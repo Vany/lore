@@ -5,6 +5,52 @@ surprised me.
 
 ---
 
+## 2026-08-03 — session 14: P0.1, and a hole in the convergence argument
+
+**Did.** `src/core/finding.ts` and `src/core/fingerprint.ts` with 24 tests.
+Typecheck clean. zod 4.4.3 added.
+
+**Implementing the fingerprint exposed a real weakness in the spec.** SPEC listed
+"fingerprint dedup" as termination bound 1 — *a settled finding cannot re-trigger
+work*. That is only true for **identical** claims. If T2 raises in different words
+what T1 already settled, the hash differs and the loop sees new work.
+
+So what actually holds the line is the **ledger in the prompt** (a *prompt* defence,
+which will sometimes fail) plus bounds 2–4, which are mechanical. Corrected in
+`spec/review-ladder.md` §3.1.1 rather than left as a comfortable assumption.
+
+I deliberately did **not** build a mitigation. Two candidates exist — a coarse
+`file ‖ symbol ‖ cwe` similarity key, or an explicit dedup pass — but whether
+paraphrase-churn actually happens is a Phase 1 measurement. Building machinery for
+an unmeasured problem is how specs grow features nobody needed.
+
+**Design decisions made while writing it:**
+
+- **Strict schema.** An unknown key from a model is an error, not a dropped field.
+  It means our prompt and the schema have parted ways, and silently dropping it
+  would hide the drift for as long as it took someone to notice findings had got
+  worse. The reviewer gets its one retry, then the review fails loudly.
+- **`claim` capped at 300 chars.** Enforces "one sentence", which is what makes
+  findings comparable — and output is ~77% of the top tier's cost once input is
+  cached, so a reviewer that writes essays costs several times more forever.
+- **Length-prefixed hash input.** With a plain separator, `("ab","c")` and
+  `("a","bc")` collide, and `claim` is free text so it can contain whatever
+  separator we picked. Cheap to prevent, invisible if it ever happened.
+- **Severity excluded from identity**, so a finding returning at raised severity
+  after a rejected justification is the same finding. There is a test pinning this,
+  because it encodes a spec requirement rather than an implementation detail.
+- **camelCase over the spec's `failure_scenario`.** One shape for both the wire
+  contract and the TypeScript, because a second internal representation would drift
+  from the one the models were actually asked for. Spec updated to match rather than
+  left to disagree.
+
+**Short-id ambiguity is now a stated requirement.** `lore-ok[8 hex]` is ~1% chance
+of a shared prefix at ~10k findings, which is fine *only* if lookup treats ambiguity
+as an error instead of picking a winner — git's rule. Written into §3.1.2 so the
+store layer cannot forget it.
+
+---
+
 ## 2026-08-03 — session 13: named `lore`
 
 **The project is `lore`** (D-45). Renamed throughout; typecheck clean, tests green,

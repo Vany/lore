@@ -8,7 +8,7 @@ learned, then gets struck here.
 
 ## Now — Phase 0: core
 
-- [ ] **P0.1 — Finding record + Zod schema**, with optional `cwe` (D-44), and the
+- [x] **P0.1 — Finding record + Zod schema**, with optional `cwe` (D-44), and the
       fingerprint `sha256(normalized_claim ‖ file ‖ enclosing_symbol)`. Everything
       else in Phase 0 hangs off this shape, so it is worth getting wrong cheaply
       first.

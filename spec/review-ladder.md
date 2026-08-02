@@ -111,7 +111,7 @@ which is `~/c/review`'s central limitation.
   "severity": "high",
   "claim": "decline path leaves the hold active",
   "evidence": "hold released only in the success branch (hold.ts:142-151)",
-  "failure_scenario": "card declines → funds stay held until the 7d sweeper"
+  "failureScenario": "card declines → funds stay held until the 7d sweeper"
 }
 ```
 
@@ -124,7 +124,37 @@ nothing.
 `sha256(normalized_claim ‖ file ‖ enclosing_symbol)`
 
 Deliberately **not** the line number: lines shift under every edit, and a finding
-that moved three lines down is the same finding.
+that moved three lines down is the same finding. Severity is likewise excluded, so
+a finding returning at raised severity after a rejected justification is recognised
+as the same finding rather than as new work.
+
+#### 3.1.1 What the fingerprint does *not* do — corrected 2026-08-03
+
+**It matches identical claims, not equivalent ones.** If T2 raises in different
+words what T1 already settled, the fingerprint differs and the loop sees new work.
+
+So termination bound 1 (§5) is weaker than first written. What actually holds the
+line is:
+
+- **the ledger in the prompt** — every reviewer is told what was already considered
+  and why, and instructed to re-raise only with new evidence. That is a *prompt*
+  defence, not a mechanical one, and it will sometimes fail.
+- **bounds 2–4** — the per-tier round cap, global budget and quota, which are
+  mechanical and do hold.
+
+Discovered while implementing, and written down rather than quietly assumed. Two
+candidate mitigations, neither built: a coarse similarity key of
+`file ‖ symbol ‖ cwe` to catch paraphrases of the same weakness, or an explicit
+dedup pass. Both wait for evidence from Phase 1 that paraphrase-churn actually
+happens — measure before adding machinery.
+
+#### 3.1.2 Short ids are ambiguous, and lookup must say so
+
+`lore-ok[…]` carries the leading 8 hex, which is ~10k findings to a ~1% chance that
+some pair shares a prefix. That is tolerable **only** because lookup by short id
+treats ambiguity as an error rather than picking a winner — git's rule for short
+object ids. Silently resolving to the wrong finding would close a defect nobody
+examined.
 
 ## 4. Justification is a proposal of lore, and the reviewer ratifies it
 
@@ -183,7 +213,9 @@ re-raises three closed findings and nothing else is clean.
 
 Four independent bounds guarantee termination:
 
-1. **Fingerprint dedup** — a settled finding cannot re-trigger work.
+1. **Fingerprint dedup** — a settled finding cannot re-trigger work *when re-raised
+   in the same words*. See §3.1.1: this bound is softer than the other three, and
+   the mechanical guarantee comes from them.
 2. **Per-tier round cap** (default 3).
 3. **Global round budget** (default 12) per review.
 4. **Quota exhaustion.**
