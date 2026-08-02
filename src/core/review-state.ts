@@ -1,0 +1,51 @@
+/**
+ * The states a review can be in, and which of them mean "clean".
+ *
+ * Exactly one state means the branch is reviewed and clean. Everything else is
+ * some flavour of not-that, and the distinctions are load-bearing: `failed`,
+ * `expired` and `fast_clean` are all ways a caller could wrongly conclude nothing
+ * was found (INV-1).
+ *
+ * SPEC: spec/mcp-api.md §3
+ */
+
+export const REVIEW_STATES = [
+  "queued",
+  "running",
+  "findings_ready",
+  "awaiting_diff",
+  /** Fast tiers clean; the deep tiers are still running. NOT a pass. */
+  "fast_clean",
+  /** A question only a person can answer is open. Blocks passing and attesting. */
+  "needs_human",
+  /** The only state that means reviewed and clean. */
+  "passed",
+  /** Did not complete. Never "found nothing". */
+  "failed",
+  /** Abandoned or timed out. Also never "found nothing". */
+  "expired",
+] as const;
+
+export type ReviewState = (typeof REVIEW_STATES)[number];
+
+/** Terminal states — no further work will happen without a new review. */
+const TERMINAL = new Set<ReviewState>(["passed", "failed", "expired"]);
+
+export function isTerminal(state: ReviewState): boolean {
+  return TERMINAL.has(state);
+}
+
+/**
+ * The only predicate any caller should use to decide whether a branch is clean.
+ *
+ * Written as a function rather than a comparison so there is one place to be wrong,
+ * and so no one is ever tempted to write `state !== "failed"`.
+ */
+export function isClean(state: ReviewState): boolean {
+  return state === "passed";
+}
+
+/** Can this review be attested? Never while a human question is open (D-39). */
+export function isAttestable(state: ReviewState): boolean {
+  return state === "passed";
+}
