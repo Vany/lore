@@ -1,0 +1,192 @@
+# MCP surface
+
+The product. Constraints and their provenance: `research/mcp-service-design.md`.
+
+---
+
+## 1. Provisioning
+
+```
+make new NAME=vany GIT=git@github.com:org/repo.git
+```
+
+1. Creates the tenant and repo record.
+2. Generates a **read-only deploy key server-side** and prints the public half to
+   add to the repo. The private key never leaves the container, and we never ask
+   for anyone's personal SSH key — a service that holds a personal key holds
+   everything that key opens.
+3. Mints an opaque, revocable bearer token scoped to that repo.
+4. Emits a paste-able client config with the token **in a header** (D-21).
+
+## 2. Tools
+
+| tool | arguments | returns |
+|---|---|---|
+| `review.start` | `branch`, `into`, **`ticket`** | `{review_id, state}` — returns immediately |
+| `review.poll` | `review_id` | `{state, tier, new_findings[], counts}` |
+| `review.submit` | `review_id`, `diff`, `tree_hash` | `{state, applied}` |
+| `review.attest` | `review_id` | `{line, signature}` |
+| `knowledge.query` | `query` and/or `path` | `{items[]}` |
+| `knowledge.teach` | `rule`, `why`, `scope` | `{id}` |
+
+`knowledge.*` is available to anyone holding a token for the repo, at any time,
+independent of any review (D-18). That is the point of the service: a session
+should be able to ask what is known *before* it writes code, not only learn it
+after being corrected.
+
+### 2.1 `review.poll` returns deltas
+
+Each poll returns findings **new since the caller's last poll**, plus running
+counts. A client that polls twice must not be shown the same finding twice — the
+loop is driven by an LLM, and duplicate work is indistinguishable from real work.
+
+### 2.2 `review_id` is a state handle, and handles get hijacked
+
+MCP is stateless with no protocol-level sessions, so `review_id` is exactly the
+"state handle" the MCP security guidance names as an attack surface (D-23,
+`research/implementation-approach.md` §2). The spec's requirements are not
+optional:
+
+- **Possession of a `review_id` is never authentication.** Every `poll`, `submit`
+  and `attest` re-verifies the bearer token *and* that the review belongs to that
+  token's principal. A valid id from another tenant fails exactly as a forged one
+  does.
+- **Handles are CSPRNG-generated**, never sequential. The moment ids are guessable,
+  every log line that contains one becomes a credential.
+
+Cheap now, expensive to retrofit.
+
+### 2.3 Operator status (D-26)
+
+A view for the operator, not for clients — `review.poll` already serves clients.
+
+Active reviews and the tier each is on; queue depth and what is waiting on what;
+rate-limit headroom per provider; model usage and spend from the usage log (§6);
+failed and expired reviews with their reason.
+
+Its job is to answer one question: **is parallelism actually running, or silently
+queueing?** Those look identical from the client side, and only one of them is
+fine.
+
+## 2.3.1 `ticket` is required, not optional (D-38)
+
+Most merges here are task-based, so `review.start` **fails without ticket text**.
+
+A reviewer that does not know what the change was *meant* to do can only ask "is
+this code correct?" — never "is this the right code?". With the ticket it gains the
+axis that matters most for vibecoded work (`spec/review-ladder.md` §6.2): did the
+change do what was asked, only what was asked, and all of what was asked.
+
+Plain text, pasted by the client. The `plane` MCP server is already configured in
+this workgroup, so a client can fetch the ticket body from there — but `lore` takes
+text and does not integrate with any tracker. One less thing to break.
+
+## 2.3.2 A review is pinned to a snapshot (D-40)
+
+Reviews are **started explicitly**. Never one per commit.
+
+Once started, a review sees exactly one tree: the one it began with, plus whatever
+arrives via `review.submit`. **Commits pushed to the branch during a review are
+invisible to it.** To review those, start a new review — it begins at the branch tip
+as it then stands.
+
+This keeps a review deterministic: it always converges on a tree that stops moving,
+rather than chasing a branch that does not.
+
+**Consequence for the attestation, and it matters: the signature covers a tree hash,
+not a branch name.** If the branch has moved since, the attestation does not describe
+what is now there, and merging on the strength of it would be wrong. The tree hash is
+in the signed line precisely so this is checkable rather than assumed.
+
+## 2.4 Two-stage review (D-34)
+
+At 30 PRs a day nobody waits for a full ladder. The review splits:
+
+| stage | tiers | latency | how it is consumed |
+|---|---|---|---|
+| **fast** | T0 + T1 | seconds to ~a minute | inline — you wait for it |
+| **deep** | T2 + T3 | minutes | asynchronous — collected later, in batches |
+
+`review.start` runs the fast stage and `review.poll` returns its findings almost
+immediately, so the developer keeps moving. The deep stage continues in the
+background and its findings land whenever they land.
+
+**A fast pass is not a pass.** `fast_clean` is its own state and is never reported
+as `passed`. Only the full ladder produces `passed`, and only `passed` supports an
+attestation. This is INV-1 in a new disguise: "the cheap tiers found nothing" must
+never read as "the branch is clean".
+
+### 2.4.1 `review.inbox`
+
+With deep findings arriving asynchronously across dozens of open reviews, polling
+each one individually does not scale.
+
+`review.inbox()` returns deep findings across **all** the caller's reviews since
+they last collected — the batch view the workflow actually needs. Per-review
+`review.poll` remains for driving a single review to completion.
+
+Without this, a developer with 30 open reviews either polls 30 ids or loses
+findings. Both are failures.
+
+## 3. Review state machine
+
+```
+  queued
+    │
+    ▼
+  running(Tn) ──┬──► findings_ready ──► awaiting_diff ──┐
+                │                                        │ review.submit
+                │                                        ▼
+                │                                   running(T1)   ← reset, not resume
+                │
+                ├──► tier_clean ──► escalate ──► running(Tn+1)
+                │
+                └──► top tier clean ──► passed ──► attested
+
+  any state ──► failed | expired
+```
+
+**Reset to T1 after a diff, never resume.** A fix is unreviewed code, and the
+cheapest tier is the cheapest possible regression check.
+
+`failed` and `expired` are **not** `passed`. A review that did not run is not a
+review that found nothing (INV-1) — the invariant that outranks everything else,
+restated here because this is where a hosted service would be tempted to blur it.
+
+## 4. Applying a diff without committing
+
+`review.submit` applies the client's diff to the review's private worktree. Nothing
+is committed and nothing is pushed; the client remains the owner of its own history.
+
+**The client sends a `tree_hash` and the server verifies it after applying.** Without
+it, a partial or fuzzy apply leaves the server reviewing code that exists nowhere —
+not in git, not on the client's disk. A mismatch is a hard failure, never a warning:
+reviewing the wrong tree produces confident findings about code no one has.
+
+## 5. Concurrency
+
+- One worktree per active review, off a shared bare clone per repo.
+- Reviews are queued when a provider's concurrency cap is reached. **A review that
+  dies on a 429 is a review that did not run**, so backpressure queues rather than
+  fails.
+- A client closing its poll stream cancels nothing. Cancellation is explicit.
+
+## 6. Usage logging
+
+No billing (D-13), but every model call is recorded: repo, review, tier, model,
+tokens in/out, latency, outcome. This is what turns the subscription question
+(D-17) from a guess into arithmetic, and what shows whether parallelism is actually
+hitting rate limits.
+
+## 7. Attestation
+
+One line, signed (D-15):
+
+```
+lore: reviewed <tree-hash> against this repo's rules and lore's own rules —
+3 tiers, 47 findings, 44 fixed, 3 justified.  [ed25519:<sig>]
+```
+
+It asserts **what was done**, never that the code is flawless. "Our models stopped
+finding things" does not imply "no defects remain", and the first bug that ships
+behind an overclaiming badge is the one that discredits the whole service.

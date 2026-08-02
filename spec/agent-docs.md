@@ -1,0 +1,229 @@
+# Documentation for agents
+
+**The client is an agent, so the docs *are* the interface.** There is no support
+channel, no README a confused caller will go and read. Whatever the tool
+descriptions fail to say, the agent will guess — and it will guess wrong in
+predictable ways (§2).
+
+Protocol facts: `research/mcp-service-design.md` and the MCP spec revision
+`2026-07-28`.
+
+---
+
+## 1. Three layers, with different costs
+
+| layer | when read | cost | carries |
+|---|---|---|---|
+| **tool descriptions** | always, every session | **permanent context** | what an agent must not get wrong |
+| **resources** | on demand | free until read | reference detail, audit trails |
+| **prompts** | user invokes | free until invoked | whole workflows, as slash commands |
+
+The split follows the cost. A tool description is in the context window for the
+entire session whether or not the tool is called, so it carries only the
+**must-know**; everything else moves to a resource. A 400-word tool description is
+not thorough, it is a tax on every turn.
+
+---
+
+## 2. The failure modes the docs exist to prevent
+
+Written first, because each one is why a specific sentence exists.
+
+1. **Polls once, sees `running`, concludes the review is clean.** The single most
+   likely failure, and it silently ships unreviewed code.
+2. **Treats `failed` or `expired` as "nothing found".** INV-1, now exposed across a
+   protocol boundary where we cannot enforce it — only state it.
+3. **Re-fixes findings it already fixed**, because it did not register that polls
+   return deltas.
+4. **Sprays `lore-ok` comments** to make inconvenient findings disappear.
+5. **Never queries knowledge**, so the memory that justifies the whole service goes
+   unread.
+6. **Gives up after two rounds**, treating repeated findings as failure rather than
+   as the process working.
+7. **Reads `fast_clean` as `passed`** — failure mode 1 wearing the two-stage
+   review's clothing.
+8. **Answers a `needs_human` question itself**, because agents are built to be
+   helpful and stopping feels like failing.
+9. **Summarises the ticket instead of pasting it**, or substitutes its own account
+   of what it built — which destroys the only independent statement of intent the
+   reviewers have.
+
+---
+
+## 3. Tool descriptions
+
+Draft text. These are the deliverable, not a summary of it.
+
+### `review.start`
+
+> Begin an independent multi-model review of `branch` against `into`.
+>
+> **`ticket` is required** — the text of the task this change implements. Without it
+> the reviewers can only ask whether the code is correct, never whether it is the
+> code that was asked for. Paste the ticket body; do not summarise it, and do not
+> substitute your own description of what you built.
+>
+> Returns a `review_id` **immediately**. The review takes minutes — this does not
+> mean it finished. Call `review.poll` until it reaches a terminal state.
+>
+> The review is pinned to the branch as it stands now. Commits you push afterwards
+> are **not** included; start a new review for those.
+>
+> Expect several rounds of findings. That is the process working, not failing.
+
+### `review.poll`
+
+> Fetch findings discovered since your last poll.
+>
+> Returns **only new** findings. A finding you have already seen will not appear
+> again — do not re-fix anything absent from the response.
+>
+> States: `queued`, `running`, `findings_ready`, `awaiting_diff`, `fast_clean`,
+> `needs_human`, `passed`, `failed`, `expired`.
+>
+> **Only `passed` means the branch is clean.** `failed` and `expired` mean the
+> review did not complete; they are not "nothing found". Never merge on them.
+>
+> `fast_clean` means only the cheap tiers have finished. The deep tiers are still
+> running. It is **not** a pass.
+>
+> `needs_human` means a question was found that you must not answer yourself —
+> currently, two recorded rules about this code contradict each other. Ask a person.
+> Do not guess, and do not close it with `lore-ok`: a justification is a claim about
+> code, and this is a question about which belief is true.
+>
+> While `queued` or `running`, wait and poll again — start at 10s, back off to 60s.
+> An absence of findings so far is not a clean result.
+
+### `review.submit`
+
+> Submit your fixes as a unified diff, with the git tree hash of your working tree
+> after applying them.
+>
+> Applied to the review's private worktree. Nothing is committed or pushed — your
+> history stays yours. The `tree_hash` is verified after applying; a mismatch fails
+> loudly rather than reviewing code that exists nowhere.
+>
+> For a finding you believe is **wrong**, do not skip it silently. Write at the
+> site:
+>
+> `// lore-ok[<fingerprint>]: <why this code is correct>`
+>
+> The reviewer decides whether your reasoning holds. Accepted, the finding closes
+> and becomes a project rule. Rejected, it returns at **higher severity** — a wrong
+> justification is worse than a bug.
+
+### `review.inbox`
+
+> Deep findings across **all** your open reviews, since you last collected. Use this
+> rather than polling each review individually once you have several in flight.
+>
+> **Surface `needs_human` and high-severity findings to your user through whatever
+> alerting you have.** Do not merely log them. `lore` cannot notify anyone — it
+> returns information and you decide what deserves attention. A finding nobody sees
+> is a finding nobody found.
+
+### `review.attest`
+
+> Available once state is `passed`. Returns one signed line recording what was
+> done: tiers run, findings raised, fixed and justified, at a tree hash.
+>
+> It asserts what was checked. It does not assert the code is correct.
+
+### `knowledge.query`
+
+> Ask what is already known about this codebase — conventions, invariants, past
+> mistakes, and why past decisions were made.
+>
+> Call this **before** writing code in an unfamiliar area, not only after a review
+> complains. This is the accumulated memory of every prior session on this repo.
+
+### `knowledge.teach`
+
+> Record something durable about this codebase, with its reason.
+>
+> Taught rules outrank rules inferred from reviews. Record the *why*: a rule
+> without one gets deleted by the next reader who disagrees with it.
+
+---
+
+## 4. Resources
+
+Custom scheme `lore://`, annotated `audience: ["assistant"]`. Static docs carry
+`priority` so a host doing automatic context inclusion picks the right ones.
+
+| uri | priority | contents |
+|---|---|---|
+| `lore://docs/workflow` | 1.0 | the loop, end to end |
+| `lore://docs/lore-ok` | 0.9 | justification format, when it is legitimate |
+| `lore://docs/findings` | 0.8 | finding schema, severities, fingerprints |
+| `lore://docs/states` | 0.8 | every state, and which ones are terminal |
+| `lore://docs/ladder` | 0.5 | the tiers and why escalation exists |
+
+Templates (RFC 6570), for live data rather than documentation:
+
+| template | contents |
+|---|---|
+| `lore://review/{review_id}` | full audit trail: every tier run, finding, verdict |
+| `lore://knowledge/{path}` | what is known about a path |
+
+`lore://review/{id}` is deliberately richer than `review.poll`. Poll gives deltas so
+the loop stays cheap; the resource gives the whole history for when an agent — or a
+human — needs to understand how a review reached its conclusion.
+
+---
+
+## 5. The `review` prompt
+
+MCP prompts are **user-controlled** and surface as slash commands, so this appears
+as `/lore:review <branch> <into>`. It exists because the loop is multi-step and
+stateful: an agent handed only tools will improvise it, and §2 lists how that goes.
+
+Arguments: `branch` (required), `into` (required).
+
+Draft returned message:
+
+> You are shepherding `<branch>` through an independent review before it merges
+> into `<into>`.
+>
+> The reviewers are models that did **not** write this code. You are not being
+> second-guessed by a peer; you are being audited. Treat findings as evidence to
+> investigate, not as opinions to argue with.
+>
+> **The loop**
+> 1. `review.start(branch, into)` → `review_id`
+> 2. `review.poll(review_id)` until findings arrive or the state is terminal
+> 3. For each finding: fix it, or justify it with `// lore-ok[fp]: <reason>`
+> 4. `review.submit(review_id, diff, tree_hash)`
+> 5. Return to 2. Repeat until the state is `passed`.
+>
+> **Rules**
+> - Polls return only new findings. Never re-fix what is not in the response.
+> - `failed` and `expired` are not `passed`. Report and stop; do not merge.
+> - Expect several rounds. Every fix resets the ladder to the cheapest tier,
+>   because a fix is unreviewed code.
+> - Do not use `lore-ok` to make an inconvenient finding go away. The reviewer rules
+>   on it, and a rejected justification returns worse than it left.
+> - Before fixing in unfamiliar code, `knowledge.query` it — someone may have
+>   already decided this, for a reason.
+> - When you learn something durable, `knowledge.teach` it.
+>
+> When the state is `passed`, call `review.attest` and give the user that line.
+
+### 5.1 Other prompts
+
+- `explain-finding` — expand one finding with full context and the relevant
+  knowledge, for when an agent or human disputes it.
+- `catch-up` — summarise what is known about a repo. A new session's first move.
+
+---
+
+## 6. Rules for writing these
+
+- **Say the consequence, not just the rule.** "Only `passed` means clean" is
+  ignorable; "`failed` is not 'nothing found' — never merge on it" is not.
+- **Write for the agent that will get it wrong.** Every sentence in §3 traces to a
+  failure mode in §2. A sentence that prevents nothing is deleted.
+- **Never describe unimplemented behaviour.** A tool description is a promise an
+  agent will act on; a stale one causes confident, wrong calls.
+- **Tool descriptions are a context budget.** Detail belongs in resources.

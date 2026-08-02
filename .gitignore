@@ -1,0 +1,11 @@
+node_modules/
+dist/
+*.tsbuildinfo
+
+# per-branch finding ledger, written into a reviewed worktree (SPEC §4.3)
+.rev/
+
+.DS_Store
+*.log
+.env
+.env.*

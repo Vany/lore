@@ -1,0 +1,27 @@
+{
+  "name": "lore",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Local pull-request review: an escalating ladder of independent models",
+  "type": "module",
+  "bin": {
+    "lore": "./src/index.ts"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lore": "node ./src/index.ts"
+  },
+  "dependencies": {
+    "@opencode-ai/sdk": "^1.18.11"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.2",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
+  }
+}

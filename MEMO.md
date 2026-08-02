@@ -1,0 +1,609 @@
+# MEMO — development memory for `lore`
+
+Newest first. Updated at the end of each task: what changed, what I learned, what
+surprised me.
+
+---
+
+## 2026-08-03 — session 13: named `lore`
+
+**The project is `lore`** (D-45). Renamed throughout; typecheck clean, tests green,
+CLI now exits 70 saying *"lore is not implemented yet"*.
+
+**Why this name rather than a review-flavoured one.** The candidates split into two
+families: the *judgment* (assay, crucible, quorum, argus) and the *memory* (lore,
+engram). Memory won because it names the **product** rather than the commodity —
+everyone has a reviewer; nobody has the memory (D-14).
+
+**The name then earned something I did not anticipate.** The justification marker
+becomes `// lore-ok[fp]: reason`, which reads as *proposing a piece of lore* that the
+reviewer ratifies or rejects. That collapses two systems into one: an accepted
+justification is not merely a closed finding, it is **how the codebase acquires a new
+fact about itself**. Every argument won with a reviewer becomes something the next
+session already knows. `spec/review-ladder.md` §4 now says so explicitly.
+
+Worth remembering as a general point: a name that describes the *product* rather
+than the *mechanism* tends to expose whether the mechanisms are actually one thing.
+Here it did.
+
+**Practical bonus:** the old working name shadowed `rev(1)`, a real coreutils command
+— a small permanent irritation avoided.
+
+**Two mechanical lessons from the rename**, both of which cost a wasted run:
+- **zsh does not word-split unquoted parameter expansions.** `for f in $FILES` ran
+  once with the entire list as one filename.
+- **BSD `sed` does not support `\b`.** Every word-boundary pattern silently
+  no-opped, which looked like a partial rename rather than a failed one. On macOS
+  use `[[:<:]]`/`[[:>:]]`, or literal strings chosen to be unambiguous.
+
+**Not renamed: the directory.** Still `~/l/rev`, because moving it mid-session would
+invalidate the working directory. Vany's call whether to `mv` it to `~/l/lore`.
+
+---
+
+## 2026-08-03 — session 12: the plan, and what CVE actually answers
+
+**Did.** `PLAN.md`, `research/security-review.md`, D-43 (review types), D-44 (CWE as
+finding vocabulary). Rewrote `TODO.md` around the phases.
+
+**The plan is ordered by risk retirement, not by layer**, and writing the risks down
+first is what made the order obvious. The top three — *the ladder never converges*,
+*the findings are noise*, *the knowledge layer does not help* — are all reachable on
+a laptop with a CLI and no service at all. So the walking skeleton is not a
+preference, it is where the expensive mistakes are cheapest to make. Risks 5 and 6
+(T0 CPU on ARM, arm64 dependency compatibility) need the device; they are planned in
+§4.1 and run when it exists.
+
+**Answering "is there a published database, like a set of CVEs?" properly.** There is
+no published database of code *review* findings. What exists is a stack, and the
+usual mistake is conflating its layers:
+
+- **CVE** — a specific vulnerability in a specific released version. Matched against
+  *dependencies*, never against your code.
+- **CWE** — the taxonomy of *weakness kinds*, derived from analysing 31,770 CVE
+  records. **This is what the question was reaching for.**
+- **OSV** — CVEs made machine-queryable per package+version, with an API. Notably it
+  can also query **by commit hash**, which is what vendored code and submodules
+  (D-36) need since they have no package version.
+- **Semgrep / CodeQL** — executable rules that detect weaknesses, carrying CWE
+  metadata.
+
+**Architectural consequence worth keeping: executable rule corpora belong in T0.**
+Semgrep's registry spans 40+ languages with CWE/OWASP metadata and JSON/SARIF output.
+Paying a model to re-detect CWE-89 is paying for the wrong thing. Rules find known
+shapes; models find what no rule anticipated.
+
+**The nicest finding: VEX is our justification ledger, already standardised.** For the
+security review a scanner says "a vulnerable package is present" and only reading the
+code says whether it is reachable. That judgement has an existing format — VEX, in
+CycloneDX — recording whether a product is actually affected, with justifications like
+*vulnerable code not in execute path*. That is structurally identical to `lore-ok`: a
+reason attached to a finding, accepted or rejected by a reviewer, stale when the code
+changes. We arrived at the same shape independently, so the security type should emit
+**real VEX** rather than a bespoke format — free interoperability with tools we did not
+write.
+
+**Review types (D-43).** Default `code-arch`; `security` next. The `type` parameter
+goes into the MCP surface from day one even while only one type exists, because adding
+a required argument later breaks every client. Phase 0 gets a pipeline abstraction for
+the same reason — nearly free now, painful to retrofit.
+
+**Deployment shape:** a folder in `$HOME` with a `docker-compose.yml`, matching the
+existing convention. arm64 assumed working, verified before trusted.
+
+---
+
+## 2026-08-03 — session 11: two audiences, and the deadman
+
+**Vany's split:** developer alarms are the *client's* job — we just provide the
+information. `lore` alerts **devops** when something happens to the service itself.
+D-41, D-42, `spec/operations.md`.
+
+**It turns out the protocol already forced half of this.** MCP servers cannot
+initiate requests, so there was never a push channel to a developer. What looked
+like a product decision is also the only implementable one — which means our real
+obligation is narrower and sharper: make urgency **machine-classifiable** so a
+client never has to infer it from prose. Explicit `severity`, `needs_human` as its
+own state, and `fast_clean`/`failed`/`expired` never blended into "not passed".
+
+**The important thing I added: a heartbeat deadman.** Alerting devops by pushing
+alerts cannot detect its own death — if the alerter breaks, "no alerts" and
+"everything is fine" become the same observation. That is **INV-1 at the operations
+layer**, and this project exists because four reviews once failed silently in one
+day. So the service emits a heartbeat and devops alerts on its *absence*: a dead
+service, a dead network, a dead alerter and a full disk then all produce the same
+*visible* symptom instead of the same invisible one.
+
+Worth generalising: every time this design has a "how do we know X happened"
+question, the answer has been to make the failure visible by inverting the signal
+rather than by adding another notification.
+
+**Also added a daily spend ceiling that stops starting reviews** rather than
+continuing quietly. At $500–2,600/month a cheap tier looping on a pathological
+branch runs up a bill nobody sees until the invoice. A review not started is honest;
+a review that runs and cannot be paid for is not.
+
+**Alert routing has three tiers, deliberately:** page (backups stale, heartbeat
+missed, disk >90%, provider auth dead, spend ceiling, reviews failing as a class),
+ticket (elevated failure rate, spend anomaly, disk >75%, `needs_human` findings
+ageing), log only (individual review failures). An alarm that fires constantly gets
+muted, and a muted alarm is worse than none.
+
+Transport is a generic outbound webhook — Slack, Alertmanager, Plane or a shell
+script, without `lore` knowing which.
+
+---
+
+## 2026-08-03 — session 10: the ticket, and the one place we stop
+
+**Did.** Asked the four questions I had left. D-38…D-40; build order deferred until
+the arm64 check lands, which is the right call — a negative result reshapes T0 and
+would change what "walking skeleton" even means.
+
+**The ticket is required, and it buys a whole review axis I did not have.** Vany:
+*"let's require task ticket text. most of the merges is task based."* Without it a
+reviewer can only ask *"is this code correct?"*. With it, it can ask *"is this the
+**right** code?"* — and see a change that does less than was asked, something else
+entirely, or **more than was asked**.
+
+Scope creep is the one worth naming. An AI told to fix one thing will cheerfully
+refactor three others, rename a module, and improve error handling nobody mentioned.
+Every unrequested change is code no one decided to write and no ticket justifies. In
+a vibecoding workflow it is probably the most common defect, and it is completely
+invisible without a ticket. I had not identified it as a category at all before this
+answer.
+
+A corollary that went straight into the agent docs: the client must **paste** the
+ticket, not summarise it and not substitute its own account of what it built. An
+agent describing its own work describes what it made, not what was asked — which
+destroys the only independent statement of intent the reviewers get.
+
+**Knowledge conflicts became the one place the system stops and asks for a person
+(D-39).** Vany's framing: newer is better, *but* reason about it, make it a problem
+in code that must be solved, and tell the client to call a human if it cannot be
+solved at the AI level.
+
+So a conflict is a **finding**, not a store-level resolution. Newer *leans* correct —
+a prior, not a verdict — because a carelessly written recent rule must not silently
+overwrite a reasoned older one. And if the agent cannot decide, `needs_human` blocks
+`passed`, blocks attestation, and **cannot be closed with `lore-ok`**. That last part
+matters: a justification is a claim about code, but this is a question about which of
+two beliefs is true. An agent that could not decide must not be able to write its way
+past it. Added to the docs as a named failure mode, because agents are built to be
+helpful and stopping feels like failing.
+
+**Reviews are snapshot-pinned (D-40).** Explicit start, never per commit; commits
+pushed mid-review are invisible; a new review starts at the tip. This keeps a review
+converging on something that stops moving. The consequence worth remembering: **the
+attestation covers a tree hash, not a branch name.** If the branch moved, the
+signature does not describe what is there now — which is exactly why the tree hash is
+in the signed line.
+
+---
+
+## 2026-08-03 — session 9: the host inverts the bottleneck
+
+**Did.** Asked the questions I still had. Four answers, five decisions (D-33…D-37),
+`spec/deployment.md`.
+
+**The host is an arm64 Orange Pi (32 GB, 4 TB) on Tailscale, reachable to prod.**
+Both halves of "arm64 SBC" constrain the design, and the second half more than I
+expected.
+
+**The bottleneck inverted.** I had been treating model calls as the expensive part.
+On this host they are remote and cost the machine nothing — **T0 is local,
+CPU-bound, and runs on modest ARM cores.** The *free* tier is the one that costs
+wall-clock: naively, ~5 CPU-hours/day for one developer, because "reset to T1 after
+every fix" (D-6) multiplies the local work by the round count. Hence D-37:
+`node_modules` cache keyed by lockfile hash, `tsc --incremental`, and **diff-scoped
+checking from round 2**. Disk is plentiful and CPU is scarce here, so spending disk
+to save CPU is always the right trade on this box.
+
+**Tailscale deletes a category of work.** No public TLS, no domain, no certificate
+renewal, no abuse surface — WireGuard is the transport security. Tokens survive, but
+for per-repo scoping rather than network defence. Unverified: whether MCP clients
+accept a plain `http://` remote endpoint on a private network; `tailscale cert` is
+the fallback.
+
+**Raised a genuine blocker (T0.5).** If any target repo's dependency tree ships
+x86-only prebuilt binaries, it will not install or test on arm64 — and **D-24 (T0
+executes tests) is undeliverable on this host**. That is cheap to check now
+(`npm ci && npm test` in an `arm64v8/node` container) and expensive to discover after
+building the sandbox around the assumption. It is now the first task in TODO, ahead
+of the model measurement.
+
+**Two-stage review confirmed (D-34):** T0+T1 inline, T2+T3 async. That forced a new
+tool — `review.inbox`, returning deep findings across *all* the caller's reviews. At
+30 PRs/day a developer with 30 open reviews would otherwise poll 30 ids or lose
+findings; both are failures. And a new invariant restatement: **`fast_clean` is not
+`passed`.** INV-1 wearing a new disguise — "the cheap tiers found nothing" must never
+read as "the branch is clean".
+
+**Submodules, not monorepos (D-36) — simpler in one way, a trap in another.** One
+package per repo makes T0 straightforward. But a submodule pointer bump is *two
+lines of diff carrying thousands*, and a reviewer shown only the outer diff would
+confidently call it low-risk having never seen it. That is exactly the
+confident-but-blind finding this project exists to prevent. Gitlinks are expanded,
+and never counted as a one-line diff for size or truncation decisions.
+
+---
+
+## 2026-08-03 — session 8: real volume, and T3 stays
+
+**Volume was wrong twice.** I invented "100 reviews/month", then corrected to ~220
+from his weekend figure. The real number: **~30 PRs on a working day**, solo, plus a
+workgroup — **740–3,700 reviews/month**, a **$500–2,600/month** tool.
+
+Lesson worth keeping: I twice built cost arguments on a volume I made up, and the
+recommendation flipped once real numbers arrived. Volume is an *input*, and inputs
+get asked for, not assumed.
+
+**Cost and latency are now first-order.** At 30 PRs/day reviews cannot queue behind
+one another, which independently kills any quota-metered plan: a burst of 30 PRs is
+exactly when a rolling window empties. The Z.ai answer stays no, but the deciding
+argument moved from price to throughput.
+
+**Honest error bar.** The $0.70/review assumes ~55k input per pass — a substantial
+diff. 30 PRs/day implies *small* PRs, so real cost could be $0.30–0.50, halving
+everything. It could also be worse if the agentic reviewer explores widely. Written
+down in the research file, because nothing should be bought on my estimates.
+
+**T3 always runs (D-32), Vany's call:** *"run it always but at final, not bother it
+with stupid mistakes, code must be almost fixed."* I had floated conditional or
+sampled T3 as the biggest remaining cost lever (44% of the bill). He bought certainty
+instead, and I think he is right: the attestation keeps its strongest meaning —
+**every tier agreed** — rather than degrading to "the tiers we chose to run agreed".
+For a tool whose only output is a claim about quality, that is the correct thing to
+spend money on.
+
+**His framing produced a design insight I had missed (D-31).** *"Don't bother it with
+stupid mistakes"* is not just about ordering — it means **the expensive tier's job is
+to find what two independent reviewers missed, not to find everything.** A tier's
+position is information, and the same prompt at every tier makes T3 spend its budget
+re-deriving what T1 already established. So T3 is now told plainly: two independent
+reviewers from different vendors found nothing left; you are the last line; do not
+re-report anything a typechecker would catch.
+
+**One thing that stays worth measuring even though T3 is no longer optional:** what
+T3 catches that T2 missed. Not to justify cutting it — to detect the opposite
+problem. A near-zero number would mean T2 and T3 share a blind spot, which is two
+tiers being paid for as one.
+
+---
+
+## 2026-08-03 — session 7: load is not cost, and caching is the real lever
+
+**Question.** Buy the Z.ai plan for GLM, since T1 is first and takes most of the
+load? **Answer: no — and precisely *because* it is first.**
+
+**Load and cost are different distributions.** Per converged review T1 is **62% of
+calls but 9% of cost**; T2 and T3 are 38% of calls and 91% of cost. The cheap tier
+is cheap, so subsidising it optimises the smallest line on the bill. Worth keeping
+as a general instinct: in a tiered system, call volume says nothing about spend
+until you multiply it by unit price.
+
+**The quota shape is a worse problem than the price.** GLM Coding Plan Lite is
+$18/month (verified) against ~$6/month of T1 tokens — already 3× — but the real
+objection is that it meters on a **5-hour rolling window**. T1 is the gate *every*
+review must clear before reaching T2 or T3. Exhaust it and every review in the
+system stalls for up to five hours, including ones that would have passed. Putting
+the highest-throughput, most latency-critical tier on the most quota-constrained
+billing model is backwards.
+
+**Found the actual cost lever: prompt caching** (D-29). Cache reads are **10×**
+cheaper on Kimi K3 and Sol Pro, 5.4× on GLM. Every loop round re-reads the same repo
+context with only the diff changing — the exact case caching exists for. A converged
+review goes from ~$1.20 to ~$0.70. This is not an optimisation to add later; it is
+most of the cost model, and it should be in the design from the first opencode call.
+
+**Consequence I did not expect: with input cached, 77% of T3's cost is output.** So
+the structured-findings rule is a *cost control*, not only a design preference — a
+reviewer that writes essays instead of records costs several times more, at every
+tier, forever. Nice when a correctness rule turns out to pay for itself.
+
+**Found a trap: the 272k cliff** (D-30). `gpt-5.6-sol-pro` doubles its rate above
+272k prompt tokens ($10/M in, $45/M out) while advertising 1.05M context. Nothing
+stops a wide agentic review from crossing it and silently doubling the dearest tier.
+Cap it, and log the crossing rather than discovering it on an invoice.
+
+**Unverified:** whether Z.ai's terms permit backend or shared use. Their docs are
+silent, and the existence of a separate Team Plan implies the individual one is not
+meant for it.
+
+---
+
+## 2026-08-03 — session 6: I dropped GLM on the wrong metric
+
+**Did.** Answered "what do we subscribe to" with **nothing — one OpenRouter key** —
+and retracted D-7 in the process.
+
+**The mistake, kept visible.** In session 2 I dropped GLM-5.2 because Artificial
+Analysis showed it at $0.69/task against Gemini 3.6 Flash's $0.56. But *cost per
+task* is **tokens consumed × price on their eval suite**, not a price. Pulling
+OpenRouter's actual `/api/v1/models` figures: GLM-5.2 is **$0.28/M in, $0.89/M
+out** versus Gemini's **$1.50 / $7.50** — 5.3× and 8.4× cheaper, at one point
+*higher* intelligence. The conclusion was exactly backwards, and Vany's original
+instinct to buy GLM was right.
+
+`research/ai-code-review-landscape.md` §2.1 is struck through rather than deleted,
+with §2.1a replacing it. A quietly-corrected file teaches nobody why the error
+happened.
+
+**What actually went wrong, so it does not repeat:** I compared a *spend* to a
+*price* without noticing they were different units. The tell was available — a
+model at $0.28/M input reaching $0.69/task must be emitting an enormous number of
+tokens — and I did not follow it.
+
+**The caveat that survives:** cheap tokens × many tokens can still add up. GLM is
+plainly a heavy reasoner. Whether that eats its advantage on *our* workload is
+unknown, so T1 now measures **tokens spent per review**, not just defects found.
+Our shape differs from theirs, which helps GLM: reviewing is input-heavy (a diff
+plus explored files in, a small findings record out), whereas SciCode is
+generation, which is output-heavy.
+
+**Vendor diversity became a priced decision.** GPT-5.6 Terra beats Kimi K3 on value
+(55 int at $1/$6 vs 57 at $3/$15, and 4× faster). But Terra and Sol Pro are the same
+family, so that ladder is two opinions wearing three hats. Kimi K3 buys a **third
+distinct vendor**, which is the entire premise of D-1. Paying 3× for independence is
+the right call here, and it should be re-examined if the price gap widens.
+
+**Why no subscription.** Seat licences authenticate a human and bind to one
+rate-limit bucket — the wrong shape for a parallel backend, which was the very
+reason he wanted one. And the arithmetic kills it: ~$1.20 per converged review,
+~$120/month at 100 reviews, against $200/month for a single ChatGPT Pro seat that
+would cover one tier, one user, no parallelism. **The usage is cheaper than the
+subscription.** Estimates are labelled as estimates; usage logging replaces them
+with facts.
+
+---
+
+## 2026-08-03 — session 5: the docs are the interface
+
+**Did.** Specced the agent-facing documentation surface (`spec/agent-docs.md`),
+with draft text for every tool description and the `review` prompt. D-27, D-28.
+
+**The framing that made this design work: the client is an agent, so the docs
+*are* the interface.** There is no support channel and no README a confused caller
+will go and read. Whatever the tool descriptions fail to say, the agent guesses.
+So I wrote the **failure modes first** (§2) and derived every sentence from one —
+a sentence that prevents nothing gets deleted. The worst failure is an agent that
+polls once, sees `running`, concludes the branch is clean, and ships unreviewed
+code. INV-1 now has to survive across a protocol boundary where we cannot enforce
+it, only state it plainly enough that an agent does not talk itself out of it.
+
+**Learned — MCP prompts are user-controlled and surface as slash commands.** So
+Vany's "maybe even a prompt for review" becomes `/lore:review <branch> <into>`,
+returning messages that drive the whole multi-step loop. That is exactly the right
+primitive: an agent handed only tools will improvise a stateful loop, and §2 lists
+how that goes.
+
+**Learned — resources carry annotations** (`audience: ["user"|"assistant"]`,
+`priority` 0.0–1.0, `lastModified`) and support RFC 6570 templates. So docs can be
+marked assistant-facing with a priority, and `lore://review/{id}` gives the full
+audit trail while `review.poll` stays cheap deltas.
+
+**Design rule worth keeping: tool descriptions are a context budget.** They sit in
+the window every session whether called or not. A 400-word tool description is not
+thorough, it is a tax on every turn — so descriptions carry only the must-know and
+everything else moves to a resource that costs nothing until read.
+
+**How this gets validated:** point a fresh Claude Code session at the server with
+no other instructions and watch where it goes wrong. Every failure it invents
+becomes a sentence. Docs written for an agent have to be tested against one; I
+cannot reason my way to the gaps.
+
+---
+
+## 2026-08-03 — session 4: implementation research
+
+**Did.** Researched the modern way to build this: MCP SDK v2, the security
+requirements that apply to our specific design, test-execution isolation, and build
+order. Five decisions (D-22…D-26). `research/implementation-approach.md`.
+
+**Learned — the MCP SDK was renamed.** It is `@modelcontextprotocol/server`
+**2.0.0**, not `@modelcontextprotocol/sdk`, with intentionally thin runtime adapters
+(`/node`, `/hono`, `/express`, `/fastify`, all 2.0.0). Tools are declared with
+Standard Schema — Zod v4 (4.4.3) — so schemas validate at runtime and generate the
+types, and there is no hand-written parsing at the boundary. Exactly the kind of
+thing I would have got wrong from memory.
+
+**Learned — our `review_id` has a named attack against it.** MCP security guidance
+describes "state handle hijacking": MCP is stateless, so servers mint handles and
+receive them back as ordinary tool arguments. *"MCP servers MUST NOT treat
+possession of a state handle as authentication."* `review_id` is precisely that
+handle. It must be CSPRNG-generated, never sequential, and bound server-side to its
+principal so another tenant's valid id fails like a forged one. Cheap now; the
+moment a sequential id exists, every log line containing one is a credential.
+
+**The important call this session: the test container must not be the service
+container.** Vany approved running the target's tests, which is arbitrary code
+execution — `npm test` runs whatever the dependency tree says, including lifecycle
+scripts. The threat is not the teammate, it is the dependency tree. And the service
+container holds **every registered repo's deploy key plus the knowledge database**,
+so a single malicious `postinstall` in there reads all of it at once. Tests now run
+in a separate ephemeral container with no secrets, no network, read-only root,
+resource limits and a hard timeout. He said "in the review container" and this is
+still that — I just made explicit which container, because the ambiguity was the
+whole risk.
+
+**Recommended a walking skeleton (D-25), and it is unconfirmed.** Core → git →
+opencode → T0 → a CLI that performs one real review → then MCP, Docker,
+provisioning. Reasoning: the uncertainty here is whether a three-tier ladder
+converges on real branches, not whether MCP servers and job queues work. Build the
+risky part where it is cheapest to change. The honest counter-argument — it defers
+the service's own integration risk — is written down in the research file rather
+than hidden.
+
+**Noted but untested:** whether `node:sqlite` under WAL survives the write
+concurrency of parallel reviews plus parallel `knowledge.*` calls, or whether writes
+need funnelling through a single writer. Also that plain containers are a namespace
+boundary, not a virtualisation one — proportionate for a workgroup reviewing its own
+code, but it should stay a conscious trade rather than an assumption.
+
+---
+
+## 2026-08-03 — session 3: it became a service, and the product changed
+
+**Did.** Rewrote the spec from a local CLI into a workgroup MCP service. Split
+`SPEC.md` into a product spec plus `spec/mcp-api.md`, `spec/knowledge.md`,
+`spec/review-ladder.md`. Nine new decisions (D-13…D-21). Still nothing
+implemented.
+
+**The product is not the reviewer.** Vany: *"the main idea is to share knowledge
+about the code between sessions."* Every Claude session starts amnesiac and
+rediscovers the same conventions. Reviews are how the knowledge gets **made**;
+sharing it across sessions and teammates is what it is **for**. D-9 was a feature
+in session 2 and is the centre of the product in session 3. `spec/knowledge.md`
+now leads with that sentence so the next reader does not mistake it for a cache.
+
+**The sharpest risk moved with it.** A knowledge base that only accumulates will
+eventually describe code that no longer exists — and unlike a stale comment, it is
+injected into every future session automatically. Rot here propagates. So every
+item carries provenance, a verification date and a `scope` hash, and ingested doc
+rules are **re-derived rather than retained** when their source file changes. Vany
+picked doc ingestion knowing the hazard was flagged; the mitigation is therefore
+mandatory, not optional.
+
+**Learned — the MCP spec forbids the planned auth.** *"Access tokens MUST NOT be
+included in the URI query string"*; credentials belong in an `Authorization` header
+sent on every request. The plan was a key embedded in the MCP URL. D-21 revises it.
+The client side is already proven to work — his own `plane` MCP entry passes
+`x-api-key` via `headers`.
+
+**Learned — poll-not-push is not a workaround.** *"Servers do not initiate JSON-RPC
+requests."* There is no way to notify a client that a long review finished, so
+returning an id and polling is the only correct shape. Vany's instinct here was
+right for a reason he had not stated.
+
+**Pushed back on three things, two accepted so far.** That a multi-tenant service
+on personal seat subscriptions is a licence problem (mitigated: it is his own
+workgroup). That parallelism plus flat-rate is a *collision*, not a saving — one
+account, one rate-limit bucket. And that *"we are perfect now"* is a claim we
+cannot make: our models stopping is not the absence of defects, and the first bug
+shipped behind that badge discredits everything. He settled on one honest line —
+tested against our rules and the user's rules — which is both truthful and a
+stronger claim than perfection.
+
+**Found a correctness hole in the diff flow.** Applying diffs to a server-side
+worktree without committing means the reviewed tree exists nowhere — not in git,
+not on the client's disk. A partial apply would be reviewed confidently. Fixed with
+a client-supplied `tree_hash` verified after apply; mismatch is terminal.
+
+**My call, not his:** D-17, OpenRouter API keys for now, revisit subscriptions once
+usage logs exist. He answered the billing question by redirecting to the knowledge
+idea, so this is unconfirmed and cheap to overturn.
+
+---
+
+## 2026-08-03 — session 2: requirements and the landscape
+
+**Did.** Researched how CodeRabbit and Greptile actually work, benchmarked the
+model field, rewrote `SPEC.md` around what came back. Six new decisions (D-7…D-12).
+Nothing implemented yet — still deliberate.
+
+**The architecture changed at the root: Claude Code owns the loop, not `lore`.**
+`lore` is a stateless single-shot reviewer that Claude Code calls repeatedly until it
+exits 0. Everything that must survive between invocations — ladder position, every
+finding, every verdict, the learnings — moves to disk. A reviewer that forgot
+between calls would restart at the bottom tier every time and re-raise everything it
+had already settled; the loop would never terminate. The exit code is now the API.
+
+**Learned — the cheapest tier should not be a model at all.** CodeRabbit runs 50+
+analyzers alongside its LLM. My first spec had a model doing work `tsc` does for
+free, deterministically, in a second. T0 is now the *target repo's own* toolchain —
+its `tsc`, its ESLint config, its tests. Using the target's config rather than ours
+matters: our config against someone else's repo manufactures findings their team
+already rejected.
+
+**Learned — agentic beats diff-in-a-prompt, measurably.** Greptile's v3 rewrite
+reports **70.5% higher comment acceptance** after going agentic. `~/c/review` pastes
+a diff into prose, and I had inherited that without questioning it. Reviewers now
+get the worktree and tools.
+
+**Learned — GLM-5.2 is dominated from both sides.** At 51 intelligence / $0.69 it
+loses to Gemini 3.6 Flash (50 int, $0.56, and 43% faster) on cost and to Kimi K3
+(57) on quality for 25% more. Vany's instinct that he was not confident about it was
+right. Dropped. Also worth remembering: **the effort knob is a bigger lever than the
+model** — GPT-5.6 Sol gives 95% of its capability at 41% of the cost by dropping
+max→high.
+
+**Validated from outside.** Greptile published *"Software Needs An Independent
+Auditor"*, arguing generation and review must be separate parties. That is D-1,
+reached independently by a company with 700K PRs/month. Worth the cost it imposes:
+D-1 excludes Claude Opus 5, the strongest model on the board.
+
+**Vany's answers resolved two open questions.** Justifications become `lore-ok`
+comments **in the source**, and the *reviewer* rules on whether the reason holds —
+which preserves the independent-auditor property. If the reviewed party could close
+its own findings, the loop would end when Claude got persuasive rather than when the
+code got correct. And specs are reviewed **as code**, with drift a defect in both
+directions.
+
+**Assumed, flag if wrong.** His exec-layer answer added the learnings database
+without picking an option, and I read "also" as yes-and: full deterministic T0
+*plus* the learnings store. If he meant the database *instead of* the tooling layer,
+D-8 needs revisiting.
+
+**Surprised me.** `opencode models` lists 360 models including **free
+code-specialised ones** (`north-mini-code-free`, poolside `laguna-s-2.1-free`).
+Given the requirement is a lot of runs, a zero-cost gate below T1 has real upside
+and no downside beyond measuring it.
+
+---
+
+## 2026-08-03 — session 1: scaffold
+
+**Did.** Audited the baseline, grounded opencode's provider/server story, wrote
+`SPEC.md`, `PROG.md`, `CLAUDE.md`, `TODO.md`, `research/`, and the TypeScript
+project skeleton. No implementation yet — by intent: `SPEC.md` §7 still carries
+three `[OPEN]` decisions, and settling those after code exists costs more.
+
+**Learned — `~/c/review` is not garbage.** Vany called it that, and the bash is
+indeed disposable, but its header comment is an incident log: nine invariants, each
+bought with real debugging time. That knowledge is the asset, and it transfers
+verbatim as INV-1…9 (`SPEC.md` §6, detail in `research/prior-art-c-review.md`).
+Rewriting without reading it would have re-bought every one of those incidents.
+
+**Learned — subscriptions invert the cost model.** The plan is flat-rate GLM (Z.AI
+coding plan) plus flat-rate OpenAI. So the cheap→expensive ladder does *not* save
+dollars per token; it saves **rate-limit quota and wall-clock**. Still worth it —
+burning T2's quota on something T0 would have caught is what makes the next review
+queue — but it changes what the tool optimises, and it makes quota exhaustion a
+first-class loud failure rather than a reason to skip a tier.
+
+**Designed — the ledger is the load-bearing part, not the ladder.** Cheap→dear is
+the easy half. The half that makes it work is recording *why* each finding was
+dismissed, so tier T+1 does not re-raise everything tier T already settled; without
+it the loop cannot converge. Corollary worth keeping in view: a justification is
+about specific code, so it must go **stale** when that code changes (SPEC §4.4) —
+otherwise the design rots into rubber-stamping, which is the failure I would most
+expect in six months.
+
+**Surprised me.** Reviewer independence turns out to be a *hard* constraint, not a
+cost preference. Claude writes the code here, so an Anthropic reviewer would be
+grading its own homework. That rules out the strongest available model for the top
+tier, on purpose (D-1).
+
+**Verified toolchain** (TODO T3 done): node 26.5.1, bun 1.3.14, deno, npm 11.17.0,
+pnpm, jq, git 2.55.0, gh, tsc 7.0.2. Latest packages pinned as caret ranges:
+`@opencode-ai/sdk` 1.18.11 (CLI on disk is 1.18.9 — same release train),
+typescript 7.0.2, vitest 4.1.10, `@types/node` 26.1.2. `npm install` is clean, 0
+vulnerabilities.
+
+**Chose no build step.** Node ≥24 strips types and runs `.ts` directly, so the
+source *is* the binary and `bin` points at `src/index.ts`. The cost is
+`erasableSyntaxOnly` — no enums, namespaces or parameter properties — which is a
+constraint `PROG.md` wanted anyway (plain data, pure core). `tsc --noEmit` remains
+the typechecker. Verified end to end: typecheck clean, test green, CLI exits **70**
+with a message rather than exiting 0 with a fake verdict.
+
+**Could not verify:**
+- `momus`'s actual prompt. `~/.config/opencode/agents/` holds only `readonly.md`,
+  so `momus` is defined inside the `oh-my-openagent` plugin rather than as a local
+  file, and a filename search inside the package found nothing. TODO T4.
+- `WebSearch` failed all session with a harness error (`effort 'max'` while
+  thinking is disabled); `WebFetch` worked and is what grounded `research/`.
+
+**Open, in priority order:** SPEC §9. The one with money attached is §9.4 — verify
+that both subscriptions actually expose the needed models through opencode *before*
+buying, since the provider docs contradict themselves on exactly that point.

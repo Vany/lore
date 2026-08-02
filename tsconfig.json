@@ -1,0 +1,35 @@
+{
+  "compilerOptions": {
+    "target": "es2024",
+    "lib": ["es2024"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "types": ["node"],
+
+    // No build step: node >=24 strips types and runs .ts directly, so `rev` is
+    // the source. erasableSyntaxOnly keeps us inside what stripping supports —
+    // it bans enums, namespaces and parameter properties, which is a constraint
+    // we would have wanted anyway (PROG.md: plain data, pure core).
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
+    "noEmit": true,
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitReturns": true,
+
+    // A read result that is never used is usually a dropped error path, and this
+    // tool's whole value is that it never drops one (SPEC INV-1).
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": ["src/**/*.ts"]
+}
