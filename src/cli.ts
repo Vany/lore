@@ -37,7 +37,7 @@ lore — an independent reviewer that remembers the codebase
   --target <path>    repo to review (default: cwd)
   --type <id>        ${reviewTypeIds().join(" | ")} (default: ${DEFAULT_TYPE})
   --run-tests        execute the target's test suite in a sandbox
-  --db <path>        state file (default: ~/.lore/lore.db)
+  --db <path>        state file (default: $LORE_DATA_DIR/lore.db, else ~/.lore/lore.db)
   --json             machine-readable output only
 
 Exit codes: 0 passed · 1 findings · 2 usage · 3 partial (some tiers unpayable)
@@ -73,7 +73,12 @@ export function parseArgs(argv: readonly string[]): Args {
     target: resolve(flag("target") ?? process.cwd()),
     type: flag("type") ?? DEFAULT_TYPE,
     runTests: has("run-tests"),
-    db: flag("db") ?? join(homedir(), ".lore", "lore.db"),
+    // LORE_DATA_DIR before the home directory, because the deployment sets it and a
+    // container has no home worth writing to: `lore new` inside one died on
+    // `EACCES: mkdir '/.lore'`, having ignored the data directory mounted beside it.
+    // Same shape as every other invisible default this project has been bitten by —
+    // the service and the CLI disagreed about where state lives, and neither said so.
+    db: flag("db") ?? join(process.env["LORE_DATA_DIR"] ?? join(homedir(), ".lore"), "lore.db"),
     json: has("json"),
   };
 }
