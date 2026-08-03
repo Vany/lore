@@ -146,8 +146,34 @@ export class Reviewer implements ReviewerLike {
   async review(tier: Tier, prompt: string, worktree: string): Promise<ReviewerResult> {
     if (tier.model === undefined) throw new DidNotRun(`tier ${tier.id} has no model`);
     const started = Date.now();
-
     const sessionId = await this.createSession(tier);
+
+    try {
+      return await this.conduct(sessionId, tier, prompt, worktree, started);
+    } catch (e) {
+      // ABANDONING THE REQUEST DOES NOT STOP THE MODEL.
+      //
+      // Measured: three T2 calls that failed client-side went on to consume
+      // ~3.7M cached-read tokens between them, because the agent kept exploring
+      // the repository after we had stopped listening. A timeout that only frees
+      // the caller is not a budget — it just makes the spend invisible.
+      await this.abort(sessionId);
+      throw e;
+    }
+  }
+
+  /** Best-effort: a failed abort must not mask the error that caused it. */
+  private async abort(sessionId: string): Promise<void> {
+    await this.client.session.abort({ path: { id: sessionId } }).catch(() => undefined);
+  }
+
+  private async conduct(
+    sessionId: string,
+    tier: Tier,
+    prompt: string,
+    worktree: string,
+    started: number,
+  ): Promise<ReviewerResult> {
     const first = await this.ask(sessionId, tier, `${prompt}\n\n${OUTPUT_CONTRACT}`, worktree);
 
     let parsed = extractFindings(first.text);

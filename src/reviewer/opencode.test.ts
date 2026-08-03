@@ -237,6 +237,35 @@ describe("Reviewer.review", () => {
   });
 });
 
+describe("abandoning a call", () => {
+  // Measured live: three T2 calls that failed client-side went on to consume
+  // ~3.7M cached-read tokens between them, because the agent kept exploring after
+  // we had stopped listening. A timeout that only frees the caller is not a
+  // budget — it just makes the spend invisible.
+  it("aborts the session when the reply cannot be parsed", async () => {
+    replies = [
+      { parts: [{ type: "text", text: "prose" }] },
+      { parts: [{ type: "text", text: "still prose" }] },
+    ];
+    await expect(reviewer().review(TIER, "review this", "/tmp/wt")).rejects.toThrow();
+    expect(captured.some((c) => c.path.includes("/abort"))).toBe(true);
+  });
+
+  it("aborts the session when the provider refuses", async () => {
+    replies = [
+      { info: { error: { name: "APIError", data: { message: "Insufficient credits", statusCode: 402 } } } },
+    ];
+    await expect(reviewer().review(TIER, "review this", "/tmp/wt")).rejects.toThrow(Exhausted);
+    expect(captured.some((c) => c.path.includes("/abort"))).toBe(true);
+  });
+
+  it("does not abort a call that succeeded", async () => {
+    replies = [{ parts: [{ type: "text", text: FINDING_JSON }] }];
+    await reviewer().review(TIER, "review this", "/tmp/wt");
+    expect(captured.some((c) => c.path.includes("/abort"))).toBe(false);
+  });
+});
+
 describe("extractFindings", () => {
   it("finds the block whether or not it is fenced", () => {
     expect(extractFindings(`prose\n\`\`\`json\n${FINDING_JSON}\n\`\`\`\nmore prose`)).toHaveLength(1);
