@@ -115,7 +115,12 @@ services:
       # under review, so with no Anthropic credential present, D-1 is enforced by
       # absence rather than by a tier config a typo could undo.
       - ./opencode/config:/home/lore/.config/opencode:ro
-      - ./opencode/data:/home/lore/.local/share/opencode:ro
+      # opencode needs a WRITABLE data directory — it stores session state there.
+      # But the credential inside it must not be writable, so the volume provides
+      # the scratch space and auth.json is bound read-only OVER it. Docker applies
+      # the deeper path last, so the file mount wins.
+      - opencode-data:/home/lore/.local/share/opencode
+      - ./opencode/data/auth.json:/home/lore/.local/share/opencode/auth.json:ro
 
   # Continuous replication of the SQLite database.
   #
@@ -142,3 +147,6 @@ services:
       LITESTREAM_SECRET_ACCESS_KEY: ${LITESTREAM_SECRET_ACCESS_KEY:-}
     depends_on:
       - lore
+
+volumes:
+  opencode-data:

@@ -25,6 +25,9 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --no-audit --no-fund
 
 COPY src ./src
+# Ladder configurations. LORE_TIERS points at one of these, so the file has to
+# exist inside the image -- the container has no access to the checkout.
+COPY deploy/tiers.*.json ./deploy/
 
 # Reviews run as this user; the data volume is chowned to it in compose.
 RUN useradd --system --create-home --uid 10001 lore

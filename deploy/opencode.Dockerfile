@@ -19,6 +19,15 @@ RUN npm i -g "opencode-ai@${OPENCODE_VERSION}"
 # Runs as a non-root user with the same uid as `lore`, so the read-only bind of the
 # repositories resolves to the same identity in both containers.
 RUN useradd --system --create-home --uid 10001 lore
+
+# opencode writes session state here (it creates `repos/` on first run), so the
+# directory must exist AND be owned by the runtime user before the named volume is
+# created from it: docker seeds a fresh volume from the image path, ownership
+# included. Without this the volume lands root-owned and opencode dies with EACCES
+# on a path nobody configured.
+RUN mkdir -p /home/lore/.local/share/opencode /home/lore/.config/opencode \
+ && chown -R lore:lore /home/lore
+
 USER lore
 
 EXPOSE 4096
