@@ -238,6 +238,13 @@ line number, so a finding that moves does not look new. Severity is excluded too
 finding returning at raised severity is recognised as the same finding.
 
 The short form printed for you is the leading 8 hex characters.
+
+Findings arrive worst first: high, then medium, then low, then by file and line. If
+you show your user only part of a response, take it from the top.
+
+A severity outside high/medium/low is a bug in whatever wrote it, and sorts ABOVE
+high rather than below low — so an unrecognised value is the first thing you see
+instead of the thing you never scroll to.
 `.trim(),
   },
 

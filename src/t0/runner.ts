@@ -10,7 +10,7 @@
 
 import { mkdir, rm } from "node:fs/promises";
 import { basename, join } from "node:path";
-import type { Finding } from "../core/finding.ts";
+import { compareFindings, type Finding } from "../core/finding.ts";
 import type { T0Engine } from "../core/review-type.ts";
 import { runEngine, type EngineOutcome } from "./engines.ts";
 import { DEFAULT_SANDBOX, install, lockfileKey, runTests, testFindings, type SandboxConfig } from "./sandbox.ts";
@@ -109,6 +109,12 @@ async function installAndTest(
   return { engine: "tests", findings: testFindings(tests) };
 }
 
+/**
+ * How many T0 findings the prompt lists before it stops. Unchanged from when this was
+ * written — what changed is *which* ones survive the cut (see below).
+ */
+const LISTED = 200;
+
 /** Render T0's result for a model prompt. */
 export function renderT0(r: T0Result): string {
   const parts: string[] = [];
@@ -116,11 +122,21 @@ export function renderT0(r: T0Result): string {
   if (r.findings.length === 0) {
     parts.push("Deterministic tooling found nothing.");
   } else {
+    // Worst first, and sorted BEFORE the cut. These arrive grouped by engine, in the
+    // order the review type lists them — `tsc, eslint, ast-grep, semgrep, tests` for
+    // code-arch — so 200+ eslint findings used to displace everything every later
+    // engine said: semgrep's `high` findings, and the two the tests stage raises
+    // (`installAndTest` above, and `testFindings` in sandbox.ts). Those findings are
+    // still recorded and still reach the client — `runRound` records all of T0's —
+    // but the tier judged the code without being told the suite fails (D-50).
+    const ordered = [...r.findings].sort(compareFindings);
     parts.push(`Deterministic tooling found ${r.findings.length} issue(s):`);
-    for (const f of r.findings.slice(0, 200)) {
+    for (const f of ordered.slice(0, LISTED)) {
       parts.push(`  [${f.severity}] ${f.file}${f.line !== undefined ? `:${f.line}` : ""} — ${f.claim}`);
     }
-    if (r.findings.length > 200) parts.push(`  … and ${r.findings.length - 200} more`);
+    if (ordered.length > LISTED) {
+      parts.push(`  … and ${ordered.length - LISTED} more, none more severe than the last line above`);
+    }
   }
 
   if (r.unavailable.length > 0) {

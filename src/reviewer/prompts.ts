@@ -8,6 +8,7 @@
  * has to say so, or the model does not know it.
  */
 
+import { compareFindings } from "../core/finding.ts";
 import type { Tier } from "../core/ladder.ts";
 import type { ReviewType } from "../core/review-type.ts";
 import type { KnowledgeItem, RecordedFinding } from "../store/store.ts";
@@ -103,7 +104,17 @@ function knowledgeBlock(items: readonly KnowledgeItem[]): string {
 
 function settledBlock(settled: PromptInput["settled"]): string {
   if (settled.length === 0) return "";
-  const lines = settled.slice(0, 80).map((s) => {
+  // Ordered BEFORE truncating, and this was the last place it was not.
+  //
+  // The store now hands out findings worst-first, but this list is assembled from
+  // verdicts rather than read from one of those queries, so it arrived in whatever
+  // order the caller built it and then lost everything past the 80th. A cut list is
+  // exactly where order decides what a reader never sees — and the reader here is a
+  // model tier, which will re-raise a settled high-severity finding it was never
+  // shown, and be told its justification was rejected.
+  const ranked = [...settled].sort((a, b) => compareFindings(a.finding, b.finding));
+  const dropped = Math.max(0, ranked.length - 80);
+  const lines = ranked.slice(0, 80).map((s) => {
     const where = `${s.finding.file}${s.finding.line !== undefined ? `:${s.finding.line}` : ""}`;
     const why = s.rationale === undefined ? "fixed" : `justified: ${s.rationale}`;
     return `  ${where} — ${s.finding.claim}\n      → ${why}`;
@@ -115,6 +126,11 @@ function settledBlock(settled: PromptInput["settled"]): string {
     "If you can show a recorded reason is wrong, say so explicitly — a mistaken justification matters more than a",
     "fresh bug, because it means someone's reasoning was wrong and was trusted.",
     ...lines,
+    // Truncation is stated, never silent. A reviewer that is shown 80 of 200 settled
+    // findings and told nothing will treat the other 120 as never-raised.
+    ...(dropped > 0
+      ? [`  … and ${dropped} more already-settled findings, not listed here. Lowest severity first, so these are the least severe.`]
+      : []),
   ].join("\n");
 }
 

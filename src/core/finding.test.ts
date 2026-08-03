@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { normalizeClaim, parseFinding } from "./finding.ts";
+import {
+  compareFindings,
+  normalizeClaim,
+  parseFinding,
+  severityRank,
+  SEVERITIES,
+  worstSeverity,
+  type Severity,
+} from "./finding.ts";
 
 const valid = {
   file: "src/pay/hold.ts",
@@ -93,5 +101,60 @@ describe("normalizeClaim", () => {
     expect(normalizeClaim("uses toEqual, not toStrictEqual")).toBe(
       "uses toequal, not tostrictequal",
     );
+  });
+});
+
+// The order findings are presented in (D-50). Pinned because the natural orders are
+// both wrong: alphabetically "high, low, medium", by insertion whatever the engines
+// happened to emit. The one that matters is worst first, and it matters most in the
+// places that show only the top of the list.
+describe("severity ordering", () => {
+  it("declares SEVERITIES worst first, since the index IS the rank", () => {
+    expect(SEVERITIES).toStrictEqual(["high", "medium", "low"]);
+  });
+
+  it("ranks medium as worse than low", () => {
+    expect(severityRank("high")).toBeLessThan(severityRank("medium"));
+    // The whole bug in one assertion: as text, "low" < "medium".
+    expect(severityRank("medium")).toBeLessThan(severityRank("low"));
+  });
+
+  // Only reachable through a row written around the schema. First, not last: at the
+  // bottom it would read as a nit, and it would be the first thing a cut discarded.
+  it("ranks a severity it does not recognise first, not last", () => {
+    const bogus = "catastrophic" as Severity;
+    expect(severityRank(bogus)).toBeLessThan(severityRank("high"));
+  });
+
+  it("sorts worst first, then by file, then by line", () => {
+    const f = (severity: Severity, file: string, line?: number) => ({
+      severity,
+      file,
+      ...(line === undefined ? {} : { line }),
+    });
+    const shuffled = [
+      f("low", "a.ts", 1),
+      f("medium", "b.ts", 1),
+      f("high", "z.ts", 9),
+      f("medium", "a.ts", 40),
+      f("medium", "a.ts", 2),
+      f("medium", "a.ts"),
+    ];
+    expect([...shuffled].sort(compareFindings)).toStrictEqual([
+      f("high", "z.ts", 9),
+      // No line first within a file: file-level findings are about the whole file.
+      f("medium", "a.ts"),
+      f("medium", "a.ts", 2),
+      f("medium", "a.ts", 40),
+      f("medium", "b.ts", 1),
+      f("low", "a.ts", 1),
+    ]);
+  });
+
+  it("finds the worst severity present rather than the first one listed", () => {
+    expect(worstSeverity(["low", "medium", "low"])).toBe("medium");
+    expect(worstSeverity(["low", "high", "medium"])).toBe("high");
+    expect(worstSeverity(["low"])).toBe("low");
+    expect(worstSeverity([])).toBeUndefined();
   });
 });

@@ -5,6 +5,15 @@ dist/
 # per-branch finding ledger, written into a reviewed worktree (SPEC §4.3)
 .rev/
 
+# Agent worktrees. Each is a full checkout with its own node_modules — 1.1G here
+# during one workflow run — and git worktrees are NOT ignored automatically when
+# they live inside the parent repo.
+#
+# This matters more than it looks: the review loop builds its submission with
+# `git add -A && git write-tree`, so an unignored worktree directory would put
+# every agent's checkout into the tree hash lore verifies against.
+.claude/
+
 .DS_Store
 *.log
 .env

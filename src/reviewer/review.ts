@@ -164,6 +164,11 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     outputTokens: result.outputTokens,
     costUsd: result.costUsd,
     latencyMs: result.latencyMs,
+    // Omitted rather than zeroed when the reviewer could not count its own turns:
+    // the column exists to become a distribution of how far reviews explore (D-50),
+    // and a failed measurement stored as 0 would be indistinguishable from a review
+    // that answered without looking at anything.
+    ...(result.steps !== undefined ? { steps: result.steps } : {}),
     outcome: result.retried ? "ok-after-retry" : "ok",
   });
 

@@ -128,6 +128,12 @@ they last collected — the batch view the workflow actually needs. Per-review
 Without this, a developer with 30 open reviews either polls 30 ids or loses
 findings. Both are failures.
 
+Each entry carries `highest`, the worst severity among its new findings, so a client
+can triage 30 reviews without reading 30 lists. It is **computed over the whole set**,
+not taken from the first row — reading position 0 was how it came to report `low` for
+a review whose worst finding was `medium` (D-50, `spec/review-ladder.md` §3.2). The
+findings themselves are ordered worst first, there and in `review.poll`.
+
 ## 3. Review state machine
 
 ```

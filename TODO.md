@@ -65,6 +65,11 @@ findings are worth the money, and the numbers are measured rather than guessed.
 - [x] **Phase 5 — Review types and security.** Done. `security/{sbom,osv,vex}`,
       wired as T0 engines, with reachability guidance in the tier prompts and real
       CycloneDX VEX output.
+- [ ] **Set the exploration cap from data** (D-50). `usage.steps` now records the
+      agentic turns of every completed tier run. Read the distribution before
+      choosing a number; a cap nobody can calibrate fails paid-for deep reviews for
+      nothing. Blocked on the same table also recording what a turn costs — today's
+      token columns describe one turn, not the session.
 
 ---
 

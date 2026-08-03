@@ -7,6 +7,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { initialState } from "../core/ladder.ts";
 import { DEFAULT_HEARTBEAT } from "../ops/heartbeat.ts";
 import { grantToken } from "../mcp/auth.ts";
 import { Store } from "../store/store.ts";
@@ -17,6 +18,7 @@ let close: () => void;
 let base: string;
 let token: string;
 let otherToken: string;
+let repoId: string;
 
 const PORT = 39_517;
 
@@ -24,6 +26,7 @@ beforeEach(() => {
   store = new Store(":memory:");
   const repo = store.upsertRepo("demo", "git@x:demo.git");
   const other = store.upsertRepo("other", "git@x:other.git");
+  repoId = repo.id;
   token = grantToken(store, repo.id, "alice");
   otherToken = grantToken(store, other.id, "bob");
 
@@ -173,5 +176,78 @@ describe("MCP surface", () => {
     const text = await res.text();
     expect(text).toContain("lore://docs/workflow");
     expect(text).toContain("lore://docs/lore-ok");
+  });
+});
+
+/**
+ * Severity ordering, through the real tools rather than the store (D-50).
+ *
+ * The store test proves the query; these prove the two responses an agent actually
+ * triages on. Both were wrong: SQLite orders TEXT lexicographically, so "low" came
+ * back ahead of "medium", and `review_inbox` reported the first row as `highest`.
+ */
+describe("findings are ranked worst first", () => {
+  const finding = (fp: string, severity: string, file: string) => ({
+    fingerprint: fp,
+    file,
+    line: 1,
+    symbol: "s",
+    severity: severity as "high" | "medium" | "low",
+    claim: `claim ${fp}`,
+    evidence: "evidence",
+    failureScenario: "scenario",
+    origin: "t1",
+    round: 1,
+    firstSeen: "2026-08-03T00:00:00.000Z",
+  });
+
+  /** Tool results come back as an SSE frame wrapping JSON-RPC wrapping JSON text. */
+  const callTool = async (name: string, args: Record<string, unknown>): Promise<Record<string, unknown>> => {
+    const res = await mcp(
+      { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } },
+      token,
+    );
+    const body = await res.text();
+    const line = body.split("\n").find((l) => l.startsWith("data:"));
+    expect(line).toBeDefined();
+    const rpc = JSON.parse((line ?? "").slice("data:".length)) as {
+      result?: { content?: { text?: string }[] };
+      error?: unknown;
+    };
+    expect(rpc.error).toBeUndefined();
+    return JSON.parse(rpc.result?.content?.[0]?.text ?? "{}") as Record<string, unknown>;
+  };
+
+  beforeEach(() => {
+    store.createReview({
+      id: "rev1",
+      repoId,
+      principal: "alice",
+      branch: "feat/x",
+      intoRef: "main",
+      ticket: "do the thing",
+      type: "code-arch",
+      state: "findings_ready",
+      ladder: initialState(),
+    });
+    // Deliberately no `high`: with a high present the old code was accidentally
+    // right, which is why the inverted medium/low pair went unnoticed.
+    store.recordFinding("rev1", finding("l1", "low", "a.ts"));
+    store.recordFinding("rev1", finding("m1", "medium", "b.ts"));
+  });
+
+  it("returns poll findings worst first", async () => {
+    const out = await callTool("review_poll", { review_id: "rev1" });
+    const got = (out["new_findings"] as { severity: string }[]).map((f) => f.severity);
+    expect(got).toStrictEqual(["medium", "low"]);
+  });
+
+  it("reports the worst severity in the inbox, not the first row", async () => {
+    const out = await callTool("review_inbox", {});
+    const reviews = out["reviews"] as { highest: string; findings: { severity: string }[] }[];
+    expect(reviews).toHaveLength(1);
+    // This said "low" for a review whose worst finding is medium.
+    expect(reviews[0]?.highest).toBe("medium");
+    expect(reviews[0]?.findings.map((f) => f.severity)).toStrictEqual(["medium", "low"]);
   });
 });

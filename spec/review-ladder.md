@@ -163,6 +163,41 @@ treats ambiguity as an error rather than picking a winner — git's rule for sho
 object ids. Silently resolving to the wrong finding would close a defect nobody
 examined.
 
+### 3.2 Findings are presented worst first — added 2026-08-03 (D-50)
+
+Every list of findings this service **hands to a client or a model tier** is ordered
+**high, medium, low**, then by file, then by line, then by fingerprint. The last key
+is unique within a review, so the same set of findings always comes back in the same
+sequence rather than in whatever order the query plan happened to produce.
+
+Two qualifications, because the sentence above was written unqualified once and was
+wrong twice over:
+
+- T0's findings carry **no fingerprint**, so their order is total only up to
+  `(severity, file, line)`. `Array.sort` is stable, so ties keep the engine's order.
+- The in-process comparator **approximates** the SQL rather than matching it: file
+  comparison is JS UTF-16 against SQLite's BINARY, and they disagree above the BMP.
+  It exists for lists the store never ordered, and re-sorting a store-ordered list is
+  safe because the comparator is indifferent exactly where the store already decided.
+
+This needs stating because it was wrong from the store's first commit and nothing
+looked wrong. `severity` is stored as TEXT and SQLite orders TEXT lexicographically:
+`ORDER BY severity` means **high, low, medium**. Every consumer of a findings query
+ranked a low-severity finding above a medium one, and `review.inbox` — which reported
+the first row as `highest` — told a client the worst thing in a review was `low` when
+it was `medium`.
+
+**Order is a correctness property wherever a list is cut short**, and what a cut drops
+is decided entirely by how the list was sorted. The T0 render caps the model prompt at
+200 findings, so the order decides which facts about the tree the tier is given — not
+which findings survive, since `runRound` records all of T0's regardless. Clients cut
+too: `review.inbox` exists to be scanned rather than read, and an agent surfacing "the
+top few" to a person is the intended use.
+
+An unrecognised severity therefore sorts **first**, not last. It can only come from a
+write that went around the schema — `severity` is plain TEXT with no CHECK constraint
+— and last place is where a cut would silently discard it.
+
 ## 4. Justification is a proposal of lore, and the reviewer ratifies it
 
 When the client believes a finding is wrong, it does not silently dismiss it. It

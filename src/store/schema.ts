@@ -13,7 +13,31 @@
  * SPEC: SPEC.md §3, spec/knowledge.md
  */
 
-export const SCHEMA_VERSION = 1;
+import type { DatabaseSync } from "node:sqlite";
+import { SEVERITIES } from "../core/finding.ts";
+
+export const SCHEMA_VERSION = 2;
+
+/**
+ * How findings are ordered wherever the service hands them out: worst first.
+ *
+ * `severity` is TEXT and SQLite orders TEXT lexicographically, so `ORDER BY severity`
+ * meant "high", "low", "medium" — a **low**-severity finding served ahead of a medium
+ * one by every query that presents findings. Ordering matters most where a list gets
+ * cut short, because there it decides what a reader never sees at all.
+ *
+ * Generated from `SEVERITIES` (declared worst first) rather than written out, so the
+ * SQL rank and `severityRank` cannot drift apart. The interpolation is over a
+ * compile-time `as const` array of bare words — no value here comes from input.
+ *
+ * `ELSE -1` puts a severity the code does not know at the very top: an unrecognised
+ * value is a bug in whatever wrote it, and burying it at the bottom of a truncated
+ * list is how it would stay unnoticed.
+ *
+ * `fingerprint` is last so the keys are unique within a review and the sequence does
+ * not depend on which plan SQLite chose.
+ */
+export const FINDING_ORDER_SQL = `CASE severity ${SEVERITIES.map((s, i) => `WHEN '${s}' THEN ${i}`).join(" ")} ELSE -1 END, file, line, fingerprint`;
 
 export const PRAGMAS = [
   "PRAGMA journal_mode = WAL",
@@ -170,6 +194,10 @@ CREATE TABLE IF NOT EXISTS usage (
   output_tokens INTEGER NOT NULL DEFAULT 0,
   cost_usd      REAL NOT NULL DEFAULT 0,
   latency_ms    INTEGER,
+  -- Agentic turns the tier took (D-50). Nullable on purpose: NULL means nobody could
+  -- count them, and 0 would mean a review that never asked the model anything. The
+  -- column exists to turn "cap exploration" from an argument into a distribution.
+  steps         INTEGER,
   outcome       TEXT NOT NULL,
   at            TEXT NOT NULL
 );
@@ -189,3 +217,39 @@ CREATE TABLE IF NOT EXISTS job (
 );
 CREATE INDEX IF NOT EXISTS job_queue ON job(state, id);
 `;
+
+/**
+ * Columns added to `DDL` after a database already existed somewhere.
+ *
+ * `CREATE TABLE IF NOT EXISTS` does nothing at all to a table that is already there,
+ * so a column added above is invisible to every database created before it — and the
+ * first `INSERT` naming it dies with `no such column`, taking a review that had
+ * already paid for a model with it. This is not hypothetical: `lore` runs on a
+ * deployed SQLite file whose `usage` table was created by version 1.
+ *
+ * Additive only, and each entry names the column it is adding so the check can be
+ * "is it there?" rather than "has this run before?".
+ */
+export const MIGRATIONS: readonly { readonly table: string; readonly column: string; readonly sql: string }[] = [
+  { table: "usage", column: "steps", sql: "ALTER TABLE usage ADD COLUMN steps INTEGER" },
+];
+
+/**
+ * Bring an existing database up to `DDL`.
+ *
+ * Asks the live table what columns it has rather than trusting a version row, so it
+ * is idempotent and cannot be fooled by a database whose bookkeeping and columns
+ * disagree — which is how a migration system comes to believe it has already run.
+ *
+ * A table that is missing entirely is not an old file, it is a broken assumption:
+ * `DDL` runs immediately before this. It throws, because the alternative is skipping
+ * quietly and failing later at the insert, one layer away from the cause.
+ */
+export function applyMigrations(db: DatabaseSync): void {
+  for (const m of MIGRATIONS) {
+    const columns = db.prepare("SELECT name FROM pragma_table_info(?)").all(m.table) as { name?: string }[];
+    if (columns.length === 0) throw new Error(`cannot migrate: table '${m.table}' does not exist`);
+    if (columns.some((c) => c.name === m.column)) continue;
+    db.exec(m.sql);
+  }
+}

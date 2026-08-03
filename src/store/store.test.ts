@@ -1,6 +1,11 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AmbiguousFingerprint } from "../core/errors.ts";
 import { initialState } from "../core/ladder.ts";
+import { SCHEMA_VERSION, applyMigrations } from "./schema.ts";
 import { Store, type RecordedFinding } from "./store.ts";
 
 let store: Store;
@@ -229,6 +234,26 @@ describe("usage and jobs", () => {
     expect(store.spendSince("2000-01-01T00:00:00.000Z")).toBeCloseTo(0.52, 6);
   });
 
+  // Tokens default to 0 because a missing token count really is nothing spent. A
+  // missing STEP count is nothing known, and the two must not share a cell value —
+  // a threshold derived later from a column of zeroes would be derived from the
+  // times the measurement failed (D-50).
+  it("keeps 'not measured' distinct from 'explored nothing'", () => {
+    store.recordUsage({ tier: "t1", steps: 41, outcome: "ok" });
+    store.recordUsage({ tier: "t2", outcome: "ok" });
+
+    const rows = store.db.prepare("SELECT tier, steps, input_tokens FROM usage ORDER BY tier").all() as {
+      tier: string;
+      steps: number | null;
+      input_tokens: number;
+    }[];
+    expect(rows.map((r) => [r.tier, r.steps])).toStrictEqual([
+      ["t1", 41],
+      ["t2", null],
+    ]);
+    expect(rows[1]?.input_tokens).toBe(0);
+  });
+
   it("hands a queued job to exactly one claimant", () => {
     newReview("rev1");
     store.enqueue("rev1", "deep");
@@ -237,5 +262,93 @@ describe("usage and jobs", () => {
     expect(claimed?.reviewId).toBe("rev1");
     expect(store.claimJob()).toBeUndefined();
     store.finishJob(claimed?.id ?? 0, "done");
+  });
+});
+
+/**
+ * The database this code will actually meet is not an empty one.
+ *
+ * `lore` runs on a deployed SQLite file created by schema version 1, and
+ * `CREATE TABLE IF NOT EXISTS` does precisely nothing to a table that already
+ * exists — so a column added to the DDL is present in every test and absent in
+ * production, where the first insert naming it dies on `no such column`, after a
+ * model has already been paid for.
+ */
+describe("opening a database that already exists", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "lore-store-"));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  /** `usage` exactly as schema version 1 created it, which is what is deployed. */
+  const V1_USAGE = `CREATE TABLE usage (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id       TEXT,
+    review_id     TEXT,
+    tier          TEXT NOT NULL,
+    model         TEXT,
+    input_tokens  INTEGER NOT NULL DEFAULT 0,
+    cached_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cost_usd      REAL NOT NULL DEFAULT 0,
+    latency_ms    INTEGER,
+    outcome       TEXT NOT NULL,
+    at            TEXT NOT NULL
+  )`;
+
+  it("adds a column the deployed database has never seen", () => {
+    const path = join(dir, "v1.db");
+    const v1 = new DatabaseSync(path);
+    v1.exec(V1_USAGE);
+    v1.exec("INSERT INTO usage(tier, outcome, at) VALUES('t1', 'ok', '2026-01-01T00:00:00.000Z')");
+    v1.close();
+
+    const migrated = new Store(path);
+    migrated.recordUsage({ tier: "t2", steps: 12, outcome: "ok" });
+    const rows = migrated.db.prepare("SELECT tier, steps FROM usage ORDER BY id").all() as {
+      tier: string;
+      steps: number | null;
+    }[];
+    // The row written before the column existed keeps the honest answer: nobody
+    // counted, so nobody knows.
+    expect(rows.map((r) => [r.tier, r.steps])).toStrictEqual([
+      ["t1", null],
+      ["t2", 12],
+    ]);
+    migrated.close();
+
+    // Every restart runs the migration again, and `ADD COLUMN` twice is an error —
+    // so the second open is the one that would take the service down at 3am.
+    const reopened = new Store(path);
+    expect(reopened.db.prepare("SELECT COUNT(*) AS n FROM usage").get()).toMatchObject({ n: 2 });
+    reopened.close();
+  });
+
+  it("records the version it left the database at, not the one it found", () => {
+    const path = join(dir, "meta.db");
+    const v1 = new DatabaseSync(path);
+    v1.exec("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
+    v1.exec("INSERT INTO meta(key, value) VALUES('schema_version', '1')");
+    v1.close();
+
+    const store2 = new Store(path);
+    expect(store2.db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get()).toMatchObject({
+      value: String(SCHEMA_VERSION),
+    });
+    store2.close();
+  });
+
+  // The migration decides what to do by asking the table. A table that is not there
+  // must fail loudly rather than be skipped: skipping leaves the column absent and
+  // moves the crash to the next insert, one layer away from the cause.
+  it("refuses to migrate a table that does not exist", () => {
+    const empty = new DatabaseSync(":memory:");
+    expect(() => applyMigrations(empty)).toThrow(/table 'usage' does not exist/);
+    empty.close();
   });
 });

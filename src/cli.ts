@@ -12,6 +12,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { EXIT, LoreError, UsageError, type ExitCode } from "./core/errors.ts";
+import { compareFindings } from "./core/finding.ts";
 import { initialState } from "./core/ladder.ts";
 import { DEFAULT_TYPE, reviewType, reviewTypeIds } from "./core/review-type.ts";
 import { gitMaybe } from "./git/exec.ts";
@@ -254,7 +255,12 @@ function render(
     out.push(decision === "passed" ? "No findings. Every tier agrees." : "No new findings this round.", "");
   } else {
     out.push(`## ${findings.length} finding(s)`, "");
-    for (const f of [...findings].sort((a, b) => rank(a.severity) - rank(b.severity))) {
+    // The store already orders these worst-first. Sorting again is redundant for
+    // that path and is kept so the renderer does not depend on its caller having
+    // done so — T0's findings never went through the store at all. The cost is one
+    // O(n log n) sort over a list a human is about to read; unmeasured, and not
+    // claimed to be free.
+    for (const f of [...findings].sort(compareFindings)) {
       const where = `${f.file}${f.line !== undefined ? `:${f.line}` : ""}`;
       out.push(
         `### [${f.severity}] ${where}${f.cwe !== undefined ? `  (${f.cwe})` : ""}`,
@@ -274,10 +280,6 @@ function render(
     out.push("---", "", "This is NOT a pass. Fix or justify, then run again.", "");
   }
   return out.join("\n");
-}
-
-function rank(s: string): number {
-  return s === "high" ? 0 : s === "medium" ? 1 : 2;
 }
 
 function dirOf(p: string): string {

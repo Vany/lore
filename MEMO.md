@@ -5,6 +5,101 @@ surprised me.
 
 ---
 
+## 2026-08-03 — session 28: the cap I did not ship
+
+**Did.** Closed the first of session 27's two open items and deliberately did not
+close the second the way it was written.
+
+**`createSession` never looked at the status.** Fixed, and both halves of it verified
+against a real opencode 1.18.9 rather than against a fake: a password-protected
+server answers `POST /session` with a **bare 401 and an empty body**, so `data` is
+undefined, `error` is `{}`, and the status is the only thing in the reply that names
+the fault. The old message blamed the missing id — *"is a server running?"* — while
+the server was up and answering, which is where two debugging sessions went. The
+opposite case turned out to be missing too: an unreachable server **rejects** instead
+of returning (`connect ECONNREFUSED` through `longFetch`), and that reached the
+worker as a bare error naming neither the tier nor the address. That is the one case
+where "is a server running there?" is the right sentence, and it never printed it.
+`doctor.ts` had both cases right already; the reviewer boundary did not.
+
+**The turn cap: not shipped, and that is the change.** Round 1 of this fix wrote one,
+defaulting to 80 turns. The local opencode store still holds the predecessor's two
+real review sessions of `rigid-monorepo`, round 181, both on the read-only agent, and
+they settle it:
+
+| session | turns | session cache reads | cost |
+|---|---|---|---|
+| `review_glm_r181` | **82** | 8.85M | $0.85 |
+| `review_sol_r181` | **27** | 11.87M | $35.20 |
+
+**A cap of 80 would have failed a healthy GLM review at turn 81**, after $0.85 of it
+had been paid for. And the run that read the *most* tokens took a *third* as many
+turns as the one that read the fewest — turns are not tokens, and one global step
+limit does not mean the same thing to two models. I argued for measuring first before
+I found these; the numbers are what turn that from a preference into a decision.
+
+Round 1's cap had two enforcement halves and I can now show both were inert.
+
+- The *audit* counted `step-start` parts in the prompt reply. A reply is ONE
+  assistant message, and an assistant message holds at most one `step-start` — 1415
+  of them across 1455 messages in the local opencode store; of the 40 without one, 31
+  are `patch`-only bookkeeping and 9 have no parts at all. So it read 1 for a runaway
+  and 1 for a one-shot answer.
+  The tests passed because the fake handed back a reply with nine step parts in it,
+  which real opencode never sends. *Fakes must not be kinder than production*, and
+  this one invented a shape production does not have.
+- The *live watch* subscribed to the event stream. A reviewer ran it against a dead
+  port: 0 steps, no trip, nothing printed — the SDK's SSE client swallows connection
+  errors into an optional callback nobody passed. And when it did fire, the abort
+  surfaced as `500: MessageAbortedError`, which is precisely the misdiagnosis the
+  other half of this session was fixing.
+
+So D-50 is now *count first*. `usage.steps`, from `GET /session/:id/message`, one
+session per tier run. **NULL, never 0**, when it cannot be taken — a zero is a claim
+that the tier explored nothing, and it would bias the very distribution the future
+threshold gets read from, downwards, exactly on the runs where the measurement broke.
+
+**Learned: the number lives in the session, not in the reply.** opencode appends one
+assistant message per turn and `session.prompt` hands back only one of them. Run
+against a real server on a copy of the local data directory, the shipping code
+counted **82** turns for a session the database says has 82 `step-start` parts.
+
+**Learned: an old database does not get new columns.** `CREATE TABLE IF NOT EXISTS`
+is a no-op on a table that exists, so `usage.steps` would have been present in every
+test and absent on the deployed file, and the first insert naming it would have taken
+a review that had already paid for a model. There is now a `MIGRATIONS` list and a
+test that opens a hand-built version-1 database — the second open is the one that
+matters, because `ADD COLUMN` twice is an error.
+
+**Surprised me, twice.**
+
+The first draft of the step counter's own failure message printed *"opencode answered
+200"* for a server that was not there — I only saw it because I pointed the real code
+at a dead port and read the output. A diagnostic that invents a status is the same
+defect as the one this session set out to fix, written by the fix.
+
+And `usage`'s token columns are read from that same single assistant message, so what
+lore records as a review's tokens is one turn of it. In a real 73-turn session the
+per-message cache reads were 100k–450k each and **summed to 17.9M**. That makes the
+spend ceiling blinder than session 27 thought (`cost_usd` is $0 on a subscription
+*and* it is one turn's cost), and it means a step count cannot be converted into
+tokens until it is fixed. `GET /session/:id` hands back the session's real totals in
+**713 bytes** — `{cost, tokens:{input, output, reasoning, cache:{read, write}}}`,
+matching my per-message sums exactly — so the fix is small. Not done here: it changes
+what the ceiling sees, which is a money decision and Vany's.
+
+**Cost of the new call, measured rather than assumed:** the message list for that
+86-turn session is **5.2 MB over 179 ms**. Once per completed review that is fine on
+the SBC; it is the reason to keep an eye on `session.messages` if reviews get much
+longer, and the reason the cheap `GET /session/:id` above is worth knowing about.
+
+**Also worth keeping:** `session.abort` reported failure by return value too, and was
+being swallowed whole — an abort that 404s means the model keeps exploring and keeps
+spending, which is the exact thing the abort exists to stop. It still cannot throw
+(that would replace the error that caused it), so it now says so on `[lore:log]`.
+
+---
+
 ## 2026-08-03 — session 27: lore reviewed lore, and was right
 
 **Did.** Ran the first whole-repo review through MCP: `main` against the first

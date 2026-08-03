@@ -27,6 +27,14 @@ import { runRound } from "./review.ts";
 /** A reviewer that says exactly what a test tells it to, and records what it saw. */
 class ScriptedReviewer implements ReviewerLike {
   readonly prompts: string[] = [];
+  /**
+   * Agentic turns to report back.
+   *
+   * Mutable, and `undefined` is a value a test sets deliberately: it reproduces a
+   * reviewer that answered but could not count its own turns (D-50), which a default
+   * argument could not express — passing `undefined` would just take the default.
+   */
+  steps: number | undefined = 7;
   private readonly script: (readonly Finding[])[];
 
   constructor(script: (readonly Finding[])[]) {
@@ -45,6 +53,7 @@ class ScriptedReviewer implements ReviewerLike {
       costUsd: 0.001,
       latencyMs: 1,
       retried: false,
+      steps: this.steps,
     };
   }
 }
@@ -299,5 +308,30 @@ describe("runRound", () => {
     await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
     // Usage logging is what turns the subscription question into arithmetic.
     expect(store.spendSince("2000-01-01T00:00:00.000Z")).toBeCloseTo(0.001, 6);
+  });
+
+  // The whole reason the step count exists: SPEC says the cap will be derived from
+  // the usage table, and a decision that cites a number nobody stores is a sentence,
+  // not a plan (D-50). This is the end of that wire.
+  it("stores how far the tier explored, where the threshold will be derived from", async () => {
+    const reviewer = new ScriptedReviewer([[]]);
+    reviewer.steps = 23;
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
+
+    const row = store.db.prepare("SELECT tier, steps FROM usage").get() as { tier: string; steps: number | null };
+    expect(row.tier).toBe("t1");
+    expect(row.steps).toBe(23);
+  });
+
+  // A reviewer that could not count its own turns must leave the cell EMPTY. Zero
+  // would be a fact — "this tier explored nothing" — and averaging it in would drag
+  // the distribution down every time the measurement itself broke.
+  it("leaves the step count null rather than zero when it was never measured", async () => {
+    const reviewer = new ScriptedReviewer([[]]);
+    reviewer.steps = undefined;
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
+
+    const row = store.db.prepare("SELECT steps FROM usage").get() as { steps: number | null };
+    expect(row.steps).toBeNull();
   });
 });

@@ -12,12 +12,14 @@
 import { randomBytes } from "node:crypto";
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/server";
 import * as z from "zod";
+import { worstSeverity } from "../core/finding.ts";
 import { initialState } from "../core/ladder.ts";
 import { isAttestable } from "../core/review-state.ts";
 import { DEFAULT_TYPE, reviewType, reviewTypeIds } from "../core/review-type.ts";
 import { applyPatch, treeHash } from "../git/repo.ts";
 import { enrich, renderEnrichment } from "../knowledge/enrich.ts";
 import { buildVex, findingsNeedingTriage, renderVex } from "../security/vex.ts";
+import { FINDING_ORDER_SQL } from "../store/schema.ts";
 import type { Store } from "../store/store.ts";
 import type { Principal } from "./auth.ts";
 import { REVIEW_PROMPT_TEXT, RESOURCE_DOCS, TOOL_DOCS } from "./docs.ts";
@@ -211,7 +213,11 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           state: r.state,
           clean: r.state === "passed",
           new_findings: fresh.length,
-          highest: fresh.some((f) => f.severity === "high") ? "high" : fresh[0]?.severity ?? null,
+          // This is the field a client triages on, so it is computed, not read off
+          // the front of the list. It used to be `fresh[0].severity` with "high"
+          // special-cased — and since the query sorted severity as text, a review
+          // whose worst finding was medium reported `highest: "low"` (D-50).
+          highest: worstSeverity(fresh.map((f) => f.severity)) ?? null,
           findings: fresh.map((f) => ({
             fingerprint: f.fingerprint.slice(0, 8),
             file: f.file,
@@ -407,7 +413,11 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
     async (uri: URL, vars: Record<string, string | string[]>) => {
       const id = String(Array.isArray(vars["review_id"]) ? vars["review_id"][0] : vars["review_id"]);
       const review = mine(id);
-      const findings = store.db.prepare("SELECT * FROM finding WHERE review_id = ?").all(id);
+      // Verdicts and runs are a chronology, so they order by id; findings are a list
+      // someone reads top-down, so they order worst first like everywhere else.
+      const findings = store.db
+        .prepare(`SELECT * FROM finding WHERE review_id = ? ORDER BY ${FINDING_ORDER_SQL}`)
+        .all(id);
       const verdicts = store.db.prepare("SELECT * FROM verdict WHERE review_id = ? ORDER BY id").all(id);
       const runs = store.db.prepare("SELECT * FROM tier_run WHERE review_id = ? ORDER BY id").all(id);
       return {

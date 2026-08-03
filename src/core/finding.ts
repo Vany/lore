@@ -16,6 +16,7 @@
 
 import * as z from "zod";
 
+/** Declared **worst first**: the index into this array is the severity rank (D-50). */
 export const SEVERITIES = ["high", "medium", "low"] as const;
 export type Severity = (typeof SEVERITIES)[number];
 
@@ -100,4 +101,72 @@ export function parseFinding(input: unknown): Finding {
  */
 export function normalizeClaim(claim: string): string {
   return claim.trim().toLowerCase().replace(/\s+/g, " ").replace(/[.!]+$/, "");
+}
+
+/**
+ * Rank a severity, lower being worse.
+ *
+ * Nothing about these three words orders itself, and the obvious order is wrong: as
+ * text `"low" < "medium"`, which is how every findings query ranked them until
+ * 2026-08-03 — a low-severity finding presented ahead of a medium one everywhere,
+ * including in the `highest` field of `review.inbox` (D-50). The rank is the position
+ * in `SEVERITIES` so that adding a severity cannot leave a stale rank table behind,
+ * and so the SQL in store/schema.ts can be generated from the same array.
+ *
+ * An unrecognised severity ranks -1, i.e. **first**. It can only come from a row
+ * written around the schema, and the top of the list is where someone will see it;
+ * ranked last it would read as a low-severity nit and would sit exactly where
+ * truncation drops things.
+ */
+export function severityRank(s: Severity): number {
+  return SEVERITIES.indexOf(s);
+}
+
+/** What ordering needs. T0's findings have no fingerprint, so this is not `RecordedFinding`. */
+type Orderable = Pick<Finding, "severity" | "file" | "line">;
+
+/**
+ * Compare two findings for presentation: worst severity first, then file, then line.
+ *
+ * For lists the store never touched — T0's findings, which carry no fingerprint.
+ *
+ * It APPROXIMATES `FINDING_ORDER_SQL` rather than matching it, and the gaps are
+ * known rather than assumed:
+ *
+ *   * file comparison is JS UTF-16 order, SQLite's is BINARY (UTF-8). They disagree
+ *     above the BMP — a path containing an emoji or a rarer CJK extension can sort
+ *     differently here than it did in SQL.
+ *   * `severityRank` returns -1 (via `indexOf`) for a severity outside `SEVERITIES`,
+ *     so two DIFFERENT unrecognised values tie here while SQL's `ELSE -1` ties them
+ *     too — the tie is consistent, but neither side breaks it the same way.
+ *   * SQL breaks remaining ties on fingerprint; a bare `Finding` has none.
+ *
+ * `Array.sort` is stable, so re-sorting a store-ordered list preserves the store's
+ * decision wherever this comparator is indifferent. That is why it is safe to apply
+ * to either kind of list — not because the two orderings are identical.
+ *
+ * A file-level finding (no line) sorts before located ones in the same file, matching
+ * SQLite's NULL-first. `line` is schema-constrained positive, so mapping a missing
+ * line to 0 cannot collide with a real one — a raw write bypassing the schema could
+ * still tie, which is a fault in the writer.
+ */
+export function compareFindings(a: Orderable, b: Orderable): number {
+  if (a.severity !== b.severity) return severityRank(a.severity) - severityRank(b.severity);
+  if (a.file !== b.file) return a.file < b.file ? -1 : 1;
+  return (a.line ?? 0) - (b.line ?? 0);
+}
+
+/**
+ * The worst severity present, or `undefined` if there is nothing to rank.
+ *
+ * Computed rather than read off the front of a list: `review.inbox` used to take the
+ * first row and call it the highest, which was only true for as long as the query
+ * really was sorted worst-first — and it was not.
+ */
+export function worstSeverity(severities: readonly Severity[]): Severity | undefined {
+  let worst: Severity | undefined;
+  for (const s of severities) {
+    if (worst === undefined || severityRank(s) < severityRank(worst)) worst = s;
+  }
+  return worst;
 }

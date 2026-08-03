@@ -1,7 +1,7 @@
 /**
  * The opencode boundary: ask a model to review, get findings back.
  *
- * Two things this file exists to guarantee.
+ * Three things this file exists to guarantee.
  *
  * **Reviewers cannot write.** The predecessor passed `--agent readonly` and learned
  * the hard way that opencode silently falls back to the *write-capable* default
@@ -12,6 +12,16 @@
  *
  * **An unparseable review is a failed review, not a clean one.** One retry with the
  * contract restated, then loud failure (INV-1).
+ *
+ * **Session setup and measurement name their own layer.** This SDK reports server
+ * faults by RETURN VALUE and transport faults by throwing, so a fault nobody looks
+ * for reads as whatever the next line happens to notice — twice that was "is a server
+ * running?" for a server that was up and answering (D-50).
+ *
+ * NOT yet true of `ask`: its catch still attributes any transport fault — an opencode
+ * restart mid-review, or the idle timeout — to the tier, as "tier <id> (<model>)
+ * failed". Named here rather than claimed fixed, because the sentence above used to
+ * say "every failure" and that was the same over-claim this file exists to punish.
  */
 
 import { createOpencodeClient } from "@opencode-ai/sdk";
@@ -69,6 +79,17 @@ export interface ReviewerResult {
   readonly latencyMs: number;
   /** Set when the model's first answer had to be re-requested. */
   readonly retried: boolean;
+  /**
+   * Agentic turns this review took, or `undefined` when the count could not be taken
+   * — either opencode could not be asked, or it answered and no step-start part was
+   * found. Both mean "not measured"; neither means "explored nothing".
+   *
+   * Never `0` as a stand-in for "did not find out" (`countStepParts`): the whole
+   * point of the number is to accumulate a distribution, and a failed measurement
+   * that reads as *explored nothing* would drag that distribution toward zero
+   * exactly when the measurement was broken (D-50).
+   */
+  readonly steps: number | undefined;
 }
 
 /**
@@ -162,9 +183,29 @@ export class Reviewer implements ReviewerLike {
     }
   }
 
-  /** Best-effort: a failed abort must not mask the error that caused it. */
+  /**
+   * Best-effort: a failed abort must not mask the error that caused it.
+   *
+   * Best-effort, though, is not the same as unobserved. This is called when a review
+   * has already gone wrong, and the model keeps exploring until something tells it to
+   * stop — so an abort that quietly returned 404 means the spend continues with
+   * nobody watching, which is the failure the caller's own comment is about. It still
+   * cannot throw here (that would replace the real error with the cleanup's), so it
+   * says so instead, on the same channel as everything else that is true but not
+   * fatal. Same reason the status is looked at at all: this SDK's failures are return
+   * values.
+   */
   private async abort(sessionId: string): Promise<void> {
-    await this.client.session.abort({ path: { id: sessionId } }).catch(() => undefined);
+    const failure = await this.client.session
+      .abort({ path: { id: sessionId } })
+      .then((r) => ((r.response?.status ?? 200) >= 400 ? `opencode answered ${r.response?.status}` : undefined))
+      .catch((e: unknown) => detail(e));
+    if (failure !== undefined) {
+      console.error(
+        `[lore:log] could not abort session ${sessionId} (${failure}) —` +
+          " the model may still be exploring, and its tokens are still being spent",
+      );
+    }
   }
 
   private async conduct(
@@ -196,6 +237,10 @@ export class Reviewer implements ReviewerLike {
       first.usage = second.usage;
     }
 
+    // Taken before the step count, because that costs an extra round trip to
+    // opencode and latency is meant to describe the review, not the bookkeeping.
+    const latencyMs = Date.now() - started;
+
     return {
       findings: parsed,
       raw: first.text,
@@ -203,18 +248,112 @@ export class Reviewer implements ReviewerLike {
       cachedTokens: first.usage.cached,
       outputTokens: first.usage.output,
       costUsd: first.usage.cost,
-      latencyMs: Date.now() - started,
+      latencyMs,
       retried,
+      steps: await this.countSteps(sessionId),
     };
   }
 
+  /**
+   * How far the agent explored, asked of the session rather than of the reply.
+   *
+   * A prompt reply carries ONE assistant message (`SessionPromptResponses` in the
+   * pinned SDK: `{info: AssistantMessage, parts: Part[]}`), and an assistant message
+   * carries at most one `step-start` — 1415 of them across 1455 recorded messages in
+   * a real opencode store, never two in one message. So counting steps in the reply
+   * yields 1 for a runaway and 1 for a one-shot answer, which is how a previous
+   * attempt at this shipped a bound that could not fire. The turns live in the
+   * SESSION: opencode appends one assistant message per turn, and lore gives every
+   * tier run its own session.
+   *
+   * A LOWER BOUND, not a total. Turns the reviewer delegates with the `task` tool run
+   * in CHILD sessions, and this list does not contain them. The read-only agent has
+   * `task` available, so a reviewer that fans out is undercounted here. That is the
+   * safe direction for a number whose purpose is to justify a future ceiling — it can
+   * only argue for a ceiling being too low, never too high — but it is not the total
+   * and must not be described as one.
+   *
+   * Never fatal. The model has already been paid for by the time this runs, and a
+   * measurement that gates nothing must not be able to destroy the finished review
+   * it is measuring. It fails to `undefined` — a missing number, never a zero.
+   *
+   * One round trip per completed review, and not a small one: the list carries every
+   * part of every turn — 5.2 MB in 179 ms for the 86-turn session above, measured on
+   * a laptop over loopback. The deployment is a CPU-bound arm64 SBC talking to a
+   * sibling container, where this has NOT been measured; treat the figure as an order
+   * of magnitude, not as a budget. `GET /session/:id` returns the same aggregates in
+   * ~713 bytes and is the obvious replacement if this ever hurts.
+   */
+  private async countSteps(sessionId: string): Promise<number | undefined> {
+    // Three outcomes, three sentences, because the first draft of this reported an
+    // unreachable server as "opencode answered 200" — caught by pointing it at a
+    // dead port and reading what it actually printed. A diagnostic that invents a
+    // status is the same defect as the one `createSession` above exists to fix.
+    const seen = await this.client.session
+      .messages({ path: { id: sessionId } })
+      .then((r) => ({ status: r.response?.status ?? 200, data: r.data, error: r.error }))
+      .catch((e: unknown) => ({ status: undefined, data: undefined, error: e }));
+
+    const steps = seen.status !== undefined && seen.status < 400 ? countStepParts(seen.data) : undefined;
+    if (steps === undefined) {
+      const because =
+        seen.status === undefined
+          ? `${this.cfg.baseUrl} could not be reached: ${detail(seen.error)}`
+          : seen.status >= 400
+            ? `opencode answered ${seen.status}: ${detail(seen.error ?? {})}`
+            : "opencode answered 200 but no step-start part was found — an empty message list, a shape this does not recognise, or genuinely no turn recorded. This cannot tell which";
+      // Logged rather than thrown, and logged rather than swallowed: the column will
+      // say NULL, which reads as "not measured", but nothing else in the system
+      // would ever say WHY. `[lore:log]` is the same channel an unmatched `lore-ok`
+      // uses, for the same reason.
+      console.error(
+        `[lore:log] step count unavailable for session ${sessionId} (${because})` +
+          " — the review stands, but this run contributes nothing to the exploration distribution (D-50)",
+      );
+    }
+    return steps;
+  }
+
   private async createSession(tier: Tier): Promise<string> {
-    const res = await this.client.session.create({
-      body: { title: `lore-${tier.id}-${Date.now()}` },
-    });
+    // The ONE case where "is a server running?" is the right question, and until now
+    // the one case that never asked it: an unreachable server makes this call REJECT
+    // while every answered request comes back as a return value. Verified against a
+    // dead port — `connect ECONNREFUSED` through `longFetch`, `TypeError: fetch
+    // failed` through plain fetch. Unwrapped, either one reaches the worker naming
+    // neither the tier nor the address it could not reach.
+    const res = await this.client.session
+      .create({ body: { title: `lore-${tier.id}-${Date.now()}` } })
+      .catch((e: unknown): never => {
+        throw new DidNotRun(
+          `tier ${tier.id} could not reach opencode at ${this.cfg.baseUrl} (${detail(e)})` +
+            " — is a server running there?",
+          e,
+        );
+      });
+
+    // And the case that made this necessary. A server that is up and refusing
+    // answers with a status and no session id, so blaming the missing id sent
+    // debugging at connectivity twice in one day while opencode was up. Verified
+    // against a password-protected opencode: a bare 401, `data` undefined and
+    // `error` an EMPTY OBJECT — the status is the only thing that names the fault,
+    // which is why it is in the message before the body is.
+    //
+    // DidNotRun rather than Exhausted even on a 429: creating a session touches no
+    // provider, so a refusal here is opencode or something in front of it, and
+    // calling it quota would step the tier over as unpayable (D-48) for a reason
+    // that has nothing to do with money.
+    const status = res.response?.status ?? 200;
+    if (status >= 400) {
+      const hint = status === 401 || status === 403 ? " — check OPENCODE_SERVER_USERNAME/PASSWORD" : "";
+      throw new DidNotRun(
+        `tier ${tier.id} could not open a session: opencode at ${this.cfg.baseUrl} returned ${status}` +
+          ` ${JSON.stringify(res.error ?? {}).slice(0, 300)}${hint}`,
+      );
+    }
+
     const id = (res.data as { id?: string } | undefined)?.id;
     if (id === undefined) {
-      throw new DidNotRun(`opencode did not return a session id (is a server running at ${this.cfg.baseUrl}?)`);
+      throw new DidNotRun(`opencode answered ${status} with no session id (${this.cfg.baseUrl})`);
     }
     return id;
   }
@@ -350,6 +489,42 @@ function collectUsage(data: unknown): Usage {
     output: num(tokens["output"]) + num(tokens["reasoning"]),
     cost: num(info?.cost),
   };
+}
+
+/**
+ * Count the agentic turns in a session's message list.
+ *
+ * `step-start` rather than assistant messages: a step is one model turn, which is
+ * the unit that re-sends the accumulated context and therefore the unit that spends
+ * quota. Counted against a real GLM review session (`review_glm_r181`, the
+ * predecessor's, same read-only agent) — 82 `step-start` parts across 86 assistant
+ * messages, the other four carrying only `patch` parts, so the two counts are close
+ * but not the same and only one of them means "the model was asked again".
+ *
+ * `undefined`, never `0`, when the shape is not the one we know. A reply this cannot
+ * read is a measurement that did not happen, and recording it as *zero exploration*
+ * would bias the distribution downwards precisely when opencode's envelope has moved
+ * under us — the failure mode that would make the eventual cap too tight to survive.
+ * A finished review always took at least one turn, so zero is that same signal.
+ */
+export function countStepParts(data: unknown): number | undefined {
+  if (!Array.isArray(data)) return undefined;
+  let steps = 0;
+  for (const message of data as { parts?: unknown }[]) {
+    const parts = message?.parts;
+    if (!Array.isArray(parts)) continue;
+    for (const part of parts as { type?: unknown }[]) {
+      if (part?.type === "step-start") steps++;
+    }
+  }
+  return steps === 0 ? undefined : steps;
+}
+
+/** Whatever this thing is, the shortest true thing that can be said about it. */
+function detail(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  if (typeof e === "object" && e !== null) return JSON.stringify(e).slice(0, 300);
+  return String(e);
 }
 
 /**

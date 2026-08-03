@@ -153,6 +153,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-47** | D-1 is enforced by **absence**: no Anthropic credential is deployed | confirmed |
 | **D-48** | An unfundable tier is *skipped*, not fatal — `passed_partial` | confirmed |
 | **D-49** | A single-vendor ladder reaches `passed_partial`, never `passed` | `[OPEN]` |
+| **D-50** | Exploration is **counted per review before it is capped**; no cap yet | `[OPEN]` |
 
 **D-7, revised.** The earlier version dropped GLM-5.2 on Artificial Analysis's
 *cost per task* — which is tokens consumed × price on their benchmark, not a price.
@@ -367,6 +368,61 @@ must be able to review; it must not be able to claim independence it does not ha
 Kimi is waitlist-only and a second subscription could not be bought. The honest
 response to "we cannot afford independence" is to say so in the output, not to
 quietly redefine `passed`. `[OPEN]` — revisit when a second vendor is reachable.
+
+**D-50 — agentic exploration is counted before it is capped.**
+
+Measured on the deployment: one T2 call read **~1.5M cached tokens** before it
+answered. An agentic reviewer re-sends its accumulated context on every turn, so the
+read count grows with the *square* of the exploration rather than with the size of
+the diff. D-29 treats caching as a saving and per token it is — but against a
+subscription **quota** the count is what runs out, which makes exploration, not model
+choice, the cost driver.
+
+The obvious response is a turn cap. **It is not shipped, deliberately.** A first
+attempt proposed 80 turns; the two real review sessions that can be measured say that
+number would have killed a good review. Counted from opencode's own store, both on
+the same repo and round, both with the read-only agent:
+
+| session | agentic turns | session cache reads | cost |
+|---|---|---|---|
+| `review_glm_r181` (GLM) | **82** | 8.85M | $0.85 |
+| `review_sol_r181` (Sol) | **27** | 11.87M | $35.20 |
+
+Both produced findings. So a cap of 80 sits *below* a healthy GLM review, and the
+run that read the most tokens took a third as many turns as the one that read the
+least — turns are not tokens, and one global step limit cannot mean the same thing to
+two models. These are the predecessor's runs on another repo, which is why they are
+two data points and not a distribution.
+
+Two implementations were tried and both failed in the way this project exists to
+catch:
+
+- **Counting the reply's own `step-start` parts** reads *one* however far the agent
+  went. A prompt reply is a single assistant message and an assistant message carries
+  at most one `step-start` — 1415 of them across 1455 messages in a real opencode
+  store. The audit half of that design could never have fired.
+- **Watching opencode's event stream** and aborting on the cap looks right and
+  degrades in silence: the SDK's SSE client swallows connection errors, calls an
+  optional callback nobody passed, and the generator ends normally. A reviewer ran it
+  against a dead port — 0 steps seen, cap never tripped, nothing printed. And when it
+  did fire, the abort came back as `500: MessageAbortedError`, i.e. as the
+  misdiagnosis the rest of this decision is about.
+
+So what ships is the **measurement**: `usage.steps`, the agentic turns of one tier
+run, taken from `GET /session/:id/message` after the answer (one session per tier
+run, so the session total is the review's). `NULL` when it could not be taken —
+never `0`, which would be a claim that the tier explored nothing, and would bias the
+distribution downwards exactly when the measurement broke.
+
+`[OPEN]` — set the cap from that column once there is a distribution, and note three
+things it will not contain. `bootstrap()`'s model call records no usage row at all. Usage is recorded only for reviews that **complete**, so
+a runaway ended by a timeout leaves no row (the motivating incident did answer, and
+would have been recorded). And `usage`'s token columns are read from the ONE
+assistant message a prompt reply carries, so they describe a single turn rather than
+the session — in a real 73-turn session the per-message cache reads were 100k–450k
+each and summed to 17.9M. `GET /session/:id` returns the session's true totals in
+~700 bytes, so closing that is small; it changes what the spend ceiling sees, which
+makes it a money decision rather than a bug fix.
 
 **D-43 — review types.** `review.start` takes a `type`, defaulting to `code-arch`:
 *is this change correct and well-made?* The next type is `security`: *what

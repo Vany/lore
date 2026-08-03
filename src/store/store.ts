@@ -18,7 +18,7 @@ import type { Finding, Severity } from "../core/finding.ts";
 import type { LadderState } from "../core/ladder.ts";
 import type { ReviewState } from "../core/review-state.ts";
 import type { Scope } from "../core/scope.ts";
-import { DDL, PRAGMAS, SCHEMA_VERSION } from "./schema.ts";
+import { DDL, FINDING_ORDER_SQL, PRAGMAS, SCHEMA_VERSION, applyMigrations } from "./schema.ts";
 
 export interface RepoRow {
   readonly id: string;
@@ -87,6 +87,8 @@ export interface UsageRecord {
   readonly outputTokens?: number;
   readonly costUsd?: number;
   readonly latencyMs?: number;
+  /** Agentic turns the tier took. Absent means "not measured", never "none" (D-50). */
+  readonly steps?: number;
   readonly outcome: string;
 }
 
@@ -110,9 +112,15 @@ export class Store {
     this.db = new DatabaseSync(path);
     for (const p of PRAGMAS) this.db.exec(p);
     this.db.exec(DDL);
+    // `CREATE TABLE IF NOT EXISTS` leaves an existing table exactly as it found it,
+    // so this is what reaches a column added after the deployment already had a
+    // database (see `MIGRATIONS`).
+    applyMigrations(this.db);
+    // Written after the migrations and UPDATED, not left alone: the row is only
+    // worth having if it describes the tables that are actually there.
     this.db
-      .prepare("INSERT INTO meta(key, value) VALUES('schema_version', ?) ON CONFLICT(key) DO NOTHING")
-      .run(String(SCHEMA_VERSION));
+      .prepare("INSERT INTO meta(key, value) VALUES('schema_version', ?) ON CONFLICT(key) DO UPDATE SET value = ?")
+      .run(String(SCHEMA_VERSION), String(SCHEMA_VERSION));
   }
 
   close(): void {
@@ -284,10 +292,16 @@ export class Store {
     return res.changes > 0;
   }
 
-  /** Findings not yet handed to the client — `poll` returns deltas, never repeats. */
+  /**
+   * Findings not yet handed to the client — `poll` returns deltas, never repeats.
+   *
+   * Worst first (`FINDING_ORDER_SQL`). This is the list `review_poll`, `review_inbox`
+   * and the CLI all render, and a client that reads only the top of it must be
+   * reading the worst of it.
+   */
   undelivered(reviewId: string): readonly RecordedFinding[] {
     const rows = this.db
-      .prepare("SELECT * FROM finding WHERE review_id = ? AND delivered_at IS NULL ORDER BY severity, file")
+      .prepare(`SELECT * FROM finding WHERE review_id = ? AND delivered_at IS NULL ORDER BY ${FINDING_ORDER_SQL}`)
       .all(reviewId) as Record<string, string | number | null>[];
     return rows.map(toFinding);
   }
@@ -300,6 +314,12 @@ export class Store {
     for (const fp of fingerprints) stmt.run(t, reviewId, fp);
   }
 
+  /**
+   * Findings nothing has settled yet. Worst first, for the same reason as
+   * `undelivered` — and because an unordered query lets SQLite pick a different plan
+   * and hand back a different order for the same data, which makes any downstream
+   * "take the first N" silently non-deterministic.
+   */
   openFindings(reviewId: string): readonly RecordedFinding[] {
     const rows = this.db
       .prepare(
@@ -309,7 +329,8 @@ export class Store {
              SELECT 1 FROM verdict v
              WHERE v.review_id = f.review_id AND v.fingerprint = f.fingerprint
                AND v.verdict IN ('fixed', 'justified-accepted')
-           )`,
+           )
+         ORDER BY ${FINDING_ORDER_SQL}`,
       )
       .all(reviewId) as Record<string, string | number | null>[];
     return rows.map(toFinding);
@@ -541,8 +562,8 @@ export class Store {
     this.db
       .prepare(
         `INSERT INTO usage(repo_id, review_id, tier, model, input_tokens, cached_tokens,
-                           output_tokens, cost_usd, latency_ms, outcome, at)
-         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                           output_tokens, cost_usd, latency_ms, steps, outcome, at)
+         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         n(u.repoId),
@@ -554,6 +575,9 @@ export class Store {
         u.outputTokens ?? 0,
         u.costUsd ?? 0,
         n(u.latencyMs),
+        // `n`, not `?? 0`, unlike every token column above it: a missing token count
+        // really is nothing spent, a missing step count is nothing KNOWN.
+        n(u.steps),
         u.outcome,
         now(),
       );
