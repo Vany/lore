@@ -495,6 +495,53 @@ describe("abandoning a call", () => {
   });
 });
 
+// The most frequent failure in this system was also the least diagnosable: a round
+// died AFTER the model had been paid for, and nothing anywhere recorded what it
+// actually said. Observed on a real review of this repo.
+describe("an unparseable reply says what shape it was", () => {
+  it("names an empty reply as empty, because that is a provider fault not a prompt one", async () => {
+    replies = [{ parts: [{ type: "text", text: "" }] }, { parts: [{ type: "text", text: "" }] }];
+    const err = await reviewer()
+      .review(TIER, "review this", "/tmp/wt")
+      .then(() => undefined, (e: unknown) => e as Error);
+
+    expect(err?.message).toMatch(/DID NOT RUN/);
+    expect(err?.message).toMatch(/EMPTY/);
+    expect(err?.message).toMatch(/provider failure inside a 200/);
+  });
+
+  // Prose means the model answered and ignored the contract — a prompt problem, and
+  // a different hour of debugging from an empty reply.
+  it("names prose as prose, with its length", async () => {
+    const prose = "I reviewed the code and it looks fine to me overall.";
+    replies = [{ parts: [{ type: "text", text: prose }] }, { parts: [{ type: "text", text: prose }] }];
+    const err = await reviewer()
+      .review(TIER, "review this", "/tmp/wt")
+      .then(() => undefined, (e: unknown) => e as Error);
+
+    expect(err?.message).toMatch(/prose with no JSON block/);
+    expect(err?.message).toContain(String(prose.length));
+  });
+
+  // The replies themselves go to the log, not into the message: the message travels
+  // into a review's failure text and an operator alert, and a 40KB model reply in
+  // either is its own problem.
+  it("puts both replies on the log so the round is diagnosable at all", async () => {
+    replies = [{ parts: [{ type: "text", text: "first attempt prose" }] }, { parts: [{ type: "text", text: "second attempt prose" }] }];
+    const logged: string[] = [];
+    const real = console.error;
+    console.error = (...a: unknown[]) => logged.push(a.join(" "));
+    try {
+      await reviewer().review(TIER, "review this", "/tmp/wt").catch(() => undefined);
+    } finally {
+      console.error = real;
+    }
+    const all = logged.join("\n");
+    expect(all).toContain("first attempt prose");
+    expect(all).toContain("second attempt prose");
+  });
+});
+
 describe("countStepParts", () => {
   const turn = (id: string) => ({
     info: { id, sessionID: "ses_test", role: "assistant" },

@@ -230,8 +230,26 @@ export class Reviewer implements ReviewerLike {
       );
       parsed = extractFindings(second.text);
       if (parsed === undefined) {
+        // BOTH replies are in scope here and both used to be thrown away, which made
+        // the most frequent failure in this system also the least diagnosable: a round
+        // died after the model had already been paid for, and nothing anywhere said
+        // what it actually said. Observed on a real review of this repo.
+        //
+        // Logged in full (bounded) rather than put in the message, because the message
+        // travels into a review's failure text and an operator alert; a 40 KB model
+        // reply in either is its own problem.
+        console.error(
+          `[lore:log] tier ${tier.id} (${tier.model}) returned nothing parseable, twice. First reply:\n` +
+            `${excerpt(first.text, 2_000)}\nAfter the contract was restated:\n${excerpt(second.text, 2_000)}`,
+        );
+        // Empty and unparseable are different faults and lead different places: an
+        // empty reply is usually the provider failing inside an HTTP 200, which is a
+        // bill or a quota; prose is the model ignoring the output contract, which is a
+        // prompt. Saying which saves the first hour of looking in the wrong place.
         throw new DidNotRun(
-          `tier ${tier.id} (${tier.model}) did not return parseable findings after a retry — this review DID NOT RUN`,
+          `tier ${tier.id} (${tier.model}) did not return parseable findings after a retry — this review DID NOT RUN. ` +
+            `${describeReply("first", first.text)}; ${describeReply("retry", second.text)}. ` +
+            "The full replies are on [lore:log].",
         );
       }
       first.usage = second.usage;
@@ -507,6 +525,29 @@ function collectUsage(data: unknown): Usage {
  * under us — the failure mode that would make the eventual cap too tight to survive.
  * A finished review always took at least one turn, so zero is that same signal.
  */
+/** Bounded, and it says when it cut — a silent truncation in a diagnostic is its own lie. */
+function excerpt(text: string, max: number): string {
+  const t = text ?? "";
+  if (t.length === 0) return "  (empty)";
+  return t.length <= max ? t : `${t.slice(0, max)}\n  … ${t.length - max} more characters not shown`;
+}
+
+/**
+ * Name the SHAPE of a reply that could not be parsed.
+ *
+ * Empty and unparseable are different faults that lead to different places. An empty
+ * reply is usually a provider failure nested inside an HTTP 200 — a bill, a quota, a
+ * refusal — while prose means the model answered and ignored the output contract. The
+ * first is an account problem and the second is a prompt problem, and an error that
+ * does not distinguish them costs an hour of looking in the wrong one.
+ */
+function describeReply(which: string, text: string): string {
+  const t = (text ?? "").trim();
+  if (t.length === 0) return `${which} reply was EMPTY (usually a provider failure inside a 200)`;
+  const looksJson = t.includes("{") && t.includes("}");
+  return `${which} reply was ${t.length} chars of ${looksJson ? "malformed JSON" : "prose with no JSON block"}`;
+}
+
 export function countStepParts(data: unknown): number | undefined {
   if (!Array.isArray(data)) return undefined;
   let steps = 0;
