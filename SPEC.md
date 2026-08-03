@@ -136,7 +136,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-30** | T3 context capped below 272k tokens; crossing it doubles the rate | confirmed |
 | **D-31** | Tier prompts differ by position; T3 is told it is the last line | confirmed |
 | **D-32** | T3 always runs. No sampling — the attestation keeps its meaning | confirmed |
-| **D-33** | Host is an arm64 Orange Pi. **No tailscale — tokens are the perimeter** | **revised** |
+| **D-33** | arm64 Orange Pi, LAN-bound. No tailscale yet — tokens are the perimeter | **revised** |
 | **D-34** | Two stages: T0+T1 inline, T2+T3 async, collected via `review.inbox` | confirmed |
 | **D-35** | Bootstrap on first review — at provisioning there is nothing to clone | **revised** |
 | **D-36** | Git submodules, not monorepos — a gitlink bump is expanded | confirmed |
@@ -223,8 +223,16 @@ finding was that `node:*-alpine` ships **no git**, which failed 10 tests in the 
 that matters most — not by refusing to run, but by running and producing failures
 unrelated to the change, which T0 would have reported as high-severity findings.
 
-**And tailscale is not installed on the host.** The whole D-33 security argument
-assumed it. On a LAN the bearer tokens stop being mere scoping and become the
+**And tailscale is not installed on the host** — deferred deliberately, 2026-08-03:
+the device is physically in the operator's hands and on a private LAN, which is a
+real perimeter even if not a cryptographic one. The service binds to the LAN
+address and the bearer token does the load-bearing work.
+
+Revisit when the device leaves his possession, or when a second workgroup member
+needs access from elsewhere. `LORE_BIND` is one line in `.env`, so getting the
+tailnet perimeter back later costs nothing but installing tailscale.
+
+The whole D-33 security argument originally assumed it. On a LAN the bearer tokens stop being mere scoping and become the
 perimeter, so the compose bind now defaults to loopback: exposing it is a decision
 someone has to make on purpose.
 
