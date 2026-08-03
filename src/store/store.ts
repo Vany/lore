@@ -405,6 +405,52 @@ export class Store {
   }
 
   /**
+   * The last accepted justification for this fingerprint **anywhere in this repo**,
+   * from a review other than the one asking.
+   *
+   * This is what makes an accepted justification durable rather than per-review, and
+   * it is the product premise: *"an accepted justification becomes durable
+   * knowledge."* Without it, a reason ratified last week matched nothing this week —
+   * fingerprints belong to the review that raised them — so every new review
+   * re-raised every settled finding and the author re-submitted the same comment
+   * forever. Observed, not theorised: a `lore-ok` accepted in one review was ignored
+   * by the next review's first round.
+   *
+   * Only `justified-accepted` carries. `fixed` does not: that verdict says the code
+   * changed, and if the same fingerprint is raised again the code evidently did not
+   * stay fixed. A rejected one obviously does not carry either.
+   *
+   * The SCOPE comes back with it, and the caller must check staleness before
+   * honouring it. A reason is about a piece of code, so it survives exactly as long
+   * as that code does — carrying one forward without that check is how a ladder rots
+   * into rubber-stamping.
+   */
+  priorAcceptedVerdict(repoId: string, fingerprint: string, exceptReviewId: string): VerdictRow | undefined {
+    const row = this.db
+      .prepare(
+        `SELECT v.* FROM verdict v
+         JOIN review r ON r.id = v.review_id
+         WHERE r.repo_id = ? AND v.fingerprint = ? AND v.review_id <> ?
+           AND v.id = (SELECT MAX(id) FROM verdict w WHERE w.review_id = v.review_id AND w.fingerprint = v.fingerprint)
+           AND v.verdict = 'justified-accepted'
+         ORDER BY v.id DESC LIMIT 1`,
+      )
+      .get(repoId, fingerprint, exceptReviewId) as Record<string, string | number | null> | undefined;
+    if (row === undefined) return undefined;
+    const blob = row["scope_blob"];
+    const hunk = row["scope_hunk"];
+    return {
+      fingerprint: String(row["fingerprint"] ?? ""),
+      verdict: String(row["verdict"] ?? "justified-accepted") as VerdictKind,
+      rationale: un(row["rationale"] as string | null) ?? undefined,
+      scope: typeof blob === "string" && typeof hunk === "string" ? { blob, hunk } : undefined,
+      tier: un(row["tier"] as string | null) ?? undefined,
+      round: un(row["round"] as number | null) ?? undefined,
+      createdAt: String(row["created_at"] ?? ""),
+    };
+  }
+
+  /**
    * Fingerprints considered settled: fixed, or justified and accepted.
    *
    * Only the **latest** verdict counts. Verdicts are append-only, so matching any

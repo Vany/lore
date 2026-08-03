@@ -234,6 +234,90 @@ describe("runRound", () => {
     expect(store.settledFingerprints("r1")).toContain(fingerprint(HOLD_BUG));
   });
 
+  // THE PRODUCT PREMISE, and it was missing until 2026-08-03. A fingerprint belongs
+  // to the review that raised it, so a reason ratified in review 1 matched nothing in
+  // review 2: every new review re-raised every settled finding and the author had to
+  // re-submit the same comment forever. Observed on lore's own repo before it was
+  // written down here.
+  describe("an accepted justification outlives the review that accepted it", () => {
+    const alwaysT0 = async () => ({
+      findings: [HOLD_BUG],
+      unavailable: [] as readonly string[],
+      outcomes: [] as readonly unknown[],
+    });
+    const t0 = alwaysT0 as unknown as Parameters<typeof runRound>[0]["t0"];
+
+    const justify = (reason: string) =>
+      writeFileSync(
+        join(dir, "src/hold.ts"),
+        ["export function capture() {", `  // lore-ok[${fingerprint(HOLD_BUG).slice(0, 8)}]: ${reason}`, "  return 1;", "}", ""].join("\n"),
+      );
+
+    /** A second review of the SAME repo, which is the only place this is visible. */
+    const secondReview = () =>
+      store.createReview({
+        id: "r2",
+        repoId,
+        principal: "p",
+        branch: "feat/holds",
+        intoRef: "main",
+        ticket: "same repo, a later session",
+        type: CODE_ARCH.id,
+        state: "running",
+        ladder: initialState(CODE_ARCH.tiers),
+      });
+
+    it("carries it into a later review, so the author does not re-argue it", async () => {
+      const first = new ScriptedReviewer([[], []]);
+      await runRound({ store, reviewer: first, reviewId: "r1", principal: "p", worktree: dir, type: TYPE, ...(t0 ? { t0 } : {}) });
+      justify("the caller releases the hold in its finally block");
+      await runRound({ store, reviewer: first, reviewId: "r1", principal: "p", worktree: dir, type: TYPE, ...(t0 ? { t0 } : {}) });
+      expect(store.settledFingerprints("r1")).toContain(fingerprint(HOLD_BUG));
+
+      secondReview();
+      const second = await runRound({
+        store, reviewer: new ScriptedReviewer([[]]), reviewId: "r2", principal: "p", worktree: dir, type: TYPE, ...(t0 ? { t0 } : {}),
+      });
+
+      // Settled in the FIRST round of the new review, without a submit.
+      expect(second.accepted).toContain(fingerprint(HOLD_BUG));
+      expect(store.settledFingerprints("r2")).toContain(fingerprint(HOLD_BUG));
+      expect(store.latestVerdict("r2", fingerprint(HOLD_BUG))?.rationale).toMatch(/carried forward/);
+    });
+
+    // A reason is about a piece of code and survives exactly as long as that code
+    // does. Inheriting one blind is how a ladder rots into rubber-stamping.
+    it("does not carry it once the code it was about has changed", async () => {
+      const first = new ScriptedReviewer([[], []]);
+      await runRound({ store, reviewer: first, reviewId: "r1", principal: "p", worktree: dir, type: TYPE, ...(t0 ? { t0 } : {}) });
+      justify("the caller releases the hold in its finally block");
+      await runRound({ store, reviewer: first, reviewId: "r1", principal: "p", worktree: dir, type: TYPE, ...(t0 ? { t0 } : {}) });
+
+      writeFileSync(join(dir, "src/hold.ts"), "export function capture() {\n  acquireTwice();\n  return 2;\n}\n");
+
+      secondReview();
+      const second = await runRound({
+        store, reviewer: new ScriptedReviewer([[]]), reviewId: "r2", principal: "p", worktree: dir, type: TYPE, ...(t0 ? { t0 } : {}),
+      });
+      expect(second.accepted).not.toContain(fingerprint(HOLD_BUG));
+    });
+
+    // A model that reads the recorded reason and complains anyway is disagreeing with
+    // the lore, and that disagreement is worth more than the convenience of closing.
+    it("does not carry it when the model raises it again", async () => {
+      const first = new ScriptedReviewer([[], []]);
+      await runRound({ store, reviewer: first, reviewId: "r1", principal: "p", worktree: dir, type: TYPE, ...(t0 ? { t0 } : {}) });
+      justify("the caller releases the hold in its finally block");
+      await runRound({ store, reviewer: first, reviewId: "r1", principal: "p", worktree: dir, type: TYPE, ...(t0 ? { t0 } : {}) });
+
+      secondReview();
+      const second = await runRound({
+        store, reviewer: new ScriptedReviewer([[HOLD_BUG]]), reviewId: "r2", principal: "p", worktree: dir, type: TYPE, ...(t0 ? { t0 } : {}),
+      });
+      expect(second.accepted).not.toContain(fingerprint(HOLD_BUG));
+    });
+  });
+
   it("climbs the ladder and passes only at the top", async () => {
     const reviewer = new ScriptedReviewer([[], [], []]);
     const first = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });

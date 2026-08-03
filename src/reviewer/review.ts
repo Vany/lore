@@ -204,8 +204,54 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     if (store.recordFinding(reviewId, rec)) newFindings.push(rec);
   }
 
+  // 5b. Carry forward justifications this repo already ratified.
+  //
+  // THE PRODUCT PREMISE, and it was missing. A fingerprint belongs to the review that
+  // raised it, so a reason accepted last week matched nothing this week: every new
+  // review re-raised every settled finding and the author re-submitted the same
+  // comment forever. `lore` is supposed to remember between sessions; this is the
+  // line where a review inherits what an earlier one decided.
+  //
+  // Two guards, and neither is optional:
+  //
+  //   * NOT if the model raised it this round. A model that reads the recorded reason
+  //     and complains anyway is disagreeing with the lore, and that disagreement is
+  //     worth more than the convenience of auto-closing. It falls through to the
+  //     normal ruling below, which is where a bad justification gets rejected.
+  //   * NOT if the code moved. A reason is about a piece of code and survives exactly
+  //     as long as that code does — the same rule `expireStaleVerdicts` applies within
+  //     a review, applied across them. Carrying one forward blind is how a ladder
+  //     rots into rubber-stamping.
+  const carried: string[] = [];
+  for (const fp of raisedFingerprints) {
+    if (modelRaised.has(fp)) continue;
+    const prior = store.priorAcceptedVerdict(review.repoId, fp, reviewId);
+    if (prior?.scope === undefined) continue;
+
+    const file = newFindings.find((f) => f.fingerprint === fp)?.file
+      ?? (store.db.prepare("SELECT file FROM finding WHERE review_id = ? AND fingerprint = ?").get(reviewId, fp) as
+        | Record<string, string>
+        | undefined)?.["file"];
+    if (file === undefined) continue;
+
+    const source = await readFile(join(worktree, file), "utf8").catch(() => undefined);
+    if (source === undefined || !hunkStillPresent(source, prior.scope.hunk)) continue;
+
+    store.recordVerdict(reviewId, {
+      fingerprint: fp,
+      verdict: "justified-accepted",
+      // The provenance travels with it. A reader six months from now needs to know
+      // this was decided elsewhere and inherited, not ruled on by the tier named here.
+      rationale: `carried forward from an earlier review of this repo (${prior.createdAt}): ${prior.rationale ?? "(no reason recorded)"}`,
+      scope: prior.scope,
+      tier: "carried",
+      round,
+    });
+    carried.push(fp);
+  }
+
   // 6. Rule on the pending justifications. Silence is assent.
-  const accepted: string[] = [];
+  const accepted: string[] = [...carried];
   const rejected: string[] = [];
   for (const p of pending) {
     if (modelRaised.has(p.finding.fingerprint)) {

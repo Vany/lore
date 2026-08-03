@@ -5,6 +5,54 @@ surprised me.
 
 ---
 
+## 2026-08-03 — session 29: the memory was per-review
+
+**Did.** Fixed the defect that undercut the whole product, found by watching the loop
+rather than by reading it (D-51).
+
+**An accepted justification did not survive its own review.** A fingerprint belongs to
+the review that raised it, so a reason ratified last week matched nothing this week.
+Every new review re-raised every settled finding, and the author re-submitted the same
+`lore-ok` forever. SPEC has said since day one that *"an accepted justification becomes
+durable knowledge"*; the code wrote it into a drawer nobody opened again.
+
+Seen, not deduced: `lore-ok[d6d9cd72]` was accepted in one review of this repo and
+ignored by the first round of the next. `collectJustifications` runs BEFORE findings
+are recorded — it must, because the model tier's silence is what ratifies a pending
+reason — so on round 1 the finding table is empty and every pre-existing marker is
+skipped. The ordering is right; what was missing was the inheritance.
+
+A raised fingerprint now inherits the last `justified-accepted` verdict from any
+earlier review of the same repo, with two guards: not if the MODEL raised it this
+round (a model that reads the reason and complains anyway is disagreeing with the
+lore, and that is worth more than closing the finding), and not if the code moved
+(the same staleness rule `expireStaleVerdicts` uses within a review, across them).
+
+**Learned: the defect lives between reviews, and every test built one.** Same shape as
+`resolveShort` throwing earlier today. A suite that constructs one review and asks
+about its own findings cannot see either bug — not because the tests are weak, but
+because they only ask questions I already had. Three rounds of adversarial agents did
+not find this. Running the loop twice did.
+
+**Also this session, from a twelve-agent sweep.** Two fixes landed, four still on
+disk. The lesson from the sweep is about prose, not code: across two rounds the code
+converged under adversarial review and the COMMENTS did not, because a comment is a
+claim nobody runs. Reviewers disproved six of them by execution — "every failure names
+its own layer" (not true of `ask`'s catch), "the session total is this review's total"
+(false when the reviewer delegates via `task`), a diagnostic asserting one cause among
+three it cannot distinguish, a 5.2 MB/179 ms figure measured on a laptop rather than
+the arm64 SBC it describes, "sorting again costs nothing" (unmeasured), and
+`compareFindings` "mirrors" the SQL (it approximates; JS UTF-16 vs SQLite BINARY
+disagree above the BMP). On a project whose one rule is that an unverified claim is
+the enemy, five of six agents wrote comments their code does not honour — twice.
+
+**Surprised me.** GLM read my `lore-ok` for the semgrep false positive and raised the
+same concern independently, in its own words, as a separate finding. I argued the
+loopback bind makes plaintext irrelevant; an independent model disagreed. That is the
+ratification mechanism working exactly as designed, against me.
+
+---
+
 ## 2026-08-03 — session 28: the cap I did not ship
 
 **Did.** Closed the first of session 27's two open items and deliberately did not

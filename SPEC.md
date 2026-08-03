@@ -154,6 +154,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-48** | An unfundable tier is *skipped*, not fatal — `passed_partial` | confirmed |
 | **D-49** | A single-vendor ladder reaches `passed_partial`, never `passed` | `[OPEN]` |
 | **D-50** | Exploration is **counted per review before it is capped**; no cap yet | `[OPEN]` |
+| **D-51** | An accepted justification is **repo knowledge**, carried across reviews | confirmed |
 
 **D-7, revised.** The earlier version dropped GLM-5.2 on Artificial Analysis's
 *cost per task* — which is tokens consumed × price on their benchmark, not a price.
@@ -423,6 +424,39 @@ the session — in a real 73-turn session the per-message cache reads were 100k�
 each and summed to 17.9M. `GET /session/:id` returns the session's true totals in
 ~700 bytes, so closing that is small; it changes what the spend ceiling sees, which
 makes it a money decision rather than a bug fix.
+
+**D-51 — an accepted justification outlives the review that accepted it.**
+
+The thing this service exists for, and it was missing until it was watched failing.
+
+A fingerprint belongs to the review that raised it. So a reason ratified last week
+matched nothing this week: every new review re-raised every settled finding, and the
+author re-submitted the same `lore-ok` comment forever. The memory was per-review,
+which is precisely the amnesia the product is against — SPEC promised *"an accepted
+justification becomes durable knowledge"* and the code delivered a note in a drawer
+nobody opened again.
+
+Observed rather than reasoned: a `lore-ok` accepted in one review of this repo was
+ignored by the first round of the next, because justifications are collected before
+findings are recorded and the new review's finding table was still empty.
+
+So a raised fingerprint now inherits the last `justified-accepted` verdict from any
+earlier review **of the same repo**. Two guards, neither optional:
+
+- **Not if the model raised it this round.** A model that reads the recorded reason
+  and complains anyway is disagreeing with the lore, and that disagreement is worth
+  more than the convenience of auto-closing. It falls through to the normal ruling,
+  which is where a bad justification gets rejected.
+- **Not if the code moved.** The same staleness rule `expireStaleVerdicts` applies
+  *within* a review, applied *across* them. A reason is about a piece of code and
+  survives exactly as long as that code does; inheriting one blind is how a ladder
+  rots into rubber-stamping.
+
+Only `justified-accepted` carries. `fixed` does not — that verdict says the code
+changed, and a fingerprint raised again means it did not stay changed.
+
+The carried verdict records its provenance in the rationale, because a reader needs
+to know a decision was inherited rather than made by the tier named beside it.
 
 **D-43 — review types.** `review.start` takes a `type`, defaulting to `code-arch`:
 *is this change correct and well-made?* The next type is `security`: *what
