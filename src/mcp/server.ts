@@ -10,12 +10,13 @@
  */
 
 import { randomBytes } from "node:crypto";
-import { McpServer } from "@modelcontextprotocol/server";
+import { McpServer, ResourceTemplate } from "@modelcontextprotocol/server";
 import * as z from "zod";
 import { initialState } from "../core/ladder.ts";
 import { isAttestable } from "../core/review-state.ts";
 import { DEFAULT_TYPE, reviewType, reviewTypeIds } from "../core/review-type.ts";
 import { applyPatch, treeHash } from "../git/repo.ts";
+import { buildVex, findingsNeedingTriage, renderVex } from "../security/vex.ts";
 import type { Store } from "../store/store.ts";
 import type { Principal } from "./auth.ts";
 import { REVIEW_PROMPT_TEXT, RESOURCE_DOCS, TOOL_DOCS } from "./docs.ts";
@@ -297,6 +298,82 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
     },
   );
 
+  // -------------------------------------------------------------- review.vex
+
+  server.registerTool(
+    "review_vex",
+    {
+      description: TOOL_DOCS.vex,
+      inputSchema: z.object({ review_id: z.string().min(1) }),
+    },
+    async ({ review_id }) => {
+      const review = mine(review_id);
+      const doc = buildVex(
+        store,
+        review_id,
+        { name: review.branch, version: review.treeHash ?? "unknown" },
+        new Date().toISOString(),
+      );
+      return text(
+        JSON.stringify({
+          summary: renderVex(doc),
+          untriaged: findingsNeedingTriage(store, review_id).length,
+          document: doc,
+        }),
+      );
+    },
+  );
+
+  // ------------------------------------------------------- knowledge.resolve
+
+  server.registerTool(
+    "knowledge_resolve",
+    {
+      description: TOOL_DOCS.resolve,
+      inputSchema: z.object({
+        keep: z.string().min(1).describe("id of the rule that is correct"),
+        retire: z.string().min(1).describe("id of the rule that is wrong"),
+        reason: z.string().min(1).describe("why — this is recorded and outlives both of you"),
+      }),
+    },
+    async ({ keep, retire, reason }) => {
+      const settled = store.resolveConflict(who.repoId, keep, retire, reason);
+      if (!settled) {
+        throw new Error(
+          `no open conflict between ${keep} and ${retire} — check knowledge_query, or it may already be settled`,
+        );
+      }
+      return text(
+        JSON.stringify({
+          resolved: true,
+          retired: retire,
+          note: "The losing rule is retired, not deleted: the decision stays reconstructable.",
+        }),
+      );
+    },
+  );
+
+  server.registerTool(
+    "knowledge_escalate",
+    {
+      description: TOOL_DOCS.escalate,
+      inputSchema: z.object({
+        left: z.string().min(1),
+        right: z.string().min(1),
+        note: z.string().min(1).describe("what you tried, and what a person needs to decide"),
+      }),
+    },
+    async ({ left, right, note }) => {
+      store.escalateConflict(who.repoId, left, right, note);
+      return text(
+        JSON.stringify({
+          escalated: true,
+          note: "Recorded. This still blocks the review from passing — tell your user a person must decide it.",
+        }),
+      );
+    },
+  );
+
   // ------------------------------------------------------------- resources
 
   for (const [uri, doc] of Object.entries(RESOURCE_DOCS)) {
@@ -313,6 +390,51 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       async () => ({ contents: [{ uri, mimeType: "text/markdown", text: doc.text }] }),
     );
   }
+
+  // Live data, not documentation.
+  //
+  // `lore://review/{id}` is deliberately richer than `review_poll`: poll returns
+  // deltas so the loop stays cheap, while this returns the whole history for when
+  // an agent — or a person — needs to understand how a review reached its verdict.
+  server.registerResource(
+    "review-trail",
+    new ResourceTemplate("lore://review/{review_id}", { list: undefined }),
+    { title: "Full audit trail for one review", mimeType: "application/json" },
+    async (uri: URL, vars: Record<string, string | string[]>) => {
+      const id = String(Array.isArray(vars["review_id"]) ? vars["review_id"][0] : vars["review_id"]);
+      const review = mine(id);
+      const findings = store.db.prepare("SELECT * FROM finding WHERE review_id = ?").all(id);
+      const verdicts = store.db.prepare("SELECT * FROM verdict WHERE review_id = ? ORDER BY id").all(id);
+      const runs = store.db.prepare("SELECT * FROM tier_run WHERE review_id = ? ORDER BY id").all(id);
+      return {
+        contents: [
+          {
+            uri: uri.href,
+            mimeType: "application/json",
+            text: JSON.stringify({ review, tierRuns: runs, findings, verdicts }, null, 2),
+          },
+        ],
+      };
+    },
+  );
+
+  server.registerResource(
+    "knowledge-at-path",
+    new ResourceTemplate("lore://knowledge/{+path}", { list: undefined }),
+    { title: "What is known about a path", mimeType: "application/json" },
+    async (uri: URL, vars: Record<string, string | string[]>) => {
+      const path = String(Array.isArray(vars["path"]) ? vars["path"][0] : vars["path"] ?? "");
+      return {
+        contents: [
+          {
+            uri: uri.href,
+            mimeType: "application/json",
+            text: JSON.stringify(store.knowledgeFor(who.repoId, path), null, 2),
+          },
+        ],
+      };
+    },
+  );
 
   // ---------------------------------------------------------------- prompt
 

@@ -12,7 +12,7 @@
  * SPEC: spec/mcp-api.md §2.4, §5
  */
 
-import { DEFAULT_TIERS } from "../core/ladder.ts";
+
 import { Exhausted, LoreError } from "../core/errors.ts";
 import { reviewType } from "../core/review-type.ts";
 import { ensureBare, addWorktree, repoPaths } from "../git/repo.ts";
@@ -153,7 +153,6 @@ export class Worker {
       runTests: this.cfg.runTests,
     });
 
-    const tiers = type.tiers.length > 0 ? type.tiers : DEFAULT_TIERS;
     switch (result.decision.kind) {
       case "fastClean":
         // Cheap tiers clean. The deep tiers continue asynchronously, and the client
@@ -161,7 +160,10 @@ export class Worker {
         this.store.enqueue(reviewId, "deep");
         break;
       case "escalate":
-        this.store.enqueue(reviewId, tiers.find((t) => t.id === result.decision.kind)?.stage ?? "deep");
+        // The decision carries the tier we are moving to; its stage decides which
+        // queue. (This previously looked up a tier whose id equalled the decision
+        // KIND, which never matched and only worked by falling through to "deep".)
+        this.store.enqueue(reviewId, result.decision.next.stage);
         break;
       default:
         // findings / passed / needsHuman / stopped all wait for the client.

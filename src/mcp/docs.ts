@@ -118,6 +118,49 @@ complains. This is the accumulated memory of every prior session on this repo, a
 is the reason this service exists.
 `.trim(),
 
+  vex: `
+The CycloneDX VEX document for a security review.
+
+A scanner says a vulnerable package is present; only reading the code says whether the
+vulnerable path can be reached. This records that judgement in the standard format, so
+tools we did not write can consume it.
+
+Statuses: not_affected (with a justification), exploitable, resolved, in_triage.
+
+\`in_triage\` means nobody has ruled on it yet. It is NOT a clearance — a VEX document
+that marks unexamined vulnerabilities as harmless is a signed claim that nobody
+checked. The untriaged count is returned alongside for exactly that reason.
+`.trim(),
+
+  resolve: `
+Settle a contradiction between two recorded rules.
+
+This codebase holds two beliefs that cannot both be true, and a review cannot pass
+while one is open. Read both rules, read their provenance, read the code as it stands
+now, and decide.
+
+A later rule is USUALLY the truer one, because code evolves — but that is a prior, not
+a verdict. A careless recent rule must not overwrite an older one that was reasoned
+through.
+
+The losing rule is retired with your reason, not deleted: "we used to believe X, until
+Y" is exactly what a codebase forgets and then re-argues.
+
+If you cannot decide, use knowledge_escalate instead. Do not guess.
+`.trim(),
+
+  escalate: `
+Say that a contradiction needs a person.
+
+Use this when you have genuinely tried to settle a conflict and cannot — not as the
+first move. Record what you tried and what a person needs to decide.
+
+This still blocks the review from passing, which is the point: an unresolved
+contradiction poisons every future session that reads the wrong rule. Tell your user
+plainly that a human decision is required; do not answer it yourself and do not close
+it with lore-ok.
+`.trim(),
+
   teach: `
 Record something durable about this codebase, with its reason.
 

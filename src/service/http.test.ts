@@ -122,11 +122,21 @@ describe("MCP surface", () => {
       "review_submit",
       "review_attest",
       "review_inbox",
+      "review_vex",
       "knowledge_query",
       "knowledge_teach",
+      "knowledge_resolve",
+      "knowledge_escalate",
     ]) {
       expect(text).toContain(name);
     }
+  });
+
+  it("exposes the live-data resource templates, not just the static docs", async () => {
+    const res = await mcp({ jsonrpc: "2.0", id: 1, method: "resources/templates/list", params: {} }, token);
+    const text = await res.text();
+    expect(text).toContain("lore://review/{review_id}");
+    expect(text).toContain("lore://knowledge/");
   });
 
   it("ships the documentation an agent reads, not just the tool names", async () => {

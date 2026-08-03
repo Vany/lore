@@ -109,3 +109,11 @@ This is the one place the system deliberately stops and asks for a person. Two
 contradictory beliefs about the same code are the failure mode most likely to
 poison every future session (§4), and guessing is what would poison it.
 
+### 7.3 Stopping must have an exit
+
+A block with no way to clear it is a trap, not a safeguard. So `knowledge.resolve`
+settles a conflict — retiring the losing rule **with its reason**, never deleting it
+— and `knowledge.escalate` records that a person is required. Both are visible to
+the ladder, which recomputes `needsHuman` from currently-open conflicts on every
+round rather than latching it forever.
+

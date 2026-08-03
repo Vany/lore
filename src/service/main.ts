@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { mkdir } from "node:fs/promises";
 import { Alerter } from "../ops/alerts.ts";
 import { DEFAULT_HEARTBEAT, startHeartbeat } from "../ops/heartbeat.ts";
+import { DEFAULT_RETENTION, collect } from "../ops/retention.ts";
 import { DEFAULT_SPEND, mayStart } from "../ops/spend.ts";
 import { addWorktree, repoPaths } from "../git/repo.ts";
 import { Store } from "../store/store.ts";
@@ -72,6 +73,28 @@ export async function serve(cfg: ServiceConfig): Promise<() => void> {
     alerter,
   );
 
+  // Sweep hourly. Worktrees and finished reviews go; the knowledge tables never do
+  // — a deleted review costs one re-run, deleted knowledge costs everything the
+  // workgroup ever taught the service.
+  const sweep = setInterval(() => {
+    void collect(store, { ...DEFAULT_RETENTION, reposRoot }).then(
+      (r) => {
+        if (r.worktreesRemoved + r.reviewsDeleted + r.reviewsExpired > 0) {
+          console.error(
+            `lore: swept ${r.worktreesRemoved} worktrees, ${r.reviewsDeleted} old reviews, ${r.reviewsExpired} expired`,
+          );
+        }
+      },
+      (e: unknown) =>
+        void alerter.send({
+          severity: "ticket",
+          condition: "retention sweep failed",
+          detail: e instanceof Error ? e.message : String(e),
+        }),
+    );
+  }, 3_600_000);
+  sweep.unref?.();
+
   const http = startHttp(
     store,
     {
@@ -107,6 +130,7 @@ export async function serve(cfg: ServiceConfig): Promise<() => void> {
 
   return () => {
     http.close();
+    clearInterval(sweep);
     stopBeat();
     stopWorker();
     store.close();

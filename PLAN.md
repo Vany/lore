@@ -166,7 +166,6 @@ Not run now, by instruction. Assume it works; verify before trusting it.
 | **security tooling on arm64** | `semgrep`, `osv-scanner`, `cdxgen` in the image | drop from T0 or run remotely |
 | **T0 CPU budget** | time a full T0 round; multiply by 30 PRs × ~5 rounds | tighten caching, or T0 becomes the queue |
 | **parallel container headroom** | N concurrent T0 runs until CPU saturates | sets the scheduler's concurrency cap |
-| **MCP over plain HTTP on tailnet** | connect Claude Code to `http://…` | `tailscale cert` and terminate TLS locally |
 
 The CPU-budget test is the one that could reshape the design, and it needs no target
 repo — a synthetic project of representative size will do.

@@ -149,6 +149,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-43** | Review **types**; `code-arch` is the default, `security` is next | confirmed |
 | **D-44** | Findings carry an optional CWE id — the shared vocabulary | confirmed |
 | **D-45** | The project is **`lore`** | confirmed |
+| **D-46** | A conflict block must have an exit: resolve, or escalate | confirmed |
 
 **D-7, revised.** The earlier version dropped GLM-5.2 on Artificial Analysis's
 *cost per task* — which is tokens consumed × price on their benchmark, not a price.

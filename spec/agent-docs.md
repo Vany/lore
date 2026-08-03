@@ -138,6 +138,27 @@ Draft text. These are the deliverable, not a summary of it.
 > Call this **before** writing code in an unfamiliar area, not only after a review
 > complains. This is the accumulated memory of every prior session on this repo.
 
+### `knowledge.resolve` / `knowledge.escalate`
+
+> Settle a contradiction between two recorded rules, or say that it needs a person.
+>
+> A review cannot pass while a conflict is open. Read both rules, their provenance,
+> and the code as it stands, and decide — a later rule is *usually* truer because
+> code evolves, but that is a prior, not a verdict.
+>
+> The losing rule is retired **with the reason**, not deleted: *"we used to believe
+> X, until Y"* is exactly what a codebase forgets and then re-argues.
+>
+> `escalate` when you have genuinely tried and cannot. It still blocks the review,
+> which is the point.
+
+### `review.vex`
+
+> The CycloneDX VEX document for a security review: which known vulnerabilities are
+> reachable here, and why not, in a format other tools consume.
+>
+> `in_triage` means nobody has ruled on it. It is **not** a clearance.
+
 ### `knowledge.teach`
 
 > Record something durable about this codebase, with its reason.
@@ -165,7 +186,9 @@ Templates (RFC 6570), for live data rather than documentation:
 | template | contents |
 |---|---|
 | `lore://review/{review_id}` | full audit trail: every tier run, finding, verdict |
-| `lore://knowledge/{path}` | what is known about a path |
+| `lore://knowledge/{+path}` | what is known about a path |
+
+Both are implemented as RFC 6570 templates via the SDK's `ResourceTemplate`.
 
 `lore://review/{id}` is deliberately richer than `review.poll`. Poll gives deltas so
 the loop stays cheap; the resource gives the whole history for when an agent — or a

@@ -50,10 +50,22 @@ describe("step", () => {
     expect(r.decision.kind).toBe("needsHuman");
   });
 
-  it("keeps needsHuman sticky across rounds", () => {
+  // Derived from the caller's current view, never accumulated. Sticky would
+  // deadlock: once a conflict appeared the review could never pass again, even
+  // after a human settled it. A question with no way to answer it is a trap.
+  it("clears needsHuman once the caller reports it resolved", () => {
     const flagged = step({ state: initialState(), raised: [], needsHuman: true });
+    expect(flagged.decision.kind).toBe("needsHuman");
     expect(flagged.state.needsHuman).toBe(true);
-    expect(step({ state: flagged.state, raised: [] }).decision.kind).toBe("needsHuman");
+
+    const cleared = step({ state: flagged.state, raised: [], needsHuman: false });
+    expect(cleared.state.needsHuman).toBe(false);
+    expect(cleared.decision.kind).not.toBe("needsHuman");
+  });
+
+  it("keeps blocking while the caller still reports it open", () => {
+    const flagged = step({ state: initialState(), raised: [], needsHuman: true });
+    expect(step({ state: flagged.state, raised: [], needsHuman: true }).decision.kind).toBe("needsHuman");
   });
 
   // Hitting a bound is NOT a pass. A review that ran out of budget learned nothing

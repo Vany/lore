@@ -442,11 +442,64 @@ export class Store {
       .run(repoId, leftId, rightId, now());
   }
 
-  openConflicts(repoId: string): readonly { left: string; right: string }[] {
+  /**
+   * Settle a conflict by retiring the rule that lost, with the reason.
+   *
+   * The losing rule is retired, not deleted: the decision has to be
+   * reconstructable later, and "we used to believe X, until Y" is exactly the kind
+   * of thing a codebase forgets and then re-litigates.
+   */
+  resolveConflict(repoId: string, keepId: string, retireId: string, reason: string): boolean {
+    return this.tx(() => {
+      const open = this.db
+        .prepare(
+          `SELECT id FROM knowledge_conflict
+           WHERE repo_id = ? AND state = 'open'
+             AND ((left_id = ? AND right_id = ?) OR (left_id = ? AND right_id = ?))`,
+        )
+        .get(repoId, keepId, retireId, retireId, keepId) as Record<string, number> | undefined;
+      if (open === undefined) return false;
+
+      const t = now();
+      this.db
+        .prepare("UPDATE knowledge SET retired_at = ?, retired_reason = ? WHERE id = ? AND repo_id = ?")
+        .run(t, reason, retireId, repoId);
+      this.db
+        .prepare("UPDATE knowledge_conflict SET state = 'resolved', resolution = ?, resolved_at = ? WHERE id = ?")
+        .run(reason, t, Number(open["id"]));
+      return true;
+    });
+  }
+
+  /** Mark a conflict as one only a person can settle. Still blocks passing. */
+  escalateConflict(repoId: string, leftId: string, rightId: string, note: string): void {
+    this.db
+      .prepare(
+        `UPDATE knowledge_conflict SET state = 'needs-human', resolution = ?
+         WHERE repo_id = ? AND state = 'open'
+           AND ((left_id = ? AND right_id = ?) OR (left_id = ? AND right_id = ?))`,
+      )
+      .run(note, repoId, leftId, rightId, rightId, leftId);
+  }
+
+  /**
+   * Conflicts that still block a review from passing.
+   *
+   * Both `open` and `needs-human` count. Escalating to a person is not progress
+   * toward passing — it is a statement that passing requires someone who has not
+   * looked yet.
+   */
+  openConflicts(repoId: string): readonly { left: string; right: string; state: string }[] {
     const rows = this.db
-      .prepare("SELECT left_id, right_id FROM knowledge_conflict WHERE repo_id = ? AND state = 'open'")
+      .prepare(
+        "SELECT left_id, right_id, state FROM knowledge_conflict WHERE repo_id = ? AND state IN ('open', 'needs-human')",
+      )
       .all(repoId) as Record<string, string>[];
-    return rows.map((r) => ({ left: r["left_id"] ?? "", right: r["right_id"] ?? "" }));
+    return rows.map((r) => ({
+      left: r["left_id"] ?? "",
+      right: r["right_id"] ?? "",
+      state: r["state"] ?? "open",
+    }));
   }
 
   // ----------------------------------------------------------------- usage

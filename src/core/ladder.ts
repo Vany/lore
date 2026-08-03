@@ -116,7 +116,14 @@ export function step(input: StepInput): { readonly state: LadderState; readonly 
 
   const round = prev.round + 1;
   const tierRounds = { ...prev.tierRounds, [tier.id]: (prev.tierRounds[tier.id] ?? 0) + 1 };
-  const needsHuman = prev.needsHuman || (input.needsHuman ?? false);
+
+  // Derived from the caller's CURRENT view, never accumulated.
+  //
+  // Sticky was wrong and would have deadlocked: once a conflict appeared, the
+  // review could never pass again even after a human settled it. The system is
+  // meant to stop and ask, not to stop permanently — a question with no way to
+  // answer it is a trap, not a safeguard.
+  const needsHuman = input.needsHuman ?? false;
 
   const settledSet = new Set(prev.settled);
   const fresh = input.raised.filter((fp) => !settledSet.has(fp));

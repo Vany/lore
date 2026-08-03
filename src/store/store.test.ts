@@ -168,7 +168,34 @@ describe("knowledge", () => {
     const a = store.addKnowledge({ repoId, kind: "rule", source: "taught", statement: "always X", why: undefined, path: undefined, cwe: undefined, provenance: undefined, sourceBlob: undefined, confidence: undefined });
     const b = store.addKnowledge({ repoId, kind: "rule", source: "derived", statement: "never X", why: undefined, path: undefined, cwe: undefined, provenance: undefined, sourceBlob: undefined, confidence: undefined });
     store.recordConflict(repoId, a.id, b.id);
-    expect(store.openConflicts(repoId)).toStrictEqual([{ left: a.id, right: b.id }]);
+    expect(store.openConflicts(repoId)).toStrictEqual([{ left: a.id, right: b.id, state: "open" }]);
+  });
+
+  it("settles a conflict by retiring the losing rule, with the reason", () => {
+    const keep = store.addKnowledge({ repoId, kind: "rule", source: "taught", statement: "always X", why: undefined, path: undefined, cwe: undefined, provenance: undefined, sourceBlob: undefined, confidence: undefined });
+    const lose = store.addKnowledge({ repoId, kind: "rule", source: "derived", statement: "never X", why: undefined, path: undefined, cwe: undefined, provenance: undefined, sourceBlob: undefined, confidence: undefined });
+    store.recordConflict(repoId, keep.id, lose.id);
+
+    expect(store.resolveConflict(repoId, keep.id, lose.id, "the schema was changed in July")).toBe(true);
+    // Unblocked: the review can pass again. A question with no way to answer it
+    // would be a trap rather than a safeguard.
+    expect(store.openConflicts(repoId)).toStrictEqual([]);
+    expect(store.knowledgeFor(repoId).map((k) => k.id)).toStrictEqual([keep.id]);
+  });
+
+  it("refuses to settle a conflict that was never recorded", () => {
+    expect(store.resolveConflict(repoId, "nope-a", "nope-b", "because")).toBe(false);
+  });
+
+  // Escalating is not progress toward passing. It states that passing requires
+  // someone who has not looked yet.
+  it("keeps blocking when a conflict is escalated to a human", () => {
+    const a = store.addKnowledge({ repoId, kind: "rule", source: "taught", statement: "always X", why: undefined, path: undefined, cwe: undefined, provenance: undefined, sourceBlob: undefined, confidence: undefined });
+    const b = store.addKnowledge({ repoId, kind: "rule", source: "taught", statement: "never X", why: undefined, path: undefined, cwe: undefined, provenance: undefined, sourceBlob: undefined, confidence: undefined });
+    store.recordConflict(repoId, a.id, b.id);
+    store.escalateConflict(repoId, a.id, b.id, "both rules were written by people; I cannot pick");
+
+    expect(store.openConflicts(repoId)).toStrictEqual([{ left: a.id, right: b.id, state: "needs-human" }]);
   });
 });
 

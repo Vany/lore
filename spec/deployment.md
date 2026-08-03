@@ -11,17 +11,13 @@ constrain the design.
 The service is never publicly exposed. It listens on the tailnet only.
 
 - **No public TLS, no domain, no certificate renewal.** WireGuard already provides
-  the transport security that HTTPS would have.
+  the transport security. TLS termination is an outer concern and deliberately not
+  this project's problem.
 - **No abuse surface.** Rate limiting, bot defence and public-facing hardening are
   not needed; the network boundary does that job.
 - **Bearer tokens still apply** (D-21, D-23) — not for network defence, but for
   **per-repo scoping** and for binding `review_id` to a principal. Two teammates on
   the same tailnet still should not read each other's repos by guessing an id.
-
-**Unverified:** whether MCP clients accept a plain `http://` remote endpoint on a
-private network, or insist on `https://`. If they insist, terminate TLS locally with
-a Tailscale-issued certificate (`tailscale cert`) — cheap, but it must be checked
-before assuming plain HTTP works.
 
 ## 2. arm64 is a hard constraint
 
