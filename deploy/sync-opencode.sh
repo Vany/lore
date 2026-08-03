@@ -65,7 +65,12 @@ if not kept:
 out_auth = os.path.join(stage, "data", "auth.json")
 with open(out_auth, "w") as f:
     json.dump(kept, f, indent=2)
-os.chmod(out_auth, 0o600)
+# 0644, not 0600: this file is bind-mounted into a container running under a
+# different uid, and 0600 makes it unreadable there — opencode then starts with no
+# providers and every tier fails as "not authenticated", pointing at the login
+# rather than at the permission. The containing directory stays 0700, so nothing
+# on the host gained access.
+os.chmod(out_auth, 0o644)
 
 # ---- config --------------------------------------------------------------
 cfg_path = os.path.join(src_config, "opencode.json")
