@@ -25,6 +25,14 @@ export interface SandboxConfig {
   readonly image: string;
   /** Host directory holding per-lockfile `node_modules` caches (D-37). */
   readonly cacheRoot: string;
+  /**
+   * Where the throwaway per-review copy lives.
+   *
+   * Beside the repositories on purpose, so it is on the same shared volume the
+   * containers already mount — the daemon resolves bind paths on the host, and a
+   * scratch directory somewhere else would not exist there.
+   */
+  readonly scratchRoot: string;
   readonly memory: string;
   readonly cpus: string;
   readonly timeoutMs: number;
@@ -35,6 +43,7 @@ export interface SandboxConfig {
 export const DEFAULT_SANDBOX: SandboxConfig = {
   image: "node:24-alpine",
   cacheRoot: "/var/lib/lore/npm-cache",
+  scratchRoot: "/var/lib/lore/scratch",
   memory: "2g",
   cpus: "2",
   // A hung suite otherwise holds a review slot forever, and looks like a slow
@@ -54,13 +63,30 @@ export async function lockfileKey(worktree: string): Promise<string> {
   return "no-lockfile";
 }
 
-function baseArgs(cfg: SandboxConfig, worktree: string, cacheDir: string): string[] {
+/**
+ * Mounts shared by both phases.
+ *
+ * **The reviewed worktree goes in read-only, at `/src`, and the run happens in a
+ * throwaway copy at `/work`.** Two reasons, and the first is not about security:
+ *
+ * 1. A test suite that writes — snapshots, coverage, build output, a lockfile
+ *    npm decides to update — would otherwise mutate the tree under review. Those
+ *    files land in the next round's diff and become findings about work nobody
+ *    did. A review that invents its own defects is worse than one that misses some.
+ * 2. The same read-only bind that opencode gets, for the same reason: a policy the
+ *    model or the suite could route around becomes a property of the filesystem.
+ *
+ * `node_modules` is mounted over the copy from the shared cache, so the copy is
+ * source only and installs are shared across reviews with the same lockfile.
+ */
+function baseArgs(cfg: SandboxConfig, worktree: string, cacheDir: string, scratch: string): string[] {
   return [
     "run",
     "--rm",
-    // Nothing from the host beyond the worktree and a node_modules cache. In
+    // Nothing from the host beyond the sources, a scratch copy and the cache. In
     // particular: no deploy keys, no database, no tokens.
-    "-v", `${worktree}:/work`,
+    "-v", `${worktree}:/src:ro`,
+    "-v", `${scratch}:/work`,
     "-v", `${cacheDir}:/work/node_modules`,
     "-w", "/work",
     "--memory", cfg.memory,
@@ -75,6 +101,15 @@ function baseArgs(cfg: SandboxConfig, worktree: string, cacheDir: string): strin
 }
 
 /**
+ * Refresh the scratch copy from the read-only sources.
+ *
+ * `-a` preserves modes and times so incremental typecheckers are not fooled into
+ * rebuilding everything; the `node_modules` mount is left alone because it is the
+ * shared cache, not part of the source.
+ */
+const SYNC = "cp -a /src/. /work/ 2>/dev/null || true";
+
+/**
  * Install dependencies.
  *
  * Network is on here because a registry install needs it — but no secret is
@@ -83,11 +118,22 @@ function baseArgs(cfg: SandboxConfig, worktree: string, cacheDir: string): strin
  * modules never build would fail its tests for reasons that have nothing to do
  * with the change under review.
  */
-export async function install(cfg: SandboxConfig, worktree: string, cacheDir: string): Promise<ToolResult> {
+export async function install(
+  cfg: SandboxConfig,
+  worktree: string,
+  cacheDir: string,
+  scratch: string,
+): Promise<ToolResult> {
   return runTool(
     worktree,
     cfg.runtime,
-    [...baseArgs(cfg, worktree, cacheDir), cfg.image, "sh", "-lc", "npm ci --no-audit --no-fund || npm install --no-audit --no-fund"],
+    [
+      ...baseArgs(cfg, worktree, cacheDir, scratch),
+      cfg.image,
+      "sh",
+      "-lc",
+      `${SYNC} && (npm ci --no-audit --no-fund || npm install --no-audit --no-fund)`,
+    ],
     cfg.timeoutMs,
   );
 }
@@ -98,11 +144,26 @@ export async function install(cfg: SandboxConfig, worktree: string, cacheDir: st
  * A test that reaches the internet is not a test of this change, and a dependency
  * that phones home during a test run is exactly what we are guarding against.
  */
-export async function runTests(cfg: SandboxConfig, worktree: string, cacheDir: string): Promise<ToolResult> {
+export async function runTests(
+  cfg: SandboxConfig,
+  worktree: string,
+  cacheDir: string,
+  scratch: string,
+): Promise<ToolResult> {
   return runTool(
     worktree,
     cfg.runtime,
-    [...baseArgs(cfg, worktree, cacheDir), "--network", "none", cfg.image, "sh", "-lc", "npm test --silent"],
+    [
+      ...baseArgs(cfg, worktree, cacheDir, scratch),
+      "--network", "none",
+      cfg.image,
+      "sh",
+      "-lc",
+      // Re-synced because install may have rewritten a lockfile, and because the
+      // suite must see exactly the sources under review — not whatever the install
+      // phase left behind.
+      `${SYNC} && npm test --silent`,
+    ],
     cfg.timeoutMs,
   );
 }

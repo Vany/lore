@@ -8,8 +8,8 @@
  * INV-1's failure.
  */
 
-import { mkdir } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, rm } from "node:fs/promises";
+import { basename, join } from "node:path";
 import type { Finding } from "../core/finding.ts";
 import type { T0Engine } from "../core/review-type.ts";
 import { runEngine, type EngineOutcome } from "./engines.ts";
@@ -60,7 +60,26 @@ async function runSuite(worktree: string, cfg: SandboxConfig): Promise<EngineOut
   const cacheDir = join(cfg.cacheRoot, await lockfileKey(worktree));
   await mkdir(cacheDir, { recursive: true });
 
-  const installed = await install(cfg, worktree, cacheDir);
+  // A throwaway copy per review, beside the repositories so it lands on the same
+  // shared volume the containers already see. Removed afterwards regardless of
+  // outcome: a failed suite must not leave a full disk behind for the next one.
+  const scratch = join(cfg.scratchRoot, basename(worktree));
+  await mkdir(scratch, { recursive: true });
+
+  try {
+    return await installAndTest(cfg, worktree, cacheDir, scratch);
+  } finally {
+    await rm(scratch, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
+async function installAndTest(
+  cfg: SandboxConfig,
+  worktree: string,
+  cacheDir: string,
+  scratch: string,
+): Promise<EngineOutcome> {
+  const installed = await install(cfg, worktree, cacheDir, scratch);
   if (installed.unavailable !== undefined) {
     return { engine: "tests", findings: [], unavailable: `install could not run: ${installed.unavailable}` };
   }
@@ -83,7 +102,7 @@ async function runSuite(worktree: string, cfg: SandboxConfig): Promise<EngineOut
     };
   }
 
-  const tests = await runTests(cfg, worktree, cacheDir);
+  const tests = await runTests(cfg, worktree, cacheDir, scratch);
   if (tests.unavailable !== undefined && !tests.timedOut) {
     return { engine: "tests", findings: [], unavailable: tests.unavailable };
   }

@@ -61,6 +61,13 @@ The worktree goes in; findings come out; nothing else crosses. The timeout is
 mandatory — a hung suite otherwise holds a review slot forever, and looks like a
 slow review rather than a stuck one.
 
+**The suite never runs in the reviewed tree.** Sources are mounted read-only at
+`/src` and copied to a throwaway `/work` per review. A suite that writes —
+snapshots, coverage, build output, a lockfile npm decides to update — would
+otherwise mutate the tree under review, and those files land in the next round's
+diff as findings about work nobody did. **A review that invents its own defects is
+worse than one that misses some.**
+
 ### 1.1.2 A tier is told where it stands (D-31)
 
 The same prompt at every tier wastes the expensive ones. A tier's position *is*
