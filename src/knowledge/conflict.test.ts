@@ -1,0 +1,129 @@
+import { beforeEach, describe, expect, it } from "vitest";
+import { Store } from "../store/store.ts";
+import { detectAndRecord, findConflicts, polarity, renderConflicts } from "./conflict.ts";
+import type { KnowledgeItem } from "../store/store.ts";
+
+const item = (id: string, statement: string, path?: string): KnowledgeItem => ({
+  id,
+  repoId: "r",
+  kind: "rule",
+  source: "taught",
+  statement,
+  why: undefined,
+  path,
+  cwe: undefined,
+  provenance: undefined,
+  sourceBlob: undefined,
+  confidence: 1,
+  verifiedAt: "2026-08-03T00:00:00.000Z",
+});
+
+describe("polarity", () => {
+  it("reads a plain claim as positive and a negated one as negative", () => {
+    expect(polarity("amounts are integers in minor units")).toBe(1);
+    expect(polarity("amounts must never be floats")).toBe(-1);
+  });
+
+  // A genuine double negative reads as positive. Only explicit negation words
+  // count: "must not be absent" reads as negative here, and that is correct for
+  // conflict detection — it contradicts "must be absent", which is the point.
+  it("cancels a genuine double negation", () => {
+    expect(polarity("never avoid checking the return value")).toBe(1);
+    expect(polarity("the field must not be absent")).toBe(-1);
+  });
+});
+
+describe("findConflicts", () => {
+  it("flags the same subject asserted both ways", () => {
+    const found = findConflicts([
+      item("a", "money amounts are always integers in minor units"),
+      item("b", "money amounts are never integers in minor units"),
+    ]);
+    expect(found).toHaveLength(1);
+    expect(found[0]?.similarity).toBeGreaterThan(0.5);
+  });
+
+  it("leaves agreeing rules alone", () => {
+    expect(
+      findConflicts([
+        item("a", "money amounts are always integers in minor units"),
+        item("b", "money amounts are always stored as integers in minor units"),
+      ]),
+    ).toStrictEqual([]);
+  });
+
+  it("leaves unrelated rules alone even when polarity differs", () => {
+    expect(
+      findConflicts([
+        item("a", "money amounts are always integers"),
+        item("b", "log lines must never contain tokens"),
+      ]),
+    ).toStrictEqual([]);
+  });
+
+  // Two rules about different directories are two rules, not a contradiction.
+  it("respects path scope", () => {
+    expect(
+      findConflicts([
+        item("a", "requests are always retried on timeout", "src/pay"),
+        item("b", "requests are never retried on timeout", "src/report"),
+      ]),
+    ).toStrictEqual([]);
+  });
+
+  it("treats an unscoped rule as repo-wide, so it can conflict with a scoped one", () => {
+    expect(
+      findConflicts([
+        item("a", "requests are always retried on timeout"),
+        item("b", "requests are never retried on timeout", "src/pay"),
+      ]),
+    ).toHaveLength(1);
+  });
+});
+
+describe("detectAndRecord", () => {
+  let store: Store;
+  let repoId: string;
+
+  beforeEach(() => {
+    store = new Store(":memory:");
+    repoId = store.upsertRepo("r", "git@x:r.git").id;
+  });
+
+  const add = (statement: string) =>
+    store.addKnowledge({
+      repoId, kind: "rule", source: "taught", statement, why: undefined, path: undefined,
+      cwe: undefined, provenance: undefined, sourceBlob: undefined, confidence: 1,
+    });
+
+  it("records a contradiction rather than resolving it", () => {
+    add("money amounts are always integers in minor units");
+    add("money amounts are never integers in minor units");
+
+    expect(detectAndRecord(store, repoId).recorded).toBe(1);
+    // Both rules survive. The store's job is to make the contradiction seen;
+    // deciding it needs someone who can read the code.
+    expect(store.knowledgeFor(repoId)).toHaveLength(2);
+    expect(store.openConflicts(repoId)).toHaveLength(1);
+  });
+
+  it("does not record the same pair twice across runs", () => {
+    add("money amounts are always integers in minor units");
+    add("money amounts are never integers in minor units");
+    detectAndRecord(store, repoId);
+    expect(detectAndRecord(store, repoId).recorded).toBe(0);
+  });
+
+  it("tells the reviewer it must not lore-ok its way past a conflict", () => {
+    add("money amounts are always integers in minor units");
+    add("money amounts are never integers in minor units");
+    detectAndRecord(store, repoId);
+    const rendered = renderConflicts(store, repoId);
+    expect(rendered).toContain("do not close it with lore-ok");
+    expect(rendered).toContain("If you cannot decide");
+  });
+
+  it("renders nothing when there is nothing to settle", () => {
+    expect(renderConflicts(store, repoId)).toBe("");
+  });
+});

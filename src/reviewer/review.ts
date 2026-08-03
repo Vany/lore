@@ -19,6 +19,10 @@ import { parseLoreOk } from "../core/lore-ok.ts";
 import type { ReviewType } from "../core/review-type.ts";
 import { makeScope } from "../core/scope.ts";
 import { blobSha, computeDiff, renderDiff } from "../git/diff.ts";
+import { detectAndRecord, renderConflicts } from "../knowledge/conflict.ts";
+import { promoteRecurring } from "../knowledge/derive.ts";
+import { relevantTo } from "../knowledge/enrich.ts";
+import { ingestDocs } from "../knowledge/ingest.ts";
 import { runT0, renderT0 } from "../t0/runner.ts";
 import type { RecordedFinding, Store } from "../store/store.ts";
 import { Reviewer } from "./opencode.ts";
@@ -75,6 +79,11 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     })
     .filter((x): x is { finding: RecordedFinding; rationale: string | undefined } => x !== undefined);
 
+  // Re-ingest the repo's own documents. Deterministic and free, and it is what
+  // makes a rule die when the paragraph that justified it is deleted (D-20).
+  await ingestDocs(store, review.repoId, worktree);
+  detectAndRecord(store, review.repoId);
+
   const prompt = reviewPrompt({
     tier,
     tierIndex: tiers.filter((t) => t.kind === "model").findIndex((t) => t.id === tier.id),
@@ -85,7 +94,10 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     ticket: review.ticket,
     diff: renderDiff(diff),
     t0: renderT0(t0),
-    knowledge: store.knowledgeFor(review.repoId),
+    // Selected against the changed files, not dumped wholesale: everything a repo
+    // knows would crowd the diff out of the context window.
+    knowledge: relevantTo(store, review.repoId, diff.changedFiles),
+    conflicts: renderConflicts(store, review.repoId),
     settled: [...settledForPrompt, ...pending.map((p) => ({ finding: p.finding, rationale: p.reason }))],
   });
 
@@ -163,7 +175,10 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     }
   }
 
-  // 7. Move the ladder.
+  // 7. A defect that keeps recurring is a missing rule, not N unrelated bugs.
+  promoteRecurring(store, review.repoId);
+
+  // 8. Move the ladder.
   const withSettled = settle(review.ladder, accepted);
   const stepped = step({
     state: withSettled,

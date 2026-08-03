@@ -23,6 +23,8 @@ export interface PromptInput {
   readonly diff: string;
   readonly t0: string;
   readonly knowledge: readonly KnowledgeItem[];
+  /** Rendered contradictions the reviewer must settle, or "" (D-39). */
+  readonly conflicts?: string;
   /** Findings already settled, with the reasons. Re-raise only with new evidence. */
   readonly settled: readonly { finding: RecordedFinding; rationale: string | undefined }[];
 }
@@ -112,6 +114,7 @@ export function reviewPrompt(i: PromptInput): string {
     "",
     indent(i.ticket),
     knowledgeBlock(i.knowledge),
+    i.conflicts ?? "",
     settledBlock(i.settled),
     "",
     "DETERMINISTIC RESULTS",

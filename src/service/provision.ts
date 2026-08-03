@@ -8,8 +8,10 @@
  *     service holding a personal key holds everything that key opens.
  *  2. an opaque bearer token is minted, shown **once**, and stored only as a hash.
  *     A database backup should not be a set of live credentials.
- *  3. the knowledge base is bootstrapped, so the first review is not the dumbest
- *     one this repo will ever get (D-35).
+ * Bootstrapping the knowledge base (D-35) deliberately does **not** happen here.
+ * The deploy key exists but a human has not yet added it to the repository, so
+ * there is nothing to clone. It runs on the first review instead, which is the
+ * first moment the code is actually readable.
  *
  * SPEC: spec/mcp-api.md §1
  */

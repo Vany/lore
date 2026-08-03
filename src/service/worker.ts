@@ -16,6 +16,7 @@ import { DEFAULT_TIERS } from "../core/ladder.ts";
 import { Exhausted, LoreError } from "../core/errors.ts";
 import { reviewType } from "../core/review-type.ts";
 import { ensureBare, addWorktree, repoPaths } from "../git/repo.ts";
+import { bootstrap } from "../knowledge/bootstrap.ts";
 import type { Store } from "../store/store.ts";
 import { Alerter, CONDITIONS } from "../ops/alerts.ts";
 import { Reviewer } from "../reviewer/opencode.ts";
@@ -111,6 +112,35 @@ export class Worker {
     });
 
     this.store.updateReview(reviewId, { state: "running" });
+
+    // Bootstrap on first clone, not at provisioning (D-35).
+    //
+    // `make new` generates the deploy key but cannot add it to the repository —
+    // a human does that — so at provisioning time there is nothing to clone yet.
+    // The first review is the first moment the code is actually readable, and a
+    // repo with no knowledge is exactly the one that most needs it.
+    if (this.store.knowledgeFor(review.repoId, undefined, 1).length === 0) {
+      const summary = await bootstrap({
+        store: this.store,
+        repoId: review.repoId,
+        worktree,
+        reviewer: this.reviewer,
+      }).catch((e: unknown) => {
+        // Never fatal: a review without a bootstrapped memory is a worse review,
+        // not an impossible one. But it is said out loud rather than swallowed.
+        void this.alerter.send({
+          severity: "ticket",
+          condition: "bootstrap failed",
+          detail: `${review.repoId}: ${e instanceof Error ? e.message : String(e)}`,
+        });
+        return undefined;
+      });
+      if (summary !== undefined) {
+        console.error(
+          `lore: bootstrapped ${review.repoId} — ${summary.rulesFromDocs} rules from ${summary.documents} docs, ${summary.factsFromCode} facts from code`,
+        );
+      }
+    }
 
     const type = reviewType(review.type);
     const result = await runRound({

@@ -5,6 +5,60 @@ surprised me.
 
 ---
 
+## 2026-08-03 — session 16: Phase 2, the knowledge layer
+
+**Did.** `knowledge/` — ingest, derive, conflict, enrich, bootstrap — wired into the
+review round. 98 tests, typecheck clean.
+
+**Wrote the product hypothesis as a test.** `memory.test.ts` asserts that what one
+review learns, the next one knows: an accepted justification from review 1 appears in
+review 2's context, a repeated finding carries its history, and a defect seen three
+times becomes a rule. If D-14 is wrong, that file fails — which is the point of
+writing it as a test rather than a belief.
+
+**A correction the wiring forced: bootstrap cannot run at provisioning.** `make new`
+generates the deploy key, but a *human* has to add it to the repository before we can
+clone anything. So there is nothing to read at provisioning time. Bootstrap now runs
+lazily on the first review, which is the first moment the code is actually readable.
+Obvious in hindsight; invisible until the call was written.
+
+**Ingestion is deterministic on purpose.** A model would extract better rules, but
+this runs on every document change, must be free, and must give the same answer
+twice. It takes bulleted and modal-carrying sentences, skips fences and headings —
+a rule inside a code block is an *example* of a rule, not one — and splits
+"X because Y" into statement and reason, because the *why* is the part that survives
+disagreement.
+
+**Two things the tests caught that I would not have:**
+- Trailing punctuation was not stripped, so the same rule written with and without a
+  full stop was two rules. Since documents are re-ingested on every change, an editor
+  adding a period would have quietly doubled an entry.
+- My polarity test asserted that "must not be absent" reads positive. It does not,
+  and *should* not: it contradicts "must be absent", which is exactly what conflict
+  detection needs to see. I had written a test for a nicety instead of for the
+  behaviour. Fixed the test, not the code.
+
+**Conflict detection is a heuristic and says so.** Token overlap plus opposite
+polarity. It will miss contradictions phrased without an explicit negation
+("amounts are integers" vs "amounts are floats") — written into the module docstring
+rather than left for someone to discover by trusting it. Threshold tuned to be noisy
+rather than silent: a false candidate costs a reviewer one sentence; a missed
+contradiction costs every future session a wrong belief.
+
+**Recurrence clusters on two axes.** CWE catches the same weakness class described in
+different words — which is precisely what the exact fingerprint cannot do
+(§3.1.1) and why D-44 exists. Normalised claim catches repeats with no CWE at all,
+which is most findings. Threshold is three, not two: two occurrences of anything is a
+coincidence often enough that promoting at two would fill the base with noise, and a
+knowledge base nobody trusts is one nobody reads.
+
+**Knowledge is selected against the changed files, not dumped.** Everything a repo
+knows would crowd the diff out of the context window, and a reviewer that cannot see
+the change reviews nothing. Repo-wide rules always apply; path-scoped ones only when
+the change touches their path.
+
+---
+
 ## 2026-08-03 — session 15: all of it, written
 
 **Did.** Phases 1, 3 and 4 in one go, on "write all the code, we will test on
