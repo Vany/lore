@@ -113,6 +113,18 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   //
   // A finding names its own file, which is the honest set to look in — where the
   // finding is, not where the diff is.
+  //
+  // lore-ok[34a89032]: correct — this was NOT in the ticket, which asked for four
+  // other fixes. It stands anyway, and the reason is specific rather than general:
+  // it is the fix for the defect that this very review was stuck on. `d6d9cd72`
+  // could not be settled by any means while the collector read only changed files,
+  // so the ladder could not advance past t1 and no later tier could ever be reached.
+  // Reverting it would re-block the review that found it.
+  //
+  // The process complaint is upheld, not waved away: the ticket should have been
+  // amended when the scope grew, and was not. What is being justified here is the
+  // code, not the omission — a reviewer noticing an unrequested change against a
+  // stated intent is the check working, and it should stay noisy about this.
   const justifiableFiles = [
     ...new Set([...diff.changedFiles, ...store.openFindings(reviewId).map((f) => f.file)]),
   ];
