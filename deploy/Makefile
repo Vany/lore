@@ -39,7 +39,11 @@ push: sync-opencode
 	@test -n "$(HOST)" || { echo "usage: make push HOST=<ssh-host> [DIR=~/lore]"; exit 1; }
 	rsync -az --delete --exclude .env \
 		./ "$(HOST):$(if $(DIR),$(DIR),lore)/"
-	@echo "pushed. On the host:  cd $(if $(DIR),$(DIR),lore) && make up"
+	@# MERGE the credentials rather than replacing them. Providers are authenticated
+	@# ON the target -- `opencode auth login` runs there -- so a wholesale copy would
+	@# silently delete a credential someone clearly remembers adding.
+	ssh "$(HOST)" "sh $(if $(DIR),$(DIR),lore)/opencode/merge-auth.sh"
+	@echo "pushed. On the host:  cd $(if $(DIR),$(DIR),lore) && make doctor"
 
 build: preflight
 	$(COMPOSE) --profile build-only build

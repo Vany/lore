@@ -108,3 +108,42 @@ if grep -qi '"anthropic"' "$STAGE/data/auth.json"; then
 fi
 
 echo "  staged at        : $STAGE"
+
+cat > "$STAGE/merge-auth.sh" <<'MERGE'
+#!/usr/bin/env sh
+# Merge staged credentials into the target's auth.json, keeping what is only there.
+#
+# The target machine is where a provider gets authenticated interactively — you run
+# `opencode auth login` on the server, not on your laptop. Replacing auth.json
+# wholesale on the next push would silently delete that credential, and the failure
+# would surface much later as "provider not authenticated" on a box where someone
+# clearly remembers logging in.
+#
+# Staged entries win on conflict: they are the ones just deliberately curated.
+set -e
+TARGET="$HOME/.local/share/opencode/auth.json"
+STAGED="$(dirname "$0")/data/auth.json"
+mkdir -p "$(dirname "$TARGET")"
+[ -f "$TARGET" ] || echo '{}' > "$TARGET"
+
+python3 - "$TARGET" "$STAGED" <<'PY'
+import json, sys
+target_path, staged_path = sys.argv[1], sys.argv[2]
+target = json.load(open(target_path))
+staged = json.load(open(staged_path))
+
+kept = sorted(set(target) - set(staged))
+merged = {**target, **staged}
+
+# Independence is enforced by absence (D-47). If anthropic reappeared on the target
+# it must not survive a merge, or the guarantee quietly lapses.
+removed = [k for k in list(merged) if k == "anthropic"]
+for k in removed:
+    del merged[k]
+
+json.dump(merged, open(target_path, "w"), indent=2)
+print(f"  merged: kept target-only {kept or '(none)'}, stripped {removed or '(none)'}")
+PY
+chmod 600 "$TARGET"
+MERGE
+chmod +x "$STAGE/merge-auth.sh"
