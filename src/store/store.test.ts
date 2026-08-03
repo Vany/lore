@@ -226,6 +226,44 @@ describe("orphaned jobs", () => {
   });
 });
 
+// A tier that ran for 30 minutes and timed out used to write NOTHING, because runs
+// were recorded only on completion. To every reader of this database that was
+// indistinguishable from a tier that never started, and the operator view said
+// "updated 41 minutes ago" while telling the literal truth. INV-1 inside the
+// bookkeeping: work that did not finish, reported as work that never happened.
+describe("tier runs are opened before the tier is asked anything", () => {
+  beforeEach(() => newReview("rev1"));
+
+  it("leaves an open row a reader can see as in flight", () => {
+    store.openTierRun("rev1", "t2", 1, new Date().toISOString());
+    const row = store.db.prepare("SELECT outcome, finished_at FROM tier_run WHERE review_id = 'rev1'").get() as
+      | Record<string, unknown>
+      | undefined;
+    expect(row).toBeDefined();
+    expect(row?.["finished_at"]).toBeNull();
+    expect(row?.["outcome"]).toBeNull();
+  });
+
+  // The case that motivated this: the model never answered.
+  it("keeps the evidence when the tier dies, with why", () => {
+    const id = store.openTierRun("rev1", "t2", 1, new Date().toISOString());
+    store.closeTierRun(id, "failed");
+    const row = store.db.prepare("SELECT outcome, finished_at FROM tier_run WHERE id = ?").get(id) as
+      | Record<string, unknown>
+      | undefined;
+    expect(row?.["outcome"]).toBe("failed");
+    expect(row?.["finished_at"]).not.toBeNull();
+  });
+
+  it("does not open a second row for the same run", () => {
+    const id = store.openTierRun("rev1", "t1", 1, new Date().toISOString());
+    store.closeTierRun(id, "answered");
+    store.closeTierRun(id, "passed");
+    const n = store.db.prepare("SELECT COUNT(*) c FROM tier_run WHERE review_id = 'rev1'").get() as Record<string, number>;
+    expect(Number(n["c"])).toBe(1);
+  });
+});
+
 describe("knowledge", () => {
   it("retires rules whose source document changed", () => {
     // The single guard against the knowledge base rotting: a stale doc must never

@@ -125,10 +125,21 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     settled: [...settledForPrompt, ...pending.map((p) => ({ finding: p.finding, rationale: p.reason }))],
   });
 
+  // Opened BEFORE the model is asked, so the row exists no matter how this ends.
+  // `finished_at` stays NULL until it does, which is what lets a reader tell a tier
+  // that is working from one that stopped without saying so.
+  const tierRunId = store.openTierRun(reviewId, tier.id, review.ladder.round + 1, startedAt);
+
   let result;
   try {
     result = await input.reviewer.review(tier, prompt, worktree);
+    store.closeTierRun(tierRunId, "answered");
   } catch (e) {
+    // The row is already open, so whatever happens next this tier leaves evidence.
+    // Before this existed, a `glm-5.2` call that ran 30 minutes and timed out wrote
+    // NOTHING, and the operator view could not tell it from a tier that never
+    // started — INV-1 inside the bookkeeping.
+    store.closeTierRun(tierRunId, e instanceof Exhausted ? "unpayable" : "failed");
     // A tier nobody can pay for is a limitation, not a failure (D-48). Record it,
     // step over it, and let the ladder finish with what it can afford — but only
     // if something else can still look. If nothing can, there is no review.
@@ -137,7 +148,6 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     const withoutTier = markUnavailable(review.ladder, tier.id);
     if (!anyTierRan(tiers, withoutTier.unavailable)) throw e;
 
-    store.recordTierRun(reviewId, tier.id, review.ladder.round + 1, "unpayable", startedAt);
     const skipped = step({ state: withoutTier, raised: [], tiers, needsHuman: false });
     store.updateReview(reviewId, {
       ladder: skipped.state,
@@ -310,7 +320,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // T0 and the model tier each ran; both belong in the audit trail, and the
   // attestation counts distinct tiers from it.
   store.recordTierRun(reviewId, "t0", round, t0.findings.length > 0 ? "findings" : "clean", startedAt);
-  store.recordTierRun(reviewId, tier.id, round, stepped.decision.kind, startedAt);
+  store.closeTierRun(tierRunId, stepped.decision.kind);
 
   store.updateReview(reviewId, {
     ladder: stepped.state,

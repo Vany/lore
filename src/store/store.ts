@@ -254,6 +254,35 @@ export class Store {
    * signed line would claim "0 tiers" — a false statement in the one output the
    * whole service exists to produce.
    */
+  /**
+   * Open a tier run BEFORE the tier is asked anything, and return its row id.
+   *
+   * Runs used to be written only on completion, so a tier that threw left no trace
+   * at all: a 30-minute `glm-5.2` call that timed out was, to every reader of this
+   * database, indistinguishable from a tier that never started. The operator view
+   * said "updated 41 minutes ago" and was telling the literal truth.
+   *
+   * That is INV-1 inside the bookkeeping — work that did not finish, reported as
+   * work that never happened — and it is worse here than in a review result,
+   * because this is the table someone consults precisely when they are asking
+   * "what is going on?"
+   *
+   * `finished_at` stays NULL until `closeTierRun`, which is what lets a reader tell
+   * IN FLIGHT from FINISHED from DIED: null and recent means running, null and old
+   * means something stopped without saying so.
+   */
+  openTierRun(reviewId: string, tier: string, round: number, startedAt: string): number {
+    const res = this.db
+      .prepare("INSERT INTO tier_run(review_id, tier, round, outcome, started_at, finished_at) VALUES(?, ?, ?, NULL, ?, NULL)")
+      .run(reviewId, tier, round, startedAt);
+    return Number(res.lastInsertRowid);
+  }
+
+  /** Close a run opened by `openTierRun`. The outcome is only known now. */
+  closeTierRun(id: number, outcome: string): void {
+    this.db.prepare("UPDATE tier_run SET outcome = ?, finished_at = ? WHERE id = ?").run(outcome, now(), id);
+  }
+
   recordTierRun(reviewId: string, tier: string, round: number, outcome: string, startedAt: string): void {
     this.db
       .prepare(
