@@ -5,6 +5,45 @@ surprised me.
 
 ---
 
+## 2026-08-03 — session 19: wiring the code that was written but never called
+
+**Did.** Audited for specced behaviour that exists but is never invoked. Found two,
+and fixing the first uncovered a third. 178 tests.
+
+**`isStale` had zero call sites.** The guard against rubber-stamping — the failure I
+had twice written down as the one I would most expect in six months — was written,
+tested in isolation, and **never wired**. Justifications never expired. Reasons would
+have accumulated, code would have moved out from under them, and nothing would ever
+have been re-examined.
+
+Now `runRound` expires stale justifications *before* the model tier runs, and records
+the expiry as a new verdict rather than mutating the old one — *why* something was
+re-opened is exactly the kind of thing that gets re-argued if it is not written down.
+
+`hunkStillPresent` slides the window across the file rather than comparing blobs: a
+verdict must survive an edit *elsewhere* in its file, or every justification in a busy
+file expires on every commit and people learn to ignore the findings that reappear.
+
+**Fixing that uncovered a worse one.** `settledFingerprints` matched *any* historical
+verdict, and verdicts are append-only — so a justification accepted and later
+**rejected stayed settled forever**. Expiry would have written its rejection into the
+table and changed nothing. Only the latest verdict per finding counts now.
+
+Two bugs, one of them silently defeating the other. Worth remembering: **writing the
+guard is not the same as installing it**, and a unit test on a pure function proves
+only that the function works — not that anything calls it. Both of these passed their
+own tests the whole time.
+
+**`renderEnrichment` had zero call sites too.** The knowledge layer's review-time
+payoff (D-9) never reached the output. Findings now carry their history in both the
+CLI and `review_poll`: *"seen 4× before in this repo — this is a pattern, not an
+incident"*, which is what tells a reader whether to fix the line or fix the habit.
+
+**Method note for the next audit:** grepping for call sites of every exported function
+took one command and found three real defects. Cheaper than any amount of re-reading.
+
+---
+
 ## 2026-08-03 — session 18: turning "typechecks" into "runs"
 
 **Did.** Integration tests for the three boundaries I had flagged as unverified.

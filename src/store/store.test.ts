@@ -125,6 +125,23 @@ describe("verdicts", () => {
     expect([...store.settledFingerprints("rev1")].sort()).toStrictEqual(["aa", "bb"]);
   });
 
+  // Verdicts are append-only, so "settled" must mean the LATEST one. Matching any
+  // historical row would leave a justification settled forever after it had been
+  // rejected — precisely the rubber-stamping this design exists to prevent.
+  it("unsettles a finding whose justification is later rejected", () => {
+    store.recordVerdict("rev1", { fingerprint: "aa", verdict: "justified-accepted", rationale: "bounded", scope: undefined, tier: "t1", round: 1 });
+    expect(store.settledFingerprints("rev1")).toContain("aa");
+
+    store.recordVerdict("rev1", { fingerprint: "aa", verdict: "justified-rejected", rationale: "expired: code changed", scope: undefined, tier: "expiry", round: 0 });
+    expect(store.settledFingerprints("rev1")).not.toContain("aa");
+  });
+
+  it("re-settles when a later verdict accepts again", () => {
+    store.recordVerdict("rev1", { fingerprint: "aa", verdict: "justified-rejected", rationale: "no", scope: undefined, tier: "t1", round: 1 });
+    store.recordVerdict("rev1", { fingerprint: "aa", verdict: "fixed", rationale: undefined, scope: undefined, tier: "t1", round: 2 });
+    expect(store.settledFingerprints("rev1")).toContain("aa");
+  });
+
   it("keeps the latest verdict for a finding", () => {
     store.recordVerdict("rev1", { fingerprint: "aa", verdict: "justified-accepted", rationale: "first", scope: { blob: "b1", hunk: "h1" }, tier: "t1", round: 1 });
     store.recordVerdict("rev1", { fingerprint: "aa", verdict: "justified-rejected", rationale: "second", scope: undefined, tier: "t2", round: 2 });

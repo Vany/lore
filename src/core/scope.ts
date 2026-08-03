@@ -54,3 +54,34 @@ export function isStale(recorded: Scope, current: Scope | undefined): boolean {
   if (current === undefined) return true;
   return recorded.hunk !== current.hunk;
 }
+
+/** Window size used when a hunk is captured, and when it is later searched for. */
+export const HUNK_RADIUS = 12;
+
+/**
+ * Look for the code a verdict was about, wherever it has moved to.
+ *
+ * Sliding the window across the file is deliberately more forgiving than comparing
+ * the blob: a verdict must survive an edit *elsewhere* in its file, or every
+ * justification in a busy file expires on every commit and people learn to ignore
+ * the findings that reappear.
+ *
+ * It must still expire when the code itself changes, because a reason attached to
+ * code that no longer exists is how this design would rot into rubber-stamping.
+ */
+export function hunkStillPresent(source: string, hunk: string, radius = HUNK_RADIUS): boolean {
+  const lines = source.split("\n");
+  const window = radius * 2 + 1;
+  if (lines.length <= window) return hashHunk(source) === hunk;
+
+  for (let start = 0; start + window <= lines.length; start++) {
+    if (hashHunk(lines.slice(start, start + window).join("\n")) === hunk) return true;
+  }
+  return false;
+}
+
+/** Capture the code around a line, for later comparison. */
+export function hunkAround(source: string, line: number, radius = HUNK_RADIUS): string {
+  const lines = source.split("\n");
+  return lines.slice(Math.max(0, line - 1 - radius), Math.min(lines.length, line + radius)).join("\n");
+}

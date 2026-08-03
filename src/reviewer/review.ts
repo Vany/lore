@@ -17,7 +17,7 @@ import type { Finding } from "../core/finding.ts";
 import { fingerprint } from "../core/fingerprint.ts";
 import { parseLoreOk } from "../core/lore-ok.ts";
 import type { ReviewType } from "../core/review-type.ts";
-import { makeScope } from "../core/scope.ts";
+import { hunkAround, hunkStillPresent, makeScope } from "../core/scope.ts";
 import { blobSha, computeDiff, renderDiff } from "../git/diff.ts";
 import { detectAndRecord, renderConflicts } from "../knowledge/conflict.ts";
 import { promoteRecurring } from "../knowledge/derive.ts";
@@ -44,6 +44,8 @@ export interface RoundResult {
   readonly newFindings: readonly RecordedFinding[];
   readonly accepted: readonly string[];
   readonly rejected: readonly string[];
+  /** Justifications retired because the code they were about changed. */
+  readonly expired: readonly string[];
   readonly t0Unavailable: readonly string[];
 }
 
@@ -70,7 +72,14 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // 3. Justifications proposed since last round.
   const pending = await collectJustifications(store, reviewId, worktree, diff.changedFiles);
 
-  // 4. The model tier.
+  // 4. Expire justifications whose code has changed, BEFORE the model tier runs.
+  //
+  // Without this the ladder rots into rubber-stamping: reasons accumulate, code
+  // moves out from under them, and nothing is ever re-examined. An expired verdict
+  // does not delete the reason — it stops the reason counting as settled, so the
+  // finding may legitimately be raised again.
+  const expired = await expireStaleVerdicts(store, reviewId, worktree);
+
   const settledForPrompt = store
     .settledFingerprints(reviewId)
     .map((fp) => {
@@ -204,8 +213,55 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     newFindings,
     accepted,
     rejected,
+    expired,
     t0Unavailable: t0.unavailable,
   };
+}
+
+/**
+ * Retire accepted justifications whose code has moved on.
+ *
+ * A justification is a claim about specific code (`spec/review-ladder.md` §4.1).
+ * When that code changes the reason may no longer hold, so the verdict stops
+ * counting and the finding becomes open again.
+ *
+ * Recorded as a new verdict rather than by mutating the old one: *why* something
+ * was re-opened is exactly the kind of thing that gets re-argued if it is not
+ * written down.
+ */
+async function expireStaleVerdicts(
+  store: Store,
+  reviewId: string,
+  worktree: string,
+): Promise<readonly string[]> {
+  const gone: string[] = [];
+
+  for (const fingerprint of store.settledFingerprints(reviewId)) {
+    const verdict = store.latestVerdict(reviewId, fingerprint);
+    // Only justifications expire. A fix is a change to the code itself, not a
+    // claim about it, so there is nothing to go stale.
+    if (verdict?.verdict !== "justified-accepted" || verdict.scope === undefined) continue;
+
+    const finding = store.db
+      .prepare("SELECT file FROM finding WHERE review_id = ? AND fingerprint = ?")
+      .get(reviewId, fingerprint) as Record<string, string> | undefined;
+    if (finding === undefined) continue;
+
+    const source = await readFile(join(worktree, finding["file"] ?? ""), "utf8").catch(() => undefined);
+    const stillThere = source !== undefined && hunkStillPresent(source, verdict.scope.hunk);
+    if (stillThere) continue;
+
+    store.recordVerdict(reviewId, {
+      fingerprint,
+      verdict: "justified-rejected",
+      rationale: `expired: the code this reason was about has changed. Previously: ${verdict.rationale ?? "(no reason recorded)"}`,
+      scope: undefined,
+      tier: "expiry",
+      round: 0,
+    });
+    gone.push(fingerprint);
+  }
+  return gone;
 }
 
 /**
@@ -246,18 +302,6 @@ async function collectJustifications(
     }
   }
   return out;
-}
-
-/**
- * The code a justification is about: the lines around it.
- *
- * Coarse on purpose. A verdict that expired on any edit anywhere in the file would
- * be useless, and one that never expired would rot into rubber-stamping — this is
- * the middle that follows the code it was about.
- */
-function hunkAround(source: string, line: number, radius = 12): string {
-  const lines = source.split("\n");
-  return lines.slice(Math.max(0, line - 1 - radius), Math.min(lines.length, line + radius)).join("\n");
 }
 
 function toReviewState(d: Decision): "findings_ready" | "fast_clean" | "passed" | "needs_human" | "failed" | "running" {

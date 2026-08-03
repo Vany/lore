@@ -205,6 +205,60 @@ describe("runRound", () => {
     expect(store.getReview("r1", "p")?.state).toBe("passed");
   });
 
+  // The guard against rubber-stamping. Without it, reasons accumulate, code moves
+  // out from under them, and nothing is ever re-examined.
+  it("expires a justification once the code it was about changes", async () => {
+    const reviewer = new ScriptedReviewer([[HOLD_BUG], [], []]);
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
+
+    const short = fingerprint(HOLD_BUG).slice(0, 8);
+    writeFileSync(
+      join(dir, "src/hold.ts"),
+      [
+        "export function capture() {",
+        `  // lore-ok[${short}]: the caller releases the hold in its finally block`,
+        "  return 1;",
+        "}",
+        "",
+      ].join("\n"),
+    );
+    const accepted = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
+    expect(accepted.accepted).toHaveLength(1);
+    expect(store.settledFingerprints("r1")).toContain(fingerprint(HOLD_BUG));
+
+    // The function is rewritten. The reason was about code that no longer exists.
+    writeFileSync(
+      join(dir, "src/hold.ts"),
+      ["export function capture() {", "  return releaseNothing();", "}", ""].join("\n"),
+    );
+    const after = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
+
+    expect(after.expired).toContain(fingerprint(HOLD_BUG));
+    expect(store.settledFingerprints("r1")).not.toContain(fingerprint(HOLD_BUG));
+    // The reason is retired, not erased: why it was reopened must stay readable.
+    expect(store.latestVerdict("r1", fingerprint(HOLD_BUG))?.rationale).toContain("expired");
+  });
+
+  it("keeps a justification alive when its code is untouched", async () => {
+    const reviewer = new ScriptedReviewer([[HOLD_BUG], [], []]);
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
+
+    const short = fingerprint(HOLD_BUG).slice(0, 8);
+    writeFileSync(
+      join(dir, "src/hold.ts"),
+      ["export function capture() {", `  // lore-ok[${short}]: bounded upstream`, "  return 1;", "}", ""].join("\n"),
+    );
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
+
+    // An unrelated file changes. Expiring on that would train people to ignore the
+    // findings that keep reappearing.
+    writeFileSync(join(dir, "src.txt"), "unrelated edit\n");
+    const after = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
+
+    expect(after.expired).toStrictEqual([]);
+    expect(store.settledFingerprints("r1")).toContain(fingerprint(HOLD_BUG));
+  });
+
   it("records what each tier cost", async () => {
     const reviewer = new ScriptedReviewer([[]]);
     await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });

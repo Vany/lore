@@ -18,6 +18,7 @@ import { gitMaybe } from "./git/exec.ts";
 import { treeHash } from "./git/repo.ts";
 import { Reviewer } from "./reviewer/opencode.ts";
 import { runRound } from "./reviewer/review.ts";
+import { enrich, renderEnrichment } from "./knowledge/enrich.ts";
 import { Store, type RecordedFinding } from "./store/store.ts";
 
 const USAGE = `
@@ -172,7 +173,14 @@ export async function main(argv: readonly string[]): Promise<ExitCode> {
     if (args.json) {
       process.stdout.write(`${JSON.stringify({ reviewId, decision: result.decision, findings: undelivered }, null, 2)}\n`);
     } else {
-      process.stdout.write(render(reviewId, result.decision.kind, undelivered, result.t0Unavailable, result.accepted, result.rejected));
+      // History is what turns a defect into a pattern: "seen 4x, and the rule from
+      // 2026-07-11 says X" is a different object from the same finding raised cold.
+      const history = new Map(
+        undelivered.map((f) => [f.fingerprint, renderEnrichment(enrich(store, repo.id, f))]),
+      );
+      process.stdout.write(
+        render(reviewId, result.decision.kind, undelivered, result.t0Unavailable, result.accepted, result.rejected, result.expired, history),
+      );
     }
 
     switch (result.decision.kind) {
@@ -204,6 +212,8 @@ function render(
   unavailable: readonly string[],
   accepted: readonly string[],
   rejected: readonly string[],
+  expired: readonly string[],
+  history: ReadonlyMap<string, string | undefined>,
 ): string {
   const out: string[] = ["", `# lore — ${decision}`, `_review ${reviewId}_`, ""];
 
@@ -214,6 +224,13 @@ function render(
   }
 
   if (accepted.length > 0) out.push(`Accepted ${accepted.length} justification(s).`, "");
+  if (expired.length > 0) {
+    out.push(
+      `**${expired.length} justification(s) expired** — the code they were about has changed, so the reasons`,
+      "no longer apply and those findings are open again.",
+      "",
+    );
+  }
   if (rejected.length > 0) {
     out.push(
       `**Rejected ${rejected.length} justification(s)** — the reviewer looked and raised the finding anyway.`,
@@ -236,6 +253,7 @@ function render(
         `- evidence: ${f.evidence}`,
         `- failure: ${f.failureScenario}`,
         `- fix it, or justify it:  \`// lore-ok[${f.fingerprint.slice(0, 8)}]: <why this code is correct>\``,
+        ...(history.get(f.fingerprint) === undefined ? [] : [`- history: ${history.get(f.fingerprint) ?? ""}`]),
         "",
       );
     }

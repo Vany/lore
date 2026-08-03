@@ -376,12 +376,21 @@ export class Store {
     };
   }
 
-  /** Fingerprints considered settled: fixed, or justified and accepted. */
+  /**
+   * Fingerprints considered settled: fixed, or justified and accepted.
+   *
+   * Only the **latest** verdict counts. Verdicts are append-only, so matching any
+   * historical row would mean a justification that was accepted and then rejected
+   * — or expired because its code changed — stayed settled forever, which is
+   * exactly the rubber-stamping this design exists to prevent.
+   */
   settledFingerprints(reviewId: string): readonly string[] {
     const rows = this.db
       .prepare(
-        `SELECT DISTINCT fingerprint FROM verdict
-         WHERE review_id = ? AND verdict IN ('fixed', 'justified-accepted')`,
+        `SELECT v.fingerprint FROM verdict v
+         WHERE v.review_id = ?
+           AND v.id = (SELECT MAX(id) FROM verdict w WHERE w.review_id = v.review_id AND w.fingerprint = v.fingerprint)
+           AND v.verdict IN ('fixed', 'justified-accepted')`,
       )
       .all(reviewId) as Record<string, string>[];
     return rows.map((r) => r["fingerprint"] ?? "");

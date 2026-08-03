@@ -16,6 +16,7 @@ import { initialState } from "../core/ladder.ts";
 import { isAttestable } from "../core/review-state.ts";
 import { DEFAULT_TYPE, reviewType, reviewTypeIds } from "../core/review-type.ts";
 import { applyPatch, treeHash } from "../git/repo.ts";
+import { enrich, renderEnrichment } from "../knowledge/enrich.ts";
 import { buildVex, findingsNeedingTriage, renderVex } from "../security/vex.ts";
 import type { Store } from "../store/store.ts";
 import type { Principal } from "./auth.ts";
@@ -130,6 +131,9 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
             evidence: f.evidence,
             failure_scenario: f.failureScenario,
             justify_with: `// lore-ok[${f.fingerprint.slice(0, 8)}]: <why this code is correct>`,
+            // A finding with history is far more actionable than the same finding
+            // raised cold: it says whether to fix the line or fix the habit.
+            history: renderEnrichment(enrich(store, who.repoId, f)),
           })),
           open_count: store.openFindings(review_id).length,
         }),
