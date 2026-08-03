@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 #
-# Stage this machine's opencode configuration for the deployment.
+# Stage the host's opencode configuration for the containers.
+#
+# RUN THIS ON THE DEPLOYMENT HOST. The template is the real opencode installation
+# in the operator's home — the one they curate interactively, authenticate with
+# `opencode auth login`, and add plugins and agents to. Containers get a derived,
+# sanitised copy of it rather than a second configuration that would drift.
 #
 # Reviewers must inherit everything a Claude Code session has — the plane MCP
 # server, the plugins, the read-only agent (D-12). A reviewer with less context
@@ -19,9 +24,12 @@
 #   * the `server` block, because the container passes its own flags and mDNS on a
 #     loopback interface only produces warnings.
 #
-# Usage:
-#   ./sync-opencode.sh <staging-dir>
-#   make push HOST=orangepi
+# Whether the surviving credentials actually cover the configured ladder is not
+# this script's business — `lore doctor` answers that against a live catalogue,
+# which is the only place the question can be answered honestly.
+#
+# Usage, on the deployment host:
+#   ./sync-opencode.sh ./opencode      # or just: make up
 
 set -euo pipefail
 
@@ -53,8 +61,6 @@ dropped = sorted(set(auth) - set(kept))
 
 if not kept:
     sys.exit("refusing: every credential was forbidden — the container would have no provider at all")
-if "openrouter" not in kept:
-    sys.exit("refusing: no openrouter credential — all three tiers route through it (D-17)")
 
 out_auth = os.path.join(stage, "data", "auth.json")
 with open(out_auth, "w") as f:
@@ -81,7 +87,12 @@ with open(os.path.join(stage, "config", "opencode.json"), "w") as f:
 # Everything else in the config directory travels as-is: agent definitions, the
 # oh-my-openagent map, any local plugin state.
 for name in os.listdir(src_config):
-    if name in {"opencode.json", "node_modules", ".gitignore"}:
+    # Backups and package metadata are the operator's working files, not
+    # configuration the container needs. Copying `.bak` files in particular risks
+    # someone later "fixing" the container by editing the wrong one.
+    if name in {"opencode.json", "node_modules", ".gitignore", "package.json", "package-lock.json"}:
+        continue
+    if ".bak" in name:
         continue
     s, d = os.path.join(src_config, name), os.path.join(stage, "config", name)
     (shutil.copytree if os.path.isdir(s) else shutil.copy2)(s, d, **({"dirs_exist_ok": True} if os.path.isdir(s) else {}))
@@ -108,42 +119,3 @@ if grep -qi '"anthropic"' "$STAGE/data/auth.json"; then
 fi
 
 echo "  staged at        : $STAGE"
-
-cat > "$STAGE/merge-auth.sh" <<'MERGE'
-#!/usr/bin/env sh
-# Merge staged credentials into the target's auth.json, keeping what is only there.
-#
-# The target machine is where a provider gets authenticated interactively — you run
-# `opencode auth login` on the server, not on your laptop. Replacing auth.json
-# wholesale on the next push would silently delete that credential, and the failure
-# would surface much later as "provider not authenticated" on a box where someone
-# clearly remembers logging in.
-#
-# Staged entries win on conflict: they are the ones just deliberately curated.
-set -e
-TARGET="$HOME/.local/share/opencode/auth.json"
-STAGED="$(dirname "$0")/data/auth.json"
-mkdir -p "$(dirname "$TARGET")"
-[ -f "$TARGET" ] || echo '{}' > "$TARGET"
-
-python3 - "$TARGET" "$STAGED" <<'PY'
-import json, sys
-target_path, staged_path = sys.argv[1], sys.argv[2]
-target = json.load(open(target_path))
-staged = json.load(open(staged_path))
-
-kept = sorted(set(target) - set(staged))
-merged = {**target, **staged}
-
-# Independence is enforced by absence (D-47). If anthropic reappeared on the target
-# it must not survive a merge, or the guarantee quietly lapses.
-removed = [k for k in list(merged) if k == "anthropic"]
-for k in removed:
-    del merged[k]
-
-json.dump(merged, open(target_path, "w"), indent=2)
-print(f"  merged: kept target-only {kept or '(none)'}, stripped {removed or '(none)'}")
-PY
-chmod 600 "$TARGET"
-MERGE
-chmod +x "$STAGE/merge-auth.sh"

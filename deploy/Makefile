@@ -30,26 +30,29 @@ preflight:
 	@mkdir -p "$(DATA)"
 	@echo "preflight ok — data at $(DATA)"
 
-## Stage this machine's opencode config for the container, minus Anthropic.
+## Derive the container's opencode config from THIS HOST's installation.
+##
+## The template is the operator's own ~/.config/opencode — curated interactively,
+## authenticated with `opencode auth login`. Containers get a sanitised copy so
+## there is one configuration to maintain, not two that drift.
 sync-opencode:
 	@./sync-opencode.sh ./opencode
 
 ## Ship the deployment to the host. Credentials travel over the tailnet only.
-push: sync-opencode
+push:
 	@test -n "$(HOST)" || { echo "usage: make push HOST=<ssh-host> [DIR=~/lore]"; exit 1; }
-	rsync -az --delete --exclude .env \
-		./ "$(HOST):$(if $(DIR),$(DIR),lore)/"
-	@# MERGE the credentials rather than replacing them. Providers are authenticated
-	@# ON the target -- `opencode auth login` runs there -- so a wholesale copy would
-	@# silently delete a credential someone clearly remembers adding.
-	ssh "$(HOST)" "sh $(if $(DIR),$(DIR),lore)/opencode/merge-auth.sh"
-	@echo "pushed. On the host:  cd $(if $(DIR),$(DIR),lore) && make doctor"
+	@# Credentials are NOT shipped. The host's own opencode installation is the
+	@# template, and `make up` derives the container config from it there.
+	rsync -az --delete --exclude .env --exclude opencode/ \
+		./ "$(HOST):$(if $(DIR),$(DIR),lore)/deploy/"
+	@echo "pushed. On the host:  cd $(if $(DIR),$(DIR),lore)/deploy && make up"
 
 build: preflight
 	$(COMPOSE) --profile build-only build
 
-up: preflight
-	@test -f ./opencode/data/auth.json || { echo "no staged opencode config — run 'make sync-opencode' on the machine that has it"; exit 1; }
+## Always re-derives the opencode config first: a container running yesterday's
+## credentials while the operator has since fixed them is a confusing failure.
+up: preflight sync-opencode
 	$(COMPOSE) --profile build-only build sandbox
 	$(COMPOSE) up -d --build
 	@echo
