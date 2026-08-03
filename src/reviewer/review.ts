@@ -12,11 +12,13 @@
 
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { DEFAULT_TIERS, settle, step, type Decision, type Tier } from "../core/ladder.ts";
+import { DEFAULT_TIERS, anyTierRan, markUnavailable, settle, step, type Decision, type Tier } from "../core/ladder.ts";
 import type { Finding } from "../core/finding.ts";
 import { fingerprint } from "../core/fingerprint.ts";
 import { parseLoreOk } from "../core/lore-ok.ts";
+import type { ReviewState } from "../core/review-state.ts";
 import type { ReviewType } from "../core/review-type.ts";
+import { Exhausted } from "../core/errors.ts";
 import { hunkAround, hunkStillPresent, makeScope } from "../core/scope.ts";
 import { blobSha, computeDiff, renderDiff } from "../git/diff.ts";
 import { detectAndRecord, renderConflicts } from "../knowledge/conflict.ts";
@@ -111,7 +113,34 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     settled: [...settledForPrompt, ...pending.map((p) => ({ finding: p.finding, rationale: p.reason }))],
   });
 
-  const result = await input.reviewer.review(tier, prompt, worktree);
+  let result;
+  try {
+    result = await input.reviewer.review(tier, prompt, worktree);
+  } catch (e) {
+    // A tier nobody can pay for is a limitation, not a failure (D-48). Record it,
+    // step over it, and let the ladder finish with what it can afford — but only
+    // if something else can still look. If nothing can, there is no review.
+    if (!(e instanceof Exhausted)) throw e;
+
+    const withoutTier = markUnavailable(review.ladder, tier.id);
+    if (!anyTierRan(tiers, withoutTier.unavailable)) throw e;
+
+    store.recordTierRun(reviewId, tier.id, review.ladder.round + 1, "unpayable", startedAt);
+    const skipped = step({ state: withoutTier, raised: [], tiers, needsHuman: false });
+    store.updateReview(reviewId, {
+      ladder: skipped.state,
+      state: toReviewState(skipped.decision),
+    });
+    return {
+      decision: skipped.decision,
+      tier,
+      newFindings: [],
+      accepted: [],
+      rejected: [],
+      expired,
+      t0Unavailable: [...t0.unavailable, `${tier.id}: ${e.message}`],
+    };
+  }
 
   store.recordUsage({
     repoId: review.repoId,
@@ -304,7 +333,7 @@ async function collectJustifications(
   return out;
 }
 
-function toReviewState(d: Decision): "findings_ready" | "fast_clean" | "passed" | "needs_human" | "failed" | "running" {
+function toReviewState(d: Decision): ReviewState {
   switch (d.kind) {
     case "findings":
       return "findings_ready";
@@ -312,6 +341,8 @@ function toReviewState(d: Decision): "findings_ready" | "fast_clean" | "passed" 
       return "fast_clean";
     case "passed":
       return "passed";
+    case "passedPartial":
+      return "passed_partial";
     case "needsHuman":
       return "needs_human";
     case "stopped":

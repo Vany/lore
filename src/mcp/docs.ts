@@ -54,9 +54,15 @@ Returns ONLY NEW findings. Anything you have already been shown will not appear 
 — do not re-fix something absent from the response.
 
 States: queued, running, findings_ready, awaiting_diff, fast_clean, needs_human,
-passed, failed, expired.
+passed, passed_partial, failed, expired.
 
 ONLY \`passed\` means the branch is clean.
+
+- \`passed_partial\` means every tier that COULD run agreed, but one or more could not
+  be paid for — "we did everything we can". The cheap tiers found nothing; the dearer
+  ones never looked. That is real evidence, and it is weaker evidence. Say so to your
+  user rather than reporting it as a pass, and the attestation will name which tiers
+  were skipped.
 
 - \`failed\` and \`expired\` mean the review did not complete. They are NOT "nothing
   found". Never merge on them.

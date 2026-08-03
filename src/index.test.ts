@@ -36,6 +36,10 @@ describe("exit codes", () => {
     expect(EXIT).toStrictEqual({
       PASS: 0,
       FINDINGS: 1,
+      // Partial is deliberately NOT 0: "the tiers we could afford agreed" is
+      // weaker evidence than "every tier agreed", and a caller that wants to
+      // treat them alike must say so itself (D-48).
+      PARTIAL: 3,
       USAGE: 2,
       DID_NOT_RUN: 70,
       EXHAUSTED: 75,

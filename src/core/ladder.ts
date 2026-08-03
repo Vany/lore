@@ -132,6 +132,13 @@ export interface LadderState {
   readonly settled: readonly string[];
   /** An unresolvable knowledge conflict is open (D-39). Blocks `passed`. */
   readonly needsHuman: boolean;
+  /**
+   * Tiers that could not be paid for (D-48).
+   *
+   * Recorded rather than fatal: a deployment with credit for one provider must
+   * still be able to finish a review, and the result says plainly how far it got.
+   */
+  readonly unavailable: readonly string[];
 }
 
 export function initialState(tiers: readonly Tier[] = DEFAULT_TIERS): LadderState {
@@ -141,13 +148,32 @@ export function initialState(tiers: readonly Tier[] = DEFAULT_TIERS): LadderStat
     tierRounds: {},
     settled: [],
     needsHuman: false,
+    unavailable: [],
   };
 }
 
-function firstModelTier(tiers: readonly Tier[]): number {
-  const i = tiers.findIndex((t) => t.kind === "model");
+/** Record a tier as unpayable. The ladder will step over it from now on. */
+export function markUnavailable(state: LadderState, tierId: string): LadderState {
+  return state.unavailable.includes(tierId)
+    ? state
+    : { ...state, unavailable: [...state.unavailable, tierId] };
+}
+
+function firstModelTier(tiers: readonly Tier[], unavailable: readonly string[] = []): number {
+  const i = tiers.findIndex((t) => t.kind === "model" && !unavailable.includes(t.id));
   if (i < 0) throw new Error("ladder has no model tier");
   return i;
+}
+
+/**
+ * Did any tier actually look at this code?
+ *
+ * If every model tier was unpayable there is no review at all, and calling that a
+ * partial pass would be exactly the "did not run reported as found nothing" that
+ * INV-1 forbids.
+ */
+function anyTierRan(tiers: readonly Tier[], unavailable: readonly string[]): boolean {
+  return tiers.some((t) => t.kind === "model" && !unavailable.includes(t.id));
 }
 
 export type Decision =
@@ -159,6 +185,8 @@ export type Decision =
   | { readonly kind: "fastClean" }
   /** Every tier agrees. The only success. */
   | { readonly kind: "passed" }
+  /** Every tier that COULD run agrees; the rest were unpayable (D-48). */
+  | { readonly kind: "passedPartial"; readonly skipped: readonly string[] }
   /** A human must answer before this can proceed. Not a pass. */
   | { readonly kind: "needsHuman" }
   /** A bound was hit. Not a pass — see §5. */
@@ -220,7 +248,7 @@ export function step(input: StepInput): { readonly state: LadderState; readonly 
     // tier — the cheapest possible regression check (D-6). Resuming where we left
     // off would let hastily patched code reach `passed` having never faced the gate.
     return {
-      state: { ...base, cursor: firstModelTier(tiers) },
+      state: { ...base, cursor: firstModelTier(tiers, base.unavailable) },
       decision: { kind: "findings" },
     };
   }
@@ -230,9 +258,19 @@ export function step(input: StepInput): { readonly state: LadderState; readonly 
     return { state: base, decision: { kind: "needsHuman" } };
   }
 
-  const nextCursor = nextModelTier(tiers, prev.cursor);
+  const nextCursor = nextModelTier(tiers, prev.cursor, base.unavailable);
   if (nextCursor === undefined) {
-    return { state: { ...base, cursor: prev.cursor }, decision: { kind: "passed" } };
+    // Everything reachable agreed. Whether that is `passed` or "we did everything we
+    // can" depends entirely on whether anything was skipped — and the two must never
+    // be reported as the same thing (D-48).
+    const skipped = base.unavailable;
+    return {
+      state: { ...base, cursor: prev.cursor },
+      decision:
+        skipped.length === 0
+          ? { kind: "passed" }
+          : { kind: "passedPartial", skipped },
+    };
   }
 
   const next = tiers[nextCursor];
@@ -246,9 +284,14 @@ export function step(input: StepInput): { readonly state: LadderState; readonly 
     : { state: advanced, decision: { kind: "escalate", next } };
 }
 
-function nextModelTier(tiers: readonly Tier[], from: number): number | undefined {
+function nextModelTier(
+  tiers: readonly Tier[],
+  from: number,
+  unavailable: readonly string[] = [],
+): number | undefined {
   for (let i = from + 1; i < tiers.length; i++) {
-    if (tiers[i]?.kind === "model") return i;
+    const t = tiers[i];
+    if (t?.kind === "model" && !unavailable.includes(t.id)) return i;
   }
   return undefined;
 }
@@ -266,3 +309,5 @@ export function settle(state: LadderState, fingerprints: readonly string[]): Lad
 export function quotaExhausted(tier: Tier): never {
   throw new Exhausted(`tier ${tier.id} (${tier.model ?? tier.kind}) is out of quota — review incomplete`);
 }
+
+export { anyTierRan };

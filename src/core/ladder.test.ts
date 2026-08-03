@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_TIERS, initialState, loadTiers, settle, step, vendorOf, type LadderState } from "./ladder.ts";
+import { DEFAULT_TIERS, anyTierRan, initialState, loadTiers, markUnavailable, settle, step, vendorOf, type LadderState } from "./ladder.ts";
 
 const clean = (state: LadderState) => step({ state, raised: [] });
 
@@ -100,6 +100,52 @@ describe("step", () => {
       expect(guard).toBeLessThan(100);
       expect(["passed", "stopped", "needsHuman"]).toContain(decision.kind);
     }
+  });
+});
+
+describe("tiers nobody can pay for (D-48)", () => {
+  it("steps over an unavailable tier instead of stopping", () => {
+    // t2 unpayable: a clean t1 lands on t3, skipping the gap. The decision is
+    // `fastClean` rather than `escalate` because t1→t3 still crosses the
+    // fast→deep boundary — the stage transition is unaffected by the skip.
+    const s = markUnavailable(initialState(), "t2");
+    const r = step({ state: s, raised: [] });
+    expect(DEFAULT_TIERS[r.state.cursor]?.id).toBe("t3");
+    expect(r.decision.kind).toBe("fastClean");
+  });
+
+  // "We did everything we can" must never be reported as "every tier agreed".
+  it("reaches passedPartial, never passed, when a tier was skipped", () => {
+    let s = markUnavailable(initialState(), "t3");
+    s = step({ state: s, raised: [] }).state; // t1 -> t2
+    const r = step({ state: s, raised: [] });
+    expect(r.decision).toStrictEqual({ kind: "passedPartial", skipped: ["t3"] });
+  });
+
+  it("still reaches a full pass when nothing was skipped", () => {
+    let s = initialState();
+    s = step({ state: s, raised: [] }).state;
+    s = step({ state: s, raised: [] }).state;
+    expect(step({ state: s, raised: [] }).decision.kind).toBe("passed");
+  });
+
+  it("resets past unavailable tiers after a fix", () => {
+    const s = markUnavailable(initialState(), "t1");
+    const r = step({ state: s, raised: ["new"] });
+    // t1 is unpayable, so the cheapest REACHABLE tier is where a fix goes back to.
+    expect(DEFAULT_TIERS[r.state.cursor]?.id).toBe("t2");
+  });
+
+  // If nothing could run there is no review, and calling that a partial pass is
+  // exactly the "did not run reported as found nothing" INV-1 forbids.
+  it("knows when no tier could run at all", () => {
+    expect(anyTierRan(DEFAULT_TIERS, ["t1", "t2", "t3"])).toBe(false);
+    expect(anyTierRan(DEFAULT_TIERS, ["t1", "t2"])).toBe(true);
+  });
+
+  it("does not record the same tier twice", () => {
+    const s = markUnavailable(markUnavailable(initialState(), "t2"), "t2");
+    expect(s.unavailable).toStrictEqual(["t2"]);
   });
 });
 

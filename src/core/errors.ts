@@ -12,6 +12,14 @@ export const EXIT = {
   PASS: 0,
   /** Findings to fix or justify, then call again. */
   FINDINGS: 1,
+  /**
+   * Every tier that COULD run agreed; some could not be paid for (D-48).
+   *
+   * Deliberately not 0. `passed` means three independent vendors found nothing;
+   * this means the ones we could afford found nothing. Weaker evidence, and a
+   * caller that wants to treat them alike must say so itself.
+   */
+  PARTIAL: 3,
   /** Bad invocation. */
   USAGE: 2,
   /** Did not run. Never confuse with PASS. */

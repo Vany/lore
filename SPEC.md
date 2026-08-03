@@ -151,6 +151,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-45** | The project is **`lore`** | confirmed |
 | **D-46** | A conflict block must have an exit: resolve, or escalate | confirmed |
 | **D-47** | D-1 is enforced by **absence**: no Anthropic credential is deployed | confirmed |
+| **D-48** | An unfundable tier is *skipped*, not fatal — `passed_partial` | confirmed |
 
 **D-7, revised.** The earlier version dropped GLM-5.2 on Artificial Analysis's
 *cost per task* — which is tokens consumed × price on their benchmark, not a price.
@@ -304,6 +305,31 @@ than the honest one. With no credential in the container that failure mode is
 unreachable rather than merely unlikely, and any attempt to use it fails loudly.
 
 The staging script refuses to emit an auth file that still contains one.
+
+**D-48 — a tier nobody can pay for is a limitation, not a failure.**
+
+A provider that refuses on quota used to fail the whole review (exit 75). That is
+right when a tier *could* have run and ran out mid-flight. It is wrong when the
+deployment simply has no credit for the dearer models: the review would never
+terminate, and a tool that cannot finish on the hardware you actually have is not a
+tool.
+
+So an exhausted tier is now **recorded as unavailable and stepped over**. When every
+tier that *could* run agrees, the review reaches **`passed_partial`** — "we did
+everything we can" — with its own exit code (**3**), never `passed` and never `0`.
+
+The distinction is load-bearing and must not erode:
+
+- **`passed`** — every configured tier agreed. Three independent vendors found
+  nothing. That is the claim the attestation exists to make.
+- **`passed_partial`** — every *available* tier agreed; the rest never looked.
+  Weaker evidence, honestly labelled.
+
+**The attestation names the tiers that ran and the tiers that did not, and why.**
+Silently attesting a partial review as though it were complete would be the single
+most damaging thing this system could do — it is the one output whose entire value
+is that it can be trusted, and a reader has no way to tell the difference unless the
+line says so.
 
 **D-43 — review types.** `review.start` takes a `type`, defaulting to `code-arch`:
 *is this change correct and well-made?* The next type is `security`: *what

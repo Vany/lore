@@ -20,6 +20,8 @@ export const REVIEW_STATES = [
   "needs_human",
   /** The only state that means reviewed and clean. */
   "passed",
+  /** Every AVAILABLE tier agreed; others could not be paid for (D-48). */
+  "passed_partial",
   /** Did not complete. Never "found nothing". */
   "failed",
   /** Abandoned or timed out. Also never "found nothing". */
@@ -29,7 +31,7 @@ export const REVIEW_STATES = [
 export type ReviewState = (typeof REVIEW_STATES)[number];
 
 /** Terminal states — no further work will happen without a new review. */
-const TERMINAL = new Set<ReviewState>(["passed", "failed", "expired"]);
+const TERMINAL = new Set<ReviewState>(["passed", "passed_partial", "failed", "expired"]);
 
 export function isTerminal(state: ReviewState): boolean {
   return TERMINAL.has(state);
@@ -47,5 +49,8 @@ export function isClean(state: ReviewState): boolean {
 
 /** Can this review be attested? Never while a human question is open (D-39). */
 export function isAttestable(state: ReviewState): boolean {
-  return state === "passed";
+  // A partial review is attestable BECAUSE the attestation names what was skipped.
+  // Refusing to attest it would leave the operator with no record at all, which is
+  // worse than an honest partial one.
+  return state === "passed" || state === "passed_partial";
 }

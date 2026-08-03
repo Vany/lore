@@ -218,6 +218,20 @@ rubber-stamping. It is the failure I would most expect in six months.
 "New" means a fingerprint not already settled, not a raw count. A tier that
 re-raises three closed findings and nothing else is clean.
 
+### 5.1 Tiers that cannot be paid for (D-48)
+
+A provider refusing on quota marks that tier **unavailable** and the ladder steps
+over it. When every tier that could run agrees, the outcome is `passed_partial`
+rather than `passed`: *we did everything we can*.
+
+This is not a softening of INV-1. The review *ran* — it simply ran shorter than
+configured, and the result says so in its own state, its own exit code, and its own
+attestation line. What INV-1 forbids is a review that did not run being reported as
+one that found nothing; a review that ran three of four tiers and says exactly that
+is the opposite of that failure.
+
+If **no** model tier could run, there is no review and it is a plain failure.
+
 Four independent bounds guarantee termination:
 
 1. **Fingerprint dedup** — a settled finding cannot re-trigger work *when re-raised

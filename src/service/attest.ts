@@ -55,11 +55,22 @@ export async function attest(store: Store, reviewId: string, principal: string, 
 
   const counts = tally(store, reviewId);
   const tiers = countTiers(store, reviewId);
+  const skipped = review.ladder.unavailable ?? [];
 
   // Deliberately plain. Every number in it can be checked against the audit trail.
+  //
+  // A partial review says so IN THE SIGNED LINE. Attesting one as though it were
+  // complete would be the single most damaging thing this system could do: the
+  // attestation is the one output whose entire value is that it can be trusted, and
+  // a reader has no other way to tell the difference (D-48).
+  const scope =
+    skipped.length === 0
+      ? `${tiers} tiers`
+      : `${tiers} tiers — ${skipped.join(", ")} could not run, so this is PARTIAL`;
+
   const line =
     `lore: reviewed tree ${review.treeHash ?? "unknown"} against this repo's rules and lore's own — ` +
-    `${tiers} tiers, ${counts.raised} findings, ${counts.fixed} fixed, ${counts.justified} justified.`;
+    `${scope}, ${counts.raised} findings, ${counts.fixed} fixed, ${counts.justified} justified.`;
 
   const { privateKey, publicKey } = await loadOrCreateKey(keyPath);
   const signature = sign(null, Buffer.from(line, "utf8"), createPrivateKey(privateKey)).toString("base64");

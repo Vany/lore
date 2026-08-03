@@ -79,7 +79,11 @@ Draft text. These are the deliverable, not a summary of it.
 > again — do not re-fix anything absent from the response.
 >
 > States: `queued`, `running`, `findings_ready`, `awaiting_diff`, `fast_clean`,
-> `needs_human`, `passed`, `failed`, `expired`.
+> `needs_human`, `passed`, `passed_partial`, `failed`, `expired`.
+>
+> `passed_partial` means every tier that *could* run agreed, but one or more could
+> not be paid for. Real evidence, weaker evidence — report it as what it is, and the
+> attestation names the tiers that were skipped.
 >
 > **Only `passed` means the branch is clean.** `failed` and `expired` mean the
 > review did not complete; they are not "nothing found". Never merge on them.

@@ -39,7 +39,8 @@ lore — an independent reviewer that remembers the codebase
   --db <path>        state file (default: ~/.lore/lore.db)
   --json             machine-readable output only
 
-Exit codes: 0 passed · 1 findings · 2 usage · 70 did not run · 75 quota
+Exit codes: 0 passed · 1 findings · 2 usage · 3 partial (some tiers unpayable)
+            70 did not run · 75 no tier could run at all
 `.trim();
 
 interface Args {
@@ -194,6 +195,8 @@ export async function main(argv: readonly string[]): Promise<ExitCode> {
     switch (result.decision.kind) {
       case "passed":
         return EXIT.PASS;
+      case "passedPartial":
+        return EXIT.PARTIAL;
       case "stopped":
         return EXIT.DID_NOT_RUN;
       default:
