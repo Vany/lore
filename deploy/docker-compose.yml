@@ -29,12 +29,24 @@ services:
       LORE_WEBHOOK_URL: ${LORE_WEBHOOK_URL:-}
       LORE_HEARTBEAT_URL: ${LORE_HEARTBEAT_URL:-}
       OPENCODE_SERVER: http://opencode:4096
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:?set OPENROUTER_API_KEY in .env}
+      # The same credentials the opencode service is started with. opencode answers
+      # a bare 401 with no hint when these are missing, which cost real time to
+      # diagnose the first time.
+      OPENCODE_SERVER_USERNAME: ${OPENCODE_SERVER_USERNAME:-lore}
+      OPENCODE_SERVER_PASSWORD: ${OPENCODE_SERVER_PASSWORD:?set OPENCODE_SERVER_PASSWORD in .env}
     volumes:
-      - lore-data:/var/lib/lore
-      # Docker socket: the T0 sandbox launches SIBLING containers for test
-      # execution, so untrusted project code never runs in this container — which
-      # holds every repo's deploy key and the knowledge database (D-24).
+      # A HOST BIND, NOT A NAMED VOLUME, and the path is identical on both sides.
+      #
+      # The T0 sandbox asks the host daemon to bind-mount a worktree into a sibling
+      # container by absolute path. The daemon resolves that path on the HOST — so
+      # with a named volume it would mount an empty directory and the tests would
+      # run against nothing, reporting a clean suite for code it never saw. Same
+      # path everywhere is the only arrangement where "the path I have" and "the
+      # path the daemon sees" are the same string.
+      - ${LORE_HOST_DATA:-/var/lib/lore}:/var/lib/lore
+      # The T0 sandbox launches SIBLING containers for test execution, so untrusted
+      # project code never runs in this container — which holds every repo's deploy
+      # key and the knowledge database (D-24).
       #
       # This grants root-equivalent control of the host daemon. Acceptable only
       # because this box does one job on a private tailnet; it is the single
@@ -46,14 +58,32 @@ services:
   # Model transport. Reviewers inherit this configuration, which is how they get
   # the same MCP servers and plugins a Claude Code session has (D-12).
   opencode:
-    image: ghcr.io/sst/opencode:latest
+    build:
+      context: ..
+      dockerfile: deploy/opencode.Dockerfile
     platform: linux/arm64
     restart: unless-stopped
-    command: ["serve", "--hostname", "0.0.0.0", "--port", "4096"]
     environment:
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:?}
+      # Verified: opencode reads this from the environment, with no auth.json.
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:?set OPENROUTER_API_KEY in .env}
+      # Basic auth on the server. lore reads the same two variables, which is how a
+      # protected server needs no extra configuration on either side.
+      OPENCODE_SERVER_USERNAME: ${OPENCODE_SERVER_USERNAME:-lore}
+      OPENCODE_SERVER_PASSWORD: ${OPENCODE_SERVER_PASSWORD:?set OPENCODE_SERVER_PASSWORD in .env}
     volumes:
-      - opencode-config:/root/.config/opencode
+      # THE REPOSITORIES, READ-ONLY, AT THE SAME PATH AS IN `lore`.
+      #
+      # Two things depend on this and both are easy to get wrong:
+      #
+      # 1. lore hands opencode an ABSOLUTE worktree path. Without this mount the
+      #    directory simply does not exist over here and every review fails; with a
+      #    different mount point it silently reviews nothing.
+      #
+      # 2. `:ro` enforces INV-9 at the filesystem. Reviewers are denied write tools
+      #    in the request body already, but that is a policy the model could in
+      #    principle route around. A read-only bind is not a policy.
+      - ${LORE_HOST_DATA:-/var/lib/lore}:/var/lib/lore:ro
+      - opencode-config:/home/lore/.config/opencode
 
   # Continuous replication of the SQLite database.
   #
@@ -67,7 +97,7 @@ services:
     restart: unless-stopped
     command: ["replicate"]
     volumes:
-      - lore-data:/var/lib/lore
+      - ${LORE_HOST_DATA:-/var/lib/lore}:/var/lib/lore
       - ./litestream.yml:/etc/litestream.yml:ro
     environment:
       LITESTREAM_ACCESS_KEY_ID: ${LITESTREAM_ACCESS_KEY_ID:-}
@@ -76,5 +106,4 @@ services:
       - lore
 
 volumes:
-  lore-data:
   opencode-config:
