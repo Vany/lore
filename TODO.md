@@ -6,7 +6,7 @@ learned, then gets struck here.
 
 ---
 
-## Now — Phase 0: core
+## Now — Phase 2: knowledge (the product)
 
 - [x] **P0.1 — Finding record + Zod schema**, with optional `cwe` (D-44), and the
       fingerprint `sha256(normalized_claim ‖ file ‖ enclosing_symbol)`. Everything

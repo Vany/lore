@@ -24,6 +24,8 @@ const USAGE = `
 lore — an independent reviewer that remembers the codebase
 
   lore review --branch <name> --into <name> --ticket <text> [options]
+  lore serve                                   run the MCP service
+  lore new --name <who> --git <ssh-url>        provision a repo and token
 
   --branch <name>    branch under review (default: current branch)
   --into <name>      branch it will merge into (default: main)
@@ -50,11 +52,13 @@ interface Args {
   readonly json: boolean;
 }
 
+export function flagOf(argv: readonly string[], name: string): string | undefined {
+  const i = argv.indexOf(`--${name}`);
+  return i >= 0 ? argv[i + 1] : undefined;
+}
+
 export function parseArgs(argv: readonly string[]): Args {
-  const flag = (name: string): string | undefined => {
-    const i = argv.indexOf(`--${name}`);
-    return i >= 0 ? argv[i + 1] : undefined;
-  };
+  const flag = (name: string): string | undefined => flagOf(argv, name);
   const has = (name: string): boolean => argv.includes(`--${name}`);
 
   return {
@@ -72,6 +76,39 @@ export function parseArgs(argv: readonly string[]): Args {
 
 export async function main(argv: readonly string[]): Promise<ExitCode> {
   const args = parseArgs(argv);
+
+  if (args.command === "serve") {
+    const { configFromEnv, serve } = await import("./service/main.ts");
+    await serve(configFromEnv());
+    // Runs until killed. Returning would tear down the workers mid-review.
+    await new Promise(() => {});
+    return EXIT.PASS;
+  }
+
+  if (args.command === "new") {
+    const { provision, renderProvisioned } = await import("./service/provision.ts");
+    const name = flagOf(argv, "name");
+    const gitUrl = flagOf(argv, "git");
+    if (name === undefined || gitUrl === undefined) {
+      throw new UsageError("usage: lore new --name <who> --git <ssh-url> [--db <path>] [--url <public-url>]");
+    }
+    await mkdir(dirOf(args.db), { recursive: true });
+    const store = new Store(args.db);
+    try {
+      const result = await provision({
+        store,
+        name,
+        gitUrl,
+        keysDir: join(dirOf(args.db), "keys"),
+        publicUrl: flagOf(argv, "url") ?? "http://lore.internal:7777/mcp",
+      });
+      process.stdout.write(renderProvisioned(result));
+      return EXIT.PASS;
+    } finally {
+      store.close();
+    }
+  }
+
   if (args.command !== "review" || argv.includes("--help") || argv.includes("-h")) {
     process.stdout.write(`${USAGE}\n`);
     return args.command === "review" ? EXIT.PASS : EXIT.USAGE;

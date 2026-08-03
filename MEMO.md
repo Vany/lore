@@ -5,6 +5,61 @@ surprised me.
 
 ---
 
+## 2026-08-03 — session 15: all of it, written
+
+**Did.** Phases 1, 3 and 4 in one go, on "write all the code, we will test on
+deploy". 72 tests, typecheck clean throughout, CLI and provisioning smoke-tested.
+
+**What exists now:** `git/` (bare clone + worktree per review, `--submodule=diff`),
+`t0/` (the target's own tsc/eslint/ast-grep/semgrep, plus a sandbox that runs tests
+in a container holding no secrets), `reviewer/` (opencode with tools denied in the
+request body, tier prompts by position, structured output with one retry),
+`store/` (SQLite, principal-scoped), `mcp/` (7 tools, 5 doc resources, the `review`
+prompt), `service/` (worker, HTTP, attestation, provisioning), `ops/` (alerts,
+heartbeat deadman, spend ceiling), `deploy/` (arm64 Dockerfile, compose, litestream).
+
+**The best thing I found while writing it: ratifying a justification needs no
+protocol.** A `lore-ok` comment is a proposal; the reviewer ratifies by *not*
+re-raising the finding and rejects by raising it again. Silence is assent, a
+re-raise is a reasoned refusal, and the author still never closes its own finding.
+I had been sketching an extra output field for accept/reject and it was unnecessary
+— the mechanism was already implied by the ladder. An accepted justification is then
+written into the knowledge base as a derived rule, which is exactly what the name
+promised.
+
+**A second one from the SDK.** `session.prompt` takes `tools: {[key]: boolean}` per
+request, so reviewers are denied write/edit/patch **in the request body** rather
+than only via `--agent`. That flag silently falls back to the write-capable default
+when the agent is missing (INV-8); an explicit per-request denial has nothing to
+fall back to. The predecessor's worst trap is now structurally impossible rather
+than merely checked for.
+
+**Judgement calls worth remembering:**
+- `extractFindings` returns `undefined` for unparseable and `[]` for clean, and one
+  malformed finding invalidates the whole reply. Keeping the valid ones would
+  silently drop a defect the model actually found.
+- The sandbox has network during install (a registry needs it) and **none** during
+  the test run. No secret is present in either phase, so a malicious lifecycle
+  script has nothing to take and nowhere to reach.
+- Tokens are stored as sha256 only and compared in constant time. A database backup
+  should not be a set of live credentials.
+- The compose file mounts the docker socket so T0 launches *sibling* containers.
+  That is root-equivalent control of the daemon and it is called out as the largest
+  privilege in the file — acceptable only because the box does one job on a private
+  tailnet.
+
+**Said once and then dropped:** untested code reviewing other people's code is the
+place "test on deploy" bites hardest, given this tool's whole value is a verdict you
+can trust. So the pure logic keeps its unit tests (they run in ~130ms and cost
+nothing) and "test on deploy" covers the boundaries that genuinely need the device,
+real repos and real models.
+
+**Unverified and honestly so:** every model call, every container launch, the MCP
+transport wiring, and arm64 anything. `tsc` proved the shapes; nothing has proved the
+behaviour.
+
+---
+
 ## 2026-08-03 — session 14: P0.1, and a hole in the convergence argument
 
 **Did.** `src/core/finding.ts` and `src/core/fingerprint.ts` with 24 tests.

@@ -1,0 +1,26 @@
+# Continuous replication of the knowledge base.
+#
+# This is the file that decides whether a dead SD card costs an afternoon or costs
+# everything the workgroup ever taught the service. The replica must be OFF this
+# device — a copy on the same disk is not a backup — and the restore must have been
+# performed at least once, because an untested backup is a belief, not a backup.
+#
+# Restore:
+#   litestream restore -config /etc/litestream.yml /var/lib/lore/lore.db
+
+dbs:
+  - path: /var/lib/lore/lore.db
+    replicas:
+      - type: s3
+        # Any S3-compatible endpoint: Backblaze B2, Minio on another machine, R2.
+        bucket: ${LITESTREAM_BUCKET:-lore-backups}
+        path: lore
+        endpoint: ${LITESTREAM_ENDPOINT:-}
+        # Frequent, because the gap between snapshots is the amount of accumulated
+        # knowledge a failure can take with it.
+        sync-interval: 10s
+        # A month of history: long enough to notice and undo a bad bulk write to
+        # the knowledge base, which is the failure mode a point-in-time replica is
+        # actually for.
+        retention: 720h
+        snapshot-interval: 6h

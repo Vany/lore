@@ -1,0 +1,69 @@
+/**
+ * The daily spend ceiling.
+ *
+ * At 30 PRs a day this is a $500–2,600/month tool, and a cheap tier looping on a
+ * pathological branch is exactly the shape that runs up a bill nobody sees until
+ * the invoice.
+ *
+ * When the ceiling is reached the service **stops starting reviews** rather than
+ * continuing quietly. A review not started is honest; a review that runs and cannot
+ * be paid for is not.
+ *
+ * SPEC: spec/operations.md §4
+ */
+
+import type { Store } from "../store/store.ts";
+import { Alerter, CONDITIONS } from "./alerts.ts";
+
+export interface SpendConfig {
+  readonly dailyCeilingUsd: number;
+  /** Fraction of the ceiling at which a ticket is raised rather than a page. */
+  readonly warnAt: number;
+}
+
+export const DEFAULT_SPEND: SpendConfig = { dailyCeilingUsd: 100, warnAt: 0.8 };
+
+export function startOfDayIso(): string {
+  return `${new Date().toISOString().slice(0, 10)}T00:00:00.000Z`;
+}
+
+export interface SpendVerdict {
+  readonly allowed: boolean;
+  readonly spent: number;
+  readonly ceiling: number;
+}
+
+/**
+ * May a new review start?
+ *
+ * Checked before starting, never mid-review: killing a review halfway leaves it in
+ * a state that is neither passed nor honestly failed, and wastes everything already
+ * spent on it.
+ */
+export async function mayStart(store: Store, cfg: SpendConfig, alerter: Alerter): Promise<SpendVerdict> {
+  const spent = store.spendSince(startOfDayIso());
+
+  if (spent >= cfg.dailyCeilingUsd) {
+    await alerter.send(CONDITIONS.spendCeiling(spent, cfg.dailyCeilingUsd));
+    return { allowed: false, spent, ceiling: cfg.dailyCeilingUsd };
+  }
+  if (spent >= cfg.dailyCeilingUsd * cfg.warnAt) {
+    await alerter.send(CONDITIONS.spendAnomaly(spent, cfg.dailyCeilingUsd * cfg.warnAt));
+  }
+  return { allowed: true, spent, ceiling: cfg.dailyCeilingUsd };
+}
+
+/** Per-tier spend, for the operator view — where the money actually goes. */
+export function spendByTier(store: Store, sinceIso: string): readonly { tier: string; usd: number; calls: number }[] {
+  const rows = store.db
+    .prepare(
+      `SELECT tier, COALESCE(SUM(cost_usd), 0) AS usd, COUNT(*) AS calls
+       FROM usage WHERE at >= ? GROUP BY tier ORDER BY usd DESC`,
+    )
+    .all(sinceIso) as Record<string, string | number | bigint>[];
+  return rows.map((r) => ({
+    tier: String(r["tier"] ?? ""),
+    usd: Number(r["usd"] ?? 0),
+    calls: Number(r["calls"] ?? 0),
+  }));
+}

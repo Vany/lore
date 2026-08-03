@@ -17,6 +17,8 @@
     "lore": "node ./src/index.ts"
   },
   "dependencies": {
+    "@modelcontextprotocol/node": "^2.0.0",
+    "@modelcontextprotocol/server": "^2.0.0",
     "@opencode-ai/sdk": "^1.18.11",
     "zod": "^4.4.3"
   },

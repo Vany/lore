@@ -1,0 +1,80 @@
+# lore, as a folder in $HOME with a compose file — the existing convention on the
+# deployment host.
+#
+#   docker compose up -d
+#   docker compose exec lore node /app/src/index.ts new --name vany --git git@github.com:org/repo.git
+#
+# Reachable only over Tailscale (D-33), so there is no public TLS and no domain.
+# Bearer tokens remain, for per-repo scoping rather than perimeter.
+
+services:
+  lore:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    # Pinned so the arm64 assumption is explicit rather than inherited from the
+    # builder's architecture.
+    platform: linux/arm64
+    restart: unless-stopped
+    # Bind to the tailnet address, not 0.0.0.0, so the service is never exposed on
+    # a LAN interface by accident. Replace with this host's tailscale IP.
+    ports:
+      - "100.64.0.1:7777:7777"
+    environment:
+      LORE_DATA_DIR: /var/lib/lore
+      LORE_PORT: "7777"
+      LORE_CONCURRENCY: "2"          # T0 is CPU-bound on an SBC; set by cores (D-37)
+      LORE_DAILY_CEILING_USD: "100"  # stops STARTING reviews when hit, never mid-review
+      LORE_RUN_TESTS: "0"            # opt-in: executes arbitrary project code (D-24)
+      LORE_WEBHOOK_URL: ${LORE_WEBHOOK_URL:-}
+      LORE_HEARTBEAT_URL: ${LORE_HEARTBEAT_URL:-}
+      OPENCODE_SERVER: http://opencode:4096
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:?set OPENROUTER_API_KEY in .env}
+    volumes:
+      - lore-data:/var/lib/lore
+      # Docker socket: the T0 sandbox launches SIBLING containers for test
+      # execution, so untrusted project code never runs in this container — which
+      # holds every repo's deploy key and the knowledge database (D-24).
+      #
+      # This grants root-equivalent control of the host daemon. Acceptable only
+      # because this box does one job on a private tailnet; it is the single
+      # largest privilege in this file and should be revisited if that changes.
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - opencode
+
+  # Model transport. Reviewers inherit this configuration, which is how they get
+  # the same MCP servers and plugins a Claude Code session has (D-12).
+  opencode:
+    image: ghcr.io/sst/opencode:latest
+    platform: linux/arm64
+    restart: unless-stopped
+    command: ["serve", "--hostname", "0.0.0.0", "--port", "4096"]
+    environment:
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:?}
+    volumes:
+      - opencode-config:/root/.config/opencode
+
+  # Continuous replication of the SQLite database.
+  #
+  # The knowledge base IS the product: losing it loses everything the workgroup
+  # ever taught the service, and this device has no redundancy. The target must be
+  # OFF this machine, and the restore must actually have been performed — an
+  # untested backup is not a backup.
+  litestream:
+    image: litestream/litestream:latest
+    platform: linux/arm64
+    restart: unless-stopped
+    command: ["replicate"]
+    volumes:
+      - lore-data:/var/lib/lore
+      - ./litestream.yml:/etc/litestream.yml:ro
+    environment:
+      LITESTREAM_ACCESS_KEY_ID: ${LITESTREAM_ACCESS_KEY_ID:-}
+      LITESTREAM_SECRET_ACCESS_KEY: ${LITESTREAM_SECRET_ACCESS_KEY:-}
+    depends_on:
+      - lore
+
+volumes:
+  lore-data:
+  opencode-config:

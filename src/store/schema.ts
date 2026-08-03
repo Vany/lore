@@ -38,6 +38,18 @@ CREATE TABLE IF NOT EXISTS repo (
   created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS token (
+  -- sha256 of the bearer token. The plaintext is shown once at provisioning and
+  -- never stored: a database backup should not be a set of live credentials.
+  hash       TEXT PRIMARY KEY,
+  principal  TEXT NOT NULL,
+  repo_id    TEXT NOT NULL REFERENCES repo(id),
+  label      TEXT,
+  created_at TEXT NOT NULL,
+  revoked_at TEXT
+);
+CREATE INDEX IF NOT EXISTS token_live ON token(hash, revoked_at);
+
 CREATE TABLE IF NOT EXISTS review (
   id          TEXT PRIMARY KEY,
   repo_id     TEXT NOT NULL REFERENCES repo(id),

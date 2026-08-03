@@ -1,0 +1,156 @@
+/**
+ * The background worker: one job, one round.
+ *
+ * Reviews outlive an MCP request and there is no way to push a result — MCP
+ * servers cannot initiate requests — so work happens here and clients poll. That
+ * is not a workaround; it is the only correct shape.
+ *
+ * A job runs exactly one round and re-enqueues itself if the ladder should
+ * continue. Keeping rounds separate means a crash loses one round rather than a
+ * whole review, and the state on disk is always a real point in the ladder.
+ *
+ * SPEC: spec/mcp-api.md §2.4, §5
+ */
+
+import { DEFAULT_TIERS } from "../core/ladder.ts";
+import { Exhausted, LoreError } from "../core/errors.ts";
+import { reviewType } from "../core/review-type.ts";
+import { ensureBare, addWorktree, repoPaths } from "../git/repo.ts";
+import type { Store } from "../store/store.ts";
+import { Alerter, CONDITIONS } from "../ops/alerts.ts";
+import { Reviewer } from "../reviewer/opencode.ts";
+import { runRound } from "../reviewer/review.ts";
+
+export interface WorkerConfig {
+  readonly reposRoot: string;
+  readonly runTests: boolean;
+  /** How many rounds may run concurrently. CPU-bound on the deployment host. */
+  readonly concurrency: number;
+  readonly pollMs: number;
+}
+
+export const DEFAULT_WORKER: WorkerConfig = {
+  reposRoot: "/var/lib/lore/repos",
+  runTests: false,
+  // T0 is the throughput bottleneck on an ARM SBC (D-37), and it is CPU-bound —
+  // so this is set by cores, not by memory.
+  concurrency: 2,
+  pollMs: 2_000,
+};
+
+export class Worker {
+  private readonly store: Store;
+  private readonly cfg: WorkerConfig;
+  private readonly alerter: Alerter;
+  private readonly reviewer: Reviewer;
+  private running = false;
+  private recent: boolean[] = [];
+
+  constructor(store: Store, cfg: WorkerConfig, alerter: Alerter, reviewer = new Reviewer()) {
+    this.store = store;
+    this.cfg = cfg;
+    this.alerter = alerter;
+    this.reviewer = reviewer;
+  }
+
+  start(): () => void {
+    this.running = true;
+    const loops = Array.from({ length: this.cfg.concurrency }, () => this.loop());
+    void Promise.allSettled(loops);
+    return () => {
+      this.running = false;
+    };
+  }
+
+  private async loop(): Promise<void> {
+    while (this.running) {
+      const job = this.store.claimJob();
+      if (job === undefined) {
+        await sleep(this.cfg.pollMs);
+        continue;
+      }
+      try {
+        await this.runJob(job.reviewId);
+        this.store.finishJob(job.id, "done");
+        this.note(true);
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        this.store.finishJob(job.id, "failed", message);
+        // A review that did not run is not a review that found nothing. The state
+        // says so, and the client is told so.
+        this.store.updateReview(job.reviewId, { state: e instanceof Exhausted ? "failed" : "failed" });
+        this.note(false);
+        await this.alerter.send({
+          severity: "log",
+          condition: "review round failed",
+          detail: `${job.reviewId}: ${message}`,
+        });
+      }
+    }
+  }
+
+  private async runJob(reviewId: string): Promise<void> {
+    // The principal is on the row; the worker acts for whoever owns the review.
+    const owner = this.store.db
+      .prepare("SELECT principal FROM review WHERE id = ?")
+      .get(reviewId) as Record<string, string> | undefined;
+    const principal = owner?.["principal"] ?? "";
+    const review = this.store.getReview(reviewId, principal);
+    if (review === undefined) throw new LoreError(`review ${reviewId} vanished`, 70);
+
+    const repo = this.store.db
+      .prepare("SELECT git_url FROM repo WHERE id = ?")
+      .get(review.repoId) as Record<string, string> | undefined;
+    const paths = repoPaths(this.cfg.reposRoot, review.repoId);
+    await ensureBare(paths, repo?.["git_url"] ?? "");
+    const worktree = await addWorktree(paths, reviewId, review.branch).catch(async (e: unknown) => {
+      // Already present from an earlier round.
+      const existing = `${paths.worktrees}/${reviewId}`;
+      if (typeof e === "object") return existing;
+      throw e;
+    });
+
+    this.store.updateReview(reviewId, { state: "running" });
+
+    const type = reviewType(review.type);
+    const result = await runRound({
+      store: this.store,
+      reviewer: this.reviewer,
+      reviewId,
+      principal,
+      worktree,
+      type,
+      runTests: this.cfg.runTests,
+    });
+
+    const tiers = type.tiers.length > 0 ? type.tiers : DEFAULT_TIERS;
+    switch (result.decision.kind) {
+      case "fastClean":
+        // Cheap tiers clean. The deep tiers continue asynchronously, and the client
+        // collects them later — but `fast_clean` is never reported as a pass.
+        this.store.enqueue(reviewId, "deep");
+        break;
+      case "escalate":
+        this.store.enqueue(reviewId, tiers.find((t) => t.id === result.decision.kind)?.stage ?? "deep");
+        break;
+      default:
+        // findings / passed / needsHuman / stopped all wait for the client.
+        break;
+    }
+  }
+
+  /** Reviews failing as a class is systematic, not one bad branch. */
+  private note(ok: boolean): void {
+    this.recent.push(ok);
+    if (this.recent.length > 20) this.recent.shift();
+    const failed = this.recent.filter((r) => !r).length;
+    if (this.recent.length >= 10 && failed >= this.recent.length / 2) {
+      void this.alerter.send(CONDITIONS.reviewsFailingAsAClass(failed, this.recent.length));
+      this.recent = [];
+    }
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
