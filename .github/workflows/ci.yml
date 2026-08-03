@@ -1,0 +1,43 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 24 is the floor: lore has no build step and relies on node stripping
+        # types to run .ts directly. 26 is what the author develops on.
+        node: ["24", "26"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - run: npm ci
+
+      - name: typecheck
+        run: npm run typecheck
+
+      - name: test
+        run: npm test
+
+      - name: the CLI must fail loudly, never exit 0 with a fake verdict
+        run: |
+          set +e
+          node ./src/index.ts review >/dev/null 2>&1
+          code=$?
+          set -e
+          # 2 is EX_USAGE — no ticket was given. A 0 here would mean the tool
+          # reported success for a review it never ran, which is the single
+          # failure this project exists to prevent (INV-1).
+          test "$code" = "2" || { echo "expected exit 2, got $code"; exit 1; }
