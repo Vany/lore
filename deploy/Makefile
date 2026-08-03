@@ -16,7 +16,7 @@ DATA    ?= $(shell grep -E '^LORE_HOST_DATA=' .env 2>/dev/null | cut -d= -f2)
 DATA    := $(if $(DATA),$(DATA),/var/lib/lore)
 
 .DEFAULT_GOAL := help
-.PHONY: help preflight sync-opencode push build up down down-hard restart logs status doctor new tokens backup-check restore sweep shell
+.PHONY: help preflight sync-opencode push build up down down-hard restart logs status doctor new tokens backup-on backup-check restore sweep shell
 
 help:
 	@sed -n '2,14p' $(MAKEFILE_LIST) | sed 's/^# \{0,1\}//'
@@ -102,6 +102,16 @@ tokens:
 	const d=new DatabaseSync('/var/lib/lore/lore.db'); \
 	for (const r of d.prepare('SELECT principal, label, created_at, revoked_at FROM token').all()) \
 	  console.log(r.revoked_at ? '[revoked]' : '[live]   ', r.principal, r.label ?? '', r.created_at);"
+
+## Turn replication on, once LITESTREAM_* are set. Off by default pre-release.
+##
+## Postponing this is reasonable while the knowledge base is empty. It stops being
+## reasonable the moment the workgroup has taught lore anything, because that is
+## the one thing here with no other copy.
+backup-on:
+	@grep -qE '^LITESTREAM_ACCESS_KEY_ID=.+' .env || { echo "set LITESTREAM_* in .env first"; exit 1; }
+	$(COMPOSE) --profile backup up -d litestream
+	@echo "replicating. Verify with: make backup-check"
 
 ## Is the backup real, or just configured? Untested backups are beliefs.
 backup-check:

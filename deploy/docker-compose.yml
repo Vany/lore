@@ -123,9 +123,15 @@ services:
   # ever taught the service, and this device has no redundancy. The target must be
   # OFF this machine, and the restore must actually have been performed — an
   # untested backup is not a backup.
+  # Off by default until a replica target is configured: with empty credentials it
+  # would restart-loop forever, and a service permanently failing in the background
+  # is how people learn to ignore the logs.
+  #
+  #   make backup-on     enable, once LITESTREAM_* are set in .env
   litestream:
     image: litestream/litestream:latest
     platform: linux/arm64
+    profiles: ["backup"]
     restart: unless-stopped
     command: ["replicate"]
     volumes:
