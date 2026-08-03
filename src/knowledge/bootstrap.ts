@@ -13,7 +13,7 @@
  */
 
 import { DEFAULT_TIERS, type Tier } from "../core/ladder.ts";
-import type { Reviewer } from "../reviewer/opencode.ts";
+import type { ReviewerLike } from "../reviewer/opencode.ts";
 import type { Store } from "../store/store.ts";
 import { detectAndRecord } from "./conflict.ts";
 import { ingestDocs } from "./ingest.ts";
@@ -60,7 +60,7 @@ export async function bootstrap(opts: {
   repoId: string;
   worktree: string;
   /** Omit to ingest documents only — no model call, no cost. */
-  reviewer?: Reviewer;
+  reviewer?: ReviewerLike;
   tier?: Tier;
 }): Promise<BootstrapResult> {
   const docs = await ingestDocs(opts.store, opts.repoId, opts.worktree);

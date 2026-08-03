@@ -25,12 +25,12 @@ import { relevantTo } from "../knowledge/enrich.ts";
 import { ingestDocs } from "../knowledge/ingest.ts";
 import { runT0, renderT0 } from "../t0/runner.ts";
 import type { RecordedFinding, Store } from "../store/store.ts";
-import { Reviewer } from "./opencode.ts";
+import type { ReviewerLike } from "./opencode.ts";
 import { reviewPrompt } from "./prompts.ts";
 
 export interface RoundInput {
   readonly store: Store;
-  readonly reviewer: Reviewer;
+  readonly reviewer: ReviewerLike;
   readonly reviewId: string;
   readonly principal: string;
   readonly worktree: string;

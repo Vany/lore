@@ -19,7 +19,7 @@ import { ensureBare, addWorktree, repoPaths } from "../git/repo.ts";
 import { bootstrap } from "../knowledge/bootstrap.ts";
 import type { Store } from "../store/store.ts";
 import { Alerter, CONDITIONS } from "../ops/alerts.ts";
-import { Reviewer } from "../reviewer/opencode.ts";
+import { Reviewer, type ReviewerLike } from "../reviewer/opencode.ts";
 import { runRound } from "../reviewer/review.ts";
 
 export interface WorkerConfig {
@@ -43,11 +43,11 @@ export class Worker {
   private readonly store: Store;
   private readonly cfg: WorkerConfig;
   private readonly alerter: Alerter;
-  private readonly reviewer: Reviewer;
+  private readonly reviewer: ReviewerLike;
   private running = false;
   private recent: boolean[] = [];
 
-  constructor(store: Store, cfg: WorkerConfig, alerter: Alerter, reviewer = new Reviewer()) {
+  constructor(store: Store, cfg: WorkerConfig, alerter: Alerter, reviewer: ReviewerLike = new Reviewer()) {
     this.store = store;
     this.cfg = cfg;
     this.alerter = alerter;

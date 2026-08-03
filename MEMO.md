@@ -5,6 +5,56 @@ surprised me.
 
 ---
 
+## 2026-08-03 — session 18: turning "typechecks" into "runs"
+
+**Did.** Integration tests for the three boundaries I had flagged as unverified.
+153 tests. **Found one real bug**, which is why the session was worth spending.
+
+**THE BUG: the opencode SDK does not throw on a non-2xx.** It returns
+`{data, error, response}`. So a **429 fell through to the findings parser**, came
+back unparseable, and was reported as *"did not return findings"* — exit 70 —
+instead of *"out of quota"* — exit 75. That would have lost the quota alert and the
+spend-ceiling behaviour with it, and it would have looked like a flaky model rather
+than an exhausted plan. The fix inspects `res.response.status` explicitly.
+
+Worth generalising: **an SDK that reports failure by return value rather than by
+throwing will be mishandled by any `try/catch` written on the assumption that it
+throws.** I wrote that assumption without checking it, and only a test against a
+real HTTP server exposed it.
+
+**Two failures were my test harness lying, not the code:**
+- The fake opencode server routed on `req.url`, which carries `?directory=…`, so
+  `.endsWith("/message")` never matched and *every prompt got the session-create
+  reply*. A harness bug that made the SDK look broken when it was fine.
+- Assertions on documentation text used phrases that wrap across lines in the
+  source, plus `Only` where the doc says `ONLY`. Failing for formatting rather than
+  content.
+
+Both are cheap lessons about integration tests: the harness is code too, and it is
+the code nobody reviews.
+
+**What now actually runs, rather than merely typechecking:**
+- `round.test.ts` — a real git repo, real worktree diffing, real doc ingestion, the
+  real store and ladder, and real `lore-ok` reconciliation. Only the model is faked.
+  The independent-auditor property is proven end to end: a justification the
+  reviewer declines to re-raise is accepted and becomes lore; one it raises anyway
+  is rejected and settles nothing.
+- `opencode.test.ts` — the real SDK against a real HTTP server. Proves the request
+  denies write tools **in the body**, that both reply shapes parse, that an
+  unparseable reply retries once and then fails loudly, and that `[]` means clean
+  while unparseable means failed.
+- `http.test.ts` — the service binds, refuses unauthenticated and revoked tokens
+  with `WWW-Authenticate`, and serves tools, prompts and resources over real SSE.
+
+**Refactor that made it possible:** `ReviewerLike`, an interface rather than the
+class. The loop is the part most likely to be wrong and the hardest to debug against
+a live model; separating them is what made it testable at all.
+
+**Still unproven:** any actual model call, any container launch, and arm64 anything.
+But the boundaries around them are no longer guesses.
+
+---
+
 ## 2026-08-03 — session 17: Phase 5, the security review type
 
 **Did.** `security/{sbom,osv,vex}`, wired as T0 engines, with reachability guidance

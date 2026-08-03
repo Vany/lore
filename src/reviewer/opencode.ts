@@ -33,6 +33,18 @@ export const DEFAULT_REVIEWER: ReviewerConfig = {
   timeoutMs: 20 * 60_000,
 };
 
+/**
+ * What the orchestrator needs from a reviewer.
+ *
+ * An interface rather than the class, so the review loop can be exercised end to
+ * end without a model, a network or an API key. The loop is the part most likely to
+ * be wrong and the part hardest to debug against a live model; separating them is
+ * what makes it testable at all (PROG.md: pure core, effectful edges).
+ */
+export interface ReviewerLike {
+  review(tier: Tier, prompt: string, worktree: string): Promise<ReviewerResult>;
+}
+
 export interface ReviewerResult {
   readonly findings: readonly Finding[];
   readonly raw: string;
@@ -66,6 +78,20 @@ const READ_ONLY_SYSTEM = [
   "`git add`, `git commit`, `git checkout`, `git reset` and `git stash` are all forbidden.",
 ].join("\n");
 
+/**
+ * Carries the HTTP status out of the SDK call, which reports failures by return
+ * value rather than by throwing.
+ */
+class HttpStatus extends Error {
+  readonly status: number;
+
+  constructor(status: number, detail: string) {
+    super(`opencode returned ${status}: ${detail}`);
+    this.name = "HttpStatus";
+    this.status = status;
+  }
+}
+
 /** `openrouter/z-ai/glm-5.2` → provider `openrouter`, model `z-ai/glm-5.2`. */
 export function splitModel(id: string): { providerID: string; modelID: string } {
   const slash = id.indexOf("/");
@@ -75,7 +101,7 @@ export function splitModel(id: string): { providerID: string; modelID: string } 
   return { providerID: id.slice(0, slash), modelID: id.slice(slash + 1) };
 }
 
-export class Reviewer {
+export class Reviewer implements ReviewerLike {
   private readonly client: ReturnType<typeof createOpencodeClient>;
   private readonly cfg: ReviewerConfig;
 
@@ -160,12 +186,24 @@ export class Reviewer {
           parts: [{ type: "text", text }],
         },
       });
+
+      // The SDK does NOT throw on a non-2xx — it returns the status and an error
+      // body. Without this check a 429 fell through to the parser, came back
+      // unparseable, and was reported as "did not return findings" (exit 70)
+      // instead of "out of quota" (exit 75) — losing the quota alert and the
+      // spend-ceiling behaviour with it.
+      const status = res.response?.status ?? 200;
+      if (status >= 400) {
+        throw new HttpStatus(status, JSON.stringify(res.error ?? {}).slice(0, 300));
+      }
+
       return { text: collectText(res.data), usage: collectUsage(res.data) };
     } catch (e) {
+      const status = e instanceof HttpStatus ? e.status : undefined;
       const message = e instanceof Error ? e.message : String(e);
       // Quota is never a reason to fall through to another tier or provider: a
       // tier that did not run found nothing, which is not finding nothing.
-      if (/rate.?limit|quota|429|insufficient/i.test(message)) {
+      if (status === 429 || status === 402 || /rate.?limit|quota|insufficient/i.test(message)) {
         throw new Exhausted(`tier ${tier.id} (${tier.model}) refused on quota: ${message}`);
       }
       throw new DidNotRun(`tier ${tier.id} (${tier.model}) failed: ${message}`, e);
