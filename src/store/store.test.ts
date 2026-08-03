@@ -202,6 +202,22 @@ describe("orphaned jobs", () => {
     expect(store.claimJob()).toBeUndefined();
   });
 
+  // The two statements were correct only because of the order they appear in, and
+  // nothing said so: swapped, every job at the limit is quietly requeued instead of
+  // failed — the crash-loop the bound exists to prevent — and the tests above would
+  // still have passed. This pins the outcome rather than the ordering.
+  it("fails a burnt-out job even if the requeue is considered first", () => {
+    store.enqueue("rev1", "fast");
+    for (let i = 0; i < 3; i++) {
+      store.claimJob();
+      if (i < 2) store.reclaimOrphanedJobs();
+    }
+    // Requeue alone, with the failing statement never run: the row must still not
+    // come back as claimable work.
+    store.db.prepare("UPDATE job SET state = 'queued' WHERE state = 'running' AND attempts < 3").run();
+    expect(store.queueDepth()).toBe(0);
+  });
+
   it("leaves finished jobs alone", () => {
     store.enqueue("rev1", "fast");
     const job = store.claimJob();

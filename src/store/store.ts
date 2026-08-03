@@ -701,9 +701,19 @@ export class Store {
           now(),
           maxAttempts,
         );
+      // `attempts < ?` is REDUNDANT and stays, because the redundancy is the point.
+      //
+      // The statement above has already set the burnt-out rows to 'failed', so they no
+      // longer match `state = 'running'` and this would skip them anyway — correct,
+      // but correct only because of the order these two statements appear in, with
+      // nothing saying so. Swap them and every job at the limit is quietly requeued
+      // instead of failed, which is the crash-loop the bound exists to prevent, and
+      // the tests would still pass on the original order.
+      //
+      // Found by a reviewer reading this an hour after it was written.
       const requeued = this.db
-        .prepare("UPDATE job SET state = 'queued', updated_at = ? WHERE state = 'running'")
-        .run(now());
+        .prepare("UPDATE job SET state = 'queued', updated_at = ? WHERE state = 'running' AND attempts < ?")
+        .run(now(), maxAttempts);
       return { requeued: Number(requeued.changes), failed: Number(failed.changes) };
     });
   }
