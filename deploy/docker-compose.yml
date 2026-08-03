@@ -27,6 +27,14 @@ services:
     # builder's architecture.
     platform: linux/arm64
     restart: unless-stopped
+    # Run as the HOST user who owns LORE_HOST_DATA.
+    #
+    # The data directory is a host bind, not a volume, because the T0 sandbox asks
+    # the daemon to bind worktree paths into sibling containers and the daemon
+    # resolves those on the host. A container uid that does not match the directory
+    # owner cannot write the database — and the sandbox's siblings would inherit
+    # the same mismatch.
+    user: "${LORE_UID:-1000}:${LORE_GID:-1000}"
     # DEFAULTS TO LOOPBACK ON PURPOSE.
     #
     # The design assumed a tailnet, where WireGuard is the perimeter and the

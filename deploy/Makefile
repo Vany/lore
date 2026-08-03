@@ -31,7 +31,11 @@ preflight:
 	@grep -qE '^OPENCODE_SERVER_PASSWORD=.+' .env || { echo "OPENCODE_SERVER_PASSWORD is empty in .env — the server would answer a bare 401 with no hint"; exit 1; }
 	@grep -qE '^LITESTREAM_ACCESS_KEY_ID=.+' .env || echo "WARNING: no backup configured. The knowledge base IS the product and this box has no redundancy."
 	@mkdir -p "$(DATA)"
-	@echo "preflight ok — data at $(DATA)"
+	@# A container uid that cannot write the data directory fails with "attempt to
+	@# write a readonly database", which points at SQLite rather than at ownership.
+	@grep -qE '^LORE_UID=' .env || echo "LORE_UID=$$(id -u)" >> .env
+	@grep -qE '^LORE_GID=' .env || echo "LORE_GID=$$(id -g)" >> .env
+	@echo "preflight ok — data at $(DATA), container uid $$(id -u)"
 
 ## Derive the container's opencode config from THIS HOST's installation.
 ##
