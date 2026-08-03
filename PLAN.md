@@ -33,7 +33,7 @@ is in hand.
 
 ---
 
-## Phase 0 — Core
+## Phase 0 — Core ✅
 
 **Goal:** the logic, with no I/O anywhere. This is what must be right, and it is the
 part testable without a model, a network or a repo.
@@ -56,7 +56,7 @@ under every combination of the four bounds. No network in this layer, ever.
 
 ---
 
-## Phase 1 — One real review, on a laptop ← *the phase that matters*
+## Phase 1 — One real review, on a laptop ✅ ← *the phase that mattered*
 
 **Goal:** `lore review --target . --branch X --into main --ticket "…"` runs the full
 ladder against a real branch and converges.
@@ -94,7 +94,7 @@ what surfaces design errors that reading a spec never will.
 
 ---
 
-## Phase 2 — Knowledge
+## Phase 2 — Knowledge ✅
 
 **Goal:** the thing that makes this a product rather than a linter (D-14).
 
@@ -115,7 +115,7 @@ and it deserves to be falsifiable.
 
 ---
 
-## Phase 3 — The service
+## Phase 3 — The service ✅
 
 **Goal:** the workgroup can use it over MCP.
 
@@ -140,7 +140,7 @@ agent must be tested against one.
 
 ---
 
-## Phase 4 — Deployment and operations
+## Phase 4 — Deployment and operations ✅ *(arm64 tests still pending a device)*
 
 **Goal:** it runs on the Pi and tells someone when it is sick.
 
@@ -174,7 +174,7 @@ repo — a synthetic project of representative size will do.
 
 ---
 
-## Phase 5 — Review types, and security
+## Phase 5 — Review types, and security ✅
 
 **Goal:** `type` becomes real, and the second type ships
 (`research/security-review.md`).
@@ -222,7 +222,27 @@ becomes vulnerable with no commit to trigger anything.
 5. Greptile's *"How to Make LLMs Shut Up"* remains unread — the most directly
    applicable published work on risk 2.
 
+## What writing it actually found
+
+Every phase turned up something the spec had wrong. Recorded here because the pattern
+is the point: the errors were not in the hard parts.
+
+- **Phase 0** — "fingerprint dedup" was listed as a termination bound. It only holds
+  for *identical* claims; a paraphrase reads as new work. The mechanical guarantee
+  comes from the round caps (`spec/review-ladder.md` §3.1.1).
+- **Phase 2** — bootstrap could not run at provisioning: the deploy key exists but a
+  human has not yet added it to the repo, so there is nothing to clone.
+- **Testing** — the opencode SDK reports failure by **return value**, not by
+  throwing, so a 429 was being reported as "unparseable findings" (exit 70) rather
+  than "out of quota" (exit 75), losing the quota alert with it.
+- **Review** — `needsHuman` was accumulated rather than derived, so a knowledge
+  conflict permanently deadlocked a review; and nothing could resolve one. A block
+  with no exit is a trap, not a safeguard.
+- **Review** — nothing wrote to `tier_run`, so the attestation would have claimed
+  "0 tiers": a false statement in the one output the service exists to produce.
+
 ## The next concrete action
 
-Phase 0, first item: the finding record and its fingerprint, with tests. Everything
-else in Phase 0 hangs off that shape, and it is an hour's work to get wrong cheaply.
+Deploy it. `deploy/docker-compose.yml`, then `lore new --name … --git …`, then point
+a Claude Code session at the endpoint with no other instructions and watch where it
+goes wrong — every failure it invents becomes a sentence in the tool descriptions.

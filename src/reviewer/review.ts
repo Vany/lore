@@ -49,6 +49,7 @@ export interface RoundResult {
 
 export async function runRound(input: RoundInput): Promise<RoundResult> {
   const { store, reviewId, principal, worktree, type } = input;
+  const startedAt = new Date().toISOString();
 
   const review = store.getReview(reviewId, principal);
   if (review === undefined) throw new Error(`review ${reviewId} not found for this principal`);
@@ -186,6 +187,11 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     tiers,
     needsHuman: store.openConflicts(review.repoId).length > 0,
   });
+
+  // T0 and the model tier each ran; both belong in the audit trail, and the
+  // attestation counts distinct tiers from it.
+  store.recordTierRun(reviewId, "t0", round, t0.findings.length > 0 ? "findings" : "clean", startedAt);
+  store.recordTierRun(reviewId, tier.id, round, stepped.decision.kind, startedAt);
 
   store.updateReview(reviewId, {
     ladder: stepped.state,

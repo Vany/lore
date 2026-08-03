@@ -37,8 +37,13 @@ in mind.
 
 ## Status
 
-**Design.** The spec is settled enough to build against; nothing is implemented.
-`PLAN.md` has the build order and what each phase de-risks.
+**Implemented, undeployed.** ~5,500 lines across 40 modules, 174 tests. The review
+loop, the knowledge layer, the MCP service, operations and the security review type
+all have code, and the boundaries around models and containers are exercised against
+real HTTP servers and real git repositories.
+
+What no test has proven: an actual model call, a container launch, and arm64. Those
+need the device, and `PLAN.md` §4.1 has the plan for them.
 
 ## Documents
 

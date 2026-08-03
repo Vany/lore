@@ -233,6 +233,23 @@ export class Store {
       .filter((r): r is ReviewRow => r !== undefined);
   }
 
+  // -------------------------------------------------------------- tier runs
+
+  /**
+   * Record that a tier ran.
+   *
+   * The attestation counts distinct tiers from this table, so without it the
+   * signed line would claim "0 tiers" — a false statement in the one output the
+   * whole service exists to produce.
+   */
+  recordTierRun(reviewId: string, tier: string, round: number, outcome: string, startedAt: string): void {
+    this.db
+      .prepare(
+        "INSERT INTO tier_run(review_id, tier, round, outcome, started_at, finished_at) VALUES(?, ?, ?, ?, ?, ?)",
+      )
+      .run(reviewId, tier, round, outcome, startedAt, now());
+  }
+
   // --------------------------------------------------------------- finding
 
   /**

@@ -3,8 +3,8 @@
 A hosted MCP service that reviews a branch before it merges, and — the actual
 point — **remembers the codebase between sessions**.
 
-Status: **draft**, revised 2026-08-03 (session 3) from a local CLI to a workgroup
-service. Nothing implemented yet.
+Status: **implemented**, 2026-08-03. All phases in `PLAN.md` have code; 174 tests.
+Unproven until deployed: real model calls, container launches, and arm64.
 
 | document | subject |
 |---|---|
@@ -128,7 +128,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-22** | `@modelcontextprotocol/server` v2 + Zod v4 schemas | confirmed |
 | **D-23** | `review_id` is CSPRNG and bound to its principal; possession ≠ auth | confirmed |
 | **D-24** | T0 runs the target's tests — in a container holding no secrets | confirmed |
-| **D-25** | Build order is a walking skeleton: CLI does a real review first | **[OPEN]** |
+| **D-25** | Build order was a walking skeleton: CLI did a real review first | done |
 | **D-26** | Operator status view: is parallelism running, or queueing? | confirmed |
 | **D-27** | Docs in three layers: tool descriptions, resources, prompts | confirmed |
 | **D-28** | A `review` prompt drives the whole loop as a slash command | confirmed |
@@ -138,7 +138,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-32** | T3 always runs. No sampling — the attestation keeps its meaning | confirmed |
 | **D-33** | Host is an arm64 Orange Pi on Tailscale; no public exposure | confirmed |
 | **D-34** | Two stages: T0+T1 inline, T2+T3 async, collected via `review.inbox` | confirmed |
-| **D-35** | `make new` bootstraps knowledge: ingest docs, one repo pass | confirmed |
+| **D-35** | Bootstrap on first review — at provisioning there is nothing to clone | **revised** |
 | **D-36** | Git submodules, not monorepos — a gitlink bump is expanded | confirmed |
 | **D-37** | T0 is the throughput bottleneck; cache, incremental, diff-scoped | confirmed |
 | **D-38** | `ticket` text is required — enables the scope-creep axis | confirmed |
