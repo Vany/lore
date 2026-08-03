@@ -122,7 +122,16 @@ services:
       # The staging step STRIPS THE ANTHROPIC CREDENTIAL. Claude writes the code
       # under review, so with no Anthropic credential present, D-1 is enforced by
       # absence rather than by a tier config a typo could undo.
-      - ./opencode/config:/home/lore/.config/opencode:ro
+      # WRITABLE, deliberately. opencode installs declared plugins into this
+      # directory at startup, so a read-only mount makes every request 500 with
+      # "Unexpected server error" and nothing in the log.
+      #
+      # This was masked until the permissions were fixed: while the directory was
+      # unreadable opencode silently ran with defaults and no plugins. Fixing one
+      # bug exposed the next, which is the honest shape of this kind of work.
+      #
+      # It is not the credential — auth.json is mounted separately and read-only.
+      - ./opencode/config:/home/lore/.config/opencode
       # opencode needs a WRITABLE data directory — it stores session state there.
       # But the credential inside it must not be writable, so the volume provides
       # the scratch space and auth.json is bound read-only OVER it. Docker applies
