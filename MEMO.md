@@ -48,6 +48,81 @@ session created, auth accepted, prompt delivered, response understood.
 
 ---
 
+## 2026-08-03 — sessions 20–26: first contact, then a live deployment
+
+**The system is deployed and answering.** `http://c:7777/mcp`, two arm64 containers
+on the Orange Pi, `doctor` green, ten tools reachable over the LAN. Getting there
+found **eleven bugs in one evening**, none of which any local test could have caught.
+
+### The two that cost real money
+
+**Abandoning a call does not stop the model.** Vany noticed opencode had eaten 5M
+tokens. Three T2 calls had failed client-side with `fetch failed` — and then went on
+to consume ~3.7M cached-read tokens between them, because the agent kept exploring
+the repository after lore had stopped listening. Six sessions were still live when I
+checked.
+
+A timeout that only frees the caller is **not a budget**. It is worse than no
+timeout: the operator sees a failed review and has no reason to suspect it is still
+running and still billing. `review()` now aborts the session on every failure path.
+
+**And the 5M were cache reads, not fresh input.** An agentic reviewer re-sends its
+accumulated context on every tool call, so a long exploration multiplies the read
+count even though each read is cheap. D-29 assumed caching is a saving — per token
+it is, but against a subscription *quota* the count is what matters, not the price.
+**Agentic exploration is the cost driver, not model choice.** Still uncapped; that is
+the next thing to build.
+
+### The pattern, now unmistakable
+
+Every one of the eleven lived at a seam, and most were **invisible defaults nobody
+chose**:
+
+- Node's `fetch` is undici, whose `headersTimeout` is **300 s**. T1 took 254 s. A
+  deep tier crosses that line and dies as a bare `fetch failed` — no status, no
+  message, nothing pointing at a timeout.
+- opencode reports `tokens.cache` as an **object**, so `Number()` gave `NaN`, and NaN
+  into a NOT NULL column killed a review that had already been paid for.
+- `node:*-alpine` ships **no git**: 10 of our own 180 tests failed, and a suite that
+  fails for reasons unrelated to the change becomes high-severity findings.
+- The container ran as uid 10001 against a host directory owned by 1000 →
+  *"attempt to write a readonly database"*.
+- `auth.json` at 0600 was unreadable to the container → *"not authenticated"*.
+
+**The last two are the instructive ones: both messages were accurate and still
+misleading.** SQLite really did see a read-only database; opencode really did observe
+no credentials. Neither could point at ownership, because from where they sat
+ownership was not visible. **The diagnosis has to come from somewhere other than the
+symptom.**
+
+### Facts worth keeping
+
+- **Cost is $0** on the coding plan, confirming `zai-coding-plan` (the
+  `/api/coding/` endpoint) rather than `zai` (per-token). Same key, different bill —
+  the provider id is what decides.
+- **T1 took 254 s** on a 5,900-line repo. At 30 PRs/day, **wall-clock is the binding
+  constraint, not money or CPU** — which makes the two-stage split (D-34)
+  load-bearing rather than a nicety.
+- **arm64 is fine**: `npm ci` 9 s, full suite 7 s, typecheck 2 s. The D-37 estimate
+  of ~5 CPU-hours/day was an order of magnitude too pessimistic; the real figure is
+  ~25 minutes.
+- `zai-coding-plan` provides GLM only, so the ladder is **single-vendor** — usable,
+  and warned about on every load, but closer to one opinion asked three times than
+  to three independent reviews.
+
+### Still not done
+
+A full ladder through T2 and T3 has **never completed**. The CLI inside the container
+cannot do it — `/app` is not a git repo, only `src/` ships — so the real test is the
+MCP path, where the worker clones into `/var/lib/lore/repos` itself. That is the next
+move, and it wants a branch with a genuine planted defect so we learn whether lore
+*finds* things, not merely whether it runs.
+
+Also open: the exploration turn cap, and the spend ceiling sums `cost_usd` which is
+$0 on a subscription — so it currently guards nothing.
+
+---
+
 ## 2026-08-03 — session 19: wiring the code that was written but never called
 
 **Did.** Audited for specced behaviour that exists but is never invoked. Found two,
