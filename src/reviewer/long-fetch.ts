@@ -25,6 +25,23 @@ import { request as httpsRequest } from "node:https";
  * review rather than a stuck one — the same failure the T0 sandbox timeout exists
  * to prevent.
  */
+// lore-ok[8d7e827d]: the finding is that 30 minutes is excessive and lets a stuck
+// model burn budget. The number is set from measurement, not comfort: the longest
+// legitimate T1 call observed on the deployment is 1006 s reviewing this repo whole,
+// and the predecessor's GLM review took 82 agentic turns. 30 min is 1.8x the longest
+// real call — thin headroom, not generous, and cutting it kills reviews that were
+// working.
+//
+// The "wastes spend ceiling budget" half does not hold today for a more embarrassing
+// reason: both configured vendors are subscriptions reporting cost_usd = 0, so the
+// ceiling sums zero and guards nothing (D-50, open). A shorter timeout would not
+// protect a budget nothing is measuring.
+//
+// What DOES bound a stuck call is the abort on every failure path, added after three
+// abandoned T2 calls kept exploring and consumed ~3.7M cache-read tokens. Revisit
+// this number when usage.steps has a distribution behind it — that is the same
+// [OPEN] as the exploration cap, and setting either from a guess is what D-50
+// exists to refuse.
 export const DEFAULT_TIMEOUT_MS = 30 * 60_000;
 
 export function longFetch(timeoutMs = DEFAULT_TIMEOUT_MS): (request: Request) => Promise<Response> {

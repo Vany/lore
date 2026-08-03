@@ -49,6 +49,19 @@ afterEach(() => {
   store.close();
 });
 
+// lore-ok[ce28e08f]: raised by the model in its own words, alongside semgrep's
+// version of the same thing below, so it gets its own marker. The claim is that
+// review data travels in plaintext where a local process could read it. Nothing
+// travels: the server is created in `beforeEach`, bound to 127.0.0.1 on an ephemeral
+// port, answered by the same process, and closed in `afterEach`. The payloads are
+// this file's own fixtures — no branch name, repository URL or finding from any real
+// review exists inside a unit test.
+//
+// The production bind is the one that carries real data, and it is governed
+// separately and deliberately: LORE_BIND in deploy/docker-compose.yml defaults to
+// loopback PRECISELY because there is no TLS in front of it, and that file says so
+// in the same words.
+//
 // lore-ok[d6d9cd72]: `base` is an ephemeral loopback server this test starts itself
 // — `http://127.0.0.1:${PORT}`, torn down in afterEach. There is no network hop to
 // intercept, so there is no plaintext to protect; adding TLS here would exercise
