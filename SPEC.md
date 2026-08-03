@@ -155,6 +155,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-49** | A single-vendor ladder reaches `passed_partial`, never `passed` | `[OPEN]` |
 | **D-50** | Exploration is **counted per review before it is capped**; no cap yet | `[OPEN]` |
 | **D-51** | An accepted justification is **repo knowledge**, carried across reviews | confirmed |
+| **D-52** | The per-tier cap bounds *iteration*, so a clean tier escalates past it | confirmed |
 
 **D-7, revised.** The earlier version dropped GLM-5.2 on Artificial Analysis's
 *cost per task* — which is tokens consumed × price on their benchmark, not a price.
@@ -457,6 +458,32 @@ changed, and a fingerprint raised again means it did not stay changed.
 
 The carried verdict records its provenance in the rationale, because a reader needs
 to know a decision was inherited rather than made by the tier named beside it.
+
+**D-52 — the per-tier cap bounds iteration, not results.**
+
+The cap and the global budget sat together, checked before anything else. They read
+as one idea — "bounds first, INV-1" — and they are not one idea.
+
+The global budget is a ceiling on the whole review: tested every round, clean or
+not, because a ceiling a good result may exceed is not a ceiling. The per-tier cap
+bounds something narrower — *going round again with the same tier*. Checked in the
+same place, it also fell on rounds where the tier came back **clean**, and then it
+discarded the one result that proved the iteration had ended.
+
+Observed, and paid for. `rev_UsgaL105JyrNJEBD8L9NwKFX` spent three rounds settling
+three findings on this repo, ran a fourth at t1 for 485s and 29 turns, came back
+clean — and was reported `failed`, because `tierRounds.t1` had reached 4. With a
+default of 3 that makes `passed` unreachable for any change needing three rounds of
+fixes, which is most changes worth reviewing. The ladder could not finish a real
+branch, and the failure looked like the code's fault rather than the counter's.
+
+So the cap is tested only inside the fresh-findings branch. Termination is what the
+bounds owe us and it is untouched (`spec/review-ladder.md` §5): every round either
+raises something fresh — still bounded — or is clean, and clean is terminal.
+
+It is a **quota decision as well as a correctness one**, which is why it is written
+down rather than filed as a bug fix: reviews that used to die at t1 now escalate
+into the deep tiers, so this strictly increases what a hard review spends.
 
 **D-43 — review types.** `review.start` takes a `type`, defaulting to `code-arch`:
 *is this change correct and well-made?* The next type is `security`: *what

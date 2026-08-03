@@ -271,17 +271,37 @@ export function step(input: StepInput): { readonly state: LadderState; readonly 
 
   const base: LadderState = { ...prev, round, tierRounds, needsHuman };
 
-  // Bounds are checked before any success can be declared. Hitting one is a
-  // distinct outcome, never a pass — a review that ran out of budget found out
-  // nothing about the code it did not reach (INV-1).
+  // The GLOBAL budget is a hard ceiling on the whole review, so it is checked
+  // against the round itself, clean or not. A ceiling that a good result may
+  // exceed is not a ceiling. INV-1 still holds: `stopped` is a named terminal
+  // state and never reads as a pass.
   if (round > limits.globalRounds) {
     return { state: base, decision: { kind: "stopped", bound: "global" } };
   }
-  if ((tierRounds[tier.id] ?? 0) > limits.perTierRounds) {
-    return { state: base, decision: { kind: "stopped", bound: "perTier" } };
-  }
 
   if (fresh.length > 0) {
+    // The PER-TIER cap is checked HERE, and only here, because it bounds a
+    // different thing: going round again with the same tier. Above, next to the
+    // global budget, it also fell on rounds where the tier came back CLEAN — and
+    // then the cap discarded the very result that ended the ping-pong.
+    //
+    // Observed on this repo, 2026-08-03. `rev_UsgaL105JyrNJEBD8L9NwKFX` spent
+    // three rounds settling three findings, ran a fourth at t1 for 485s and 29
+    // turns, came back clean — and was reported FAILED, because `tierRounds.t1`
+    // had reached 4. We paid for a review, it found nothing, and the answer was
+    // thrown away by a counter. With a default of 3 that makes `passed`
+    // unreachable for any change needing three rounds of fixes, which is most of
+    // them: the ladder could not do its job on a real branch.
+    //
+    // Termination (spec/review-ladder.md §5) is unaffected, and that is the whole
+    // reason the bounds exist. Every round either raises something fresh — bounded
+    // here and by the global budget above — or is clean, and clean is terminal:
+    // it passes, asks a human, or escalates. Escalation only ever moves the cursor
+    // FORWARD through a finite tier list, so no path loops.
+    if ((tierRounds[tier.id] ?? 0) > limits.perTierRounds) {
+      return { state: base, decision: { kind: "stopped", bound: "perTier" } };
+    }
+
     // A fix is unreviewed code, so the next round starts at the cheapest model
     // tier — the cheapest possible regression check (D-6). Resuming where we left
     // off would let hastily patched code reach `passed` having never faced the gate.

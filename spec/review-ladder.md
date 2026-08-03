@@ -272,11 +272,24 @@ Four independent bounds guarantee termination:
 1. **Fingerprint dedup** — a settled finding cannot re-trigger work *when re-raised
    in the same words*. See §3.1.1: this bound is softer than the other three, and
    the mechanical guarantee comes from them.
-2. **Per-tier round cap** (default 3).
+2. **Per-tier round cap** (default 3) — applied only to a round that raises
+   something fresh (D-52).
 3. **Global round budget** (default 12) per review.
 4. **Quota exhaustion.**
 
 Hitting 2, 3 or 4 is **not** a pass. It is a distinct terminal state, named.
+
+The cap in 2 bounds *going round again with the same tier*, so it is tested only
+where that could happen — on a round with fresh findings. A tier that comes back
+**clean** has already stopped going round, and the ladder escalates however many
+rounds it took to get there. The budget in 3 is different in kind: a ceiling on
+the whole review, tested on every round, clean or not, because a ceiling a good
+result may exceed is not a ceiling.
+
+Termination survives this, which is the only thing the bounds owe us. Each round
+either raises something fresh — bounded by 2 and 3 — or is clean, and clean is
+terminal: it passes, asks a human, or escalates. Escalation moves the cursor only
+**forward** through a finite tier list.
 
 ## 6. Scope of a review
 

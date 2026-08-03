@@ -77,6 +77,20 @@ describe("step", () => {
     expect(r.decision).toStrictEqual({ kind: "stopped", bound: "perTier" });
   });
 
+  // The other half of that rule, and the one that cost a real review. The cap
+  // bounds *going round again with the same tier*; a clean tier has stopped going
+  // round. Checked alongside the global budget, it fell on the clean round too and
+  // binned a result we had already paid 485s and 29 turns for.
+  it("does not stop on the per-tier bound when the tier came back clean", () => {
+    let s = initialState();
+    for (let i = 0; i < 3; i++) s = step({ state: s, raised: [`f${i}`] }).state;
+    expect(s.tierRounds["t1"]).toBe(3); // the next round is the one that used to stop
+
+    const r = step({ state: s, raised: [] });
+    expect(r.decision.kind).toBe("fastClean"); // escalates into the deep stage
+    expect(r.state.tierRounds["t1"]).toBe(4); // over the cap, and that is fine
+  });
+
   it("stops on the global bound", () => {
     let s = initialState();
     const limits = { perTierRounds: 99, globalRounds: 3 };
