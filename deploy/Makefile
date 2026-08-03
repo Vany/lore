@@ -4,7 +4,8 @@
 #
 #   make up                                    build and start everything
 #   make new NAME=vany GIT=git@github.com:o/r  provision a repo and token
-#   make status                                is parallelism running, or queueing?
+#   make status                                what is happening, coloured
+#   make status ID=rev_xxx                     one review, in full
 #   make logs                                  follow
 #   make restore                               pull the database back from backup
 #
@@ -16,7 +17,7 @@ DATA    ?= $(shell grep -E '^LORE_HOST_DATA=' .env 2>/dev/null | cut -d= -f2)
 DATA    := $(if $(DATA),$(DATA),/var/lib/lore)
 
 .DEFAULT_GOAL := help
-.PHONY: help preflight sync-opencode push build up down down-hard restart logs status doctor new tokens backup-on backup-check restore sweep shell
+.PHONY: help preflight sync-opencode push build up down down-hard restart logs status status-json status-local doctor new tokens backup-on backup-check restore sweep shell
 
 help:
 	@sed -n '2,14p' $(MAKEFILE_LIST) | sed 's/^# \{0,1\}//'
@@ -95,10 +96,27 @@ new: preflight
 doctor:
 	$(COMPOSE) exec -T lore node /app/src/index.ts doctor
 
-## The operator view: active reviews, queue depth, spend, disk.
+## What is happening right now, coloured, for a person.
+##
+## The JSON at /status answers "is parallelism running or queueing?" and stops
+## there — it reports a review as `running` and will not tell you which tier is
+## working, whether a tier was skipped, or that a justification was ratified. For a
+## service whose one rule is that a review which did not run must never look like
+## one that found nothing, that gap is the thin end of the exact ambiguity we
+## refuse. `make status ID=rev_...` drills into one review.
 status:
+	@$(COMPOSE) exec -T lore node /app/src/ops/status.ts $(ID) 2>/dev/null \
+		|| echo "not reachable — is it up? (make logs)"
+
+## The raw JSON, for a script rather than a person.
+status-json:
 	@curl -fsS http://127.0.0.1:7777/status | python3 -m json.tool 2>/dev/null \
 		|| echo "not reachable — is it up? (make logs)"
+
+## Same view, straight against a local database — no container, no service.
+## Development on a laptop, where lore runs as plain node.
+status-local:
+	@LORE_DATA_DIR=$${LORE_DATA_DIR:-$$PWD/../lore} node ../src/ops/status.ts $(ID)
 
 tokens:
 	@$(COMPOSE) exec -T lore node -e "\

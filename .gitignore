@@ -5,6 +5,13 @@ dist/
 # per-branch finding ledger, written into a reviewed worktree (SPEC §4.3)
 .rev/
 
+# The LOCAL deployment's data directory: database, bare clones, worktrees.
+#
+# It lives inside the repo for convenience on a laptop, which means git would
+# otherwise offer to commit the knowledge base and every reviewed worktree —
+# including other people's repositories.
+lore/
+
 # Agent worktrees. Each is a full checkout with its own node_modules — 1.1G here
 # during one workflow run — and git worktrees are NOT ignored automatically when
 # they live inside the parent repo.
