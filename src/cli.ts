@@ -192,6 +192,27 @@ export async function main(argv: readonly string[]): Promise<ExitCode> {
         runTests: args.runTests,
       });
     } catch (e) {
+      // lore-ok[178a57e7]: the finding says this marks the review failed without
+      // marking the round's tier_run failed, leaving an open row beside a failed
+      // review. It does not: `runRound` owns that row and closes it on every path
+      // before anything reaches here.
+      //
+      // In src/reviewer/review.ts, reading the model tier's block in order:
+      //   openTierRun(...)                          opens it
+      //   closeTierRun(tierRunId, "answered")       success
+      //   catch: closeTierRun(tierRunId, ...)       BEFORE either rethrow
+      //   if (!(e instanceof Exhausted)) throw e    rethrow #1, already closed
+      //   if (!anyTierRan(...)) throw e             rethrow #2, already closed
+      // and T0's own open/close wraps its call the same way.
+      //
+      // So by the time this catch runs, every run this round opened is closed with
+      // a real outcome. Closing from out here would need the id, which is private to
+      // runRound by design — the layer that opens a row is the layer that knows what
+      // happened to it.
+      //
+      // The reviewer was right about the SHAPE of the bug: a failed review beside a
+      // run still claiming to work is exactly the disagreement this view exists to
+      // surface. It was fixed one layer down, an hour before this was written.
       store.updateReview(reviewId, { state: "failed" });
       throw e;
     }
