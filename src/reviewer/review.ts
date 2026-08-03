@@ -99,7 +99,24 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   store.closeTierRun(t0RunId, t0.findings.length > 0 ? "findings" : "clean");
 
   // 3. Justifications proposed since last round.
-  const pending = await collectJustifications(store, reviewId, worktree, diff.changedFiles);
+  // The changed files PLUS every file that already has an open finding.
+  //
+  // Changed-files-only was a silent trap. T0 scans the whole worktree, so it raises
+  // findings in files the diff never touched — a semgrep rule firing on a test that
+  // this branch did not modify. Those findings were then IMPOSSIBLE to justify: the
+  // `lore-ok` sat in the source, in the right place, with the right fingerprint, and
+  // nothing ever read it. Raised every round, never settled, so the ladder reset for
+  // ever and the review could not reach `passed` by any route.
+  //
+  // Observed on this repo: `d6d9cd72` survived every review of 2026-08-03, and the
+  // justification written for it was never once collected.
+  //
+  // A finding names its own file, which is the honest set to look in — where the
+  // finding is, not where the diff is.
+  const justifiableFiles = [
+    ...new Set([...diff.changedFiles, ...store.openFindings(reviewId).map((f) => f.file)]),
+  ];
+  const pending = await collectJustifications(store, reviewId, worktree, justifiableFiles);
 
   // 4. Expire justifications whose code has changed, BEFORE the model tier runs.
   //
