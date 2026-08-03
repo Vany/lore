@@ -665,6 +665,49 @@ export class Store {
     });
   }
 
+  /**
+   * Requeue jobs a dead process left behind. Call at STARTUP, before any loop runs.
+   *
+   * `claimJob` sets `running` and `finishJob` clears it, so a process that dies in
+   * between leaves the row `running` for ever. Nothing reclaimed it and nothing said
+   * so: the review simply stopped advancing, and `queueDepth` counts only `queued`,
+   * so the operator view showed an idle service with work stranded inside it. That is
+   * INV-1 wearing the scheduler's clothes — a round that did not run, reported as
+   * nothing to do.
+   *
+   * `attempts` was already incremented on every claim and read by nothing, which is
+   * the same decoration `SCHEMA_VERSION` was. It is now the bound.
+   *
+   * AT STARTUP SPECIFICALLY, so no timeout has to be guessed. Mid-flight this would
+   * need a staleness threshold longer than the longest legitimate round — T1 has been
+   * measured at 1006s and `longFetch` allows 30 minutes — and getting that wrong
+   * requeues a job that is still running, so the same review runs twice and pays
+   * twice. At startup there is no such ambiguity: this process holds no jobs, so
+   * anything `running` belongs to a process that is gone.
+   *
+   * A job that has burnt its attempts is FAILED, not requeued. A round that reliably
+   * kills the worker would otherwise crash-loop on restart for ever, and a review
+   * that cannot finish must say so rather than be retried in silence.
+   */
+  reclaimOrphanedJobs(maxAttempts = 3): { readonly requeued: number; readonly failed: number } {
+    return this.tx(() => {
+      const failed = this.db
+        .prepare(
+          `UPDATE job SET state = 'failed', last_error = ?, updated_at = ?
+           WHERE state = 'running' AND attempts >= ?`,
+        )
+        .run(
+          `abandoned by a worker that stopped mid-round, and it had already used its ${maxAttempts} attempts`,
+          now(),
+          maxAttempts,
+        );
+      const requeued = this.db
+        .prepare("UPDATE job SET state = 'queued', updated_at = ? WHERE state = 'running'")
+        .run(now());
+      return { requeued: Number(requeued.changes), failed: Number(failed.changes) };
+    });
+  }
+
   finishJob(id: number, state: "done" | "failed", error?: string): void {
     this.db
       .prepare("UPDATE job SET state = ?, last_error = ?, updated_at = ? WHERE id = ?")

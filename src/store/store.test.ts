@@ -169,6 +169,47 @@ describe("verdicts", () => {
   });
 });
 
+// A worker that dies between claiming a job and finishing it leaves the row
+// `running` for ever. Nothing reclaimed it, nothing said so, and `queueDepth` counts
+// only `queued` — so the operator view showed an idle service with work stranded
+// inside it. INV-1 wearing the scheduler's clothes.
+describe("orphaned jobs", () => {
+  beforeEach(() => newReview("rev1"));
+
+  it("requeues what a dead worker left running", () => {
+    store.enqueue("rev1", "fast");
+    expect(store.claimJob()).toBeDefined();
+    expect(store.queueDepth()).toBe(0); // stranded, and the queue looks empty
+
+    expect(store.reclaimOrphanedJobs()).toStrictEqual({ requeued: 1, failed: 0 });
+    expect(store.queueDepth()).toBe(1);
+    expect(store.claimJob()?.reviewId).toBe("rev1");
+  });
+
+  // A round that reliably kills the worker would otherwise crash-loop on every
+  // restart. A review that cannot finish has to say so, not be retried in silence.
+  it("fails a job that has burnt its attempts instead of looping for ever", () => {
+    store.enqueue("rev1", "fast");
+    // Claims 1 and 2 are survivable; each reclaim puts it back.
+    for (let i = 0; i < 2; i++) {
+      expect(store.claimJob()).toBeDefined();
+      expect(store.reclaimOrphanedJobs()).toStrictEqual({ requeued: 1, failed: 0 });
+    }
+    // The third claim takes attempts to 3, and dying again is where it stops.
+    expect(store.claimJob()).toBeDefined();
+    expect(store.reclaimOrphanedJobs()).toStrictEqual({ requeued: 0, failed: 1 });
+    expect(store.queueDepth()).toBe(0);
+    expect(store.claimJob()).toBeUndefined();
+  });
+
+  it("leaves finished jobs alone", () => {
+    store.enqueue("rev1", "fast");
+    const job = store.claimJob();
+    store.finishJob(job?.id ?? 0, "done");
+    expect(store.reclaimOrphanedJobs()).toStrictEqual({ requeued: 0, failed: 0 });
+  });
+});
+
 describe("knowledge", () => {
   it("retires rules whose source document changed", () => {
     // The single guard against the knowledge base rotting: a stale doc must never

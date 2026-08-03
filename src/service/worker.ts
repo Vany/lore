@@ -55,6 +55,18 @@ export class Worker {
   }
 
   start(): () => void {
+    // Before any loop claims anything: whatever is still marked `running` belongs to
+    // a process that is gone, and left alone it would sit there for ever while the
+    // queue looked empty (see `reclaimOrphanedJobs`). Said out loud rather than done
+    // quietly — a restart that silently resurrects work is exactly as confusing as
+    // one that silently loses it.
+    const reclaimed = this.store.reclaimOrphanedJobs();
+    if (reclaimed.requeued > 0 || reclaimed.failed > 0) {
+      console.error(
+        `[lore:log] startup: ${reclaimed.requeued} job(s) requeued and ${reclaimed.failed} failed —` +
+          " they were left mid-round by a worker that stopped",
+      );
+    }
     this.running = true;
     const loops = Array.from({ length: this.cfg.concurrency }, () => this.loop());
     void Promise.allSettled(loops);

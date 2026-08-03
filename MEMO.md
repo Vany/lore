@@ -64,6 +64,29 @@ looks healthy, and writes into a schema it does not understand — losing whatev
 newer build recorded in columns it cannot see. It only ever refuses, never approves,
 so a version row that disagrees with the real columns still cannot skip a migration.
 
+**And closed the second finding on today's code**, `worker.ts` "job claiming race".
+The stated mechanism was wrong again — `claimJob` runs inside `BEGIN IMMEDIATE` on a
+synchronous single-threaded connection, so the claim itself does not race — but the
+finding was pointing at something real one step over. `claimJob` sets `running` and
+`finishJob` clears it; a process that dies in between leaves the row `running` FOR
+EVER. Nothing reclaimed it, and `queueDepth` counts only `queued`, so the operator
+view showed an idle service with work stranded inside it. INV-1 wearing the
+scheduler's clothes: a round that did not run, reported as nothing to do. `attempts`
+was incremented on every claim and read by nothing — the same decoration
+`SCHEMA_VERSION` was, in the same file I had just fixed it in.
+
+I expected wreckage on the deployment, having restarted that container a dozen times
+today mid-review. **There was none** — every restart happened to land between jobs.
+Lucky, not safe, and worth writing down as luck rather than as evidence.
+
+Reclaim happens at STARTUP specifically, so no staleness threshold has to be guessed.
+Mid-flight it would need one longer than the longest legitimate round — T1 measured
+at 1006s, `longFetch` allows 30 minutes — and guessing low requeues a job that is
+still running, so the review runs twice and is paid for twice. At startup this
+process holds nothing, so `running` unambiguously means orphaned. A job that has
+burnt its attempts fails instead of requeueing, because a round that reliably kills
+the worker would otherwise crash-loop on every restart.
+
 **Surprised me.** GLM read my `lore-ok` for the semgrep false positive and raised the
 same concern independently, in its own words, as a separate finding. I argued the
 loopback bind makes plaintext irrelevant; an independent model disagreed. That is the
