@@ -12,6 +12,11 @@
  * stopped being about the code. `.gitignore` does not help — vitest has its own
  * discovery and never consults git.
  *
+ * The SECOND instance of the same bug is `lore/data/**`: the local deployment clones
+ * the repo under review into its own data directory, so a review of THIS repo puts a
+ * full copy of this suite inside it. Same symptom, same cause, and the same reason
+ * `.gitignore` does not help. A pattern that recurs is a missing rule, not two bugs.
+ *
  * `configDefaults.exclude` is spread rather than replaced, so node_modules and dist
  * stay excluded; dropping them is the usual way this file goes wrong.
  */
@@ -20,6 +25,6 @@ import { configDefaults, defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
-    exclude: [...configDefaults.exclude, "**/.claude/**"],
+    exclude: [...configDefaults.exclude, "**/.claude/**", "**/lore/data/**"],
   },
 });

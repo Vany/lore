@@ -63,9 +63,22 @@ export const FindingSchema = z
      * without its fix" would be theatre. When present it is the shared vocabulary
      * that lets two tiers, and the scanners, talk about the same defect (D-44).
      */
+    // An EMPTY string means "no CWE applies", and is read as absent rather than as
+    // malformed. Models write `"cwe": ""` instead of omitting the key, and this
+    // schema is `.strict()` inside a batch parse — so one empty string used to
+    // discard EVERY finding in the reply.
+    //
+    // Observed, and expensive: glm-4.7 returned two real findings, one of them a
+    // genuine hole in a fix made an hour earlier, and lore binned the lot over a
+    // zero-length field on the second one. The model had already been paid for.
+    //
+    // Blank is forgiven; WRONG is still rejected. "CWE-abc" means the reviewer and
+    // this schema disagree about the vocabulary, which is drift worth failing on.
     cwe: z
-      .string()
-      .regex(/^CWE-\d+$/, "cwe must look like CWE-89")
+      .preprocess(
+        (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+        z.string().regex(/^CWE-\d+$/, "cwe must look like CWE-89").optional(),
+      )
       .optional(),
   })
   // Strict: an unexpected key means our prompt and this schema have drifted apart.
