@@ -11,6 +11,7 @@
 
 import { createOpencodeClient } from "@opencode-ai/sdk";
 import { loadTiers, vendorOf, type Tier } from "../core/ladder.ts";
+import { longFetch } from "../reviewer/long-fetch.ts";
 import { DEFAULT_REVIEWER, type ReviewerConfig } from "../reviewer/opencode.ts";
 
 export interface Check {
@@ -28,6 +29,7 @@ function client(cfg: ReviewerConfig) {
       : `Basic ${Buffer.from(`${cfg.username ?? ""}:${cfg.password}`).toString("base64")}`;
   return createOpencodeClient({
     baseUrl: cfg.baseUrl,
+    fetch: longFetch(cfg.timeoutMs),
     ...(basic === undefined ? {} : { headers: { Authorization: basic } }),
   });
 }

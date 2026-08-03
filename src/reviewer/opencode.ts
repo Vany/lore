@@ -18,6 +18,7 @@ import { createOpencodeClient } from "@opencode-ai/sdk";
 import { DidNotRun, Exhausted } from "../core/errors.ts";
 import { FindingSchema, type Finding } from "../core/finding.ts";
 import type { Tier } from "../core/ladder.ts";
+import { longFetch } from "./long-fetch.ts";
 import { OUTPUT_CONTRACT } from "./prompts.ts";
 
 export interface ReviewerConfig {
@@ -126,6 +127,10 @@ export class Reviewer implements ReviewerLike {
         : `Basic ${Buffer.from(`${cfg.username ?? ""}:${cfg.password}`).toString("base64")}`;
     this.client = createOpencodeClient({
       baseUrl: cfg.baseUrl,
+      // Node's fetch gives up after 300s with a bare "fetch failed". A deep tier
+      // routinely takes longer than that, and losing a review to an invisible
+      // transport default is the worst kind of failure: it looks like the model.
+      fetch: longFetch(cfg.timeoutMs),
       ...(basic === undefined ? {} : { headers: { Authorization: basic } }),
     });
   }
