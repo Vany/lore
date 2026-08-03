@@ -28,9 +28,17 @@ import { request as httpsRequest } from "node:https";
 // lore-ok[8d7e827d]: the finding is that 30 minutes is excessive and lets a stuck
 // model burn budget. The number is set from measurement, not comfort: the longest
 // legitimate T1 call observed on the deployment is 1006 s reviewing this repo whole,
-// and the predecessor's GLM review took 82 agentic turns. 30 min is 1.8x the longest
-// real call — thin headroom, not generous, and cutting it kills reviews that were
-// working.
+// and the predecessor's GLM review took 82 agentic turns.
+//
+// CORRECTED, hours after this comment first claimed 1.8x headroom. That arithmetic
+// used 30 min while the BINDING limit was `DEFAULT_REVIEWER.timeoutMs` at 20 min —
+// two timeouts, the shorter winning silently, and a comment confidently reasoning
+// about the wrong one. Real headroom over 1006 s was 1.19x, and the next run crossed
+// it: "opencode did not respond within 1200s". They are now one constant, this one.
+//
+// Cutting it kills reviews that were working; raising it because reviews got slower
+// is a treadmill. The honest reading of the failure is that a whole-repo diff is at
+// the edge of what T1 can do, not that the number is wrong.
 //
 // The "wastes spend ceiling budget" half does not hold today for a more embarrassing
 // reason: both configured vendors are subscriptions reporting cost_usd = 0, so the

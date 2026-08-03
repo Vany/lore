@@ -28,7 +28,7 @@ import { createOpencodeClient } from "@opencode-ai/sdk";
 import { DidNotRun, Exhausted } from "../core/errors.ts";
 import { FindingSchema, type Finding } from "../core/finding.ts";
 import type { Tier } from "../core/ladder.ts";
-import { longFetch } from "./long-fetch.ts";
+import { DEFAULT_TIMEOUT_MS, longFetch } from "./long-fetch.ts";
 import { OUTPUT_CONTRACT } from "./prompts.ts";
 
 export interface ReviewerConfig {
@@ -44,7 +44,15 @@ export interface ReviewerConfig {
 export const DEFAULT_REVIEWER: ReviewerConfig = {
   baseUrl: process.env["OPENCODE_SERVER"] ?? "http://127.0.0.1:4096",
   agent: "readonly",
-  timeoutMs: 20 * 60_000,
+  // ONE timeout, not two. This was 20 minutes while `longFetch`'s own default was
+  // 30, and the shorter silently won — an invisible default nobody chose, which is
+  // the shape of nearly every bug this project has found in itself.
+  //
+  // It cost a real review: T1 on this repo went 521s, then 1006s as the code grew,
+  // then past 1200s, and died as "opencode did not respond within 1200s" while a
+  // comment three files away justified the 30-minute figure with headroom that did
+  // not exist.
+  timeoutMs: DEFAULT_TIMEOUT_MS,
   // opencode protects its server with basic auth when OPENCODE_SERVER_PASSWORD is
   // set, and returns a bare 401 with no hint when it is missing. Reading the same
   // variables opencode itself reads means a protected server works without any
