@@ -150,6 +150,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-44** | Findings carry an optional CWE id — the shared vocabulary | confirmed |
 | **D-45** | The project is **`lore`** | confirmed |
 | **D-46** | A conflict block must have an exit: resolve, or escalate | confirmed |
+| **D-47** | D-1 is enforced by **absence**: no Anthropic credential is deployed | confirmed |
 
 **D-7, revised.** The earlier version dropped GLM-5.2 on Artificial Analysis's
 *cost per task* — which is tokens consumed × price on their benchmark, not a price.
@@ -266,6 +267,19 @@ becomes something the next session already knows.
 
 Practical bonus: the previous working name shadowed `rev(1)`, a real coreutils
 command.
+
+**D-47 — independence enforced by absence.** Reviewers inherit this machine's
+opencode configuration so they have what a Claude Code session has (D-12) — but
+`make sync-opencode` **strips the Anthropic credential** and the plugin that
+supplies it on the way.
+
+Until now D-1 held only because the tier list happens to name non-Anthropic models.
+One wrong model id, or one agent config naming an Anthropic model, and the author's
+own model family grades its own work — silently, producing a *better-looking* review
+than the honest one. With no credential in the container that failure mode is
+unreachable rather than merely unlikely, and any attempt to use it fails loudly.
+
+The staging script refuses to emit an auth file that still contains one.
 
 **D-43 — review types.** `review.start` takes a `type`, defaulting to `code-arch`:
 *is this change correct and well-made?* The next type is `security`: *what

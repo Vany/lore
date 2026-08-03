@@ -64,8 +64,13 @@ services:
     platform: linux/arm64
     restart: unless-stopped
     environment:
-      # Verified: opencode reads this from the environment, with no auth.json.
+      # Verified: opencode reads this from the environment, with no auth.json. The
+      # staged auth.json below also carries it; either alone is enough.
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:?set OPENROUTER_API_KEY in .env}
+      # The plane MCP config references these by name rather than embedding the
+      # key, so the config file is safe to copy and the secret stays in .env.
+      PLANE_API_KEY: ${PLANE_API_KEY:-}
+      PLANE_WORKSPACE_SLUG: ${PLANE_WORKSPACE_SLUG:-}
       # Basic auth on the server. lore reads the same two variables, which is how a
       # protected server needs no extra configuration on either side.
       OPENCODE_SERVER_USERNAME: ${OPENCODE_SERVER_USERNAME:-lore}
@@ -83,7 +88,15 @@ services:
       #    in the request body already, but that is a policy the model could in
       #    principle route around. A read-only bind is not a policy.
       - ${LORE_HOST_DATA:-/var/lib/lore}:/var/lib/lore:ro
-      - opencode-config:/home/lore/.config/opencode
+      # This machine's opencode configuration, staged by `make sync-opencode`:
+      # the plane MCP server, the plugins and the read-only agent, so reviewers
+      # inherit what a Claude Code session has (D-12).
+      #
+      # The staging step STRIPS THE ANTHROPIC CREDENTIAL. Claude writes the code
+      # under review, so with no Anthropic credential present, D-1 is enforced by
+      # absence rather than by a tier config a typo could undo.
+      - ./opencode/config:/home/lore/.config/opencode:ro
+      - ./opencode/data:/home/lore/.local/share/opencode:ro
 
   # Continuous replication of the SQLite database.
   #
@@ -104,6 +117,3 @@ services:
       LITESTREAM_SECRET_ACCESS_KEY: ${LITESTREAM_SECRET_ACCESS_KEY:-}
     depends_on:
       - lore
-
-volumes:
-  opencode-config:

@@ -16,7 +16,7 @@ DATA    ?= $(shell grep -E '^LORE_HOST_DATA=' .env 2>/dev/null | cut -d= -f2)
 DATA    := $(if $(DATA),$(DATA),/var/lib/lore)
 
 .DEFAULT_GOAL := help
-.PHONY: help preflight build up down down-hard restart logs status new tokens backup-check restore sweep shell
+.PHONY: help preflight sync-opencode push build up down down-hard restart logs status new tokens backup-check restore sweep shell
 
 help:
 	@sed -n '2,14p' $(MAKEFILE_LIST) | sed 's/^# \{0,1\}//'
@@ -30,10 +30,22 @@ preflight:
 	@mkdir -p "$(DATA)"
 	@echo "preflight ok — data at $(DATA)"
 
+## Stage this machine's opencode config for the container, minus Anthropic.
+sync-opencode:
+	@./sync-opencode.sh ./opencode
+
+## Ship the deployment to the host. Credentials travel over the tailnet only.
+push: sync-opencode
+	@test -n "$(HOST)" || { echo "usage: make push HOST=<ssh-host> [DIR=~/lore]"; exit 1; }
+	rsync -az --delete --exclude .env \
+		./ "$(HOST):$(if $(DIR),$(DIR),lore)/"
+	@echo "pushed. On the host:  cd $(if $(DIR),$(DIR),lore) && make up"
+
 build: preflight
 	$(COMPOSE) build
 
 up: preflight
+	@test -f ./opencode/data/auth.json || { echo "no staged opencode config — run 'make sync-opencode' on the machine that has it"; exit 1; }
 	$(COMPOSE) up -d --build
 	@echo
 	@echo "up. next:  make new NAME=<who> GIT=<ssh-url>"
