@@ -8,7 +8,9 @@
  * SPEC: spec/review-ladder.md §1, §5
  */
 
-import { Exhausted } from "./errors.ts";
+import { readFileSync } from "node:fs";
+import * as z from "zod";
+import { Exhausted, UsageError } from "./errors.ts";
 
 export type TierKind = "deterministic" | "model";
 export type Stage = "fast" | "deep";
@@ -38,6 +40,70 @@ export const DEFAULT_TIERS: readonly Tier[] = [
   { id: "t2", kind: "model", model: "openrouter/moonshotai/kimi-k3", effort: "high", stage: "deep" },
   { id: "t3", kind: "model", model: "openrouter/openai/gpt-5.6-sol-pro", effort: "high", stage: "deep" },
 ];
+
+const TierSchema = z
+  .object({
+    id: z.string().min(1),
+    kind: z.enum(["deterministic", "model"]),
+    model: z.string().min(1).optional(),
+    effort: z.enum(["low", "medium", "high", "max"]).optional(),
+    stage: z.enum(["fast", "deep"]),
+  })
+  .strict()
+  .refine((t) => t.kind !== "model" || t.model !== undefined, {
+    message: "a model tier must name a model",
+  });
+
+/**
+ * Load the ladder from configuration.
+ *
+ * `LORE_TIERS` is either inline JSON or a path to a JSON file. SPEC has always
+ * said tiers are configuration rather than code; until now they were only code,
+ * which meant changing provider required a rebuild.
+ *
+ * A malformed ladder throws rather than falling back to the default. Silently
+ * reviewing with a different set of models than the operator configured is the
+ * kind of divergence nobody notices until the bill or the findings look wrong.
+ */
+export function loadTiers(source = process.env["LORE_TIERS"]): readonly Tier[] {
+  if (source === undefined || source.trim().length === 0) return DEFAULT_TIERS;
+
+  const raw = source.trim().startsWith("[") ? source : readFileSync(source, "utf8");
+  const parsed = z.array(TierSchema).min(1).safeParse(JSON.parse(raw));
+  if (!parsed.success) {
+    throw new UsageError(`LORE_TIERS is malformed: ${parsed.error.issues.map((i) => i.message).join("; ")}`);
+  }
+
+  const tiers = parsed.data as Tier[];
+  if (!tiers.some((t) => t.kind === "model")) {
+    throw new UsageError("LORE_TIERS has no model tier — deterministic tooling alone is not a review");
+  }
+
+  // Loud, not fatal. A single-vendor ladder is a real degradation — two tiers from
+  // one model family share blind spots and are not two independent opinions (D-7)
+  // — but it is a legitimate stopgap when only one provider is funded.
+  const vendors = new Set(tiers.filter((t) => t.kind === "model").map((t) => vendorOf(t.model ?? "")));
+  if (vendors.size === 1) {
+    console.error(
+      "lore: WARNING — every model tier is from one vendor. Tiers share blind spots, so this ladder is closer to one opinion asked three times than to three independent reviews.",
+    );
+  }
+  return tiers;
+}
+
+/**
+ * Who actually trained the model, which is what shares blind spots.
+ *
+ * Ids come in two shapes and the vendor sits in a different place in each:
+ * `openrouter/z-ai/glm-5.2` is *gateway/vendor/model*, while `zai/glm-5.2` is
+ * *vendor/model* direct. Reading position 1 blindly compares `glm-4.7` against
+ * `glm-5.2` and concludes they are different vendors — which is exactly the
+ * warning this exists to raise, silently not raised.
+ */
+export function vendorOf(modelId: string): string {
+  const parts = modelId.split("/");
+  return (parts.length >= 3 ? parts[1] : parts[0]) ?? "";
+}
 
 export interface Limits {
   /** Rounds one tier may produce new findings before we stop and get a human. */

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_TIERS, initialState, settle, step, type LadderState } from "./ladder.ts";
+import { DEFAULT_TIERS, initialState, loadTiers, settle, step, vendorOf, type LadderState } from "./ladder.ts";
 
 const clean = (state: LadderState) => step({ state, raised: [] });
 
@@ -100,6 +100,52 @@ describe("step", () => {
       expect(guard).toBeLessThan(100);
       expect(["passed", "stopped", "needsHuman"]).toContain(decision.kind);
     }
+  });
+});
+
+describe("vendorOf", () => {
+  // Two id shapes, vendor in a different position in each. Reading position 1
+  // blindly compares glm-4.7 against glm-5.2 and calls them different vendors —
+  // silently disabling the single-vendor warning, which is the whole point of it.
+  it("reads the vendor from a gateway-qualified id", () => {
+    expect(vendorOf("openrouter/z-ai/glm-5.2")).toBe("z-ai");
+    expect(vendorOf("openrouter/moonshotai/kimi-k3")).toBe("moonshotai");
+  });
+
+  it("reads the vendor from a direct id", () => {
+    expect(vendorOf("zai/glm-5.2")).toBe("zai");
+    expect(vendorOf("zai/glm-4.7")).toBe("zai");
+  });
+
+  it("sees two GLM models from one vendor as one vendor", () => {
+    expect(new Set(["zai/glm-4.7", "zai/glm-5.2"].map(vendorOf)).size).toBe(1);
+  });
+});
+
+describe("loadTiers", () => {
+  it("falls back to the default ladder when unconfigured", () => {
+    expect(loadTiers("")).toStrictEqual(DEFAULT_TIERS);
+    expect(loadTiers(undefined)).toStrictEqual(DEFAULT_TIERS);
+  });
+
+  it("accepts inline JSON", () => {
+    const tiers = loadTiers('[{"id":"t0","kind":"deterministic","stage":"fast"},{"id":"t1","kind":"model","model":"zai/glm-5.2","stage":"fast"}]');
+    expect(tiers.map((t) => t.id)).toStrictEqual(["t0", "t1"]);
+  });
+
+  // Falling back to the default on a malformed config would review with a
+  // different set of models than the operator configured — a divergence nobody
+  // notices until the bill or the findings look wrong.
+  it("throws rather than falling back to the default", () => {
+    expect(() => loadTiers('[{"id":"t1","kind":"model","stage":"fast"}]')).toThrow(/must name a model/);
+    expect(() => loadTiers('[{"id":"t0","kind":"deterministic","stage":"fast"}]')).toThrow(/no model tier/);
+    expect(() => loadTiers("[]")).toThrow();
+  });
+
+  it("rejects keys it does not know, rather than ignoring them", () => {
+    expect(() =>
+      loadTiers('[{"id":"t1","kind":"model","model":"zai/glm-5.2","stage":"fast","temperature":0.7}]'),
+    ).toThrow();
   });
 });
 

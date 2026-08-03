@@ -1,0 +1,6 @@
+[
+  { "id": "t0", "kind": "deterministic", "stage": "fast" },
+  { "id": "t1", "kind": "model", "model": "zai/glm-4.7", "effort": "medium", "stage": "fast" },
+  { "id": "t2", "kind": "model", "model": "zai/glm-5.2", "effort": "high", "stage": "deep" },
+  { "id": "t3", "kind": "model", "model": "zai/glm-5.2", "effort": "max", "stage": "deep" }
+]

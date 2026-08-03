@@ -14,7 +14,7 @@
  */
 
 import { UsageError } from "./errors.ts";
-import { DEFAULT_TIERS, type Tier } from "./ladder.ts";
+import { loadTiers, type Tier } from "./ladder.ts";
 
 /** A deterministic engine run at T0. Names are resolved by the T0 runner. */
 export type T0Engine = "tsc" | "eslint" | "ast-grep" | "semgrep" | "tests" | "sbom" | "osv";
@@ -32,7 +32,7 @@ export const CODE_ARCH: ReviewType = {
   id: "code-arch",
   description: "Correctness and design of a prepared merge, judged against its ticket and specs.",
   t0: ["tsc", "eslint", "ast-grep", "semgrep", "tests"],
-  tiers: DEFAULT_TIERS,
+  tiers: loadTiers(),
   question:
     "Is this change correct, well-made, and the change that was actually asked for?",
 };
@@ -49,7 +49,7 @@ export const SECURITY: ReviewType = {
   id: "security",
   description: "Known-vulnerable dependencies and weaknesses, and whether they are reachable.",
   t0: ["sbom", "osv", "semgrep"],
-  tiers: DEFAULT_TIERS,
+  tiers: loadTiers(),
   question:
     "What known-vulnerable code are we shipping, and can it actually be reached from this application?",
 };
