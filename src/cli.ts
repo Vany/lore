@@ -167,15 +167,29 @@ export async function main(argv: readonly string[]): Promise<ExitCode> {
       });
     }
 
-    const result = await runRound({
-      store,
-      reviewer: new Reviewer(),
-      reviewId,
-      principal,
-      worktree: args.target,
-      type,
-      runTests: args.runTests,
-    });
+    // Marked failed when the round throws, exactly as the worker does.
+    //
+    // Without this a CLI review that died sat in `running` for ever: the tier_run
+    // said `failed 1801s` while the review row still claimed to be working, so
+    // `make status` showed a review in flight that nothing was flying. The worker
+    // path already got this right and quotes INV-1 while doing it — a review that
+    // did not run is not a review that found nothing — and the second entry point
+    // simply never received the same treatment.
+    let result;
+    try {
+      result = await runRound({
+        store,
+        reviewer: new Reviewer(),
+        reviewId,
+        principal,
+        worktree: args.target,
+        type,
+        runTests: args.runTests,
+      });
+    } catch (e) {
+      store.updateReview(reviewId, { state: "failed" });
+      throw e;
+    }
 
     const undelivered = store.undelivered(reviewId);
     store.markDelivered(reviewId, undelivered.map((f) => f.fingerprint));
