@@ -24,7 +24,10 @@ help:
 ## Fail early and legibly, rather than midway through a build.
 preflight:
 	@test -f .env || { echo "no .env — copy .env.example and fill it in"; exit 1; }
-	@grep -qE '^(OPENROUTER_API_KEY|ZHIPU_API_KEY)=.+' .env || { echo "no model provider key in .env — set OPENROUTER_API_KEY or ZHIPU_API_KEY"; exit 1; }
+	@# Credentials normally arrive via the staged auth.json derived from this host's
+	@# own opencode install. An env key is the alternative, not the requirement.
+	@test -s ./opencode/data/auth.json || grep -qE '^(OPENROUTER_API_KEY|ZHIPU_API_KEY)=.+' .env \
+		|| { echo "no credentials: run 'make sync-opencode', or set a provider key in .env"; exit 1; }
 	@grep -qE '^OPENCODE_SERVER_PASSWORD=.+' .env || { echo "OPENCODE_SERVER_PASSWORD is empty in .env — the server would answer a bare 401 with no hint"; exit 1; }
 	@grep -qE '^LITESTREAM_ACCESS_KEY_ID=.+' .env || echo "WARNING: no backup configured. The knowledge base IS the product and this box has no redundancy."
 	@mkdir -p "$(DATA)"
