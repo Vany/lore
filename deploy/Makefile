@@ -42,10 +42,11 @@ push: sync-opencode
 	@echo "pushed. On the host:  cd $(if $(DIR),$(DIR),lore) && make up"
 
 build: preflight
-	$(COMPOSE) build
+	$(COMPOSE) --profile build-only build
 
 up: preflight
 	@test -f ./opencode/data/auth.json || { echo "no staged opencode config — run 'make sync-opencode' on the machine that has it"; exit 1; }
+	$(COMPOSE) --profile build-only build sandbox
 	$(COMPOSE) up -d --build
 	@echo
 	@echo "up. next:  make new NAME=<who> GIT=<ssh-url>"

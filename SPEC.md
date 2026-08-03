@@ -136,11 +136,11 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-30** | T3 context capped below 272k tokens; crossing it doubles the rate | confirmed |
 | **D-31** | Tier prompts differ by position; T3 is told it is the last line | confirmed |
 | **D-32** | T3 always runs. No sampling — the attestation keeps its meaning | confirmed |
-| **D-33** | Host is an arm64 Orange Pi on Tailscale; no public exposure | confirmed |
+| **D-33** | Host is an arm64 Orange Pi. **No tailscale — tokens are the perimeter** | **revised** |
 | **D-34** | Two stages: T0+T1 inline, T2+T3 async, collected via `review.inbox` | confirmed |
 | **D-35** | Bootstrap on first review — at provisioning there is nothing to clone | **revised** |
 | **D-36** | Git submodules, not monorepos — a gitlink bump is expanded | confirmed |
-| **D-37** | T0 is the throughput bottleneck; cache, incremental, diff-scoped | confirmed |
+| **D-37** | T0 is the local bottleneck — but ~25 min/day, not 5 hours | **measured** |
 | **D-38** | `ticket` text is required — enables the scope-creep axis | confirmed |
 | **D-39** | Knowledge conflicts are findings; unresolvable ones need a human | confirmed |
 | **D-40** | Reviews are explicit and snapshot-pinned; attestation covers a tree | confirmed |
@@ -216,6 +216,22 @@ reviews/month**, i.e. a **$500–2,600/month** tool. Cost is a first-order desig
 constraint, and latency is too — 30 reviews a day cannot queue behind one another,
 which makes any quota-metered plan actively dangerous. A burst of 30 PRs is exactly
 when a rolling window empties. `research/ai-code-review-landscape.md` §3.2.3.
+
+**D-33, revised 2026-08-03 — measured on the device.** arm64 is confirmed: node runs
+natively, `npm ci` takes 9 s, the full suite 7 s, a typecheck 2 s. The one real
+finding was that `node:*-alpine` ships **no git**, which failed 10 tests in the way
+that matters most — not by refusing to run, but by running and producing failures
+unrelated to the change, which T0 would have reported as high-severity findings.
+
+**And tailscale is not installed on the host.** The whole D-33 security argument
+assumed it. On a LAN the bearer tokens stop being mere scoping and become the
+perimeter, so the compose bind now defaults to loopback: exposing it is a decision
+someone has to make on purpose.
+
+**D-37, measured.** The estimate of ~5 CPU-hours/day was an order of magnitude too
+pessimistic; the real figure is ~25 minutes/day at 30 PRs × 5 rounds. The caching is
+still worth having, and T0 is still the local bottleneck — but it is not the
+constraint the plan feared.
 
 **D-33 / D-37 — the host inverts the bottleneck.** Model calls are remote and cost
 this machine nothing; **T0 is local, CPU-bound, and runs on modest ARM cores**. The

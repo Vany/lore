@@ -8,6 +8,17 @@
 # Bearer tokens remain, for per-repo scoping rather than perimeter.
 
 services:
+  # The T0 test sandbox image. Built, never started: `lore` launches it per review
+  # as a sibling container. Declared here so `make build` produces it.
+  sandbox:
+    build:
+      context: ..
+      dockerfile: deploy/sandbox.Dockerfile
+    image: lore-sandbox:node24
+    platform: linux/arm64
+    profiles: ["build-only"]
+    command: ["true"]
+
   lore:
     build:
       context: ..
@@ -16,10 +27,14 @@ services:
     # builder's architecture.
     platform: linux/arm64
     restart: unless-stopped
-    # Bind to the tailnet address, not 0.0.0.0, so the service is never exposed on
-    # a LAN interface by accident. Replace with this host's tailscale IP.
+    # DEFAULTS TO LOOPBACK ON PURPOSE.
+    #
+    # The design assumed a tailnet, where WireGuard is the perimeter and the
+    # bearer tokens only scope one teammate away from another's repo. The
+    # deployment host has no tailscale, so on a LAN THE TOKENS ARE THE PERIMETER.
+    # Set LORE_BIND to the address the workgroup reaches, deliberately.
     ports:
-      - "100.64.0.1:7777:7777"
+      - "${LORE_BIND:-127.0.0.1}:7777:7777"
     environment:
       LORE_DATA_DIR: /var/lib/lore
       LORE_PORT: "7777"

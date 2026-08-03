@@ -41,7 +41,12 @@ export interface SandboxConfig {
 }
 
 export const DEFAULT_SANDBOX: SandboxConfig = {
-  image: "node:24-alpine",
+  // Built by `make build`, not pulled: a bare node image ships no git, and a
+  // suite that needs git does not refuse to run — it runs and fails for reasons
+  // unrelated to the change, which T0 then reports as high-severity findings.
+  // Measured on the deployment host: 10 of lore's own 180 tests failed without
+  // git; all 180 pass with it.
+  image: process.env["LORE_SANDBOX_IMAGE"] ?? "lore-sandbox:node24",
   cacheRoot: "/var/lib/lore/npm-cache",
   scratchRoot: "/var/lib/lore/scratch",
   memory: "2g",

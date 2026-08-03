@@ -155,9 +155,35 @@ agent must be tested against one.
 - daily spend ceiling that stops starting reviews
 - operator status view (D-26)
 
-### 4.1 The arm64 tests — planned, run when the device exists
+### 4.1 The arm64 tests — ✅ RUN 2026-08-03 on the device
 
-Not run now, by instruction. Assume it works; verify before trusting it.
+Orange Pi, RK3588, aarch64, 8 cores, 31 GiB, 3.2 TB free. Docker 29.6, compose 5.3.
+
+| test | result |
+|---|---|
+| arm64 node container | **pass** — node 24.18.1 native, no emulation |
+| `npm ci` | **pass, 9 s** |
+| full 180-test suite | **pass, 7 s** — after fixing the image, below |
+| `tsc --noEmit` | **pass, 2 s** |
+| tailscale on host | **ABSENT** — see below |
+
+**The one real finding: `node:*-alpine` ships no git,** and 10 of lore's own 180
+tests failed without it. That failure mode is the dangerous kind — the suite does
+not refuse to run, it runs and fails for reasons unrelated to the change, and T0
+turns those into high-severity findings. A reviewer that manufactures defects costs
+a fix cycle each. Fixed by building `deploy/sandbox.Dockerfile` with git present.
+
+**The CPU budget was wrong by an order of magnitude, in our favour.** D-37 estimated
+~5 CPU-hours/day for one developer. Measured: a T0 round on this repo is ~2 s of
+typecheck plus ~7 s of tests, with installs cached. At 30 PRs × 5 rounds that is
+**~25 minutes/day**, not five hours. T0 is still the local bottleneck, and the
+caching in D-37 is still worth having, but it is not the constraint the plan feared.
+Caveat: lore is a small repo; a large monorepo will be slower.
+
+**tailscale is not installed on the host.** The security model assumed it: D-33
+reasoned that WireGuard is the perimeter and bearer tokens only scope one teammate
+from another's repo. Without it, on a LAN, **the tokens are the perimeter**. The
+compose bind now defaults to loopback so that choice has to be made deliberately.
 
 | test | method | if it fails |
 |---|---|---|
