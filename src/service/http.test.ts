@@ -46,6 +46,16 @@ afterEach(() => {
   store.close();
 });
 
+// lore-ok[d6d9cd72]: `base` is an ephemeral loopback server this test starts itself
+// — `http://127.0.0.1:${PORT}`, torn down in afterEach. There is no network hop to
+// intercept, so there is no plaintext to protect; adding TLS here would exercise
+// node's TLS stack rather than the MCP handler under test. The rule that fired is
+// `typescript.react.security.react-insecure-request`, a React browser-fetch rule,
+// matched against a Node test file by URL shape alone.
+//
+// The production bind is the one that matters and it is governed separately: see
+// LORE_BIND in deploy/docker-compose.yml, which defaults to loopback precisely
+// because there is no TLS in front of it.
 const mcp = (body: unknown, bearer?: string) =>
   fetch(`${base}/mcp`, {
     method: "POST",

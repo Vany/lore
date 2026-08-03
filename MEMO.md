@@ -5,6 +5,105 @@ surprised me.
 
 ---
 
+## 2026-08-03 — session 27: lore reviewed lore, and was right
+
+**Did.** Ran the first whole-repo review through MCP: `main` against the first
+commit `d3ebb0c`, 85 files, 480,689 characters of diff, ticket = the original ask.
+T1 (GLM-4.7) took **521s**, spent **161,792 cached** tokens against 2,990 fresh
+(98% cache hit again), and returned **four findings**. Three were real.
+
+**What it found, and why it matters:**
+
+- `deploy/tiers.zai-coding-plan.json` — T2 and T3 are both `glm-5.2`. **A config I
+  wrote, violating a rule I documented.** It cited D-7 and D-47, so it had read
+  SPEC.md; the knowledge premise is not theoretical.
+- `src/core/ladder.ts` — the single-vendor check *warns and continues*. That is why
+  the config above sailed through the guard written to catch it.
+- `deploy/sync-opencode.sh` — the INV-8 agent check also only warns. **I had lived
+  this exact failure four hours earlier**; GLM found it by reading the script cold.
+- One false positive: a semgrep React rule on `http://127.0.0.1` in a test. Closed
+  with the first real `lore-ok` in this codebase.
+
+**The thesis it handed me:** *a check that only prints is a comment.* Three
+instances, one review, in a project whose stated rule is that every ambiguity
+resolves toward saying so loudly.
+
+**Three bugs to get there, and each fix exposed the next.** Staged config was 0700
+and the container runs as uid 10001 → agent lookup 500 in **0.015s** (that number is
+the tell; nothing that fast reached a model). `chmod 755` → opencode could now *read*
+its config, saw `plugin: [superpowers, oh-my-openagent]`, tried to install into a
+`:ro` mount → every `POST /session` 500. Config mount made writable → works.
+
+The first bug was **masking** the second: while the directory was unreadable,
+opencode silently ran with defaults and no plugins. I did not create the second bug
+by fixing the first; I revealed one that shipped with the compose file.
+
+**Observed live, worth keeping:** the probe I ran *without* an agent ran as `build`
+— the write-capable default. INV-8's trap, on real hardware. Only the per-request
+`tools: {write:false,…}` denial stood between a reviewer and a writable checkout.
+`sync-opencode.sh` now **refuses to stage** without a readable `readonly.md`.
+
+**D-49.** Kimi is waitlist-only, so a second vendor cannot be bought. Enforcing
+independence therefore cannot mean "fix the ladder" — it means a single-vendor
+ladder reaches `passed_partial`, never `passed`, and the attestation names the
+vendor next to the tier count it would otherwise inflate. Vany chose this over
+spending on OpenRouter. The honest answer to *"we cannot afford independence"* is to
+say so in the output, not to quietly redefine `passed`.
+
+**The MCP loop works end to end.** `review_start` → poll → findings with
+fingerprints, CWEs, evidence and `justify_with` → `review_submit` with a diff, and
+the tree hash **verified** — lore reproduced `6c0ad6ed` in its own worktree.
+
+**And then round 2 died, on the worst bug of the project so far.**
+
+```
+review round failed — no finding matches lore-ok[a1b2c3d4] in this review
+```
+
+`a1b2c3d4` is the example fingerprint in lore's **own documentation** — `docs.ts`
+shows it as the format. But the doc example is only how it surfaced. The real defect:
+
+`store.resolveShort` threw when a `lore-ok` matched no finding **in this review**.
+A fingerprint belongs to the review that raised it, so a justification accepted last
+week matches nothing this week. That is not an error, it is *what every mature repo
+looks like* — and it meant **the second review of any repo using lore-ok would fail.**
+The core feature broke the core loop, on the second use.
+
+The cruellest part is `review.ts:322`:
+
+```ts
+const fp = store.resolveShort(reviewId, mark.short);
+const finding = byFingerprint.get(fp);
+if (finding === undefined) continue; // already settled in an earlier round
+```
+
+I *anticipated* this exact case and wrote the skip. The line above throws before it
+can ever run. The intent was right and unreachable — which is the same shape as
+`isStale` in session 19 (written, unit-tested, zero call sites).
+
+`resolveShort` now returns `undefined`, the caller skips and **logs the file and
+line** so a typo'd fingerprint is still findable. Ambiguity still throws — picking a
+winner would close a defect nobody examined.
+
+**No unit test would have found this.** Every test builds one review and asks about
+its own findings. The bug lives in the relationship *between* reviews, and only
+running the loop twice poses that question. That is the third time this project has
+learned the same thing: contact with the real system finds what local tests cannot,
+because tests only ask the questions I already thought of.
+
+**Surprised me.** I expected the cheapest tier to produce forty variations of
+"consider adding error handling". It produced one argument with three pieces of
+evidence. The finding I'd have called the least likely — a shell script warning —
+was the one I had personally been burned by that afternoon.
+
+**Still open:** `createSession` reports a 500 as *"is a server running?"* (it never
+checks status — same class as the SDK bug in session 20, a failure reported by
+return value rather than status). No turn cap on agentic exploration. The spend
+ceiling sums `cost_usd`, which is `$0` on a subscription, so it guards nothing. T0
+inherits semgrep severity verbatim, which is why a test-file FP arrived `high`.
+
+---
+
 ## 2026-08-03 — session 20: first contact with a live model
 
 **Did.** Ran the CLI against a real opencode server and a real provider. It did not

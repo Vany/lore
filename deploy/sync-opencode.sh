@@ -117,26 +117,29 @@ print(f"  plugins removed  : {', '.join(removed_plugins) if removed_plugins else
 print(f"  mcp servers      : {', '.join((cfg.get('mcp') or {}).keys()) or '(none)'}")
 PY
 
-# INV-8: `--agent` silently falls back to the WRITE-CAPABLE default when the named
-# agent is missing. Tools are also denied per-request, so this is belt and braces —
-# but a missing agent file is exactly the trap that bit the predecessor.
-if [ ! -f "$STAGE/config/agents/readonly.md" ]; then
-  echo "  WARNING: no agents/readonly.md — opencode falls back to the write-capable"
-  echo "           default agent when --agent names something missing (INV-8)."
-fi
-
 # Everything staged must be readable by the container uid, which is not this one.
 # Checking here beats discovering it as a 500 with no diagnostic later.
 find "$STAGE" -type d -exec chmod 755 {} +
 find "$STAGE" -type f -exec chmod 644 {} +
 
-# INV-8 has teeth here. Observed on the deployment host: with the agent
-# unreadable, a prompt naming it fails outright — but a prompt WITHOUT an agent
-# runs as `build`, the WRITE-CAPABLE default. The per-request tool denial is what
-# actually protects us; this file is the belt.
+# INV-8, ENFORCED. This used to be two warnings and a shrug, which is how a
+# reviewer nearly ran write-capable.
+#
+# Observed on the deployment host, not theorised: with the agent file unreadable, a
+# prompt NAMING it fails outright — but a prompt without an agent silently runs as
+# `build`, the WRITE-CAPABLE default. So the failure mode is not "reviews stop", it
+# is "reviews continue, with write tools, and nothing says so".
+#
+# The per-request tool denial is the belt and it did hold. This is the braces, and
+# braces that only print a message are decoration. Refusing to stage is the whole
+# point: a container that cannot start is loud, and INV-9 says reviewers are
+# read-only ALWAYS.
 if [ ! -r "$STAGE/config/agents/readonly.md" ]; then
-  echo "  WARNING: agents/readonly.md is missing or unreadable — opencode's default"
-  echo "           agent is write-capable (INV-8)."
+  echo "REFUSING: agents/readonly.md is missing or unreadable at $STAGE/config/agents/." >&2
+  echo "          opencode falls back to the WRITE-CAPABLE 'build' agent when --agent" >&2
+  echo "          names something it cannot read, and says nothing about it (INV-8)." >&2
+  echo "          Create it in $SRC_CONFIG/agents/ and re-run." >&2
+  exit 1
 fi
 
 # Last line of defence: prove the staged credentials really are clean.

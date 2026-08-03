@@ -86,13 +86,15 @@ export function loadTiers(source = process.env["LORE_TIERS"]): readonly Tier[] {
     throw new UsageError("LORE_TIERS has no model tier — deterministic tooling alone is not a review");
   }
 
-  // Loud, not fatal. A single-vendor ladder is a real degradation — two tiers from
-  // one model family share blind spots and are not two independent opinions (D-7)
-  // — but it is a legitimate stopgap when only one provider is funded.
-  const vendors = new Set(tiers.filter((t) => t.kind === "model").map((t) => vendorOf(t.model ?? "")));
-  if (vendors.size === 1) {
+  // Loud AND consequential. Not fatal, because a deployment funded for one provider
+  // must still be able to review — but this warning is no longer the whole story:
+  // `step` refuses to call a single-vendor ladder `passed` (D-49). Saying "this is
+  // degraded" at startup and then issuing a clean pass anyway is precisely the
+  // advisory-guard shape this project exists to reject.
+  const sole = soleVendorOf(tiers);
+  if (sole !== undefined) {
     console.error(
-      "lore: WARNING — every model tier is from one vendor. Tiers share blind spots, so this ladder is closer to one opinion asked three times than to three independent reviews.",
+      `lore: WARNING — every model tier is from one vendor (${sole}). Tiers share blind spots, so this ladder is closer to one opinion asked three times than to three independent reviews. Reviews on it can reach 'passed_partial' at best, never 'passed'.`,
     );
   }
 
@@ -112,6 +114,26 @@ export function loadTiers(source = process.env["LORE_TIERS"]): readonly Tier[] {
 export function vendorOf(modelId: string): string {
   const parts = modelId.split("/");
   return (parts.length >= 3 ? parts[1] : parts[0]) ?? "";
+}
+
+/**
+ * The one vendor behind every model tier, or `undefined` if there is more than one.
+ *
+ * `undefined` means "independent enough"; a name means every opinion in this ladder
+ * came from the same training run, and the review is worth less than its tier count
+ * suggests (D-49).
+ *
+ * `unavailable` tiers are excluded because the question is about the reviews that
+ * actually happened. A three-vendor ladder with two tiers unpayable really did get
+ * one vendor's opinion, and reporting otherwise would be a claim about work nobody
+ * did — the same error as counting a tier that never ran (INV-1).
+ */
+export function soleVendorOf(tiers: readonly Tier[], unavailable: readonly string[] = []): string | undefined {
+  const vendors = new Set(
+    tiers.filter((t) => t.kind === "model" && !unavailable.includes(t.id)).map((t) => vendorOf(t.model ?? "")),
+  );
+  const [only] = [...vendors];
+  return vendors.size === 1 ? only : undefined;
 }
 
 export interface Limits {
@@ -139,9 +161,18 @@ export interface LadderState {
    * still be able to finish a review, and the result says plainly how far it got.
    */
   readonly unavailable: readonly string[];
+  /**
+   * The single vendor behind every tier that could run, if there is only one (D-49).
+   *
+   * Derived, but stored: the attestation is written long after the ladder config is
+   * out of scope, and it must be able to say whose opinion it is actually carrying.
+   * Recomputed each round because `unavailable` grows as providers refuse.
+   */
+  readonly soleVendor?: string;
 }
 
 export function initialState(tiers: readonly Tier[] = DEFAULT_TIERS): LadderState {
+  const sole = soleVendorOf(tiers);
   return {
     cursor: firstModelTier(tiers),
     round: 0,
@@ -149,6 +180,9 @@ export function initialState(tiers: readonly Tier[] = DEFAULT_TIERS): LadderStat
     settled: [],
     needsHuman: false,
     unavailable: [],
+    // Omitted rather than set to undefined, so a serialised state round-trips to
+    // something a strict equality check still recognises.
+    ...(sole === undefined ? {} : { soleVendor: sole }),
   };
 }
 
@@ -185,8 +219,12 @@ export type Decision =
   | { readonly kind: "fastClean" }
   /** Every tier agrees. The only success. */
   | { readonly kind: "passed" }
-  /** Every tier that COULD run agrees; the rest were unpayable (D-48). */
-  | { readonly kind: "passedPartial"; readonly skipped: readonly string[] }
+  /**
+   * Every tier that COULD run agrees, but the evidence is weaker than a pass:
+   * tiers were unpayable (D-48), or every tier that ran came from one vendor
+   * (D-49), or both. `skipped` and `soleVendor` say which.
+   */
+  | { readonly kind: "passedPartial"; readonly skipped: readonly string[]; readonly soleVendor?: string }
   /** A human must answer before this can proceed. Not a pass. */
   | { readonly kind: "needsHuman" }
   /** A bound was hit. Not a pass — see §5. */
@@ -261,15 +299,25 @@ export function step(input: StepInput): { readonly state: LadderState; readonly 
   const nextCursor = nextModelTier(tiers, prev.cursor, base.unavailable);
   if (nextCursor === undefined) {
     // Everything reachable agreed. Whether that is `passed` or "we did everything we
-    // can" depends entirely on whether anything was skipped — and the two must never
-    // be reported as the same thing (D-48).
+    // can" turns on two independent questions, and neither may be reported as the
+    // other:
+    //
+    //   * was a tier skipped, because nobody could pay for it (D-48)
+    //   * did every tier that ran come from ONE vendor (D-49)
+    //
+    // The second is the one this project kept getting wrong. `loadTiers` warned about
+    // a single-vendor ladder and then let the review pass anyway, which made the
+    // warning decorative — the reviewer that found this was right, and it is the same
+    // warn-instead-of-enforce shape as INV-8's missing agent file. A rule with no
+    // consequence is a comment.
     const skipped = base.unavailable;
+    const sole = soleVendorOf(tiers, skipped);
     return {
-      state: { ...base, cursor: prev.cursor },
+      state: { ...base, cursor: prev.cursor, ...(sole === undefined ? {} : { soleVendor: sole }) },
       decision:
-        skipped.length === 0
+        skipped.length === 0 && sole === undefined
           ? { kind: "passed" }
-          : { kind: "passedPartial", skipped },
+          : { kind: "passedPartial", skipped, ...(sole === undefined ? {} : { soleVendor: sole }) },
     };
   }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_TIERS, anyTierRan, initialState, loadTiers, markUnavailable, settle, step, vendorOf, type LadderState } from "./ladder.ts";
+import { DEFAULT_TIERS, anyTierRan, initialState, loadTiers, markUnavailable, settle, soleVendorOf, step, vendorOf, type LadderState, type Tier } from "./ladder.ts";
 
 const clean = (state: LadderState) => step({ state, raised: [] });
 
@@ -146,6 +146,63 @@ describe("tiers nobody can pay for (D-48)", () => {
   it("does not record the same tier twice", () => {
     const s = markUnavailable(markUnavailable(initialState(), "t2"), "t2");
     expect(s.unavailable).toStrictEqual(["t2"]);
+  });
+});
+
+// The reviewer that found this was right: loadTiers warned about a single-vendor
+// ladder and then let the review pass anyway, which made the warning decorative.
+describe("single-vendor ladders cannot pass (D-49)", () => {
+  const ONE_VENDOR: readonly Tier[] = [
+    { id: "t0", kind: "deterministic", stage: "fast" },
+    { id: "t1", kind: "model", model: "zai-coding-plan/glm-4.7", effort: "medium", stage: "fast" },
+    { id: "t2", kind: "model", model: "zai-coding-plan/glm-5.2", effort: "high", stage: "deep" },
+    { id: "t3", kind: "model", model: "zai-coding-plan/glm-5.2", effort: "max", stage: "deep" },
+  ];
+
+  const runClean = (tiers: readonly Tier[]) => {
+    let s = initialState(tiers);
+    let d = step({ state: s, raised: [], tiers }).decision;
+    for (let i = 0; i < 5 && (d.kind === "fastClean" || d.kind === "escalate"); i++) {
+      const r = step({ state: s, raised: [], tiers });
+      s = r.state;
+      d = r.decision;
+    }
+    return d;
+  };
+
+  it("reaches passedPartial naming the vendor, never passed", () => {
+    expect(runClean(ONE_VENDOR)).toStrictEqual({
+      kind: "passedPartial",
+      skipped: [],
+      soleVendor: "zai-coding-plan",
+    });
+  });
+
+  it("still passes outright when the vendors really are distinct", () => {
+    expect(runClean(DEFAULT_TIERS).kind).toBe("passed");
+  });
+
+  // The question is whose opinion we actually got, not whose we configured. A
+  // three-vendor ladder with two tiers unpayable really did get one vendor's view,
+  // and saying otherwise counts work nobody did (INV-1).
+  it("counts vendors among tiers that could run, not tiers that were configured", () => {
+    expect(soleVendorOf(DEFAULT_TIERS)).toBeUndefined();
+    expect(soleVendorOf(DEFAULT_TIERS, ["t2", "t3"])).toBe("z-ai");
+  });
+
+  it("reports both weaknesses at once when a tier was also skipped", () => {
+    let s = markUnavailable(initialState(ONE_VENDOR), "t3");
+    s = step({ state: s, raised: [], tiers: ONE_VENDOR }).state; // t1 -> t2
+    expect(step({ state: s, raised: [], tiers: ONE_VENDOR }).decision).toStrictEqual({
+      kind: "passedPartial",
+      skipped: ["t3"],
+      soleVendor: "zai-coding-plan",
+    });
+  });
+
+  it("carries the vendor in the state, so the attestation can name it", () => {
+    expect(initialState(ONE_VENDOR).soleVendor).toBe("zai-coding-plan");
+    expect(initialState(DEFAULT_TIERS).soleVendor).toBeUndefined();
   });
 });
 

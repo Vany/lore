@@ -152,6 +152,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-46** | A conflict block must have an exit: resolve, or escalate | confirmed |
 | **D-47** | D-1 is enforced by **absence**: no Anthropic credential is deployed | confirmed |
 | **D-48** | An unfundable tier is *skipped*, not fatal — `passed_partial` | confirmed |
+| **D-49** | A single-vendor ladder reaches `passed_partial`, never `passed` | `[OPEN]` |
 
 **D-7, revised.** The earlier version dropped GLM-5.2 on Artificial Analysis's
 *cost per task* — which is tokens consumed × price on their benchmark, not a price.
@@ -330,6 +331,42 @@ Silently attesting a partial review as though it were complete would be the sing
 most damaging thing this system could do — it is the one output whose entire value
 is that it can be trusted, and a reader has no way to tell the difference unless the
 line says so.
+
+**D-49 — a single-vendor ladder cannot reach `passed`.**
+
+Found by the system reviewing itself. `loadTiers` printed a warning when every model
+tier came from one vendor — and then let the review pass anyway. The reviewer named
+the consequence exactly: *"attestation falsely claims multiple independent reviews
+when there were only 2 unique models."*
+
+That is the same shape as INV-8's missing agent file, and as the two permission bugs
+that preceded it: **a check that only prints is a comment.** This codebase's own rule
+is that every ambiguity resolves toward saying so loudly, and here it resolved toward
+a clean-looking pass.
+
+So a ladder whose *reachable* tiers share one vendor now reaches **`passed_partial`**,
+never `passed` — the same outcome as D-48, for an independent reason, and the decision
+carries both:
+
+- **`skipped`** — tiers nobody could pay for (D-48)
+- **`soleVendor`** — the one vendor behind every tier that ran (this)
+
+Vendors are counted among tiers that *could run*, not tiers that were *configured*. A
+three-vendor ladder with two tiers unpayable really did get one vendor's opinion, and
+recording otherwise would count work nobody did (INV-1).
+
+**The attestation names the vendor next to the tier count**, because the count is the
+number a reader takes as a proxy for rigour, and it is exactly the number a
+single-vendor ladder inflates: three tiers from one model family is one opinion asked
+three times.
+
+`loadTiers` still warns rather than throwing. A deployment funded for one provider
+must be able to review; it must not be able to claim independence it does not have.
+
+**Why this stayed advisory until now:** the deployed ladder *is* single-vendor —
+Kimi is waitlist-only and a second subscription could not be bought. The honest
+response to "we cannot afford independence" is to say so in the output, not to
+quietly redefine `passed`. `[OPEN]` — revisit when a second vendor is reachable.
 
 **D-43 — review types.** `review.start` takes a `type`, defaulting to `code-arch`:
 *is this change correct and well-made?* The next type is `security`: *what

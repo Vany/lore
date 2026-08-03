@@ -56,17 +56,25 @@ export async function attest(store: Store, reviewId: string, principal: string, 
   const counts = tally(store, reviewId);
   const tiers = countTiers(store, reviewId);
   const skipped = review.ladder.unavailable ?? [];
+  const sole = review.ladder.soleVendor;
 
   // Deliberately plain. Every number in it can be checked against the audit trail.
   //
   // A partial review says so IN THE SIGNED LINE. Attesting one as though it were
   // complete would be the single most damaging thing this system could do: the
   // attestation is the one output whose entire value is that it can be trusted, and
-  // a reader has no other way to tell the difference (D-48).
-  const scope =
-    skipped.length === 0
-      ? `${tiers} tiers`
-      : `${tiers} tiers — ${skipped.join(", ")} could not run, so this is PARTIAL`;
+  // a reader has no other way to tell the difference (D-48, D-49).
+  //
+  // The tier COUNT is the number a reader will take as a proxy for rigour, and it is
+  // exactly the number a single-vendor ladder inflates: three tiers from one model
+  // family is one opinion asked three times. So the vendor is named right next to the
+  // count that would otherwise mislead.
+  const caveats = [
+    skipped.length === 0 ? undefined : `${skipped.join(", ")} could not run`,
+    sole === undefined ? undefined : `every tier that ran was ${sole}, so these are not independent opinions`,
+  ].filter((c) => c !== undefined);
+
+  const scope = caveats.length === 0 ? `${tiers} tiers` : `${tiers} tiers — ${caveats.join("; ")}, so this is PARTIAL`;
 
   const line =
     `lore: reviewed tree ${review.treeHash ?? "unknown"} against this repo's rules and lore's own — ` +

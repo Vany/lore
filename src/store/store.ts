@@ -13,7 +13,7 @@
 
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
-import { AmbiguousFingerprint, DidNotRun } from "../core/errors.ts";
+import { AmbiguousFingerprint } from "../core/errors.ts";
 import type { Finding, Severity } from "../core/finding.ts";
 import type { LadderState } from "../core/ladder.ts";
 import type { ReviewState } from "../core/review-state.ts";
@@ -316,20 +316,27 @@ export class Store {
   }
 
   /**
-   * Resolve the short id from a `lore-ok[…]` comment.
+   * Resolve the short id from a `lore-ok[…]` comment, or `undefined` if this review
+   * raised no such finding.
    *
-   * Ambiguity is an error, never a guess. Picking a winner would close a defect
-   * nobody examined (spec/review-ladder.md §3.1.2) — git's rule for short object
-   * ids, for the same reason.
+   * **No match is not an error, and this used to throw.** A source tree accumulates
+   * `lore-ok` comments from every review that ever ran against it, and a fingerprint
+   * belongs to the review that raised it — so a justification accepted last week
+   * matches nothing this week, which is the normal steady state rather than a fault.
+   * Throwing meant the SECOND review of any repo using the feature died, and lore's
+   * own docs (which carry `lore-ok[a1b2c3d4]` as the format example) killed the first
+   * one. Found by running the loop; no unit test would have posed the question.
+   *
+   * Ambiguity is still an error, never a guess. Picking a winner would close a defect
+   * nobody examined (spec/review-ladder.md §3.1.2) — git's rule for short object ids,
+   * for the same reason.
    */
-  resolveShort(reviewId: string, short: string): string {
+  resolveShort(reviewId: string, short: string): string | undefined {
     const rows = this.db
       .prepare("SELECT fingerprint FROM finding WHERE review_id = ? AND fingerprint LIKE ?")
       .all(reviewId, `${short}%`) as Record<string, string>[];
     const matches = rows.map((r) => r["fingerprint"] ?? "");
-    if (matches.length === 0) {
-      throw new DidNotRun(`no finding matches lore-ok[${short}] in this review`);
-    }
+    if (matches.length === 0) return undefined;
     if (matches.length > 1) throw new AmbiguousFingerprint(short, matches);
     return matches[0] ?? "";
   }

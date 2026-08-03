@@ -58,11 +58,16 @@ passed, passed_partial, failed, expired.
 
 ONLY \`passed\` means the branch is clean.
 
-- \`passed_partial\` means every tier that COULD run agreed, but one or more could not
-  be paid for — "we did everything we can". The cheap tiers found nothing; the dearer
-  ones never looked. That is real evidence, and it is weaker evidence. Say so to your
-  user rather than reporting it as a pass, and the attestation will name which tiers
-  were skipped.
+- \`passed_partial\` means every tier that COULD run agreed, but the evidence is
+  weaker than a pass, for either or both of two reasons:
+    * a tier could not be paid for — the cheap tiers found nothing, the dearer ones
+      never looked ("we did everything we can");
+    * every tier that ran came from ONE vendor, so they share blind spots. Three
+      tiers from one model family is one opinion asked three times, not three
+      independent reviews.
+  Both are real evidence and both are weaker evidence. Say so to your user rather
+  than reporting it as a pass; the attestation names which tiers were skipped and
+  which vendor, if only one, actually looked at the code.
 
 - \`failed\` and \`expired\` mean the review did not complete. They are NOT "nothing
   found". Never merge on them.

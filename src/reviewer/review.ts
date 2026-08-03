@@ -296,9 +296,19 @@ async function expireStaleVerdicts(
 /**
  * Read `lore-ok` comments and match them to the findings they answer.
  *
- * A comment whose short id matches nothing, or matches two findings, is a hard
- * error rather than a shrug: resolving ambiguity by picking would close a defect
- * nobody examined.
+ * A comment matching two findings is a hard error: resolving ambiguity by picking
+ * would close a defect nobody examined.
+ *
+ * A comment matching NOTHING is skipped and logged, not fatal. Three kinds of marker
+ * legitimately match nothing in the current review, and only the last is a mistake:
+ *
+ *   * a justification accepted by an earlier review — fingerprints belong to the
+ *     review that raised them, so this is what every mature repo looks like;
+ *   * a documented example of the format (ours says `lore-ok[a1b2c3d4]`);
+ *   * a typo in the fingerprint, which closes nothing and must be visible.
+ *
+ * Telling them apart from here is guesswork, so the honest move is to skip and say
+ * so rather than to fail the round or to close a finding on a coincidence.
  */
 async function collectJustifications(
   store: Store,
@@ -318,6 +328,14 @@ async function collectJustifications(
 
     for (const mark of parseLoreOk(source)) {
       const fp = store.resolveShort(reviewId, mark.short);
+      if (fp === undefined) {
+        // Named so a typo is findable. Silence here would mean an agent believes it
+        // answered a finding it never touched.
+        console.error(
+          `[lore:log] lore-ok[${mark.short}] at ${file}:${mark.line} matches no finding in this review — ignored`,
+        );
+        continue;
+      }
       const finding = byFingerprint.get(fp);
       if (finding === undefined) continue; // already settled in an earlier round
 

@@ -103,8 +103,14 @@ describe("resolveShort", () => {
     expect(store.resolveShort("rev1", "a1b2c3d4")).toBe("a1b2c3d4ffff");
   });
 
-  it("throws when nothing matches, rather than returning nothing", () => {
-    expect(() => store.resolveShort("rev1", "deadbeef")).toThrow();
+  // This USED to throw, and that broke the loop in production. A source tree carries
+  // lore-ok comments from every review that ever ran against it, and a fingerprint
+  // belongs to the review that raised it — so an accepted justification matches
+  // nothing next time. Throwing killed the second review of any repo using the
+  // feature, and lore's own docs (which show `lore-ok[a1b2c3d4]` as the example
+  // format) killed the first.
+  it("returns undefined when nothing matches, because that is the normal case", () => {
+    expect(store.resolveShort("rev1", "deadbeef")).toBeUndefined();
   });
 
   // Picking a winner would close a defect nobody examined. Git's rule.
