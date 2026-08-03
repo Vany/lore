@@ -38,6 +38,18 @@ export interface RoundInput {
   readonly worktree: string;
   readonly type: ReviewType;
   readonly runTests?: boolean;
+  /**
+   * The deterministic layer, injectable exactly as `reviewer` is.
+   *
+   * T0 engines are selected by name and shell out, so a test could only switch them
+   * off — and every test did (`t0: []`). That blind spot hid a defect where a T0
+   * finding could never be justified: no test could produce a deterministic finding
+   * and a `lore-ok` in the same round, which is the only arrangement that shows it.
+   *
+   * Faking the model was never enough. The loop has two sources of findings and they
+   * are treated differently, so both have to be fakeable.
+   */
+  readonly t0?: typeof runT0;
 }
 
 export interface RoundResult {
@@ -66,7 +78,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   const diff = await computeDiff(worktree, review.intoRef);
 
   // 2. Deterministic first. An LLM is never paid for what tsc decides for free.
-  const t0 = await runT0(worktree, {
+  const t0 = await (input.t0 ?? runT0)(worktree, {
     engines: type.t0,
     ...(input.runTests !== undefined ? { runTests: input.runTests } : {}),
   });
@@ -164,10 +176,25 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
 
   const newFindings: RecordedFinding[] = [];
   const raisedFingerprints = new Set<string>();
+  /**
+   * The MODEL tier's fingerprints alone, which is what may reject a justification.
+   *
+   * T0 must be excluded and this is not a nicety. A justification is a claim that a
+   * finding is wrong, and ruling on it means READING THE REASON. `tsc` and `semgrep`
+   * cannot: they pattern-match, deterministically, and re-match every single round.
+   *
+   * With T0 counted, "the reviewer looked and raised it anyway" was true forever for
+   * any deterministic finding — so a T0 false positive could never be justified, never
+   * settled, and reset the ladder every round until a bound stopped the review. The
+   * loop could not reach `passed` at all. Found by trying to justify one real semgrep
+   * false positive on lore's own test suite.
+   */
+  const modelRaised = new Set<string>();
 
   for (const { f, origin } of raised) {
     const fp = fingerprint(f);
     raisedFingerprints.add(fp);
+    if (origin !== "t0") modelRaised.add(fp);
     const rec: RecordedFinding = { ...f, fingerprint: fp, origin, round, firstSeen: new Date().toISOString() };
     if (store.recordFinding(reviewId, rec)) newFindings.push(rec);
   }
@@ -176,9 +203,12 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   const accepted: string[] = [];
   const rejected: string[] = [];
   for (const p of pending) {
-    if (raisedFingerprints.has(p.finding.fingerprint)) {
+    if (modelRaised.has(p.finding.fingerprint)) {
       // The reviewer looked and raised it anyway: the reason does not hold. A
       // mistaken justification is worse than a bug, because it was trusted.
+      //
+      // `modelRaised`, never `raisedFingerprints` — only something that can read the
+      // reason is entitled to reject it. See the note where the two sets are built.
       rejected.push(p.finding.fingerprint);
       store.recordVerdict(reviewId, {
         fingerprint: p.finding.fingerprint,

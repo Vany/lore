@@ -190,6 +190,41 @@ describe("runRound", () => {
     expect(store.settledFingerprints("r1")).not.toContain(fingerprint(HOLD_BUG));
   });
 
+  // The bug this exists for: a semgrep false positive on lore's own test suite could
+  // NEVER be justified. T0 is deterministic — it re-matches every round — so counting
+  // it as "the reviewer looked and raised it anyway" rejected the reason forever, the
+  // finding never settled, the ladder reset every round, and the review could only
+  // ever end `stopped`. `passed` was unreachable for any repo with one T0 false
+  // positive. No existing test could see it, because every test set `t0: []`.
+  it("lets the model, never T0, rule on a justification", async () => {
+    // A deterministic engine that reports the same finding every single round.
+    const alwaysT0 = async () => ({
+      findings: [HOLD_BUG],
+      unavailable: [] as readonly string[],
+      outcomes: [] as readonly unknown[],
+    });
+
+    const reviewer = new ScriptedReviewer([[], []]);
+    const t0 = alwaysT0 as unknown as Parameters<typeof runRound>[0]["t0"];
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE, ...(t0 ? { t0 } : {}) });
+
+    const short = fingerprint(HOLD_BUG).slice(0, 8);
+    writeFileSync(
+      join(dir, "src/hold.ts"),
+      ["export function capture() {", `  // lore-ok[${short}]: the linter rule does not apply to tests`, "  return 1;", "}", ""].join("\n"),
+    );
+
+    const second = await runRound({
+      store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE, ...(t0 ? { t0 } : {}),
+    });
+
+    // T0 raised it again this very round, and it is STILL accepted: `tsc` and
+    // `semgrep` pattern-match, they do not read reasons.
+    expect(second.accepted).toStrictEqual([fingerprint(HOLD_BUG)]);
+    expect(second.rejected).toStrictEqual([]);
+    expect(store.settledFingerprints("r1")).toContain(fingerprint(HOLD_BUG));
+  });
+
   it("climbs the ladder and passes only at the top", async () => {
     const reviewer = new ScriptedReviewer([[], [], []]);
     const first = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
