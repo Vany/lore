@@ -73,12 +73,16 @@ if not kept:
 out_auth = os.path.join(stage, "data", "auth.json")
 with open(out_auth, "w") as f:
     json.dump(kept, f, indent=2)
-# 0644, not 0600: this file is bind-mounted into a container running under a
-# different uid, and 0600 makes it unreadable there — opencode then starts with no
-# providers and every tier fails as "not authenticated", pointing at the login
-# rather than at the permission. The containing directory stays 0700, so nothing
-# on the host gained access.
-os.chmod(out_auth, 0o644)
+# Back to 0600, and READ-WRITE for the owner on purpose.
+#
+# This was 0644 because the container ran as a different uid and could not otherwise
+# read it. The container now runs as the uid that owns this file, so the widening is
+# no longer needed — and an OAuth credential must be WRITABLE anyway: opencode
+# renews the token roughly hourly by rewriting this file.
+#
+# The blanket chmod sweep further down would flatten this back to 0644, so the final
+# mode is set after it, not here.
+os.chmod(out_auth, 0o600)
 
 # ---- config --------------------------------------------------------------
 cfg_path = os.path.join(src_config, "opencode.json")
@@ -117,10 +121,18 @@ print(f"  plugins removed  : {', '.join(removed_plugins) if removed_plugins else
 print(f"  mcp servers      : {', '.join((cfg.get('mcp') or {}).keys()) or '(none)'}")
 PY
 
-# Everything staged must be readable by the container uid, which is not this one.
-# Checking here beats discovering it as a 500 with no diagnostic later.
+# Everything staged must be readable inside the container. Checking here beats
+# discovering it as a 500 with no diagnostic later.
 find "$STAGE" -type d -exec chmod 755 {} +
 find "$STAGE" -type f -exec chmod 644 {} +
+
+# ...except the credential, which this sweep would otherwise widen to 0644.
+#
+# It is last so nothing can flatten it afterwards, and it is 0600 rather than 0400
+# because an OAuth token is renewed IN PLACE: opencode rewrites this file when the
+# access token expires, roughly hourly. Read-only here would work for one hour and
+# then fail looking like a cancelled subscription.
+chmod 600 "$STAGE/data/auth.json"
 
 # INV-8, ENFORCED. This used to be two warnings and a shrug, which is how a
 # reviewer nearly ran write-capable.

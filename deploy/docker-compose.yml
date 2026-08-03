@@ -85,6 +85,10 @@ services:
     build:
       context: ..
       dockerfile: deploy/opencode.Dockerfile
+      args:
+        # Must match LORE_UID: opencode rewrites auth.json when it renews the OAuth
+        # token, and the staged file is owned by the host user who ran make sync.
+        LORE_UID: "${LORE_UID:-1000}"
     platform: linux/arm64
     restart: unless-stopped
     environment:
@@ -133,11 +137,24 @@ services:
       # It is not the credential — auth.json is mounted separately and read-only.
       - ./opencode/config:/home/lore/.config/opencode
       # opencode needs a WRITABLE data directory — it stores session state there.
-      # But the credential inside it must not be writable, so the volume provides
-      # the scratch space and auth.json is bound read-only OVER it. Docker applies
-      # the deeper path last, so the file mount wins.
+      # The volume provides that scratch space; auth.json is bound over it so the
+      # staged credentials land at the path opencode reads. Docker applies the
+      # deeper path last, so the file mount wins.
+      #
+      # WRITABLE, and it was `:ro` until the OpenAI credential arrived.
+      #
+      # An API key is a constant, so read-only cost nothing and bought a little. An
+      # OAUTH credential is not: it carries `expires` and `refresh`, and opencode
+      # must write the renewed token back roughly hourly. Read-only would have let
+      # reviews work for about an hour and then fail in a way that looks like an
+      # expired subscription rather than a mount flag.
+      #
+      # That is the third read-only-mount failure in this deployment — 0700 staged
+      # directories, then plugins that could not install, now this. The pattern is
+      # worth naming: `:ro` is a claim that nothing on the other side ever needs to
+      # write, and that claim keeps turning out to be false.
       - opencode-data:/home/lore/.local/share/opencode
-      - ./opencode/data/auth.json:/home/lore/.local/share/opencode/auth.json:ro
+      - ./opencode/data/auth.json:/home/lore/.local/share/opencode/auth.json
 
   # Continuous replication of the SQLite database.
   #

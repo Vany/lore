@@ -16,9 +16,25 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ARG OPENCODE_VERSION=1.18.11
 RUN npm i -g "opencode-ai@${OPENCODE_VERSION}"
 
-# Runs as a non-root user with the same uid as `lore`, so the read-only bind of the
-# repositories resolves to the same identity in both containers.
-RUN useradd --system --create-home --uid 10001 lore
+# Runs as a non-root user with THE SAME UID AS THE HOST OWNER of the staged files,
+# which is also the uid the `lore` service runs as.
+#
+# This used to be 10001 and the comment above it already claimed they matched. They
+# did not: `lore` runs as ${LORE_UID:-1000} and this was 10001. Reading survived the
+# mismatch — the repo bind is read-only and the staged files are world-readable — so
+# nothing complained, right up until a credential needed WRITING.
+#
+# The OpenAI credential is OAuth: it carries `expires` and `refresh`, and opencode
+# renews it roughly hourly by rewriting auth.json. A file owned by the host user at
+# 0644 is not writable by uid 10001, so reviews would have worked for about an hour
+# and then failed looking like an expired subscription.
+#
+# `node:24-bookworm-slim` ships a `node` user already holding 1000, which is why the
+# original chose 10001 to dodge the collision. Removing it is safe: nothing in this
+# image runs as `node`, and dodging the collision is what created the bug.
+ARG LORE_UID=1000
+RUN userdel -r node 2>/dev/null || true \
+ && useradd --create-home --uid "${LORE_UID}" lore
 
 # opencode writes session state here (it creates `repos/` on first run), so the
 # directory must exist AND be owned by the runtime user before the named volume is
