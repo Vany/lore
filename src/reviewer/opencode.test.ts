@@ -181,6 +181,33 @@ describe("Reviewer.review", () => {
     replies = [{ error: "rate limit exceeded" }];
     await expect(reviewer().review(TIER, "review this", "/tmp/wt")).rejects.toThrow(Exhausted);
   });
+
+  // The shape that actually occurs. opencode answers 200 and nests the PROVIDER's
+  // failure in the body, so the transport status says nothing about whether the
+  // model ran. Observed live against OpenRouter with an unfunded account.
+  it("raises Exhausted when the provider refuses inside a 200 response", async () => {
+    replies = [
+      {
+        info: {
+          error: {
+            name: "APIError",
+            data: { message: "Insufficient credits. Add more using https://openrouter.ai/settings/credits", statusCode: 402 },
+          },
+        },
+      },
+    ];
+    await expect(reviewer().review(TIER, "review this", "/tmp/wt")).rejects.toThrow(Exhausted);
+  });
+
+  it("does not retry a provider failure as though it were bad formatting", async () => {
+    // Retrying an unpaid bill wastes a call and reports the wrong cause: someone
+    // would go and debug the prompt.
+    replies = [
+      { info: { error: { name: "APIError", data: { message: "invalid api key", statusCode: 401 } } } },
+      { parts: [{ type: "text", text: FINDING_JSON }] },
+    ];
+    await expect(reviewer().review(TIER, "review this", "/tmp/wt")).rejects.toThrow(/invalid api key/);
+  });
 });
 
 describe("extractFindings", () => {

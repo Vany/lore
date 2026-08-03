@@ -25,12 +25,25 @@ export interface ReviewerConfig {
   /** Read-only agent name. Belt; the explicit tool denial below is braces. */
   readonly agent: string;
   readonly timeoutMs: number;
+  /** HTTP basic credentials, when the opencode server is password-protected. */
+  readonly username?: string;
+  readonly password?: string;
 }
 
 export const DEFAULT_REVIEWER: ReviewerConfig = {
   baseUrl: process.env["OPENCODE_SERVER"] ?? "http://127.0.0.1:4096",
   agent: "readonly",
   timeoutMs: 20 * 60_000,
+  // opencode protects its server with basic auth when OPENCODE_SERVER_PASSWORD is
+  // set, and returns a bare 401 with no hint when it is missing. Reading the same
+  // variables opencode itself reads means a protected server works without any
+  // extra configuration here.
+  ...(process.env["OPENCODE_SERVER_USERNAME"] !== undefined
+    ? { username: process.env["OPENCODE_SERVER_USERNAME"] }
+    : {}),
+  ...(process.env["OPENCODE_SERVER_PASSWORD"] !== undefined
+    ? { password: process.env["OPENCODE_SERVER_PASSWORD"] }
+    : {}),
 };
 
 /**
@@ -107,7 +120,14 @@ export class Reviewer implements ReviewerLike {
 
   constructor(cfg: ReviewerConfig = DEFAULT_REVIEWER) {
     this.cfg = cfg;
-    this.client = createOpencodeClient({ baseUrl: cfg.baseUrl });
+    const basic =
+      cfg.password === undefined
+        ? undefined
+        : `Basic ${Buffer.from(`${cfg.username ?? ""}:${cfg.password}`).toString("base64")}`;
+    this.client = createOpencodeClient({
+      baseUrl: cfg.baseUrl,
+      ...(basic === undefined ? {} : { headers: { Authorization: basic } }),
+    });
   }
 
   /**
@@ -197,6 +217,16 @@ export class Reviewer implements ReviewerLike {
         throw new HttpStatus(status, JSON.stringify(res.error ?? {}).slice(0, 300));
       }
 
+      // opencode answers 200 and nests the PROVIDER's failure in the message body,
+      // so the transport status says nothing about whether the model ran. Without
+      // this, "insufficient credits" (402) arrives as an empty assistant message,
+      // fails to parse, and is reported as "the model did not return findings" —
+      // sending someone to debug a prompt when the real answer is an unpaid bill.
+      const embedded = providerError(res.data);
+      if (embedded !== undefined) {
+        throw new HttpStatus(embedded.statusCode, embedded.message);
+      }
+
       return { text: collectText(res.data), usage: collectUsage(res.data) };
     } catch (e) {
       const status = e instanceof HttpStatus ? e.status : undefined;
@@ -216,6 +246,24 @@ interface Usage {
   cached: number;
   output: number;
   cost: number;
+}
+
+/**
+ * Pull a provider failure out of an otherwise-successful reply.
+ *
+ * `data.info.error` is where opencode records that the model call itself failed —
+ * bad key, no credits, rate limit — while the HTTP exchange with opencode
+ * succeeded. Two different layers, two different verdicts, and only one of them is
+ * visible in the status code.
+ */
+function providerError(data: unknown): { statusCode: number; message: string } | undefined {
+  const err = (data as { info?: { error?: { name?: string; data?: { message?: string; statusCode?: number } } } })
+    ?.info?.error;
+  if (err === undefined) return undefined;
+  return {
+    statusCode: err.data?.statusCode ?? 500,
+    message: `${err.name ?? "provider error"}: ${err.data?.message ?? "no detail"}`,
+  };
 }
 
 /** Defensive: the response shape varies across opencode versions. */

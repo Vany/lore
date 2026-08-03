@@ -5,6 +5,49 @@ surprised me.
 
 ---
 
+## 2026-08-03 — session 20: first contact with a live model
+
+**Did.** Ran the CLI against a real opencode server and a real provider. It did not
+complete a review — the OpenRouter account has no credits — but it found **two real
+bugs in ten minutes** that no amount of local testing would have surfaced.
+
+**Bug 1: the opencode server uses HTTP basic auth, and the Reviewer could not speak
+it.** `OPENCODE_SERVER_USERNAME` / `OPENCODE_SERVER_PASSWORD` are set in Vany's
+environment; the server answers a bare 401 with no hint. Now read from the same
+variables opencode itself reads, so a protected server works with no extra config.
+
+**Bug 2, and this is the valuable one: opencode answers HTTP 200 and nests the
+PROVIDER's failure in the message body.**
+
+```
+HTTP 200
+  data.info.error = { statusCode: 402, message: "Insufficient credits" }
+```
+
+I had already fixed the transport-level status check in session 18 — but the
+transport said 200. The provider failure arrived as an empty assistant message,
+failed to parse, got retried, failed again, and was reported as *"the model did not
+return findings"* (exit 70). Someone would have gone to debug the prompt when the
+real answer was an unpaid bill.
+
+Now exit **75**, with the provider's own message. Also: a provider failure no longer
+consumes the parse retry, because retrying an unpaid bill wastes a call and reports
+the wrong cause.
+
+**The lesson, which is the same one twice at different layers:** *a successful
+exchange with a middleman says nothing about whether the work happened.* I fixed
+that for the SDK and did not think to ask whether opencode did the same thing to
+me. Two layers, two verdicts, and only one of them is in the status code.
+
+**Method note.** Ten minutes of running found more than the last several hours of
+reading. Local tests proved the code does what I wrote; only contact with the real
+system showed what I had failed to write at all.
+
+**Blocked on:** OpenRouter credits. Everything up to the model call now works —
+session created, auth accepted, prompt delivered, response understood.
+
+---
+
 ## 2026-08-03 — session 19: wiring the code that was written but never called
 
 **Did.** Audited for specced behaviour that exists but is never invoked. Found two,
