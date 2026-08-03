@@ -65,8 +65,15 @@ const TierSchema = z
  * reviewing with a different set of models than the operator configured is the
  * kind of divergence nobody notices until the bill or the findings look wrong.
  */
+let cached: { source: string; tiers: readonly Tier[] } | undefined;
+
 export function loadTiers(source = process.env["LORE_TIERS"]): readonly Tier[] {
   if (source === undefined || source.trim().length === 0) return DEFAULT_TIERS;
+
+  // Memoised per source, so the single-vendor warning is said once per process
+  // rather than once per review type. A warning repeated three times at startup
+  // reads as noise, and noise is what people learn to scroll past.
+  if (cached?.source === source) return cached.tiers;
 
   const raw = source.trim().startsWith("[") ? source : readFileSync(source, "utf8");
   const parsed = z.array(TierSchema).min(1).safeParse(JSON.parse(raw));
@@ -88,6 +95,8 @@ export function loadTiers(source = process.env["LORE_TIERS"]): readonly Tier[] {
       "lore: WARNING — every model tier is from one vendor. Tiers share blind spots, so this ladder is closer to one opinion asked three times than to three independent reviews.",
     );
   }
+
+  cached = { source, tiers };
   return tiers;
 }
 

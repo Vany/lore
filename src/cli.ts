@@ -27,6 +27,7 @@ lore — an independent reviewer that remembers the codebase
   lore review --branch <name> --into <name> --ticket <text> [options]
   lore serve                                   run the MCP service
   lore new --name <who> --git <ssh-url>        provision a repo and token
+  lore doctor                                  check tiers, auth and model ids
 
   --branch <name>    branch under review (default: current branch)
   --into <name>      branch it will merge into (default: main)
@@ -84,6 +85,13 @@ export async function main(argv: readonly string[]): Promise<ExitCode> {
     // Runs until killed. Returning would tear down the workers mid-review.
     await new Promise(() => {});
     return EXIT.PASS;
+  }
+
+  if (args.command === "doctor") {
+    const { doctor, render, healthy } = await import("./service/doctor.ts");
+    const checks = await doctor();
+    process.stdout.write(`${render(checks)}\n`);
+    return healthy(checks) ? EXIT.PASS : EXIT.DID_NOT_RUN;
   }
 
   if (args.command === "new") {
