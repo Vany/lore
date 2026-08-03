@@ -136,15 +136,42 @@ describe("Reviewer.review", () => {
     expect(result.findings).toHaveLength(1);
   });
 
-  it("records what the call cost", async () => {
+  // The shape opencode really sends, observed live: `cache` is an OBJECT, and
+  // `Number({read,write})` is NaN. NaN into a NOT NULL column killed the first
+  // real review after the diff, T0 and the model call had all been paid for.
+  it("reads the nested cache object rather than producing NaN", async () => {
     replies = [
       {
         parts: [{ type: "text", text: FINDING_JSON }],
-        info: { tokens: { input: 4000, cache: 3000, output: 200 }, cost: 0.0123 },
+        info: {
+          tokens: { input: 4000, output: 200, reasoning: 50, cache: { read: 3000, write: 900 } },
+          cost: 0.0123,
+        },
       },
     ];
-    const result = await reviewer().review(TIER, "review this", "/tmp/wt");
-    expect(result).toMatchObject({ inputTokens: 4000, cachedTokens: 3000, outputTokens: 200, costUsd: 0.0123 });
+    const r = await reviewer().review(TIER, "review this", "/tmp/wt");
+    expect(r.inputTokens).toBe(4000);
+    // Only `read` is the saving. `write` is what populating the cache cost, and
+    // counting it would overstate the discount D-29's cost model rests on.
+    expect(r.cachedTokens).toBe(3000);
+    // Reasoning is billed as output by every provider in the ladder.
+    expect(r.outputTokens).toBe(250);
+    expect(r.costUsd).toBeCloseTo(0.0123, 6);
+  });
+
+  it("still reads a flat cache count, for providers that send one", async () => {
+    replies = [
+      { parts: [{ type: "text", text: FINDING_JSON }], info: { tokens: { input: 10, cache: 5, output: 2 }, cost: 0.1 } },
+    ];
+    expect((await reviewer().review(TIER, "review this", "/tmp/wt")).cachedTokens).toBe(5);
+  });
+
+  it("never yields NaN when usage is missing or malformed", async () => {
+    replies = [{ parts: [{ type: "text", text: FINDING_JSON }], info: { tokens: { input: "?" } } }];
+    const r = await reviewer().review(TIER, "review this", "/tmp/wt");
+    for (const v of [r.inputTokens, r.cachedTokens, r.outputTokens, r.costUsd]) {
+      expect(Number.isFinite(v)).toBe(true);
+    }
   });
 
   it("retries once when the reply cannot be parsed, and says it retried", async () => {

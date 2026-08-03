@@ -13,3 +13,8 @@ dist/
 # Staged opencode credentials and deployment secrets. Never committed.
 deploy/opencode/
 deploy/.env
+
+# Project-local MCP wiring. Points at a private host and is per-machine, so it
+# does not belong in a public repository even though the token itself is an env
+# reference rather than a literal.
+.mcp.json

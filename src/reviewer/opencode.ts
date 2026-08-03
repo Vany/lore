@@ -281,14 +281,43 @@ function collectText(data: unknown): string {
   return typeof data === "object" && data !== null ? JSON.stringify(data) : String(data ?? "");
 }
 
+/**
+ * Coerce to a finite number, never NaN.
+ *
+ * `Number({read: 0, write: 0})` is NaN, and NaN reaching a NOT NULL integer column
+ * fails the insert — which killed the first live review after the diff, T0 and the
+ * model call had all been paid for. Usage accounting must never be the thing that
+ * loses a completed review.
+ */
+function num(v: unknown): number {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+/**
+ * Read token usage from a reply.
+ *
+ * `tokens.cache` is an OBJECT — `{read, write}` — not a count. Only `read` is the
+ * saving: those are tokens that were served from cache instead of being charged at
+ * the full input rate. `write` is what it cost to populate the cache, and counting
+ * it as cached would overstate the discount that D-29's whole cost model rests on.
+ */
 function collectUsage(data: unknown): Usage {
-  const t = (data as { info?: { tokens?: Record<string, number>; cost?: number } } | undefined)?.info;
-  const tokens = t?.tokens ?? {};
+  const info = (data as { info?: { tokens?: Record<string, unknown>; cost?: number } } | undefined)?.info;
+  const tokens = info?.tokens ?? {};
+  const cache = tokens["cache"];
+  const cachedRead =
+    typeof cache === "object" && cache !== null
+      ? num((cache as Record<string, unknown>)["read"])
+      : num(cache ?? tokens["cached"]);
+
   return {
-    input: Number(tokens["input"] ?? 0),
-    cached: Number(tokens["cache"] ?? tokens["cached"] ?? 0),
-    output: Number(tokens["output"] ?? 0),
-    cost: Number(t?.cost ?? 0),
+    input: num(tokens["input"]),
+    cached: cachedRead,
+    // Reasoning tokens are billed as output by every provider in the ladder, so
+    // omitting them would understate what a review actually cost.
+    output: num(tokens["output"]) + num(tokens["reasoning"]),
+    cost: num(info?.cost),
   };
 }
 
