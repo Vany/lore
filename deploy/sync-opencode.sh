@@ -42,7 +42,15 @@ command -v python3 >/dev/null || { echo "python3 is required"; exit 1; }
 [ -f "$SRC_AUTH" ] || { echo "no opencode auth at $SRC_AUTH — run 'opencode auth login' first"; exit 1; }
 
 mkdir -p "$STAGE/config" "$STAGE/data"
-chmod 700 "$STAGE" "$STAGE/config" "$STAGE/data"
+# 0755, not 0700.
+#
+# These directories are bind-mounted into a container running under a DIFFERENT
+# uid, which needs execute permission to traverse them. At 0700 opencode cannot
+# even list agents/ — and the failure is an instant HTTP 500 on agent lookup, which
+# looks nothing like a permission problem from the caller's side.
+#
+# Host protection comes from where this directory lives, not from these bits.
+chmod 755 "$STAGE" "$STAGE/config" "$STAGE/data"
 
 python3 - "$SRC_CONFIG" "$SRC_AUTH" "$STAGE" <<'PY'
 import json, os, shutil, sys
@@ -115,6 +123,20 @@ PY
 if [ ! -f "$STAGE/config/agents/readonly.md" ]; then
   echo "  WARNING: no agents/readonly.md — opencode falls back to the write-capable"
   echo "           default agent when --agent names something missing (INV-8)."
+fi
+
+# Everything staged must be readable by the container uid, which is not this one.
+# Checking here beats discovering it as a 500 with no diagnostic later.
+find "$STAGE" -type d -exec chmod 755 {} +
+find "$STAGE" -type f -exec chmod 644 {} +
+
+# INV-8 has teeth here. Observed on the deployment host: with the agent
+# unreadable, a prompt naming it fails outright — but a prompt WITHOUT an agent
+# runs as `build`, the WRITE-CAPABLE default. The per-request tool denial is what
+# actually protects us; this file is the belt.
+if [ ! -r "$STAGE/config/agents/readonly.md" ]; then
+  echo "  WARNING: agents/readonly.md is missing or unreadable — opencode's default"
+  echo "           agent is write-capable (INV-8)."
 fi
 
 # Last line of defence: prove the staged credentials really are clean.
