@@ -339,6 +339,25 @@ describe("runRound", () => {
     expect(t0row?.["finished_at"]).not.toBeNull();
   });
 
+  // The other half of that rule, found by a real reviewer: a tier_run row records
+  // what the TIER did, and nothing may overwrite it with what the LADDER decided.
+  // `closeTierRun` is an UPDATE, so a second close silently replaced the first —
+  // and `make status` then painted a clean, answered t1 red as `stopped`.
+  it("records what the model tier found, not what the ladder decided", async () => {
+    // Clean at t1 in the default ladder means `fastClean`: a decision kind that is
+    // NOT a tier outcome, which is exactly the value that used to land here.
+    const r = await runRound({
+      store, reviewer: new ScriptedReviewer([[]]), reviewId: "r1", principal: "p", worktree: dir, type: TYPE,
+    });
+    expect(r.decision.kind).toBe("fastClean");
+
+    const t1row = store.db
+      .prepare("SELECT outcome, finished_at FROM tier_run WHERE review_id = 'r1' AND tier = 't1'")
+      .get() as Record<string, unknown> | undefined;
+    expect(t1row?.["outcome"]).toBe("clean");
+    expect(t1row?.["finished_at"]).not.toBeNull();
+  });
+
   it("climbs the ladder and passes only at the top", async () => {
     const reviewer = new ScriptedReviewer([[], [], []]);
     const first = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });

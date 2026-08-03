@@ -70,6 +70,24 @@ findings are worth the money, and the numbers are measured rather than guessed.
       choosing a number; a cap nobody can calibrate fails paid-for deep reviews for
       nothing. Blocked on the same table also recording what a turn costs — today's
       token columns describe one turn, not the session.
+- [ ] **Nothing ever writes a `fixed` verdict.** `VerdictKind` has three values and
+      production writes two: all four `recordVerdict` calls in `reviewer/review.ts`
+      say `justified-accepted` or `justified-rejected`. A finding the author simply
+      *fixes* — the normal, wanted outcome — is therefore never settled. Three
+      consequences, worst last:
+      1. `make status` overstates what is open. Watched live on
+         `rev_cv9OhSuJ147KLEw1GKnTVoyt`: `a47cfc2c` was fixed and not re-raised, and
+         still displayed as open.
+      2. `prompts.ts:119` renders `"fixed"` for a settled finding with no rationale —
+         a branch production cannot reach.
+      3. `attest.test.ts` builds its fixtures with `verdict: "fixed"`. The
+         attestation, which is what this whole product converges on, is tested
+         against a database state that never occurs.
+      The ladder itself is fine — `step()` keys off what was *raised*, so an unraised
+      finding correctly stops blocking. This is about the record, not the control
+      flow, which is why it survived this long. Fix is likely in `runRound`: a
+      previously-open finding the tier did not re-raise gets a `fixed` verdict, with
+      the same "the code moved" care `expireStaleVerdicts` already takes.
 
 ---
 

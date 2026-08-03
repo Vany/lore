@@ -74,6 +74,22 @@ export const FindingSchema = z
     //
     // Blank is forgiven; WRONG is still rejected. "CWE-abc" means the reviewer and
     // this schema disagree about the vocabulary, which is drift worth failing on.
+    //
+    // lore-ok[96bf7159]: the outer `.optional()` is redundant, but the finding's
+    // claim — that it "makes schema validation ineffective" — is false. Measured
+    // against this schema rather than reasoned about:
+    //
+    //   absent    -> accepted, cwe=undefined
+    //   ""        -> accepted, cwe=undefined     (the case that binned a paid batch)
+    //   "CWE-89"  -> accepted, cwe="CWE-89"
+    //   "CWE-abc" -> REJECTED
+    //   "nonsense"-> REJECTED
+    //
+    // Nothing malformed gets through. `ZodOptional` only short-circuits on
+    // `undefined`, so any string still reaches the preprocess and then the regex;
+    // the two `.optional()`s cannot mask each other. It is kept as-is because the
+    // inner one is load-bearing — it is what lets the preprocess return `undefined`
+    // for a blank — and deleting the outer one changes nothing a caller can see.
     cwe: z
       .preprocess(
         (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),

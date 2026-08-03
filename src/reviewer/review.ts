@@ -177,7 +177,11 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   let result;
   try {
     result = await input.reviewer.review(tier, prompt, worktree);
-    store.closeTierRun(tierRunId, "answered");
+    // Closed with what this tier FOUND, in the same words T0 uses (line 99). The
+    // column answers one question — what did this tier do — and `answered` did not
+    // answer it: a tier that replied with nothing and one that replied with six
+    // problems both read the same.
+    store.closeTierRun(tierRunId, result.findings.length > 0 ? "findings" : "clean");
   } catch (e) {
     // The row is already open, so whatever happens next this tier leaves evidence.
     // Before this existed, a `glm-5.2` call that ran 30 minutes and timed out wrote
@@ -361,10 +365,24 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     needsHuman: store.openConflicts(review.repoId).length > 0,
   });
 
-  // T0 and the model tier each ran; both belong in the audit trail, and the
-  // attestation counts distinct tiers from it.
-  store.closeTierRun(tierRunId, stepped.decision.kind);
-
+  // The model tier's row is ALREADY closed — on the success path above, or in the
+  // catch. It is deliberately not closed again here.
+  //
+  // It used to be, with `stepped.decision.kind`, and `closeTierRun` is a plain
+  // UPDATE: the second write destroyed the first. The tier's own result was
+  // replaced by the LADDER's decision, and `finished_at` was pushed out to include
+  // this bookkeeping. Two vocabularies landed in one column — {clean, findings,
+  // failed, unpayable} from the tier, {passed, findings, escalate, stopped, ...}
+  // from the ladder — so the column no longer answered which question it was for.
+  //
+  // Not cosmetic. `make status` paints `stopped` red as DID-NOT-RUN, so on
+  // 2026-08-03 `rev_UsgaL105JyrNJEBD8L9NwKFX` showed `t1·r4 ✘ stopped 485s` for a
+  // round where t1 answered and was CLEAN; the ladder stopped, not the tier. It
+  // took a SQL query to find that out. A tier that ran and found nothing, shown as
+  // a tier that did not finish, is INV-1 upside down — and the audit trail is where
+  // that rule is least allowed to bend.
+  //
+  // The decision belongs to the review, and that is where it is written, next.
   store.updateReview(reviewId, {
     ladder: stepped.state,
     state: toReviewState(stepped.decision),
