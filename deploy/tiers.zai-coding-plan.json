@@ -7,21 +7,21 @@
   {
     "id": "t1",
     "kind": "model",
-    "model": "zhipuai/glm-4.7",
+    "model": "zai-coding-plan/glm-4.7",
     "effort": "medium",
     "stage": "fast"
   },
   {
     "id": "t2",
     "kind": "model",
-    "model": "zhipuai/glm-5.2",
+    "model": "zai-coding-plan/glm-5.2",
     "effort": "high",
     "stage": "deep"
   },
   {
     "id": "t3",
     "kind": "model",
-    "model": "zhipuai/glm-5.2",
+    "model": "zai-coding-plan/glm-5.2",
     "effort": "max",
     "stage": "deep"
   }

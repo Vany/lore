@@ -16,7 +16,7 @@ DATA    ?= $(shell grep -E '^LORE_HOST_DATA=' .env 2>/dev/null | cut -d= -f2)
 DATA    := $(if $(DATA),$(DATA),/var/lib/lore)
 
 .DEFAULT_GOAL := help
-.PHONY: help preflight sync-opencode push build up down down-hard restart logs status new tokens backup-check restore sweep shell
+.PHONY: help preflight sync-opencode push build up down down-hard restart logs status doctor new tokens backup-check restore sweep shell
 
 help:
 	@sed -n '2,14p' $(MAKEFILE_LIST) | sed 's/^# \{0,1\}//'
@@ -24,7 +24,7 @@ help:
 ## Fail early and legibly, rather than midway through a build.
 preflight:
 	@test -f .env || { echo "no .env — copy .env.example and fill it in"; exit 1; }
-	@grep -qE '^OPENROUTER_API_KEY=.+' .env || { echo "OPENROUTER_API_KEY is empty in .env"; exit 1; }
+	@grep -qE '^(OPENROUTER_API_KEY|ZHIPU_API_KEY)=.+' .env || { echo "no model provider key in .env — set OPENROUTER_API_KEY or ZHIPU_API_KEY"; exit 1; }
 	@grep -qE '^OPENCODE_SERVER_PASSWORD=.+' .env || { echo "OPENCODE_SERVER_PASSWORD is empty in .env — the server would answer a bare 401 with no hint"; exit 1; }
 	@grep -qE '^LITESTREAM_ACCESS_KEY_ID=.+' .env || echo "WARNING: no backup configured. The knowledge base IS the product and this box has no redundancy."
 	@mkdir -p "$(DATA)"
@@ -76,6 +76,10 @@ new: preflight
 	$(COMPOSE) exec -T lore node /app/src/index.ts new \
 		--name "$(NAME)" --git "$(GIT)" --db /var/lib/lore/lore.db \
 		$(if $(URL),--url "$(URL)",)
+
+## Check tiers, auth and model ids BEFORE spending a review on them.
+doctor:
+	$(COMPOSE) exec -T lore node /app/src/index.ts doctor
 
 ## The operator view: active reviews, queue depth, spend, disk.
 status:

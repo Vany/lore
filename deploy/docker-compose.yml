@@ -41,6 +41,7 @@ services:
       LORE_CONCURRENCY: "2"          # T0 is CPU-bound on an SBC; set by cores (D-37)
       LORE_DAILY_CEILING_USD: "100"  # stops STARTING reviews when hit, never mid-review
       LORE_RUN_TESTS: "0"            # opt-in: executes arbitrary project code (D-24)
+      LORE_TIERS: ${LORE_TIERS:-}     # unset = the three-vendor default ladder
       LORE_WEBHOOK_URL: ${LORE_WEBHOOK_URL:-}
       LORE_HEARTBEAT_URL: ${LORE_HEARTBEAT_URL:-}
       OPENCODE_SERVER: http://opencode:4096
@@ -81,7 +82,10 @@ services:
     environment:
       # Verified: opencode reads this from the environment, with no auth.json. The
       # staged auth.json below also carries it; either alone is enough.
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:?set OPENROUTER_API_KEY in .env}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      # Z.AI Coding Plan. opencode reads this straight from the environment, so a
+      # headless host needs no interactive login.
+      ZHIPU_API_KEY: ${ZHIPU_API_KEY:-}
       # The plane MCP config references these by name rather than embedding the
       # key, so the config file is safe to copy and the secret stays in .env.
       PLANE_API_KEY: ${PLANE_API_KEY:-}
