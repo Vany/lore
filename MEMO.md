@@ -46,6 +46,24 @@ the arm64 SBC it describes, "sorting again costs nothing" (unmeasured), and
 disagree above the BMP). On a project whose one rule is that an unverified claim is
 the enemy, five of six agents wrote comments their code does not honour — twice.
 
+**Closed a finding GLM raised on code written an hour earlier**, which an agent AND
+its adversarial verifier had both passed: `schema.ts` "lacks version tracking". Its
+stated mechanism was wrong — column-sniffing is deliberate and is better than a
+version row for going forward — but the instinct found two real things underneath.
+`SCHEMA_VERSION` was **written on every open and read by nothing**: a number that
+looked like protection and was decoration, this codebase's characteristic bug one
+layer down. And `MIGRATIONS` can only express ADD COLUMN, with nothing stopping
+someone writing a `CREATE INDEX` into it — which would run on every single open,
+silently for an `IF NOT EXISTS` index and as a startup crash for anything else,
+neither pointing back at the list.
+
+So the list now refuses anything that is not an ADD COLUMN, and the version number
+earns its place by refusing a DOWNGRADE. That is the one case column-sniffing cannot
+catch: every column an older build wants already exists, so it skips every migration,
+looks healthy, and writes into a schema it does not understand — losing whatever the
+newer build recorded in columns it cannot see. It only ever refuses, never approves,
+so a version row that disagrees with the real columns still cannot skip a migration.
+
 **Surprised me.** GLM read my `lore-ok` for the semgrep false positive and raised the
 same concern independently, in its own words, as a separate finding. I argued the
 loopback bind makes plaintext irrelevant; an independent model disagreed. That is the

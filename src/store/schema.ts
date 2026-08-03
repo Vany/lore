@@ -245,11 +245,60 @@ export const MIGRATIONS: readonly { readonly table: string; readonly column: str
  * `DDL` runs immediately before this. It throws, because the alternative is skipping
  * quietly and failing later at the insert, one layer away from the cause.
  */
-export function applyMigrations(db: DatabaseSync): void {
-  for (const m of MIGRATIONS) {
+export function applyMigrations(db: DatabaseSync, migrations: typeof MIGRATIONS = MIGRATIONS): void {
+  for (const m of migrations) {
+    // THIS LIST CAN ONLY EXPRESS "ADD COLUMN", so it refuses anything else rather
+    // than mishandling it quietly.
+    //
+    // Idempotence here comes from asking whether the COLUMN exists. Put a
+    // `CREATE INDEX` or a backfill `UPDATE` in this list and that question is
+    // answered "no" for ever: the statement runs on every single open — silently for
+    // an `IF NOT EXISTS` index, and as a crash-on-startup for anything else. Neither
+    // failure points at this list.
+    //
+    // A migration system that supports one kind of change should say so at the point
+    // someone writes the second kind, not at 3am on the deployment.
+    if (!/^\s*ALTER\s+TABLE\s+\S+\s+ADD\s+COLUMN\s/i.test(m.sql)) {
+      throw new Error(
+        `migration for ${m.table}.${m.column} is not an ADD COLUMN: ${m.sql}. ` +
+          "applyMigrations decides what has already run by looking for the column, so it can express nothing else. " +
+          "Anything more needs a real versioned migration step.",
+      );
+    }
     const columns = db.prepare("SELECT name FROM pragma_table_info(?)").all(m.table) as { name?: string }[];
     if (columns.length === 0) throw new Error(`cannot migrate: table '${m.table}' does not exist`);
     if (columns.some((c) => c.name === m.column)) continue;
     db.exec(m.sql);
   }
+}
+
+/**
+ * Refuse a database written by a NEWER build than this one.
+ *
+ * `SCHEMA_VERSION` was written on every open and read by nothing — a number that
+ * looked like protection and was decoration, which is this codebase's characteristic
+ * bug rather than an oversight. It now buys one specific thing.
+ *
+ * Rolling the container back is a normal operational move, and a downgrade is the one
+ * case column-sniffing cannot handle: the columns an older build wants all exist, so
+ * every migration is skipped, everything appears fine, and the old code writes into a
+ * schema it does not understand — losing whatever the newer build recorded in the
+ * columns it cannot see. Silent, and discovered later as missing data.
+ *
+ * Forward is still handled by the columns, not by this number. A version row that
+ * disagrees with the actual columns must never be able to skip a migration, which is
+ * why this only ever refuses and never approves.
+ */
+export function assertNotDowngrade(db: DatabaseSync): void {
+  const row = db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as
+    | { value?: string }
+    | undefined;
+  if (row?.value === undefined) return; // first open, or a database from before this row existed
+  const found = Number(row.value);
+  if (!Number.isFinite(found) || found <= SCHEMA_VERSION) return;
+  throw new Error(
+    `this database was written by schema version ${found}; this build is ${SCHEMA_VERSION}. ` +
+      "Refusing to open it: the older code would skip every migration, write into columns it does not know about, " +
+      "and lose what the newer build recorded. Restore a backup from this version, or run the newer build.",
+  );
 }

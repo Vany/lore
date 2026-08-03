@@ -351,4 +351,47 @@ describe("opening a database that already exists", () => {
     expect(() => applyMigrations(empty)).toThrow(/table 'usage' does not exist/);
     empty.close();
   });
+
+  // Idempotence here comes from asking whether the COLUMN exists, so anything that
+  // does not add a column is answered "not yet" for ever — running on every open,
+  // silently for an IF NOT EXISTS index and as a startup crash for anything else.
+  // Neither failure points back at this list, so the list refuses instead.
+  it("refuses a migration that is not an ADD COLUMN", () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec("CREATE TABLE usage (id INTEGER PRIMARY KEY)");
+    expect(() =>
+      applyMigrations(db, [{ table: "usage", column: "by_review", sql: "CREATE INDEX IF NOT EXISTS ix ON usage(id)" }]),
+    ).toThrow(/not an ADD COLUMN/);
+    db.close();
+  });
+
+  // Rolling the container back is a normal operational move, and it is the one case
+  // column-sniffing cannot catch: every column an older build wants already exists,
+  // so it skips every migration, looks healthy, and writes into a schema it does not
+  // understand — losing whatever the newer build recorded in columns it cannot see.
+  it("refuses to open a database written by a newer build", () => {
+    const path = join(dir, "future.db");
+    const ahead = new Store(path);
+    ahead.db
+      .prepare("INSERT INTO meta(key, value) VALUES('schema_version', ?) ON CONFLICT(key) DO UPDATE SET value = ?")
+      .run(String(SCHEMA_VERSION + 1), String(SCHEMA_VERSION + 1));
+    ahead.close();
+
+    expect(() => new Store(path)).toThrow(new RegExp(`written by schema version ${SCHEMA_VERSION + 1}`));
+  });
+
+  // Only ever refuses, never approves: a version row that disagrees with the real
+  // columns must not be able to skip a migration. Forward is the columns' job.
+  it("opens an older database rather than demanding an exact match", () => {
+    const path = join(dir, "older.db");
+    const old = new Store(path);
+    old.db.prepare("UPDATE meta SET value = '1' WHERE key = 'schema_version'").run();
+    old.close();
+
+    const reopened = new Store(path);
+    expect(reopened.db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get()).toMatchObject({
+      value: String(SCHEMA_VERSION),
+    });
+    reopened.close();
+  });
 });

@@ -18,7 +18,7 @@ import type { Finding, Severity } from "../core/finding.ts";
 import type { LadderState } from "../core/ladder.ts";
 import type { ReviewState } from "../core/review-state.ts";
 import type { Scope } from "../core/scope.ts";
-import { DDL, FINDING_ORDER_SQL, PRAGMAS, SCHEMA_VERSION, applyMigrations } from "./schema.ts";
+import { DDL, FINDING_ORDER_SQL, PRAGMAS, SCHEMA_VERSION, applyMigrations, assertNotDowngrade } from "./schema.ts";
 
 export interface RepoRow {
   readonly id: string;
@@ -112,6 +112,10 @@ export class Store {
     this.db = new DatabaseSync(path);
     for (const p of PRAGMAS) this.db.exec(p);
     this.db.exec(DDL);
+    // Before the migrations, and before the version row is overwritten: it is the
+    // PREVIOUS build's number that says whether this one is a downgrade, and writing
+    // first would destroy the only evidence.
+    assertNotDowngrade(this.db);
     // `CREATE TABLE IF NOT EXISTS` leaves an existing table exactly as it found it,
     // so this is what reaches a column added after the deployment already had a
     // database (see `MIGRATIONS`).
