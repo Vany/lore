@@ -318,6 +318,27 @@ describe("runRound", () => {
     });
   });
 
+  // Raised by a real reviewer against this file, an hour after the model tier's
+  // half of the same fix landed: T0 shells out to tsc, semgrep and a sandboxed test
+  // suite, any of which can die, and a crash used to leave no row at all.
+  it("records that T0 ran even when T0 throws", async () => {
+    const exploding = (async () => {
+      throw new Error("semgrep died");
+    }) as unknown as Parameters<typeof runRound>[0]["t0"];
+
+    await expect(
+      runRound({ store, reviewer: new ScriptedReviewer([[]]), reviewId: "r1", principal: "p", worktree: dir, type: TYPE, ...(exploding ? { t0: exploding } : {}) }),
+    ).rejects.toThrow(/semgrep died/);
+
+    const runs = store.db.prepare("SELECT tier, outcome, finished_at FROM tier_run WHERE review_id = 'r1'").all() as Record<string, unknown>[];
+    const t0row = runs.find((r) => r["tier"] === "t0");
+    expect(t0row).toBeDefined();
+    expect(t0row?.["outcome"]).toBe("failed");
+    // Closed, not left dangling: an open row that never closes reads as "still
+    // running" for ever, which is the other half of the same lie.
+    expect(t0row?.["finished_at"]).not.toBeNull();
+  });
+
   it("climbs the ladder and passes only at the top", async () => {
     const reviewer = new ScriptedReviewer([[], [], []]);
     const first = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });

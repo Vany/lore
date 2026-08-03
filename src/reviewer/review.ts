@@ -78,10 +78,25 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   const diff = await computeDiff(worktree, review.intoRef);
 
   // 2. Deterministic first. An LLM is never paid for what tsc decides for free.
-  const t0 = await (input.t0 ?? runT0)(worktree, {
-    engines: type.t0,
-    ...(input.runTests !== undefined ? { runTests: input.runTests } : {}),
-  });
+  //
+  // Opened before it runs, closed with what happened, for the same reason the model
+  // tier is: T0 shells out to tsc, semgrep and a sandboxed test suite, any of which
+  // can die, and a crash used to leave no row at all. A reviewer reading this code
+  // raised exactly that — "T0 crashes mid-execution, no tier_run row exists, and a
+  // reader cannot distinguish 'never ran' from 'ran and died'" — after the model
+  // tier's half had been fixed and this half had not.
+  const t0RunId = store.openTierRun(reviewId, "t0", review.ladder.round + 1, startedAt);
+  let t0;
+  try {
+    t0 = await (input.t0 ?? runT0)(worktree, {
+      engines: type.t0,
+      ...(input.runTests !== undefined ? { runTests: input.runTests } : {}),
+    });
+  } catch (e) {
+    store.closeTierRun(t0RunId, "failed");
+    throw e;
+  }
+  store.closeTierRun(t0RunId, t0.findings.length > 0 ? "findings" : "clean");
 
   // 3. Justifications proposed since last round.
   const pending = await collectJustifications(store, reviewId, worktree, diff.changedFiles);
@@ -319,7 +334,6 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
 
   // T0 and the model tier each ran; both belong in the audit trail, and the
   // attestation counts distinct tiers from it.
-  store.recordTierRun(reviewId, "t0", round, t0.findings.length > 0 ? "findings" : "clean", startedAt);
   store.closeTierRun(tierRunId, stepped.decision.kind);
 
   store.updateReview(reviewId, {
