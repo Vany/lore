@@ -16,6 +16,8 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Finding, Severity } from "../core/finding.ts";
 import type { T0Engine } from "../core/review-type.ts";
+import { queryComponents, toFindings } from "../security/osv.ts";
+import { generateSbom } from "../security/sbom.ts";
 import { runTool } from "./exec.ts";
 
 export interface EngineOutcome {
@@ -65,6 +67,9 @@ export function detect(worktree: string, engine: T0Engine): boolean {
       // Semgrep needs no project config: the registry rulesets are the value, and
       // they carry CWE metadata that lands in the same namespace as model findings.
       return true;
+    case "sbom":
+    case "osv":
+      return existsSync(join(worktree, "package.json"));
     case "tests":
       return existsSync(join(worktree, "package.json"));
     default:
@@ -85,8 +90,67 @@ export async function runEngine(worktree: string, engine: T0Engine): Promise<Eng
       return semgrep(worktree);
     case "ast-grep":
       return astGrep(worktree);
+    case "sbom":
+      return sbom(worktree);
+    case "osv":
+      return osv(worktree);
     default:
       return { engine, findings: [], unavailable: `${engine} has no runner` };
+  }
+}
+
+// ------------------------------------------------------------- sbom and osv
+
+/**
+ * Enumerate what is shipped.
+ *
+ * Emits a finding only when the tree *cannot* be enumerated — you cannot security-
+ * review dependencies you were unable to list, and reporting that as "no
+ * vulnerabilities" would be the worst possible reading of INV-1.
+ */
+async function sbom(worktree: string): Promise<EngineOutcome> {
+  const bom = await generateSbom(worktree);
+  if (bom.source === "none") {
+    return {
+      engine: "sbom",
+      findings: [
+        finding({
+          file: "package.json",
+          severity: "medium",
+          claim: "the dependency tree could not be enumerated, so it was not checked for known vulnerabilities",
+          evidence: bom.note ?? "no SBOM produced",
+          failureScenario:
+            "every published vulnerability in this tree is unexamined — this is 'not checked', not 'nothing found'",
+        }),
+      ],
+      unavailable: bom.note ?? "no SBOM produced",
+    };
+  }
+  return { engine: "sbom", findings: [] };
+}
+
+/**
+ * Match the tree against OSV.
+ *
+ * Produces *candidates*: a vulnerable package is present. Whether the vulnerable
+ * path is reachable from this application is the model tiers' job, and it is where
+ * both the noise and the value live.
+ */
+async function osv(worktree: string): Promise<EngineOutcome> {
+  const bom = await generateSbom(worktree);
+  if (bom.components.length === 0) {
+    return { engine: "osv", findings: [], unavailable: bom.note ?? "nothing to query" };
+  }
+  try {
+    const vulnerable = await queryComponents(bom.components);
+    return { engine: "osv", findings: toFindings(vulnerable) };
+  } catch (e) {
+    // A database we could not reach is not a database that said "clean".
+    return {
+      engine: "osv",
+      findings: [],
+      unavailable: `OSV query failed: ${e instanceof Error ? e.message : String(e)}`,
+    };
   }
 }
 

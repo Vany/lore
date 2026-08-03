@@ -62,9 +62,9 @@ findings are worth the money, and the numbers are measured rather than guessed.
       a **restore actually performed**, heartbeat deadman, spend ceiling, operator
       view. Includes the **arm64 test plan** (`PLAN.md` §4.1), run when the device is
       in hand.
-- [ ] **Phase 5 — Review types and security.** Type registry, then the security
-      pipeline: `cdxgen` → OSV (by version *and* commit hash) → `semgrep` security
-      rules → model reachability → **VEX** output.
+- [x] **Phase 5 — Review types and security.** Done. `security/{sbom,osv,vex}`,
+      wired as T0 engines, with reachability guidance in the tier prompts and real
+      CycloneDX VEX output.
 
 ---
 

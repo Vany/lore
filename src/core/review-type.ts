@@ -38,9 +38,12 @@ export const CODE_ARCH: ReviewType = {
 };
 
 /**
- * Not yet wired to a pipeline implementation — the engines exist as names only.
- * Declared here so the type registry is real rather than a single-element list
- * pretending to be extensible.
+ * SBOM → OSV → semgrep, then the model tiers judge **reachability**.
+ *
+ * The scanners do the detection; a scanner cannot say whether your code ever
+ * reaches the vulnerable path, and that judgement is where both the noise and the
+ * value live. Output is real CycloneDX VEX (`security/vex.ts`), because the
+ * justification ledger and a VEX statement turned out to be the same object.
  */
 export const SECURITY: ReviewType = {
   id: "security",

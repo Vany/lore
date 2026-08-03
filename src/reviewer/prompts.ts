@@ -57,6 +57,36 @@ function position(i: PromptInput): string {
   ].join("\n");
 }
 
+/**
+ * Extra instructions that only make sense for one review type.
+ *
+ * The security type is the one that needs it: scanners have already done the
+ * *detection*, and asking a model to repeat that is paying for the wrong thing.
+ * Its contribution is reachability — the judgement no rule can make.
+ */
+function typeGuidance(typeId: string): string {
+  if (typeId !== "security") return "";
+  return [
+    "",
+    "Your job is REACHABILITY, not detection. The scanners below have already found which vulnerable packages are",
+    "present; that part is done and you must not re-report it. What only you can answer is whether the vulnerable",
+    "code path can actually be reached from this application.",
+    "",
+    "For each candidate, decide and say which:",
+    "  * the vulnerable function is never called from any code path this app executes",
+    "  * it is called, but the inputs that reach it cannot take the exploitable form",
+    "  * it is reachable and exploitable — say from where, concretely",
+    "  * the package is not even bundled into what ships",
+    "",
+    "Most transitive vulnerabilities are NOT exploitable in a given application. Saying so, with the reason, is the",
+    "valuable answer here — it is what a VEX statement records, and a review that marks everything exploitable is",
+    "as useless as one that marks everything safe.",
+    "",
+    "Do not guess. If you cannot trace the call path, say that you could not, and why. 'Unexamined' is an honest",
+    "answer; 'probably fine' is not.",
+  ].join("\n");
+}
+
 function knowledgeBlock(items: readonly KnowledgeItem[]): string {
   if (items.length === 0) return "";
   const lines = items.slice(0, 60).map((k) => {
@@ -97,6 +127,7 @@ export function reviewPrompt(i: PromptInput): string {
     position(i),
     "",
     `THE QUESTION: ${i.type.question}`,
+    typeGuidance(i.type.id),
     "",
     "FIRST: cd into the worktree and confirm with `pwd`. Your default directory is NOT the branch under review.",
     `    ${i.worktree}`,

@@ -5,6 +5,51 @@ surprised me.
 
 ---
 
+## 2026-08-03 — session 17: Phase 5, the security review type
+
+**Did.** `security/{sbom,osv,vex}`, wired as T0 engines, with reachability guidance
+in the tier prompts. 118 tests, typecheck clean. Every phase in `PLAN.md` now has
+code.
+
+**VEX really is the justification ledger.** Building it confirmed what the research
+suggested: a VEX statement is a status plus a justification attached to a specific
+vulnerability, ratified by a reviewer — structurally identical to `lore-ok`. So
+`buildVex` is a *mapping*, not a translation layer, and the security type emits real
+CycloneDX rather than something bespoke.
+
+**The line I care most about in this phase:** an unexamined vulnerability is
+`in_triage`, never `not_affected`. Silence is not a clearance. A VEX document that
+quietly marks unlooked-at vulnerabilities as harmless is worse than no document — it
+is a signed claim that nobody checked. There is a test pinning it.
+
+**Deleted a function I had just written.** `cvssScore` always returned `undefined` —
+dead code pretending to compute something, because OSV carries CVSS as a vector
+string and I had started implementing the scoring algorithm before realising the
+database already publishes a qualitative rating. Shipping it would have been exactly
+the kind of thing a reviewer should catch. Replaced with `severityOf`, and the
+reasoning is in the docstring.
+
+**Two honest defaults, both biased toward being looked at:**
+- An unrated vulnerability is `medium`, not `low`. Unrated is unrated, not harmless,
+  and defaulting downward is how things stop being examined.
+- No SBOM produced is a *finding*, not an empty result. You cannot security-review
+  dependencies you were unable to enumerate, and reporting that as "no
+  vulnerabilities" would be the worst possible reading of INV-1.
+
+**A test that was wrong and taught me the domain.** I asserted that "defaultsDeep is
+never called" maps to `code_not_present`. It does not: VEX separates *not shipped at
+all* from *shipped but never executed*, and "never called" is the latter
+(`code_not_reachable`). The implementation was right and my expectation was wrong.
+Fixed the test and wrote the distinction into it, because the next reader will make
+the same mistake.
+
+**The security prompt tells the model not to do the scanners' job.** Its contribution
+is reachability, and it is told explicitly that "unexamined" is an honest answer
+while "probably fine" is not — a review that marks everything exploitable is as
+useless as one that marks everything safe.
+
+---
+
 ## 2026-08-03 — session 16: Phase 2, the knowledge layer
 
 **Did.** `knowledge/` — ingest, derive, conflict, enrich, bootstrap — wired into the
