@@ -101,7 +101,8 @@ restart:
 logs:
 	$(COMPOSE) logs -f --tail=100
 
-## Provision a repo: read-only deploy key, revocable token, client config.
+## Provision a repo: a revocable token and the .mcp.json to paste. No key is
+## issued — lore does not fetch, `make mirror` does, as you (D-63).
 new: preflight
 	@test -n "$(NAME)" || { echo "usage: make new NAME=<who> GIT=<ssh-url> [URL=<mcp-url>]"; exit 1; }
 	@test -n "$(GIT)"  || { echo "usage: make new NAME=<who> GIT=<ssh-url> [URL=<mcp-url>]"; exit 1; }
@@ -156,23 +157,32 @@ tokens:
 	for (const r of d.prepare('SELECT principal, label, created_at, revoked_at FROM token').all()) \
 	  console.log(r.revoked_at ? '[revoked]' : '[live]   ', r.principal, r.label ?? '', r.created_at);"
 
-## Refresh every local checkout lore reviews, using YOUR credentials.
+## Clone and fetch every registered repository, OUT HERE, as you.
 ##
-## lore holds no key for your remotes and is not meant to (D-62): a service holding
-## one holds everything that key opens. So the fetch happens out here, as you, on
-## demand — and lore refuses a review whose checkout has gone stale rather than
-## describing a tree that is not what you are merging (D-63).
+## This is the only thing that talks to a remote. lore holds no credentials and
+## needs none: it reads the bare clones this leaves in $(DATA)/repos, which is
+## already mounted, so nothing outside the project is ever exposed to the container
+## (D-63).
 ##
-## Run it before starting a review. A plain git pull in the checkout counts too.
+## Run it before starting a review. lore refuses a review whose clone has gone stale
+## rather than describing a tree that is not what you are merging.
 mirror:
 	@$(COMPOSE) exec -T lore node -e "\
 	const {DatabaseSync}=require('node:sqlite'); \
 	const d=new DatabaseSync(process.env.LORE_DATA_DIR+'/lore.db'); \
-	for (const r of d.prepare('SELECT git_url FROM repo').all()) \
-	  if (/^[.\/]/.test(r.git_url)) console.log(r.git_url);" \
-	| tr -d '\r' | while read p; do \
-		printf '%-42s ' "$$p"; \
-		git -C "$$p" fetch --prune --tags origin >/dev/null 2>&1 && echo "fetched" || echo "FAILED (fetch it yourself and see why)"; \
+	for (const r of d.prepare('SELECT id, git_url FROM repo').all()) console.log(r.id+' '+r.git_url);" \
+	| tr -d '\r' | while read id url; do \
+		b="$(DATA)/repos/$$id/bare.git"; \
+		printf '%-48s ' "$$url"; \
+		if [ -d "$$b/objects" ]; then \
+			git -C "$$b" fetch --prune --tags origin >/dev/null 2>&1 && echo "fetched" || echo "FETCH FAILED"; \
+		else \
+			mkdir -p "$$(dirname $$b)"; \
+			git clone --bare --recurse-submodules "$$url" "$$b" >/dev/null 2>&1 \
+				&& git -C "$$b" config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*' \
+				&& git -C "$$b" fetch --prune --tags origin >/dev/null 2>&1 \
+				&& echo "cloned" || echo "CLONE FAILED (can you reach it from here, as you?)"; \
+		fi; \
 	  done
 
 ## Replication is always on — this only restarts it.

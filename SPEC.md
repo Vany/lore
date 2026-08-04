@@ -165,7 +165,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-59** | Replication is **local and always on**; an outer script takes it off the box | confirmed |
 | **D-60** | The data directory is the **same path** inside the container as on the host | confirmed |
 | **D-61** | Git may never climb out of the directory it was aimed at | hard |
-| **D-62** | The deploy key is **used**, and it is the only identity offered | confirmed |
+| **D-62** | The deploy key is **used**, and it is the only identity offered | superseded by D-63 |
 | **D-63** | A local mirror is refreshed **on demand, outside lore**, and staleness is refused | confirmed |
 
 **D-7, revised.** The earlier version dropped GLM-5.2 on Artificial Analysis's
@@ -744,6 +744,12 @@ the exact shape — an empty bare directory nested inside another repository —
 fails if either half is reverted.
 
 **D-62 — the deploy key is used, and it is the only identity offered.**
+**Superseded by D-63.** Kept because the finding is worth more than the fix: it is
+the sharpest example in this repository of a documented workflow that had never once
+run end to end. The fix below — `usesSsh`, the composed ssh command, `core.sshCommand`
+— was written, tested, and then deleted a day later, because D-63 removed the fetch
+it authenticated. **No key is generated for any url any more.** What survives is the
+question that exposed it: *how was this tested?*
 
 Provisioning generated a read-only deploy key, wrote the private half server-side,
 and printed the public half with instructions to install it. Nothing then told git to
@@ -811,6 +817,31 @@ A repository with **no remote** is never stale: nothing can be behind nothing, a
 the check says so rather than inventing a rule for it. Thirty minutes is long enough
 to survive a queue and a slow first round, short enough that "nobody fetched this
 today" cannot pass.
+
+**Provisioning therefore issues a token and nothing else.** The deploy key went with
+the fetch: a keypair written to disk that nothing reads, handed over with an
+instruction to grant a repository read access to a key with no user, is strictly
+worse than no key. That was already the argument for skipping it on a local path —
+"a secret created for no reason" — and once no url is fetched from here, no url has
+a reason. `isLocalPath` went too, for the same cause: `make mirror` clones a path and
+a remote with one command, so nothing branches on the answer.
+
+**The mirror lives in `data/repos`, which is already mounted, and nothing else is.**
+No directory outside the project is visible to the container — not the operator's
+checkout, not their keys, not their agent. `make mirror` reads the repo table, then
+clones or fetches each one out here as the operator, into the path lore already
+expects. Registering the same repository twice under two protocols is what forced
+this to be stated: `lore` existed as both an https and an ssh row with separate
+clones and its knowledge split between them, and merging them cost a nine-table
+transaction.
+
+**A last note on the paste-able output, since D-63 is what made it the only step
+that matters.** The printed `.mcp.json` was wrong in three independent and
+individually fatal ways — `mcp` for `mcpServers`, a type of `remote` for `http`, and
+`{env:LORE_TOKEN}` for `${LORE_TOKEN}` — and had been since it was written. Nothing
+compared it against a working config, though one sat in this repository the whole
+time. It is checked structurally now, and each of the three defects was reintroduced
+to confirm the test fails on it.
 
 **D-43 — review types.** `review.start` takes a `type`, defaulting to `code-arch`:
 *is this change correct and well-made?* The next type is `security`: *what

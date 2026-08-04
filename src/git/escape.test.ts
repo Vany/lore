@@ -1,187 +1,103 @@
+/**
+ * What `ensureBare` guarantees now that it neither clones nor fetches (D-63).
+ *
+ * `make mirror` populates `data/repos/<id>/bare.git` on the HOST, where the
+ * operator's agent and credentials are. lore holds none, sees nothing outside its
+ * own data directory, and only checks what it was given.
+ */
+
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { ensureBare, sshCommand, usesSsh } from "./repo.ts";
+import { ensureBare } from "./repo.ts";
 
 let root: string;
-beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), "lore-esc-"));
-  // An OUTER repository, standing in for the operator's checkout.
-  const outer = join(root, "outer");
-  mkdirSync(outer, { recursive: true });
-  const g = (...a: string[]) => execFileSync("git", a, { cwd: outer, stdio: "ignore" });
+
+/** A repository with one commit, standing in for something real. */
+const makeRepo = (dir: string) => {
+  mkdirSync(dir, { recursive: true });
+  const g = (...a: string[]) => execFileSync("git", a, { cwd: dir, stdio: "ignore" });
   g("init", "-q", "-b", "main");
   g("config", "user.email", "t@e.com");
   g("config", "user.name", "t");
-  writeFileSync(join(outer, "f.txt"), "x\n");
+  writeFileSync(join(dir, "a.txt"), "a\n");
   g("add", "-A");
-  g("commit", "-qm", "base");
-  g("tag", "precious-tag");
+  g("commit", "-qm", "x");
+  return g;
+};
+
+/** What `make mirror` leaves behind. */
+const mirror = (src: string, bare: string) => {
+  mkdirSync(join(bare, ".."), { recursive: true });
+  execFileSync("git", ["clone", "--bare", src, bare], { stdio: "ignore" });
+};
+
+beforeEach(() => {
+  root = mkdtempSync(join(tmpdir(), "lore-bare-"));
 });
 afterEach(() => rmSync(root, { recursive: true, force: true }));
 
-describe("git cannot climb out of the directory it was aimed at", () => {
-  it("clones into an empty dir nested in another repo, and leaves that repo alone", async () => {
+describe("git cannot climb out of the directory it was aimed at (D-61)", () => {
+  // The original defect: an empty bare dir nested inside another repository made
+  // `rev-parse` report the ENCLOSING checkout, so lore treated it as already cloned
+  // and every later command operated on the operator's own repository.
+  it("refuses an empty directory nested in another repo, rather than adopting it", async () => {
     const outer = join(root, "outer");
-    // lore's data directory living INSIDE a checkout: the normal layout.
+    const g = makeRepo(outer);
+    g("tag", "precious-tag");
+
+    // lore's data directory living inside a checkout: the normal layout.
     const paths = { bare: join(outer, "data/repos/r1/bare.git"), worktrees: join(outer, "data/repos/r1/wt") };
-    const src = join(root, "source");
-    mkdirSync(src, { recursive: true });
-    const s = (...a: string[]) => execFileSync("git", a, { cwd: src, stdio: "ignore" });
-    s("init", "-q", "-b", "main");
-    s("config", "user.email", "t@e.com");
-    s("config", "user.name", "t");
-    writeFileSync(join(src, "a.txt"), "a\n");
-    s("add", "-A");
-    s("commit", "-qm", "src");
+    mkdirSync(paths.bare, { recursive: true });
 
-    await ensureBare(paths, src);
-
-    // The bare clone is real, and the outer repository still has its tag.
-    const head = execFileSync("git", ["-C", paths.bare, "rev-parse", "--is-bare-repository"], { encoding: "utf8" });
-    expect(head.trim()).toBe("true");
-    const tags = execFileSync("git", ["-C", outer, "tag"], { encoding: "utf8" });
-    expect(tags).toContain("precious-tag");
+    await expect(ensureBare(paths, "git@example.com:o/r.git")).rejects.toThrow(/no clone of/);
+    // And the enclosing repository is untouched.
+    expect(execFileSync("git", ["-C", outer, "tag"], { encoding: "utf8" })).toContain("precious-tag");
   });
 });
 
-// D-62. The deploy key was generated at provisioning and used by nothing, so every
-// ssh remote failed to clone while a public https url and a local path kept working
-// — the documented workflow had never run end to end.
-describe("a repo with a deploy key authenticates with it", () => {
-  // What can honestly be tested without an ssh server, and what cannot.
-  //
-  // A real ssh url never reaches the config step here: ensureBare writes
-  // core.sshCommand only AFTER a successful clone, and cloning git@github.com needs
-  // a host. So the decision and the string are tested directly, and the plumbing
-  // between them is exercised by a real private remote, not by a unit test
-  // pretending to be one. The first version of this test cloned a LOCAL path with a
-  // key beside it and asserted the ssh command was written — which was asserting the
-  // bug below, not the behaviour.
-  it.each([
-    ["git@github.com:org/repo.git", true],
-    ["ssh://git@host/org/repo.git", true],
-    ["https://github.com/org/repo.git", false],
-    ["git://host/repo.git", false],
-    ["/Users/vany/c/repo", false],
-    ["./checkout", false],
-  ])("usesSsh(%s) === %s", (url, expected) => {
-    expect(usesSsh(url)).toBe(expected);
-  });
-
-  it("offers the deploy key and nothing else", () => {
-    const cmd = sshCommand("/k/r1_ed25519", "/k/known_hosts");
-    expect(cmd).toContain("-i /k/r1_ed25519");
-    // Without this ssh also offers the agent's keys, so the service authenticates as
-    // the PERSON and can push while believing it holds a read-only key.
-    expect(cmd).toContain("IdentitiesOnly=yes");
-    // `no` would silently accept a CHANGED host, which is what checking is for.
-    expect(cmd).toContain("StrictHostKeyChecking=accept-new");
-    expect(cmd).toContain("UserKnownHostsFile=/k/known_hosts");
-  });
-
-  // The bug in the first version of D-62: it asked whether a key EXISTED, and keys
-  // exist for repositories that turned out to be local paths or public https urls.
-  // Both would have had an ssh command written in for a transport they never use.
-  it("ignores a key when the url does not use ssh", async () => {
-    const src = join(root, "src4");
-    mkdirSync(src, { recursive: true });
-    const s = (...a: string[]) => execFileSync("git", a, { cwd: src, stdio: "ignore" });
-    s("init", "-q", "-b", "main");
-    s("config", "user.email", "t@e.com");
-    s("config", "user.name", "t");
-    writeFileSync(join(src, "a.txt"), "a\n");
-    s("add", "-A");
-    s("commit", "-qm", "x");
-
-    const keys = join(root, "keys4");
-    mkdirSync(keys, { recursive: true });
-    const keyPath = join(keys, "r4_ed25519");
-    writeFileSync(keyPath, "not-a-real-key\n");
-
-    // `src` is a local path, and the key is right there beside it.
-    const paths = { bare: join(root, "repos/r4/bare.git"), worktrees: join(root, "repos/r4/wt") };
-    await ensureBare(paths, src, keyPath);
-
-    expect(() =>
-      execFileSync("git", ["-C", paths.bare, "config", "--get", "core.sshCommand"], {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"],
-      }),
-    ).toThrow();
-  });
-
-  it("does not set an ssh command when there is no key", async () => {
-    const src = join(root, "src3");
-    mkdirSync(src, { recursive: true });
-    const s = (...a: string[]) => execFileSync("git", a, { cwd: src, stdio: "ignore" });
-    s("init", "-q", "-b", "main");
-    s("config", "user.email", "t@e.com");
-    s("config", "user.name", "t");
-    writeFileSync(join(src, "a.txt"), "a\n");
-    s("add", "-A");
-    s("commit", "-qm", "x");
-
+describe("the clone has to be there, and recent (D-63)", () => {
+  it("refuses when nothing has been mirrored yet, and names the fix", async () => {
     const paths = { bare: join(root, "repos/r2/bare.git"), worktrees: join(root, "repos/r2/wt") };
-    await ensureBare(paths, src, join(root, "keys", "absent_ed25519"));
-
-    // `git config --get` exits 1 when the key is unset, so absence IS the throw.
-    expect(() =>
-      execFileSync("git", ["-C", paths.bare, "config", "--get", "core.sshCommand"], {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"],
-      }),
-    ).toThrow();
+    await expect(ensureBare(paths, "git@example.com:o/r.git")).rejects.toThrow(/make mirror/);
   });
-});
 
-// D-63. Reviews are driven on demand because lore holds no credentials for the
-// remote and must not. The weakness of on-demand is a client that forgets, and a
-// review of a stale tree is exactly what INV-2 names — so forgetting is made loud.
-describe("a local mirror has to be fresh", () => {
-  const makeRepo = (dir: string) => {
-    mkdirSync(dir, { recursive: true });
-    const g = (...a: string[]) => execFileSync("git", a, { cwd: dir, stdio: "ignore" });
-    g("init", "-q", "-b", "main");
-    g("config", "user.email", "t@e.com");
-    g("config", "user.name", "t");
-    writeFileSync(join(dir, "a.txt"), "a\n");
-    g("add", "-A");
-    g("commit", "-qm", "x");
-    return g;
-  };
-
-  it("reviews a repository that has no remote, because it cannot be behind one", async () => {
-    const src = join(root, "noremote");
+  it("accepts a clone with no remote, because it cannot be behind one", async () => {
+    const src = join(root, "src1");
     makeRepo(src);
-    const paths = { bare: join(root, "repos/n1/bare.git"), worktrees: join(root, "repos/n1/wt") };
+    const paths = { bare: join(root, "repos/r3/bare.git"), worktrees: join(root, "repos/r3/wt") };
+    mirror(src, paths.bare);
+    execFileSync("git", ["-C", paths.bare, "remote", "remove", "origin"], { stdio: "ignore" });
+
     await expect(ensureBare(paths, src)).resolves.toBeUndefined();
   });
 
-  it("refuses when the mirror was fetched too long ago, and says how to fix it", async () => {
-    const src = join(root, "stale");
-    const g = makeRepo(src);
-    // A remote to be behind, and a FETCH_HEAD backdated well past the limit.
-    g("remote", "add", "origin", "https://example.invalid/r.git");
-    const fetchHead = join(src, ".git", "FETCH_HEAD");
+  it("accepts a clone fetched just now", async () => {
+    const src = join(root, "src2");
+    makeRepo(src);
+    const paths = { bare: join(root, "repos/r4/bare.git"), worktrees: join(root, "repos/r4/wt") };
+    mirror(src, paths.bare);
+    writeFileSync(join(paths.bare, "FETCH_HEAD"), "");
+
+    await expect(ensureBare(paths, src)).resolves.toBeUndefined();
+  });
+
+  // The failure on-demand refresh actually has: a client that forgot. Reviewing
+  // anyway describes a tree that is not the one being merged — INV-2, with an
+  // attestation over it.
+  it("refuses a stale clone, and says how to fix it", async () => {
+    const src = join(root, "src3");
+    makeRepo(src);
+    const paths = { bare: join(root, "repos/r5/bare.git"), worktrees: join(root, "repos/r5/wt") };
+    mirror(src, paths.bare);
+    const fetchHead = join(paths.bare, "FETCH_HEAD");
     writeFileSync(fetchHead, "");
     const old = new Date(Date.now() - 2 * 60 * 60_000);
     utimesSync(fetchHead, old, old);
 
-    const paths = { bare: join(root, "repos/s1/bare.git"), worktrees: join(root, "repos/s1/wt") };
     await expect(ensureBare(paths, src)).rejects.toThrow(/last fetched \d+ minutes ago/);
-    await expect(ensureBare(paths, src)).rejects.toThrow(/fetch --prune --tags origin/);
-  });
-
-  it("accepts a mirror fetched just now", async () => {
-    const src = join(root, "fresh");
-    const g = makeRepo(src);
-    g("remote", "add", "origin", "https://example.invalid/r.git");
-    writeFileSync(join(src, ".git", "FETCH_HEAD"), "");
-
-    const paths = { bare: join(root, "repos/f1/bare.git"), worktrees: join(root, "repos/f1/wt") };
-    await expect(ensureBare(paths, src)).resolves.toBeUndefined();
+    await expect(ensureBare(paths, src)).rejects.toThrow(/make mirror/);
   });
 });

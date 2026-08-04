@@ -115,7 +115,6 @@ export async function main(argv: readonly string[]): Promise<ExitCode> {
         store,
         name,
         gitUrl,
-        keysDir: join(dirOf(args.db), "keys"),
         publicUrl: flagOf(argv, "url") ?? "http://lore.internal:7777/mcp",
       });
       process.stdout.write(renderProvisioned(result));

@@ -8,7 +8,7 @@
  */
 
 import { mkdir, rm, stat } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { DidNotRun } from "../core/errors.ts";
 import { git, gitMaybe } from "./exec.ts";
 
@@ -24,72 +24,12 @@ export function repoPaths(root: string, repoId: string): RepoPaths {
 }
 
 /**
- * Clone if absent, fetch if present.
- *
- * `--recurse-submodules` because a submodule pointer bump is two lines of diff
- * that can carry thousands, and a reviewer shown only the outer diff would
- * confidently call it low-risk having never seen it (D-36).
+ * `isLocalPath` lived here and is gone (D-63). It existed so provisioning could skip
+ * generating a deploy key for a local directory, and so the clone could be told
+ * whether to authenticate. Neither caller survives: no key is generated for any url,
+ * and `make mirror` clones local paths and remotes with the same command. A
+ * classifier nobody branches on is a question a reader must answer for nothing.
  */
-/**
- * Does this `git_url` name a directory on this machine rather than a remote?
- *
- * Local paths are a supported source — the clone happens inside the container, so
- * the directory is mounted there (see `LORE_HOST_SRC`) — and they need no key, no
- * network and no human step. Remote forms are `git@host:path`, `ssh://`, `https://`
- * and `git://`; anything absolute or relative is a path.
- */
-export function isLocalPath(gitUrl: string): boolean {
-  if (gitUrl.startsWith("file://")) return true;
-  if (/^[a-z+]+:\/\//i.test(gitUrl)) return false;
-  // `git@github.com:org/repo.git` — a colon before any slash is scp-like syntax.
-  const colon = gitUrl.indexOf(":");
-  const slash = gitUrl.indexOf("/");
-  if (colon >= 0 && (slash < 0 || colon < slash)) return false;
-  return true;
-}
-
-/**
- * Does this url authenticate over ssh?
- *
- * `git@host:path` and `ssh://…` do. A local path, `https://` and `git://` do not,
- * and handing them an identity is describing a transport that will not be used.
- */
-export function usesSsh(gitUrl: string): boolean {
-  if (gitUrl.startsWith("ssh://")) return true;
-  if (/^[a-z+]+:\/\//i.test(gitUrl)) return false;
-  const colon = gitUrl.indexOf(":");
-  const slash = gitUrl.indexOf("/");
-  return colon >= 0 && (slash < 0 || colon < slash);
-}
-
-/**
- * Tell git which key to authenticate with, and only that key.
- *
- * The deploy key was generated at provisioning and then used by nothing: no
- * `GIT_SSH_COMMAND`, no `core.sshCommand`, no identity anywhere. Every ssh remote
- * therefore failed to clone, silently enough that it went unnoticed while the two
- * repositories that did work were a PUBLIC https url and a local path — so the
- * documented workflow, `make new` then install the deploy key then review a private
- * repository, had never once run end to end (D-62).
- *
- * `IdentitiesOnly=yes` matters as much as `-i`: without it ssh also offers whatever
- * the agent holds, which on a developer machine means authenticating as the person
- * rather than as the read-only deploy key, and a service that can push while
- * believing it cannot.
- *
- * `accept-new` pins the host on first sight and refuses a CHANGE afterwards. Plain
- * `no` would accept a different host silently, which is the one thing host checking
- * exists to prevent.
- */
-export function sshCommand(keyPath: string, knownHosts: string): string {
-  return [
-    "ssh",
-    `-i ${keyPath}`,
-    "-o IdentitiesOnly=yes",
-    `-o UserKnownHostsFile=${knownHosts}`,
-    "-o StrictHostKeyChecking=accept-new",
-  ].join(" ");
-}
 
 /**
  * How long ago the mirror was last fetched from ITS remote (D-63).
@@ -127,80 +67,44 @@ export async function mirrorFetchedAt(localPath: string): Promise<Date | undefin
  */
 export const MAX_MIRROR_AGE_MS = 30 * 60_000;
 
-export async function ensureBare(paths: RepoPaths, gitUrl: string, keyPath?: string): Promise<void> {
-  // A local mirror must have been fetched recently, and saying so is the whole
-  // enforcement of on-demand refresh (D-63). lore cannot fetch the remote itself —
-  // it holds no credentials for it by design — so the only alternatives to this
-  // check are trusting the client to remember, or reviewing a stale tree and
-  // attesting to it.
-  if (isLocalPath(gitUrl)) {
-    const fetchedAt = await mirrorFetchedAt(gitUrl);
-    if (fetchedAt !== undefined) {
-      const age = Date.now() - fetchedAt.getTime();
-      if (age > MAX_MIRROR_AGE_MS) {
-        throw new DidNotRun(
-          `the mirror at ${gitUrl} was last fetched ${Math.round(age / 60_000)} minutes ago, and lore holds no ` +
-            `credentials to fetch it itself. Run \`git -C ${gitUrl} fetch --prune --tags origin\` and start the ` +
-            `review again. Reviewing it as it stands would describe a tree that is not what you are merging.`,
-        );
-      }
-    }
-  }
-
-  // Gated on the URL, not merely on a key file existing.
-  //
-  // "Is there a key on disk" is the wrong question and the right-looking one: keys
-  // are generated per repository and older ones exist for repositories that turned
-  // out to be a local path or a public https url. Both would have had an ssh command
-  // written into their config for a transport they never use — inert, and a false
-  // statement in a config file, which is the same wrong-question mistake as asking
-  // `rev-parse --git-dir` whether a directory is a repository (D-61).
-  const key =
-    usesSsh(gitUrl) && keyPath !== undefined && (await stat(keyPath).then(() => true).catch(() => false))
-      ? keyPath
-      : undefined;
-  const env =
-    key === undefined ? {} : { GIT_SSH_COMMAND: sshCommand(key, join(dirname(key), "known_hosts")) };
-
-  await mkdir(paths.bare, { recursive: true });
-  // Asks whether THIS directory is a repository, not whether one exists somewhere
-  // above it. `rev-parse --git-dir` answered the second question: in the empty
-  // directory `mkdir` had just created it happily reported the enclosing checkout,
-  // so the clone below was skipped as already done and every later command operated
-  // on the wrong repository (D-61). `--resolve-git-dir` asks about the path given.
+/**
+ * The clone must be here already, and recent. lore never fetches it (D-63).
+ *
+ * `make mirror` clones and fetches on the HOST, where the operator's agent and
+ * credentials live. That is the only thing that talks to a remote — which is why
+ * lore needs no key, no agent, and no sight of any directory outside its own data
+ * (D-62's header: a service holding a key holds everything that key opens).
+ *
+ * So this does not clone and does not fetch. It checks, and refuses loudly:
+ *
+ *   * **Missing** is not "clone it now", because there is nothing to clone with. It
+ *     is an operator step that has not been taken, and saying so beats a git error
+ *     about a host it cannot reach.
+ *   * **Stale** is the failure on-demand refresh actually has — a client that forgot.
+ *     Reviewing anyway describes a tree that is not the one being merged, which is
+ *     INV-2's failure with an attestation over it.
+ */
+export async function ensureBare(paths: RepoPaths, gitUrl: string): Promise<void> {
   const isRepo = await gitMaybe(paths.bare, ["rev-parse", "--resolve-git-dir", "."]);
   if (isRepo === undefined) {
-    await git(paths.bare, ["clone", "--bare", "--recurse-submodules", gitUrl, "."], 600_000, env);
-    await git(paths.bare, ["config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"]);
-    // Persisted in the clone's own config, so every later fetch authenticates the
-    // same way without the caller having to remember to pass it.
-    if (key !== undefined) {
-      await git(paths.bare, ["config", "core.sshCommand", sshCommand(key, join(dirname(key), "known_hosts"))]);
-    }
+    throw new DidNotRun(
+      `no clone of ${gitUrl} at ${paths.bare}. lore does not clone — it holds no credentials for your ` +
+        `remotes by design. Run \`make mirror\` on the host and start the review again.`,
+    );
   }
-  // Always fetch. `git fetch` moves only remote-tracking refs, never local ones —
-  // which is how a local `main` once sat 57 commits behind while every session was
-  // fetching constantly, turning a one-file branch into a 496-file diff (INV-2).
-  await git(paths.bare, ["fetch", "--prune", "--tags", "origin"], 600_000, env);
+
+  const fetchedAt = await mirrorFetchedAt(paths.bare);
+  if (fetchedAt === undefined) return; // no remote to be behind
+  const age = Date.now() - fetchedAt.getTime();
+  if (age > MAX_MIRROR_AGE_MS) {
+    throw new DidNotRun(
+      `the clone of ${gitUrl} was last fetched ${Math.round(age / 60_000)} minutes ago, and lore holds no ` +
+        `credentials to fetch it itself. Run \`make mirror\` on the host and start the review again. ` +
+        `Reviewing it as it stands would describe a tree that is not what you are merging.`,
+    );
+  }
 }
 
-/**
- * Resolve the base ref, preferring the remote-tracking form.
- *
- * `origin/main` is what CI and the merge will actually compare against, and it
- * needs no local discipline to be correct. A local ref of the same name only
- * happens to be right (INV-2).
- */
-export async function resolveBase(gitDir: string, intoRef: string): Promise<string> {
-  const candidates = [`origin/${intoRef}`, `refs/remotes/origin/${intoRef}`, intoRef];
-  for (const c of candidates) {
-    const sha = await gitMaybe(gitDir, ["rev-parse", "--verify", "--quiet", `${c}^{commit}`]);
-    if (sha !== undefined && sha.length > 0) return c;
-  }
-  throw new DidNotRun(`cannot resolve base ref '${intoRef}' — tried ${candidates.join(", ")}`);
-}
-
-/** Create a detached worktree at the branch tip. Removed when the review ends. */
 export async function addWorktree(paths: RepoPaths, reviewId: string, branch: string): Promise<string> {
   const dir = join(paths.worktrees, reviewId);
   await mkdir(paths.worktrees, { recursive: true });
