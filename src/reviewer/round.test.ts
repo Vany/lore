@@ -16,6 +16,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { Exhausted } from "../core/errors.ts";
 import { fingerprint } from "../core/fingerprint.ts";
 import { initialState } from "../core/ladder.ts";
 import { CODE_ARCH } from "../core/review-type.ts";
@@ -370,6 +371,20 @@ describe("runRound", () => {
     // The real tree of the worktree, not merely some non-null string.
     const actual = execFileSync("git", ["write-tree"], { cwd: dir, encoding: "utf8" }).trim();
     expect(recorded).toBe(actual);
+  });
+
+  // The quota path returns early with its own updateReview, so it missed the tree
+  // recording above (e49a67fe). It reaches `passed_partial`, which is attestable —
+  // so a review could pass and then be refused an attestation for having no tree,
+  // which is the guard causing the fault rather than catching it.
+  it("records the tree even when the tier cannot be paid for", async () => {
+    const broke: ReviewerLike = {
+      review: () => Promise.reject(new Exhausted("t1: out of quota")),
+    };
+    await runRound({ store, reviewer: broke, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
+
+    const actual = execFileSync("git", ["write-tree"], { cwd: dir, encoding: "utf8" }).trim();
+    expect(store.getReview("r1", "p")?.treeHash).toBe(actual);
   });
 
   it("climbs the ladder and passes only at the top", async () => {

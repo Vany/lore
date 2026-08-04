@@ -201,9 +201,15 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     if (!anyTierRan(tiers, withoutTier.unavailable)) throw e;
 
     const skipped = step({ state: withoutTier, raised: [], tiers, needsHuman: false });
+    // The tree is recorded on THIS path too (e49a67fe). It reaches `passed_partial`,
+    // which is attestable — so without it the review would pass and then be refused
+    // an attestation for having no tree, which is a regression the guard introduced
+    // rather than a fault it caught. T0 and the tiers that could be paid for did read
+    // this tree; that is exactly what a partial attestation claims.
     store.updateReview(reviewId, {
       ladder: skipped.state,
       state: toReviewState(skipped.decision),
+      treeHash: await treeHash(worktree),
     });
     return {
       decision: skipped.decision,
