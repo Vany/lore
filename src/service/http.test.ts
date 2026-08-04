@@ -263,4 +263,45 @@ describe("findings are ranked worst first", () => {
     expect(reviews[0]?.highest).toBe("medium");
     expect(reviews[0]?.findings.map((f) => f.severity)).toStrictEqual(["medium", "low"]);
   });
+
+  // A finding can be raised and settled inside one round — D-51 carries a
+  // justification this repo already ratified into a later review and accepts it
+  // with nobody answering. It is still new to the caller, so it is still
+  // delivered; what must not survive is the instruction to justify it.
+  //
+  // Found by driving lore's own review over MCP: a semgrep CWE-319 on a loopback
+  // test server came back among `new_findings` carrying `justify_with`, having
+  // been auto-settled seconds earlier. Writing the lore-ok it asked for would have
+  // duplicated one already in the file, and `review_submit` warns in its own docs
+  // that every word submitted is fresh surface for the next tier.
+  it("does not ask for a justification for a finding already settled", async () => {
+    store.recordVerdict("rev1", {
+      fingerprint: "m1",
+      verdict: "justified-accepted",
+      rationale: "carried forward from an earlier review of this repo",
+      scope: undefined,
+      tier: "t1",
+      round: 1,
+    });
+
+    const out = await callTool("review_poll", { review_id: "rev1" });
+    const byFp = Object.fromEntries(
+      (out["new_findings"] as Record<string, unknown>[]).map((f) => [f["fingerprint"], f]),
+    );
+
+    // Delivered, because it is new to this caller — silence would be the opposite
+    // failure, and this codebase resolves ambiguity toward saying more.
+    expect(Object.keys(byFp).sort()).toStrictEqual(["l1", "m1"]);
+
+    expect(byFp["m1"]?.["justify_with"]).toBeUndefined();
+    expect(byFp["m1"]?.["settled"]).toBe("justified-accepted");
+    expect(byFp["m1"]?.["settled_because"]).toContain("carried forward");
+
+    // The unsettled one is untouched: it still says how to answer it.
+    expect(byFp["l1"]?.["settled"]).toBeUndefined();
+    expect(byFp["l1"]?.["justify_with"]).toContain("lore-ok[l1]");
+
+    // And it is not counted as work.
+    expect(out["open_count"]).toBe(1);
+  });
 });

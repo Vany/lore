@@ -122,21 +122,39 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
             review.state === "passed"
               ? "Every tier agrees. You may attest and merge."
               : "NOT clean. Only `passed` means clean.",
-          new_findings: fresh.map((f) => ({
-            fingerprint: f.fingerprint.slice(0, 8),
-            file: f.file,
-            line: f.line,
-            symbol: f.symbol,
-            severity: f.severity,
-            cwe: f.cwe,
-            claim: f.claim,
-            evidence: f.evidence,
-            failure_scenario: f.failureScenario,
-            justify_with: `// lore-ok[${f.fingerprint.slice(0, 8)}]: <why this code is correct>`,
-            // A finding with history is far more actionable than the same finding
-            // raised cold: it says whether to fix the line or fix the habit.
-            history: renderEnrichment(enrich(store, who.repoId, f)),
-          })),
+          new_findings: fresh.map((f) => {
+            const short = f.fingerprint.slice(0, 8);
+            // A finding can be raised and settled inside one round: D-51 carries a
+            // justification this repo already ratified into a later review and
+            // accepts it without anyone answering. It is still NEW to this caller,
+            // so it is still delivered — but telling them to justify it would be a
+            // confident instruction to do work that is already done, and the lore-ok
+            // they wrote in response would be fresh surface for the next tier to
+            // review. Observed here: a semgrep CWE-319 on a loopback test server,
+            // auto-settled by carry-forward, handed back with `justify_with` set.
+            const settled = store.latestVerdict(review_id, f.fingerprint);
+            return {
+              fingerprint: short,
+              file: f.file,
+              line: f.line,
+              symbol: f.symbol,
+              severity: f.severity,
+              cwe: f.cwe,
+              claim: f.claim,
+              evidence: f.evidence,
+              failure_scenario: f.failureScenario,
+              ...(settled === undefined
+                ? { justify_with: `// lore-ok[${short}]: <why this code is correct>` }
+                : {
+                    settled: settled.verdict,
+                    settled_because: settled.rationale ?? "no reason recorded",
+                    note: "Already settled — nothing to do. Shown because it is new to you.",
+                  }),
+              // A finding with history is far more actionable than the same finding
+              // raised cold: it says whether to fix the line or fix the habit.
+              history: renderEnrichment(enrich(store, who.repoId, f)),
+            };
+          }),
           open_count: store.openFindings(review_id).length,
         }),
       );
