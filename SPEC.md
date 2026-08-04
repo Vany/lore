@@ -166,6 +166,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-60** | The data directory is the **same path** inside the container as on the host | confirmed |
 | **D-61** | Git may never climb out of the directory it was aimed at | hard |
 | **D-62** | The deploy key is **used**, and it is the only identity offered | confirmed |
+| **D-63** | A local mirror is refreshed **on demand, outside lore**, and staleness is refused | confirmed |
 
 **D-7, revised.** The earlier version dropped GLM-5.2 on Artificial Analysis's
 *cost per task* — which is tokens consumed × price on their benchmark, not a price.
@@ -785,6 +786,31 @@ Two options carry the weight:
 - **`StrictHostKeyChecking=accept-new`**, which pins a host on first sight and
   refuses a change afterwards. `no` would accept a changed host silently, which is
   the single thing host checking exists to prevent.
+
+**D-63 — the mirror is refreshed outside lore, and a stale one is refused.**
+
+lore holds no credentials for a private remote, and should not: a service holding a
+key holds everything that key opens, which is why `provision.ts` has always said a
+personal key is never asked for. Mounting one to prove D-62 made that concrete — the
+operator's key is passphrase-protected on disk and unlocked only in an agent, so
+putting it in the container would have meant forwarding the agent and handing a
+container that already has the docker socket the ability to sign as the person.
+
+So the fetch happens **outside**, as the operator, on demand: `make mirror`, or the
+`git pull` they were doing anyway. lore reads the refreshed checkout as a local path
+and needs nothing.
+
+**The weakness of on demand is that a client can forget, so forgetting is loud.**
+`ensureBare` reads `FETCH_HEAD`'s mtime and refuses a review whose checkout is older
+than `MAX_MIRROR_AGE_MS`, naming the exact command that fixes it. Reviewing it anyway
+would describe a tree that is not the one being merged — INV-2's failure, where a
+base 57 commits behind turned a one-file branch into a 496-file diff, and this time
+with an attestation over it.
+
+A repository with **no remote** is never stale: nothing can be behind nothing, and
+the check says so rather than inventing a rule for it. Thirty minutes is long enough
+to survive a queue and a slow first round, short enough that "nobody fetched this
+today" cannot pass.
 
 **D-43 — review types.** `review.start` takes a `type`, defaulting to `code-arch`:
 *is this change correct and well-made?* The next type is `security`: *what

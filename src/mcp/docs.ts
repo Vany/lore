@@ -41,6 +41,17 @@ reviewers get.
 Returns a review_id IMMEDIATELY. The review takes minutes — this does not mean it
 finished. Call review_poll until it reaches a terminal state.
 
+IF THE REPOSITORY IS A LOCAL PATH, FETCH IT FIRST.
+
+    git -C <path> fetch --prune --tags origin
+
+lore holds no credentials for your remote and is not meant to: a service holding a
+key holds everything that key opens. So the checkout it reads is refreshed by you,
+on demand, and a review started against a stale one describes a tree that is not
+what you are merging. lore refuses rather than guesses — it checks when the mirror
+was last fetched and fails with that instruction if it is too old. A plain git pull
+counts; it fetches on the way.
+
 The review pins the branch when its first round begins, which is shortly after this
 returns — not at the instant it returns. A commit pushed in that window may or may
 not be included, and nothing will tell you which. Push first, then start; for

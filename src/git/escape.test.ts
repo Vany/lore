@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -134,5 +134,54 @@ describe("a repo with a deploy key authenticates with it", () => {
         stdio: ["ignore", "pipe", "ignore"],
       }),
     ).toThrow();
+  });
+});
+
+// D-63. Reviews are driven on demand because lore holds no credentials for the
+// remote and must not. The weakness of on-demand is a client that forgets, and a
+// review of a stale tree is exactly what INV-2 names — so forgetting is made loud.
+describe("a local mirror has to be fresh", () => {
+  const makeRepo = (dir: string) => {
+    mkdirSync(dir, { recursive: true });
+    const g = (...a: string[]) => execFileSync("git", a, { cwd: dir, stdio: "ignore" });
+    g("init", "-q", "-b", "main");
+    g("config", "user.email", "t@e.com");
+    g("config", "user.name", "t");
+    writeFileSync(join(dir, "a.txt"), "a\n");
+    g("add", "-A");
+    g("commit", "-qm", "x");
+    return g;
+  };
+
+  it("reviews a repository that has no remote, because it cannot be behind one", async () => {
+    const src = join(root, "noremote");
+    makeRepo(src);
+    const paths = { bare: join(root, "repos/n1/bare.git"), worktrees: join(root, "repos/n1/wt") };
+    await expect(ensureBare(paths, src)).resolves.toBeUndefined();
+  });
+
+  it("refuses when the mirror was fetched too long ago, and says how to fix it", async () => {
+    const src = join(root, "stale");
+    const g = makeRepo(src);
+    // A remote to be behind, and a FETCH_HEAD backdated well past the limit.
+    g("remote", "add", "origin", "https://example.invalid/r.git");
+    const fetchHead = join(src, ".git", "FETCH_HEAD");
+    writeFileSync(fetchHead, "");
+    const old = new Date(Date.now() - 2 * 60 * 60_000);
+    utimesSync(fetchHead, old, old);
+
+    const paths = { bare: join(root, "repos/s1/bare.git"), worktrees: join(root, "repos/s1/wt") };
+    await expect(ensureBare(paths, src)).rejects.toThrow(/last fetched \d+ minutes ago/);
+    await expect(ensureBare(paths, src)).rejects.toThrow(/fetch --prune --tags origin/);
+  });
+
+  it("accepts a mirror fetched just now", async () => {
+    const src = join(root, "fresh");
+    const g = makeRepo(src);
+    g("remote", "add", "origin", "https://example.invalid/r.git");
+    writeFileSync(join(src, ".git", "FETCH_HEAD"), "");
+
+    const paths = { bare: join(root, "repos/f1/bare.git"), worktrees: join(root, "repos/f1/wt") };
+    await expect(ensureBare(paths, src)).resolves.toBeUndefined();
   });
 });

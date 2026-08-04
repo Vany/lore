@@ -19,7 +19,7 @@ BACKUP  ?= $(shell grep -E '^LORE_HOST_BACKUP=' .env 2>/dev/null | cut -d= -f2)
 BACKUP  := $(if $(BACKUP),$(BACKUP),./backup)
 
 .DEFAULT_GOAL := help
-.PHONY: help preflight sync-opencode push build up down down-hard restart logs status status-json status-local doctor new tokens backup-on backup-check backup-drill restore sweep shell
+.PHONY: help preflight sync-opencode push build up down down-hard restart logs status status-json status-local doctor new tokens mirror backup-on backup-check backup-drill restore sweep shell
 
 help:
 	@sed -n '2,14p' $(MAKEFILE_LIST) | sed 's/^# \{0,1\}//'
@@ -155,6 +155,25 @@ tokens:
 	const d=new DatabaseSync('$(DATA)/lore.db'); \
 	for (const r of d.prepare('SELECT principal, label, created_at, revoked_at FROM token').all()) \
 	  console.log(r.revoked_at ? '[revoked]' : '[live]   ', r.principal, r.label ?? '', r.created_at);"
+
+## Refresh every local checkout lore reviews, using YOUR credentials.
+##
+## lore holds no key for your remotes and is not meant to (D-62): a service holding
+## one holds everything that key opens. So the fetch happens out here, as you, on
+## demand — and lore refuses a review whose checkout has gone stale rather than
+## describing a tree that is not what you are merging (D-63).
+##
+## Run it before starting a review. A plain git pull in the checkout counts too.
+mirror:
+	@$(COMPOSE) exec -T lore node -e "\
+	const {DatabaseSync}=require('node:sqlite'); \
+	const d=new DatabaseSync(process.env.LORE_DATA_DIR+'/lore.db'); \
+	for (const r of d.prepare('SELECT git_url FROM repo').all()) \
+	  if (/^[.\/]/.test(r.git_url)) console.log(r.git_url);" \
+	| tr -d '\r' | while read p; do \
+		printf '%-42s ' "$$p"; \
+		git -C "$$p" fetch --prune --tags origin >/dev/null 2>&1 && echo "fetched" || echo "FAILED (fetch it yourself and see why)"; \
+	  done
 
 ## Replication is always on — this only restarts it.
 ##

@@ -31,6 +31,24 @@ export function repoPaths(root: string, repoId: string): RepoPaths {
  * confidently call it low-risk having never seen it (D-36).
  */
 /**
+ * Does this `git_url` name a directory on this machine rather than a remote?
+ *
+ * Local paths are a supported source — the clone happens inside the container, so
+ * the directory is mounted there (see `LORE_HOST_SRC`) — and they need no key, no
+ * network and no human step. Remote forms are `git@host:path`, `ssh://`, `https://`
+ * and `git://`; anything absolute or relative is a path.
+ */
+export function isLocalPath(gitUrl: string): boolean {
+  if (gitUrl.startsWith("file://")) return true;
+  if (/^[a-z+]+:\/\//i.test(gitUrl)) return false;
+  // `git@github.com:org/repo.git` — a colon before any slash is scp-like syntax.
+  const colon = gitUrl.indexOf(":");
+  const slash = gitUrl.indexOf("/");
+  if (colon >= 0 && (slash < 0 || colon < slash)) return false;
+  return true;
+}
+
+/**
  * Does this url authenticate over ssh?
  *
  * `git@host:path` and `ssh://…` do. A local path, `https://` and `git://` do not,
@@ -73,7 +91,62 @@ export function sshCommand(keyPath: string, knownHosts: string): string {
   ].join(" ");
 }
 
+/**
+ * How long ago the mirror was last fetched from ITS remote (D-63).
+ *
+ * `undefined` when the question does not apply: the path is not a git repository, or
+ * it has no remote to be behind. A repository nobody fetches cannot be stale.
+ *
+ * Read from `FETCH_HEAD`'s mtime, which git rewrites on every fetch — including the
+ * one inside `git pull`, so an operator working normally in the checkout keeps it
+ * current without doing anything special.
+ */
+export async function mirrorFetchedAt(localPath: string): Promise<Date | undefined> {
+  const hasRemote = await gitMaybe(localPath, ["config", "--get", "remote.origin.url"]);
+  if (hasRemote === undefined) return undefined;
+  for (const candidate of [join(localPath, ".git", "FETCH_HEAD"), join(localPath, "FETCH_HEAD")]) {
+    const s = await stat(candidate).catch(() => undefined);
+    if (s !== undefined) return s.mtime;
+  }
+  return undefined;
+}
+
+/**
+ * How stale a mirror may be before lore refuses to review from it.
+ *
+ * Reviews are driven on demand: the client fetches its checkout and then asks for a
+ * review, because lore holds no credentials for the remote and must not (D-62's
+ * header, and the reason a personal key is never mounted). The weakness of on-demand
+ * is that a client can simply forget — and a review of a stale tree is exactly the
+ * failure INV-2 names, where a base 57 commits behind turned a one-file branch into
+ * a 496-file diff.
+ *
+ * So forgetting is made loud rather than prevented. Thirty minutes is long enough to
+ * survive a queue and a slow first round, and short enough that "nobody fetched this
+ * today" cannot pass.
+ */
+export const MAX_MIRROR_AGE_MS = 30 * 60_000;
+
 export async function ensureBare(paths: RepoPaths, gitUrl: string, keyPath?: string): Promise<void> {
+  // A local mirror must have been fetched recently, and saying so is the whole
+  // enforcement of on-demand refresh (D-63). lore cannot fetch the remote itself —
+  // it holds no credentials for it by design — so the only alternatives to this
+  // check are trusting the client to remember, or reviewing a stale tree and
+  // attesting to it.
+  if (isLocalPath(gitUrl)) {
+    const fetchedAt = await mirrorFetchedAt(gitUrl);
+    if (fetchedAt !== undefined) {
+      const age = Date.now() - fetchedAt.getTime();
+      if (age > MAX_MIRROR_AGE_MS) {
+        throw new DidNotRun(
+          `the mirror at ${gitUrl} was last fetched ${Math.round(age / 60_000)} minutes ago, and lore holds no ` +
+            `credentials to fetch it itself. Run \`git -C ${gitUrl} fetch --prune --tags origin\` and start the ` +
+            `review again. Reviewing it as it stands would describe a tree that is not what you are merging.`,
+        );
+      }
+    }
+  }
+
   // Gated on the URL, not merely on a key file existing.
   //
   // "Is there a key on disk" is the wrong question and the right-looking one: keys

@@ -20,10 +20,14 @@ import { execFile } from "node:child_process";
 import { readFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { isLocalPath } from "../git/repo.ts";
 import { grantToken } from "../mcp/auth.ts";
 import type { Store } from "../store/store.ts";
 
 const run = promisify(execFile);
+
+/** Re-exported: url classification belongs to the git layer, callers here already used it. */
+export { isLocalPath };
 
 export interface Provisioned {
   readonly repoId: string;
@@ -40,24 +44,6 @@ export interface Provisioned {
    */
   readonly deployPublicKey: string | undefined;
   readonly clientConfig: string;
-}
-
-/**
- * Does this `git_url` name a directory on this machine rather than a remote?
- *
- * Local paths are a supported source — the clone happens inside the container, so
- * the directory is mounted there (see `LORE_HOST_SRC`) — and they need no key, no
- * network and no human step. Remote forms are `git@host:path`, `ssh://`, `https://`
- * and `git://`; anything absolute or relative is a path.
- */
-export function isLocalPath(gitUrl: string): boolean {
-  if (gitUrl.startsWith("file://")) return true;
-  if (/^[a-z+]+:\/\//i.test(gitUrl)) return false;
-  // `git@github.com:org/repo.git` — a colon before any slash is scp-like syntax.
-  const colon = gitUrl.indexOf(":");
-  const slash = gitUrl.indexOf("/");
-  if (colon >= 0 && (slash < 0 || colon < slash)) return false;
-  return true;
 }
 
 export async function provision(opts: {
