@@ -56,6 +56,28 @@ describe("parseFinding", () => {
     expect(() => parseFinding({ ...valid, cwe: "CWE-" })).toThrow();
   });
 
+  // Every way a model has been seen to write "no CWE applies", pinned.
+  //
+  // This table is the point. The `""` behaviour was written to stop one blank
+  // field discarding a whole paid-for batch, the reasoning was put in a comment,
+  // and NOTHING tested it — so deleting the preprocess left the suite green while
+  // re-arming the original incident. `null` is here because a review found it
+  // missing: it is the more natural JSON for absent, and it was still rejected.
+  it.each([
+    ["absent", undefined],
+    ["empty string", ""],
+    ["whitespace", "   "],
+    ["null", null],
+  ])("reads cwe %s as no CWE rather than as malformed", (_label, cwe) => {
+    expect(parseFinding({ ...valid, cwe }).cwe).toBeUndefined();
+  });
+
+  // The other half: forgiving blank must not become forgiving anything. A CWE the
+  // schema and the reviewer disagree about is drift, and drift fails loudly.
+  it.each([["CWE-abc"], ["nonsense"], [89], [{}], [[]]])("still rejects %s as a cwe", (cwe) => {
+    expect(() => parseFinding({ ...valid, cwe })).toThrow();
+  });
+
   it("rejects a claim that sprawls past one sentence", () => {
     expect(() => parseFinding({ ...valid, claim: "x".repeat(301) })).toThrow();
   });

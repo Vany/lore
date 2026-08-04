@@ -63,36 +63,37 @@ export const FindingSchema = z
      * without its fix" would be theatre. When present it is the shared vocabulary
      * that lets two tiers, and the scanners, talk about the same defect (D-44).
      */
-    // An EMPTY string means "no CWE applies", and is read as absent rather than as
-    // malformed. Models write `"cwe": ""` instead of omitting the key, and this
-    // schema is `.strict()` inside a batch parse — so one empty string used to
-    // discard EVERY finding in the reply.
+    // "No CWE applies" is read as ABSENT, however the model chose to write it —
+    // omitted, `""`, blank, or `null`. Not as malformed. This schema is `.strict()`
+    // inside a batch parse, so one such field used to discard EVERY finding in the
+    // reply.
     //
     // Observed, and expensive: glm-4.7 returned two real findings, one of them a
     // genuine hole in a fix made an hour earlier, and lore binned the lot over a
     // zero-length field on the second one. The model had already been paid for.
     //
+    // `null` was added after the `""` fix, and by the tier above the one that had
+    // just ratified the `""` reasoning: null is the more natural JSON for absent
+    // and it was still rejected, so the incident was one differently-shaped reply
+    // away from repeating inside its own fix. The lesson is in the shape of the
+    // check — ask "did the model mean nothing here", not "is it the empty string".
+    //
     // Blank is forgiven; WRONG is still rejected. "CWE-abc" means the reviewer and
     // this schema disagree about the vocabulary, which is drift worth failing on.
     //
-    // lore-ok[96bf7159]: the outer `.optional()` is redundant, but the finding's
-    // claim — that it "makes schema validation ineffective" — is false. Measured
-    // against this schema rather than reasoned about:
+    // The table of every accepted and rejected form is in finding.test.ts, NOT in
+    // this comment. It lived here once, as prose, while nothing executed it — which
+    // is how a refactor could have deleted the preprocess with the suite still green
+    // (b3aa50bc). A comment is a claim nobody runs.
     //
-    //   absent    -> accepted, cwe=undefined
-    //   ""        -> accepted, cwe=undefined     (the case that binned a paid batch)
-    //   "CWE-89"  -> accepted, cwe="CWE-89"
-    //   "CWE-abc" -> REJECTED
-    //   "nonsense"-> REJECTED
-    //
-    // Nothing malformed gets through. `ZodOptional` only short-circuits on
-    // `undefined`, so any string still reaches the preprocess and then the regex;
-    // the two `.optional()`s cannot mask each other. It is kept as-is because the
-    // inner one is load-bearing — it is what lets the preprocess return `undefined`
-    // for a blank — and deleting the outer one changes nothing a caller can see.
+    // lore-ok[96bf7159]: the outer `.optional()` is redundant — `ZodOptional` only
+    // short-circuits on `undefined`, so every other value still reaches the
+    // preprocess and then the regex, and the two cannot mask each other. The
+    // finding's claim that this "makes schema validation ineffective" is false, and
+    // the test above is the proof rather than this sentence.
     cwe: z
       .preprocess(
-        (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+        (v) => (v === null || (typeof v === "string" && v.trim() === "") ? undefined : v),
         z.string().regex(/^CWE-\d+$/, "cwe must look like CWE-89").optional(),
       )
       .optional(),
