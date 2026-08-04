@@ -226,6 +226,76 @@ describe("orphaned jobs", () => {
   });
 });
 
+// The invariant is not "two workers never take the same JOB" — that was true, and
+// it was the wrong question. It is that two rounds never run on the same REVIEW,
+// because runRound reads the ladder, runs a tier and writes the ladder back.
+//
+// rev_cuZabwdrspNwv3OV6eu0IHA_, 2026-08-04: review_start queued one job, a
+// review_submit 19s later queued a second, two loops took one each, and both paid
+// for a t1 call. The ladder settled at round 1 after two rounds had finished and
+// one completed review was discarded.
+describe("one round at a time per review (D-53)", () => {
+  beforeEach(() => {
+    newReview("rev1");
+    newReview("rev2");
+  });
+
+  it("will not hand out a second job for a review already running one", () => {
+    // Different stages, so the dedup below does not hide what is being tested.
+    store.enqueue("rev1", "fast");
+    store.enqueue("rev1", "deep");
+    expect(store.queueDepth()).toBe(2);
+
+    expect(store.claimJob()?.reviewId).toBe("rev1");
+    expect(store.claimJob()).toBeUndefined(); // the second is queued, not lost
+    expect(store.queueDepth()).toBe(1);
+  });
+
+  it("releases the next round once the first finishes", () => {
+    store.enqueue("rev1", "fast");
+    store.enqueue("rev1", "deep");
+    const first = store.claimJob();
+    store.finishJob(first?.id ?? 0, "done");
+
+    expect(store.claimJob()?.stage).toBe("deep");
+  });
+
+  // The concurrency worth having is BETWEEN reviews. Serialising everything would
+  // fix the race by making the service single-threaded, which is not a fix.
+  it("still runs other reviews in parallel", () => {
+    store.enqueue("rev1", "fast");
+    store.enqueue("rev2", "fast");
+
+    expect(store.claimJob()?.reviewId).toBe("rev1");
+    expect(store.claimJob()?.reviewId).toBe("rev2");
+  });
+
+  it("collapses a duplicate queued round instead of stacking it", () => {
+    // review_start, then review_submit before the first round is even claimed.
+    store.enqueue("rev1", "fast");
+    store.enqueue("rev1", "fast");
+    expect(store.queueDepth()).toBe(1);
+  });
+
+  // A submit DURING a running round still has to be queued: the client is not
+  // required to poll before sending a fix, it just must not run beside the round.
+  it("queues a round submitted while one is already running", () => {
+    store.enqueue("rev1", "fast");
+    store.claimJob();
+    store.enqueue("rev1", "fast");
+    expect(store.queueDepth()).toBe(1);
+    expect(store.claimJob()).toBeUndefined();
+  });
+
+  // What the bug actually looked like: N loops polling one queue, one review.
+  it("gives one review to exactly one of many concurrent loops", () => {
+    store.enqueue("rev1", "fast");
+    store.enqueue("rev1", "deep");
+    const claimed = Array.from({ length: 4 }, () => store.claimJob()).filter((j) => j !== undefined);
+    expect(claimed).toHaveLength(1);
+  });
+});
+
 // A tier that ran for 30 minutes and timed out used to write NOTHING, because runs
 // were recorded only on completion. To every reader of this database that was
 // indistinguishable from a tier that never started, and the operator view said

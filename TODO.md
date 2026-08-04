@@ -89,22 +89,6 @@ findings are worth the money, and the numbers are measured rather than guessed.
       previously-open finding the tier did not re-raise gets a `fixed` verdict, with
       the same "the code moved" care `expireStaleVerdicts` already takes.
 
-- [ ] **Two rounds can run on one review at once, and one of them is paid for
-      nothing.** `enqueue` inserts unconditionally and `claimJob` takes the oldest
-      queued job *of any review*; its comment — "so two workers never take the same
-      one" — guards job identity, which is not the invariant that matters. Nothing
-      enforces one round at a time per review.
-      Observed on `rev_cuZabwdrspNwv3OV6eu0IHA_`, 2026-08-04. `review_start`
-      enqueued one job; `review_submit` 19s later enqueued a second; two worker
-      loops ran two rounds concurrently. Both called t1/glm-4.7 — 550s and 590s,
-      overlapping — and the ladder's read-modify-write raced, so it settled at
-      `round: 1, tierRounds: {t1: 1}`. One completed review that returned `ok` was
-      discarded. `tier_run` and `usage` also disagree about which tier ran, because
-      they were written by different rounds.
-      Costs money and corrupts the audit trail, which makes it worse than a stall.
-      Likely fix: make the claim per-review — refuse to claim a job whose review
-      already has one running — and have `enqueue` collapse a duplicate rather than
-      stack it. Wants a test that runs two loops against one review.
 ---
 
 ## Done

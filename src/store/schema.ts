@@ -216,6 +216,13 @@ CREATE TABLE IF NOT EXISTS job (
   updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS job_queue ON job(state, id);
+-- claimJob asks, for every candidate, whether that REVIEW already has a job
+-- running (D-53), and enqueue asks whether an identical one is already queued.
+-- Both are correlated lookups on (review_id, state), run on every poll of every
+-- worker loop. (No backticks in here: this string is a template literal, and a
+-- stray one ends it -- the same self-closing-delimiter bug as a */ in a block
+-- comment, which happened the same night.)
+CREATE INDEX IF NOT EXISTS job_by_review ON job(review_id, state);
 `;
 
 /**

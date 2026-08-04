@@ -156,6 +156,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-50** | Exploration is **counted per review before it is capped**; no cap yet | `[OPEN]` |
 | **D-51** | An accepted justification is **repo knowledge**, carried across reviews | confirmed |
 | **D-52** | The per-tier cap bounds *iteration*, so a clean tier escalates past it | confirmed |
+| **D-53** | One round at a time **per review**; reviews still run in parallel | confirmed |
 
 **D-7, revised.** The earlier version dropped GLM-5.2 on Artificial Analysis's
 *cost per task* — which is tokens consumed × price on their benchmark, not a price.
@@ -484,6 +485,36 @@ raises something fresh — still bounded — or is clean, and clean is terminal.
 It is a **quota decision as well as a correctness one**, which is why it is written
 down rather than filed as a bug fix: reviews that used to die at t1 now escalate
 into the deep tiers, so this strictly increases what a hard review spends.
+
+**D-53 — one round at a time per review.**
+
+`claimJob` took the oldest queued job of any review and called that safe, "so two
+workers never take the same one". True, and the wrong invariant. What must not
+happen twice is not a job — it is a **round on a review**, because `runRound` reads
+the ladder, runs a tier, and writes the ladder back.
+
+Both `review_start` and `review_submit` enqueue, and `enqueue` inserted
+unconditionally. Starting a review and submitting a diff moments later — the normal
+shape of the loop, not an abuse of it — left two `fast` jobs for one review, and two
+worker loops took one each.
+
+Observed on `rev_cuZabwdrspNwv3OV6eu0IHA_`, 2026-08-04: two overlapping t1 calls of
+550s and 590s, both paid. The interleaved read-modify-write left the ladder at
+`round: 1, tierRounds: {t1: 1}` after two rounds had completed, so one finished
+review that returned `ok` was discarded; `tier_run` and `usage` disagreed about
+which tier ran, because different rounds wrote them.
+
+Worse than a stall: it spends money and corrupts the audit trail, in the one table
+that exists to say whether a review really ran. It is also precisely the hazard
+`reclaimOrphanedJobs` refuses to risk mid-flight — "requeues a job that is still
+running, so the same review runs twice and pays twice" — arriving through the front
+door while the back one was guarded.
+
+So the claim skips any job whose review already has one running, and `enqueue`
+collapses an identical queued round. Parallelism **between** reviews is untouched,
+which is the concurrency worth having; a blocked job stays queued and the loop
+polls again. Deduplication is on (review, stage), not review alone: collapsing a
+`deep` into a waiting `fast` would silently drop an escalation.
 
 **D-43 — review types.** `review.start` takes a `type`, defaulting to `code-arch`:
 *is this change correct and well-made?* The next type is `security`: *what

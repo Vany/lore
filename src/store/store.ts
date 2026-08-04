@@ -672,18 +672,60 @@ export class Store {
 
   // ------------------------------------------------------------------- job
 
+  /**
+   * Queue a round, unless an identical one is already waiting (D-53).
+   *
+   * Two callers reach here for the same review: `review_start` and `review_submit`.
+   * A client that starts a review and immediately submits a diff — which is the
+   * normal shape of the loop, not an abuse of it — used to stack two `fast` jobs,
+   * and stacked jobs became simultaneous rounds.
+   *
+   * Deduplicated on (review, stage) rather than on review alone: collapsing a `deep`
+   * into a waiting `fast` would silently drop the escalation. Two IDENTICAL waiting
+   * rounds are redundant; two different ones are a sequence.
+   */
   enqueue(reviewId: string, stage: "fast" | "deep"): void {
     const t = now();
     this.db
-      .prepare("INSERT INTO job(review_id, stage, state, created_at, updated_at) VALUES(?, ?, 'queued', ?, ?)")
-      .run(reviewId, stage, t, t);
+      .prepare(
+        `INSERT INTO job(review_id, stage, state, created_at, updated_at)
+         SELECT ?, ?, 'queued', ?, ?
+         WHERE NOT EXISTS (SELECT 1 FROM job WHERE review_id = ? AND stage = ? AND state = 'queued')`,
+      )
+      .run(reviewId, stage, t, t, reviewId, stage);
   }
 
-  /** Claim one queued job atomically, so two workers never take the same one. */
+  /**
+   * Claim one queued job, for a review that has none already running (D-53).
+   *
+   * The old version claimed the oldest queued job of ANY review and said it was safe
+   * "so two workers never take the same one". That is true and it is the wrong
+   * invariant: what must not happen twice is not a job, it is a ROUND ON A REVIEW.
+   *
+   * Observed on `rev_cuZabwdrspNwv3OV6eu0IHA_`, 2026-08-04. Two `fast` jobs existed
+   * for one review, two worker loops took one each, and both called t1 — 550s and
+   * 590s, overlapping. `runRound` reads the ladder, runs a tier and writes the ladder
+   * back, so the two interleaved: the state settled at `round: 1, tierRounds: {t1: 1}`
+   * after two rounds had finished, and one completed review that returned `ok` was
+   * discarded. `tier_run` and `usage` disagreed about which tier had run, because
+   * different rounds wrote them. It cost a paid call and corrupted the audit trail,
+   * which is worse than a stall — the same hazard `reclaimOrphanedJobs` refuses to
+   * risk mid-flight, arriving through the front door instead.
+   *
+   * Reviews still run in parallel with EACH OTHER, which is the concurrency worth
+   * having; only one round at a time within a review. A blocked job is left queued
+   * and the loop polls again, so nothing is lost — and a review whose `running` job
+   * belongs to a dead process is freed by `reclaimOrphanedJobs` at startup.
+   */
   claimJob(): { id: number; reviewId: string; stage: "fast" | "deep" } | undefined {
     return this.tx(() => {
       const row = this.db
-        .prepare("SELECT id, review_id, stage FROM job WHERE state = 'queued' ORDER BY id LIMIT 1")
+        .prepare(
+          `SELECT id, review_id, stage FROM job AS j
+           WHERE j.state = 'queued'
+             AND NOT EXISTS (SELECT 1 FROM job AS r WHERE r.review_id = j.review_id AND r.state = 'running')
+           ORDER BY j.id LIMIT 1`,
+        )
         .get() as Record<string, string | number> | undefined;
       if (row === undefined) return undefined;
       const id = Number(row["id"]);
