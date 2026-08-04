@@ -70,8 +70,10 @@ services:
       # path the daemon sees" are the same string.
       - ${LORE_HOST_DATA:-/var/lib/lore}:${LORE_HOST_DATA:-/var/lib/lore}
       # The T0 sandbox launches SIBLING containers for test execution, so untrusted
-      # project code never runs in this container — which holds every repo's deploy
-      # key and the knowledge database (D-24).
+      # project code never runs in this container — which holds the knowledge
+      # database, the attestation signing key and every provider credential (D-24).
+      # No git credentials: lore fetches nothing, so there is no deploy key here to
+      # lose (D-63).
       #
       # This grants root-equivalent control of the host daemon. Acceptable only
       # because this box does one job on a private tailnet; it is the single

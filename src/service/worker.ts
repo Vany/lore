@@ -127,12 +127,16 @@ export class Worker {
 
     this.store.updateReview(reviewId, { state: "running" });
 
-    // Bootstrap on first clone, not at provisioning (D-35).
+    // Bootstrap on first mirror, not at provisioning (D-35).
     //
-    // `make new` generates the deploy key but cannot add it to the repository —
-    // a human does that — so at provisioning time there is nothing to clone yet.
+    // `make new` records the repo and mints a token; it does not fetch, because lore
+    // holds no credentials for a remote (D-63). The mirror arrives later, when a
+    // human runs `make mirror`, so at provisioning time there is nothing to read.
     // The first review is the first moment the code is actually readable, and a
     // repo with no knowledge is exactly the one that most needs it.
+    //
+    // The reason outlived its original wording, which named the deploy key a human
+    // had to install. That key is gone; the human step is not.
     if (this.store.knowledgeFor(review.repoId, undefined, 1).length === 0) {
       const summary = await bootstrap({
         store: this.store,
