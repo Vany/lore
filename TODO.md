@@ -48,10 +48,14 @@ that part is pulled out into its own open item rather than hidden inside a tick.
       `LORE_RUN_TESTS` goes on; `--user` fixes it, and needs those two directories
       to be writable by whichever uid is chosen.
 
-- [ ] **Turn `LORE_RUN_TESTS` on.** It is `0` in the deployment, so T0 still does not
-      execute the suites it is now proven able to contain. Worth doing on a repo we
-      own first, and watching what it costs: D-37 budgeted T0 at roughly 25 minutes a
-      day on the target device, and that estimate has never met a real test run.
+- [x] **T0 executes the target's suite** (D-60). Done 2026-08-04.
+      `LORE_RUN_TESTS=1`, and four faults had to be cleared before anything ran —
+      the image had the docker socket but no client, the socket's group was not
+      granted, the data directory did not mean the same thing inside the container
+      as on the host (so Docker mounted an empty one), and the sandbox's sync
+      swallowed its own failure. Verified both directions: lore's suite runs clean
+      in the sandbox, and a deliberately failing suite yields exactly one
+      high-severity finding.
 
 - [x] **Announce a diff too big for the tier** (D-58). Done 2026-08-04. `usage` now
       records every run's diff size, and a round warns before spending when the diff
