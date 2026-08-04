@@ -163,6 +163,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-57** | `.lore-ok.md` justifies findings in files that cannot hold a comment | confirmed |
 | **D-58** | An oversized diff is announced against the tier's **own** demonstrated ceiling | confirmed |
 | **D-59** | Replication is **local and always on**; an outer script takes it off the box | confirmed |
+| **D-60** | The data directory is the **same path** inside the container as on the host | confirmed |
 
 **D-7, revised.** The earlier version dropped GLM-5.2 on Artificial Analysis's
 *cost per task* — which is tokens consumed × price on their benchmark, not a price.
@@ -676,6 +677,33 @@ rather than the presence of a credential, which was never the question.
 Proven on the live deployment, 2026-08-04: restoring from the running replica gives
 `integrity: ok`, schema v4 and all 440 knowledge rows. `make backup-drill` repeats
 that end to end on a copy, including destroying the source first.
+
+**D-60 — the data directory is the same path on both sides, by construction.**
+
+T0 runs the target's suite by asking the **host** daemon to start a sibling
+container with the review worktree bind-mounted (D-24). The daemon resolves that
+path on the HOST, so it has to mean the same thing in both places. The compose file
+said so in a comment and nothing enforced it.
+
+Where it does not match, Docker does not refuse. **It creates an empty directory and
+mounts that**, so the sources silently were not there, and the first symptom was npm
+reporting no `package-lock.json` in a repository that plainly has one — a true
+statement about a directory nobody meant to look at, three layers from the cause.
+
+So the container mounts the data directory at its own host path
+(`${LORE_HOST_DATA}:${LORE_HOST_DATA}`) and `LORE_DATA_DIR` follows it. There is no
+constraint left to violate, rather than a constraint plus a warning. The sandbox's
+cache and scratch roots read the same variable instead of hardcoding `/var/lib/lore`,
+which was only ever correct on a deployment whose data happened to live there.
+
+The sync inside the sandbox no longer swallows its own failure either. It was
+`cp -a /src/. /work/ 2>/dev/null || true`, which discarded the reason and reported
+success; it now fails loudly, and separately refuses an empty `/src` — because `cp`
+legitimately exits 0 with nothing to copy, which is exactly what the misconfigured
+mount produced.
+
+Found by turning test execution on for the first time. Everything above had been
+true and unexercised for as long as `LORE_RUN_TESTS` was `0`.
 
 **D-43 — review types.** `review.start` takes a `type`, defaulting to `code-arch`:
 *is this change correct and well-made?* The next type is `security`: *what

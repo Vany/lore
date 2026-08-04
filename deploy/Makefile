@@ -33,6 +33,14 @@ preflight:
 		|| { echo "no credentials: run 'make sync-opencode', or set a provider key in .env"; exit 1; }
 	@grep -qE '^OPENCODE_SERVER_PASSWORD=.+' .env || { echo "OPENCODE_SERVER_PASSWORD is empty in .env — the server would answer a bare 401 with no hint"; exit 1; }
 	@mkdir -p "$(BACKUP)"
+	@# The T0 sandbox asks the HOST daemon to bind-mount a review worktree into a
+	@# sibling container by absolute path, so that path must mean the same thing on
+	@# both sides. When it does not, Docker does not refuse — it creates an EMPTY
+	@# directory and mounts that, and the first symptom is npm reporting no
+	@# package-lock.json in a repository that has one. Checked here because the
+	@# consequence is silent and the cause is three layers away.
+	@$(COMPOSE) config 2>/dev/null | grep -qE "^\s+- $(DATA):$(DATA)(:|$$)" \
+		|| echo "NOTE: verify the data dir is mounted at the same path inside the container ($(DATA)); T0 test execution depends on it"
 	@mkdir -p "$(DATA)"
 	@# A container uid that cannot write the data directory fails with "attempt to
 	@# write a readonly database", which points at SQLite rather than at ownership.
@@ -91,7 +99,7 @@ new: preflight
 	@test -n "$(NAME)" || { echo "usage: make new NAME=<who> GIT=<ssh-url> [URL=<mcp-url>]"; exit 1; }
 	@test -n "$(GIT)"  || { echo "usage: make new NAME=<who> GIT=<ssh-url> [URL=<mcp-url>]"; exit 1; }
 	$(COMPOSE) exec -T lore node /app/src/index.ts new \
-		--name "$(NAME)" --git "$(GIT)" --db /var/lib/lore/lore.db \
+		--name "$(NAME)" --git "$(GIT)" --db "$(DATA)/lore.db" \
 		$(if $(URL),--url "$(URL)",)
 
 ## Check tiers, auth and model ids BEFORE spending a review on them.
@@ -137,7 +145,7 @@ status-local:
 tokens:
 	@$(COMPOSE) exec -T lore node -e "\
 	const {DatabaseSync}=require('node:sqlite'); \
-	const d=new DatabaseSync('/var/lib/lore/lore.db'); \
+	const d=new DatabaseSync('$(DATA)/lore.db'); \
 	for (const r of d.prepare('SELECT principal, label, created_at, revoked_at FROM token').all()) \
 	  console.log(r.revoked_at ? '[revoked]' : '[live]   ', r.principal, r.label ?? '', r.created_at);"
 
@@ -176,7 +184,7 @@ backup-drill:
 	@set -e; D=$$(mktemp -d); trap 'docker rm -f lore-drill-ls >/dev/null 2>&1 || true; rm -rf $$D' EXIT; \
 	mkdir -p $$D/db $$D/replica; \
 	printf 'dbs:\n  - path: /var/lib/lore/lore.db\n    replicas:\n      - type: file\n        path: /replica/lore\n        sync-interval: 1s\n' > $$D/litestream.yml; \
-	$(COMPOSE) exec -T lore node -e "const{DatabaseSync}=require('node:sqlite');new DatabaseSync('/var/lib/lore/lore.db').exec(\"VACUUM INTO '/tmp/drill.db'\")"; \
+	$(COMPOSE) exec -T lore node -e "const{DatabaseSync}=require('node:sqlite');new DatabaseSync('$(DATA)/lore.db').exec(\"VACUUM INTO '/tmp/drill.db'\")"; \
 	$(COMPOSE) cp lore:/tmp/drill.db $$D/db/lore.db >/dev/null; \
 	$(COMPOSE) exec -T lore rm -f /tmp/drill.db; \
 	before=$$(docker run --rm --entrypoint node -v $$D/db:/var/lib/lore lore-lore:latest -e "const{DatabaseSync}=require('node:sqlite');const d=new DatabaseSync('/var/lib/lore/lore.db');console.log(['knowledge','finding','verdict','review'].map(t=>t+'='+d.prepare('SELECT count(*) c FROM '+t).get().c).join(' '))"); \

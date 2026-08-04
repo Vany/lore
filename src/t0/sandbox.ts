@@ -47,8 +47,15 @@ export const DEFAULT_SANDBOX: SandboxConfig = {
   // Measured on the deployment host: 10 of lore's own 180 tests failed without
   // git; all 180 pass with it.
   image: process.env["LORE_SANDBOX_IMAGE"] ?? "lore-sandbox:node24",
-  cacheRoot: "/var/lib/lore/npm-cache",
-  scratchRoot: "/var/lib/lore/scratch",
+  // Under the data directory, and READ FROM THE ENVIRONMENT rather than hardcoded.
+  //
+  // These are bind-mounted into a sibling container by the HOST daemon, so the path
+  // has to mean the same thing on both sides — a literal `/var/lib/lore` is only
+  // correct on a deployment whose data directory happens to be there. Anywhere else
+  // it is a path the lore container cannot even create (EACCES), and before that it
+  // was a path the host silently mounted as empty.
+  cacheRoot: `${process.env["LORE_DATA_DIR"] ?? "/var/lib/lore"}/npm-cache`,
+  scratchRoot: `${process.env["LORE_DATA_DIR"] ?? "/var/lib/lore"}/scratch`,
   memory: "2g",
   cpus: "2",
   // A hung suite otherwise holds a review slot forever, and looks like a slow
@@ -112,7 +119,25 @@ function baseArgs(cfg: SandboxConfig, worktree: string, cacheDir: string, scratc
  * rebuilding everything; the `node_modules` mount is left alone because it is the
  * shared cache, not part of the source.
  */
-const SYNC = "cp -a /src/. /work/ 2>/dev/null || true";
+/**
+ * Copy the sources into the writable scratch, and FAIL if it does not happen.
+ *
+ * This was `cp -a /src/. /work/ 2>/dev/null || true`, which swallowed the reason and
+ * then reported success, so every later step ran against an empty `/work`. What the
+ * operator saw was npm complaining there was no `package-lock.json` in a repository
+ * that plainly has one — a true statement about a directory nobody meant to look at,
+ * and a full diagnostic dead end.
+ *
+ * The emptiness check is the load-bearing half. `cp` legitimately exits 0 when the
+ * source is empty, and an empty `/src` is exactly what a misconfigured sibling mount
+ * produces (see `MOUNT_PATHS_MUST_MATCH` in deploy/docker-compose.yml): the host
+ * daemon resolves the path on the HOST, and where it does not exist Docker creates an
+ * empty directory rather than refusing.
+ */
+const SYNC =
+  "cp -a /src/. /work/ || { echo 'sandbox: could not copy the sources into /work' >&2; exit 1; }; " +
+  "[ -n \"$(ls -A /work 2>/dev/null)\" ] || " +
+  "{ echo 'sandbox: /src is EMPTY. The host daemon mounts by HOST path, so this means the worktree path does not exist on the host — LORE_HOST_DATA and the container data dir must be the same path.' >&2; exit 1; }";
 
 /**
  * Install dependencies.

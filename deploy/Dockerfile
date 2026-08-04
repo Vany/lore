@@ -22,6 +22,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 COPY package.json package-lock.json ./
+# The docker CLIENT, and deliberately not Debian's `docker.io`, which would install
+# a daemon this image must never run.
+#
+# T0 executes the target's test suite by asking the HOST daemon, over the mounted
+# socket, to start a SIBLING container (D-24). The socket was mounted from the
+# beginning and the client was not installed, so every attempt reported "docker not
+# found" and the sandbox was unreachable from the one service that uses it — the
+# engine reported it honestly and nothing else noticed for as long as tests were
+# switched off.
+#
+# arm64 is the deployment target, so the architecture is derived rather than pinned.
+ARG DOCKER_CLI_VERSION=27.5.1
+RUN arch="$(dpkg --print-architecture)" \
+ && case "$arch" in amd64) a=x86_64 ;; arm64) a=aarch64 ;; *) echo "unsupported: $arch" >&2; exit 1 ;; esac \
+ && curl -fsSL "https://download.docker.com/linux/static/stable/$a/docker-${DOCKER_CLI_VERSION}.tgz" \
+      | tar -xz -C /usr/local/bin --strip-components=1 docker/docker \
+ && docker --version
+
 RUN npm ci --omit=dev --no-audit --no-fund
 
 COPY src ./src

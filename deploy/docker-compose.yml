@@ -44,11 +44,12 @@ services:
     ports:
       - "${LORE_BIND:-127.0.0.1}:7777:7777"
     environment:
-      LORE_DATA_DIR: /var/lib/lore
+      # SAME PATH AS THE HOST, deliberately — see the volume below.
+      LORE_DATA_DIR: ${LORE_HOST_DATA:-/var/lib/lore}
       LORE_PORT: "7777"
       LORE_CONCURRENCY: "2"          # T0 is CPU-bound on an SBC; set by cores (D-37)
       LORE_DAILY_CEILING_USD: "100"  # stops STARTING reviews when hit, never mid-review
-      LORE_RUN_TESTS: "0"            # opt-in: executes arbitrary project code (D-24)
+      LORE_RUN_TESTS: "1"            # T0 runs the target's suite, contained (D-24)
       LORE_TIERS: ${LORE_TIERS:-}     # unset = the three-vendor default ladder
       LORE_WEBHOOK_URL: ${LORE_WEBHOOK_URL:-}
       LORE_HEARTBEAT_URL: ${LORE_HEARTBEAT_URL:-}
@@ -67,7 +68,7 @@ services:
       # run against nothing, reporting a clean suite for code it never saw. Same
       # path everywhere is the only arrangement where "the path I have" and "the
       # path the daemon sees" are the same string.
-      - ${LORE_HOST_DATA:-/var/lib/lore}:/var/lib/lore
+      - ${LORE_HOST_DATA:-/var/lib/lore}:${LORE_HOST_DATA:-/var/lib/lore}
       # The T0 sandbox launches SIBLING containers for test execution, so untrusted
       # project code never runs in this container — which holds every repo's deploy
       # key and the knowledge database (D-24).
@@ -76,6 +77,17 @@ services:
       # because this box does one job on a private tailnet; it is the single
       # largest privilege in this file and should be revisited if that changes.
       - /var/run/docker.sock:/var/run/docker.sock
+    # The socket is the T0 sandbox's only route to the host daemon (D-24), and it
+    # is mode 0660. lore runs as LORE_UID, not root, so it needs the socket's GROUP.
+    #
+    # 0 suits Docker Desktop, where the socket is root:root. On a Linux host — the
+    # Orange Pi included — it is the `docker` group's gid instead:
+    #   LORE_DOCKER_GID=$(stat -c '%g' /var/run/docker.sock)
+    # Getting it wrong is not silent: every T0 test run reports "permission denied
+    # while trying to connect to the Docker daemon socket", which is how this was
+    # found.
+    group_add:
+      - "${LORE_DOCKER_GID:-0}"
     depends_on:
       - opencode
 
@@ -118,7 +130,7 @@ services:
       # 2. `:ro` enforces INV-9 at the filesystem. Reviewers are denied write tools
       #    in the request body already, but that is a policy the model could in
       #    principle route around. A read-only bind is not a policy.
-      - ${LORE_HOST_DATA:-/var/lib/lore}:/var/lib/lore:ro
+      - ${LORE_HOST_DATA:-/var/lib/lore}:${LORE_HOST_DATA:-/var/lib/lore}:ro
       # This machine's opencode configuration, staged by `make sync-opencode`:
       # the plane MCP server, the plugins and the read-only agent, so reviewers
       # inherit what a Claude Code session has (D-12).
@@ -175,11 +187,15 @@ services:
   # here with no other copy.
   litestream:
     image: litestream/litestream:latest
+    environment:
+      # litestream.yml reads the database path from here, so it follows the same
+      # host-equals-container rule as everything else.
+      LORE_DATA_DIR: ${LORE_HOST_DATA:-/var/lib/lore}
     platform: linux/arm64
     restart: unless-stopped
     command: ["replicate"]
     volumes:
-      - ${LORE_HOST_DATA:-/var/lib/lore}:/var/lib/lore
+      - ${LORE_HOST_DATA:-/var/lib/lore}:${LORE_HOST_DATA:-/var/lib/lore}
       # The handoff. An outer script takes files out of THIS directory and off the
       # machine; nothing in lore knows how, and that is the whole point of the split.
       - ${LORE_HOST_BACKUP:-./backup}:/backup
