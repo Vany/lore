@@ -128,3 +128,45 @@ describe("attest", () => {
     expect(render(await attest(store, "r1", "p", keyPath))).toMatch(/\[ed25519:[A-Za-z0-9+/=]+\]$/);
   });
 });
+
+// Both defects the FIRST attestation ever produced showed on sight. It read
+// "reviewed tree unknown ... 1 findings, 0 fixed, 3 justified" for a review with
+// one finding: the tree column was only ever written by review_submit, and the
+// tally counted verdict ROWS while D-51 carries a justification forward once per
+// round.
+describe("the artefact has to describe the review", () => {
+  it("counts each finding once, by its latest verdict", async () => {
+    review("passed");
+    store.recordFinding("r1", {
+      fingerprint: "aaaa1111", file: "a.ts", severity: "low", claim: "c",
+      evidence: "e", failureScenario: "s", origin: "t1", round: 1,
+      firstSeen: "2026-08-03T00:00:00.000Z",
+    });
+    // Carried three times, exactly as a three-round review does.
+    for (const round of [1, 2, 3]) {
+      store.recordVerdict("r1", {
+        fingerprint: "aaaa1111", verdict: "justified-accepted",
+        rationale: "carried", scope: undefined, tier: "carried", round,
+      });
+    }
+
+    const a = await attest(store, "r1", "p", keyPath);
+    expect(a.line).toContain("1 findings");
+    expect(a.line).toContain("1 justified");
+  });
+
+  it("counts a finding under its latest verdict only, never both", async () => {
+    review("passed");
+    store.recordFinding("r1", {
+      fingerprint: "bbbb2222", file: "b.ts", severity: "low", claim: "c",
+      evidence: "e", failureScenario: "s", origin: "t1", round: 1,
+      firstSeen: "2026-08-03T00:00:00.000Z",
+    });
+    store.recordVerdict("r1", { fingerprint: "bbbb2222", verdict: "justified-accepted", rationale: "r", scope: undefined, tier: "t1", round: 1 });
+    store.recordVerdict("r1", { fingerprint: "bbbb2222", verdict: "fixed", rationale: undefined, scope: undefined, tier: "t1", round: 2 });
+
+    const a = await attest(store, "r1", "p", keyPath);
+    expect(a.line).toContain("1 fixed");
+    expect(a.line).toContain("0 justified");
+  });
+});

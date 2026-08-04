@@ -21,6 +21,7 @@ import type { ReviewType } from "../core/review-type.ts";
 import { Exhausted } from "../core/errors.ts";
 import { hunkAround, hunkStillPresent, makeScope } from "../core/scope.ts";
 import { blobSha, computeDiff, renderDiff } from "../git/diff.ts";
+import { treeHash } from "../git/repo.ts";
 import { detectAndRecord, renderConflicts } from "../knowledge/conflict.ts";
 import { promoteRecurring } from "../knowledge/derive.ts";
 import { relevantTo } from "../knowledge/enrich.ts";
@@ -386,9 +387,19 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // that rule is least allowed to bend.
   //
   // The decision belongs to the review, and that is where it is written, next.
+  // The tree the tiers ACTUALLY read, recorded every round.
+  //
+  // `review_submit` used to be the only writer of this column, so a review that
+  // needed no fixes reached `passed` having never recorded one — and the first
+  // attestation ever produced said "reviewed tree unknown". An attestation that
+  // cannot name the tree it covers is not an attestation; D-40 exists to say the
+  // signature covers a tree rather than a branch name, and a null there quietly
+  // undoes it. Written here because this is the layer that HAS the worktree and
+  // knows the tiers just finished reading it.
   store.updateReview(reviewId, {
     ladder: stepped.state,
     state: toReviewState(stepped.decision),
+    treeHash: await treeHash(worktree),
   });
 
   return {

@@ -98,8 +98,20 @@ function tally(store: Store, reviewId: string): { raised: number; fixed: number;
   const row = store.db
     .prepare("SELECT COUNT(*) AS c FROM finding WHERE review_id = ?")
     .get(reviewId) as Record<string, number | bigint> | undefined;
+  // Counted per FINDING, by its LATEST verdict — the same rule `settledFingerprints`
+  // uses. Counting verdict rows was wrong twice over, and the first attestation ever
+  // produced showed both: verdicts are append-only, so a justification carried
+  // forward each round (D-51) added a row per round, and one finding was reported as
+  // "1 findings, 0 fixed, 3 justified". A finding rejected and then accepted would
+  // likewise have been counted under both. An attestation is a claim about findings,
+  // not about how many times we wrote a row.
   const verdicts = store.db
-    .prepare("SELECT verdict, COUNT(*) AS c FROM verdict WHERE review_id = ? GROUP BY verdict")
+    .prepare(
+      `SELECT v.verdict, COUNT(*) AS c FROM verdict v
+       WHERE v.review_id = ?
+         AND v.id = (SELECT MAX(id) FROM verdict w WHERE w.review_id = v.review_id AND w.fingerprint = v.fingerprint)
+       GROUP BY v.verdict`,
+    )
     .all(reviewId) as Record<string, string | number | bigint>[];
 
   let fixed = 0;
