@@ -52,6 +52,22 @@ export async function attest(store: Store, reviewId: string, principal: string, 
   if (!isAttestable(review.state)) {
     throw new DidNotRun(`review is '${review.state}', not 'passed' — attesting it would be a false claim`);
   }
+  // No tree, no attestation. The signature's whole subject is a TREE rather than a
+  // branch name (D-40), so a line reading "reviewed tree unknown" asserts nothing
+  // anyone can check while carrying a real ed25519 signature over it — which is
+  // worse than refusing, because it LOOKS verified. That artefact was produced once,
+  // by the first review ever to pass, and `?? "unknown"` was how (659c2f50).
+  //
+  // Recording the hash every round makes this unreachable for new reviews; the guard is
+  // for the ones already in the database, and for whatever else might one day leave
+  // the column null.
+  if (review.treeHash === undefined) {
+    throw new DidNotRun(
+      `review ${reviewId} passed but recorded no tree hash, so there is nothing to attest to. ` +
+        `The signature covers a tree, not a branch name (D-40) — signing "unknown" would look verified ` +
+        `while asserting nothing. Re-run the review to record one.`,
+    );
+  }
 
   const counts = tally(store, reviewId);
   const tiers = countTiers(store, reviewId);
@@ -77,7 +93,7 @@ export async function attest(store: Store, reviewId: string, principal: string, 
   const scope = caveats.length === 0 ? `${tiers} tiers` : `${tiers} tiers — ${caveats.join("; ")}, so this is PARTIAL`;
 
   const line =
-    `lore: reviewed tree ${review.treeHash ?? "unknown"} against this repo's rules and lore's own — ` +
+    `lore: reviewed tree ${review.treeHash} against this repo's rules and lore's own — ` +
     `${scope}, ${counts.raised} findings, ${counts.fixed} fixed, ${counts.justified} justified.`;
 
   const { privateKey, publicKey } = await loadOrCreateKey(keyPath);

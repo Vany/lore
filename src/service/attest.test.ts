@@ -170,3 +170,13 @@ describe("the artefact has to describe the review", () => {
     expect(a.line).toContain("0 justified");
   });
 });
+
+// The `?? "unknown"` that produced the first attestation's worst line. A signed
+// artefact that cannot name its subject is worse than none: it looks verified.
+it("refuses to sign a passed review that recorded no tree", async () => {
+  store.createReview({
+    id: "r2", repoId, principal: "p", branch: "b", intoRef: "origin/main",
+    ticket: "t", type: "code-arch", state: "passed", ladder: initialState(),
+  });
+  await expect(attest(store, "r2", "p", keyPath)).rejects.toThrow(/no tree hash/);
+});
