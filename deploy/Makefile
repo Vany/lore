@@ -204,7 +204,7 @@ restore:
 	@echo "This overwrites $(DATA)/lore.db with the newest replica."
 	@printf 'Type RESTORE to confirm: ' && read ans && [ "$$ans" = "RESTORE" ] || { echo "aborted"; exit 1; }
 	$(COMPOSE) stop lore
-	$(COMPOSE) run --rm litestream restore -o /var/lib/lore/lore.db /var/lib/lore/lore.db
+	$(COMPOSE) run --rm litestream restore -o "$(DATA)/lore.db" "$(DATA)/lore.db"
 	$(COMPOSE) start lore
 	@echo "restored. Verify with: make status"
 
@@ -213,8 +213,8 @@ sweep:
 	$(COMPOSE) exec -T lore node -e "\
 	import('/app/src/ops/retention.ts').then(async m => { \
 	  const {Store} = await import('/app/src/store/store.ts'); \
-	  const s = new Store('/var/lib/lore/lore.db'); \
-	  console.log(await m.collect(s, {...m.DEFAULT_RETENTION, reposRoot: '/var/lib/lore/repos'})); \
+	  const s = new Store('$(DATA)/lore.db'); \
+	  console.log(await m.collect(s, {...m.DEFAULT_RETENTION, reposRoot: '$(DATA)/repos'})); \
 	  s.close(); });"
 
 shell:

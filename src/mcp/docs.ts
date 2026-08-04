@@ -282,10 +282,13 @@ awaiting_diff   waiting for your fixes
 fast_clean      cheap tiers clean, deep tiers still running — NOT a pass
 needs_human     a question you must not answer yourself — NOT a pass
 passed          every tier agrees. The only clean state.
+passed_partial  every tier that COULD run agreed — a tier went unpaid, or all of
+                them came from one vendor. Real evidence, weaker evidence. NOT a pass
 failed          did not complete — NOT "found nothing"
 expired         abandoned or timed out — NOT "found nothing"
 
-Only \`passed\` supports an attestation.
+\`passed\` and \`passed_partial\` both support an attestation. The partial one is the
+case that most needs the record, because the line names what was skipped.
 `.trim(),
   },
 
