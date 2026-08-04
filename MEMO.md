@@ -66,6 +66,30 @@ marker and JSON has none; the tier schema is `.strict()`, so a smuggled key is a
 parse error. c618aec7 was raised against `deploy/tiers.zai-openai.json` and has
 nowhere to put its reason, so it can never settle. In TODO with options.
 
+**The ladder converges on code and oscillates on prose, and that is the finding.**
+A PR-sized review (31.8 KB, `b819017..main`) ran ten rounds and hit the per-tier cap
+with `tierRounds: {t1: 5, t2: 4, t3: 1}`. Rounds 1–5 found real defects: a TOCTOU in
+the D-55 guard I had written an hour earlier, a `lore-ok` written in a JSDoc block
+that `parseLoreOk` could never read, a blank ` *` line that swallowed the following
+paragraph into a justification, an error naming a tool that does not exist, and a
+wait condition — `fast_clean` — that never arrives.
+
+Rounds 6–10 were prose about prose. Every fix to a documentation finding *writes new
+documentation*, which the next tier reads and faults, and this codebase is
+deliberately comment-dense (PROG.md). The bound stopped it, which is exactly what
+D-52 left it able to do: the cap now fires only on rounds that raise something
+fresh, and t2 raising fresh findings four rounds running IS the unproductive
+iteration the cap is for. The system was right and I was the one looping.
+
+The lesson is about scope, not tiers: **prose and code should not be in the same
+review round forever.** A comment is a claim and deserves review — that was worth
+five real defects tonight — but a ladder that re-reads its own freshly-written
+explanations will always find something to say about them.
+
+**`passed` is still unreached, after all of this.** Every tier has now run and
+agreed at least once; no single tree has been agreed by all three at once. The
+attestation remains the one thing this product exists for and has never produced.
+
 **Open.** Nothing writes a `fixed` verdict, so a finding that gets fixed is never
 settled and shows open for ever — `attest.test.ts` builds fixtures in a state
 production cannot produce (TODO). One bad finding still discards a whole reply;
