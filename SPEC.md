@@ -756,10 +756,26 @@ deployment 2026-08-04: `git@github.com:Vany/lore.git` and
 `git@github.com:chainnodesorg/rigid-monorepo.git` had zero objects between them,
 against 101, 443 and 146 commits for the https and local ones.
 
-`ensureBare` now builds an ssh command when the key exists, uses it for the clone,
-and persists it as `core.sshCommand` in the bare repository so every later fetch
-authenticates the same way without a caller remembering to pass it. A missing key
-means a public url or a local path, and is not an error.
+`ensureBare` now builds an ssh command when the url **uses ssh** and the key exists,
+uses it for the clone, and persists it as `core.sshCommand` in the bare repository so
+every later fetch authenticates the same way without a caller remembering to pass it.
+
+Gated on the url, not merely on the key file. The first version asked "does a key
+exist", which is the right-looking wrong question: keys are generated per repository
+and older ones exist for repositories that turned out to be a local path or a public
+https url, so both would have had an ssh command written in for a transport they
+never use. Same shape as asking `rev-parse --git-dir` whether a directory is a
+repository (D-61), and caught the same way — by someone asking how it had been
+tested.
+
+**What is verified and what is not.** `usesSsh` and the composed ssh command are
+tested directly; that a key present on a non-ssh url is ignored is tested against a
+real clone. That an ssh remote authenticates with that key is **not** unit-tested and
+cannot honestly be: `core.sshCommand` is written only after a successful clone, and
+cloning `git@github.com:…` needs a host. The round trip is proven by a private remote
+or not at all — an earlier version of the test cloned a LOCAL path with a key beside
+it and asserted the ssh command was written, which was asserting the bug rather than
+the behaviour.
 
 Two options carry the weight:
 

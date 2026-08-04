@@ -31,6 +31,20 @@ export function repoPaths(root: string, repoId: string): RepoPaths {
  * confidently call it low-risk having never seen it (D-36).
  */
 /**
+ * Does this url authenticate over ssh?
+ *
+ * `git@host:path` and `ssh://…` do. A local path, `https://` and `git://` do not,
+ * and handing them an identity is describing a transport that will not be used.
+ */
+export function usesSsh(gitUrl: string): boolean {
+  if (gitUrl.startsWith("ssh://")) return true;
+  if (/^[a-z+]+:\/\//i.test(gitUrl)) return false;
+  const colon = gitUrl.indexOf(":");
+  const slash = gitUrl.indexOf("/");
+  return colon >= 0 && (slash < 0 || colon < slash);
+}
+
+/**
  * Tell git which key to authenticate with, and only that key.
  *
  * The deploy key was generated at provisioning and then used by nothing: no
@@ -49,7 +63,7 @@ export function repoPaths(root: string, repoId: string): RepoPaths {
  * `no` would accept a different host silently, which is the one thing host checking
  * exists to prevent.
  */
-function sshCommand(keyPath: string, knownHosts: string): string {
+export function sshCommand(keyPath: string, knownHosts: string): string {
   return [
     "ssh",
     `-i ${keyPath}`,
@@ -60,9 +74,18 @@ function sshCommand(keyPath: string, knownHosts: string): string {
 }
 
 export async function ensureBare(paths: RepoPaths, gitUrl: string, keyPath?: string): Promise<void> {
-  // Only when a key actually exists on disk. A missing one means a public https url
-  // or a local path, both of which authenticate with nothing.
-  const key = keyPath !== undefined && (await stat(keyPath).then(() => true).catch(() => false)) ? keyPath : undefined;
+  // Gated on the URL, not merely on a key file existing.
+  //
+  // "Is there a key on disk" is the wrong question and the right-looking one: keys
+  // are generated per repository and older ones exist for repositories that turned
+  // out to be a local path or a public https url. Both would have had an ssh command
+  // written into their config for a transport they never use — inert, and a false
+  // statement in a config file, which is the same wrong-question mistake as asking
+  // `rev-parse --git-dir` whether a directory is a repository (D-61).
+  const key =
+    usesSsh(gitUrl) && keyPath !== undefined && (await stat(keyPath).then(() => true).catch(() => false))
+      ? keyPath
+      : undefined;
   const env =
     key === undefined ? {} : { GIT_SSH_COMMAND: sshCommand(key, join(dirname(key), "known_hosts")) };
 
