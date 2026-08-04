@@ -69,6 +69,16 @@ services:
       # path everywhere is the only arrangement where "the path I have" and "the
       # path the daemon sees" are the same string.
       - ${LORE_HOST_DATA:-/var/lib/lore}:${LORE_HOST_DATA:-/var/lib/lore}
+      # WHERE THE REPOSITORIES UNDER REVIEW LIVE, read-only, at the same path.
+      #
+      # A git_url may be a local directory rather than an ssh remote, and the clone
+      # happens INSIDE this container — so the directory has to be visible here, at
+      # the path the caller named. Read-only because lore never writes to a repo it
+      # reviews (D-2), and the same path on both sides for the reason in D-60.
+      #
+      # Defaults to the data directory, which is already mounted, so a deployment
+      # that only reviews remotes needs no configuration and gains no extra access.
+      - ${LORE_HOST_SRC:-${LORE_HOST_DATA:-/var/lib/lore}}:${LORE_HOST_SRC:-${LORE_HOST_DATA:-/var/lib/lore}}:ro
       # The T0 sandbox launches SIBLING containers for test execution, so untrusted
       # project code never runs in this container — which holds every repo's deploy
       # key and the knowledge database (D-24).
