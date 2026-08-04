@@ -36,8 +36,8 @@
  * lore-ok[03aa0769]: the coupling is real and is now fixed above, but the finding's
  * actual claim — that the exclusion "is inert", so the copies are discovered — is
  * false, and was false when it was written. Measured, not argued: there are 68
- * `*.test.ts` files under `lore/data/repos/*/wt/*/src/`, and `vitest list` reports
- * 261 tests with none of them from that tree.
+ * `*.test.ts` files under the review worktrees, and `vitest list` reports 261 tests
+ * with none of them from that tree.
  *
  * The reasoning behind it swapped two paths that are both real. `cfg.dataDir` is
  * `/var/lib/lore` INSIDE the container, which is where the finding's evidence comes
