@@ -220,9 +220,25 @@ writes a comment at the site:
 // so a negative amount cannot reach here.
 ```
 
+```ts
+/**
+ * Prose about the function.
+ *
+ * lore-ok[a1b2c3d4]: the block form, for a reason long enough to want a
+ * paragraph. It ends at a blank ` *` line or at the closing delimiter, so it
+ * cannot absorb the prose that follows it.
+ */
+```
+
 ```md
 <!-- lore-ok[a1b2c3d4]: reason -->
 ```
+
+Three forms, no more. A justification written in any other shape is not collected,
+and a justification that is never read is the failure this mechanism exists to
+prevent — it looks exactly like a client that never answered. **A file with no
+comment syntax at all, such as JSON, therefore cannot carry one**: findings there
+can be fixed but not justified, which is open and recorded in `TODO.md`.
 
 The bracketed value is the first 8 hex of the fingerprint, which `lore` prints in
 its report, so comment and finding link exactly.

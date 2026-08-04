@@ -65,9 +65,11 @@ const STAR_CONT = /^\s*\*(?!\/)\s?(.*\S)\s*$/;
 /**
  * Find every justification in a file.
  *
- * Only the two comment forms the spec names. Adding `#` for YAML and Python is an
- * obvious future need but not a guess to make now — a marker syntax that silently
- * differs between languages is worse than one that is absent.
+ * Only the three comment forms the spec names: `//`, ` * ` inside a block, and
+ * `<!-- -->`. Adding `#` for YAML and Python is an obvious future need but not a
+ * guess to make now — a marker syntax that silently differs between languages is
+ * worse than one that is absent. JSON has no comment at all, so a finding there
+ * cannot be justified in place; that is open, and in TODO.
  */
 export function parseLoreOk(source: string): LoreOk[] {
   const found: LoreOk[] = [];
