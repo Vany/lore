@@ -358,6 +358,20 @@ describe("runRound", () => {
     expect(t1row?.["finished_at"]).not.toBeNull();
   });
 
+  // The attestation signs a TREE (D-40). `review_submit` was once the only writer of
+  // that column, so a review needing no fixes reached `passed` having never recorded
+  // one and its attestation read "reviewed tree unknown". Raised as e5700124: the fix
+  // shipped without a test, and reverting the line passed the whole suite.
+  it("records the tree the tier actually read, with no submit involved", async () => {
+    await runRound({ store, reviewer: new ScriptedReviewer([[]]), reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
+
+    const recorded = store.getReview("r1", "p")?.treeHash;
+    expect(recorded).toBeDefined();
+    // The real tree of the worktree, not merely some non-null string.
+    const actual = execFileSync("git", ["write-tree"], { cwd: dir, encoding: "utf8" }).trim();
+    expect(recorded).toBe(actual);
+  });
+
   it("climbs the ladder and passes only at the top", async () => {
     const reviewer = new ScriptedReviewer([[], [], []]);
     const first = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
