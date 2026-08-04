@@ -572,16 +572,27 @@ describe("countStepParts", () => {
 });
 
 describe("extractFindings", () => {
+  const ok = (t: string) => {
+    const r = extractFindings(t);
+    if (!r.ok) throw new Error(`expected findings, got: ${r.why}`);
+    return r.findings;
+  };
+  const why = (t: string) => {
+    const r = extractFindings(t);
+    if (r.ok) throw new Error("expected a failure, got findings");
+    return r.why;
+  };
+
   it("finds the block whether or not it is fenced", () => {
-    expect(extractFindings(`prose\n\`\`\`json\n${FINDING_JSON}\n\`\`\`\nmore prose`)).toHaveLength(1);
-    expect(extractFindings(FINDING_JSON)).toHaveLength(1);
+    expect(ok(`prose\n\`\`\`json\n${FINDING_JSON}\n\`\`\`\nmore prose`)).toHaveLength(1);
+    expect(ok(FINDING_JSON)).toHaveLength(1);
   });
 
   it("distinguishes 'said clean' from 'could not be read'", () => {
-    // [] means the model said clean. undefined means we could not tell. Conflating
+    // [] means the model said clean. A failure means we could not tell. Conflating
     // them is precisely INV-1's failure.
-    expect(extractFindings('{"findings": []}')).toStrictEqual([]);
-    expect(extractFindings("I could not complete this review.")).toBeUndefined();
+    expect(ok('{"findings": []}')).toStrictEqual([]);
+    expect(why("I could not complete this review.")).toMatch(/no JSON object/);
   });
 
   it("rejects the whole reply when one finding is malformed", () => {
@@ -590,13 +601,33 @@ describe("extractFindings", () => {
     const mixed = JSON.stringify({
       findings: [JSON.parse(FINDING_JSON).findings[0], { file: "x.ts", severity: "high" }],
     });
-    expect(extractFindings(mixed)).toBeUndefined();
+    expect(why(mixed)).toMatch(/finding 2 of 2 was rejected/);
   });
 
   it("rejects a finding carrying keys we did not ask for", () => {
     const extra = JSON.stringify({
       findings: [{ ...JSON.parse(FINDING_JSON).findings[0], confidence: 0.9 }],
     });
-    expect(extractFindings(extra)).toBeUndefined();
+    expect(why(extra)).toMatch(/finding 1 of 1 was rejected/);
+  });
+
+  // The reason this type exists, pinned to the reply that cost a review.
+  //
+  // glm-5.2 found a real high-severity bug and wrote a 325-character claim against
+  // a 300-character cap. The reply was flawless JSON; only the cap rejected it. The
+  // operator was told "malformed JSON" and the model was told nothing at all, so on
+  // retry it guessed — trimming one claim to 298 and leaving another at 322.
+  it("names the CAP, not the JSON, when a claim is too long", () => {
+    const long = JSON.parse(FINDING_JSON).findings[0];
+    const reason = why(JSON.stringify({ findings: [{ ...long, claim: "x".repeat(325) }] }));
+    expect(reason).toMatch(/^finding 1 of 1 was rejected — claim: /);
+    // Actionable: it has to carry the limit, or a model cannot comply with it.
+    expect(reason).toMatch(/300/);
+    expect(reason).not.toMatch(/JSON/);
+  });
+
+  it("says which of the three faults it was", () => {
+    expect(why("```json\n{not json at all}\n```")).toMatch(/JSON did not parse/);
+    expect(why('{"results": []}')).toMatch(/no `findings` array/);
   });
 });

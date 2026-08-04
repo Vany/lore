@@ -24,6 +24,7 @@
  * say "every failure" and that was the same over-claim this file exists to punish.
  */
 
+import type * as z from "zod";
 import { createOpencodeClient } from "@opencode-ai/sdk";
 import { DidNotRun, Exhausted } from "../core/errors.ts";
 import { FindingSchema, type Finding } from "../core/finding.ts";
@@ -225,19 +226,23 @@ export class Reviewer implements ReviewerLike {
   ): Promise<ReviewerResult> {
     const first = await this.ask(sessionId, tier, `${prompt}\n\n${OUTPUT_CONTRACT}`, worktree);
 
-    let parsed = extractFindings(first.text);
+    let extracted = extractFindings(first.text);
     let retried = false;
-    if (parsed === undefined) {
-      // One retry, contract restated. Then it is a failure, not a clean result.
+    if (!extracted.ok) {
+      // One retry, contract restated — and, since 2026-08-04, carrying WHAT was
+      // wrong. A model told only "could not be parsed" is guessing: glm-5.2 trimmed
+      // one over-long claim by nine characters and left another over the cap,
+      // because nothing had told it a cap existed.
       retried = true;
       const second = await this.ask(
         sessionId,
         tier,
-        `Your previous reply could not be parsed. Reply again with ONLY the json block.\n\n${OUTPUT_CONTRACT}`,
+        `Your previous reply could not be used: ${extracted.why}.\n` +
+          `Fix exactly that and reply again with ONLY the json block.\n\n${OUTPUT_CONTRACT}`,
         worktree,
       );
-      parsed = extractFindings(second.text);
-      if (parsed === undefined) {
+      const retry = extractFindings(second.text);
+      if (!retry.ok) {
         // BOTH replies are in scope here and both used to be thrown away, which made
         // the most frequent failure in this system also the least diagnosable: a round
         // died after the model had already been paid for, and nothing anywhere said
@@ -250,16 +255,22 @@ export class Reviewer implements ReviewerLike {
           `[lore:log] tier ${tier.id} (${tier.model}) returned nothing parseable, twice. First reply:\n` +
             `${excerpt(first.text, 2_000)}\nAfter the contract was restated:\n${excerpt(second.text, 2_000)}`,
         );
-        // Empty and unparseable are different faults and lead different places: an
-        // empty reply is usually the provider failing inside an HTTP 200, which is a
-        // bill or a quota; prose is the model ignoring the output contract, which is a
-        // prompt. Saying which saves the first hour of looking in the wrong place.
+        // Empty, unparseable and REJECTED are different faults and lead different
+        // places: an empty reply is usually the provider failing inside an HTTP 200,
+        // which is a bill or a quota; prose is the model ignoring the output
+        // contract, which is a prompt; a schema rejection is a reply that was
+        // perfectly good JSON saying something we would not accept, which is a cap
+        // or a vocabulary. `why` is what separates the third from the second — it
+        // said "malformed JSON" about valid JSON once, and sent the search an hour
+        // in the wrong direction.
         throw new DidNotRun(
-          `tier ${tier.id} (${tier.model}) did not return parseable findings after a retry — this review DID NOT RUN. ` +
-            `${describeReply("first", first.text)}; ${describeReply("retry", second.text)}. ` +
+          `tier ${tier.id} (${tier.model}) did not return usable findings after a retry — this review DID NOT RUN. ` +
+            `${describeReply("first", first.text)}: ${extracted.why}; ` +
+            `${describeReply("retry", second.text)}: ${retry.why}. ` +
             "The full replies are on [lore:log].",
         );
       }
+      extracted = retry;
       first.usage = second.usage;
     }
 
@@ -268,7 +279,7 @@ export class Reviewer implements ReviewerLike {
     const latencyMs = Date.now() - started;
 
     return {
-      findings: parsed,
+      findings: extracted.findings,
       raw: first.text,
       inputTokens: first.usage.input,
       cachedTokens: first.usage.cached,
@@ -577,13 +588,39 @@ function detail(e: unknown): string {
 }
 
 /**
+ * Why a reply could not be read, in the words needed to fix it.
+ *
+ * Failure used to be a bare `undefined`, which cost a real review. glm-5.2 found a
+ * genuine high-severity bug, wrote a 325-character `claim` against a 300-character
+ * cap, and the whole reply was discarded; the operator was told "malformed JSON"
+ * when the JSON was perfect, and the retry told the model only that its reply
+ * "could not be parsed". It shortened one claim to 298 and left another at 322 —
+ * complying blind with a rule nobody had named. The finding was lost, and the bug
+ * it described was live in `main`.
+ *
+ * So the reason travels: into the retry, so the model can actually fix it, and into
+ * the log, so the operator is not sent to the wrong fault.
+ */
+export type Extraction =
+  | { readonly ok: true; readonly findings: readonly Finding[] }
+  | { readonly ok: false; readonly why: string };
+
+/** The first zod issue, as `path: message` — enough to act on, short enough to send. */
+function firstIssue(error: z.ZodError): string {
+  const i = error.issues[0];
+  if (i === undefined) return "rejected by the finding schema";
+  const path = i.path.join(".");
+  return path === "" ? i.message : `${path}: ${i.message}`;
+}
+
+/**
  * Pull findings out of a reply.
  *
- * Returns `undefined` — meaning "could not parse", which triggers the retry — and
- * never an empty array on failure. An empty array means the model said clean, and
- * conflating "said clean" with "could not be read" is precisely INV-1's failure.
+ * Never returns an empty array on failure. An empty array means the model said
+ * clean, and conflating "said clean" with "could not be read" is exactly INV-1's
+ * failure.
  */
-export function extractFindings(text: string): readonly Finding[] | undefined {
+export function extractFindings(text: string): Extraction {
   const block = /```(?:json)?\s*([\s\S]*?)```/g;
   const candidates: string[] = [];
   for (const m of text.matchAll(block)) candidates.push(m[1] ?? "");
@@ -591,24 +628,38 @@ export function extractFindings(text: string): readonly Finding[] | undefined {
   const brace = text.indexOf("{");
   if (brace >= 0) candidates.push(text.slice(brace));
 
+  // Kept from the LAST candidate that got furthest, so the reason describes the
+  // most promising thing in the reply rather than the first stray brace in prose.
+  let why = "no JSON object containing a `findings` array";
+
   for (const candidate of candidates) {
     let parsed: unknown;
     try {
       parsed = JSON.parse(candidate.trim());
-    } catch {
+    } catch (e) {
+      why = `JSON did not parse: ${detail(e)}`;
       continue;
     }
     const list = (parsed as { findings?: unknown })?.findings;
-    if (!Array.isArray(list)) continue;
+    if (!Array.isArray(list)) {
+      why = "parsed as JSON, but there was no `findings` array";
+      continue;
+    }
     const out: Finding[] = [];
-    for (const raw of list) {
+    for (const [i, raw] of list.entries()) {
       const res = FindingSchema.safeParse(raw);
-      // One malformed finding invalidates the reply. Keeping the valid ones would
-      // silently drop a defect the model actually found, and we would never know.
-      if (!res.success) return undefined;
+      // One malformed finding still invalidates the reply. Keeping the valid ones
+      // would silently drop a defect the model actually found, and we would never
+      // know. What changes is that the reason now leaves this function.
+      if (!res.success) {
+        return {
+          ok: false,
+          why: `finding ${i + 1} of ${list.length} was rejected — ${firstIssue(res.error)}`,
+        };
+      }
       out.push(res.data);
     }
-    return out;
+    return { ok: true, findings: out };
   }
-  return undefined;
+  return { ok: false, why };
 }
