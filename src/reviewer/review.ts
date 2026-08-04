@@ -389,7 +389,13 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   promoteRecurring(store, review.repoId);
 
   // 8. Move the ladder.
-  const withSettled = settle(review.ladder, accepted);
+  // `fixed` belongs here as much as `accepted` does (cadd3821). The store has always
+  // counted both as settled — `settledFingerprints` and `openFindings` agree — and the
+  // ladder was the only view that did not. That disagreement livelocks: a re-raised
+  // fixed fingerprint looks fresh to `step`, which resets the ladder, while
+  // `openFindings` excludes it and `undelivered` has already delivered it. The client
+  // is told `findings_ready` and handed nothing, for ever, until a bound stops it.
+  const withSettled = settle(review.ladder, [...accepted, ...fixed]);
   const stepped = step({
     state: withSettled,
     raised: [...raisedFingerprints],

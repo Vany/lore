@@ -417,6 +417,21 @@ describe("runRound", () => {
       expect(store.openFindings("r1").map((f) => f.fingerprint)).toContain(fingerprint(HOLD_BUG));
     });
 
+    // A re-raise of something already settled as fixed must not restart the ladder
+    // with nothing for the client to do: openFindings excludes it and undelivered has
+    // already delivered it, so `findings_ready` would hand back an empty list for ever
+    // (cadd3821).
+    it("does not restart the ladder when a fixed finding is raised again", async () => {
+      const reviewer = new ScriptedReviewer([[HOLD_BUG], [], [HOLD_BUG]]);
+      await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
+      fix();
+      await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
+      expect(store.settledFingerprints("r1")).toContain(fingerprint(HOLD_BUG));
+
+      const again = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
+      expect(again.decision.kind).not.toBe("findings");
+    });
+
     // The guard that matters most. t1 not repeating what t3 found says nothing about
     // the code — t1 may be unable to see it — so closing on that silence would be
     // INV-1 inverted: a tier that did not look, recorded as one that found nothing.
