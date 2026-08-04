@@ -39,8 +39,11 @@ preflight:
 	@# directory and mounts that, and the first symptom is npm reporting no
 	@# package-lock.json in a repository that has one. Checked here because the
 	@# consequence is silent and the cause is three layers away.
-	@$(COMPOSE) config 2>/dev/null | grep -qE "^\s+- $(DATA):$(DATA)(:|$$)" \
-		|| echo "NOTE: verify the data dir is mounted at the same path inside the container ($(DATA)); T0 test execution depends on it"
+	@$(COMPOSE) config 2>/dev/null | grep -A1 "source: $(DATA)$$" | grep -q "target: $(DATA)$$" \
+		|| { echo "the data dir is NOT mounted at the same path inside the container."; \
+		     echo "T0 test execution needs $(DATA) to mean the same thing on both sides, because the"; \
+		     echo "host daemon resolves the sandbox's bind by HOST path and silently mounts an empty"; \
+		     echo "directory when it does not exist. See D-60."; exit 1; }
 	@mkdir -p "$(DATA)"
 	@# A container uid that cannot write the data directory fails with "attempt to
 	@# write a readonly database", which points at SQLite rather than at ownership.
