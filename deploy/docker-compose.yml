@@ -79,6 +79,11 @@ services:
       # Defaults to the data directory, which is already mounted, so a deployment
       # that only reviews remotes needs no configuration and gains no extra access.
       - ${LORE_HOST_SRC:-${LORE_HOST_DATA:-/var/lib/lore}}:${LORE_HOST_SRC:-${LORE_HOST_DATA:-/var/lib/lore}}:ro
+      # A second root, because repositories under review are not all under one parent
+      # and the alternative was mounting a home directory to cover both. Same rules:
+      # read-only, same path on both sides, defaults to the data dir so it costs
+      # nothing when unused.
+      - ${LORE_HOST_SRC2:-${LORE_HOST_DATA:-/var/lib/lore}}:${LORE_HOST_SRC2:-${LORE_HOST_DATA:-/var/lib/lore}}:ro
       # The T0 sandbox launches SIBLING containers for test execution, so untrusted
       # project code never runs in this container — which holds every repo's deploy
       # key and the knowledge database (D-24).
