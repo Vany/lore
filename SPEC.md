@@ -838,6 +838,25 @@ helper cloned without fetching — manufacturing the dangerous state — and the
 tests either side wrote `FETCH_HEAD` by hand before asserting, stepping over it every
 time.
 
+**Freshness is required only on the round that cuts the worktree.** A review is
+pinned to a snapshot (D-40): once its worktree exists it sees that tree plus whatever
+`review_submit` applies, and never reads the mirror again. So on later rounds the
+mirror's age cannot change what is reviewed, and refusing on it destroys work instead
+of protecting it.
+
+It destroyed some. Reviewing this very change, round 3 was refused with *"last
+fetched 35 minutes ago"* — after t2 alone had spent 16 minutes — throwing away three
+rounds and eight answered findings. The general form is worse than the incident:
+`MAX_MIRROR_AGE_MS` is 30 minutes and a t1→t2 climb alone exceeds it, so **from D-63
+until this fix, no review could reach t3**. Stated with that bound rather than as
+"ever": t3 has seven recorded runs, and all seven predate the guard by hours. The
+window is small only because it was caught the first time the ladder ran long inside
+it.
+
+Found by driving lore's own review over MCP rather than by reasoning about it, which
+is the argument for dogfooding over inspection: the fault needed a review long enough
+to trip it, and no test that stubs the clock would have produced one.
+
 **Provisioning therefore issues a token and nothing else.** The deploy key went with
 the fetch: a keypair written to disk that nothing reads, handed over with an
 instruction to grant a repository read access to a key with no user, is strictly

@@ -104,7 +104,26 @@ export const MAX_MIRROR_AGE_MS = 30 * 60_000;
  *     Reviewing anyway describes a tree that is not the one being merged, which is
  *     INV-2's failure with an attestation over it.
  */
-export async function ensureBare(paths: RepoPaths, gitUrl: string): Promise<void> {
+export async function ensureBare(
+  paths: RepoPaths,
+  gitUrl: string,
+  /**
+   * Whether staleness is disqualifying, which it is **only when the base is being
+   * chosen** — the first round, before a worktree exists.
+   *
+   * A review is pinned to a snapshot (D-40): once its worktree is cut it sees that
+   * tree and whatever arrives by `review_submit`, and never reads the mirror again.
+   * So on later rounds the mirror's age cannot affect what is reviewed, and refusing
+   * on it destroys work rather than protecting it.
+   *
+   * It did exactly that. Reviewing this change, round 3 was refused with "last
+   * fetched 35 minutes ago" after t2 alone had spent 16 minutes — three rounds and
+   * eight answered findings thrown away by a guard that had nothing left to guard.
+   * Any review slower than MAX_MIRROR_AGE_MS killed itself, and the deep tiers are
+   * all slower than that.
+   */
+  requireFresh = true,
+): Promise<void> {
   const isRepo = await gitMaybe(paths.bare, ["rev-parse", "--resolve-git-dir", "."]);
   if (isRepo === undefined) {
     throw new DidNotRun(
@@ -112,6 +131,7 @@ export async function ensureBare(paths: RepoPaths, gitUrl: string): Promise<void
         `remotes by design. Run \`make mirror\` on the host and start the review again.`,
     );
   }
+  if (!requireFresh) return;
 
   const freshness = await mirrorFreshness(paths.bare);
   if (freshness.kind === "no-remote") return; // nothing can be behind nothing

@@ -13,6 +13,8 @@
  */
 
 
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { Exhausted, LoreError } from "../core/errors.ts";
 import { reviewType } from "../core/review-type.ts";
 import { ensureBare, addWorktree, repoPaths } from "../git/repo.ts";
@@ -115,15 +117,22 @@ export class Worker {
       .prepare("SELECT git_url FROM repo WHERE id = ?")
       .get(review.repoId) as Record<string, string> | undefined;
     const paths = repoPaths(this.cfg.reposRoot, review.repoId);
-    // Present and fresh, or a loud refusal. `make mirror` on the host is what puts
-    // it there; lore holds no credentials for a remote (D-63).
-    await ensureBare(paths, repo?.["git_url"] ?? "");
-    const worktree = await addWorktree(paths, reviewId, review.branch).catch(async (e: unknown) => {
-      // Already present from an earlier round.
-      const existing = `${paths.worktrees}/${reviewId}`;
-      if (typeof e === "object") return existing;
-      throw e;
-    });
+
+    // A worktree already here means this is a later round of a review whose tree is
+    // pinned (D-40). It will not be re-cut, and the mirror will not be read again —
+    // so the mirror's age is only disqualifying on the round that cuts it.
+    const existing = join(paths.worktrees, reviewId);
+    const resumed = existsSync(existing);
+
+    // Present always; fresh only while the base is still being chosen (D-63).
+    await ensureBare(paths, repo?.["git_url"] ?? "", !resumed);
+
+    // Previously this called addWorktree unconditionally and caught the failure,
+    // treating `typeof e === "object"` as "already present from an earlier round".
+    // Every LoreError is an object, so a real failure — `branch 'x' not found on
+    // origin` — was swallowed too, and the round continued with a path to a
+    // directory that had never been created.
+    const worktree = resumed ? existing : await addWorktree(paths, reviewId, review.branch);
 
     this.store.updateReview(reviewId, { state: "running" });
 

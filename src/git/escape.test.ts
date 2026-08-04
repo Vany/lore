@@ -62,6 +62,9 @@ describe("the clone has to be there, and recent (D-63)", () => {
   it("refuses when nothing has been mirrored yet, and names the fix", async () => {
     const paths = { bare: join(root, "repos/r2/bare.git"), worktrees: join(root, "repos/r2/wt") };
     await expect(ensureBare(paths, "git@example.com:o/r.git")).rejects.toThrow(/make mirror/);
+    // Waiving the freshness requirement must not waive EXISTENCE. A later round with
+    // no clone at all is a broken deployment, not a pinned review.
+    await expect(ensureBare(paths, "git@example.com:o/r.git", false)).rejects.toThrow(/make mirror/);
   });
 
   it("accepts a clone with no remote, because it cannot be behind one", async () => {
@@ -128,6 +131,17 @@ describe("the clone has to be there, and recent (D-63)", () => {
     utimesSync(fetchHead, old, old);
 
     await expect(ensureBare(paths, src)).rejects.toThrow(/last fetched \d+ minutes ago/);
+
+    // ...but only while the base is being chosen. A review already holding a
+    // worktree is pinned to it (D-40) and never reads the mirror again, so the
+    // same staleness is not disqualifying on a later round.
+    //
+    // This is not hypothetical tidiness: reviewing the commit that introduced the
+    // check, round 3 was refused at "35 minutes" after t2 alone spent 16 — three
+    // rounds and eight answered findings destroyed by a guard with nothing left to
+    // guard. A t1→t2 climb alone exceeds MAX_MIRROR_AGE_MS, so between D-63 and this
+    // fix no review could reach t3 at all.
+    await expect(ensureBare(paths, src, false)).resolves.toBeUndefined();
     await expect(ensureBare(paths, src)).rejects.toThrow(/make mirror/);
   });
 });
