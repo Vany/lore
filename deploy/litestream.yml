@@ -1,23 +1,33 @@
 # Continuous replication of the knowledge base.
 #
-# This is the file that decides whether a dead SD card costs an afternoon or costs
-# everything the workgroup ever taught the service. The replica must be OFF this
-# device — a copy on the same disk is not a backup — and the restore must have been
-# performed at least once, because an untested backup is a belief, not a backup.
+# This is the file that decides whether a dead disk costs an afternoon or costs
+# everything the workgroup ever taught the service.
+#
+# THE REPLICA IS LOCAL, AND ON PURPOSE. lore's job ends at producing a consistent,
+# restorable copy in a folder beside itself; carrying that folder off the machine is
+# an outer script's job, not this service's. That split is why replication needs no
+# credentials, why it is always on rather than opt-in, and why nothing here knows or
+# cares where the copy eventually goes.
+#
+# It also means this file alone is NOT a backup. A copy on the same disk survives a
+# corrupted database, a bad bulk write and a wrong `down-hard`; it does not survive
+# the disk. The outer script is the other half, and `make backup-check` says how
+# fresh this half is, not whether the other half ran.
 #
 # Restore:
+#   make restore                      (or)
 #   litestream restore -config /etc/litestream.yml /var/lib/lore/lore.db
+#
+# Verify the whole path end to end, on a copy, without touching the live database:
+#   make backup-drill
 
 dbs:
   - path: /var/lib/lore/lore.db
     replicas:
-      - type: s3
-        # Any S3-compatible endpoint: Backblaze B2, Minio on another machine, R2.
-        bucket: ${LITESTREAM_BUCKET:-lore-backups}
-        path: lore
-        endpoint: ${LITESTREAM_ENDPOINT:-}
-        # Frequent, because the gap between snapshots is the amount of accumulated
-        # knowledge a failure can take with it.
+      - type: file
+        path: /backup/lore
+        # Frequent, because the gap between syncs is the amount of accumulated
+        # knowledge a failure can take with it. Cheap when the target is local.
         sync-interval: 10s
         # A month of history: long enough to notice and undo a bad bulk write to
         # the knowledge base, which is the failure mode a point-in-time replica is

@@ -162,6 +162,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-56** | A **fix** is settled by qualified silence over code that moved | confirmed |
 | **D-57** | `.lore-ok.md` justifies findings in files that cannot hold a comment | confirmed |
 | **D-58** | An oversized diff is announced against the tier's **own** demonstrated ceiling | confirmed |
+| **D-59** | Replication is **local and always on**; an outer script takes it off the box | confirmed |
 
 **D-7, revised.** The earlier version dropped GLM-5.2 on Artificial Analysis's
 *cost per task* — which is tokens consumed × price on their benchmark, not a price.
@@ -650,6 +651,31 @@ It warns and proceeds rather than refusing. The tier may well manage a diff larg
 than its previous best — that is how the ceiling rises — and a review stopped by a
 guess is worse than one that runs long. The fix it names is review scope, not a
 longer timeout: 21 commits accumulated on one base is not one review.
+
+**D-59 — replication is local and always on; carrying it away is not lore's job.**
+
+The knowledge base was to be replicated to an off-device S3 target, and the
+consequence was that it was replicated nowhere: the credentials were never set, the
+container was behind a `backup` profile, and **an opt-in backup is one that is off**.
+440 rows sat on a laptop with no second copy while the spec said losing them loses
+everything the workgroup taught the service.
+
+So the split moves. Litestream writes a continuously-restorable copy into a folder
+beside the deployment, and an **outer script** takes the files off the machine. lore
+does not know how, and does not need to: the half it can be responsible for, it now
+does properly and without configuration. There are no credentials, so there is
+nothing to gate, so the container is a first-class service rather than a profile.
+
+**This alone is not a backup, and the tooling says so rather than implying
+otherwise.** A copy on this disk survives a corrupted database, a bad bulk write and
+a wrong `down-hard`; it does not survive the disk. `make backup-check` reports that
+it is checking the local half only. `make status` warns when the replica has not
+been written in an hour — freshness, which is the failure that actually happens,
+rather than the presence of a credential, which was never the question.
+
+Proven on the live deployment, 2026-08-04: restoring from the running replica gives
+`integrity: ok`, schema v4 and all 440 knowledge rows. `make backup-drill` repeats
+that end to end on a copy, including destroying the source first.
 
 **D-43 — review types.** `review.start` takes a `type`, defaulting to `code-arch`:
 *is this change correct and well-made?* The next type is `security`: *what

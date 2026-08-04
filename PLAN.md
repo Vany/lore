@@ -149,7 +149,7 @@ agent must be tested against one.
 - **T0 engineered for the host** (D-37): `node_modules` cache keyed by lockfile
   hash, `tsc --incremental` with persisted build info, **diff-scoped work from round
   2**, bounded concurrency
-- Litestream to an **off-device** target, and a **restore that has actually been
+- Litestream to a **local folder** an outer script collects, and a **restore that has actually been
   performed**
 - heartbeat deadman, webhook alerting, the page/ticket/log split (D-42)
 - daily spend ceiling that stops starting reviews

@@ -18,17 +18,14 @@ that part is pulled out into its own open item rather than hidden inside a tick.
 
 ## Now — nothing here is about writing more features
 
-- [ ] **Turn on backups — blocked on a bucket, and only on a bucket.** The restore
-      is proven: `make backup-drill` replicates a snapshot, destroys the source the
-      way a dead disk would, restores, and checks integrity and every row count
-      (2026-08-04: `knowledge=440 finding=45 verdict=58 review=14`, identical either
-      side). `make status` now says in red when there is no backup, and
-      `backup-check` reports its real error instead of guessing.
-      What is left is somewhere to put it. Replication is off-device by design — a
-      copy on the same disk is not a backup — so this needs S3-compatible
-      credentials in `.env` (Backblaze B2, R2, or Minio on another machine), then
-      `make backup-on`. Until then the knowledge base has exactly one copy, on a
-      laptop, and it is the thing the product IS.
+- [x] **The knowledge base is replicated** (D-59). Done 2026-08-04. Litestream runs
+      as a first-class service — no profile, no credentials — writing a
+      continuously-restorable copy into a folder beside the deployment, from which an
+      outer script takes it off the machine. Restoring from the *live* replica gives
+      `integrity: ok`, schema v4 and all 440 rows; `make backup-drill` repeats it end
+      to end on a copy, source destroyed first. `make status` warns when the replica
+      has not been written in an hour, and `backup-check` says plainly that it can
+      only see the local half.
 
 - [x] **T0's sandbox is no longer untested.** Done 2026-08-04: a package whose
       `npm test` is a hostile script, run through the real `runTests` path with the

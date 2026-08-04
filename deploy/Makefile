@@ -15,6 +15,8 @@
 COMPOSE ?= docker compose
 DATA    ?= $(shell grep -E '^LORE_HOST_DATA=' .env 2>/dev/null | cut -d= -f2)
 DATA    := $(if $(DATA),$(DATA),/var/lib/lore)
+BACKUP  ?= $(shell grep -E '^LORE_HOST_BACKUP=' .env 2>/dev/null | cut -d= -f2)
+BACKUP  := $(if $(BACKUP),$(BACKUP),./backup)
 
 .DEFAULT_GOAL := help
 .PHONY: help preflight sync-opencode push build up down down-hard restart logs status status-json status-local doctor new tokens backup-on backup-check backup-drill restore sweep shell
@@ -30,7 +32,7 @@ preflight:
 	@test -s ./opencode/data/auth.json || grep -qE '^(OPENROUTER_API_KEY|ZHIPU_API_KEY)=.+' .env \
 		|| { echo "no credentials: run 'make sync-opencode', or set a provider key in .env"; exit 1; }
 	@grep -qE '^OPENCODE_SERVER_PASSWORD=.+' .env || { echo "OPENCODE_SERVER_PASSWORD is empty in .env — the server would answer a bare 401 with no hint"; exit 1; }
-	@grep -qE '^LITESTREAM_ACCESS_KEY_ID=.+' .env || echo "WARNING: no backup configured. The knowledge base IS the product and this box has no redundancy."
+	@mkdir -p "$(BACKUP)"
 	@mkdir -p "$(DATA)"
 	@# A container uid that cannot write the data directory fails with "attempt to
 	@# write a readonly database", which points at SQLite rather than at ownership.
@@ -116,8 +118,9 @@ status:
 	$(COMPOSE) exec -T lore node /app/src/ops/status.ts $(ID) 2>$$e; rc=$$?; \
 	test $$rc -eq 0 || { echo "status could not answer. the error, not a guess:"; head -20 $$e; }; \
 	rm -f $$e; \
-	grep -qE '^LITESTREAM_ACCESS_KEY_ID=.+' .env 2>/dev/null \
-		|| printf '\033[31m!! the knowledge base has NO BACKUP\033[0m — it is the product, and this is its only copy. `make backup-on`\n'; \
+	newest=$$(find "$(BACKUP)" -type f -newermt '-1 hour' 2>/dev/null | head -1); \
+	test -n "$$newest" \
+		|| printf '\033[31m!! the local replica has not been written in an hour\033[0m — the knowledge base is the product. make backup-check\n'; \
 	exit $$rc
 
 ## The raw JSON, for a script rather than a person.
@@ -138,24 +141,25 @@ tokens:
 	for (const r of d.prepare('SELECT principal, label, created_at, revoked_at FROM token').all()) \
 	  console.log(r.revoked_at ? '[revoked]' : '[live]   ', r.principal, r.label ?? '', r.created_at);"
 
-## Turn replication on, once LITESTREAM_* are set. Off by default pre-release.
+## Replication is always on — this only restarts it.
 ##
-## Postponing this is reasonable while the knowledge base is empty. It stops being
-## reasonable the moment the workgroup has taught lore anything, because that is
-## the one thing here with no other copy.
+## It used to be opt-in because it needed S3 credentials, and an opt-in backup is
+## one that is off. The replica is a local folder now, so there is nothing to
+## configure and no reason to gate it.
 backup-on:
-	@grep -qE '^LITESTREAM_ACCESS_KEY_ID=.+' .env || { echo "set LITESTREAM_* in .env first"; exit 1; }
-	$(COMPOSE) --profile backup up -d litestream
-	@echo "replicating. Verify with: make backup-check"
+	$(COMPOSE) up -d litestream
+	@echo "replicating to $(BACKUP). Verify with: make backup-check"
 
 ## Is the backup real, or just configured? Untested backups are beliefs.
 backup-check:
-	@grep -qE '^LITESTREAM_ACCESS_KEY_ID=.+' .env 2>/dev/null \
-		|| { echo "no LITESTREAM_* credentials in .env — replication was never configured, so there is nothing to check"; exit 1; }
-	@e=/tmp/lore-backup.$$$$.err; \
-	$(COMPOSE) exec -T litestream litestream ltx /var/lib/lore/lore.db 2>$$e; rc=$$?; \
-	test $$rc -eq 0 || { echo "backup-check could not answer. the error, not a guess:"; head -20 $$e; }; \
-	rm -f $$e; exit $$rc
+	@n=$$(find "$(BACKUP)" -type f 2>/dev/null | wc -l | tr -d ' '); \
+	test "$$n" -gt 0 || { echo "nothing in $(BACKUP) — replication has never written. Is the litestream container up? (make logs)"; exit 1; }; \
+	fresh=$$(find "$(BACKUP)" -type f -newermt '-1 hour' 2>/dev/null | wc -l | tr -d ' '); \
+	echo "$$n file(s) in $(BACKUP), $$fresh written in the last hour"; \
+	test "$$fresh" -gt 0 || { echo "STALE — the replica exists but is not being updated"; exit 1; }
+	@echo "This checks the LOCAL half only. Whether an outer script has carried these"
+	@echo "files off the machine is not something lore can see, and a copy on this"
+	@echo "disk does not survive this disk. 'make backup-drill' proves the restore."
 
 ## Prove a restore actually works, on a COPY. Never touches the live database.
 ##

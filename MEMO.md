@@ -165,10 +165,19 @@ the reason is written into the target.
 that caught several of this session's defects was silent about the single largest
 risk to the thing the product IS.
 
-**Still blocked on a bucket.** Replication is off-device by design — a copy on the
-same disk is not a backup — so turning it on needs S3-compatible credentials. The
-mechanism, the restore and the verification are all proven; what is missing is
-somewhere to put it.
+**And then the architecture changed, which unblocked it entirely.** Off-device S3
+was the wrong split: it made replication need credentials, credentials made it
+opt-in, and an opt-in backup is one that is off — 440 rows on a laptop with no
+second copy. Vany's design is simpler and better. Litestream writes into a folder
+beside the deployment and an **outer script** carries it away; lore does the half it
+can be responsible for, properly and without configuration, and knows nothing about
+the rest. No credentials means nothing to gate, so it is a first-class service now
+rather than a profile.
+
+Restoring from the LIVE replica: `integrity: ok`, schema v4, all 440 rows. The
+tooling is careful not to overclaim — `backup-check` says it sees the local half
+only, and `make status` warns on replica staleness rather than on a missing
+credential, because staleness is the failure that actually happens.
 
 **T0's sandbox ran for the first time, adversarially, and held.** A package whose
 `npm test` is a hostile script, through the real `runTests` path with the deployed
