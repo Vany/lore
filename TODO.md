@@ -18,14 +18,17 @@ that part is pulled out into its own open item rather than hidden inside a tick.
 
 ## Now — nothing here is about writing more features
 
-- [ ] **Turn on backups, and perform a restore.** `make backup-on`, then
-      `make backup-check`, then actually restore into a scratch directory and open
-      the database. Litestream has no credentials today and the container is not
-      running, so the knowledge base — **440 rows**, the thing the product IS — has
-      exactly one copy, on a laptop. `SPEC.md` §3 says a knowledge base without
-      backups is one you will lose, and `make backup-check`'s own text says untested
-      backups are beliefs. This is the only open item whose downside is losing
-      everything the tool has learned.
+- [ ] **Turn on backups — blocked on a bucket, and only on a bucket.** The restore
+      is proven: `make backup-drill` replicates a snapshot, destroys the source the
+      way a dead disk would, restores, and checks integrity and every row count
+      (2026-08-04: `knowledge=440 finding=45 verdict=58 review=14`, identical either
+      side). `make status` now says in red when there is no backup, and
+      `backup-check` reports its real error instead of guessing.
+      What is left is somewhere to put it. Replication is off-device by design — a
+      copy on the same disk is not a backup — so this needs S3-compatible
+      credentials in `.env` (Backblaze B2, R2, or Minio on another machine), then
+      `make backup-on`. Until then the knowledge base has exactly one copy, on a
+      laptop, and it is the thing the product IS.
 
 - [ ] **Run T0's test sandbox once, adversarially.** `tests` is already a declared
       T0 engine for `code-arch`, but `LORE_RUN_TESTS=0` in the deployment, so it has

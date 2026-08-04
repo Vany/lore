@@ -17,7 +17,7 @@ DATA    ?= $(shell grep -E '^LORE_HOST_DATA=' .env 2>/dev/null | cut -d= -f2)
 DATA    := $(if $(DATA),$(DATA),/var/lib/lore)
 
 .DEFAULT_GOAL := help
-.PHONY: help preflight sync-opencode push build up down down-hard restart logs status status-json status-local doctor new tokens backup-on backup-check restore sweep shell
+.PHONY: help preflight sync-opencode push build up down down-hard restart logs status status-json status-local doctor new tokens backup-on backup-check backup-drill restore sweep shell
 
 help:
 	@sed -n '2,14p' $(MAKEFILE_LIST) | sed 's/^# \{0,1\}//'
@@ -115,7 +115,10 @@ status:
 	@e=/tmp/lore-status.$$$$.err; \
 	$(COMPOSE) exec -T lore node /app/src/ops/status.ts $(ID) 2>$$e; rc=$$?; \
 	test $$rc -eq 0 || { echo "status could not answer. the error, not a guess:"; head -20 $$e; }; \
-	rm -f $$e; exit $$rc
+	rm -f $$e; \
+	grep -qE '^LITESTREAM_ACCESS_KEY_ID=.+' .env 2>/dev/null \
+		|| printf '\033[31m!! the knowledge base has NO BACKUP\033[0m — it is the product, and this is its only copy. `make backup-on`\n'; \
+	exit $$rc
 
 ## The raw JSON, for a script rather than a person.
 status-json:
@@ -147,8 +150,42 @@ backup-on:
 
 ## Is the backup real, or just configured? Untested backups are beliefs.
 backup-check:
-	@$(COMPOSE) exec -T litestream litestream snapshots /var/lib/lore/lore.db \
-		|| echo "no snapshots — the knowledge base is NOT backed up"
+	@grep -qE '^LITESTREAM_ACCESS_KEY_ID=.+' .env 2>/dev/null \
+		|| { echo "no LITESTREAM_* credentials in .env — replication was never configured, so there is nothing to check"; exit 1; }
+	@e=/tmp/lore-backup.$$$$.err; \
+	$(COMPOSE) exec -T litestream litestream ltx /var/lib/lore/lore.db 2>$$e; rc=$$?; \
+	test $$rc -eq 0 || { echo "backup-check could not answer. the error, not a guess:"; head -20 $$e; }; \
+	rm -f $$e; exit $$rc
+
+## Prove a restore actually works, on a COPY. Never touches the live database.
+##
+## "Untested backups are beliefs" is easy to write and easy to leave untested, so it
+## is a command. Replicates a consistent snapshot to a throwaway file replica,
+## destroys the source the way a dead disk would, restores, and checks the row counts
+## and integrity of what comes back.
+##
+## The snapshot is taken with VACUUM INTO, NOT `cp`. On 2026-08-04 a plain copy of a
+## WAL-mode database silently lost 86 knowledge rows and a schema version, because
+## the main file does not contain what is still in the WAL — a backup that looks like
+## it worked and is missing the newest thing you did.
+backup-drill:
+	@set -e; D=$$(mktemp -d); trap 'docker rm -f lore-drill-ls >/dev/null 2>&1 || true; rm -rf $$D' EXIT; \
+	mkdir -p $$D/db $$D/replica; \
+	printf 'dbs:\n  - path: /var/lib/lore/lore.db\n    replicas:\n      - type: file\n        path: /replica/lore\n        sync-interval: 1s\n' > $$D/litestream.yml; \
+	$(COMPOSE) exec -T lore node -e "const{DatabaseSync}=require('node:sqlite');new DatabaseSync('/var/lib/lore/lore.db').exec(\"VACUUM INTO '/tmp/drill.db'\")"; \
+	$(COMPOSE) cp lore:/tmp/drill.db $$D/db/lore.db >/dev/null; \
+	$(COMPOSE) exec -T lore rm -f /tmp/drill.db; \
+	before=$$(docker run --rm --entrypoint node -v $$D/db:/var/lib/lore lore-lore:latest -e "const{DatabaseSync}=require('node:sqlite');const d=new DatabaseSync('/var/lib/lore/lore.db');console.log(['knowledge','finding','verdict','review'].map(t=>t+'='+d.prepare('SELECT count(*) c FROM '+t).get().c).join(' '))"); \
+	echo "snapshot: $$before"; \
+	docker run --rm -d --name lore-drill-ls -v $$D/db:/var/lib/lore -v $$D/replica:/replica -v $$D/litestream.yml:/etc/litestream.yml:ro litestream/litestream:latest replicate -config /etc/litestream.yml >/dev/null; \
+	sleep 6; docker stop lore-drill-ls >/dev/null; \
+	rm -f $$D/db/lore.db $$D/db/lore.db-wal $$D/db/lore.db-shm; \
+	echo "source destroyed"; \
+	docker run --rm -v $$D/db:/var/lib/lore -v $$D/replica:/replica -v $$D/litestream.yml:/etc/litestream.yml:ro litestream/litestream:latest restore -config /etc/litestream.yml /var/lib/lore/lore.db >/dev/null; \
+	after=$$(docker run --rm --entrypoint node -v $$D/db:/var/lib/lore lore-lore:latest -e "const{DatabaseSync}=require('node:sqlite');const d=new DatabaseSync('/var/lib/lore/lore.db');const i=d.prepare('PRAGMA integrity_check').get().integrity_check;if(i!=='ok'){console.error('integrity: '+i);process.exit(1)}console.log(['knowledge','finding','verdict','review'].map(t=>t+'='+d.prepare('SELECT count(*) c FROM '+t).get().c).join(' '))"); \
+	echo "restored : $$after"; \
+	test "$$before" = "$$after" || { echo "DRILL FAILED — the restore does not match the snapshot"; exit 1; }; \
+	echo "drill passed: integrity ok and every row came back"
 
 ## Restore from backup. Overwrites the live database.
 restore:

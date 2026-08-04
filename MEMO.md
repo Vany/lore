@@ -147,6 +147,29 @@ findings on five rounds is the ping-pong the cap is for, and every one of those 
 was a real defect in a design written the same afternoon. The bound stopping it is
 not the design failing; it is the design being reviewed harder than it was written.
 
+**The restore drill passes, and taking the snapshot is where the danger was.**
+Replicate → destroy the source → restore → `integrity_check` ok and every row back:
+`knowledge=440 finding=45 verdict=58 review=14`, identical either side. Litestream's
+mechanism is sound and is now `make backup-drill` rather than something I once did
+by hand.
+
+The finding was in my own first attempt. The container has no `sqlite3`, so a
+`.backup` fell through to plain `cp lore.db` — which copies the main file and **not
+the WAL**, and silently produced a snapshot missing **86 knowledge rows and a schema
+version** (354 vs 440, version 2 vs 3). It looked like it worked. A backup that is
+quietly missing the newest thing you did is the same species as everything else this
+session: a failure that reports success. `VACUUM INTO` is what the drill uses, and
+the reason is written into the target.
+
+`make status` now says, in red, when there is no backup at all. The operator view
+that caught several of this session's defects was silent about the single largest
+risk to the thing the product IS.
+
+**Still blocked on a bucket.** Replication is off-device by design — a copy on the
+same disk is not a backup — so turning it on needs S3-compatible credentials. The
+mechanism, the restore and the verification are all proven; what is missing is
+somewhere to put it.
+
 **Open.** One bad finding still discards a whole reply;
 that is the right default and the wrong outcome. `passed`, t3 and a real
 `review_attest` remain unreached. glm-5.2 exceeded the 300-character claim cap on
