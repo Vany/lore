@@ -550,8 +550,14 @@ async function settleFixed(
     const qualified = f.origin === "t0" ? tier.id === "t0" || here >= 0 : here >= 0 && here >= rank(f.origin);
     if (!qualified) continue;
 
+    // Unreadable is CANNOT TELL, and cannot tell never settles (c037b812). The old
+    // condition fell through to `fixed` when the read failed, so a permissions error
+    // or a transient I/O fault read as evidence the code had moved — the opposite of
+    // what it means. It is the same rule the absent-scope check above already states
+    // and it has to hold on both paths, or the weaker one decides.
     const source = await readFile(join(worktree, f.file), "utf8").catch(() => undefined);
-    if (source !== undefined && hunkStillPresent(source, f.scope.hunk)) continue;
+    if (source === undefined) continue;
+    if (hunkStillPresent(source, f.scope.hunk)) continue;
 
     store.recordVerdict(reviewId, {
       fingerprint: f.fingerprint,

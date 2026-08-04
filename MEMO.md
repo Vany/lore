@@ -118,9 +118,36 @@ refused an attestation by the guard I had just added.
 Four defects in the product's central artefact, none reachable except by making it
 once.
 
-**Open.** Nothing writes a `fixed` verdict, so a finding that gets fixed is never
-settled and shows open for ever — `attest.test.ts` builds fixtures in a state
-production cannot produce (TODO). One bad finding still discards a whole reply;
+**D-56 and D-57, and what reviewing them proved.** The design work answered the
+three symptoms that shared a root — the loop had no way to record that a finding was
+*answered*. `fixed` is now settled by qualified silence over code that moved, and
+`.lore-ok.md` gives a reason somewhere to live when the file it defends has no
+comment syntax.
+
+The review of that work found **six defects in it**, every one mine, and five of
+them would have been silent:
+
+- the ladder never learned about `fixed`, so a re-raise livelocked the client on
+  `findings_ready` with an empty list;
+- a ledger justification recorded a hunk of markdown, which `expireStaleVerdicts`
+  then looked for in the JSON it defends — expiring every ledger reason the round
+  after it was accepted, the exact loop D-57 exists to end;
+- `SCHEMA_VERSION` stayed at 2 while two columns were added, so the number
+  `assertNotDowngrade` compares stopped describing the schema;
+- a re-raise refreshed neither scope nor origin, so a stale hunk could fake a fix and
+  a stale origin let a weaker tier close a stronger tier's finding;
+- an unreadable file fell through to `fixed`, reading an I/O failure as evidence the
+  code had moved.
+
+The first `fixed` verdict this system has ever written was observed live:
+`cadd3821 → fixed by t1, "not re-raised by t1 and the code it named has changed"`.
+
+The review then hit the per-tier bound at `{t1: 5, t2: 3, t3: 1}` — t1 raising fresh
+findings on five rounds is the ping-pong the cap is for, and every one of those five
+was a real defect in a design written the same afternoon. The bound stopping it is
+not the design failing; it is the design being reviewed harder than it was written.
+
+**Open.** One bad finding still discards a whole reply;
 that is the right default and the wrong outcome. `passed`, t3 and a real
 `review_attest` remain unreached. glm-5.2 exceeded the 300-character claim cap on
 three of four claims, which is a number to revisit with a cost argument, not

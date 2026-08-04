@@ -450,6 +450,19 @@ describe("runRound", () => {
       expect(after.fixed).toStrictEqual([]);
     });
 
+    // Unreadable is "cannot tell", not "the code moved". Falling through to `fixed`
+    // turned a permissions error or an I/O fault into a settled verdict (c037b812).
+    it("does not settle a finding whose file cannot be read", async () => {
+      const reviewer = new ScriptedReviewer([[HOLD_BUG], []]);
+      await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
+
+      // The file is gone, so the read fails — which says nothing about the defect.
+      rmSync(join(dir, "src/hold.ts"));
+      const after = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
+
+      expect(after.fixed).toStrictEqual([]);
+    });
+
     // The guard that matters most. t1 not repeating what t3 found says nothing about
     // the code — t1 may be unable to see it — so closing on that silence would be
     // INV-1 inverted: a tier that did not look, recorded as one that found nothing.
