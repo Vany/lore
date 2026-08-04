@@ -324,11 +324,17 @@ The loop:
 2. review_poll(review_id) until findings arrive or the state is terminal
 3. For each finding: fix it, or justify it with // lore-ok[fp]: <reason>
 4. review_submit(review_id, diff, tree_hash)
-5. Return to 2. Repeat until the state is \`passed\`.
+5. Return to 2. Repeat until the state is TERMINAL — \`passed\`, \`passed_partial\`,
+   \`needs_human\`, \`failed\` or \`expired\`. Only \`passed\` and \`passed_partial\` are
+   worth attesting, and only \`passed\` is clean.
 
 Rules:
 - Polls return only new findings. Never re-fix what is not in the response.
 - \`failed\`, \`expired\` and \`fast_clean\` are not \`passed\`. Do not merge on them.
+- \`passed_partial\` is TERMINAL: it will never become \`passed\`, so looping for that
+  never ends. Attest it — the line names which tiers were skipped and which vendor
+  looked — and tell your user the evidence is weaker than a pass, so the decision to
+  merge is theirs.
 - Expect several rounds. Every fix resets the ladder to the cheapest tier.
 - Do not use lore-ok to make an inconvenient finding go away.
 - Before fixing in unfamiliar code, knowledge_query it.
