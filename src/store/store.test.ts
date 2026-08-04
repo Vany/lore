@@ -327,8 +327,8 @@ describe("tier runs are opened before the tier is asked anything", () => {
 
   it("does not open a second row for the same run", () => {
     const id = store.openTierRun("rev1", "t1", 1, new Date().toISOString());
-    store.closeTierRun(id, "answered");
-    store.closeTierRun(id, "passed");
+    store.closeTierRun(id, "clean");
+    store.closeTierRun(id, "findings");
     const n = store.db.prepare("SELECT COUNT(*) c FROM tier_run WHERE review_id = 'rev1'").get() as Record<string, number>;
     expect(Number(n["c"])).toBe(1);
   });

@@ -49,6 +49,23 @@ export interface RecordedFinding extends Finding {
 
 export type VerdictKind = "fixed" | "justified-accepted" | "justified-rejected";
 
+/**
+ * What a TIER did. Never what the ladder decided about it.
+ *
+ * Two vocabularies used to reach this column, because `runRound` closed the row a
+ * second time with `stepped.decision.kind` — so `passed`, `escalate` and `fastClean`
+ * landed in it, and `make status` painted an answered, clean tier red as a tier that
+ * never finished. That second write is gone, and this type is what stops the two
+ * vocabularies meeting again.
+ *
+ * It is a type rather than a comment because the drift outlived the bug: the
+ * attestation fixtures went on asserting `fastClean`/`escalate`/`passed` and stayed
+ * green, since `countTiers` reads DISTINCT tier and never looks at the outcome. A
+ * test that describes a state production cannot produce proves nothing about
+ * production, and nothing was in a position to notice (d17c92f8).
+ */
+export type TierOutcome = "clean" | "findings" | "failed" | "unpayable";
+
 export interface VerdictRow {
   readonly fingerprint: string;
   readonly verdict: VerdictKind;
@@ -279,11 +296,11 @@ export class Store {
   }
 
   /** Close a run opened by `openTierRun`. The outcome is only known now. */
-  closeTierRun(id: number, outcome: string): void {
+  closeTierRun(id: number, outcome: TierOutcome): void {
     this.db.prepare("UPDATE tier_run SET outcome = ?, finished_at = ? WHERE id = ?").run(outcome, now(), id);
   }
 
-  recordTierRun(reviewId: string, tier: string, round: number, outcome: string, startedAt: string): void {
+  recordTierRun(reviewId: string, tier: string, round: number, outcome: TierOutcome, startedAt: string): void {
     this.db
       .prepare(
         "INSERT INTO tier_run(review_id, tier, round, outcome, started_at, finished_at) VALUES(?, ?, ?, ?, ?, ?)",

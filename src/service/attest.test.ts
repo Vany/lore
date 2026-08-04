@@ -53,12 +53,20 @@ describe("attest", () => {
     await expect(attest(store, "r1", "mallory", keyPath)).rejects.toThrow();
   });
 
+  // Outcomes here are the ones a TIER writes — clean, findings, failed, unpayable —
+  // and never a ladder decision kind. The fixture used to say `fastClean`,
+  // `escalate` and `passed`, which was accurate while `runRound` closed the row a
+  // second time with `stepped.decision.kind`, and became fiction the moment that
+  // stopped. Nothing caught it: `countTiers` reads DISTINCT tier and ignores the
+  // outcome entirely, so the attestation — the one artefact this product exists to
+  // produce — was being proved against a database state that can no longer occur.
+  // Raised by t1 against this branch (d17c92f8).
   it("counts the tiers that actually ran", async () => {
     review("passed");
     store.recordTierRun("r1", "t0", 1, "clean", "2026-08-03T00:00:00.000Z");
-    store.recordTierRun("r1", "t1", 1, "fastClean", "2026-08-03T00:00:00.000Z");
-    store.recordTierRun("r1", "t2", 2, "escalate", "2026-08-03T00:00:00.000Z");
-    store.recordTierRun("r1", "t3", 3, "passed", "2026-08-03T00:00:00.000Z");
+    store.recordTierRun("r1", "t1", 1, "clean", "2026-08-03T00:00:00.000Z");
+    store.recordTierRun("r1", "t2", 2, "findings", "2026-08-03T00:00:00.000Z");
+    store.recordTierRun("r1", "t3", 3, "clean", "2026-08-03T00:00:00.000Z");
     // Repeats of the same tier are one tier, not four.
     store.recordTierRun("r1", "t1", 4, "clean", "2026-08-03T00:00:00.000Z");
 

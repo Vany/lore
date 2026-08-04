@@ -82,7 +82,10 @@ findings are worth the money, and the numbers are measured rather than guessed.
          a branch production cannot reach.
       3. `attest.test.ts` builds its fixtures with `verdict: "fixed"`. The
          attestation, which is what this whole product converges on, is tested
-         against a database state that never occurs.
+         against a database state that never occurs. The `tier_run` half of that
+         same drift is fixed — `TierOutcome` now makes it a type error (D-53's
+         review, d17c92f8) — and `VerdictKind` already is one, so this is the
+         remaining gap: the type permits `fixed`, and nothing writes it.
       The ladder itself is fine — `step()` keys off what was *raised*, so an unraised
       finding correctly stops blocking. This is about the record, not the control
       flow, which is why it survived this long. Fix is likely in `runRound`: a
