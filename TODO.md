@@ -92,6 +92,22 @@ findings are worth the money, and the numbers are measured rather than guessed.
       previously-open finding the tier did not re-raise gets a `fixed` verdict, with
       the same "the code moved" care `expireStaleVerdicts` already takes.
 
+- [ ] **A finding in a comment-less file cannot be justified.** `lore-ok` is a
+      comment marker (`//` and `<!-- -->`), and `collectJustifications` reads the
+      files that carry open findings. JSON has no comments, so a finding raised
+      against `deploy/tiers.zai-openai.json` has nowhere to put its reason — and the
+      tier schema is `.strict()`, correctly, so smuggling one in as a key is a parse
+      error rather than a workaround.
+      Hit on 2026-08-04 with c618aec7, a fair scope-creep finding about the t1 model
+      swap. The reason went to SPEC (D-54) instead, which is where a money decision
+      belongs anyway, but the reviewer cannot see it there — so the finding cannot be
+      settled the normal way and will be re-raised for ever, exactly like d6d9cd72
+      before the changed-files fix.
+      Options, none free: a sidecar `<file>.lore-ok` read alongside the file; allow
+      justifications in a repo-level file keyed by fingerprint; or accept that
+      comment-less files can only ever be fixed, never justified, and say so loudly
+      instead of looping. The last is the smallest and probably right, but it needs a
+      decision — silence here is the failure mode this project is named against.
 ---
 
 ## Done

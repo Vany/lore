@@ -733,6 +733,18 @@ export class Store {
    * having; only one round at a time within a review. A blocked job is left queued
    * and the loop polls again, so nothing is lost — and a review whose `running` job
    * belongs to a dead process is freed by `reclaimOrphanedJobs` at startup.
+   *
+   * lore-ok[3b2e40c0]: the subquery is indexed, not a table scan. Asked of SQLite
+   * rather than reasoned about, against the deployed database:
+   *
+   *   CORRELATED SCALAR SUBQUERY 1
+   *     SEARCH r USING COVERING INDEX job_by_review (review_id=? AND state=?)
+   *
+   * `job_by_review` is exactly (review_id, state), which is exactly what this
+   * predicate binds — and COVERING means it is answered from the index without
+   * touching the table at all. The finding's own evidence undoes it: it faults the
+   * plan for not using a `stage` column that this index does not contain. `stage`
+   * belongs to `enqueue`'s predicate, and SQLite picks the same index there.
    */
   claimJob(): { id: number; reviewId: string; stage: "fast" | "deep" } | undefined {
     return this.tx(() => {

@@ -125,10 +125,13 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // amended when the scope grew, and was not. What is being justified here is the
   // code, not the omission — a reviewer noticing an unrequested change against a
   // stated intent is the check working, and it should stay noisy about this.
-  const justifiableFiles = [
-    ...new Set([...diff.changedFiles, ...store.openFindings(reviewId).map((f) => f.file)]),
-  ];
-  const pending = await collectJustifications(store, reviewId, worktree, justifiableFiles);
+  // Read ONCE and passed down. `collectJustifications` used to re-run the identical
+  // query (5a90207a), which is not just a wasted round trip: two reads of the same
+  // rows in one round can disagree, and the file list would then describe a set of
+  // findings the collector never saw.
+  const open = store.openFindings(reviewId);
+  const justifiableFiles = [...new Set([...diff.changedFiles, ...open.map((f) => f.file)])];
+  const pending = await collectJustifications(store, reviewId, worktree, justifiableFiles, open);
 
   // 4. Expire justifications whose code has changed, BEFORE the model tier runs.
   //
@@ -467,8 +470,9 @@ async function collectJustifications(
   reviewId: string,
   worktree: string,
   files: readonly string[],
+  /** The caller's open findings — the same read `files` was derived from. */
+  open: readonly RecordedFinding[],
 ): Promise<readonly { finding: RecordedFinding; reason: string; scope: ReturnType<typeof makeScope> | undefined }[]> {
-  const open = store.openFindings(reviewId);
   if (open.length === 0) return [];
   const byFingerprint = new Map(open.map((f) => [f.fingerprint, f]));
 

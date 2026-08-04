@@ -157,6 +157,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-51** | An accepted justification is **repo knowledge**, carried across reviews | confirmed |
 | **D-52** | The per-tier cap bounds *iteration*, so a clean tier escalates past it | confirmed |
 | **D-53** | One round at a time **per review**; reviews still run in parallel | confirmed |
+| **D-54** | t1 is `glm-5-turbo`: glm-4.7 answers 200 with an empty body | confirmed |
 
 **D-7, revised.** The earlier version dropped GLM-5.2 on Artificial Analysis's
 *cost per task* — which is tokens consumed × price on their benchmark, not a price.
@@ -515,6 +516,31 @@ collapses an identical queued round. Parallelism **between** reviews is untouche
 which is the concurrency worth having; a blocked job stays queued and the loop
 polls again. Deduplication is on (review, stage), not review alone: collapsing a
 `deep` into a waiting `fast` would silently drop an escalation.
+
+**D-54 — t1 is `glm-5-turbo`, because glm-4.7 stopped answering.**
+
+Measured, not assumed. On 2026-08-04 glm-4.7 returned an empty body three times —
+twice inside a review, once to a direct probe — with HTTP 200 and tokens counted
+(`output: 1`). That is a provider refusing inside a success status, which is what
+`describeReply` was taught to name hours earlier, and it named it correctly first
+time: *"first reply was EMPTY (usually a provider failure inside a 200)"*.
+
+Not the account. On the same subscription, at the same minute: glm-5.2 answered in
+8s, glm-5-turbo in 6s, both `$0`. `glm-5.2-highspeed` was also empty, and with zero
+input tokens, so it never started.
+
+`glm-5-turbo` over promoting glm-5.2 into t1: making t1 and t2 the same model would
+leave the cheap regression check (D-6) doing the same work as the deep tier, and the
+ladder would stop being a ladder. Still multi-vendor, so `passed` stays reachable
+(D-49). Its review quality was unmeasured when chosen; its first two rounds took
+271s/13 turns and 162s/11 turns, against glm-4.7's 500–600s and 30+ turns, and it
+found a real defect in the attestation fixtures.
+
+**The operator chose this**, per the rule that anything changing which model is
+called is discussed before it ships. Recorded here rather than beside the code
+because `deploy/tiers.zai-openai.json` cannot carry a `lore-ok` — JSON has no
+comments and the tier schema is `.strict()` — which is its own open problem, in
+TODO.
 
 **D-43 — review types.** `review.start` takes a `type`, defaulting to `code-arch`:
 *is this change correct and well-made?* The next type is `security`: *what
