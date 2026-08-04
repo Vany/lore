@@ -66,3 +66,29 @@ describe("parseLoreOk", () => {
     expect(parseLoreOk(src).map((f) => f.short)).toStrictEqual(["bbbbbbbb", "aaaaaaaa"]);
   });
 });
+
+// The block-comment form, added because it was silently missing and that cost a
+// justification: this codebase explains itself in `/** ... */`, a long reason lands
+// there by reflex, and `parseLoreOk` skipped it — so the finding it answered could
+// never settle (b674468b).
+describe("the block-comment form", () => {
+  it("reads a lore-ok written as JSDoc", () => {
+    const src = ["/**", " * Some prose.", " * lore-ok[a1b2c3d4]: bounded by the caller", " */"].join("\n");
+    expect(parseLoreOk(src)).toStrictEqual([{ short: "a1b2c3d4", reason: "bounded by the caller", line: 3 }]);
+  });
+
+  it("continues across ` * ` lines and stops at the closing delimiter", () => {
+    const src = ["/**", " * lore-ok[a1b2c3d4]: bounded by the", " * caller's schema check", " */", "const after = 1;"].join("\n");
+    expect(parseLoreOk(src)[0]?.reason).toBe("bounded by the caller's schema check");
+  });
+
+  it("does not merge two markers in one block", () => {
+    const src = ["/**", " * lore-ok[aaaaaaaa]: first reason", " * lore-ok[bbbbbbbb]: second reason", " */"].join("\n");
+    expect(parseLoreOk(src).map((f) => f.short)).toStrictEqual(["aaaaaaaa", "bbbbbbbb"]);
+    expect(parseLoreOk(src)[0]?.reason).toBe("first reason");
+  });
+
+  it("still refuses an empty reason", () => {
+    expect(parseLoreOk(["/**", " * lore-ok[a1b2c3d4]:", " */"].join("\n"))).toStrictEqual([]);
+  });
+});

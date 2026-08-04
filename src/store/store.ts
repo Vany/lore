@@ -766,16 +766,23 @@ export class Store {
   }
 
   /**
-   * Is a round in flight for this review right now?
+   * Does this review have a round that has not finished — queued OR running?
    *
-   * For callers that must not touch the review's WORKTREE while one is (D-55).
-   * D-53 stopped two rounds running at once; it did nothing about a writer outside
-   * the queue, and `review_submit` is exactly that — it patches the worktree a
-   * running round is reading.
+   * For callers that must not touch the review's WORKTREE (D-55). D-53 stopped two
+   * rounds running at once; it did nothing about a writer outside the queue, and
+   * `review_submit` is exactly that — it patches the worktree a tier is reading.
+   *
+   * QUEUED COUNTS, and that is the whole point. Asking only about `running` left a
+   * TOCTOU that t2 found (8b859cdc): a job sits queued, the check says no round is
+   * in flight, the handler yields on the next `await`, a worker loop claims that
+   * job and `computeDiff` starts reading — and the handler resumes and patches the
+   * files underneath it. The tree hash then matches a tree the findings never
+   * described. Counting queued closes it by leaving nothing for a worker to claim,
+   * rather than by making the window smaller and hoping.
    */
-  hasRunningJob(reviewId: string): boolean {
+  hasPendingRound(reviewId: string): boolean {
     const row = this.db
-      .prepare("SELECT 1 AS x FROM job WHERE review_id = ? AND state = 'running' LIMIT 1")
+      .prepare("SELECT 1 AS x FROM job WHERE review_id = ? AND state IN ('queued', 'running') LIMIT 1")
       .get(reviewId) as Record<string, number> | undefined;
     return row !== undefined;
   }

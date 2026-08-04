@@ -32,6 +32,21 @@ const SLASH_START = new RegExp(`^\\s*//\\s*lore-ok\\[(${SHORT})\\]\\s*:\\s*(.*)$
 const SLASH_CONT = /^\s*\/\/\s?(.*)$/;
 /** `<!-- lore-ok[abcd1234]: reason -->`, possibly spanning lines. */
 const HTML_START = new RegExp(`<!--\\s*lore-ok\\[(${SHORT})\\]\\s*:\\s*([\\s\\S]*?)-->`, "g");
+/**
+ * ` * lore-ok[abcd1234]: reason` — the JSDoc/block-comment form.
+ *
+ * Added because it was silently missing and that cost a justification. This
+ * codebase explains itself in `/** ... *\/` blocks, so a long reason lands there by
+ * reflex; mine did, `parseLoreOk` skipped it, and the finding it answered could
+ * never have settled (b674468b). That is d6d9cd72's failure again — a reason
+ * written in the right place, about the right code, that nothing ever read.
+ *
+ * It is also what this file already argued for: a marker that works in one comment
+ * syntax and silently fails in another is worse than one that is absent.
+ */
+const STAR_START = new RegExp(`^\\s*\\*\\s*lore-ok\\[(${SHORT})\\]\\s*:\\s*(.*)$`);
+/** A ` * ` line continuing the reason. Never the closing `*\/`, and never a blank ` *`. */
+const STAR_CONT = /^\s*\*(?!\/)\s?(.*)$/;
 
 /**
  * Find every justification in a file.
@@ -45,19 +60,27 @@ export function parseLoreOk(source: string): LoreOk[] {
   const lines = source.split("\n");
 
   for (let i = 0; i < lines.length; i++) {
-    const start = SLASH_START.exec(lines[i] ?? "");
+    // Whichever line form this is, it continues in the SAME form: a `//` reason is
+    // not continued by a ` * ` line, so two adjacent comment blocks cannot merge.
+    const slash = SLASH_START.exec(lines[i] ?? "");
+    const star = slash === null ? STAR_START.exec(lines[i] ?? "") : null;
+    const start = slash ?? star;
     if (start === null) continue;
+    const isStar = slash === null;
+    const CONT = isStar ? STAR_CONT : SLASH_CONT;
+    const START = isStar ? STAR_START : SLASH_START;
 
     const short = start[1] ?? "";
     const parts = [start[2] ?? ""];
 
-    // Absorb following `//` lines as continuation. Stops at the first line that is
-    // not a comment, or at a line that begins a different justification — two
-    // markers must never merge into one reason.
+    // Absorb following comment lines as continuation. Stops at the first line that
+    // is not a comment of the same form, or at a line that begins a different
+    // justification — two markers must never merge into one reason. For the block
+    // form, `*/` is not a continuation, so a reason cannot run past its own comment.
     for (let j = i + 1; j < lines.length; j++) {
       const next = lines[j] ?? "";
-      if (SLASH_START.test(next)) break;
-      const cont = SLASH_CONT.exec(next);
+      if (START.test(next)) break;
+      const cont = CONT.exec(next);
       if (cont === null) break;
       parts.push(cont[1] ?? "");
       i = j;

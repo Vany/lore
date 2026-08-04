@@ -557,6 +557,16 @@ prevent (D-40), arriving from the other side. Raised by t3 as `5bb4272e` against
 change that serialised the rounds, which is the review catching the incompleteness
 of its own subject.
 
+**The first version of this had a TOCTOU, found by t2 one round later** (`8b859cdc`).
+It asked only whether a round was *running*, so a job sitting **queued** read as "no
+round in flight" — the handler then yielded on its next `await`, a worker claimed
+that job and `computeDiff` began reading, and the handler resumed and patched the
+files underneath it. The tree hash would then have matched a tree the findings never
+described, which is the very thing being prevented. A queued round now counts, so
+there is nothing left for a worker to claim; the window is closed rather than
+narrowed, and the worktree is resolved before the check so no `await` sits between
+the check and the write.
+
 Refused rather than queued. The client already polls (D-34), a fix genuinely cannot
 be reviewed until the current round finishes, and holding pending patches would put
 a review's tree in two places at once — the ambiguity this project exists to refuse.

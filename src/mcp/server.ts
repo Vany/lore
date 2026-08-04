@@ -161,8 +161,13 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
     async ({ review_id, diff, tree_hash }) => {
       mine(review_id);
 
-      // REFUSED while a round is in flight, because the next line writes into the
-      // directory that round is reading (D-55).
+      // The worktree is resolved FIRST so the only `await` before the check is
+      // behind us; the check and the write then sit together with nothing to yield
+      // between them.
+      const worktree = await deps.worktreeFor(review_id);
+
+      // REFUSED while a round is pending, because the next line writes into the
+      // directory that round reads (D-55).
       //
       // D-53 stopped two rounds running at once. It did not stop a writer from
       // OUTSIDE the queue, and this is one: a tier computes its diff, starts
@@ -177,15 +182,14 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       // the fix genuinely cannot be reviewed until the current round is done, and
       // storing pending patches would add a second place where a review's tree
       // lives. The error says what to wait for.
-      if (store.hasRunningJob(review_id)) {
+      if (store.hasPendingRound(review_id)) {
         throw new Error(
-          `a review round is running for ${review_id}; its reviewer is reading the worktree this patch would ` +
-            `rewrite. Poll review_status until it is not 'running', then submit the same diff again. ` +
-            `Nothing was applied.`,
+          `a review round is pending for ${review_id}; a reviewer is reading — or is about to read — the ` +
+            `worktree this patch would rewrite. Call review_poll until the state is not 'running' or ` +
+            `'queued', then submit the same diff again. Nothing was applied.`,
         );
       }
 
-      const worktree = await deps.worktreeFor(review_id);
       await applyPatch(worktree, diff);
 
       const applied = await treeHash(worktree);
