@@ -63,7 +63,23 @@ describe("a local path", () => {
 });
 
 describe("a remote", () => {
-  it("still generates a key and asks for it to be installed", async () => {
+  // Seeds the key rather than generating one. `provision` reads `<key>.pub` first
+  // and only shells out to ssh-keygen when it is missing, so this exercises the
+  // branch under test without needing that binary on PATH.
+  //
+  // It DID need it, and T0 caught that by running this suite in its sandbox — where
+  // openssh is not installed — an hour after the test was written. It passed on the
+  // author's machine and in the service image and failed where the target's suite
+  // actually runs, which is the entire reason the sandbox executes tests at all.
+  const seedKey = async () => {
+    const { mkdir, writeFile } = await import("node:fs/promises");
+    await mkdir(keysDir, { recursive: true });
+    const repo = store.upsertRepo("repo", "git@github.com:org/repo.git");
+    await writeFile(join(keysDir, `${repo.id}_ed25519.pub`), "ssh-ed25519 AAAASEEDED lore:repo\n");
+  };
+
+  it("still asks for the key to be installed, and numbers all three steps", async () => {
+    await seedKey();
     const p = await provision({
       store, name: "vany", gitUrl: "git@github.com:org/repo.git", keysDir, publicUrl: "http://x/mcp",
     });
