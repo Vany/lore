@@ -5,6 +5,56 @@ surprised me.
 
 ---
 
+## 2026-08-04 — session 30: the ladder reached the deep tier, and every bug was a lie about a failure
+
+**Did.** Drove lore's own review to the first `t2` run in the project's life, and
+fixed what the climb exposed. D-52 (the per-tier cap only bounds rounds that raise
+something fresh), the double `closeTierRun`, `cwe: null`, the vitest exclusion's
+coupling to one deployment's data path, and the extraction diagnostic.
+
+**Measured.** t1 glm-4.7: 187–591s, 17–37 turns. t2 glm-5.2 at medium: 779s and
+1193s, 48 and 68 turns — well inside the 30-minute timeout that high effort blew,
+so lowering it was right. Both subscriptions bill $0 through opencode. t3
+`openai/gpt-5.6-terra` answers in 2s to a probe but has still never run a review.
+
+**D-51 fired live.** `lore-ok d6d9cd72 (carried) … from an earlier review of this
+repo` — a justification ratified in one review inherited by the next, without being
+re-argued. That is the product's thesis, observed rather than reasoned.
+
+**Learned — every defect this session was a false statement about a failure.**
+Not one was a wrong algorithm. The per-tier cap called a clean, paid-for round
+`stopped`. `closeTierRun` overwrote what the tier did with what the ladder decided,
+so `make status` painted an answered, clean t1 red. `describeReply` said "malformed
+JSON" about JSON that parsed perfectly — the claim was 25 characters over a cap.
+And `make status` itself turned a SQLite `disk I/O error` into "not reachable" while
+the service was up and answering 401. Four instances of substituting a guess for an
+error, in a codebase whose one rule is about exactly that.
+
+**And I did it too, which is the part worth keeping.** I verified a config change
+with `npx vitest run … | tail -3 && git commit`. The pipe swallowed the exit status,
+`&&` committed anyway, vitest printed nothing because the config no longer parsed,
+and I read nothing as nothing-wrong. I shipped a broken suite and a commit message
+claiming 261 tests. t2 caught it within minutes — then lore binned the finding over
+the claim-length cap. A verification whose result I cannot see has not verified
+anything; `2>&1 | tail` is not a check.
+
+**Operational, cost an hour.** Do not run `sqlite3` on the HOST against
+`lore/data/lore.db` while the container has it open. It is WAL mode over a Docker
+Desktop bind mount, the `-shm` coordination does not cross the VM boundary, and the
+container starts getting `SQLITE_IOERR_SHORT_READ` (522). `integrity_check` came
+back `ok` and it cleared on its own, but read through `make status` or
+`docker compose exec`, not from the host.
+
+**Open.** Nothing writes a `fixed` verdict, so a finding that gets fixed is never
+settled and shows open for ever — `attest.test.ts` builds fixtures in a state
+production cannot produce (TODO). One bad finding still discards a whole reply;
+that is the right default and the wrong outcome. `passed`, t3 and a real
+`review_attest` remain unreached. glm-5.2 exceeded the 300-character claim cap on
+three of four claims, which is a number to revisit with a cost argument, not
+quietly.
+
+---
+
 ## 2026-08-03 — session 29: the memory was per-review
 
 **Did.** Fixed the defect that undercut the whole product, found by watching the loop

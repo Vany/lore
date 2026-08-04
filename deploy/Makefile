@@ -104,14 +104,24 @@ doctor:
 ## service whose one rule is that a review which did not run must never look like
 ## one that found nothing, that gap is the thin end of the exact ambiguity we
 ## refuse. `make status ID=rev_...` drills into one review.
+##
+## When it cannot answer it prints WHY, rather than guessing. `2>/dev/null ||
+## echo "not reachable"` used to turn every failure into that one sentence: on
+## 2026-08-04 the real fault was a SQLite `disk I/O error` from the host and the
+## container reading the same WAL database at once, the service was up and
+## answering, and the suggested fix pointed at the wrong thing entirely. A status
+## command that lies about why it has no status is the failure it exists to catch.
 status:
-	@$(COMPOSE) exec -T lore node /app/src/ops/status.ts $(ID) 2>/dev/null \
-		|| echo "not reachable — is it up? (make logs)"
+	@e=/tmp/lore-status.$$$$.err; \
+	$(COMPOSE) exec -T lore node /app/src/ops/status.ts $(ID) 2>$$e; rc=$$?; \
+	test $$rc -eq 0 || { echo "status could not answer. the error, not a guess:"; head -20 $$e; }; \
+	rm -f $$e; exit $$rc
 
 ## The raw JSON, for a script rather than a person.
 status-json:
-	@curl -fsS http://127.0.0.1:7777/status | python3 -m json.tool 2>/dev/null \
-		|| echo "not reachable — is it up? (make logs)"
+	@out=$$(curl -fsS http://127.0.0.1:7777/status 2>&1) \
+		&& printf '%s' "$$out" | python3 -m json.tool \
+		|| { echo "status-json could not answer. the error, not a guess:"; printf '%s\n' "$$out"; exit 1; }
 
 ## Same view, straight against a local database — no container, no service.
 ## Development on a laptop, where lore runs as plain node.
