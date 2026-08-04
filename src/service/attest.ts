@@ -50,7 +50,14 @@ export async function attest(store: Store, reviewId: string, principal: string, 
   const review = store.getReview(reviewId, principal);
   if (review === undefined) throw new DidNotRun(`review ${reviewId} not found`);
   if (!isAttestable(review.state)) {
-    throw new DidNotRun(`review is '${review.state}', not 'passed' — attesting it would be a false claim`);
+    // Names BOTH attestable states, because `passed` is not the only one and saying
+    // so sends a caller to wait for something it may never reach. Seventh place the
+    // same omission turned up (d93dec01); the first six were documentation, and an
+    // error message is documentation that arrives when someone is already stuck.
+    throw new DidNotRun(
+      `review is '${review.state}' — attesting it would be a false claim. ` +
+        `Only 'passed' and 'passed_partial' can be attested, and only 'passed' is clean.`,
+    );
   }
   // No tree, no attestation. The signature's whole subject is a TREE rather than a
   // branch name (D-40), so a line reading "reviewed tree unknown" asserts nothing

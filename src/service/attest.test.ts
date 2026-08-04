@@ -43,7 +43,10 @@ describe("attest", () => {
       review(state);
       // An attestation for an incomplete review would be a false claim, and the
       // whole product is that this claim can be trusted.
-      await expect(attest(store, "r1", "p", keyPath)).rejects.toThrow(/not 'passed'/);
+      // The message must name every state that CAN be attested, not just the clean
+      // one: a caller told only about `passed` waits for a state a partial review
+      // will never reach.
+      await expect(attest(store, "r1", "p", keyPath)).rejects.toThrow(/'passed' and 'passed_partial'/);
       store.db.prepare("DELETE FROM review WHERE id = 'r1'").run();
     }
   });

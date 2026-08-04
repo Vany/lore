@@ -228,7 +228,8 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       const review = mine(review_id);
       if (!isAttestable(review.state)) {
         throw new Error(
-          `review is '${review.state}', not 'passed' — there is nothing to attest. ` +
+          `review is '${review.state}' — there is nothing to attest. ` +
+          `Only 'passed' and 'passed_partial' can be attested, and only 'passed' is clean. ` +
             `An attestation for an incomplete review would be a false claim.`,
         );
       }
