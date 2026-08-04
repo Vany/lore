@@ -170,6 +170,35 @@ same disk is not a backup — so turning it on needs S3-compatible credentials. 
 mechanism, the restore and the verification are all proven; what is missing is
 somewhere to put it.
 
+**T0's sandbox ran for the first time, adversarially, and held.** A package whose
+`npm test` is a hostile script, through the real `runTests` path with the deployed
+`DEFAULT_SANDBOX` — not a relaxed copy:
+
+```
+read the knowledge base                    blocked
+read the attestation signing key           blocked
+list the deploy keys                       blocked
+read any host root                         blocked
+reach the network (dns)                    blocked
+reach the network (tcp)                    blocked
+write to the read-only sources             blocked
+read the docker socket                     blocked
+gain new privileges                        blocked
+capabilities  0000000000000000   pids 512   memory 2 GiB
+its own sources                            reachable  (as it must be)
+```
+
+The hard timeout holds too: a `sleep 600` suite is killed at the limit, and the
+whole chain is honest about which failure it was — `timedOut: true` produces *"the
+test suite did not finish within the time limit"*, not *"the test suite fails"*.
+Those are different claims and the code already knew it.
+
+**The one thing I do not like: the suite runs as uid 0.** With every capability
+dropped and `no-new-privileges` set, root buys an attacker very little — but it is
+still root, and a kernel or runtime escape is worth more from uid 0 than from
+nobody. `--user` is not set, which is defence in depth left on the table rather than
+a hole. In TODO.
+
 **Open.** One bad finding still discards a whole reply;
 that is the right default and the wrong outcome. `passed`, t3 and a real
 `review_attest` remain unreached. glm-5.2 exceeded the 300-character claim cap on

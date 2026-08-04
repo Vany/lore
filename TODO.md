@@ -30,14 +30,26 @@ that part is pulled out into its own open item rather than hidden inside a tick.
       `make backup-on`. Until then the knowledge base has exactly one copy, on a
       laptop, and it is the thing the product IS.
 
-- [ ] **Run T0's test sandbox once, adversarially.** `tests` is already a declared
-      T0 engine for `code-arch`, but `LORE_RUN_TESTS=0` in the deployment, so it has
-      never executed. The whole D-24 design — ephemeral container per review, no
-      secrets, no network, read-only root, hard timeout — has never run, and
-      `spec/review-ladder.md` §1.1.1 is explicit that **an untested sandbox is not a
-      sandbox**. Done when a deliberately hostile test file has tried to read a
-      deploy key and the database from inside it and failed at both, with the
-      transcript in `MEMO.md`.
+- [x] **T0's sandbox is no longer untested.** Done 2026-08-04: a package whose
+      `npm test` is a hostile script, run through the real `runTests` path with the
+      deployed config. The knowledge base, the attestation signing key, the deploy
+      keys, the docker socket, every host root, DNS, TCP and writes to the read-only
+      sources were all blocked; `CapEff` is zero, pids capped at 512, memory at 2 GiB.
+      A `sleep 600` suite is killed at the limit and reported as *did not finish*
+      rather than *fails*, which are different claims. Transcript in `MEMO.md`.
+
+- [ ] **Run the sandbox as a non-root user.** The probe above found the suite runs
+      as **uid 0**. With `--cap-drop ALL` and `no-new-privileges` that buys an
+      attacker very little, so this is defence in depth left on the table rather than
+      a hole — but a runtime or kernel escape is worth more from root than from
+      nobody, and the whole point of this container is that it runs code we have not
+      read. `--user` needs the scratch and cache directories to be writable by
+      whichever uid is chosen, which is the only reason it is not a one-line change.
+
+- [ ] **Turn `LORE_RUN_TESTS` on.** It is `0` in the deployment, so T0 still does not
+      execute the suites it is now proven able to contain. Worth doing on a repo we
+      own first, and watching what it costs: D-37 budgeted T0 at roughly 25 minutes a
+      day on the target device, and that estimate has never met a real test run.
 
 - [ ] **Set the exploration cap from data** (D-50). The distribution now exists —
       54 completed tier runs with a step count, 2026-08-04:
