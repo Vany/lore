@@ -199,11 +199,18 @@ export async function main(argv: readonly string[]): Promise<ExitCode> {
       //
       // In src/reviewer/review.ts, reading the model tier's block in order:
       //   openTierRun(...)                          opens it
-      //   closeTierRun(tierRunId, "answered")       success
+      //   closeTierRun(tierRunId, findings|clean)   success
       //   catch: closeTierRun(tierRunId, ...)       BEFORE either rethrow
       //   if (!(e instanceof Exhausted)) throw e    rethrow #1, already closed
       //   if (!anyTierRan(...)) throw e             rethrow #2, already closed
       // and T0's own open/close wraps its call the same way.
+      //
+      // That success line said `"answered"` until the outcome vocabulary changed in
+      // the same branch that wrote this, and the justification was not updated with
+      // it — raised as 285a07bc and 91c17fcb. The ARGUMENT survived the edit and the
+      // EVIDENCE did not, which is the failure mode a reader cannot detect: a
+      // citation that no longer matches the file it names is indistinguishable from
+      // one that was never checked.
       //
       // So by the time this catch runs, every run this round opened is closed with
       // a real outcome. Closing from out here would need the id, which is private to

@@ -630,4 +630,14 @@ describe("extractFindings", () => {
     expect(why("```json\n{not json at all}\n```")).toMatch(/JSON did not parse/);
     expect(why('{"results": []}')).toMatch(/no `findings` array/);
   });
+
+  // t3 raised this against the comment above the loop, which claimed the reason
+  // came from the candidate that got furthest while the code just overwrote it per
+  // candidate. Here the fenced block parses and merely lacks `findings`; the bare
+  // slice taken from the first "{" then fails to parse and used to mask it, so the
+  // log blamed a stray brace in trailing prose for a reply whose real fault was a
+  // missing key.
+  it("reports the candidate that got furthest, not the last one tried", () => {
+    expect(why('```json\n{"results": []}\n```\ntrailing {oops')).toMatch(/no `findings` array/);
+  });
 });

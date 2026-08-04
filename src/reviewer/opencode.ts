@@ -251,8 +251,13 @@ export class Reviewer implements ReviewerLike {
         // Logged in full (bounded) rather than put in the message, because the message
         // travels into a review's failure text and an operator alert; a 40 KB model
         // reply in either is its own problem.
+        // "nothing parseable" was itself untrue once the schema became a way to
+        // fail: a 325-character claim is perfectly parseable JSON that we refuse.
+        // The headline now carries both reasons, so the log agrees with the error
+        // thrown three lines below it instead of contradicting it (f7c4a9b8).
         console.error(
-          `[lore:log] tier ${tier.id} (${tier.model}) returned nothing parseable, twice. First reply:\n` +
+          `[lore:log] tier ${tier.id} (${tier.model}) returned nothing usable, twice ` +
+            `(first: ${extracted.why}; retry: ${retry.why}). First reply:\n` +
             `${excerpt(first.text, 2_000)}\nAfter the contract was restated:\n${excerpt(second.text, 2_000)}`,
         );
         // Empty, unparseable and REJECTED are different faults and lead different
@@ -633,21 +638,35 @@ export function extractFindings(text: string): Extraction {
   const brace = text.indexOf("{");
   if (brace >= 0) candidates.push(text.slice(brace));
 
-  // Kept from the LAST candidate that got furthest, so the reason describes the
-  // most promising thing in the reply rather than the first stray brace in prose.
+  // The reason comes from the candidate that got FURTHEST, which needs a rank —
+  // the comment claimed this before the code did it, and simply overwrote `why`
+  // per candidate, so a later, worse candidate masked an earlier, better one. A
+  // reply whose fenced block parsed but had no `findings`, followed by a stray
+  // brace in trailing prose, reported the stray brace's syntax error and hid the
+  // real fault. Raised against this function by t3 (b8554687), with that exact
+  // reply as the reproduction.
+  const NO_JSON = 0;
+  const UNPARSEABLE = 1;
+  const NO_LIST = 2;
+  let got = NO_JSON;
   let why = "no JSON object containing a `findings` array";
+  const note = (rank: number, reason: string) => {
+    if (rank < got) return;
+    got = rank;
+    why = reason;
+  };
 
   for (const candidate of candidates) {
     let parsed: unknown;
     try {
       parsed = JSON.parse(candidate.trim());
     } catch (e) {
-      why = `JSON did not parse: ${detail(e)}`;
+      note(UNPARSEABLE, `JSON did not parse: ${detail(e)}`);
       continue;
     }
     const list = (parsed as { findings?: unknown })?.findings;
     if (!Array.isArray(list)) {
-      why = "parsed as JSON, but there was no `findings` array";
+      note(NO_LIST, "parsed as JSON, but there was no `findings` array");
       continue;
     }
     const out: Finding[] = [];
