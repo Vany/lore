@@ -141,10 +141,18 @@ export function renderStatus(db: DatabaseSync, reviewId?: string): string {
         const o = String(t["outcome"] ?? "");
         // A tier that COULD NOT RUN is red, not yellow, and never shares a colour
         // with one that ran and agreed. This is INV-1 at the level of a glance:
-        // `unpayable` and `stopped` mean code nobody looked at, and the eye must not
+        // `unpayable` and `failed` mean code nobody looked at, and the eye must not
         // file them next to `clean`.
-        const didNotRun = o === "unpayable" || o === "stopped" || o === "failed";
-        const paint = didNotRun ? red : o === "passed" || o === "clean" ? green : o.startsWith("findings") ? cyan : yellow;
+        //
+        // `TierOutcome` is the live vocabulary — clean | findings | failed |
+        // unpayable. `stopped` and `passed` are LADDER decision kinds that reached
+        // this column only while `runRound` closed each row a second time; that write
+        // is gone. They stay in the two lists on purpose, because rows written before
+        // the fix are still in the database and a historical `stopped` must keep
+        // rendering red rather than falling through to yellow. Reading them as live
+        // values is what was wrong, not testing for them (a99232da).
+        const didNotRun = o === "unpayable" || o === "failed" || o === "stopped";
+        const paint = didNotRun ? red : o === "clean" || o === "passed" ? green : o.startsWith("findings") ? cyan : yellow;
         return `${paint(`${label} ${didNotRun ? `✘ ${o}` : o}`)} ${dim(took)}`;
       });
       out.push(`    ${cells.join(dim("  →  "))}`);

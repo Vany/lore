@@ -182,11 +182,21 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       // the fix genuinely cannot be reviewed until the current round is done, and
       // storing pending patches would add a second place where a review's tree
       // lives. The error says what to wait for.
+      // The wait condition is stated POSITIVELY, as the states that accept a diff.
+      //
+      // Naming the states to wait past instead — "until it is not running or queued"
+      // — described the JOB while the client can only see the REVIEW, and the two
+      // disagree exactly where it matters: during `fast_clean` the deep round is
+      // already queued, so the submit is refused while the client's exit condition
+      // reads as met. It would poll, see `fast_clean`, submit, and be refused again,
+      // for ever, with no state named that it could actually wait for (df1fc19c).
       if (store.hasPendingRound(review_id)) {
         throw new Error(
           `a review round is pending for ${review_id}; a reviewer is reading — or is about to read — the ` +
-            `worktree this patch would rewrite. Call review_poll until the state is not 'running' or ` +
-            `'queued', then submit the same diff again. Nothing was applied.`,
+            `worktree this patch would rewrite. Call review_poll until the state is 'findings_ready' or ` +
+            `'awaiting_diff' — those are the states that accept a diff — then submit the same diff again. ` +
+            `Note that 'fast_clean' is NOT one of them: the deep tiers are still queued against this worktree. ` +
+            `Nothing was applied.`,
         );
       }
 
