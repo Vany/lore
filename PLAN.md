@@ -100,7 +100,7 @@ what surfaces design errors that reading a spec never will.
 
 - derive rules from accepted `lore-ok` justifications and recurring fingerprint
   clusters
-- `knowledge.query` / `knowledge.teach` as library functions
+- `knowledge_query` / `knowledge_teach` as library functions
 - provenance, verification dates, `scope` invalidation; ingested-doc rules
   **re-derived** when their source blob changes (D-20)
 - conflicts as findings, with `needs_human` when unresolvable (D-39)
@@ -120,12 +120,14 @@ and it deserves to be falsifiable.
 **Goal:** the workgroup can use it over MCP.
 
 - `@modelcontextprotocol/server` v2 with Zod schemas (D-22)
-- `review.start` / `poll` / `submit` / `attest` / `inbox`, `knowledge.query` /
+- `review_start` / `poll` / `submit` / `attest` / `inbox`, `knowledge_query` /
   `teach` — **with the `type` parameter present from day one** even though only
   `code-arch` exists (D-43). Adding a required argument later breaks every client.
 - `lore://docs/*` resources, the `review` prompt (D-27, D-28)
-- provisioning: `make new`, server-side read-only deploy key, bearer token in a
-  header (D-21), CSPRNG `review_id` bound to its principal (D-23)
+- provisioning: `make new`, a revocable bearer token in a header (D-21) and the
+  `.mcp.json` to paste, CSPRNG `review_id` bound to its principal (D-23). The
+  server-side deploy key this originally specified is **gone** — D-63 moved the
+  fetch out to the host, so lore holds no git credentials
 - scheduler with per-provider concurrency and queueing
 - two-stage: T0+T1 inline, T2+T3 async (D-34)
 - `tree_hash` verification on submit
@@ -241,7 +243,7 @@ becomes vulnerable with no commit to trigger anything.
    rethinking before anything else is built on it.
 2. **Noise.** If T1 produces mostly false positives, the cheap gate costs more in fix
    cycles than it saves in tokens, and the tier lineup changes.
-3. **`node:sqlite` write concurrency** under parallel reviews plus `knowledge.*` —
+3. **`node:sqlite` write concurrency** under parallel reviews plus `knowledge_*` —
    untested. May need a single-writer funnel.
 4. **T0 CPU on the Pi** (Phase 4). If it does not fit, T0 moves off-device or the
    host changes.
@@ -256,8 +258,10 @@ is the point: the errors were not in the hard parts.
 - **Phase 0** — "fingerprint dedup" was listed as a termination bound. It only holds
   for *identical* claims; a paraphrase reads as new work. The mechanical guarantee
   comes from the round caps (`spec/review-ladder.md` §3.1.1).
-- **Phase 2** — bootstrap could not run at provisioning: the deploy key exists but a
-  human has not yet added it to the repo, so there is nothing to clone.
+- **Phase 2** — bootstrap could not run at provisioning: there is nothing to read
+  until a clone exists. Stated then as "the deploy key exists but a human has not
+  yet added it to the repo"; the reason survived the key (D-63 — a human still has
+  to run `make mirror`), which is why the finding outlived its explanation.
 - **Testing** — the opencode SDK reports failure by **return value**, not by
   throwing, so a 429 was being reported as "unparseable findings" (exit 70) rather
   than "out of quota" (exit 75), losing the quota alert with it.

@@ -18,6 +18,27 @@ that part is pulled out into its own open item rather than hidden inside a tick.
 
 ## Now — nothing here is about writing more features
 
+- [x] **lore holds no git credentials** (D-63). Done 2026-08-04. `make mirror` fetches
+      on the host as the operator into `data/repos`; the container sees nothing
+      outside the project. `ensureBare` checks presence and freshness and refuses
+      loudly. Provisioning issues a token and the `.mcp.json` to paste — no key, for
+      any url, which supersedes D-62 a day after it shipped.
+
+- [x] **The docs describe the deployed system again.** Done 2026-08-04. The sweep
+      found `spec/mcp-api.md` listing six tools under dotted names when ten are
+      registered with underscores; `spec/deployment.md` still requiring an off-device
+      replica that D-59 replaced; `spec/review-ladder.md` and `spec/operations.md`
+      alerting on deploy keys that no longer exist; README claiming *undeployed* with
+      a 180-test badge. The provisioning output's `.mcp.json` was wrong in three
+      independent, individually fatal ways and is now checked structurally.
+
+- [ ] **The `.mcp.json` test guards the shape, not the client.** It asserts
+      `mcpServers` / `http` / `${LORE_TOKEN}`, which is what today's client reads —
+      pinned by observation, not by anything that would notice the client changing.
+      A dependency bump elsewhere cannot break it; a Claude Code release can, and
+      silently. Cheap mitigation: re-run the header-echo probe when the client
+      updates. Recorded so the guarantee is not overread.
+
 - [x] **The knowledge base is replicated** (D-59). Done 2026-08-04. Litestream runs
       as a first-class service — no profile, no credentials — writing a
       continuously-restorable copy into a folder beside the deployment, from which an

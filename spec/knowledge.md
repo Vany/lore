@@ -18,7 +18,7 @@ knowledge freely, both reading and writing (D-18).
 
 | rank | source | how it arrives |
 |---|---|---|
-| 1 | **taught** | `knowledge.teach` — a human or session states a rule outright |
+| 1 | **taught** | `knowledge_teach` — a human or session states a rule outright |
 | 2 | **ingested** | parsed from the repo's own `CLAUDE.md`, `PROG.md`, `SPEC.md`, ADRs |
 | 3 | **derived** | inferred from accepted `lore-ok` justifications and recurring findings |
 
@@ -65,7 +65,7 @@ because it propagates.
 from 2026-07-11 says X."* A finding with history is far more actionable than the
 same finding raised cold.
 
-**At any time** — `knowledge.query` (D-18). A session asks what is known about a
+**At any time** — `knowledge_query` (D-18). A session asks what is known about a
 path, a module or a pattern before writing code.
 
 ## 6. Concurrency
@@ -111,9 +111,9 @@ poison every future session (§4), and guessing is what would poison it.
 
 ### 7.3 Stopping must have an exit
 
-A block with no way to clear it is a trap, not a safeguard. So `knowledge.resolve`
+A block with no way to clear it is a trap, not a safeguard. So `knowledge_resolve`
 settles a conflict — retiring the losing rule **with its reason**, never deleting it
-— and `knowledge.escalate` records that a person is required. Both are visible to
+— and `knowledge_escalate` records that a person is required. Both are visible to
 the ladder, which recomputes `needsHuman` from currently-open conflicts on every
 round rather than latching it forever.
 

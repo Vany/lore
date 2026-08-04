@@ -10,31 +10,79 @@ The product. Constraints and their provenance: `research/mcp-service-design.md`.
 make new NAME=vany GIT=git@github.com:org/repo.git
 ```
 
-1. Creates the tenant and repo record.
-2. Generates a **read-only deploy key server-side** and prints the public half to
-   add to the repo. The private key never leaves the container, and we never ask
-   for anyone's personal SSH key — a service that holds a personal key holds
-   everything that key opens.
-3. Mints an opaque, revocable bearer token scoped to that repo.
-4. Emits a paste-able client config with the token **in a header** (D-21).
+1. Creates the tenant and repo record. Registering a url that is already known
+   **reuses** the existing repo — the same repository under two protocols was once
+   two rows with two clones and its knowledge split between them.
+2. Mints an opaque, revocable bearer token scoped to that repo, shown **once** and
+   stored only as a hash.
+3. Emits a paste-able `.mcp.json` fragment with the token **in a header** (D-21).
+
+**No key is issued** (D-63, superseding D-62). lore does not clone and does not
+fetch; `make mirror` does, on the host, as the operator, into `data/repos` — the one
+directory the container already sees. A deploy key would be a credential on disk
+that nothing reads. So the operator's remaining step is `make mirror`, before the
+first review and before each later one: a mirror older than `MAX_MIRROR_AGE_MS` is
+refused rather than reviewed.
 
 ## 2. Tools
 
-| tool | arguments | returns |
-|---|---|---|
-| `review.start` | `branch`, `into`, **`ticket`** | `{review_id, state}` — returns immediately |
-| `review.poll` | `review_id` | `{state, tier, new_findings[], counts}` |
-| `review.submit` | `review_id`, `diff`, `tree_hash` | `{state, applied}` |
-| `review.attest` | `review_id` | `{line, signature}` |
-| `knowledge.query` | `query` and/or `path` | `{items[]}` |
-| `knowledge.teach` | `rule`, `why`, `scope` | `{id}` |
+Ten, registered with **underscores**. The dotted form is prose, not an address —
+every document here once used it and an agent following them literally called
+nothing.
 
-`knowledge.*` is available to anyone holding a token for the repo, at any time,
+| tool | arguments (`*` required) | returns |
+|---|---|---|
+| `review_start` | `branch*`, `into*`, `ticket*`, `type` | `{review_id, state: "queued", note}` — returns immediately |
+| `review_poll` | `review_id*` | `{state, clean, note, new_findings[], open_count}` |
+| `review_submit` | `review_id*`, `diff*`, `tree_hash*` | `{review_id, state, tree_hash}` |
+| `review_attest` | `review_id*` | the signed line, with its tree hash |
+| `review_inbox` | — | `{reviews[], needs_human, note}` across all the caller's reviews |
+| `review_vex` | `review_id*` | `{summary, untriaged, document}` — CycloneDX VEX |
+| `knowledge_query` | `path`, `contains` | `{count, items[]}` |
+| `knowledge_teach` | `statement*`, `why*`, `path`, `kind` | `{id, recorded}` |
+| `knowledge_resolve` | `keep*`, `retire*`, `reason*` | `{resolved, retired, note}` |
+| `knowledge_escalate` | `left*`, `right*`, `note*` | the conflict, raised for a person |
+
+`review_poll` and `review_inbox` both return a `note` that restates the one rule in
+machine-readable position: *only `passed` means clean*. A client that reads `state`
+and nothing else is the client this service exists to protect against.
+
+`knowledge_*` is available to anyone holding a token for the repo, at any time,
 independent of any review (D-18). That is the point of the service: a session
 should be able to ask what is known *before* it writes code, not only learn it
 after being corrected.
 
-### 2.1 `review.poll` returns deltas
+### 2.0 Resources and the prompt
+
+Tools are not the whole surface. `spec/agent-docs.md` §1 — the docs **are** the
+interface — is why these are shipped by the server rather than written in a README
+the agent never reads.
+
+| resource | subject |
+|---|---|
+| `lore://docs/workflow` | the review loop, end to end |
+| `lore://docs/lore-ok` | justification format |
+| `lore://docs/findings` | finding schema and severities |
+| `lore://docs/states` | every state, and which are terminal |
+| `lore://docs/ladder` | why escalation exists |
+
+Two are **templates**, and clients list them separately (`resources/templates/list`,
+not `resources/list` — a client that reads only the latter never sees them):
+
+| template | subject |
+|---|---|
+| `lore://review/{review_id}` | the full audit trail: every tier run, finding, verdict |
+| `lore://knowledge/{+path}` | what is known about a path |
+
+`lore://review/{id}` is deliberately richer than `review_poll`. Poll gives deltas, so
+a client driving the loop is never shown the same finding twice; the resource gives
+the whole history, for a person asking what happened.
+
+One prompt, `review(branch, into, ticket)`, drives the whole loop. It exists because
+an agent handed only tools improvises the multi-round, stateful part, and improvises
+it wrong.
+
+### 2.1 `review_poll` returns deltas
 
 Each poll returns findings **new since the caller's last poll**, plus running
 counts. A client that polls twice must not be shown the same finding twice — the
@@ -58,7 +106,7 @@ Cheap now, expensive to retrofit.
 
 ### 2.3 Operator status (D-26)
 
-A view for the operator, not for clients — `review.poll` already serves clients.
+A view for the operator, not for clients — `review_poll` already serves clients.
 
 Active reviews and the tier each is on; queue depth and what is waiting on what;
 rate-limit headroom per provider; model usage and spend from the usage log (§6);
@@ -70,7 +118,7 @@ fine.
 
 ## 2.3.1 `ticket` is required, not optional (D-38)
 
-Most merges here are task-based, so `review.start` **fails without ticket text**.
+Most merges here are task-based, so `review_start` **fails without ticket text**.
 
 A reviewer that does not know what the change was *meant* to do can only ask "is
 this code correct?" — never "is this the right code?". With the ticket it gains the
@@ -86,7 +134,7 @@ text and does not integrate with any tracker. One less thing to break.
 Reviews are **started explicitly**. Never one per commit.
 
 Once started, a review sees exactly one tree: the one it began with, plus whatever
-arrives via `review.submit`. **Commits pushed to the branch during a review are
+arrives via `review_submit`. **Commits pushed to the branch during a review are
 invisible to it.** To review those, start a new review — it begins at the branch tip
 as it then stands.
 
@@ -107,7 +155,7 @@ At 30 PRs a day nobody waits for a full ladder. The review splits:
 | **fast** | T0 + T1 | seconds to ~a minute | inline — you wait for it |
 | **deep** | T2 + T3 | minutes | asynchronous — collected later, in batches |
 
-`review.start` runs the fast stage and `review.poll` returns its findings almost
+`review_start` runs the fast stage and `review_poll` returns its findings almost
 immediately, so the developer keeps moving. The deep stage continues in the
 background and its findings land whenever they land.
 
@@ -116,14 +164,14 @@ as `passed`. Only the full ladder produces `passed`, and only `passed` supports 
 attestation. This is INV-1 in a new disguise: "the cheap tiers found nothing" must
 never read as "the branch is clean".
 
-### 2.4.1 `review.inbox`
+### 2.4.1 `review_inbox`
 
 With deep findings arriving asynchronously across dozens of open reviews, polling
 each one individually does not scale.
 
-`review.inbox()` returns deep findings across **all** the caller's reviews since
+`review_inbox()` returns deep findings across **all** the caller's reviews since
 they last collected — the batch view the workflow actually needs. Per-review
-`review.poll` remains for driving a single review to completion.
+`review_poll` remains for driving a single review to completion.
 
 Without this, a developer with 30 open reviews either polls 30 ids or loses
 findings. Both are failures.
@@ -132,7 +180,7 @@ Each entry carries `highest`, the worst severity among its new findings, so a cl
 can triage 30 reviews without reading 30 lists. It is **computed over the whole set**,
 not taken from the first row — reading position 0 was how it came to report `low` for
 a review whose worst finding was `medium` (D-50, `spec/review-ladder.md` §3.2). The
-findings themselves are ordered worst first, there and in `review.poll`.
+findings themselves are ordered worst first, there and in `review_poll`.
 
 ## 3. Review state machine
 
@@ -141,7 +189,7 @@ findings themselves are ordered worst first, there and in `review.poll`.
     │
     ▼
   running(Tn) ──┬──► findings_ready ──► awaiting_diff ──┐
-                │                                        │ review.submit
+                │                                        │ review_submit
                 │                                        ▼
                 │                                   running(T1)   ← reset, not resume
                 │
@@ -161,7 +209,7 @@ restated here because this is where a hosted service would be tempted to blur it
 
 ## 4. Applying a diff without committing
 
-`review.submit` applies the client's diff to the review's private worktree. Nothing
+`review_submit` applies the client's diff to the review's private worktree. Nothing
 is committed and nothing is pushed; the client remains the owner of its own history.
 
 **The client sends a `tree_hash` and the server verifies it after applying.** Without

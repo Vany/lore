@@ -5,6 +5,61 @@ surprised me.
 
 ---
 
+## 2026-08-04 — session 31: lore stopped holding keys, and the docs caught up with the code
+
+**Did.** Finished D-63 and wrote it into the specs. lore neither clones nor fetches:
+`make mirror` runs on the host under the operator's own agent and lands bare clones
+in `data/repos`, which was already mounted. Nothing outside the project is visible to
+the container. `ensureBare` now only checks — present, and fetched within
+`MAX_MIRROR_AGE_MS` — and refuses loudly with the command that fixes it. Provisioning
+issues a token and nothing else. Issued one for `rigid-monorepo`, and a replacement
+for `lore` itself.
+
+**D-62 lasted one day.** It made the deploy key actually authenticate; D-63 deleted
+the fetch it authenticated. Marked superseded in SPEC rather than removed, because
+the finding outlives the fix: it is the clearest case here of a **documented
+workflow that had never once run end to end** — `make new`, install the key, review
+a private repo. Two repos worked (a public https url and a local path), neither of
+which authenticates with anything, so nobody noticed the other two had zero objects.
+
+**Learned — the paste-able config could never have been pasted.** Nine lines whose
+entire purpose is to be copied without thought, wrong in three independent and
+individually fatal ways since the day they were written: `mcp` for `mcpServers`,
+`"type": "remote"` for `"http"`, `{env:LORE_TOKEN}` for `${LORE_TOKEN}`. Nothing
+compared it against a config known to work — and one had been sitting in this
+repository the whole time, in `.mcp.json`, being used daily.
+
+That is the session-30 lesson again in a new place: not a wrong algorithm, a
+confident false statement. It survived because the check nobody runs is the check
+against reality, and prose feels exempt from that.
+
+**Two things about verifying it that are worth keeping.**
+
+*Verify the platform, don't recall it.* Rather than trusting that `${VAR}` expands in
+`.mcp.json`, I pointed a client at a stub server that logged the header it received:
+`Bearer expanded_ok`. `claude mcp get` had shown the header **unexpanded**, which
+would have been the wrong conclusion drawn from a real observation.
+
+*Check the probe before believing the probe.* Reintroducing each of the three defects
+to confirm the test bites, the third reported *slipped through* — and the test was
+fine. My shell loop had a literal backslash in the search string, so the substitution
+never applied and I was testing unmodified code. A green "the defect got through" is
+as much a false statement about a failure as anything the reviews found; the fix was
+to make the substitution assert it changed something.
+
+**Also.** lore's own `.mcp.json` was doubly broken — a token whose repo row the
+consolidation had deleted, and a host (`c`) that does not resolve here. Both fixed.
+The docs sweep found the tool table in `spec/mcp-api.md` listed **six** tools with
+dotted names when ten are registered with underscores, and that `spec/deployment.md`
+still demanded an off-device replication target that D-59 had already replaced.
+
+**Retracted mid-session.** I said nothing in the code raised severity on a rejected
+justification. It does — `prompts.ts:134` instructs the reviewer to. My grep matched
+the docs' wording and not the prompt's, and I stated the conclusion before checking
+the one file where the behaviour actually lives.
+
+---
+
 ## 2026-08-04 — session 30: the ladder reached the deep tier, and every bug was a lie about a failure
 
 **Did.** Drove lore's own review to the first `t2` run in the project's life, and

@@ -48,9 +48,11 @@ a class** is an alert.
 
 ### 2.2 Ticket — next working day
 
-Elevated review failure rate; spend anomaly against trend; a repo's deploy key
-rejected; disk > 75%; queue depth sustained high enough that reviews are waiting on
-CPU (`spec/deployment.md` §3); `needs_human` findings ageing without resolution.
+Elevated review failure rate; spend anomaly against trend; a repo whose mirror is
+refused as stale often enough to look like a habit rather than a slip (D-63 — that
+one is a *person* forgetting `make mirror`, not the service breaking); disk > 75%;
+queue depth sustained high enough that reviews are waiting on CPU
+(`spec/deployment.md` §3); `needs_human` findings ageing without resolution.
 
 The `plane` MCP server is already configured in this workgroup, so filing these as
 tickets is natural. Not a dependency — a webhook is the transport and Plane is one

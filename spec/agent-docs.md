@@ -54,7 +54,7 @@ Written first, because each one is why a specific sentence exists.
 
 Draft text. These are the deliverable, not a summary of it.
 
-### `review.start`
+### `review_start`
 
 > Begin an independent multi-model review of `branch` against `into`.
 >
@@ -64,14 +64,14 @@ Draft text. These are the deliverable, not a summary of it.
 > substitute your own description of what you built.
 >
 > Returns a `review_id` **immediately**. The review takes minutes — this does not
-> mean it finished. Call `review.poll` until it reaches a terminal state.
+> mean it finished. Call `review_poll` until it reaches a terminal state.
 >
 > The review is pinned to the branch as it stands now. Commits you push afterwards
 > are **not** included; start a new review for those.
 >
 > Expect several rounds of findings. That is the process working, not failing.
 
-### `review.poll`
+### `review_poll`
 
 > Fetch findings discovered since your last poll.
 >
@@ -99,7 +99,7 @@ Draft text. These are the deliverable, not a summary of it.
 > While `queued` or `running`, wait and poll again — start at 10s, back off to 60s.
 > An absence of findings so far is not a clean result.
 
-### `review.submit`
+### `review_submit`
 
 > Submit your fixes as a unified diff, with the git tree hash of your working tree
 > after applying them.
@@ -117,7 +117,7 @@ Draft text. These are the deliverable, not a summary of it.
 > and becomes a project rule. Rejected, it returns at **higher severity** — a wrong
 > justification is worse than a bug.
 
-### `review.inbox`
+### `review_inbox`
 
 > Deep findings across **all** your open reviews, since you last collected. Use this
 > rather than polling each review individually once you have several in flight.
@@ -127,14 +127,14 @@ Draft text. These are the deliverable, not a summary of it.
 > returns information and you decide what deserves attention. A finding nobody sees
 > is a finding nobody found.
 
-### `review.attest`
+### `review_attest`
 
 > Available once state is `passed`. Returns one signed line recording what was
 > done: tiers run, findings raised, fixed and justified, at a tree hash.
 >
 > It asserts what was checked. It does not assert the code is correct.
 
-### `knowledge.query`
+### `knowledge_query`
 
 > Ask what is already known about this codebase — conventions, invariants, past
 > mistakes, and why past decisions were made.
@@ -142,7 +142,7 @@ Draft text. These are the deliverable, not a summary of it.
 > Call this **before** writing code in an unfamiliar area, not only after a review
 > complains. This is the accumulated memory of every prior session on this repo.
 
-### `knowledge.resolve` / `knowledge.escalate`
+### `knowledge_resolve` / `knowledge_escalate`
 
 > Settle a contradiction between two recorded rules, or say that it needs a person.
 >
@@ -156,14 +156,14 @@ Draft text. These are the deliverable, not a summary of it.
 > `escalate` when you have genuinely tried and cannot. It still blocks the review,
 > which is the point.
 
-### `review.vex`
+### `review_vex`
 
 > The CycloneDX VEX document for a security review: which known vulnerabilities are
 > reachable here, and why not, in a format other tools consume.
 >
 > `in_triage` means nobody has ruled on it. It is **not** a clearance.
 
-### `knowledge.teach`
+### `knowledge_teach`
 
 > Record something durable about this codebase, with its reason.
 >
@@ -194,7 +194,7 @@ Templates (RFC 6570), for live data rather than documentation:
 
 Both are implemented as RFC 6570 templates via the SDK's `ResourceTemplate`.
 
-`lore://review/{id}` is deliberately richer than `review.poll`. Poll gives deltas so
+`lore://review/{id}` is deliberately richer than `review_poll`. Poll gives deltas so
 the loop stays cheap; the resource gives the whole history for when an agent — or a
 human — needs to understand how a review reached its conclusion.
 
@@ -218,10 +218,10 @@ Draft returned message:
 > investigate, not as opinions to argue with.
 >
 > **The loop**
-> 1. `review.start(branch, into)` → `review_id`
-> 2. `review.poll(review_id)` until findings arrive or the state is terminal
+> 1. `review_start(branch, into)` → `review_id`
+> 2. `review_poll(review_id)` until findings arrive or the state is terminal
 > 3. For each finding: fix it, or justify it with `// lore-ok[fp]: <reason>`
-> 4. `review.submit(review_id, diff, tree_hash)`
+> 4. `review_submit(review_id, diff, tree_hash)`
 > 5. Return to 2. Repeat until the state is `passed`.
 >
 > **Rules**
@@ -231,11 +231,11 @@ Draft returned message:
 >   because a fix is unreviewed code.
 > - Do not use `lore-ok` to make an inconvenient finding go away. The reviewer rules
 >   on it, and a rejected justification returns worse than it left.
-> - Before fixing in unfamiliar code, `knowledge.query` it — someone may have
+> - Before fixing in unfamiliar code, `knowledge_query` it — someone may have
 >   already decided this, for a reason.
-> - When you learn something durable, `knowledge.teach` it.
+> - When you learn something durable, `knowledge_teach` it.
 >
-> When the state is `passed`, call `review.attest` and give the user that line.
+> When the state is `passed`, call `review_attest` and give the user that line.
 
 ### 5.1 Other prompts
 

@@ -3,8 +3,11 @@
 A hosted MCP service that reviews a branch before it merges, and — the actual
 point — **remembers the codebase between sessions**.
 
-Status: **implemented**, 2026-08-03. All phases in `PLAN.md` have code; 174 tests.
-Unproven until deployed: real model calls, container launches, and arm64.
+Status: **deployed and reviewing itself**, 2026-08-04. All phases in `PLAN.md` have
+code; 355 tests. Live: 14 reviews, 2 to `passed` and attested, 493 knowledge rows,
+60 model calls. Still unproven — the Orange Pi itself, and the three paths that have
+never once executed (`passed_partial`, `needs_human`, quota exhaustion). `TODO.md`
+keeps those open rather than folding them into a tick.
 
 | document | subject |
 |---|---|
@@ -42,17 +45,17 @@ strongest model on the board on purpose. Greptile reached the same conclusion fr
  developer finishes, commits, pushes
         │
         ▼
- review.start(branch, into) ─────────────► {review_id}   (returns at once)
+ review_start(branch, into) ─────────────► {review_id}   (returns at once)
         │
         │   ┌──────────────────────────────────────────┐
         │   ▼                                          │
-        ├─ review.poll(id) ─► new findings ────────────┤
+        ├─ review_poll(id) ─► new findings ────────────┤
         │                                              │
-        └─ review.submit(id, diff, tree_hash) ─────────┘
+        └─ review_submit(id, diff, tree_hash) ─────────┘
                                     │
               all tiers agree there is nothing left
                                     ▼
-                      review.attest(id) ─► signed one-liner
+                      review_attest(id) ─► signed one-liner
                                     │
                                     ▼
                         developer merges into `into`
@@ -75,7 +78,7 @@ rather than silently reviewed.
 ```
  MCP client ──► lore-mcp (Docker)
                   │
-                  ├─ MCP surface     review.* / knowledge.*
+                  ├─ MCP surface     review_* / knowledge_*
                   ├─ scheduler       per-provider concurrency, backpressure
                   ├─ review workers  ──► opencode servers ──► models
                   ├─ repo cache      bare clone + one worktree per active review
@@ -137,7 +140,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-31** | Tier prompts differ by position; T3 is told it is the last line | confirmed |
 | **D-32** | T3 always runs. No sampling — the attestation keeps its meaning | confirmed |
 | **D-33** | arm64 Orange Pi, LAN-bound. No tailscale yet — tokens are the perimeter | **revised** |
-| **D-34** | Two stages: T0+T1 inline, T2+T3 async, collected via `review.inbox` | confirmed |
+| **D-34** | Two stages: T0+T1 inline, T2+T3 async, collected via `review_inbox` | confirmed |
 | **D-35** | Bootstrap on first review — at provisioning there is nothing to clone | **revised** |
 | **D-36** | Git submodules, not monorepos — a gitlink bump is expanded | confirmed |
 | **D-37** | T0 is the local bottleneck — but ~25 min/day, not 5 hours | **measured** |
@@ -843,7 +846,7 @@ compared it against a working config, though one sat in this repository the whol
 time. It is checked structurally now, and each of the three defects was reintroduced
 to confirm the test fails on it.
 
-**D-43 — review types.** `review.start` takes a `type`, defaulting to `code-arch`:
+**D-43 — review types.** `review_start` takes a `type`, defaulting to `code-arch`:
 *is this change correct and well-made?* The next type is `security`: *what
 known-vulnerable things are we shipping, and can they be reached?* Different inputs
 (the lockfile and SBOM, not just the diff), different scope (the whole dependency
@@ -903,10 +906,12 @@ state handle as authentication."* Cheap to build now; the moment a sequential id
 stored anywhere, every log line becomes a credential.
 
 **D-24.** Running the target's tests is arbitrary code execution, and the threat is
-the dependency tree rather than the teammate. The service container holds every
-repo's deploy key and the knowledge database, so it **must not** be where a
-`postinstall` runs. Separate ephemeral container, no secrets, no network, hard
-timeout (`spec/review-ladder.md` §1.1.1).
+the dependency tree rather than the teammate — a *careless* suite, not a hostile
+one. The service container holds the knowledge database, the attestation signing key
+and every provider credential, so it **must not** be where a `postinstall` runs.
+(It no longer holds a deploy key for anything: D-63 left it with no git credentials
+at all.) Separate ephemeral container, no secrets, no network, hard timeout
+(`spec/review-ladder.md` §1.1.1).
 
 **D-25.** Walking skeleton: build a thin end-to-end slice, then deepen it. The
 uncertainty in this project is whether a three-tier ladder converges on real

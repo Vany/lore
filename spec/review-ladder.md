@@ -58,12 +58,14 @@ That is **arbitrary code execution** — `npm test` runs whatever the repo and i
 entire dependency tree say, including lifecycle scripts. The threat is not the
 teammate; it is the dependency tree.
 
-**The test container is not the service container.** The service holds the deploy
-keys for every registered repo and the knowledge database; one malicious
-`postinstall` inside it reads all of both. So tests run in a **separate ephemeral
+**The test container is not the service container.** The service holds the knowledge
+database, the attestation signing key and every provider credential; one careless
+`postinstall` inside it reaches all three. So tests run in a **separate ephemeral
 container per review**:
 
-- no secrets mounted — no deploy keys, no tokens, no database
+- no secrets mounted — no tokens, no signing key, no database. (There are no deploy
+  keys to mount any more: lore fetches nothing, so it holds no git credentials at
+  all — D-63.)
 - no network, or egress through a deny-by-default proxy
 - read-only root filesystem apart from the worktree
 - CPU, memory and PID limits, and a **hard timeout**
@@ -195,7 +197,7 @@ wrong twice over:
 This needs stating because it was wrong from the store's first commit and nothing
 looked wrong. `severity` is stored as TEXT and SQLite orders TEXT lexicographically:
 `ORDER BY severity` means **high, low, medium**. Every consumer of a findings query
-ranked a low-severity finding above a medium one, and `review.inbox` — which reported
+ranked a low-severity finding above a medium one, and `review_inbox` — which reported
 the first row as `highest` — told a client the worst thing in a review was `low` when
 it was `medium`.
 
@@ -203,7 +205,7 @@ it was `medium`.
 is decided entirely by how the list was sorted. The T0 render caps the model prompt at
 200 findings, so the order decides which facts about the tree the tier is given — not
 which findings survive, since `runRound` records all of T0's regardless. Clients cut
-too: `review.inbox` exists to be scanned rather than read, and an agent surfacing "the
+too: `review_inbox` exists to be scanned rather than read, and an agent surfacing "the
 top few" to a person is the intended use.
 
 An unrecognised severity therefore sorts **first**, not last. It can only come from a

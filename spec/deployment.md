@@ -82,5 +82,25 @@ SQLite plus Litestream (SPEC §3). The Pi is a single machine with no redundancy
 the knowledge base is the product — losing it loses everything the workgroup has
 taught the service.
 
-Replication target must be **off this device**. A backup on the same disk is not a
-backup, and **restore must be tested**, not assumed.
+**Revised by D-59.** This section said the replication target must be off-device,
+and Litestream now writes a **local** file replica beside the deployment, from which
+an outer script takes it off the machine. The reasoning holds — a backup on the same
+disk is not a backup — but the boundary moved: lore's job is a continuously
+restorable copy, and getting it off the box is the operator's, with no credentials
+inside the container to do it. The replica is always on: no profile, no S3 key.
+
+**Restore is tested, not assumed.** `make backup-drill` restores from a copy with
+the source destroyed first, and `make status` says so loudly when the replica has
+not been written in an hour. That check exists because copying a WAL database with
+`cp` once lost 86 knowledge rows; the drill uses `VACUUM INTO`.
+
+## 6. The mirror is populated from outside (D-63)
+
+Nothing outside the deployment directory is mounted into the container — not a
+checkout, not a key, not an agent socket. `make mirror` runs on the host, as the
+operator, and clones or fetches every registered repo into `data/repos/<id>/bare.git`,
+which lore already reads.
+
+This is what lets the service hold no git credentials at all. The cost is that a
+person has to run it, so a mirror older than `MAX_MIRROR_AGE_MS` is refused with the
+command that fixes it, rather than reviewed as though it were current.
