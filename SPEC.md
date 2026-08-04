@@ -164,6 +164,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-58** | An oversized diff is announced against the tier's **own** demonstrated ceiling | confirmed |
 | **D-59** | Replication is **local and always on**; an outer script takes it off the box | confirmed |
 | **D-60** | The data directory is the **same path** inside the container as on the host | confirmed |
+| **D-61** | Git may never climb out of the directory it was aimed at | hard |
 
 **D-7, revised.** The earlier version dropped GLM-5.2 on Artificial Analysis's
 *cost per task* — which is tokens consumed × price on their benchmark, not a price.
@@ -704,6 +705,36 @@ mount produced.
 
 Found by turning test execution on for the first time. Everything above had been
 true and unexercised for as long as `LORE_RUN_TESTS` was `0`.
+
+**D-61 — git may never climb out of the directory it was aimed at.**
+
+Git's default is to walk **up** from the working directory until it finds a
+repository. A command aimed at a directory that is not one therefore retargets
+itself, silently, at whatever encloses it — and lore's data directory sits inside a
+checkout in every deployment run from one.
+
+Observed the first time a local path was reviewed, 2026-08-04. `ensureBare` creates
+`bare.git` with `mkdir` and then asked `rev-parse --git-dir` whether it was already a
+repository. In the empty directory it had just created, that reported the
+**enclosing** checkout, so the clone was skipped as unnecessary and
+`fetch --prune --tags origin` ran **inside the operator's own working repository**.
+It failed only because that path was mounted read-only. Anywhere writable it would
+have pruned their refs and tags.
+
+That is lore writing to a user's repository, which D-2 forbids and INV-9 forbids
+again — reached without a single line of code intending it, through a default.
+
+Two changes, because one of them is the class and one is the instance:
+
+- **`GIT_CEILING_DIRECTORIES` is set to `cwd` on every git invocation.** Discovery
+  may find a repository AT the directory given and nowhere above it. Cheaper and far
+  more total than auditing every call site for whether its target exists.
+- **`ensureBare` asks `--resolve-git-dir .`**, which is a question about the path
+  given, rather than `--git-dir`, which is a question about the tree.
+
+Marked **hard** rather than confirmed: this one is not a preference. The test builds
+the exact shape — an empty bare directory nested inside another repository — and
+fails if either half is reverted.
 
 **D-43 — review types.** `review.start` takes a `type`, defaulting to `code-arch`:
 *is this change correct and well-made?* The next type is `security`: *what

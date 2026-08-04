@@ -32,7 +32,12 @@ export function repoPaths(root: string, repoId: string): RepoPaths {
  */
 export async function ensureBare(paths: RepoPaths, gitUrl: string): Promise<void> {
   await mkdir(paths.bare, { recursive: true });
-  const isRepo = await gitMaybe(paths.bare, ["rev-parse", "--git-dir"]);
+  // Asks whether THIS directory is a repository, not whether one exists somewhere
+  // above it. `rev-parse --git-dir` answered the second question: in the empty
+  // directory `mkdir` had just created it happily reported the enclosing checkout,
+  // so the clone below was skipped as already done and every later command operated
+  // on the wrong repository (D-61). `--resolve-git-dir` asks about the path given.
+  const isRepo = await gitMaybe(paths.bare, ["rev-parse", "--resolve-git-dir", "."]);
   if (isRepo === undefined) {
     await git(paths.bare, ["clone", "--bare", "--recurse-submodules", gitUrl, "."], 600_000);
     await git(paths.bare, ["config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"]);

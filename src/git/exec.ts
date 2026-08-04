@@ -29,6 +29,25 @@ export async function git(cwd: string, args: readonly string[], timeoutMs = 120_
       maxBuffer: MAX_BUFFER,
       timeout: timeoutMs,
       encoding: "utf8",
+      // GIT CANNOT CLIMB OUT OF `cwd` (D-61).
+      //
+      // Git's default is to walk UP from the working directory until it finds a
+      // repository. So a command aimed at a directory that is not one silently
+      // retargets at whatever encloses it — and lore's data directory sits inside a
+      // checkout in every deployment run from one.
+      //
+      // Observed 2026-08-04, the first time a local path was reviewed: an empty
+      // `bare.git` made `rev-parse --git-dir` report the ENCLOSING repository, so the
+      // clone was skipped as unnecessary and `fetch --prune --tags origin` ran
+      // against the operator's own working repository. It failed only because that
+      // path happened to be mounted read-only. Anywhere writable it would have pruned
+      // their refs and tags — lore writing to a user's repo, which D-2 forbids
+      // outright and INV-9 forbids again.
+      //
+      // The ceiling is `cwd` itself, so discovery can find a repository AT `cwd` and
+      // nowhere above it. Cheaper and more total than auditing every call site for
+      // whether its target exists.
+      env: { ...process.env, GIT_CEILING_DIRECTORIES: cwd },
     });
     return { stdout, stderr };
   } catch (e) {
