@@ -37,14 +37,19 @@ that part is pulled out into its own open item rather than hidden inside a tick.
       sources were all blocked; `CapEff` is zero, pids capped at 512, memory at 2 GiB.
       A `sleep 600` suite is killed at the limit and reported as *did not finish*
       rather than *fails*, which are different claims. Transcript in `MEMO.md`.
+      Worth stating plainly since the probe was written the other way round: the real
+      threat here is a **careless** suite, not a hostile one. Nobody is attacking this
+      workgroup. The containment matters because a test can hang, eat the box, or
+      write where it should not by accident — and it holds against all of that.
 
-- [ ] **Run the sandbox as a non-root user.** The probe above found the suite runs
-      as **uid 0**. With `--cap-drop ALL` and `no-new-privileges` that buys an
-      attacker very little, so this is defence in depth left on the table rather than
-      a hole — but a runtime or kernel escape is worth more from root than from
-      nobody, and the whole point of this container is that it runs code we have not
-      read. `--user` needs the scratch and cache directories to be writable by
-      whichever uid is chosen, which is the only reason it is not a one-line change.
+- [ ] **The sandbox writes as uid 0, and the cache it writes to is shared.** Not a
+      security item — the threat here is a *stupid* test suite, not a malicious one,
+      and against accidents the container is already enough. It is an ownership
+      problem: `cacheRoot` and `scratchRoot` live under the data directory and are
+      reused across reviews, so a suite running as root leaves root-owned files that
+      `lore` (uid 1000) then cannot rewrite or clean up. Watch for it when
+      `LORE_RUN_TESTS` goes on; `--user` fixes it, and needs those two directories
+      to be writable by whichever uid is chosen.
 
 - [ ] **Turn `LORE_RUN_TESTS` on.** It is `0` in the deployment, so T0 still does not
       execute the suites it is now proven able to contain. Worth doing on a repo we
