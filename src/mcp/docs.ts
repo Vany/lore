@@ -39,10 +39,12 @@ made, not what was asked, which destroys the only independent statement of inten
 reviewers get.
 
 Returns a review_id IMMEDIATELY. The review takes minutes — this does not mean it
-finished. Call review.poll until it reaches a terminal state.
+finished. Call review_poll until it reaches a terminal state.
 
-The review is pinned to the branch as it stands now. Commits you push afterwards are
-NOT included; start a new review for those.
+The review pins the branch when its first round begins, which is shortly after this
+returns — not at the instant it returns. A commit pushed in that window may or may
+not be included, and nothing will tell you which. Push first, then start; for
+anything after that, start a new review.
 
 Expect several rounds of findings. That is the process working, not failing.
 `.trim(),
@@ -116,7 +118,12 @@ fault, against three rounds once the answers got terse.
 `.trim(),
 
   attest: `
-Available once state is \`passed\`. Returns one signed line recording what was done:
+Available once state is \`passed\` — or \`passed_partial\`, which is the case that
+most needs a record: the line names which tiers were skipped and, if only one vendor
+looked, which. Refusing to attest a partial review would leave the operator with no
+account of it at all, which is worse than an honest incomplete one.
+
+Returns one signed line recording what was done:
 tiers run, findings raised, fixed and justified, at a tree hash.
 
 It asserts what was checked. It does NOT assert the code is correct, and you should
@@ -201,10 +208,10 @@ export const RESOURCE_DOCS: Readonly<Record<string, { title: string; priority: n
     title: "The review loop, end to end",
     priority: 1.0,
     text: `
-1. review.start(branch, into, ticket) → review_id
-2. review.poll(review_id) until findings arrive or the state is terminal
+1. review_start(branch, into, ticket) → review_id
+2. review_poll(review_id) until findings arrive or the state is terminal
 3. For each finding: fix it, or justify it with // lore-ok[fp]: <reason>
-4. review.submit(review_id, diff, tree_hash)
+4. review_submit(review_id, diff, tree_hash)
 5. Return to 2. Repeat until the state is \`passed\`.
 
 Rules that decide whether this works:
@@ -215,9 +222,9 @@ Rules that decide whether this works:
   fix is unreviewed code.
 - Do not use lore-ok to make an inconvenient finding go away. The reviewer rules on
   it, and a rejected justification returns worse than it left.
-- Before fixing in unfamiliar code, knowledge.query it — someone may already have
+- Before fixing in unfamiliar code, knowledge_query it — someone may already have
   decided this, for a reason.
-- When you learn something durable, knowledge.teach it.
+- When you learn something durable, knowledge_teach it.
 `.trim(),
   },
 
@@ -310,10 +317,10 @@ by a peer; you are being audited. Treat findings as evidence to investigate, not
 opinions to argue with.
 
 The loop:
-1. review.start(branch: "${branch}", into: "${into}", ticket: <paste the ticket, do not summarise>)
-2. review.poll(review_id) until findings arrive or the state is terminal
+1. review_start(branch: "${branch}", into: "${into}", ticket: <paste the ticket, do not summarise>)
+2. review_poll(review_id) until findings arrive or the state is terminal
 3. For each finding: fix it, or justify it with // lore-ok[fp]: <reason>
-4. review.submit(review_id, diff, tree_hash)
+4. review_submit(review_id, diff, tree_hash)
 5. Return to 2. Repeat until the state is \`passed\`.
 
 Rules:
@@ -321,12 +328,12 @@ Rules:
 - \`failed\`, \`expired\` and \`fast_clean\` are not \`passed\`. Do not merge on them.
 - Expect several rounds. Every fix resets the ladder to the cheapest tier.
 - Do not use lore-ok to make an inconvenient finding go away.
-- Before fixing in unfamiliar code, knowledge.query it.
-- When you learn something durable, knowledge.teach it.
+- Before fixing in unfamiliar code, knowledge_query it.
+- When you learn something durable, knowledge_teach it.
 - If the state is needs_human, STOP and ask a person. Do not answer it yourself.
 
 The ticket for this change:
 ${ticket.trim()}
 
-When the state is \`passed\`, call review.attest and give the user that line.
+When the state is \`passed\`, call review_attest and give the user that line.
 `.trim();

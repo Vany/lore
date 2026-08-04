@@ -125,6 +125,14 @@ function settledBlock(settled: PromptInput["settled"]): string {
     "These were raised and settled, with reasons. Re-raise one ONLY with new evidence that the reason is wrong.",
     "If you can show a recorded reason is wrong, say so explicitly — a mistaken justification matters more than a",
     "fresh bug, because it means someone's reasoning was wrong and was trusted.",
+    // The client is TOLD this happens (TOOL_DOCS.submit), so it has to actually
+    // happen. Nothing in the code raises a severity: the fingerprint deliberately
+    // excludes severity so the same finding is recognised across the change, and the
+    // raising itself was left to a reviewer nobody had asked. A promise the system
+    // does not keep is worth less than no promise.
+    "When you re-raise something whose justification you are rejecting, raise its SEVERITY above what it was.",
+    "A defect that was argued away and is still there is worse than one nobody has looked at, because the",
+    "argument was believed. Keep the claim wording otherwise identical, so it is recognised as the same finding.",
     ...lines,
     // Truncation is stated, never silent. A reviewer that is shown 80 of 200 settled
     // findings and told nothing will treat the other 120 as never-raised.
