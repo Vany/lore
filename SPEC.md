@@ -821,6 +821,23 @@ the check says so rather than inventing a rule for it. Thirty minutes is long en
 to survive a queue and a slow first round, short enough that "nobody fetched this
 today" cannot pass.
 
+**Freshness has three answers, not two, and the first version had two.** `no-remote`,
+`never-fetched`, and `fetched(at)`. The read returned `Date | undefined` and
+`undefined` meant both of the first two, so a mirror *with* a remote that had never
+been fetched was accepted as one that could not be behind. `make mirror` produces
+exactly that state — its clone branch is `git clone --bare && … && git fetch`, so a
+clone that succeeds with a fetch that fails leaves objects and a `remote.origin.url`
+and no `FETCH_HEAD`. It is the worst form of the failure rather than a mild one:
+`refs/remotes/origin/*` does not exist either, so `addWorktree` falls back from the
+missing `origin/<branch>` to the local branch, frozen at the commit the clone was
+made at, and the review describes a tree nobody is merging.
+
+Raised by **t2, against the commit that introduced the check**, with the reproduction
+attached. The tests around it had made the same mistake in the other direction: the
+helper cloned without fetching — manufacturing the dangerous state — and the two
+tests either side wrote `FETCH_HEAD` by hand before asserting, stepping over it every
+time.
+
 **Provisioning therefore issues a token and nothing else.** The deploy key went with
 the fetch: a keypair written to disk that nothing reads, handed over with an
 instruction to grant a repository read access to a key with no user, is strictly

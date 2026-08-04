@@ -32,23 +32,43 @@ export function repoPaths(root: string, repoId: string): RepoPaths {
  */
 
 /**
- * How long ago the mirror was last fetched from ITS remote (D-63).
+ * Three states, deliberately not two (D-63).
  *
- * `undefined` when the question does not apply: the path is not a git repository, or
- * it has no remote to be behind. A repository nobody fetches cannot be stale.
+ * This returned `Date | undefined` and `undefined` meant BOTH "no remote, so it
+ * cannot be behind" and "has a remote and has never been fetched" — and `ensureBare`
+ * accepted both. The second is the dangerous one, and `make mirror` produces it: its
+ * clone branch runs `git clone --bare && … && git fetch`, so a clone that succeeds
+ * followed by a fetch that fails leaves objects and a `remote.origin.url` with no
+ * `FETCH_HEAD` and no `refs/remotes/origin/*`. `addWorktree` then falls back from the
+ * missing `origin/<branch>` to the LOCAL branch, frozen at the clone-time commit, and
+ * the review describes a tree nobody is merging — INV-2, with an attestation over it.
+ *
+ * Raised by t2 against the commit that introduced the check, with the reproduction
+ * that confirmed it: after `clone --bare`, `origin/master` does not resolve while
+ * `master` resolves to the clone SHA. Verified before fixing.
+ */
+export type MirrorFreshness =
+  | { readonly kind: "no-remote" }
+  | { readonly kind: "never-fetched" }
+  | { readonly kind: "fetched"; readonly at: Date };
+
+/**
+ * When the mirror was last fetched from its remote.
  *
  * Read from `FETCH_HEAD`'s mtime, which git rewrites on every fetch — including the
  * one inside `git pull`, so an operator working normally in the checkout keeps it
- * current without doing anything special.
+ * current without doing anything special. Git writes it even when the fetch brought
+ * nothing new, which is what makes its ABSENCE mean "never fetched" rather than
+ * "nothing changed".
  */
-export async function mirrorFetchedAt(localPath: string): Promise<Date | undefined> {
+export async function mirrorFreshness(localPath: string): Promise<MirrorFreshness> {
   const hasRemote = await gitMaybe(localPath, ["config", "--get", "remote.origin.url"]);
-  if (hasRemote === undefined) return undefined;
+  if (hasRemote === undefined) return { kind: "no-remote" };
   for (const candidate of [join(localPath, ".git", "FETCH_HEAD"), join(localPath, "FETCH_HEAD")]) {
     const s = await stat(candidate).catch(() => undefined);
-    if (s !== undefined) return s.mtime;
+    if (s !== undefined) return { kind: "fetched", at: s.mtime };
   }
-  return undefined;
+  return { kind: "never-fetched" };
 }
 
 /**
@@ -93,9 +113,21 @@ export async function ensureBare(paths: RepoPaths, gitUrl: string): Promise<void
     );
   }
 
-  const fetchedAt = await mirrorFetchedAt(paths.bare);
-  if (fetchedAt === undefined) return; // no remote to be behind
-  const age = Date.now() - fetchedAt.getTime();
+  const freshness = await mirrorFreshness(paths.bare);
+  if (freshness.kind === "no-remote") return; // nothing can be behind nothing
+
+  // A clone whose fetch never landed. `origin/<branch>` does not exist yet, so
+  // `addWorktree` would silently review the clone-time commit instead.
+  if (freshness.kind === "never-fetched") {
+    throw new DidNotRun(
+      `the clone of ${gitUrl} at ${paths.bare} has a remote but has never been fetched — no FETCH_HEAD. ` +
+        `\`make mirror\` clones and then fetches; a clone that succeeded with a failed fetch looks like this. ` +
+        `Run \`make mirror\` on the host and start the review again. Reviewing it as it stands would review ` +
+        `the commit it was cloned at, not the branch you are merging.`,
+    );
+  }
+
+  const age = Date.now() - freshness.at.getTime();
   if (age > MAX_MIRROR_AGE_MS) {
     throw new DidNotRun(
       `the clone of ${gitUrl} was last fetched ${Math.round(age / 60_000)} minutes ago, and lore holds no ` +

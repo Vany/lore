@@ -7,7 +7,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -72,6 +72,36 @@ describe("the clone has to be there, and recent (D-63)", () => {
     execFileSync("git", ["-C", paths.bare, "remote", "remove", "origin"], { stdio: "ignore" });
 
     await expect(ensureBare(paths, src)).resolves.toBeUndefined();
+  });
+
+  // The gap between the two tests above, and the one `make mirror` can actually
+  // produce: its clone branch is `git clone --bare && … && git fetch`, so a clone
+  // that succeeds with a fetch that fails leaves a remote configured and no
+  // FETCH_HEAD. That used to return `undefined` from the freshness read — the same
+  // answer as "no remote" — and was accepted.
+  //
+  // It is the worst version of the failure, not a mild one: `refs/remotes/origin/*`
+  // does not exist yet either, so `addWorktree` falls back to the LOCAL branch and
+  // reviews whatever commit the clone happened to be made at.
+  //
+  // Note that `mirror()` above produces exactly this state, and the two tests
+  // around it write FETCH_HEAD by hand — so the helper was manufacturing the
+  // dangerous case and every test was stepping over it. Raised by t2 against the
+  // commit that introduced the check.
+  it("refuses a clone whose fetch never landed, even though a remote is configured", async () => {
+    const src = join(root, "src-nofetch");
+    makeRepo(src);
+    const paths = { bare: join(root, "repos/r6/bare.git"), worktrees: join(root, "repos/r6/wt") };
+    mirror(src, paths.bare); // clone only — no fetch, so no FETCH_HEAD
+
+    // The precondition that makes this dangerous rather than merely unfetched.
+    expect(existsSync(join(paths.bare, "FETCH_HEAD"))).toBe(false);
+    expect(
+      execFileSync("git", ["-C", paths.bare, "config", "--get", "remote.origin.url"]).toString().trim(),
+    ).toBe(src);
+
+    await expect(ensureBare(paths, src)).rejects.toThrow(/never been fetched/);
+    await expect(ensureBare(paths, src)).rejects.toThrow(/make mirror/);
   });
 
   it("accepts a clone fetched just now", async () => {
