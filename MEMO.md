@@ -45,6 +45,27 @@ container starts getting `SQLITE_IOERR_SHORT_READ` (522). `integrity_check` came
 back `ok` and it cleared on its own, but read through `make status` or
 `docker compose exec`, not from the host.
 
+**Measured — the deep tier has a diff-size ceiling, and we crossed it.** glm-5.2 at
+medium effort reviewed 21–30 KB diffs in 685s, 779s, 935s and 1193s. At **69 KB it
+timed out at 1802s**, against the 1800s `longFetch` budget. Nothing was wrong with
+the model or the deployment: the review base stayed at `cccc7b2` while 21 commits
+accumulated behind it, because I kept reviewing without ever merging. A branch in
+real use is reviewed against its merge base and lands. The number worth keeping is
+that **t2 at medium is good for roughly 30 KB and dies around 70 KB** — so review
+scope, not tier config, is the thing to control.
+
+**t1 replaced mid-session (D-54).** glm-4.7 began answering HTTP 200 with an empty
+body — three times, tokens counted, `output: 1` — while glm-5.2 and glm-5-turbo kept
+working on the same subscription. `describeReply`, taught hours earlier to separate
+empty from prose from rejected, named it correctly on the first try. glm-5-turbo is
+faster and cheaper than glm-4.7 was: 271s/13 turns and 162s/11 turns against 500–600s
+and 30+ turns, and it found a real defect in the attestation fixtures on its first run.
+
+**A finding in a comment-less file cannot be justified.** `lore-ok` is a comment
+marker and JSON has none; the tier schema is `.strict()`, so a smuggled key is a
+parse error. c618aec7 was raised against `deploy/tiers.zai-openai.json` and has
+nowhere to put its reason, so it can never settle. In TODO with options.
+
 **Open.** Nothing writes a `fixed` verdict, so a finding that gets fixed is never
 settled and shows open for ever — `attest.test.ts` builds fixtures in a state
 production cannot produce (TODO). One bad finding still discards a whole reply;

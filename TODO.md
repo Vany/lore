@@ -108,6 +108,18 @@ findings are worth the money, and the numbers are measured rather than guessed.
       comment-less files can only ever be fixed, never justified, and say so loudly
       instead of looping. The last is the smallest and probably right, but it needs a
       decision — silence here is the failure mode this project is named against.
+- [ ] **Announce a diff that is too big for the tier, instead of timing out on it.**
+      Measured 2026-08-04: glm-5.2 at medium reviewed 21-30 KB diffs in 685-1193s and
+      timed out at 1802s on 69 KB. The tier is fine; the review scope was not, because
+      the base stayed put while 21 commits accumulated behind it.
+      Today that costs a full 30-minute budget to learn nothing, and reports `failed`
+      — which is at least honest (INV-1), but it is honest far too late and far too
+      expensively. INV-7 already says truncation is announced; there is no equivalent
+      for "this diff is beyond what this tier has ever completed".
+      Wants the distribution first — `usage` now has `latency_ms` and the diff size is
+      knowable at submit time — then a warning at `review_start`/`review_submit` well
+      before the money is spent. A threshold guessed rather than measured would fail
+      real reviews for nothing, which is the same trap as the exploration cap (D-50).
 ---
 
 ## Done
