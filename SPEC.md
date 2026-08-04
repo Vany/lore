@@ -158,6 +158,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-52** | The per-tier cap bounds *iteration*, so a clean tier escalates past it | confirmed |
 | **D-53** | One round at a time **per review**; reviews still run in parallel | confirmed |
 | **D-54** | t1 is `glm-5-turbo`: glm-4.7 answers 200 with an empty body | confirmed |
+| **D-55** | A submit is **refused** while a round is reading the worktree | confirmed |
 
 **D-7, revised.** The earlier version dropped GLM-5.2 on Artificial Analysis's
 *cost per task* — which is tokens consumed × price on their benchmark, not a price.
@@ -541,6 +542,25 @@ called is discussed before it ships. Recorded here rather than beside the code
 because `deploy/tiers.zai-openai.json` cannot carry a `lore-ok` — JSON has no
 comments and the tier schema is `.strict()` — which is its own open problem, in
 TODO.
+
+**D-55 — a submit is refused while a round is reading the worktree.**
+
+D-53 stopped two rounds running at once, and stopped there. The worktree has a
+writer that is not in the queue at all: `review_submit` applies the client's patch
+to the same directory the running tier is exploring.
+
+So a tier computes its diff, begins reading, and a submit rewrites the files
+underneath it. Its prompt and its `tier_run` row describe the old tree while its
+tools see a new or half-patched one, and a `clean` from that describes a tree that
+has never existed anywhere — the exact failure the tree-hash check was built to
+prevent (D-40), arriving from the other side. Raised by t3 as `5bb4272e` against the
+change that serialised the rounds, which is the review catching the incompleteness
+of its own subject.
+
+Refused rather than queued. The client already polls (D-34), a fix genuinely cannot
+be reviewed until the current round finishes, and holding pending patches would put
+a review's tree in two places at once — the ambiguity this project exists to refuse.
+The error names what to wait for and states that nothing was applied.
 
 **D-43 — review types.** `review.start` takes a `type`, defaulting to `code-arch`:
 *is this change correct and well-made?* The next type is `security`: *what

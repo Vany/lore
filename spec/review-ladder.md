@@ -17,6 +17,18 @@ already passed.
 | **T2** | main reviewer | `openrouter/moonshotai/kimi-k3` | 57 | 3.00 | 15.00 | Moonshot |
 | **T3** | adversarial | `openrouter/openai/gpt-5.6-sol-pro` | 59 | 5.00 | 30.00 | OpenAI |
 
+**This table is the DEFAULT ladder, and a deployment usually replaces it.** `LORE_TIERS`
+points at a tiers file that overrides every row (`core/ladder.ts`, `loadTiers`), and
+what is deployed today is `deploy/tiers.zai-openai.json`: T1 `zai-coding-plan/glm-5-turbo`,
+T2 `zai-coding-plan/glm-5.2`, T3 `openai/gpt-5.6-terra`, all on subscriptions rather than
+per-token. Read the tiers file for what is actually being spent, and `SPEC.md` D-54 for why
+T1 moved.
+
+Saying so because an operator consulting "the ladder" to approve a cost or diagnose a T1
+failure would otherwise conclude GLM-5.2 was called when GLM-5-turbo was — the table was
+accurate about the default and silent about being overridden, which reads the same as
+wrong (43cd1237).
+
 Tiers are configuration, not code.
 
 **Three tiers, three vendors — deliberately.** Two tiers from one model family

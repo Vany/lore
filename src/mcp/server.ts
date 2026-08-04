@@ -160,6 +160,31 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
     },
     async ({ review_id, diff, tree_hash }) => {
       mine(review_id);
+
+      // REFUSED while a round is in flight, because the next line writes into the
+      // directory that round is reading (D-55).
+      //
+      // D-53 stopped two rounds running at once. It did not stop a writer from
+      // OUTSIDE the queue, and this is one: a tier computes its diff, starts
+      // exploring, and a submit rewrites the files under it. Its prompt and its
+      // tier_run row describe the old tree while its tools read a new or
+      // half-patched one, and a `clean` from that describes a tree that has never
+      // existed anywhere — which is the failure the tree-hash check below exists to
+      // prevent, arriving from the other side (D-40). Raised by t3 as 5bb4272e
+      // against the very change that serialised the rounds.
+      //
+      // Refusing rather than queueing the patch: the client already polls (D-34),
+      // the fix genuinely cannot be reviewed until the current round is done, and
+      // storing pending patches would add a second place where a review's tree
+      // lives. The error says what to wait for.
+      if (store.hasRunningJob(review_id)) {
+        throw new Error(
+          `a review round is running for ${review_id}; its reviewer is reading the worktree this patch would ` +
+            `rewrite. Poll review_status until it is not 'running', then submit the same diff again. ` +
+            `Nothing was applied.`,
+        );
+      }
+
       const worktree = await deps.worktreeFor(review_id);
       await applyPatch(worktree, diff);
 

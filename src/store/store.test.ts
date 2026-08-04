@@ -270,6 +270,23 @@ describe("one round at a time per review (D-53)", () => {
     expect(store.claimJob()?.reviewId).toBe("rev2");
   });
 
+  // D-53 serialised the rounds; it did nothing about a writer from outside the
+  // queue. `review_submit` is one — it patches the worktree a running round is
+  // reading — so it asks this before touching anything (D-55).
+  it("says whether a round is in flight, for callers that must not touch the worktree", () => {
+    expect(store.hasRunningJob("rev1")).toBe(false);
+
+    store.enqueue("rev1", "fast");
+    expect(store.hasRunningJob("rev1")).toBe(false); // queued is not running
+
+    const job = store.claimJob();
+    expect(store.hasRunningJob("rev1")).toBe(true);
+    expect(store.hasRunningJob("rev2")).toBe(false); // per review, not global
+
+    store.finishJob(job?.id ?? 0, "done");
+    expect(store.hasRunningJob("rev1")).toBe(false);
+  });
+
   it("collapses a duplicate queued round instead of stacking it", () => {
     // review_start, then review_submit before the first round is even claimed.
     store.enqueue("rev1", "fast");

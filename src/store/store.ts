@@ -766,6 +766,21 @@ export class Store {
   }
 
   /**
+   * Is a round in flight for this review right now?
+   *
+   * For callers that must not touch the review's WORKTREE while one is (D-55).
+   * D-53 stopped two rounds running at once; it did nothing about a writer outside
+   * the queue, and `review_submit` is exactly that — it patches the worktree a
+   * running round is reading.
+   */
+  hasRunningJob(reviewId: string): boolean {
+    const row = this.db
+      .prepare("SELECT 1 AS x FROM job WHERE review_id = ? AND state = 'running' LIMIT 1")
+      .get(reviewId) as Record<string, number> | undefined;
+    return row !== undefined;
+  }
+
+  /**
    * Requeue jobs a dead process left behind. Call at STARTUP, before any loop runs.
    *
    * `claimJob` sets `running` and `finishJob` clears it, so a process that dies in
