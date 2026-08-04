@@ -59,6 +59,25 @@ export interface RecordedFinding extends Finding {
 export type VerdictKind = "fixed" | "justified-accepted" | "justified-rejected";
 
 /**
+ * The verdicts that CLOSE a finding. `justified-rejected` is deliberately not one:
+ * the reviewer read the reason and refused it, which leaves the defect open and
+ * makes it worse than one nobody argued about.
+ *
+ * Exported because "settled" was defined twice and the definitions disagreed.
+ * `openFindings` had it right in SQL; `review_poll` asked instead whether a verdict
+ * row EXISTED, so a rejected justification was labelled "Already settled — nothing to
+ * do", stripped of its `justify_with`, and still counted in `open_count`. A client
+ * trusting the per-finding note over the aggregate would merge a defect its reviewer
+ * had explicitly refused to accept. Raised by t2 against the commit that introduced
+ * the note, with a standalone repro.
+ */
+export const SETTLING_VERDICTS: readonly VerdictKind[] = ["fixed", "justified-accepted"];
+
+export function isSettled(v: VerdictKind): boolean {
+  return SETTLING_VERDICTS.includes(v);
+}
+
+/**
  * What a TIER did. Never what the ladder decided about it.
  *
  * Two vocabularies used to reach this column, because `runRound` closed the row a
@@ -391,7 +410,7 @@ export class Store {
            AND NOT EXISTS (
              SELECT 1 FROM verdict v
              WHERE v.review_id = f.review_id AND v.fingerprint = f.fingerprint
-               AND v.verdict IN ('fixed', 'justified-accepted')
+               AND v.verdict IN (${SETTLING_VERDICTS.map((v) => `'${v}'`).join(", ")})
            )
          ORDER BY ${FINDING_ORDER_SQL}`,
       )

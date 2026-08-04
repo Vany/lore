@@ -304,4 +304,36 @@ describe("findings are ranked worst first", () => {
     // And it is not counted as work.
     expect(out["open_count"]).toBe(1);
   });
+
+  // The case the test above did not cover, and t2 said so: a verdict EXISTS but
+  // does not close anything. `justified-rejected` means the reviewer read the
+  // reason and refused it, which leaves the finding open and makes it worse than
+  // one nobody argued about — lore's own rule is that a wrong justification is
+  // worse than a bug, because it was trusted.
+  //
+  // Asking "is there a verdict row" instead of "is it closed" labelled exactly
+  // that case "Already settled — nothing to do", dropped its justify_with, and
+  // left open_count still counting it. A client trusting the per-finding note
+  // over the aggregate would merge a defect its reviewer had explicitly refused.
+  it("says a rejected justification is still open, and says it was rejected", async () => {
+    store.recordVerdict("rev1", {
+      fingerprint: "m1",
+      verdict: "justified-rejected",
+      rationale: "the caller's schema check does not run on this path",
+      scope: undefined,
+      tier: "t1",
+      round: 1,
+    });
+
+    const out = await callTool("review_poll", { review_id: "rev1" });
+    const m1 = (out["new_findings"] as Record<string, unknown>[]).find((f) => f["fingerprint"] === "m1");
+
+    expect(m1?.["settled"]).toBeUndefined();
+    expect(m1?.["justify_with"]).toContain("lore-ok[m1]");
+    expect(m1?.["justification_rejected"]).toContain("schema check does not run");
+    expect(String(m1?.["note"])).toMatch(/REJECTED/);
+
+    // The aggregate and the per-finding label now agree — which is the whole point.
+    expect(out["open_count"]).toBe(2);
+  });
 });

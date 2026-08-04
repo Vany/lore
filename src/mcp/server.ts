@@ -20,7 +20,7 @@ import { applyPatch, treeHash } from "../git/repo.ts";
 import { enrich, renderEnrichment } from "../knowledge/enrich.ts";
 import { buildVex, findingsNeedingTriage, renderVex } from "../security/vex.ts";
 import { FINDING_ORDER_SQL } from "../store/schema.ts";
-import type { Store } from "../store/store.ts";
+import { isSettled, type Store } from "../store/store.ts";
 import type { Principal } from "./auth.ts";
 import { REVIEW_PROMPT_TEXT, RESOURCE_DOCS, TOOL_DOCS } from "./docs.ts";
 
@@ -132,7 +132,14 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
             // they wrote in response would be fresh surface for the next tier to
             // review. Observed here: a semgrep CWE-319 on a loopback test server,
             // auto-settled by carry-forward, handed back with `justify_with` set.
-            const settled = store.latestVerdict(review_id, f.fingerprint);
+            // The question is whether the finding is CLOSED, not whether a verdict
+            // row exists. `justified-rejected` is a verdict and leaves the finding
+            // open — the reviewer read the reason and refused it — so asking the
+            // wrong one labelled the most serious case "nothing to do" while
+            // `open_count` still counted it (t2, medium).
+            const verdict = store.latestVerdict(review_id, f.fingerprint);
+            const closed = verdict !== undefined && isSettled(verdict.verdict);
+            const rejected = verdict?.verdict === "justified-rejected";
             return {
               fingerprint: short,
               file: f.file,
@@ -143,12 +150,23 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
               claim: f.claim,
               evidence: f.evidence,
               failure_scenario: f.failureScenario,
-              ...(settled === undefined
-                ? { justify_with: `// lore-ok[${short}]: <why this code is correct>` }
-                : {
-                    settled: settled.verdict,
-                    settled_because: settled.rationale ?? "no reason recorded",
+              ...(closed
+                ? {
+                    settled: verdict.verdict,
+                    settled_because: verdict.rationale ?? "no reason recorded",
                     note: "Already settled — nothing to do. Shown because it is new to you.",
+                  }
+                : {
+                    justify_with: `// lore-ok[${short}]: <why this code is correct>`,
+                    // Still open, and worse than open: a justification was offered
+                    // and refused. Saying so is the difference between "answer this"
+                    // and "your answer was wrong".
+                    ...(rejected
+                      ? {
+                          justification_rejected: verdict.rationale ?? "no reason recorded",
+                          note: "Your justification was REJECTED. Fix the code, or give a reason that holds.",
+                        }
+                      : {}),
                   }),
               // A finding with history is far more actionable than the same finding
               // raised cold: it says whether to fix the line or fix the habit.
