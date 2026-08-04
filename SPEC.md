@@ -857,6 +857,24 @@ Found by driving lore's own review over MCP rather than by reasoning about it, w
 is the argument for dogfooding over inspection: the fault needed a review long enough
 to trip it, and no test that stubs the clock would have produced one.
 
+**And the first fix for that was wrong, which t3 caught.** The worker decided a
+review was already pinned from `existsSync` on the worktree directory — but
+`review_submit` cuts a worktree too, and its path called `addWorktree` with no
+freshness check at all. Start a review against a stale mirror, submit before the
+queued job runs, and the submit chooses the base; the worker then sees the directory,
+reads it as a later round, and skips the check. A review, and an attestation, over a
+base nobody fetched — the exact failure two fixes had now been written to prevent.
+
+So the heuristic is gone. **Whoever cuts the base asks the question**, in the one
+function that does both: `worktreeFor` checks freshness when it creates a worktree
+and only existence when it reuses one, and the worker and the MCP layer both call it.
+The rule is a property of cutting a base, not of being a worker.
+
+Worth recording that this is **t3's first finding under D-63**, that it is rated
+high, and that what it found was a hole in the fix for t2's finding one round
+earlier. The ladder's argument — that each tier sees what the last one passed — is
+not abstract here: t1 and t2 both read this code and called it clean.
+
 **Provisioning therefore issues a token and nothing else.** The deploy key went with
 the fetch: a keypair written to disk that nothing reads, handed over with an
 instruction to grant a repository read access to a key with no user, is strictly

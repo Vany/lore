@@ -13,11 +13,9 @@
  */
 
 
-import { existsSync } from "node:fs";
-import { join } from "node:path";
 import { Exhausted, LoreError } from "../core/errors.ts";
 import { reviewType } from "../core/review-type.ts";
-import { ensureBare, addWorktree, repoPaths } from "../git/repo.ts";
+import { repoPaths, worktreeFor } from "../git/repo.ts";
 import { bootstrap } from "../knowledge/bootstrap.ts";
 import type { Store } from "../store/store.ts";
 import { Alerter, CONDITIONS } from "../ops/alerts.ts";
@@ -117,22 +115,10 @@ export class Worker {
       .prepare("SELECT git_url FROM repo WHERE id = ?")
       .get(review.repoId) as Record<string, string> | undefined;
     const paths = repoPaths(this.cfg.reposRoot, review.repoId);
-
-    // A worktree already here means this is a later round of a review whose tree is
-    // pinned (D-40). It will not be re-cut, and the mirror will not be read again —
-    // so the mirror's age is only disqualifying on the round that cuts it.
-    const existing = join(paths.worktrees, reviewId);
-    const resumed = existsSync(existing);
-
-    // Present always; fresh only while the base is still being chosen (D-63).
-    await ensureBare(paths, repo?.["git_url"] ?? "", !resumed);
-
-    // Previously this called addWorktree unconditionally and caught the failure,
-    // treating `typeof e === "object"` as "already present from an earlier round".
-    // Every LoreError is an object, so a real failure — `branch 'x' not found on
-    // origin` — was swallowed too, and the round continued with a path to a
-    // directory that had never been created.
-    const worktree = resumed ? existing : await addWorktree(paths, reviewId, review.branch);
+    // Cutting a base checks the mirror is present and fresh; reusing one only checks
+    // it is present (D-40, D-63). That decision lives in one place because when it
+    // lived in two, they disagreed and the disagreement was reachable.
+    const worktree = await worktreeFor(paths, reviewId, review.branch, repo?.["git_url"] ?? "");
 
     this.store.updateReview(reviewId, { state: "running" });
 

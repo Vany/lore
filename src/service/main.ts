@@ -11,7 +11,7 @@ import { Alerter } from "../ops/alerts.ts";
 import { DEFAULT_HEARTBEAT, startHeartbeat } from "../ops/heartbeat.ts";
 import { DEFAULT_RETENTION, collect } from "../ops/retention.ts";
 import { DEFAULT_SPEND, mayStart } from "../ops/spend.ts";
-import { addWorktree, repoPaths } from "../git/repo.ts";
+import { repoPaths, worktreeFor } from "../git/repo.ts";
 import { Store } from "../store/store.ts";
 import { attest, render } from "./attest.ts";
 import { startHttp } from "./http.ts";
@@ -99,14 +99,18 @@ export async function serve(cfg: ServiceConfig): Promise<() => void> {
     store,
     {
       store,
+      // `review_submit` needs a worktree to apply a diff into and hash. That makes
+      // this a base-cutting path exactly as much as the worker's is, so it asks the
+      // same question through the same function — it used to call `addWorktree`
+      // directly with no freshness check, which let a submit choose a base from a
+      // never-fetched mirror (t3, high). The old `.catch(() => <path>)` went with it:
+      // it turned any failure into a path to a directory that was never created.
       worktreeFor: async (reviewId) => {
         const row = store.db
-          .prepare("SELECT repo_id, branch FROM review WHERE id = ?")
+          .prepare("SELECT r.branch, r.repo_id, p.git_url FROM review r JOIN repo p ON p.id = r.repo_id WHERE r.id = ?")
           .get(reviewId) as Record<string, string> | undefined;
         const paths = repoPaths(reposRoot, row?.["repo_id"] ?? "");
-        return addWorktree(paths, reviewId, row?.["branch"] ?? "").catch(
-          () => join(paths.worktrees, reviewId),
-        );
+        return worktreeFor(paths, reviewId, row?.["branch"] ?? "", row?.["git_url"] ?? "");
       },
       enqueue: (reviewId, stage) => {
         // Checked before starting, never mid-review: killing a review halfway

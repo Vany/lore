@@ -7,6 +7,7 @@
  * hours in silence (INV-5).
  */
 
+import { existsSync } from "node:fs";
 import { mkdir, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { DidNotRun } from "../core/errors.ts";
@@ -169,6 +170,38 @@ export async function addWorktree(paths: RepoPaths, reviewId: string, branch: st
     // than failing the review — but they are never silently treated as absent.
   });
   return dir;
+}
+
+/**
+ * The one way to get a review's worktree. Cutting a base checks freshness; reusing
+ * one does not.
+ *
+ * Both callers used to do this themselves and they disagreed, which is the bug this
+ * exists to make unrepresentable. The worker called `ensureBare` and then decided
+ * from `existsSync` whether the review was already pinned; `worktreeFor` in the MCP
+ * layer called `addWorktree` directly, with no freshness check at all. So
+ * `review_submit` — which needs a worktree to apply a diff and hash the tree — could
+ * cut a base from a stale or never-fetched mirror before the first round ran, and the
+ * worker would then see the directory, conclude the review was pinned, and skip the
+ * check. A review, and an attestation, against a base nobody fetched.
+ *
+ * Raised by **t3** at high severity, naming both call sites and the exact order that
+ * reaches it. It is the first finding t3 has produced since D-63, and it found a hole
+ * in the fix for the previous round's finding.
+ *
+ * The rule it enforces: **freshness is a question about choosing a base, not about
+ * running a round.** Whoever cuts the worktree asks it, once, here.
+ */
+export async function worktreeFor(
+  paths: RepoPaths,
+  reviewId: string,
+  branch: string,
+  gitUrl: string,
+): Promise<string> {
+  const existing = join(paths.worktrees, reviewId);
+  const resumed = existsSync(existing);
+  await ensureBare(paths, gitUrl, !resumed);
+  return resumed ? existing : await addWorktree(paths, reviewId, branch);
 }
 
 export async function removeWorktree(paths: RepoPaths, reviewId: string): Promise<void> {

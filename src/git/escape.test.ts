@@ -11,7 +11,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync }
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { ensureBare } from "./repo.ts";
+import { ensureBare, worktreeFor } from "./repo.ts";
 
 let root: string;
 
@@ -105,6 +105,44 @@ describe("the clone has to be there, and recent (D-63)", () => {
 
     await expect(ensureBare(paths, src)).rejects.toThrow(/never been fetched/);
     await expect(ensureBare(paths, src)).rejects.toThrow(/make mirror/);
+  });
+
+  // Raised by t3 at HIGH, against the fix for the previous round's finding.
+  //
+  // The worker decided "this review is already pinned" from `existsSync` on the
+  // worktree directory — but `review_submit` also cuts a worktree, through a path
+  // that called `addWorktree` with no freshness check at all. So: start a review
+  // against a stale mirror, submit before the queued job runs, and the submit cuts
+  // the base; the worker then sees the directory, concludes it is a later round, and
+  // skips the check. A review, and an attestation, over a base nobody fetched.
+  //
+  // The rule that replaces the heuristic: whoever CUTS the base asks the question,
+  // and there is one function that does both.
+  it("requires freshness whenever a base is cut, not merely when the worker cuts it", async () => {
+    const src = join(root, "src-submit");
+    makeRepo(src);
+    const paths = { bare: join(root, "repos/r7/bare.git"), worktrees: join(root, "repos/r7/wt") };
+    mirror(src, paths.bare);
+    const fetchHead = join(paths.bare, "FETCH_HEAD");
+    writeFileSync(fetchHead, "");
+    const stale = new Date(Date.now() - 2 * 60 * 60_000);
+    utimesSync(fetchHead, stale, stale);
+
+    // The submit path is the one that used to skip this entirely.
+    await expect(worktreeFor(paths, "rev_x", "main", src)).rejects.toThrow(/last fetched/);
+    // ...and it must not have left a worktree behind for the worker to mistake for
+    // a pinned one, which is the whole mechanism of the finding.
+    expect(existsSync(join(paths.worktrees, "rev_x"))).toBe(false);
+
+    // Once the mirror is current, the base may be cut — and the SECOND call reuses
+    // it without re-asking, which is what lets a long review outlive the window.
+    const now = new Date();
+    utimesSync(fetchHead, now, now);
+    const wt = await worktreeFor(paths, "rev_x", "main", src);
+    expect(existsSync(wt)).toBe(true);
+
+    utimesSync(fetchHead, stale, stale);
+    await expect(worktreeFor(paths, "rev_x", "main", src)).resolves.toBe(wt);
   });
 
   it("accepts a clone fetched just now", async () => {
