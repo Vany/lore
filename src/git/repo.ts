@@ -7,8 +7,8 @@
  * hours in silence (INV-5).
  */
 
-import { mkdir, rm } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, rm, stat } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { DidNotRun } from "../core/errors.ts";
 import { git, gitMaybe } from "./exec.ts";
 
@@ -30,7 +30,42 @@ export function repoPaths(root: string, repoId: string): RepoPaths {
  * that can carry thousands, and a reviewer shown only the outer diff would
  * confidently call it low-risk having never seen it (D-36).
  */
-export async function ensureBare(paths: RepoPaths, gitUrl: string): Promise<void> {
+/**
+ * Tell git which key to authenticate with, and only that key.
+ *
+ * The deploy key was generated at provisioning and then used by nothing: no
+ * `GIT_SSH_COMMAND`, no `core.sshCommand`, no identity anywhere. Every ssh remote
+ * therefore failed to clone, silently enough that it went unnoticed while the two
+ * repositories that did work were a PUBLIC https url and a local path — so the
+ * documented workflow, `make new` then install the deploy key then review a private
+ * repository, had never once run end to end (D-62).
+ *
+ * `IdentitiesOnly=yes` matters as much as `-i`: without it ssh also offers whatever
+ * the agent holds, which on a developer machine means authenticating as the person
+ * rather than as the read-only deploy key, and a service that can push while
+ * believing it cannot.
+ *
+ * `accept-new` pins the host on first sight and refuses a CHANGE afterwards. Plain
+ * `no` would accept a different host silently, which is the one thing host checking
+ * exists to prevent.
+ */
+function sshCommand(keyPath: string, knownHosts: string): string {
+  return [
+    "ssh",
+    `-i ${keyPath}`,
+    "-o IdentitiesOnly=yes",
+    `-o UserKnownHostsFile=${knownHosts}`,
+    "-o StrictHostKeyChecking=accept-new",
+  ].join(" ");
+}
+
+export async function ensureBare(paths: RepoPaths, gitUrl: string, keyPath?: string): Promise<void> {
+  // Only when a key actually exists on disk. A missing one means a public https url
+  // or a local path, both of which authenticate with nothing.
+  const key = keyPath !== undefined && (await stat(keyPath).then(() => true).catch(() => false)) ? keyPath : undefined;
+  const env =
+    key === undefined ? {} : { GIT_SSH_COMMAND: sshCommand(key, join(dirname(key), "known_hosts")) };
+
   await mkdir(paths.bare, { recursive: true });
   // Asks whether THIS directory is a repository, not whether one exists somewhere
   // above it. `rev-parse --git-dir` answered the second question: in the empty
@@ -39,13 +74,18 @@ export async function ensureBare(paths: RepoPaths, gitUrl: string): Promise<void
   // on the wrong repository (D-61). `--resolve-git-dir` asks about the path given.
   const isRepo = await gitMaybe(paths.bare, ["rev-parse", "--resolve-git-dir", "."]);
   if (isRepo === undefined) {
-    await git(paths.bare, ["clone", "--bare", "--recurse-submodules", gitUrl, "."], 600_000);
+    await git(paths.bare, ["clone", "--bare", "--recurse-submodules", gitUrl, "."], 600_000, env);
     await git(paths.bare, ["config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"]);
+    // Persisted in the clone's own config, so every later fetch authenticates the
+    // same way without the caller having to remember to pass it.
+    if (key !== undefined) {
+      await git(paths.bare, ["config", "core.sshCommand", sshCommand(key, join(dirname(key), "known_hosts"))]);
+    }
   }
   // Always fetch. `git fetch` moves only remote-tracking refs, never local ones —
   // which is how a local `main` once sat 57 commits behind while every session was
   // fetching constantly, turning a one-file branch into a 496-file diff (INV-2).
-  await git(paths.bare, ["fetch", "--prune", "--tags", "origin"], 600_000);
+  await git(paths.bare, ["fetch", "--prune", "--tags", "origin"], 600_000, env);
 }
 
 /**

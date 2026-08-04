@@ -46,3 +46,59 @@ describe("git cannot climb out of the directory it was aimed at", () => {
     expect(tags).toContain("precious-tag");
   });
 });
+
+// D-62. The deploy key was generated at provisioning and used by nothing, so every
+// ssh remote failed to clone while a public https url and a local path kept working
+// — the documented workflow had never run end to end.
+describe("a repo with a deploy key authenticates with it", () => {
+  it("pins the key into the clone, and offers no other identity", async () => {
+    const src = join(root, "src2");
+    mkdirSync(src, { recursive: true });
+    const s = (...a: string[]) => execFileSync("git", a, { cwd: src, stdio: "ignore" });
+    s("init", "-q", "-b", "main");
+    s("config", "user.email", "t@e.com");
+    s("config", "user.name", "t");
+    writeFileSync(join(src, "a.txt"), "a\n");
+    s("add", "-A");
+    s("commit", "-qm", "x");
+
+    const keys = join(root, "keys");
+    mkdirSync(keys, { recursive: true });
+    const keyPath = join(keys, "r1_ed25519");
+    writeFileSync(keyPath, "not-a-real-key\n");
+
+    const paths = { bare: join(root, "repos/r1/bare.git"), worktrees: join(root, "repos/r1/wt") };
+    await ensureBare(paths, src, keyPath);
+
+    const cfg = execFileSync("git", ["-C", paths.bare, "config", "--get", "core.sshCommand"], { encoding: "utf8" });
+    expect(cfg).toContain(keyPath);
+    // Without this ssh also offers the agent's keys, which authenticates as the
+    // person rather than as the read-only deploy key.
+    expect(cfg).toContain("IdentitiesOnly=yes");
+    // `no` would silently accept a CHANGED host, which is what checking is for.
+    expect(cfg).toContain("StrictHostKeyChecking=accept-new");
+  });
+
+  it("does not set an ssh command when there is no key", async () => {
+    const src = join(root, "src3");
+    mkdirSync(src, { recursive: true });
+    const s = (...a: string[]) => execFileSync("git", a, { cwd: src, stdio: "ignore" });
+    s("init", "-q", "-b", "main");
+    s("config", "user.email", "t@e.com");
+    s("config", "user.name", "t");
+    writeFileSync(join(src, "a.txt"), "a\n");
+    s("add", "-A");
+    s("commit", "-qm", "x");
+
+    const paths = { bare: join(root, "repos/r2/bare.git"), worktrees: join(root, "repos/r2/wt") };
+    await ensureBare(paths, src, join(root, "keys", "absent_ed25519"));
+
+    // `git config --get` exits 1 when the key is unset, so absence IS the throw.
+    expect(() =>
+      execFileSync("git", ["-C", paths.bare, "config", "--get", "core.sshCommand"], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      }),
+    ).toThrow();
+  });
+});

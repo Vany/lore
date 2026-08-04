@@ -22,7 +22,13 @@ export interface GitResult {
   readonly stderr: string;
 }
 
-export async function git(cwd: string, args: readonly string[], timeoutMs = 120_000): Promise<GitResult> {
+export async function git(
+  cwd: string,
+  args: readonly string[],
+  timeoutMs = 120_000,
+  /** Extra environment, for the one thing git cannot be told on the command line. */
+  extraEnv: Readonly<Record<string, string>> = {},
+): Promise<GitResult> {
   try {
     const { stdout, stderr } = await run("git", [...args], {
       cwd,
@@ -47,7 +53,7 @@ export async function git(cwd: string, args: readonly string[], timeoutMs = 120_
       // The ceiling is `cwd` itself, so discovery can find a repository AT `cwd` and
       // nowhere above it. Cheaper and more total than auditing every call site for
       // whether its target exists.
-      env: { ...process.env, GIT_CEILING_DIRECTORIES: cwd },
+      env: { ...process.env, GIT_CEILING_DIRECTORIES: cwd, ...extraEnv },
     });
     return { stdout, stderr };
   } catch (e) {

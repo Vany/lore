@@ -165,6 +165,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-59** | Replication is **local and always on**; an outer script takes it off the box | confirmed |
 | **D-60** | The data directory is the **same path** inside the container as on the host | confirmed |
 | **D-61** | Git may never climb out of the directory it was aimed at | hard |
+| **D-62** | The deploy key is **used**, and it is the only identity offered | confirmed |
 
 **D-7, revised.** The earlier version dropped GLM-5.2 on Artificial Analysis's
 *cost per task* — which is tokens consumed × price on their benchmark, not a price.
@@ -740,6 +741,34 @@ Two changes, because one of them is the class and one is the instance:
 Marked **hard** rather than confirmed: this one is not a preference. The test builds
 the exact shape — an empty bare directory nested inside another repository — and
 fails if either half is reverted.
+
+**D-62 — the deploy key is used, and it is the only identity offered.**
+
+Provisioning generated a read-only deploy key, wrote the private half server-side,
+and printed the public half with instructions to install it. Nothing then told git to
+use it: no `GIT_SSH_COMMAND`, no `core.sshCommand`, no identity anywhere.
+
+So every ssh remote failed to clone. It went unnoticed because the two repositories
+that did work were a **public** https url and a local path, neither of which
+authenticates with anything — the documented workflow, `make new` then install the
+key then review a private repository, had never once run end to end. Counted on the
+deployment 2026-08-04: `git@github.com:Vany/lore.git` and
+`git@github.com:chainnodesorg/rigid-monorepo.git` had zero objects between them,
+against 101, 443 and 146 commits for the https and local ones.
+
+`ensureBare` now builds an ssh command when the key exists, uses it for the clone,
+and persists it as `core.sshCommand` in the bare repository so every later fetch
+authenticates the same way without a caller remembering to pass it. A missing key
+means a public url or a local path, and is not an error.
+
+Two options carry the weight:
+
+- **`IdentitiesOnly=yes`**, which matters as much as `-i`. Without it ssh also offers
+  whatever the agent holds, so on a developer machine the service authenticates as
+  the *person* — a process that can push while believing it holds a read-only key.
+- **`StrictHostKeyChecking=accept-new`**, which pins a host on first sight and
+  refuses a change afterwards. `no` would accept a changed host silently, which is
+  the single thing host checking exists to prevent.
 
 **D-43 — review types.** `review.start` takes a `type`, defaulting to `code-arch`:
 *is this change correct and well-made?* The next type is `security`: *what

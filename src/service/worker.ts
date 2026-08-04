@@ -15,6 +15,7 @@
 
 import { Exhausted, LoreError } from "../core/errors.ts";
 import { reviewType } from "../core/review-type.ts";
+import { dirname, join } from "node:path";
 import { ensureBare, addWorktree, repoPaths } from "../git/repo.ts";
 import { bootstrap } from "../knowledge/bootstrap.ts";
 import type { Store } from "../store/store.ts";
@@ -115,7 +116,11 @@ export class Worker {
       .prepare("SELECT git_url FROM repo WHERE id = ?")
       .get(review.repoId) as Record<string, string> | undefined;
     const paths = repoPaths(this.cfg.reposRoot, review.repoId);
-    await ensureBare(paths, repo?.["git_url"] ?? "");
+    // The repo's own deploy key, beside the repositories rather than inside them
+    // (D-62). `ensureBare` ignores it when the file is absent, which is every public
+    // url and every local path.
+    const keyPath = join(dirname(this.cfg.reposRoot), "keys", `${review.repoId}_ed25519`);
+    await ensureBare(paths, repo?.["git_url"] ?? "", keyPath);
     const worktree = await addWorktree(paths, reviewId, review.branch).catch(async (e: unknown) => {
       // Already present from an earlier round.
       const existing = `${paths.worktrees}/${reviewId}`;
