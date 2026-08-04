@@ -86,9 +86,37 @@ review round forever.** A comment is a claim and deserves review — that was wo
 five real defects tonight — but a ladder that re-reads its own freshly-written
 explanations will always find something to say about them.
 
-**`passed` is still unreached, after all of this.** Every tier has now run and
-agreed at least once; no single tree has been agreed by all three at once. The
-attestation remains the one thing this product exists for and has never produced.
+**`passed`, reached — and then the attestation showed two more defects.**
+
+```
+lore: reviewed tree bc1432841a5d3911e88f5e5866bf8c0d03ecee7a against this repo's
+rules and lore's own — 4 tiers, 5 findings, 0 fixed, 2 justified.
+[ed25519:+IS6r19+xlkqZDBnkYKk/rVyiT+Za9GksLAzSim7No1X9dZR4BF99KuoVgk8YoFUAJNFRWkQlGumKjue0DldAw==]
+```
+
+The tree equals `HEAD^{tree}` exactly. Two vendors, three model tiers plus T0, all
+agreeing on one tree, on subscriptions, at `$0`.
+
+**What made it reachable was scope, not tiers.** A 5.8 KB review cleared t1 in 137s
+where a 31.8 KB one had needed ten rounds and a 69 KB one blew the deep tier's
+timeout. Small diffs, a ticket naming every commit in the range, and — the tactic
+that actually broke the prose oscillation — **justify rather than rewrite** unless a
+finding is behavioural. A settled finding does not reset the ladder; a rewrite adds
+fresh surface for the next tier to fault.
+
+**The first attestation was wrong in two ways, and only producing it could show
+that.** It read `reviewed tree unknown ... 1 findings, 0 fixed, 3 justified` for a
+review with one finding. `review_submit` was the sole writer of `review.tree_hash`,
+so a review needing no fixes passed having never recorded one; and `tally` counted
+verdict ROWS, while D-51 carries a justification forward once per round. Then t3
+found the sharper half: `?? "unknown"` meant a missing hash still got SIGNED — an
+artefact asserting nothing checkable while carrying a real ed25519 signature over
+it, which looks verified. `attest` refuses now. Then it found that the quota path
+returns early and skipped the recording, so `passed_partial` would have been
+refused an attestation by the guard I had just added.
+
+Four defects in the product's central artefact, none reachable except by making it
+once.
 
 **Open.** Nothing writes a `fixed` verdict, so a finding that gets fixed is never
 settled and shows open for ever — `attest.test.ts` builds fixtures in a state
