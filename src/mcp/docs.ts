@@ -212,12 +212,15 @@ export const RESOURCE_DOCS: Readonly<Record<string, { title: string; priority: n
 2. review_poll(review_id) until findings arrive or the state is terminal
 3. For each finding: fix it, or justify it with // lore-ok[fp]: <reason>
 4. review_submit(review_id, diff, tree_hash)
-5. Return to 2. Repeat until the state is \`passed\`.
+5. Return to 2. Repeat until the state is TERMINAL — \`passed\`, \`passed_partial\`,
+   \`needs_human\`, \`failed\` or \`expired\`.
 
 Rules that decide whether this works:
 - Polls return only new findings. Never re-fix what is not in the response.
 - \`failed\` and \`expired\` are not \`passed\`. Report and stop; do not merge.
 - \`fast_clean\` is not \`passed\` either — the deep tiers have not run.
+- \`passed_partial\` is terminal and will NEVER become \`passed\`, so waiting for that
+  never returns. Attest it, and say plainly that the evidence is weaker than a pass.
 - Expect several rounds. Every fix resets the ladder to the cheapest tier, because a
   fix is unreviewed code.
 - Do not use lore-ok to make an inconvenient finding go away. The reviewer rules on
@@ -344,5 +347,7 @@ Rules:
 The ticket for this change:
 ${ticket.trim()}
 
-When the state is \`passed\`, call review_attest and give the user that line.
+When the state is \`passed\` — or \`passed_partial\` — call review_attest and give the
+user that line. On a partial one, say which tiers were skipped and that the evidence
+is weaker than a pass; the decision to merge on it is theirs, not yours.
 `.trim();
