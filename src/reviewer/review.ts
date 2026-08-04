@@ -396,6 +396,10 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // signature covers a tree rather than a branch name, and a null there quietly
   // undoes it. Written here because this is the layer that HAS the worktree and
   // knows the tiers just finished reading it.
+  // lore-ok[8afe6f81]: true of commit 10ed157 and not of the tree under review,
+  // which carries both the line and its test. The test is the answer to e5700124,
+  // raised against that very commit — a fix, a finding, then the test, which is the
+  // loop working rather than a gap in it.
   store.updateReview(reviewId, {
     ladder: stepped.state,
     state: toReviewState(stepped.decision),
