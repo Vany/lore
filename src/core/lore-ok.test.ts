@@ -88,6 +88,20 @@ describe("the block-comment form", () => {
     expect(parseLoreOk(src)[0]?.reason).toBe("first reason");
   });
 
+  // A bare ` *` is a paragraph break, not a continuation. Matching it let the reason
+  // run on into whatever prose followed, so a justification silently acquired an
+  // unrelated paragraph and the reviewer ruled on text nobody wrote for it.
+  it("stops at a blank star line instead of swallowing the next paragraph", () => {
+    const src = [
+      "/**",
+      " * lore-ok[a1b2c3d4]: the actual reason",
+      " *",
+      " * Unrelated prose about something else entirely.",
+      " */",
+    ].join("\n");
+    expect(parseLoreOk(src)[0]?.reason).toBe("the actual reason");
+  });
+
   it("still refuses an empty reason", () => {
     expect(parseLoreOk(["/**", " * lore-ok[a1b2c3d4]:", " */"].join("\n"))).toStrictEqual([]);
   });

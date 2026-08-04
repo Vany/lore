@@ -45,8 +45,22 @@ const HTML_START = new RegExp(`<!--\\s*lore-ok\\[(${SHORT})\\]\\s*:\\s*([\\s\\S]
  * syntax and silently fails in another is worse than one that is absent.
  */
 const STAR_START = new RegExp(`^\\s*\\*\\s*lore-ok\\[(${SHORT})\\]\\s*:\\s*(.*)$`);
-/** A ` * ` line continuing the reason. Never the closing `*\/`, and never a blank ` *`. */
-const STAR_CONT = /^\s*\*(?!\/)\s?(.*)$/;
+/**
+ * A ` * ` line continuing the reason. Never the closing `*\/`, and never a blank ` *`.
+ *
+ * The blank case is the one that matters, and the first version of this got it
+ * wrong while claiming otherwise (11817665). A bare ` *` is a PARAGRAPH BREAK in a
+ * JSDoc block, and matching it meant the continuation ran straight through into
+ * whatever prose followed — so a justification silently grew an unrelated paragraph
+ * that the reviewer then had to rule on. `(.*\S)` requires at least one
+ * non-whitespace character, which is what stops it.
+ *
+ * `SLASH_CONT` has the same shape and is deliberately left alone: it is not what
+ * this finding was about, and changing the behaviour of the form every existing
+ * justification uses is not something to do at the end of a long branch. Written
+ * down rather than left as a difference someone rediscovers.
+ */
+const STAR_CONT = /^\s*\*(?!\/)\s?(.*\S)\s*$/;
 
 /**
  * Find every justification in a file.
