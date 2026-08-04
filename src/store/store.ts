@@ -777,6 +777,35 @@ export class Store {
   }
 
   /**
+   * A re-raise refreshes what the finding is ABOUT (D-56).
+   *
+   * `recordFinding` is `ON CONFLICT DO NOTHING`, which is right for the finding's
+   * text — the claim, the evidence, when it was first seen — and wrong for the two
+   * fields the settling rule reads, because both describe the world at the LAST
+   * raise rather than the first. t3 raised both against D-56:
+   *
+   *   * **scope** — code can move without the finding being fixed. Testing the first
+   *     raise's hunk then finds it absent and records `fixed` for a defect the tier
+   *     is still complaining about, which is a false claim in a signed line.
+   *   * **origin** — if t3 re-raises what t1 first found, a stale `t1` lets t1's
+   *     silence close it, and the qualified-tier guard exists precisely to stop a
+   *     weaker tier doing that. Raised only, never lowered: the strongest tier that
+   *     has confirmed a defect is the one that must be satisfied it is gone.
+   */
+  refreshFinding(reviewId: string, fingerprint: string, scope: Scope | undefined, origin: string | undefined): void {
+    if (scope !== undefined) {
+      this.db
+        .prepare("UPDATE finding SET scope_blob = ?, scope_hunk = ? WHERE review_id = ? AND fingerprint = ?")
+        .run(scope.blob, scope.hunk, reviewId, fingerprint);
+    }
+    if (origin !== undefined) {
+      this.db
+        .prepare("UPDATE finding SET origin = ? WHERE review_id = ? AND fingerprint = ?")
+        .run(origin, reviewId, fingerprint);
+    }
+  }
+
+  /**
    * Does this review have a round that has not finished — queued OR running?
    *
    * For callers that must not touch the review's WORKTREE (D-55). D-53 stopped two

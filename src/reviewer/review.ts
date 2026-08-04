@@ -283,7 +283,19 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       firstSeen: new Date().toISOString(),
       ...(scope === undefined ? {} : { scope }),
     };
-    if (store.recordFinding(reviewId, rec)) newFindings.push(rec);
+    if (store.recordFinding(reviewId, rec)) {
+      newFindings.push(rec);
+    } else {
+      // Already on file, so the insert did nothing — but a RE-RAISE changes two
+      // things the settling rule depends on, and both describe the last raise rather
+      // than the first (D-56). The scope moves with the code; the origin rises to the
+      // strongest tier that has confirmed the defect, and never falls.
+      const prev = store.db
+        .prepare("SELECT origin FROM finding WHERE review_id = ? AND fingerprint = ?")
+        .get(reviewId, fp) as Record<string, string> | undefined;
+      const stronger = tierRank(tiers, origin) > tierRank(tiers, prev?.["origin"] ?? origin) ? origin : undefined;
+      store.refreshFinding(reviewId, fp, scope, stronger);
+    }
   }
 
   // 5b. Carry forward justifications this repo already ratified.
@@ -453,6 +465,15 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
 }
 
 /**
+ * Where a tier sits in the ladder. `-1` for anything not in it — T0, or a tier a
+ * deployment has since removed — which compares below every real tier, so an unknown
+ * origin can never out-rank one and quietly gain the right to close findings.
+ */
+function tierRank(tiers: readonly Tier[], id: string): number {
+  return tiers.findIndex((t) => t.id === id);
+}
+
+/**
  * The code a finding is about, as it stands right now.
  *
  * `undefined` when the file cannot be read or the finding names no line — both mean
@@ -515,7 +536,7 @@ async function settleFixed(
   answered: ReadonlySet<string>,
   round: number,
 ): Promise<readonly string[]> {
-  const rank = (id: string) => tiers.findIndex((x) => x.id === id);
+  const rank = (id: string) => tierRank(tiers, id);
   const here = rank(tier.id);
   const fixed: string[] = [];
 

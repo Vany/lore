@@ -432,6 +432,24 @@ describe("runRound", () => {
       expect(again.decision.kind).not.toBe("findings");
     });
 
+    // A re-raise moves the goalposts, and both fields the rule reads must move with
+    // it. Here the code changes WITHOUT the defect being fixed and t1 says so again;
+    // testing the first raise's hunk would then find it absent and record a false
+    // fix for a defect the tier is still complaining about (bd0c15b0).
+    it("re-scopes a finding that is raised again, so a stale hunk cannot fake a fix", async () => {
+      const reviewer = new ScriptedReviewer([[HOLD_BUG], [HOLD_BUG], []]);
+      await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
+
+      // Code moves; the defect does not go away, and t1 raises it again.
+      writeFileSync(join(dir, "src/hold.ts"), "export function capture() {\n  // moved\n  return 1;\n}\n");
+      await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
+
+      // Nothing changes now, and t1 falls silent. Silence over untouched code is not
+      // a fix, and it is only visible as untouched if the scope was refreshed.
+      const after = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
+      expect(after.fixed).toStrictEqual([]);
+    });
+
     // The guard that matters most. t1 not repeating what t3 found says nothing about
     // the code — t1 may be unable to see it — so closing on that silence would be
     // INV-1 inverted: a tier that did not look, recorded as one that found nothing.

@@ -234,6 +234,34 @@ describe("orphaned jobs", () => {
 // review_submit 19s later queued a second, two loops took one each, and both paid
 // for a t1 call. The ladder settled at round 1 after two rounds had finished and
 // one completed review was discarded.
+// A re-raise refreshes what the settling rule reads. Both fields describe the LAST
+// raise, not the first, and `recordFinding` is ON CONFLICT DO NOTHING (D-56).
+describe("a re-raise refreshes the finding's context", () => {
+  beforeEach(() => newReview("rev1"));
+
+  it("moves the scope, so a stale hunk cannot look like a fix", () => {
+    store.recordFinding("rev1", { ...finding("aaaa1111"), scope: { blob: "b1", hunk: "h1" } });
+    store.refreshFinding("rev1", "aaaa1111", { blob: "b2", hunk: "h2" }, undefined);
+    expect(store.openFindings("rev1")[0]?.scope).toStrictEqual({ blob: "b2", hunk: "h2" });
+  });
+
+  // The qualified-silence guard reads `origin`. If t3 confirms what t1 first found
+  // and origin stays t1, t1's silence closes a defect t3 is still asserting.
+  it("raises the origin to the tier that last confirmed it", () => {
+    store.recordFinding("rev1", { ...finding("bbbb2222"), origin: "t1" });
+    store.refreshFinding("rev1", "bbbb2222", undefined, "t3");
+    expect(store.openFindings("rev1")[0]?.origin).toBe("t3");
+  });
+
+  it("leaves both alone when there is nothing new to record", () => {
+    store.recordFinding("rev1", { ...finding("cccc3333"), origin: "t2", scope: { blob: "b1", hunk: "h1" } });
+    store.refreshFinding("rev1", "cccc3333", undefined, undefined);
+    const f = store.openFindings("rev1")[0];
+    expect(f?.origin).toBe("t2");
+    expect(f?.scope).toStrictEqual({ blob: "b1", hunk: "h1" });
+  });
+});
+
 describe("one round at a time per review (D-53)", () => {
   beforeEach(() => {
     newReview("rev1");
