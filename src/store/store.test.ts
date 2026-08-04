@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AmbiguousFingerprint } from "../core/errors.ts";
 import { initialState } from "../core/ladder.ts";
 import { SCHEMA_VERSION, applyMigrations } from "./schema.ts";
-import { Store, type RecordedFinding } from "./store.ts";
+import { SETTLING_VERDICTS, Store, type RecordedFinding, type VerdictKind } from "./store.ts";
 
 let store: Store;
 let repoId: string;
@@ -128,6 +128,36 @@ describe("resolveShort", () => {
 
 describe("verdicts", () => {
   beforeEach(() => newReview("rev1"));
+
+  // The two views of "settled" must agree, and review.ts:427 says why in the code
+  // that depends on it: when they diverge the review LIVELOCKS — a re-raised
+  // fingerprint looks fresh to `step`, which resets the ladder, while `openFindings`
+  // excludes it and `undelivered` has already delivered it, so the client is told
+  // `findings_ready` and handed nothing, for ever.
+  //
+  // Raised by t1 — the cheapest tier — one round after SETTLING_VERDICTS was
+  // introduced precisely to stop "settled" being defined twice. It had been applied
+  // to `openFindings` and to `review_poll` and not to `settledFingerprints`, so the
+  // constant left three definitions where it was meant to leave one.
+  //
+  // Asserted over every verdict kind rather than the two that settle, so adding a
+  // kind cannot pass by being ignored on both sides.
+  it("agrees with openFindings on every verdict kind", () => {
+    const kinds: VerdictKind[] = ["fixed", "justified-accepted", "justified-rejected"];
+    kinds.forEach((verdict, i) => {
+      const fp = `f${i}`;
+      store.recordFinding("rev1", finding(fp));
+      store.recordVerdict("rev1", { fingerprint: fp, verdict, rationale: "r", scope: undefined, tier: "t1", round: 1 });
+    });
+
+    const settled = new Set(store.settledFingerprints("rev1"));
+    const open = new Set(store.openFindings("rev1").map((f) => f.fingerprint));
+
+    for (const fp of ["f0", "f1", "f2"]) {
+      expect(settled.has(fp), `${fp}: settled and open disagree`).toBe(!open.has(fp));
+    }
+    expect([...settled].sort()).toStrictEqual(SETTLING_VERDICTS.map((_, i) => `f${i}`));
+  });
 
   it("counts fixed and accepted as settled, but not rejected", () => {
     store.recordVerdict("rev1", { fingerprint: "aa", verdict: "fixed", rationale: undefined, scope: undefined, tier: "t1", round: 1 });

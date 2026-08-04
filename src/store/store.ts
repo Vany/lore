@@ -546,7 +546,7 @@ export class Store {
         `SELECT v.fingerprint FROM verdict v
          WHERE v.review_id = ?
            AND v.id = (SELECT MAX(id) FROM verdict w WHERE w.review_id = v.review_id AND w.fingerprint = v.fingerprint)
-           AND v.verdict IN ('fixed', 'justified-accepted')`,
+           AND v.verdict IN (${SETTLING_VERDICTS.map((v) => `'${v}'`).join(", ")})`,
       )
       .all(reviewId) as Record<string, string>[];
     return rows.map((r) => r["fingerprint"] ?? "");
