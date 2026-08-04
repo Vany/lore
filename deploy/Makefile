@@ -33,6 +33,10 @@ preflight:
 		|| { echo "no credentials: run 'make sync-opencode', or set a provider key in .env"; exit 1; }
 	@grep -qE '^OPENCODE_SERVER_PASSWORD=.+' .env || { echo "OPENCODE_SERVER_PASSWORD is empty in .env — the server would answer a bare 401 with no hint"; exit 1; }
 	@mkdir -p "$(BACKUP)"
+	@# Placeholders for the optional source roots. Compose mounts them whether or not
+	@# they are configured, and Docker refuses a duplicate mount target, so each needs
+	@# its own directory and each has to exist.
+	@mkdir -p "$(DATA)/.no-src-1" "$(DATA)/.no-src-2"
 	@# The T0 sandbox asks the HOST daemon to bind-mount a review worktree into a
 	@# sibling container by absolute path, so that path must mean the same thing on
 	@# both sides. When it does not, Docker does not refuse — it creates an EMPTY

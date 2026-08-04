@@ -729,6 +729,11 @@ Two changes, because one of them is the class and one is the instance:
 - **`GIT_CEILING_DIRECTORIES` is set to `cwd` on every git invocation.** Discovery
   may find a repository AT the directory given and nowhere above it. Cheaper and far
   more total than auditing every call site for whether its target exists.
+  One call site is not the wrapper: `applyPatch` feeds the patch on stdin, which
+  `git()` cannot express, so it sets the same env itself. "Every invocation" was
+  written here before that was true, and a reviewer found the gap rather than a
+  reader of the sentence (`a88aa1e2`) — which is the argument for the wrapper, not
+  against it.
 - **`ensureBare` asks `--resolve-git-dir .`**, which is a question about the path
   given, rather than `--git-dir`, which is a question about the tree.
 

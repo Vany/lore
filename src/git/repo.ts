@@ -103,14 +103,29 @@ export async function treeHash(worktree: string): Promise<string> {
   return stdout.trim();
 }
 
-/** Apply a unified diff without committing. The client keeps its own history. */
+/**
+ * Apply a unified diff without committing. The client keeps its own history.
+ *
+ * Spawned here rather than through `git()` because the patch goes in on stdin, which
+ * that wrapper has no way to pass — so this is the one call site the ceiling in D-61
+ * did not reach, while SPEC said it applied to "every git invocation". Raised as
+ * a88aa1e2 against the commit that introduced the claim. The env is set explicitly
+ * below; a reviewer had to find it, which is the argument for the wrapper, not
+ * against it.
+ */
 export async function applyPatch(worktree: string, patch: string): Promise<void> {
   const { execFile } = await import("node:child_process");
   await new Promise<void>((resolve, reject) => {
     const child = execFile(
       "git",
       ["apply", "--whitespace=nowarn", "-"],
-      { cwd: worktree, maxBuffer: 64 * 1024 * 1024 },
+      {
+        cwd: worktree,
+        maxBuffer: 64 * 1024 * 1024,
+        // The same ceiling every other invocation gets (D-61): a patch must never be
+        // applied to a repository above the worktree it was meant for.
+        env: { ...process.env, GIT_CEILING_DIRECTORIES: worktree },
+      },
       (err, _stdout, stderr) => {
         if (err) {
           reject(new DidNotRun(`patch did not apply cleanly: ${String(stderr).trim().slice(0, 500)}`, err));

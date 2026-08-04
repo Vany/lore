@@ -76,14 +76,16 @@ services:
       # the path the caller named. Read-only because lore never writes to a repo it
       # reviews (D-2), and the same path on both sides for the reason in D-60.
       #
-      # Defaults to the data directory, which is already mounted, so a deployment
-      # that only reviews remotes needs no configuration and gains no extra access.
-      - ${LORE_HOST_SRC:-${LORE_HOST_DATA:-/var/lib/lore}}:${LORE_HOST_SRC:-${LORE_HOST_DATA:-/var/lib/lore}}:ro
+      # Unset, it points at its own empty placeholder rather than at the data
+      # directory. Defaulting to the data dir looked free and was fatal: Docker
+      # refuses a duplicate mount TARGET outright — "Duplicate mount point" — so
+      # with both of these unset the container could not start at all, which is
+      # every fresh deployment. Distinct placeholders, created by preflight.
+      - ${LORE_HOST_SRC:-${LORE_HOST_DATA:-/var/lib/lore}/.no-src-1}:${LORE_HOST_SRC:-${LORE_HOST_DATA:-/var/lib/lore}/.no-src-1}:ro
       # A second root, because repositories under review are not all under one parent
       # and the alternative was mounting a home directory to cover both. Same rules:
-      # read-only, same path on both sides, defaults to the data dir so it costs
-      # nothing when unused.
-      - ${LORE_HOST_SRC2:-${LORE_HOST_DATA:-/var/lib/lore}}:${LORE_HOST_SRC2:-${LORE_HOST_DATA:-/var/lib/lore}}:ro
+      # read-only, same path on both sides, and its own placeholder when unset.
+      - ${LORE_HOST_SRC2:-${LORE_HOST_DATA:-/var/lib/lore}/.no-src-2}:${LORE_HOST_SRC2:-${LORE_HOST_DATA:-/var/lib/lore}/.no-src-2}:ro
       # The T0 sandbox launches SIBLING containers for test execution, so untrusted
       # project code never runs in this container — which holds every repo's deploy
       # key and the knowledge database (D-24).
