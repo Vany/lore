@@ -473,6 +473,16 @@ describe("runRound", () => {
     const after = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
     expect(after.accepted).toStrictEqual([fingerprint(CONFIG_BUG)]);
     expect(store.latestVerdict("r1", fingerprint(CONFIG_BUG))?.verdict).toBe("justified-accepted");
+
+    // And it must SURVIVE the next round. The scope is taken from the code the reason
+    // defends, not from the ledger it is written in — a hunk of markdown can never be
+    // found in the JSON it defends, so recording that expired the justification the
+    // round after it was accepted and restarted the ladder for ever (3f0e2139).
+    const later = await runRound({
+      store, reviewer: new ScriptedReviewer([[]]), reviewId: "r1", principal: "p", worktree: dir, type: TYPE,
+    });
+    expect(later.expired).toStrictEqual([]);
+    expect(store.settledFingerprints("r1")).toContain(fingerprint(CONFIG_BUG));
   });
 
   it("climbs the ladder and passes only at the top", async () => {

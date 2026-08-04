@@ -615,6 +615,15 @@ fixed, it was re-raised for ever with no way to answer. Hit on
 `deploy/tiers.zai-openai.json` (`c618aec7`), where the tier schema is `.strict()`, so
 smuggling a key in is a parse error rather than a workaround.
 
+A justification's scope is taken from **the code it defends**, never from wherever
+the reason is written. That only looked like a detail while the two were the same
+file: `expireStaleVerdicts` looks the hunk up in the finding's file, so a ledger
+entry recorded a hunk of markdown that can never appear in the JSON it defends, and
+expired the round after it was accepted — re-opening the finding and restarting the
+ladder for ever, which is the exact loop this decision exists to end (`3f0e2139`).
+It is the better rule for the in-file case too: a reason should go stale when the
+CODE moves, not when someone rewords the comment beside it.
+
 One markdown file at the repo root, read on every round in addition to the files
 that carry findings. Markdown so the existing `<!-- lore-ok[...] -->` form works and
 no new syntax enters the vocabulary; a single listed path rather than discovery,

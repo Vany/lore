@@ -656,12 +656,23 @@ async function collectJustifications(
       const finding = byFingerprint.get(fp);
       if (finding === undefined) continue; // already settled in an earlier round
 
-      const blob = await blobSha(worktree, file);
-      const hunk = hunkAround(source, mark.line);
+      // The scope is taken from the code the reason DEFENDS, never from wherever the
+      // reason happens to be written (3f0e2139).
+      //
+      // `expireStaleVerdicts` looks the hunk up in the FINDING's file, so a scope
+      // taken from the scanning file only worked while the two were the same file.
+      // The ledger broke that silently and badly: a justification in `.lore-ok.md`
+      // recorded a hunk of markdown, which can never appear in the JSON it defends,
+      // so it expired the round after it was accepted — re-opening the finding and
+      // restarting the ladder for ever, which is the exact loop D-57 exists to end.
+      //
+      // Taking it from the finding is also the more honest rule for the in-file case
+      // it replaces: the reason should go stale when the CODE moves, not when someone
+      // rewords the comment beside it.
       out.push({
         finding,
         reason: mark.reason,
-        scope: blob === undefined ? undefined : makeScope(blob, hunk),
+        scope: await scopeOf(worktree, finding.file, finding.line),
       });
     }
   }
