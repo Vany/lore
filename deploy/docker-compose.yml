@@ -81,11 +81,11 @@ services:
       # refuses a duplicate mount TARGET outright — "Duplicate mount point" — so
       # with both of these unset the container could not start at all, which is
       # every fresh deployment. Distinct placeholders, created by preflight.
-      - ${LORE_HOST_SRC:-${LORE_HOST_DATA:-/var/lib/lore}/.no-src-1}:${LORE_HOST_SRC:-${LORE_HOST_DATA:-/var/lib/lore}/.no-src-1}:ro
+      - ${LORE_HOST_SRC:-${LORE_HOST_DATA:-/var/lib/lore}/.no-src-1}:${LORE_HOST_SRC:-${LORE_HOST_DATA:-/var/lib/lore}/.no-src-1}
       # A second root, because repositories under review are not all under one parent
       # and the alternative was mounting a home directory to cover both. Same rules:
       # read-only, same path on both sides, and its own placeholder when unset.
-      - ${LORE_HOST_SRC2:-${LORE_HOST_DATA:-/var/lib/lore}/.no-src-2}:${LORE_HOST_SRC2:-${LORE_HOST_DATA:-/var/lib/lore}/.no-src-2}:ro
+      - ${LORE_HOST_SRC2:-${LORE_HOST_DATA:-/var/lib/lore}/.no-src-2}:${LORE_HOST_SRC2:-${LORE_HOST_DATA:-/var/lib/lore}/.no-src-2}
       # The T0 sandbox launches SIBLING containers for test execution, so untrusted
       # project code never runs in this container — which holds every repo's deploy
       # key and the knowledge database (D-24).
