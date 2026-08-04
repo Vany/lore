@@ -41,6 +41,15 @@ export interface ReviewRow {
 
 export interface RecordedFinding extends Finding {
   readonly fingerprint: string;
+  /**
+   * The code this finding is about, as it stood when it was raised (D-56).
+   *
+   * Absent for findings raised before the column existed, and for anything whose
+   * file could not be read. Absent means "cannot tell whether it moved", which is
+   * why it never auto-settles: guessing here would write a false `fixed` into an
+   * attestation.
+   */
+  readonly scope?: Scope | undefined;
   /** Tier id or T0 engine name that raised it. */
   readonly origin: string;
   readonly round: number;
@@ -320,8 +329,8 @@ export class Store {
     const res = this.db
       .prepare(
         `INSERT INTO finding(review_id, fingerprint, file, line, symbol, severity, claim, evidence,
-                             failure_scenario, cwe, origin, round, first_seen)
-         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                             failure_scenario, cwe, origin, round, first_seen, scope_blob, scope_hunk)
+         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(review_id, fingerprint) DO NOTHING`,
       )
       .run(
@@ -338,6 +347,8 @@ export class Store {
         f.origin,
         f.round,
         f.firstSeen,
+        n(f.scope?.blob),
+        n(f.scope?.hunk),
       );
     return res.changes > 0;
   }
@@ -859,6 +870,8 @@ function toFinding(row: Record<string, string | number | null>): RecordedFinding
   const line = row["line"];
   const symbol = row["symbol"];
   const cwe = row["cwe"];
+  const scopeBlob = row["scope_blob"];
+  const scopeHunk = row["scope_hunk"];
   return {
     fingerprint: String(row["fingerprint"] ?? ""),
     file: String(row["file"] ?? ""),
@@ -872,6 +885,11 @@ function toFinding(row: Record<string, string | number | null>): RecordedFinding
     origin: String(row["origin"] ?? ""),
     round: Number(row["round"] ?? 0),
     firstSeen: String(row["first_seen"] ?? ""),
+    // Absent stays absent: it means "cannot tell whether the code moved", and the
+    // settling rule in D-56 declines to act on that rather than guessing.
+    ...(typeof scopeBlob === "string" && typeof scopeHunk === "string"
+      ? { scope: { blob: scopeBlob, hunk: scopeHunk } }
+      : {}),
   };
 }
 

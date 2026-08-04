@@ -387,6 +387,79 @@ describe("runRound", () => {
     expect(store.getReview("r1", "p")?.treeHash).toBe(actual);
   });
 
+  // D-56. The most common ending a review has — the author fixed it — was recorded
+  // nowhere, so a review could pass having fixed three findings and attest
+  // "0 fixed", understating its own work and implying they were ignored.
+  describe("a fix is settled by qualified silence", () => {
+    const fix = () => writeFileSync(join(dir, "src/hold.ts"), "export function capture() {\n  return release();\n}\n");
+
+    it("settles a finding the tier stops raising once the code has moved", async () => {
+      const reviewer = new ScriptedReviewer([[HOLD_BUG], []]);
+      await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
+
+      fix();
+      const after = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
+
+      expect(after.fixed).toStrictEqual([fingerprint(HOLD_BUG)]);
+      expect(store.latestVerdict("r1", fingerprint(HOLD_BUG))?.verdict).toBe("fixed");
+      expect(store.openFindings("r1")).toHaveLength(0);
+    });
+
+    // Silence is weak evidence. A tier that stops mentioning untouched code has
+    // changed its mind, and recording that as a fix puts a false claim in a signed
+    // line.
+    it("does not settle one whose code never changed", async () => {
+      const reviewer = new ScriptedReviewer([[HOLD_BUG], []]);
+      await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
+      const after = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
+
+      expect(after.fixed).toStrictEqual([]);
+      expect(store.openFindings("r1").map((f) => f.fingerprint)).toContain(fingerprint(HOLD_BUG));
+    });
+
+    // The guard that matters most. t1 not repeating what t3 found says nothing about
+    // the code — t1 may be unable to see it — so closing on that silence would be
+    // INV-1 inverted: a tier that did not look, recorded as one that found nothing.
+    it("refuses to let a weaker tier close a stronger tier's finding", async () => {
+      const reviewer = new ScriptedReviewer([[HOLD_BUG], []]);
+      await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
+      // Re-attribute it to the top tier, then let t1 fall silent over changed code.
+      store.db.prepare("UPDATE finding SET origin = 't3' WHERE review_id = 'r1'").run();
+
+      fix();
+      const after = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
+
+      expect(after.fixed).toStrictEqual([]);
+      expect(store.openFindings("r1").map((f) => f.fingerprint)).toContain(fingerprint(HOLD_BUG));
+    });
+  });
+
+  // D-57. A lore-ok is a comment, and JSON has none — so a finding raised against a
+  // config file had nowhere to put its reason and could never settle.
+  it("reads a justification from the repo-root ledger for a file that cannot hold one", async () => {
+    const CONFIG_BUG: Finding = {
+      file: "tiers.json", line: 2, symbol: "t1", severity: "medium",
+      claim: "the t1 model was changed without saying so",
+      evidence: "tiers.json:2", failureScenario: "an operator approves the wrong spend",
+    };
+    writeFileSync(join(dir, "tiers.json"), '{\n  "t1": "glm-5-turbo"\n}\n');
+    git("add", "-A");
+    git("commit", "-qm", "config");
+
+    const reviewer = new ScriptedReviewer([[CONFIG_BUG], []]);
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
+
+    // Nowhere in tiers.json to write this. It goes in the ledger instead.
+    writeFileSync(
+      join(dir, ".lore-ok.md"),
+      `<!-- lore-ok[${fingerprint(CONFIG_BUG).slice(0, 8)}]: the operator chose it; JSON cannot carry a comment -->\n`,
+    );
+
+    const after = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
+    expect(after.accepted).toStrictEqual([fingerprint(CONFIG_BUG)]);
+    expect(store.latestVerdict("r1", fingerprint(CONFIG_BUG))?.verdict).toBe("justified-accepted");
+  });
+
   it("climbs the ladder and passes only at the top", async () => {
     const reviewer = new ScriptedReviewer([[], [], []]);
     const first = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });

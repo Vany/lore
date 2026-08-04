@@ -123,6 +123,15 @@ CREATE TABLE IF NOT EXISTS finding (
   -- Poll returns deltas, so a client is never shown the same finding twice: in an
   -- LLM-driven loop duplicate work is indistinguishable from real work.
   delivered_at     TEXT,
+  -- The code this finding is ABOUT, as it stood when the finding was raised (D-56).
+  -- Blob sha of the file plus a hash of the lines around it, the same shape a
+  -- verdict records. It is what lets a later round tell a finding the author FIXED
+  -- from one a tier merely stopped mentioning: silence alone cannot distinguish
+  -- them, and calling the second "fixed" would put a false claim in the
+  -- attestation. Null for findings raised before this column existed, which are
+  -- therefore never auto-settled.
+  scope_blob       TEXT,
+  scope_hunk       TEXT,
   PRIMARY KEY (review_id, fingerprint)
 );
 CREATE INDEX IF NOT EXISTS finding_undelivered ON finding(review_id, delivered_at);
@@ -239,6 +248,8 @@ CREATE INDEX IF NOT EXISTS job_by_review ON job(review_id, state);
  */
 export const MIGRATIONS: readonly { readonly table: string; readonly column: string; readonly sql: string }[] = [
   { table: "usage", column: "steps", sql: "ALTER TABLE usage ADD COLUMN steps INTEGER" },
+  { table: "finding", column: "scope_blob", sql: "ALTER TABLE finding ADD COLUMN scope_blob TEXT" },
+  { table: "finding", column: "scope_hunk", sql: "ALTER TABLE finding ADD COLUMN scope_hunk TEXT" },
 ];
 
 /**

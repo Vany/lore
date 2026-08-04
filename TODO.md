@@ -70,44 +70,6 @@ findings are worth the money, and the numbers are measured rather than guessed.
       choosing a number; a cap nobody can calibrate fails paid-for deep reviews for
       nothing. Blocked on the same table also recording what a turn costs — today's
       token columns describe one turn, not the session.
-- [ ] **Nothing ever writes a `fixed` verdict.** `VerdictKind` has three values and
-      production writes two: all four `recordVerdict` calls in `reviewer/review.ts`
-      say `justified-accepted` or `justified-rejected`. A finding the author simply
-      *fixes* — the normal, wanted outcome — is therefore never settled. Three
-      consequences, worst last:
-      1. `make status` overstates what is open. Watched live on
-         `rev_cv9OhSuJ147KLEw1GKnTVoyt`: `a47cfc2c` was fixed and not re-raised, and
-         still displayed as open.
-      2. `prompts.ts:119` renders `"fixed"` for a settled finding with no rationale —
-         a branch production cannot reach.
-      3. `attest.test.ts` builds its fixtures with `verdict: "fixed"`. The
-         attestation, which is what this whole product converges on, is tested
-         against a database state that never occurs. The `tier_run` half of that
-         same drift is fixed — `TierOutcome` now makes it a type error (D-53's
-         review, d17c92f8) — and `VerdictKind` already is one, so this is the
-         remaining gap: the type permits `fixed`, and nothing writes it.
-      The ladder itself is fine — `step()` keys off what was *raised*, so an unraised
-      finding correctly stops blocking. This is about the record, not the control
-      flow, which is why it survived this long. Fix is likely in `runRound`: a
-      previously-open finding the tier did not re-raise gets a `fixed` verdict, with
-      the same "the code moved" care `expireStaleVerdicts` already takes.
-
-- [ ] **A finding in a comment-less file cannot be justified.** `lore-ok` is a
-      comment marker (`//` and `<!-- -->`), and `collectJustifications` reads the
-      files that carry open findings. JSON has no comments, so a finding raised
-      against `deploy/tiers.zai-openai.json` has nowhere to put its reason — and the
-      tier schema is `.strict()`, correctly, so smuggling one in as a key is a parse
-      error rather than a workaround.
-      Hit on 2026-08-04 with c618aec7, a fair scope-creep finding about the t1 model
-      swap. The reason went to SPEC (D-54) instead, which is where a money decision
-      belongs anyway, but the reviewer cannot see it there — so the finding cannot be
-      settled the normal way and will be re-raised for ever, exactly like d6d9cd72
-      before the changed-files fix.
-      Options, none free: a sidecar `<file>.lore-ok` read alongside the file; allow
-      justifications in a repo-level file keyed by fingerprint; or accept that
-      comment-less files can only ever be fixed, never justified, and say so loudly
-      instead of looping. The last is the smallest and probably right, but it needs a
-      decision — silence here is the failure mode this project is named against.
 - [ ] **Announce a diff that is too big for the tier, instead of timing out on it.**
       Measured 2026-08-04: glm-5.2 at medium reviewed 21-30 KB diffs in 685-1193s and
       timed out at 1802s on 69 KB. The tier is fine; the review scope was not, because

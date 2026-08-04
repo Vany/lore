@@ -91,12 +91,28 @@ loudly rather than reviewing code that exists nowhere.
 For a finding you believe is WRONG, do not skip it silently. Write at the site:
 
     // lore-ok[<fingerprint>]: <why this code is correct>
-    <!-- lore-ok[<fingerprint>]: <reason> -->   (for markdown)
+     * lore-ok[<fingerprint>]: <reason>          (inside a /** */ block)
+    <!-- lore-ok[<fingerprint>]: <reason> -->    (for markdown)
+
+Those three forms are the whole list; anything else is never read. If the file has
+no comment syntax at all — JSON, a lockfile, generated output — put it in
+.lore-ok.md at the repo root, using the markdown form.
 
 Writing that PROPOSES a piece of lore. The reviewer decides whether your reasoning
 holds. Accepted, the finding closes and your reason becomes a fact this codebase
 knows about itself. Rejected, the finding returns at HIGHER severity — a wrong
 justification is worse than a bug, because it was trusted.
+
+ANSWER MINIMALLY. Every word you submit is reviewed by the next tier, so a fix is
+new surface and a long explanation is a lot of new surface. Measured on this tool's
+own repository: ten rounds where each documentation fix wrote more documentation to
+fault, against three rounds once the answers got terse.
+
+  * A finding about BEHAVIOUR: change the code.
+  * A finding about WORDING, or one you disagree with: prefer a lore-ok to a
+    rewrite. A settled finding does not restart the ladder; rewritten prose does.
+  * Say the reason once. Do not restate the finding, and do not explain the fix at
+    length in a comment — the diff already shows it.
 `.trim(),
 
   attest: `

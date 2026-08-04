@@ -159,6 +159,8 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-53** | One round at a time **per review**; reviews still run in parallel | confirmed |
 | **D-54** | t1 is `glm-5-turbo`: glm-4.7 answers 200 with an empty body | confirmed |
 | **D-55** | A submit is **refused** while a round is reading the worktree | confirmed |
+| **D-56** | A **fix** is settled by qualified silence over code that moved | confirmed |
+| **D-57** | `.lore-ok.md` justifies findings in files that cannot hold a comment | confirmed |
 
 **D-7, revised.** The earlier version dropped GLM-5.2 on Artificial Analysis's
 *cost per task* — which is tokens consumed × price on their benchmark, not a price.
@@ -571,6 +573,53 @@ Refused rather than queued. The client already polls (D-34), a fix genuinely can
 be reviewed until the current round finishes, and holding pending patches would put
 a review's tree in two places at once — the ambiguity this project exists to refuse.
 The error names what to wait for and states that nothing was applied.
+
+**D-56 — a fix is settled by qualified silence.**
+
+`VerdictKind` had three values and production wrote two. The missing one was the
+*most common ending a review has*: the author changed the code and the complaint no
+longer applies. Nothing recorded it, so an open finding stayed open for ever.
+
+Found by producing the artefact. The first attestation of a `passed` review read
+`5 findings, 0 fixed, 2 justified` — three of those five had been fixed, and were
+counted as neither. A signed line understating its own review and implying three
+findings were ignored is worse than no line.
+
+The mechanism is the one §4 already uses for justifications: **the reviewer rules by
+not re-raising.** Two guards make silence mean something, and neither is optional:
+
+- **Only a QUALIFIED tier's silence counts.** `origin` records the tier that raised
+  it, and tiers are ordered by strength. t1 not repeating what t3 found says nothing
+  about the code — t1 may be unable to see it — so closing a t3 finding on t1's
+  silence is INV-1 exactly inverted. Only a tier at or above the origin may settle
+  it; T0 settles only its own, and re-scans the whole worktree so its silence is
+  authoritative there.
+- **The code must have MOVED.** A tier that stops mentioning untouched code has
+  changed its mind, which is not a fix. The finding's scope is recorded when it is
+  raised; absent scope means "cannot tell" and never settles.
+
+And never a finding this round answered another way. Both cases were caught by
+existing tests within a minute of the rule landing, and both would have been silent
+damage: a `lore-ok` is written INTO the file it defends, so the code moves and a
+justification would have been recorded as a fix, losing the reason; and
+`expireStaleVerdicts` re-opens a finding *because the code moved*, so closing it here
+on that same fact would use one observation to both open and close it — no
+justification could ever expire, quietly removing the guard against rubber-stamping.
+
+**D-57 — `.lore-ok.md`, for files that cannot hold a comment.**
+
+A justification is a comment, and some files have no comment syntax: JSON,
+lockfiles, generated output, anything binary. A finding raised against one of those
+had nowhere to put its reason, so it could only be fixed — and if it should not be
+fixed, it was re-raised for ever with no way to answer. Hit on
+`deploy/tiers.zai-openai.json` (`c618aec7`), where the tier schema is `.strict()`, so
+smuggling a key in is a parse error rather than a workaround.
+
+One markdown file at the repo root, read on every round in addition to the files
+that carry findings. Markdown so the existing `<!-- lore-ok[...] -->` form works and
+no new syntax enters the vocabulary; a single listed path rather than discovery,
+because a justification nothing reads is the failure the mechanism exists to prevent
+— so where one may live stays a closed set.
 
 **D-43 — review types.** `review.start` takes a `type`, defaulting to `code-arch`:
 *is this change correct and well-made?* The next type is `security`: *what

@@ -19,7 +19,7 @@ import { parseLoreOk } from "../core/lore-ok.ts";
 import type { ReviewState } from "../core/review-state.ts";
 import type { ReviewType } from "../core/review-type.ts";
 import { Exhausted } from "../core/errors.ts";
-import { hunkAround, hunkStillPresent, makeScope } from "../core/scope.ts";
+import { hunkAround, hunkStillPresent, makeScope, type Scope } from "../core/scope.ts";
 import { blobSha, computeDiff, renderDiff } from "../git/diff.ts";
 import { treeHash } from "../git/repo.ts";
 import { detectAndRecord, renderConflicts } from "../knowledge/conflict.ts";
@@ -61,6 +61,8 @@ export interface RoundResult {
   readonly rejected: readonly string[];
   /** Justifications retired because the code they were about changed. */
   readonly expired: readonly string[];
+  /** Findings settled as `fixed`: not re-raised by a qualified tier, code moved (D-56). */
+  readonly fixed: readonly string[];
   readonly t0Unavailable: readonly string[];
 }
 
@@ -218,6 +220,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       accepted: [],
       rejected: [],
       expired,
+      fixed: [],
       t0Unavailable: [...t0.unavailable, `${tier.id}: ${e.message}`],
     };
   }
@@ -268,7 +271,18 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     const fp = fingerprint(f);
     raisedFingerprints.add(fp);
     if (origin !== "t0") modelRaised.add(fp);
-    const rec: RecordedFinding = { ...f, fingerprint: fp, origin, round, firstSeen: new Date().toISOString() };
+    // The scope is taken NOW, while the code the finding is about is still the code
+    // the tier saw. Without it a later round cannot tell a finding the author fixed
+    // from one a tier simply stopped mentioning (D-56).
+    const scope = await scopeOf(worktree, f.file, f.line);
+    const rec: RecordedFinding = {
+      ...f,
+      fingerprint: fp,
+      origin,
+      round,
+      firstSeen: new Date().toISOString(),
+      ...(scope === undefined ? {} : { scope }),
+    };
     if (store.recordFinding(reviewId, rec)) newFindings.push(rec);
   }
 
@@ -363,6 +377,14 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     }
   }
 
+  // 6b. Settle what the author FIXED. Silence rules here exactly as it does above,
+  // with two guards: only a tier qualified to see it may close it, and the code must
+  // actually have moved (D-56).
+  const answeredOtherwise = new Set<string>([...pending.map((p) => p.finding.fingerprint), ...expired]);
+  const fixed = await settleFixed(
+    store, reviewId, worktree, tiers, tier, open, raisedFingerprints, answeredOtherwise, round,
+  );
+
   // 7. A defect that keeps recurring is a missing rule, not N unrelated bugs.
   promoteRecurring(store, review.repoId);
 
@@ -419,8 +441,102 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     accepted,
     rejected,
     expired,
+    fixed,
     t0Unavailable: t0.unavailable,
   };
+}
+
+/**
+ * The code a finding is about, as it stands right now.
+ *
+ * `undefined` when the file cannot be read or the finding names no line — both mean
+ * "cannot tell", and every caller treats that as a reason to do nothing rather than
+ * as evidence of anything.
+ */
+async function scopeOf(worktree: string, file: string, line: number | undefined): Promise<Scope | undefined> {
+  if (line === undefined) return undefined;
+  const source = await readFile(join(worktree, file), "utf8").catch(() => undefined);
+  if (source === undefined) return undefined;
+  const blob = await blobSha(worktree, file);
+  if (blob === undefined) return undefined;
+  return makeScope(blob, hunkAround(source, line));
+}
+
+/**
+ * Settle findings the author FIXED (D-56).
+ *
+ * The mechanism is the one SPEC already uses for justifications: the reviewer rules
+ * by not re-raising. This applies it to the other, and far more common, ending — the
+ * author changed the code and the complaint no longer applies. Nothing recorded that
+ * before, so `fixed` existed in `VerdictKind` and was written nowhere: a review could
+ * pass having fixed three findings and attest "0 fixed", which is the artefact this
+ * product exists to produce, understating its own work and implying the findings were
+ * ignored.
+ *
+ * TWO guards, and neither is optional, because silence is weak evidence:
+ *
+ *   * **Only a QUALIFIED tier's silence counts.** `origin` is the tier that raised
+ *     it, and tiers are ordered by cost and strength. t1 not repeating something t3
+ *     found says nothing — t1 may simply be unable to see it — so closing a t3
+ *     finding on t1's silence would be INV-1 exactly inverted: a review that did not
+ *     look, recorded as one that found nothing. Only a tier at or above the origin
+ *     may settle it, and T0 settles only its own.
+ *   * **The code must have MOVED.** A tier that stops mentioning something whose code
+ *     is untouched has changed its mind, which is not a fix; recording it as one puts
+ *     a false claim in a signed line. A finding with no recorded scope is skipped for
+ *     the same reason — absent means "cannot tell".
+ *
+ * And it never touches a finding this round answered some OTHER way, which the
+ * existing tests caught immediately:
+ *
+ *   * A `lore-ok` is written INTO the file it defends, so the code moves and a
+ *     justification would have been recorded as a fix — losing the reason, and with
+ *     it the only record of why the code stands.
+ *   * `expireStaleVerdicts` re-opens a finding *because the code moved*, precisely so
+ *     it gets looked at again. Closing it here on that same fact would use one
+ *     observation to both open and close it, so no justification could ever actually
+ *     expire — quietly removing the guard against rubber-stamping (§4.1).
+ */
+async function settleFixed(
+  store: Store,
+  reviewId: string,
+  worktree: string,
+  tiers: readonly Tier[],
+  tier: Tier,
+  open: readonly RecordedFinding[],
+  raised: ReadonlySet<string>,
+  /** Fingerprints this round already answered some other way — never also `fixed`. */
+  answered: ReadonlySet<string>,
+  round: number,
+): Promise<readonly string[]> {
+  const rank = (id: string) => tiers.findIndex((x) => x.id === id);
+  const here = rank(tier.id);
+  const fixed: string[] = [];
+
+  for (const f of open) {
+    if (raised.has(f.fingerprint)) continue;
+    if (answered.has(f.fingerprint)) continue;
+    if (f.scope === undefined) continue;
+
+    // T0 re-scans the whole worktree every round, so its silence is authoritative
+    // for its own findings and means nothing for anyone else's.
+    const qualified = f.origin === "t0" ? tier.id === "t0" || here >= 0 : here >= 0 && here >= rank(f.origin);
+    if (!qualified) continue;
+
+    const source = await readFile(join(worktree, f.file), "utf8").catch(() => undefined);
+    if (source !== undefined && hunkStillPresent(source, f.scope.hunk)) continue;
+
+    store.recordVerdict(reviewId, {
+      fingerprint: f.fingerprint,
+      verdict: "fixed",
+      rationale: `not re-raised by ${tier.id} and the code it named has changed`,
+      scope: undefined,
+      tier: tier.id,
+      round,
+    });
+    fixed.push(f.fingerprint);
+  }
+  return fixed;
 }
 
 /**
@@ -486,6 +602,9 @@ async function expireStaleVerdicts(
  * Telling them apart from here is guesswork, so the honest move is to skip and say
  * so rather than to fail the round or to close a finding on a coincidence.
  */
+/** Where a justification lives when its own file cannot hold a comment (D-57). */
+export const LEDGER = ".lore-ok.md";
+
 async function collectJustifications(
   store: Store,
   reviewId: string,
@@ -499,7 +618,22 @@ async function collectJustifications(
 
   const out: { finding: RecordedFinding; reason: string; scope: ReturnType<typeof makeScope> | undefined }[] = [];
 
-  for (const file of files) {
+  // The repo-level ledger, always read (D-57).
+  //
+  // A `lore-ok` is a comment, and some files have no comment syntax at all: JSON,
+  // lockfiles, generated output, anything binary. A finding raised against one of
+  // those had NOWHERE to put its reason, so it could only ever be fixed — and if it
+  // should not be fixed, it was re-raised for ever with no way to answer. Hit on
+  // `deploy/tiers.zai-openai.json` (c618aec7), where the tier schema is `.strict()`
+  // so smuggling a key in is a parse error rather than a workaround.
+  //
+  // Markdown, so the existing `<!-- lore-ok[...] -->` form works and no new syntax
+  // enters the vocabulary. One file, at the repo root, listed here rather than
+  // discovered — a justification nothing reads is the failure this mechanism exists
+  // to prevent, so where it may live is a closed set.
+  // A Set because the ledger is itself a file, and a round that edits it would
+  // otherwise scan it twice and propose every reason in it twice over.
+  for (const file of new Set([...files, LEDGER])) {
     const source = await readFile(join(worktree, file), "utf8").catch(() => undefined);
     if (source === undefined) continue;
 
