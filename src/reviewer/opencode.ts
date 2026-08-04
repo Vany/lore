@@ -563,8 +563,13 @@ function excerpt(text: string, max: number): string {
 function describeReply(which: string, text: string): string {
   const t = (text ?? "").trim();
   if (t.length === 0) return `${which} reply was EMPTY (usually a provider failure inside a 200)`;
+  // Says only what it can SEE — a size and whether braces are present. It used to
+  // call anything with braces "malformed JSON", which was a guess, and on 2026-08-04
+  // it guessed wrong about a reply whose JSON was perfect and whose claim was 25
+  // characters over a cap. The caller appends the extraction's `why`, which is the
+  // part that actually knows; this half must not contradict it.
   const looksJson = t.includes("{") && t.includes("}");
-  return `${which} reply was ${t.length} chars of ${looksJson ? "malformed JSON" : "prose with no JSON block"}`;
+  return `${which} reply was ${t.length} chars ${looksJson ? "containing a JSON object" : "of prose with no JSON block"}`;
 }
 
 export function countStepParts(data: unknown): number | undefined {
