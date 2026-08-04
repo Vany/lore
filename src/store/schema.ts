@@ -16,7 +16,11 @@
 import type { DatabaseSync } from "node:sqlite";
 import { SEVERITIES } from "../core/finding.ts";
 
-export const SCHEMA_VERSION = 2;
+// 3: finding.scope_blob / finding.scope_hunk (D-56). Bumped in the same change that
+// adds the columns, because this number is what `assertNotDowngrade` compares — left
+// behind, it says a database written by this build is identical to one written before
+// the columns existed (3f464578).
+export const SCHEMA_VERSION = 3;
 
 /**
  * How findings are ordered wherever the service hands them out: worst first.
