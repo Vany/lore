@@ -262,6 +262,43 @@ describe("a re-raise refreshes the finding's context", () => {
   });
 });
 
+// The ceiling a tier has DEMONSTRATED, never a constant (D-58). With no evidence
+// there is no warning, because a threshold nobody calibrated fails real reviews for
+// nothing — the trap D-50 names.
+describe("the diff ceiling is observed, not guessed", () => {
+  beforeEach(() => newReview("rev1"));
+  const ran = (tier: string, diffChars: number, outcome: string) =>
+    store.recordUsage({ reviewId: "rev1", repoId, tier, diffChars, outcome });
+
+  it("says nothing until the tier has finished something", () => {
+    expect(store.largestCompletedDiff("t2")).toBeUndefined();
+  });
+
+  it("reports the largest diff the tier actually completed", () => {
+    ran("t2", 20_000, "ok");
+    ran("t2", 31_000, "ok-after-retry");
+    ran("t2", 12_000, "ok");
+    expect(store.largestCompletedDiff("t2")).toBe(31_000);
+  });
+
+  // A run that timed out proves the opposite of capacity. Counting it would raise
+  // the ceiling every time the tier failed, so the warning would go quiet exactly
+  // as the problem got worse.
+  it("ignores runs that did not finish", () => {
+    ran("t2", 20_000, "ok");
+    ran("t2", 69_000, "timeout");
+    ran("t2", 80_000, "failed");
+    expect(store.largestCompletedDiff("t2")).toBe(20_000);
+  });
+
+  it("is per tier, because capacity is", () => {
+    ran("t1", 30_000, "ok");
+    ran("t3", 5_000, "ok");
+    expect(store.largestCompletedDiff("t1")).toBe(30_000);
+    expect(store.largestCompletedDiff("t3")).toBe(5_000);
+  });
+});
+
 describe("one round at a time per review (D-53)", () => {
   beforeEach(() => {
     newReview("rev1");

@@ -178,6 +178,28 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // Opened BEFORE the model is asked, so the row exists no matter how this ends.
   // `finished_at` stays NULL until it does, which is what lets a reader tell a tier
   // that is working from one that stopped without saying so.
+  // Say so BEFORE the money is spent when this diff is beyond anything this tier has
+  // ever finished (D-58).
+  //
+  // Measured 2026-08-04: glm-5.2 at medium completed 21-30 KB in 685-1193s and blew
+  // the entire 1800s budget at 69 KB. Discovering that costs a full deep-tier budget
+  // to learn nothing, and reports `failed` — honest (INV-1), but honest far too late.
+  // INV-7 already announces a truncated diff; nothing announced an oversized one.
+  //
+  // The ceiling is the tier's own demonstrated best, never a constant: with no
+  // evidence it says nothing at all, which is the only honest thing to do with a
+  // threshold nobody has calibrated (the trap D-50 names). It warns and proceeds
+  // rather than refusing — the tier may well manage it, and a review stopped by a
+  // guess is worse than one that runs long.
+  const ceiling = store.largestCompletedDiff(tier.id);
+  if (ceiling !== undefined && diff.totalChars > ceiling) {
+    console.error(
+      `[lore:log] ${reviewId}: this diff is ${Math.round(diff.totalChars / 1024)} KB, larger than anything ` +
+        `${tier.id} has ever finished (${Math.round(ceiling / 1024)} KB). It may exceed the tier's time budget ` +
+        `and fail after spending it. A smaller review scope is the fix, not a longer timeout.`,
+    );
+  }
+
   const tierRunId = store.openTierRun(reviewId, tier.id, review.ladder.round + 1, startedAt);
 
   let result;
@@ -240,6 +262,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     // and a failed measurement stored as 0 would be indistinguishable from a review
     // that answered without looking at anything.
     ...(result.steps !== undefined ? { steps: result.steps } : {}),
+    diffChars: diff.totalChars,
     outcome: result.retried ? "ok-after-retry" : "ok",
   });
 

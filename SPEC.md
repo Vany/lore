@@ -161,6 +161,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-55** | A submit is **refused** while a round is reading the worktree | confirmed |
 | **D-56** | A **fix** is settled by qualified silence over code that moved | confirmed |
 | **D-57** | `.lore-ok.md` justifies findings in files that cannot hold a comment | confirmed |
+| **D-58** | An oversized diff is announced against the tier's **own** demonstrated ceiling | confirmed |
 
 **D-7, revised.** The earlier version dropped GLM-5.2 on Artificial Analysis's
 *cost per task* — which is tokens consumed × price on their benchmark, not a price.
@@ -629,6 +630,26 @@ that carry findings. Markdown so the existing `<!-- lore-ok[...] -->` form works
 no new syntax enters the vocabulary; a single listed path rather than discovery,
 because a justification nothing reads is the failure the mechanism exists to prevent
 — so where one may live stays a closed set.
+
+**D-58 — an oversized diff is announced before the money is spent.**
+
+Measured 2026-08-04: glm-5.2 at medium completed 21–30 KB diffs in 685–1193s and
+blew the entire 1800s budget at 69 KB. Discovering that costs a full deep-tier
+budget to learn nothing and reports `failed` — honest (INV-1), and honest far too
+late. INV-7 already announces a *truncated* diff; nothing announced an oversized one.
+
+**The threshold is the tier's own demonstrated best, never a constant.** `usage`
+records the diff size of every run, and the ceiling is `MAX` over the runs that
+tier actually **finished** — completed only, because a run that timed out proves the
+opposite of capacity, and counting it would raise the ceiling every time the tier
+failed, going quiet exactly as the problem got worse. With no evidence there is no
+warning at all: a threshold nobody has calibrated fails real reviews for nothing,
+which is the trap D-50 names and refuses.
+
+It warns and proceeds rather than refusing. The tier may well manage a diff larger
+than its previous best — that is how the ceiling rises — and a review stopped by a
+guess is worse than one that runs long. The fix it names is review scope, not a
+longer timeout: 21 commits accumulated on one base is not one review.
 
 **D-43 — review types.** `review.start` takes a `type`, defaulting to `code-arch`:
 *is this change correct and well-made?* The next type is `security`: *what

@@ -16,11 +16,12 @@
 import type { DatabaseSync } from "node:sqlite";
 import { SEVERITIES } from "../core/finding.ts";
 
+// 4: usage.diff_chars (D-58).
 // 3: finding.scope_blob / finding.scope_hunk (D-56). Bumped in the same change that
 // adds the columns, because this number is what `assertNotDowngrade` compares — left
 // behind, it says a database written by this build is identical to one written before
 // the columns existed (3f464578).
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 /**
  * How findings are ordered wherever the service hands them out: worst first.
@@ -211,6 +212,10 @@ CREATE TABLE IF NOT EXISTS usage (
   -- count them, and 0 would mean a review that never asked the model anything. The
   -- column exists to turn "cap exploration" from an argument into a distribution.
   steps         INTEGER,
+  -- How big the diff was, in characters before truncation (D-58). Recorded so the
+  -- ceiling can be observed instead of guessed: a threshold nobody can calibrate
+  -- fails real reviews for nothing, which is D-50's trap.
+  diff_chars    INTEGER,
   outcome       TEXT NOT NULL,
   at            TEXT NOT NULL
 );
@@ -254,6 +259,7 @@ export const MIGRATIONS: readonly { readonly table: string; readonly column: str
   { table: "usage", column: "steps", sql: "ALTER TABLE usage ADD COLUMN steps INTEGER" },
   { table: "finding", column: "scope_blob", sql: "ALTER TABLE finding ADD COLUMN scope_blob TEXT" },
   { table: "finding", column: "scope_hunk", sql: "ALTER TABLE finding ADD COLUMN scope_hunk TEXT" },
+  { table: "usage", column: "diff_chars", sql: "ALTER TABLE usage ADD COLUMN diff_chars INTEGER" },
 ];
 
 /**

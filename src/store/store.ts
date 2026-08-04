@@ -115,6 +115,8 @@ export interface UsageRecord {
   readonly latencyMs?: number;
   /** Agentic turns the tier took. Absent means "not measured", never "none" (D-50). */
   readonly steps?: number;
+  /** Diff size in characters before truncation, so the ceiling is observed (D-58). */
+  readonly diffChars?: number;
   readonly outcome: string;
 }
 
@@ -669,8 +671,8 @@ export class Store {
     this.db
       .prepare(
         `INSERT INTO usage(repo_id, review_id, tier, model, input_tokens, cached_tokens,
-                           output_tokens, cost_usd, latency_ms, steps, outcome, at)
-         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                           output_tokens, cost_usd, latency_ms, steps, diff_chars, outcome, at)
+         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         n(u.repoId),
@@ -685,9 +687,32 @@ export class Store {
         // `n`, not `?? 0`, unlike every token column above it: a missing token count
         // really is nothing spent, a missing step count is nothing KNOWN.
         n(u.steps),
+        n(u.diffChars),
         u.outcome,
         now(),
       );
+  }
+
+  /**
+   * The largest diff this tier has ever **finished** reviewing (D-58).
+   *
+   * `undefined` when it has never finished one, and that is the useful half: with no
+   * evidence there is no warning, rather than a guessed constant. A threshold nobody
+   * can calibrate fails real reviews for nothing — the same trap D-50 names — so the
+   * only number allowed here is one the tier has actually demonstrated.
+   *
+   * Completed only. A run that timed out proves the opposite of capacity, and
+   * counting it would raise the ceiling every time the tier failed.
+   */
+  largestCompletedDiff(tier: string): number | undefined {
+    const row = this.db
+      .prepare(
+        `SELECT MAX(diff_chars) AS m FROM usage
+         WHERE tier = ? AND diff_chars IS NOT NULL AND outcome LIKE 'ok%'`,
+      )
+      .get(tier) as Record<string, number | bigint | null> | undefined;
+    const m = row?.["m"];
+    return m === null || m === undefined ? undefined : Number(m);
   }
 
   /** Spend since an ISO timestamp — what the daily ceiling is checked against. */

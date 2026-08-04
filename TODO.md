@@ -56,27 +56,31 @@ that part is pulled out into its own open item rather than hidden inside a tick.
       own first, and watching what it costs: D-37 budgeted T0 at roughly 25 minutes a
       day on the target device, and that estimate has never met a real test run.
 
-- [ ] **Set the exploration cap from data** (D-50). The distribution now exists —
-      54 completed tier runs with a step count, 2026-08-04:
+- [x] **Announce a diff too big for the tier** (D-58). Done 2026-08-04. `usage` now
+      records every run's diff size, and a round warns before spending when the diff
+      exceeds the largest that tier has ever *finished*. The threshold is the tier's
+      own demonstrated best rather than a constant — with no evidence it says
+      nothing, and a timed-out run never raises the ceiling.
 
-      | tier | n  | steps min/med/max | seconds min/med/max |
-      |------|----|-------------------|---------------------|
-      | t1   | 31 | 5 / 19 / 59       | 135 / 320 / 590     |
-      | t2   | 16 | 31 / 46 / 68      | 464 / 933 / 1191    |
-      | t3   | 7  | 6 / 9 / 16        | 99 / 133 / 1691     |
+- [ ] **Set the exploration cap from data** (D-50) — and the data says *not yet*.
+      54 completed runs, 2026-08-04:
 
-      The shape is the finding: **t3 explores least and t2 most**, so one global cap
-      is wrong for both and the cap has to be per tier. Note that the 80 I nearly
-      shipped by guesswork would have held here — by luck, not by reasoning, which is
-      the whole argument for measuring first.
+      | tier | n  | p50 | p90 | p95 | max |
+      |------|----|-----|-----|-----|-----|
+      | t1   | 31 | 19  | 35  | 37  | 59  |
+      | t2   | 16 | 43  | 52  | 57  | 68  |
+      | t3   | 7  | 9   | 16  | 16  | 16  |
 
-- [ ] **Announce a diff too big for the tier instead of timing out on it.** Measured
-      2026-08-04: glm-5.2 at medium handled 21–30 KB in 685–1193s and blew the full
-      1800s budget at 69 KB. Costing a 30-minute budget to learn nothing is honest
-      (INV-1) but far too late and far too expensive. INV-7 already announces
-      truncation; there is no equivalent for "this is beyond what this tier has ever
-      completed". The latency column above is the input; the warning belongs at
-      `review_start` and `review_submit`, before the money is spent.
+      I claimed earlier this showed the cap must be per tier. Reading the spread
+      rather than the medians says the opposite: t1's max is 1.6× its p95 and t2's is
+      1.2×, so the tails are long, and t3 has **seven** samples — calibrating a cap on
+      that is exactly the trap this item exists to avoid. **No runaway has ever
+      occurred**, so the cap protects against something unobserved while risking
+      killing paid-for reviews that are merely thorough.
+      What it needs: more t3 runs, and a real mid-flight abort — `countSteps` is read
+      after the reply, so capping means polling during the call and calling
+      `session.abort`, which is machinery worth building only once there is something
+      to catch.
 
 ## Later
 
