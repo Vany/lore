@@ -36,6 +36,8 @@ class ScriptedReviewer implements ReviewerLike {
    * argument could not express — passing `undefined` would just take the default.
    */
   steps: number | undefined = 7;
+  /** What the schema refused, for exercising the partial-acceptance path (D-66). */
+  discarded: readonly string[] = [];
   private readonly script: (readonly Finding[])[];
 
   constructor(script: (readonly Finding[])[]) {
@@ -53,6 +55,7 @@ class ScriptedReviewer implements ReviewerLike {
       outputTokens: 10,
       costUsd: 0.001,
       latencyMs: 1,
+      discarded: this.discarded,
       retried: false,
       steps: this.steps,
     };
@@ -687,5 +690,29 @@ describe("a carried justification does not accumulate its own provenance", () =>
     const origin = originalJustification({ rationale: authors, createdAt: "2026-08-04T00:00:00.000Z", tier: "t2" });
     expect(origin.reason).toBe(authors);
     expect(origin.at).toBe("2026-08-04T00:00:00.000Z");
+  });
+});
+
+// D-66. A finding the schema refused is a defect this tier SAW and the review does
+// not contain. That is the same class of fact as an engine that could not run, so it
+// goes in the same channel — the one the client repeats to its user so a later
+// `passed` is not over-read. Silence here would be INV-1 failing one layer further in.
+describe("a discarded finding is reported, not swallowed", () => {
+  it("reaches checks_skipped, naming the tier and the reason", async () => {
+    const reviewer = new ScriptedReviewer([[]]);
+    reviewer.discarded = ["finding 2 of 2: claim: too long — {…}"];
+
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
+
+    const skipped = store.unavailableChecks("r1").join(" ");
+    expect(skipped).toMatch(/produced a finding this review does NOT contain/);
+    expect(skipped).toContain("claim: too long");
+  });
+
+  it("says nothing when the tier's whole reply was accepted", async () => {
+    const reviewer = new ScriptedReviewer([[]]);
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
+
+    expect(store.unavailableChecks("r1").join(" ")).not.toMatch(/does NOT contain/);
   });
 });

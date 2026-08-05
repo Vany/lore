@@ -29,6 +29,20 @@ export interface EngineOutcome {
    * conflating them is the whole of INV-1.
    */
   readonly unavailable?: string;
+  /**
+   * Set when an OPTIONAL engine had nothing to do — a tool that is only meaningful
+   * with project-authored rules, in a project that has not written any.
+   *
+   * Deliberately not `unavailable`. That list is what the client repeats to its user
+   * so a `passed` is not over-read, and it only keeps working while every entry is
+   * worth reading. ast-grep reported itself missing on every review of every
+   * repository lore has ever seen, for a check that never existed — and a list that
+   * always contains the same noise is a list nobody reads, including on the day it
+   * contains "the test suite did not run".
+   *
+   * Kept rather than dropped so the operator can still see it in the log.
+   */
+  readonly skipped?: string;
 }
 
 const cap = (s: string, n: number): string => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
@@ -54,6 +68,15 @@ function finding(f: {
 }
 
 /** Is this engine configured in the target at all? */
+/**
+ * Engines that mean nothing without project-authored rules.
+ *
+ * Their absence is not a gap in the review, so it is not reported as one. Contrast
+ * `tsc`, `eslint` and `tests`: a JavaScript project without those has a gap, and
+ * saying so is the point.
+ */
+const OPT_IN = new Set<T0Engine>(["ast-grep"]);
+
 export function detect(worktree: string, engine: T0Engine): boolean {
   switch (engine) {
     case "tsc":
@@ -91,6 +114,20 @@ export async function runEngine(worktree: string, engine: T0Engine): Promise<Eng
     };
   }
   if (!detect(worktree, engine)) {
+    // OPT-IN BY NATURE vs A GAP, and they must not be reported the same way.
+    //
+    // `unavailable` means "a check that should have run did not", and the client is
+    // told to pass it on so a later `passed` is not over-read. That is INV-1 working
+    // — but only while the list means something. ast-grep needs project-authored
+    // structural rules to say anything at all, and no repository lore has ever met
+    // has an `sgconfig.yml`: 5 of 7 runs on the customer's repo reported it missing,
+    // every single review, for a check that never existed to be skipped.
+    //
+    // Reporting that as NOT RUN teaches the reader to skim the list, which is how the
+    // one entry that matters — the suite that did not run, the typecheck that could
+    // not resolve — gets skimmed too. A tool that is only meaningful when configured
+    // is simply absent when it is not.
+    if (OPT_IN.has(engine)) return { engine, findings: [], skipped: `${engine}: no rules configured (optional)` };
     return { engine, findings: [], unavailable: `${engine} is not configured in this repo` };
   }
   switch (engine) {

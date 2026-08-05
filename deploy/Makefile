@@ -68,14 +68,19 @@ push:
 		./ "$(HOST):$(if $(DIR),$(DIR),lore)/deploy/"
 	@echo "pushed. On the host:  cd $(if $(DIR),$(DIR),lore)/deploy && make up"
 
+## Stamped with the commit being built, so `/status` can report what is running
+## rather than leaving everyone to assume it is current.
+STAMP = LORE_COMMIT="$$(git -C .. rev-parse --short HEAD 2>/dev/null || echo unknown)$$(git -C .. diff --quiet 2>/dev/null || echo -dirty)" \
+        LORE_BUILT_AT="$$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
 build: preflight
-	$(COMPOSE) --profile build-only build
+	@$(STAMP) $(COMPOSE) --profile build-only build
 
 ## Always re-derives the opencode config first: a container running yesterday's
 ## credentials while the operator has since fixed them is a confusing failure.
 up: preflight sync-opencode
-	$(COMPOSE) --profile build-only build sandbox
-	$(COMPOSE) up -d --build
+	@$(STAMP) $(COMPOSE) --profile build-only build sandbox
+	@$(STAMP) $(COMPOSE) up -d --build
 	@echo
 	@echo "up. next:  make new NAME=<who> GIT=<ssh-url>"
 

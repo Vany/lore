@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { initialState } from "../core/ladder.ts";
 import { MAX_MIRROR_AGE_MS } from "../git/repo.ts";
 import { Store } from "../store/store.ts";
 import { renderStatus } from "./status.ts";
@@ -90,5 +91,39 @@ describe("what the operator is told about the mirrors", () => {
 
   it("says nothing about mirrors when no repository is registered", () => {
     expect(render()).not.toContain("mirrors");
+  });
+});
+
+// Eighteen findings sat unread across four reviews on 2026-08-05, fourteen of them
+// `high`. The review reached findings_ready, nothing polled it again, and nothing
+// said so — `delivered_at` had recorded it per finding the whole time.
+describe("findings nobody has collected", () => {
+  const withFinding = (severity: "high" | "low", fingerprint: string) => {
+    store.createReview({
+      id: "revU", repoId: store.upsertRepo("r", "git@x:r.git").id, principal: "alice",
+      branch: "feat/unread", intoRef: "main", ticket: "t", type: "code-arch",
+      state: "findings_ready", ladder: initialState(),
+    });
+    store.recordFinding("revU", {
+      fingerprint, file: "a.ts", line: 1, symbol: undefined, severity,
+      claim: "something is wrong", evidence: "e", failureScenario: "f",
+      cwe: undefined, origin: "t1", round: 1, firstSeen: new Date().toISOString(),
+    });
+  };
+
+  it("names them, counts the high ones, and says how long they have waited", () => {
+    withFinding("high", "f".repeat(64));
+    const out = render();
+    expect(out).toContain("waiting to be collected");
+    expect(out).toMatch(/1 finding\(s\), 1 high\s+feat\/unread/);
+    expect(out).toContain("unread since");
+    // The consequence, not just the count — this is why it is worth a line.
+    expect(out).toContain("a review that did not run, later");
+  });
+
+  it("says nothing when everything has been collected", () => {
+    withFinding("low", "e".repeat(64));
+    store.markDelivered("revU", ["e".repeat(64)]);
+    expect(render()).not.toContain("waiting to be collected");
   });
 });

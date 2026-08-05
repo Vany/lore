@@ -210,7 +210,17 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     // column answers one question — what did this tier do — and `answered` did not
     // answer it: a tier that replied with nothing and one that replied with six
     // problems both read the same.
-    store.closeTierRun(tierRunId, result.findings.length > 0 ? "findings" : "clean");
+    // Findings the schema refused go in the SAME channel as an engine that could not
+    // run, and for the same reason: this tier looked at the code and said something
+    // the review does not contain. `checks_skipped` is what the client repeats to its
+    // user so a later `passed` is not over-read, and this belongs in exactly that
+    // sentence (D-66). Silence here would be the tier's own findings quietly
+    // disappearing, which is INV-1 with the loss one layer further in.
+    store.closeTierRun(
+      tierRunId,
+      result.findings.length > 0 ? "findings" : "clean",
+      result.discarded.map((d) => `${tier.id} produced a finding this review does NOT contain — ${d}`),
+    );
   } catch (e) {
     // The row is already open, so whatever happens next this tier leaves evidence.
     // Before this existed, a `glm-5.2` call that ran 30 minutes and timed out wrote

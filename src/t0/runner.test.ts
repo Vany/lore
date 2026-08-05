@@ -24,7 +24,7 @@ const f = (severity: Finding["severity"], file: string): Finding => ({
 
 describe("renderT0", () => {
   it("says plainly what did not run, rather than implying it was clean", () => {
-    const out = renderT0({ findings: [], outcomes: [], unavailable: ["tsc: not configured"] });
+    const out = renderT0({ findings: [], outcomes: [], unavailable: ["tsc: not configured"], skipped: [] });
     expect(out).toContain("Deterministic tooling found nothing.");
     expect(out).toContain("NOT RUN");
     expect(out).toContain("tsc: not configured");
@@ -34,7 +34,7 @@ describe("renderT0", () => {
     const out = renderT0({
       findings: [f("low", "a.ts"), f("high", "b.ts"), f("medium", "c.ts")],
       outcomes: [],
-      unavailable: [],
+      unavailable: [], skipped: [],
     });
     const lines = out.split("\n").filter((l) => l.startsWith("  ["));
     expect(lines.map((l) => l.slice(0, 10))).toStrictEqual(["  [high] b", "  [medium]", "  [low] a."]);
@@ -48,7 +48,7 @@ describe("renderT0", () => {
     const out = renderT0({
       findings: [...nits, f("high", "broken.ts")],
       outcomes: [],
-      unavailable: [],
+      unavailable: [], skipped: [],
     });
 
     expect(out).toContain("[high] broken.ts");

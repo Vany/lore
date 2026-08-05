@@ -176,6 +176,8 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-63** | *(superseded — the refresh is automated on the host rather than manual; see D-65)* | superseded |
 | **D-64** | `claim` is capped at **500** — one sentence, and a refused reply costs the round | confirmed |
 | **D-65** | mirrors are refreshed by a **host process outside lore**; a stale one is refused | confirmed |
+| **D-66** | A rejected finding **loses its own line, not the batch** — and the loss is reported | confirmed |
+| **D-67** | Severity is the engine's. Recurrence informs the reader, and never demotes | confirmed |
 
 **D-7, revised.** The earlier version dropped GLM-5.2 on Artificial Analysis's
 *cost per task* — which is tokens consumed × price on their benchmark, not a price.
@@ -839,6 +841,52 @@ A lockfile naming a manager the image does not carry — bun, which is a runtime
 not merely an installer — is reported as an **unavailable engine**. Installing with
 npm instead and presenting the result as that project's suite would be a confident
 claim about something that never ran.
+
+**D-66 — a finding the schema rejects loses its own line, not the whole reply.**
+
+The valid findings in a reply are kept; the rejected ones are recorded and reported.
+
+This reverses the earlier rule, and the reversal turns on one word. The argument for
+all-or-nothing was that keeping the good findings would *silently* drop a defect the
+model actually found — and it is the silence that does the damage, not the dropping.
+Discarding the whole reply drops that same defect and every valid finding beside it,
+so it is strictly worse on the axis it was defending.
+
+Measured before changing it: five paid replies binned this way. The worst was a t2
+round of forty minutes returning one finding, over the cap by fourteen characters,
+which was correct and load-bearing — `openFindings` had no latest-verdict gate, so a
+justification accepted and later rejected counted as neither open nor settled. It was
+fixed from the error message alone. The cap filtered a real defect and charged forty
+minutes for it. **And the retry does not rescue this**: told the exact rule, the model
+shortened its claim by 44 characters and still landed 14 over, twice.
+
+So the loss is made loud instead of total. It is logged in full, and it travels to the
+client in `checks_skipped` — the same channel as an engine that could not run, because
+it is the same class of fact: *this tier looked at the code and said something the
+review does not contain*. A reply where NOTHING parsed is still a failed round; there
+is no partial result to keep, and calling it clean would be INV-1's exact failure.
+
+**D-67 — severity belongs to the engine that raised it. Recurrence informs the reader
+and never demotes.**
+
+A finding that has been raised and justified before keeps its severity. `enrich()`
+attaches `priorOccurrences` and the related rules to every finding, including T0's, so
+the reader is told *"seen 6× before in this repo — this is a pattern, not an
+incident"* and can weigh it. What the accumulated verdicts do not do is lower the
+severity.
+
+The tempting change is the other one: semgrep's `http://` rule fires `high` on test
+fixtures every time, this codebase has justified it four times, so demote it. The
+reason not to is that **the finding is true**. A loopback URL in a test file really is
+an unencrypted request; what makes it acceptable is context a rule engine does not
+have. Demoting on familiarity would mean the second occurrence of a real defect
+reports as less serious than the first — and the same machinery that quiets a known
+false positive would quiet a known-and-recurring genuine one, which is the more
+dangerous direction by a long way.
+
+The right place to spend a justification is the finding, not the class: an accepted
+one settles it and carries forward (D-51), which is quieter than a demotion and says
+something true.
 
 **D-64 — `claim` is capped at 500.**
 

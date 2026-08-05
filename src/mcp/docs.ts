@@ -115,7 +115,9 @@ WHAT EACH FINDING CARRIES.
 \`fingerprint\` (use it in the lore-ok), \`file\`, \`line\`, \`symbol\`, \`severity\`,
 \`claim\`, \`evidence\`, \`failure_scenario\`, sometimes \`cwe\`, and \`history\` — what this
 codebase already knows about this defect, which tells you whether to fix the line or
-fix the habit.
+fix the habit. \`history\` never changes \`severity\`: a defect seen six times is not
+less serious for being familiar, and a rule engine that fires every round is still
+telling the truth about the line it fired on. Weigh it; do not discount it.
 
 Then ONE of three shapes, and they are the whole instruction:
 
@@ -136,9 +138,16 @@ Then ONE of three shapes, and they are the whole instruction:
     decided. Do not write a lore-ok for one of these; the file already has one, and a
     duplicate is fresh surface for the next tier to review.
 
-\`checks_skipped\` appears when a deterministic engine did NOT run — no installed
-dependencies, no test script, a suite disabled for the deployment. It is not a
-finding and not a failure; it narrows what the review is evidence OF. Typecheck and
+\`checks_skipped\` appears when something the review would have covered did not reach
+you. Two causes, one meaning:
+
+  * a deterministic engine did NOT run — no installed dependencies, no test script, a
+    suite disabled for the deployment;
+  * a tier produced a finding the schema refused, so this review does not contain it.
+    The line says which tier and what was wrong with it. The tier looked at the code
+    and saw something; you are not being shown it.
+
+It is not a finding and not a failure; it narrows what the review is evidence OF. Typecheck and
 lint go missing quietly, so this is the only place their absence is stated. Report it
 to your user alongside the result: a \`passed\` where the suite never ran means the
 tiers that DID run agree, not that the tests do. \`checks_skipped_note\` accompanies it

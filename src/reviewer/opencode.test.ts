@@ -596,20 +596,39 @@ describe("extractFindings", () => {
     expect(why("I could not complete this review.")).toMatch(/no JSON object/);
   });
 
-  it("rejects the whole reply when one finding is malformed", () => {
-    // Keeping the valid ones would silently drop a defect the model actually found,
-    // and nobody would ever know it had been dropped.
+  // D-66. This used to bin the whole reply, on the argument that keeping the good
+  // findings would "silently drop a defect the model actually found". The premise was
+  // the word SILENTLY: discarding everything drops that same defect AND every valid
+  // finding beside it, which is strictly worse on the axis the rule defended.
+  //
+  // Measured before changing it: five paid replies binned this way, the worst a t2
+  // round of forty minutes whose single finding — 14 characters over the cap — was
+  // correct and load-bearing.
+  it("keeps the valid findings when one sibling is malformed, and says what went", () => {
     const mixed = JSON.stringify({
       findings: [JSON.parse(FINDING_JSON).findings[0], { file: "x.ts", severity: "high" }],
     });
-    expect(why(mixed)).toMatch(/finding 2 of 2 was rejected/);
+    const r = extractFindings(mixed);
+    if (!r.ok) throw new Error(`expected the good finding to survive: ${r.why}`);
+
+    expect(r.findings).toHaveLength(1);
+    // The loss is carried, not swallowed — it becomes checks_skipped for the client.
+    expect(r.rejected).toHaveLength(1);
+    expect(r.rejected[0]).toMatch(/finding 2 of 2/);
+  });
+
+  it("still fails the reply when NOTHING in it is usable", () => {
+    // Nothing survived, so there is no partial result to keep: this is a reply we
+    // could not read, which is a failed round rather than a clean one.
+    const allBad = JSON.stringify({ findings: [{ file: "x.ts" }, { file: "y.ts" }] });
+    expect(why(allBad)).toMatch(/all 2 finding\(s\) were rejected/);
   });
 
   it("rejects a finding carrying keys we did not ask for", () => {
     const extra = JSON.stringify({
       findings: [{ ...JSON.parse(FINDING_JSON).findings[0], confidence: 0.9 }],
     });
-    expect(why(extra)).toMatch(/finding 1 of 1 was rejected/);
+    expect(why(extra)).toMatch(/all 1 finding\(s\) were rejected/);
   });
 
   // The reason this type exists, pinned to the reply that cost a review.
@@ -626,7 +645,7 @@ describe("extractFindings", () => {
   it("names the CAP, not the JSON, when a claim is too long", () => {
     const long = JSON.parse(FINDING_JSON).findings[0];
     const reason = why(JSON.stringify({ findings: [{ ...long, claim: "x".repeat(CLAIM_MAX + 25) }] }));
-    expect(reason).toMatch(/^finding 1 of 1 was rejected — claim: /);
+    expect(reason).toMatch(/claim: /);
     // Actionable: it has to carry the limit, or a model cannot comply with it.
     expect(reason).toContain(String(CLAIM_MAX));
     expect(reason).not.toMatch(/JSON/);

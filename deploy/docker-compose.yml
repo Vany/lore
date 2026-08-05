@@ -23,6 +23,12 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
+      args:
+        # So `/status` can say WHICH code is running. `make up` passes the checkout's
+        # real commit; a bare `docker compose build` leaves them "unknown", which is
+        # the honest answer rather than a plausible wrong one.
+        LORE_COMMIT: ${LORE_COMMIT:-unknown}
+        LORE_BUILT_AT: ${LORE_BUILT_AT:-unknown}
     # Pinned so the arm64 assumption is explicit rather than inherited from the
     # builder's architecture.
     platform: linux/arm64

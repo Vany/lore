@@ -56,7 +56,19 @@ async function handle(
       JSON.stringify(
         {
           ...health,
+          // WHICH CODE IS RUNNING. The deployment ran 21 commits behind for three
+          // hours while this endpoint said ok: true, and nothing here distinguished
+          // that from being current. "unknown" is what an unstamped build says,
+          // rather than something plausible.
+          build: {
+            commit: process.env["LORE_COMMIT"] ?? "unknown",
+            built_at: process.env["LORE_BUILT_AT"] ?? "unknown",
+          },
           spend_today_by_tier: spendByTier(store, startOfDayIso()),
+          // Findings produced and never collected. 18 sat unread for hours, 14 of
+          // them high — the review reached findings_ready and nothing ever polled it.
+          // A finding nobody reads is a review that did not run, one step later.
+          uncollected: uncollectedFindings(store),
           active: activeReviews(store),
         },
         null,
@@ -94,6 +106,28 @@ async function handle(
   const transport = new NodeStreamableHTTPServerTransport({ sessionIdGenerator: undefined });
   await mcp.connect(transport);
   await transport.handleRequest(req, res);
+}
+
+/**
+ * Reviews holding findings nobody has fetched, oldest first.
+ *
+ * `delivered_at` already recorded this per finding; nothing ever asked. The age is
+ * what makes it actionable — a finding undelivered for a minute is a poll in flight,
+ * one undelivered for six hours is a client that walked away.
+ */
+function uncollectedFindings(store: Store): unknown {
+  return store.db
+    .prepare(
+      `SELECT r.id, r.branch,
+              COUNT(*) AS undelivered,
+              SUM(CASE WHEN f.severity = 'high' THEN 1 ELSE 0 END) AS high,
+              MIN(f.first_seen) AS waiting_since
+       FROM finding f JOIN review r ON r.id = f.review_id
+       WHERE f.delivered_at IS NULL
+       GROUP BY r.id, r.branch
+       ORDER BY waiting_since`,
+    )
+    .all();
 }
 
 function activeReviews(store: Store): unknown {

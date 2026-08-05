@@ -99,6 +99,14 @@ export interface ReviewerResult {
    * exactly when the measurement was broken (D-50).
    */
   readonly steps: number | undefined;
+  /**
+   * Findings this tier produced that the schema refused, one line each.
+   *
+   * Empty is the normal case. Non-empty means the tier looked at the code and said
+   * something we could not accept — which is not the same as the tier finding
+   * nothing, and must never be reported as though it were (INV-1, D-66).
+   */
+  readonly discarded: readonly string[];
 }
 
 /**
@@ -279,6 +287,14 @@ export class Reviewer implements ReviewerLike {
       first.usage = second.usage;
     }
 
+    // Loud, always: a discarded finding is a defect this tier saw and we threw away.
+    if (extracted.rejected.length > 0) {
+      console.error(
+        `[lore:log] tier ${tier.id} (${tier.model}) had ${extracted.rejected.length} finding(s) rejected by the ` +
+          `schema; the other ${extracted.findings.length} were kept. ${extracted.rejected.join(" | ")}`,
+      );
+    }
+
     // Taken before the step count, because that costs an extra round trip to
     // opencode and latency is meant to describe the review, not the bookkeeping.
     const latencyMs = Date.now() - started;
@@ -292,6 +308,7 @@ export class Reviewer implements ReviewerLike {
       costUsd: first.usage.cost,
       latencyMs,
       retried,
+      discarded: extracted.rejected,
       steps: await this.countSteps(sessionId),
     };
   }
@@ -654,7 +671,7 @@ function detail(e: unknown): string {
  * the log, so the operator is not sent to the wrong fault.
  */
 export type Extraction =
-  | { readonly ok: true; readonly findings: readonly Finding[] }
+  | { readonly ok: true; readonly findings: readonly Finding[]; readonly rejected: readonly string[] }
   | { readonly ok: false; readonly why: string };
 
 /** The first zod issue, as `path: message` — enough to act on, short enough to send. */
@@ -711,21 +728,42 @@ export function extractFindings(text: string): Extraction {
       note(NO_LIST, "parsed as JSON, but there was no `findings` array");
       continue;
     }
+    // THE VALID FINDINGS SURVIVE ONE BAD SIBLING (D-66).
+    //
+    // This used to discard the whole reply. The argument was that keeping the good
+    // ones would "silently drop a defect the model actually found" — and the premise
+    // was the word SILENTLY, not the dropping. Discarding everything drops that same
+    // defect AND every valid finding beside it, which is strictly worse on the axis
+    // the rule was defending.
+    //
+    // The cost was measured. Five paid replies were binned this way; the worst was a
+    // t2 round of FORTY MINUTES whose single finding — over the claim cap by 14
+    // characters — was correct and load-bearing: `openFindings` had no latest-verdict
+    // gate, so a justification accepted and later rejected counted as neither open nor
+    // settled. It was fixed from the error message alone. The cap filtered a real
+    // defect and charged forty minutes for it.
+    //
+    // And the retry does not rescue it: told the exact rule, glm-5.2 shortened its
+    // claim by 44 characters and still landed 14 over. Twice.
+    //
+    // So: take what parsed, and make the loss LOUD — logged here, carried on the
+    // result, and reported to the client so a clean round is never read as a complete
+    // one. A reply where NOTHING parsed is still a failed reply.
     const out: Finding[] = [];
+    const rejected: string[] = [];
     for (const [i, raw] of list.entries()) {
       const res = FindingSchema.safeParse(raw);
-      // One malformed finding still invalidates the reply. Keeping the valid ones
-      // would silently drop a defect the model actually found, and we would never
-      // know. What changes is that the reason now leaves this function.
       if (!res.success) {
-        return {
-          ok: false,
-          why: `finding ${i + 1} of ${list.length} was rejected — ${firstIssue(res.error)}`,
-        };
+        rejected.push(`finding ${i + 1} of ${list.length}: ${firstIssue(res.error)} — ${excerpt(JSON.stringify(raw), 300)}`);
+        continue;
       }
       out.push(res.data);
     }
-    return { ok: true, findings: out };
+    if (out.length === 0 && rejected.length > 0) {
+      note(NO_LIST, `all ${rejected.length} finding(s) were rejected — ${rejected[0] ?? ""}`);
+      continue;
+    }
+    return { ok: true, findings: out, rejected };
   }
   return { ok: false, why };
 }

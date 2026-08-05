@@ -31,6 +31,13 @@ export interface T0Result {
   readonly outcomes: readonly EngineOutcome[];
   /** Engines that did not run, and why. Goes into the model prompt verbatim. */
   readonly unavailable: readonly string[];
+  /**
+   * Optional engines with nothing to do — logged, never reported as a gap.
+   *
+   * Kept separate from `unavailable` so the list a client repeats to its user stays
+   * worth reading. See `EngineOutcome.skipped`.
+   */
+  readonly skipped: readonly string[];
 }
 
 export interface T0Options {
@@ -55,12 +62,18 @@ export async function runT0(worktree: string, opts: T0Options): Promise<T0Result
     ...(await sandboxed(worktree, opts.sandbox ?? DEFAULT_SANDBOX, opts.engines, opts.runTests === true)),
   );
 
+  const skipped = outcomes.filter((o) => o.skipped !== undefined).map((o) => o.skipped ?? "");
+  // Said once, to the operator's log, so an optional engine's absence is visible to
+  // someone who could act on it without becoming noise in the client's report.
+  if (skipped.length > 0) console.error(`[lore:log] t0 optional engines idle — ${skipped.join("; ")}`);
+
   return {
     findings: outcomes.flatMap((o) => o.findings),
     outcomes,
     unavailable: outcomes
       .filter((o) => o.unavailable !== undefined)
       .map((o) => `${o.engine}: ${o.unavailable ?? ""}`),
+    skipped,
   };
 }
 

@@ -227,12 +227,50 @@ export function renderStatus(db: DatabaseSync, reviewId?: string, dataDir = "/va
     out.push("");
   }
 
+  out.push(...uncollectedLines(db));
   out.push(...mirrorLines(db, dataDir));
 
   // Repeated because a coloured tick is exactly the thing a tired reader
   // over-trusts, and these two states are the ones that cost the most when misread.
   out.push(dim("only PASSED is clean. passed_partial and fast_clean are not passes."));
   return `${out.join("\n")}\n`;
+}
+
+/**
+ * Findings produced and never fetched.
+ *
+ * Eighteen sat unread across four reviews on 2026-08-05, fourteen of them `high`. The
+ * review reached `findings_ready`, the client never polled again, and nothing said so
+ * — `delivered_at` had recorded it per finding the whole time and nothing asked.
+ *
+ * A finding nobody reads is the same failure as a review that did not run, one step
+ * later: work was done, a defect was found, and the branch is no safer for it.
+ */
+function uncollectedLines(db: DatabaseSync): string[] {
+  const rows = db
+    .prepare(
+      `SELECT r.branch AS branch, COUNT(*) AS n,
+              SUM(CASE WHEN f.severity = 'high' THEN 1 ELSE 0 END) AS high,
+              MIN(f.first_seen) AS since
+       FROM finding f JOIN review r ON r.id = f.review_id
+       WHERE f.delivered_at IS NULL
+       GROUP BY r.id, r.branch ORDER BY since`,
+    )
+    .all() as Row[];
+  if (rows.length === 0) return [];
+
+  const lines: string[] = [bold("waiting to be collected"), ""];
+  for (const r of rows) {
+    const high = Number(r["high"] ?? 0);
+    // High severity is the reason this is red rather than dim: nobody has SEEN it.
+    const paint = high > 0 ? red : yellow;
+    lines.push(
+      `  ${paint(`${r["n"]} finding(s)${high > 0 ? `, ${high} high` : ""}`)}  ` +
+        `${String(r["branch"])}  ${dim(`unread since ${age(r["since"])}`)}`,
+    );
+  }
+  lines.push("", dim("nobody has polled these. A finding nobody reads is a review that did not run, later."), "");
+  return lines;
 }
 
 /**

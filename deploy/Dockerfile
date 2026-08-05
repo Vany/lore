@@ -47,6 +47,21 @@ COPY src ./src
 # exist inside the image -- the container has no access to the checkout.
 COPY deploy/tiers.*.json ./deploy/
 
+# WHAT CODE IS ACTUALLY RUNNING.
+#
+# The deployment ran 21 commits behind for three hours while `make status` said
+# `ok: true`, and every fix in those commits was invisible to the one client using
+# it. Nothing distinguished "running the code you think it is" from "running this
+# afternoon's" — so the build stamps itself, and `/status` reports it.
+#
+# Passed in rather than derived here: the image has no git history to read, and a
+# stamp the build invents would only be a build timestamp, which does not say WHICH
+# code. Defaults are honest about being unknown rather than plausible.
+ARG LORE_COMMIT=unknown
+ARG LORE_BUILT_AT=unknown
+ENV LORE_COMMIT=${LORE_COMMIT} \
+    LORE_BUILT_AT=${LORE_BUILT_AT}
+
 # Reviews run as this user; the data volume is chowned to it in compose.
 RUN useradd --system --create-home --uid 10001 lore
 USER lore
