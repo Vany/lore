@@ -29,6 +29,16 @@ export interface ReviewDiff {
   readonly untracked: readonly string[];
   /** Files touched, for scoping knowledge and T0 work. */
   readonly changedFiles: readonly string[];
+  /**
+   * How many commits the BASE has that this branch does not.
+   *
+   * The real signal a reviewer wants when it senses something is off about a stale
+   * branch — and without it one invented a substitute, reporting that the branch
+   * had bundled a 70-file refactor from another ticket. It had not: the base had
+   * moved 22 commits ahead, and a two-dot diff renders that as the branch deleting
+   * everything the base had added.
+   */
+  readonly behindBy: number;
 }
 
 export async function computeDiff(worktree: string, base: string): Promise<ReviewDiff> {
@@ -64,6 +74,9 @@ export async function computeDiff(worktree: string, base: string): Promise<Revie
 
   const untracked = await gitLines(worktree, ["ls-files", "--others", "--exclude-standard"]);
   const changedFiles = await gitLines(worktree, ["diff", "--name-only", mergeBase]);
+  const behindBy = Number(
+    (await gitMaybe(worktree, ["rev-list", "--count", `HEAD..${resolved}`])) ?? "0",
+  );
 
   const truncated = rawPatch.length > MAX_DIFF_CHARS;
   const patch = truncated
@@ -73,6 +86,7 @@ export async function computeDiff(worktree: string, base: string): Promise<Revie
   return {
     base,
     mergeBase,
+    behindBy: Number.isFinite(behindBy) ? behindBy : 0,
     stat: stat.trim(),
     patch,
     truncated,
@@ -94,7 +108,35 @@ export async function blobSha(worktree: string, path: string): Promise<string | 
  * metadata, because a reviewer that never sees them cannot account for them.
  */
 export function renderDiff(d: ReviewDiff): string {
-  const parts = [`Base: ${d.base} (merge-base ${d.mergeBase})`, "", d.stat];
+  // Spelled out, because naming the base was not enough. A reviewer given
+  // `Base: main (merge-base abc123)` went and ran `git diff main..HEAD` itself,
+  // got the two-dot picture, and reported at high severity that the branch had
+  // bundled a 70-file refactor from an unrelated ticket. The branch was one commit
+  // and twenty files; the base had moved 22 commits ahead, and two dots render that
+  // as the branch deleting everything the base gained. The alarm was right and the
+  // diagnosis was invented — so the true fact is stated here instead.
+  const parts = [
+    `Base: ${d.base}, at merge-base ${d.mergeBase}.`,
+    "",
+    "THIS DIFF IS THE CHANGE THE BRANCH INTRODUCES — three-dot, exactly what a squash",
+    `merge would apply. Reproduce it with:  git diff ${d.mergeBase}`,
+    "",
+    "Do NOT recompute it as `git diff <base>..HEAD`. Two dots is a CHECKOUT difference,",
+    "not this branch's work: every commit the base gained since the fork shows up as this",
+    "branch deleting things it never touched. In this worktree it is doubly misleading —",
+    "local branch refs come from a mirror and are frozen at clone time.",
+    ...(d.behindBy > 0
+      ? [
+          "",
+          `THE BRANCH IS ${d.behindBy} COMMIT(S) BEHIND ${d.base}. That is worth a finding on its own if it`,
+          "is large: the diff above is correct, but it was computed against the fork point, so it cannot",
+          "show a conflict with work the base has gained since. Nothing here has been tested against the",
+          "base as it now stands.",
+        ]
+      : []),
+    "",
+    d.stat,
+  ];
 
   if (d.untracked.length > 0) {
     parts.push(

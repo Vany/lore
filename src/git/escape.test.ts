@@ -11,7 +11,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync }
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { computeDiff } from "./diff.ts";
+import { computeDiff, renderDiff } from "./diff.ts";
 import { ensureBare, worktreeFor } from "./repo.ts";
 
 let root: string;
@@ -235,5 +235,62 @@ describe("a mirror's local branches are frozen, and nothing may resolve to them"
     expect(err?.message).toContain("git@github.com:org/other.git");
     expect(err?.message).toMatch(/token is scoped/);
     expect(err?.message).toContain("main"); // what the mirror actually holds
+  });
+});
+
+// A reviewer was given `Base: main (merge-base abc123)`, went and ran
+// `git diff main..HEAD` itself, and reported at HIGH severity that the branch had
+// bundled a ~70-file refactor from an unrelated ticket. The branch was one commit
+// and twenty files. The base had moved 22 commits ahead, and two dots render that
+// as the branch deleting everything the base gained.
+//
+// The alarm was right — the branch WAS dangerously stale — and the diagnosis was
+// invented, because nothing told it how far behind the branch was. So the true fact
+// is stated now, and the trap is named.
+describe("the diff says what it is, and how stale the branch is", () => {
+  it("names three-dot semantics and warns off two", async () => {
+    const src = join(root, "src-semantics");
+    const g = makeRepo(src);
+    const paths = { bare: join(root, "repos/rA/bare.git"), worktrees: join(root, "repos/rA/wt") };
+    mirror(src, paths.bare);
+    execFileSync("git", ["-C", paths.bare, "config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"]);
+    execFileSync("git", ["-C", paths.bare, "fetch", "-q", "origin"]);
+
+    // The base moves on without the branch — the shape that misled the reviewer.
+    writeFileSync(join(src, "b.txt"), "b\n");
+    g("add", "-A");
+    g("commit", "-qm", "base moves on");
+    execFileSync("git", ["-C", paths.bare, "fetch", "-q", "origin"]);
+
+    const wt = await worktreeFor(paths, "rev_sem", "main", src);
+    const rendered = renderDiff(await computeDiff(wt, "main"));
+
+    expect(rendered).toMatch(/three-dot/);
+    expect(rendered).toMatch(/Do NOT recompute/);
+    expect(rendered).toContain("git diff <base>..HEAD");
+  });
+
+  it("states how far behind the branch is, rather than leaving it to be inferred", async () => {
+    const src = join(root, "src-behind");
+    const g = makeRepo(src);
+    const paths = { bare: join(root, "repos/rB/bare.git"), worktrees: join(root, "repos/rB/wt") };
+    mirror(src, paths.bare);
+    execFileSync("git", ["-C", paths.bare, "config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"]);
+    execFileSync("git", ["-C", paths.bare, "fetch", "-q", "origin"]);
+    const forkPoint = execFileSync("git", ["-C", paths.bare, "rev-parse", "origin/main"], { encoding: "utf8" }).trim();
+
+    for (const n of [1, 2, 3]) {
+      writeFileSync(join(src, `m${n}.txt`), "x\n");
+      g("add", "-A");
+      g("commit", "-qm", `base ${n}`);
+    }
+    execFileSync("git", ["-C", paths.bare, "fetch", "-q", "origin"]);
+
+    // A worktree cut at the fork point: zero of its own commits, three behind.
+    execFileSync("git", ["-C", paths.bare, "worktree", "add", "--detach", join(paths.worktrees, "rev_b"), forkPoint], { stdio: "ignore" });
+    const d = await computeDiff(join(paths.worktrees, "rev_b"), "main");
+
+    expect(d.behindBy).toBe(3);
+    expect(renderDiff(d)).toContain("3 COMMIT(S) BEHIND");
   });
 });
