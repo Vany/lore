@@ -34,6 +34,20 @@ silent failures in one day are the reason this project exists in this shape.
 
 - SPEC is ground truth. If reality disagrees with SPEC, I update SPEC in the same
   change — I do not let code and spec drift apart quietly.
+- **The MCP texts move with the behaviour, in the same change.** `TOOL_DOCS`,
+  `RESOURCE_DOCS` and `REVIEW_PROMPT_TEXT` in `src/mcp/docs.ts` — and
+  `src/reviewer/prompts.ts` when a *model* is what learns differently. The client is
+  an agent, so these strings are the entire interface: there is no other way for it
+  to find out what changed. A behaviour change that does not reach them leaves a
+  client acting confidently on the old contract, which is this project's defining
+  failure in its most avoidable form. Where a mechanical check is possible, write one
+  — `src/mcp/docs.test.ts` and the field test in `src/service/http.test.ts` exist so
+  drift fails the suite instead of waiting to be noticed.
+- Specs and docs describe the system **as it stands**. The reasoning that makes a
+  decision right belongs there; the sequence of changes that produced it belongs in
+  `MEMO.md` and the git history. Code comments are the deliberate exception — per
+  `PROG.md`, a guard carries the incident it guards against, in enough detail to
+  reconstruct it.
 - `[OPEN]` in SPEC means *I decided this alone because it blocked me*. I flag it
   when it becomes load-bearing, rather than letting it harden by default.
 - I verify current versions, APIs and model names before relying on memory. Notes
