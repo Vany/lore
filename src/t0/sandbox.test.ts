@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { scriptFinding } from "./runner.ts";
-import { commandsFor } from "./sandbox.ts";
+import { commandsFor, lockfileKey } from "./sandbox.ts";
 
 let dir: string;
 
@@ -93,5 +93,39 @@ describe("a process we killed did not fail", () => {
     expect(out.findings).toHaveLength(1);
     expect(out.findings[0]?.claim).toContain("fails on this branch");
     expect(out.findings[0]?.severity).toBe("high");
+  });
+});
+
+// Raised by t1 against the commit that introduced the installer. Two functions held
+// two lists with OPPOSITE precedence: the cache key took `package-lock.json` first,
+// the installer took `pnpm-lock.yaml` first. A repo carrying both got its key from
+// one file while installing from the other — so a change to the lockfile that
+// actually mattered left the key untouched and the previous node_modules was reused.
+// A review running against dependencies that are not the branch's, and nothing says so.
+describe("the cache key follows the installer", () => {
+  const write = (name: string, body: string) => writeFileSync(join(dir, name), body);
+
+  it("keys on the lockfile the chosen manager installs from", async () => {
+    write("package-lock.json", "npm-v1");
+    write("pnpm-lock.yaml", "pnpm-v1");
+    const before = await lockfileKey(dir);
+
+    // The file the installer does NOT use changes: the key must not move.
+    write("package-lock.json", "npm-v2-completely-different");
+    expect(await lockfileKey(dir)).toBe(before);
+
+    // The file it DOES use changes: the key must move.
+    write("pnpm-lock.yaml", "pnpm-v2");
+    expect(await lockfileKey(dir)).not.toBe(before);
+  });
+
+  it("agrees with commandsFor on which file that is", async () => {
+    write("package-lock.json", "x");
+    write("pnpm-lock.yaml", "y");
+    expect((await commandsFor(dir))?.lockfile).toBe("pnpm-lock.yaml");
+  });
+
+  it("says no-lockfile rather than inventing a key", async () => {
+    expect(await lockfileKey(dir)).toBe("no-lockfile");
   });
 });

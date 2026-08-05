@@ -206,7 +206,16 @@ async function mergeCheck(worktree: string, base: string): Promise<boolean | und
     execFile(
       "git",
       ["merge-tree", "--write-tree", base, "HEAD"],
-      { cwd: worktree, maxBuffer: 64 * 1024 * 1024, env: { ...process.env, GIT_CEILING_DIRECTORIES: worktree } },
+      {
+        cwd: worktree,
+        maxBuffer: 64 * 1024 * 1024,
+        // The same bound every other git call gets. Raw `execFile` is used here only
+        // to read merge-tree's exit code, which the wrapper discards — the timeout is
+        // not part of what needed bypassing, and without it a hung git holds the
+        // round open with nothing to say.
+        timeout: 120_000,
+        env: { ...process.env, GIT_CEILING_DIRECTORIES: worktree },
+      },
       (err) => {
         if (err === null) return resolve(true);
         const code = (err as unknown as { code?: number }).code;

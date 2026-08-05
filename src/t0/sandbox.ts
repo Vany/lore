@@ -68,15 +68,20 @@ export const DEFAULT_SANDBOX: SandboxConfig = {
   runtime: "docker",
 };
 
-/** Cache key: identical lockfiles share an install. Installs dominate T0 otherwise. */
+/**
+ * Cache key: identical lockfiles share an install. Installs dominate T0 otherwise.
+ *
+ * Keyed on the lockfile the CHOSEN manager installs from, never on whichever one is
+ * found first — see `Toolchain.lockfile` for what the disagreement cost.
+ */
 export async function lockfileKey(worktree: string): Promise<string> {
-  for (const name of ["package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock", "bun.lockb"]) {
-    const content = await readFile(join(worktree, name)).catch(() => undefined);
-    if (content !== undefined) {
-      return createHash("sha256").update(content).digest("hex").slice(0, 16);
-    }
-  }
-  return "no-lockfile";
+  const cmds = await commandsFor(worktree);
+  const name = cmds?.lockfile;
+  if (name === undefined) return "no-lockfile";
+  const content = await readFile(join(worktree, name)).catch(() => undefined);
+  return content === undefined
+    ? "no-lockfile"
+    : createHash("sha256").update(content).digest("hex").slice(0, 16);
 }
 
 /**
@@ -168,6 +173,18 @@ const SYNC =
  */
 export interface Toolchain {
   readonly name: string;
+  /**
+   * The lockfile this manager installs from — and therefore the ONLY file the cache
+   * key may be derived from.
+   *
+   * These were two lists in two functions with opposite precedence: the key took
+   * `package-lock.json` first, the installer took `pnpm-lock.yaml` first. A repo
+   * carrying both got a key from one file while installing from the other, so a
+   * change to the lockfile that mattered left the key untouched and the previous
+   * `node_modules` was reused — a review running against dependencies that are not
+   * the branch's, silently.
+   */
+  readonly lockfile: string | undefined;
   readonly install: string;
   readonly test: string;
   /** `<pm> run <script>`, for scripts the target declares itself. */
@@ -182,6 +199,7 @@ export async function toolchain(worktree: string): Promise<Toolchain | undefined
   if (await has("pnpm-lock.yaml")) {
     return {
       name: "pnpm",
+      lockfile: "pnpm-lock.yaml",
       install: "pnpm install --frozen-lockfile || pnpm install",
       test: "pnpm test",
       run: (script) => `pnpm run ${script}`,
@@ -190,6 +208,7 @@ export async function toolchain(worktree: string): Promise<Toolchain | undefined
   if (await has("yarn.lock")) {
     return {
       name: "yarn",
+      lockfile: "yarn.lock",
       install: "yarn install --immutable || yarn install",
       test: "yarn test",
       run: (script) => `yarn run ${script}`,
@@ -204,6 +223,7 @@ export async function toolchain(worktree: string): Promise<Toolchain | undefined
 
 const NPM: Toolchain = {
   name: "npm",
+  lockfile: "package-lock.json",
   install: "npm ci --no-audit --no-fund || npm install --no-audit --no-fund",
   test: "npm test --silent",
   run: (script) => `npm run --silent ${script}`,
