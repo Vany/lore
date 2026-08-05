@@ -18,7 +18,7 @@
  * SPEC: spec/knowledge.md §2
  */
 
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { blobSha } from "../git/diff.ts";
 import type { KnowledgeItem, Store } from "../store/store.ts";
@@ -204,13 +204,13 @@ export async function ingestDocs(
   store: Store,
   repoId: string,
   worktree: string,
-  files: readonly string[] = discoverable(),
+  files?: readonly string[],
 ): Promise<IngestResult> {
   let added = 0;
   let retired = 0;
   let documents = 0;
 
-  for (const rel of files) {
+  for (const rel of files ?? (await discoverable(worktree))) {
     const source = await readFile(join(worktree, rel), "utf8").catch(() => undefined);
     if (source === undefined) continue;
     documents++;
@@ -243,8 +243,52 @@ export async function ingestDocs(
   return { documents, added, retired };
 }
 
-function discoverable(): readonly string[] {
-  return RULE_DOCS;
+/**
+ * Every rule document in the tree: the root files, and the decision records.
+ *
+ * **The directories were missing, and the spec said they were not.**
+ * `spec/knowledge.md` promised rules parsed from "`CLAUDE.md`, `PROG.md`, `SPEC.md`,
+ * ADRs"; this returned `RULE_DOCS` alone, so no ADR was ever read. `RULE_DIRS` existed
+ * only to *scope* a rule found under one — a branch nothing could reach, which is
+ * what made the gap invisible to a reader: the constant is right there and looks used.
+ *
+ * The cost was the product. `rigid-monorepo` carries 37 ADRs and had **eight** rules,
+ * all from two root files, while its entire decision record — the reasoning a reviewer
+ * most needs and least can infer — was not read at all. That is the memory this
+ * service exists to keep, missing for the one repository with a real user.
+ *
+ * Recursive, because ADRs get filed into subdirectories once there are enough of them.
+ * The cap is per repository and announced when hit (`ingest: …`) rather than silently
+ * truncating: a knowledge base that quietly stopped reading at some arbitrary file is
+ * exactly the confident incompleteness this project refuses.
+ */
+export const MAX_RULE_DOCS = 400;
+
+async function discoverable(worktree: string): Promise<readonly string[]> {
+  const out: string[] = [...RULE_DOCS];
+
+  for (const dir of RULE_DIRS) {
+    const found: string[] = [];
+    const walk = async (rel: string): Promise<void> => {
+      const entries = await readdir(join(worktree, rel), { withFileTypes: true }).catch(() => []);
+      for (const e of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+        const child = `${rel}/${e.name}`;
+        if (e.isDirectory()) await walk(child);
+        else if (e.isFile() && e.name.toLowerCase().endsWith(".md")) found.push(child);
+      }
+    };
+    await walk(dir);
+    out.push(...found);
+  }
+
+  if (out.length > MAX_RULE_DOCS) {
+    console.error(
+      `[lore:log] ingest: ${out.length} rule documents found, reading the first ${MAX_RULE_DOCS}. ` +
+        `The rest were NOT read — this repository's memory is incomplete and knows it.`,
+    );
+    return out.slice(0, MAX_RULE_DOCS);
+  }
+  return out;
 }
 
 /**
