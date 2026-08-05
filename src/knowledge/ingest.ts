@@ -65,31 +65,90 @@ export interface Candidate {
 export function extractRules(markdown: string): readonly Candidate[] {
   const out: Candidate[] = [];
   const seen = new Set<string>();
+
+  for (const block of blocks(markdown)) {
+    for (const sentence of sentences(block)) {
+      const cleaned = stripMarkup(sentence);
+      if (cleaned.length < MIN_LENGTH || cleaned.length > MAX_LENGTH) continue;
+      if (!MODAL.test(cleaned) || NOT_A_RULE.test(cleaned)) continue;
+
+      const { statement, why } = splitReason(cleaned);
+      const key = statement.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ statement, why });
+    }
+  }
+  return out;
+}
+
+/**
+ * Markdown reflowed into logical blocks: a paragraph or one bullet, wrapped lines
+ * joined back together.
+ *
+ * This is the whole difference between a knowledge base and a pile of fragments.
+ * Reading PHYSICAL lines means every rule in a hard-wrapped document is cut at the
+ * wrap — and these documents are wrapped at eighty characters, so most were. The
+ * store filled with things like "change — I do not let code and spec drift apart
+ * quietly": true, unattributable, and starting mid-sentence because the clause
+ * before it lived on the previous line.
+ *
+ * Headings, code fences, quotes and TABLE ROWS are skipped. A table row matches a
+ * modal as readily as prose does — `| D-2 | lore never commits or pushes |` — and
+ * arrives as pipes and alignment rather than as a sentence anyone can act on.
+ */
+function blocks(markdown: string): string[] {
+  const out: string[] = [];
+  let current: string[] = [];
   let inFence = false;
+
+  const flush = () => {
+    if (current.length > 0) out.push(current.join(" "));
+    current = [];
+  };
 
   for (const raw of markdown.split("\n")) {
     const line = raw.trim();
 
     if (line.startsWith("```")) {
+      flush();
       inFence = !inFence;
       continue;
     }
-    if (inFence || line.length === 0 || line.startsWith("#") || line.startsWith(">")) continue;
+    // A rule inside a code block is an example of a rule, not one.
+    if (inFence) continue;
 
-    const bullet = /^[-*+]\s+(.*)$/.exec(line);
-    const text = bullet?.[1] ?? line;
-    const cleaned = stripMarkup(text);
+    // A blank line, a heading, a quote or a table row all end whatever came before.
+    if (line.length === 0 || line.startsWith("#") || line.startsWith(">") || line.startsWith("|")) {
+      flush();
+      continue;
+    }
 
-    if (cleaned.length < MIN_LENGTH || cleaned.length > MAX_LENGTH) continue;
-    if (!MODAL.test(cleaned) || NOT_A_RULE.test(cleaned)) continue;
-
-    const { statement, why } = splitReason(cleaned);
-    const key = statement.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push({ statement, why });
+    const bullet = /^[-*+]\s+(.*)$/.exec(line) ?? /^\d+\.\s+(.*)$/.exec(line);
+    if (bullet !== null) {
+      // A new bullet ends the previous one; its own continuation lines follow.
+      flush();
+      current.push(bullet[1] ?? "");
+      continue;
+    }
+    current.push(line);
   }
+  flush();
   return out;
+}
+
+/**
+ * One block into whole sentences.
+ *
+ * Split on sentence-ending punctuation followed by a capital, which leaves
+ * abbreviations and version numbers intact. A block with no terminator is one
+ * sentence — bullets frequently have no full stop.
+ */
+function sentences(block: string): string[] {
+  return block
+    .split(/(?<=[.!?])\s+(?=[A-Z"`*])/)
+    .map((x) => x.trim())
+    .filter((x) => x.length > 0);
 }
 
 /**

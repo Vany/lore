@@ -75,3 +75,50 @@ describe("rank", () => {
     ]);
   });
 });
+
+// The knowledge base IS the product, and it was 78% fragments — 727 rows of 938.
+//
+// The extractor read PHYSICAL lines, and these documents are hard-wrapped at eighty
+// characters, so most rules were cut at the wrap. What reached the store, and what
+// every client was served, looked like "change — I do not let code and spec drift
+// apart quietly": true, unattributable, and beginning mid-sentence because the
+// clause before it lived on the previous line.
+describe("wrapped markdown is one rule, not several", () => {
+  it("joins a rule split across lines", () => {
+    const md = [
+      "- SPEC is ground truth. If reality disagrees with SPEC, I update SPEC in the",
+      "  same change — I do not let code and spec drift apart quietly.",
+    ].join("\n");
+
+    const rules = extractRules(md);
+    expect(rules).toHaveLength(1);
+    expect(rules[0]?.statement).toContain("I update SPEC in the same change");
+    // The tail must not have become a rule of its own.
+    expect(rules.some((r) => /^change —/.test(r.statement))).toBe(false);
+  });
+
+  // A table row matches a modal as readily as prose — and arrives as pipes and
+  // alignment rather than as something anyone can act on.
+  it("ignores table rows", () => {
+    const md = [
+      "| # | decision | status |",
+      "|---|---|---|",
+      "| **D-2** | `lore` never commits or pushes; the client owns its history | confirmed |",
+    ].join("\n");
+    expect(extractRules(md)).toStrictEqual([]);
+  });
+
+  // Two rules in one paragraph are still two rules.
+  it("splits a paragraph into sentences", () => {
+    const md = "Reviewer agents are read-only, always. A fake reviewer must not be kinder than production.";
+    expect(extractRules(md)).toHaveLength(2);
+  });
+
+  // A bullet ends at the next bullet, not at the end of the list.
+  it("keeps separate bullets separate", () => {
+    const md = ["- Comments must carry why.", "- Tests must not be kinder than production."].join("\n");
+    const rules = extractRules(md);
+    expect(rules).toHaveLength(2);
+    expect(rules[0]?.statement).not.toContain("kinder");
+  });
+});
