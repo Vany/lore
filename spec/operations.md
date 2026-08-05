@@ -39,11 +39,11 @@ a class** is an alert.
 
 | condition | why it is urgent |
 |---|---|
-| **backup replication stale > 1h** | the knowledge base *is* the product; losing it loses everything the workgroup taught it |
+| **replica behind the database** | the knowledge base *is* the product; losing it loses everything the workgroup taught it. Measured as *behind*, never as *recently written*: litestream writes only when there is something to replicate, so an idle database and a dead replicator look identical under a freshness test |
 | **heartbeat missed** (§3) | the service is down, or the monitoring is |
-| disk > 90% | worktrees and `node_modules` caches grow without bound |
+| disk > 90% | the sandbox's `node_modules` cache grows without bound and is by far the largest thing here — 3.4 GB against 200 MB of repositories, measured 2026-08-05. Worktrees are reclaimed on completion (§6) and are no longer the risk |
 | provider auth failure | every review stops at once |
-| **daily spend ceiling hit** | a runaway loop at $500–2,600/month can burn fast |
+| **daily spend ceiling hit** | a runaway loop at $500–2,600/month can burn fast — but see §4: under a subscription this cannot fire at all |
 | all reviews failing over a window | systematic breakage, not a bad branch |
 
 ### 2.2 Ticket — next working day
@@ -89,7 +89,43 @@ A cheap tier looping on a pathological branch is exactly the shape that runs up 
 bill nobody sees until the invoice. Stopping is the correct behaviour; a review not
 started is honest, while a review that runs and cannot be paid for is not.
 
-## 5. Transport
+**The ceiling cannot fire under a subscription, and says so.** It sums `cost_usd`,
+and both current providers bill a flat rate, so every usage row carries zero.
+`/status` reports `spend_ceiling.metered: false` with a note that a zero means
+*unmeasured*, not *headroom* — because "$0 spent against a $100 ceiling" and "nothing
+here can measure spending" are opposite facts that look identical in a dashboard. A
+guard that cannot fire must say so rather than being mistaken for one that looked.
+
+## 5. Reviews end, or they are ended (D-70)
+
+**A review that is finished gives its worktree back at once.** Its tree hash is
+already recorded, attestation reads only the store, and `review_submit` refuses a
+finished review — so the worker releases the worktree the moment a review reaches
+`passed`, `passed_partial`, `failed` or `expired`. An hourly sweep repeats this with a
+zero-day window, prunes git records whose directory has gone, and deletes review rows
+after 90 days. Findings and verdicts cascade with them; **knowledge never does**, and
+has no foreign key to a review precisely so that it outlives one.
+
+Release goes through `git worktree remove`, never a bare `rm`. git keeps its own
+record under `bare.git/worktrees/<id>`, and deleting the directory leaves it listing
+paths that are not there.
+
+**Orphaned reviews are normal, not exceptional.** Measured across eleven of them on
+2026-08-05:
+
+- **Nothing obliges a client to finish.** It polls, collects the findings, and stops.
+  The review then sits in `findings_ready` holding a pinned worktree until the
+  staleness sweep expires it. This is the dominant cause, and it is a property of the
+  loop rather than a fault in any client.
+- **Restarting instead of continuing** accounted for four, all on one branch, before
+  `review_start` began refusing a branch that already has an open review.
+- **A round that fails** leaves a worktree its review will never use again.
+
+Reclamation is therefore a routine duty rather than an error path. What must never
+happen is an expired review reading as a clean one: `expired` is its own state, never
+`passed`, because a review somebody walked away from told us nothing about the code.
+
+## 6. Transport
 
 A generic **outbound webhook**, with severity, condition, and a short human
 description. It works with Slack, Alertmanager, a Plane integration or a shell script

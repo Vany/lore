@@ -5,6 +5,90 @@ surprised me.
 
 ---
 
+## 2026-08-05 — session 32: the first day a client drove it, and everything it broke
+
+**The day in one line.** The loop closed for the first time — a review of
+`rigid-monorepo` reached round 2, all five findings settled, first verdicts and first
+earned rules on that repo — and almost every defect found today was found *because* a
+real client hit it, not because we reasoned about it.
+
+**Measured before changing anything.** 30 reviews, 2 ever `passed`, 11 abandoned in
+`findings_ready`, 18 findings never collected, and **zero verdicts on the customer's
+repo**. That last number was the whole story: reviews were being run all day and
+nothing was being learned. Caching confirmed at 97–99%; INV-1 held in all 15 failures.
+
+**D-65 twice, because I built the wrong thing first.** A stale mirror caused more
+failures than every model and transport fault combined, and its instruction — run
+`make mirror` on the host — is unfollowable by an agent on another machine. I built
+per-repo deploy keys so lore could fetch. Vany's correction was right and simpler:
+this host already authenticates to the forge, so a credential for lore is a second
+secret for a fetch that is already possible. Reverted it the same evening; a host
+timer refreshes the mirrors now. **What was actually broken was never the credential
+— it was that refreshing had been made a person's job.**
+
+**Found while deciding where a key could safely live:** `opencode` runs third-party
+models as the *same uid* as `lore` and mounted the whole data directory. Verified
+readable from inside it: the attestation signing key, `lore.db`, and a leftover key
+from D-62. It mounts `data/repos` only now. That fix outlived the deploy keys that
+prompted it.
+
+**The spec promised ADRs and we never opened one.** `discoverable()` returned six root
+files; `RULE_DIRS` sat beside it *looking* used, consumed only to scope a rule that
+could never be found. `rigid-monorepo` carries 37 ADRs and had **eight** rules. Now
+128. This is the single largest improvement to the product today, and it was a
+constant nobody branched on.
+
+**And it immediately caused the first `needs_human` in production, wrongly.** Two ADR
+sentences restating one constraint were recorded as a contradiction, because
+`polarity()` cancelled negations across a whole statement: *"holds no balance and
+never calls the ledger"* — two independent negative clauses — came out positive. It
+stopped a review whose findings were all settled. Cancellation is per clause now, and
+a statement whose clauses disagree is *undecidable* rather than guessed.
+
+**Learned: a heuristic feeding a human escalation must fail quiet, not loud.** A
+missed conflict leaves a rule to be caught later. A false one stops a review and
+demands a person — and the first time this path ever ran, it was wrong.
+
+**The client's four, all real.** A token scoped per *principal* while tokens are
+minted per *repository* — and a workgroup provisions every repo to the same human, so
+the check was doing nothing; `needs_human` that named no question, in the inbox, where
+a client looks first; pattern findings from files the branch never touched
+outranking real spec contradictions. The test named *"binds each token to its own
+repo"* asserted the token rows differ and never checked that anything was scoped by
+them. **A test named for a property it does not test is worse than no test.**
+
+**Reclamation.** 16 finished reviews still held worktrees because the window was seven
+days; the sweep would have leaked git's own records had it ever run, since it deleted
+directories with `rm` rather than `git worktree remove`. Setting the window to zero
+would have started that leak on the next pass, which is how it was found. Twelve stale
+records from a data directory that moved months of reviews ago were collected by a
+`git worktree prune` nothing had ever called.
+
+**Two latent bugs, same shape, found by reading:** the terminal states written out by
+hand with `passed_partial` left off — so `expireStale` would overwrite a legitimate
+partial pass with `expired` after 48h, destroying a verdict, and the sweep would hold
+its worktree for ever. There is one `TERMINAL` set now and the SQL derives from it.
+**Every time a set of states is spelled out twice in this codebase, the copies have
+disagreed.**
+
+**Decided (D-66, D-67).** A rejected finding loses its own line, not the batch — the
+argument for all-or-nothing turned on the word *silently*, and discarding everything
+drops the same defect plus every valid finding beside it. And severity stays with the
+engine: demoting on familiarity would make the second sighting of a real defect report
+as less serious than the first.
+
+**My own worst moment.** I committed a broken build — unescaped backticks inside a
+template literal took out three test files by parse failure, 487 tests reading as 388
+— because I piped `vitest` into `tail`, so `&&` saw *tail* succeed. Sixth time those
+backticks have bitten this project. `tsc --noEmit` catches it; that is what to gate on,
+and never a pipeline whose last command is a formatter.
+
+**Open.** Reachability-aware severity: the client's argument that a CWE-319 behind
+`msw` on a reserved TLD is not a `high` is about *reachability*, which is real and
+which semgrep cannot see. Distinct from D-67 and harder; named rather than half-done.
+
+---
+
 ## 2026-08-04 — session 31: lore stopped holding keys, and the docs caught up with the code
 
 **Did.** Finished D-63 and wrote it into the specs. lore neither clones nor fetches:

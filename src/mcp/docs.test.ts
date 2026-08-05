@@ -109,3 +109,28 @@ describe("what the docs promise about attestation is what the code allows", () =
     if (/attest/i.test(text)) expect(text).toContain("passed_partial");
   });
 });
+
+// The client is an agent, so these strings ARE the interface — a behaviour change
+// that does not reach them leaves a client acting confidently on the old contract.
+// Each line below is a behaviour that shipped, pinned to the sentence that tells the
+// client about it, so removing one fails here rather than in someone's review.
+//
+// Matched on fragments that do not wrap in the source: a wrapped phrase would make
+// this fail for formatting rather than for content.
+describe("every behaviour a client must know about reaches the texts", () => {
+  it.each([
+    ["start", "a branch gets one review, continued", "ONE REVIEW PER BRANCH"],
+    ["start", "lore reads its mirror, not your disk", "PUSH YOUR BRANCH FIRST"],
+    ["start", "an abandoned review concludes nothing", "FINISH WHAT YOU START"],
+    ["start", "the host refreshes the mirror, not you", "You do not have to refresh anything"],
+    ["poll", "needs_human carries the question (D-39)", "open_questions"],
+    ["poll", "inherited findings are marked (D-68)", "preexisting"],
+    ["poll", "a rejected finding is disclosed (D-66)", "a tier produced a finding the schema refused"],
+    ["poll", "recurrence never demotes (D-67)", "never changes"],
+    ["poll", "failed is often transient", "TRANSIENT"],
+    ["submit", "this is how a review continues", "THIS IS HOW A REVIEW CONTINUES"],
+    ["query", "empty means not bootstrapped yet (D-35)", "count: 0"],
+  ])("%s tells the client: %s", (tool, _why, needle) => {
+    expect(TOOL_DOCS[tool as keyof typeof TOOL_DOCS]).toContain(needle);
+  });
+});

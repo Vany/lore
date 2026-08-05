@@ -684,12 +684,18 @@ nothing to gate, so the container is a first-class service rather than a profile
 **This alone is not a backup, and the tooling says so rather than implying
 otherwise.** A copy on this disk survives a corrupted database, a bad bulk write and
 a wrong `down-hard`; it does not survive the disk. `make backup-check` reports that
-it is checking the local half only. `make status` warns when the replica has not
-been written in an hour — freshness, which is the failure that actually happens,
-rather than the presence of a credential, which was never the question.
+it is checking the local half only. `make status` warns when the replica is **behind the
+database** — not when it was last written. litestream writes only when there is
+something to replicate, so an idle database and a dead replicator are identical under
+a freshness test, and the freshness test cried wolf the first time it mattered: the
+newest replica file and the last write to `lore.db` carried the same timestamp to the
+second, and the monitor called it stale. A monitor that cries wolf gets ignored, and
+this one guards the product.
 
 Proven on the live deployment, 2026-08-04: restoring from the running replica gives
-`integrity: ok`, schema v4 and all 440 knowledge rows. `make backup-drill` repeats
+`integrity: ok` and every knowledge row (schema v4 and 440 rows at the time; the
+schema is v7 now and the rows have multiplied, which is the point of proving the
+mechanism rather than a count). `make backup-drill` repeats
 that end to end on a copy, including destroying the source first.
 
 **D-60 — the data directory is the same path on both sides, by construction.**

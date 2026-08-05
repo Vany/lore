@@ -5,7 +5,7 @@
 **An independent code reviewer that remembers your codebase between sessions.**
 
 [![ci](https://github.com/Vany/lore/actions/workflows/ci.yml/badge.svg)](https://github.com/Vany/lore/actions/workflows/ci.yml)
-[![tests](https://img.shields.io/badge/tests-355%20passing-brightgreen)](src)
+[![tests](https://img.shields.io/badge/tests-488%20passing-brightgreen)](src)
 [![node](https://img.shields.io/badge/node-%E2%89%A524-339933?logo=node.js&logoColor=white)](package.json)
 [![typescript](https://img.shields.io/badge/typescript-strict%2C%20no%20build%20step-3178C6?logo=typescript&logoColor=white)](tsconfig.json)
 [![mcp](https://img.shields.io/badge/MCP-2026--07--28-000000)](spec/mcp-api.md)

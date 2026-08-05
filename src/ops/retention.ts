@@ -9,7 +9,7 @@
  * Deleted knowledge costs everything the workgroup ever taught the service. So this
  * removes worktrees and old review rows, and **never touches the knowledge tables**.
  *
- * SPEC: spec/operations.md
+ * SPEC: spec/operations.md §5
  */
 
 import { TERMINAL_SQL, isTerminal, type ReviewState } from "../core/review-state.ts";

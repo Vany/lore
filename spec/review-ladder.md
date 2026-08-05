@@ -67,6 +67,11 @@ container per review**:
   credentials anywhere in the deployment to mount: lore does not fetch (D-65)
 - no network, or egress through a deny-by-default proxy
 - read-only root filesystem apart from the worktree
+- **runs as lore's own uid, not root** — not a security control (the container already
+  has no capabilities, no network and no host filesystem, and the threat is a careless
+  suite rather than a hostile one) but an ownership one: the cache and scratch
+  directories are reused across reviews, and root-owned leftovers in them break the
+  next review with a permission error in a directory it owns
 - CPU, memory and PID limits, and a **hard timeout**
 - destroyed after the run
 
@@ -138,6 +143,25 @@ which is `~/c/review`'s central limitation.
 **An unparseable review is a failed review, not a clean one.** Parse failure → one
 retry → loud failure. This is the most likely way a "green" run could silently mean
 nothing.
+
+**A finding the schema rejects loses its own line, not the batch (D-66).** The valid
+findings in a reply are kept; each rejected one is logged in full and reported to the
+client in `checks_skipped`, because *this tier looked at the code and said something
+the review does not contain* is the same class of fact as an engine that could not
+run. Discarding the whole reply dropped that defect **and** every valid finding beside
+it, which is worse on the axis the rule was defending — five paid replies died that
+way, the worst a forty-minute round whose single finding was correct, load-bearing,
+and fourteen characters over the cap. A reply where **nothing** parsed is still a
+failed round; there is no partial result to keep.
+
+**A tool that needs project-authored rules is absent when they are missing, not
+skipped.** `unavailable` means a check that should have run did not, and it only stays
+worth reading while every entry is. `ast-grep` requires an `sgconfig.yml` no
+repository lore has met, so it reported NOT RUN on every review for a check that never
+existed — which teaches a reader to skim the list, including on the day it says the
+test suite did not run. Optional engines are logged for the operator and left out of
+the client's report. `tsc`, `eslint` and the suite stay gaps when they are missing,
+because for a JavaScript project they are.
 
 ### 3.1 Fingerprint
 

@@ -108,6 +108,13 @@ as the operator, and clones or fetches every registered repo into
     make mirror-daemon-log    what it last did
     make mirror REPO=<name>   one repository, by hand
 
+**The reviewer container sees the repositories and nothing else.** It runs
+third-party models with file-reading tools, as the same uid as `lore` — it must, since
+it writes its own session state — so mounting the data root handed a reviewer the
+attestation signing key, `lore.db` and every credential beside them. Checked rather
+than assumed on 2026-08-05, and the assumption was wrong: all three were readable from
+inside it. It mounts `data/repos` only, which is all a worktree needs.
+
 It reads the repository list straight out of the SQLite registry, read-only, so it
 keeps working while lore is down, restarting or being rebuilt — which is exactly when
 a stale mirror would otherwise go unnoticed.

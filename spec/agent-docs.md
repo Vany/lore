@@ -69,6 +69,16 @@ Draft text. These are the deliverable, not a summary of it.
 > The review is pinned to the branch as it stands now. Commits you push afterwards
 > are **not** included; start a new review for those.
 >
+> **Push first.** lore reads its own mirror of the remote, kept current by a process
+> on its host, so a commit that exists only on your disk is not in the review. You are
+> asked to refresh nothing.
+>
+> **One review per branch.** A branch that already has an open review is refused, and
+> the refusal names the one to continue — `review_submit` advances it. Restarting
+> discards every ratified justification and re-pays the cheap tiers, which is why the
+> deep tiers were so rarely reached. `restart: true` is the deliberate way through
+> after a rebase.
+>
 > Expect several rounds of findings. That is the process working, not failing.
 
 ### `review_poll`
@@ -84,6 +94,14 @@ Draft text. These are the deliverable, not a summary of it.
 > `passed_partial` means every tier that *could* run agreed, but one or more could
 > not be paid for. Real evidence, weaker evidence — report it as what it is, and the
 > attestation names the tiers that were skipped.
+>
+> `needs_human` carries **`open_questions`** — the question itself: two statements
+> this repository holds that cannot both be true, in full, with their sources. Take
+> them to a person; do not answer them yourself, and do not close one with `lore-ok`.
+>
+> A finding marked **`preexisting`** is in a file your branch does not touch, and the
+> pattern was already there — every other branch gets it too. Real, worth a ticket,
+> not yours to answer here. These sort last on purpose; do not re-sort by severity.
 >
 > **Only `passed` means the branch is clean.** `failed` and `expired` mean the
 > review did not complete; they are not "nothing found". Never merge on them.

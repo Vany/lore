@@ -147,8 +147,14 @@ optional:
 
 - **Possession of a `review_id` is never authentication.** Every `poll`, `submit`
   and `attest` re-verifies the bearer token *and* that the review belongs to that
-  token's principal. A valid id from another tenant fails exactly as a forged one
-  does.
+  token's **repository** — not merely to its principal (D-69). Tokens are minted per
+  repository while this was checked per principal, and a workgroup provisions every
+  repository to the same human, so the check was doing nothing: one person's token for
+  repo A read their reviews of repo B. A client reported seeing another repository's
+  branches through its own token.
+- **A valid id from elsewhere fails as NOT FOUND**, never as forbidden. "This exists
+  but is not yours" confirms to an unauthorized caller that the id is real, and an id
+  is the one thing worth guessing.
 - **Handles are CSPRNG-generated**, never sequential. The moment ids are guessable,
   every log line that contains one becomes a credential.
 
@@ -219,9 +225,9 @@ never read as "the branch is clean".
 With deep findings arriving asynchronously across dozens of open reviews, polling
 each one individually does not scale.
 
-`review_inbox()` returns deep findings across **all** the caller's reviews since
-they last collected — the batch view the workflow actually needs. Per-review
-`review_poll` remains for driving a single review to completion.
+`review_inbox()` returns deep findings across all the caller's reviews **in this
+token's repository** since they last collected — the batch view the workflow actually
+needs. Per-review `review_poll` remains for driving a single review to completion.
 
 Without this, a developer with 30 open reviews either polls 30 ids or loses
 findings. Both are failures.
@@ -230,7 +236,32 @@ Each entry carries `highest`, the worst severity among its new findings, so a cl
 can triage 30 reviews without reading 30 lists. It is **computed over the whole set**,
 not taken from the first row — reading position 0 was how it came to report `low` for
 a review whose worst finding was `medium` (D-50, `spec/review-ladder.md` §3.2). The
-findings themselves are ordered worst first, there and in `review_poll`.
+findings themselves are ordered worst first, there and in `review_poll` — except that
+findings the branch did not cause sort **below** the ones it did, whatever their
+severity (D-68). Ordering is what a reader acts on, and severity alone put two
+inherited pattern matches in untouched test fixtures above three spec contradictions
+in files the author had written.
+
+When a review is parked at `needs_human`, the inbox and `review_poll` both carry
+`open_questions` — **the question itself**: both contradicting statements in full and
+where each came from. The state whose entire purpose is *a person must decide this*
+shipped saying only that there was something to decide, and a client said plainly that
+it could not surface a question it was never given. Being told to escalate something
+unnamed leaves only inventing it or dropping it, and inventing it is what this service
+forbids everywhere else.
+
+### 2.4.2 One review per branch
+
+`review_start` refuses a branch that already has an open review, naming the one to
+continue. The ladder reaches its deep, independent tiers only by ADVANCING — findings
+carry forward, ratified justifications stay ratified, severity escalates where an
+answer did not hold — so a restart discards all of it and re-pays the cheap tiers.
+Measured before the refusal existed: six reviews of one branch in two hours, and 13 of
+30 reviews stopping at round 1, on a repository that produced no verdict all day.
+
+Refused rather than silently returning the open review: handing back an id that is not
+the one asked for is a quiet substitution. `restart: true` is the deliberate way
+through when a rebase or force-push has made the pinned snapshot meaningless.
 
 ## 3. Review state machine
 

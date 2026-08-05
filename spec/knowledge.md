@@ -19,11 +19,24 @@ knowledge freely, both reading and writing (D-18).
 | rank | source | how it arrives |
 |---|---|---|
 | 1 | **taught** | `knowledge_teach` — a human or session states a rule outright |
-| 2 | **ingested** | parsed from the repo's own `CLAUDE.md`, `PROG.md`, `SPEC.md`, ADRs |
+| 2 | **ingested** | parsed from the repo's own root rule docs **and every decision record** |
 | 3 | **derived** | inferred from accepted `lore-ok` justifications and recurring findings |
 
 Higher rank wins on conflict, and a conflict is **recorded, not silently
 resolved** — two sources disagreeing about a rule is itself worth surfacing.
+
+### 2.0 What is actually read
+
+Root files — `CLAUDE.md`, `AGENTS.md`, `PROG.md`, `SPEC.md`, `CONTRIBUTING.md`,
+`.cursorrules` — **and every `.md` under `docs/adr`, `docs/decisions`, `spec` and
+`adr`**, recursively, because decision records get filed into subdirectories once
+there are enough of them. Capped at 400 documents per repository, and the cap
+announces itself in the log rather than truncating silently.
+
+The directories were the point and were missing. A repository with 37 ADRs had
+**eight** rules, all from two root files, while its entire decision record — the
+reasoning a reviewer most needs and can least infer from the code — was never opened.
+Reading it took that repository to 128 rules.
 
 ### 2.1 Ingested docs are a known hazard
 
@@ -84,6 +97,23 @@ the affected code.
 **Newer leans correct, but only leans.** Code evolves, so a later rule is usually
 the truer one — that is a prior, not a verdict. A recent rule written carelessly
 must not silently overwrite an older one that was reasoned through.
+
+**Detection is a heuristic and is tuned to stay quiet where it cannot tell.** Two
+rules conflict when they share a subject (token overlap) and have opposite polarity.
+Polarity counts negations, and double negation cancels **within one clause only** — a
+statement whose clauses pull different ways is reported as *undecidable* and compared
+with nothing.
+
+That last rule is not fastidiousness. Cancelling across a whole sentence made a
+compound assertion come out as its own opposite: *"the seam holds no balance and never
+calls the ledger"* read as positive, its own restatement in another ADR read as
+negative, and the two were recorded as a contradiction. It stopped a real review whose
+findings were all settled, and demanded a person for a question that did not exist.
+
+The trade is deliberate: a missed conflict leaves two rules to be caught later, while
+a false one stops a review and calls for a human. It will also miss contradictions
+phrased without an explicit negation — *"amounts are integers"* against *"amounts are
+floats"* — and those need a model or a person to spot.
 
 ### 7.1 Resolution
 
