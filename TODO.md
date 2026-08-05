@@ -75,25 +75,23 @@ nothing.
       deploy key still on disk from an earlier decision. None of it is needed to read
       a worktree. It now mounts `<data>/repos` only, re-verified after the restart.
 
-- [ ] **The client restarts reviews instead of continuing them.** Six reviews of
-      `feat/RIGID-125-network-txn-id` between 10:39 and 12:46; four of
-      `fix/RIGID-135-cardholder-velocity-scope` between 13:29 and 18:25; four of
-      `main`. 13 of 30 reviews stop at round 1, and the ladder's whole design — carry
-      findings forward, escalate, settle — needs round 2. Each restart re-pays t0 and
-      t1 from scratch: today's 14 tier calls bought one round each rather than one
-      review's worth of depth.
-      Whether the client restarts because it prefers to, or because it does not know
-      `review_submit` continues the same review, is **not answered by this data**. The
-      texts in `src/mcp/docs.ts` are the only place it could learn, which makes this
-      first a documentation question, not a code one.
+- [x] **The client restarts reviews instead of continuing them.** Fixed 2026-08-05.
+      Six reviews of `feat/RIGID-125`, four of `fix/RIGID-135`, four of `main`, and 13
+      of 30 stopping at round 1 — while the ladder needs round 2 to settle anything.
+      Both halves were missing: nothing told the client `review_submit` continues a
+      review, and nothing noticed it starting a fifth. `review_start` now refuses with
+      the id to continue, and `restart: true` is the deliberate way through after a
+      rebase. Refused rather than silently returning the open review — handing back an
+      id that is not the one asked for is the quiet substitution this project refuses.
+      **Whether this actually changes the client's behaviour is unmeasured.** The
+      refusal is new, no client has met it, and the belief that it will help is a
+      hypothesis. Re-read the per-branch review counts after a day of real use.
 
-- [ ] **18 findings were produced and never collected.** All 18 are from today, across
-      four reviews (6 + 5 + 4 + 3), and 14 are t0 `high`. The review reached
-      `findings_ready` and nothing ever polled it. `delivered_at` already records this
-      per finding, so the fact is available to the service and it says nothing about
-      it — `make status` shows queue depth and active reviews, not *this review has
-      been holding six high-severity findings for six hours*. A finding nobody reads
-      is the same failure as a review that did not run, one step later.
+- [x] **18 findings were produced and never collected.** Fixed 2026-08-05. The fact
+      was in `delivered_at` the whole time and nothing asked. `make status` now has a
+      "waiting to be collected" section and `/status` an `uncollected` array, both with
+      the age and the high count. It lit up immediately: **23 findings across 5
+      reviews, 16 of them high, unread for seven hours.**
 
 - [x] **The ingester was fixed and no row in the database came from the fixed one.**
       Done 2026-08-05, on Vany's approval to re-ingest both repos. `dda312f` landed at
@@ -121,13 +119,14 @@ nothing.
       Still true that **zero verdicts exist on that repo**, so nothing is being
       *derived* there yet. That half remains open above.
 
-- [ ] **T0 is partly blind on the repository it actually reviews.** Of 7 t0 runs on
-      `rigid-monorepo`: ast-grep unconfigured in 5, eslint in 1, tsc in 1 — against 5
-      and 5 of 85 on lore. It reports this honestly in `unavailable` and the ladder
-      carries it, so nothing is claimed falsely. But `ast-grep` is unconfigured in
-      *every* repo it has ever met, which makes it an engine that has never once run
-      in production. Either it needs a default ruleset it can bring itself, or it
-      should stop being counted as a gate.
+- [x] **T0 is partly blind on the repository it actually reviews.** Resolved
+      2026-08-05, by deciding what `unavailable` is for. ast-grep needs
+      project-authored structural rules and no repository lore has ever met has any,
+      so it reported NOT RUN on every review for a check that never existed. That
+      trains the reader to skim the list — including on the day it says the test suite
+      did not run. Optional engines are now **absent** rather than **missing**, logged
+      for the operator and kept out of the client's report. tsc and eslint stay gaps
+      when they are missing, because for a JS project they are.
 
 ### What the client's own report adds
 
@@ -164,7 +163,20 @@ landing with a real user, and it should not get lost among the defects below.
       against a repo that does know things, and a normal answer. `TOOL_DOCS.query` says
       so too, and two tests hold it.
 
-- [ ] **A justified finding is still raised at `high` every time.** Narrowed from what
+- [x] **A justified finding is still raised at `high` every time.** Decided
+      2026-08-05 as **D-67: it stays.** The finding is TRUE — a loopback URL in a test
+      really is an unencrypted request, and what makes it acceptable is context a rule
+      engine does not have. Demoting on familiarity would make the second sighting of
+      a real defect report as less serious than the first, and the same machinery that
+      quiets a known false positive would quiet a known-and-recurring genuine one.
+      `history` informs the reader and never discounts; the docs now say so. The place
+      to spend a justification is the finding, not the class — an accepted one settles
+      it and carries forward (D-51), which is quieter and says something true.
+      *Superseded reasoning below, kept because it is what the decision was made on.*
+
+  <details><summary>the evidence D-67 was decided on</summary>
+
+      **A justified finding is still raised at `high` every time.** Narrowed from what
       I first wrote here, which overstated it. Two of the four findings the client
       evaluated are semgrep `http://` hits in **test fixtures** at `high`, and lore has
       derived the rule on both repos — *"This codebase repeatedly produces CWE-319
@@ -180,12 +192,12 @@ landing with a real user, and it should not get lost among the defects below.
       changes what gets reported as `high`, and a finding that is genuinely true should
       probably not be demoted for being familiar. Wants a decision, not a patch.
 
-- [ ] **Nothing says how old the running image is.** The service ran 21 commits behind
-      for three hours while `make status` reported `ok: true`, and every fix in those
-      commits was invisible to the one client using it. `/status` knows the queue,
-      the spend and the active reviews — none of which distinguishes "running the code
-      you think it is" from "running this afternoon's". Cheap: stamp the build into the
-      image and report it, so a stale deployment is a fact rather than an assumption.
+  </details>
+
+- [x] **Nothing says how old the running image is.** Fixed 2026-08-05. `make up`
+      stamps the checkout's commit into the image and `/status` reports it, with
+      `-dirty` when the tree had uncommitted changes and `unknown` for a build that
+      was not stamped — honest rather than plausible.
 
 - [x] **lore holds no git credentials** (D-63). Done 2026-08-04. `make mirror` fetches
       on the host as the operator into `data/repos`; the container sees nothing
@@ -229,7 +241,16 @@ landing with a real user, and it should not get lost among the defects below.
       workgroup. The containment matters because a test can hang, eat the box, or
       write where it should not by accident — and it holds against all of that.
 
-- [ ] **The sandbox writes as uid 0, and the cache it writes to is shared.** Not a
+- [x] **The sandbox writes as uid 0, and the cache it writes to is shared.** Fixed
+      2026-08-05: it runs as lore's own uid, asked of the process rather than
+      configured. Verified rather than assumed, because it affects every review that
+      typechecks — the sandbox image's own user is already uid 1000, the shared cache
+      and scratch are writable from it, and `npm ci` runs clean under `--network none`.
+      *Original note below.*
+
+  <details><summary>what the ownership problem actually was</summary>
+
+      **The sandbox writes as uid 0, and the cache it writes to is shared.** Not a
       security item — the threat here is a *stupid* test suite, not a malicious one,
       and against accidents the container is already enough. It is an ownership
       problem: `cacheRoot` and `scratchRoot` live under the data directory and are
@@ -237,6 +258,8 @@ landing with a real user, and it should not get lost among the defects below.
       `lore` (uid 1000) then cannot rewrite or clean up. Watch for it when
       `LORE_RUN_TESTS` goes on; `--user` fixes it, and needs those two directories
       to be writable by whichever uid is chosen.
+
+  </details>
 
 - [x] **T0 executes the target's suite** (D-60). Done 2026-08-04.
       `LORE_RUN_TESTS=1`, and four faults had to be cleared before anything ran —
@@ -293,25 +316,48 @@ landing with a real user, and it should not get lost among the defects below.
 
 ## Later
 
-- [ ] **Exercise the three paths that have never happened.** `passed_partial`
-      (D-48/49), `needs_human` (D-39 — zero conflicts recorded, ever), and a real
-      quota exhaustion. All three have code and tests; none has occurred in
-      production, and a path whose first real execution is during an incident is a
-      path nobody has reviewed.
+- [x] **Exercise the three paths that have never happened.** Done 2026-08-05:
+      `passed_partial`, `needs_human` and quota exhaustion now run end to end through
+      `runRound` against a real worktree and store. Writing them corrected my model of
+      the ladder twice — one unpayable tier is `fast_clean` with more to come, not a
+      partial pass, and the ladder steps OVER an exhausted tier to try the next rather
+      than giving up, failing only when nothing is left that could read the code.
+      Still true that none has occurred in **production**; what is closed is that
+      their first real execution will not be their first execution.
 
-- [ ] **The spend ceiling guards nothing today.** Zero of 84 usage rows have
+- [x] **The spend ceiling guards nothing today.** Fixed 2026-08-05 by making it say
+      so. It cannot fire under a subscription and never could; what changed is that
+      `/status` reports `metered: false` with a note that a zero means *unmeasured*,
+      not *headroom*. Those are opposite facts and looked identical.
+      *Original note below.*
+
+  <details><summary>why it is inert</summary>
+
+      **The spend ceiling guards nothing today.** Zero of 84 usage rows have
       `cost_usd > 0` (re-checked 2026-08-05, 30 more runs, still zero), because both
       providers are subscriptions, and `ops/spend.ts`
       sums exactly that column. Not wrong — inert. It needs either a metered provider
       to be meaningful, or an honest statement that it cannot fire under a
       subscription, so nobody reads its silence as headroom.
 
+  </details>
+
 - [x] **The claim cap was the wrong 300** (D-64). Decided 2026-08-05 by Vany: raise
       it to 500. The number now lives in one place and is interpolated into the
       output contract the models read, so the prompt can no longer state a limit the
       schema does not enforce, and both tests derive from the constant.
 
-- [ ] **One bad finding still discards a whole reply.** Separate from D-64 and still
+- [x] **One bad finding still discards a whole reply.** Decided and fixed 2026-08-05
+      as **D-66**: the rejected finding loses its own line, the valid ones survive, and
+      the loss travels to the client in `checks_skipped` — the same channel as an
+      engine that could not run, because it is the same fact. The all-or-nothing rule
+      turned on the word *silently*, and discarding everything drops the same defect
+      plus every valid finding beside it. A reply where nothing parsed is still a
+      failed round. *The evidence it was decided on is below.*
+
+  <details><summary>the evidence D-66 was decided on</summary>
+
+      **One bad finding still discards a whole reply.** Separate from D-64 and still
       open: `extractFindings` fails the batch if any finding fails the schema. Raising
       the cap removes the trigger that fired four times; it does not change what
       happens when something else in a batch is malformed — `cwe: ""` and `cwe: null`
@@ -350,6 +396,8 @@ landing with a real user, and it should not get lost among the defects below.
       what was dropped; or keep failing and treat the cap as a real contract. **This
       changes how much quota a failed round burns, so it is Vany's call** — the
       project rule is that anything altering model spend gets discussed first.
+
+  </details>
 
 - [ ] **Prove Phase 3's actual done-criterion.** A fresh Claude Code session, given
       no instructions beyond the MCP tool descriptions, drives a review to `passed`.
