@@ -40,9 +40,27 @@ export interface Cluster {
  * which is most review findings.
  */
 export function clusters(store: Store, repoId: string, threshold = RECURRENCE_THRESHOLD): readonly Cluster[] {
+  // WHAT RECURRED — A DEFECT, OR A FALSE POSITIVE?
+  //
+  // This counted every finding and never looked at how it was answered, so a pattern
+  // the team ruled out seven times derived "This codebase repeatedly produces CWE-319
+  // findings (7 so far). Check for it explicitly." That rule then goes into every
+  // future reviewer's prompt, telling the model to hunt harder for the exact thing
+  // the repository has already decided is not a defect: noise manufactured and then
+  // amplified, with rising confidence each round.
+  //
+  // Named precisely by the client who hit it: *"correct reasoning, wrong conclusion —
+  // what recurs is the false positive."*
+  //
+  // So the verdict comes along, and a cluster is only a MISTAKE when the repository
+  // actually treated it as one. `justified-accepted` recurring is the opposite lesson
+  // and is derived as such; a cluster nobody has answered teaches nothing yet.
   const rows = store.db
     .prepare(
-      `SELECT f.cwe AS cwe, f.claim AS claim, f.file AS file
+      `SELECT f.cwe AS cwe, f.claim AS claim, f.file AS file,
+              (SELECT v.verdict FROM verdict v
+                WHERE v.review_id = f.review_id AND v.fingerprint = f.fingerprint
+                ORDER BY v.id DESC LIMIT 1) AS verdict
        FROM finding f JOIN review r ON r.id = f.review_id
        WHERE r.repo_id = ?`,
     )
@@ -55,6 +73,9 @@ export function clusters(store: Store, repoId: string, threshold = RECURRENCE_TH
     const claim = row["claim"] ?? "";
     const file = row["file"] ?? "";
     const cwe = row["cwe"];
+    // Only what the repository CONFIRMED as a defect by fixing it. An unanswered
+    // finding might be either, and guessing is what produced the backwards rule.
+    if (row["verdict"] !== "fixed") continue;
 
     if (typeof cwe === "string" && cwe.length > 0) bump(byCwe, cwe, claim, file);
     bump(byClaim, normalizeClaim(claim), claim, file);

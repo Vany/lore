@@ -20,7 +20,7 @@ knowledge freely, both reading and writing (D-18).
 |---|---|---|
 | 1 | **taught** | `knowledge_teach` — a human or session states a rule outright |
 | 2 | **ingested** | parsed from the repo's own root rule docs **and every decision record** |
-| 3 | **derived** | inferred from accepted `lore-ok` justifications and recurring findings |
+| 3 | **derived** | inferred from accepted `lore-ok` justifications and recurring **fixed** findings |
 
 Higher rank wins on conflict, and a conflict is **recorded, not silently
 resolved** — two sources disagreeing about a rule is itself worth surfacing.
@@ -49,6 +49,24 @@ Mitigation is mandatory, not optional:
 - Every ingested rule stores the **source file and its blob sha**.
 - When the file changes, rules derived from it are **re-derived, not retained**.
 - A rule never outlives the text that justified it.
+
+### 2.2 A recurrence is only a lesson once the repository has answered it
+
+A cluster becomes a `mistake` rule only from findings the repository **fixed**. Not
+from findings it justified away, and not from findings nobody has answered.
+
+Ignoring the verdict inverts the lesson. A semgrep pattern on a mock URL behind `msw`
+was raised and justified away dozens of times, and this derived *"This codebase
+repeatedly produces CWE-319 findings. Check for it explicitly"* — which then entered
+every future reviewer's prompt, telling the model to hunt harder for exactly what the
+team had already ruled out, with confidence rising each round. Noise manufactured and
+then amplified. Every derived rule in the deployment on 2026-08-06 was of this kind:
+seven rules, not one backed by a single `fixed` verdict.
+
+An unanswered finding is not evidence either way, and guessing is what produced the
+backwards rule. A `justified-rejected` finding is a real defect that stands, but it is
+not one the team has acted on, so it does not teach a rule yet either — deliberately
+conservative, because a wrong rule here is injected into every future session.
 
 ## 3. What is stored
 

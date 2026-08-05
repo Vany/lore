@@ -105,12 +105,24 @@ describe("what one review learns, the next one knows", () => {
 });
 
 describe("recurrence becomes a rule", () => {
+  /**
+   * A finding the repository FIXED — which is what makes it a defect rather than an
+   * opinion. Recurrence alone used to be enough, and that is how a false positive
+   * ruled out seven times derived "check for it explicitly" and fed it back into
+   * every future reviewer's prompt.
+   */
+  const raisedAndFixed = (id: string, fp: string, over: Record<string, unknown> = {}) => {
+    review(id);
+    store.recordFinding(id, finding(fp, over));
+    store.recordVerdict(id, {
+      fingerprint: fp, verdict: "fixed", rationale: undefined,
+      scope: undefined, tier: "t1", round: 1,
+    });
+  };
+
   it("promotes a defect seen enough times", () => {
     // The fourth occurrence is not four bugs; it is one missing rule.
-    for (let i = 0; i < RECURRENCE_THRESHOLD; i++) {
-      review(`r${i}`);
-      store.recordFinding(`r${i}`, finding(`fp${i}`));
-    }
+    for (let i = 0; i < RECURRENCE_THRESHOLD; i++) raisedAndFixed(`r${i}`, `fp${i}`);
     expect(clusters(store, repoId).length).toBeGreaterThan(0);
 
     const promoted = promoteRecurring(store, repoId);
@@ -120,28 +132,52 @@ describe("recurrence becomes a rule", () => {
   });
 
   it("stays quiet below the threshold, so a coincidence is not made into a rule", () => {
-    review("r1");
-    store.recordFinding("r1", finding("fp1"));
+    raisedAndFixed("r1", "fp1");
+    expect(promoteRecurring(store, repoId)).toStrictEqual([]);
+  });
+
+  // THE LESSON RUNS BACKWARDS IF THE VERDICT IS IGNORED.
+  //
+  // A semgrep pattern on `http://auth.test` behind msw was raised and justified away
+  // seven times on one repository, and lore derived "This codebase repeatedly produces
+  // CWE-319 findings (7 so far). Check for it explicitly." That goes into every future
+  // reviewer prompt: hunt harder for the exact thing this repository has already
+  // decided is not a defect, with confidence rising each round.
+  it("does not turn a repeatedly-justified false positive into a rule to hunt for", () => {
+    for (let i = 0; i < RECURRENCE_THRESHOLD + 3; i++) {
+      review(`j${i}`);
+      store.recordFinding(`j${i}`, finding(`jfp${i}`));
+      store.recordVerdict(`j${i}`, {
+        fingerprint: `jfp${i}`, verdict: "justified-accepted",
+        rationale: "msw intercepts in-process; nothing is transmitted",
+        scope: undefined, tier: "t1", round: 1,
+      });
+    }
+
+    expect(clusters(store, repoId)).toStrictEqual([]);
+    expect(promoteRecurring(store, repoId)).toStrictEqual([]);
+  });
+
+  // Unanswered is not evidence either way. Guessing is what produced the wrong rule.
+  it("waits for a verdict rather than assuming an unanswered finding is a defect", () => {
+    for (let i = 0; i < RECURRENCE_THRESHOLD + 2; i++) {
+      review(`u${i}`);
+      store.recordFinding(`u${i}`, finding(`ufp${i}`));
+    }
     expect(promoteRecurring(store, repoId)).toStrictEqual([]);
   });
 
   it("does not re-promote the same lesson on every review", () => {
-    for (let i = 0; i < RECURRENCE_THRESHOLD; i++) {
-      review(`r${i}`);
-      store.recordFinding(`r${i}`, finding(`fp${i}`));
-    }
+    for (let i = 0; i < RECURRENCE_THRESHOLD; i++) raisedAndFixed(`r${i}`, `fp${i}`);
     promoteRecurring(store, repoId);
     expect(promoteRecurring(store, repoId)).toStrictEqual([]);
   });
 
   it("clusters a weakness class across differently-worded findings", () => {
     // What the exact fingerprint cannot do, and the reason CWE is on a finding.
-    review("r1");
-    store.recordFinding("r1", finding("fp1", { claim: "amount held as a JS number" }));
-    review("r2");
-    store.recordFinding("r2", finding("fp2", { claim: "float used for a currency value" }));
-    review("r3");
-    store.recordFinding("r3", finding("fp3", { claim: "price stored as a double" }));
+    raisedAndFixed("r1", "fp1", { claim: "amount held as a JS number" });
+    raisedAndFixed("r2", "fp2", { claim: "float used for a currency value" });
+    raisedAndFixed("r3", "fp3", { claim: "price stored as a double" });
 
     const cwe = clusters(store, repoId).filter((c) => c.kind === "cwe");
     expect(cwe).toHaveLength(1);
