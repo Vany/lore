@@ -44,15 +44,13 @@ finished. Call review_poll until it reaches a terminal state.
 PUSH YOUR BRANCH FIRST. lore reads its own mirror of the remote, not your working
 copy, so a commit that exists only on your disk is not in the review.
 
-You do not have to refresh anything. lore fetches the mirror itself, with that
-repository's own read-only deploy key, whenever it is about to choose a base and the
-mirror is more than 30 minutes old. Nothing is asked of you and no host command is
-involved — an earlier version told clients to run \`make mirror\` on the deployment
-host, which is not somewhere a client can reach.
+You do not have to refresh anything. A process on the lore host keeps every mirror
+current, and nothing is asked of you — an earlier version told clients to run
+\`make mirror\` on the deployment host, which is not somewhere a client can reach.
 
-A fetch that fails still fails the review rather than reviewing a stale tree, and
-says which of the two it was: an unauthorized deploy key (the normal first state of a
-new repository — the message carries the key to paste) or an unreachable remote.
+If that process has stopped, a review is REFUSED rather than run against a stale tree.
+You cannot fix that from where you are: report the message to your user verbatim. It
+names what a person must check on the lore host.
 
 The review pins the branch when its first round begins, which is shortly after this
 returns — not at the instant it returns. A commit pushed in that window may or may
@@ -88,7 +86,8 @@ ONLY \`passed\` means the branch is clean.
 - \`failed\` and \`expired\` mean the review did not complete. They are NOT "nothing
   found". Never merge on them. **\`failed_because\` says why** — read it and repeat it
   to your user verbatim. Do NOT infer a cause from the word \`failed\`: most reasons
-  are operational (a deploy key not yet authorized, a tier that would not parse) and
+  are operational (a mirror the host refresher stopped updating, a tier that would not
+  parse) and
   say exactly what to do. A guess here is worse than silence, because it is confident
   and it is yours. \`failed\` is also often TRANSIENT — an identical retry frequently
   succeeds — so retry once before concluding anything about how lore is configured.

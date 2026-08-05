@@ -19,7 +19,7 @@ BACKUP  ?= $(shell grep -E '^LORE_HOST_BACKUP=' .env 2>/dev/null | cut -d= -f2)
 BACKUP  := $(if $(BACKUP),$(BACKUP),./backup)
 
 .DEFAULT_GOAL := help
-.PHONY: help preflight sync-opencode push build up down down-hard restart logs status status-json status-local doctor new relocate tokens mirror backup-on backup-check backup-drill restore sweep shell
+.PHONY: help preflight sync-opencode push build up down down-hard restart logs status status-json status-local doctor new relocate tokens mirror mirror-daemon mirror-daemon-off mirror-daemon-log backup-on backup-check backup-drill restore sweep shell
 
 help:
 	@sed -n '2,14p' $(MAKEFILE_LIST) | sed 's/^# \{0,1\}//'
@@ -205,30 +205,76 @@ tokens:
 	for (const r of d.prepare('SELECT principal, label, created_at, revoked_at FROM token').all()) \
 	  console.log(r.revoked_at ? '[revoked]' : '[live]   ', r.principal, r.label ?? '', r.created_at);"
 
-## The public deploy key for a repository, to paste into its forge (D-65).
+## Keep every mirror fresh, forever, without anyone remembering to.
 ##
-##   make key REPO=rigid-monorepo
+##   make mirror-daemon        install and start it
+##   make mirror-daemon-off    stop and remove it
+##   make mirror-daemon-log    what it has been doing
 ##
-## Printed at `make new` too; this is for when that scrollback is gone. Public half
-## only — the private half never leaves the container, and nothing here can print it.
-key:
-	@test -n "$(REPO)" || { echo "usage: make key REPO=<name|url|id>"; exit 1; }
-	@$(COMPOSE) exec -T lore node -e "	const {DatabaseSync}=require('node:sqlite'); 	const {readFileSync}=require('node:fs'); 	const d=new DatabaseSync(process.env.LORE_DATA_DIR+'/lore.db'); 	const want=process.argv[1]; 	const rows=d.prepare('SELECT id, name, git_url FROM repo').all() 	  .filter(r => r.id===want || r.name===want || r.git_url.includes(want)); 	if (rows.length===0) { console.error('no registered repo matches '+JSON.stringify(want)); process.exit(1); } 	for (const r of rows) { 	  const p=process.env.LORE_DATA_DIR+'/keys/'+r.id+'_ed25519.pub'; 	  let k; try { k=readFileSync(p,'utf8').trim(); } catch { k='(none yet — generated on the next fetch)'; } 	  console.log(); console.log(r.name+'  '+r.git_url); console.log('  '+k); 	} 	console.log(); 	console.log('Add as a READ-ONLY deploy key. Leave \'Allow write access\' unticked.');" "$(REPO)"
+## Refreshing the mirror is the SERVICE's responsibility, not the client's: the
+## client is an agent, usually on another machine, with no shell here. And it is not
+## a person's, because a person who has to remember is a person who forgets — on
+## 2026-08-05 a forgotten refresh failed more reviews than every model and transport
+## fault combined.
+##
+## It runs OUTSIDE docker, as you, using the ssh credentials this host already has.
+## That is the whole reason it needs no key of its own.
+##
+## macOS: a LaunchAgent in your login session, which is what makes the keychain
+## available — a passphrase-protected key works here and would NOT in a system-wide
+## daemon. Linux: a systemd --user timer, which needs `loginctl enable-linger $(USER)`
+## to run while you are logged out, and a key the agent does not have to unlock.
+mirror-daemon:
+	@here="$$(cd $$(dirname $(firstword $(MAKEFILE_LIST))) && pwd)"; \
+	if [ "$$(uname)" = "Darwin" ]; then \
+		plist="$$HOME/Library/LaunchAgents/org.lore.mirror.plist"; \
+		mkdir -p "$$HOME/Library/LaunchAgents"; \
+		printf '%s\n' \
+		  '<?xml version="1.0" encoding="UTF-8"?>' \
+		  '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
+		  '<plist version="1.0"><dict>' \
+		  '  <key>Label</key><string>org.lore.mirror</string>' \
+		  '  <key>ProgramArguments</key><array>' \
+		  "    <string>/bin/sh</string><string>$$here/mirror-refresh.sh</string>" \
+		  '  </array>' \
+		  "  <key>WorkingDirectory</key><string>$$here</string>" \
+		  '  <key>StartInterval</key><integer>$(or $(INTERVAL),300)</integer>' \
+		  '  <key>RunAtLoad</key><true/>' \
+		  "  <key>StandardOutPath</key><string>$$here/mirror.log</string>" \
+		  "  <key>StandardErrorPath</key><string>$$here/mirror.log</string>" \
+		  '</dict></plist>' > "$$plist"; \
+		launchctl bootout gui/$$(id -u)/org.lore.mirror 2>/dev/null || true; \
+		launchctl bootstrap gui/$$(id -u) "$$plist" && echo "installed: $$plist"; \
+	else \
+		mkdir -p "$$HOME/.config/systemd/user"; \
+		printf '%s\n' '[Unit]' 'Description=lore mirror refresh' \
+		  '[Service]' 'Type=oneshot' "WorkingDirectory=$$here" \
+		  "ExecStart=/bin/sh $$here/mirror-refresh.sh" \
+		  > "$$HOME/.config/systemd/user/lore-mirror.service"; \
+		printf '%s\n' '[Unit]' 'Description=lore mirror refresh' \
+		  '[Timer]' 'OnBootSec=1min' 'OnUnitActiveSec=$(or $(INTERVAL),300)' \
+		  '[Install]' 'WantedBy=timers.target' \
+		  > "$$HOME/.config/systemd/user/lore-mirror.timer"; \
+		systemctl --user daemon-reload && systemctl --user enable --now lore-mirror.timer \
+		  && echo "installed. For it to run while logged out:  loginctl enable-linger $$USER"; \
+	fi
+	@echo "checking it actually works, rather than assuming:"
+	@sh ./mirror-refresh.sh
 
-## Clone and fetch ONE registered repository, OUT HERE, as you.
-##
-##   make mirror REPO=lore          match on name, url or id
-##   make mirror ALL=1              every registered repo, deliberately
-##
-## A FALLBACK since D-65, not the normal path. lore fetches its own mirrors with each
-## repository's read-only deploy key, on demand, before it cuts a base. Use this for
-## the window before that key is authorized on the forge — or when the remote is
-## reachable from here and not from the service.
-##
-## REPO is required. Fetching every repository because one was asked for reaches
-## remotes nobody named — on a shared host that is someone else's repository being
-## touched because you wanted yours refreshed. It also hides a failure: a repo you
-## did not ask about reporting FETCH FAILED reads as YOUR command failing.
+mirror-daemon-off:
+	@if [ "$$(uname)" = "Darwin" ]; then \
+		launchctl bootout gui/$$(id -u)/org.lore.mirror 2>/dev/null; \
+		rm -f "$$HOME/Library/LaunchAgents/org.lore.mirror.plist"; \
+	else \
+		systemctl --user disable --now lore-mirror.timer 2>/dev/null; \
+		rm -f "$$HOME/.config/systemd/user/lore-mirror."*; systemctl --user daemon-reload; \
+	fi
+	@echo "removed. Mirrors will go stale, and lore refuses a review rather than using one."
+
+mirror-daemon-log:
+	@if [ "$$(uname)" = "Darwin" ]; then tail -40 ./mirror.log 2>/dev/null || echo "nothing logged yet"; \
+	else journalctl --user -u lore-mirror.service -n 40 --no-pager; fi
+
 mirror:
 	@test -n "$(REPO)$(ALL)" || { \
 		echo "usage: make mirror REPO=<name|url|id>   (or ALL=1 for every repo)"; \

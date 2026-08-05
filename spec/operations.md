@@ -48,9 +48,9 @@ a class** is an alert.
 
 ### 2.2 Ticket — next working day
 
-Elevated review failure rate; spend anomaly against trend; a repo whose fetch keeps
-failing (D-65 — most often a deploy key that was never authorized, which is the
-service telling you about a step nobody took, not the service breaking); disk > 75%;
+Elevated review failure rate; spend anomaly against trend; a mirror `make status`
+shows in red (D-65 — the host refresher has stopped or cannot reach the remote, which
+lore itself cannot detect); disk > 75%;
 queue depth sustained high enough that reviews are waiting on CPU
 (`spec/deployment.md` §3); `needs_human` findings ageing without resolution.
 

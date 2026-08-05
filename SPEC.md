@@ -173,9 +173,9 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-60** | The data directory is the **same path** inside the container as on the host | confirmed |
 | **D-61** | Git may never climb out of the directory it was aimed at | hard |
 | **D-62** | *(withdrawn — lore holds no git credentials at all; see D-63)* | withdrawn |
-| **D-63** | *(superseded — lore fetches its own mirrors with a per-repo deploy key; see D-65)* | superseded |
+| **D-63** | *(superseded — the refresh is automated on the host rather than manual; see D-65)* | superseded |
 | **D-64** | `claim` is capped at **500** — one sentence, and a refused reply costs the round | confirmed |
-| **D-65** | lore **refreshes its own mirrors**, with a per-repository read-only deploy key | confirmed |
+| **D-65** | mirrors are refreshed by a **host process outside lore**; a stale one is refused | confirmed |
 
 **D-7, revised.** The earlier version dropped GLM-5.2 on Artificial Analysis's
 *cost per task* — which is tokens consumed × price on their benchmark, not a price.
@@ -742,78 +742,65 @@ Marked **hard** rather than confirmed: this one is not a preference. The test bu
 the exact shape — an empty bare directory nested inside another repository — and
 fails if either half is reverted.
 
-**D-65 — lore refreshes its own mirrors, with a per-repository read-only deploy key.**
+**D-65 — the mirror is refreshed by a host process, and lore refuses a stale one.**
 
-The mirror is fetched **by lore**, on demand, immediately before a base is cut and
-only when it is older than `MAX_MIRROR_AGE_MS`. Each repository has its own ed25519
-deploy key under `<data>/keys`, generated at provisioning, private half never leaving
-the host.
+lore holds no credentials for any remote, and must not: a service holding a key holds
+everything that key opens. A personal key is never asked for, and forwarding an agent
+into a container that already has the docker socket would hand it the ability to sign
+as the person. That is D-63's argument and it stands.
 
-**Why the credential is acceptable here, stated in full because D-63 argued the
-opposite.** D-63's reasoning was sound and its premise expired. It held that a key
-would be "a secret created for no reason" because lore never fetched — true while the
-operator refreshed mirrors by hand on the deployment host. But lore is a service: the
-client is an agent, frequently on another machine and under another user, with no
-shell on that host. Told *the mirror is stale, run `make mirror`*, it can do nothing
-at all. Measured on 2026-08-05, that single cause produced more review failures than
-every model and transport fault combined, and the last one refused a review against a
-mirror 192 minutes old. A service that cannot refresh what it reads is not a service.
+**What D-63 got wrong was whose job the refresh is.** It made it the operator's, by
+hand, before each review — and the party that hits a stale mirror is the *client*, an
+agent usually on another machine with no shell on this host. Told "run `make mirror`",
+it can do nothing at all. Measured on 2026-08-05: that single cause failed more
+reviews than every model and transport fault combined, ending with one refused against
+a mirror 192 minutes old.
 
-What survives from D-63 is everything that was about danger rather than about who
-runs the command:
+**So a process does it, outside docker, on the host.** `deploy/mirror-refresh.sh` runs
+every five minutes under launchd (macOS) or a systemd --user timer (Linux), reads the
+repository list straight out of the SQLite registry read-only, and fetches each mirror
+using the credentials the host already has. Reading the registry rather than asking
+the container means it keeps working while lore is down, restarting or being rebuilt
+— which is exactly when a stale mirror would otherwise go unnoticed.
 
-- **Per repository, never personal.** A deploy key opens exactly one repository. A
-  personal key opens everything its human can reach and would let a reviewer sign as
-  them; it is never asked for and never accepted. `IdentitiesOnly=yes` is what makes
-  this true in practice — without it ssh offers every identity it can find and the
-  forge accepts the first that works, so a fetch could silently succeed on the
-  operator's own key.
-- **Read-only.** Nothing here pushes; D-2 is untouched. The operator is told to leave
-  *allow write access* unticked.
-- **Marginal exposure, not new exposure.** The key grants read access to a repository
-  whose complete contents lore already holds in its mirror.
-- **Out of reach of every model.** Keys live under `<data>/keys`, and the reviewer
-  container mounts only `<data>/repos`. This was checked rather than assumed and was
-  wrong when checked: `opencode` runs as the same uid as `lore` and mounted the whole
-  data directory, so a reviewer could read the attestation signing key, `lore.db`, and
-  a leftover D-62 key. Narrowed in the same change.
-- **A local path still gets no key.** git reaches those through the filesystem and ssh
-  never runs, so a keypair for one would be the secret-for-no-reason D-62 and D-63
-  both objected to. That is the `isLocalPath` distinction, restored because it has a
-  caller again.
+It refreshes **all** registered repositories, which is not what `make mirror REPO=`
+refuses. That refusal is about an interactive command reaching remotes nobody named
+because one was asked for; here, keeping every mirror current *is* what was asked
+for, once, when the daemon was installed.
 
-**A fetch that cannot happen still fails the review.** INV-1 is unchanged: the mirror
-is made current or the review does not run, and a tree nobody fetched is never
-reviewed. The failure distinguishes an unauthorized key — the normal first state of
-every new repository, so the message carries the public key to paste — from an
-unreachable remote. `make mirror` survives as the operator's fallback for the window
-before a key is authorized.
+**lore does not get a deploy key of its own, though it easily could.** The host
+already authenticates to the forge as someone allowed to read these repositories, so a
+credential for lore would be a second secret to hold, inside the container that also
+holds the knowledge base and the signing key, plus a key to authorize on a repository
+the operator may not own. More machinery for a fetch that is already possible.
 
 **Freshness has three answers, not two:** `no-remote`, `never-fetched`, `fetched(at)`.
 Only the first passes without comment — nothing can be behind nothing. `never-fetched`
 is a mirror with a remote configured and no `FETCH_HEAD`, which is what a successful
 clone followed by a failed fetch leaves behind; it is the most dangerous state rather
 than the mildest, because `refs/remotes/origin/*` does not exist either, so a worktree
-cut from it would resolve the local branch frozen at the clone commit. Collapsing it
-into "no remote" would accept exactly the tree the check exists to reject.
+cut from it would resolve the local branch frozen at the clone commit.
 
 **Freshness is a question about cutting a base, not about running a round.** A review
 is pinned to a snapshot (D-40): once its worktree exists it sees that tree plus
 whatever `review_submit` applies, and never reads the mirror again. `worktreeFor` is
 the one function that obtains a worktree — for the worker and for `review_submit`
 alike — and it checks presence and freshness when it creates one, presence alone when
-it reuses one. Both halves matter: requiring freshness on every round would fail any
-review slower than thirty minutes, and every deep-tier review is slower than that;
-requiring it only in the worker would let a submit choose a base from a stale mirror
-that the worker then trusts.
+it reuses one. Requiring freshness on every round would fail any review slower than
+thirty minutes, and every deep-tier review is slower than that.
 
-Thirty minutes is long enough to survive a queue and a slow first round, short enough
-that "nobody fetched this today" cannot pass.
+Thirty minutes against a five-minute refresh is six missed passes before anything is
+refused.
 
-**Provisioning issues a token and a deploy key.** The public half is printed for the
-operator to authorize; the private half stays on the host. Generating it here rather
-than lazily on the first fetch means the operator is asked while they are still
-looking at the terminal, instead of discovering the need later as a failed review.
+**A refusal now means the refresher is down, not that someone forgot**, so the
+messages say what to report rather than what to run — the reader cannot run anything.
+The gap this leaves is that nothing in lore knows whether the timer is alive, so
+`make status` prints every mirror's age and turns red at the same threshold that
+refuses a review. That is the whole safety net for the arrangement, and it has a test.
+
+**Provisioning issues a token and nothing else.** No key is generated for any url.
+The operator's remaining step is `make mirror REPO=<name>` once, and `make
+mirror-daemon` so it stays current without anyone remembering.
 
 **D-8, extended — T0 runs the target's own tooling, in the sandbox.**
 
@@ -958,8 +945,8 @@ the deterministic tier reports typecheck and lint as unavailable too.
 **D-24.** Running the target's tests is arbitrary code execution, and the threat is
 the dependency tree rather than the teammate — a *careless* suite, not a hostile
 one. The service container holds the knowledge database, the attestation signing key
-and every provider credential — and, since D-65, the per-repository deploy keys — so
-it **must not** be where a `postinstall` runs. Separate ephemeral container, no
+and every provider credential, so it **must not** be where a `postinstall` runs. It
+holds no git credentials at all (D-65). Separate ephemeral container, no
 secrets, no network, hard timeout (`spec/review-ladder.md` §1.1.1).
 
 **D-25.** Walking skeleton: build a thin end-to-end slice, then deepen it. The

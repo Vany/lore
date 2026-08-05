@@ -1,34 +1,20 @@
 /**
- * What `ensureBare` guarantees now that it clones and fetches for itself (D-65).
+ * What `ensureBare` guarantees now that it neither clones nor fetches (D-63).
  *
- * It used to only check, and refuse with "run `make mirror` on the host" — an
- * instruction the only party who ever reads it cannot follow, because the client is
- * an agent with no shell there. So the mirror is made current here, with the
- * repository's own read-only deploy key, and a refusal now means it could not be.
- *
- * Every url below is a LOCAL PATH on purpose. git reaches those through the
- * filesystem, so no key is generated, no ssh runs, and the suite neither touches the
- * network nor depends on a credential — while exercising the same code a remote
- * takes.
+ * `make mirror` populates `data/repos/<id>/bare.git` on the HOST, where the
+ * operator's agent and credentials are. lore holds none, sees nothing outside its
+ * own data directory, and only checks what it was given.
  */
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { computeDiff, renderDiff } from "./diff.ts";
-import { type RepoPaths, ensureBare, worktreeFor } from "./repo.ts";
+import { ensureBare, worktreeFor } from "./repo.ts";
 
 let root: string;
-
-/** The full shape, so a test never has to know how `repoPaths` lays a repo out. */
-const at = (id: string): RepoPaths => ({
-  bare: join(root, "repos", id, "bare.git"),
-  worktrees: join(root, "repos", id, "wt"),
-  keysDir: join(root, "keys"),
-  repoId: id,
-});
 
 /** A repository with one commit, standing in for something real. */
 const makeRepo = (dir: string) => {
@@ -58,60 +44,34 @@ describe("git cannot climb out of the directory it was aimed at (D-61)", () => {
   // The original defect: an empty bare dir nested inside another repository made
   // `rev-parse` report the ENCLOSING checkout, so lore treated it as already cloned
   // and every later command operated on the operator's own repository.
-  it("clones into an empty directory nested in another repo, rather than adopting it", async () => {
+  it("refuses an empty directory nested in another repo, rather than adopting it", async () => {
     const outer = join(root, "outer");
     const g = makeRepo(outer);
     g("tag", "precious-tag");
-    const src = join(root, "src-nested");
-    makeRepo(src);
 
-    // lore's data directory living inside a checkout: the normal layout. The bare
-    // path exists but is EMPTY, which is what made `rev-parse` report the enclosing
-    // checkout and every later command operate on the operator's own repository.
-    const paths = { ...at("r1"), bare: join(outer, "data/repos/r1/bare.git") };
+    // lore's data directory living inside a checkout: the normal layout.
+    const paths = { bare: join(outer, "data/repos/r1/bare.git"), worktrees: join(outer, "data/repos/r1/wt") };
     mkdirSync(paths.bare, { recursive: true });
 
-    await ensureBare(paths, src);
-
-    // The enclosing repository is untouched — without the ceiling, `fetch --prune
-    // --tags` would have run in it and taken this with it.
+    await expect(ensureBare(paths, "git@example.com:o/r.git")).rejects.toThrow(/no clone of/);
+    // And the enclosing repository is untouched.
     expect(execFileSync("git", ["-C", outer, "tag"], { encoding: "utf8" })).toContain("precious-tag");
-    // And what was cloned is the source, not the enclosing repo.
-    expect(
-      execFileSync("git", ["-C", paths.bare, "config", "--get", "remote.origin.url"], { encoding: "utf8" }).trim(),
-    ).toBe(src);
   });
 });
 
-describe("the mirror is made current, or the review does not run (D-65)", () => {
-  it("clones on demand when nothing has been mirrored yet", async () => {
-    const src = join(root, "src-ondemand");
-    makeRepo(src);
-    const paths = at("r2");
-
-    await ensureBare(paths, src);
-
-    // A clone that is immediately usable: origin refs resolve, which is the state
-    // `make mirror`'s clone-then-fetch could fail to reach.
-    expect(existsSync(join(paths.bare, "objects"))).toBe(true);
-    expect(
-      execFileSync("git", ["-C", paths.bare, "rev-parse", "origin/main"], { encoding: "utf8" }).trim(),
-    ).toHaveLength(40);
-  });
-
-  // The failure is loud and the mirror is left absent rather than half-made — a
-  // partial clone satisfies `rev-parse` next time, so the next review would take the
-  // never-fetched path against an empty object store instead of cloning properly.
-  it("leaves nothing behind when the clone fails", async () => {
-    const paths = at("r2b");
-    await expect(ensureBare(paths, join(root, "no-such-repo"))).rejects.toThrow(/could not fetch/);
-    expect(existsSync(paths.bare)).toBe(false);
+describe("the clone has to be there, and recent (D-63)", () => {
+  it("refuses when nothing has been mirrored yet, and names the fix", async () => {
+    const paths = { bare: join(root, "repos/r2/bare.git"), worktrees: join(root, "repos/r2/wt") };
+    await expect(ensureBare(paths, "git@example.com:o/r.git")).rejects.toThrow(/make mirror/);
+    // Waiving the freshness requirement must not waive EXISTENCE. A later round with
+    // no clone at all is a broken deployment, not a pinned review.
+    await expect(ensureBare(paths, "git@example.com:o/r.git", false)).rejects.toThrow(/make mirror/);
   });
 
   it("accepts a clone with no remote, because it cannot be behind one", async () => {
     const src = join(root, "src1");
     makeRepo(src);
-    const paths = at("r3");
+    const paths = { bare: join(root, "repos/r3/bare.git"), worktrees: join(root, "repos/r3/wt") };
     mirror(src, paths.bare);
     execFileSync("git", ["-C", paths.bare, "remote", "remove", "origin"], { stdio: "ignore" });
 
@@ -132,28 +92,20 @@ describe("the mirror is made current, or the review does not run (D-65)", () => 
   // around it write FETCH_HEAD by hand — so the helper was manufacturing the
   // dangerous case and every test was stepping over it. Raised by t2 against the
   // commit that introduced the check.
-  it("fetches a clone whose fetch never landed, rather than reviewing the clone-time commit", async () => {
+  it("refuses a clone whose fetch never landed, even though a remote is configured", async () => {
     const src = join(root, "src-nofetch");
-    const g = makeRepo(src);
-    const paths = at("r6");
+    makeRepo(src);
+    const paths = { bare: join(root, "repos/r6/bare.git"), worktrees: join(root, "repos/r6/wt") };
     mirror(src, paths.bare); // clone only — no fetch, so no FETCH_HEAD
-    execFileSync("git", ["-C", paths.bare, "config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"]);
 
     // The precondition that makes this dangerous rather than merely unfetched.
     expect(existsSync(join(paths.bare, "FETCH_HEAD"))).toBe(false);
-    expect(execFileSync("git", ["-C", paths.bare, "config", "--get", "remote.origin.url"]).toString().trim()).toBe(src);
+    expect(
+      execFileSync("git", ["-C", paths.bare, "config", "--get", "remote.origin.url"]).toString().trim(),
+    ).toBe(src);
 
-    // The source moves after the clone. `origin/main` does not exist yet, so without
-    // the fetch `addWorktree` falls back to the frozen local branch.
-    writeFileSync(join(src, "later.txt"), "later\n");
-    g("add", "-A");
-    g("commit", "-qm", "after the clone");
-
-    await ensureBare(paths, src);
-
-    const originMain = execFileSync("git", ["-C", paths.bare, "rev-parse", "origin/main"], { encoding: "utf8" }).trim();
-    const srcMain = execFileSync("git", ["-C", src, "rev-parse", "main"], { encoding: "utf8" }).trim();
-    expect(originMain).toBe(srcMain); // caught up, not frozen
+    await expect(ensureBare(paths, src)).rejects.toThrow(/never been fetched/);
+    await expect(ensureBare(paths, src)).rejects.toThrow(/make mirror/);
   });
 
   // Raised by t3 at HIGH, against the fix for the previous round's finding.
@@ -167,91 +119,69 @@ describe("the mirror is made current, or the review does not run (D-65)", () => 
   //
   // The rule that replaces the heuristic: whoever CUTS the base asks the question,
   // and there is one function that does both.
-  it("refreshes whenever a base is cut, and never once the review is pinned", async () => {
+  it("requires freshness whenever a base is cut, not merely when the worker cuts it", async () => {
     const src = join(root, "src-submit");
-    const g = makeRepo(src);
-    const paths = at("r7");
-    mirror(src, paths.bare);
-    execFileSync("git", ["-C", paths.bare, "config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"]);
-    execFileSync("git", ["-C", paths.bare, "fetch", "-q", "origin"]);
-
-    const fetchHead = join(paths.bare, "FETCH_HEAD");
-    const stale = new Date(Date.now() - 2 * 60 * 60_000);
-    utimesSync(fetchHead, stale, stale);
-
-    // The source moves while the mirror is stale. Cutting a base must see it.
-    writeFileSync(join(src, "b.txt"), "b\n");
-    g("add", "-A");
-    g("commit", "-qm", "moved while the mirror was stale");
-
-    // The submit path is the one that used to skip the question entirely.
-    const wt = await worktreeFor(paths, "rev_x", "main", src);
-    expect(existsSync(wt)).toBe(true);
-    expect(execFileSync("git", ["-C", paths.bare, "rev-parse", "origin/main"], { encoding: "utf8" }).trim()).toBe(
-      execFileSync("git", ["-C", src, "rev-parse", "main"], { encoding: "utf8" }).trim(),
-    );
-
-    // A review already holding a worktree is pinned to it (D-40) and never reads the
-    // mirror again — so a later round must NOT fetch, however stale the mirror looks.
-    //
-    // Not hypothetical tidiness: when staleness was disqualifying on every round,
-    // round 3 was refused at "35 minutes" after t2 alone had spent 16, destroying
-    // three rounds and eight answered findings. Re-fetching instead of refusing would
-    // repeat the same mistake in the other direction — moving the base under a review
-    // that has already been reported on.
-    utimesSync(fetchHead, stale, stale);
-    writeFileSync(join(src, "c.txt"), "c\n");
-    g("add", "-A");
-    g("commit", "-qm", "must not be pulled into a pinned review");
-
-    await expect(worktreeFor(paths, "rev_x", "main", src)).resolves.toBe(wt);
-    expect(execFileSync("git", ["-C", paths.bare, "rev-parse", "origin/main"], { encoding: "utf8" }).trim()).not.toBe(
-      execFileSync("git", ["-C", src, "rev-parse", "main"], { encoding: "utf8" }).trim(),
-    );
-  });
-
-  it("does not fetch a clone that is already current", async () => {
-    const src = join(root, "src2");
     makeRepo(src);
-    const paths = at("r4");
+    const paths = { bare: join(root, "repos/r7/bare.git"), worktrees: join(root, "repos/r7/wt") };
     mirror(src, paths.bare);
     const fetchHead = join(paths.bare, "FETCH_HEAD");
     writeFileSync(fetchHead, "");
-    const stamp = statSync(fetchHead).mtimeMs;
+    const stale = new Date(Date.now() - 2 * 60 * 60_000);
+    utimesSync(fetchHead, stale, stale);
 
-    await expect(ensureBare(paths, src)).resolves.toBeUndefined();
-    // Untouched: re-fetching inside the window would cost a network round trip per
-    // round on every review, for a mirror that is by definition current enough.
-    expect(statSync(fetchHead).mtimeMs).toBe(stamp);
+    // The submit path is the one that used to skip this entirely.
+    await expect(worktreeFor(paths, "rev_x", "main", src)).rejects.toThrow(/last fetched/);
+    // ...and it must not have left a worktree behind for the worker to mistake for
+    // a pinned one, which is the whole mechanism of the finding.
+    expect(existsSync(join(paths.worktrees, "rev_x"))).toBe(false);
+
+    // Once the mirror is current, the base may be cut — and the SECOND call reuses
+    // it without re-asking, which is what lets a long review outlive the window.
+    const now = new Date();
+    utimesSync(fetchHead, now, now);
+    const wt = await worktreeFor(paths, "rev_x", "main", src);
+    expect(existsSync(wt)).toBe(true);
+
+    utimesSync(fetchHead, stale, stale);
+    await expect(worktreeFor(paths, "rev_x", "main", src)).resolves.toBe(wt);
   });
 
-  // The failure that used to be a client's to fix and is now lore's: a mirror
-  // nobody refreshed. Reviewing it anyway describes a tree that is not the one being
-  // merged — INV-2, with an attestation over it.
-  it("refreshes a stale clone before choosing a base", async () => {
-    const src = join(root, "src3");
-    const g = makeRepo(src);
-    const paths = at("r5");
+  it("accepts a clone fetched just now", async () => {
+    const src = join(root, "src2");
+    makeRepo(src);
+    const paths = { bare: join(root, "repos/r4/bare.git"), worktrees: join(root, "repos/r4/wt") };
     mirror(src, paths.bare);
-    execFileSync("git", ["-C", paths.bare, "config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"]);
-    execFileSync("git", ["-C", paths.bare, "fetch", "-q", "origin"]);
+    writeFileSync(join(paths.bare, "FETCH_HEAD"), "");
+
+    await expect(ensureBare(paths, src)).resolves.toBeUndefined();
+  });
+
+  // The failure on-demand refresh actually has: a client that forgot. Reviewing
+  // anyway describes a tree that is not the one being merged — INV-2, with an
+  // attestation over it.
+  it("refuses a stale clone, and says how to fix it", async () => {
+    const src = join(root, "src3");
+    makeRepo(src);
+    const paths = { bare: join(root, "repos/r5/bare.git"), worktrees: join(root, "repos/r5/wt") };
+    mirror(src, paths.bare);
     const fetchHead = join(paths.bare, "FETCH_HEAD");
+    writeFileSync(fetchHead, "");
     const old = new Date(Date.now() - 2 * 60 * 60_000);
     utimesSync(fetchHead, old, old);
 
-    writeFileSync(join(src, "new.txt"), "new\n");
-    g("add", "-A");
-    g("commit", "-qm", "upstream moved");
+    await expect(ensureBare(paths, src)).rejects.toThrow(/last fetched \d+ minutes ago/);
 
-    await ensureBare(paths, src);
-    expect(execFileSync("git", ["-C", paths.bare, "rev-parse", "origin/main"], { encoding: "utf8" }).trim()).toBe(
-      execFileSync("git", ["-C", src, "rev-parse", "main"], { encoding: "utf8" }).trim(),
-    );
-
-    // ...and the pinned path still declines to look, whatever the age.
-    utimesSync(fetchHead, old, old);
+    // ...but only while the base is being chosen. A review already holding a
+    // worktree is pinned to it (D-40) and never reads the mirror again, so the
+    // same staleness is not disqualifying on a later round.
+    //
+    // This is not hypothetical tidiness: reviewing the commit that introduced the
+    // check, round 3 was refused at "35 minutes" after t2 alone spent 16 — three
+    // rounds and eight answered findings destroyed by a guard with nothing left to
+    // guard. A t1→t2 climb alone exceeds MAX_MIRROR_AGE_MS, so between D-63 and this
+    // fix no review could reach t3 at all.
     await expect(ensureBare(paths, src, false)).resolves.toBeUndefined();
-    expect(statSync(fetchHead).mtime.getTime()).toBe(old.getTime());
+    await expect(ensureBare(paths, src)).rejects.toThrow(/make mirror/);
   });
 });
 
@@ -265,7 +195,7 @@ describe("a mirror's local branches are frozen, and nothing may resolve to them"
   it("prefers origin/<base> over the stale local branch", async () => {
     const src = join(root, "src-drift");
     const g = makeRepo(src);
-    const paths = at("r8");
+    const paths = { bare: join(root, "repos/r8/bare.git"), worktrees: join(root, "repos/r8/wt") };
     mirror(src, paths.bare);
     execFileSync("git", ["-C", paths.bare, "config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"]);
     execFileSync("git", ["-C", paths.bare, "fetch", "-q", "origin"]);
@@ -294,7 +224,7 @@ describe("a mirror's local branches are frozen, and nothing may resolve to them"
   it("names the repository when a branch is missing, and what else it holds", async () => {
     const src = join(root, "src-wrongrepo");
     makeRepo(src);
-    const paths = at("r9");
+    const paths = { bare: join(root, "repos/r9/bare.git"), worktrees: join(root, "repos/r9/wt") };
     mirror(src, paths.bare);
     execFileSync("git", ["-C", paths.bare, "config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"]);
     execFileSync("git", ["-C", paths.bare, "fetch", "-q", "origin"]);
@@ -321,7 +251,7 @@ describe("the diff says what it is, and how stale the branch is", () => {
   it("names three-dot semantics and warns off two", async () => {
     const src = join(root, "src-semantics");
     const g = makeRepo(src);
-    const paths = at("rA");
+    const paths = { bare: join(root, "repos/rA/bare.git"), worktrees: join(root, "repos/rA/wt") };
     mirror(src, paths.bare);
     execFileSync("git", ["-C", paths.bare, "config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"]);
     execFileSync("git", ["-C", paths.bare, "fetch", "-q", "origin"]);
@@ -343,7 +273,7 @@ describe("the diff says what it is, and how stale the branch is", () => {
   it("states how far behind the branch is, rather than leaving it to be inferred", async () => {
     const src = join(root, "src-behind");
     const g = makeRepo(src);
-    const paths = at("rB");
+    const paths = { bare: join(root, "repos/rB/bare.git"), worktrees: join(root, "repos/rB/wt") };
     mirror(src, paths.bare);
     execFileSync("git", ["-C", paths.bare, "config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"]);
     execFileSync("git", ["-C", paths.bare, "fetch", "-q", "origin"]);
@@ -375,7 +305,7 @@ describe("what the model is told instead of left to infer", () => {
   const repoWithBranch = async (name: string) => {
     const src = join(root, `src-${name}`);
     const g = makeRepo(src);
-    const paths = at(name);
+    const paths = { bare: join(root, `repos/${name}/bare.git`), worktrees: join(root, `repos/${name}/wt`) };
     mirror(src, paths.bare);
     execFileSync("git", ["-C", paths.bare, "config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"]);
     execFileSync("git", ["-C", paths.bare, "fetch", "-q", "origin"]);
@@ -445,7 +375,7 @@ describe("the base's own work on the files that overlap", () => {
   it("names which base commits touched each shared file", async () => {
     const src = join(root, "src-attr");
     const g = makeRepo(src);
-    const paths = at("rF");
+    const paths = { bare: join(root, "repos/rF/bare.git"), worktrees: join(root, "repos/rF/wt") };
     mirror(src, paths.bare);
     execFileSync("git", ["-C", paths.bare, "config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"]);
     execFileSync("git", ["-C", paths.bare, "fetch", "-q", "origin"]);
@@ -472,7 +402,7 @@ describe("the base's own work on the files that overlap", () => {
   it("says plainly when source changed and no test did", async () => {
     const src = join(root, "src-notest");
     const g = makeRepo(src);
-    const paths = at("rG");
+    const paths = { bare: join(root, "repos/rG/bare.git"), worktrees: join(root, "repos/rG/wt") };
     mirror(src, paths.bare);
     execFileSync("git", ["-C", paths.bare, "config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"]);
     execFileSync("git", ["-C", paths.bare, "fetch", "-q", "origin"]);

@@ -21,8 +21,11 @@
  *   node src/ops/status.ts <review_id> one review, in full
  */
 
+import { statSync } from "node:fs";
+import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { LadderState } from "../core/ladder.ts";
+import { MAX_MIRROR_AGE_MS } from "../git/repo.ts";
 
 // Honest in a pipe: colour is for a human at a terminal, and a log file full of
 // escape codes is worse than a plain one. NO_COLOR is the convention (no-color.org).
@@ -89,7 +92,7 @@ function age(iso: unknown): string {
 
 type Row = Record<string, string | number | null>;
 
-export function renderStatus(db: DatabaseSync, reviewId?: string): string {
+export function renderStatus(db: DatabaseSync, reviewId?: string, dataDir = "/var/lib/lore"): string {
   const out: string[] = [];
 
   const reviews = (
@@ -106,7 +109,9 @@ export function renderStatus(db: DatabaseSync, reviewId?: string): string {
   ) as Row[];
 
   if (reviews.length === 0) {
-    return dim("no reviews in the last day. `lore` is idle.\n");
+    // Idle still reports the mirrors: "nothing happening" and "nothing CAN happen"
+    // look identical otherwise.
+    return [dim("no reviews in the last day. `lore` is idle."), "", ...mirrorLines(db, dataDir)].join("\n") + "\n";
   }
 
   const depth = Number((db.prepare("SELECT COUNT(*) c FROM job WHERE state = 'queued'").get() as Row)["c"] ?? 0);
@@ -222,13 +227,66 @@ export function renderStatus(db: DatabaseSync, reviewId?: string): string {
     out.push("");
   }
 
+  out.push(...mirrorLines(db, dataDir));
+
   // Repeated because a coloured tick is exactly the thing a tired reader
   // over-trusts, and these two states are the ones that cost the most when misread.
   out.push(dim("only PASSED is clean. passed_partial and fast_clean are not passes."));
   return `${out.join("\n")}\n`;
 }
 
-const dbPath = process.env["LORE_DATA_DIR"] ?? "/var/lib/lore";
-const db = new DatabaseSync(`${dbPath}/lore.db`, { readOnly: true });
-process.stdout.write(renderStatus(db, process.argv[2]));
-db.close();
+/**
+ * How stale each mirror is — the one thing that goes wrong in silence.
+ *
+ * The refresher runs OUTSIDE this service, on the host, as the operator (D-65). That
+ * is the right place for it and it has one weakness: nothing in lore knows whether it
+ * is still alive. A dead LaunchAgent looks exactly like a healthy one until a review
+ * is refused, and on 2026-08-05 a forgotten refresh failed more reviews than every
+ * model and transport fault combined.
+ *
+ * So the mirror's age is reported next to everything else, and crosses into red at
+ * `MAX_MIRROR_AGE_MS` — the same threshold that refuses a review, rather than a
+ * second number that could drift away from it. A mirror already past it is not a
+ * warning about the future; it is a review that will fail if started now.
+ */
+function mirrorLines(db: DatabaseSync, dataDir: string): string[] {
+  const repos = db.prepare("SELECT id, name FROM repo ORDER BY name").all() as Row[];
+  if (repos.length === 0) return [];
+
+  const lines: string[] = [bold("mirrors"), ""];
+  for (const r of repos) {
+    const bare = join(dataDir, "repos", String(r["id"]), "bare.git");
+    const at = ["FETCH_HEAD", join(".git", "FETCH_HEAD")]
+      .map((f) => statSync(join(bare, f), { throwIfNoEntry: false })?.mtimeMs)
+      .find((m) => m !== undefined);
+
+    if (at === undefined) {
+      // Never fetched is worse than stale, not milder: `origin/<branch>` does not
+      // resolve, so a base cut from it would take the frozen clone-time commit.
+      lines.push(`  ${red("✗ never fetched")}  ${String(r["name"])}  ${dim("make mirror-daemon")}`);
+      continue;
+    }
+    const ageMs = Date.now() - at;
+    const shown = `${Math.round(ageMs / 60_000)}m ago`;
+    lines.push(
+      ageMs > MAX_MIRROR_AGE_MS
+        ? `  ${red(`✗ ${shown}`)}  ${String(r["name"])}  ${dim("past the window — a review started now would be refused. make mirror-daemon-log")}`
+        : `  ${green(`✓ ${shown}`)}  ${String(r["name"])}`,
+    );
+  }
+  lines.push("");
+  return lines;
+}
+
+// Guarded so the module can be IMPORTED without running.
+//
+// It could not be, and that is why the one part of this file with a safety property
+// worth holding — the mirror-staleness warning, which is the only thing that notices
+// a dead refresher — had no test. Opening a database and writing to stdout at import
+// time makes a module unusable from a test, so it does not get one.
+if (import.meta.main) {
+  const dbPath = process.env["LORE_DATA_DIR"] ?? "/var/lib/lore";
+  const db = new DatabaseSync(`${dbPath}/lore.db`, { readOnly: true });
+  process.stdout.write(renderStatus(db, process.argv[2], dbPath));
+  db.close();
+}

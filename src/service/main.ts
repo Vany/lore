@@ -95,14 +95,10 @@ export async function serve(cfg: ServiceConfig): Promise<() => void> {
 
   const reposRoot = join(cfg.dataDir, "repos");
   const keyPath = join(cfg.dataDir, "attest_ed25519.pem");
-  // Deploy keys (D-65). Under the data directory but OUTSIDE `repos`, which is the
-  // only part of it the reviewer container mounts — so a key is not reachable by a
-  // model even though the mirrors it fetches are.
-  const keysDir = join(cfg.dataDir, "keys");
 
   const worker = new Worker(
     store,
-    { ...DEFAULT_WORKER, reposRoot, keysDir, runTests: cfg.runTests, concurrency: cfg.concurrency },
+    { ...DEFAULT_WORKER, reposRoot, runTests: cfg.runTests, concurrency: cfg.concurrency },
     alerter,
   );
   const stopWorker = worker.start();
@@ -153,7 +149,7 @@ export async function serve(cfg: ServiceConfig): Promise<() => void> {
         const row = store.db
           .prepare("SELECT r.branch, r.repo_id, p.git_url FROM review r JOIN repo p ON p.id = r.repo_id WHERE r.id = ?")
           .get(reviewId) as Record<string, string> | undefined;
-        const paths = repoPaths(reposRoot, row?.["repo_id"] ?? "", keysDir);
+        const paths = repoPaths(reposRoot, row?.["repo_id"] ?? "");
         return worktreeFor(paths, reviewId, row?.["branch"] ?? "", row?.["git_url"] ?? "");
       },
       enqueue: (reviewId, stage) => {

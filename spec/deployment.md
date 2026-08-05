@@ -97,19 +97,26 @@ source destroyed first, and `make status` warns when the replica has not been wr
 in an hour. The drill uses `VACUUM INTO`: a WAL database copied with `cp` loses
 whatever is still in the write-ahead log.
 
-## 6. lore refreshes its own mirrors (D-65)
+## 6. The mirror is refreshed by a host process (D-65)
 
 Nothing outside the deployment directory is mounted into the container — not a
-checkout, not an agent socket. lore clones and fetches into `data/repos/<id>/bare.git`
-itself, on demand, immediately before cutting a base and only when the mirror is older
-than `MAX_MIRROR_AGE_MS`.
+checkout, not a key, not an agent socket. `deploy/mirror-refresh.sh` runs on the HOST,
+as the operator, and clones or fetches every registered repo into
+`data/repos/<id>/bare.git`, which lore already reads.
 
-Each repository has its own **read-only** ed25519 deploy key under `data/keys`,
-generated at provisioning. The public half is printed for the operator to authorize on
-the forge; the private half never leaves the host, and the reviewer container mounts
-only `data/repos`, so no model can reach one. A local path gets no key — ssh never
-runs for it.
+    make mirror-daemon        every five minutes, launchd or systemd --user
+    make mirror-daemon-log    what it last did
+    make mirror REPO=<name>   one repository, by hand
 
-`make mirror REPO=<name>` remains, as the operator's fallback for the window before a
-key is authorized. A mirror that cannot be made current still fails the review rather
-than being reviewed as though it were fresh.
+It reads the repository list straight out of the SQLite registry, read-only, so it
+keeps working while lore is down, restarting or being rebuilt — which is exactly when
+a stale mirror would otherwise go unnoticed.
+
+This is what lets the service hold no git credentials at all. The cost is that lore
+cannot tell whether the timer is alive, so `make status` prints every mirror's age and
+turns red at the same threshold that refuses a review.
+
+**On macOS the LaunchAgent runs in the login session**, which is what makes the
+keychain available — a passphrase-protected key works there and would not in a
+system-wide daemon. On Linux, `systemctl --user` needs `loginctl enable-linger` to run
+while logged out, and a key the agent does not have to unlock.

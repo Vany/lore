@@ -24,8 +24,6 @@ import { runRound } from "../reviewer/review.ts";
 
 export interface WorkerConfig {
   readonly reposRoot: string;
-  /** Where the per-repo deploy keys live, so a stale mirror can be refreshed (D-65). */
-  readonly keysDir: string;
   readonly runTests: boolean;
   /** How many rounds may run concurrently. CPU-bound on the deployment host. */
   readonly concurrency: number;
@@ -34,7 +32,6 @@ export interface WorkerConfig {
 
 export const DEFAULT_WORKER: WorkerConfig = {
   reposRoot: "/var/lib/lore/repos",
-  keysDir: "/var/lib/lore/keys",
   runTests: false,
   // T0 is the throughput bottleneck on an ARM SBC (D-37), and it is CPU-bound —
   // so this is set by cores, not by memory.
@@ -117,7 +114,7 @@ export class Worker {
     const repo = this.store.db
       .prepare("SELECT git_url FROM repo WHERE id = ?")
       .get(review.repoId) as Record<string, string> | undefined;
-    const paths = repoPaths(this.cfg.reposRoot, review.repoId, this.cfg.keysDir);
+    const paths = repoPaths(this.cfg.reposRoot, review.repoId);
     // Cutting a base checks the mirror is present and fresh; reusing one only checks
     // it is present (D-40, D-63). That decision lives in one place because when it
     // lived in two, they disagreed and the disagreement was reachable.
@@ -133,8 +130,8 @@ export class Worker {
     // The first review is the first moment the code is actually readable, and a
     // repo with no knowledge is exactly the one that most needs it.
     //
-    // The reason outlived its original wording, which named the deploy key a human
-    // had to install. That key is gone; the human step is not.
+    // The reason outlived two rewordings of how the mirror arrives. What has never
+    // changed is that it is not here at provisioning time.
     if (this.store.knowledgeFor(review.repoId, undefined, 1).length === 0) {
       const summary = await bootstrap({
         store: this.store,

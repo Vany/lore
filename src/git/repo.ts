@@ -9,54 +9,42 @@
 
 import { existsSync } from "node:fs";
 import { mkdir, rm, stat } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { DidNotRun } from "../core/errors.ts";
 import { git, gitMaybe } from "./exec.ts";
-import { type DeployKey, authorizeInstructions, ensureDeployKey, fetchEnv, isLocalPath } from "./keys.ts";
 
 export interface RepoPaths {
   /** Bare clone, shared by every review of this repo. */
   readonly bare: string;
   /** Per-review worktrees. */
   readonly worktrees: string;
-  /**
-   * Where this repo's deploy key lives (D-65). Carried in the struct rather than
-   * passed alongside it because every consumer that has a mirror path now also needs
-   * the credential for it, and two arguments that must agree eventually disagree.
-   */
-  readonly keysDir: string;
-  /** The id, so a fetch can name its own key without re-deriving the path. */
-  readonly repoId: string;
 }
 
 /**
- * The short name a repository is known by, derived from the url.
+ * The short name `make mirror REPO=` matches on, derived from the url.
  *
- * Used for `make mirror REPO=` — which is now the operator's fallback rather than the
- * only way a mirror gets populated (D-65) — and to label the deploy key, so a human
- * reading a forge's deploy-key list sees `lore:rigid-monorepo` rather than a uuid.
+ * The instruction has to be COMPLETE. `make mirror` alone refuses and lists the
+ * registered repositories, because fetching every remote because one was asked for
+ * reaches repositories nobody named — and on a shared host that is someone else's
+ * repository touched because you wanted yours refreshed. The daemon refreshes all of
+ * them, which is not the same thing: that is what was asked for, once, at install.
  */
 export function repoHint(gitUrl: string): string {
   const m = /([^/:]+?)(?:\.git)?$/.exec(gitUrl.trim());
   return m?.[1] ?? gitUrl;
 }
 
-export function repoPaths(root: string, repoId: string, keysDir: string): RepoPaths {
-  return {
-    bare: join(root, repoId, "bare.git"),
-    worktrees: join(root, repoId, "wt"),
-    keysDir,
-    repoId,
-  };
+export function repoPaths(root: string, repoId: string): RepoPaths {
+  return { bare: join(root, repoId, "bare.git"), worktrees: join(root, repoId, "wt") };
 }
 
 /**
- * Three states, deliberately not two (D-63).
+ * Three states, deliberately not two.
  *
  * This returned `Date | undefined` and `undefined` meant BOTH "no remote, so it
  * cannot be behind" and "has a remote and has never been fetched" — and `ensureBare`
- * accepted both. The second is the dangerous one, and `make mirror` produces it: its
- * clone branch runs `git clone --bare && … && git fetch`, so a clone that succeeds
+ * accepted both. The second is the dangerous one, and the refresher produces it: it
+ * runs `git clone --bare && … && git fetch`, so a clone that succeeds
  * followed by a fetch that fails leaves objects and a `remote.origin.url` with no
  * `FETCH_HEAD` and no `refs/remotes/origin/*`. `addWorktree` then falls back from the
  * missing `origin/<branch>` to the LOCAL branch, frozen at the clone-time commit, and
@@ -91,43 +79,37 @@ export async function mirrorFreshness(localPath: string): Promise<MirrorFreshnes
 }
 
 /**
- * How stale a mirror may be before it is refreshed (D-65) — no longer before lore
- * refuses.
+ * How stale a mirror may be before lore refuses to review from it.
  *
- * This used to be the deadline on a human: lore held no credentials, so a mirror
- * older than this failed the review with an instruction to run `make mirror` on the
- * host. That instruction is unfollowable by the only party that ever reads it. The
- * client is an agent inside a repository, frequently on a different machine and under
- * a different user, with no shell on the deployment host — so a service that can only
- * say "ask someone to fetch for you" cannot refresh, and on 2026-08-05 that single
- * cause produced more review failures than every model and transport fault combined.
+ * lore holds no credentials for any remote and must not: a service holding a key
+ * holds everything that key opens. The host already authenticates to the forge as a
+ * person allowed to read these repositories, so `mirror-refresh.sh` runs out there on
+ * a timer and keeps every mirror current (D-65).
  *
- * Now it is the deadline on lore itself: past this age the mirror is fetched before
- * the base is cut. Thirty minutes still, and the number means something different but
- * lands in the same place — long enough that a queued review does not re-fetch for
- * nothing, short enough that no review is ever cut from a tree half an hour behind.
+ * **So a mirror past this age no longer means a person forgot — it means the
+ * refresher is not running.** That is a different fault with a different fix, and it
+ * is why the messages below point at the daemon rather than at a command the reader
+ * is expected to remember. Reviewing anyway would describe a tree that is not the one
+ * being merged: INV-2's failure, where a base 57 commits behind turned a one-file
+ * branch into a 496-file diff, with an attestation over it.
+ *
+ * Thirty minutes against a five-minute refresh is six missed passes before anything
+ * is refused — comfortable slack for a slow fetch, and still short enough that
+ * "nobody fetched this today" cannot pass.
  */
 export const MAX_MIRROR_AGE_MS = 30 * 60_000;
 
 /**
- * The mirror is here and current by the time this returns, or the review does not
- * run (D-65).
+ * The clone must be here already, and recent. lore never fetches it (D-65).
  *
- * This used to only *check*, and refuse with an instruction to run `make mirror` on
- * the host. Refusing is still what happens when the mirror cannot be made current —
- * INV-1 is untouched, and a tree nobody fetched is never reviewed. What changed is
- * that lore now tries first, with the repository's own read-only deploy key, because
- * the party reading the refusal is an agent that has no shell on this host.
+ * The refresher clones and fetches on the HOST, where the operator's credentials
+ * live. That is the only thing that talks to a remote — which is why lore needs no
+ * key, no agent, and no sight of any directory outside its own data.
  *
- * Three states, and each now has an action rather than only a complaint:
- *
- *   * **Missing** — clone it. There is something to clone with now.
- *   * **Never fetched** — a clone that landed with a failed fetch. Fetch it.
- *   * **Stale** — fetch it.
- *
- * A failure at any of those still throws, and still names the repository, because the
- * common case for a NEW repo is a key the operator has not authorized yet. That
- * message carries the public key rather than sending the reader looking for it.
+ * So this does not clone and does not fetch. It checks, and refuses loudly. **Every
+ * message here is read by an agent that cannot fix any of it**: the client has no
+ * shell on this host, so the useful thing to tell it is what to report, not what to
+ * run. `make status` shows each mirror's age for whoever can act.
  */
 export async function ensureBare(
   paths: RepoPaths,
@@ -151,8 +133,12 @@ export async function ensureBare(
 ): Promise<void> {
   const isRepo = await gitMaybe(paths.bare, ["rev-parse", "--resolve-git-dir", "."]);
   if (isRepo === undefined) {
-    await cloneMirror(paths, gitUrl);
-    return; // a fresh clone is as current as a fetch can make it
+    throw new DidNotRun(
+      `no clone of ${gitUrl} at ${paths.bare}. lore does not clone — it holds no credentials for any ` +
+        `remote, by design. The host refresher populates this; it has not, so either it is not installed ` +
+        `or it has never succeeded for this repository. REPORT THIS — you cannot fix it from here. On the ` +
+        `lore host: \`make mirror REPO=${repoHint(gitUrl)}\` once, and \`make mirror-daemon\` so it stays current.`,
+    );
   }
   if (!requireFresh) return;
 
@@ -162,81 +148,26 @@ export async function ensureBare(
   // A clone whose fetch never landed. `origin/<branch>` does not exist yet, so
   // `addWorktree` would silently review the clone-time commit instead.
   if (freshness.kind === "never-fetched") {
-    await fetchMirror(paths, gitUrl);
-    return;
+    throw new DidNotRun(
+      `the clone of ${gitUrl} at ${paths.bare} has a remote but has never been fetched — no FETCH_HEAD. ` +
+        `A clone that succeeded with a failed fetch looks exactly like this, and it is the dangerous shape: ` +
+        `refs/remotes/origin/* does not exist either, so reviewing it would review the commit it was cloned ` +
+        `at rather than the branch you are merging. REPORT THIS — on the lore host, ` +
+        `\`make mirror REPO=${repoHint(gitUrl)}\` and \`make mirror-daemon-log\` say why it is failing.`,
+    );
   }
 
-  if (Date.now() - freshness.at.getTime() > MAX_MIRROR_AGE_MS) await fetchMirror(paths, gitUrl);
-}
-
-/**
- * Refresh one mirror, with that repository's key and no other.
- *
- * Exported because `make mirror` is no longer the only caller that matters and the
- * operator's manual path should run the same code the service does — two
- * implementations of "fetch this mirror" is how one of them ends up subtly wrong.
- */
-export async function fetchMirror(paths: RepoPaths, gitUrl: string): Promise<void> {
-  const key = await credentialFor(paths, gitUrl);
-  try {
-    // --prune so a branch deleted upstream stops resolving here. Without it a review
-    // of a merged-and-deleted branch quietly succeeds against the last ref we saw.
-    await git(paths.bare, ["fetch", "--prune", "--tags", "origin"], 300_000, envFor(key, paths.keysDir));
-  } catch (e) {
-    throw new DidNotRun(fetchFailure(gitUrl, key, e), e);
+  const age = Date.now() - freshness.at.getTime();
+  if (age > MAX_MIRROR_AGE_MS) {
+    throw new DidNotRun(
+      `the clone of ${gitUrl} was last fetched ${Math.round(age / 60_000)} minutes ago, and lore holds no ` +
+        `credentials to fetch it itself. The host refresher should keep this under ` +
+        `${Math.round(MAX_MIRROR_AGE_MS / 60_000)} minutes, so it is not running or cannot reach the remote. ` +
+        `REPORT THIS — you cannot fix it from here. On the lore host: \`make status\` shows every mirror's age, ` +
+        `\`make mirror-daemon-log\` says what the refresher last did. Reviewing this as it stands would ` +
+        `describe a tree that is not what you are merging.`,
+    );
   }
-}
-
-async function cloneMirror(paths: RepoPaths, gitUrl: string): Promise<void> {
-  const key = await credentialFor(paths, gitUrl);
-  const parent = dirname(paths.bare);
-  await mkdir(parent, { recursive: true });
-  try {
-    // cwd is the PARENT: the target does not exist yet, and D-61's ceiling is set to
-    // cwd, so aiming git at a directory that is not there would otherwise let it
-    // discover whatever encloses it. `--` so a url starting with a dash is never
-    // read as an option.
-    await git(parent, ["clone", "--bare", "--", gitUrl, paths.bare], 600_000, envFor(key, paths.keysDir));
-    // A bare clone fetches into refs/heads/*, not refs/remotes/origin/*, so without
-    // this the first `fetch` writes nowhere useful and `origin/<branch>` never
-    // resolves — the "never-fetched" trap, arriving one step later.
-    await git(paths.bare, ["config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"]);
-    await git(paths.bare, ["fetch", "--prune", "--tags", "origin"], 300_000, envFor(key, paths.keysDir));
-  } catch (e) {
-    // A half-made clone is worse than none: it satisfies `rev-parse` next time, so
-    // the next review would take the never-fetched path against an empty object
-    // store instead of cloning properly.
-    await rm(paths.bare, { recursive: true, force: true }).catch(() => undefined);
-    throw new DidNotRun(fetchFailure(gitUrl, key, e), e);
-  }
-}
-
-/** A key for a remote, and deliberately none for a local path (see `isLocalPath`). */
-async function credentialFor(paths: RepoPaths, gitUrl: string): Promise<DeployKey | undefined> {
-  if (isLocalPath(gitUrl)) return undefined;
-  return ensureDeployKey(paths.keysDir, paths.repoId, repoHint(gitUrl));
-}
-
-function envFor(key: DeployKey | undefined, keysDir: string): Record<string, string> {
-  return key === undefined ? {} : fetchEnv(key, keysDir);
-}
-
-/**
- * Why a fetch failed, in the terms the reader can act on.
- *
- * For a repository lore has never successfully fetched, "permission denied" means one
- * specific thing — the deploy key is not authorized yet — and that is the normal
- * first state of every new repository rather than an anomaly. Guessing wrong in the
- * other direction is cheap: the raw git error is always included underneath.
- */
-function fetchFailure(gitUrl: string, key: DeployKey | undefined, e: unknown): string {
-  const detail = e instanceof Error ? e.message : String(e);
-  const denied = /permission denied|publickey|authentication failed|repository not found|access rights/i.test(detail);
-  const head =
-    denied && key !== undefined
-      ? authorizeInstructions(gitUrl, key)
-      : `lore could not fetch ${gitUrl}. The mirror is unchanged, so nothing was reviewed against a half-updated tree.`;
-  return `${head}\n\ngit said:\n${detail}`;
 }
 
 export async function addWorktree(

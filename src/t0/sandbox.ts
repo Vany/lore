@@ -6,7 +6,7 @@
  * say, lifecycle scripts included — **the threat is not the teammate, it is the
  * dependency tree.**
  *
- * The service container holds every registered repo's deploy key and the knowledge
+ * The service container holds the attestation signing key and the knowledge
  * database. One malicious `postinstall` in there reads all of it at once. So this
  * runs somewhere else entirely: no secrets, no host access, resource limits, hard
  * timeout, destroyed after (D-24).
@@ -105,7 +105,7 @@ function baseArgs(cfg: SandboxConfig, worktree: string, cacheDir: string, scratc
     "run",
     "--rm",
     // Nothing from the host beyond the sources, a scratch copy and the cache. In
-    // particular: no deploy keys, no database, no tokens.
+    // particular: no signing key, no database, no tokens.
     "-v", `${worktree}:/src:ro`,
     "-v", `${scratch}:/work`,
     "-v", `${cacheDir}:/work/node_modules`,

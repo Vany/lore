@@ -10,7 +10,7 @@
 # and T0 turns those into high-severity findings. A reviewer that manufactures
 # defects costs a fix cycle each and destroys trust in the real ones.
 #
-# This image holds NOTHING worth stealing. It never sees a deploy key, a token or
+# This image holds NOTHING worth stealing. It never sees a signing key, a token or
 # the database (D-24).
 
 FROM node:24-alpine

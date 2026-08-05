@@ -63,8 +63,8 @@ database, the attestation signing key and every provider credential; one careles
 `postinstall` inside it reaches all three. So tests run in a **separate ephemeral
 container per review**:
 
-- no secrets mounted — no tokens, no signing key, no database, and none of the
-  per-repository deploy keys D-65 puts under `data/keys`
+- no secrets mounted — no tokens, no signing key, no database. There are no git
+  credentials anywhere in the deployment to mount: lore does not fetch (D-65)
 - no network, or egress through a deny-by-default proxy
 - read-only root filesystem apart from the worktree
 - CPU, memory and PID limits, and a **hard timeout**

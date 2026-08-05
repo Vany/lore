@@ -9,11 +9,11 @@
 
 FROM node:24-bookworm-slim
 
-# git for repository work; openssh-client for deploy keys; ca-certificates for the
+# git for repository work on mirrors a HOST process populates; ca-certificates for the
 # providers. semgrep and ast-grep are the T0 engines beyond tsc/eslint, which come
 # from each target repo's own node_modules.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      git openssh-client ca-certificates python3 python3-pip curl \
+      git ca-certificates python3 python3-pip curl \
  && pip3 install --no-cache-dir --break-system-packages semgrep \
  && npm i -g @ast-grep/cli \
  && apt-get purge -y python3-pip && apt-get autoremove -y \

@@ -87,9 +87,8 @@ services:
       # The T0 sandbox launches SIBLING containers for test execution, so untrusted
       # project code never runs in this container — which holds the knowledge
       # database, the attestation signing key and every provider credential (D-24).
-      # This is also where the deploy keys live, under `<data>/keys` (D-65). They are
-      # per-repository, read-only, and never leave this container — the reviewer
-      # mounts only `<data>/repos`, so nothing that runs a model can reach them.
+      # No git credentials: lore fetches nothing, so there is no key here to lose.
+      # A host process refreshes the mirrors this reads (D-65).
       #
       # This grants root-equivalent control of the host daemon. Acceptable only
       # because this box does one job on a private tailnet; it is the single
@@ -161,11 +160,10 @@ services:
       #        container, mode 0600 notwithstanding, because same uid.
       #      * `lore.db`, every repository's knowledge, findings and token hashes,
       #        world-readable at 0644.
-      #      * `keys/`, where a leftover D-62 deploy key was still sitting.
+      #      * `keys/`, where a leftover deploy key was still sitting.
       #
       #    None of it is needed to read a worktree. The reviewer gets the repositories
-      #    and nothing else, which also keeps D-65's deploy keys — under `<data>/keys`
-      #    — outside anything a model can reach, by layout rather than by permission.
+      #    and nothing else.
       - ${LORE_HOST_DATA:-/var/lib/lore}/repos:${LORE_HOST_DATA:-/var/lib/lore}/repos:ro
       # This machine's opencode configuration, staged by `make sync-opencode`:
       # the plane MCP server, the plugins and the read-only agent, so reviewers
