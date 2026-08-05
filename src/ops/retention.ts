@@ -13,7 +13,7 @@
  */
 
 import { TERMINAL_SQL, isTerminal, type ReviewState } from "../core/review-state.ts";
-import { removeWorktree, repoPaths } from "../git/repo.ts";
+import { pruneWorktrees, removeWorktree, repoPaths } from "../git/repo.ts";
 import type { Store } from "../store/store.ts";
 
 export interface RetentionConfig {
@@ -110,6 +110,15 @@ export async function collect(store: Store, cfg: RetentionConfig = DEFAULT_RETEN
       () => false,
     );
     if (removed) worktreesRemoved++;
+  }
+
+  // Whatever the careful path could not reach: records naming a directory that is
+  // gone. `git worktree remove` cannot collect those, so they accumulate silently —
+  // twelve were found on the deployment, left over from a data directory that moved.
+  // Per repository, once, because that is the scope git prunes at.
+  const repos = store.db.prepare("SELECT id FROM repo").all() as Record<string, string>[];
+  for (const r of repos) {
+    await pruneWorktrees(repoPaths(cfg.reposRoot, r["id"] ?? "")).catch(() => undefined);
   }
 
   // Old review rows. Findings and verdicts cascade; knowledge does not — it has no

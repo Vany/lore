@@ -265,6 +265,24 @@ export async function worktreeFor(
   }
 }
 
+/**
+ * Drop git's record of every worktree whose directory has gone.
+ *
+ * `removeWorktree` asks git first and only then deletes, which is right — but it
+ * cannot help a record git can no longer reach. Found on the deployment: twelve
+ * records naming `/var/lib/lore/...`, left from before the data directory moved, that
+ * `git worktree remove` refuses because the path does not exist. Nothing had ever
+ * collected them, because nothing ever called this.
+ *
+ * A crash between creating a worktree and recording it, an operator clearing space by
+ * hand, or a moved data directory all produce the same litter, so this is a
+ * per-repository sweep rather than a per-review one — it collects whatever the
+ * careful path could not.
+ */
+export async function pruneWorktrees(paths: RepoPaths): Promise<void> {
+  await git(paths.bare, ["worktree", "prune"]);
+}
+
 export async function removeWorktree(paths: RepoPaths, reviewId: string): Promise<void> {
   const dir = join(paths.worktrees, reviewId);
   await git(paths.bare, ["worktree", "remove", "--force", dir]).catch(() => undefined);

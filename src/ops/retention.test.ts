@@ -163,6 +163,20 @@ describe("a finished review gives its worktree back", () => {
     expect(existsSync(dir)).toBe(false);
   });
 
+  // git cannot collect a record whose directory it can no longer reach — a crash
+  // between creating and recording, an operator clearing space, or a data directory
+  // that moved. Twelve such records were found on the deployment, naming a path from
+  // a previous layout, that nothing had ever collected because nothing ever pruned.
+  it("collects git records whose directory vanished behind its back", async () => {
+    const dir = reviewWithWorktree("revGone", "findings_ready");
+    rmSync(dir, { recursive: true, force: true }); // as if something removed it by hand
+    expect(git("-C", bare(), "worktree", "list")).toContain("revGone");
+
+    await collect(store, { ...DEFAULT_RETENTION, reposRoot: join(root, "repos") });
+
+    expect(git("-C", bare(), "worktree", "list")).not.toContain("revGone");
+  });
+
   it("leaves a review that can still be worked on alone", async () => {
     const dir = reviewWithWorktree("revLive", "findings_ready");
     await collect(store, { ...DEFAULT_RETENTION, reposRoot: join(root, "repos") });
