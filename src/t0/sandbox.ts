@@ -56,7 +56,11 @@ export const DEFAULT_SANDBOX: SandboxConfig = {
   // was a path the host silently mounted as empty.
   cacheRoot: `${process.env["LORE_DATA_DIR"] ?? "/var/lib/lore"}/npm-cache`,
   scratchRoot: `${process.env["LORE_DATA_DIR"] ?? "/var/lib/lore"}/scratch`,
-  memory: "2g",
+  // A monorepo typechecking 30+ packages through turbo fans out hard, and 2g
+  // OOM-killed it — which arrives as exit 137 and reads as a failing gate unless
+  // something checks. Raised to what the deployment host can spare; the kill is
+  // still reported honestly if it happens anyway.
+  memory: "6g",
   cpus: "2",
   // A hung suite otherwise holds a review slot forever, and looks like a slow
   // review rather than a stuck one.
@@ -109,6 +113,16 @@ function baseArgs(cfg: SandboxConfig, worktree: string, cacheDir: string, scratc
     "--security-opt", "no-new-privileges",
     "-e", "CI=1",
     "-e", "NO_COLOR=1",
+    // Where a self-provisioning package manager keeps the version the project
+    // ASKED for, on the one mount that survives between phases.
+    //
+    // pnpm honours `packageManager: pnpm@9.15.0` by fetching that exact version on
+    // first use. Install has network and the later phases do not, so with this
+    // pointing at the container's own filesystem the fetch succeeded during install,
+    // was thrown away with the container, and then failed under `--network none` —
+    // reported as `pnpm run typecheck` FAILING. A false high-severity finding
+    // against a branch whose typecheck passes is worse than not running it at all.
+    "-e", "XDG_DATA_HOME=/work/node_modules/.xdg",
   ];
 }
 

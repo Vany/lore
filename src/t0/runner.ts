@@ -167,8 +167,33 @@ async function packageScripts(worktree: string): Promise<Record<string, string>>
   }
 }
 
+/**
+ * A process WE killed did not fail — it did not run.
+ *
+ * Docker reports SIGKILL as exit 137, and the usual cause here is our own
+ * `--memory` limit: a monorepo running `turbo run typecheck` fans out across every
+ * package at once. Reporting that as "the project's gate fails on this branch" is a
+ * confident false statement about someone else's code — the exact failure INV-1
+ * names, made worse by being high severity and pointed at a branch whose typecheck
+ * actually passes.
+ */
+export const KILLED = 137;
+
 /** A failed script becomes one finding carrying its tail. Its output is not a format. */
-function scriptFinding(engine: string, script: string, r: { stdout: string; stderr: string }): EngineOutcome {
+export function scriptFinding(
+  engine: string,
+  script: string,
+  r: { stdout: string; stderr: string; code: number },
+): EngineOutcome {
+  if (r.code === KILLED) {
+    return {
+      engine: engine as T0Engine,
+      findings: [],
+      unavailable:
+        `\`${script}\` was killed (exit ${KILLED}) — almost always the sandbox memory limit, ` +
+        `not a fault in the branch. Nothing it would have found is known either way.`,
+    };
+  }
   return {
     engine: engine as T0Engine,
     findings: [
@@ -246,6 +271,16 @@ async function suite(
   const tests = await runTestsIn(cfg, worktree, cacheDir, scratch, cmds);
   if (tests.unavailable !== undefined && !tests.timedOut) {
     return { engine: "tests", findings: [], unavailable: tests.unavailable };
+  }
+  // A timeout IS a fact about the suite and stays a finding — "did not finish" and
+  // "fails" are different claims and both are the branch's. A KILL is ours: the
+  // memory limit stopping a fan-out says nothing about the tests.
+  if (tests.code === KILLED && !tests.timedOut) {
+    return {
+      engine: "tests",
+      findings: [],
+      unavailable: `the suite was killed (exit ${KILLED}) — almost always the sandbox memory limit, not a failing test`,
+    };
   }
   return { engine: "tests", findings: testFindings(tests) };
 }

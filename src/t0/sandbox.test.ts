@@ -13,6 +13,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { scriptFinding } from "./runner.ts";
 import { commandsFor } from "./sandbox.ts";
 
 let dir: string;
@@ -65,5 +66,32 @@ describe("the installer follows the lockfile", () => {
   it("falls back from a frozen install to a resolving one", async () => {
     lock("pnpm-lock.yaml");
     expect((await commandsFor(dir))?.install).toMatch(/--frozen-lockfile \|\|/);
+  });
+});
+
+// Exit 137 is SIGKILL, and here it is nearly always our own `--memory` limit
+// stopping a monorepo that fans out across thirty packages. It is not a fault in
+// the branch, and reporting it as one is a confident false statement about someone
+// else's code — high severity, pointed at a gate that actually passes.
+//
+// Observed: `turbo run typecheck` with 27 of 28 packages green and one killed,
+// reported as "`pnpm run typecheck` fails on this branch".
+describe("a process we killed did not fail", () => {
+  const result = (code: number) => ({ stdout: "some output", stderr: "", code });
+
+  it("reports a kill as unavailable, with nothing claimed about the branch", () => {
+    const out = scriptFinding("tsc", "pnpm run typecheck", result(137));
+    expect(out.findings).toStrictEqual([]);
+    expect(out.unavailable).toMatch(/killed/);
+    // The distinction that matters to a reader: we do not know either way.
+    expect(out.unavailable).toMatch(/not a fault in the branch/);
+  });
+
+  it("still reports an ordinary failure as a finding", () => {
+    const out = scriptFinding("tsc", "pnpm run typecheck", result(1));
+    expect(out.unavailable).toBeUndefined();
+    expect(out.findings).toHaveLength(1);
+    expect(out.findings[0]?.claim).toContain("fails on this branch");
+    expect(out.findings[0]?.severity).toBe("high");
   });
 });
