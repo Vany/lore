@@ -366,6 +366,20 @@ export class Store {
    * Every engine that could not run in this review, deduplicated, worst-case first
    * seen. Empty means everything the review type asks for actually executed.
    */
+  /**
+   * Has any model call this deployment ever made reported a cost?
+   *
+   * Distinguishes "spent nothing" from "cannot measure spending". Asked of ALL of
+   * history rather than of today, because a subscription-only deployment never
+   * reports a cost on any day, and one day's zero is normal even where costs exist.
+   */
+  hasMeteredUsage(): boolean {
+    const row = this.db.prepare("SELECT 1 AS present FROM usage WHERE cost_usd > 0 LIMIT 1").get() as
+      | Record<string, number>
+      | undefined;
+    return row !== undefined;
+  }
+
   unavailableChecks(reviewId: string): readonly string[] {
     const rows = this.db
       .prepare("SELECT unavailable FROM tier_run WHERE review_id = ? AND unavailable IS NOT NULL ORDER BY id")

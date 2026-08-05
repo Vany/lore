@@ -8,6 +8,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { initialState } from "../core/ladder.ts";
+import { DEFAULT_SPEND } from "../ops/spend.ts";
 import { DEFAULT_HEARTBEAT } from "../ops/heartbeat.ts";
 import { grantToken } from "../mcp/auth.ts";
 import { Store } from "../store/store.ts";
@@ -51,7 +52,12 @@ beforeEach(() => {
       enqueue: () => undefined,
       attest: async () => "lore: attested",
     },
-    { port: nextPort(), host: "127.0.0.1", heartbeat: { ...DEFAULT_HEARTBEAT, dataDir: "/tmp" } },
+    {
+      port: nextPort(),
+      host: "127.0.0.1",
+      heartbeat: { ...DEFAULT_HEARTBEAT, dataDir: "/tmp" },
+      spend: DEFAULT_SPEND,
+    },
   );
   close = server.close;
   base = `http://127.0.0.1:${port}`;
@@ -611,5 +617,27 @@ describe("one review per branch", () => {
     await start();
     const other = await start({ branch: "feat/y" });
     expect(JSON.parse(other.result?.content?.[0]?.text ?? "{}").review_id).toMatch(/^rev_/);
+  });
+});
+
+// "$0 spent against a $100 ceiling" and "nothing here can measure spending" are
+// opposite facts that look identical in a dashboard. Both providers bill a flat
+// subscription, so all 84 usage rows carry cost_usd = 0 and the ceiling has never
+// been able to fire — a guard that cannot fire must say so rather than stay quiet
+// and be mistaken for one that looked.
+describe("the spend ceiling says whether it can fire", () => {
+  it("declares itself inert when nothing has ever reported a cost", async () => {
+    const body = (await (await fetch(`${base}/status`)).json()) as Record<string, Record<string, unknown>>;
+    expect(body["spend_ceiling"]?.["metered"]).toBe(false);
+    expect(String(body["spend_ceiling"]?.["note"])).toMatch(/INERT/);
+    expect(String(body["spend_ceiling"]?.["note"])).toMatch(/not as headroom/);
+  });
+
+  it("stops explaining itself once a real cost is recorded", async () => {
+    store.recordUsage({ tier: "t1", costUsd: 0.42, outcome: "ok" });
+
+    const body = (await (await fetch(`${base}/status`)).json()) as Record<string, Record<string, unknown>>;
+    expect(body["spend_ceiling"]?.["metered"]).toBe(true);
+    expect(body["spend_ceiling"]).not.toHaveProperty("note");
   });
 });

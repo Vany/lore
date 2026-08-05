@@ -33,6 +33,14 @@ export interface SandboxConfig {
    * scratch directory somewhere else would not exist there.
    */
   readonly scratchRoot: string;
+  /**
+   * The uid/gid the sandbox runs as, matching the service's own.
+   *
+   * See `--user` in `baseArgs`: the shared cache and scratch directories outlive a
+   * review, and root-owned leftovers in them break the next one.
+   */
+  readonly uid: number;
+  readonly gid: number;
   readonly memory: string;
   readonly cpus: string;
   readonly timeoutMs: number;
@@ -56,6 +64,10 @@ export const DEFAULT_SANDBOX: SandboxConfig = {
   // was a path the host silently mounted as empty.
   cacheRoot: `${process.env["LORE_DATA_DIR"] ?? "/var/lib/lore"}/npm-cache`,
   scratchRoot: `${process.env["LORE_DATA_DIR"] ?? "/var/lib/lore"}/scratch`,
+  // The uid lore is actually running as, asked of the process rather than configured
+  // — a second place to write it down is a second place for it to disagree.
+  uid: typeof process.getuid === "function" ? process.getuid() : 1000,
+  gid: typeof process.getgid === "function" ? process.getgid() : 1000,
   // A monorepo typechecking 30+ packages through turbo fans out hard, and 2g
   // OOM-killed it — which arrives as exit 137 and reads as a failing gate unless
   // something checks. Raised to what the deployment host can spare; the kill is
@@ -116,6 +128,19 @@ function baseArgs(cfg: SandboxConfig, worktree: string, cacheDir: string, scratc
     "--pids-limit", "512",
     "--cap-drop", "ALL",
     "--security-opt", "no-new-privileges",
+    // RUN AS LORE'S OWN UID, NOT ROOT.
+    //
+    // Not a security control — the container already has no capabilities, no network
+    // and no host filesystem, and the threat here is a CARELESS test suite rather
+    // than a hostile one. It is an ownership problem: `cacheRoot` and `scratchRoot`
+    // live under the data directory and are REUSED across reviews, so a suite running
+    // as root leaves root-owned files that lore (uid 1000) then cannot rewrite or
+    // clean up. The next review fails on a permission error in a directory it owns,
+    // which reads as a broken sandbox rather than as leftovers.
+    //
+    // Matching the service's own uid is what makes the two agree; the directories are
+    // created by lore, so they are already writable by it.
+    "--user", `${cfg.uid}:${cfg.gid}`,
     "-e", "CI=1",
     "-e", "NO_COLOR=1",
     // Where a self-provisioning package manager keeps the version the project

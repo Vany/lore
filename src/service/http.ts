@@ -15,7 +15,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
 import { authenticate } from "../mcp/auth.ts";
 import { buildServer, type ServerDeps } from "../mcp/server.ts";
-import { spendByTier, startOfDayIso } from "../ops/spend.ts";
+import { type SpendConfig, spendByTier, startOfDayIso } from "../ops/spend.ts";
 import { checkHealth, type HeartbeatConfig } from "../ops/heartbeat.ts";
 import type { Store } from "../store/store.ts";
 
@@ -23,6 +23,8 @@ export interface HttpConfig {
   readonly port: number;
   readonly host: string;
   readonly heartbeat: HeartbeatConfig;
+  /** So /status can report the ceiling — and whether it is capable of firing. */
+  readonly spend: SpendConfig;
 }
 
 export function startHttp(store: Store, deps: ServerDeps, cfg: HttpConfig): { close: () => void } {
@@ -65,6 +67,21 @@ async function handle(
             built_at: process.env["LORE_BUILT_AT"] ?? "unknown",
           },
           spend_today_by_tier: spendByTier(store, startOfDayIso()),
+          // A ceiling that CANNOT fire must say so. Both providers are subscriptions,
+          // so every usage row carries cost_usd = 0 and `spendToday: 0` against a $100
+          // ceiling reads as headroom when it actually means "nothing here measures
+          // spending". Opposite facts, identical in a dashboard.
+          spend_ceiling: {
+            usd: cfg.spend.dailyCeilingUsd,
+            metered: store.hasMeteredUsage(),
+            ...(store.hasMeteredUsage()
+              ? {}
+              : {
+                  note:
+                    "INERT: no model call has ever reported a cost, because these providers bill a flat " +
+                    "subscription. This ceiling cannot fire. Read `spendToday: 0` as unmeasured, not as headroom.",
+                }),
+          },
           // Findings produced and never collected. 18 sat unread for hours, 14 of
           // them high — the review reached findings_ready and nothing ever polled it.
           // A finding nobody reads is a review that did not run, one step later.

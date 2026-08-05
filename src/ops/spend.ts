@@ -31,6 +31,20 @@ export interface SpendVerdict {
   readonly allowed: boolean;
   readonly spent: number;
   readonly ceiling: number;
+  /**
+   * Whether this deployment reports cost at all.
+   *
+   * `false` means the ceiling CANNOT FIRE, and that is not a bug — it is what a
+   * subscription looks like. Both current providers bill a flat rate, so every one of
+   * the 84 usage rows carries `cost_usd = 0` and this sums exactly that column.
+   *
+   * It matters because an unfired ceiling reads as headroom. "Spend is $0 against a
+   * $100 ceiling" and "nothing here can measure spend" are opposite facts that look
+   * identical in a dashboard, and this is the only thing that separates them. A guard
+   * that cannot fire must say so rather than stay quiet and be mistaken for one that
+   * looked.
+   */
+  readonly metered: boolean;
 }
 
 /**
@@ -42,15 +56,16 @@ export interface SpendVerdict {
  */
 export async function mayStart(store: Store, cfg: SpendConfig, alerter: Alerter): Promise<SpendVerdict> {
   const spent = store.spendSince(startOfDayIso());
+  const metered = store.hasMeteredUsage();
 
   if (spent >= cfg.dailyCeilingUsd) {
     await alerter.send(CONDITIONS.spendCeiling(spent, cfg.dailyCeilingUsd));
-    return { allowed: false, spent, ceiling: cfg.dailyCeilingUsd };
+    return { allowed: false, spent, ceiling: cfg.dailyCeilingUsd, metered };
   }
   if (spent >= cfg.dailyCeilingUsd * cfg.warnAt) {
     await alerter.send(CONDITIONS.spendAnomaly(spent, cfg.dailyCeilingUsd * cfg.warnAt));
   }
-  return { allowed: true, spent, ceiling: cfg.dailyCeilingUsd };
+  return { allowed: true, spent, ceiling: cfg.dailyCeilingUsd, metered };
 }
 
 /** Per-tier spend, for the operator view — where the money actually goes. */

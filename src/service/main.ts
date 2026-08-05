@@ -167,7 +167,12 @@ export async function serve(cfg: ServiceConfig): Promise<() => void> {
         return render(await attest(store, reviewId, row?.["principal"] ?? "", keyPath));
       },
     },
-    { port: cfg.port, host: cfg.host, heartbeat: { ...DEFAULT_HEARTBEAT, dataDir: cfg.dataDir } },
+    {
+      port: cfg.port,
+      host: cfg.host,
+      heartbeat: { ...DEFAULT_HEARTBEAT, dataDir: cfg.dataDir },
+      spend: { ...DEFAULT_SPEND, dailyCeilingUsd: cfg.dailyCeilingUsd },
+    },
   );
 
   console.error(`lore listening on ${cfg.host}:${cfg.port} (data: ${cfg.dataDir})`);
