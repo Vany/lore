@@ -271,14 +271,31 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
               left: { id: c.left, statement: byId.get(c.left)?.statement ?? "(retired)", source: byId.get(c.left)?.provenance },
               right: { id: c.right, statement: byId.get(c.right)?.statement ?? "(retired)", source: byId.get(c.right)?.provenance },
             }));
+            if (questions.length > 0) {
+              return {
+                needs_human_because:
+                  "This repository's memory contains statements that cannot both be true. A REVIEW CANNOT SETTLE THIS — " +
+                  "the answer decides what every future session is told about this codebase, so a person must choose. " +
+                  "Take it to them, then call knowledge_resolve with the id to keep, or knowledge_escalate if they cannot decide either.",
+                open_questions: questions,
+              };
+            }
+            // ANSWERED. The state is a record of where the review stopped, not a
+            // claim that it is still stopped — and the way out is a submit, which is
+            // the same way out as every other round.
+            //
+            // Written the wrong way round first, and caught while a real review was
+            // sitting in exactly this position: with no open conflicts left, this
+            // said the record was "gone" and told the client to report a defect in
+            // lore. Resolution is the NORMAL exit from needs_human, not evidence of
+            // data loss, and sending a client to raise a bug because a person did
+            // what they were asked to do is its own small betrayal of INV-1.
             return {
               needs_human_because:
-                questions.length === 0
-                  ? "A question was raised that must not be answered without a person, and the record of it is gone. Report this: it is a defect in lore."
-                  : "This repository's memory contains statements that cannot both be true. A REVIEW CANNOT SETTLE THIS — " +
-                    "the answer decides what every future session is told about this codebase, so a person must choose. " +
-                    "Take it to them, then call knowledge_resolve with the id to keep, or knowledge_escalate if they cannot decide either.",
-              open_questions: questions,
+                "The question has been ANSWERED — no contradiction is open any more. Nothing is blocking this " +
+                "review: call review_submit with your work (an empty diff is fine if there is nothing to change) " +
+                "and the ladder continues from where it stopped.",
+              open_questions: [],
             };
           })(),
         }),

@@ -688,6 +688,20 @@ describe("needs_human says what the question is", () => {
     expect(String(out["needs_human_because"])).toContain("knowledge_resolve");
   });
 
+  // Resolution is the normal exit from needs_human. Told "the record is gone, report
+  // a defect", a client would file a bug because a person did what they were asked.
+  it("says the question was answered once the conflict is resolved", async () => {
+    conflicted();
+    const c = store.openConflicts(repoId)[0];
+    store.resolveConflict(repoId, c?.left ?? "", c?.right ?? "", "a person chose");
+
+    const out = await callTool("review_poll", { review_id: "revH" });
+    expect(String(out["needs_human_because"])).toMatch(/ANSWERED/);
+    expect(String(out["needs_human_because"])).toContain("review_submit");
+    expect(String(out["needs_human_because"])).not.toMatch(/defect in lore/);
+    expect(out["open_questions"]).toStrictEqual([]);
+  });
+
   it("says nothing about questions on a review that has none", async () => {
     store.createReview({
       id: "revQ", repoId, principal: "alice", branch: "feat/y", intoRef: "main",
