@@ -19,7 +19,7 @@ BACKUP  ?= $(shell grep -E '^LORE_HOST_BACKUP=' .env 2>/dev/null | cut -d= -f2)
 BACKUP  := $(if $(BACKUP),$(BACKUP),./backup)
 
 .DEFAULT_GOAL := help
-.PHONY: help preflight sync-opencode push build up down down-hard restart logs status status-json status-local doctor new relocate tokens mirror mirror-daemon mirror-daemon-off mirror-daemon-log backup-on backup-check backup-drill restore sweep shell
+.PHONY: help preflight sync-opencode push build up down down-hard restart logs status status-json status-local doctor new relocate tokens replica-state mirror mirror-daemon mirror-daemon-off mirror-daemon-log backup-on backup-check backup-drill restore sweep shell
 
 help:
 	@sed -n '2,14p' $(MAKEFILE_LIST) | sed 's/^# \{0,1\}//'
@@ -187,9 +187,11 @@ status:
 	$(COMPOSE) exec -T lore node /app/src/ops/status.ts $(ID) 2>$$e; rc=$$?; \
 	test $$rc -eq 0 || { echo "status could not answer. the error, not a guess:"; head -20 $$e; }; \
 	rm -f $$e; \
-	newest=$$(find "$(BACKUP)" -type f -newermt '-1 hour' 2>/dev/null | head -1); \
-	test -n "$$newest" \
-		|| printf '\033[31m!! the local replica has not been written in an hour\033[0m — the knowledge base is the product. make backup-check\n'; \
+	state=$$($(MAKE) --no-print-directory replica-state); \
+	case "$$state" in \
+	  ok*) ;; \
+	  *) printf '\033[31m!! replica: %s\033[0m — the knowledge base is the product. make backup-check\n' "$${state#stale }" ;; \
+	esac; \
 	exit $$rc
 
 ## The raw JSON, for a script rather than a person.
@@ -321,12 +323,41 @@ backup-on:
 	@echo "replicating to $(BACKUP). Verify with: make backup-check"
 
 ## Is the backup real, or just configured? Untested backups are beliefs.
+## Is the replica caught up with the database?
+##
+## Prints "ok <detail>" or "stale <detail>". Exit status is not used, so both callers
+## can decide for themselves what to do about it.
+##
+## THE QUESTION IS NOT "WAS A FILE WRITTEN RECENTLY".
+##
+## It was, and it cried wolf the first time it mattered. litestream writes only when
+## there is something to replicate, so an IDLE database produces no new files — which
+## is the healthy state, and is exactly what "nothing written in an hour" also looks
+## like when replication has died. Measured while checking it: the newest replica file
+## and the last write to lore.db carried the same timestamp to the second, and the
+## monitor called that STALE.
+##
+## A monitor that cries wolf gets ignored, and this one guards the product. So it
+## compares the replica against the DATABASE: caught up is fine at any age, and behind
+## is a problem however recent the files are.
+replica-state:
+	@db="$(DATA)/lore.db"; \
+	test -f "$$db" || { echo "stale no database at $$db"; exit 0; }; \
+	n=$$(find "$(BACKUP)" -type f -name '*.ltx' 2>/dev/null | wc -l | tr -d ' '); \
+	test "$$n" -gt 0 || { echo "stale nothing in $(BACKUP) — replication has never written"; exit 0; }; \
+	dbt=$$(date -r "$$db" +%s 2>/dev/null || stat -c %Y "$$db"); \
+	rept=$$(find "$(BACKUP)" -type f -name '*.ltx' -exec sh -c 'date -r "$$1" +%s 2>/dev/null || stat -c %Y "$$1"' _ {} \; | sort -n | tail -1); \
+	behind=$$((dbt - rept)); \
+	if [ "$$behind" -gt 300 ]; then \
+		echo "stale the database has changed but the replica has not, for $$((behind / 60))m"; \
+	else \
+		echo "ok replica is level with the database ($$n segments, $$behind s behind)"; \
+	fi
+
 backup-check:
-	@n=$$(find "$(BACKUP)" -type f 2>/dev/null | wc -l | tr -d ' '); \
-	test "$$n" -gt 0 || { echo "nothing in $(BACKUP) — replication has never written. Is the litestream container up? (make logs)"; exit 1; }; \
-	fresh=$$(find "$(BACKUP)" -type f -newermt '-1 hour' 2>/dev/null | wc -l | tr -d ' '); \
-	echo "$$n file(s) in $(BACKUP), $$fresh written in the last hour"; \
-	test "$$fresh" -gt 0 || { echo "STALE — the replica exists but is not being updated"; exit 1; }
+	@state=$$($(MAKE) --no-print-directory replica-state); \
+	echo "$$state"; \
+	case "$$state" in ok*) ;; *) echo "Is the litestream container up? (make logs)"; exit 1 ;; esac
 	@echo "This checks the LOCAL half only. Whether an outer script has carried these"
 	@echo "files off the machine is not something lore can see, and a copy on this"
 	@echo "disk does not survive this disk. 'make backup-drill' proves the restore."

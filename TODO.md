@@ -220,6 +220,18 @@ landing with a real user, and it should not get lost among the defects below.
       silently. Cheap mitigation: re-run the header-echo probe when the client
       updates. Recorded so the guarantee is not overread.
 
+- [x] **The replica monitor cried wolf.** Found and fixed 2026-08-06, on a restart.
+      `make status` reported the replica stale while litestream was healthy and fully
+      caught up — the newest replica file and the last write to `lore.db` carried the
+      same timestamp to the second. The check asked *was a file written in the last
+      hour*, and litestream writes only when there is something to replicate, so an
+      IDLE database looks exactly like a dead replicator. It now compares the replica
+      against the DATABASE: level is fine at any age, behind is a problem however
+      recent the files are. Verified in both directions.
+      Same shape as the spend ceiling, from the other side: one guard's silence read
+      as safety, this one's noise read as danger. A monitor that cries wolf gets
+      ignored, and this one guards the product.
+
 - [x] **The knowledge base is replicated** (D-59). Done 2026-08-04. Litestream runs
       as a first-class service — no profile, no credentials — writing a
       continuously-restorable copy into a folder beside the deployment, from which an
