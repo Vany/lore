@@ -57,22 +57,23 @@ nothing.
       on the host, and the client is an agent with no shell there.
       Vany's call, and the right one: *"make mirror is not the client's
       responsibility, our service must do this, we can be on another machine or
-      another user."* So lore fetches, with a per-repository read-only deploy key,
-      before it cuts a base. `make mirror` survives as the fallback for the window
-      before a key is authorized. **Authorizing the two printed keys is the one
-      outstanding manual step** — until then every fetch fails with the key in the
-      message, which is the correct behaviour and still a blocked review.
+      another user."* So a process on the host does it: `mirror-refresh.sh` every five
+      minutes under launchd, outside docker, with the credentials this machine already
+      has. lore still holds no git credentials and still refuses a stale mirror — what
+      changed is that nobody has to remember. `make mirror-daemon` installs it.
+      Its one weak point is that lore cannot tell whether the timer is alive, which is
+      why `make status` prints every mirror's age and turns red at the threshold that
+      refuses a review.
 
 - [x] **The reviewer container could read every secret on the box.** Found and fixed
-      2026-08-05 while deciding where a deploy key could safely live — checked rather
-      than assumed, and the assumption was wrong. `opencode` runs third-party models
+      2026-08-05 while deciding where a git credential could safely live — checked
+      rather than assumed, and the assumption was wrong. `opencode` runs third-party models
       with file-reading tools, as the **same uid** as `lore` (it must: it writes its
       own session state), and mounted the entire data directory read-only. Verified
       from inside that container: the attestation signing key `attest_ed25519.pem`
       (mode 0600, defeated by the uid match), `lore.db` at 0644, and a leftover D-62
-      deploy key still on disk. None of it is needed to read a worktree. It now mounts
-      `<data>/repos` only, re-verified after the restart. Keys live outside that path
-      by layout, not by permission.
+      deploy key still on disk from an earlier decision. None of it is needed to read
+      a worktree. It now mounts `<data>/repos` only, re-verified after the restart.
 
 - [ ] **The client restarts reviews instead of continuing them.** Six reviews of
       `feat/RIGID-125-network-txn-id` between 10:39 and 12:46; four of
