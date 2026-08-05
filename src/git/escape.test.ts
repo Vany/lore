@@ -347,7 +347,8 @@ describe("what the model is told instead of left to infer", () => {
     const d = await computeDiff(wt, "main");
 
     expect(d.behindBy).toBe(1);
-    expect(d.overlap).toStrictEqual(["shared.txt"]); // not other.txt — the branch never touched it
+    expect(d.overlap.map((o) => o.file)).toStrictEqual(["shared.txt"]); // not other.txt
+    expect(d.overlap[0]?.baseCommits.join(" ")).toContain("base touches shared too");
     expect(d.mergesClean).toBe(false); // both edited the same line
     const out = renderDiff(d);
     expect(out).toContain("NO LONGER MERGES CLEANLY");
@@ -361,5 +362,60 @@ describe("what the model is told instead of left to infer", () => {
     // Current branch: nothing to say about merging at all.
     expect(d.behindBy).toBe(0);
     expect(renderDiff(d)).not.toContain("MERGES CLEANLY");
+  });
+});
+
+// The base's commits per overlapping file, which is what turns a warning into a
+// finding — and the exact fact whose absence produced a false one.
+//
+// A reviewer reported that a branch had bundled "a refactoring from RIGID-455".
+// RIGID-455 was real: it was on the BASE, and it had touched the one file the branch
+// also touched. The model had the ticket name and attributed it to the wrong side.
+describe("the base's own work on the files that overlap", () => {
+  it("names which base commits touched each shared file", async () => {
+    const src = join(root, "src-attr");
+    const g = makeRepo(src);
+    const paths = { bare: join(root, "repos/rF/bare.git"), worktrees: join(root, "repos/rF/wt") };
+    mirror(src, paths.bare);
+    execFileSync("git", ["-C", paths.bare, "config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"]);
+    execFileSync("git", ["-C", paths.bare, "fetch", "-q", "origin"]);
+
+    g("checkout", "-qb", "feat/z");
+    writeFileSync(join(src, "contract.ts"), "branch edit\n");
+    g("add", "-A");
+    g("commit", "-qm", "branch edits the contract");
+    g("checkout", "-q", "main");
+    writeFileSync(join(src, "contract.ts"), "base edit\n");
+    g("add", "-A");
+    g("commit", "-qm", "TICKET-455 remove the face from contracts");
+    execFileSync("git", ["-C", paths.bare, "fetch", "-q", "origin"]);
+
+    const d = await computeDiff(await worktreeFor(paths, "rev_f", "feat/z", src), "main");
+    const shared = d.overlap.find((o) => o.file === "contract.ts");
+    expect(shared).toBeDefined();
+    // The attribution that was missing: the ticket belongs to the BASE.
+    expect(shared?.baseCommits.join(" ")).toContain("TICKET-455");
+    expect(renderDiff(d)).toContain("base: ");
+  });
+
+  // A branch touching source and no tests is a question worth asking every time.
+  it("says plainly when source changed and no test did", async () => {
+    const src = join(root, "src-notest");
+    const g = makeRepo(src);
+    const paths = { bare: join(root, "repos/rG/bare.git"), worktrees: join(root, "repos/rG/wt") };
+    mirror(src, paths.bare);
+    execFileSync("git", ["-C", paths.bare, "config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"]);
+    execFileSync("git", ["-C", paths.bare, "fetch", "-q", "origin"]);
+
+    g("checkout", "-qb", "feat/untested");
+    writeFileSync(join(src, "money.ts"), "export const x = 1\n");
+    g("add", "-A");
+    g("commit", "-qm", "change the money path");
+    execFileSync("git", ["-C", paths.bare, "fetch", "-q", "origin"]);
+
+    const d = await computeDiff(await worktreeFor(paths, "rev_g", "feat/untested", src), "main");
+    expect(d.changedSource).toBe(1);
+    expect(d.changedTests).toBe(0);
+    expect(renderDiff(d)).toContain("NO test file changed");
   });
 });

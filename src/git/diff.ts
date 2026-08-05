@@ -16,7 +16,9 @@ import { git, gitLines, gitMaybe } from "./exec.ts";
  * that silently saw half a change reports confidently about the half it got
  * (INV-7). An unexpectedly large diff usually means the base is wrong.
  */
-export const MAX_DIFF_CHARS = 600_000;
+export const MAX_OVERLAP = 10;
+const MAX_COMMITS_PER_FILE = 4;
+const MAX_DIFF_CHARS = 600_000;
 
 export interface ReviewDiff {
   readonly base: string;
@@ -64,7 +66,25 @@ export interface ReviewDiff {
    * can actually inspect. Textually clean and semantically broken lives here: a
    * branch calling a helper the base has since deleted conflicts with nothing.
    */
-  readonly overlap: readonly string[];
+  readonly overlap: readonly OverlapFile[];
+  /** Changed files that look like tests, and those that do not. */
+  readonly changedTests: number;
+  readonly changedSource: number;
+}
+
+/**
+ * A file both sides changed, and WHAT the base did to it.
+ *
+ * The base's commits are the part that turns a warning into a finding. On a real
+ * pull request the reviewer reported that the branch had bundled "a refactoring from
+ * RIGID-455". RIGID-455 was real — and it was on the BASE, touching the one file the
+ * branch also touched. The model had seen the ticket somewhere and attributed it to
+ * the wrong side. Naming the base's commits per overlapping file gives it the true
+ * story instead of the raw material for a wrong one.
+ */
+export interface OverlapFile {
+  readonly file: string;
+  readonly baseCommits: readonly string[];
 }
 
 export async function computeDiff(worktree: string, base: string): Promise<ReviewDiff> {
@@ -122,7 +142,24 @@ export async function computeDiff(worktree: string, base: string): Promise<Revie
   const mergesClean = await mergeCheck(worktree, resolved);
 
   const baseTouched = new Set(await gitLines(worktree, ["diff", "--name-only", mergeBase, resolved]));
-  const overlap = changedFilesFrom.filter((f) => baseTouched.has(f));
+  const overlapFiles = changedFilesFrom.filter((f) => baseTouched.has(f));
+
+  // Capped: a monorepo can overlap in dozens of files, and this is read by a model
+  // whose context is the budget. The cut is announced where it is rendered.
+  const overlap: OverlapFile[] = [];
+  for (const file of overlapFiles.slice(0, MAX_OVERLAP)) {
+    const baseCommits = (
+      await gitLines(worktree, ["log", "--format=%h %s", `${mergeBase}..${resolved}`, "--", file])
+    )
+      .filter((l) => l.length > 0)
+      .slice(0, MAX_COMMITS_PER_FILE);
+    overlap.push({ file, baseCommits });
+  }
+
+  // A branch that changes source and no tests is a question worth asking every time,
+  // and one a reviewer should never have to derive from a file list that may be cut.
+  const isTest = (f: string) => /(\.test\.|\.spec\.|(^|\/)tests?\/|__tests__)/.test(f);
+  const changedTests = changedFilesFrom.filter(isTest).length;
 
   const truncated = rawPatch.length > MAX_DIFF_CHARS;
   const patch = truncated
@@ -136,6 +173,8 @@ export async function computeDiff(worktree: string, base: string): Promise<Revie
     commits,
     mergesClean,
     overlap,
+    changedTests,
+    changedSource: changedFilesFrom.length - changedTests,
     stat: stat.trim(),
     patch,
     truncated,
@@ -200,6 +239,10 @@ export function renderDiff(d: ReviewDiff): string {
     // one-commit branch as having bundled a seventy-file refactor from another
     // ticket. Facts a command can answer are answered by the command.
     "",
+    d.changedSource > 0 && d.changedTests === 0
+      ? `${d.changedSource} source file(s) changed and NO test file changed. Ask whether that is right.`
+      : `${d.changedSource} source file(s) and ${d.changedTests} test file(s) changed.`,
+    "",
     `THIS BRANCH IS ${d.commits.length} COMMIT(S):`,
     ...(d.commits.length > 0 ? d.commits.map((c) => `  ${c}`) : ["  (none — the branch is at the fork point)"]),
     ...(d.behindBy > 0
@@ -213,10 +256,17 @@ export function renderDiff(d: ReviewDiff): string {
               : "  IT NO LONGER MERGES CLEANLY into the base as it now stands.",
           ...(d.overlap.length > 0
             ? [
-                `  ${d.overlap.length} file(s) were changed by BOTH this branch and the base since they diverged:`,
-                ...d.overlap.map((f) => `    ${f}`),
-                "  Read these against the base's current version. A clean textual merge is not a working one —",
-                "  a branch calling a helper the base has since deleted conflicts with nothing.",
+                `  ${d.overlap.length} file(s) changed by BOTH this branch and the base since they diverged,`,
+                "  with what the BASE did to each — read the branch's version against these:",
+                ...d.overlap.flatMap((o) => [
+                  `    ${o.file}`,
+                  ...(o.baseCommits.length > 0
+                    ? o.baseCommits.map((c) => `        base: ${c}`)
+                    : ["        base: (no commit touches it directly — check a rename or a move)"]),
+                ]),
+                "  A clean textual merge is not a working one: a branch calling a helper the base has since",
+                "  deleted conflicts with nothing. If one of those base commits removed or renamed something",
+                "  this branch still uses, that is a finding and the diff above cannot show it.",
               ]
             : ["  No file was touched by both sides, so the overlap risk is low."]),
           "",
