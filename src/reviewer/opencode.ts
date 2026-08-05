@@ -337,6 +337,19 @@ export class Reviewer implements ReviewerLike {
       .catch((e: unknown) => ({ status: undefined, data: undefined, error: e }));
 
     const steps = seen.status !== undefined && seen.status < 400 ? countStepParts(seen.data) : undefined;
+
+    // What it reached for, and how often. Logged rather than stored: this is a
+    // measurement to act on, not review state — every question answered by a tool
+    // call is one that could have been precomputed and handed over instead.
+    const tools = seen.status !== undefined && seen.status < 400 ? toolsUsed(seen.data) : {};
+    const ranked = Object.entries(tools).sort((a, b) => b[1] - a[1]);
+    if (ranked.length > 0) {
+      console.error(
+        `[lore:log] tools used in session ${sessionId}: ` +
+          ranked.map(([name, n]) => `${name}×${n}`).join(", "),
+      );
+    }
+
     if (steps === undefined) {
       const because =
         seen.status === undefined
@@ -588,6 +601,35 @@ export function countStepParts(data: unknown): number | undefined {
     }
   }
   return steps === 0 ? undefined : steps;
+}
+
+/**
+ * Which tools the reviewer reached for, and how often.
+ *
+ * We counted `step-start` and discarded everything else, so how a tier spent its
+ * turns was invisible — and that is the measurement that says what to precompute.
+ * Every question the model answers with a tool call is one it could have been handed
+ * for free: the branch's commits, whether it still merges, which files the base
+ * touched. Those three were added by reasoning about a wrong finding rather than by
+ * looking, and the looking is cheaper.
+ *
+ * Tolerant about shape on purpose. This reads someone else's reply format, and a
+ * histogram that returns nothing is a lost measurement, never a failed review.
+ */
+export function toolsUsed(data: unknown): Record<string, number> {
+  const out: Record<string, number> = {};
+  if (!Array.isArray(data)) return out;
+  for (const message of data as { parts?: unknown }[]) {
+    const parts = message?.parts;
+    if (!Array.isArray(parts)) continue;
+    for (const part of parts as Record<string, unknown>[]) {
+      if (part?.["type"] !== "tool") continue;
+      const name = part["tool"] ?? part["name"] ?? (part["state"] as Record<string, unknown> | undefined)?.["title"];
+      const key = typeof name === "string" && name.length > 0 ? name : "unknown";
+      out[key] = (out[key] ?? 0) + 1;
+    }
+  }
+  return out;
 }
 
 /** Whatever this thing is, the shortest true thing that can be said about it. */

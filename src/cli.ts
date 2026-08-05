@@ -28,6 +28,7 @@ lore — an independent reviewer that remembers the codebase
   lore review --branch <name> --into <name> --ticket <text> [options]
   lore serve                                   run the MCP service
   lore new --name <who> --git <ssh-url>        provision a repo and token
+  lore relocate --repo <name> --git <new-url>  a repo moved: keep its history
   lore doctor                                  check tiers, auth and model ids
 
   --branch <name>    branch under review (default: current branch)
@@ -119,6 +120,30 @@ export async function main(argv: readonly string[]): Promise<ExitCode> {
       });
       process.stdout.write(renderProvisioned(result));
       return EXIT.PASS;
+    } finally {
+      store.close();
+    }
+  }
+
+  if (args.command === "relocate") {
+    const { relocate, renderRelocation, RelocateError } = await import("./service/relocate.ts");
+    const repo = flagOf(argv, "repo");
+    const git = flagOf(argv, "git");
+    if (repo === undefined || git === undefined) {
+      throw new UsageError("usage: lore relocate --repo <name|url|id> --git <new-url> [--db <path>]");
+    }
+    const store = new Store(args.db);
+    try {
+      process.stdout.write(renderRelocation(relocate(store, repo, git)));
+      return EXIT.PASS;
+    } catch (e) {
+      // A refusal here is the feature, not a crash: every branch of it prevents a
+      // repository's memory being split or attached to the wrong code.
+      if (e instanceof RelocateError) {
+        process.stderr.write(`${e.message}\n`);
+        return EXIT.DID_NOT_RUN;
+      }
+      throw e;
     } finally {
       store.close();
     }

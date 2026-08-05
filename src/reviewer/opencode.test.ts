@@ -15,7 +15,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Exhausted } from "../core/errors.ts";
 import { CLAIM_MAX } from "../core/finding.ts";
 import type { Tier } from "../core/ladder.ts";
-import { Reviewer, countStepParts, extractFindings, splitModel } from "./opencode.ts";
+import { Reviewer, countStepParts, extractFindings, splitModel, toolsUsed } from "./opencode.ts";
 
 const TIER: Tier = { id: "t1", kind: "model", model: "openrouter/z-ai/glm-5.2", stage: "fast" };
 
@@ -645,5 +645,38 @@ describe("extractFindings", () => {
   // missing key.
   it("reports the candidate that got furthest, not the last one tried", () => {
     expect(why('```json\n{"results": []}\n```\ntrailing {oops')).toMatch(/no `findings` array/);
+  });
+});
+
+// Every question the reviewer answers with a tool call is one it could have been
+// handed for free. We counted `step-start` and discarded the rest, so how a tier
+// spent its turns was invisible — and that is exactly the measurement that says what
+// to precompute next. The three facts added today (the branch's commits, whether it
+// still merges, what the base did to the overlapping files) were found by reasoning
+// about a wrong finding. Looking is cheaper than reasoning.
+describe("what the reviewer reached for", () => {
+  const msg = (...parts: unknown[]) => ({ parts });
+
+  it("counts tool calls by name", () => {
+    const data = [
+      msg({ type: "step-start" }, { type: "tool", tool: "read" }, { type: "tool", tool: "bash" }),
+      msg({ type: "tool", tool: "read" }, { type: "text", text: "thinking" }),
+    ];
+    expect(toolsUsed(data)).toStrictEqual({ read: 2, bash: 1 });
+  });
+
+  // A histogram that returns nothing is a lost measurement, never a failed review:
+  // this reads someone else's reply format and must not throw on a shape change.
+  it.each([[undefined], [null], [{}], ["nonsense"], [[{ parts: "not an array" }]]])(
+    "returns an empty histogram for %s rather than throwing",
+    (data) => {
+      expect(() => toolsUsed(data)).not.toThrow();
+      expect(toolsUsed(data)).toStrictEqual({});
+    },
+  );
+
+  it("falls back through the shapes a tool part might use", () => {
+    const data = [msg({ type: "tool", name: "grep" }, { type: "tool", state: { title: "webfetch" } }, { type: "tool" })];
+    expect(toolsUsed(data)).toStrictEqual({ grep: 1, webfetch: 1, unknown: 1 });
   });
 });

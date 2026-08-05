@@ -19,7 +19,7 @@ BACKUP  ?= $(shell grep -E '^LORE_HOST_BACKUP=' .env 2>/dev/null | cut -d= -f2)
 BACKUP  := $(if $(BACKUP),$(BACKUP),./backup)
 
 .DEFAULT_GOAL := help
-.PHONY: help preflight sync-opencode push build up down down-hard restart logs status status-json status-local doctor new tokens mirror backup-on backup-check backup-drill restore sweep shell
+.PHONY: help preflight sync-opencode push build up down down-hard restart logs status status-json status-local doctor new relocate tokens mirror backup-on backup-check backup-drill restore sweep shell
 
 help:
 	@sed -n '2,14p' $(MAKEFILE_LIST) | sed 's/^# \{0,1\}//'
@@ -105,6 +105,58 @@ new: preflight
 	$(COMPOSE) exec -T lore node /app/src/index.ts new \
 		--name "$(NAME)" --git "$(GIT)" --db "$(DATA)/lore.db" \
 		$(if $(URL),--url "$(URL)",)
+
+## A repository MOVED: same repo, new url. Keeps its id and everything attached.
+##
+##   make relocate REPO=rigid-monorepo GIT=git@github.com:NewOrg/rigid-monorepo.git
+##
+## Not `make new`. That matches on url, so it would create a SECOND row and leave the
+## reviews, findings, knowledge and tokens on the old one — a repository's memory
+## split in half, silently. Undoing that here once cost a nine-table transaction.
+##
+## Refuses unless the new remote is REACHABLE and is the SAME repository, proved by
+## sharing branch tips with the mirror we already have.
+##
+## The SET, not one ref: a repository that moved has usually also moved ON, so testing
+## a single tip refuses the very case this exists for. The first version tested `main`
+## alone and refused a genuine relocation whose main had advanced by one commit, while
+## 21 of 23 other tips matched exactly. Relocating onto a different repo
+## would attach one codebase's accumulated memory to another's code (D-14, D-19), and
+## nothing downstream could notice.
+relocate:
+	@test -n "$(REPO)" || { echo "usage: make relocate REPO=<name|url|id> GIT=<new-url>"; exit 1; }
+	@test -n "$(GIT)"  || { echo "usage: make relocate REPO=<name|url|id> GIT=<new-url>"; exit 1; }
+	@id=$$($(COMPOSE) exec -T lore node -e "\
+	const {DatabaseSync}=require('node:sqlite'); \
+	const d=new DatabaseSync(process.env.LORE_DATA_DIR+'/lore.db'); \
+	const w=process.argv[1]; \
+	const r=d.prepare('SELECT id,name,git_url FROM repo').all().filter(x=>x.id===w||x.name===w||x.git_url===w); \
+	if(r.length!==1){console.error('need exactly one match for '+JSON.stringify(w)+', got '+r.length);process.exit(1);} \
+	console.log(r[0].id);" "$(REPO)" | tr -d '\r') || exit 1; \
+	b="$(DATA)/repos/$$id/bare.git"; \
+	echo "checking $(GIT) is reachable, as you..."; \
+	git ls-remote --heads "$(GIT)" >/tmp/lore-reloc.$$$$ 2>&1 \
+		|| { echo "cannot reach $(GIT):"; head -3 /tmp/lore-reloc.$$$$; rm -f /tmp/lore-reloc.$$$$; exit 1; }; \
+	if [ -d "$$b/objects" ]; then \
+		echo "checking it is the SAME repository..."; \
+		awk '{print $$1}' /tmp/lore-reloc.$$$$ | sort -u > /tmp/lore-new.$$$$; \
+		git -C "$$b" for-each-ref --format='%(objectname)' refs/remotes/origin | sort -u > /tmp/lore-old.$$$$; \
+		shared=$$(comm -12 /tmp/lore-old.$$$$ /tmp/lore-new.$$$$ | wc -l | tr -d ' '); \
+		rm -f /tmp/lore-new.$$$$ /tmp/lore-old.$$$$; \
+		if [ "$$shared" -eq 0 ]; then \
+			echo "REFUSED: $(GIT) shares NO branch tip with the mirror we already have."; \
+			echo "That means it is a DIFFERENT repository, or nothing has been pushed there yet."; \
+			echo "Relocating onto it would attach this repo's knowledge and reviews to other code."; \
+			rm -f /tmp/lore-reloc.$$$$; exit 1; \
+		fi; \
+		echo "  same repository confirmed — $$shared branch tip(s) in common"; \
+	else \
+		echo "  no mirror yet — identity cannot be checked, and is not being claimed"; \
+	fi; \
+	rm -f /tmp/lore-reloc.$$$$; \
+	$(COMPOSE) exec -T lore node /app/src/index.ts relocate --repo "$(REPO)" --git "$(GIT)" --db "$(DATA)/lore.db" || exit 1; \
+	test -d "$$b/objects" && { git -C "$$b" remote set-url origin "$(GIT)"; echo "mirror origin repointed."; }; \
+	echo "next:  make mirror REPO=$(GIT)"
 
 ## Check tiers, auth and model ids BEFORE spending a review on them.
 doctor:
