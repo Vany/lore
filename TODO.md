@@ -124,9 +124,18 @@ that part is pulled out into its own open item rather than hidden inside a tick.
       found), but the evidence has changed and this now needs deciding.
 
       **2026-08-05, the fourth occurrence and the worst.** t2 spent **40 minutes** on
-      round 5 of lore's own review, returned one finding whose `claim` was **342
-      characters against a 300 cap**, was told the exact rule, retried, and broke it
-      again by the same margin. Both replies discarded; the review is `failed`.
+      round 5 of lore's own review and returned one finding over the 300-character
+      `claim` cap. Told the exact rule, it retried — and came back **still over**:
+
+      | reply | claim length | over |
+      |---|---|---|
+      | first | 358 | 58 |
+      | retry | 314 | **14** |
+
+      Both discarded; the review is `failed`. The retry shortened the claim by 44
+      characters and missed by 14, which is the detail that matters: the model is
+      trying to comply and cannot land it. (An earlier note here said 42 characters
+      over — measured wrong, from the error text rather than the reply.)
 
       The claim it threw away was **correct and load-bearing** — `openFindings` had
       no latest-verdict gate, so a justification accepted and later rejected counted
