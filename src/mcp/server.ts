@@ -175,6 +175,22 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
             };
           }),
           open_count: store.openFindings(review_id).length,
+          // Deterministic, known in milliseconds, and the fact a landing decision
+          // actually turns on. It was reaching the reviewer's prompt and stopping
+          // there, so a client triaging eight open pull requests would have needed
+          // eight model-tier reviews to learn which ones were stale.
+          ...(() => {
+            const n = store.behindBy(review_id);
+            return n === undefined || n === 0
+              ? {}
+              : {
+                  behind_by: n,
+                  behind_by_note:
+                    `The base has ${n} commit(s) this branch does not. The findings above are correct for the ` +
+                    "fork point, but nothing here was checked against the base as it now stands — so a `passed` " +
+                    "does not mean this merges cleanly or still works. Rebase and review again before landing.",
+                };
+          })(),
           // WHY it did not run, not merely that it did not. A bare `failed` is the
           // shape INV-1 refuses: indistinguishable from "found nothing" to anyone
           // who has to act on it, and an invitation to guess. A client given only

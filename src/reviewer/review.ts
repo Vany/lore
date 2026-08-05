@@ -79,6 +79,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
 
   // 1. What changed.
   const diff = await computeDiff(worktree, review.intoRef);
+  store.setBehindBy(reviewId, diff.behindBy);
 
   // 2. Deterministic first. An LLM is never paid for what tsc decides for free.
   //

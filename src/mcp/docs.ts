@@ -130,6 +130,13 @@ to your user alongside the result: a \`passed\` where the suite never ran means 
 tiers that DID run agree, not that the tests do. \`checks_skipped_note\` accompanies it
 and says the same thing in a sentence you can pass straight on.
 
+\`behind_by\` appears when the base has moved on: the number of commits it has that
+this branch does not. It is not a finding — no edit fixes it — but it BOUNDS what
+this review proves. Everything above was checked against the fork point, so a
+\`passed\` on a branch that is far behind does not mean it merges cleanly or still
+works against the base as it now stands. Report it with the result, and prefer a
+rebase and a fresh review before landing.
+
 \`open_count\` is how many findings are still open across the whole review, not just
 this poll. It agrees with the per-finding shapes by construction — if the two ever
 disagree, trust neither and say so, because that is a bug in lore rather than a

@@ -935,6 +935,26 @@ export class Store {
    * authenticated with its own token. The real reason was a stale mirror, and the
    * message naming the fix already existed one table away.
    */
+  /**
+   * How far the base moved ahead of this branch, as of the last round.
+   *
+   * Deterministic, known in milliseconds, and the single most useful fact for
+   * deciding whether a branch is landable — so it belongs where the decision is
+   * made rather than only in the reviewer's prompt. A client triaging eight open
+   * pull requests should not need eight model-tier reviews to learn which are
+   * stale.
+   */
+  setBehindBy(reviewId: string, n: number): void {
+    this.db.prepare("UPDATE review SET behind_by = ? WHERE id = ?").run(n, reviewId);
+  }
+
+  behindBy(reviewId: string): number | undefined {
+    const row = this.db.prepare("SELECT behind_by FROM review WHERE id = ?").get(reviewId) as
+      | { behind_by: number | null }
+      | undefined;
+    return row?.behind_by ?? undefined;
+  }
+
   failureReason(reviewId: string): string | undefined {
     const row = this.db
       .prepare("SELECT last_error FROM job WHERE review_id = ? AND last_error IS NOT NULL ORDER BY id DESC LIMIT 1")

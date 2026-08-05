@@ -21,7 +21,7 @@ import { SEVERITIES } from "../core/finding.ts";
 // adds the columns, because this number is what `assertNotDowngrade` compares — left
 // behind, it says a database written by this build is identical to one written before
 // the columns existed (3f464578).
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 /**
  * How findings are ordered wherever the service hands them out: worst first.
@@ -266,6 +266,7 @@ export const MIGRATIONS: readonly { readonly table: string; readonly column: str
   { table: "finding", column: "scope_hunk", sql: "ALTER TABLE finding ADD COLUMN scope_hunk TEXT" },
   { table: "usage", column: "diff_chars", sql: "ALTER TABLE usage ADD COLUMN diff_chars INTEGER" },
   { table: "tier_run", column: "unavailable", sql: "ALTER TABLE tier_run ADD COLUMN unavailable TEXT" },
+  { table: "review", column: "behind_by", sql: "ALTER TABLE review ADD COLUMN behind_by INTEGER" },
 ];
 
 /**

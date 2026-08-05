@@ -435,6 +435,35 @@ describe("findings are ranked worst first", () => {
 //
 // A bare `failed` does not merely withhold information. It invites a diagnosis, and
 // the client's was the opposite of the truth.
+// The fact a landing decision turns on, and it was reaching only the reviewer.
+//
+// A client triaging eight open pull requests asked which were landable. lore knew —
+// deterministically, in milliseconds — that one was 22 commits behind, and told
+// nobody but the model. The client computed it itself with `gh` and `git`, and the
+// model, having no true fact to name, invented a bundled refactor instead.
+describe("the client is told how far the base has moved", () => {
+  beforeEach(() => {
+    store.createReview({
+      id: "revB", repoId, principal: "alice", branch: "feat/x", intoRef: "main",
+      ticket: "t", type: "code-arch", state: "findings_ready", ladder: initialState(),
+    });
+  });
+
+  it("reports behind_by, and says what it costs the result", async () => {
+    store.setBehindBy("revB", 22);
+    const out = await callTool("review_poll", { review_id: "revB" });
+    expect(out["behind_by"]).toBe(22);
+    expect(String(out["behind_by_note"])).toMatch(/does not mean this merges cleanly/);
+  });
+
+  // Absent rather than zero: a current branch should say nothing at all.
+  it("says nothing when the branch is current", async () => {
+    store.setBehindBy("revB", 0);
+    const out = await callTool("review_poll", { review_id: "revB" });
+    expect(out).not.toHaveProperty("behind_by");
+  });
+});
+
 describe("a failed review says why", () => {
   beforeEach(() => {
     store.createReview({
