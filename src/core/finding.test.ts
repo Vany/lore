@@ -1,3 +1,6 @@
+import { readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   CLAIM_MAX,
@@ -100,6 +103,61 @@ describe("parseFinding", () => {
 
   it("rejects an unknown severity", () => {
     expect(() => parseFinding({ ...valid, severity: "critical" })).toThrow();
+  });
+});
+
+// D-64 said "the number is now in one place". It was not, and I wrote that sentence
+// into SPEC without checking it.
+//
+// t2 found four survivors: `src/t0/engines.ts` and `src/security/osv.ts` both
+// truncated claims at a hardcoded 300 — with an ellipsis, mid-clause, which is the
+// exact failure D-64's own rationale gives for raising the cap rather than
+// truncating — `src/knowledge/bootstrap.ts` told a model "max 300 characters", and
+// `src/security/security.test.ts` asserted `<= 300` under the title "satisfy the
+// finding schema's caps", so correcting osv.ts would have made that test fail and
+// blocked its own fix.
+//
+// The consequence was worse than staleness: a 350-character claim from semgrep was
+// silently cut while an identical one from a model passed intact, so the same
+// finding got different treatment depending on which engine raised it.
+//
+// This is the check that makes the claim in SPEC true, mechanically, instead of by
+// assertion — the same shape as `docs.test.ts`, and for the same reason.
+describe("the claim cap lives in exactly one place", () => {
+  const SRC = fileURLToPath(new URL("..", import.meta.url));
+
+  const sources = (dir: string): string[] =>
+    readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+      const p = join(dir, e.name);
+      if (e.isDirectory()) return sources(p);
+      return e.isFile() && p.endsWith(".ts") ? [p] : [];
+    });
+
+  // Comments are exempt, and that is not a loophole — it is the same rule MEMO
+  // follows. "glm-5.2 wrote a 325-character claim against a 300-character cap" is a
+  // record of what was true then; rewriting it to say 500 would falsify the history
+  // that justifies the current value. Three such lines exist and all three are
+  // history. What must never appear is an EXECUTABLE 300: a cap, an assertion, or a
+  // string handed to a model.
+  const isComment = (line: string): boolean => /^\s*(\/\/|\*|\/\*)/.test(line);
+
+  it("is not hardcoded in any code path that caps or states it", () => {
+    const offenders: string[] = [];
+    for (const file of sources(SRC)) {
+      readFileSync(file, "utf8")
+        .split("\n")
+        .forEach((line, i) => {
+          if (isComment(line) || !/\bclaim\b/i.test(line)) return;
+          // The shapes that drifted: `cap(claim, 300)`, `"max 300 characters"`,
+          // `toBeLessThanOrEqual(300)`. The CURRENT value is matched too, so raising
+          // the cap again cannot leave a fresh literal behind — this test has to
+          // fail on its own next revision, not just on the last one.
+          if (/\b(300|500)\b/.test(line) && !line.includes("CLAIM_MAX")) {
+            offenders.push(`${file.slice(SRC.length)}:${i + 1}: ${line.trim()}`);
+          }
+        });
+    }
+    expect(offenders).toStrictEqual([]);
   });
 });
 

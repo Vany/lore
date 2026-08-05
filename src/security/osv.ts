@@ -13,6 +13,7 @@
  * SPEC: research/security-review.md §4
  */
 
+import { CLAIM_MAX } from "../core/finding.ts";
 import { DidNotRun } from "../core/errors.ts";
 import type { Finding, Severity } from "../core/finding.ts";
 import type { Component } from "./sbom.ts";
@@ -160,7 +161,7 @@ export function toFindings(vulnerable: readonly Vulnerable[], lockfile = "packag
         severity: severityOf(v),
         claim: cap(
           `${component.name}@${component.version} is affected by ${label}${v.summary === undefined ? "" : `: ${v.summary}`}`,
-          300,
+          CLAIM_MAX,
         ),
         evidence: cap(
           [

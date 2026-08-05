@@ -938,11 +938,30 @@ one that may be long.
 
 Vany's call, because it changes how much quota a failed round burns.
 
-The number is now in one place and interpolated into the output contract the models
-read, so the prompt cannot state a limit the schema does not enforce — which is
-exactly how the first version told a model to comply with something it was never
-shown. Both tests derive from the constant for the same reason: a hardcoded `301`
-would have gone on passing while asserting nothing.
+The number is in one place and interpolated into the output contract the models read,
+so the prompt cannot state a limit the schema does not enforce — which is exactly how
+the first version told a model to comply with something it was never shown. The tests
+derive from the constant for the same reason: a hardcoded `301` would have gone on
+passing while asserting nothing.
+
+**That sentence was false when first written, and t2 said so in the next round.** The
+cap had been changed in the schema and the model prompt and left hardcoded in four
+other places: `src/t0/engines.ts` and `src/security/osv.ts` truncated claims at 300 —
+with an ellipsis, mid-clause, which is precisely the failure this decision cites as
+its reason for raising rather than truncating — `src/knowledge/bootstrap.ts` told a
+model "max 300 characters", and `src/security/security.test.ts` asserted `<= 300`
+under the title *"satisfy the finding schema's caps"*, so fixing `osv.ts` would have
+broken that test and blocked its own repair.
+
+The effect was not merely staleness. A 350-character claim from semgrep was silently
+cut while an identical one from a model passed whole, so the same finding was treated
+differently according to which engine raised it.
+
+There is now a **test that greps the source** for an executable `300` or `500` on any
+line mentioning a claim, which is what makes the paragraph above true mechanically
+rather than by assertion. Comments are exempt on purpose: *"glm-5.2 wrote a
+325-character claim against a 300-character cap"* is a record of what was true then,
+and rewriting it would falsify the history that justifies the current number.
 
 **D-43 — review types.** `review_start` takes a `type`, defaulting to `code-arch`:
 *is this change correct and well-made?* The next type is `security`: *what

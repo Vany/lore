@@ -12,6 +12,7 @@
  * have already rejected.
  */
 
+import { CLAIM_MAX } from "../core/finding.ts";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Finding, Severity } from "../core/finding.ts";
@@ -45,7 +46,7 @@ function finding(f: {
     file: f.file,
     ...(f.line !== undefined ? { line: f.line } : {}),
     severity: f.severity,
-    claim: cap(f.claim.replace(/\s+/g, " ").trim(), 300),
+    claim: cap(f.claim.replace(/\s+/g, " ").trim(), CLAIM_MAX),
     evidence: cap(f.evidence, 2000),
     failureScenario: cap(f.failureScenario, 2000),
     ...(f.cwe !== undefined ? { cwe: f.cwe } : {}),

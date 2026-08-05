@@ -1,3 +1,4 @@
+import { CLAIM_MAX } from "../core/finding.ts";
 import { beforeEach, describe, expect, it } from "vitest";
 import { initialState } from "../core/ladder.ts";
 import { Store } from "../store/store.ts";
@@ -62,7 +63,7 @@ describe("toFindings", () => {
   it("produces findings that satisfy the finding schema's caps", () => {
     const wordy: OsvVuln = { ...vuln, summary: "x".repeat(600), details: "y".repeat(5000) };
     const [f] = toFindings([{ component, vulns: [wordy] }]);
-    expect((f?.claim ?? "").length).toBeLessThanOrEqual(300);
+    expect((f?.claim ?? "").length).toBeLessThanOrEqual(CLAIM_MAX);
     expect((f?.failureScenario ?? "").length).toBeLessThanOrEqual(2000);
   });
 });

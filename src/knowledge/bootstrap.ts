@@ -12,6 +12,7 @@
  * SPEC: D-35, spec/knowledge.md §2
  */
 
+import { CLAIM_MAX } from "../core/finding.ts";
 import { DEFAULT_TIERS, type Tier } from "../core/ladder.ts";
 import type { ReviewerLike } from "../reviewer/opencode.ts";
 import type { Store } from "../store/store.ts";
@@ -43,7 +44,7 @@ Reply with ONE fenced json block and nothing else:
   {
     "file": "src/pay/hold.ts",
     "severity": "low",
-    "claim": "the fact, in one sentence, max 300 characters",
+    "claim": "the fact, in one sentence, max ${CLAIM_MAX} characters",
     "evidence": "where in the code this is visible",
     "failureScenario": "what breaks if someone changes code without knowing this"
   }
