@@ -20,6 +20,19 @@ export interface RepoPaths {
   readonly worktrees: string;
 }
 
+/**
+ * The short name `make mirror REPO=` matches on, derived from the url.
+ *
+ * The instruction has to be COMPLETE. `make mirror` alone now refuses and lists the
+ * registered repositories, because fetching every remote because one was asked for
+ * reaches repositories nobody named — and on a shared host that is someone else's
+ * repository touched because you wanted yours refreshed.
+ */
+export function repoHint(gitUrl: string): string {
+  const m = /([^/:]+?)(?:\.git)?$/.exec(gitUrl.trim());
+  return m?.[1] ?? gitUrl;
+}
+
 export function repoPaths(root: string, repoId: string): RepoPaths {
   return { bare: join(root, repoId, "bare.git"), worktrees: join(root, repoId, "wt") };
 }
@@ -129,7 +142,7 @@ export async function ensureBare(
   if (isRepo === undefined) {
     throw new DidNotRun(
       `no clone of ${gitUrl} at ${paths.bare}. lore does not clone — it holds no credentials for your ` +
-        `remotes by design. Run \`make mirror\` on the host and start the review again.`,
+        `remotes by design. Run \`make mirror REPO=${repoHint(gitUrl)}\` on the host and start the review again.`,
     );
   }
   if (!requireFresh) return;
@@ -143,7 +156,7 @@ export async function ensureBare(
     throw new DidNotRun(
       `the clone of ${gitUrl} at ${paths.bare} has a remote but has never been fetched — no FETCH_HEAD. ` +
         `\`make mirror\` clones and then fetches; a clone that succeeded with a failed fetch looks like this. ` +
-        `Run \`make mirror\` on the host and start the review again. Reviewing it as it stands would review ` +
+        `Run \`make mirror REPO=${repoHint(gitUrl)}\` on the host and start again. Reviewing it as it stands would review ` +
         `the commit it was cloned at, not the branch you are merging.`,
     );
   }
@@ -152,7 +165,7 @@ export async function ensureBare(
   if (age > MAX_MIRROR_AGE_MS) {
     throw new DidNotRun(
       `the clone of ${gitUrl} was last fetched ${Math.round(age / 60_000)} minutes ago, and lore holds no ` +
-        `credentials to fetch it itself. Run \`make mirror\` on the host and start the review again. ` +
+        `credentials to fetch it itself. Run \`make mirror REPO=${repoHint(gitUrl)}\` on the host and start again. ` +
         `Reviewing it as it stands would describe a tree that is not what you are merging.`,
     );
   }
@@ -188,7 +201,7 @@ export async function addWorktree(
       `branch '${branch}' is not in the mirror of ${gitUrl || paths.bare}. ` +
         `Your token is scoped to that repository — if the branch belongs to a different one, ` +
         `you are holding the wrong token, and the branch existing elsewhere will not help. ` +
-        `Otherwise push it and run \`make mirror\` on the host.` +
+        `Otherwise push it and run \`make mirror REPO=${repoHint(gitUrl)}\` on the host.` +
         (nearby.length > 0 ? ` Most recent branches there: ${nearby.join(", ")}.` : " The mirror has no branches at all."),
     );
   }

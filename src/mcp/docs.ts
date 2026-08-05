@@ -49,8 +49,10 @@ lore holds no credentials for your remote and is not meant to: a service holding
 key holds everything that key opens. So the checkout it reads is refreshed by you,
 on demand, and a review started against a stale one describes a tree that is not
 what you are merging. lore refuses rather than guesses — it checks when the mirror
-was last fetched and fails with that instruction if it is too old. A plain git pull
-counts; it fetches on the way.
+was last fetched and fails with that instruction if it is too old — and the message
+names the exact command, including WHICH repository: \`make mirror REPO=<name>\`. It
+is per-repo on purpose; refreshing every registered remote because one was asked for
+reaches repositories nobody named. A plain git pull counts; it fetches on the way.
 
 The review pins the branch when its first round begins, which is shortly after this
 returns — not at the instant it returns. A commit pushed in that window may or may

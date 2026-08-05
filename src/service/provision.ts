@@ -24,6 +24,8 @@ import type { Store } from "../store/store.ts";
 
 export interface Provisioned {
   readonly repoId: string;
+  /** What `make mirror REPO=` matches on. */
+  readonly repoName: string;
   readonly principal: string;
   /** Shown once. Never recoverable from the database. */
   readonly token: string;
@@ -42,6 +44,7 @@ export async function provision(opts: {
 
   return {
     repoId: repo.id,
+    repoName: repo.name,
     principal: opts.name,
     token,
     clientConfig: clientConfig(opts.publicUrl),
@@ -91,7 +94,7 @@ export function renderProvisioned(p: Provisioned): string {
     "1. Populate the mirror, out here, as you. lore holds no credentials for your",
     "   remotes by design, so this is the only step that talks to one:",
     "",
-    "      make mirror",
+    `      make mirror REPO=${p.repoName}`,
     "",
     "   Run it again before each review. A review whose mirror has gone stale is",
     "   refused rather than run against a tree that is not what you are merging.",

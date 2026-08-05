@@ -20,8 +20,10 @@ make new NAME=vany GIT=git@github.com:org/repo.git
 **No key is issued** (D-63, superseding D-62). lore does not clone and does not
 fetch; `make mirror` does, on the host, as the operator, into `data/repos` — the one
 directory the container already sees. A deploy key would be a credential on disk
-that nothing reads. So the operator's remaining step is `make mirror`, before the
-first review and before each later one: a mirror older than `MAX_MIRROR_AGE_MS` is
+that nothing reads. So the operator's remaining step is `make mirror REPO=<name>`,
+before the first review and before each later one — **per repository, never all of
+them**, because fetching every registered remote because one was asked for reaches
+repositories nobody named: a mirror older than `MAX_MIRROR_AGE_MS` is
 refused rather than reviewed.
 
 ## 2. Tools

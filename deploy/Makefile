@@ -153,7 +153,15 @@ tokens:
 	for (const r of d.prepare('SELECT principal, label, created_at, revoked_at FROM token').all()) \
 	  console.log(r.revoked_at ? '[revoked]' : '[live]   ', r.principal, r.label ?? '', r.created_at);"
 
-## Clone and fetch every registered repository, OUT HERE, as you.
+## Clone and fetch ONE registered repository, OUT HERE, as you.
+##
+##   make mirror REPO=lore          match on name, url or id
+##   make mirror ALL=1              every registered repo, deliberately
+##
+## REPO is required. Fetching every repository because one was asked for reaches
+## remotes nobody named — on a shared host that is someone else's repository being
+## touched because you wanted yours refreshed. It also hides a failure: a repo you
+## did not ask about reporting FETCH FAILED reads as YOUR command failing.
 ##
 ## This is the only thing that talks to a remote. lore holds no credentials and
 ## needs none: it reads the bare clones this leaves in $(DATA)/repos, which is
@@ -163,10 +171,22 @@ tokens:
 ## Run it before starting a review. lore refuses a review whose clone has gone stale
 ## rather than describing a tree that is not what you are merging.
 mirror:
+	@test -n "$(REPO)$(ALL)" || { \
+		echo "usage: make mirror REPO=<name|url|id>   (or ALL=1 for every repo)"; \
+		echo; echo "registered:"; \
+		$(COMPOSE) exec -T lore node -e "\
+		const {DatabaseSync}=require('node:sqlite'); \
+		const d=new DatabaseSync(process.env.LORE_DATA_DIR+'/lore.db'); \
+		for (const r of d.prepare('SELECT name, git_url FROM repo').all()) console.log('  '+r.name+'  '+r.git_url);"; \
+		exit 1; }
 	@$(COMPOSE) exec -T lore node -e "\
 	const {DatabaseSync}=require('node:sqlite'); \
 	const d=new DatabaseSync(process.env.LORE_DATA_DIR+'/lore.db'); \
-	for (const r of d.prepare('SELECT id, git_url FROM repo').all()) console.log(r.id+' '+r.git_url);" \
+	const want=process.argv[1]||''; \
+	const rows=d.prepare('SELECT id, name, git_url FROM repo').all() \
+	  .filter(r => want==='' || r.id===want || r.name===want || r.git_url.includes(want)); \
+	if (rows.length===0) { console.error('no registered repo matches '+JSON.stringify(want)); process.exit(1); } \
+	for (const r of rows) console.log(r.id+' '+r.git_url);" "$(REPO)" \
 	| tr -d '\r' | while read id url; do \
 		b="$(DATA)/repos/$$id/bare.git"; \
 		printf '%-48s ' "$$url"; \

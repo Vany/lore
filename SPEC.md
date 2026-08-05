@@ -748,8 +748,12 @@ everything that key opens. A personal key is never asked for, and forwarding an 
 into a container that already has the docker socket would hand it the ability to sign
 as the person.
 
-So the fetch happens **outside**, as the operator: `make mirror`, or the `git pull`
-they were doing anyway. It clones and fetches every registered repository into
+So the fetch happens **outside**, as the operator: `make mirror REPO=<name>`, or the
+`git pull` they were doing anyway. **One repository per invocation**, and the bare
+command refuses and lists what is registered: fetching every remote because one was
+asked for reaches repositories nobody named — on a shared host, someone else's
+repository touched because you wanted yours refreshed — and it hides failures, since
+a repo you did not ask about reporting FETCH FAILED reads as your command failing. It clones and fetches every registered repository into
 `data/repos/<id>/bare.git` — the one directory the container already reads. Nothing
 outside the deployment directory is mounted: not a checkout, not a key, not an agent
 socket.
