@@ -17,6 +17,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Exhausted } from "../core/errors.ts";
+import type { Tier } from "../core/ladder.ts";
 import { fingerprint } from "../core/fingerprint.ts";
 import { initialState } from "../core/ladder.ts";
 import { CODE_ARCH } from "../core/review-type.ts";
@@ -714,5 +715,106 @@ describe("a discarded finding is reported, not swallowed", () => {
     await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
 
     expect(store.unavailableChecks("r1").join(" ")).not.toMatch(/does NOT contain/);
+  });
+});
+
+// THE THREE PATHS THAT HAD NEVER EXECUTED IN PRODUCTION.
+//
+// All three had code and unit tests; none had ever run through `runRound` against a
+// real worktree and a real store. A path whose first real execution is during an
+// incident is a path nobody has reviewed — and these three are exactly the ones that
+// run when something has already gone wrong, which is the worst moment to find out.
+describe("the paths that only happen when something has gone wrong", () => {
+  /**
+   * Clean everywhere except the tiers named, which cannot be paid for.
+   *
+   * Exhausted is a limitation rather than a failure (D-48), and the distinction only
+   * shows up over a WHOLE ladder: one unpayable tier mid-climb is `fast_clean` with
+   * more to come, and only the last tier turns it into a verdict.
+   */
+  class Unpayable implements ReviewerLike {
+    // A plain field, not a parameter property: `erasableSyntaxOnly` is on, because
+    // node runs these files directly with no build step (D-3).
+    private readonly broke: readonly string[];
+
+    constructor(broke: readonly string[]) {
+      this.broke = broke;
+    }
+
+    async review(tier: Tier): Promise<ReviewerResult> {
+      if (this.broke.includes(tier.id)) throw new Exhausted(`quota exhausted for ${tier.id}`);
+      return new ScriptedReviewer([[]]).review(tier, "", "");
+    }
+  }
+
+  /** Drive the ladder to a terminal state, as the worker does. */
+  const toEnd = async (reviewer: ReviewerLike, type: typeof CODE_ARCH) => {
+    let last;
+    for (let i = 0; i < 8; i++) {
+      last = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type });
+      if (!["escalate", "fastClean"].includes(last.decision.kind)) break;
+    }
+    return last;
+  };
+
+  // D-48: a tier nobody can pay for is stepped over, and the review finishes with
+  // what it could afford — as `passed_partial`, never `passed`. "We did everything we
+  // can" and "everything agrees" are different claims.
+  it("reaches passed_partial when a tier could not be paid for", async () => {
+    // t1 is unpayable; the deeper tiers still look and agree. "We did everything we
+    // can" is a different claim from "everything agrees", and only one is a pass.
+    const result = await toEnd(new Unpayable(["t1"]), { ...CODE_ARCH, t0: [] as const });
+
+    expect(result?.decision.kind).toBe("passedPartial");
+    expect(store.getReview("r1", "p")?.state).toBe("passed_partial");
+    // The tier's own row says WHY, so the operator view cannot confuse it with a
+    // tier that never started.
+    const runs = store.db.prepare("SELECT outcome FROM tier_run WHERE review_id = 'r1'").all() as { outcome: string }[];
+    expect(runs.some((r) => r.outcome === "unpayable")).toBe(true);
+  });
+
+  // If NOTHING can be paid for there is no review at all, and saying "partial" would
+  // be claiming evidence that does not exist.
+  // The ladder does not give up on the first unpayable tier — it steps over that one
+  // and tries the next, which is the whole point of D-48. It gives up only when the
+  // LAST tier that could have looked is gone, because at that point nothing has read
+  // the code and calling it `passed_partial` would claim evidence nobody gathered.
+  it("fails outright once NOTHING can run, rather than passing partially", async () => {
+    const all = CODE_ARCH.tiers.filter((t) => t.kind === "model").map((t) => t.id);
+    const reviewer = new Unpayable(all);
+    const type = { ...CODE_ARCH, t0: [] as const };
+
+    let thrown: unknown;
+    for (let i = 0; i < 8 && thrown === undefined; i++) {
+      thrown = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type })
+        .then(() => undefined, (e: unknown) => e);
+    }
+
+    expect(thrown).toBeInstanceOf(Exhausted);
+    expect(store.getReview("r1", "p")?.state).not.toBe("passed_partial");
+  });
+
+  // D-39: the one place the system stops and asks a person. A knowledge conflict is
+  // not resolved by the store — it becomes a finding the agent must actually work
+  // through, and the agent must not write its way past it.
+  it("reaches needs_human when the knowledge base contradicts itself", async () => {
+    const a = store.addKnowledge({
+      repoId, kind: "rule", source: "taught", statement: "Holds must expire after 7 days",
+      why: undefined, path: undefined, cwe: undefined, provenance: undefined,
+      sourceBlob: undefined, confidence: undefined,
+    });
+    const b = store.addKnowledge({
+      repoId, kind: "rule", source: "taught", statement: "Holds must never expire",
+      why: undefined, path: undefined, cwe: undefined, provenance: undefined,
+      sourceBlob: undefined, confidence: undefined,
+    });
+    store.escalateConflict(repoId, a.id, b.id, "these cannot both hold");
+
+    const result = await runRound({
+      store, reviewer: new ScriptedReviewer([[]]), reviewId: "r1", principal: "p", worktree: dir, type: TYPE,
+    });
+
+    expect(result.decision.kind).toBe("needsHuman");
+    expect(store.getReview("r1", "p")?.state).toBe("needs_human");
   });
 });
