@@ -291,6 +291,75 @@ describe("the diff says what it is, and how stale the branch is", () => {
     const d = await computeDiff(join(paths.worktrees, "rev_b"), "main");
 
     expect(d.behindBy).toBe(3);
-    expect(renderDiff(d)).toContain("3 COMMIT(S) BEHIND");
+    expect(renderDiff(d)).toContain("MOVED 3 COMMIT(S) AHEAD");
+  });
+});
+
+// Everything a command can answer, answered by the command.
+//
+// A reviewer given only the diff and `Base: main` reported that a one-commit,
+// twenty-file branch had bundled a seventy-file refactor from an unrelated ticket.
+// It had not — the base had moved 22 commits ahead. Each fact below is deterministic,
+// costs milliseconds, and removes a question the model was answering by inference.
+describe("what the model is told instead of left to infer", () => {
+  const repoWithBranch = async (name: string) => {
+    const src = join(root, `src-${name}`);
+    const g = makeRepo(src);
+    const paths = { bare: join(root, `repos/${name}/bare.git`), worktrees: join(root, `repos/${name}/wt`) };
+    mirror(src, paths.bare);
+    execFileSync("git", ["-C", paths.bare, "config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"]);
+    execFileSync("git", ["-C", paths.bare, "fetch", "-q", "origin"]);
+    return { src, g, paths };
+  };
+
+  it("lists the branch's own commits, so a focused branch cannot read as a bundled one", async () => {
+    const { src, g, paths } = await repoWithBranch("rC");
+    g("checkout", "-qb", "feat/x");
+    writeFileSync(join(src, "f.txt"), "f\n");
+    g("add", "-A");
+    g("commit", "-qm", "the only thing this branch does");
+    execFileSync("git", ["-C", paths.bare, "fetch", "-q", "origin"]);
+
+    const wt = await worktreeFor(paths, "rev_c", "feat/x", src);
+    const d = await computeDiff(wt, "main");
+
+    expect(d.commits).toHaveLength(1);
+    expect(d.commits[0]).toContain("the only thing this branch does");
+    expect(renderDiff(d)).toContain("THIS BRANCH IS 1 COMMIT(S)");
+  });
+
+  // "Behind" says the base moved. This says whether that matters — and it is the
+  // question a landing decision actually turns on.
+  it("says whether it still merges, and which files both sides touched", async () => {
+    const { src, g, paths } = await repoWithBranch("rD");
+    g("checkout", "-qb", "feat/y");
+    writeFileSync(join(src, "shared.txt"), "branch version\n");
+    g("add", "-A");
+    g("commit", "-qm", "branch touches shared");
+    g("checkout", "-q", "main");
+    writeFileSync(join(src, "shared.txt"), "base version\n");
+    writeFileSync(join(src, "other.txt"), "base only\n");
+    g("add", "-A");
+    g("commit", "-qm", "base touches shared too");
+    execFileSync("git", ["-C", paths.bare, "fetch", "-q", "origin"]);
+
+    const wt = await worktreeFor(paths, "rev_d", "feat/y", src);
+    const d = await computeDiff(wt, "main");
+
+    expect(d.behindBy).toBe(1);
+    expect(d.overlap).toStrictEqual(["shared.txt"]); // not other.txt — the branch never touched it
+    expect(d.mergesClean).toBe(false); // both edited the same line
+    const out = renderDiff(d);
+    expect(out).toContain("NO LONGER MERGES CLEANLY");
+    expect(out).toContain("shared.txt");
+  });
+
+  // Unknown is not "fine". If git cannot answer, say so rather than implying safety.
+  it("never reports a clean merge it did not verify", async () => {
+    const { paths, src } = await repoWithBranch("rE");
+    const d = await computeDiff(await worktreeFor(paths, "rev_e", "main", src), "main");
+    // Current branch: nothing to say about merging at all.
+    expect(d.behindBy).toBe(0);
+    expect(renderDiff(d)).not.toContain("MERGES CLEANLY");
   });
 });

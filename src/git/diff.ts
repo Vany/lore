@@ -39,6 +39,32 @@ export interface ReviewDiff {
    * everything the base had added.
    */
   readonly behindBy: number;
+  /**
+   * The branch's OWN commits, subject line each.
+   *
+   * A reviewer with the diff but not this cannot tell a focused branch from a
+   * bundled one, and one guessed: it reported that a single-commit, twenty-file
+   * branch had folded in a seventy-file refactor from another ticket. The commit
+   * list makes that unguessable.
+   */
+  readonly commits: readonly string[];
+  /**
+   * Whether the branch still merges into the base AS IT NOW STANDS.
+   *
+   * `behindBy` says the base moved; this says whether that matters. Computed with
+   * `merge-tree`, which merges in memory and writes nothing. `undefined` when git
+   * could not answer — never guessed, because "probably fine" is the claim this
+   * project exists to refuse.
+   */
+  readonly mergesClean: boolean | undefined;
+  /**
+   * Files this branch changed that the BASE also changed since they diverged.
+   *
+   * The concrete risk in a stale branch, and the only part of staleness a reviewer
+   * can actually inspect. Textually clean and semantically broken lives here: a
+   * branch calling a helper the base has since deleted conflicts with nothing.
+   */
+  readonly overlap: readonly string[];
 }
 
 export async function computeDiff(worktree: string, base: string): Promise<ReviewDiff> {
@@ -73,10 +99,30 @@ export async function computeDiff(worktree: string, base: string): Promise<Revie
   const { stdout: stat } = await git(worktree, ["diff", "--stat", "--submodule=short", mergeBase]);
 
   const untracked = await gitLines(worktree, ["ls-files", "--others", "--exclude-standard"]);
-  const changedFiles = await gitLines(worktree, ["diff", "--name-only", mergeBase]);
+  const changedFilesFrom = await gitLines(worktree, ["diff", "--name-only", mergeBase]);
+  const changedFiles = changedFilesFrom;
   const behindBy = Number(
     (await gitMaybe(worktree, ["rev-list", "--count", `HEAD..${resolved}`])) ?? "0",
   );
+
+  // Everything below is deterministic, costs milliseconds, and answers a question
+  // the model would otherwise have to infer from the diff alone — which is where
+  // its inferences have been wrong.
+  const commits = (await gitLines(worktree, ["log", "--format=%h %s", `${mergeBase}..HEAD`])).filter(
+    (l) => l.length > 0,
+  );
+
+  // In memory; writes no tree, touches no ref, leaves no state.
+  //
+  // The exit code carries the answer and `gitMaybe` would destroy it: merge-tree
+  // exits 0 for a clean merge and 1 for CONFLICTS, so swallowing non-zero as "could
+  // not run" turns the very case we are asking about into "unknown". Anything above
+  // 1 is a real failure — an old git, a bad ref — and stays unknown, because
+  // "probably fine" is the claim this project exists to refuse.
+  const mergesClean = await mergeCheck(worktree, resolved);
+
+  const baseTouched = new Set(await gitLines(worktree, ["diff", "--name-only", mergeBase, resolved]));
+  const overlap = changedFilesFrom.filter((f) => baseTouched.has(f));
 
   const truncated = rawPatch.length > MAX_DIFF_CHARS;
   const patch = truncated
@@ -87,6 +133,9 @@ export async function computeDiff(worktree: string, base: string): Promise<Revie
     base,
     mergeBase,
     behindBy: Number.isFinite(behindBy) ? behindBy : 0,
+    commits,
+    mergesClean,
+    overlap,
     stat: stat.trim(),
     patch,
     truncated,
@@ -107,6 +156,27 @@ export async function blobSha(worktree: string, path: string): Promise<string | 
  * The untracked list and the truncation notice are part of the prompt rather than
  * metadata, because a reviewer that never sees them cannot account for them.
  */
+/**
+ * Does the branch still merge into the base as it now stands?
+ *
+ * `undefined` means genuinely unknown and must never be rendered as safe.
+ */
+async function mergeCheck(worktree: string, base: string): Promise<boolean | undefined> {
+  const { execFile } = await import("node:child_process");
+  return new Promise((resolve) => {
+    execFile(
+      "git",
+      ["merge-tree", "--write-tree", base, "HEAD"],
+      { cwd: worktree, maxBuffer: 64 * 1024 * 1024, env: { ...process.env, GIT_CEILING_DIRECTORIES: worktree } },
+      (err) => {
+        if (err === null) return resolve(true);
+        const code = (err as unknown as { code?: number }).code;
+        resolve(code === 1 ? false : undefined);
+      },
+    );
+  });
+}
+
 export function renderDiff(d: ReviewDiff): string {
   // Spelled out, because naming the base was not enough. A reviewer given
   // `Base: main (merge-base abc123)` went and ran `git diff main..HEAD` itself,
@@ -125,13 +195,33 @@ export function renderDiff(d: ReviewDiff): string {
     "not this branch's work: every commit the base gained since the fork shows up as this",
     "branch deleting things it never touched. In this worktree it is doubly misleading —",
     "local branch refs come from a mirror and are frozen at clone time.",
+    // Everything below is computed, not inferred. A reviewer asked to derive these
+    // from the diff alone has got them wrong: told only "Base: main", one reported a
+    // one-commit branch as having bundled a seventy-file refactor from another
+    // ticket. Facts a command can answer are answered by the command.
+    "",
+    `THIS BRANCH IS ${d.commits.length} COMMIT(S):`,
+    ...(d.commits.length > 0 ? d.commits.map((c) => `  ${c}`) : ["  (none — the branch is at the fork point)"]),
     ...(d.behindBy > 0
       ? [
           "",
-          `THE BRANCH IS ${d.behindBy} COMMIT(S) BEHIND ${d.base}. That is worth a finding on its own if it`,
-          "is large: the diff above is correct, but it was computed against the fork point, so it cannot",
-          "show a conflict with work the base has gained since. Nothing here has been tested against the",
-          "base as it now stands.",
+          `THE BASE HAS MOVED ${d.behindBy} COMMIT(S) AHEAD.`,
+          d.mergesClean === undefined
+            ? "  Whether it still merges could not be determined — treat that as unknown, not as fine."
+            : d.mergesClean
+              ? "  It still merges cleanly into the base as it now stands (checked in memory, nothing written)."
+              : "  IT NO LONGER MERGES CLEANLY into the base as it now stands.",
+          ...(d.overlap.length > 0
+            ? [
+                `  ${d.overlap.length} file(s) were changed by BOTH this branch and the base since they diverged:`,
+                ...d.overlap.map((f) => `    ${f}`),
+                "  Read these against the base's current version. A clean textual merge is not a working one —",
+                "  a branch calling a helper the base has since deleted conflicts with nothing.",
+              ]
+            : ["  No file was touched by both sides, so the overlap risk is low."]),
+          "",
+          "  The diff above is correct, but it was computed at the fork point: nothing here has been",
+          "  checked against the base as it now stands.",
         ]
       : []),
     "",
