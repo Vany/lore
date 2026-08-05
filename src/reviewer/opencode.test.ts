@@ -13,6 +13,7 @@
 import { createServer, type Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Exhausted } from "../core/errors.ts";
+import { CLAIM_MAX } from "../core/finding.ts";
 import type { Tier } from "../core/ladder.ts";
 import { Reviewer, countStepParts, extractFindings, splitModel } from "./opencode.ts";
 
@@ -617,12 +618,17 @@ describe("extractFindings", () => {
   // a 300-character cap. The reply was flawless JSON; only the cap rejected it. The
   // operator was told "malformed JSON" and the model was told nothing at all, so on
   // retry it guessed — trimming one claim to 298 and leaving another at 322.
+  //
+  // The cap moved 300 → 500 on 2026-08-05 after a fourth loss, so the limit is read
+  // from the constant here. A literal would have gone on asserting the old number
+  // while the message carried the new one — and this test exists precisely because
+  // a model cannot comply with a limit it is told wrongly.
   it("names the CAP, not the JSON, when a claim is too long", () => {
     const long = JSON.parse(FINDING_JSON).findings[0];
-    const reason = why(JSON.stringify({ findings: [{ ...long, claim: "x".repeat(325) }] }));
+    const reason = why(JSON.stringify({ findings: [{ ...long, claim: "x".repeat(CLAIM_MAX + 25) }] }));
     expect(reason).toMatch(/^finding 1 of 1 was rejected — claim: /);
     // Actionable: it has to carry the limit, or a model cannot comply with it.
-    expect(reason).toMatch(/300/);
+    expect(reason).toContain(String(CLAIM_MAX));
     expect(reason).not.toMatch(/JSON/);
   });
 

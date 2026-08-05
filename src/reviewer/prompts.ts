@@ -8,7 +8,7 @@
  * has to say so, or the model does not know it.
  */
 
-import { compareFindings } from "../core/finding.ts";
+import { CLAIM_MAX, compareFindings } from "../core/finding.ts";
 import type { Tier } from "../core/ladder.ts";
 import type { ReviewType } from "../core/review-type.ts";
 import type { KnowledgeItem, RecordedFinding } from "../store/store.ts";
@@ -207,7 +207,7 @@ Reply with ONE fenced json block and nothing else. No preamble, no commentary af
     "line": 142,
     "symbol": "capturePayment",
     "severity": "high",
-    "claim": "one sentence, max 300 characters",
+    "claim": "one sentence, max ${CLAIM_MAX} characters",
     "evidence": "where the proof is, with file:line",
     "failureScenario": "concrete inputs or state, then the wrong outcome",
     "cwe": "CWE-459"

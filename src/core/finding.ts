@@ -27,8 +27,30 @@ export type Severity = (typeof SEVERITIES)[number];
  * another finding, and because output tokens are ~77% of the top tier's cost once
  * input is cached — a reviewer that writes essays instead of records costs several
  * times more at every tier, forever (SPEC D-29).
+ *
+ * **300 → 500 on 2026-08-05, on the evidence of four failures.** Every recorded
+ * violation was a *sentence* — one clause too many, never an essay — and the shape
+ * the cap defends was never actually under attack:
+ *
+ *   | occurrence | length | over |
+ *   |---|---|---|
+ *   | earlier | 325 | 25 |
+ *   | t2 round 5, first reply | 358 | 58 |
+ *   | t2 round 5, retry | 314 | **14** |
+ *
+ * That retry is the argument. The model was told the exact rule, cut 44 characters,
+ * and still missed — so the retry does not converge here, and the cost of holding
+ * the line is a discarded reply, not a shorter one. The last one discarded a real
+ * defect: `openFindings` had no latest-verdict gate, found by t2, thrown away for
+ * being 58 characters long, and recovered only because the error message quoted it.
+ *
+ * 500 keeps the shape (one long sentence, ~70 words — still a record, not a
+ * paragraph) and clears the observed maximum by 40%. It stays four times smaller
+ * than `TEXT_MAX`, so `claim` remains the field that must be short and `evidence`
+ * the one that may be long. Raised rather than truncated because a claim silently
+ * cut mid-clause is a finding that says something its author did not.
  */
-const CLAIM_MAX = 300;
+export const CLAIM_MAX = 500;
 const TEXT_MAX = 2000;
 
 export const FindingSchema = z

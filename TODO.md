@@ -118,10 +118,20 @@ that part is pulled out into its own open item rather than hidden inside a tick.
       to be meaningful, or an honest statement that it cannot fire under a
       subscription, so nobody reads its silence as headroom.
 
-- [ ] **One bad finding still discards a whole reply — and it is now costing real
-      findings.** `extractFindings` fails the batch if any finding fails the schema.
-      The default is right (keeping the valid ones silently drops a defect the model
-      found), but the evidence has changed and this now needs deciding.
+- [x] **The claim cap was the wrong 300** (D-64). Decided 2026-08-05 by Vany: raise
+      it to 500. The number now lives in one place and is interpolated into the
+      output contract the models read, so the prompt can no longer state a limit the
+      schema does not enforce, and both tests derive from the constant.
+
+- [ ] **One bad finding still discards a whole reply.** Separate from D-64 and still
+      open: `extractFindings` fails the batch if any finding fails the schema. Raising
+      the cap removes the trigger that fired four times; it does not change what
+      happens when something else in a batch is malformed — `cwe: ""` and `cwe: null`
+      both did, and both are now forgiven individually rather than by policy. The
+      question left is whether partial acceptance with a loud record of what was
+      dropped beats failing the batch. Wants a decision, not a patch. The evidence
+      below is what D-64 was decided on and is kept because it is the best record of
+      what the all-or-nothing rule costs.
 
       **2026-08-05, the fourth occurrence and the worst.** t2 spent **40 minutes** on
       round 5 of lore's own review and returned one finding over the 300-character

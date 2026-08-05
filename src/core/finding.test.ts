@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  CLAIM_MAX,
   compareFindings,
   normalizeClaim,
   parseFinding,
@@ -78,8 +79,11 @@ describe("parseFinding", () => {
     expect(() => parseFinding({ ...valid, cwe })).toThrow();
   });
 
+  // Derived from the constant, not from a literal: the cap moved 300 → 500 and a
+  // hardcoded 301 would have kept passing while asserting nothing.
   it("rejects a claim that sprawls past one sentence", () => {
-    expect(() => parseFinding({ ...valid, claim: "x".repeat(301) })).toThrow();
+    expect(() => parseFinding({ ...valid, claim: "x".repeat(CLAIM_MAX + 1) })).toThrow();
+    expect(() => parseFinding({ ...valid, claim: "x".repeat(CLAIM_MAX) })).not.toThrow();
   });
 
   it("rejects empty required text", () => {

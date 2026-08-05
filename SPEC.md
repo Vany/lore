@@ -170,6 +170,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-61** | Git may never climb out of the directory it was aimed at | hard |
 | **D-62** | The deploy key is **used**, and it is the only identity offered | superseded by D-63 |
 | **D-63** | A local mirror is refreshed **on demand, outside lore**, and staleness is refused | confirmed |
+| **D-64** | `claim` is capped at **500**, raised from 300 because the retry does not converge | confirmed |
 
 **D-7, revised.** The earlier version dropped GLM-5.2 on Artificial Analysis's
 *cost per task* — which is tokens consumed × price on their benchmark, not a price.
@@ -899,6 +900,49 @@ individually fatal ways — `mcp` for `mcpServers`, a type of `remote` for `http
 compared it against a working config, though one sat in this repository the whole
 time. It is checked structurally now, and each of the three defects was reintroduced
 to confirm the test fails on it.
+
+**D-64 — `claim` is capped at 500, not 300, because the retry does not converge.**
+
+The cap enforces *shape*: a finding that sprawls cannot be compared with another
+finding, and output tokens are ~77% of the top tier's cost once input is cached
+(D-29). None of that changed. What changed is the evidence about what the cap
+actually catches.
+
+Four rejections, and every one was a **sentence** — one clause too many, never an
+essay:
+
+| occurrence | length | over |
+|---|---|---|
+| glm-5.2, earlier | 325 | 25 |
+| t2 round 5, first reply | 358 | 58 |
+| t2 round 5, retry | 314 | **14** |
+
+The retry is the argument. The model is told the exact rule and the exact limit,
+cuts 44 characters, and still misses by 14 — so the retry does not converge on this
+constraint, and the cost of holding the line is a **discarded reply**, not a shorter
+one. Four reviews have died this way.
+
+The last one was expensive in a way the others were not. t2 spent 40 minutes and
+returned one finding: `openFindings` had no latest-verdict gate, so a justification
+accepted and later rejected by `expireStaleVerdicts` counted as neither open nor
+settled — the livelock condition, defeating the expiry that stops justifications
+rubber-stamping themselves. Real, load-bearing, and thrown away for being 58
+characters long. It survived only because the error message quoted the claim back.
+
+**500 rather than truncation.** A claim silently cut mid-clause is a finding that
+says something its author did not, which is the same failure as every other one in
+this file. 500 keeps the shape — one long sentence, ~70 words, still a record and
+not a paragraph — clears the observed maximum by 40%, and stays four times smaller
+than `TEXT_MAX` so `claim` is still the field that must be short and `evidence` the
+one that may be long.
+
+Vany's call, because it changes how much quota a failed round burns.
+
+The number is now in one place and interpolated into the output contract the models
+read, so the prompt cannot state a limit the schema does not enforce — which is
+exactly how the first version told a model to comply with something it was never
+shown. Both tests derive from the constant for the same reason: a hardcoded `301`
+would have gone on passing while asserting nothing.
 
 **D-43 — review types.** `review_start` takes a `type`, defaulting to `code-arch`:
 *is this change correct and well-made?* The next type is `security`: *what
