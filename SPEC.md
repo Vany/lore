@@ -785,7 +785,26 @@ keypair on disk that nothing reads, handed over with an instruction to grant a
 repository read access to a key with no user, is worse than no key at all. The
 operator's remaining step is `make mirror`.
 
-**D-8, extended — T0 installs with the target's own package manager.**
+**D-8, extended — T0 runs the target's own tooling, in the sandbox.**
+
+Everything that needs the target's `node_modules` runs **inside the sandbox**, off
+one install per review: the suite, the typecheck and the lint. `tsc` and `eslint`
+resolve their binaries out of the target's dependency tree, so running them is
+executing code the target controls — which D-24 places in the sandbox and nowhere
+else. The service container holds the knowledge base, the signing key and every
+provider credential; a `postinstall`-shaped risk must not have a second door.
+
+`semgrep`, `ast-grep`, `sbom` and `osv` stay outside it. Those are lore's own
+binaries reading files: they need no install and execute nothing from the tree.
+
+**Where the target declares a script, that script wins.** A monorepo's answer to
+"does this typecheck" is `turbo run typecheck` across every package, not one `tsc`
+at a root that has no `tsconfig.json`. A script's output is not a format we can
+parse into per-line findings, so a failure becomes one finding carrying its tail —
+which beats reporting nothing, and beats reporting clean. Where there is no script,
+the structured `tsc`/`eslint` parse still runs and still gives per-line findings.
+
+**Installation follows the lockfile.**
 
 T0 runs the target repository's tooling rather than ours, and that includes how it
 installs. The lockfile decides: `pnpm-lock.yaml` → pnpm, `yarn.lock` → yarn,

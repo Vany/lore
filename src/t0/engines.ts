@@ -79,14 +79,27 @@ export function detect(worktree: string, engine: T0Engine): boolean {
 }
 
 export async function runEngine(worktree: string, engine: T0Engine): Promise<EngineOutcome> {
+  // Refused rather than defaulted. These two resolve their binary out of the
+  // target's node_modules, so the service must never run them — `runner.ts` drives
+  // them inside the sandbox. Falling through to "has no runner" would read as a
+  // missing feature instead of a boundary.
+  if (engine === "tsc" || engine === "eslint" || engine === "tests") {
+    return {
+      engine,
+      findings: [],
+      unavailable: `${engine} runs in the sandbox, not here — call it through runT0`,
+    };
+  }
   if (!detect(worktree, engine)) {
     return { engine, findings: [], unavailable: `${engine} is not configured in this repo` };
   }
   switch (engine) {
-    case "tsc":
-      return tsc(worktree);
-    case "eslint":
-      return eslint(worktree);
+    // tsc and eslint are NOT here. Both resolve their binary out of the target's
+    // `node_modules`, so running them means executing code from the dependency tree
+    // — which D-24 says happens in the sandbox and never in the service. They are
+    // driven by `runner.ts` inside the same container the suite uses. `semgrep`,
+    // `ast-grep`, `sbom` and `osv` stay: those are lore's own binaries reading
+    // files, and they need no install.
     case "semgrep":
       return semgrep(worktree);
     case "ast-grep":
@@ -159,12 +172,10 @@ async function osv(worktree: string): Promise<EngineOutcome> {
 
 const TSC_LINE = /^(.+?)\((\d+),(\d+)\):\s+error\s+(TS\d+):\s+(.*)$/;
 
-async function tsc(worktree: string): Promise<EngineOutcome> {
-  const r = await runTool(worktree, "npx", ["--no-install", "tsc", "--noEmit", "--pretty", "false"]);
-  if (r.unavailable !== undefined) return { engine: "tsc", findings: [], unavailable: r.unavailable };
-
+/** Parse `tsc --noEmit --pretty false` output. Exported so the sandbox can use it. */
+export function parseTsc(output: string): Finding[] {
   const findings: Finding[] = [];
-  for (const raw of `${r.stdout}\n${r.stderr}`.split("\n")) {
+  for (const raw of output.split("\n")) {
     const m = TSC_LINE.exec(raw.trim());
     if (m === null) continue;
     findings.push(
@@ -179,7 +190,7 @@ async function tsc(worktree: string): Promise<EngineOutcome> {
       }),
     );
   }
-  return { engine: "tsc", findings };
+  return findings;
 }
 
 // --------------------------------------------------------------------- eslint
@@ -195,14 +206,10 @@ interface EslintFile {
   messages: EslintMessage[];
 }
 
-async function eslint(worktree: string): Promise<EngineOutcome> {
-  const r = await runTool(worktree, "npx", ["--no-install", "eslint", ".", "--format", "json"]);
-  if (r.unavailable !== undefined) return { engine: "eslint", findings: [], unavailable: r.unavailable };
-
-  const parsed = parseJson<EslintFile[]>(r.stdout);
-  if (parsed === undefined) {
-    return { engine: "eslint", findings: [], unavailable: "eslint produced unparseable output" };
-  }
+/** Parse `eslint --format json`. Returns undefined when the output is not that. */
+export function parseEslint(stdout: string, worktree: string): Finding[] | undefined {
+  const parsed = parseJson<EslintFile[]>(stdout);
+  if (parsed === undefined) return undefined;
 
   const findings: Finding[] = [];
   for (const file of parsed) {
@@ -219,7 +226,7 @@ async function eslint(worktree: string): Promise<EngineOutcome> {
       );
     }
   }
-  return { engine: "eslint", findings };
+  return findings;
 }
 
 // -------------------------------------------------------------------- semgrep

@@ -156,6 +156,8 @@ export interface Toolchain {
   readonly name: string;
   readonly install: string;
   readonly test: string;
+  /** `<pm> run <script>`, for scripts the target declares itself. */
+  readonly run: (script: string) => string;
 }
 
 export async function toolchain(worktree: string): Promise<Toolchain | undefined | "npm"> {
@@ -168,10 +170,16 @@ export async function toolchain(worktree: string): Promise<Toolchain | undefined
       name: "pnpm",
       install: "pnpm install --frozen-lockfile || pnpm install",
       test: "pnpm test",
+      run: (script) => `pnpm run ${script}`,
     };
   }
   if (await has("yarn.lock")) {
-    return { name: "yarn", install: "yarn install --immutable || yarn install", test: "yarn test" };
+    return {
+      name: "yarn",
+      install: "yarn install --immutable || yarn install",
+      test: "yarn test",
+      run: (script) => `yarn run ${script}`,
+    };
   }
   // Bun is a different runtime, not just a different installer, and is not in the
   // sandbox image. Saying so beats installing with npm and reporting whatever that
@@ -184,12 +192,47 @@ const NPM: Toolchain = {
   name: "npm",
   install: "npm ci --no-audit --no-fund || npm install --no-audit --no-fund",
   test: "npm test --silent",
+  run: (script) => `npm run --silent ${script}`,
 };
 
 /** The commands to use, with npm as the default for a repo with no lockfile. */
 export async function commandsFor(worktree: string): Promise<Toolchain | undefined> {
   const t = await toolchain(worktree);
   return t === undefined ? undefined : t === "npm" ? NPM : t;
+}
+
+/**
+ * Run one command in the sandbox.
+ *
+ * `network` is on ONLY for the install: a registry needs it, and a test — or a
+ * typecheck, or a lint — that reaches the internet is not a check of this change.
+ * Everything else is the same container shape: sources read-only at /src, a
+ * throwaway copy at /work, the shared install at /work/node_modules, no
+ * capabilities, no new privileges, bounded cpu/memory/pids, and a hard timeout.
+ */
+export async function runInSandbox(
+  cfg: SandboxConfig,
+  worktree: string,
+  cacheDir: string,
+  scratch: string,
+  script: string,
+  network: boolean,
+): Promise<ToolResult> {
+  return runTool(
+    worktree,
+    cfg.runtime,
+    [
+      ...baseArgs(cfg, worktree, cacheDir, scratch),
+      ...(network ? [] : ["--network", "none"]),
+      cfg.image,
+      "sh",
+      "-lc",
+      // Re-synced every time: install may rewrite a lockfile, and each phase must
+      // see exactly the sources under review rather than what the last one left.
+      `${SYNC} && ${script}`,
+    ],
+    cfg.timeoutMs,
+  );
 }
 
 /**
