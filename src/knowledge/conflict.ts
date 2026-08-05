@@ -16,7 +16,13 @@
 
 import type { KnowledgeItem, Store } from "../store/store.ts";
 
-/** Words that flip a statement's polarity. */
+/**
+ * Words that flip a statement's polarity.
+ *
+ * A closed list, so "must not be ABSENT" reads as one negation here and as a double
+ * negative to a person. That is a known limit rather than a bug — widening it to
+ * every negative-meaning word needs a lexicon this file has no business carrying.
+ */
 const NEGATIONS = /\b(not|never|no|avoid|forbidden|must not|don't|do not|without|reject)\b/gi;
 
 /** Words carrying no signal about what a rule is about. */
@@ -33,10 +39,37 @@ export interface ConflictCandidate {
   readonly reason: string;
 }
 
+/**
+ * Positive (1), negative (-1), or **too compound to say** (0).
+ *
+ * Double negation only cancels within ONE proposition — "must not run without a tree
+ * hash" really is a positive claim. It was applied to the whole statement, and a
+ * sentence making SEVERAL claims breaks that badly:
+ *
+ *   "…the seam holds NO balance and NEVER calls the ledger"   → 2 negations → positive
+ *   "…the seam still NEVER touches the ledger"                → 1 negation  → negative
+ *
+ * Those are the same assertion, written twice. The first was read as its own
+ * opposite, and with 63% token overlap the two were recorded as a contradiction that
+ * stopped a real review at `needs_human` — the first time this path ever fired in
+ * production, and it was wrong. Two independent negative clauses do not cancel; they
+ * are two negative facts.
+ *
+ * So cancellation is now per CLAUSE, and a statement whose clauses disagree returns 0
+ * — this heuristic cannot reduce it to one polarity, and saying so is better than
+ * picking one. `findConflicts` skips those rather than guessing, which is the right
+ * trade here: a missed conflict leaves two rules to be caught later, while a false one
+ * stops a review and demands a person.
+ */
 export function polarity(statement: string): number {
-  const matches = statement.match(NEGATIONS);
-  // Even numbers of negations cancel: "must not be absent" is a positive claim.
-  return (matches?.length ?? 0) % 2 === 0 ? 1 : -1;
+  // Clause boundaries, not sentence boundaries: the failure was WITHIN one sentence.
+  const clauses = statement.split(/[,;:—]|\band\b|\bbut\b|\bwhile\b/i).filter((c) => c.trim().length > 0);
+  const polarities = new Set(
+    clauses.map((c) => ((c.match(NEGATIONS)?.length ?? 0) % 2 === 0 ? 1 : -1)),
+  );
+  if (polarities.size === 0) return 1;
+  // Mixed: several claims pulling different ways. Undecidable, and it says so.
+  return polarities.size > 1 ? 0 : (polarities.values().next().value ?? 1);
 }
 
 export function subjectTokens(statement: string): ReadonlySet<string> {
@@ -82,6 +115,9 @@ export function findConflicts(items: readonly KnowledgeItem[]): readonly Conflic
       const a = prepared[i];
       const b = prepared[j];
       if (a === undefined || b === undefined) continue;
+      // 0 means "too compound to reduce to one polarity" — a statement that makes
+      // several claims cannot be said to contradict anything on this evidence.
+      if (a.pol === 0 || b.pol === 0) continue;
       if (a.pol === b.pol) continue;
       // Rules scoped to unrelated paths are not in conflict; they are two rules.
       if (!scopesOverlap(a.k.path, b.k.path)) continue;

@@ -251,6 +251,36 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
                     "say so to your user, and weigh a later `passed` accordingly.",
                 };
           })(),
+          // THE QUESTION ITSELF, not just the fact that there is one.
+          //
+          // `needs_human` is the single state whose entire purpose is "a person must
+          // decide this" — and it shipped saying only that. A client hit it on a real
+          // review and reported, correctly, that lore "does not say which question".
+          // Telling an agent to stop and ask a human, without telling it what to ask,
+          // is the same defect as a review that did not run reporting nothing found:
+          // the machine knows something the caller needs and does not say it.
+          //
+          // Rendered rather than raw ids: the two statements ARE the question, and an
+          // id pair sends the reader on a second lookup for the only thing that
+          // matters.
+          ...(() => {
+            if (review.state !== "needs_human") return {};
+            const open = store.openConflicts(review.repoId);
+            const byId = new Map(store.knowledgeFor(review.repoId, undefined, 1000).map((k) => [k.id, k]));
+            const questions = open.map((c) => ({
+              left: { id: c.left, statement: byId.get(c.left)?.statement ?? "(retired)", source: byId.get(c.left)?.provenance },
+              right: { id: c.right, statement: byId.get(c.right)?.statement ?? "(retired)", source: byId.get(c.right)?.provenance },
+            }));
+            return {
+              needs_human_because:
+                questions.length === 0
+                  ? "A question was raised that must not be answered without a person, and the record of it is gone. Report this: it is a defect in lore."
+                  : "This repository's memory contains statements that cannot both be true. A REVIEW CANNOT SETTLE THIS — " +
+                    "the answer decides what every future session is told about this codebase, so a person must choose. " +
+                    "Take it to them, then call knowledge_resolve with the id to keep, or knowledge_escalate if they cannot decide either.",
+              open_questions: questions,
+            };
+          })(),
         }),
       );
     },

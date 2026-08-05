@@ -127,3 +127,51 @@ describe("detectAndRecord", () => {
     expect(renderConflicts(store, repoId)).toBe("");
   });
 });
+
+// THE FIRST TIME needs_human EVER FIRED IN PRODUCTION, IT WAS WRONG.
+//
+// Two ADR sentences saying the same thing were recorded as a contradiction and
+// stopped a real review whose findings were all settled. Double negation cancels
+// within one proposition — "must not be absent" is positive — but it was applied to
+// the whole statement, and a compound sentence with two INDEPENDENT negative clauses
+// came out positive, the opposite of what it says.
+describe("polarity does not cancel across independent clauses", () => {
+  const SEAM_A =
+    "Everything else in 0018 stands: the gateway owns the 1500 ms budget, the issuer target is configuration, " +
+    "and the seam holds no balance and never calls the ledger";
+  const SEAM_B =
+    "Everything else in both stands — the gateway still owns the 1500 ms budget, the issuer target is still " +
+    "configuration, the seam still never touches the ledger";
+
+  it("calls a statement with clauses pulling both ways undecidable, not positive", () => {
+    // 0, not 1. "I cannot reduce this to one polarity" beats picking the wrong one.
+    expect(polarity(SEAM_A)).toBe(0);
+    expect(polarity(SEAM_B)).toBe(0);
+  });
+
+  it("does not record two restatements of the same rule as a contradiction", () => {
+    expect(findConflicts([item("a", SEAM_A), item("b", SEAM_B)])).toStrictEqual([]);
+  });
+
+  // Single-proposition double negation still cancels — that part was right, and it
+  // only works for negations the regex actually knows. "must not be ABSENT" is a
+  // double negative to a reader and a single one here, because `absent` is not in
+  // NEGATIONS; the old doc comment used it as its example and was describing an
+  // intention rather than the behaviour.
+  it("still cancels a double negative built from words it recognises", () => {
+    expect(polarity("A round must not run without a tree hash")).toBe(1);
+    expect(polarity("A round must run with a tree hash")).toBe(1);
+    expect(polarity("A round must not run")).toBe(-1);
+  });
+
+  // The trade is deliberate: skipping an undecidable statement can miss a
+  // contradiction, and that costs a rule left to be caught later. A FALSE one stops a
+  // review and demands a person, which is what happened.
+  it("still catches a real contradiction about the same subject", () => {
+    const found = findConflicts([
+      item("x", "The ledger must allow a negative balance"),
+      item("y", "The ledger must not allow a negative balance"),
+    ]);
+    expect(found).toHaveLength(1);
+  });
+});

@@ -105,7 +105,13 @@ ONLY \`passed\` means the branch is clean.
 - \`fast_clean\` means only the cheap tiers have finished; the deep tiers are still
   running. It is NOT a pass.
 - \`needs_human\` means a question was found that you must not answer yourself.
-  Ask a person. Do not guess, and do not close it with lore-ok.
+  **\`open_questions\` is the question** — both statements, in full, and where each
+  came from; \`needs_human_because\` says why a review cannot settle it. Take them to
+  a person verbatim. This is not a finding about code: it is two things this
+  repository believes that cannot both be true, and the answer decides what every
+  future session is told. Do not guess, do not close it with lore-ok. When the person
+  has decided, call knowledge_resolve with the id to keep — or knowledge_escalate if
+  they cannot decide either.
 
 While queued or running, wait and poll again — start at 10s, back off to 60s. An
 absence of findings so far is not a clean result.

@@ -641,3 +641,59 @@ describe("the spend ceiling says whether it can fire", () => {
     expect(body["spend_ceiling"]).not.toHaveProperty("note");
   });
 });
+
+// `needs_human` is the one state whose entire purpose is "a person must decide this",
+// and it shipped saying only that. A client hit it on a real review and reported,
+// correctly, that lore "does not say which question". Telling an agent to stop and ask
+// a human without telling it what to ask is the same defect as a review that did not
+// run reporting nothing found: the machine knows what the caller needs and withholds it.
+describe("needs_human says what the question is", () => {
+  const conflicted = () => {
+    store.createReview({
+      id: "revH", repoId, principal: "alice", branch: "feat/x", intoRef: "main",
+      ticket: "t", type: "code-arch", state: "needs_human", ladder: initialState(),
+    });
+    const a = store.addKnowledge({
+      repoId, kind: "rule", source: "ingested", statement: "Holds must expire after seven days",
+      why: undefined, path: undefined, cwe: undefined, provenance: "docs/adr/0022.md",
+      sourceBlob: undefined, confidence: undefined,
+    });
+    const b = store.addKnowledge({
+      repoId, kind: "rule", source: "ingested", statement: "Holds must never expire",
+      why: undefined, path: undefined, cwe: undefined, provenance: "docs/adr/0030.md",
+      sourceBlob: undefined, confidence: undefined,
+    });
+    store.recordConflict(repoId, a.id, b.id);
+  };
+
+  it("returns both statements, not just an id pair", async () => {
+    conflicted();
+    const out = await callTool("review_poll", { review_id: "revH" });
+
+    expect(out["state"]).toBe("needs_human");
+    const qs = out["open_questions"] as { left: { statement: string }; right: { statement: string } }[];
+    expect(qs).toHaveLength(1);
+    // The statements ARE the question. An id pair sends the reader on a second
+    // lookup for the only thing that matters.
+    expect(qs[0]?.left.statement).toContain("expire after seven days");
+    expect(qs[0]?.right.statement).toContain("never expire");
+    // And where each came from, so a person can go and read the source.
+    expect(JSON.stringify(qs[0])).toContain("docs/adr/0030.md");
+  });
+
+  it("says why a review cannot settle it, and what to call instead", async () => {
+    conflicted();
+    const out = await callTool("review_poll", { review_id: "revH" });
+    expect(String(out["needs_human_because"])).toMatch(/A REVIEW CANNOT SETTLE THIS/);
+    expect(String(out["needs_human_because"])).toContain("knowledge_resolve");
+  });
+
+  it("says nothing about questions on a review that has none", async () => {
+    store.createReview({
+      id: "revQ", repoId, principal: "alice", branch: "feat/y", intoRef: "main",
+      ticket: "t", type: "code-arch", state: "findings_ready", ladder: initialState(),
+    });
+    const out = await callTool("review_poll", { review_id: "revQ" });
+    expect(out).not.toHaveProperty("open_questions");
+  });
+});
