@@ -410,6 +410,14 @@ export class Store {
            AND NOT EXISTS (
              SELECT 1 FROM verdict v
              WHERE v.review_id = f.review_id AND v.fingerprint = f.fingerprint
+               -- The LATEST verdict, matching settledFingerprints. Without this it
+               -- matched ANY historical row, so a justification that was accepted and
+               -- later REJECTED — which is exactly what expireStaleVerdicts writes
+               -- when the code moves — still excluded the finding here while
+               -- settledFingerprints correctly stopped counting it settled. Neither
+               -- open nor settled: the livelock review.ts:427 describes.
+               AND v.id = (SELECT MAX(id) FROM verdict w
+                           WHERE w.review_id = v.review_id AND w.fingerprint = v.fingerprint)
                AND v.verdict IN (${SETTLING_VERDICTS.map((v) => `'${v}'`).join(", ")})
            )
          ORDER BY ${FINDING_ORDER_SQL}`,

@@ -159,6 +159,30 @@ describe("verdicts", () => {
     expect([...settled].sort()).toStrictEqual(SETTLING_VERDICTS.map((_, i) => `f${i}`));
   });
 
+  // Verdicts are append-only, so the two views must agree on the LATEST row — and
+  // the test above only proved they agree for findings with exactly one. That gap
+  // was named by t2, in a reply the 300-character claim cap then discarded; the
+  // finding was real and is fixed here.
+  //
+  // `openFindings` matched ANY historical settling verdict with no latest gate,
+  // while `settledFingerprints` took the maximum id. So a justification accepted and
+  // later rejected — precisely what `expireStaleVerdicts` writes when the code it
+  // justified changes — was excluded from open AND excluded from settled. Neither.
+  // That is the livelock condition review.ts:427 spells out, and the rubber-stamping
+  // the expiry exists to prevent: the defect is back and nothing counts it.
+  it("agrees on the latest verdict, not merely on some historical one", () => {
+    store.recordFinding("rev1", finding("aa"));
+    store.recordVerdict("rev1", { fingerprint: "aa", verdict: "justified-accepted", rationale: "bounded", scope: undefined, tier: "t1", round: 1 });
+    expect(store.openFindings("rev1").map((f) => f.fingerprint)).not.toContain("aa");
+    expect(store.settledFingerprints("rev1")).toContain("aa");
+
+    // The code moved, so the reason no longer holds.
+    store.recordVerdict("rev1", { fingerprint: "aa", verdict: "justified-rejected", rationale: "expired: code changed", scope: undefined, tier: "expiry", round: 0 });
+
+    expect(store.settledFingerprints("rev1")).not.toContain("aa");
+    expect(store.openFindings("rev1").map((f) => f.fingerprint)).toContain("aa");
+  });
+
   it("counts fixed and accepted as settled, but not rejected", () => {
     store.recordVerdict("rev1", { fingerprint: "aa", verdict: "fixed", rationale: undefined, scope: undefined, tier: "t1", round: 1 });
     store.recordVerdict("rev1", { fingerprint: "bb", verdict: "justified-accepted", rationale: "bounded upstream", scope: undefined, tier: "t1", round: 1 });
