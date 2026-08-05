@@ -180,6 +180,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-67** | Severity is the engine's. Recurrence informs the reader, and never demotes | confirmed |
 | **D-68** | A finding outside the diff from a pattern engine is **inherited**: reported, ranked last | confirmed |
 | **D-69** | A token reaches **its own repository** and no other — scoping is per repo, not per principal | confirmed |
+| **D-70** | A finished review **gives its worktree back at once**, through git, not in a week | confirmed |
 
 **D-7, revised.** The earlier version dropped GLM-5.2 on Artificial Analysis's
 *cost per task* — which is tokens consumed × price on their benchmark, not a price.
@@ -843,6 +844,35 @@ A lockfile naming a manager the image does not carry — bun, which is a runtime
 not merely an installer — is reported as an **unavailable engine**. Installing with
 npm instead and presenting the result as that project's suite would be a confident
 claim about something that never ran.
+
+**D-70 — a finished review gives its worktree back immediately.**
+
+A terminal review's worktree serves nothing. Its tree hash is already recorded,
+attestation reads only the store, and `review_submit` refuses a finished review — so
+the moment a review reaches `passed`, `passed_partial`, `failed` or `expired`, the
+worker releases the worktree. The hourly sweep keeps a zero-day window as the backstop
+for anything that path missed.
+
+**Released through git, never by deleting the directory.** git keeps its own record
+under `bare.git/worktrees/<id>`, so an `rm` leaves `git worktree list` naming
+directories that are not there and administrative files nobody collects. The sweep did
+exactly that, and it had never shown because the seven-day window meant nothing was
+ever old enough to remove.
+
+**Why a review becomes orphaned**, measured on 2026-08-05 across 11 abandoned reviews:
+
+- **Nothing obliges the client to finish.** It polls, collects the findings, and stops.
+  A review then sits in `findings_ready` for ever, holding a worktree, until the
+  staleness sweep expires it 48 hours later. This is the dominant cause and it is not
+  a bug in the client — the loop simply has no deadline in it.
+- **Restarting instead of continuing** orphaned four of the eleven, all on one branch.
+  Fixed separately: `review_start` refuses a branch that already has an open review.
+- **A review that fails mid-round** leaves a worktree its review will never use again.
+
+Orphaned is therefore normal, not exceptional, and reclamation is a routine duty
+rather than an error path. What must NOT happen is an expired review reading as a
+clean one: `expired` is its own state, never `passed`, because a review somebody
+walked away from told us nothing about the code (INV-1).
 
 **D-68 — a finding outside the diff, from a pattern engine, belongs to the repository
 rather than to the branch.**

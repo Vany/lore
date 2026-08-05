@@ -58,6 +58,12 @@ not be included, and nothing will tell you which. Push first, then start; for
 anything after that, start a new review. Once a review is pinned the mirror is never
 re-read, so a later push cannot move the ground under findings already reported.
 
+FINISH WHAT YOU START. A review left in \`findings_ready\` never ends by itself: it
+holds a pinned worktree until it is expired as abandoned, and the branch stays
+unreviewed. Either answer its findings with review_submit, or leave it knowing the
+result is \`expired\` — which means NOTHING was concluded about the code, not that it
+was clean.
+
 ONE REVIEW PER BRANCH. Start it once; then answer its findings with review_submit,
 which applies your fixes to the SAME review and advances the ladder. Do NOT start a
 second review of a branch that already has one open — it is refused, and it names the

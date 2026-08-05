@@ -14,8 +14,9 @@
 
 
 import { Exhausted, LoreError } from "../core/errors.ts";
+import { isTerminal, type ReviewState } from "../core/review-state.ts";
 import { reviewType } from "../core/review-type.ts";
-import { repoPaths, worktreeFor } from "../git/repo.ts";
+import { removeWorktree, repoPaths, worktreeFor } from "../git/repo.ts";
 import { bootstrap } from "../knowledge/bootstrap.ts";
 import type { Store } from "../store/store.ts";
 import { Alerter, CONDITIONS } from "../ops/alerts.ts";
@@ -85,6 +86,7 @@ export class Worker {
       try {
         await this.runJob(job.reviewId);
         this.store.finishJob(job.id, "done");
+        await this.releaseIfFinished(job.reviewId);
         this.note(true);
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
@@ -92,6 +94,7 @@ export class Worker {
         // A review that did not run is not a review that found nothing. The state
         // says so, and the client is told so.
         this.store.updateReview(job.reviewId, { state: e instanceof Exhausted ? "failed" : "failed" });
+        await this.releaseIfFinished(job.reviewId);
         this.note(false);
         await this.alerter.send({
           severity: "log",
@@ -182,6 +185,39 @@ export class Worker {
         // findings / passed / needsHuman / stopped all wait for the client.
         break;
     }
+  }
+
+  /**
+   * Give back a finished review's worktree, now rather than in a week (D-70).
+   *
+   * A terminal review's worktree serves nothing: the tree hash is already recorded,
+   * attestation reads only the store, and `review_submit` refuses a finished review
+   * outright. It was held for seven days by the retention sweep — so on 2026-08-05,
+   * sixteen finished reviews were still holding worktrees, the oldest for two days,
+   * on a disk at 88%.
+   *
+   * Here rather than only in the sweep because an hour of lag is an hour of disk, and
+   * a failing review is exactly when they arrive in bursts. The sweep stays as the
+   * backstop for anything this misses — a crash between the state write and this
+   * line, or a review that reached a terminal state by another path.
+   *
+   * Never fatal. A worktree that cannot be removed is a disk problem to report, not a
+   * reason to fail a review that has already finished.
+   */
+  private async releaseIfFinished(reviewId: string): Promise<void> {
+    const row = this.store.db
+      .prepare("SELECT repo_id, state FROM review WHERE id = ?")
+      .get(reviewId) as Record<string, string> | undefined;
+    if (row === undefined || !isTerminal((row["state"] ?? "") as ReviewState)) return;
+
+    const paths = repoPaths(this.cfg.reposRoot, row["repo_id"] ?? "");
+    await removeWorktree(paths, reviewId).catch((e: unknown) => {
+      void this.alerter.send({
+        severity: "log",
+        condition: "worktree not released",
+        detail: `${reviewId}: ${e instanceof Error ? e.message : String(e)}`,
+      });
+    });
   }
 
   /** Reviews failing as a class is systematic, not one bad branch. */

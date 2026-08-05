@@ -15,7 +15,7 @@ import * as z from "zod";
 import { absent } from "../core/optional.ts";
 import { worstSeverity } from "../core/finding.ts";
 import { initialState } from "../core/ladder.ts";
-import { isAttestable } from "../core/review-state.ts";
+import { isAttestable, isTerminal } from "../core/review-state.ts";
 import { DEFAULT_TYPE, reviewType, reviewTypeIds } from "../core/review-type.ts";
 import { applyPatch, treeHash } from "../git/repo.ts";
 import { enrich, renderEnrichment } from "../knowledge/enrich.ts";
@@ -350,7 +350,25 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       }),
     },
     async ({ review_id, diff, tree_hash }) => {
-      mine(review_id);
+      const review = mine(review_id);
+
+      // A FINISHED REVIEW TAKES NO MORE WORK.
+      //
+      // There was no guard here, and it was harmless only by accident: the worktree
+      // of a terminal review happened to still exist, so a patch landed in a
+      // directory nobody would read again. Dropping those worktrees on completion
+      // (D-70) turns that into a real fault — `worktreeFor` would cut a FRESH base
+      // from the mirror as it stands now, apply the patch to it, and record a tree
+      // hash against a review that passed on an entirely different tree. D-40 says a
+      // review is pinned to the snapshot it began with; this is that guarantee being
+      // quietly voided by a call nobody thought to refuse.
+      if (isTerminal(review.state)) {
+        throw new Error(
+          `review ${review_id} is '${review.state}' and takes no more submissions. Its base is gone and cannot ` +
+            `be recreated — a new worktree would be cut from the mirror as it stands NOW, which is not the tree ` +
+            `this review looked at. Start a fresh review for further work on this branch.`,
+        );
+      }
 
       // The worktree is resolved FIRST so the only `await` before the check is
       // behind us; the check and the write then sit together with nothing to yield

@@ -33,6 +33,17 @@ export type ReviewState = (typeof REVIEW_STATES)[number];
 /** Terminal states — no further work will happen without a new review. */
 const TERMINAL = new Set<ReviewState>(["passed", "passed_partial", "failed", "expired"]);
 
+/**
+ * The same set, for SQL that has to name them.
+ *
+ * Derived rather than written out, because it was written out and one copy was
+ * wrong: `expireStale` listed `'passed', 'failed', 'expired'` and omitted
+ * `passed_partial`, so a review that legitimately reached a partial pass would be
+ * overwritten with `expired` 48 hours later — a verdict destroyed by a sweep. It had
+ * never fired only because `passed_partial` had never occurred in production.
+ */
+export const TERMINAL_SQL: string = [...TERMINAL].map((s) => `'${s}'`).join(", ");
+
 export function isTerminal(state: ReviewState): boolean {
   return TERMINAL.has(state);
 }
