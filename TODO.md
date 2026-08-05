@@ -118,13 +118,31 @@ that part is pulled out into its own open item rather than hidden inside a tick.
       to be meaningful, or an honest statement that it cannot fire under a
       subscription, so nobody reads its silence as headroom.
 
-- [ ] **One bad finding still discards a whole reply.** `extractFindings` returns a
-      failure if any finding in the batch fails the schema. That is the right default
-      — keeping the valid ones silently drops a defect the model actually found — and
-      it has been the wrong outcome three times (`cwe: ""`, `cwe: null`, a
-      325-character claim). Now that the retry names the exact rule broken, the
-      question is whether a second retry, or partial acceptance with a loud record of
-      what was dropped, is better. Wants a decision, not a patch.
+- [ ] **One bad finding still discards a whole reply — and it is now costing real
+      findings.** `extractFindings` fails the batch if any finding fails the schema.
+      The default is right (keeping the valid ones silently drops a defect the model
+      found), but the evidence has changed and this now needs deciding.
+
+      **2026-08-05, the fourth occurrence and the worst.** t2 spent **40 minutes** on
+      round 5 of lore's own review, returned one finding whose `claim` was **342
+      characters against a 300 cap**, was told the exact rule, retried, and broke it
+      again by the same margin. Both replies discarded; the review is `failed`.
+
+      The claim it threw away was **correct and load-bearing** — `openFindings` had
+      no latest-verdict gate, so a justification accepted and later rejected counted
+      as neither open nor settled. Fixed in `966b12a`, from the error message alone.
+      So the cap did not filter noise; it filtered a real defect and charged 40
+      minutes for it.
+
+      Also worth weighing: **the retry does not work on this rule.** It names the
+      violated constraint and the model exceeds it again — twice now. Whatever is
+      chosen should not assume a second retry converges.
+
+      Options, none free: raise the cap; accept the batch and truncate the claim with
+      the full text kept in evidence; accept the valid findings and record loudly
+      what was dropped; or keep failing and treat the cap as a real contract. **This
+      changes how much quota a failed round burns, so it is Vany's call** — the
+      project rule is that anything altering model spend gets discussed first.
 
 - [ ] **Prove Phase 3's actual done-criterion.** A fresh Claude Code session, given
       no instructions beyond the MCP tool descriptions, drives a review to `passed`.
