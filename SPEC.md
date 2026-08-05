@@ -4,7 +4,7 @@ A hosted MCP service that reviews a branch before it merges, and — the actual
 point — **remembers the codebase between sessions**.
 
 Status: **deployed and reviewing itself**, 2026-08-05. All phases in `PLAN.md` have
-code; 367 tests. Live: 17 reviews, 2 attested, 863 knowledge rows, 75 model calls.
+code; 391 tests. Live: 21 reviews, 2 attested, 871 knowledge rows, 82 model calls.
 Unproven: the Orange Pi itself, and three paths that have never executed —
 `passed_partial`, `needs_human`, quota exhaustion. `TODO.md` keeps those open rather
 than folding them into a tick.

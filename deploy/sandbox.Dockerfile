@@ -26,7 +26,8 @@ RUN apk add --no-cache git ca-certificates
 # containers: corepack downloads on first use, and its cache would live in a layer
 # the second container never sees. The only mount shared between them is
 # /work/node_modules.
-RUN npm i -g --no-audit --no-fund pnpm@10 yarn@1
+# yarn 1.x already ships in this image; only pnpm is missing.
+RUN npm i -g --no-audit --no-fund pnpm@10
 
 # Many suites assume an identity exists when they touch git at all.
 RUN git config --system user.email "sandbox@lore.invalid" \
