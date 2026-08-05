@@ -109,6 +109,17 @@ an earlier review, carried forward and accepted without anyone re-arguing it.
 `lore-ok` for one duplicates the marker already in the file, and every word submitted
 is fresh surface for the next tier.
 
+`checks_skipped` is present when a deterministic engine did not run — no installed
+dependencies, no test script, a suite disabled for the deployment. It is absent, not
+empty, when everything ran, so a client never has to tell `[]` from "all of them".
+
+It exists because INV-1 has a quiet failure mode on this surface. T0's engines go
+missing without raising anything: `tsc` and `eslint` shell out through the target's
+own `node_modules`, and a repository whose install fails simply produces no findings
+from either. The model tiers are told in their prompt and the CLI prints it, so the
+gap was only ever on the MCP side — where the client deciding whether to merge is.
+A `passed` with `checks_skipped` means the tiers that ran agree, not that the tests do.
+
 `open_count` counts findings still open across the whole review, not just this poll.
 It and the per-finding shapes are derived from the same definition of settled
 (`spec/review-ladder.md` §3.3), so they cannot disagree; if they ever do, that is a

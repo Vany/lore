@@ -331,7 +331,7 @@ describe("findings are ranked worst first", () => {
       expect(byFp["l1"], `poll does not emit ${field}`).toHaveProperty(field);
     }
     // Conditional: named in the docs, emitted only when they apply.
-    for (const field of ["cwe", "history", "justify_with", "settled", "settled_because", "justification_rejected", "open_count"]) {
+    for (const field of ["cwe", "history", "justify_with", "settled", "settled_because", "justification_rejected", "open_count", "checks_skipped"]) {
       expect(documented, `TOOL_DOCS.poll does not mention ${field}`).toContain(field);
     }
 
@@ -340,6 +340,31 @@ describe("findings are ranked worst first", () => {
     expect(byFp["l1"]).not.toHaveProperty("settled");
     expect(byFp["m1"]).toHaveProperty("settled");
     expect(byFp["m1"]).not.toHaveProperty("justify_with");
+  });
+
+  // INV-1 on the product surface. T0's deterministic engines go missing quietly —
+  // no node_modules, no test script, a suite disabled for the deployment — and their
+  // absence was reported to the model prompt and to the CLI, but never to the MCP
+  // client. Reviewing a real PR made that concrete: tsc and eslint could not run for
+  // want of an install, and nothing a client could read said so.
+  it("tells the client which checks did not run", async () => {
+    const id = store.openTierRun("rev1", "t0", 1, new Date().toISOString());
+    store.closeTierRun(id, "findings", ["tsc: no installed dependencies", "tests: disabled for this deployment"]);
+
+    const out = await callTool("review_poll", { review_id: "rev1" });
+    expect(out["checks_skipped"]).toStrictEqual([
+      "tsc: no installed dependencies",
+      "tests: disabled for this deployment",
+    ]);
+    expect(String(out["checks_skipped_note"])).toMatch(/did NOT run/);
+  });
+
+  // Absent, not empty: a client must not have to distinguish [] from "all ran".
+  it("says nothing when every check ran", async () => {
+    const id = store.openTierRun("rev1", "t0", 1, new Date().toISOString());
+    store.closeTierRun(id, "clean");
+    const out = await callTool("review_poll", { review_id: "rev1" });
+    expect(out).not.toHaveProperty("checks_skipped");
   });
 
   // The case the test above did not cover, and t2 said so: a verdict EXISTS but

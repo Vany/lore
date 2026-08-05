@@ -99,7 +99,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     store.closeTierRun(t0RunId, "failed");
     throw e;
   }
-  store.closeTierRun(t0RunId, t0.findings.length > 0 ? "findings" : "clean");
+  store.closeTierRun(t0RunId, t0.findings.length > 0 ? "findings" : "clean", t0.unavailable);
 
   // 3. Justifications proposed since last round.
   // The changed files PLUS every file that already has an open finding.

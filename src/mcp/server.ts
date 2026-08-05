@@ -174,6 +174,22 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
             };
           }),
           open_count: store.openFindings(review_id).length,
+          // A check that did not run is not a check that found nothing (INV-1). The
+          // deterministic engines are the ones that go missing silently — no
+          // `node_modules`, no test script, a disabled suite — and their absence
+          // narrows what any later `passed` is evidence OF. The model tiers are told
+          // in their prompt; the client has no other way to find out.
+          ...(() => {
+            const skipped = store.unavailableChecks(review_id);
+            return skipped.length === 0
+              ? {}
+              : {
+                  checks_skipped: skipped,
+                  checks_skipped_note:
+                    "These checks did NOT run. Anything they would have caught is unexamined — " +
+                    "say so to your user, and weigh a later `passed` accordingly.",
+                };
+          })(),
         }),
       );
     },

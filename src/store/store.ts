@@ -325,9 +325,29 @@ export class Store {
     return Number(res.lastInsertRowid);
   }
 
-  /** Close a run opened by `openTierRun`. The outcome is only known now. */
-  closeTierRun(id: number, outcome: TierOutcome): void {
-    this.db.prepare("UPDATE tier_run SET outcome = ?, finished_at = ? WHERE id = ?").run(outcome, now(), id);
+  /**
+   * Close a run opened by `openTierRun`. The outcome is only known now.
+   *
+   * `unavailable` records the engines that did NOT run and why. It is persisted
+   * rather than only passed to the model prompt because a client polling this review
+   * has no other way to learn that `tsc` or the suite never executed — and a check
+   * that did not run must never read as a check that found nothing (INV-1).
+   */
+  closeTierRun(id: number, outcome: TierOutcome, unavailable: readonly string[] = []): void {
+    this.db
+      .prepare("UPDATE tier_run SET outcome = ?, unavailable = ?, finished_at = ? WHERE id = ?")
+      .run(outcome, unavailable.length > 0 ? unavailable.join("\n") : null, now(), id);
+  }
+
+  /**
+   * Every engine that could not run in this review, deduplicated, worst-case first
+   * seen. Empty means everything the review type asks for actually executed.
+   */
+  unavailableChecks(reviewId: string): readonly string[] {
+    const rows = this.db
+      .prepare("SELECT unavailable FROM tier_run WHERE review_id = ? AND unavailable IS NOT NULL ORDER BY id")
+      .all(reviewId) as { unavailable: string }[];
+    return [...new Set(rows.flatMap((r) => r.unavailable.split("\n")).filter((l) => l.length > 0))];
   }
 
   recordTierRun(reviewId: string, tier: string, round: number, outcome: TierOutcome, startedAt: string): void {

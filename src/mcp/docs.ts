@@ -118,6 +118,13 @@ Then ONE of three shapes, and they are the whole instruction:
     decided. Do not write a lore-ok for one of these; the file already has one, and a
     duplicate is fresh surface for the next tier to review.
 
+\`checks_skipped\` appears when a deterministic engine did NOT run — no installed
+dependencies, no test script, a suite disabled for the deployment. It is not a
+finding and not a failure; it narrows what the review is evidence OF. Typecheck and
+lint go missing quietly, so this is the only place their absence is stated. Report it
+to your user alongside the result: a \`passed\` where the suite never ran means the
+tiers that DID run agree, not that the tests do.
+
 \`open_count\` is how many findings are still open across the whole review, not just
 this poll. It agrees with the per-finding shapes by construction — if the two ever
 disagree, trust neither and say so, because that is a bug in lore rather than a
