@@ -33,7 +33,7 @@ nothing.
 | tool | arguments (`*` required) | returns |
 |---|---|---|
 | `review_start` | `branch*`, `into*`, `ticket*`, `type` | `{review_id, state: "queued", note}` — returns immediately |
-| `review_poll` | `review_id*` | `{state, clean, note, new_findings[], open_count}` |
+| `review_poll` | `review_id*` | `{state, clean, note, new_findings[], open_count}` — §2.1.1 |
 | `review_submit` | `review_id*`, `diff*`, `tree_hash*` | `{review_id, state, tree_hash}` |
 | `review_attest` | `review_id*` | the signed line, with its tree hash |
 | `review_inbox` | — | `{reviews[], needs_human, note}` across all the caller's reviews |
@@ -87,6 +87,33 @@ it wrong.
 Each poll returns findings **new since the caller's last poll**, plus running
 counts. A client that polls twice must not be shown the same finding twice — the
 loop is driven by an LLM, and duplicate work is indistinguishable from real work.
+
+#### 2.1.1 What a finding carries, and the three shapes
+
+Always: `fingerprint` (the short id used in a `lore-ok`), `file`, `line`, `symbol`,
+`severity`, `claim`, `evidence`, `failure_scenario`. Conditionally: `cwe`, and
+`history` — what this codebase already knows about this defect, which is what tells a
+client whether to fix the line or fix the habit (D-9).
+
+Then **exactly one** of three shapes, and the shape *is* the instruction:
+
+| shape | fields | what it means |
+|---|---|---|
+| open | `justify_with` | nobody has argued about it. Fix it, or answer with that line |
+| open, refused | `justify_with` + `justification_rejected` | a reviewer read a reason and refused it. Worse than untouched: the code is wrong *and* an argument for it was believed long enough to be checked |
+| closed | `settled` + `settled_because`, **no** `justify_with` | nothing to do; it is here only because it is new to this caller |
+
+A closed finding usually arrives by D-51 — a justification this repository ratified in
+an earlier review, carried forward and accepted without anyone re-arguing it.
+`settled_because` names the original reason and when it was first decided. Writing a
+`lore-ok` for one duplicates the marker already in the file, and every word submitted
+is fresh surface for the next tier.
+
+`open_count` counts findings still open across the whole review, not just this poll.
+It and the per-finding shapes are derived from the same definition of settled
+(`spec/review-ladder.md` §3.3), so they cannot disagree; if they ever do, that is a
+defect in lore rather than a fact about the branch, and a client should say so rather
+than pick one.
 
 ### 2.2 `review_id` is a state handle, and handles get hijacked
 

@@ -91,6 +91,37 @@ ONLY \`passed\` means the branch is clean.
 
 While queued or running, wait and poll again — start at 10s, back off to 60s. An
 absence of findings so far is not a clean result.
+
+WHAT EACH FINDING CARRIES.
+
+\`fingerprint\` (use it in the lore-ok), \`file\`, \`line\`, \`symbol\`, \`severity\`,
+\`claim\`, \`evidence\`, \`failure_scenario\`, sometimes \`cwe\`, and \`history\` — what this
+codebase already knows about this defect, which tells you whether to fix the line or
+fix the habit.
+
+Then ONE of three shapes, and they are the whole instruction:
+
+  * \`justify_with\` present, nothing else — open, nobody has argued about it. Fix it,
+    or answer it with the lore-ok line given.
+
+  * \`justify_with\` AND \`justification_rejected\` — open, and you already tried. A
+    reviewer read your reason and refused it, so this is worse than a finding nobody
+    argued about: the code is still wrong AND an argument for it was believed long
+    enough to be checked. \`justification_rejected\` is why it was refused. Fix the
+    code, or give a reason that holds. Repeating the rejected one is the one move
+    guaranteed not to work.
+
+  * \`settled\` and \`settled_because\`, with NO \`justify_with\` — closed. Nothing to do.
+    It appears only because it is new to YOU: often a justification this repository
+    ratified in an earlier review, carried forward and accepted without anyone
+    re-arguing it. \`settled_because\` names the original reason and when it was first
+    decided. Do not write a lore-ok for one of these; the file already has one, and a
+    duplicate is fresh surface for the next tier to review.
+
+\`open_count\` is how many findings are still open across the whole review, not just
+this poll. It agrees with the per-finding shapes by construction — if the two ever
+disagree, trust neither and say so, because that is a bug in lore rather than a
+fact about your branch.
 `.trim(),
 
   submit: `

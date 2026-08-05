@@ -82,17 +82,20 @@ SQLite plus Litestream (SPEC §3). The Pi is a single machine with no redundancy
 the knowledge base is the product — losing it loses everything the workgroup has
 taught the service.
 
-**Revised by D-59.** This section said the replication target must be off-device,
-and Litestream now writes a **local** file replica beside the deployment, from which
-an outer script takes it off the machine. The reasoning holds — a backup on the same
-disk is not a backup — but the boundary moved: lore's job is a continuously
-restorable copy, and getting it off the box is the operator's, with no credentials
-inside the container to do it. The replica is always on: no profile, no S3 key.
+**The split (D-59).** Litestream writes a continuously-restorable **local** file
+replica beside the deployment; an outer script carries it off the machine. The
+boundary is deliberate: lore owns the half it can be responsible for without holding
+any credential, and a container with no S3 key cannot leak one. Always on — no
+profile, no credentials, nothing to forget to enable.
 
-**Restore is tested, not assumed.** `make backup-drill` restores from a copy with
-the source destroyed first, and `make status` says so loudly when the replica has
-not been written in an hour. That check exists because copying a WAL database with
-`cp` once lost 86 knowledge rows; the drill uses `VACUUM INTO`.
+A copy on the same disk is **not a backup**. It survives a corrupted database, a bad
+bulk write and a wrong `down-hard`; it does not survive the disk. `make backup-check`
+reports the local half only, and says so.
+
+**Restore is tested, not assumed.** `make backup-drill` restores from a copy with the
+source destroyed first, and `make status` warns when the replica has not been written
+in an hour. The drill uses `VACUUM INTO`: a WAL database copied with `cp` loses
+whatever is still in the write-ahead log.
 
 ## 6. The mirror is populated from outside (D-63)
 

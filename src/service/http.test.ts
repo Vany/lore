@@ -11,6 +11,7 @@ import { initialState } from "../core/ladder.ts";
 import { DEFAULT_HEARTBEAT } from "../ops/heartbeat.ts";
 import { grantToken } from "../mcp/auth.ts";
 import { Store } from "../store/store.ts";
+import { TOOL_DOCS } from "../mcp/docs.ts";
 import { startHttp } from "./http.ts";
 
 let store: Store;
@@ -303,6 +304,42 @@ describe("findings are ranked worst first", () => {
 
     // And it is not counted as work.
     expect(out["open_count"]).toBe(1);
+  });
+
+  // The docs ARE the interface (spec/agent-docs.md §1), so the fields TOOL_DOCS.poll
+  // names have to be the fields the server emits. This is the mechanical half.
+  //
+  // It exists because the per-finding shape was undocumented for its whole life:
+  // `justify_with` had never been mentioned in any client-facing text, and when
+  // `settled` and `justification_rejected` were added a client following the docs
+  // literally would have gone on treating a closed finding as work.
+  it("emits exactly the per-finding fields the docs promise", async () => {
+    store.recordVerdict("rev1", {
+      fingerprint: "m1", verdict: "justified-accepted", rationale: "bounded upstream",
+      scope: undefined, tier: "t1", round: 1,
+    });
+    const out = await callTool("review_poll", { review_id: "rev1" });
+    const byFp = Object.fromEntries(
+      (out["new_findings"] as Record<string, unknown>[]).map((f) => [f["fingerprint"], f]),
+    );
+
+    // Every field named in the docs must exist on the shape it describes...
+    const documented = TOOL_DOCS.poll;
+    // Always present on every finding.
+    for (const field of ["fingerprint", "file", "line", "symbol", "severity", "claim", "evidence", "failure_scenario"]) {
+      expect(documented, `TOOL_DOCS.poll does not mention ${field}`).toContain(field);
+      expect(byFp["l1"], `poll does not emit ${field}`).toHaveProperty(field);
+    }
+    // Conditional: named in the docs, emitted only when they apply.
+    for (const field of ["cwe", "history", "justify_with", "settled", "settled_because", "justification_rejected", "open_count"]) {
+      expect(documented, `TOOL_DOCS.poll does not mention ${field}`).toContain(field);
+    }
+
+    // ...and the three shapes are mutually exclusive, which is what the docs claim.
+    expect(byFp["l1"]).toHaveProperty("justify_with");
+    expect(byFp["l1"]).not.toHaveProperty("settled");
+    expect(byFp["m1"]).toHaveProperty("settled");
+    expect(byFp["m1"]).not.toHaveProperty("justify_with");
   });
 
   // The case the test above did not cover, and t2 said so: a verdict EXISTS but

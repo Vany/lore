@@ -98,6 +98,26 @@ Draft text. These are the deliverable, not a summary of it.
 >
 > While `queued` or `running`, wait and poll again — start at 10s, back off to 60s.
 > An absence of findings so far is not a clean result.
+>
+> Every finding carries `fingerprint`, `file`, `line`, `symbol`, `severity`, `claim`,
+> `evidence` and `failure_scenario`; `cwe` and `history` when they apply. Then exactly
+> one of three shapes, which *is* the instruction:
+>
+> * `justify_with` alone — open, unargued. Fix it or answer with that line.
+> * `justify_with` **and** `justification_rejected` — open, and a reason was already
+>   refused. Fix the code or give one that holds; repeating the refused one is the
+>   single move guaranteed to fail.
+> * `settled` and `settled_because`, with **no** `justify_with` — closed. Nothing to
+>   do. It is shown because it is new to you, usually a justification this repository
+>   ratified earlier and carried forward. Writing a `lore-ok` duplicates the marker
+>   already in the file.
+>
+> `open_count` is the whole review, not this poll.
+
+The three shapes are the reason this is a doc and not a schema comment. A client that
+sees only `claim` and `severity` will treat a closed finding as work and re-justify
+something already justified — which costs a round and adds surface for the next tier
+to review.
 
 ### `review_submit`
 

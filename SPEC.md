@@ -3,11 +3,15 @@
 A hosted MCP service that reviews a branch before it merges, and — the actual
 point — **remembers the codebase between sessions**.
 
-Status: **deployed and reviewing itself**, 2026-08-04. All phases in `PLAN.md` have
-code; 355 tests. Live: 14 reviews, 2 to `passed` and attested, 493 knowledge rows,
-60 model calls. Still unproven — the Orange Pi itself, and the three paths that have
-never once executed (`passed_partial`, `needs_human`, quota exhaustion). `TODO.md`
-keeps those open rather than folding them into a tick.
+Status: **deployed and reviewing itself**, 2026-08-05. All phases in `PLAN.md` have
+code; 367 tests. Live: 17 reviews, 2 attested, 863 knowledge rows, 75 model calls.
+Unproven: the Orange Pi itself, and three paths that have never executed —
+`passed_partial`, `needs_human`, quota exhaustion. `TODO.md` keeps those open rather
+than folding them into a tick.
+
+**This file describes the system as it stands.** Decisions carry the reasoning that
+makes them right, not the sequence of changes that produced them; what changed when,
+and what it cost to learn, lives in `MEMO.md` and in the git history.
 
 | document | subject |
 |---|---|
@@ -168,9 +172,9 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-59** | Replication is **local and always on**; an outer script takes it off the box | confirmed |
 | **D-60** | The data directory is the **same path** inside the container as on the host | confirmed |
 | **D-61** | Git may never climb out of the directory it was aimed at | hard |
-| **D-62** | The deploy key is **used**, and it is the only identity offered | superseded by D-63 |
+| **D-62** | *(withdrawn — lore holds no git credentials at all; see D-63)* | withdrawn |
 | **D-63** | A local mirror is refreshed **on demand, outside lore**, and staleness is refused | confirmed |
-| **D-64** | `claim` is capped at **500**, raised from 300 because the retry does not converge | confirmed |
+| **D-64** | `claim` is capped at **500** — one sentence, and a refused reply costs the round | confirmed |
 
 **D-7, revised.** The earlier version dropped GLM-5.2 on Artificial Analysis's
 *cost per task* — which is tokens consumed × price on their benchmark, not a price.
@@ -327,15 +331,14 @@ The staging script refuses to emit an auth file that still contains one.
 
 **D-48 — a tier nobody can pay for is a limitation, not a failure.**
 
-A provider that refuses on quota used to fail the whole review (exit 75). That is
-right when a tier *could* have run and ran out mid-flight. It is wrong when the
-deployment simply has no credit for the dearer models: the review would never
-terminate, and a tool that cannot finish on the hardware you actually have is not a
-tool.
+Failing the whole review on quota (exit 75) is right when a tier *could* have run and
+ran out mid-flight. It is wrong when the deployment simply has no credit for the
+dearer models: the review would never terminate, and a tool that cannot finish on the
+hardware you actually have is not a tool.
 
-So an exhausted tier is now **recorded as unavailable and stepped over**. When every
-tier that *could* run agrees, the review reaches **`passed_partial`** — "we did
-everything we can" — with its own exit code (**3**), never `passed` and never `0`.
+So an exhausted tier is **recorded as unavailable and stepped over**. When every tier
+that *could* run agrees, the review reaches **`passed_partial`** — "we did everything
+we can" — with its own exit code (**3**), never `passed` and never `0`.
 
 The distinction is load-bearing and must not erode:
 
@@ -352,10 +355,10 @@ line says so.
 
 **D-49 — a single-vendor ladder cannot reach `passed`.**
 
-Found by the system reviewing itself. `loadTiers` printed a warning when every model
-tier came from one vendor — and then let the review pass anyway. The reviewer named
-the consequence exactly: *"attestation falsely claims multiple independent reviews
-when there were only 2 unique models."*
+A warning is not a control. If every model tier that runs comes from one vendor, the
+attestation would claim multiple independent reviews over what is one opinion asked
+several times — so the ladder cannot reach `passed` at all, whoever wrote the tier
+file.
 
 That is the same shape as INV-8's missing agent file, and as the two permission bugs
 that preceded it: **a check that only prints is a comment.** This codebase's own rule
@@ -497,8 +500,8 @@ bounds owe us and it is untouched (`spec/review-ladder.md` §5): every round eit
 raises something fresh — still bounded — or is clean, and clean is terminal.
 
 It is a **quota decision as well as a correctness one**, which is why it is written
-down rather than filed as a bug fix: reviews that used to die at t1 now escalate
-into the deep tiers, so this strictly increases what a hard review spends.
+down rather than filed as a bug fix: a review that would otherwise stop at t1 climbs
+into the deep tiers instead, so this strictly increases what a hard review spends.
 
 **D-53 — one round at a time per review.**
 
@@ -565,16 +568,14 @@ So a tier computes its diff, begins reading, and a submit rewrites the files
 underneath it. Its prompt and its `tier_run` row describe the old tree while its
 tools see a new or half-patched one, and a `clean` from that describes a tree that
 has never existed anywhere — the exact failure the tree-hash check was built to
-prevent (D-40), arriving from the other side. Raised by t3 as `5bb4272e` against the
-change that serialised the rounds, which is the review catching the incompleteness
-of its own subject.
+prevent (D-40), arriving from the other side.
 
-**The first version of this had a TOCTOU, found by t2 one round later** (`8b859cdc`).
-It asked only whether a round was *running*, so a job sitting **queued** read as "no
-round in flight" — the handler then yielded on its next `await`, a worker claimed
-that job and `computeDiff` began reading, and the handler resumed and patched the
-files underneath it. The tree hash would then have matched a tree the findings never
-described, which is the very thing being prevented. A queued round now counts, so
+**The check must count a QUEUED round, not only a running one.** Asking whether a
+round is *running* leaves a TOCTOU: a job sitting queued reads as "nothing in
+flight", the handler yields on its next `await`, a worker claims that job and
+`computeDiff` starts reading, and the handler resumes and patches the files
+underneath it. The tree hash would then match a tree the findings never described —
+the very thing being prevented. A queued round counts, so
 there is nothing left for a worker to claim; the window is closed rather than
 narrowed, and the worktree is resolved before the check so no `await` sits between
 the check and the write.
@@ -590,10 +591,10 @@ The error names what to wait for and states that nothing was applied.
 *most common ending a review has*: the author changed the code and the complaint no
 longer applies. Nothing recorded it, so an open finding stayed open for ever.
 
-Found by producing the artefact. The first attestation of a `passed` review read
-`5 findings, 0 fixed, 2 justified` — three of those five had been fixed, and were
-counted as neither. A signed line understating its own review and implying three
-findings were ignored is worse than no line.
+A fix has to be recorded as a verdict, or the attestation cannot count it. A signed
+line reading `5 findings, 0 fixed, 2 justified` when three of the five were fixed
+understates its own review and implies three findings were ignored, which is worse
+than no line at all.
 
 The mechanism is the one §4 already uses for justifications: **the reviewer rules by
 not re-raising.** Two guards make silence mean something, and neither is optional:
@@ -703,14 +704,9 @@ constraint left to violate, rather than a constraint plus a warning. The sandbox
 cache and scratch roots read the same variable instead of hardcoding `/var/lib/lore`,
 which was only ever correct on a deployment whose data happened to live there.
 
-The sync inside the sandbox no longer swallows its own failure either. It was
-`cp -a /src/. /work/ 2>/dev/null || true`, which discarded the reason and reported
-success; it now fails loudly, and separately refuses an empty `/src` — because `cp`
-legitimately exits 0 with nothing to copy, which is exactly what the misconfigured
-mount produced.
-
-Found by turning test execution on for the first time. Everything above had been
-true and unexercised for as long as `LORE_RUN_TESTS` was `0`.
+The sync inside the sandbox must not swallow its own failure. It fails loudly, and
+separately refuses an empty `/src`: `cp` exits 0 with nothing to copy, so a
+misconfigured mount otherwise reports success and the suite runs against nothing.
 
 **D-61 — git may never climb out of the directory it was aimed at.**
 
@@ -719,12 +715,10 @@ repository. A command aimed at a directory that is not one therefore retargets
 itself, silently, at whatever encloses it — and lore's data directory sits inside a
 checkout in every deployment run from one.
 
-Observed the first time a local path was reviewed, 2026-08-04. `ensureBare` creates
-`bare.git` with `mkdir` and then asked `rev-parse --git-dir` whether it was already a
-repository. In the empty directory it had just created, that reported the
-**enclosing** checkout, so the clone was skipped as unnecessary and
-`fetch --prune --tags origin` ran **inside the operator's own working repository**.
-It failed only because that path was mounted read-only. Anywhere writable it would
+The hazard is concrete. Asking `rev-parse --git-dir` whether a freshly-created empty
+directory is a repository reports the **enclosing** checkout, so a clone looks
+unnecessary and the fetch that follows runs **inside the operator's own working
+repository**. Read-only mounts stop it; anywhere writable it would
 have pruned their refs and tags.
 
 That is lore writing to a user's repository, which D-2 forbids and INV-9 forbids
@@ -747,221 +741,76 @@ Marked **hard** rather than confirmed: this one is not a preference. The test bu
 the exact shape — an empty bare directory nested inside another repository — and
 fails if either half is reverted.
 
-**D-62 — the deploy key is used, and it is the only identity offered.**
-**Superseded by D-63.** Kept because the finding is worth more than the fix: it is
-the sharpest example in this repository of a documented workflow that had never once
-run end to end. The fix below — `usesSsh`, the composed ssh command, `core.sshCommand`
-— was written, tested, and then deleted a day later, because D-63 removed the fetch
-it authenticated. **No key is generated for any url any more.** What survives is the
-question that exposed it: *how was this tested?*
-
-Provisioning generated a read-only deploy key, wrote the private half server-side,
-and printed the public half with instructions to install it. Nothing then told git to
-use it: no `GIT_SSH_COMMAND`, no `core.sshCommand`, no identity anywhere.
-
-So every ssh remote failed to clone. It went unnoticed because the two repositories
-that did work were a **public** https url and a local path, neither of which
-authenticates with anything — the documented workflow, `make new` then install the
-key then review a private repository, had never once run end to end. Counted on the
-deployment 2026-08-04: `git@github.com:Vany/lore.git` and
-`git@github.com:chainnodesorg/rigid-monorepo.git` had zero objects between them,
-against 101, 443 and 146 commits for the https and local ones.
-
-`ensureBare` now builds an ssh command when the url **uses ssh** and the key exists,
-uses it for the clone, and persists it as `core.sshCommand` in the bare repository so
-every later fetch authenticates the same way without a caller remembering to pass it.
-
-Gated on the url, not merely on the key file. The first version asked "does a key
-exist", which is the right-looking wrong question: keys are generated per repository
-and older ones exist for repositories that turned out to be a local path or a public
-https url, so both would have had an ssh command written in for a transport they
-never use. Same shape as asking `rev-parse --git-dir` whether a directory is a
-repository (D-61), and caught the same way — by someone asking how it had been
-tested.
-
-**What is verified and what is not.** `usesSsh` and the composed ssh command are
-tested directly; that a key present on a non-ssh url is ignored is tested against a
-real clone. That an ssh remote authenticates with that key is **not** unit-tested and
-cannot honestly be: `core.sshCommand` is written only after a successful clone, and
-cloning `git@github.com:…` needs a host. The round trip is proven by a private remote
-or not at all — an earlier version of the test cloned a LOCAL path with a key beside
-it and asserted the ssh command was written, which was asserting the bug rather than
-the behaviour.
-
-Two options carry the weight:
-
-- **`IdentitiesOnly=yes`**, which matters as much as `-i`. Without it ssh also offers
-  whatever the agent holds, so on a developer machine the service authenticates as
-  the *person* — a process that can push while believing it holds a read-only key.
-- **`StrictHostKeyChecking=accept-new`**, which pins a host on first sight and
-  refuses a change afterwards. `no` would accept a changed host silently, which is
-  the single thing host checking exists to prevent.
-
 **D-63 — the mirror is refreshed outside lore, and a stale one is refused.**
 
-lore holds no credentials for a private remote, and should not: a service holding a
-key holds everything that key opens, which is why `provision.ts` has always said a
-personal key is never asked for. Mounting one to prove D-62 made that concrete — the
-operator's key is passphrase-protected on disk and unlocked only in an agent, so
-putting it in the container would have meant forwarding the agent and handing a
-container that already has the docker socket the ability to sign as the person.
+lore holds no credentials for any remote, and must not: a service holding a key holds
+everything that key opens. A personal key is never asked for, and forwarding an agent
+into a container that already has the docker socket would hand it the ability to sign
+as the person.
 
-So the fetch happens **outside**, as the operator, on demand: `make mirror`, or the
-`git pull` they were doing anyway. lore reads the refreshed checkout as a local path
-and needs nothing.
+So the fetch happens **outside**, as the operator: `make mirror`, or the `git pull`
+they were doing anyway. It clones and fetches every registered repository into
+`data/repos/<id>/bare.git` — the one directory the container already reads. Nothing
+outside the deployment directory is mounted: not a checkout, not a key, not an agent
+socket.
 
-**The weakness of on demand is that a client can forget, so forgetting is loud.**
-`ensureBare` reads `FETCH_HEAD`'s mtime and refuses a review whose checkout is older
-than `MAX_MIRROR_AGE_MS`, naming the exact command that fixes it. Reviewing it anyway
-would describe a tree that is not the one being merged — INV-2's failure, where a
-base 57 commits behind turned a one-file branch into a 496-file diff, and this time
-with an attestation over it.
+**The weakness of on-demand is that a person can forget, so forgetting is loud.**
+`ensureBare` reads how long ago the mirror was fetched and refuses a review older than
+`MAX_MIRROR_AGE_MS`, naming the command that fixes it. Reviewing anyway would describe
+a tree that is not the one being merged — INV-2, with an attestation over it.
 
-A repository with **no remote** is never stale: nothing can be behind nothing, and
-the check says so rather than inventing a rule for it. Thirty minutes is long enough
-to survive a queue and a slow first round, short enough that "nobody fetched this
-today" cannot pass.
+**Freshness has three answers, not two:** `no-remote`, `never-fetched`, `fetched(at)`.
+Only the first passes without comment — nothing can be behind nothing. `never-fetched`
+is a mirror with a remote configured and no `FETCH_HEAD`, which is what a successful
+clone followed by a failed fetch leaves behind; it is the most dangerous state rather
+than the mildest, because `refs/remotes/origin/*` does not exist either, so a worktree
+cut from it would resolve the local branch frozen at the clone commit. Collapsing it
+into "no remote" would accept exactly the tree the check exists to reject.
 
-**Freshness has three answers, not two, and the first version had two.** `no-remote`,
-`never-fetched`, and `fetched(at)`. The read returned `Date | undefined` and
-`undefined` meant both of the first two, so a mirror *with* a remote that had never
-been fetched was accepted as one that could not be behind. `make mirror` produces
-exactly that state — its clone branch is `git clone --bare && … && git fetch`, so a
-clone that succeeds with a fetch that fails leaves objects and a `remote.origin.url`
-and no `FETCH_HEAD`. It is the worst form of the failure rather than a mild one:
-`refs/remotes/origin/*` does not exist either, so `addWorktree` falls back from the
-missing `origin/<branch>` to the local branch, frozen at the commit the clone was
-made at, and the review describes a tree nobody is merging.
+**Freshness is a question about cutting a base, not about running a round.** A review
+is pinned to a snapshot (D-40): once its worktree exists it sees that tree plus
+whatever `review_submit` applies, and never reads the mirror again. `worktreeFor` is
+the one function that obtains a worktree — for the worker and for `review_submit`
+alike — and it checks presence and freshness when it creates one, presence alone when
+it reuses one. Both halves matter: requiring freshness on every round would fail any
+review slower than thirty minutes, and every deep-tier review is slower than that;
+requiring it only in the worker would let a submit choose a base from a stale mirror
+that the worker then trusts.
 
-Raised by **t2, against the commit that introduced the check**, with the reproduction
-attached. The tests around it had made the same mistake in the other direction: the
-helper cloned without fetching — manufacturing the dangerous state — and the two
-tests either side wrote `FETCH_HEAD` by hand before asserting, stepping over it every
-time.
+Thirty minutes is long enough to survive a queue and a slow first round, short enough
+that "nobody fetched this today" cannot pass.
 
-**Freshness is required only on the round that cuts the worktree.** A review is
-pinned to a snapshot (D-40): once its worktree exists it sees that tree plus whatever
-`review_submit` applies, and never reads the mirror again. So on later rounds the
-mirror's age cannot change what is reviewed, and refusing on it destroys work instead
-of protecting it.
+**Provisioning issues a token and nothing else.** No key is generated for any url: a
+keypair on disk that nothing reads, handed over with an instruction to grant a
+repository read access to a key with no user, is worse than no key at all. The
+operator's remaining step is `make mirror`.
 
-It destroyed some. Reviewing this very change, round 3 was refused with *"last
-fetched 35 minutes ago"* — after t2 alone had spent 16 minutes — throwing away three
-rounds and eight answered findings. The general form is worse than the incident:
-`MAX_MIRROR_AGE_MS` is 30 minutes and a t1→t2 climb alone exceeds it, so **from D-63
-until this fix, no review could reach t3**. Stated with that bound rather than as
-"ever": t3 has seven recorded runs, and all seven predate the guard by hours. The
-window is small only because it was caught the first time the ladder ran long inside
-it.
+**D-64 — `claim` is capped at 500.**
 
-Found by driving lore's own review over MCP rather than by reasoning about it, which
-is the argument for dogfooding over inspection: the fault needed a review long enough
-to trip it, and no test that stubs the clock would have produced one.
-
-**And the first fix for that was wrong, which t3 caught.** The worker decided a
-review was already pinned from `existsSync` on the worktree directory — but
-`review_submit` cuts a worktree too, and its path called `addWorktree` with no
-freshness check at all. Start a review against a stale mirror, submit before the
-queued job runs, and the submit chooses the base; the worker then sees the directory,
-reads it as a later round, and skips the check. A review, and an attestation, over a
-base nobody fetched — the exact failure two fixes had now been written to prevent.
-
-So the heuristic is gone. **Whoever cuts the base asks the question**, in the one
-function that does both: `worktreeFor` checks freshness when it creates a worktree
-and only existence when it reuses one, and the worker and the MCP layer both call it.
-The rule is a property of cutting a base, not of being a worker.
-
-Worth recording that this is **t3's first finding under D-63**, that it is rated
-high, and that what it found was a hole in the fix for t2's finding one round
-earlier. The ladder's argument — that each tier sees what the last one passed — is
-not abstract here: t1 and t2 both read this code and called it clean.
-
-**Provisioning therefore issues a token and nothing else.** The deploy key went with
-the fetch: a keypair written to disk that nothing reads, handed over with an
-instruction to grant a repository read access to a key with no user, is strictly
-worse than no key. That was already the argument for skipping it on a local path —
-"a secret created for no reason" — and once no url is fetched from here, no url has
-a reason. `isLocalPath` went too, for the same cause: `make mirror` clones a path and
-a remote with one command, so nothing branches on the answer.
-
-**The mirror lives in `data/repos`, which is already mounted, and nothing else is.**
-No directory outside the project is visible to the container — not the operator's
-checkout, not their keys, not their agent. `make mirror` reads the repo table, then
-clones or fetches each one out here as the operator, into the path lore already
-expects. Registering the same repository twice under two protocols is what forced
-this to be stated: `lore` existed as both an https and an ssh row with separate
-clones and its knowledge split between them, and merging them cost a nine-table
-transaction.
-
-**A last note on the paste-able output, since D-63 is what made it the only step
-that matters.** The printed `.mcp.json` was wrong in three independent and
-individually fatal ways — `mcp` for `mcpServers`, a type of `remote` for `http`, and
-`{env:LORE_TOKEN}` for `${LORE_TOKEN}` — and had been since it was written. Nothing
-compared it against a working config, though one sat in this repository the whole
-time. It is checked structurally now, and each of the three defects was reintroduced
-to confirm the test fails on it.
-
-**D-64 — `claim` is capped at 500, not 300, because the retry does not converge.**
-
-The cap enforces *shape*: a finding that sprawls cannot be compared with another
+The cap enforces *shape*. A finding that sprawls cannot be compared with another
 finding, and output tokens are ~77% of the top tier's cost once input is cached
-(D-29). None of that changed. What changed is the evidence about what the cap
-actually catches.
+(D-29), so a reviewer that writes essays instead of records costs several times more
+at every tier, forever.
 
-Four rejections, and every one was a **sentence** — one clause too many, never an
-essay:
+500 is where it sits because a model writing one precise sentence about a subtle
+cross-file invariant lands between 310 and 360 characters, and the cost of refusing
+one is the **whole reply**: the batch is discarded, the retry is charged, and a model
+told the exact rule does not reliably comply with it. A tier that spends twenty
+minutes and returns one correct finding must not lose it to a clause. 500 clears that
+range with margin while staying four times smaller than `TEXT_MAX`, so `claim` is
+still the field that must be short and `evidence` the one that may be long.
 
-| occurrence | length | over |
-|---|---|---|
-| glm-5.2, earlier | 325 | 25 |
-| t2 round 5, first reply | 358 | 58 |
-| t2 round 5, retry | 314 | **14** |
+**The cap is raised rather than the claim truncated.** A claim cut mid-clause is a
+finding that says something its author did not — the same failure as every other one
+in this file.
 
-The retry is the argument. The model is told the exact rule and the exact limit,
-cuts 44 characters, and still misses by 14 — so the retry does not converge on this
-constraint, and the cost of holding the line is a **discarded reply**, not a shorter
-one. Four reviews have died this way.
-
-The last one was expensive in a way the others were not. t2 spent 40 minutes and
-returned one finding: `openFindings` had no latest-verdict gate, so a justification
-accepted and later rejected by `expireStaleVerdicts` counted as neither open nor
-settled — the livelock condition, defeating the expiry that stops justifications
-rubber-stamping themselves. Real, load-bearing, and thrown away for being 58
-characters long. It survived only because the error message quoted the claim back.
-
-**500 rather than truncation.** A claim silently cut mid-clause is a finding that
-says something its author did not, which is the same failure as every other one in
-this file. 500 keeps the shape — one long sentence, ~70 words, still a record and
-not a paragraph — clears the observed maximum by 40%, and stays four times smaller
-than `TEXT_MAX` so `claim` is still the field that must be short and `evidence` the
-one that may be long.
-
-Vany's call, because it changes how much quota a failed round burns.
-
-The number is in one place and interpolated into the output contract the models read,
-so the prompt cannot state a limit the schema does not enforce — which is exactly how
-the first version told a model to comply with something it was never shown. The tests
-derive from the constant for the same reason: a hardcoded `301` would have gone on
-passing while asserting nothing.
-
-**That sentence was false when first written, and t2 said so in the next round.** The
-cap had been changed in the schema and the model prompt and left hardcoded in four
-other places: `src/t0/engines.ts` and `src/security/osv.ts` truncated claims at 300 —
-with an ellipsis, mid-clause, which is precisely the failure this decision cites as
-its reason for raising rather than truncating — `src/knowledge/bootstrap.ts` told a
-model "max 300 characters", and `src/security/security.test.ts` asserted `<= 300`
-under the title *"satisfy the finding schema's caps"*, so fixing `osv.ts` would have
-broken that test and blocked its own repair.
-
-The effect was not merely staleness. A 350-character claim from semgrep was silently
-cut while an identical one from a model passed whole, so the same finding was treated
-differently according to which engine raised it.
-
-There is now a **test that greps the source** for an executable `300` or `500` on any
-line mentioning a claim, which is what makes the paragraph above true mechanically
-rather than by assertion. Comments are exempt on purpose: *"glm-5.2 wrote a
-325-character claim against a 300-character cap"* is a record of what was true then,
-and rewriting it would falsify the history that justifies the current number.
+**The number exists in exactly one place** and is interpolated into the output
+contract the models read, so the prompt cannot state a limit the schema does not
+enforce. A test greps the source for an executable `300` or `500` on any line
+mentioning a claim; it matches the current value too, so raising it again cannot leave
+a fresh literal behind. Comments are exempt: a comment recording what a model once
+wrote against an older cap is history, and rewriting it would falsify the record that
+justifies the number.
 
 **D-43 — review types.** `review_start` takes a `type`, defaulting to `code-arch`:
 *is this change correct and well-made?* The next type is `security`: *what
@@ -1025,10 +874,9 @@ stored anywhere, every log line becomes a credential.
 **D-24.** Running the target's tests is arbitrary code execution, and the threat is
 the dependency tree rather than the teammate — a *careless* suite, not a hostile
 one. The service container holds the knowledge database, the attestation signing key
-and every provider credential, so it **must not** be where a `postinstall` runs.
-(It no longer holds a deploy key for anything: D-63 left it with no git credentials
-at all.) Separate ephemeral container, no secrets, no network, hard timeout
-(`spec/review-ladder.md` §1.1.1).
+and every provider credential, so it **must not** be where a `postinstall` runs. It
+holds no git credentials at all (D-63). Separate ephemeral container, no secrets, no
+network, hard timeout (`spec/review-ladder.md` §1.1.1).
 
 **D-25.** Walking skeleton: build a thin end-to-end slice, then deepen it. The
 uncertainty in this project is whether a three-tier ladder converges on real

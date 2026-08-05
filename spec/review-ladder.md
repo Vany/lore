@@ -63,9 +63,8 @@ database, the attestation signing key and every provider credential; one careles
 `postinstall` inside it reaches all three. So tests run in a **separate ephemeral
 container per review**:
 
-- no secrets mounted — no tokens, no signing key, no database. (There are no deploy
-  keys to mount any more: lore fetches nothing, so it holds no git credentials at
-  all — D-63.)
+- no secrets mounted — no tokens, no signing key, no database. There are no git
+  credentials anywhere in the deployment to mount: lore does not fetch (D-63)
 - no network, or egress through a deny-by-default proxy
 - read-only root filesystem apart from the worktree
 - CPU, memory and PID limits, and a **hard timeout**
@@ -149,7 +148,7 @@ that moved three lines down is the same finding. Severity is likewise excluded, 
 a finding returning at raised severity after a rejected justification is recognised
 as the same finding rather than as new work.
 
-#### 3.1.1 What the fingerprint does *not* do — corrected 2026-08-03
+#### 3.1.1 What the fingerprint does *not* do
 
 **It matches identical claims, not equivalent ones.** If T2 raises in different
 words what T1 already settled, the fingerprint differs and the loop sees new work.
@@ -177,7 +176,7 @@ treats ambiguity as an error rather than picking a winner — git's rule for sho
 object ids. Silently resolving to the wrong finding would close a defect nobody
 examined.
 
-### 3.2 Findings are presented worst first — added 2026-08-03 (D-50)
+### 3.2 Findings are presented worst first (D-50)
 
 Every list of findings this service **hands to a client or a model tier** is ordered
 **high, medium, low**, then by file, then by line, then by fingerprint. The last key
@@ -194,12 +193,11 @@ wrong twice over:
   It exists for lists the store never ordered, and re-sorting a store-ordered list is
   safe because the comparator is indifferent exactly where the store already decided.
 
-This needs stating because it was wrong from the store's first commit and nothing
-looked wrong. `severity` is stored as TEXT and SQLite orders TEXT lexicographically:
-`ORDER BY severity` means **high, low, medium**. Every consumer of a findings query
-ranked a low-severity finding above a medium one, and `review_inbox` — which reported
-the first row as `highest` — told a client the worst thing in a review was `low` when
-it was `medium`.
+This needs stating because the obvious spelling is wrong and looks right. `severity`
+is stored as TEXT and SQLite orders TEXT lexicographically, so `ORDER BY severity`
+means **high, low, medium**. Every findings query must rank explicitly; a query that
+does not will present a low-severity finding above a medium one, and any consumer
+reporting "the worst" from the first row will understate it.
 
 **Order is a correctness property wherever a list is cut short**, and what a cut drops
 is decided entirely by how the list was sorted. The T0 render caps the model prompt at
@@ -211,6 +209,35 @@ top few" to a person is the intended use.
 An unrecognised severity therefore sorts **first**, not last. It can only come from a
 write that went around the schema — `severity` is plain TEXT with no CHECK constraint
 — and last place is where a cut would silently discard it.
+
+### 3.3 Verdicts, and what "settled" means
+
+A verdict is append-only and there are three kinds. Only the **latest** one for a
+fingerprint counts:
+
+| verdict | closes the finding? |
+|---|---|
+| `fixed` | yes |
+| `justified-accepted` | yes |
+| `justified-rejected` | **no** |
+
+`justified-rejected` leaves the finding open, and open in the worse way: the reviewer
+read the reason and refused it, so the defect is still present *and* an argument for
+it was trusted enough to be examined. A rejected justification is worse than a bug
+nobody argued about.
+
+**Latest, not any.** Verdicts accumulate, and a justification is invalidated when the
+code it described changes (§4). A finding accepted and later rejected by that expiry
+must read as open — matching any historical accepting verdict would leave it settled
+for ever, which is precisely the rubber-stamping the expiry exists to prevent.
+
+**One definition, used everywhere.** The set that closes a finding is declared once
+and every view derives from it: the open-findings query, the settled-fingerprint set
+the ladder steps on, and the per-finding shape `review_poll` returns. They are not
+merely expected to agree — they must not be able to disagree. When they do, a
+re-raised fingerprint looks fresh to the ladder (which resets) while the open query
+excludes it and delivery has already happened, so the client is told `findings_ready`
+and handed nothing, for ever, until a bound stops the review.
 
 ## 4. Justification is a proposal of lore, and the reviewer ratifies it
 
@@ -276,6 +303,28 @@ legitimately reappear.
 
 Silently honouring a stale justification is how this design rots into
 rubber-stamping. It is the failure I would most expect in six months.
+
+### 4.2 A ratified justification carries between reviews (D-51)
+
+This is the whole thesis of the product applied to one finding. When a later review
+of the same repository raises a fingerprint this repository has **already** ratified,
+and no model tier raised it this round, the justification is accepted without anyone
+re-arguing it.
+
+Three conditions, and all are load-bearing:
+
+- **A model tier did not raise it.** If one did, it looked and objected, so the
+  earlier ruling is contested and must be ruled on afresh.
+- **The prior verdict has a `scope`,** and the code it described is still there. A
+  carried justification obeys §4.1 exactly like a fresh one; carrying one blind is
+  how the ladder rots into rubber-stamping.
+- **The reason travels with it.** The recorded rationale names the original reason
+  and the date it was *first* decided, so a reader knows the ruling was inherited
+  rather than made by the tier named on the row.
+
+The provenance does not accumulate. A justification surviving many reviews keeps one
+line, not one per hop: the value of the field is the reason, and a wall of nested
+provenance buries it.
 
 ## 5. Escalation and termination
 
