@@ -49,7 +49,22 @@ services:
       LORE_PORT: "7777"
       LORE_CONCURRENCY: "2"          # T0 is CPU-bound on an SBC; set by cores (D-37)
       LORE_DAILY_CEILING_USD: "100"  # stops STARTING reviews when hit, never mid-review
-      LORE_RUN_TESTS: "1"            # T0 runs the target's suite, contained (D-24)
+      # OFF by default, and deliberately (D-24 revised).
+      #
+      # `npm test` runs whatever the repo and its whole dependency tree say. The
+      # sandbox contains it well — no network, no capabilities, no host filesystem,
+      # no docker socket, no sight of the database — but it is still someone else's
+      # code executing on the operator's machine, and that is a choice the operator
+      # makes rather than one this file makes for them.
+      #
+      # Set to "1" to turn it on. What you gain is the one finding no reader can
+      # produce: whether the suite actually passes on this branch.
+      #
+      # NOTE: this does not stop all execution. `tsc` and `eslint` resolve through
+      # the target's node_modules, so the INSTALL still runs — and an install runs
+      # lifecycle scripts, with network. Turning tests off narrows the exposure; it
+      # does not remove it.
+      LORE_RUN_TESTS: "0"
       LORE_TIERS: ${LORE_TIERS:-}     # unset = the three-vendor default ladder
       LORE_WEBHOOK_URL: ${LORE_WEBHOOK_URL:-}
       LORE_HEARTBEAT_URL: ${LORE_HEARTBEAT_URL:-}

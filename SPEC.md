@@ -134,7 +134,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-21** | Credentials in a header, never in the URL | **revised** |
 | **D-22** | `@modelcontextprotocol/server` v2 + Zod v4 schemas | confirmed |
 | **D-23** | `review_id` is CSPRNG and bound to its principal; possession ≠ auth | confirmed |
-| **D-24** | T0 runs the target's tests — in a container holding no secrets | confirmed |
+| **D-24** | T0 *can* run the target's tests, contained — **off unless enabled** | **revised** |
 | **D-25** | Build order was a walking skeleton: CLI did a real review first | done |
 | **D-26** | Operator status view: is parallelism running, or queueing? | confirmed |
 | **D-27** | Docs in three layers: tool descriptions, resources, prompts | confirmed |
@@ -908,6 +908,22 @@ entry already demonstrates works.
 `review_id` is precisely that handle: *"MCP servers MUST NOT treat possession of a
 state handle as authentication."* Cheap to build now; the moment a sequential id is
 stored anywhere, every log line becomes a credential.
+
+**D-24, revised — test execution is opt-in, and defaults to off.**
+
+The containment holds: no network during the run, every capability dropped, no host
+filesystem, no docker socket, no sight of the database, hard limits and an ephemeral
+container. What changed is who decides. Running a repository's suite executes that
+repository's code and its entire dependency tree's code on the operator's machine,
+and a deployment file should not make that choice on their behalf. `LORE_RUN_TESTS=1`
+turns it on; the suite is otherwise reported as an unavailable check, which is a fact
+about the review rather than a silence.
+
+**Off does not mean nothing executes.** `tsc` and `eslint` resolve through the
+target's `node_modules`, so the install still runs — and an install runs lifecycle
+scripts, with network, because a registry needs one. Turning tests off narrows the
+exposure; it does not remove it. A deployment that wants none of it must accept that
+the deterministic tier reports typecheck and lint as unavailable too.
 
 **D-24.** Running the target's tests is arbitrary code execution, and the threat is
 the dependency tree rather than the teammate — a *careless* suite, not a hostile
