@@ -110,8 +110,10 @@ an earlier review, carried forward and accepted without anyone re-arguing it.
 is fresh surface for the next tier.
 
 `checks_skipped` is present when a deterministic engine did not run — no installed
-dependencies, no test script, a suite disabled for the deployment. It is absent, not
-empty, when everything ran, so a client never has to tell `[]` from "all of them".
+dependencies, no test script, a suite disabled for the deployment — with
+`checks_skipped_note` beside it saying the same thing in a sentence a client can pass
+straight on. Both are absent, not empty, when everything ran, so a client never has to
+tell `[]` from "all of them".
 
 It exists because INV-1 has a quiet failure mode on this surface. T0's engines go
 missing without raising anything: `tsc` and `eslint` shell out through the target's

@@ -637,17 +637,27 @@ describe("a carried justification does not accumulate its own provenance", () =>
     expect(origin).toStrictEqual({ at: "2026-08-01T00:00:00.000Z", reason: "bounded by the schema check upstream" });
   });
 
-  it("unwraps to the innermost decision however many hops it took", () => {
-    let r = "bounded by the schema check upstream";
-    r = wrap("2026-08-01T00:00:00.000Z", r);
-    r = wrap("2026-08-02T00:00:00.000Z", r);
-    r = wrap("2026-08-03T00:00:00.000Z", r);
+  it("strips exactly one layer — the one this code added", () => {
+    const inner = wrap("2026-08-01T00:00:00.000Z", "bounded by the schema check upstream");
+    const origin = originalJustification(carried(wrap("2026-08-02T00:00:00.000Z", inner), "2026-08-03T00:00:00.000Z"));
+    expect(origin.at).toBe("2026-08-02T00:00:00.000Z");
+    expect(origin.reason).toBe(inner);
+  });
 
-    const origin = originalJustification(carried(r, "2026-08-04T00:00:00.000Z"));
-    // The FIRST date, not the most recent hop — the outer prefix only named the
-    // previous carry, which tells a reader nothing they need.
-    expect(origin.at).toBe("2026-08-01T00:00:00.000Z");
-    expect(origin.reason).toBe("bounded by the schema check upstream");
+  // The nested case the tier guard does NOT cover, and the reason one strip beats a
+  // loop. The guard proves only the OUTERMOST verdict is ours; anything inside it is
+  // opaque prose. An agent shown `settled_because` may imitate the phrasing in its
+  // own lore-ok — and a loop would then eat into that sentence on the second carry
+  // and adopt a date lifted from the author's own text.
+  it("never eats into an author reason nested inside a real carry", () => {
+    const authors = wrap("2019-01-01T00:00:00.000Z", "the vendor doc says this header is optional");
+    const carriedOnce = wrap("2026-08-02T00:00:00.000Z", authors);
+
+    const origin = originalJustification(carried(carriedOnce, "2026-08-03T00:00:00.000Z"));
+    expect(origin.reason).toBe(authors);
+    expect(origin.at).toBe("2026-08-02T00:00:00.000Z");
+    // Specifically NOT the date embedded in the author's sentence.
+    expect(origin.at).not.toBe("2019-01-01T00:00:00.000Z");
   });
 
   // The property that matters: re-carrying is idempotent, so the field cannot grow.

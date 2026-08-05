@@ -123,7 +123,8 @@ dependencies, no test script, a suite disabled for the deployment. It is not a
 finding and not a failure; it narrows what the review is evidence OF. Typecheck and
 lint go missing quietly, so this is the only place their absence is stated. Report it
 to your user alongside the result: a \`passed\` where the suite never ran means the
-tiers that DID run agree, not that the tests do.
+tiers that DID run agree, not that the tests do. \`checks_skipped_note\` accompanies it
+and says the same thing in a sentence you can pass straight on.
 
 \`open_count\` is how many findings are still open across the whole review, not just
 this poll. It agrees with the per-finding shapes by construction — if the two ever

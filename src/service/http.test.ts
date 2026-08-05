@@ -285,6 +285,11 @@ describe("findings are ranked worst first", () => {
       round: 1,
     });
 
+    // Every conditional field must actually be EMITTED here, or the reverse check
+    // below silently proves nothing about the ones that are absent.
+    const t0 = store.openTierRun("rev1", "t0", 1, new Date().toISOString());
+    store.closeTierRun(t0, "findings", ["eslint: not configured in this repo"]);
+
     const out = await callTool("review_poll", { review_id: "rev1" });
     const byFp = Object.fromEntries(
       (out["new_findings"] as Record<string, unknown>[]).map((f) => [f["fingerprint"], f]),
@@ -318,6 +323,11 @@ describe("findings are ranked worst first", () => {
       fingerprint: "m1", verdict: "justified-accepted", rationale: "bounded upstream",
       scope: undefined, tier: "t1", round: 1,
     });
+    // Every conditional field must actually be EMITTED here, or the reverse check
+    // below silently proves nothing about the ones that are absent.
+    const t0 = store.openTierRun("rev1", "t0", 1, new Date().toISOString());
+    store.closeTierRun(t0, "findings", ["eslint: not configured in this repo"]);
+
     const out = await callTool("review_poll", { review_id: "rev1" });
     const byFp = Object.fromEntries(
       (out["new_findings"] as Record<string, unknown>[]).map((f) => [f["fingerprint"], f]),
@@ -334,6 +344,19 @@ describe("findings are ranked worst first", () => {
     for (const field of ["cwe", "history", "justify_with", "settled", "settled_because", "justification_rejected", "open_count", "checks_skipped"]) {
       expect(documented, `TOOL_DOCS.poll does not mention ${field}`).toContain(field);
     }
+
+    // The OTHER direction, and the one that actually catches drift. The list above
+    // is an allow-list: it proves the docs mention what we remembered to add to it,
+    // and says nothing about a field shipped without being written down.
+    // `checks_skipped_note` was emitted for exactly that reason and no test noticed.
+    const emitted = new Set([
+      ...Object.keys(out),
+      ...(out["new_findings"] as Record<string, unknown>[]).flatMap((f) => Object.keys(f)),
+    ]);
+    // Envelope fields a client gets from the protocol, not from these docs.
+    const NOT_DOCUMENTED_HERE = new Set(["review_id", "state", "clean", "note", "new_findings", "line", "symbol"]);
+    const undocumented = [...emitted].filter((k) => !NOT_DOCUMENTED_HERE.has(k) && !documented.includes(k));
+    expect(undocumented, "poll emits fields TOOL_DOCS.poll never mentions").toStrictEqual([]);
 
     // ...and the three shapes are mutually exclusive, which is what the docs claim.
     expect(byFp["l1"]).toHaveProperty("justify_with");

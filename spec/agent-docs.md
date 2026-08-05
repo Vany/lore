@@ -114,8 +114,8 @@ Draft text. These are the deliverable, not a summary of it.
 >
 > `open_count` is the whole review, not this poll.
 >
-> `checks_skipped` lists deterministic engines that did **not** run, and is absent
-> when they all did. Not a finding and not a failure — it narrows what the review is
+> `checks_skipped` lists deterministic engines that did **not** run, with
+> `checks_skipped_note` beside it in prose; both are absent when they all did. Not a finding and not a failure — it narrows what the review is
 > evidence of. Typecheck and lint disappear silently when a target's dependencies do
 > not install, so this is the only place their absence is stated.
 

@@ -524,13 +524,24 @@ export function originalJustification(prior: {
   const reason0 = prior.rationale ?? "(no reason recorded)";
   if (prior.tier !== CARRIED_TIER) return { at: prior.createdAt, reason: reason0 };
 
-  let reason = reason0;
-  let first = prior.createdAt;
-  for (let m = CARRY_PREFIX.exec(reason); m !== null; m = CARRY_PREFIX.exec(reason)) {
-    first = m[1] ?? first;
-    reason = reason.slice(m[0].length);
-  }
-  return { at: first, reason };
+  // Exactly ONE layer — the one this code adds — never a loop.
+  //
+  // The tier guard above only proves the OUTERMOST verdict is ours. Everything
+  // inside it is opaque: an author's `lore-ok` reason is unrestricted prose and may
+  // legitimately begin with this very phrasing, especially now that agents are shown
+  // `settled_because` and imitate what they read. Stripping repeatedly would eat
+  // into that sentence on the second carry and adopt a date out of the author's own
+  // text, rewriting what a reviewer actually ratified — the thing the guard exists
+  // to prevent, reached one level down.
+  //
+  // One strip is also sufficient: carrying adds one prefix and removes one, so the
+  // field cannot grow. A rationale that already carries several layers keeps them
+  // and stops accumulating, which is the right trade — stale cosmetics beat altering
+  // a ratified reason.
+  const m = CARRY_PREFIX.exec(reason0);
+  return m === null
+    ? { at: prior.createdAt, reason: reason0 }
+    : { at: m[1] ?? prior.createdAt, reason: reason0.slice(m[0].length) };
 }
 
 function tierRank(tiers: readonly Tier[], id: string): number {
