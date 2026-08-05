@@ -11,6 +11,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync }
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { computeDiff } from "./diff.ts";
 import { ensureBare, worktreeFor } from "./repo.ts";
 
 let root: string;
@@ -181,5 +182,58 @@ describe("the clone has to be there, and recent (D-63)", () => {
     // fix no review could reach t3 at all.
     await expect(ensureBare(paths, src, false)).resolves.toBeUndefined();
     await expect(ensureBare(paths, src)).rejects.toThrow(/make mirror/);
+  });
+});
+
+// The two traps a mirror sets, both hit by hand before they were fixed.
+describe("a mirror's local branches are frozen, and nothing may resolve to them", () => {
+  // `make mirror` fetches into refs/remotes/origin/* and never touches refs/heads/*,
+  // so a mirror's own `main` still points at the commit it was cloned at. Resolving
+  // an `into` of "main" against that produces a diff many times the real change —
+  // which reads as an enormous branch rather than as a wrong base. Measured on this
+  // repository at 165 KB against 94 KB for the same work.
+  it("prefers origin/<base> over the stale local branch", async () => {
+    const src = join(root, "src-drift");
+    const g = makeRepo(src);
+    const paths = { bare: join(root, "repos/r8/bare.git"), worktrees: join(root, "repos/r8/wt") };
+    mirror(src, paths.bare);
+    execFileSync("git", ["-C", paths.bare, "config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"]);
+    execFileSync("git", ["-C", paths.bare, "fetch", "-q", "origin"]);
+
+    // The source moves; the mirror's LOCAL `main` does not follow a fetch.
+    writeFileSync(join(src, "b.txt"), "b\n");
+    g("add", "-A");
+    g("commit", "-qm", "second");
+    execFileSync("git", ["-C", paths.bare, "fetch", "-q", "origin"]);
+
+    const localMain = execFileSync("git", ["-C", paths.bare, "rev-parse", "main"], { encoding: "utf8" }).trim();
+    const originMain = execFileSync("git", ["-C", paths.bare, "rev-parse", "origin/main"], { encoding: "utf8" }).trim();
+    expect(localMain).not.toBe(originMain); // the trap exists
+
+    const wt = await worktreeFor(paths, "rev_drift", "main", src);
+    const diff = await computeDiff(wt, "main");
+    // Against origin/main there is nothing between them; against the stale local
+    // branch the second commit would show up as the branch's own work.
+    expect(diff.mergeBase).toBe(originMain);
+    expect(diff.changedFiles).toStrictEqual([]);
+  });
+
+  // The message that sent someone hunting for a branch that existed: tokens are
+  // per-repo, so starting a review of one repository's branch with another's token
+  // reports, truthfully and uselessly, that the branch is not there.
+  it("names the repository when a branch is missing, and what else it holds", async () => {
+    const src = join(root, "src-wrongrepo");
+    makeRepo(src);
+    const paths = { bare: join(root, "repos/r9/bare.git"), worktrees: join(root, "repos/r9/wt") };
+    mirror(src, paths.bare);
+    execFileSync("git", ["-C", paths.bare, "config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"]);
+    execFileSync("git", ["-C", paths.bare, "fetch", "-q", "origin"]);
+
+    const err = await worktreeFor(paths, "rev_x", "feat/belongs-elsewhere", "git@github.com:org/other.git")
+      .then(() => undefined, (e: unknown) => e as Error);
+
+    expect(err?.message).toContain("git@github.com:org/other.git");
+    expect(err?.message).toMatch(/token is scoped/);
+    expect(err?.message).toContain("main"); // what the mirror actually holds
   });
 });

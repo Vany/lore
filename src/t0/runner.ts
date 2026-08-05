@@ -13,7 +13,7 @@ import { basename, join } from "node:path";
 import { compareFindings, type Finding } from "../core/finding.ts";
 import type { T0Engine } from "../core/review-type.ts";
 import { runEngine, type EngineOutcome } from "./engines.ts";
-import { DEFAULT_SANDBOX, install, lockfileKey, runTests, testFindings, type SandboxConfig } from "./sandbox.ts";
+import { commandsFor, DEFAULT_SANDBOX, install, lockfileKey, runTests, testFindings, type SandboxConfig } from "./sandbox.ts";
 
 export interface T0Result {
   readonly findings: readonly Finding[];
@@ -79,7 +79,19 @@ async function installAndTest(
   cacheDir: string,
   scratch: string,
 ): Promise<EngineOutcome> {
-  const installed = await install(cfg, worktree, cacheDir, scratch);
+  // The target's own installer, chosen by its lockfile (D-8). A repo whose manager
+  // we cannot honour is reported as unavailable rather than installed with the wrong
+  // one — the results of the wrong installer are not that project's suite.
+  const cmds = await commandsFor(worktree);
+  if (cmds === undefined) {
+    return {
+      engine: "tests",
+      findings: [],
+      unavailable: "this repository uses bun, which the sandbox image does not carry",
+    };
+  }
+
+  const installed = await install(cfg, worktree, cacheDir, scratch, cmds);
   if (installed.unavailable !== undefined) {
     return { engine: "tests", findings: [], unavailable: `install could not run: ${installed.unavailable}` };
   }
@@ -92,17 +104,17 @@ async function installAndTest(
         {
           file: "package.json",
           severity: "high",
-          claim: "dependencies do not install, so the suite could not be run",
+          claim: `dependencies do not install with ${cmds.name}, so the suite could not be run — and neither tsc nor eslint can resolve, since both run through node_modules`,
           evidence: `${installed.stdout}\n${installed.stderr}`.trim().split("\n").slice(-30).join("\n").slice(0, 2000),
           failureScenario:
             "nothing that depends on a working install can be verified here — including every claim the tests would have made",
         },
       ],
-      unavailable: "dependencies failed to install",
+      unavailable: `dependencies failed to install with ${cmds.name}`,
     };
   }
 
-  const tests = await runTests(cfg, worktree, cacheDir, scratch);
+  const tests = await runTests(cfg, worktree, cacheDir, scratch, cmds);
   if (tests.unavailable !== undefined && !tests.timedOut) {
     return { engine: "tests", findings: [], unavailable: tests.unavailable };
   }

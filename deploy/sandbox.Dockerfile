@@ -17,6 +17,17 @@ FROM node:24-alpine
 
 RUN apk add --no-cache git ca-certificates
 
+# The package managers targets actually use, baked in rather than fetched at run
+# time. T0 runs the TARGET's own tooling (D-8), and a monorepo on pnpm with a
+# `preinstall` that refuses npm cannot be installed by npm at all — the suite then
+# does not run and neither do tsc or eslint, which resolve through node_modules.
+#
+# Baked rather than via corepack because install and test are two separate
+# containers: corepack downloads on first use, and its cache would live in a layer
+# the second container never sees. The only mount shared between them is
+# /work/node_modules.
+RUN npm i -g --no-audit --no-fund pnpm@10 yarn@1
+
 # Many suites assume an identity exists when they touch git at all.
 RUN git config --system user.email "sandbox@lore.invalid" \
  && git config --system user.name  "lore sandbox" \

@@ -785,6 +785,25 @@ keypair on disk that nothing reads, handed over with an instruction to grant a
 repository read access to a key with no user, is worse than no key at all. The
 operator's remaining step is `make mirror`.
 
+**D-8, extended — T0 installs with the target's own package manager.**
+
+T0 runs the target repository's tooling rather than ours, and that includes how it
+installs. The lockfile decides: `pnpm-lock.yaml` → pnpm, `yarn.lock` → yarn,
+otherwise npm. The managers are baked into the sandbox image rather than fetched by
+corepack at run time, because install and test are two separate containers and the
+only thing mounted into both is `node_modules`.
+
+This is not a convenience. A pnpm monorepo cannot be installed by npm — the
+`packageManager` field and a `preinstall` guard both refuse it — and the failure is
+not confined to the suite: `tsc` and `eslint` run through `npx --no-install` and
+resolve out of `node_modules`, so an install that does not happen silently removes
+three of T0's engines at once.
+
+A lockfile naming a manager the image does not carry — bun, which is a runtime and
+not merely an installer — is reported as an **unavailable engine**. Installing with
+npm instead and presenting the result as that project's suite would be a confident
+claim about something that never ran.
+
 **D-64 — `claim` is capped at 500.**
 
 The cap enforces *shape*. A finding that sprawls cannot be compared with another

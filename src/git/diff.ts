@@ -32,10 +32,24 @@ export interface ReviewDiff {
 }
 
 export async function computeDiff(worktree: string, base: string): Promise<ReviewDiff> {
+  // `origin/<base>` first, exactly as `addWorktree` resolves the branch.
+  //
+  // A worktree shares its refs with the bare mirror, and in a mirror the LOCAL
+  // branches are frozen at clone time: `make mirror` fetches into
+  // `refs/remotes/origin/*` and never touches `refs/heads/*`. So `main` in a mirror
+  // cloned weeks ago points at a weeks-old commit while `origin/main` is current, and
+  // an `into` of `main` would diff against the stale one — producing a diff many
+  // times the real change, which reads as an enormous branch rather than as a wrong
+  // base. Measured here at 165 KB against 94 KB for the same work.
+  //
+  // A sha or a tag has no `origin/` form, so it falls through untouched.
+  const resolved = (await gitMaybe(worktree, ["rev-parse", "--verify", "--quiet", `origin/${base}^{commit}`]))
+    ?? base;
+
   const mergeBase =
-    (await gitMaybe(worktree, ["merge-base", base, "HEAD"])) ??
-    (await gitMaybe(worktree, ["rev-parse", base])) ??
-    base;
+    (await gitMaybe(worktree, ["merge-base", resolved, "HEAD"])) ??
+    (await gitMaybe(worktree, ["rev-parse", resolved])) ??
+    resolved;
 
   // --submodule=diff expands a gitlink bump into the submodule's own diff. Without
   // it a two-line pointer change can hide thousands of lines, and the reviewer

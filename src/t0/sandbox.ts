@@ -139,6 +139,59 @@ const SYNC =
   "[ -n \"$(ls -A /work 2>/dev/null)\" ] || " +
   "{ echo 'sandbox: /src is EMPTY. The host daemon mounts by HOST path, so this means the worktree path does not exist on the host — LORE_HOST_DATA and the container data dir must be the same path.' >&2; exit 1; }";
 
+
+/**
+ * Which package manager this repository actually uses, chosen by its lockfile.
+ *
+ * T0 runs the TARGET's own tooling (D-8), and that has to include how it installs.
+ * A pnpm monorepo cannot be installed by npm — `packageManager` and a `preinstall`
+ * guard both refuse it — and the failure is not confined to the suite: `tsc` and
+ * `eslint` resolve through `node_modules`, so an install that does not happen takes
+ * the whole deterministic tier with it.
+ *
+ * `undefined` means we recognise the lockfile and cannot honour it. That is reported
+ * as an unavailable engine, never as a clean run.
+ */
+export interface Toolchain {
+  readonly name: string;
+  readonly install: string;
+  readonly test: string;
+}
+
+export async function toolchain(worktree: string): Promise<Toolchain | undefined | "npm"> {
+  const has = async (f: string) => (await readFile(join(worktree, f)).catch(() => undefined)) !== undefined;
+
+  // Order matters only where a repo carries two lockfiles, which is itself a mess;
+  // the most specific manager wins so we do not silently pick the wrong one.
+  if (await has("pnpm-lock.yaml")) {
+    return {
+      name: "pnpm",
+      install: "pnpm install --frozen-lockfile || pnpm install",
+      test: "pnpm test",
+    };
+  }
+  if (await has("yarn.lock")) {
+    return { name: "yarn", install: "yarn install --immutable || yarn install", test: "yarn test" };
+  }
+  // Bun is a different runtime, not just a different installer, and is not in the
+  // sandbox image. Saying so beats installing with npm and reporting whatever that
+  // produces as though it were the project's own suite.
+  if ((await has("bun.lock")) || (await has("bun.lockb"))) return undefined;
+  return "npm";
+}
+
+const NPM: Toolchain = {
+  name: "npm",
+  install: "npm ci --no-audit --no-fund || npm install --no-audit --no-fund",
+  test: "npm test --silent",
+};
+
+/** The commands to use, with npm as the default for a repo with no lockfile. */
+export async function commandsFor(worktree: string): Promise<Toolchain | undefined> {
+  const t = await toolchain(worktree);
+  return t === undefined ? undefined : t === "npm" ? NPM : t;
+}
+
 /**
  * Install dependencies.
  *
@@ -153,6 +206,7 @@ export async function install(
   worktree: string,
   cacheDir: string,
   scratch: string,
+  cmds: Toolchain,
 ): Promise<ToolResult> {
   return runTool(
     worktree,
@@ -162,7 +216,7 @@ export async function install(
       cfg.image,
       "sh",
       "-lc",
-      `${SYNC} && (npm ci --no-audit --no-fund || npm install --no-audit --no-fund)`,
+      `${SYNC} && (${cmds.install})`,
     ],
     cfg.timeoutMs,
   );
@@ -179,6 +233,7 @@ export async function runTests(
   worktree: string,
   cacheDir: string,
   scratch: string,
+  cmds: Toolchain,
 ): Promise<ToolResult> {
   return runTool(
     worktree,
@@ -192,7 +247,7 @@ export async function runTests(
       // Re-synced because install may have rewritten a lockfile, and because the
       // suite must see exactly the sources under review — not whatever the install
       // phase left behind.
-      `${SYNC} && npm test --silent`,
+      `${SYNC} && ${cmds.test}`,
     ],
     cfg.timeoutMs,
   );

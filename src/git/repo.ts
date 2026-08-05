@@ -158,12 +158,40 @@ export async function ensureBare(
   }
 }
 
-export async function addWorktree(paths: RepoPaths, reviewId: string, branch: string): Promise<string> {
+export async function addWorktree(
+  paths: RepoPaths,
+  reviewId: string,
+  branch: string,
+  /** Named in the failure, because "which repository" is the usual answer. */
+  gitUrl = "",
+): Promise<string> {
   const dir = join(paths.worktrees, reviewId);
   await mkdir(paths.worktrees, { recursive: true });
   const ref = (await gitMaybe(paths.bare, ["rev-parse", "--verify", "--quiet", `origin/${branch}^{commit}`]))
     ?? (await gitMaybe(paths.bare, ["rev-parse", "--verify", "--quiet", `${branch}^{commit}`]));
-  if (ref === undefined) throw new DidNotRun(`branch '${branch}' not found on origin`);
+  if (ref === undefined) {
+    // Naming the repository, because the message that omitted it sent someone
+    // hunting for a missing branch when the branch existed and the TOKEN was scoped
+    // to a different repository. Tokens are per-repo, so a client holding two can
+    // start a review of one repo's branch against the other and be told, truthfully
+    // and uselessly, that the branch does not exist.
+    //
+    // Recent branches rather than all of them: this list is read by a model, and a
+    // monorepo has hundreds. Five is enough to show whether the mirror has anything
+    // resembling what was asked for.
+    const known = (await gitMaybe(paths.bare, [
+      "for-each-ref", "--sort=-committerdate", "--count=5",
+      "--format=%(refname:strip=3)", "refs/remotes/origin",
+    ])) ?? "";
+    const nearby = known.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
+    throw new DidNotRun(
+      `branch '${branch}' is not in the mirror of ${gitUrl || paths.bare}. ` +
+        `Your token is scoped to that repository — if the branch belongs to a different one, ` +
+        `you are holding the wrong token, and the branch existing elsewhere will not help. ` +
+        `Otherwise push it and run \`make mirror\` on the host.` +
+        (nearby.length > 0 ? ` Most recent branches there: ${nearby.join(", ")}.` : " The mirror has no branches at all."),
+    );
+  }
   await git(paths.bare, ["worktree", "add", "--detach", dir, ref], 300_000);
   await git(dir, ["submodule", "update", "--init", "--recursive"], 600_000).catch(() => {
     // Submodules that cannot be initialised are announced by the diff layer rather
@@ -212,7 +240,7 @@ export async function worktreeFor(
   await ensureBare(paths, gitUrl, true);
 
   try {
-    return await addWorktree(paths, reviewId, branch);
+    return await addWorktree(paths, reviewId, branch, gitUrl);
   } catch (e) {
     // Narrow on purpose: ONLY when the directory now exists, which means a
     // concurrent caller created the same review's worktree from the same pinned
