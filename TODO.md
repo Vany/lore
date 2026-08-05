@@ -104,23 +104,19 @@ that part is pulled out into its own open item rather than hidden inside a tick.
       `session.abort`, which is machinery worth building only once there is something
       to catch.
 
-- [ ] **T0 only understands a single-package repo, and now says so.** Reviewing a
-      real pnpm monorepo, T0 installed correctly and then reported `tsc: not
-      configured` and `eslint: produced unparseable output`. Both are honest — the
-      repo has `tsconfig.base.json` and per-package configs rather than a root
-      `tsconfig.json`, and one eslint invocation at the root of 33 packages is not
-      what that project runs. What it *does* run is `turbo run typecheck` and
-      `turbo run lint`, declared in its own `package.json`.
+- [x] **T0 runs the target's own tooling, in the sandbox.** Done 2026-08-05.
+      `tsc` and `eslint` resolved their binaries out of the target's `node_modules`
+      and ran in the SERVICE container — the same dependency tree the sandbox exists
+      to contain, next to the knowledge base, the signing key and every provider
+      credential. Both now run inside the sandbox off one install, and where the
+      target declares `typecheck` or `lint`, that script is what runs.
 
-      Running those scripts is what D-8 actually asks for — the target's own tooling
-      — but they are **arbitrary code execution**, and D-24 says that belongs in the
-      sandbox. `tsc` and `eslint` currently run through `runTool` on the host, so
-      honouring the scripts means moving the deterministic engines inside the
-      sandbox alongside the suite. That is an architecture change, not a patch, and
-      it wants a decision.
-
-      Until then the coverage gap is visible rather than silent, which is the part
-      that mattered: `checks_skipped` names both on every poll.
+      Verified on a real pnpm monorepo PR, and it took three passes to become true:
+      the first reported all three of its gates failing, which was our missing pnpm;
+      the second still reported typecheck and lint failing, which was pnpm fetching
+      its own declared version under `--network none`; the third reported only the
+      suite failing, which the author's commit says is deliberate. Two rounds of
+      confident false claims about someone else's branch before it was right.
 
 ## Later
 
