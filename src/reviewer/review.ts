@@ -355,7 +355,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     const source = await readFile(join(worktree, file), "utf8").catch(() => undefined);
     if (source === undefined || !hunkStillPresent(source, prior.scope.hunk)) continue;
 
-    const origin = originalJustification(prior.rationale, prior.createdAt);
+    const origin = originalJustification(prior);
     store.recordVerdict(reviewId, {
       fingerprint: fp,
       verdict: "justified-accepted",
@@ -363,7 +363,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       // this was decided elsewhere and inherited, not ruled on by the tier named here.
       rationale: `carried forward from an earlier review of this repo (${origin.at}): ${origin.reason}`,
       scope: prior.scope,
-      tier: "carried",
+      tier: CARRIED_TIER,
       round,
     });
     carried.push(fp);
@@ -494,27 +494,38 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
  * deployment has since removed — which compares below every real tier, so an unknown
  * origin can never out-rank one and quietly gain the right to close findings.
  */
+/** The tier stamped on a verdict this code wrote, rather than one a model ruled. */
+export const CARRIED_TIER = "carried";
+
 const CARRY_PREFIX = /^carried forward from an earlier review of this repo \(([^)]+)\): /;
 
 /**
  * The decision a carried justification actually rests on.
  *
- * D-51 carries an accepted justification into a later review, and the carry used to
- * wrap the previous rationale in its own prefix — so a justification surviving N
- * reviews accumulated N prefixes. Observed at **thirteen** on lore's own repository
- * in a single day, ~62 characters each, growing without bound and burying the one
- * sentence a reader wants under a wall of identical provenance.
+ * D-51 carries an accepted justification into a later review. Without unwrapping, the
+ * carry wraps the previous rationale in its own prefix and a justification surviving
+ * N reviews accumulates N prefixes — observed at thirteen on this repository in one
+ * day, ~62 characters each, growing without bound and burying the one sentence a
+ * reader wants. Unwrapping keeps the ORIGINAL reason and the date it was FIRST
+ * decided at constant size; the outer prefix only ever named the previous hop.
  *
- * Unwrapping to the innermost layer keeps both things that matter at constant size:
- * the ORIGINAL reason, and the date it was FIRST decided — which is the more useful
- * date anyway. The outermost prefix only ever named the previous hop.
+ * **Only text this code wrote is unwrapped**, identified by the tier stamped on the
+ * verdict. `rationale` otherwise comes verbatim from an author's `lore-ok` comment,
+ * and matching the prose would let a legitimate reason that happens to begin
+ * "carried forward from an earlier review of this repo (…)" be truncated and
+ * re-dated — rewriting what a reviewer actually ratified. Provenance is recognised
+ * by a field we control, never by parsing someone else's sentence.
  */
-export function originalJustification(
-  rationale: string | undefined,
-  at: string,
-): { readonly at: string; readonly reason: string } {
-  let reason = rationale ?? "(no reason recorded)";
-  let first = at;
+export function originalJustification(prior: {
+  readonly rationale: string | undefined;
+  readonly createdAt: string;
+  readonly tier: string | undefined;
+}): { readonly at: string; readonly reason: string } {
+  const reason0 = prior.rationale ?? "(no reason recorded)";
+  if (prior.tier !== CARRIED_TIER) return { at: prior.createdAt, reason: reason0 };
+
+  let reason = reason0;
+  let first = prior.createdAt;
   for (let m = CARRY_PREFIX.exec(reason); m !== null; m = CARRY_PREFIX.exec(reason)) {
     first = m[1] ?? first;
     reason = reason.slice(m[0].length);

@@ -199,9 +199,30 @@ export async function worktreeFor(
   gitUrl: string,
 ): Promise<string> {
   const existing = join(paths.worktrees, reviewId);
-  const resumed = existsSync(existing);
-  await ensureBare(paths, gitUrl, !resumed);
-  return resumed ? existing : await addWorktree(paths, reviewId, branch);
+
+  // Re-checked AFTER the await, not before it. `ensureBare` yields, and both the
+  // worker and `review_submit` reach this function — so a snapshot taken beforehand
+  // can be stale by the time it is used, and the caller that loses the race would
+  // call `addWorktree` on a path that now exists. The worker treats a throw here as
+  // a failed round, so losing that race failed the review outright.
+  if (existsSync(existing)) {
+    await ensureBare(paths, gitUrl, false);
+    return existing;
+  }
+  await ensureBare(paths, gitUrl, true);
+
+  try {
+    return await addWorktree(paths, reviewId, branch);
+  } catch (e) {
+    // Narrow on purpose: ONLY when the directory now exists, which means a
+    // concurrent caller created the same review's worktree from the same pinned
+    // base while this one was working. Every other failure — `branch not found`,
+    // a broken bare repo — leaves no directory behind and propagates, because a
+    // catch that cannot tell those apart is how a round once continued against a
+    // path that had never been created.
+    if (existsSync(existing)) return existing;
+    throw e;
+  }
 }
 
 export async function removeWorktree(paths: RepoPaths, reviewId: string): Promise<void> {

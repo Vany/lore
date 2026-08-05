@@ -23,7 +23,7 @@ import { CODE_ARCH } from "../core/review-type.ts";
 import { Store } from "../store/store.ts";
 import type { Finding } from "../core/finding.ts";
 import type { ReviewerLike, ReviewerResult } from "./opencode.ts";
-import { originalJustification, runRound } from "./review.ts";
+import { CARRIED_TIER, originalJustification, runRound } from "./review.ts";
 
 /** A reviewer that says exactly what a test tells it to, and records what it saw. */
 class ScriptedReviewer implements ReviewerLike {
@@ -629,9 +629,11 @@ describe("runRound", () => {
 describe("a carried justification does not accumulate its own provenance", () => {
   const wrap = (at: string, reason: string) =>
     `carried forward from an earlier review of this repo (${at}): ${reason}`;
+  const carried = (rationale: string | undefined, createdAt: string) =>
+    ({ rationale, createdAt, tier: CARRIED_TIER });
 
   it("keeps the original reason and the date it was FIRST decided", () => {
-    const origin = originalJustification("bounded by the schema check upstream", "2026-08-01T00:00:00.000Z");
+    const origin = originalJustification(carried("bounded by the schema check upstream", "2026-08-01T00:00:00.000Z"));
     expect(origin).toStrictEqual({ at: "2026-08-01T00:00:00.000Z", reason: "bounded by the schema check upstream" });
   });
 
@@ -641,7 +643,7 @@ describe("a carried justification does not accumulate its own provenance", () =>
     r = wrap("2026-08-02T00:00:00.000Z", r);
     r = wrap("2026-08-03T00:00:00.000Z", r);
 
-    const origin = originalJustification(r, "2026-08-04T00:00:00.000Z");
+    const origin = originalJustification(carried(r, "2026-08-04T00:00:00.000Z"));
     // The FIRST date, not the most recent hop — the outer prefix only named the
     // previous carry, which tells a reader nothing they need.
     expect(origin.at).toBe("2026-08-01T00:00:00.000Z");
@@ -654,7 +656,7 @@ describe("a carried justification does not accumulate its own provenance", () =>
     let at = "2026-08-01T00:00:00.000Z";
     const lengths: number[] = [];
     for (let i = 0; i < 20; i++) {
-      const origin = originalJustification(rationale, at);
+      const origin = originalJustification(carried(rationale, at));
       rationale = wrap(origin.at, origin.reason);
       at = `2026-08-${String(2 + i).padStart(2, "0")}T00:00:00.000Z`;
       lengths.push(rationale.length);
@@ -663,6 +665,17 @@ describe("a carried justification does not accumulate its own provenance", () =>
   });
 
   it("says so plainly when there was never a reason", () => {
-    expect(originalJustification(undefined, "2026-08-01T00:00:00.000Z").reason).toBe("(no reason recorded)");
+    expect(originalJustification(carried(undefined, "2026-08-01T00:00:00.000Z")).reason).toBe("(no reason recorded)");
+  });
+
+  // An author's rationale is arbitrary text from a `lore-ok` comment, and one may
+  // legitimately begin with the same words this code uses for its own provenance.
+  // Unwrapping is therefore keyed on the tier WE stamp, never on the prose — parsing
+  // it would truncate and re-date a reason a reviewer actually ratified.
+  it("never rewrites a reason a reviewer ratified, however it begins", () => {
+    const authors = wrap("2019-01-01T00:00:00.000Z", "the vendor doc says this header is optional");
+    const origin = originalJustification({ rationale: authors, createdAt: "2026-08-04T00:00:00.000Z", tier: "t2" });
+    expect(origin.reason).toBe(authors);
+    expect(origin.at).toBe("2026-08-04T00:00:00.000Z");
   });
 });
