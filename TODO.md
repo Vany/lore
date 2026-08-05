@@ -112,6 +112,59 @@ nothing.
       in production. Either it needs a default ruleset it can bring itself, or it
       should stop being counted as a gate.
 
+### What the client's own report adds
+
+`~/c/REPORT-2026-08-05-manual-lore-prs.md` §5–§7, written 17:57 by the session that
+drove today's reviews. It is the first outside account of this service, and its
+verdict is the strongest evidence the project has: *"Working, and it earned its place
+on the first run — it overturned a 'ready to land' call that I had made and that
+GitHub's own signals supported."* Specifically, lore caught that the full suite fails
+on `fix/RIGID-135` where GitHub was green (PR checks run `turbo … --affected`, lore
+runs all of it), and that the branch was 22 commits stale while GitHub said
+`MERGEABLE`. It names `history` — *"seen 6× before in this repo — this is a pattern,
+not an incident"* — as the thing nothing else in their toolchain does. That is D-14
+landing with a real user, and it should not get lost among the defects below.
+
+- [ ] **The running service is 21 commits behind, and the two fixes the client asked
+      for are among them.** The container was built 15:15 and started 15:16 today; it
+      is still up. Everything committed since is not running — including `2c527c1`
+      (17:36) *"`failed` carried no reason, so the client invented one"* and `49179a2`
+      (18:01) *"the reviewer recomputed the diff with two dots and invented a bundled
+      refactor"*. Those are, word for word, the two items the report's §7 lists under
+      **"Needs you — lore, as its owner"**. Also undeployed: the ingest fix (`dda312f`),
+      `LORE_RUN_TESTS` defaulting off (`8fb49d9`), the mirror-scope fix (`a2f6c41`),
+      and `relocate` — which means the `RigidFi` url is only in the database because
+      it was written there directly.
+      Nothing here needs writing. It needs a deploy, deliberately, when Vany chooses —
+      the service is mid-review as of 18:25 and restarting drops that work.
+
+- [ ] **A new client's first question about the knowledge base is answered `0`.** The
+      report's §7 records `knowledge_query`, no filter, `count: 0`, and concludes *"the
+      knowledge store is empty"*. It queries fine — 68 items for lore right now. The
+      real cause is worse than a bug: `bootstrap` runs in `worker.ts` on the first
+      **review**, and `provision.ts` says so on purpose ("there is nothing to read
+      until the mirror exists"). So between provisioning and the first completed
+      review, a client that asks what the service knows is told `0`, and the honest
+      inference from that is *this product is empty*. The very first interaction a new
+      workgroup has with the thing whose entire pitch is accumulated memory returns
+      nothing, with no note explaining why.
+      Cheapest fix is not code: `count: 0` should say *not bootstrapped yet — run a
+      review*, which is a `docs.ts` and handler-note change, not a redesign.
+
+- [ ] **Knowledge never reaches T0, so the same justified finding is raised at `high`
+      forever.** Two of the four findings the client evaluated are semgrep `http://`
+      hits in **test fixtures**, rated `high` — the report flags exactly this. lore has
+      already derived the rule for it, twice, on both repos: *"This codebase repeatedly
+      produces CWE-319 findings (4 so far)"*, and lore's own base carries a full
+      accepted justification explaining why a loopback URL in a test file is not a
+      plaintext risk. `src/t0/runner.ts` never calls `knowledgeFor` — only
+      `mcp/server.ts`, `worker.ts` and `conflict.ts` do. So the system observes the
+      pattern, writes it down, tells the client about it, and then raises it again at
+      the same severity next time.
+      This is the loop failing to close: knowledge is produced and never consumed by
+      the engine that produced it. Changing severity from accumulated verdicts touches
+      what gets reported as `high`, so it wants a decision before a patch.
+
 - [x] **lore holds no git credentials** (D-63). Done 2026-08-04. `make mirror` fetches
       on the host as the operator into `data/repos`; the container sees nothing
       outside the project. `ensureBare` checks presence and freshness and refuses
