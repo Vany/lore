@@ -340,6 +340,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   //     a review, applied across them. Carrying one forward blind is how a ladder
   //     rots into rubber-stamping.
   const carried: string[] = [];
+  // See `originalJustification`: the prefix used to nest, once per review.
   for (const fp of raisedFingerprints) {
     if (modelRaised.has(fp)) continue;
     const prior = store.priorAcceptedVerdict(review.repoId, fp, reviewId);
@@ -354,12 +355,13 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     const source = await readFile(join(worktree, file), "utf8").catch(() => undefined);
     if (source === undefined || !hunkStillPresent(source, prior.scope.hunk)) continue;
 
+    const origin = originalJustification(prior.rationale, prior.createdAt);
     store.recordVerdict(reviewId, {
       fingerprint: fp,
       verdict: "justified-accepted",
       // The provenance travels with it. A reader six months from now needs to know
       // this was decided elsewhere and inherited, not ruled on by the tier named here.
-      rationale: `carried forward from an earlier review of this repo (${prior.createdAt}): ${prior.rationale ?? "(no reason recorded)"}`,
+      rationale: `carried forward from an earlier review of this repo (${origin.at}): ${origin.reason}`,
       scope: prior.scope,
       tier: "carried",
       round,
@@ -492,6 +494,34 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
  * deployment has since removed — which compares below every real tier, so an unknown
  * origin can never out-rank one and quietly gain the right to close findings.
  */
+const CARRY_PREFIX = /^carried forward from an earlier review of this repo \(([^)]+)\): /;
+
+/**
+ * The decision a carried justification actually rests on.
+ *
+ * D-51 carries an accepted justification into a later review, and the carry used to
+ * wrap the previous rationale in its own prefix — so a justification surviving N
+ * reviews accumulated N prefixes. Observed at **thirteen** on lore's own repository
+ * in a single day, ~62 characters each, growing without bound and burying the one
+ * sentence a reader wants under a wall of identical provenance.
+ *
+ * Unwrapping to the innermost layer keeps both things that matter at constant size:
+ * the ORIGINAL reason, and the date it was FIRST decided — which is the more useful
+ * date anyway. The outermost prefix only ever named the previous hop.
+ */
+export function originalJustification(
+  rationale: string | undefined,
+  at: string,
+): { readonly at: string; readonly reason: string } {
+  let reason = rationale ?? "(no reason recorded)";
+  let first = at;
+  for (let m = CARRY_PREFIX.exec(reason); m !== null; m = CARRY_PREFIX.exec(reason)) {
+    first = m[1] ?? first;
+    reason = reason.slice(m[0].length);
+  }
+  return { at: first, reason };
+}
+
 function tierRank(tiers: readonly Tier[], id: string): number {
   return tiers.findIndex((t) => t.id === id);
 }

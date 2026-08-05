@@ -23,7 +23,7 @@ import { CODE_ARCH } from "../core/review-type.ts";
 import { Store } from "../store/store.ts";
 import type { Finding } from "../core/finding.ts";
 import type { ReviewerLike, ReviewerResult } from "./opencode.ts";
-import { runRound } from "./review.ts";
+import { originalJustification, runRound } from "./review.ts";
 
 /** A reviewer that says exactly what a test tells it to, and records what it saw. */
 class ScriptedReviewer implements ReviewerLike {
@@ -615,5 +615,54 @@ describe("runRound", () => {
 
     const row = store.db.prepare("SELECT steps FROM usage").get() as { steps: number | null };
     expect(row.steps).toBeNull();
+  });
+});
+
+// D-51 carries an accepted justification into a later review. The carry wrapped the
+// previous rationale in its own prefix, so a justification that survived N reviews
+// accumulated N prefixes — observed at THIRTEEN on this repository in one day, each
+// ~62 characters, growing without bound.
+//
+// Found by reading what `review_poll` actually returned rather than by a test: the
+// `settled_because` field was a wall of identical provenance with the one sentence
+// that mattered at the far end of it.
+describe("a carried justification does not accumulate its own provenance", () => {
+  const wrap = (at: string, reason: string) =>
+    `carried forward from an earlier review of this repo (${at}): ${reason}`;
+
+  it("keeps the original reason and the date it was FIRST decided", () => {
+    const origin = originalJustification("bounded by the schema check upstream", "2026-08-01T00:00:00.000Z");
+    expect(origin).toStrictEqual({ at: "2026-08-01T00:00:00.000Z", reason: "bounded by the schema check upstream" });
+  });
+
+  it("unwraps to the innermost decision however many hops it took", () => {
+    let r = "bounded by the schema check upstream";
+    r = wrap("2026-08-01T00:00:00.000Z", r);
+    r = wrap("2026-08-02T00:00:00.000Z", r);
+    r = wrap("2026-08-03T00:00:00.000Z", r);
+
+    const origin = originalJustification(r, "2026-08-04T00:00:00.000Z");
+    // The FIRST date, not the most recent hop — the outer prefix only named the
+    // previous carry, which tells a reader nothing they need.
+    expect(origin.at).toBe("2026-08-01T00:00:00.000Z");
+    expect(origin.reason).toBe("bounded by the schema check upstream");
+  });
+
+  // The property that matters: re-carrying is idempotent, so the field cannot grow.
+  it("is stable under repeated carrying", () => {
+    let rationale = "bounded by the schema check upstream";
+    let at = "2026-08-01T00:00:00.000Z";
+    const lengths: number[] = [];
+    for (let i = 0; i < 20; i++) {
+      const origin = originalJustification(rationale, at);
+      rationale = wrap(origin.at, origin.reason);
+      at = `2026-08-${String(2 + i).padStart(2, "0")}T00:00:00.000Z`;
+      lengths.push(rationale.length);
+    }
+    expect(new Set(lengths).size).toBe(1);
+  });
+
+  it("says so plainly when there was never a reason", () => {
+    expect(originalJustification(undefined, "2026-08-01T00:00:00.000Z").reason).toBe("(no reason recorded)");
   });
 });
