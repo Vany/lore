@@ -244,6 +244,29 @@ export class Store {
    * another principal must fail exactly as a forged one does — which is why the
    * principal is a parameter here rather than something callers remember to check.
    */
+  /**
+   * The review of this branch that is still going, if there is one.
+   *
+   * Scoped to the repo rather than the principal: two teammates reviewing one branch
+   * are duplicating the same work and paying twice for it, and the second should be
+   * told about the first rather than quietly starting a parallel ladder.
+   *
+   * Newest first, because if several are somehow open the useful one to continue is
+   * the one that has got furthest.
+   */
+  openReviewFor(repoId: string, branch: string): { id: string; state: string; round: number } | undefined {
+    const row = this.db
+      .prepare(
+        `SELECT id, state, ladder FROM review
+         WHERE repo_id = ? AND branch = ? AND state NOT IN ('passed','passed_partial','failed','expired')
+         ORDER BY created_at DESC LIMIT 1`,
+      )
+      .get(repoId, branch) as Record<string, string> | undefined;
+    if (row === undefined) return undefined;
+    const ladder = JSON.parse(row["ladder"] ?? "{}") as { round?: number };
+    return { id: row["id"] ?? "", state: row["state"] ?? "", round: ladder.round ?? 0 };
+  }
+
   getReview(id: string, principal: string): ReviewRow | undefined {
     const row = this.db
       .prepare("SELECT * FROM review WHERE id = ? AND principal = ?")

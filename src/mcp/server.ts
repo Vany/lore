@@ -71,9 +71,39 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           .min(1)
           .describe("the task text, pasted verbatim — not summarised, not your own description"),
         type: absent(z.enum(reviewTypeIds() as [string, ...string[]])).describe(`default: ${DEFAULT_TYPE}`),
+        restart: absent(z.boolean()).describe(
+          "abandon an open review of this branch and start over — only after a rebase or force-push",
+        ),
       }),
     },
-    async ({ branch, into, ticket, type }) => {
+    async ({ branch, into, ticket, type, restart }) => {
+      // AN OPEN REVIEW OF THIS BRANCH IS THE ONE TO CONTINUE, NOT TO DUPLICATE.
+      //
+      // Measured 2026-08-05, the first day a real client drove this: six reviews of
+      // one branch in two hours, four of another, and 13 of 30 reviews stopping at
+      // round 1. The ladder needs round 2 to settle anything — carry findings
+      // forward, escalate, ratify a justification — so a repository being reviewed
+      // all day produced ZERO verdicts and learned nothing. Every restart also
+      // re-pays t0 and t1 from scratch.
+      //
+      // Nothing told the client that `review_submit` continues the same review, and
+      // nothing noticed it was starting a fifth one. The docs say it now, and this
+      // is the mechanical half: refused, with the id to continue instead. A refusal
+      // rather than silently returning the existing review, because "here is a
+      // review_id" that is not the one just asked for is exactly the kind of quiet
+      // substitution this project refuses.
+      const open = store.openReviewFor(who.repoId, branch);
+      if (open !== undefined && restart !== true) {
+        throw new Error(
+          `${branch} already has an open review: ${open.id} (state ${open.state}, round ${open.round}). ` +
+            `Continue it — poll it, then answer its findings with review_submit, which applies your fixes ` +
+            `to the SAME review and advances the ladder. Starting again would re-run the cheap tiers from ` +
+            `round 1 and abandon every justification this review has already ratified, which is why the ` +
+            `deep tiers are rarely reached. If the branch was rebased or force-pushed the old snapshot is ` +
+            `genuinely meaningless — pass restart: true, deliberately.`,
+        );
+      }
+
       const rt = reviewType(type ?? DEFAULT_TYPE);
       const id = newReviewId();
       store.createReview({

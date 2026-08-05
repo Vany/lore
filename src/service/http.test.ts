@@ -20,8 +20,20 @@ let base: string;
 let token: string;
 let otherToken: string;
 let repoId: string;
+let port: number;
 
-const PORT = 39_517;
+/**
+ * A DIFFERENT PORT PER TEST.
+ *
+ * One fixed port, rebound by every `beforeEach`, leaves fetch's connection pool
+ * holding keep-alive sockets to a server that has just been closed — so the next
+ * request fails with ECONNRESET for reasons having nothing to do with what is under
+ * test. It only became likely once there were enough tests, and it failed two of them
+ * intermittently. `listen(0)` would be tidier but binds asynchronously, so the port is
+ * not knowable when this returns.
+ */
+let portSeq = 39_517;
+const nextPort = () => (port = ++portSeq);
 
 beforeEach(() => {
   store = new Store(":memory:");
@@ -39,10 +51,10 @@ beforeEach(() => {
       enqueue: () => undefined,
       attest: async () => "lore: attested",
     },
-    { port: PORT, host: "127.0.0.1", heartbeat: { ...DEFAULT_HEARTBEAT, dataDir: "/tmp" } },
+    { port: nextPort(), host: "127.0.0.1", heartbeat: { ...DEFAULT_HEARTBEAT, dataDir: "/tmp" } },
   );
   close = server.close;
-  base = `http://127.0.0.1:${PORT}`;
+  base = `http://127.0.0.1:${port}`;
 });
 
 afterEach(() => {
@@ -531,5 +543,73 @@ describe("an empty knowledge base explains itself", () => {
     const miss = await callTool("knowledge_query", { contains: "nothing matches this" });
     expect(miss["count"]).toBe(0);
     expect(String(miss["note"])).toMatch(/HAS knowledge/);
+  });
+});
+
+// Six reviews of one branch in two hours, four of another, and 13 of 30 reviews
+// stopping at round 1 — measured on the first day a real client drove this.
+//
+// The ladder only reaches its deep, independent tiers by ADVANCING: findings carry
+// forward, ratified justifications stay ratified, severity escalates where an answer
+// did not hold. A restart discards all of it and re-pays t0 and t1. So the repository
+// under review all day produced ZERO verdicts and learned nothing, which for a
+// service whose product is accumulated memory is the whole failure.
+describe("one review per branch", () => {
+  /** The error path, which `callTool` cannot reach — it asserts there is no error. */
+  const callRaw = async (name: string, args: Record<string, unknown>) => {
+    const res = await mcp({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }, token);
+    const line = (await res.text()).split("\n").find((l) => l.startsWith("data:")) ?? "";
+    return JSON.parse(line.slice("data:".length)) as {
+      result?: { content?: { text?: string }[]; isError?: boolean };
+      error?: { message?: string };
+    };
+  };
+  const message = (r: Awaited<ReturnType<typeof callRaw>>) =>
+    `${r.error?.message ?? ""} ${r.result?.content?.[0]?.text ?? ""}`;
+
+  const start = (args: Record<string, unknown> = {}) =>
+    callRaw("review_start", { branch: "feat/x", into: "main", ticket: "do the thing", ...args });
+
+  it("refuses a second review of a branch that already has one open, and names it", async () => {
+    const first = await start();
+    const id = JSON.parse(first.result?.content?.[0]?.text ?? "{}").review_id as string;
+    expect(id).toMatch(/^rev_/);
+
+    const second = await start();
+    // Refused, not silently satisfied: returning the FIRST review's id from a call
+    // that asked for a new one is the quiet substitution this project refuses.
+    expect(second.result?.isError).toBe(true);
+    expect(message(second)).toContain(id);
+    expect(message(second)).toContain("review_submit");
+    // And no NEW review was created behind the refusal.
+    const { c } = store.db.prepare("SELECT COUNT(*) c FROM review WHERE branch = 'feat/x'").get() as { c: number };
+    expect(c).toBe(1);
+  });
+
+  // A rebase or force-push genuinely invalidates the pinned snapshot, so there has to
+  // be a way through — an explicit one, never a default.
+  it("allows a restart when asked for deliberately", async () => {
+    const first = await start();
+    const firstId = JSON.parse(first.result?.content?.[0]?.text ?? "{}").review_id as string;
+
+    const again = await start({ restart: true });
+    const secondId = JSON.parse(again.result?.content?.[0]?.text ?? "{}").review_id as string;
+    expect(secondId).toMatch(/^rev_/);
+    expect(secondId).not.toBe(firstId);
+  });
+
+  it("lets a finished branch be reviewed again without ceremony", async () => {
+    const first = await start();
+    const id = JSON.parse(first.result?.content?.[0]?.text ?? "{}").review_id as string;
+    store.updateReview(id, { state: "passed" });
+
+    const next = await start();
+    expect(JSON.parse(next.result?.content?.[0]?.text ?? "{}").review_id).toMatch(/^rev_/);
+  });
+
+  it("does not confuse one branch's open review with another's", async () => {
+    await start();
+    const other = await start({ branch: "feat/y" });
+    expect(JSON.parse(other.result?.content?.[0]?.text ?? "{}").review_id).toMatch(/^rev_/);
   });
 });

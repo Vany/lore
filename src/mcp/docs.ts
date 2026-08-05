@@ -58,6 +58,17 @@ not be included, and nothing will tell you which. Push first, then start; for
 anything after that, start a new review. Once a review is pinned the mirror is never
 re-read, so a later push cannot move the ground under findings already reported.
 
+ONE REVIEW PER BRANCH. Start it once; then answer its findings with review_submit,
+which applies your fixes to the SAME review and advances the ladder. Do NOT start a
+second review of a branch that already has one open — it is refused, and it names the
+one to continue.
+
+That matters more than it looks. The ladder only reaches its deeper, independent
+tiers by ADVANCING: findings carry forward, justifications you ratified stay ratified,
+and severity escalates where an answer did not hold. A restart throws all of that away
+and re-runs the cheap tiers from round 1, so a branch reviewed all day can produce no
+verdict at all — which is exactly what happened before this was refused.
+
 Expect several rounds of findings. That is the process working, not failing.
 `.trim(),
 
@@ -149,6 +160,12 @@ fact about your branch.
   submit: `
 Submit your fixes as a unified diff, with the git tree hash of your working tree
 after applying them.
+
+THIS IS HOW A REVIEW CONTINUES. It is the same review, one round further on: your
+answers are checked, findings you settled stay settled, and the ladder escalates to a
+deeper tier when it should. This — not review_start — is the loop. Starting a new
+review instead abandons every justification already ratified and re-runs the cheap
+tiers from the beginning.
 
 Applied to the review's private worktree. Nothing is committed or pushed — your
 history stays yours. The tree_hash is verified after applying; a mismatch fails
