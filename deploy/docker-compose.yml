@@ -53,7 +53,23 @@ services:
       # SAME PATH AS THE HOST, deliberately — see the volume below.
       LORE_DATA_DIR: ${LORE_HOST_DATA:-/var/lib/lore}
       LORE_PORT: "7777"
-      LORE_CONCURRENCY: "2"          # T0 is CPU-bound on an SBC; set by cores (D-37)
+      # How many ROUNDS run at once. Governs both halves of a round, which have very
+      # different costs: the model call is remote and merely waits (t1 averages 304s,
+      # t2 915s), while T0 runs a sandbox container locally and is CPU- and
+      # memory-bound. Raising this buys real throughput on the waiting half and
+      # oversubscribes the local one.
+      #
+      # 12 on a machine whose DOCKER VM has 7.7 GB, against a 6g limit per sandbox.
+      # That is deliberate and the arithmetic is not a mistake: limits are ceilings,
+      # not reservations, and a warm install uses a fraction of one — which is why 2
+      # has been fine while already requesting 12 GB of limits. Workers are also
+      # rarely in T0 together, since the model call dominates the round.
+      #
+      # When it is wrong it is wrong LOUDLY: an OOM-killed sandbox exits 137 and is
+      # reported as `did not finish`, never as a clean check. Watch for that in
+      # `checks_skipped`; if it appears, give Docker Desktop more memory (24 GB makes
+      # four concurrent cold installs comfortable) rather than guessing here.
+      LORE_CONCURRENCY: "${LORE_CONCURRENCY:-12}"
       LORE_DAILY_CEILING_USD: "100"  # stops STARTING reviews when hit, never mid-review
       # OFF by default, and deliberately (D-24 revised).
       #

@@ -47,6 +47,36 @@ export interface T0Options {
   readonly runTests?: boolean;
 }
 
+/**
+ * Serialises installs that share a cache directory, and only those.
+ *
+ * In-process because the workers are loops in one process (`Worker.start`). A second
+ * lore process on the same data directory would need a file lock; there is not one,
+ * and this comment is the record of that limit rather than a claim it is handled.
+ */
+const installing = new Map<string, Promise<unknown>>();
+
+export async function withInstallLock<T>(cacheDir: string, fn: () => Promise<T>): Promise<T> {
+  const previous = installing.get(cacheDir) ?? Promise.resolve();
+  // `.then(fn, fn)` on both arms: a failed install must not wedge the queue behind it
+  // for ever. The next caller runs regardless of how the last one ended.
+  const queued = previous.then(fn, fn);
+  // What the NEXT caller chains onto — swallowing the outcome, since a rejection here
+  // is the caller's to handle, not the lock's. Held in its own variable because the
+  // cleanup below compares identity, and comparing against `queued` would never match.
+  const guard = queued.then(
+    () => undefined,
+    () => undefined,
+  );
+  installing.set(cacheDir, guard);
+  try {
+    return await queued;
+  } finally {
+    // Only if nothing has queued behind us; otherwise the map still names their turn.
+    if (installing.get(cacheDir) === guard) installing.delete(cacheDir);
+  }
+}
+
 export async function runT0(worktree: string, opts: T0Options): Promise<T0Result> {
   const outcomes: EngineOutcome[] = [];
 
@@ -121,7 +151,23 @@ async function sandboxed(
   await mkdir(scratch, { recursive: true });
 
   try {
-    const installed = await install(cfg, worktree, cacheDir, scratch, cmds);
+    // ONE INSTALL AT A TIME PER CACHE DIRECTORY.
+    //
+    // The cache is keyed by LOCKFILE HASH, so every branch of a repository that has
+    // not changed its lockfile shares one `node_modules`, mounted read-write into
+    // each sandbox. Two reviews of one repo therefore already race; at higher
+    // concurrency a whole burst of branches installs into the same directory at once.
+    //
+    // The failure is not a crash. A half-written `node_modules` makes `tsc` and
+    // `eslint` report errors that are not real — reporting the target's own gates as
+    // failing when we broke them ourselves, which has already happened here once from
+    // a different cause and cost two rounds of confident false claims about someone
+    // else's branch.
+    //
+    // Serialising costs almost nothing after the first one: a warm cache installs in
+    // about 200ms, measured. It is the cold install that takes minutes, and that one
+    // has to happen exactly once anyway.
+    const installed = await withInstallLock(cacheDir, () => install(cfg, worktree, cacheDir, scratch, cmds));
     if (installed.unavailable !== undefined) {
       return wanted.map((engine) => ({
         engine,
