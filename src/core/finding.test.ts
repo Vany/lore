@@ -152,6 +152,41 @@ describe("parseFinding", () => {
 //
 // This is the check that makes the claim in SPEC true, mechanically, instead of by
 // assertion — the same shape as `docs.test.ts`, and for the same reason.
+// The rule, not the field. `cwe` was given a preprocess mapping null and blank to
+// absent, with the reasoning written beside it, and `symbol`, `line` and all five
+// optional MCP tool arguments kept the defect — because the fix went where the bug
+// was reported instead of where it applied. It then went off: `symbol: null`, twice,
+// and a whole review discarded.
+//
+// Zod's `.optional()` short-circuits on `undefined` alone, so a bare one always
+// rejects `null` — and every caller here is a language model, which writes `null` for
+// absent as readily as it omits the key.
+describe("no schema field is optional without deciding what null means", () => {
+  const SRC = fileURLToPath(new URL("..", import.meta.url));
+
+  const sources = (dir: string): string[] =>
+    readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+      const p = join(dir, e.name);
+      if (e.isDirectory()) return sources(p);
+      return e.isFile() && p.endsWith(".ts") && !p.endsWith(".test.ts") ? [p] : [];
+    });
+
+  it("routes every .optional() through absent()", () => {
+    const offenders: string[] = [];
+    for (const file of sources(SRC)) {
+      // The helper itself is where `.optional()` is allowed to appear.
+      if (file.endsWith("core/optional.ts")) continue;
+      readFileSync(file, "utf8")
+        .split("\n")
+        .forEach((line, i) => {
+          if (/^\s*(\/\/|\*|\/\*)/.test(line)) return;
+          if (line.includes(".optional()")) offenders.push(`${file.slice(SRC.length)}:${i + 1}: ${line.trim()}`);
+        });
+    }
+    expect(offenders).toStrictEqual([]);
+  });
+});
+
 describe("the claim cap lives in exactly one place", () => {
   const SRC = fileURLToPath(new URL("..", import.meta.url));
 

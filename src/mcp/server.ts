@@ -12,6 +12,7 @@
 import { randomBytes } from "node:crypto";
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/server";
 import * as z from "zod";
+import { absent } from "../core/optional.ts";
 import { worstSeverity } from "../core/finding.ts";
 import { initialState } from "../core/ladder.ts";
 import { isAttestable } from "../core/review-state.ts";
@@ -69,7 +70,7 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           .string()
           .min(1)
           .describe("the task text, pasted verbatim — not summarised, not your own description"),
-        type: z.enum(reviewTypeIds() as [string, ...string[]]).optional().describe(`default: ${DEFAULT_TYPE}`),
+        type: absent(z.enum(reviewTypeIds() as [string, ...string[]])).describe(`default: ${DEFAULT_TYPE}`),
       }),
     },
     async ({ branch, into, ticket, type }) => {
@@ -339,8 +340,8 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
     {
       description: TOOL_DOCS.query,
       inputSchema: z.object({
-        path: z.string().optional().describe("narrow to a file or directory prefix"),
-        contains: z.string().optional().describe("case-insensitive substring filter"),
+        path: absent(z.string()).describe("narrow to a file or directory prefix"),
+        contains: absent(z.string()).describe("case-insensitive substring filter"),
       }),
     },
     async ({ path, contains }) => {
@@ -379,8 +380,8 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       inputSchema: z.object({
         statement: z.string().min(1).describe("the rule or fact, stated plainly"),
         why: z.string().min(1).describe("the reason — a rule without one gets deleted by the next reader"),
-        path: z.string().optional().describe("scope it to a file or directory when it is not repo-wide"),
-        kind: z.enum(["rule", "fact", "mistake"]).optional(),
+        path: absent(z.string()).describe("scope it to a file or directory when it is not repo-wide"),
+        kind: absent(z.enum(["rule", "fact", "mistake"])),
       }),
     },
     async ({ statement, why, path, kind }) => {

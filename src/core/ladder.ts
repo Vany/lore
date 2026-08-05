@@ -10,6 +10,7 @@
 
 import { readFileSync } from "node:fs";
 import * as z from "zod";
+import { absent } from "./optional.ts";
 import { Exhausted, UsageError } from "./errors.ts";
 
 export type TierKind = "deterministic" | "model";
@@ -45,8 +46,8 @@ const TierSchema = z
   .object({
     id: z.string().min(1),
     kind: z.enum(["deterministic", "model"]),
-    model: z.string().min(1).optional(),
-    effort: z.enum(["low", "medium", "high", "max"]).optional(),
+    model: absent(z.string().min(1)),
+    effort: absent(z.enum(["low", "medium", "high", "max"])),
     stage: z.enum(["fast", "deep"]),
   })
   .strict()

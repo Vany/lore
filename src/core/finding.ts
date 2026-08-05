@@ -15,6 +15,7 @@
  */
 
 import * as z from "zod";
+import { absent } from "./optional.ts";
 
 /** Declared **worst first**: the index into this array is the severity rank (D-50). */
 export const SEVERITIES = ["high", "medium", "low"] as const;
@@ -53,29 +54,6 @@ export type Severity = (typeof SEVERITIES)[number];
 export const CLAIM_MAX = 500;
 const TEXT_MAX = 2000;
 
-/**
- * "The model meant nothing here", however it chose to write it.
- *
- * Every OPTIONAL field takes this. A model with no enclosing symbol and no line
- * writes `null` at least as readily as it omits the key — `null` is the natural JSON
- * for absent — and Zod's `.optional()` short-circuits on `undefined` alone, so a
- * `null` reaches the inner type and fails it. The schema is `.strict()` inside a
- * batch parse, so one such field discards EVERY finding in a paid-for reply.
- *
- * This was fixed once for `cwe` and the fix was applied to that field rather than to
- * the rule, which left `symbol` and `line` armed with the identical defect. It went
- * off: glm-5-turbo sent `symbol: null`, twice, and a whole review failed. The comment
- * on `cwe` had even written the lesson down — *ask "did the model mean nothing here",
- * not "is it the empty string"* — while three fields away the question was still
- * being asked the wrong way.
- *
- * Blank is forgiven; WRONG is still rejected. A `symbol` of `42` or a `line` of
- * `"top"` still fails, because that is our prompt and the model disagreeing about the
- * shape, which is drift worth failing on.
- */
-const absent = <T extends z.ZodTypeAny>(inner: T) =>
-  z.preprocess((v) => (v === null || (typeof v === "string" && v.trim() === "") ? undefined : v), inner.optional());
-
 export const FindingSchema = z
   .object({
     /** Repo-relative path. Absolute paths are rejected below. */
@@ -108,20 +86,15 @@ export const FindingSchema = z
      * without its fix" would be theatre. When present it is the shared vocabulary
      * that lets two tiers, and the scanners, talk about the same defect (D-44).
      */
-    // "No CWE applies" is read as ABSENT, however the model chose to write it —
-    // omitted, `""`, blank, or `null`. Not as malformed. This schema is `.strict()`
-    // inside a batch parse, so one such field used to discard EVERY finding in the
-    // reply.
+    // "No CWE applies" is read as ABSENT however the model writes it — omitted,
+    // `""`, blank, or `null` — and never as malformed. `absent` is what makes that
+    // true, and it is shared with every other optional field for the reason its own
+    // header gives: this exact behaviour was written here first, as a preprocess on
+    // this one field, and the three fields that needed it identically did not get it.
     //
     // Observed, and expensive: glm-4.7 returned two real findings, one of them a
     // genuine hole in a fix made an hour earlier, and lore binned the lot over a
     // zero-length field on the second one. The model had already been paid for.
-    //
-    // `null` was added after the `""` fix, and by the tier above the one that had
-    // just ratified the `""` reasoning: null is the more natural JSON for absent
-    // and it was still rejected, so the incident was one differently-shaped reply
-    // away from repeating inside its own fix. The lesson is in the shape of the
-    // check — ask "did the model mean nothing here", not "is it the empty string".
     //
     // Blank is forgiven; WRONG is still rejected. "CWE-abc" means the reviewer and
     // this schema disagree about the vocabulary, which is drift worth failing on.
@@ -130,18 +103,7 @@ export const FindingSchema = z
     // this comment. It lived here once, as prose, while nothing executed it — which
     // is how a refactor could have deleted the preprocess with the suite still green
     // (b3aa50bc). A comment is a claim nobody runs.
-    //
-    // lore-ok[96bf7159]: the outer `.optional()` is redundant — `ZodOptional` only
-    // short-circuits on `undefined`, so every other value still reaches the
-    // preprocess and then the regex, and the two cannot mask each other. The
-    // finding's claim that this "makes schema validation ineffective" is false, and
-    // the test above is the proof rather than this sentence.
-    cwe: z
-      .preprocess(
-        (v) => (v === null || (typeof v === "string" && v.trim() === "") ? undefined : v),
-        z.string().regex(/^CWE-\d+$/, "cwe must look like CWE-89").optional(),
-      )
-      .optional(),
+    cwe: absent(z.string().regex(/^CWE-\d+$/, "cwe must look like CWE-89")),
   })
   // Strict: an unexpected key means our prompt and this schema have drifted apart.
   // Silently dropping it would hide that drift for as long as it took someone to
