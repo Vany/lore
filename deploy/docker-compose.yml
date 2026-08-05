@@ -87,8 +87,9 @@ services:
       # The T0 sandbox launches SIBLING containers for test execution, so untrusted
       # project code never runs in this container — which holds the knowledge
       # database, the attestation signing key and every provider credential (D-24).
-      # No git credentials: lore fetches nothing, so there is no deploy key here to
-      # lose (D-63).
+      # This is also where the deploy keys live, under `<data>/keys` (D-65). They are
+      # per-repository, read-only, and never leave this container — the reviewer
+      # mounts only `<data>/repos`, so nothing that runs a model can reach them.
       #
       # This grants root-equivalent control of the host daemon. Acceptable only
       # because this box does one job on a private tailnet; it is the single
@@ -136,9 +137,9 @@ services:
       OPENCODE_SERVER_USERNAME: ${OPENCODE_SERVER_USERNAME:-lore}
       OPENCODE_SERVER_PASSWORD: ${OPENCODE_SERVER_PASSWORD:?set OPENCODE_SERVER_PASSWORD in .env}
     volumes:
-      # THE REPOSITORIES, READ-ONLY, AT THE SAME PATH AS IN `lore`.
+      # THE REPOSITORIES ONLY, READ-ONLY, AT THE SAME PATH AS IN `lore`.
       #
-      # Two things depend on this and both are easy to get wrong:
+      # Three things depend on this and all are easy to get wrong:
       #
       # 1. lore hands opencode an ABSOLUTE worktree path. Without this mount the
       #    directory simply does not exist over here and every review fails; with a
@@ -147,7 +148,25 @@ services:
       # 2. `:ro` enforces INV-9 at the filesystem. Reviewers are denied write tools
       #    in the request body already, but that is a policy the model could in
       #    principle route around. A read-only bind is not a policy.
-      - ${LORE_HOST_DATA:-/var/lib/lore}:${LORE_HOST_DATA:-/var/lib/lore}:ro
+      #
+      # 3. `/repos`, NOT the whole data directory — and this was wrong until
+      #    2026-08-05, when it was checked rather than assumed.
+      #
+      #    This container runs third-party models with file-reading tools, and it runs
+      #    as the SAME uid as `lore` (it has to: it writes its own session state).
+      #    Mounting the data root therefore handed a reviewer:
+      #
+      #      * `attest_ed25519.pem`, the attestation SIGNING KEY — the one secret that
+      #        makes an attestation mean anything. Verified readable from inside this
+      #        container, mode 0600 notwithstanding, because same uid.
+      #      * `lore.db`, every repository's knowledge, findings and token hashes,
+      #        world-readable at 0644.
+      #      * `keys/`, where a leftover D-62 deploy key was still sitting.
+      #
+      #    None of it is needed to read a worktree. The reviewer gets the repositories
+      #    and nothing else, which also keeps D-65's deploy keys — under `<data>/keys`
+      #    — outside anything a model can reach, by layout rather than by permission.
+      - ${LORE_HOST_DATA:-/var/lib/lore}/repos:${LORE_HOST_DATA:-/var/lib/lore}/repos:ro
       # This machine's opencode configuration, staged by `make sync-opencode`:
       # the plane MCP server, the plugins and the read-only agent, so reviewers
       # inherit what a Claude Code session has (D-12).

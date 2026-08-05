@@ -497,3 +497,39 @@ describe("a failed review says why", () => {
     expect(out).not.toHaveProperty("failed_because");
   });
 });
+
+// `count: 0` was the first thing a new client ever saw, and it read it correctly and
+// concluded the wrong thing: "the knowledge store is empty" went into two manuals.
+//
+// The zero was true. Bootstrapping needs a mirror to read, so it happens on the first
+// review (D-35) — not at provisioning. Nothing said so, and this is the very first
+// question a new workgroup asks about the thing whose entire pitch is memory.
+describe("an empty knowledge base explains itself", () => {
+  it("says NOT YET rather than letting a zero speak for itself", async () => {
+    const out = await callTool("knowledge_query", {});
+    expect(out["count"]).toBe(0);
+    expect(String(out["note"])).toMatch(/YET/);
+    // The two things that actually resolve it, named rather than implied.
+    expect(String(out["note"])).toMatch(/FIRST REVIEW/);
+    expect(String(out["note"])).toContain("knowledge_teach");
+  });
+
+  // A filter matching nothing is a different fact from a repository knowing nothing,
+  // and conflating them would teach the same wrong conclusion by another route.
+  it("distinguishes a filter that matched nothing from a repo that knows nothing", async () => {
+    store.addKnowledge({
+      repoId, kind: "rule", source: "taught",
+      statement: "holds are idempotent on the network transaction id", why: "ADR-0026",
+      path: undefined, cwe: undefined, provenance: undefined,
+      sourceBlob: undefined, confidence: undefined,
+    });
+
+    const hit = await callTool("knowledge_query", {});
+    expect(hit["count"]).toBe(1);
+    expect(String(hit["note"])).not.toMatch(/YET/);
+
+    const miss = await callTool("knowledge_query", { contains: "nothing matches this" });
+    expect(miss["count"]).toBe(0);
+    expect(String(miss["note"])).toMatch(/HAS knowledge/);
+  });
+});

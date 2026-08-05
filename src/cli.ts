@@ -117,6 +117,9 @@ export async function main(argv: readonly string[]): Promise<ExitCode> {
         name,
         gitUrl,
         publicUrl: flagOf(argv, "url") ?? "http://lore.internal:7777/mcp",
+        // Beside the database and outside `repos`, matching `serve` — the reviewer
+        // container mounts only `repos`, so a key is unreachable by a model (D-65).
+        keysDir: join(dirOf(args.db), "keys"),
       });
       process.stdout.write(renderProvisioned(result));
       return EXIT.PASS;

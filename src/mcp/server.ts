@@ -382,6 +382,23 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           (k) => k.statement.toLowerCase().includes(needle) || (k.why ?? "").toLowerCase().includes(needle),
         );
       }
+      // An empty answer has to explain itself.
+      //
+      // A client queried this before its repository's first review completed, got
+      // `count: 0`, and wrote "the knowledge store is empty" into two manuals. That
+      // is the honest reading of a bare zero — and it is wrong in a way that matters,
+      // because the memory is the product and "empty" reads as "this does nothing".
+      //
+      // The cause is D-35: bootstrapping needs a mirror to read, so it runs on the
+      // first review rather than at provisioning. Nothing said so, and the very first
+      // question a new workgroup asks is this one.
+      const empty =
+        store.knowledgeFor(who.repoId, undefined, 1).length === 0
+          ? "Nothing has been learned about this repository YET — not 'this repo has no conventions'. " +
+            "The knowledge base is built from the repo's own docs on the FIRST REVIEW (there has not been one, " +
+            "or it did not finish). Start a review, or teach a rule directly with knowledge_teach."
+          : undefined;
+
       return text(
         JSON.stringify({
           count: items.length,
@@ -395,7 +412,11 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
             cwe: k.cwe,
             verified_at: k.verifiedAt,
           })),
-          note: "Taught rules outrank inferred ones. These are this team's decisions, not suggestions.",
+          note:
+            empty ??
+            (items.length === 0
+              ? "This repository HAS knowledge; nothing matched this filter. Widen it before concluding anything."
+              : "Taught rules outrank inferred ones. These are this team's decisions, not suggestions."),
         }),
       );
     },

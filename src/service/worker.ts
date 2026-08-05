@@ -24,6 +24,8 @@ import { runRound } from "../reviewer/review.ts";
 
 export interface WorkerConfig {
   readonly reposRoot: string;
+  /** Where the per-repo deploy keys live, so a stale mirror can be refreshed (D-65). */
+  readonly keysDir: string;
   readonly runTests: boolean;
   /** How many rounds may run concurrently. CPU-bound on the deployment host. */
   readonly concurrency: number;
@@ -32,6 +34,7 @@ export interface WorkerConfig {
 
 export const DEFAULT_WORKER: WorkerConfig = {
   reposRoot: "/var/lib/lore/repos",
+  keysDir: "/var/lib/lore/keys",
   runTests: false,
   // T0 is the throughput bottleneck on an ARM SBC (D-37), and it is CPU-bound —
   // so this is set by cores, not by memory.
@@ -114,7 +117,7 @@ export class Worker {
     const repo = this.store.db
       .prepare("SELECT git_url FROM repo WHERE id = ?")
       .get(review.repoId) as Record<string, string> | undefined;
-    const paths = repoPaths(this.cfg.reposRoot, review.repoId);
+    const paths = repoPaths(this.cfg.reposRoot, review.repoId, this.cfg.keysDir);
     // Cutting a base checks the mirror is present and fresh; reusing one only checks
     // it is present (D-40, D-63). That decision lives in one place because when it
     // lived in two, they disagreed and the disagreement was reachable.

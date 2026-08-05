@@ -97,13 +97,19 @@ source destroyed first, and `make status` warns when the replica has not been wr
 in an hour. The drill uses `VACUUM INTO`: a WAL database copied with `cp` loses
 whatever is still in the write-ahead log.
 
-## 6. The mirror is populated from outside (D-63)
+## 6. lore refreshes its own mirrors (D-65)
 
 Nothing outside the deployment directory is mounted into the container — not a
-checkout, not a key, not an agent socket. `make mirror` runs on the host, as the
-operator, and clones or fetches every registered repo into `data/repos/<id>/bare.git`,
-which lore already reads.
+checkout, not an agent socket. lore clones and fetches into `data/repos/<id>/bare.git`
+itself, on demand, immediately before cutting a base and only when the mirror is older
+than `MAX_MIRROR_AGE_MS`.
 
-This is what lets the service hold no git credentials at all. The cost is that a
-person has to run it, so a mirror older than `MAX_MIRROR_AGE_MS` is refused with the
-command that fixes it, rather than reviewed as though it were current.
+Each repository has its own **read-only** ed25519 deploy key under `data/keys`,
+generated at provisioning. The public half is printed for the operator to authorize on
+the forge; the private half never leaves the host, and the reviewer container mounts
+only `data/repos`, so no model can reach one. A local path gets no key — ssh never
+runs for it.
+
+`make mirror REPO=<name>` remains, as the operator's fallback for the window before a
+key is authorized. A mirror that cannot be made current still fails the review rather
+than being reviewed as though it were fresh.

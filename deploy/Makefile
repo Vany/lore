@@ -205,23 +205,30 @@ tokens:
 	for (const r of d.prepare('SELECT principal, label, created_at, revoked_at FROM token').all()) \
 	  console.log(r.revoked_at ? '[revoked]' : '[live]   ', r.principal, r.label ?? '', r.created_at);"
 
+## The public deploy key for a repository, to paste into its forge (D-65).
+##
+##   make key REPO=rigid-monorepo
+##
+## Printed at `make new` too; this is for when that scrollback is gone. Public half
+## only — the private half never leaves the container, and nothing here can print it.
+key:
+	@test -n "$(REPO)" || { echo "usage: make key REPO=<name|url|id>"; exit 1; }
+	@$(COMPOSE) exec -T lore node -e "	const {DatabaseSync}=require('node:sqlite'); 	const {readFileSync}=require('node:fs'); 	const d=new DatabaseSync(process.env.LORE_DATA_DIR+'/lore.db'); 	const want=process.argv[1]; 	const rows=d.prepare('SELECT id, name, git_url FROM repo').all() 	  .filter(r => r.id===want || r.name===want || r.git_url.includes(want)); 	if (rows.length===0) { console.error('no registered repo matches '+JSON.stringify(want)); process.exit(1); } 	for (const r of rows) { 	  const p=process.env.LORE_DATA_DIR+'/keys/'+r.id+'_ed25519.pub'; 	  let k; try { k=readFileSync(p,'utf8').trim(); } catch { k='(none yet — generated on the next fetch)'; } 	  console.log(); console.log(r.name+'  '+r.git_url); console.log('  '+k); 	} 	console.log(); 	console.log('Add as a READ-ONLY deploy key. Leave \'Allow write access\' unticked.');" "$(REPO)"
+
 ## Clone and fetch ONE registered repository, OUT HERE, as you.
 ##
 ##   make mirror REPO=lore          match on name, url or id
 ##   make mirror ALL=1              every registered repo, deliberately
 ##
+## A FALLBACK since D-65, not the normal path. lore fetches its own mirrors with each
+## repository's read-only deploy key, on demand, before it cuts a base. Use this for
+## the window before that key is authorized on the forge — or when the remote is
+## reachable from here and not from the service.
+##
 ## REPO is required. Fetching every repository because one was asked for reaches
 ## remotes nobody named — on a shared host that is someone else's repository being
 ## touched because you wanted yours refreshed. It also hides a failure: a repo you
 ## did not ask about reporting FETCH FAILED reads as YOUR command failing.
-##
-## This is the only thing that talks to a remote. lore holds no credentials and
-## needs none: it reads the bare clones this leaves in $(DATA)/repos, which is
-## already mounted, so nothing outside the project is ever exposed to the container
-## (D-63).
-##
-## Run it before starting a review. lore refuses a review whose clone has gone stale
-## rather than describing a tree that is not what you are merging.
 mirror:
 	@test -n "$(REPO)$(ALL)" || { \
 		echo "usage: make mirror REPO=<name|url|id>   (or ALL=1 for every repo)"; \

@@ -41,23 +41,24 @@ reviewers get.
 Returns a review_id IMMEDIATELY. The review takes minutes — this does not mean it
 finished. Call review_poll until it reaches a terminal state.
 
-IF THE REPOSITORY IS A LOCAL PATH, FETCH IT FIRST.
+PUSH YOUR BRANCH FIRST. lore reads its own mirror of the remote, not your working
+copy, so a commit that exists only on your disk is not in the review.
 
-    git -C <path> fetch --prune --tags origin
+You do not have to refresh anything. lore fetches the mirror itself, with that
+repository's own read-only deploy key, whenever it is about to choose a base and the
+mirror is more than 30 minutes old. Nothing is asked of you and no host command is
+involved — an earlier version told clients to run \`make mirror\` on the deployment
+host, which is not somewhere a client can reach.
 
-lore holds no credentials for your remote and is not meant to: a service holding a
-key holds everything that key opens. So the checkout it reads is refreshed by you,
-on demand, and a review started against a stale one describes a tree that is not
-what you are merging. lore refuses rather than guesses — it checks when the mirror
-was last fetched and fails with that instruction if it is too old — and the message
-names the exact command, including WHICH repository: \`make mirror REPO=<name>\`. It
-is per-repo on purpose; refreshing every registered remote because one was asked for
-reaches repositories nobody named. A plain git pull counts; it fetches on the way.
+A fetch that fails still fails the review rather than reviewing a stale tree, and
+says which of the two it was: an unauthorized deploy key (the normal first state of a
+new repository — the message carries the key to paste) or an unreachable remote.
 
 The review pins the branch when its first round begins, which is shortly after this
 returns — not at the instant it returns. A commit pushed in that window may or may
 not be included, and nothing will tell you which. Push first, then start; for
-anything after that, start a new review.
+anything after that, start a new review. Once a review is pinned the mirror is never
+re-read, so a later push cannot move the ground under findings already reported.
 
 Expect several rounds of findings. That is the process working, not failing.
 `.trim(),
@@ -87,9 +88,10 @@ ONLY \`passed\` means the branch is clean.
 - \`failed\` and \`expired\` mean the review did not complete. They are NOT "nothing
   found". Never merge on them. **\`failed_because\` says why** — read it and repeat it
   to your user verbatim. Do NOT infer a cause from the word \`failed\`: most reasons
-  are operational (a stale mirror, a tier that would not parse) and name the exact
-  command that fixes them. A guess here is worse than silence, because it is
-  confident and it is yours.
+  are operational (a deploy key not yet authorized, a tier that would not parse) and
+  say exactly what to do. A guess here is worse than silence, because it is confident
+  and it is yours. \`failed\` is also often TRANSIENT — an identical retry frequently
+  succeeds — so retry once before concluding anything about how lore is configured.
 - \`fast_clean\` means only the cheap tiers have finished; the deep tiers are still
   running. It is NOT a pass.
 - \`needs_human\` means a question was found that you must not answer yourself.
@@ -213,6 +215,12 @@ mistakes, and why past decisions were made.
 Call this BEFORE writing code in an unfamiliar area, not only after a review
 complains. This is the accumulated memory of every prior session on this repo, and it
 is the reason this service exists.
+
+\`count: 0\` DOES NOT mean this service is empty or unconfigured. A repository's
+memory is built from its own docs during its FIRST REVIEW, so a repo that has not
+been reviewed yet has none — the \`note\` field says which case you are in, and it is
+the only thing that can tell you. Read it before reporting anything about lore's
+state.
 `.trim(),
 
   vex: `

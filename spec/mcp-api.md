@@ -17,14 +17,14 @@ make new NAME=vany GIT=git@github.com:org/repo.git
    stored only as a hash.
 3. Emits a paste-able `.mcp.json` fragment with the token **in a header** (D-21).
 
-**No key is issued** (D-63, superseding D-62). lore does not clone and does not
-fetch; `make mirror` does, on the host, as the operator, into `data/repos` — the one
-directory the container already sees. A deploy key would be a credential on disk
-that nothing reads. So the operator's remaining step is `make mirror REPO=<name>`,
-before the first review and before each later one — **per repository, never all of
-them**, because fetching every registered remote because one was asked for reaches
-repositories nobody named: a mirror older than `MAX_MIRROR_AGE_MS` is
-refused rather than reviewed.
+4. Generates a **read-only** deploy key for that repository and prints the public
+   half (D-65, superseding D-63). A local path gets none — ssh never runs for one.
+
+The operator's remaining step is to authorize that key on the forge, with *allow
+write access* unticked. After that nothing is asked of anyone: lore fetches the mirror
+itself before choosing a base, whenever it is older than `MAX_MIRROR_AGE_MS`. Until it
+is authorized, `make mirror REPO=<name>` populates the mirror by hand. A mirror that
+cannot be made current fails the review rather than being reviewed as though fresh.
 
 ## 2. Tools
 

@@ -26,6 +26,13 @@ export interface RetentionConfig {
   /** Hours before an untouched, unfinished review is called expired. */
   readonly staleHours: number;
   readonly reposRoot: string;
+  /**
+   * Carried only because `repoPaths` describes a repository completely and this
+   * sweep asks it for one. Nothing here fetches, so no key is ever read — but a
+   * layout defined in two places is a layout that eventually disagrees, which is
+   * worse than one unused field.
+   */
+  readonly keysDir: string;
 }
 
 export const DEFAULT_RETENTION: RetentionConfig = {
@@ -33,6 +40,7 @@ export const DEFAULT_RETENTION: RetentionConfig = {
   reviewDays: 90,
   staleHours: 48,
   reposRoot: "/var/lib/lore/repos",
+  keysDir: "/var/lib/lore/keys",
 };
 
 export interface RetentionResult {
@@ -78,7 +86,7 @@ export async function collect(store: Store, cfg: RetentionConfig = DEFAULT_RETEN
   for (const row of finished) {
     const state = (row["state"] ?? "failed") as ReviewState;
     if (!isTerminal(state)) continue;
-    const paths = repoPaths(cfg.reposRoot, row["repo_id"] ?? "");
+    const paths = repoPaths(cfg.reposRoot, row["repo_id"] ?? "", cfg.keysDir);
     const dir = join(paths.worktrees, row["id"] ?? "");
     // Best-effort: a worktree that is already gone is the desired state, and
     // failing the sweep over one directory would leave every later one uncollected.

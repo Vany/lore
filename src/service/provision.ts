@@ -5,20 +5,27 @@
  * shown **once**, and stored only as a hash — a database backup should not be a set
  * of live credentials.
  *
- * **No key is generated any more (D-63 supersedes D-62).** lore does not clone and
- * does not fetch; `make mirror` does, on the host, as the operator. A deploy key
- * would be a live credential written to disk that nothing ever reads, handed out
- * with an instruction to grant a repository read access to a keypair with no user —
- * strictly worse than none. That is the argument the local-path branch already made
- * ("a secret created for no reason"); D-63 extends it to every url, because now no
- * url is fetched from here.
+ * **A read-only deploy key is generated again (D-65 supersedes D-63).** D-63 removed
+ * it because nothing read it: lore did not fetch, so the key was "a secret created
+ * for no reason". lore fetches now — a service cannot tell a client on another
+ * machine to go run a Makefile here — so the key is read on every mirror refresh, and
+ * the argument that removed it no longer applies.
+ *
+ * The public half is printed and the private half never leaves this host. Authorizing
+ * it is one paste, and until it happens `make mirror` remains the fallback, so a
+ * repository is never blocked on it.
+ *
+ * A **local path** still gets no key, which is the distinction D-62 drew and D-63
+ * generalised too far: git reaches those through the filesystem, ssh never runs, and
+ * a keypair for one would be exactly the secret-for-no-reason both objected to.
  *
  * Bootstrapping the knowledge base (D-35) deliberately does **not** happen here.
  * There is nothing to read until the mirror exists, so it runs on the first review.
  *
- * SPEC: spec/mcp-api.md §1, SPEC.md D-63
+ * SPEC: spec/mcp-api.md §1, SPEC.md D-65
  */
 
+import { ensureDeployKey, isLocalPath } from "../git/keys.ts";
 import { grantToken } from "../mcp/auth.ts";
 import type { Store } from "../store/store.ts";
 
@@ -31,6 +38,11 @@ export interface Provisioned {
   readonly token: string;
   /** The paste-able `.mcp.json` fragment. */
   readonly clientConfig: string;
+  /**
+   * The deploy key to authorize, or absent for a local path, which needs none.
+   * Safe to print and safe to commit — it is the public half.
+   */
+  readonly deployKey?: string;
 }
 
 export async function provision(opts: {
@@ -38,9 +50,14 @@ export async function provision(opts: {
   name: string;
   gitUrl: string;
   publicUrl: string;
+  keysDir: string;
 }): Promise<Provisioned> {
   const repo = opts.store.upsertRepo(repoName(opts.gitUrl), opts.gitUrl);
   const token = grantToken(opts.store, repo.id, opts.name, `provisioned for ${opts.name}`);
+  // Generated here rather than lazily on the first fetch so the operator is asked to
+  // authorize it while they are still looking at the terminal. Discovering the need
+  // later means discovering it as a failed review.
+  const key = isLocalPath(opts.gitUrl) ? undefined : await ensureDeployKey(opts.keysDir, repo.id, repo.name);
 
   return {
     repoId: repo.id,
@@ -48,6 +65,7 @@ export async function provision(opts: {
     principal: opts.name,
     token,
     clientConfig: clientConfig(opts.publicUrl),
+    ...(key !== undefined ? { deployKey: key.publicKey } : {}),
   };
 }
 
@@ -87,18 +105,33 @@ function clientConfig(publicUrl: string): string {
 export function renderProvisioned(p: Provisioned): string {
   const indent = (s: string) => s.split("\n").map((l) => `   ${l}`).join("\n");
 
+  const mirrorStep =
+    p.deployKey === undefined
+      ? [
+          "1. Nothing to authorize — a local path needs no credential. lore clones and",
+          "   refreshes it itself, on demand.",
+          "",
+        ]
+      : [
+          "1. Authorize this READ-ONLY deploy key on the repository. lore refreshes the",
+          "   mirror itself before every review, and cannot without it:",
+          "",
+          `      ${p.deployKey}`,
+          "",
+          "   GitHub: Settings → Deploy keys → Add deploy key. Leave 'Allow write",
+          "   access' UNTICKED — lore never pushes, and a write key would breach D-2.",
+          "   The private half stays on the lore host and is readable by nothing else.",
+          "",
+          "   Until it is authorized, populate the mirror by hand instead:",
+          `      make mirror REPO=${p.repoName}`,
+          "",
+        ];
+
   return [
     "",
     "Provisioned.",
     "",
-    "1. Populate the mirror, out here, as you. lore holds no credentials for your",
-    "   remotes by design, so this is the only step that talks to one:",
-    "",
-    `      make mirror REPO=${p.repoName}`,
-    "",
-    "   Run it again before each review. A review whose mirror has gone stale is",
-    "   refused rather than run against a tree that is not what you are merging.",
-    "",
+    ...mirrorStep,
     "2. Set LORE_TOKEN in the client environment. This is shown ONCE and is not",
     "   recoverable — only its hash is stored.",
     "",
