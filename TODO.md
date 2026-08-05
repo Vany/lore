@@ -104,6 +104,24 @@ that part is pulled out into its own open item rather than hidden inside a tick.
       `session.abort`, which is machinery worth building only once there is something
       to catch.
 
+- [ ] **T0 only understands a single-package repo, and now says so.** Reviewing a
+      real pnpm monorepo, T0 installed correctly and then reported `tsc: not
+      configured` and `eslint: produced unparseable output`. Both are honest — the
+      repo has `tsconfig.base.json` and per-package configs rather than a root
+      `tsconfig.json`, and one eslint invocation at the root of 33 packages is not
+      what that project runs. What it *does* run is `turbo run typecheck` and
+      `turbo run lint`, declared in its own `package.json`.
+
+      Running those scripts is what D-8 actually asks for — the target's own tooling
+      — but they are **arbitrary code execution**, and D-24 says that belongs in the
+      sandbox. `tsc` and `eslint` currently run through `runTool` on the host, so
+      honouring the scripts means moving the deterministic engines inside the
+      sandbox alongside the suite. That is an architecture change, not a patch, and
+      it wants a decision.
+
+      Until then the coverage gap is visible rather than silent, which is the part
+      that mattered: `checks_skipped` names both on every poll.
+
 ## Later
 
 - [ ] **Exercise the three paths that have never happened.** `passed_partial`
