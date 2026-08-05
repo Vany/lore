@@ -18,6 +18,100 @@ that part is pulled out into its own open item rather than hidden inside a tick.
 
 ## Now — nothing here is about writing more features
 
+### Measured 2026-08-05: the first day a client drove it
+
+Until today every review was driven by me, by hand, with shell scripts. Today a
+Claude session in `rigid-monorepo` drove them. Read straight off the live database,
+read-only, with the service left running.
+
+|                              | all time |    today |
+| ---------------------------- | -------: | -------: |
+| reviews                      |       30 |       15 |
+| reached `passed`             |        2 |        0 |
+| left in `findings_ready`     |       11 |        8 |
+| `failed`                     |       15 |        5 |
+| findings                     |      106 |       31 |
+| findings never delivered     |       18 |       18 |
+| verdicts answered            |       95 |        8 |
+| verdicts on `rigid-monorepo` |    **0** |    **0** |
+
+The last row is the whole story. The customer's repository has produced 21 findings
+and answered none of them, so nothing has ever been learned from it: the knowledge
+base is the product, and for the one repo with a real user it is not being written.
+The five items below are what the numbers say is in the way, in order of size.
+
+What the numbers also confirm, so it is not re-litigated: **prompt caching works**
+(97.3% of everything sent to t1 was cached, 99.1% for t2, 95.8% for t3 — 7.8M cached
+against 183k fresh, D-29); **the retry earns its place** (5 of 53 t1 replies and 5 of
+22 t2 replies were usable only after one retry); and **INV-1 holds** — every one of
+the 15 failures is a refusal that named its cause, not a review that quietly found
+nothing.
+
+- [ ] **A stale mirror is the largest single cause of failure, and the client cannot
+      clear it.** 3 of 9 failed jobs, and 3 of 5 today — more than any model or
+      transport fault. `MAX_MIRROR_AGE_MS` is 30 minutes; the refusal at 18:23 today
+      read *last fetched 192 minutes ago*. The refusal is right (D-40, D-63) and the
+      message names the fix, but the fix is `make mirror REPO=…` **on the host**, and
+      the client is an agent inside the repository with no host shell. So it reads an
+      instruction it cannot follow, and the only move left is to ask a human and wait.
+      The fourth review of `fix/RIGID-135` was started two minutes after that refusal.
+      Related and same root: `branch 'feat/RIGID-125-network-txn-id' not found on
+      origin` at 10:39, which was the mirror predating the push.
+      Not a bug to patch blindly — the options (a longer window, a fetch the client
+      can trigger, a mirror refreshed on a timer) differ in who holds credentials,
+      which is D-63's whole subject. Wants a decision.
+
+- [ ] **The client restarts reviews instead of continuing them.** Six reviews of
+      `feat/RIGID-125-network-txn-id` between 10:39 and 12:46; four of
+      `fix/RIGID-135-cardholder-velocity-scope` between 13:29 and 18:25; four of
+      `main`. 13 of 30 reviews stop at round 1, and the ladder's whole design — carry
+      findings forward, escalate, settle — needs round 2. Each restart re-pays t0 and
+      t1 from scratch: today's 14 tier calls bought one round each rather than one
+      review's worth of depth.
+      Whether the client restarts because it prefers to, or because it does not know
+      `review_submit` continues the same review, is **not answered by this data**. The
+      texts in `src/mcp/docs.ts` are the only place it could learn, which makes this
+      first a documentation question, not a code one.
+
+- [ ] **18 findings were produced and never collected.** All 18 are from today, across
+      four reviews (6 + 5 + 4 + 3), and 14 are t0 `high`. The review reached
+      `findings_ready` and nothing ever polled it. `delivered_at` already records this
+      per finding, so the fact is available to the service and it says nothing about
+      it — `make status` shows queue depth and active reviews, not *this review has
+      been holding six high-severity findings for six hours*. A finding nobody reads
+      is the same failure as a review that did not run, one step later.
+
+- [ ] **The ingester was fixed today and not one row in the database came from the
+      fixed one.** `dda312f` landed at 17:27 ("the knowledge base was 78% fragments,
+      because it read physical lines"). Every live ingested row predates it — 8 from
+      08-03T20:55, 8 from 08-05T10:44 (all of `rigid-monorepo`), 3 from 10:55, 48 from
+      14:40. Re-ingestion is triggered by *the source document changing*, not by the
+      ingester changing, so improving the reader does not reach what it already wrote.
+      What remains is visible: 9 of lore's 59 live rules and 1 of rigid's 8 begin
+      mid-sentence — `spec. Hand-rolled HTTP against opencode is a last resort`,
+      `response, an exhausted quota and a timeout are all "did not run"`.
+      Needs a re-ingest of both repos, and a reason for one to happen when the
+      ingester's own behaviour changes. Retiring is non-destructive (`retired_reason`,
+      907 rows already retired that way), so this is cheap — but it rewrites the
+      product, so it is Vany's call, as agreed.
+
+- [ ] **`rigid-monorepo` starts every review from 11 rules.** lore has 68. Its eight
+      ingested ones are the pre-fix output above, and two of them carry no content at
+      all: `Specifically forbidden` (22 characters) and `task cancellation. Its
+      failures never block execution`. The three derived ones are the only earned
+      knowledge there, all from repeated t0 findings (CWE-319 ×4, an insecure-request
+      semgrep rule ×4, the suite failing ×3). With zero verdicts on that repo, nothing
+      else can be derived — this item and the `verdicts: 0` row are the same problem
+      seen from two ends.
+
+- [ ] **T0 is partly blind on the repository it actually reviews.** Of 7 t0 runs on
+      `rigid-monorepo`: ast-grep unconfigured in 5, eslint in 1, tsc in 1 — against 5
+      and 5 of 85 on lore. It reports this honestly in `unavailable` and the ladder
+      carries it, so nothing is claimed falsely. But `ast-grep` is unconfigured in
+      *every* repo it has ever met, which makes it an engine that has never once run
+      in production. Either it needs a default ruleset it can bring itself, or it
+      should stop being counted as a gate.
+
 - [x] **lore holds no git credentials** (D-63). Done 2026-08-04. `make mirror` fetches
       on the host as the operator into `data/repos`; the container sees nothing
       outside the project. `ensureBare` checks presence and freshness and refuses
@@ -84,19 +178,23 @@ that part is pulled out into its own open item rather than hidden inside a tick.
       own demonstrated best rather than a constant — with no evidence it says
       nothing, and a timed-out run never raises the ceiling.
 
-- [ ] **Set the exploration cap from data** (D-50) — and the data says *not yet*.
-      54 completed runs, 2026-08-04:
+- [ ] **Set the exploration cap from data** (D-50) — and the data still says *not yet*.
+      84 completed runs, re-measured 2026-08-05 (the 2026-08-04 table had 54):
 
-      | tier | n  | p50 | p90 | p95 | max |
-      |------|----|-----|-----|-----|-----|
-      | t1   | 31 | 19  | 35  | 37  | 59  |
-      | t2   | 16 | 43  | 52  | 57  | 68  |
-      | t3   | 7  | 9   | 16  | 16  | 16  |
+      | tier | n  | p50 | p90 | p95 | max | latency p50 | p90   | max   |
+      |------|----|-----|-----|-----|-----|-------------|-------|-------|
+      | t1   | 53 | 20  | 35  | 40  | 59  | 289s        | 489s  | 590s  |
+      | t2   | 22 | 41  | 52  | 52  | 68  | 820s        | 1180s | 1851s |
+      | t3   | 9  | 11  | 16  | 16  | 16  | 135s        | 1633s | 1691s |
+
+      Twenty-two more t1 runs, six more t2 and two more t3 moved **no maximum at all**
+      — 59, 68 and 16 are the same ceilings the smaller sample showed. That is the
+      useful result: the tails are stable, not merely unsampled.
 
       I claimed earlier this showed the cap must be per tier. Reading the spread
-      rather than the medians says the opposite: t1's max is 1.6× its p95 and t2's is
-      1.2×, so the tails are long, and t3 has **seven** samples — calibrating a cap on
-      that is exactly the trap this item exists to avoid. **No runaway has ever
+      rather than the medians says the opposite: t1's max is 1.5× its p95 and t2's is
+      1.3×, so the tails are long, and t3 still has **nine** samples — calibrating a
+      cap on that is exactly the trap this item exists to avoid. **No runaway has ever
       occurred**, so the cap protects against something unobserved while risking
       killing paid-for reviews that are merely thorough.
       What it needs: more t3 runs, and a real mid-flight abort — `countSteps` is read
@@ -126,8 +224,9 @@ that part is pulled out into its own open item rather than hidden inside a tick.
       production, and a path whose first real execution is during an incident is a
       path nobody has reviewed.
 
-- [ ] **The spend ceiling guards nothing today.** Zero of 54 usage rows have
-      `cost_usd > 0`, because both providers are subscriptions, and `ops/spend.ts`
+- [ ] **The spend ceiling guards nothing today.** Zero of 84 usage rows have
+      `cost_usd > 0` (re-checked 2026-08-05, 30 more runs, still zero), because both
+      providers are subscriptions, and `ops/spend.ts`
       sums exactly that column. Not wrong — inert. It needs either a metered provider
       to be meaningful, or an honest statement that it cannot fire under a
       subscription, so nobody reads its silence as headroom.
@@ -207,7 +306,9 @@ Ticked because it is **running and observed**, not because it was written.
       observed at 100k+ cached tokens per call), tier prompts by position (D-31),
       doc ingestion (433 ingested rules), and the CLI with exit codes as its API.
       **Except the test sandbox, which is open above.**
-- [x] **Phase 2 — knowledge.** 440 rows, 7 of them derived. Its done-criterion is
+- [x] **Phase 2 — knowledge.** 440 rows when this was ticked on 2026-08-04; 986 today,
+      79 of them live and 11 derived, the rest retired as their sources changed. Its
+      done-criterion is
       met and was watched happening: D-51 carried an accepted justification into a
       later review of the same repo — `lore-ok d6d9cd72 (carried)` — with a test
       covering the cross-review path.
