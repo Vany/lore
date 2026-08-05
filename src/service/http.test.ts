@@ -84,6 +84,24 @@ const mcp = (body: unknown, bearer?: string) =>
     body: JSON.stringify(body),
   });
 
+/** Tool results come back as an SSE frame wrapping JSON-RPC wrapping JSON text. */
+const callTool = async (name: string, args: Record<string, unknown>): Promise<Record<string, unknown>> => {
+  const res = await mcp(
+    { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } },
+    token,
+  );
+  const body = await res.text();
+  const line = body.split("\n").find((l) => l.startsWith("data:"));
+  expect(line).toBeDefined();
+  const rpc = JSON.parse((line ?? "").slice("data:".length)) as {
+    result?: { content?: { text?: string }[] };
+    error?: unknown;
+  };
+  expect(rpc.error).toBeUndefined();
+  return JSON.parse(rpc.result?.content?.[0]?.text ?? "{}") as Record<string, unknown>;
+};
+
+
 describe("health and status", () => {
   it("answers /healthz without a token, so a probe needs no credential", async () => {
     const res = await fetch(`${base}/healthz`);
@@ -214,23 +232,6 @@ describe("findings are ranked worst first", () => {
     round: 1,
     firstSeen: "2026-08-03T00:00:00.000Z",
   });
-
-  /** Tool results come back as an SSE frame wrapping JSON-RPC wrapping JSON text. */
-  const callTool = async (name: string, args: Record<string, unknown>): Promise<Record<string, unknown>> => {
-    const res = await mcp(
-      { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } },
-      token,
-    );
-    const body = await res.text();
-    const line = body.split("\n").find((l) => l.startsWith("data:"));
-    expect(line).toBeDefined();
-    const rpc = JSON.parse((line ?? "").slice("data:".length)) as {
-      result?: { content?: { text?: string }[] };
-      error?: unknown;
-    };
-    expect(rpc.error).toBeUndefined();
-    return JSON.parse(rpc.result?.content?.[0]?.text ?? "{}") as Record<string, unknown>;
-  };
 
   beforeEach(() => {
     store.createReview({
@@ -420,5 +421,50 @@ describe("findings are ranked worst first", () => {
 
     // The aggregate and the per-finding label now agree — which is the whole point.
     expect(out["open_count"]).toBe(2);
+  });
+});
+
+// INV-1 has a hole if "did not run" cannot say WHY.
+//
+// A client polled a failed review, saw `{"state":"failed", ...}` and nothing else,
+// and published that its repository was not registered with lore — when the
+// repository WAS registered, WAS mirrored, and had just authenticated with its own
+// token to create that very review. The real reason was a stale mirror, and the
+// message naming the fix (`make mirror`) was already written, one table away in
+// job.last_error, unreachable through the MCP surface.
+//
+// A bare `failed` does not merely withhold information. It invites a diagnosis, and
+// the client's was the opposite of the truth.
+describe("a failed review says why", () => {
+  beforeEach(() => {
+    store.createReview({
+      id: "revF", repoId, principal: "alice", branch: "feat/x", intoRef: "main",
+      ticket: "t", type: "code-arch", state: "failed", ladder: initialState(),
+    });
+    store.createReview({
+      id: "revOK", repoId, principal: "alice", branch: "feat/y", intoRef: "main",
+      ticket: "t", type: "code-arch", state: "findings_ready", ladder: initialState(),
+    });
+  });
+
+  it("carries the recorded reason", async () => {
+    store.enqueue("revF", "fast");
+    const job = store.claimJob();
+    store.finishJob(job?.id ?? 0, "failed", "the clone was last fetched 43 minutes ago — run `make mirror`");
+
+    const out = await callTool("review_poll", { review_id: "revF" });
+    expect(out["state"]).toBe("failed");
+    expect(String(out["failed_because"])).toContain("make mirror");
+  });
+
+  // Missing reason is itself a defect, and must not read as "no cause".
+  it("says so when no reason was recorded, rather than staying silent", async () => {
+    const out = await callTool("review_poll", { review_id: "revF" });
+    expect(String(out["failed_because"])).toMatch(/no reason was recorded/);
+  });
+
+  it("says nothing about failure on a review that has not failed", async () => {
+    const out = await callTool("review_poll", { review_id: "revOK" });
+    expect(out).not.toHaveProperty("failed_because");
   });
 });

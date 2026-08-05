@@ -122,6 +122,14 @@ from either. The model tiers are told in their prompt and the CLI prints it, so 
 gap was only ever on the MCP side — where the client deciding whether to merge is.
 A `passed` with `checks_skipped` means the tiers that ran agree, not that the tests do.
 
+`failed_because` is present on `failed` and `expired`, carrying the reason the round
+stopped. Without it a client sees the word and nothing else — which is INV-1's shape
+exactly, since "did not run" and "found nothing" become indistinguishable to whoever
+must act. Worse, it invites a diagnosis: a client given only `failed` reported that
+its repository was not registered with lore, when the repository was registered,
+mirrored, and had just authenticated with its own token. The true reason was a stale
+mirror, and the message naming the fix already existed one table away.
+
 `open_count` counts findings still open across the whole review, not just this poll.
 It and the per-finding shapes are derived from the same definition of settled
 (`spec/review-ladder.md` §3.3), so they cannot disagree; if they ever do, that is a

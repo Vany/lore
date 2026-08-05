@@ -175,6 +175,20 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
             };
           }),
           open_count: store.openFindings(review_id).length,
+          // WHY it did not run, not merely that it did not. A bare `failed` is the
+          // shape INV-1 refuses: indistinguishable from "found nothing" to anyone
+          // who has to act on it, and an invitation to guess. A client given only
+          // the word published a diagnosis that was the opposite of the truth.
+          ...(() => {
+            if (!["failed", "expired"].includes(review.state)) return {};
+            const why = store.failureReason(review_id);
+            return why === undefined
+              ? {
+                  failed_because:
+                    "no reason was recorded, which is itself a defect — report it rather than inferring a cause",
+                }
+              : { failed_because: why };
+          })(),
           // A check that did not run is not a check that found nothing (INV-1). The
           // deterministic engines are the ones that go missing silently — no
           // `node_modules`, no test script, a disabled suite — and their absence

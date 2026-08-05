@@ -923,6 +923,25 @@ export class Store {
    * kills the worker would otherwise crash-loop on restart for ever, and a review
    * that cannot finish must say so rather than be retried in silence.
    */
+  /**
+   * Why the last job for this review stopped, if it stopped badly.
+   *
+   * The reason is written to `job.last_error` and was never readable through the
+   * MCP surface, so a client polling a `failed` review saw the word and nothing
+   * else. INV-1 says a review that did not run must never look like one that found
+   * nothing — and a bare `failed` does exactly that, then invites the client to
+   * invent a cause. One did: told only `failed`, it published that this repository
+   * was not registered with lore, when it was registered, mirrored, and had just
+   * authenticated with its own token. The real reason was a stale mirror, and the
+   * message naming the fix already existed one table away.
+   */
+  failureReason(reviewId: string): string | undefined {
+    const row = this.db
+      .prepare("SELECT last_error FROM job WHERE review_id = ? AND last_error IS NOT NULL ORDER BY id DESC LIMIT 1")
+      .get(reviewId) as { last_error: string } | undefined;
+    return row?.last_error ?? undefined;
+  }
+
   reclaimOrphanedJobs(maxAttempts = 3): { readonly requeued: number; readonly failed: number } {
     return this.tx(() => {
       const failed = this.db

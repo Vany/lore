@@ -87,6 +87,8 @@ Draft text. These are the deliverable, not a summary of it.
 >
 > **Only `passed` means the branch is clean.** `failed` and `expired` mean the
 > review did not complete; they are not "nothing found". Never merge on them.
+> `failed_because` carries the reason — repeat it verbatim rather than inferring a
+> cause from the word `failed`. Most reasons are operational and name their own fix.
 >
 > `fast_clean` means only the cheap tiers have finished. The deep tiers are still
 > running. It is **not** a pass.

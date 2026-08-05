@@ -83,7 +83,11 @@ ONLY \`passed\` means the branch is clean.
   which vendor, if only one, actually looked at the code.
 
 - \`failed\` and \`expired\` mean the review did not complete. They are NOT "nothing
-  found". Never merge on them.
+  found". Never merge on them. **\`failed_because\` says why** — read it and repeat it
+  to your user verbatim. Do NOT infer a cause from the word \`failed\`: most reasons
+  are operational (a stale mirror, a tier that would not parse) and name the exact
+  command that fixes them. A guess here is worse than silence, because it is
+  confident and it is yours.
 - \`fast_clean\` means only the cheap tiers have finished; the deep tiers are still
   running. It is NOT a pass.
 - \`needs_human\` means a question was found that you must not answer yourself.
