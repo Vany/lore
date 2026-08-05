@@ -28,19 +28,59 @@ export interface ServiceConfig {
   readonly dailyCeilingUsd: number;
 }
 
+/**
+ * A variable set to NOTHING is not set.
+ *
+ * `.env` files spell "unconfigured" as `LORE_WEBHOOK_URL=`, so the value arrives as
+ * an empty string rather than absent — and `??` only catches `undefined`. Every
+ * reader here had that hole, with three different consequences:
+ *
+ *   * `fetch("")` on every alert, which throws and logs a failure that looks like a
+ *     broken webhook rather than an absent one;
+ *   * the heartbeat posting to nowhere while the operator believes it is off;
+ *   * and the one that matters — `Number("")` is **0**, so `LORE_CONCURRENCY=`
+ *     starts ZERO worker loops. The service binds, answers `/status` with
+ *     `ok: true`, accepts reviews, queues them, and runs none of them, for ever.
+ *     Healthy and doing nothing is the failure this project exists to refuse.
+ */
+function env(name: string): string | undefined {
+  const v = process.env[name];
+  return v === undefined || v.trim() === "" ? undefined : v;
+}
+
+/**
+ * A number, or the default — but never a number the operator did not write.
+ *
+ * Blank means "use the default" and is normal. GARBAGE means the deployment is
+ * misconfigured, and silently substituting a default there would hide it until
+ * someone wondered why the ceiling never fired. It throws at startup, which is the
+ * one moment a person is watching.
+ */
+function envNumber(name: string, fallback: number, min = 0): number {
+  const raw = env(name);
+  if (raw === undefined) return fallback;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < min) {
+    throw new Error(`${name} is "${raw}", which is not a number >= ${min}. Fix it or leave it empty for ${fallback}.`);
+  }
+  return n;
+}
+
 export function configFromEnv(): ServiceConfig {
-  const env = process.env;
+  const webhookUrl = env("LORE_WEBHOOK_URL");
+  const heartbeatUrl = env("LORE_HEARTBEAT_URL");
   return {
-    dataDir: env["LORE_DATA_DIR"] ?? "/var/lib/lore",
-    port: Number(env["LORE_PORT"] ?? 7777),
+    dataDir: env("LORE_DATA_DIR") ?? "/var/lib/lore",
+    port: envNumber("LORE_PORT", 7777, 1),
     // Binds to the tailnet interface in production; 0.0.0.0 inside a container
     // that is only reachable through it.
-    host: env["LORE_HOST"] ?? "0.0.0.0",
-    ...(env["LORE_WEBHOOK_URL"] !== undefined ? { webhookUrl: env["LORE_WEBHOOK_URL"] } : {}),
-    ...(env["LORE_HEARTBEAT_URL"] !== undefined ? { heartbeatUrl: env["LORE_HEARTBEAT_URL"] } : {}),
-    runTests: env["LORE_RUN_TESTS"] === "1",
-    concurrency: Number(env["LORE_CONCURRENCY"] ?? DEFAULT_WORKER.concurrency),
-    dailyCeilingUsd: Number(env["LORE_DAILY_CEILING_USD"] ?? DEFAULT_SPEND.dailyCeilingUsd),
+    host: env("LORE_HOST") ?? "0.0.0.0",
+    ...(webhookUrl !== undefined ? { webhookUrl } : {}),
+    ...(heartbeatUrl !== undefined ? { heartbeatUrl } : {}),
+    runTests: env("LORE_RUN_TESTS") === "1",
+    // At least one: zero workers is a service that queues for ever in silence.
+    concurrency: envNumber("LORE_CONCURRENCY", DEFAULT_WORKER.concurrency, 1),
+    dailyCeilingUsd: envNumber("LORE_DAILY_CEILING_USD", DEFAULT_SPEND.dailyCeilingUsd),
   };
 }
 
