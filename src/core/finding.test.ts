@@ -82,6 +82,35 @@ describe("parseFinding", () => {
     expect(() => parseFinding({ ...valid, cwe })).toThrow();
   });
 
+  // EVERY optional field, not just the one that was reported.
+  //
+  // The `cwe` table above existed, the reasoning was written beside it, and the fix
+  // was applied to that field instead of to the rule — so `symbol` and `line` kept
+  // the identical defect. glm-5-turbo sent `symbol: null`, twice, and the whole
+  // review failed: the schema is `.strict()` inside a batch parse, so one null
+  // discards every finding in a reply that has already been paid for.
+  //
+  // Parameterised over the fields so adding an optional one without deciding this
+  // question is not possible by accident.
+  it.each([["cwe"], ["symbol"], ["line"]])("reads %s null/blank as absent, not as malformed", (field) => {
+    for (const v of [undefined, null, "", "   "]) {
+      const got = parseFinding({ ...valid, [field]: v });
+      expect(got[field as keyof typeof got], `${field}=${JSON.stringify(v)}`).toBeUndefined();
+    }
+  });
+
+  // Forgiving blank must not become forgiving anything, on any of them.
+  it.each([
+    ["symbol", 42],
+    ["symbol", {}],
+    ["line", "top"],
+    ["line", 0],
+    ["line", -1],
+    ["line", 1.5],
+  ])("still rejects %s = %s", (field, v) => {
+    expect(() => parseFinding({ ...valid, [field]: v })).toThrow();
+  });
+
   // Derived from the constant, not from a literal: the cap moved 300 → 500 and a
   // hardcoded 301 would have kept passing while asserting nothing.
   it("rejects a claim that sprawls past one sentence", () => {

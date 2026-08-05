@@ -53,20 +53,43 @@ export type Severity = (typeof SEVERITIES)[number];
 export const CLAIM_MAX = 500;
 const TEXT_MAX = 2000;
 
+/**
+ * "The model meant nothing here", however it chose to write it.
+ *
+ * Every OPTIONAL field takes this. A model with no enclosing symbol and no line
+ * writes `null` at least as readily as it omits the key — `null` is the natural JSON
+ * for absent — and Zod's `.optional()` short-circuits on `undefined` alone, so a
+ * `null` reaches the inner type and fails it. The schema is `.strict()` inside a
+ * batch parse, so one such field discards EVERY finding in a paid-for reply.
+ *
+ * This was fixed once for `cwe` and the fix was applied to that field rather than to
+ * the rule, which left `symbol` and `line` armed with the identical defect. It went
+ * off: glm-5-turbo sent `symbol: null`, twice, and a whole review failed. The comment
+ * on `cwe` had even written the lesson down — *ask "did the model mean nothing here",
+ * not "is it the empty string"* — while three fields away the question was still
+ * being asked the wrong way.
+ *
+ * Blank is forgiven; WRONG is still rejected. A `symbol` of `42` or a `line` of
+ * `"top"` still fails, because that is our prompt and the model disagreeing about the
+ * shape, which is drift worth failing on.
+ */
+const absent = <T extends z.ZodTypeAny>(inner: T) =>
+  z.preprocess((v) => (v === null || (typeof v === "string" && v.trim() === "") ? undefined : v), inner.optional());
+
 export const FindingSchema = z
   .object({
     /** Repo-relative path. Absolute paths are rejected below. */
     file: z.string().min(1).max(1024),
 
     /** 1-indexed. Optional: file-level findings have no line. */
-    line: z.number().int().positive().optional(),
+    line: absent(z.number().int().positive()),
 
     /**
      * Enclosing function/class/method. Optional, but load-bearing when present:
      * it is what keeps a finding's identity stable while line numbers shift
      * (see fingerprint.ts).
      */
-    symbol: z.string().min(1).max(256).optional(),
+    symbol: absent(z.string().min(1).max(256)),
 
     severity: z.enum(SEVERITIES),
 
