@@ -284,7 +284,9 @@ function existingReview(store: Store, principal: string, branch: string): string
   // loop driver: resume the open review for this branch rather than starting a new
   // one and losing every justification already accepted.
   return store
-    .listReviews(principal)
+    // Every repository, deliberately: this runs on the operator's own machine,
+    // against their own database, where narrowing would hide their own work.
+    .listReviews(principal, undefined)
     .find((r) => r.branch === branch && r.state !== "passed" && r.state !== "expired")?.id;
 }
 

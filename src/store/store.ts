@@ -52,6 +52,14 @@ export interface RecordedFinding extends Finding {
   readonly scope?: Scope | undefined;
   /** Tier id or T0 engine name that raised it. */
   readonly origin: string;
+  /**
+   * True when this finding is about code THIS BRANCH DOES NOT TOUCH (D-68).
+   *
+   * T0 scans the whole worktree, so a pattern engine reports every match in the
+   * repository — and those same matches then appear on every unrelated branch,
+   * forever. Not false, and not this merge's doing.
+   */
+  readonly preexisting?: boolean | undefined;
   readonly round: number;
   readonly firstSeen: string;
 }
@@ -306,10 +314,26 @@ export class Store {
   }
 
   /** Reviews for a principal, newest first — backs `review.inbox`. */
-  listReviews(principal: string, limit = 50): readonly ReviewRow[] {
+  /**
+   * A principal's reviews, optionally narrowed to one repository.
+   *
+   * `repoId` is REQUIRED to be written even when it is `undefined`, because omitting
+   * it is exactly the bug this parameter was added to fix: tokens are scoped per
+   * repository (D-23) and this was scoped per PRINCIPAL, so one person's token for
+   * repo A listed their reviews of repo B. Reported by a client that could see
+   * lore's own branches through a rigid-monorepo token.
+   *
+   * `undefined` means "every repository" and is right for the CLI, which runs on the
+   * operator's own machine against their own database. It is never right at the MCP
+   * boundary, where the token is the only thing saying who is asking.
+   */
+  listReviews(principal: string, repoId: string | undefined, limit = 50): readonly ReviewRow[] {
     const rows = this.db
-      .prepare("SELECT id FROM review WHERE principal = ? ORDER BY updated_at DESC LIMIT ?")
-      .all(principal, limit) as Record<string, string>[];
+      .prepare(
+        `SELECT id FROM review WHERE principal = ? AND (? IS NULL OR repo_id = ?)
+         ORDER BY updated_at DESC LIMIT ?`,
+      )
+      .all(principal, repoId ?? null, repoId ?? null, limit) as Record<string, string>[];
     return rows
       .map((r) => this.getReview(r["id"] ?? "", principal))
       .filter((r): r is ReviewRow => r !== undefined);
@@ -407,8 +431,9 @@ export class Store {
     const res = this.db
       .prepare(
         `INSERT INTO finding(review_id, fingerprint, file, line, symbol, severity, claim, evidence,
-                             failure_scenario, cwe, origin, round, first_seen, scope_blob, scope_hunk)
-         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                             failure_scenario, cwe, origin, round, first_seen, scope_blob, scope_hunk,
+                             preexisting)
+         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(review_id, fingerprint) DO NOTHING`,
       )
       .run(
@@ -427,6 +452,7 @@ export class Store {
         f.firstSeen,
         n(f.scope?.blob),
         n(f.scope?.hunk),
+        f.preexisting === true ? 1 : 0,
       );
     return res.changes > 0;
   }
@@ -1062,6 +1088,9 @@ function toFinding(row: Record<string, string | number | null>): RecordedFinding
     origin: String(row["origin"] ?? ""),
     round: Number(row["round"] ?? 0),
     firstSeen: String(row["first_seen"] ?? ""),
+    // Rows written before the column existed read as `false`, which is the safe
+    // direction: an old finding is treated as this branch's, not silently demoted.
+    preexisting: Number(row["preexisting"] ?? 0) === 1,
     // Absent stays absent: it means "cannot tell whether the code moved", and the
     // settling rule in D-56 declines to act on that rather than guessing.
     ...(typeof scopeBlob === "string" && typeof scopeHunk === "string"

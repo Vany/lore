@@ -50,10 +50,23 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
   const server = new McpServer({ name: "lore", version: "0.1.0" });
   const { store } = deps;
 
-  /** Fetch a review or refuse. A valid id from another principal fails like a forged one. */
+  /**
+   * Fetch a review or refuse. A valid id from another principal — OR ANOTHER
+   * REPOSITORY — fails exactly like a forged one.
+   *
+   * The repo check is the half that was missing. Tokens are minted per repository
+   * (D-23), and this asked only whether the principal matched — so one person holding
+   * tokens for two repos could read either through either, and the same person is the
+   * normal case: a workgroup provisions each repo to the same human. A client
+   * reported seeing lore's own branches through a rigid-monorepo token.
+   *
+   * Failing as NOT FOUND rather than as forbidden, deliberately: "this exists but is
+   * not yours" tells an unauthorized caller that the id is real, and ids are the one
+   * thing a caller might guess.
+   */
   const mine = (reviewId: string) => {
     const r = store.getReview(reviewId, who.principal);
-    if (r === undefined) throw new Error(`review ${reviewId} not found`);
+    if (r === undefined || r.repoId !== who.repoId) throw new Error(`review ${reviewId} not found`);
     return r;
   };
 
@@ -153,7 +166,15 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
             review.state === "passed"
               ? "Every tier agrees. You may attest and merge."
               : "NOT clean. Only `passed` means clean.",
-          new_findings: fresh.map((f) => {
+          // The branch's own defects FIRST, inherited ones after.
+          //
+          // Ordering is what a reader actually acts on, and severity alone put two
+          // pattern matches in test fixtures the branch never opened above three spec
+          // contradictions in files it wrote. Both are true; only one is this merge's
+          // to answer, and triage should not have to work that out.
+          new_findings: [...fresh]
+            .sort((a, b) => Number(a.preexisting ?? false) - Number(b.preexisting ?? false))
+            .map((f) => {
             const short = f.fingerprint.slice(0, 8);
             // A finding can be raised and settled inside one round: D-51 carries a
             // justification this repo already ratified into a later review and
@@ -202,6 +223,16 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
               // A finding with history is far more actionable than the same finding
               // raised cold: it says whether to fix the line or fix the habit.
               history: renderEnrichment(enrich(store, who.repoId, f)),
+              // Not this branch's doing, and every other branch inherits it too.
+              ...(f.preexisting === true
+                ? {
+                    preexisting: true,
+                    preexisting_note:
+                      "This file is NOT touched by your branch, and the pattern that matched was already " +
+                      "there — every other branch gets this finding too. It is real and worth a ticket; it " +
+                      "is not yours to answer here. Fixing it widens this merge; a lore-ok settles it.",
+                  }
+                : {}),
             };
           }),
           open_count: store.openFindings(review_id).length,
@@ -403,7 +434,8 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
     "review_inbox",
     { description: TOOL_DOCS.inbox, inputSchema: z.object({}) },
     async () => {
-      const reviews = store.listReviews(who.principal);
+      // Scoped to the token's repository, not merely to its principal.
+      const reviews = store.listReviews(who.principal, who.repoId);
       const items = reviews.map((r) => {
         const fresh = store.undelivered(r.id);
         store.markDelivered(r.id, fresh.map((f) => f.fingerprint));
@@ -427,14 +459,36 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
         };
       });
       const needsHuman = items.filter((i) => i.state === "needs_human");
+      // THE QUESTION, not the fact that there is one.
+      //
+      // `review_poll` was fixed to carry this and the inbox was not — and the inbox is
+      // where a client looks FIRST, so "surface these to your user" arrived with
+      // nothing to surface. A client said so plainly: *I can't surface a question I
+      // was never given, and guessing is exactly what lore's own doctrine forbids.*
+      // Being told to escalate something unnamed is worse than not being told, because
+      // the only ways forward are to invent the question or to drop it.
+      const byId = new Map(store.knowledgeFor(who.repoId, undefined, 1000).map((k) => [k.id, k]));
+      const questions = needsHuman.length === 0
+        ? []
+        : store.openConflicts(who.repoId).map((c) => ({
+            left: { id: c.left, statement: byId.get(c.left)?.statement ?? "(retired)", source: byId.get(c.left)?.provenance },
+            right: { id: c.right, statement: byId.get(c.right)?.statement ?? "(retired)", source: byId.get(c.right)?.provenance },
+          }));
+
       return text(
         JSON.stringify({
           reviews: items.filter((i) => i.new_findings > 0 || i.state === "needs_human"),
           needs_human: needsHuman.length,
+          ...(needsHuman.length > 0 ? { open_questions: questions } : {}),
           note:
-            needsHuman.length > 0
-              ? "Some reviews need a PERSON. Surface these to your user; do not answer them yourself."
-              : "Surface high-severity findings to your user rather than only logging them.",
+            needsHuman.length === 0
+              ? "Surface high-severity findings to your user rather than only logging them."
+              : questions.length > 0
+                ? "Some reviews need a PERSON. `open_questions` IS the question — two things this repository " +
+                  "believes that cannot both be true. Take both statements to your user verbatim; do not answer " +
+                  "them yourself. Then call knowledge_resolve with the id to keep, or knowledge_escalate."
+                : "A review is parked at needs_human but no contradiction is open any more — the question has " +
+                  "been answered. Call review_submit on it (an empty diff is fine) and the ladder continues.",
         }),
       );
     },

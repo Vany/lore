@@ -178,6 +178,8 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-65** | mirrors are refreshed by a **host process outside lore**; a stale one is refused | confirmed |
 | **D-66** | A rejected finding **loses its own line, not the batch** — and the loss is reported | confirmed |
 | **D-67** | Severity is the engine's. Recurrence informs the reader, and never demotes | confirmed |
+| **D-68** | A finding outside the diff from a pattern engine is **inherited**: reported, ranked last | confirmed |
+| **D-69** | A token reaches **its own repository** and no other — scoping is per repo, not per principal | confirmed |
 
 **D-7, revised.** The earlier version dropped GLM-5.2 on Artificial Analysis's
 *cost per task* — which is tokens consumed × price on their benchmark, not a price.
@@ -841,6 +843,42 @@ A lockfile naming a manager the image does not carry — bun, which is a runtime
 not merely an installer — is reported as an **unavailable engine**. Installing with
 npm instead and presenting the result as that project's suite would be a confident
 claim about something that never ran.
+
+**D-68 — a finding outside the diff, from a pattern engine, belongs to the repository
+rather than to the branch.**
+
+T0 scans the whole worktree, so semgrep and ast-grep report every match in the
+repository — and the same matches then appear on every unrelated branch, for ever.
+They are marked `preexisting`, ranked below the branch's own findings, and reported
+with a note saying they are worth a ticket but not this merge's to answer.
+
+Reported, never dropped: the defect is real, and dropping it would be INV-1's failure
+wearing a tidier coat. What was wrong was the attribution, and the cost of getting it
+wrong is ordering — a client triaging by severity answered two inherited `high`
+pattern matches in test fixtures it had never opened before three `medium` spec
+contradictions in files it had written.
+
+**Only pattern engines.** semgrep and ast-grep match text that was already there, so
+"outside the diff" really does mean "not this branch". `tsc`, `eslint` and the test
+suite are project-wide: a change here genuinely can break an untouched file, and
+calling that pre-existing would be the more dangerous mistake of the two.
+
+**D-69 — a token reaches its own repository and no other.**
+
+Tokens are minted per repository. Access control asked only whether the PRINCIPAL
+matched, and a workgroup provisions every repository to the same human — so one
+person's token for repo A listed and fetched their reviews of repo B. Reported by a
+client that could see lore's own branches through a rigid-monorepo token.
+
+Both the inbox and the review lookup are scoped by `repo_id` now. A valid id from
+another repository fails as **not found**, not as forbidden: "this exists but is not
+yours" tells an unauthorized caller the id is real, and an id is the one thing worth
+guessing (D-23).
+
+The test that should have caught this was called *binds each token to its own repo*
+and asserted that the token ROWS carry different `repo_id`s. It passed throughout,
+because it never checked that anything was scoped by them — a test named for a
+property it did not test.
 
 **D-66 — a finding the schema rejects loses its own line, not the whole reply.**
 

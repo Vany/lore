@@ -279,6 +279,30 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
 
   // 5. Record everything raised this round: T0's findings and the model's.
   const round = review.ladder.round + 1;
+  // WHOSE DEFECT IS THIS? (D-68)
+  //
+  // T0 scans the whole worktree, so a pattern engine reports every match in the
+  // repository — and those same matches then appear on EVERY unrelated branch,
+  // forever, ahead of what the branch actually did. A client triaging by severity
+  // did two `high` CWE-319 hits in test fixtures it had never touched before three
+  // real `medium` spec contradictions in files it had written.
+  //
+  // Only pattern engines, deliberately. semgrep and ast-grep match text that was
+  // already there, so "outside the diff" really does mean "not this branch". `tsc`,
+  // `eslint` and the test suite are project-wide: a change here genuinely can break
+  // an untouched file, and calling that pre-existing would be the more dangerous
+  // mistake of the two.
+  //
+  // Reported, never dropped. The finding is true and someone should fix it; what was
+  // wrong was attributing it to this merge.
+  const PATTERN_ENGINES = new Set(["semgrep", "ast-grep"]);
+  const changed = new Set(diff.changedFiles);
+  const fromPatterns = new Set(
+    t0.outcomes.filter((o) => PATTERN_ENGINES.has(o.engine)).flatMap((o) => o.findings.map((f) => `${f.file}:${f.claim}`)),
+  );
+  const inherited = (f: { file: string; claim: string }): boolean =>
+    fromPatterns.has(`${f.file}:${f.claim}`) && !changed.has(f.file);
+
   const raised = [
     ...t0.findings.map((f) => ({ f, origin: "t0" })),
     ...result.findings.map((f) => ({ f, origin: tier.id })),
@@ -315,6 +339,9 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       origin,
       round,
       firstSeen: new Date().toISOString(),
+      // Only T0's pattern engines can be inherited; a model tier reads the diff and
+      // raises what it means to raise.
+      preexisting: origin === "t0" && inherited(f),
       ...(scope === undefined ? {} : { scope }),
     };
     if (store.recordFinding(reviewId, rec)) {

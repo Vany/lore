@@ -711,3 +711,132 @@ describe("needs_human says what the question is", () => {
     expect(out).not.toHaveProperty("open_questions");
   });
 });
+
+// TOKENS ARE PER-REPOSITORY; ACCESS CONTROL WAS PER-PRINCIPAL.
+//
+// A workgroup provisions each repository to the same human, so one person holding
+// tokens for two repos is the NORMAL case — and both `review_inbox` and the review
+// lookup asked only whether the principal matched. A client reported seeing lore's
+// own branches through a rigid-monorepo token, which is exactly this.
+//
+// The old test named "binds each token to its own repo" asserted that the token ROWS
+// carry different repo_ids. It passed the whole time, because it never checked that
+// anything was scoped by them — a test that proved nothing about the property it named.
+describe("a token reaches its own repository and no other", () => {
+  let othersReview: string;
+
+  beforeEach(() => {
+    // Same principal, different repo — the shape that leaked.
+    const other = store.db.prepare("SELECT repo_id FROM token WHERE principal = 'bob'").get() as { repo_id: string };
+    othersReview = "rev_elsewhere";
+    store.createReview({
+      id: othersReview, repoId: other.repo_id, principal: "alice", branch: "someone-elses/branch",
+      intoRef: "main", ticket: "t", type: "code-arch", state: "findings_ready", ladder: initialState(),
+    });
+  });
+
+  it("does not list another repository's reviews in the inbox", async () => {
+    store.recordFinding(othersReview, {
+      fingerprint: "a".repeat(64), file: "secret.ts", line: 1, symbol: undefined, severity: "high",
+      claim: "a claim from a repo this token cannot reach", evidence: "e", failureScenario: "f",
+      cwe: undefined, origin: "t1", round: 1, firstSeen: new Date().toISOString(),
+    });
+
+    const out = await callTool("review_inbox", {});
+    expect(JSON.stringify(out)).not.toContain("someone-elses/branch");
+    expect(JSON.stringify(out)).not.toContain("a repo this token cannot reach");
+  });
+
+  // Failing as NOT FOUND rather than forbidden: "this exists but is not yours" tells
+  // an unauthorized caller the id is real, and the id is the one thing worth guessing.
+  it("refuses a valid id from another repository as though it did not exist", async () => {
+    const res = await mcp(
+      { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "review_poll", arguments: { review_id: othersReview } } },
+      token,
+    );
+    const line = (await res.text()).split("\n").find((l) => l.startsWith("data:")) ?? "";
+    const rpc = JSON.parse(line.slice("data:".length)) as { result?: { content?: { text?: string }[]; isError?: boolean } };
+
+    expect(rpc.result?.isError).toBe(true);
+    expect(rpc.result?.content?.[0]?.text).toContain("not found");
+    expect(rpc.result?.content?.[0]?.text).not.toMatch(/forbidden|not yours|another/i);
+  });
+});
+
+// The inbox is where a client looks FIRST, so "surface these to your user" arrived
+// with nothing to surface. Being told to escalate something unnamed is worse than not
+// being told: the only ways forward are to invent the question or to drop it, and
+// inventing it is precisely what this service forbids everywhere else.
+describe("the inbox carries the question too, not just review_poll", () => {
+  it("names both statements when a review is parked at needs_human", async () => {
+    store.createReview({
+      id: "revI", repoId, principal: "alice", branch: "feat/z", intoRef: "main",
+      ticket: "t", type: "code-arch", state: "needs_human", ladder: initialState(),
+    });
+    const a = store.addKnowledge({
+      repoId, kind: "rule", source: "ingested", statement: "Money is stored as DECIMAL",
+      why: undefined, path: undefined, cwe: undefined, provenance: "docs/adr/0009.md",
+      sourceBlob: undefined, confidence: undefined,
+    });
+    const b = store.addKnowledge({
+      repoId, kind: "rule", source: "ingested", statement: "Money must never be stored as DECIMAL",
+      why: undefined, path: undefined, cwe: undefined, provenance: "docs/adr/0031.md",
+      sourceBlob: undefined, confidence: undefined,
+    });
+    store.recordConflict(repoId, a.id, b.id);
+
+    const out = await callTool("review_inbox", {});
+    expect(out["needs_human"]).toBe(1);
+    expect(JSON.stringify(out["open_questions"])).toContain("must never be stored as DECIMAL");
+    expect(JSON.stringify(out["open_questions"])).toContain("docs/adr/0009.md");
+    expect(String(out["note"])).toContain("IS the question");
+  });
+});
+
+// A client triaging by severity did two `high` pattern matches in test fixtures it
+// had never touched before three real `medium` spec contradictions in files it wrote.
+// Both are true; only one set is this merge's to answer.
+describe("findings the branch did not cause are marked and ranked below", () => {
+  const record = (fp: string, file: string, severity: "high" | "medium", preexisting: boolean) =>
+    store.recordFinding("revP", {
+      fingerprint: fp.repeat(64).slice(0, 64), file, line: 1, symbol: undefined, severity,
+      claim: `claim about ${file}`, evidence: "e", failureScenario: "f",
+      cwe: undefined, origin: "t0", round: 1, firstSeen: new Date().toISOString(), preexisting,
+    });
+
+  beforeEach(() => {
+    store.createReview({
+      id: "revP", repoId, principal: "alice", branch: "feat/p", intoRef: "main",
+      ticket: "t", type: "code-arch", state: "findings_ready", ladder: initialState(),
+    });
+  });
+
+  it("puts the branch's own medium above an inherited high", async () => {
+    record("a", "fixtures.test.ts", "high", true);
+    record("b", "src/mine.ts", "medium", false);
+
+    const out = await callTool("review_poll", { review_id: "revP" });
+    const list = out["new_findings"] as { file: string; preexisting?: boolean }[];
+
+    // Severity alone would invert this, and severity alone is what a client sorts on.
+    expect(list[0]?.file).toBe("src/mine.ts");
+    expect(list[1]?.preexisting).toBe(true);
+  });
+
+  it("says why the inherited one is not this branch's to answer", async () => {
+    record("c", "fixtures.test.ts", "high", true);
+    const out = await callTool("review_poll", { review_id: "revP" });
+    const note = String((out["new_findings"] as { preexisting_note?: string }[])[0]?.preexisting_note);
+
+    expect(note).toContain("NOT touched by your branch");
+    expect(note).toContain("every other branch");
+    // Reported, never dropped: it is real and someone should fix it.
+    expect(note).toContain("worth a ticket");
+  });
+
+  it("marks nothing when the finding is in a file the branch changed", async () => {
+    record("d", "src/mine.ts", "high", false);
+    const out = await callTool("review_poll", { review_id: "revP" });
+    expect((out["new_findings"] as Record<string, unknown>[])[0]).not.toHaveProperty("preexisting");
+  });
+});

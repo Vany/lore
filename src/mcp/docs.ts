@@ -121,7 +121,13 @@ WHAT EACH FINDING CARRIES.
 \`fingerprint\` (use it in the lore-ok), \`file\`, \`line\`, \`symbol\`, \`severity\`,
 \`claim\`, \`evidence\`, \`failure_scenario\`, sometimes \`cwe\`, and \`history\` — what this
 codebase already knows about this defect, which tells you whether to fix the line or
-fix the habit. \`history\` never changes \`severity\`: a defect seen six times is not
+fix the habit.
+
+\`preexisting: true\` means the finding is in a file YOUR BRANCH DOES NOT TOUCH and the
+pattern was already there — every other branch gets it too. Real, worth a ticket, not
+yours to answer in this merge. **The list is already ordered with these last**, so do
+not re-sort by severity alone: an inherited \`high\` is not more urgent than a \`medium\`
+in code you actually wrote. \`history\` never changes \`severity\`: a defect seen six times is not
 less serious for being familiar, and a rule engine that fires every round is still
 telling the truth about the line it fired on. Weigh it; do not discount it.
 
