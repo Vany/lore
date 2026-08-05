@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_TIERS, anyTierRan, initialState, loadTiers, markUnavailable, settle, soleVendorOf, step, vendorOf, type LadderState, type Tier } from "./ladder.ts";
+import { DEFAULT_TIERS, anyTierRan, initialState, loadTiers, markUnavailable, settle, soleVendorOf, step, vendorOf, type Decision, type LadderState, type Tier } from "./ladder.ts";
 
 const clean = (state: LadderState) => step({ state, raised: [] });
 
@@ -99,21 +99,62 @@ describe("step", () => {
     expect(r.decision).toStrictEqual({ kind: "stopped", bound: "global" });
   });
 
-  it("terminates from any starting point", () => {
-    // The whole design rests on this: whatever the reviewers do, the loop ends.
-    for (const raised of [[], ["a"], ["a", "b"]]) {
-      let s = initialState();
-      let decision = step({ state: s, raised }).decision;
-      let guard = 0;
-      while (decision.kind === "findings" || decision.kind === "escalate" || decision.kind === "fastClean") {
-        const r = step({ state: s, raised });
-        s = r.state;
-        decision = r.decision;
-        if (++guard > 100) break;
-      }
-      expect(guard).toBeLessThan(100);
-      expect(["passed", "stopped", "needsHuman"]).toContain(decision.kind);
+  // The whole design rests on this: whatever the reviewers do, the loop ends.
+  //
+  // Driven with a DIFFERENT input every round, because the dangerous case is not a
+  // tier repeating itself — fingerprint dedup handles that — it is a tier that
+  // PARAPHRASES. §3.1.1 says so outright: a re-worded claim hashes differently and
+  // reads as fresh work, so dedup is not what bounds this loop; the per-tier and
+  // global caps are. A constant `raised` set never tests the thing that holds.
+  //
+  // Deterministic PRNG so a failure reproduces from the seed printed with it.
+  const lcg = (seed: number) => () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+
+  it.each([1, 7, 42, 1337, 90210])("terminates under adversarial input (seed %i)", (seed) => {
+    const rand = lcg(seed);
+    let s = initialState();
+    let decision: Decision = { kind: "findings" };
+    let guard = 0;
+
+    while (decision.kind === "findings" || decision.kind === "escalate" || decision.kind === "fastClean") {
+      // Every round: sometimes clean, sometimes a rehash of settled work, and
+      // sometimes an entirely new fingerprint — the paraphrase case.
+      const roll = rand();
+      const raised =
+        roll < 0.3 ? [] : roll < 0.6 ? [...s.settled].slice(0, 2) : [`fresh-${guard}-${Math.floor(rand() * 1e6)}`];
+
+      const r = step({
+        state: s,
+        raised,
+        // A human question that opens and closes, and tiers that fall over.
+        ...(rand() < 0.15 ? { needsHuman: true } : {}),
+      });
+      s = r.state;
+      decision = r.decision;
+
+      // Settling some of what was raised, as a real round does.
+      if (rand() < 0.5 && raised.length > 0) s = settle(s, raised.slice(0, 1));
+
+      if (++guard > 200) break;
     }
+
+    expect(guard, `seed ${seed} did not terminate`).toBeLessThanOrEqual(200);
+    expect(["passed", "passedPartial", "stopped", "needsHuman"]).toContain(decision.kind);
+  });
+
+  // The bound is not merely "eventually" — it is the global cap, and a paraphrasing
+  // tier must hit it rather than wandering close to it.
+  it("stops a tier that paraphrases for ever, at the global bound", () => {
+    let s = initialState();
+    let decision: Decision = { kind: "findings" };
+    let round = 0;
+    while (decision.kind === "findings" && round < 100) {
+      const r = step({ state: s, raised: [`paraphrase-${round++}`] });
+      s = r.state;
+      decision = r.decision;
+    }
+    expect(decision.kind).toBe("stopped");
+    if (decision.kind === "stopped") expect(["perTier", "global"]).toContain(decision.bound);
   });
 });
 
