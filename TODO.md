@@ -24,6 +24,9 @@ Until today every review was driven by me, by hand, with shell scripts. Today a
 Claude session in `rigid-monorepo` drove them. Read straight off the live database,
 read-only, with the service left running.
 
+Five of the six items below were fixed the same evening; what they say is kept
+because the numbers are the reason the fixes happened.
+
 |                              | all time |    today |
 | ---------------------------- | -------: | -------: |
 | reviews                      |       30 |       15 |
@@ -47,19 +50,29 @@ against 183k fresh, D-29); **the retry earns its place** (5 of 53 t1 replies and
 the 15 failures is a refusal that named its cause, not a review that quietly found
 nothing.
 
-- [ ] **A stale mirror is the largest single cause of failure, and the client cannot
-      clear it.** 3 of 9 failed jobs, and 3 of 5 today — more than any model or
-      transport fault. `MAX_MIRROR_AGE_MS` is 30 minutes; the refusal at 18:23 today
-      read *last fetched 192 minutes ago*. The refusal is right (D-40, D-63) and the
-      message names the fix, but the fix is `make mirror REPO=…` **on the host**, and
-      the client is an agent inside the repository with no host shell. So it reads an
-      instruction it cannot follow, and the only move left is to ask a human and wait.
-      The fourth review of `fix/RIGID-135` was started two minutes after that refusal.
-      Related and same root: `branch 'feat/RIGID-125-network-txn-id' not found on
-      origin` at 10:39, which was the mirror predating the push.
-      Not a bug to patch blindly — the options (a longer window, a fetch the client
-      can trigger, a mirror refreshed on a timer) differ in who holds credentials,
-      which is D-63's whole subject. Wants a decision.
+- [x] **A stale mirror was the largest single cause of failure.** Done 2026-08-05,
+      D-65. It was 3 of 9 failed jobs and 3 of 5 that day — more than any model or
+      transport fault — and the refusal at 18:23 read *last fetched 192 minutes ago*.
+      The refusal was right and its instruction was unfollowable: `make mirror` runs
+      on the host, and the client is an agent with no shell there.
+      Vany's call, and the right one: *"make mirror is not the client's
+      responsibility, our service must do this, we can be on another machine or
+      another user."* So lore fetches, with a per-repository read-only deploy key,
+      before it cuts a base. `make mirror` survives as the fallback for the window
+      before a key is authorized. **Authorizing the two printed keys is the one
+      outstanding manual step** — until then every fetch fails with the key in the
+      message, which is the correct behaviour and still a blocked review.
+
+- [x] **The reviewer container could read every secret on the box.** Found and fixed
+      2026-08-05 while deciding where a deploy key could safely live — checked rather
+      than assumed, and the assumption was wrong. `opencode` runs third-party models
+      with file-reading tools, as the **same uid** as `lore` (it must: it writes its
+      own session state), and mounted the entire data directory read-only. Verified
+      from inside that container: the attestation signing key `attest_ed25519.pem`
+      (mode 0600, defeated by the uid match), `lore.db` at 0644, and a leftover D-62
+      deploy key still on disk. None of it is needed to read a worktree. It now mounts
+      `<data>/repos` only, re-verified after the restart. Keys live outside that path
+      by layout, not by permission.
 
 - [ ] **The client restarts reviews instead of continuing them.** Six reviews of
       `feat/RIGID-125-network-txn-id` between 10:39 and 12:46; four of
@@ -81,28 +94,31 @@ nothing.
       been holding six high-severity findings for six hours*. A finding nobody reads
       is the same failure as a review that did not run, one step later.
 
-- [ ] **The ingester was fixed today and not one row in the database came from the
-      fixed one.** `dda312f` landed at 17:27 ("the knowledge base was 78% fragments,
-      because it read physical lines"). Every live ingested row predates it — 8 from
-      08-03T20:55, 8 from 08-05T10:44 (all of `rigid-monorepo`), 3 from 10:55, 48 from
-      14:40. Re-ingestion is triggered by *the source document changing*, not by the
-      ingester changing, so improving the reader does not reach what it already wrote.
-      What remains is visible: 9 of lore's 59 live rules and 1 of rigid's 8 begin
-      mid-sentence — `spec. Hand-rolled HTTP against opencode is a last resort`,
+- [x] **The ingester was fixed and no row in the database came from the fixed one.**
+      Done 2026-08-05, on Vany's approval to re-ingest both repos. `dda312f` landed at
+      17:27; every live row predated it, because re-ingestion triggers on *the source
+      document* changing, not on the reader changing. Retired 59 + 8 rows with a reason
+      naming the fix and re-read the docs. The genuinely broken fragments are gone —
+      `spec. Hand-rolled HTTP against opencode is a last resort`,
       `response, an exhausted quota and a timeout are all "did not run"`.
-      Needs a re-ingest of both repos, and a reason for one to happen when the
-      ingester's own behaviour changes. Retiring is non-destructive (`retired_reason`,
-      907 rows already retired that way), so this is cheap — but it rewrites the
-      product, so it is Vany's call, as agreed.
+      What my "starts mid-sentence" count still reports is a **false positive**: the
+      survivors begin with lowercase *identifiers* (`claimJob`, `tenantId`,
+      `networkTxnId`, `make status`) and are complete sentences. Worth recording so
+      the metric is not read as unfinished work.
 
-- [ ] **`rigid-monorepo` starts every review from 11 rules.** lore has 68. Its eight
-      ingested ones are the pre-fix output above, and two of them carry no content at
-      all: `Specifically forbidden` (22 characters) and `task cancellation. Its
-      failures never block execution`. The three derived ones are the only earned
-      knowledge there, all from repeated t0 findings (CWE-319 ×4, an insecure-request
-      semgrep rule ×4, the suite failing ×3). With zero verdicts on that repo, nothing
-      else can be derived — this item and the `verdicts: 0` row are the same problem
-      seen from two ends.
+- [x] **`rigid-monorepo` started every review from 11 rules.** Fixed 2026-08-05, and
+      the cause was not the ingester's parsing at all — it was that nothing ever opened
+      a decision record. `discoverable()` returned the six root files; `RULE_DIRS` sat
+      beside it looking used, consumed only to *scope* a rule that could never be
+      found. `spec/knowledge.md` §2 promised "CLAUDE.md, PROG.md, SPEC.md, ADRs" the
+      whole time. rigid has **37 ADRs** and lore has a whole `spec/`, none of it read.
+      Now: rigid 8 → **128** rules from 41 documents, lore 59 → 116 from 9. Spot-checked
+      rather than counted — *"Money values use Money<Currency>, never number"*,
+      *"expires_at is mandatory (NOT NULL) on every hold"*, *"tenantId must be a UUID,
+      lower-cased on the way in so one tenant has one spelling in RLS"* — which is
+      exactly the reasoning a reviewer cannot infer from the code.
+      Still true that **zero verdicts exist on that repo**, so nothing is being
+      *derived* there yet. That half remains open above.
 
 - [ ] **T0 is partly blind on the repository it actually reviews.** Of 7 t0 runs on
       `rigid-monorepo`: ast-grep unconfigured in 5, eslint in 1, tsc in 1 — against 5
@@ -125,45 +141,50 @@ runs all of it), and that the branch was 22 commits stale while GitHub said
 not an incident"* — as the thing nothing else in their toolchain does. That is D-14
 landing with a real user, and it should not get lost among the defects below.
 
-- [ ] **The running service is 21 commits behind, and the two fixes the client asked
-      for are among them.** The container was built 15:15 and started 15:16 today; it
-      is still up. Everything committed since is not running — including `2c527c1`
-      (17:36) *"`failed` carried no reason, so the client invented one"* and `49179a2`
-      (18:01) *"the reviewer recomputed the diff with two dots and invented a bundled
-      refactor"*. Those are, word for word, the two items the report's §7 lists under
-      **"Needs you — lore, as its owner"**. Also undeployed: the ingest fix (`dda312f`),
-      `LORE_RUN_TESTS` defaulting off (`8fb49d9`), the mirror-scope fix (`a2f6c41`),
-      and `relocate` — which means the `RigidFi` url is only in the database because
-      it was written there directly.
-      Nothing here needs writing. It needs a deploy, deliberately, when Vany chooses —
-      the service is mid-review as of 18:25 and restarting drops that work.
+- [x] **The running service was 21 commits behind.** Deployed 2026-08-05 22:5x. The
+      container had been built at 15:15 and everything since was unrunning, including
+      the two items the report's §7 listed under "Needs you — lore, as its owner":
+      `2c527c1` *"`failed` carried no reason, so the client invented one"* and
+      `49179a2` *"the reviewer recomputed the diff with two dots and invented a bundled
+      refactor"*. Both are live now, along with the ingest fix, `LORE_RUN_TESTS` off by
+      default, the mirror-scope fix and `relocate`.
+      Worth keeping as a habit rather than an incident: **the code being right is not
+      the service being right**, and nothing in `make status` says how old the running
+      image is. That gap is its own item below.
 
-- [ ] **A new client's first question about the knowledge base is answered `0`.** The
-      report's §7 records `knowledge_query`, no filter, `count: 0`, and concludes *"the
-      knowledge store is empty"*. It queries fine — 68 items for lore right now. The
-      real cause is worse than a bug: `bootstrap` runs in `worker.ts` on the first
-      **review**, and `provision.ts` says so on purpose ("there is nothing to read
-      until the mirror exists"). So between provisioning and the first completed
-      review, a client that asks what the service knows is told `0`, and the honest
-      inference from that is *this product is empty*. The very first interaction a new
-      workgroup has with the thing whose entire pitch is accumulated memory returns
-      nothing, with no note explaining why.
-      Cheapest fix is not code: `count: 0` should say *not bootstrapped yet — run a
-      review*, which is a `docs.ts` and handler-note change, not a redesign.
+- [x] **A new client's first question about the knowledge base was answered `0`.**
+      Fixed 2026-08-05. The report's §7 recorded `knowledge_query` → `count: 0` and
+      concluded *"the knowledge store is empty"*. The query worked; the zero was true
+      and meant something else. `bootstrap` runs on the first **review** (D-35,
+      deliberately — there is nothing to read until a mirror exists), so between
+      provisioning and the first completed review the honest reading of a bare zero is
+      *this product is empty*. Now the `note` distinguishes three cases: nothing
+      learned YET (with the two things that resolve it), a filter that matched nothing
+      against a repo that does know things, and a normal answer. `TOOL_DOCS.query` says
+      so too, and two tests hold it.
 
-- [ ] **Knowledge never reaches T0, so the same justified finding is raised at `high`
-      forever.** Two of the four findings the client evaluated are semgrep `http://`
-      hits in **test fixtures**, rated `high` — the report flags exactly this. lore has
-      already derived the rule for it, twice, on both repos: *"This codebase repeatedly
-      produces CWE-319 findings (4 so far)"*, and lore's own base carries a full
-      accepted justification explaining why a loopback URL in a test file is not a
-      plaintext risk. `src/t0/runner.ts` never calls `knowledgeFor` — only
-      `mcp/server.ts`, `worker.ts` and `conflict.ts` do. So the system observes the
-      pattern, writes it down, tells the client about it, and then raises it again at
-      the same severity next time.
-      This is the loop failing to close: knowledge is produced and never consumed by
-      the engine that produced it. Changing severity from accumulated verdicts touches
-      what gets reported as `high`, so it wants a decision before a patch.
+- [ ] **A justified finding is still raised at `high` every time.** Narrowed from what
+      I first wrote here, which overstated it. Two of the four findings the client
+      evaluated are semgrep `http://` hits in **test fixtures** at `high`, and lore has
+      derived the rule on both repos — *"This codebase repeatedly produces CWE-319
+      findings (4 so far)"* — plus a full accepted justification explaining why a
+      loopback URL in a test file is not a plaintext risk.
+      What I got wrong: the client **does** see this. `enrich()` attaches
+      `priorOccurrences` and the related rules to every finding including T0's, and the
+      report praises exactly that (*"seen 6× before in this repo"*) as the
+      differentiator. So knowledge reaches the client; it does not reach the
+      **severity**. `src/t0/runner.ts` never calls `knowledgeFor`, and an engine's
+      rating is fixed at the engine.
+      Whether accumulated verdicts should move a severity is a real question — it
+      changes what gets reported as `high`, and a finding that is genuinely true should
+      probably not be demoted for being familiar. Wants a decision, not a patch.
+
+- [ ] **Nothing says how old the running image is.** The service ran 21 commits behind
+      for three hours while `make status` reported `ok: true`, and every fix in those
+      commits was invisible to the one client using it. `/status` knows the queue,
+      the spend and the active reviews — none of which distinguishes "running the code
+      you think it is" from "running this afternoon's". Cheap: stamp the build into the
+      image and report it, so a stale deployment is a fact rather than an assumption.
 
 - [x] **lore holds no git credentials** (D-63). Done 2026-08-04. `make mirror` fetches
       on the host as the operator into `data/repos`; the container sees nothing
