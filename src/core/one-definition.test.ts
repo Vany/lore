@@ -83,4 +83,66 @@ describe("an exported constant has a reader", () => {
 
     expect(orphans, `exported, and nothing reads them — delete or wire up:\n  ${orphans.join("\n  ")}`).toStrictEqual([]);
   });
+
+  /**
+   * ...AND SO DOES EACH OF ITS MEMBERS.
+   *
+   * The check above passed for the whole of this service's life while three of the
+   * nine entries in `CONDITIONS` were dead — `backupStale`, `providerAuthFailed`,
+   * `needsHumanAgeing` — because it asks whether the CONTAINER is read, and
+   * `CONDITIONS` is read by three modules. `spec/operations.md` §2.1 listed two of
+   * them under "page, someone should look now" throughout.
+   *
+   * That is the shape PROG.md names two bullets down: a test named for a property it
+   * does not test. It asserted the setup, not the consequence. A routing table is
+   * exactly where this hides, because the table being wired reads as the routes being
+   * wired.
+   *
+   * Members only, on tables declared `as const` — a registry the code dispatches
+   * through, not every exported object.
+   */
+  it("has a caller for every member of an exported routing table", () => {
+    const TABLE = /^export const ([A-Z][A-Z0-9_]+)\s*=\s*\{([\s\S]*?)\n\} as const;/gm;
+    const MEMBER = /^ {2}([a-zA-Z][a-zA-Z0-9_]*)\s*:/gm;
+    const orphans: string[] = [];
+
+    for (const file of FILES) {
+      for (const [, table, body] of file.text.matchAll(TABLE)) {
+        if (table === undefined || body === undefined) continue;
+        for (const [, member] of body.matchAll(MEMBER)) {
+          if (member === undefined) continue;
+          // `TABLE.member` anywhere, including at home — a table consumed only by its
+          // own module is a legitimate shape, an entry consumed by nothing is not.
+          const used = new RegExp(`\\b${table}\\.${member}\\b`);
+          if (!FILES.some((f) => used.test(f.text))) orphans.push(`${table}.${member} (${file.path})`);
+        }
+      }
+    }
+
+    expect(
+      orphans,
+      `declared in a routing table and never dispatched to — wire it up or delete it:\n  ${orphans.join("\n  ")}`,
+    ).toStrictEqual([]);
+  });
+});
+
+/**
+ * One number, two implementations, in two languages.
+ *
+ * `make status` has to answer whether the replica is behind while the SERVICE IS
+ * DOWN — which is exactly when a dead replicator would otherwise go unnoticed — so it
+ * cannot be a call into this process, and the predicate genuinely exists twice. That
+ * is the shape this file is about, and the honest response is not to pretend
+ * otherwise but to make the copies unable to disagree quietly.
+ */
+describe("the replica threshold agrees with the shell that reimplements it", () => {
+  it("matches deploy/Makefile's replica-state", async () => {
+    const { REPLICA_BEHIND_SEC } = await import("../ops/heartbeat.ts");
+    const makefile = readFileSync(join(SRC, "..", "deploy", "Makefile"), "utf8");
+    const m = /behind"?\s*-gt\s*(\d+)/.exec(makefile);
+    expect(m?.[1], "deploy/Makefile no longer compares `behind` against a literal — update this check").toBeDefined();
+    expect(Number(m?.[1]), `Makefile says ${m?.[1]}s, heartbeat.ts says ${REPLICA_BEHIND_SEC}s`).toBe(
+      REPLICA_BEHIND_SEC,
+    );
+  });
 });

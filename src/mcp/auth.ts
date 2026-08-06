@@ -64,11 +64,79 @@ export function authenticate(store: Store, header: string | undefined): Principa
   return undefined;
 }
 
-export function revokeToken(store: Store, token: string): boolean {
-  const res = store.db
-    .prepare("UPDATE token SET revoked_at = ? WHERE hash = ? AND revoked_at IS NULL")
-    .run(new Date().toISOString(), hashToken(token));
-  return Number(res.changes) > 0;
+/** What a token looks like to an operator deciding whether to revoke it. */
+export interface TokenRow {
+  /** Leading 8 hex of the stored hash — the handle, since the secret is unrecoverable. */
+  readonly short: string;
+  readonly principal: string;
+  readonly repo: string;
+  readonly label?: string;
+  readonly createdAt: string;
+  readonly revokedAt?: string;
+}
+
+export function listTokens(store: Store): readonly TokenRow[] {
+  const rows = store.db
+    .prepare(
+      "SELECT t.hash, t.principal, t.label, t.created_at, t.revoked_at, r.name AS repo" +
+        " FROM token t LEFT JOIN repo r ON r.id = t.repo_id ORDER BY t.created_at",
+    )
+    .all() as Record<string, string | null>[];
+  return rows.map((r) => ({
+    short: (r["hash"] ?? "").slice(0, 8),
+    principal: r["principal"] ?? "",
+    repo: r["repo"] ?? "(unknown)",
+    ...(r["label"] === null || r["label"] === undefined ? {} : { label: r["label"] }),
+    createdAt: r["created_at"] ?? "",
+    ...(r["revoked_at"] === null || r["revoked_at"] === undefined ? {} : { revokedAt: r["revoked_at"] }),
+  }));
+}
+
+export type RevokeResult =
+  | { readonly kind: "revoked"; readonly principal: string; readonly repo: string }
+  | { readonly kind: "not-found" }
+  | { readonly kind: "already-revoked"; readonly at: string }
+  | { readonly kind: "ambiguous"; readonly matches: readonly string[] };
+
+/**
+ * Revoke by the leading hex of the stored HASH, not by the token itself.
+ *
+ * The old signature took the secret — which is shown once at provisioning and stored
+ * only as a hash, so an operator who wants to revoke one cannot supply it. That is
+ * backwards: you revoke a credential precisely when you do NOT have it, because it
+ * leaked, was lost, or belonged to someone who left. It had no caller and no route to
+ * one, while `spec/mcp-api.md` §1 promised "an opaque, revocable bearer token" and
+ * `make tokens` printed a `revoked_at` column nothing on earth could set.
+ *
+ * A prefix, with git's rule: **ambiguity is an error, never a winner**. It is the same
+ * decision as short fingerprints (`spec/review-ladder.md` §3.1.2), and it matters more
+ * here — silently revoking the wrong token locks out a teammate and leaves the leaked
+ * one live.
+ *
+ * `already-revoked` is its own answer rather than a plain failure, so a second run of
+ * the same command does not read as "that token was never here".
+ */
+export function revokeByPrefix(store: Store, prefix: string): RevokeResult {
+  if (!/^[0-9a-f]{4,64}$/i.test(prefix)) return { kind: "not-found" };
+
+  const rows = store.db
+    .prepare(
+      "SELECT t.hash, t.principal, t.revoked_at, r.name AS repo FROM token t" +
+        " LEFT JOIN repo r ON r.id = t.repo_id WHERE t.hash LIKE ?",
+    )
+    .all(`${prefix.toLowerCase()}%`) as Record<string, string | null>[];
+
+  if (rows.length === 0) return { kind: "not-found" };
+  if (rows.length > 1) return { kind: "ambiguous", matches: rows.map((r) => (r["hash"] ?? "").slice(0, 12)) };
+
+  const row = rows[0] as Record<string, string | null>;
+  const already = row["revoked_at"];
+  if (already !== null && already !== undefined) return { kind: "already-revoked", at: already };
+
+  store.db
+    .prepare("UPDATE token SET revoked_at = ? WHERE hash = ?")
+    .run(new Date().toISOString(), row["hash"] ?? "");
+  return { kind: "revoked", principal: row["principal"] ?? "", repo: row["repo"] ?? "(unknown)" };
 }
 
 function parseBearer(header: string | undefined): string | undefined {

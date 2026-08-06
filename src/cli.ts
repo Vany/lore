@@ -29,6 +29,8 @@ lore — an independent reviewer that remembers the codebase
   lore serve                                   run the MCP service
   lore new --name <who> --git <ssh-url>        provision a repo and token
   lore relocate --repo <name> --git <new-url>  a repo moved: keep its history
+  lore tokens                                  who holds a token, and for what
+  lore revoke --token <short>                  turn one off, by its short hash
   lore doctor                                  check tiers, auth and model ids
 
   --branch <name>    branch under review (default: current branch)
@@ -117,6 +119,65 @@ export async function main(argv: readonly string[]): Promise<ExitCode> {
       });
       process.stdout.write(renderProvisioned(result));
       return EXIT.PASS;
+    } finally {
+      store.close();
+    }
+  }
+
+  if (args.command === "tokens") {
+    const { listTokens } = await import("./mcp/auth.ts");
+    const store = new Store(args.db);
+    try {
+      const rows = listTokens(store);
+      if (rows.length === 0) {
+        process.stdout.write("no tokens issued\n");
+        return EXIT.PASS;
+      }
+      for (const t of rows) {
+        const state = t.revokedAt === undefined ? "live    " : "revoked ";
+        process.stdout.write(
+          `${state} ${t.short}  ${t.principal.padEnd(12)} ${t.repo.padEnd(18)} ${t.createdAt}` +
+            `${t.label === undefined ? "" : `  ${t.label}`}\n`,
+        );
+      }
+      process.stdout.write("\nrevoke one with: lore revoke --token <short>\n");
+      return EXIT.PASS;
+    } finally {
+      store.close();
+    }
+  }
+
+  // The command that makes `revocable` true (spec/mcp-api.md §1). Until now the
+  // column existed, `make tokens` printed it, and nothing could set it.
+  if (args.command === "revoke") {
+    const { revokeByPrefix } = await import("./mcp/auth.ts");
+    const short = flagOf(argv, "token");
+    if (short === undefined) {
+      throw new UsageError("usage: lore revoke --token <short-hash> [--db <path>]  (see `lore tokens`)");
+    }
+    const store = new Store(args.db);
+    try {
+      const r = revokeByPrefix(store, short);
+      switch (r.kind) {
+        case "revoked":
+          process.stdout.write(`revoked ${short} — ${r.principal} on ${r.repo}. Every client using it now fails auth.\n`);
+          return EXIT.PASS;
+        case "already-revoked":
+          // Not a failure. A second run of the same command must not read as
+          // "that token was never here".
+          process.stdout.write(`${short} was already revoked at ${r.at}. Nothing to do.\n`);
+          return EXIT.PASS;
+        case "ambiguous":
+          // git's rule, and the reason it matters more here than for a fingerprint:
+          // picking a winner locks out a teammate AND leaves the leaked token live.
+          process.stderr.write(
+            `'${short}' matches ${r.matches.length} tokens (${r.matches.join(", ")}) — give more characters.\n`,
+          );
+          return EXIT.USAGE;
+        case "not-found":
+          process.stderr.write(`no token starts with '${short}'. Run \`lore tokens\` for the list.\n`);
+          return EXIT.USAGE;
+      }
     } finally {
       store.close();
     }

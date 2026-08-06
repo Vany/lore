@@ -19,7 +19,7 @@ BACKUP  ?= $(shell grep -E '^LORE_HOST_BACKUP=' .env 2>/dev/null | cut -d= -f2)
 BACKUP  := $(if $(BACKUP),$(BACKUP),./backup)
 
 .DEFAULT_GOAL := help
-.PHONY: help preflight sync-opencode push build drain drain-off deploy up down down-hard restart logs status status-json status-local doctor new relocate tokens replica-state mirror mirror-daemon mirror-daemon-off mirror-daemon-log backup-on backup-check backup-drill restore sweep shell
+.PHONY: help preflight sync-opencode push build drain drain-off deploy up down down-hard restart logs status status-json status-local doctor new relocate tokens revoke replica-state mirror mirror-daemon mirror-daemon-off mirror-daemon-log backup-on backup-check backup-drill restore sweep shell
 
 help:
 	@sed -n '2,14p' $(MAKEFILE_LIST) | sed 's/^# \{0,1\}//'
@@ -257,12 +257,23 @@ status-json:
 status-local:
 	@LORE_DATA_DIR=$${LORE_DATA_DIR:-$$PWD/../lore} node ../src/ops/status.ts $(ID)
 
+## Who holds a token, for which repository, and whether it still works.
+##
+## Through the CLI rather than an inline SELECT, so the short hash it prints is the
+## same string `make revoke` accepts. The hand-rolled query printed a `revoked_at`
+## column and there was nothing in the entire system that could set it.
 tokens:
-	@$(COMPOSE) exec -T lore node -e "\
-	const {DatabaseSync}=require('node:sqlite'); \
-	const d=new DatabaseSync('$(DATA)/lore.db'); \
-	for (const r of d.prepare('SELECT principal, label, created_at, revoked_at FROM token').all()) \
-	  console.log(r.revoked_at ? '[revoked]' : '[live]   ', r.principal, r.label ?? '', r.created_at);"
+	@$(COMPOSE) exec -T lore node /app/src/index.ts tokens --db $(DATA)/lore.db
+
+## Turn a token off. `make revoke TOKEN=<short>`, from the list above.
+##
+## By the HASH prefix, not the token: the secret is shown once at provisioning, so an
+## operator revoking a leaked or lost one has never had it. Ambiguity is refused
+## rather than resolved — picking a winner would lock out a teammate and leave the
+## leaked token live.
+revoke:
+	@test -n "$(TOKEN)" || { echo "usage: make revoke TOKEN=<short-hash>   (see: make tokens)"; exit 2; }
+	@$(COMPOSE) exec -T lore node /app/src/index.ts revoke --token $(TOKEN) --db $(DATA)/lore.db
 
 ## Keep every mirror fresh, forever, without anyone remembering to.
 ##
