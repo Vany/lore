@@ -16,7 +16,7 @@ import { git, gitLines, gitMaybe } from "./exec.ts";
  * that silently saw half a change reports confidently about the half it got
  * (INV-7). An unexpectedly large diff usually means the base is wrong.
  */
-export const MAX_OVERLAP = 10;
+const MAX_OVERLAP = 10;
 const MAX_COMMITS_PER_FILE = 4;
 const MAX_DIFF_CHARS = 600_000;
 

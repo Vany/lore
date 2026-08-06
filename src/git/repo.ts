@@ -29,7 +29,7 @@ export interface RepoPaths {
  * repository touched because you wanted yours refreshed. The daemon refreshes all of
  * them, which is not the same thing: that is what was asked for, once, at install.
  */
-export function repoHint(gitUrl: string): string {
+function repoHint(gitUrl: string): string {
   const m = /([^/:]+?)(?:\.git)?$/.exec(gitUrl.trim());
   return m?.[1] ?? gitUrl;
 }
@@ -68,7 +68,7 @@ export type MirrorFreshness =
  * nothing new, which is what makes its ABSENCE mean "never fetched" rather than
  * "nothing changed".
  */
-export async function mirrorFreshness(localPath: string): Promise<MirrorFreshness> {
+async function mirrorFreshness(localPath: string): Promise<MirrorFreshness> {
   const hasRemote = await gitMaybe(localPath, ["config", "--get", "remote.origin.url"]);
   if (hasRemote === undefined) return { kind: "no-remote" };
   for (const candidate of [join(localPath, ".git", "FETCH_HEAD"), join(localPath, "FETCH_HEAD")]) {

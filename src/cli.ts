@@ -57,7 +57,7 @@ interface Args {
   readonly json: boolean;
 }
 
-export function flagOf(argv: readonly string[], name: string): string | undefined {
+function flagOf(argv: readonly string[], name: string): string | undefined {
   const i = argv.indexOf(`--${name}`);
   return i >= 0 ? argv[i + 1] : undefined;
 }

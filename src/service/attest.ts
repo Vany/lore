@@ -33,7 +33,7 @@ export interface Attestation {
  * (those signatures still verify against the published public key) but means every
  * future attestation is signed by a stranger.
  */
-export async function loadOrCreateKey(path: string): Promise<{ privateKey: string; publicKey: string }> {
+async function loadOrCreateKey(path: string): Promise<{ privateKey: string; publicKey: string }> {
   const existing = await readFile(path, "utf8").catch(() => undefined);
   if (existing !== undefined) {
     const priv = createPrivateKey(existing);

@@ -23,11 +23,11 @@ export interface Principal {
 const PREFIX = "lore_";
 
 /** 32 bytes of CSPRNG. Shown once, never stored. */
-export function mintToken(): string {
+function mintToken(): string {
   return `${PREFIX}${randomBytes(32).toString("base64url")}`;
 }
 
-export function hashToken(token: string): string {
+function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 

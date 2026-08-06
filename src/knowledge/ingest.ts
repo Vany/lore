@@ -24,7 +24,7 @@ import { blobSha } from "../git/diff.ts";
 import type { KnowledgeItem, Store } from "../store/store.ts";
 
 /** Documents that state a project's rules, in the order a reader would trust them. */
-export const RULE_DOCS = [
+const RULE_DOCS = [
   "CLAUDE.md",
   "AGENTS.md",
   "PROG.md",
@@ -262,7 +262,7 @@ export async function ingestDocs(
  * truncating: a knowledge base that quietly stopped reading at some arbitrary file is
  * exactly the confident incompleteness this project refuses.
  */
-export const MAX_RULE_DOCS = 400;
+const MAX_RULE_DOCS = 400;
 
 async function discoverable(worktree: string): Promise<readonly string[]> {
   const out: string[] = [...RULE_DOCS];

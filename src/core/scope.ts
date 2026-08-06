@@ -94,7 +94,7 @@ export function isStale(recorded: Scope, current: Scope | undefined): boolean {
 }
 
 /** Window size used when a hunk is captured, and when it is later searched for. */
-export const HUNK_RADIUS = 12;
+const HUNK_RADIUS = 12;
 
 /**
  * Look for the code a verdict was about, wherever it has moved to.

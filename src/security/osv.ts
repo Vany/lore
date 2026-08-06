@@ -18,7 +18,7 @@ import { DidNotRun } from "../core/errors.ts";
 import type { Finding, Severity } from "../core/finding.ts";
 import type { Component } from "./sbom.ts";
 
-export const OSV_API = "https://api.osv.dev/v1";
+const OSV_API = "https://api.osv.dev/v1";
 
 /** OSV documents batching at 1000; kept well under to bound request size. */
 const BATCH = 500;
@@ -142,7 +142,7 @@ export function fixedVersion(v: OsvVuln): string | undefined {
   return undefined;
 }
 
-export function cweOf(v: OsvVuln): string | undefined {
+function cweOf(v: OsvVuln): string | undefined {
   const id = v.database_specific?.cwe_ids?.[0];
   return id !== undefined && /^CWE-\d+$/.test(id) ? id : undefined;
 }

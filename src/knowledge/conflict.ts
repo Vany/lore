@@ -96,7 +96,7 @@ export function jaccard(a: ReadonlySet<string>, b: ReadonlySet<string>): number 
  * sentence of consideration; a missed contradiction costs every future session a
  * wrong belief.
  */
-export const SIMILARITY_THRESHOLD = 0.5;
+const SIMILARITY_THRESHOLD = 0.5;
 
 /**
  * Find candidate contradictions among live rules.

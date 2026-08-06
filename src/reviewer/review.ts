@@ -758,7 +758,7 @@ async function expireStaleVerdicts(
  * so rather than to fail the round or to close a finding on a coincidence.
  */
 /** Where a justification lives when its own file cannot hold a comment (D-57). */
-export const LEDGER = ".lore-ok.md";
+const LEDGER = ".lore-ok.md";
 
 async function collectJustifications(
   store: Store,

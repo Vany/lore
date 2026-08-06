@@ -53,6 +53,14 @@ export function isTerminal(state: ReviewState): boolean {
  *
  * Written as a function rather than a comparison so there is one place to be wrong,
  * and so no one is ever tempted to write `state !== "failed"`.
+ *
+ * **And for its whole life every caller wrote the comparison anyway** — four of them,
+ * including both `clean` fields the MCP surface hands a client, which is the single
+ * value a client decides to merge on. The function said it was the only one anyone
+ * should use and nothing used it, so the "one place to be wrong" was five places.
+ * That is the shape PROG.md's first bullet is about, in the most expensive field on
+ * the wire: `passed_partial` has already been left out of a hand-written state list
+ * three times in this codebase, and here that would read as clean.
  */
 export function isClean(state: ReviewState): boolean {
   return state === "passed";

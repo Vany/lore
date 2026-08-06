@@ -15,7 +15,7 @@ import * as z from "zod";
 import { absent } from "../core/optional.ts";
 import { worstSeverity } from "../core/finding.ts";
 import { initialState } from "../core/ladder.ts";
-import { isAttestable, isTerminal } from "../core/review-state.ts";
+import { isAttestable, isClean, isTerminal } from "../core/review-state.ts";
 import { DEFAULT_TYPE, reviewType, reviewTypeIds } from "../core/review-type.ts";
 import { applyPatch, treeHash } from "../git/repo.ts";
 import { enrich, renderEnrichment } from "../knowledge/enrich.ts";
@@ -161,11 +161,10 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           state: review.state,
           // Restated on every poll, because failure mode 1 and 7 are the two most
           // likely ways this loop ends with unreviewed code shipped.
-          clean: review.state === "passed",
-          note:
-            review.state === "passed"
-              ? "Every tier agrees. You may attest and merge."
-              : "NOT clean. Only `passed` means clean.",
+          clean: isClean(review.state),
+          note: isClean(review.state)
+            ? "Every tier agrees. You may attest and merge."
+            : "NOT clean. Only `passed` means clean.",
           // The branch's own defects FIRST, inherited ones after.
           //
           // Ordering is what a reader actually acts on, and severity alone put two
@@ -461,7 +460,7 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           review_id: r.id,
           branch: r.branch,
           state: r.state,
-          clean: r.state === "passed",
+          clean: isClean(r.state),
           new_findings: fresh.length,
           // This is the field a client triages on, so it is computed, not read off
           // the front of the list. It used to be `fresh[0].severity` with "high"

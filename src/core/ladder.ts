@@ -11,7 +11,7 @@
 import { readFileSync } from "node:fs";
 import * as z from "zod";
 import { absent } from "./optional.ts";
-import { Exhausted, UsageError } from "./errors.ts";
+import { UsageError } from "./errors.ts";
 
 export type TierKind = "deterministic" | "model";
 export type Stage = "fast" | "deep";
@@ -144,7 +144,7 @@ export interface Limits {
   readonly globalRounds: number;
 }
 
-export const DEFAULT_LIMITS: Limits = { perTierRounds: 3, globalRounds: 12 };
+const DEFAULT_LIMITS: Limits = { perTierRounds: 3, globalRounds: 12 };
 
 export interface LadderState {
   /** Index into the tier list of the next *model* tier to run. */
@@ -370,13 +370,11 @@ export function settle(state: LadderState, fingerprints: readonly string[]): Lad
   return { ...state, settled: [...new Set([...state.settled, ...fingerprints])] };
 }
 
-/**
- * A provider refused on quota. Loud, and never a reason to fall through to the
- * next tier: a tier that did not run found nothing, which is not the same as
- * finding nothing.
- */
-export function quotaExhausted(tier: Tier): never {
-  throw new Exhausted(`tier ${tier.id} (${tier.model ?? tier.kind}) is out of quota — review incomplete`);
-}
+// `quotaExhausted(tier)` lived here and threw `Exhausted`. Deleted rather than wired:
+// the live path is `opencode.ts`, which classifies the provider's own status and
+// throws with the message the provider gave, and a second spelling of the same throw
+// would only be the one a future edit forgot to keep in step. The rule it documented —
+// a refusal on quota is never a reason to fall through to the next tier — is enforced
+// where the refusal is actually seen, and D-48 is where it is written down.
 
 export { anyTierRan };
