@@ -18,6 +18,7 @@ import { authenticate } from "../mcp/auth.ts";
 import { buildServer, type ServerDeps } from "../mcp/server.ts";
 import { type SpendConfig, spendByTier, startOfDayIso } from "../ops/spend.ts";
 import { checkHealth, type HeartbeatConfig } from "../ops/heartbeat.ts";
+import type { GateState } from "../reviewer/gate.ts";
 import type { Store } from "../store/store.ts";
 
 export interface HttpConfig {
@@ -26,6 +27,15 @@ export interface HttpConfig {
   readonly heartbeat: HeartbeatConfig;
   /** So /status can report the ceiling — and whether it is capable of firing. */
   readonly spend: SpendConfig;
+  /**
+   * The model-call gate, so `/status` can answer D-26 for the REMOTE half too.
+   *
+   * "Is parallelism actually running, or silently queueing?" was answerable only for
+   * the local half, because nothing queued on the remote one — over the limit, calls
+   * did not wait, they died. Now they wait, and waiting is invisible from outside
+   * unless it is reported.
+   */
+  readonly modelGate?: () => GateState;
 }
 
 export function startHttp(store: Store, deps: ServerDeps, cfg: HttpConfig): { close: () => void } {
@@ -89,6 +99,12 @@ async function handle(
           // Findings produced and never collected. 18 sat unread for hours, 14 of
           // them high — the review reached findings_ready and nothing ever polled it.
           // A finding nobody reads is a review that did not run, one step later.
+          // Two bounds, two resources. `queueDepth` counts rounds waiting for a
+          // worker (local, CPU-bound); this counts rounds holding a worker and
+          // waiting for a model slot (remote). One knob used to govern both and was
+          // therefore wrong for one of them — at 12 it killed four reviews in 2.5
+          // minutes, and neither the host nor the container could show why.
+          ...(cfg.modelGate === undefined ? {} : { model_calls: cfg.modelGate() }),
           uncollected: uncollectedFindings(store),
           active: activeReviews(store),
         },

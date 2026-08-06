@@ -70,6 +70,17 @@ services:
       # `checks_skipped`; if it appears, give Docker Desktop more memory (24 GB makes
       # four concurrent cold installs comfortable) rather than guessing here.
       LORE_CONCURRENCY: "${LORE_CONCURRENCY:-12}"
+      # THE OTHER HALF OF THE ROUND, and the one that actually broke.
+      #
+      # LORE_CONCURRENCY above is sized for T0: local, CPU- and memory-bound, set by
+      # cores. This is sized for the PROVIDER, which is remote and has its own limit
+      # that nothing here can see. One knob governing both was always wrong for one of
+      # them — at 12 it killed four reviews in 2.5 minutes, two `socket hang up` in the
+      # same second and two empty replies inside a 200, while the host was fine.
+      #
+      # Work above this queues instead of failing, so being wrong low costs latency and
+      # being wrong high costs quota. Raise it on evidence.
+      LORE_MODEL_CONCURRENCY: "${LORE_MODEL_CONCURRENCY:-4}"
       LORE_DAILY_CEILING_USD: "100"  # stops STARTING reviews when hit, never mid-review
       # LORE_RUN_TESTS is gone (D-71). lore READS a test suite — whether the change
       # is covered, whether a test asserts what its name claims — and never runs one.

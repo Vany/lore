@@ -29,6 +29,7 @@ import { createOpencodeClient } from "@opencode-ai/sdk";
 import { DidNotRun, Exhausted, ProviderAuthFailed } from "../core/errors.ts";
 import { FindingSchema, type Finding } from "../core/finding.ts";
 import type { Tier } from "../core/ladder.ts";
+import { Gate, type GateState } from "./gate.ts";
 import { DEFAULT_TIMEOUT_MS, longFetch } from "./long-fetch.ts";
 import { OUTPUT_CONTRACT } from "./prompts.ts";
 
@@ -40,6 +41,14 @@ export interface ReviewerConfig {
   /** HTTP basic credentials, when the opencode server is password-protected. */
   readonly username?: string;
   readonly password?: string;
+  /**
+   * How many model calls may be in flight at once, across every review.
+   *
+   * Deliberately NOT `LORE_CONCURRENCY`, which sizes the local sandbox by cores. See
+   * `gate.ts`: the two resources have opposite constraints, and the provider was what
+   * broke first — four reviews dead in 2.5 minutes when the local knob went to 12.
+   */
+  readonly modelConcurrency: number;
 }
 
 export const DEFAULT_REVIEWER: ReviewerConfig = {
@@ -54,6 +63,17 @@ export const DEFAULT_REVIEWER: ReviewerConfig = {
   // comment three files away justified the 30-minute figure with headroom that did
   // not exist.
   timeoutMs: DEFAULT_TIMEOUT_MS,
+  // FOUR, against a worker default of 2 and a deployment running 12.
+  //
+  // Sized from the failure rather than from a guess: 12 concurrent calls killed four
+  // reviews in 2.5 minutes, and the deployment has been healthy at the 2 that
+  // `LORE_CONCURRENCY` used to imply. Four leaves room above the known-good figure
+  // while staying well under the known-bad one, and work above it queues rather than
+  // failing, so being wrong low costs latency and being wrong high costs quota.
+  //
+  // Raise it with `LORE_MODEL_CONCURRENCY` once there is evidence, not before — the
+  // number that matters is the provider's and we cannot see it.
+  modelConcurrency: 4,
   // opencode protects its server with basic auth when OPENCODE_SERVER_PASSWORD is
   // set, and returns a bare 401 with no hint when it is missing. Reading the same
   // variables opencode itself reads means a protected server works without any
@@ -76,6 +96,15 @@ export const DEFAULT_REVIEWER: ReviewerConfig = {
  */
 export interface ReviewerLike {
   review(tier: Tier, prompt: string, worktree: string): Promise<ReviewerResult>;
+  /**
+   * In-flight and waiting model calls, for the operator view.
+   *
+   * D-26 asks one question — *is parallelism actually running, or silently queueing?*
+   * — and `/status` could only answer it for the local half, because until the gate
+   * existed nothing queued on the remote half; it just failed. Optional, so a fake
+   * reviewer in a test is not forced to model a bound it does not have.
+   */
+  gateState?(): GateState;
 }
 
 export interface ReviewerResult {
@@ -156,9 +185,11 @@ export function splitModel(id: string): { providerID: string; modelID: string } 
 export class Reviewer implements ReviewerLike {
   private readonly client: ReturnType<typeof createOpencodeClient>;
   private readonly cfg: ReviewerConfig;
+  private readonly gate: Gate;
 
   constructor(cfg: ReviewerConfig = DEFAULT_REVIEWER) {
     this.cfg = cfg;
+    this.gate = new Gate(cfg.modelConcurrency);
     const basic =
       cfg.password === undefined
         ? undefined
@@ -183,6 +214,19 @@ export class Reviewer implements ReviewerLike {
    */
   async review(tier: Tier, prompt: string, worktree: string): Promise<ReviewerResult> {
     if (tier.model === undefined) throw new DidNotRun(`tier ${tier.id} has no model`);
+    // The gate wraps the SESSION, not the request. What loads a provider is the
+    // agentic exploration between them (`gate.ts`), so bounding individual HTTP calls
+    // would bound nothing. Waiting here queues the round instead of failing it, which
+    // is the same trade as backpressure: a review that dies on a 429 did not run.
+    return this.gate.run(() => this.conductSession(tier, prompt, worktree));
+  }
+
+  gateState(): GateState {
+    return this.gate.state();
+  }
+
+  /** What `review` does once it holds a slot. */
+  private async conductSession(tier: Tier, prompt: string, worktree: string): Promise<ReviewerResult> {
     const started = Date.now();
     const sessionId = await this.createSession(tier);
 

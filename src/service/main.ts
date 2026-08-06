@@ -12,6 +12,7 @@ import { DEFAULT_HEARTBEAT, startHeartbeat, type HeartbeatConfig } from "../ops/
 import { DEFAULT_RETENTION, collect } from "../ops/retention.ts";
 import { DEFAULT_SPEND, mayStart } from "../ops/spend.ts";
 import { repoPaths, worktreeFor } from "../git/repo.ts";
+import { DEFAULT_REVIEWER, Reviewer } from "../reviewer/opencode.ts";
 import { Store } from "../store/store.ts";
 import { attest, render } from "./attest.ts";
 import { startHttp } from "./http.ts";
@@ -32,6 +33,8 @@ export interface ServiceConfig {
    */
   readonly backupDir?: string;
   readonly concurrency: number;
+  /** In-flight model calls, sized for the provider rather than for the host. */
+  readonly modelConcurrency: number;
   readonly dailyCeilingUsd: number;
 }
 
@@ -88,6 +91,11 @@ export function configFromEnv(): ServiceConfig {
     ...(backupDir !== undefined ? { backupDir } : {}),
     // At least one: zero workers is a service that queues for ever in silence.
     concurrency: envNumber("LORE_CONCURRENCY", DEFAULT_WORKER.concurrency, 1),
+    // A SECOND knob, because the first one governs the wrong resource for this.
+    // `LORE_CONCURRENCY` is sized by cores for the local sandbox; this is sized for
+    // the provider, which is what actually broke — four reviews dead in 2.5 minutes
+    // at 12 (`reviewer/gate.ts`). Also at least one, for the same reason.
+    modelConcurrency: envNumber("LORE_MODEL_CONCURRENCY", DEFAULT_REVIEWER.modelConcurrency, 1),
     dailyCeilingUsd: envNumber("LORE_DAILY_CEILING_USD", DEFAULT_SPEND.dailyCeilingUsd),
   };
 }
@@ -104,10 +112,18 @@ export async function serve(cfg: ServiceConfig): Promise<() => void> {
   const reposRoot = join(cfg.dataDir, "repos");
   const keyPath = join(cfg.dataDir, "attest_ed25519.pem");
 
+  // Built here rather than defaulted inside Worker, so the gate is ONE instance
+  // shared by every worker loop. A reviewer per loop would give each its own gate and
+  // the limit would silently multiply by the worker count — the bound would read as 4
+  // and behave as 48 at LORE_CONCURRENCY=12, which is the number that killed four
+  // reviews in the first place.
+  const reviewer = new Reviewer({ ...DEFAULT_REVIEWER, modelConcurrency: cfg.modelConcurrency });
+
   const worker = new Worker(
     store,
     { ...DEFAULT_WORKER, reposRoot, concurrency: cfg.concurrency },
     alerter,
+    reviewer,
   );
   const stopWorker = worker.start();
 
@@ -191,6 +207,7 @@ export async function serve(cfg: ServiceConfig): Promise<() => void> {
       host: cfg.host,
       heartbeat,
       spend: { ...DEFAULT_SPEND, dailyCeilingUsd: cfg.dailyCeilingUsd },
+      modelGate: () => reviewer.gateState(),
     },
   );
 

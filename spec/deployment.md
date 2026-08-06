@@ -117,8 +117,25 @@ Measured on 2026-08-05 at 12, on a host with 16 cores and 48 GB behind a Docker 
   quota was spent.
 
 The lesson is the shape rather than the number: **one knob governing two resources
-with different limits will always be wrong for one of them.** Capping outbound model
-calls separately from worker concurrency is the fix this points at, and is not built.
+with different limits will always be wrong for one of them.**
+
+**Built, 2026-08-06.** `LORE_MODEL_CONCURRENCY` (default 4) bounds model calls in
+flight across every review, separately from `LORE_CONCURRENCY`, which stays sized for
+T0 by cores. Work above the limit **queues rather than failing** — the same argument
+as backpressure in `spec/mcp-api.md` §5, since a review that dies on a 429 is a review
+that did not run.
+
+The bound is held for the whole **session**, not per request: what loads a provider is
+the agentic exploration between the prompt and the reply, and an agent re-sends its
+accumulated context on every turn (D-50), so gating individual HTTP calls would bound
+nothing. One `Reviewer` is shared by every worker loop for the same reason — one per
+loop would give each its own gate and the limit would silently multiply by the worker
+count, reading as 4 and behaving as 48 at `LORE_CONCURRENCY=12`.
+
+Four is sized from the failure rather than guessed: 12 killed four reviews, and the
+deployment has been healthy at 2. `/status` reports `model_calls` — in flight, waiting,
+limit — because queueing and running look identical from outside, which is the whole of
+D-26, and until this existed the remote half could not queue at all. It just died.
 
 
 ## 4. Resources
