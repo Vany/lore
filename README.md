@@ -215,7 +215,7 @@ the failure this tool exists to catch:
 
 | file | what it holds |
 |:--|:--|
-| [`SPEC.md`](SPEC.md) | purpose, workflow, and every decision `D-1`…`D-74` |
+| [`SPEC.md`](SPEC.md) | purpose, workflow, and every decision `D-1`…`D-77` |
 | [`PLAN.md`](PLAN.md) | build order, and what each phase de-risked |
 | [`spec/knowledge.md`](spec/knowledge.md) | the knowledge layer — the product |
 | [`spec/review-ladder.md`](spec/review-ladder.md) | tiers, findings, verdicts, invariants |

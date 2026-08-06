@@ -189,6 +189,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-74** | **One vendor per tier** — the deployed ladder is Z.ai, Moonshot, OpenAI | confirmed |
 | **D-75** | `propose` is an **idea generator for the maintainer**, never a gate | `[OPEN]` |
 | **D-76** | A change is validated **over MCP**; a CLI run is never evidence the product works | `[OPEN]` |
+| **D-77** | **Commit, review to a verdict, amend, push.** Nothing reaches origin unreviewed | `[OPEN]` |
 
 **D-7, revised.** The earlier version dropped GLM-5.2 on Artificial Analysis's
 *cost per task* — which is tokens consumed × price on their benchmark, not a price.
@@ -306,11 +307,43 @@ cheerfully refactor three others; every unrequested change is code nobody decide
 write and no ticket justifies. Invisible without the ticket, which is why it is
 required rather than optional (`spec/review-ladder.md` §6.2).
 
-**D-39 — the one place the system stops and asks for a person.** A knowledge
-conflict is not resolved by the store; it becomes a finding the reviewing agent must
-actually work through. Newer *leans* correct, because code evolves — but that is a
-prior, not a verdict, and a careless recent rule must not silently overwrite a
-reasoned older one. If the agent cannot decide, it marks `needs_human` and says so.
+**D-39, revised 2026-08-06 — a person is called only when the two rules cannot be
+ORDERED.**
+
+The original stopped on every detected contradiction. That is too eager, and the
+production record says so: the path has fired exactly once and was wrong — two ADR
+sentences restating one constraint, read as a contradiction because `polarity()`
+cancelled negations across a whole statement. It halted a review whose findings were
+all settled, and demanded a person for a question that did not exist.
+
+The two errors are not symmetric, which is what settles it. **A wrong escalation stops
+a review and spends a person; a wrong auto-resolution retires a rule with its reason
+preserved** (§7.1) and is recoverable by reading it back. With the detector at one for
+one, stopping is the more expensive mistake.
+
+So the ordering the store already holds is used instead of merely being described:
+
+- **Source rank** — `taught` > `ingested` > `derived` (D-20). Different ranks decide
+  it: a rule a human stated outranks one inferred from reviews, and no person needs
+  asking to know that.
+- **Recency** — `verified_at`. Same rank, different times: the later one wins. That is
+  D-39's own prior, now acted on rather than noted and then ignored.
+
+**A person is called when neither separates them** — same source rank and no usable
+difference in time, which is exactly what two rules re-ingested from one document
+revision look like. Then there genuinely is no way to tell which is current, guessing
+would be a coin toss, and the coin is a belief injected into every future session.
+
+Everything else about D-39 stands: the loser is retired with its reason rather than
+deleted, and while a `needs_human` is open the review cannot pass, cannot attest, and
+cannot be closed with `lore-ok` — a justification is a claim about code, and this is a
+question about which of two beliefs is true.
+
+*Original, kept because it is what the revision narrows:* a knowledge conflict is not
+resolved by the store; it becomes a finding the reviewing agent must actually work
+through. Newer *leans* correct, because code evolves — but that is a prior, not a
+verdict, and a careless recent rule must not silently overwrite a reasoned older one.
+If the agent cannot decide, it marks `needs_human` and says so.
 While that is open the review cannot pass, cannot attest, and **cannot be closed
 with `lore-ok`** — a justification is a claim about code, and this is a question about
 which of two beliefs is true. The agent that could not decide must not write its way
@@ -895,6 +928,181 @@ and the ids were read from `/config/providers` on the running server. `DEFAULT_T
 still names `openrouter/moonshotai/kimi-k3` for a gateway route nobody here uses, which
 is a guess nothing has verified — it applies only when `LORE_TIERS` is unset, and this
 deployment always sets it.
+
+**D-77 — commit, review it to a verdict, amend, then push.**
+
+lore gates other people's branches and has never gated its own. Every commit in this
+repository reached `origin` on the strength of a typecheck and a test suite — the two
+things D-8 says a model should never be paid to do — while the ladder that exists to
+catch what those cannot ran, at best, hours later and usually not at all.
+
+So the loop closes on ourselves:
+
+1. **Commit** locally. The message says what changed and why, as now.
+2. **Review it, over MCP, as a client** (D-76). Not one round — answer each finding by
+   fixing it or justifying it, and send the answer back with `review_submit` so the
+   ladder re-reads the corrected tree. Repeat until it reaches **`passed`** or
+   **`passed_partial`**, which are the only two states that mean a ladder read this
+   code and was satisfied.
+3. **Amend** that commit with exactly what was submitted, and record in its message
+   what the review found and what was done about it.
+4. **Push.**
+
+**The fixes go through `review_submit`, not straight into the amend.** Written the
+other way — review, then amend with the fixes, then push — the tree that reaches
+`origin` is not the tree the ladder read, and the property is lost in the last step of
+the workflow that exists to protect it. Submitting means the final round is run against
+the code that is actually pushed.
+
+**`needs_human` is not a stopping point, and D-77 said it was.** Caught by the first
+review this decision ever ran on — its own. The code's terminal set is
+`{passed, passed_partial, failed, expired}` (`core/review-state.ts`); `needs_human`
+is a review PARKED on a question, and `spec/knowledge.md` §7.2 is explicit that while
+one is open the review cannot pass, cannot attest and cannot be closed with `lore-ok`.
+Reading D-77 literally, an operator would have stopped there and pushed code carrying
+an unresolved conflict the ladder had flagged and could not settle — the exact class of
+thing "nothing reaches origin that a ladder has not read" exists to prevent.
+
+So `needs_human` means **get a person and settle the question with
+`knowledge_resolve`**, which re-queues every review that was waiting on it and reports
+how many. `knowledge_escalate` is the other half and does NOT unblock: it records that
+a person is required, which is the point of it.
+
+That resumption had to be built to make this sentence true. `spec/knowledge.md` §7.3
+promised the ladder recomputes `needsHuman` each round — correct, and unreachable,
+because settling a conflict scheduled no round. A client that resolved and waited, as
+instructed, waited for nothing, and since `needs_human` is not terminal the staleness
+sweep turned the review into `expired` two days later. An exit sign over a wall, caught
+by the review of the commit that wrote the sentence.
+
+**What fires a review, and what does not.**
+
+Code or specs changed → review. **A test-only change does not**, and neither does
+`TODO.md` or `MEMO.md`: a checklist and a diary make no claim about how the system
+behaves, and a ladder reading them spends three model tiers to have an opinion about
+housekeeping. Specs are in because D-11 makes them reviewable artifacts and because
+prose asserting what the code stopped doing is this repository's most common defect —
+the exact thing a reviewer catches and a test cannot.
+
+**With one exception, and it is not a technicality: a test-only diff that REMOVES
+tests still fires.** Adding a test cannot weaken anything. Deleting one, or cutting
+assertions out of one, changes what the gate catches — a behaviour change in the
+checking apparatus, invisible to the suite because the suite is what shrank. And a
+test can be wrong in its own right: the session driving `rigid-monorepo` on 2026-08-06
+found an e2e test *"still asserting an unrequested partial approval, i.e. asserting the
+defect that ticket exists to remove"*. Whether a test asserts what its name claims is a
+model-tier job by D-71, so the one shape that must not skip the model tiers is the one
+where a test got smaller.
+
+**A skipped review is recorded, never silent.** The commit says which rule let it
+through. An unreviewed commit that looks like a reviewed one is this project's defining
+failure applied to its own history, and "it was only tests" is exactly the sentence
+that would later turn out to be untrue.
+
+**Amend rather than a follow-up commit**, for two reasons. The history should show the
+tree that was reviewed, not a broken state followed by a repair — a reader six months
+out wants the reviewed commit, not the archaeology. And the commit is unpushed, so
+amending rewrites nothing anybody has.
+
+**Push is the gate.** Nothing reaches **`origin/main`** that a ladder has not read.
+That is the property, and it is the same one lore sells to everyone else.
+
+**`origin/main`, not `origin` — and the earlier wording was simply false.** This
+workflow pushes the *unreviewed* commit to `origin` as `refs/heads/review/<sha>` in
+step 2; an absolute "nothing reaches origin" is contradicted by the rule's own
+machinery, and calling that push "transport, not a release" was a comment excusing a
+sentence rather than a reconciliation. Caught by the first review D-77 ever ran, on
+itself.
+
+The scratch ref is real exposure and is bounded rather than waved at: it is fetchable
+from a public remote for the length of the review, and if the session dies between the
+push and the delete **nothing sweeps `review/*`** — the ref stays until someone
+removes it. So the delete belongs in the same command as the push rather than in a
+later step a crash can skip, and stale `review/*` refs are something to look for. What
+the property actually guarantees is that no reviewed-by-nobody tree becomes the branch
+anyone builds on.
+
+**And the amend is not checked against what was reviewed.** "Submitting means the final
+round runs against the code that is actually pushed" was stated as fact and the
+procedure never verifies it: the reviewed tree is the snapshot plus submitted diffs,
+the pushed tree is whatever the amend produced, and a stray staged hunk between the two
+would push a tree the ladder never read — silently, with every report saying otherwise.
+Both hashes are known, so **compare them before pushing**: `git write-tree` against the
+`tree_hash` the last `review_submit` returned. Not built; it is the missing step in
+`make review`.
+
+**A review that FAILED blocks the push exactly as open findings do — and the response
+is to fix lore, not to push past it.**
+
+This is the half with teeth, and without it the rest is decoration. `failed` means the
+ladder did not read the code, which is INV-1 in its original words: *a review that did
+not run is not a review that found nothing*. Treating it as "well, we tried" is the
+precise failure this project was built to refuse, committed by the thing built to
+refuse it.
+
+**`expired` is a different animal and was wrongly lumped in here.** Its ordinary cause
+is abandonment — nobody polled, the staleness sweep collected it (D-70) — and the
+remedy is to start a review, not to go hunting a bug in a healthy service. Read
+literally, the sentence sent a reader who walked away over a weekend to debug lore. It
+shares one property with `failed` and only one: **neither is a pass, and neither may be
+pushed on.**
+
+So when a review of lore fails, **fixing lore is the work** — ahead of whatever the
+commit was for. Not a retry in hope, not a workaround, not a note in TODO to look at
+later. The gate is down, and a gate that cannot run makes every claim behind it
+worthless.
+
+Today is the evidence, and it is the whole argument. Five identical failures on one
+branch over two days; lore had computed the cause and written it to a log no client can
+read; the client retried as its own documentation instructed, then told its operator it
+was blocked on *"whether to proceed without a lore pass given its tier is still
+broken"*. That is a reasonable person reaching the only conclusion available — and it
+is unreviewed code shipping, arrived at honestly.
+
+**What is ours and what is not.** A tier nobody can pay for is already handled: it is
+recorded unavailable and stepped over, and the review reaches `passed_partial` (D-48).
+A provider that is simply down is not a defect here and the answer is to wait, not to
+push. Everything else — an empty reply nobody explained, a prompt that will not fit, a
+message that sends its reader the wrong way — is ours, and is fixed before the commit
+that was waiting on it.
+
+**The bootstrap, stated rather than left to be discovered.** Fixing lore produces a
+commit, and that commit needs reviewing, which is the thing that is broken. So the fix
+commit is the one review that may run last: it is pushed once reviewing works, and its
+own successful review is the proof that it worked. If it cannot be reviewed even after
+the fix, the fix was not one.
+
+**The obstacle, and it is real: lore reads the mirror, not the working tree.** A review
+is cut from `origin/<branch>` (D-65, D-40), so a commit that exists only on this disk
+cannot be reviewed — which is precisely the friction that made me reach for the CLI and
+earned D-76. The workflow above therefore needs the tree to reach the mirror *without*
+reaching `main`, and the honest way is a scratch ref:
+
+```
+git commit                                   # local
+git push origin HEAD:refs/heads/review/<sha> # transport, not a release
+  … review that branch against main, to a verdict …
+git commit --amend                           # fixes + what the review found
+git push origin main
+git push origin --delete review/<sha>
+```
+
+`[OPEN]` on two counts, both of which are Vany's rather than mine.
+
+**Cost.** A full ladder cycle per commit is not free. This session produced eleven
+commits; eleven cycles through t1, t2 and t3 would be hours of model time and a serious
+share of three rolling quota windows. Plausible relaxations, none chosen: full ladder
+only on the last commit before a push; deep tiers only when T0 or t1 raise something;
+or batching a session's commits into one review of the whole range. Anything that
+changes how much quota burns is discussed before it ships.
+
+**And the scratch-ref dance is machinery.** It is the simplest thing that satisfies
+"review before push" given the mirror, but it is five commands where the rule is one
+sentence, and `make review` ought to be what actually runs it. Not built.
+
+**This decision was not followed for the commits that introduced it**, including this
+one — recorded plainly, because a rule whose own commit violates it is exactly the kind
+of claim this repository exists to catch.
 
 **D-76 — a change is exercised through the MCP surface, and a CLI run proves nothing
 about the product.**

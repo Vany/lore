@@ -18,6 +18,29 @@ silent failures in one day are the reason this project exists in this shape.
 
 ## Working agreement
 
+- **Commit, review to `passed`, amend, push** (D-77). lore gates other people's
+  branches; it gates its own the same way. After committing I drive a full review over
+  MCP — as a client, not through the CLI (D-76) — answering findings with
+  `review_submit` so the ladder re-reads the corrected tree, until it reaches `passed`
+  or `passed_partial`. Then I amend the commit with exactly what was submitted, and
+  only then push. `needs_human` is a blocker, not an ending: get a person, resolve it,
+  carry on.
+  **Code or specs fire a review; tests, `TODO.md` and `MEMO.md` do not** — with one
+  exception, because adding a test cannot weaken anything but REMOVING one changes what
+  the gate catches, invisibly to the suite. A test-only diff that deletes tests or cuts
+  assertions is reviewed like code. A skipped review is stated in the commit, never
+  silent.
+  Nothing reaches `origin/main` that a ladder has not read — `main`, not `origin`,
+  because a review is cut from the mirror, so getting an unpushed commit reviewed needs
+  a scratch `review/<sha>` ref that is by definition unreviewed when it lands. Push and
+  delete it in one command; nothing sweeps `review/*`. SPEC D-77 has the shape and the
+  open questions, including what this costs in quota.
+- **A `failed` review blocks the push exactly as findings do, and the response is to
+  fix lore.** `failed` means the ladder did not read the code — INV-1 in its original
+  words — so pushing past it ships unreviewed work while believing otherwise. Fixing
+  the reviewer comes ahead of whatever the commit was for; a gate that cannot run makes
+  every claim behind it worthless. Quota is the exception the ladder already handles
+  (D-48), and a provider that is down means wait, not push.
 - If reality disagrees with `SPEC.md`, I update SPEC in the same change. Drift is a
   defect whichever side moved (D-11), and it is this repository's most common one.
 - **The MCP texts move with the behaviour, in the same change.** `TOOL_DOCS`,

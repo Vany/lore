@@ -318,6 +318,16 @@ through.
 The losing rule is retired with your reason, not deleted: "we used to believe X, until
 Y" is exactly what a codebase forgets and then re-argues.
 
+RESOLVING RESUMES THE REVIEWS THIS WAS BLOCKING. The reply carries
+\`resumed_reviews\` — how many were parked on this question and have now been
+re-queued. Poll them; they carry on from where they stopped, they do not start again.
+
+Until this existed, resolving settled the rule and scheduled nothing: a client that
+resolved and waited for the ladder to continue waited for a round that was never
+enqueued, and the review was swept to \`expired\` two days later. If
+\`resumed_reviews\` is 0 and you expected otherwise, the review was not parked on
+THIS conflict — check \`review_poll\` rather than resolving something else.
+
 If you cannot decide, use knowledge_escalate instead. Do not guess.
 `.trim(),
 

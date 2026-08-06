@@ -127,6 +127,31 @@ describe("an exported constant has a reader", () => {
 });
 
 /**
+ * `@#` is a make prefix only at the START of a recipe line.
+ *
+ * Inside a `\`-continued shell command it is shell text, and `sh` answers
+ * `@#: command not found` — exit 127. Written that way in `replica-state`, it made
+ * `make status` print the replica in red while it was perfectly level: the
+ * wolf-crying failure that monitor exists to avoid, reintroduced by its own fix, and
+ * caught only because a status run happened to be watched.
+ *
+ * Comments about a continued recipe go OUTSIDE it, as `##` above the target.
+ */
+describe("make recipes do not comment inside a shell continuation", () => {
+  it("has no `@#` on a line continuing the previous one", () => {
+    const lines = readFileSync(join(SRC, "..", "deploy", "Makefile"), "utf8").split("\n");
+    const offenders = lines
+      .map((l, i) => ({ l, i, prev: lines[i - 1] ?? "" }))
+      .filter(({ l, prev }) => /^\t\s*@#/.test(l) && prev.trimEnd().endsWith("\\"))
+      .map(({ l, i }) => `${i + 1}: ${l.trim()}`);
+    expect(
+      offenders,
+      `these are shell text, not make comments — sh answers "@#: command not found":\n  ${offenders.join("\n  ")}`,
+    ).toStrictEqual([]);
+  });
+});
+
+/**
  * A guard applied from a hand-written list is a guard with a hole in it.
  *
  * `$(wrong-directory)` was added to eight targets by naming them one at a time, and

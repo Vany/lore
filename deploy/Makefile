@@ -450,19 +450,27 @@ backup-on:
 ## A monitor that cries wolf gets ignored, and this one guards the product. So it
 ## compares the replica against the DATABASE: caught up is fine at any age, and behind
 ## is a problem however recent the files are.
+##
+## THE WAL COUNTS, and it is usually the only thing that moves. SQLite is in WAL mode,
+## so a write lands in lore.db-wal and lore.db's own mtime advances only on checkpoint.
+## Reading the main file alone left this blind in exactly the case it exists for:
+## litestream dies, writes continue into an unflushed WAL, both timestamps freeze,
+## `behind` clamps to 0, and it reports level for hours. Raised by a reviewer against
+## the commit that introduced the monitor; the same defect was in the TypeScript half
+## (ops/heartbeat.ts) and both are fixed.
+##
+## These lines are `##` OUTSIDE the recipe rather than `@#` inside it. Written the
+## other way they landed in the middle of a `\`-continued shell command, where `@#` is
+## not a make prefix but shell text — `@#: command not found`, exit 127, and `make
+## status` reporting the replica broken while it was perfectly level. The wolf-crying
+## failure this monitor exists to avoid, reintroduced by its own fix, and caught only
+## because a status run happened to be watched.
 replica-state:
 	$(wrong-directory)
 	@db="$(DATA)/lore.db"; \
 	test -f "$$db" || { echo "stale no database at $$db"; exit 0; }; \
 	n=$$(find "$(BACKUP)" -type f -name '*.ltx' 2>/dev/null | wc -l | tr -d ' '); \
 	test "$$n" -gt 0 || { echo "stale nothing in $(BACKUP) — replication has never written"; exit 0; }; \
-	@# THE WAL COUNTS, and it is usually the only thing that moves. SQLite is in WAL
-	@# mode, so a write lands in lore.db-wal and lore.db's own mtime advances only on
-	@# checkpoint. Reading the main file alone left this blind in exactly the case it
-	@# exists for: litestream dies, writes continue into an unflushed WAL, both
-	@# timestamps freeze, `behind` clamps to 0, and it reports level for hours.
-	@# Raised by a reviewer against the commit that introduced the monitor; the same
-	@# defect was in the TypeScript half (ops/heartbeat.ts) and both are fixed.
 	dbt=$$(for f in "$$db" "$$db-wal"; do \
 		test -f "$$f" && { date -r "$$f" +%s 2>/dev/null || stat -c %Y "$$f"; }; \
 	  done | sort -n | tail -1); \

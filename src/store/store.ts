@@ -1130,6 +1130,36 @@ export class Store {
   }
 
   /**
+   * Re-queue every review of this repo that is parked on `needs_human`.
+   *
+   * Called when a conflict is settled. `spec/knowledge.md` §7.3 says a block must have
+   * an exit and that the ladder recomputes `needsHuman` from currently-open conflicts
+   * each round — true, and unreachable, because nothing scheduled the round that would
+   * do the recomputing. A client that resolved the conflict and waited, exactly as
+   * instructed, waited for nothing; `needs_human` is not terminal, so the staleness
+   * sweep turned the review into `expired` two days later.
+   *
+   * Only reviews still parked are touched. One that has moved on, been abandoned, or
+   * reached a verdict is left alone — re-queueing a finished review would pay for a
+   * round nobody asked for.
+   *
+   * Returns how many were resumed, so the caller can say so rather than implying it.
+   */
+  resumeNeedsHuman(repoId: string): number {
+    const rows = this.db
+      .prepare("SELECT id FROM review WHERE repo_id = ? AND state = 'needs_human'")
+      .all(repoId) as Record<string, string>[];
+    for (const r of rows) {
+      const id = r["id"] ?? "";
+      // `enqueue` collapses an identical queued round (D-53), so resolving two
+      // conflicts in a row cannot buy the same review two workers.
+      this.enqueue(id, "fast");
+      this.updateReview(id, { state: "queued" });
+    }
+    return rows.length;
+  }
+
+  /**
    * Reviews parked on a question nobody has answered for `hours`.
    *
    * `needs_human` blocks its review from ever passing (spec/knowledge.md §7.2), so one

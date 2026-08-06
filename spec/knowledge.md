@@ -152,28 +152,69 @@ provenance, read the code as it now stands, and decide — recording *why*. A re
 conflict retires the losing rule with its reason preserved, so the decision is
 reconstructable later.
 
-### 7.2 Escalation to a human
+### 7.2 Escalation to a human — only when the two cannot be ordered (D-39, revised)
 
-**If the agent cannot resolve it, it must say so rather than pick.** The finding is
-marked `needs_human` and the client is told plainly to ask a person.
+**Decided, not built.** Today *every* detected contradiction calls a person. What
+follows is the rule that replaces that, and the tense matters: the columns it needs
+exist, the logic does not, and the work is open in `TODO.md`. Written in the present
+tense first, which a reviewer caught immediately — an unbuilt rule described as
+behaviour is this repository's most common defect and it does not stop being one
+because the decision is sound.
+
+**A person will be called only when neither rule can be shown to supersede the other.**
+Two orderings the store already records, neither yet consulted for this:
+
+1. **Source rank** — `taught` > `ingested` > `derived` (§2). Different ranks settle it.
+2. **Recency** — `verified_at`. Same rank, later wins.
+
+Only when both tie — same rank, no usable difference in time, which is what two rules
+re-ingested from one document revision look like — is there genuinely no way to tell
+which is current, and only then is a person asked.
+
+This narrows an earlier rule that stopped on *every* detected contradiction. The
+production record is one escalation, and it was wrong: two ADR sentences restating one
+constraint, halting a review whose findings were all settled. The errors are not
+symmetric — a wrong escalation stops a review and spends a person, while a wrong
+auto-resolution retires a rule **with its reason preserved** (§7.1) and can be read
+back. With a heuristic at one for one, stopping is the more expensive mistake.
+
+**And the agent is not the one deciding this today.** `needs_human` is set from
+`openConflicts` alone; the reviewing model is shown the contradiction, told to resolve
+it or say it cannot, and its answer is not parsed and changes nothing — there is no
+field in the findings contract for it and reviewers hold no lore MCP. Stated here
+because this section previously described agent agency that does not exist, which is
+the defect this project is most often guilty of. What to do about it is open in
+`TODO.md`.
 
 While any `needs_human` finding is open:
 
 - the review **cannot reach `passed`**, and
 - it **cannot be attested**, and
 - it **cannot be closed with `lore-ok`** — a justification is a claim about code, and
-  this is a question about which of two rules is true. The agent that could not
-  decide it must not be allowed to write its way past it.
+  this is a question about which of two rules is true. Nothing may write its way past
+  it.
 
-This is the one place the system deliberately stops and asks for a person. Two
-contradictory beliefs about the same code are the failure mode most likely to
-poison every future session (§4), and guessing is what would poison it.
+**This is still the only place the system stops and asks for a person** — that has not
+changed, and it is why the block is absolute. What changed is *when* it fires: not on
+every contradiction, only on one that cannot be ordered. Two contradictory beliefs
+about the same code are the failure mode most likely to poison every future session
+(§4), and guessing is what would poison it — but so is stopping on a pair a timestamp
+could have separated.
 
 ### 7.3 Stopping must have an exit
 
 A block with no way to clear it is a trap, not a safeguard. So `knowledge_resolve`
 settles a conflict — retiring the losing rule **with its reason**, never deleting it
-— and `knowledge_escalate` records that a person is required. Both are visible to
-the ladder, which recomputes `needsHuman` from currently-open conflicts on every
-round rather than latching it forever.
+— and `knowledge_escalate` records that a person is required, which deliberately does
+not unblock.
+
+**`knowledge_resolve` re-queues the reviews that were waiting**, and reports how many
+in `resumed_reviews`. That had to be built for this section to be true. It used to say
+the ladder "recomputes `needsHuman` from currently-open conflicts on every round rather
+than latching it forever" — correct, and unreachable, because nothing scheduled the
+round that would do the recomputing. A client that resolved the conflict and waited,
+exactly as instructed, waited for something never enqueued; `needs_human` is not a
+terminal state, so the staleness sweep turned the review into `expired` two days later.
+An exit sign over a wall, and the review of the commit claiming otherwise is what found
+it.
 

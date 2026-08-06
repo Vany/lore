@@ -665,6 +665,54 @@ watched the database and the log.
       to the model tiers. lore never ran, so it never looked. That is the value the
       oversize loop spent five attempts failing to deliver.
 
+- [ ] **Auto-resolve a conflict whose rules can be ordered** (D-39, revised
+      2026-08-06). Specced, not built. A person is called only when neither `source`
+      rank (taught > ingested > derived) nor `verified_at` can show one rule
+      superseding the other; both columns already exist. Where one wins, retire the
+      loser with its reason — the mechanism `knowledge_resolve` already uses — and let
+      the review carry on.
+      The argument is asymmetry, not tidiness: a wrong escalation stops a review and
+      spends a person, a wrong auto-resolution is recoverable because the reason is
+      kept. The detector has fired once in production and was wrong, so stopping is
+      currently the more expensive error.
+      Worth measuring first rather than assuming: how many of the conflicts now sitting
+      in the store would each rule settle, and how many would still need a person. If
+      the answer is "nearly all auto-resolve", the heuristic's precision matters less
+      than it does today, which is its own argument.
+
+- [ ] **The reviewing model cannot ask for a human, and the spec says it can.** Found
+      2026-08-06 by Vany asking what we actually tell a model about escalating.
+
+      `spec/knowledge.md` §7.1–7.2 says *"the reviewing agent must actually resolve
+      it… If the agent cannot resolve it, it must say so rather than pick"*, and D-39
+      calls this *"the one place the system deliberately stops and asks for a person"*.
+      None of that is wired:
+
+      - `needsHuman` is set at exactly one line — `review.ts:574`,
+        `store.openConflicts(repoId).length > 0` — entirely from `conflict.ts`'s
+        heuristic. **The model cannot originate one.**
+      - `prompts.ts` never mentions a human or escalation. The only such text is in
+        `renderConflicts`, shown only once a conflict already exists.
+      - That text says *"if you cannot decide, say so plainly and stop"* — and there is
+        **no channel to say it in**. The output contract is a findings array; prose is
+        not parsed. The model's answer changes nothing either way.
+      - It could not act even if it decided: `knowledge_resolve` is an MCP tool for
+        clients, and reviewers have no lore MCP (the staged opencode config carries
+        only `plane`).
+
+      So the escalation path is entirely deterministic, driven by a token-overlap and
+      polarity heuristic that has fired exactly once in production and **was wrong**
+      (session 32). The model that could actually judge a contradiction is shown the
+      question, told to answer, and ignored.
+
+      Two directions, and they are different in kind. **Wire the model in** — give the
+      findings contract a way to say *"this needs a person, and here is the question"*,
+      which makes D-39 true and lets a model raise an escalation the heuristic cannot
+      see. Or **narrow the spec** to what the code does: conflicts are detected
+      deterministically and only a client resolves them. The first is the better
+      product and costs a schema change; the second is honest and costs nothing.
+      Either way the spec stops describing agency that does not exist.
+
 - [ ] **A `failed` that names a symptom invites a diagnosis, and clients make one.**
       Generalised from the entry above, because the oversize case is one instance and
       the shape will recur.

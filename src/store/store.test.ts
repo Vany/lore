@@ -71,6 +71,39 @@ describe("review", () => {
     expect(got?.state).toBe("awaiting_diff");
   });
 
+  // A BLOCK WITH NO EXIT IS A TRAP, and this one had an exit sign over a wall.
+  // `spec/knowledge.md` §7.3 promises the ladder recomputes needsHuman each round —
+  // true, and unreachable, because settling a conflict scheduled no round. A client
+  // that resolved and waited, exactly as told, waited for nothing; `needs_human` is
+  // not terminal, so the sweep turned the review into `expired` two days later.
+  describe("settling a conflict resumes the reviews it blocked", () => {
+    const parked = (id: string, state = "needs_human") => {
+      newReview(id);
+      store.db.prepare("UPDATE review SET state = ? WHERE id = ?").run(state, id);
+    };
+
+    it("re-queues a parked review", () => {
+      parked("rev1");
+      expect(store.resumeNeedsHuman(repoId)).toBe(1);
+      expect(store.getReview("rev1", PRINCIPAL)?.state).toBe("queued");
+    });
+
+    it("leaves reviews that are not parked alone", () => {
+      parked("rev1", "passed");
+      parked("rev2", "findings_ready");
+      expect(store.resumeNeedsHuman(repoId)).toBe(0);
+      expect(store.getReview("rev1", PRINCIPAL)?.state).toBe("passed");
+      expect(store.getReview("rev2", PRINCIPAL)?.state).toBe("findings_ready");
+    });
+
+    it("does not reach into another repository's reviews", () => {
+      parked("rev1");
+      const other = store.upsertRepo("other", "git@x:other.git").id;
+      expect(store.resumeNeedsHuman(other)).toBe(0);
+      expect(store.getReview("rev1", PRINCIPAL)?.state).toBe("needs_human");
+    });
+  });
+
   // The refusal built on this is read by someone deciding whether to continue or
   // restart, and that turns entirely on how stale the pinned snapshot is (D-40). It
   // fired on a review twenty hours and twenty-five commits old while offering

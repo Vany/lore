@@ -668,11 +668,30 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           `no open conflict between ${keep} and ${retire} — check knowledge_query, or it may already be settled`,
         );
       }
+      // RESUME THE REVIEWS THIS WAS BLOCKING. Without it the exit is not an exit.
+      //
+      // `spec/knowledge.md` §7.3 promises that a block has a way out and that the
+      // ladder "recomputes needsHuman from currently-open conflicts on every round
+      // rather than latching it forever". The recomputation is correct and was
+      // unreachable: nothing enqueued a round after a conflict was settled, so a
+      // client that did exactly what it was told — resolve, then wait for the ladder
+      // to continue — waited for something that was never scheduled. `needs_human` is
+      // not a terminal state, so `expireStale` then swept the review to `expired`
+      // after 48 hours, and D-77 reads `expired` as "the ladder did not read the
+      // code". A trap with an exit sign on it.
+      //
+      // Raised by Kimi against the commit that wrote that sentence into D-77.
+      const resumed = store.resumeNeedsHuman(who.repoId);
       return text(
         JSON.stringify({
           resolved: true,
           retired: retire,
-          note: "The losing rule is retired, not deleted: the decision stays reconstructable.",
+          resumed_reviews: resumed,
+          note:
+            resumed > 0
+              ? `The losing rule is retired, not deleted: the decision stays reconstructable. ${resumed} review(s) ` +
+                "that were waiting on this question have been resumed — poll them."
+              : "The losing rule is retired, not deleted: the decision stays reconstructable.",
         }),
       );
     },
