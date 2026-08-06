@@ -1,0 +1,136 @@
+/**
+ * The filter that removes ideas without blunting them.
+ *
+ * Four demotions, and only one of them drops a proposal. The asymmetry is the whole
+ * design: an idea about somewhere else answers a question nobody asked, while a weakly
+ * stated idea or one we have already had is still an idea the reader might want — so it
+ * is kept, annotated, and ranked last. Silently discarding a generator's output is the
+ * failure D-66 settled for findings, and it would be worse here, where the output is
+ * meant to be surprising.
+ *
+ * **The knowledge screen is why the second run is cheaper than the first.** Without it
+ * `propose` re-suggests splitting `store.ts` every quarter and costs the same hour of
+ * appraisal each time. A codebase that records why it did NOT do things stops
+ * re-arguing them, and that half of this idea is worth more than the ideas.
+ *
+ * SPEC: spec/propose.md §5, §6
+ */
+
+import type { KnowledgeItem } from "../store/store.ts";
+import { inScope, type Demotion, type Proposal, type Screened } from "./proposal.ts";
+
+/** How much of a statement must appear in an idea before we call it the same idea. */
+const MIN_OVERLAP = 0.5;
+
+/** Words too common to carry meaning when matching an idea against a decision. */
+const STOP = new Set([
+  "the", "a", "an", "and", "or", "of", "to", "in", "is", "it", "that", "this", "for", "on", "with",
+  "as", "by", "be", "are", "was", "not", "no", "we", "should", "would", "must", "can", "from",
+]);
+
+/**
+ * Words that carry meaning, singularised.
+ *
+ * The trailing `s` is stripped because "surfaces" and "surface" are the same idea and a
+ * screen that misses a decision it has already made over a plural is unreliable in the
+ * most uninteresting way possible. Crude on purpose — a real stemmer would raise the
+ * false-match rate, and a false match is the one failure here that costs the reader
+ * something they will never know they lost.
+ */
+function terms(s: string): Set<string> {
+  return new Set(
+    s
+      .toLowerCase()
+      .split(/[^a-z0-9_]+/)
+      .filter((w) => w.length > 2 && !STOP.has(w))
+      .map((w) => (w.length > 4 && w.endsWith("s") && !w.endsWith("ss") ? w.slice(0, -1) : w)),
+  );
+}
+
+/**
+ * Does this idea restate that rule?
+ *
+ * Deliberately crude, and deliberately biased toward NOT matching. A false match hides a
+ * new idea behind an old decision, which is the one failure this screen can cause and
+ * the expensive one — the reader never sees what they were not shown. A missed match
+ * only costs them a paragraph they recognise.
+ */
+export function restates(idea: string, statement: string): boolean {
+  const a = terms(statement);
+  if (a.size < 4) return false;
+  const b = terms(idea);
+  let hit = 0;
+  for (const w of a) if (b.has(w)) hit++;
+  return hit / a.size >= MIN_OVERLAP;
+}
+
+/**
+ * Rank and annotate. Order out is the order the document prints.
+ *
+ * Survivors first, then everything demoted, then the unappraisable — and within each
+ * group the input order, so a run is reproducible against its own transcript.
+ */
+export function screen(
+  proposals: readonly Proposal[],
+  folder: string,
+  knowledge: readonly KnowledgeItem[],
+): readonly Screened[] {
+  // A rejection is recorded as a `mistake` — the kinds are rule | fact | mistake, and
+  // "we considered X and rejected it because Y" is the mistake we would otherwise make
+  // again. The text test catches rejections taught as rules, which is how a person
+  // writes one by hand.
+  const rejected = knowledge.filter(
+    (k) => k.kind === "mistake" || /\b(?:considered|rejected|decided against|do not|don't)\b/i.test(k.statement),
+  );
+  const taught = knowledge.filter((k) => k.source === "taught");
+
+  const screened = proposals.map((proposal): Screened => {
+    const demotions: Demotion[] = [];
+    const because: string[] = [];
+
+    if (!inScope(folder, proposal.touches)) {
+      demotions.push("out-of-scope");
+      because.push(
+        proposal.touches.length === 0
+          ? `named no files, so it cannot be placed inside ${folder || "the repository"}`
+          : `lands in ${proposal.touches.join(", ")}, none of it inside ${folder}`,
+      );
+    }
+
+    // Both fields, one demotion: a proposal you cannot appraise is a proposal you cannot
+    // appraise, and listing two reasons for it would read as two problems.
+    const missing = [
+      proposal.settledBy === undefined ? "no measurement that would settle it" : undefined,
+      proposal.preserves === undefined ? "does not say what it keeps working" : undefined,
+    ].filter((m) => m !== undefined);
+    if (missing.length > 0) {
+      demotions.push("unappraisable");
+      because.push(missing.join("; "));
+    }
+
+    const decided = rejected.find((k) => restates(proposal.idea, k.statement));
+    if (decided !== undefined) {
+      demotions.push("already-decided");
+      because.push(`this repository decided against it on ${decided.verifiedAt.slice(0, 10)}: ${decided.statement}`);
+    }
+
+    const against = taught.find((k) => restates(proposal.idea, k.statement));
+    if (against !== undefined && decided === undefined) {
+      // Annotated, never dropped. A taught rule can be wrong and a model arguing with
+      // one is worth reading — the reader is only told they are arguing with a decision
+      // rather than with nothing.
+      demotions.push("contradicts-taught");
+      because.push(`argues against a taught rule: ${against.statement}`);
+    }
+
+    return { proposal, demotions, because };
+  });
+
+  const rank = (s: Screened): number => {
+    if (s.demotions.length === 0) return 0;
+    if (s.demotions.includes("out-of-scope")) return 3;
+    if (s.demotions.includes("unappraisable")) return 2;
+    return 1;
+  };
+  return [...screened].sort((a, b) => rank(a) - rank(b));
+}
