@@ -107,13 +107,36 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       // substitution this project refuses.
       const open = store.openReviewFor(who.repoId, branch);
       if (open !== undefined && restart !== true) {
+        // THE AGE IS PART OF THE ADVICE, not decoration.
+        //
+        // This fired on a review from twenty hours and twenty-five commits earlier,
+        // whose pinned snapshot was long meaningless — and offered `restart: true`
+        // only "if the branch was rebased or force-pushed", which it had not been. So
+        // the message named an id worth continuing, gave a condition that did not
+        // apply, and left the one correct action looking unavailable.
+        //
+        // A review is pinned to the tree it began with (D-40), so what decides between
+        // continuing and restarting is how far the branch has moved since — and age is
+        // the only proxy for that available here. Twelve hours is a working day's
+        // worth of drift, not a threshold with evidence behind it; it is a hint to a
+        // reader who has the branch in front of them and can tell.
+        const stale = open.ageHours >= 12;
+        const age =
+          open.ageHours < 1
+            ? `${Math.round(open.ageHours * 60)} minutes`
+            : `${Math.round(open.ageHours)} hours`;
         throw new Error(
-          `${branch} already has an open review: ${open.id} (state ${open.state}, round ${open.round}). ` +
-            `Continue it — poll it, then answer its findings with review_submit, which applies your fixes ` +
-            `to the SAME review and advances the ladder. Starting again would re-run the cheap tiers from ` +
-            `round 1 and abandon every justification this review has already ratified, which is why the ` +
-            `deep tiers are rarely reached. If the branch was rebased or force-pushed the old snapshot is ` +
-            `genuinely meaningless — pass restart: true, deliberately.`,
+          `${branch} already has an open review: ${open.id} (state ${open.state}, round ${open.round}, ` +
+            `last advanced ${age} ago). Continue it — poll it, then answer its findings with ` +
+            `review_submit, which applies your fixes to the SAME review and advances the ladder. Starting ` +
+            `again would re-run the cheap tiers from round 1 and abandon every justification this review ` +
+            `has already ratified, which is why the deep tiers are rarely reached. ` +
+            (stale
+              ? `BUT THAT REVIEW IS ${age.toUpperCase()} OLD. It is pinned to the tree it started with, so ` +
+                `if the branch has moved since — commits, a rebase, a force-push — it is reviewing code ` +
+                `nobody is merging, and there is nothing worth carrying forward. Pass restart: true.`
+              : `If the branch was rebased or force-pushed the old snapshot is genuinely meaningless — ` +
+                `pass restart: true, deliberately.`),
         );
       }
 

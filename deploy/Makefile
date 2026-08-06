@@ -19,7 +19,7 @@ BACKUP  ?= $(shell grep -E '^LORE_HOST_BACKUP=' .env 2>/dev/null | cut -d= -f2)
 BACKUP  := $(if $(BACKUP),$(BACKUP),./backup)
 
 .DEFAULT_GOAL := help
-.PHONY: help preflight sync-opencode push build drain drain-off deploy up down down-hard restart logs status status-json status-local doctor new relocate tokens revoke replica-state mirror mirror-daemon mirror-daemon-off mirror-daemon-log backup-on backup-check backup-drill restore sweep shell
+.PHONY: help preflight sync-opencode push build drain drain-off deploy up down down-hard restart logs status status-json status-local doctor new relocate tokens revoke replica-state db-check mirror mirror-daemon mirror-daemon-off mirror-daemon-log backup-on backup-check backup-drill restore sweep shell
 
 help:
 	@sed -n '2,14p' $(MAKEFILE_LIST) | sed 's/^# \{0,1\}//'
@@ -244,6 +244,11 @@ status:
 	  ok*) ;; \
 	  *) printf '\033[31m!! replica: %s\033[0m — the knowledge base is the product. make backup-check\n' "$${state#stale }" ;; \
 	esac; \
+	dbs=$$($(MAKE) --no-print-directory db-check); \
+	case "$$dbs" in \
+	  ok*) ;; \
+	  *) printf '\033[31m!! database: %s\033[0m — a level replica of a damaged file is a copy of the damage\n' "$${dbs#corrupt }" ;; \
+	esac; \
 	exit $$rc
 
 ## The raw JSON, for a script rather than a person.
@@ -417,7 +422,38 @@ replica-state:
 		echo "ok replica is level with the database ($$n segments, $$behind s behind)"; \
 	fi
 
+## Is the DATABASE readable? Replicating a corrupted file faithfully is not a backup.
+##
+## Prints "ok" or "corrupt <detail>". Separate from replica-state because the two
+## answer different questions and the failure that motivated it makes them look alike:
+## for a whole period every table returned `database disk image is malformed` while
+## backup-check reported healthy, because it only ever compared timestamps. A replica
+## that is perfectly level with an unreadable database is a faithful copy of nothing.
+##
+## Through the container: WAL over a Docker Desktop bind mount does not coordinate
+## with a host sqlite3, and reading it from outside has already cost an hour and
+## produced SQLITE_IOERR_SHORT_READ inside the running service.
+db-check:
+	@out=$$($(COMPOSE) exec -T lore node -e "\
+	const {DatabaseSync}=require('node:sqlite'); \
+	try { \
+	  const d=new DatabaseSync('$(DATA)/lore.db', {readOnly:true}); \
+	  const r=d.prepare('PRAGMA integrity_check').get(); \
+	  console.log(Object.values(r)[0]); \
+	} catch (e) { console.log('unreadable: ' + e.message); }" 2>&1 | tr -d '\r'); \
+	case "$$out" in \
+	  ok) echo "ok database passes integrity_check" ;; \
+	  *) echo "corrupt $$out" ;; \
+	esac
+
 backup-check:
+	@state=$$($(MAKE) --no-print-directory db-check); \
+	echo "$$state"; \
+	case "$$state" in ok*) ;; *) \
+	  echo "The database itself is damaged. A replica of it is a faithful copy of the damage,"; \
+	  echo "so RESTORE FROM AN EARLIER GENERATION rather than trusting the newest — see make restore."; \
+	  exit 1 ;; \
+	esac
 	@state=$$($(MAKE) --no-print-directory replica-state); \
 	echo "$$state"; \
 	case "$$state" in ok*) ;; *) echo "Is the litestream container up? (make logs)"; exit 1 ;; esac

@@ -70,6 +70,38 @@ describe("review", () => {
     expect(got?.ladder.round).toBe(4);
     expect(got?.state).toBe("awaiting_diff");
   });
+
+  // The refusal built on this is read by someone deciding whether to continue or
+  // restart, and that turns entirely on how stale the pinned snapshot is (D-40). It
+  // fired on a review twenty hours and twenty-five commits old while offering
+  // `restart: true` only "if the branch was rebased" — which it had not been, so the
+  // one correct action looked unavailable.
+  describe("openReviewFor carries the age the advice depends on", () => {
+    it("reports an open review with how long since it advanced", () => {
+      newReview("rev1");
+      const when = new Date(Date.now() - 20 * 3_600_000).toISOString();
+      store.db.prepare("UPDATE review SET branch = 'feat/x', updated_at = ? WHERE id = 'rev1'").run(when);
+
+      const open = store.openReviewFor(repoId, "feat/x");
+      expect(open?.id).toBe("rev1");
+      expect(open?.ageHours ?? 0).toBeGreaterThan(19);
+      expect(open?.ageHours ?? 0).toBeLessThan(21);
+    });
+
+    it("is undefined once the review is terminal, so a finished branch can start again", () => {
+      newReview("rev1");
+      store.db.prepare("UPDATE review SET branch = 'feat/x', state = 'passed' WHERE id = 'rev1'").run();
+      expect(store.openReviewFor(repoId, "feat/x")).toBeUndefined();
+    });
+
+    // NaN would print as "NaN hours old" in the refusal. Zero suppresses the
+    // staleness advice rather than inventing it.
+    it("reads an unparseable timestamp as age zero rather than NaN", () => {
+      newReview("rev1");
+      store.db.prepare("UPDATE review SET branch = 'feat/x', updated_at = 'not a date' WHERE id = 'rev1'").run();
+      expect(store.openReviewFor(repoId, "feat/x")?.ageHours).toBe(0);
+    });
+  });
 });
 
 describe("findings", () => {

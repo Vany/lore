@@ -262,17 +262,38 @@ export class Store {
    * Newest first, because if several are somehow open the useful one to continue is
    * the one that has got furthest.
    */
-  openReviewFor(repoId: string, branch: string): { id: string; state: string; round: number } | undefined {
+  /**
+   * The open review on this branch, if there is one.
+   *
+   * Carries its AGE because the refusal built on it is read by someone deciding
+   * whether to continue or restart, and that decision turns entirely on how stale the
+   * pinned snapshot is. Without the age the message could only offer `restart: true`
+   * "if the branch was rebased" — which fired on a review from twenty hours and
+   * twenty-five commits earlier that had been neither rebased nor force-pushed, so the
+   * one legitimate escape did not appear to apply.
+   */
+  openReviewFor(
+    repoId: string,
+    branch: string,
+  ): { id: string; state: string; round: number; ageHours: number } | undefined {
     const row = this.db
       .prepare(
-        `SELECT id, state, ladder FROM review
+        `SELECT id, state, ladder, updated_at FROM review
          WHERE repo_id = ? AND branch = ? AND state NOT IN (${TERMINAL_SQL})
          ORDER BY created_at DESC LIMIT 1`,
       )
       .get(repoId, branch) as Record<string, string> | undefined;
     if (row === undefined) return undefined;
     const ladder = JSON.parse(row["ladder"] ?? "{}") as { round?: number };
-    return { id: row["id"] ?? "", state: row["state"] ?? "", round: ladder.round ?? 0 };
+    const updated = Date.parse(row["updated_at"] ?? "");
+    return {
+      id: row["id"] ?? "",
+      state: row["state"] ?? "",
+      round: ladder.round ?? 0,
+      // NaN would print as "NaN hours old", so an unparseable timestamp reads as 0 —
+      // which suppresses the staleness advice rather than inventing it.
+      ageHours: Number.isFinite(updated) ? Math.max(0, (Date.now() - updated) / 3_600_000) : 0,
+    };
   }
 
   getReview(id: string, principal: string): ReviewRow | undefined {
