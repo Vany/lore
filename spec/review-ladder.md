@@ -142,6 +142,17 @@ test suite did not run. Optional engines are logged for the operator and left ou
 the client's report. `tsc`, `eslint` and the suite stay gaps when they are missing,
 because for a JavaScript project they are.
 
+### 3.0.1 A justification is not part of the code it defends (D-73)
+
+`lore-ok` lines are stripped before the scope hunk is hashed, so writing the marker —
+or later losing it — never expires the reason. A real edit to the surrounding code
+still does.
+
+Without that, the annotation sat inside the hunk whose stability the justification
+depended on, and justifying a finding invalidated the justification. One false positive
+was justified and expired four times across nine rounds, cost 109 minutes of model
+time, and ended on a bound.
+
 ### 3.1 Fingerprint
 
 `sha256(normalized_claim ‖ file ‖ enclosing_symbol)`

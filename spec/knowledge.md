@@ -68,6 +68,18 @@ backwards rule. A `justified-rejected` finding is a real defect that stands, but
 not one the team has acted on, so it does not teach a rule yet either — deliberately
 conservative, because a wrong rule here is injected into every future session.
 
+### 2.3 A fact is learned once, however often it is argued
+
+An accepted justification adds its reason to the knowledge base — and only if that
+statement is not already held. Ratifying the same reason in a later round, or a later
+review, is the same fact about the codebase, not a new one.
+
+Nothing checked this until 2026-08-06, and a justification livelock wrote the same
+sentence on every cycle: 21 of one repository's 27 derived rules were one reason about
+one false positive, each copy then entering the next reviewer's prompt. Matched on the
+statement itself, since the statement is the fact; a differently-worded reason for the
+same finding is a different claim and is kept.
+
 ## 3. What is stored
 
 - **rules** — conventions and constraints. *"Amounts are integers in minor units,

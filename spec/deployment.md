@@ -56,7 +56,7 @@ So T0 must be engineered for this host, not merely invoked:
 | `tsc --incremental` with a persisted build info cache | full typecheck every round is pure waste |
 | **diff-scoped work on rounds ≥ 2** | round 1 checks everything; later rounds re-check what changed and its dependents |
 | test selection by changed files, where the repo supports it | running the full suite five times per PR is the worst case |
-| bounded concurrency | 32 GB allows several containers; the CPU does not |
+| bounded concurrency | see §3.1 — the binding constraint turned out to be neither |
 
 **Round 1 is thorough; later rounds are incremental.** Without that, the ladder's
 "reset to T1 after every fix" (D-6) multiplies the most expensive local work by the
@@ -96,6 +96,36 @@ reports the local half only, and says so.
 source destroyed first, and `make status` warns when the replica has not been written
 in an hour. The drill uses `VACUUM INTO`: a WAL database copied with `cp` loses
 whatever is still in the write-ahead log.
+
+### 3.1 What actually bounds concurrency
+
+`LORE_CONCURRENCY` governs both halves of a round, and they have opposite constraints.
+The model call is remote and merely waits — t1 averages 304s, t2 915s. T0 runs a
+sandbox container locally and is CPU- and memory-bound. Raising the number buys real
+throughput on the waiting half and oversubscribes the local one.
+
+Measured on 2026-08-05 at 12, on a host with 16 cores and 48 GB behind a Docker VM of
+14 cores and **7.7 GB**:
+
+- **Memory held.** Six concurrent sandboxes against 6 GB limits each used 1–3 GB
+  apiece, peaking near 84% of the VM. Limits are ceilings, not reservations. When it
+  is wrong it is wrong loudly: an OOM-killed sandbox exits 137 and is reported as *did
+  not finish*, never as a clean check.
+- **The npm cache did not, and had to be fixed.** It is keyed by lockfile hash, so
+  every branch of a repository that has not changed its lockfile shares one
+  `node_modules` mounted read-write into each sandbox. Installs sharing a cache
+  directory are serialised now — a warm install measures ~200ms, and the cold one
+  happens once — because a half-written `node_modules` makes `tsc` and `eslint` report
+  errors that are not real.
+- **The provider was the real ceiling.** Four reviews died within 2.5 minutes of the
+  change: two `socket hang up` in the same second, two empty replies inside a 200.
+  That is the upstream refusing the load, and the one constraint neither the host nor
+  the container could show. They failed honestly — `this review DID NOT RUN` — but the
+  quota was spent.
+
+The lesson is the shape rather than the number: **one knob governing two resources
+with different limits will always be wrong for one of them.** Capping outbound model
+calls separately from worker concurrency is the fix this points at, and is not built.
 
 ## 6. The mirror is refreshed by a host process (D-65)
 

@@ -128,6 +128,50 @@ nothing.
       for the operator and kept out of the client's report. tsc and eslint stay gaps
       when they are missing, because for a JS project they are.
 
+### 2026-08-06 — the second day, and what using it taught
+
+The loop closed: a review of `rigid-monorepo` reached round 2 with every finding
+settled, then the deep tier ran on that repo for the first time. Almost every defect
+below was found by the client USING it or by me reading — not by lore reviewing
+itself, which is the uncomfortable part.
+
+- [x] **`needs_human` named no question.** Fixed: `open_questions` carries both
+      statements and their sources, in `review_poll` **and** the inbox, which is where
+      a client looks first and which I missed on the first pass.
+- [x] **A token reached other repositories.** Scoping was per principal while tokens
+      are minted per repository, and a workgroup provisions every repo to the same
+      human — so the check did nothing (D-69).
+- [x] **Findings from untouched files outranked the branch's own.** Marked
+      `preexisting` and ranked last (D-68).
+- [x] **The knowledge base taught reviewers to hunt for what the team had ruled out.**
+      Recurrence was counted without reading the verdict; seven derived rules existed
+      and not one was backed by a `fixed`. Now only fixed findings teach a lesson.
+- [x] **A justification invalidated itself** (D-73). The livelock: one false positive
+      justified and expired four times across nine rounds, 109 minutes of model time,
+      21 duplicate rules written into the memory. `lore-ok` lines are stripped from the
+      scope hash, and a fact is learned once.
+- [x] **Test execution removed** (D-71), on Vany's call. lore reads a suite, never runs
+      one.
+- [x] **A deploy drains** (D-72) instead of throwing in-flight rounds away.
+- [x] **The recurring shapes are checked mechanically** rather than by reading —
+      `one-definition.test.ts`, and five of them taught to lore as knowledge, which had
+      exactly ONE taught fact before today.
+
+- [ ] **Cap outbound model calls separately from worker concurrency.** Raising
+      `LORE_CONCURRENCY` to 12 killed four reviews in 2.5 minutes — two `socket hang
+      up` in the same second, two empty replies inside a 200. The provider was the
+      binding constraint, not the memory or the cache I had worried about. One knob
+      governs a local resource and a remote one with different limits, and will always
+      be wrong for one of them. Twelve workers, N concurrent model calls, the rest
+      queueing at that gate instead of dying.
+      Cheap mitigation available first: a transport drop is the most obviously
+      retryable failure there is, and `socket hang up` is not retried while an
+      unparseable reply gets one retry.
+
+- [ ] **Retire the 21 duplicate derived rules already in the database.** The dedupe
+      stops new ones; it does not clear what the livelock wrote. Non-destructive, same
+      as the backwards ones — but it rewrites the product, so it is Vany's call.
+
 ### What the client's own report adds
 
 `~/c/REPORT-2026-08-05-manual-lore-prs.md` §5–§7, written 17:57 by the session that

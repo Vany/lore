@@ -219,10 +219,23 @@ own repository: ten rounds where each documentation fix wrote more documentation
 fault, against three rounds once the answers got terse.
 
   * A finding about BEHAVIOUR: change the code.
-  * A finding about WORDING, or one you disagree with: prefer a lore-ok to a
-    rewrite. A settled finding does not restart the ladder; rewritten prose does.
+  * A finding you believe is WRONG: a lore-ok, with the reason that makes it wrong.
+  * A finding about WORDING: fix the wording, briefly, or lore-ok it if the wording
+    is right and the reader was not.
   * Say the reason once. Do not restate the finding, and do not explain the fix at
     length in a comment — the diff already shows it.
+
+CHOOSE ON WHETHER THE FINDING IS TRUE, NEVER ON WHICH ANSWER IS CHEAPER. It is true
+that a settled finding does not restart the ladder while changed code does, and this
+text used to tell you to prefer the lore-ok for that reason. That was advice to
+optimise for the review ending rather than for the code being right, which is not what
+you are here for. A justification for a finding you privately agree with is the one
+answer that costs more than either honest option: the next tier reads it, and a
+justification a reviewer refuses comes back at HIGHER severity.
+
+Your lore-ok is safe to write at the site. The marker is not part of the code it
+defends — adding or removing it does not expire the reason — so putting it where the
+reader will see it costs you nothing.
 `.trim(),
 
   attest: `

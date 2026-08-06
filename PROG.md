@@ -59,6 +59,29 @@ reconstruct the incident. A guard without a reason gets deleted by the next read
 - `toStrictEqual` when asserting absence; `toEqual` ignores `undefined`-valued
   properties and will happily agree with a bug.
 
+## Shapes that keep producing bugs here
+
+Checked mechanically in `src/core/one-definition.test.ts`, because reading for them
+does not work — I introduced `TERMINAL_SQL` to fix the first three copies of one list
+and found two more the next day.
+
+- **One thing defined twice always disagrees eventually.** Derive the second form from
+  the first. The terminal review states were written out in six places and
+  `passed_partial` was missing from three: a verdict overwritten by a sweep, worktrees
+  held for ever, partial passes shown as permanently open.
+- **An exported constant nothing reads is worse than one that is absent**, because a
+  reader believes it. `RULE_DIRS` sat beside the ingest list looking used and 37 ADRs
+  went unread.
+- **A guard whose silence is ambiguous is not a guard.** "$0 spent" and "cannot measure
+  spend" look identical; so do an idle replica and a dead one. Report whether the guard
+  is *capable* of firing, not only whether it fired.
+- **A test named for a property it does not test is worse than no test.** *"binds each
+  token to its own repo"* asserted that the rows differ and never that anything was
+  scoped by them — so it passed while a token read another repository's reviews. Assert
+  the consequence, never the setup.
+- **Code that has never executed is not code that works.** The retention sweep would
+  have leaked git's worktree records the first time it ran; it never had.
+
 ## Dependencies
 
 - Search for an existing library before writing anything large and well-known

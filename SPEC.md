@@ -183,6 +183,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-70** | A finished review **gives its worktree back at once**, through git, not in a week | confirmed |
 | **D-71** | lore **reads** a test suite and never runs it; a failing suite is the repo owner's | confirmed |
 | **D-72** | A deploy **drains** — stop claiming, finish what is in flight, then swap | confirmed |
+| **D-73** | A justification is **not part of the code it defends**, and is learned once | confirmed |
 
 **D-7, revised.** The earlier version dropped GLM-5.2 on Artificial Analysis's
 *cost per task* — which is tokens consumed × price on their benchmark, not a price.
@@ -852,6 +853,40 @@ A lockfile naming a manager the image does not carry — bun, which is a runtime
 not merely an installer — is reported as an **unavailable engine**. Installing with
 npm instead and presenting the result as that project's suite would be a confident
 claim about something that never ran.
+
+**D-73 — a justification is not part of the code it defends, and its fact is learned
+once.**
+
+`lore-ok` lines are stripped before the scope hunk is hashed. The marker is an
+annotation *about* code, not code, so writing it or removing it never expires the
+reason it carries. A real edit to the surrounding code still does, which is the whole
+point of expiry (D-20): a reason must not outlive the thing it was about.
+
+**Without this, a justification invalidated itself by existing.** Clients are told to
+write the marker at the site; the scope deciding whether the justification survives was
+the hunk around that same line. So the reason lived inside the code it depended on
+staying stable. Observed 2026-08-06 as a livelock: one semgrep false positive, in a
+file the branch never touched, justified and expired four times across nine rounds —
+accepted at 2, expired, 4, expired, 6, expired, 8, expired, with a byte-identical hunk
+every time. It cost 109 minutes of model time and ended when the review hit a bound.
+
+This is what `spec/knowledge.md` already asserted and the code did not do: *a
+justification's scope is taken from the code it defends, never from wherever the reason
+is written.* The rule was right; nothing made it true.
+
+**An accepted justification teaches its fact once.** Ratifying the same reason again is
+the same fact, not a new one. Nothing checked, so the livelock wrote it on every cycle:
+21 of one repository's 27 derived rules were a single sentence about a single false
+positive, and every copy then entered the next reviewer's prompt. Matched on the
+statement, because the statement *is* the fact; a differently-worded reason for the same
+finding is a different claim and is kept.
+
+**The client is no longer told to prefer a lore-ok.** `TOOL_DOCS.submit` advised
+choosing it over a rewrite because "a settled finding does not restart the ladder" —
+true, and advice to optimise for the review ending rather than for the code being
+right. It now says to choose on whether the finding is true, and notes that a
+justification for a finding you privately agree with is the most expensive answer of
+all: the next tier reads it, and a refused justification returns at higher severity.
 
 **D-72 — a deploy drains rather than interrupts, and blue/green is the wrong shape.**
 

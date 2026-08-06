@@ -130,6 +130,8 @@ describe("every behaviour a client must know about reaches the texts", () => {
     ["poll", "failed is often transient", "TRANSIENT"],
     ["submit", "this is how a review continues", "THIS IS HOW A REVIEW CONTINUES"],
     ["query", "empty means not bootstrapped yet (D-35)", "count: 0"],
+    ["submit", "choose on truth, not on which answer is cheaper (D-73)", "CHOOSE ON WHETHER THE FINDING IS TRUE"],
+    ["submit", "a marker at the site is safe now (D-73)", "safe to write at the site"],
   ])("%s tells the client: %s", (tool, _why, needle) => {
     expect(TOOL_DOCS[tool as keyof typeof TOOL_DOCS]).toContain(needle);
   });

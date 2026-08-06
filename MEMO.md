@@ -5,6 +5,75 @@ surprised me.
 
 ---
 
+## 2026-08-06 — session 33: the loop closed, and then ate itself
+
+**The good half, and it is real.** A review of `rigid-monorepo` reached round 2 with
+all five findings settled — three fixed, two justified — and the deep tier ran on that
+repo for the first time. Two of its catches were cross-file contradictions between code
+and committed prose governing a GDPR position: the class no linter, type checker or
+test can reach. The client's own report says it *"found what nothing else did"*.
+
+**The uncomfortable half.** Almost nothing today was found by lore reviewing itself. The
+client found four defects by using it; I found the rest by reading. For a tool whose
+whole thesis is that review catches what CI cannot, that is worth sitting with.
+
+**The livelock, and why it is the most instructive bug so far.** We tell clients to
+write `lore-ok` AT THE SITE. The scope deciding whether a justification survives was the
+hunk around that same line. So the reason lived inside the code it depended on staying
+stable, and writing it down was itself a change to that code. One semgrep false
+positive — in a file the branch never touched — was justified and expired four times
+across nine rounds, cost 109 minutes of model time, ended on a bound, and re-derived
+the same rule every cycle: **21 of that repo's 27 derived rules were one sentence about
+one false positive.** The product ate itself.
+
+`spec/knowledge.md` already said *"a justification's scope is taken from the code it
+defends, never from wherever the reason is written"*. The rule was right and nothing
+made it true. **A rule stated in a spec and not enforced anywhere is a rule that is
+false.**
+
+**I built deploy keys and then deleted them the same evening.** A stale mirror was the
+top failure cause, so I gave lore its own credential to fetch with. Vany's correction:
+this host already authenticates to the forge, so a key for lore is a second secret for
+a fetch that is already possible. **What was broken was never the credential — it was
+that refreshing had been made a person''s job.** A host timer does it now. The lesson is
+that I reached for the mechanism before finishing the diagnosis.
+
+**Learned — a heuristic that escalates to a human must fail quiet, not loud.** The first
+`needs_human` in production was wrong: two ADR sentences restating one constraint,
+recorded as a contradiction because `polarity()` cancelled negations across a whole
+sentence. It stopped a review whose findings were all settled. A missed conflict leaves
+a rule to be caught later; a false one demands a person.
+
+**Learned — derivation without a verdict runs backwards.** Recurrence was counted with
+no reference to how the finding was answered, so a pattern the team ruled out 73 times
+derived *"check for it explicitly"* into every future prompt. Seven such rules existed;
+not one was backed by a single `fixed`. The client named it exactly: *correct reasoning,
+wrong conclusion — what recurs is the false positive.*
+
+**Learned — I cannot find "defined twice" by reading.** I introduced `TERMINAL_SQL` to
+fix three copies of the terminal-state list, declared it done, and found two more the
+next day, then a sixth the moment a grep-shaped test ran. That is now
+`one-definition.test.ts`, along with a check for exported constants nothing reads.
+
+**Taught lore five of these shapes.** It had ONE taught fact in its entire history —
+the mechanism the product exists for, essentially unused, while `knowledge_teach` sat
+there.
+
+**My own failures today, both the same shape.** I committed a broken build: unescaped
+backticks in a template literal took out three test files by parse failure, 487 tests
+reading as 388, and I missed it because piping `vitest` into `tail` masks the exit code
+so `&&` saw *tail* succeed. Then the same character bit the commit message, where
+backticks inside a double-quoted shell string get command-substituted. Gate on
+`tsc --noEmit`; write commit bodies from a heredoc.
+
+**Open.** Model calls need a concurrency cap separate from the workers — raising
+`LORE_CONCURRENCY` to 12 killed four reviews in 2.5 minutes, and the provider was the
+binding constraint rather than the memory or the cache I had worried about.
+Reachability-aware severity is still unbuilt and still the client''s best remaining
+complaint.
+
+---
+
 ## 2026-08-05 — session 32: the first day a client drove it, and everything it broke
 
 **The day in one line.** The loop closed for the first time — a review of
