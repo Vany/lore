@@ -61,16 +61,13 @@ function daysAgo(n: number): string {
  */
 export function expireStale(store: Store, cfg: RetentionConfig): number {
   const cutoff = new Date(Date.now() - cfg.staleHours * 3_600_000).toISOString();
-  const res = store.db
-    .prepare(
-      // The terminal set comes from ONE place. Spelled out here, it omitted
-      // `passed_partial` — so a review that reached a partial pass would be
-      // overwritten with `expired` two days later, a verdict destroyed by a sweep.
-      `UPDATE review SET state = 'expired', updated_at = ?
-       WHERE updated_at < ? AND state NOT IN (${TERMINAL_SQL})`,
-    )
-    .run(new Date().toISOString(), cutoff);
-  return Number(res.changes);
+  // The SQL lives in the store, not here. It used to be written inline — the terminal
+  // set spelled out (it omitted `passed_partial`, and a partial pass was overwritten
+  // with `expired` two days later, a verdict destroyed by a sweep), and the state
+  // column written directly, which made this the one review-state change that woke no
+  // subscriber. Both faults are the same fault: a mutation that knows the schema
+  // better than the invariants.
+  return store.expireStaleReviews(cutoff).length;
 }
 
 export async function collect(store: Store, cfg: RetentionConfig = DEFAULT_RETENTION): Promise<RetentionResult> {

@@ -73,6 +73,9 @@ const HOLD_BUG: Finding = {
   failureScenario: "card declines and funds stay held",
 };
 
+/** Distinct findings, so each round raises something FRESH and the bound can be hit. */
+const nthBug = (n: number): Finding => ({ ...HOLD_BUG, line: 100 + n, claim: `distinct defect ${String(n)}` });
+
 let dir: string;
 let store: Store;
 let repoId: string;
@@ -129,6 +132,30 @@ describe("runRound", () => {
     expect(result.decision.kind).toBe("findings");
     expect(result.newFindings).toHaveLength(1);
     expect(store.getReview("r1", "p")?.state).toBe("findings_ready");
+  });
+
+  // A FAILURE MUST NAME ITS CAUSE (INV-1). Hitting a round bound left every job `done`
+  // with no error, so `failureReason` — which read only `job.last_error` — had nothing,
+  // and `review_poll` answered "no reason was recorded, which is itself a defect" about
+  // a cause the ladder knew exactly. Found on a review of this repository that had just
+  // hit the per-tier bound after nine rounds of documentation findings.
+  it("says WHY when a round bound stops the ladder, not merely that it failed", async () => {
+    // Four rounds of fresh findings at t1: the default per-tier bound is 3.
+    const reviewer = new ScriptedReviewer([[nthBug(1)], [nthBug(2)], [nthBug(3)], [nthBug(4)]]);
+    let last;
+    for (let i = 0; i < 4; i++) {
+      last = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
+    }
+
+    expect(last?.decision.kind).toBe("stopped");
+    expect(store.getReview("r1", "p")?.state).toBe("failed");
+    const why = store.failureReason("r1") ?? "";
+    expect(why).toContain("per-review round bound");
+    expect(why).toContain("t1×4");
+    // The instruction, not just the diagnosis: this bound is nearly always the
+    // answer-begets-finding loop, and answering shorter is what ends it.
+    expect(why).toMatch(/MINIMALLY/);
+    expect(why).toContain("NOT a pass");
   });
 
   it("gives the reviewer the ticket and the diff", async () => {

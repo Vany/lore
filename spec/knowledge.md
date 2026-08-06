@@ -235,3 +235,17 @@ terminal state, so the staleness sweep turned the review into `expired` two days
 An exit sign over a wall, and the review of the commit claiming otherwise is what found
 it.
 
+**It re-queues them only when the LAST open conflict is settled**, and says how many
+remain in `conflicts_still_open`. The recomputation above is repo-wide — a parked review
+is blocked by every open conflict in the repository, not by one it could name — so
+resuming while another is unsettled buys each review one paid round and parks it again
+at the end of it, while `resumed_reviews` reports movement that is not happening. The
+same review, one round later, found the second wall behind the first.
+
+**`knowledge_escalate` is not a one-way door**, though it was one until that same round.
+`resolveConflict` matched only `open`, so the state a person is called to settle was the
+one state nothing could settle — and once the gate above counted escalated conflicts as
+blocking, the reviews behind one could never resume and the reply told the client to do
+something the API refused. The exit is what this section always said it was: a person
+decides, the client calls `knowledge_resolve`.
+

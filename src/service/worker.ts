@@ -1,9 +1,13 @@
 /**
  * The background worker: one job, one round.
  *
- * Reviews outlive an MCP request and there is no way to push a result — MCP
- * servers cannot initiate requests — so work happens here and clients poll. That
- * is not a workaround; it is the only correct shape.
+ * Reviews outlive an MCP request, so the work happens here rather than inside one.
+ * That much was never in question. What was — and was wrong — is the sentence that
+ * used to follow it: *"there is no way to push a result, so clients poll"*. There is;
+ * `store.updateReview` wakes every subscriber of that review when the STATE changes,
+ * and nothing else does — `recordFinding` deliberately publishes nothing (D-80). This
+ * loop publishes nothing itself and should not start: it changes reviews through the
+ * store, which is the one place that knows about every mutation.
  *
  * A job runs exactly one round and re-enqueues itself if the ladder should
  * continue. Keeping rounds separate means a crash loses one round rather than a

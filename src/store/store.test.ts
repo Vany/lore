@@ -62,6 +62,64 @@ describe("review", () => {
     expect(store.getReview("rev1", "tok_mallory")).toBeUndefined();
   });
 
+  // ANNOUNCED AFTER THE WRITE, and the comment saying so used to sit above a call
+  // that ran before it. A client woken first re-reads and sees the state it was told
+  // had changed; if the write then throws it waits for a second wake that never comes.
+  // Caught by t2 on the commit that wrote the comment — the false-statement-about-
+  // behaviour this repository is worst at, inside the feature meant to keep clients
+  // informed.
+  it("wakes a subscriber only once the new state is readable", () => {
+    newReview("rev1");
+    let stateWhenWoken: string | undefined;
+    store.events = {
+      changed: (id) => {
+        stateWhenWoken = store.getReview(id, PRINCIPAL)?.state;
+      },
+    };
+    // NOT the state it already has — `newReview` opens at `running`, and updating to
+    // the same value would let a wake fired before the write look correct.
+    store.updateReview("rev1", { state: "findings_ready" });
+    expect(stateWhenWoken).toBe("findings_ready");
+  });
+
+  // A WRITE IS NOT NEWS. Every round boundary writes `state: running` over `running`,
+  // and the next round writes it again, so a review climbing t1→t2→t3 with nothing to
+  // report woke its subscriber twice per tier — an LLM turn spent per wake to poll and
+  // learn nothing. The same shape as notifying on a re-raised finding, which this file
+  // already refuses. Raised by t2 two rounds after subscriptions landed.
+  it("does not wake a subscriber for a write that changes no state", () => {
+    newReview("rev1");
+    const woken: string[] = [];
+    store.events = { changed: (id) => woken.push(id) };
+
+    store.updateReview("rev1", { state: "running" }); // already running
+    store.updateReview("rev1", { ladder: { ...initialState(), cursor: 2 } }); // bookkeeping
+    expect(woken).toEqual([]);
+
+    store.updateReview("rev1", { state: "findings_ready" });
+    expect(woken).toEqual(["rev1"]);
+  });
+
+  // THE ONE STATE CHANGE THAT WOKE NOBODY. The expiry sweep wrote `state` with its own
+  // SQL, so a client subscribed to a review — the path the docs lead with — was never
+  // told it had been abandoned and waited on a stream that would never deliver for it
+  // again. Raised by t1 one round after subscriptions landed, in a file the comment
+  // predicting exactly this had never reached.
+  it("wakes a subscriber when the sweep expires their review", () => {
+    newReview("rev1");
+    newReview("rev2");
+    store.db.prepare("UPDATE review SET updated_at = '2020-01-01T00:00:00.000Z' WHERE id = 'rev1'").run();
+
+    const woken: string[] = [];
+    store.events = { changed: (id) => woken.push(id) };
+    const expired = store.expireStaleReviews("2021-01-01T00:00:00.000Z");
+
+    expect(expired).toEqual(["rev1"]);
+    expect(woken).toEqual(["rev1"]);
+    expect(store.getReview("rev1", PRINCIPAL)?.state).toBe("expired");
+    expect(store.getReview("rev2", PRINCIPAL)?.state).toBe("running");
+  });
+
   it("round-trips ladder state", () => {
     newReview("rev1");
     const ladder = { ...initialState(), round: 4, settled: ["aa"] };
@@ -69,6 +127,28 @@ describe("review", () => {
     const got = store.getReview("rev1", PRINCIPAL);
     expect(got?.ladder.round).toBe(4);
     expect(got?.state).toBe("awaiting_diff");
+  });
+
+  // ESCALATING WAS A ONE-WAY DOOR. `knowledge_escalate` moves a conflict to
+  // `needs-human` and `resolveConflict` matched only `open`, so the state a person is
+  // supposed to settle was the one state nothing could settle — while D-77 and
+  // `spec/knowledge.md` §7.3 both say the exit is a person deciding and the client
+  // calling `knowledge_resolve`. Latent until the resume gate counted escalated
+  // conflicts as blocking, at which point the reviews behind it could never resume.
+  it("settles a conflict a person was called to, not just an open one", () => {
+    const rule = (s: string) =>
+      store.addKnowledge({
+        repoId, kind: "rule", source: "taught", statement: s, why: "because",
+        path: undefined, cwe: undefined, provenance: undefined,
+        sourceBlob: undefined, confidence: undefined,
+      }).id;
+    const [a, b] = [rule("holds expire"), rule("holds never expire")];
+    store.recordConflict(repoId, a, b);
+    store.escalateConflict(repoId, a, b, "two ADRs disagree, ask someone");
+    expect(store.openConflicts(repoId)).toHaveLength(1);
+
+    expect(store.resolveConflict(repoId, a, b, "Vany: ADR-0026 wins")).toBe(true);
+    expect(store.openConflicts(repoId)).toHaveLength(0);
   });
 
   // A BLOCK WITH NO EXIT IS A TRAP, and this one had an exit sign over a wall.

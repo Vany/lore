@@ -12,7 +12,16 @@
 
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { DEFAULT_TIERS, anyTierRan, markUnavailable, settle, step, type Decision, type Tier } from "../core/ladder.ts";
+import {
+  DEFAULT_TIERS,
+  anyTierRan,
+  markUnavailable,
+  settle,
+  step,
+  type Decision,
+  type LadderState,
+  type Tier,
+} from "../core/ladder.ts";
 import type { Finding } from "../core/finding.ts";
 import { fingerprint } from "../core/fingerprint.ts";
 import { parseLoreOk } from "../core/lore-ok.ts";
@@ -339,6 +348,8 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     // an attestation for having no tree, which is a regression the guard introduced
     // rather than a fault it caught. T0 and the tiers that could be paid for did read
     // this tree; that is exactly what a partial attestation claims.
+    const skippedWhy = stoppedBecause(skipped.decision, skipped.state);
+    if (skippedWhy !== undefined) store.setFailureReason(reviewId, skippedWhy);
     store.updateReview(reviewId, {
       ladder: skipped.state,
       state: toReviewState(skipped.decision),
@@ -618,6 +629,12 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // which carries both the line and its test. The test is the answer to e5700124,
   // raised against that very commit — a fix, a finding, then the test, which is the
   // loop working rather than a gap in it.
+  // Written BEFORE the state, so a client woken by the state change can already read
+  // the reason. The wake fires on the `updateReview` below.
+  // Written BEFORE the state, so a client woken by the state change can already read
+  // the reason. The wake fires on the `updateReview` below.
+  const why = stoppedBecause(stepped.decision, stepped.state);
+  if (why !== undefined) store.setFailureReason(reviewId, why);
   store.updateReview(reviewId, {
     ladder: stepped.state,
     state: toReviewState(stepped.decision),
@@ -926,6 +943,35 @@ async function collectJustifications(
     }
   }
   return out;
+}
+
+/**
+ * What to tell the client when the LADDER stopped, rather than a round throwing.
+ *
+ * A bound was reached, and `state: failed` alone is indistinguishable from a crash —
+ * the shape INV-1 refuses. The cause is known exactly at this point and used to be
+ * discarded here, so `review_poll` answered "no reason was recorded, which is itself
+ * a defect" and it was right. Raised against a review of this repository that had
+ * just hit the per-tier bound after nine rounds.
+ *
+ * The advice matters as much as the cause: hitting the per-tier bound almost always
+ * means each fix produced fresh findings ABOUT THE FIX, which for prose is nearly
+ * unbounded — measured twice on this repository. Answering shorter is what ends it.
+ */
+function stoppedBecause(d: Decision, state: LadderState): string | undefined {
+  if (d.kind !== "stopped") return undefined;
+  const rounds = Object.entries(state.tierRounds)
+    .map(([tier, n]) => `${tier}×${String(n)}`)
+    .join(", ");
+  return d.bound === "global"
+    ? `The ladder ran its whole budget (${String(state.round)} rounds: ${rounds}) without settling every ` +
+        "finding, so it stopped. This is NOT a pass and NOT 'nothing found' — the code past that point was " +
+        "never reviewed. Answer the remaining findings and start a fresh review of the final tree."
+    : `One tier reached its per-review round bound (${rounds} across ${String(state.round)} rounds), so the ` +
+        "ladder stopped. This is NOT a pass and NOT 'nothing found' — the code past that point was never " +
+        "reviewed. It means each answer produced fresh findings about the answer, which is nearly unbounded " +
+        "for documentation and wording: answer MINIMALLY — change the code, or one short lore-ok line — and " +
+        "start a fresh review of the final tree.";
 }
 
 function toReviewState(d: Decision): ReviewState {

@@ -45,14 +45,32 @@ DO NOT SIT IN A POLLING LOOP. Subscribe instead, and go and do something else:
 
     subscriptions/listen  { notifications: { resourceSubscriptions: ["lore://review/<review_id>"] } }
 
-You will be woken by \`notifications/resources/updated\` whenever the review changes —
-a finding raised, a finding settled, or a terminal state. Read
+You will be woken by \`notifications/resources/updated\` whenever the review's STATE
+changes — and only then. That is the moment there is something for you to do; findings
+being recorded mid-round is not, because you cannot submit until the round ends. Read
 \`lore://review/<review_id>\` to see what changed; it carries the whole audit trail.
 The notification tells you WHEN, that resource tells you WHAT.
 
-If your host cannot subscribe, fall back to review_poll — start at 10s, back off to
-60s. That works and is the older way; it is a fallback because it makes you spend your
-turn waiting for something that could have woken you.
+THEN POLL ONCE, IMMEDIATELY. A subscription delivers what happens NEXT; there is no
+replay of what already happened. If findings landed in the moment before your stream
+opened — or you subscribed to a review you found in review_inbox, which is already
+sitting in findings_ready — nothing further will ever happen, because the next move is
+yours. Subscribe, poll once, then wait.
+
+If subscriptions/listen is unavailable or errors, THAT IS NORMAL AND NOT A FAULT IN
+LORE: the method needs a 2026-07-28 connection, and many hosts still negotiate the
+2025 one. Do not report it as a problem. Fall back to review_poll — start at 10s, back
+off to 60s. That works and is the older way; it is a fallback only because it makes you
+spend your turn waiting for something that could have woken you.
+
+Check the acknowledgement, do not assume. The ack echoes the subscriptions the server
+agreed to serve; if yours is not in it, you are not subscribed and nothing will ever
+arrive on that stream.
+
+Subscribe only to review ids YOU started. A subscription to somebody else's is
+accepted and then silent forever — deliberately, because refusing would confirm the id
+is real (D-23). If a stream you expected events on stays quiet, check the id is one of
+yours before concluding anything about lore.
 
 PUSH YOUR BRANCH FIRST. lore reads its own mirror of the remote, not your working
 copy, so a commit that exists only on your disk is not in the review.
@@ -99,9 +117,12 @@ Returns ONLY NEW findings. Anything you have already been shown will not appear 
 
 USE THIS TO READ, NOT TO WAIT. Subscribe to \`lore://review/<review_id>\` with
 subscriptions/listen and you will be woken when something changes; then call this to
-collect it. The notification says WHEN, this says WHAT. Calling it in a sleep loop is
+collect it. CALL IT ONCE RIGHT AFTER SUBSCRIBING TOO — a subscription carries no
+history, so anything that happened before your stream opened is waiting here and
+nothing will announce it. The notification says WHEN, this says WHAT. Calling it in a sleep loop is
 the fallback for a host that cannot subscribe — it works, and it spends your turn
-waiting for something that could have woken you.
+waiting for something that could have woken you. A host that cannot subscribe is
+common, not broken: the method needs a 2026-07-28 connection.
 
 States: queued, running, findings_ready, awaiting_diff, fast_clean, needs_human,
 passed, passed_partial, failed, expired.
@@ -412,15 +433,18 @@ through.
 The losing rule is retired with your reason, not deleted: "we used to believe X, until
 Y" is exactly what a codebase forgets and then re-argues.
 
-RESOLVING RESUMES THE REVIEWS THIS WAS BLOCKING. The reply carries
-\`resumed_reviews\` — how many were parked on this question and have now been
-re-queued. Poll them; they carry on from where they stopped, they do not start again.
+RESOLVING THE LAST OPEN CONFLICT RESUMES EVERY REVIEW THAT WAS BLOCKED. The reply
+carries \`resumed_reviews\` — how many were parked and have now been re-queued. Poll
+them; they carry on from where they stopped, they do not start again.
+
+A parked review is blocked by EVERY open conflict in the repository, not by one it
+could name, so nothing resumes while any remain. \`conflicts_still_open\` says how
+many, and \`resumed_reviews\` is 0 while it is non-zero — that is not a failure and
+not something to retry: settle the rest, and the reviews resume with the last one.
 
 Until this existed, resolving settled the rule and scheduled nothing: a client that
 resolved and waited for the ladder to continue waited for a round that was never
-enqueued, and the review was swept to \`expired\` two days later. If
-\`resumed_reviews\` is 0 and you expected otherwise, the review was not parked on
-THIS conflict — check \`review_poll\` rather than resolving something else.
+enqueued, and the review was swept to \`expired\` two days later.
 
 If you cannot decide, use knowledge_escalate instead. Do not guess.
 `.trim(),
@@ -453,11 +477,18 @@ export const RESOURCE_DOCS: Readonly<Record<string, { title: string; priority: n
 1. review_start(branch, into, ticket) → review_id
 2. SUBSCRIBE, do not loop:
    subscriptions/listen { notifications: { resourceSubscriptions: ["lore://review/<id>"] } }
-   You are woken by notifications/resources/updated whenever anything changes. Fall back
-   to review_poll (10s, backing off to 60s) only if your host cannot subscribe.
-3. On each wake, review_poll(review_id) — it returns only what is new.
+   You are woken by notifications/resources/updated when the review's STATE changes —
+   that is the moment there is something to do, and nothing else wakes you. Check the
+   ack: if your URI is not in the filter the server echoes back, you are NOT subscribed.
+   Fall back to review_poll (10s, backing off to 60s) if your host cannot subscribe —
+   that is common (the method needs a 2026-07-28 connection), not a fault to report.
+3. review_poll(review_id) ONCE, straight after subscribing — a subscription has no
+   replay, so whatever happened before the stream opened arrives no other way. Then on
+   each wake, review_poll again; it returns only what is new.
 4. For each finding: fix it, or justify it with // lore-ok[fp]: <reason>
-5. review_submit(review_id, diff, tree_hash) — at any time; it returns at once
+5. review_submit(review_id, diff, tree_hash) — ONLY while the state is findings_ready
+   or awaiting_diff. fast_clean is NOT one of them: the deep round is already queued
+   against that worktree, and a submit is refused while a tier is reading it.
 6. Return to 3. Repeat until the state is TERMINAL — \`passed\`, \`passed_partial\`,
    \`needs_human\`, \`failed\`, \`expired\` or \`cancelled\`.
 
@@ -581,11 +612,18 @@ The loop:
 1. review_start(branch: "${branch}", into: "${into}", ticket: <paste the ticket, do not summarise>)
 2. SUBSCRIBE, do not loop:
    subscriptions/listen { notifications: { resourceSubscriptions: ["lore://review/<id>"] } }
-   You are woken by notifications/resources/updated whenever anything changes. Fall back
-   to review_poll (10s, backing off to 60s) only if your host cannot subscribe.
-3. On each wake, review_poll(review_id) — it returns only what is new.
+   You are woken by notifications/resources/updated when the review's STATE changes —
+   that is the moment there is something to do, and nothing else wakes you. Check the
+   ack: if your URI is not in the filter the server echoes back, you are NOT subscribed.
+   Fall back to review_poll (10s, backing off to 60s) if your host cannot subscribe —
+   that is common (the method needs a 2026-07-28 connection), not a fault to report.
+3. review_poll(review_id) ONCE, straight after subscribing — a subscription has no
+   replay, so whatever happened before the stream opened arrives no other way. Then on
+   each wake, review_poll again; it returns only what is new.
 4. For each finding: fix it, or justify it with // lore-ok[fp]: <reason>
-5. review_submit(review_id, diff, tree_hash) — at any time; it returns at once
+5. review_submit(review_id, diff, tree_hash) — ONLY while the state is findings_ready
+   or awaiting_diff. fast_clean is NOT one of them: the deep round is already queued
+   against that worktree, and a submit is refused while a tier is reading it.
 6. Return to 3. Repeat until the state is TERMINAL — \`passed\`, \`passed_partial\`,
    \`needs_human\`, \`failed\`, \`expired\` or \`cancelled\`.
    Only \`passed\` and \`passed_partial\` are worth attesting, and only \`passed\` is clean.

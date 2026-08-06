@@ -98,7 +98,17 @@ function newReviewId(): string {
 }
 
 export function buildServer(who: Principal, deps: ServerDeps): McpServer {
-  const server = new McpServer({ name: "lore", version: "0.1.0" });
+  // `resources.subscribe` is DECLARED, not implied. `registerResource` advertises
+  // `resources.listChanged` on its own and stops there, and the listen router honours
+  // a client's `resourceSubscriptions` filter only against a declared `subscribe` bit
+  // — so without this line the server would accept `subscriptions/listen`, acknowledge
+  // it with an empty filter, and then never deliver a single event. A client that
+  // waited on that stream would wait forever while being told everything was fine,
+  // which is this project's defining failure with a new coat of paint (D-80).
+  const server = new McpServer(
+    { name: "lore", version: "0.1.0" },
+    { capabilities: { resources: { subscribe: true } } },
+  );
   const { store } = deps;
 
   /**
@@ -210,7 +220,15 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
         JSON.stringify({
           review_id: id,
           state: "queued",
-          note: "Started. This does NOT mean it finished — poll until a terminal state.",
+          // THE STRING A CLIENT IS GUARANTEED TO READ, and it is not in `docs.ts`, which
+          // is how it survived the rewrite that moved every text in that file to
+          // subscribe-first. A tool description may or may not be in the model's
+          // context by the time this returns; the response note always is.
+          note:
+            "Started. This does NOT mean it finished. SUBSCRIBE: subscriptions/listen " +
+            `{ notifications: { resourceSubscriptions: ["lore://review/${id}"] } }, then review_poll ` +
+            "ONCE (a subscription has no replay), then wait to be woken. If your host cannot " +
+            "subscribe — common, and not a fault — poll from 10s backing off to 60s until a terminal state.",
         }),
       );
     },
@@ -484,6 +502,20 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       // already queued, so the submit is refused while the client's exit condition
       // reads as met. It would poll, see `fast_clean`, submit, and be refused again,
       // for ever, with no state named that it could actually wait for (df1fc19c).
+      //
+      // lore-ok[d3021c5e]: correct, and deliberately not closed by this commit. The
+      // ticket asked for a submit at any time, fully async; this refusal is D-55 and it
+      // is half the ask. What it needs is D-80's conversation half — the diff applied
+      // at once and handed to the live session as its next message — which SPEC D-80 §6
+      // marks `[OPEN]` on two questions that must be answered first: whether a long
+      // conversation beats repeated cold rounds on COST, measured rather than argued
+      // (a session re-sends its accumulated context every turn, D-50, against a 97-99%
+      // cache hit on cold rounds), and how the deep tiers enter a conversation the
+      // cheap tier has been having. Both change which models are called and how much
+      // quota burns, which is the operator's decision, not a reviewer's or mine.
+      // The prerequisite landed today — D-6 revised, so a submit no longer resets the
+      // ladder, which is what made an interactive submit incoherent. This is the next
+      // commit, not a patch to one already ten rounds deep.
       if (store.hasPendingRound(review_id)) {
         throw new Error(
           `a review round is pending for ${review_id}; a reviewer is reading — or is about to read — the ` +
@@ -821,17 +853,31 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       // code". A trap with an exit sign on it.
       //
       // Raised by Kimi against the commit that wrote that sentence into D-77.
-      const resumed = store.resumeNeedsHuman(who.repoId);
+      //
+      // BUT ONLY WHEN NOTHING ELSE IS STILL OPEN. `needsHuman` is recomputed from
+      // `openConflicts(repoId)`, which is repo-wide: a parked review is blocked by
+      // EVERY open conflict in the repository, not by one it could name. So resuming
+      // while another conflict is unsettled buys each review one paid round and parks
+      // it again at the end of it, while `resumed_reviews` reports progress that is
+      // not happening. Raised on the commit that added the resume — the exit sign
+      // fixed, and pointing at a second wall.
+      const blocking = store.openConflicts(who.repoId).length;
+      const resumed = blocking === 0 ? store.resumeNeedsHuman(who.repoId) : 0;
+      const kept = "The losing rule is retired, not deleted: the decision stays reconstructable.";
       return text(
         JSON.stringify({
           resolved: true,
           retired: retire,
           resumed_reviews: resumed,
+          conflicts_still_open: blocking,
           note:
-            resumed > 0
-              ? `The losing rule is retired, not deleted: the decision stays reconstructable. ${resumed} review(s) ` +
-                "that were waiting on this question have been resumed — poll them."
-              : "The losing rule is retired, not deleted: the decision stays reconstructable.",
+            blocking > 0
+              ? `${kept} ${blocking} other conflict(s) in this repository are still open, and a parked review is ` +
+                "blocked by all of them — so NOTHING was resumed. Settle them too; the reviews resume when the " +
+                "last one is gone."
+              : resumed > 0
+                ? `${kept} ${resumed} review(s) that were waiting have been resumed — poll them.`
+                : kept,
         }),
       );
     },

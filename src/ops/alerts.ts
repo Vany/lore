@@ -3,9 +3,11 @@
  *
  * Two audiences, two channels, never blended (D-41/D-42). Developers are alerted
  * by their own client — `lore` returns information and the client decides what
- * deserves an alarm, which is also the only implementable design since MCP servers
- * cannot initiate requests. This file is the *other* channel: about the service,
- * never about a review.
+ * deserves an alarm. That used to be the only implementable design too, on the
+ * grounds that MCP servers cannot initiate requests; since D-80 lore *can* wake a
+ * subscribed client, and the split survives on its own merit: waking a client is not
+ * the same as declaring something urgent, and urgency is the client's call. This file
+ * is the *other* channel: about the service, never about a review.
  *
  * One review failing is a log line. Reviews failing **as a class** is an alert.
  *

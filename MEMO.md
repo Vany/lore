@@ -5,6 +5,103 @@ surprised me.
 
 ---
 
+## 2026-08-06 — session 35: the server can wake the client, and mostly won't be asked to
+
+**Built the subscription half of D-80.** `subscriptions/listen` on
+`lore://review/{review_id}`, woken by every state change and by nothing else. Eight
+tests in `src/service/subscribe.test.ts` drive it with a real MCP client end to end.
+
+**The design decision that made it small: publish from the store, not from the callers.**
+`updateReview` has ten call sites and `recordFinding` two. A hand-maintained list of
+places to publish from is the shape that has produced a missing case here every single
+time, so `Store.events` is a late-bound field and the two mutations publish. The worker
+publishes nothing and knows nothing about MCP.
+
+**What surprised me, and it reshapes the decision: the era is opt-in on the client.**
+`subscriptions/listen` exists only on a 2026-07-28 connection, and
+`@modelcontextprotocol/client` defaults to `versionNegotiation: 'legacy'`. My first test
+run connected with the defaults and `listen()` threw *"requires a 2026-07-28-era
+connection (negotiated: 2025-11-25)"* — while the server was advertising
+`resources.subscribe` and serving the modern era perfectly well. So the feature works and
+almost no client will reach it. Polling is not the fallback for stragglers; it is what
+every unconfigured client does. `research/mcp-subscriptions.md` §4.
+
+Two smaller traps in the same area, both of which fail *silently*:
+
+- **`registerResource` advertises `listChanged`, never `subscribe`.** Without the
+  explicit capability the listen router accepts the subscription, acknowledges it with
+  an empty filter, and never delivers anything. Accepted and silent forever — the exact
+  failure this project is named after. The test asserts the honoured filter, not just
+  that `listen()` resolved.
+- **`LATEST_PROTOCOL_VERSION` is `2025-11-25`.** The modern revision is a separate
+  constant. Reading that name as "newest thing the SDK speaks" is wrong.
+
+**One handler for the process, servers still per request.** The listen router lives in
+the handler, so a handler per request would kill the stream with the exchange that opened
+it. `createMcpHandler`'s factory closes over the principal from `req.auth`, so the D-23
+guarantee is untouched: an instance is still built for exactly one principal. `token: ""`
+in that `AuthInfo` is deliberate — the field is required, nothing downstream needs the
+secret, and a credential copied into a pass-through struct is a credential in every stack
+trace that struct appears in.
+
+**Retired a sentence that had been load-bearing in three files.** *"MCP servers cannot
+initiate requests"* justified polling in `SPEC.md` §2, D-41/42 and `worker.ts`. It is true
+about *requests* and was carrying an argument about *notifications*. D-41's two-channel
+split survives on its own merit — waking a client is not the same as declaring something
+urgent — but it is now a decision rather than a constraint.
+
+**Did not start the conversation half of D-80.** Two `[OPEN]` questions still gate it:
+whether a long conversation beats repeated cold rounds on cost (measured, not argued),
+and how the deep tiers enter a conversation the cheap tier has been having. D-55 stands
+until then.
+
+**Then D-77 ran on it, and this is the part worth reading.** Nine rounds, t1×5 t2×4,
+eight findings raised and settled. What the ladder found in my own subscription code:
+
+- **The listen router authorizes NOTHING.** t2 read my own comment about the capability
+  bit and drew the conclusion I had not: `resources.subscribe` is declared once for the
+  server, so any authenticated client could subscribe to somebody else's review id and
+  be woken by it — an existence-and-activity oracle for exactly the thing `mine()`
+  answers NOT FOUND to (D-23). And a stream outlived the revocation of the token that
+  opened it, making `make revoke` a false statement. Fixed with a `ScopedEventBus`
+  filtering per event on owner and token liveness; the identity reaches it through an
+  `AsyncLocalStorage`, because the SDK hands the bus a bare callback.
+- **My own negative test was a race**, in a file whose header says negative tests must
+  not be races. And when I rewrote it I got it wrong again: I used the OTHER client's
+  arrival as the ordering barrier, which orders nothing across two sockets — it passed
+  against the unfixed code, which is how I caught it.
+- **`updateReview` published BEFORE the write**, under a comment saying it published
+  after. The defect class this repository is worst at, inside the feature meant to keep
+  clients informed.
+- **The expiry sweep wrote `state` with its own SQL**, so the one state change a
+  waiting client most needs woke nobody. My own comment predicting exactly this sat in
+  a file I never opened.
+- **A wake per finding, and a wake per no-op write.** Both fixed by narrowing the rule
+  to one sentence: a wake means the review's STATE changed. Findings arrive in a burst
+  and the client cannot act on one mid-round anyway (D-55); a round boundary rewrites
+  `running` over `running` twice per tier.
+- **`knowledge_escalate` was a one-way door.** `resolveConflict` matched only `open`, so
+  the state a person is called to settle was the one state nothing could settle. Latent
+  for weeks; my new resume gate turned it into a review that could never resume.
+
+**And the review itself failed, correctly and uselessly.** Round nine hit the per-tier
+bound, which is a real terminal answer — and `failed_because` said *"no reason was
+recorded, which is itself a defect"*, because `failureReason` read only `job.last_error`
+and a ladder-stopped review leaves every job `done`. The cause was known exactly and
+thrown away. Now recorded on the review, with the instruction that actually ends it:
+answer minimally.
+
+**The loop that got me there is the one MEMO already recorded once**: every fix to a
+prose finding writes new prose for the next round to fault. Five rounds of it last
+session, nine this time. The per-tier bound is what stops it, and it is doing its job —
+what is missing is not a bigger bound but shorter answers.
+
+**Dogfooding note.** The subscription was watched live against the deployed service
+throughout, with a pinned 2026-07-28 client. It works; it also woke three times in one
+millisecond at every round boundary, which is what led to the two narrowing findings.
+
+---
+
 ## 2026-08-06 — session 34: the refactor I argued against, and the debt underneath it
 
 **Vany asked me to plan a huge refactoring toward "state of the art". I argued

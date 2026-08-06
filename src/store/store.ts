@@ -19,6 +19,7 @@ import type { LadderState } from "../core/ladder.ts";
 import { TERMINAL_SQL, type ReviewState } from "../core/review-state.ts";
 import type { Scope } from "../core/scope.ts";
 import { DDL, FINDING_ORDER_SQL, PRAGMAS, SCHEMA_VERSION, applyMigrations, assertNotDowngrade } from "./schema.ts";
+import { NO_EVENTS, type ReviewEvents } from "../mcp/events.ts";
 
 export interface RepoRow {
   readonly id: string;
@@ -162,6 +163,23 @@ function now(): string {
 
 export class Store {
   readonly db: DatabaseSync;
+
+  /**
+   * Who to tell when a review moves — set once during wiring, after the MCP handler
+   * that owns the publish side exists (D-80).
+   *
+   * Late-bound rather than a constructor argument because of a genuine ordering
+   * problem: the store is opened before anything is serving, and the notifier belongs
+   * to the handler. Defaulting to a no-op means the CLI and every test that does not
+   * care simply never notice — publishing into the void is correct where nothing can
+   * subscribe, and must stay silent so the log keeps carrying only real faults.
+   *
+   * Set HERE rather than at each mutation site: `updateReview` has ten callers and
+   * `recordFinding` two, and a hand-maintained list of places to publish from is the
+   * shape that has produced a missing case every single time it has been tried in
+   * this codebase.
+   */
+  events: ReviewEvents = NO_EVENTS;
 
   constructor(path: string) {
     this.db = new DatabaseSync(path);
@@ -316,6 +334,10 @@ export class Store {
   }
 
   updateReview(id: string, patch: { state?: ReviewState; ladder?: LadderState; treeHash?: string }): void {
+    // Read first, so the wake below can be about a CHANGE rather than about a write.
+    const before = this.db.prepare("SELECT state FROM review WHERE id = ?").get(id) as
+      | Record<string, string>
+      | undefined;
     const sets: string[] = ["updated_at = ?"];
     const args: (string | null)[] = [now()];
     if (patch.state !== undefined) {
@@ -332,6 +354,87 @@ export class Store {
     }
     args.push(id);
     this.db.prepare(`UPDATE review SET ${sets.join(", ")} WHERE id = ?`).run(...args);
+    // THE ONLY PLACE A SUBSCRIBED CLIENT IS WOKEN. `recordFinding` deliberately does
+    // not — see the note there.
+    //
+    // AFTER the write. The comment here used to say exactly that while the call sat
+    // above the UPDATE: the false-statement-about-behaviour this repository is worst
+    // at, written into the feature that exists to keep clients informed. Woken first,
+    // a client re-reads and sees the state it was just told had changed; if the write
+    // then throws, it waits for a second wake that will never come. Caught by t2 on
+    // the commit that wrote it.
+    //
+    // And ONLY on a state change, which is the promise `spec/mcp-api.md` §2.0.1 makes.
+    // Every round boundary writes `state: running` over `running`, and the next round
+    // writes it again — so a review climbing t1→t2→t3 with nothing to report woke its
+    // subscriber twice per tier, each wake costing an LLM turn to poll and learn
+    // nothing. That is the same shape as notifying on a re-raised finding, which this
+    // file already refuses for the same reason: a notification per non-event teaches a
+    // client to ignore the stream. The ladder cursor is deliberately NOT news — it is
+    // bookkeeping the client cannot act on.
+    if (patch.state !== undefined && patch.state !== before?.["state"]) this.events.changed(id);
+  }
+
+  /**
+   * Expire every review that has not moved since `cutoff`, and wake whoever waited.
+   *
+   * The SQL used to live in `ops/retention.ts` and wrote `state` directly, which made
+   * it the one review-state mutation that published nothing: a client subscribed to a
+   * review — the path the docs lead with — was never told it had been abandoned, and
+   * waited on a stream that would never deliver for it again. Exactly the failure the
+   * comment on `events` predicts, in a file that comment's author never looked at.
+   * Raised by t1 one round after the subscriptions landed.
+   *
+   * Ids are read inside the transaction and published after it commits: woken before,
+   * a client re-reads and sees a review that is still open.
+   */
+  expireStaleReviews(cutoff: string): readonly string[] {
+    const ids = this.tx(() => {
+      const rows = this.db
+        .prepare(`SELECT id FROM review WHERE updated_at < ? AND state NOT IN (${TERMINAL_SQL})`)
+        .all(cutoff) as Record<string, string>[];
+      if (rows.length > 0) {
+        this.db
+          .prepare(
+            `UPDATE review SET state = 'expired', updated_at = ?
+             WHERE updated_at < ? AND state NOT IN (${TERMINAL_SQL})`,
+          )
+          .run(now(), cutoff);
+      }
+      return rows.map((r) => r["id"] ?? "");
+    });
+    for (const id of ids) this.events.changed(id);
+    return ids;
+  }
+
+  /**
+   * Who a review belongs to — the ownership rule, without the review.
+   *
+   * `getReview` already enforces this and takes the principal as an argument, because
+   * its answer is a review. This answers the narrower question a subscription stream
+   * asks — *may THIS listener hear about THIS id* — where the caller holds the
+   * subscriber and the id is whatever the client typed. `undefined` for an id that does
+   * not exist, which the bus treats identically to one that is somebody else's: see
+   * `ScopedEventBus`, and `mine()`'s NOT FOUND, for the same reason.
+   */
+  ownerOf(reviewId: string): { readonly principal: string; readonly repoId: string } | undefined {
+    const row = this.db
+      .prepare("SELECT principal, repo_id FROM review WHERE id = ?")
+      .get(reviewId) as Record<string, string> | undefined;
+    if (row === undefined) return undefined;
+    return { principal: row["principal"] ?? "", repoId: row["repo_id"] ?? "" };
+  }
+
+  /**
+   * Whether a token is still live, by its stored hash.
+   *
+   * Authentication happens once per HTTP exchange, and a `subscriptions/listen` stream
+   * is one exchange that stays open for hours. Without re-checking, revoking a leaked
+   * token would leave every stream it had already opened delivering — while `make
+   * revoke` tells an operator the opposite.
+   */
+  tokenLive(hash: string): boolean {
+    return this.db.prepare("SELECT 1 FROM token WHERE hash = ? AND revoked_at IS NULL").get(hash) !== undefined;
   }
 
   /** Reviews for a principal, newest first — backs `review.inbox`. */
@@ -464,6 +567,23 @@ export class Store {
    * wins and `first_seen` is preserved. Returns whether this was genuinely new.
    */
   recordFinding(reviewId: string, f: RecordedFinding): boolean {
+    // THIS DOES NOT WAKE ANYONE, and the reasoning is worth keeping because the first
+    // version did.
+    //
+    // A round records its findings in one synchronous burst, so N findings meant N
+    // notifications within milliseconds — and the shipped instruction is to poll on
+    // each wake, where the first poll returns all N (deltas) and the rest return
+    // nothing. N-1 client turns spent to learn nothing, which is the same waste this
+    // file refuses for a re-raised finding, one level along.
+    //
+    // And the client could not have acted on any of them: D-55 refuses a submit while
+    // the round is running, so a mid-round wake tells a client something it must sit
+    // on until the round ends. The round END is a state change to `findings_ready`,
+    // and `updateReview` publishes that. So a wake means exactly one thing — the
+    // review's state changed — which is the only thing a client can act on.
+    //
+    // Raised by t2, twice, on consecutive rounds of the review of the commit that
+    // added subscriptions.
     const res = this.db
       .prepare(
         `INSERT INTO finding(review_id, fingerprint, file, line, symbol, severity, claim, evidence,
@@ -773,13 +893,22 @@ export class Store {
    * The losing rule is retired, not deleted: the decision has to be
    * reconstructable later, and "we used to believe X, until Y" is exactly the kind
    * of thing a codebase forgets and then re-litigates.
+   *
+   * **`needs-human` is settleable, and used not to be.** Only `state = 'open'` matched,
+   * so `knowledge_escalate` was a one-way door: it moved a conflict to `needs-human`
+   * and nothing on earth could move it back, while D-77 and `spec/knowledge.md` §7.3
+   * both say the exit from an escalation is a person deciding and the client calling
+   * this. Latent until the resume gate started counting escalated conflicts as
+   * blocking, which turned it into a review that could never be resumed and a reply
+   * telling the client to do something the API refuses. Raised by t2 on the round that
+   * introduced the gate.
    */
   resolveConflict(repoId: string, keepId: string, retireId: string, reason: string): boolean {
     return this.tx(() => {
       const open = this.db
         .prepare(
           `SELECT id FROM knowledge_conflict
-           WHERE repo_id = ? AND state = 'open'
+           WHERE repo_id = ? AND state IN ('open', 'needs-human')
              AND ((left_id = ? AND right_id = ?) OR (left_id = ? AND right_id = ?))`,
         )
         .get(repoId, keepId, retireId, retireId, keepId) as Record<string, number> | undefined;
@@ -1080,10 +1209,26 @@ export class Store {
   }
 
   failureReason(reviewId: string): string | undefined {
+    // The review's own reason first. `job.last_error` only ever covers a round that
+    // THREW; a review stopped by the ladder — a round bound reached — left every job
+    // `done` with no error, so `review_poll` answered "no reason was recorded, which is
+    // itself a defect" about a cause the code knew exactly. Raised against a review of
+    // this repository that had itself just hit the per-tier bound (D-57, INV-1).
+    const own = this.db.prepare("SELECT failed_because FROM review WHERE id = ?").get(reviewId) as
+      | Record<string, string | null>
+      | undefined;
+    const stated = own?.["failed_because"];
+    if (typeof stated === "string" && stated !== "") return stated;
+
     const row = this.db
       .prepare("SELECT last_error FROM job WHERE review_id = ? AND last_error IS NOT NULL ORDER BY id DESC LIMIT 1")
       .get(reviewId) as { last_error: string } | undefined;
     return row?.last_error ?? undefined;
+  }
+
+  /** Record why a review will not finish, for `failureReason` to hand to the client. */
+  setFailureReason(reviewId: string, why: string): void {
+    this.db.prepare("UPDATE review SET failed_because = ? WHERE id = ?").run(why, reviewId);
   }
 
   /**

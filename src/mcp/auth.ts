@@ -18,6 +18,15 @@ import type { Store } from "../store/store.ts";
 export interface Principal {
   readonly principal: string;
   readonly repoId: string;
+  /**
+   * The SHA-256 of the presented token — the row's own key, never the token.
+   *
+   * Here so that something authenticated once and then held open, namely a
+   * `subscriptions/listen` stream, can be re-checked against revocation later
+   * (`ScopedEventBus`). A hash is not a credential: it cannot be presented, and it is
+   * exactly what is already on disk. The token itself is compared and discarded.
+   */
+  readonly tokenHash: string;
 }
 
 const PREFIX = "lore_";
@@ -58,7 +67,11 @@ export function authenticate(store: Store, header: string | undefined): Principa
   for (const row of rows) {
     const known = Buffer.from(row["hash"] ?? "", "hex");
     if (known.length === given.length && timingSafeEqual(known, given)) {
-      return { principal: row["principal"] ?? "", repoId: row["repo_id"] ?? "" };
+      return {
+        principal: row["principal"] ?? "",
+        repoId: row["repo_id"] ?? "",
+        tokenHash: row["hash"] ?? "",
+      };
     }
   }
   return undefined;

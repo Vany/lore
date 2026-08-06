@@ -21,7 +21,7 @@ import { SEVERITIES } from "../core/finding.ts";
 // adds the columns, because this number is what `assertNotDowngrade` compares — left
 // behind, it says a database written by this build is identical to one written before
 // the columns existed (3f464578).
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 
 /**
  * How findings are ordered wherever the service hands them out: worst first.
@@ -94,6 +94,12 @@ CREATE TABLE IF NOT EXISTS review (
   -- (D-40): if the branch moved, the signature does not describe what is there now.
   tree_hash   TEXT,
   ladder      TEXT NOT NULL,
+  -- WHY a review did not run, in the client's words, when the LADDER is what stopped
+  -- it rather than a round that threw. failureReason used to read only job.last_error,
+  -- which covers a throw and nothing else, so hitting a round bound produced a bare
+  -- 'failed' whose own message said "no reason was recorded, which is itself a defect".
+  -- It was: the bound and the tier that hit it were known exactly (D-57, INV-1).
+  failed_because TEXT,
   created_at  TEXT NOT NULL,
   updated_at  TEXT NOT NULL
 );
@@ -272,6 +278,8 @@ export const MIGRATIONS: readonly { readonly table: string; readonly column: str
   { table: "review", column: "behind_by", sql: "ALTER TABLE review ADD COLUMN behind_by INTEGER" },
   // Whether this finding is about code the branch never touched (D-68).
   { table: "finding", column: "preexisting", sql: "ALTER TABLE finding ADD COLUMN preexisting INTEGER" },
+  // Why the ladder stopped, when it is the ladder that stopped it rather than a throw.
+  { table: "review", column: "failed_because", sql: "ALTER TABLE review ADD COLUMN failed_because TEXT" },
 ];
 
 /**

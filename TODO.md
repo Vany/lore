@@ -759,31 +759,58 @@ watched the database and the log.
       but whether rotation can hand reviews over is a decision, and making it after
       someone rotates is the wrong order.
 
-- [ ] **A client can be told a review finished; we have been assuming it cannot.**
-      Checked in the installed SDK 2026-08-06, not recalled:
+- [x] **A client can be told a review finished; we had been assuming it cannot.**
+      Built 2026-08-06, D-80. `subscriptions/listen` on `lore://review/{review_id}`,
+      woken by every state change and by nothing else; eight tests drive it with a real
+      MCP client (`src/service/subscribe.test.ts`). The premise it contradicted —
+      *"MCP servers cannot initiate requests"* — was true about **requests** and had
+      been carrying an argument about **notifications** in SPEC §2, D-41/42 and
+      `worker.ts`; all three now say what is actually true.
+      Tasks (`CreateTaskResult`, `tasks/get`) were the other candidate and are the
+      better conceptual fit, but change the client contract; recorded in
+      `research/mcp-subscriptions.md` §3 so the choice stays a decision rather than a
+      default. What is left is the item below.
 
-      | mechanism | where | fits |
-      |---|---|---|
-      | `resources/subscribe` + `notifications/resources/updated`, with a `subscribe` capability flag | `@modelcontextprotocol/core` | `lore://review/{id}` already exists as a resource template — subscribe, get told it changed, re-read |
-      | task-augmented requests, `CreateTaskResult`, `tasks/get`/`status`/`result`/`cancel` | `core` **and** `server` | a tool call that models long-running work natively — which is exactly what `review_start` is |
+- [ ] **The per-tier round bound is doing its job, and it is the wrong instrument.**
+      Two reviews of this repository have now ended `failed` on it — five rounds in
+      session 34, nine on 2026-08-06 — and both for the same reason: every answer to a
+      prose finding is new prose for the next round to fault. The bound is a real
+      terminal answer and stopping is right; what it cannot say is *why* the loop
+      happened, and raising it would only buy more rounds of the same.
 
-      **The premise this contradicts is load-bearing.** SPEC §2 and D-41 say *"MCP
-      servers cannot initiate requests"*, and the whole polling design, the two-stage
-      split (D-34) and "the client owns the alarm" rest on it. It is true about
-      *requests* and has been used to justify a conclusion it does not support:
-      servers can send **notifications**, and one of these two is purpose-built for
-      "tell me when this long thing is done".
+      What has been done: the failure now names the bound, the tiers and the rounds,
+      and says the thing that actually ends it — answer MINIMALLY, then start a fresh
+      review of the final tree. `review_submit`'s docs already say the same.
 
-      The task shape is the better fit — `review_start` exists because a review
-      outlives a request, which is the exact problem `CreateTaskResult` was added for —
-      but it changes the client contract, so it is a decision rather than a patch.
-      Subscription is smaller and additive: no new tools, one existing resource.
+      What is NOT done and needs a decision, because it changes quota burn and is
+      therefore Vany's: whether a *documentation-only* answer should reset the per-tier
+      counter differently from a code answer, or whether the honest fix is that lore
+      should stop reviewing its own prose past round N. Measure first: of the findings
+      in the two runs that hit the bound, count how many were about wording versus
+      behaviour.
 
-      **Unverified and must be, before either is built:** what a real client actually
-      supports. A capability the client does not declare buys nothing, so polling stays
-      as the fallback whatever happens — and "verify the platform, don't recall it" is
-      the lesson from the `.mcp.json` that could never have been pasted (MEMO session
-      31). Point a client at a stub and watch what it negotiates.
+- [ ] **Find out what Claude Code actually negotiates.** The subscription path is built
+      and the thing that decides whether it is ever used is still unmeasured — this is
+      the same "verify the platform, don't recall it" item as before, and it survived
+      the implementation rather than being answered by it.
+
+      What IS measured (2026-08-06): the official client SDK defaults to
+      `versionNegotiation: 'legacy'`, and `subscriptions/listen` exists **only** on a
+      2026-07-28 connection. Connecting with the defaults and calling `listen()` throws
+      *"requires a 2026-07-28-era connection (negotiated: 2025-11-25)"* against a server
+      that is serving the modern era correctly. So the feature is reachable only by a
+      client that asks for the newer revision.
+
+      That makes polling the majority path, not the fallback for stragglers, and the
+      tool texts now say a failed subscribe is normal rather than a lore fault. If
+      Claude Code turns out to negotiate up, the ordering in `spec/mcp-async.md` §4 is
+      right as written and the abandonment problem (D-70) largely goes away; if it does
+      not, the subscription surface is dead code that costs nothing and buys nothing,
+      and that should be recorded rather than left looking like a feature.
+      **Measure it the way it must be measured:** point a client at the deployed
+      service and read what it sends. Not by reasoning about the SDK default — the
+      `.mcp.json` that could never have been pasted was wrong for weeks in exactly that
+      way (MEMO session 31).
 
 - [ ] **Auto-resolve a conflict whose rules can be ordered** (D-39, revised
       2026-08-06). Specced, not built. A person is called only when neither `source`

@@ -563,6 +563,54 @@ describe("an empty knowledge base explains itself", () => {
   });
 });
 
+// RESUMING A REVIEW THAT WILL ONLY PARK AGAIN IS NOT PROGRESS, and reporting it as
+// progress is worse than not resuming. `needsHuman` is recomputed from
+// `openConflicts(repoId)`, which is repo-wide: a parked review is blocked by EVERY open
+// conflict in the repository, not by one it could name. So settling one of two bought
+// each waiting review a paid round and parked it again at the end of it, while
+// `resumed_reviews` said they were moving. Raised by t1 against the commit that added
+// the resume — the exit sign fixed, pointing at a second wall.
+describe("settling one of several conflicts resumes nothing, and says so", () => {
+  const parked = (id: string) => {
+    store.createReview({
+      id, repoId, principal: "alice", branch: `feat/${id}`, intoRef: "main",
+      ticket: "t", type: "code-arch", state: "needs_human", ladder: initialState(),
+    });
+  };
+  const rule = (statement: string) =>
+    store.addKnowledge({
+      repoId, kind: "rule", source: "taught", statement, why: "because",
+      path: undefined, cwe: undefined, provenance: undefined,
+      sourceBlob: undefined, confidence: undefined,
+    }).id;
+
+  it("holds the reviews while another conflict is open, and names how many", async () => {
+    const [a, b, c, d] = [rule("holds expire"), rule("holds never expire"), rule("x is y"), rule("x is not y")];
+    store.recordConflict(repoId, a as string, b as string);
+    store.recordConflict(repoId, c as string, d as string);
+    parked("revP");
+
+    const out = await callTool("knowledge_resolve", { keep: a, retire: b, reason: "ADR-0026 says so" });
+    expect(out["resolved"]).toBe(true);
+    expect(out["resumed_reviews"]).toBe(0);
+    expect(out["conflicts_still_open"]).toBe(1);
+    expect(String(out["note"])).toContain("still open");
+    // Still parked, and NOT charged for a round that would have re-parked it.
+    expect(store.getReview("revP", "alice")?.state).toBe("needs_human");
+  });
+
+  it("resumes them when the last one is settled", async () => {
+    const [a, b] = [rule("holds expire"), rule("holds never expire")];
+    store.recordConflict(repoId, a as string, b as string);
+    parked("revP");
+
+    const out = await callTool("knowledge_resolve", { keep: a, retire: b, reason: "ADR-0026 says so" });
+    expect(out["resumed_reviews"]).toBe(1);
+    expect(out["conflicts_still_open"]).toBe(0);
+    expect(store.getReview("revP", "alice")?.state).toBe("queued");
+  });
+});
+
 // Six reviews of one branch in two hours, four of another, and 13 of 30 reviews
 // stopping at round 1 — measured on the first day a real client drove this.
 //

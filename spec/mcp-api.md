@@ -109,6 +109,81 @@ One prompt, `review(branch, into, ticket)`, drives the whole loop. It exists bec
 an agent handed only tools improvises the multi-round, stateful part, and improvises
 it wrong.
 
+### 2.0.1 Being woken instead of asking (D-80)
+
+`lore://review/{review_id}` is also **subscribable**. The server declares
+`resources: { subscribe: true }`, and a client on a 2026-07-28 connection opens
+
+```jsonc
+{ "method": "subscriptions/listen",
+  "params": { "notifications": { "resourceSubscriptions": ["lore://review/<id>"] } } }
+```
+
+and is then sent `notifications/resources/updated` — carrying the URI and nothing else
+— **whenever that review's state changes, and only then**.
+
+That is the whole rule, and it is narrower than the obvious one on purpose. Findings do
+not wake anybody as they are recorded: a round writes them in one synchronous burst, so
+six findings would be six notifications within milliseconds, and a client following the
+instruction to poll on each wake would spend five LLM turns on empty deltas — the first
+poll returns all six. It could not act on them either, because §2.4 refuses a submit
+while the round is running. The round ends by moving the review to `findings_ready`, and
+that is the wake worth having.
+
+So a wake means exactly one thing: **the review's state changed and there is something
+new to do.** A write that changes no state — the ladder advancing a cursor, a round
+boundary rewriting `running` over `running` — sends nothing, for the same reason.
+
+**A subscription starts at NOW, and there is no replay.** Nothing is delivered for what
+happened before the stream opened, so a client must `review_poll` once immediately after
+subscribing. This is not a nicety: `findings_ready`, `awaiting_diff` and `needs_human`
+are states whose next move belongs to the client, so a review sitting in one produces no
+further events at all. A session that restarts, or that picks a review up from
+`review_inbox`, would subscribe exactly as instructed and then wait until the 48h sweep
+expired it — which is D-70's abandonment, recreated by the mechanism built to end it.
+Raised by t2 against the commit that added subscriptions.
+
+The events are per URI **and per principal**. Subscribing to one review does not
+deliver another's, and subscribing to a review that is not yours delivers nothing at
+all — see §2.0.2.
+
+**Two things a client must get right, both of which fail silently:**
+
+- **Check the acknowledgement.** The ack echoes the subset the server agreed to serve.
+  An empty one means the subscription was accepted and will never deliver.
+- **Expect to be unable to subscribe.** `subscriptions/listen` exists only on a
+  2026-07-28 connection, and the official client SDK negotiates the 2025 era by default
+  (`research/mcp-subscriptions.md` §4). A host that cannot subscribe is the common case,
+  not a fault in lore, and the tool texts say so — because a client concluding "lore is
+  broken" is this project's most expensive failure mode.
+
+### 2.0.2 A subscription is not a way around D-23
+
+**The MCP listen router authorizes nothing.** It matches an event's URI against the
+`resourceSubscriptions` list the client asked for; the `resources.subscribe` capability
+is declared once, for the server, and is not a per-resource decision. On the stock
+in-process bus, any authenticated client could therefore subscribe to
+`lore://review/<somebody else's id>` and be woken by every state change and every
+finding on it.
+
+Not the contents — reading the resource still goes through the ownership check. But
+D-23 is that **possession of a review id is never authentication**, and §2.2 answers a
+foreign id with NOT FOUND precisely so it cannot be used to confirm that an id is real.
+A stream that wakes on that id confirms it, and says when somebody is working. It is
+the same oracle one layer along, and an open stream would also outlive the revocation
+of the token that opened it — making `make revoke` a false statement to an operator.
+
+So delivery is filtered on the server, per event, against two facts that can change
+after a stream opens: **who owns the review**, and **whether the token is still live**.
+A subscription to a review that is not yours is accepted and then silent — the ack is
+written before the filter is consulted and cannot be narrowed — which is the same
+answer §2.2 gives, for the same reason: refusing loudly would confirm the id exists.
+
+Raised by t2 against the commit that added subscriptions.
+
+So: subscription answers *when*, `review_poll` answers *what*, and polling remains the
+floor for every client that cannot reach the newer revision.
+
 ### 2.1 `review_poll` returns deltas
 
 Each poll returns findings **new since the caller's last poll**, plus running
@@ -329,7 +404,10 @@ reviewing the wrong tree produces confident findings about code no one has.
 - Reviews are queued when a provider's concurrency cap is reached. **A review that
   dies on a 429 is a review that did not run**, so backpressure queues rather than
   fails.
-- A client closing its poll stream cancels nothing. Cancellation is explicit.
+- A client going away cancels nothing — neither stopping its polling nor closing a
+  `subscriptions/listen` stream. Cancellation is explicit (`review_cancel`). A dropped
+  connection is far more often a client crash or a network blip than an intention, and
+  a review killed by one is spend already burned for no verdict.
 
 ## 6. Usage logging
 

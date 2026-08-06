@@ -68,19 +68,26 @@ strongest model on the board on purpose. Greptile reached the same conclusion fr
                         developer merges into `into`
 ```
 
-A review outlives an MCP request, and **MCP servers cannot initiate requests** — so
-`start` returns an id and the client polls (`research/mcp-service-design.md` §2). There
-is no progress estimate, because we cannot honestly give one.
+A review outlives an MCP request, so `start` returns an id and the client is told the
+answer later. There is no progress estimate, because we cannot honestly give one.
 
-**That sentence is true and has been carrying more weight than it can hold.** A server
-cannot initiate a *request*; it can send **notifications**, and the installed SDK
-carries two mechanisms built for exactly this shape — `resources/subscribe` with
-`notifications/resources/updated`, and task-augmented requests with `tasks/status`.
-Polling is therefore the safe floor rather than "the only correct shape", and the
-difference matters because a client that must poll has no deadline, which is why
-reviews are abandoned in `findings_ready` until a sweep expires them (D-70). Checked in
-the SDK on 2026-08-06; what a real client negotiates is unverified and is the thing to
-establish first. `TODO.md`.
+**Two ways of being told, and the order matters.** A client that can reach the
+2026-07-28 protocol revision opens `subscriptions/listen` on `lore://review/{id}` and is
+woken by `notifications/resources/updated`; a client that cannot calls `review_poll` in
+a backoff loop. Subscription is the designed path — it is the one that removes the
+waiting, and it is what the tool texts lead with (D-80, `spec/mcp-async.md`).
+
+The old justification here — *"MCP servers cannot initiate requests"* — was true about
+**requests** and was carrying an argument it could not support: a server has always been
+able to send notifications, and since `2026-07-28` there is a mechanism built for exactly
+this shape. It shipped on 2026-08-06.
+
+Polling is still the floor, and for a measured reason rather than caution: the official
+client SDK negotiates the 2025 era **by default**, and `subscriptions/listen` does not
+exist there. So most clients will poll until one is shown to negotiate up
+(`research/mcp-subscriptions.md` §4). That is also why a client that must poll has no
+deadline, and why reviews are abandoned in `findings_ready` until a sweep expires them
+(D-70).
 
 Fixes arrive as diffs and are applied to a private worktree without committing —
 the client keeps ownership of its own history. Each submission carries a
@@ -161,7 +168,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-36** | Git submodules, not monorepos — a gitlink bump is expanded | confirmed |
 | **D-37** | T0 is the local bottleneck — but ~25 min/day, not 5 hours | **measured** |
 | **D-38** | `ticket` text is required — enables the scope-creep axis | confirmed |
-| **D-39** | Knowledge conflicts are findings; unresolvable ones need a human | confirmed |
+| **D-39** | Knowledge conflicts are findings; unresolvable ones need a human | confirmed; the 2026-08-06 narrowing is decided, not built |
 | **D-40** | Reviews are explicit and snapshot-pinned; attestation covers a tree | confirmed |
 | **D-41** | Developer alarms are the client's job; `lore` provides information | confirmed |
 | **D-42** | `lore` alerts devops about itself, with a heartbeat deadman | confirmed |
@@ -202,7 +209,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-77** | **Commit, review to a verdict, amend, push.** Nothing reaches origin unreviewed | `[OPEN]` |
 | **D-78** | A review answers to **the token that started it**, not to its repository | `[OPEN]` |
 | **D-79** | A finding is **what the author missed and would be hurt by** — asked, not filed | confirmed |
-| **D-80** | A review is **one conversation per tier**, not a series of audits. Fully async | `[OPEN]` |
+| **D-80** | A review is **one conversation per tier**, not a series of audits. Fully async | subscription live; conversation `[OPEN]` |
 
 **D-7, revised.** The earlier version dropped GLM-5.2 on Artificial Analysis's
 *cost per task* — which is tokens consumed × price on their benchmark, not a price.
@@ -334,18 +341,27 @@ a review and spends a person; a wrong auto-resolution retires a rule with its re
 preserved** (§7.1) and is recoverable by reading it back. With the detector at one for
 one, stopping is the more expensive mistake.
 
-So the ordering the store already holds is used instead of merely being described:
+**DECIDED, NOT BUILT — and the tense here matters, because this document is the one a
+session trusts.** What follows is what the code SHOULD do; `knowledge/conflict.ts`
+consults neither column today and every detected contradiction still escalates. The
+ordering it will use is already in the store:
 
-- **Source rank** — `taught` > `ingested` > `derived` (D-20). Different ranks decide
-  it: a rule a human stated outranks one inferred from reviews, and no person needs
-  asking to know that.
+- **Source rank** — `taught` > `ingested` > `derived` (D-20). Different ranks will
+  decide it: a rule a human stated outranks one inferred from reviews, and no person
+  needs asking to know that.
 - **Recency** — `verified_at`. Same rank, different times: the later one wins. That is
-  D-39's own prior, now acted on rather than noted and then ignored.
+  D-39's own prior, to be acted on rather than noted and then ignored.
 
-**A person is called when neither separates them** — same source rank and no usable
-difference in time, which is exactly what two rules re-ingested from one document
-revision look like. Then there genuinely is no way to tell which is current, guessing
-would be a coin toss, and the coin is a belief injected into every future session.
+**A person will be called when neither separates them** — same source rank and no
+usable difference in time, which is exactly what two rules re-ingested from one
+document revision look like. Then there genuinely is no way to tell which is current,
+guessing would be a coin toss, and the coin is a belief injected into every future
+session.
+
+Until it is built, every conflict calls a person, which is the original behaviour and
+the more expensive of the two mistakes. `TODO.md` carries it, and `spec/knowledge.md`
+§7.1 says the same thing in the same tense — this paragraph did not, and a reader who
+trusted this document alone would have believed rank and recency were in effect.
 
 Everything else about D-39 stands: the loser is retired with its reason rather than
 deleted, and while a `needs_human` is open the review cannot pass, cannot attest, and
@@ -999,10 +1015,42 @@ see the settled tree, or a conversation with t1 becomes the whole review. The la
 still has to climb; what changes is that it climbs from a settled conversation rather
 than from a fresh audit.
 
-`[OPEN]` — the design is agreed and the consequences above are not yet resolved. Two
-questions before it ships: whether a long conversation is cheaper or dearer than
-repeated cold rounds, measured rather than argued; and how the deep tiers enter a
-conversation the cheap tier has been having.
+**The subscription half is built; the conversation half is not.** `subscriptions/listen`
+against `lore://review/{review_id}` is live and proved end to end against a real MCP
+client (`src/service/subscribe.test.ts`): the server declares `resources.subscribe`, one
+handler for the process owns the listen router, and a **state change** — nothing else —
+wakes the subscribers of that review and nobody else.
+
+That rule got narrower twice under review, both times for the same reason. Findings do
+not wake anyone as they are recorded: a round writes them in one burst, so six findings
+were six notifications and, under "poll on each wake", five wasted LLM turns on empty
+deltas — and D-55 refuses the submit until the round ends anyway. A write that changes
+no state does not wake anyone either: every round boundary rewrites `running` over
+`running`, so a review climbing the ladder woke its subscriber twice per tier with
+nothing to report. A notification per non-event teaches a client to ignore the stream,
+which costs more than every notification saves.
+
+**And it does not weaken D-23, though the first version did.** The MCP listen router
+authorizes nothing: it matches URIs against what the client asked for, so on the stock
+bus a subscription to somebody else's review id would have been an existence-and-activity
+oracle for exactly the thing `getReview` answers with NOT FOUND — and a stream would have
+outlived the revocation of the token that opened it. Delivery is filtered per event
+against the review's owner and the token's liveness (`spec/mcp-api.md` §2.0.2). Raised by
+t2 against the commit that added subscriptions, which is D-77 doing its job on the change
+that made it possible.
+
+One measured fact reshapes the ordering above: `subscriptions/listen` exists **only on a
+2026-07-28 connection**, and the official client SDK negotiates the 2025 era by default.
+A client that connects the ordinary way cannot subscribe however much lore advertises.
+So subscription is the *designed* path and the one the docs lead with, while polling is
+what most clients will actually do until a specific client is shown to negotiate up —
+and the tool texts now say that a failed subscribe is normal rather than a lore fault,
+because "client reports lore as broken" is the failure this project keeps having.
+
+`[OPEN]` — the conversation half. Two questions before it ships: whether a long
+conversation is cheaper or dearer than repeated cold rounds, measured rather than
+argued; and how the deep tiers enter a conversation the cheap tier has been having.
+Until then D-55 stands: a submit during a running round is still refused.
 
 **D-79 — a finding is something the author missed and would be hurt by, addressed to
 them as a question.**
@@ -1720,8 +1768,10 @@ eleven differently-worded complaints are not. Optional, because forcing a CWE on
 `docker-compose.yml`, matching the workgroup's existing convention.
 
 **D-41 / D-42 — two audiences, two channels, never blended.** `lore` does not notify
-developers; it returns information and the client decides what deserves an alarm.
-That is also forced by the protocol, since MCP servers cannot initiate requests. Our
+developers; it returns information and the client decides what deserves an alarm. That
+was once forced by the protocol as well; since D-80 it is not — lore *can* wake a
+subscribed client — and it remains true as a decision: waking a client is not the same
+as deciding something is urgent, and the client still owns that judgement. Our
 obligation is to make urgency **machine-classifiable** — explicit `severity`,
 `needs_human` as its own state, `fast_clean`/`failed`/`expired` never blended into
 "not passed" — so a client never infers urgency from prose.

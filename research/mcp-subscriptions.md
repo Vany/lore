@@ -112,7 +112,10 @@ audit trail — richer than `review_poll`.
 ```
 
 `subscribe` and `listChanged` are independent; a server may declare either, both or
-neither. **lore currently declares no resource capability at all.**
+neither. lore declares both (`src/mcp/server.ts`); `listChanged` comes free with
+`registerResource`, `subscribe` had to be asked for. Without the `subscribe` bit the
+listen router drops `resourceSubscriptions` from the honoured filter and answers the
+subscription with an empty ack — accepted, and silent forever.
 
 ## 3. Tasks, the other candidate
 
@@ -126,13 +129,45 @@ Against it: adopting tasks changes the shape of the client contract, where subsc
 is additive and reuses a resource that already exists. Not researched in depth here;
 recorded so the choice is made knowingly rather than by default.
 
-## 4. What is NOT verified
+## 4. The era is opt-in on the client — measured 2026-08-06
 
-**Whether a real client negotiates any of this.** The spec is clear that a server may
-send only what the client subscribed to, so a client that never issues
-`subscriptions/listen` gets exactly today's behaviour however much lore declares. What
-Claude Code actually does is unknown and is the first thing to establish — by pointing
-it at a stub and reading what it sends, not by reasoning about it.
+`subscriptions/listen` exists **only on a 2026-07-28 connection**, and the official
+client SDK does not open one by default:
+
+```ts
+// @modelcontextprotocol/client 2.0.0 — the shape that actually compiles, copied from
+// src/service/subscribe.test.ts rather than paraphrased:
+new Client({ name, version }, { versionNegotiation: { mode: { pin: "2026-07-28" } } });
+
+// `mode` takes one of three values:
+//   'legacy' (THE DEFAULT) — no probe, plain 2025 connect, byte-identical to a 2025 client
+//   'auto'                 — probe with `server/discover`, fall back to legacy on anything
+//                            short of definitive modern evidence
+//   { pin: '2026-07-28' }  — modern or fail loudly
+```
+
+Measured, not read off the docs: `src/service/subscribe.test.ts` connected with the
+defaults and `client.listen()` threw
+
+> `subscriptions/listen requires a 2026-07-28-era connection (negotiated: 2025-11-25)`
+
+even though the server advertised `resources.subscribe` and served the modern era. The
+test pins the revision.
+
+The consequence for lore is not small. A client that connects the ordinary way sees the
+2025 surface, cannot subscribe, and must poll — so **polling is the majority path, not
+the fallback for stragglers**, until a specific client is shown to negotiate up.
+
+Note also that `LATEST_PROTOCOL_VERSION` in the SDK is `2025-11-25`: the modern revision
+is a separate constant (`MODERN_WIRE_REVISION`), not the maximum of that list. Reading
+`LATEST_PROTOCOL_VERSION` as "the newest thing this SDK speaks" is wrong.
+
+## 5. What is still NOT verified
+
+**What Claude Code negotiates.** The SDK default above is evidence about the SDK, not
+about the client we actually have — Claude Code may configure it. This is the first
+thing to establish, by pointing one at the service and reading what it sends, not by
+reasoning about it.
 
 That order matters here more than usual. The paste-able `.mcp.json` was wrong in three
 independent, individually fatal ways for weeks because nobody checked it against a
