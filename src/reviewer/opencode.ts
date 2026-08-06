@@ -97,6 +97,14 @@ export const DEFAULT_REVIEWER: ReviewerConfig = {
 export interface ReviewerLike {
   review(tier: Tier, prompt: string, worktree: string): Promise<ReviewerResult>;
   /**
+   * Characters of prompt this tier can hold, or `undefined` if unknown.
+   *
+   * The round compacts the diff to fit before spending anything. Optional so a fake
+   * reviewer need not model a window; absent means "do not compact", which is the
+   * safe direction — an unmeasurable tier must not be quietly given less to read.
+   */
+  promptBudgetChars?(tier: Tier): Promise<number | undefined>;
+  /**
    * In-flight and waiting model calls, for the operator view.
    *
    * D-26 asks one question — *is parallelism actually running, or silently queueing?*
@@ -186,6 +194,8 @@ export class Reviewer implements ReviewerLike {
   private readonly client: ReturnType<typeof createOpencodeClient>;
   private readonly cfg: ReviewerConfig;
   private readonly gate: Gate;
+  /** Lazily fetched, cached for the process: model id -> advertised context window. */
+  private limits?: Promise<Map<string, number>>;
 
   constructor(cfg: ReviewerConfig = DEFAULT_REVIEWER) {
     this.cfg = cfg;
@@ -223,6 +233,61 @@ export class Reviewer implements ReviewerLike {
 
   gateState(): GateState {
     return this.gate.state();
+  }
+
+  /**
+   * The share of a context window the OPENING prompt may occupy.
+   *
+   * Derived from our own completed runs, not chosen. A t1 review that finished sent a
+   * 218 KB diff — roughly 54k tokens — and its session recorded 135k–155k tokens
+   * against a 200k window by the time it answered. So agentic exploration multiplied
+   * the opening prompt by about three (D-50: an agent re-sends its accumulated context
+   * every turn). A prompt at a third of the window leaves room for that; a prompt at
+   * 95% of it, which is what the 741 KB branch produced, cannot even begin.
+   *
+   * Deliberately generous rather than tight. Refusing a tier that would have coped is
+   * the expensive mistake here — it costs an independent opinion — so this only fires
+   * where there is no plausible way through.
+   */
+  private static readonly PROMPT_SHARE = 0.35;
+
+  /** ~4 characters per token. Rough, and only ever used with a wide margin. */
+  private static readonly CHARS_PER_TOKEN = 4;
+
+  /**
+   * How many characters of prompt this tier can be given.
+   *
+   * The round asks before it builds, and compacts the diff to fit (`review.ts`). The
+   * limit comes from opencode's provider config rather than from a tiers file, for
+   * D-74's reason: model facts come from the provider, never from memory or from a
+   * name — `k3` carries 1M and `k3-256k` carries 262k, the suffix naming the smaller —
+   * and a second copy in config is a copy that drifts.
+   *
+   * `undefined` when the model is unknown to us, and the caller must then compact
+   * nothing: declining to review because a lookup failed would be a silent skip, which
+   * is the failure this whole path exists to remove.
+   */
+  async promptBudgetChars(tier: Tier): Promise<number | undefined> {
+    const limit = await this.contextLimit(tier.model ?? "");
+    return limit === undefined ? undefined : Math.floor(limit * Reviewer.PROMPT_SHARE * Reviewer.CHARS_PER_TOKEN);
+  }
+
+  /** Advertised context window for a provider-qualified model id, cached per process. */
+  private async contextLimit(model: string): Promise<number | undefined> {
+    if (this.limits === undefined) {
+      this.limits = (async (): Promise<Map<string, number>> => {
+        const out = new Map<string, number>();
+        const res = await this.client.config.providers().catch(() => undefined);
+        for (const p of res?.data?.providers ?? []) {
+          for (const [id, m] of Object.entries(p.models ?? {})) {
+            const ctx = (m as { limit?: { context?: number } }).limit?.context;
+            if (typeof ctx === "number" && ctx > 0) out.set(`${p.id}/${id}`, ctx);
+          }
+        }
+        return out;
+      })();
+    }
+    return (await this.limits).get(model);
   }
 
   /** What `review` does once it holds a slot. */

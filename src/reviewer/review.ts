@@ -18,7 +18,7 @@ import { fingerprint } from "../core/fingerprint.ts";
 import { parseLoreOk } from "../core/lore-ok.ts";
 import type { ReviewState } from "../core/review-state.ts";
 import type { ReviewType } from "../core/review-type.ts";
-import { Exhausted } from "../core/errors.ts";
+import { TierUnavailable, TooLargeForTier } from "../core/errors.ts";
 import { hunkAround, hunkStillPresent, makeScope, type Scope } from "../core/scope.ts";
 import { blobSha, computeDiff, renderDiff } from "../git/diff.ts";
 import { treeHash } from "../git/repo.ts";
@@ -63,6 +63,56 @@ export interface RoundResult {
   /** Findings settled as `fixed`: not re-raised by a qualified tier, code moved (D-56). */
   readonly fixed: readonly string[];
   readonly t0Unavailable: readonly string[];
+}
+
+/**
+ * Fit the prompt to this tier's context window by shrinking the DIFF, and error only
+ * when even a compacted prompt cannot fit.
+ *
+ * The diff is the only part that is both large and safely reducible. Everything else
+ * — the ticket, the knowledge, the settled ledger, the output contract — is either
+ * small or load-bearing, and cutting those would change what the reviewer is asked
+ * rather than how much of the code it sees.
+ *
+ * **Announced, always.** A shortened diff means the reviewer did not see the whole
+ * change, and a reviewer that does not know that will report clean about code it never
+ * read — INV-7, and the reason truncation has always carried a notice.
+ *
+ * **Compaction failing is an error, not a skip.** If the fixed parts alone overflow
+ * the window there is nothing to cut that would not change the question, and a review
+ * that cannot ask the question did not run.
+ */
+export async function compactToFit(
+  reviewer: ReviewerLike,
+  tier: Tier,
+  diffText: string,
+  build: (diffText: string) => string,
+): Promise<string> {
+  const budget = await reviewer.promptBudgetChars?.(tier);
+  const full = build(diffText);
+  // No measurable window is NOT a licence to send less. An unmeasurable tier gets the
+  // whole thing, exactly as before this existed.
+  if (budget === undefined || full.length <= budget) return full;
+
+  // What the prompt costs with no diff at all — the floor we cannot compact below.
+  const floor = build("").length;
+  const NOTICE_ROOM = 500;
+  const room = budget - floor - NOTICE_ROOM;
+
+  // Below this a "diff" is not a diff, it is a fragment — and a tier given a fragment
+  // produces confident findings about code it mostly did not see. Better to say so.
+  const MIN_USEFUL_DIFF = 4_000;
+  if (room < MIN_USEFUL_DIFF) {
+    throw new TooLargeForTier(tier.id, tier.model ?? "", Math.round(floor / 4), budget);
+  }
+
+  const kept = diffText.slice(0, room);
+  return build(
+    `${kept}\n\n[COMPACTED FOR THIS TIER: ${kept.length} of ${diffText.length} characters shown. ` +
+      `${tier.id} (${tier.model ?? "?"}) cannot hold the whole diff, so the rest was cut to fit its context ` +
+      `window. YOU HAVE NOT SEEN THE WHOLE CHANGE — read the remainder from the worktree before concluding ` +
+      `anything is absent, and say so if you could not. A smaller review scope is the real fix.]`,
+  );
 }
 
 export async function runRound(input: RoundInput): Promise<RoundResult> {
@@ -157,22 +207,40 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   await ingestDocs(store, review.repoId, worktree);
   detectAndRecord(store, review.repoId);
 
-  const prompt = reviewPrompt({
-    tier,
-    tierIndex: tiers.filter((t) => t.kind === "model").findIndex((t) => t.id === tier.id),
-    modelTierCount: tiers.filter((t) => t.kind === "model").length,
-    type,
-    worktree,
-    branch: review.branch,
-    ticket: review.ticket,
-    diff: renderDiff(diff),
-    t0: renderT0(t0),
-    // Selected against the changed files, not dumped wholesale: everything a repo
-    // knows would crowd the diff out of the context window.
-    knowledge: relevantTo(store, review.repoId, diff.changedFiles),
-    conflicts: renderConflicts(store, review.repoId),
-    settled: [...settledForPrompt, ...pending.map((p) => ({ finding: p.finding, rationale: p.reason }))],
-  });
+  const build = (diffText: string): string =>
+    reviewPrompt({
+      tier,
+      tierIndex: tiers.filter((t) => t.kind === "model").findIndex((t) => t.id === tier.id),
+      modelTierCount: tiers.filter((t) => t.kind === "model").length,
+      type,
+      worktree,
+      branch: review.branch,
+      ticket: review.ticket,
+      diff: diffText,
+      t0: renderT0(t0),
+      // Selected against the changed files, not dumped wholesale: everything a repo
+      // knows would crowd the diff out of the context window.
+      knowledge: relevantTo(store, review.repoId, diff.changedFiles),
+      conflicts: renderConflicts(store, review.repoId),
+      settled: [...settledForPrompt, ...pending.map((p) => ({ finding: p.finding, rationale: p.reason }))],
+    });
+
+  // COMPACT TO THE READER, rather than to a constant.
+  //
+  // `computeDiff` already truncates at a fixed 600,000 characters (INV-7) and
+  // announces it — but that number has no relationship to whoever is about to read
+  // it. A 763 KB branch was cut to 600 KB, which is still ~150k tokens against
+  // glm-5-turbo's 200,000-token window, before the system prompt, the knowledge
+  // block, the ledger or a single tool call. The provider answered HTTP 200 with an
+  // empty body, which `describeReply` reported as "usually a provider failure inside
+  // a 200", and the client — told by TOOL_DOCS that `failed` is often transient —
+  // retried. Five times over two days, ~21 minutes of T0 and ten empty calls, ending
+  // with it telling its operator that lore's tier was broken. It was not.
+  //
+  // Skipping the tier was the first fix and it was worse: on any large branch it
+  // would drop an independent opinion permanently and make `passed` unreachable,
+  // trading away the premise of the whole design (D-1) to avoid an error.
+  const prompt = await compactToFit(input.reviewer, tier, renderDiff(diff), build);
 
   // Opened BEFORE the model is asked, so the row exists no matter how this ends.
   // `finished_at` stays NULL until it does, which is what lets a reader tell a tier
@@ -224,11 +292,30 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     // Before this existed, a `glm-5.2` call that ran 30 minutes and timed out wrote
     // NOTHING, and the operator view could not tell it from a tier that never
     // started — INV-1 inside the bookkeeping.
-    store.closeTierRun(tierRunId, e instanceof Exhausted ? "unpayable" : "failed");
-    // A tier nobody can pay for is a limitation, not a failure (D-48). Record it,
-    // step over it, and let the ladder finish with what it can afford — but only
-    // if something else can still look. If nothing can, there is no review.
-    if (!(e instanceof Exhausted)) throw e;
+    // A tier that COULD NOT LOOK is closed as `unpayable`, whether the reason was
+    // money or size. The column answers "what did this tier do", and both answers are
+    // "nothing, and not because the code was clean".
+    store.closeTierRun(
+      tierRunId,
+      e instanceof TierUnavailable ? "unpayable" : "failed",
+      // THE CLIENT IS TOLD, and this is the whole point of the change.
+      //
+      // lore already knew this diff was 3.4× the largest t1 had ever finished — it
+      // computed the ratio and wrote it to `[lore:log]`, which no client can read.
+      // What the client got was "first reply was EMPTY (usually a provider failure
+      // inside a 200)", and `TOOL_DOCS.poll` tells it `failed` is often transient and
+      // to retry. It retried five times over two days, then reported to its operator
+      // that lore's tier was broken. It was not; the tier's window was too small.
+      //
+      // `checks_skipped` is the channel that already exists for "this review does not
+      // cover what you might assume", and it is what the client repeats to its user.
+      e instanceof TierUnavailable ? [`${tier.id} did not look at this code — ${e.message}`] : [],
+    );
+    // A tier nobody can pay for, or whose window cannot hold the diff, is a limitation
+    // rather than a failure (D-48). Record it, step over it, and let the ladder finish
+    // with what remains — but only if something else can still look. If nothing can,
+    // there is no review.
+    if (!(e instanceof TierUnavailable)) throw e;
 
     const withoutTier = markUnavailable(review.ladder, tier.id);
     if (!anyTierRan(tiers, withoutTier.unavailable)) throw e;

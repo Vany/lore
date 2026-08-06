@@ -56,10 +56,61 @@ export class DidNotRun extends LoreError {
   }
 }
 
+/**
+ * This tier could not look at this code — for a reason that is about the TIER, not
+ * about the branch.
+ *
+ * The ladder steps over one of these and finishes with what remains, reaching
+ * `passed_partial` at best (D-48). That is the whole distinction: a tier that could
+ * not run is a limitation, honestly labelled; a tier that ran and broke is a failure.
+ *
+ * Two of them, and the second arrived because the first's machinery was already
+ * right. Quota was the original case. Context is the other: a diff too large for a
+ * model's window is not a defect in the branch, and treating it as a failed review is
+ * what made a 741 KB branch unreviewable for two days when two of the three tiers
+ * could hold it comfortably.
+ */
+export abstract class TierUnavailable extends LoreError {}
+
 /** A tier's provider is out of budget or rate limit. Never a reason to skip it. */
-export class Exhausted extends LoreError {
+export class Exhausted extends TierUnavailable {
   constructor(message: string) {
     super(message, EXIT.EXHAUSTED);
+  }
+}
+
+/**
+ * The prompt cannot fit this tier's context window.
+ *
+ * Known BEFORE the call, from the model's own advertised limit, so it costs nothing
+ * to discover. Previously this was discovered by spending: the provider answered HTTP
+ * 200 with an empty body — a refusal inside a success — which `describeReply` reported
+ * as "usually a provider failure inside a 200", and the client, told that `failed` is
+ * often transient, retried. Five times over two days on one branch, 21 minutes of T0
+ * and ten empty model calls, ending with the client reporting to its operator that
+ * lore's tier was broken. It was not: the diff was 3.4× the largest that tier had ever
+ * finished, and 95% of its window before a single tool call.
+ */
+export class TooLargeForTier extends TierUnavailable {
+  // Declared rather than parameter properties: `erasableSyntaxOnly` forbids those,
+  // because node strips types rather than compiling them (D-3).
+  readonly tierId: string;
+  readonly model: string;
+  readonly promptTokens: number;
+  readonly contextLimit: number;
+
+  constructor(tierId: string, model: string, promptTokens: number, contextLimit: number) {
+    super(
+      `tier ${tierId} (${model}) cannot hold this review: the prompt is about ${promptTokens.toLocaleString()} ` +
+        `tokens against a ${contextLimit.toLocaleString()}-token context window. Not a defect in the branch and ` +
+        `not a fault in the model — this tier is too small for this diff, so it is skipped and a larger tier ` +
+        `looks instead. To get every tier to look, review a smaller range.`,
+      EXIT.EXHAUSTED,
+    );
+    this.tierId = tierId;
+    this.model = model;
+    this.promptTokens = promptTokens;
+    this.contextLimit = contextLimit;
   }
 }
 
