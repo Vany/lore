@@ -178,6 +178,25 @@ itself, which is the uncomfortable part.
       not asked about; what still gets a question is anything changing which model
       runs or how much quota burns.
 
+- [ ] **Submitting a diff through MCP is fragile in a way clients cannot diagnose.**
+      Hit while driving a real review as a client on 2026-08-06, twice:
+
+      * **`corrupt patch at line 66`** — the diff ENDED on a whitespace-only context
+        line, and reproducing it through a tool call dropped that line. The message
+        names a line number in a string the client composed, which is the least
+        useful place to point. Verified that `git apply` tolerates such lines being
+        emptied, so the fault is specifically a diff whose LAST line is whitespace.
+      * **`tree hash mismatch`** — I sent three of the five changed files. The guard
+        worked exactly as designed (D-40: refuse rather than review a tree that
+        exists nowhere) and the message was clear. Recorded because it is the honest
+        half of the same session: one message was excellent, the other was not.
+
+      Two cheap fixes: `git apply --recount` in `applyPatch`, which absorbs damaged
+      hunk counts; and a message for a corrupt patch that says *what* is malformed
+      rather than where — a client cannot debug a line number in its own payload.
+      Worth doing before another agent meets it, because an agent that cannot submit
+      cannot continue a review at all, and the loop stops there.
+
 - [ ] **`make backup-check` cannot see that the product is broken.** It compares the
       replica against the database and never asks whether the database is READABLE, so
       it reported healthy for the whole period every table returned `database disk
