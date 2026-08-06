@@ -208,16 +208,22 @@ zero `@ts-ignore`, zero `eslint-disable` — and every item below is something t
       deployed turbo and terra, and told the reader to run `make mirror` before every
       review, which D-65 made a host timer's job.
 
-- [ ] **Cap outbound model calls separately from worker concurrency.** Raising
-      `LORE_CONCURRENCY` to 12 killed four reviews in 2.5 minutes — two `socket hang
-      up` in the same second, two empty replies inside a 200. The provider was the
-      binding constraint, not the memory or the cache I had worried about. One knob
-      governs a local resource and a remote one with different limits, and will always
-      be wrong for one of them. Twelve workers, N concurrent model calls, the rest
-      queueing at that gate instead of dying.
-      Cheap mitigation available first: a transport drop is the most obviously
-      retryable failure there is, and `socket hang up` is not retried while an
-      unparseable reply gets one retry.
+- [x] **Cap outbound model calls separately from worker concurrency.** Done
+      2026-08-06. `LORE_MODEL_CONCURRENCY`, default 4 — above the 2 the deployment has
+      been healthy at, well under the 12 that killed four reviews in 2.5 minutes. Work
+      above it queues rather than failing, so being wrong low costs latency and being
+      wrong high costs quota. Held for the whole session, not per request, because what
+      loads a provider is the agentic exploration between prompt and reply. One
+      `Reviewer` shared by every worker loop, or the limit multiplies by the worker
+      count. `/status` reports `model_calls`, which is D-26's question for the half that
+      could not previously queue at all.
+      **Not done, and deliberately: the retry asymmetry.** `socket hang up` still is
+      not retried while an unparseable reply gets one, which is backwards — a transport
+      drop is the most obviously retryable failure there is, and D-66 showed the model
+      does not reliably comply on the retry it does get. Left alone because a retry
+      spends another call, which makes it a quota decision, and because the gate should
+      remove most transport drops at source. Revisit with evidence from the gate rather
+      than changing two things at once.
 
 - [x] **Retire the duplicate derived rules the livelock wrote.** Done 2026-08-06: 19
       retired, keeping the oldest of each set — the one whose provenance names the
@@ -237,8 +243,17 @@ zero `@ts-ignore`, zero `eslint-disable` — and every item below is something t
       that is configured and has never executed is not a working tier, and this project
       says so about everything else.
 
-- [ ] **Submitting a diff through MCP is fragile in a way clients cannot diagnose.**
-      Hit while driving a real review as a client on 2026-08-06, twice:
+- [x] **Submitting a diff through MCP is fragile in a way clients cannot diagnose.**
+      Fixed 2026-08-06. `git apply --recount` absorbs the damaged hunk count — verified
+      by reproducing the exact case, where plain apply fails and recount applies it
+      correctly — and the leniency cannot produce a silently wrong tree because the
+      tree hash is checked afterwards (D-40), which a test pins. Every failure message
+      now names the fault rather than a position and says nothing was applied.
+      `TOOL_DOCS.submit` carries both, since the client composes the diff.
+      `applyPatch` had no test at all; writing one caught my own fixture being wrong in
+      exactly the way the bug is about. *Original note below.*
+
+  <details><summary>what the two failures were</summary>
 
       * **`corrupt patch at line 66`** — the diff ENDED on a whitespace-only context
         line, and reproducing it through a tool call dropped that line. The message
@@ -256,18 +271,24 @@ zero `@ts-ignore`, zero `eslint-disable` — and every item below is something t
       Worth doing before another agent meets it, because an agent that cannot submit
       cannot continue a review at all, and the loop stops there.
 
-- [ ] **`make backup-check` cannot see that the product is broken.** It compares the
-      replica against the database and never asks whether the database is READABLE, so
-      it reported healthy for the whole period every table returned `database disk
-      image is malformed`. A `PRAGMA integrity_check` belongs in it and in `make
-      status`. Found by the corruption on 2026-08-06 rather than by the monitor.
+  </details>
 
-- [ ] **The one-review-per-branch refusal points at stale reviews.** It fired on my own
-      review today and named one from twenty hours and twenty-five commits earlier,
-      whose pinned snapshot was meaningless. `restart: true` is the right answer there,
-      but the message only offers it "if the branch was rebased or force-pushed" — and
-      mine was neither. It should carry the open review's AGE and say that a snapshot
-      the branch has long left behind is a legitimate reason to start again.
+- [x] **`make backup-check` could not see that the product was broken.** Fixed
+      2026-08-06. It compared the replica against the database and never asked whether
+      the database was READABLE, so it reported healthy for the whole period every
+      table returned `database disk image is malformed` — a replica perfectly level
+      with an unreadable file is a faithful copy of nothing. `make db-check` runs
+      `PRAGMA integrity_check`, `backup-check` refuses before looking at the replica,
+      and `make status` turns red on it. Through the container, because WAL over a
+      Docker Desktop bind mount does not coordinate with a host `sqlite3`.
+
+- [x] **The one-review-per-branch refusal pointed at stale reviews.** Fixed
+      2026-08-06. It carries how long since the review last advanced, and past twelve
+      hours says plainly that a snapshot the branch has left behind is reason enough to
+      start again. Twelve is a working day's drift rather than a measured threshold — a
+      hint to a reader who has the branch in front of them, not a rule. An unparseable
+      timestamp reads as age zero, because "NaN hours old" in a refusal is worse than
+      saying nothing.
 
 ### What the client's own report adds
 

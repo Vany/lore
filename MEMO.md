@@ -72,6 +72,48 @@ SQLite query found more than reading the code would have. The same lesson as ses
 19, 20 and 27 in a new place — but the version worth keeping is narrower: **I cannot
 find "declared and unreachable" by reading, and I have now failed at it four times.**
 
+**Then the four open TODO items, and two of them were monitors that could not see the
+thing they guard.**
+
+- **The provider got its own bound.** `LORE_CONCURRENCY` governed both halves of a
+  round — a remote call that merely waits, and a local sandbox that is CPU-bound — so
+  it was always set for T0 and the provider inherited whatever fell out. At 12 that
+  killed four reviews in 2.5 minutes while the host was fine.
+  `LORE_MODEL_CONCURRENCY` defaults to 4, and work above it **queues rather than
+  failing**, which is backpressure's argument. Two details I would have got wrong
+  without thinking: the gate wraps the SESSION, because what loads a provider is the
+  agentic exploration between prompt and reply — gating HTTP calls would bound
+  nothing; and one `Reviewer` is shared by every worker loop, or each gets its own
+  gate and the limit multiplies by the worker count, reading as 4 and behaving as 48.
+- **`backup-check` never asked whether the database was readable.** It compared
+  timestamps, so through the whole corruption it reported healthy. A replica perfectly
+  level with an unreadable file is a faithful copy of nothing.
+- **The stale-review refusal** named an id worth continuing, gave a condition
+  (`if the branch was rebased`) that did not apply, and left `restart: true` looking
+  unavailable — on a review twenty hours and twenty-five commits old.
+- **A client could not submit.** `git apply --recount` fixes the dropped trailing
+  whitespace line, and every failure message now names the fault rather than a
+  position in a string the client composed and cannot open.
+
+**Learned — my own test fixture was wrong in exactly the way the bug was about.** The
+file's last line is a single space, so its diff context line needs TWO — one marker,
+one of content. I wrote one, the patch legitimately did not apply, and for a moment I
+thought the fix was broken. The bug and my reproduction of it had the same root, which
+is the most persuasive evidence I have that the fix is aimed at the right thing.
+
+**Learned — being lenient is safe when something downstream is strict.** `--recount`
+guesses at hunk arithmetic, which would normally be exactly the sort of quiet
+approximation this project refuses. It is fine here *only* because `review_submit`
+hashes the resulting tree against the client's `tree_hash` (D-40), so a wrong guess
+fails loudly one step later. There is a test pinning that the recounted tree equals
+the well-formed one, because that argument is the whole licence.
+
+**Did NOT do, deliberately: the retry asymmetry.** `socket hang up` is still not
+retried while an unparseable reply gets one, which is backwards. Left alone because a
+retry spends another call — a quota decision, and Vany's — and because the gate should
+remove most transport drops at source. Changing two things at once would leave neither
+measured.
+
 ---
 
 ## 2026-08-06 — session 33: the loop closed, and then ate itself
