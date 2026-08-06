@@ -517,8 +517,7 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       // tier_run row describe the old tree while its tools read a new or
       // half-patched one, and a `clean` from that describes a tree that has never
       // existed anywhere — which is the failure the tree-hash check below exists to
-      // prevent, arriving from the other side (D-40). Raised by t3 as 5bb4272e
-      // against the very change that serialised the rounds.
+      // prevent, arriving from the other side (D-40).
       //
       // Refusing rather than queueing the patch: the client already polls (D-34),
       // the fix genuinely cannot be reviewed until the current round is done, and
@@ -531,7 +530,7 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       // disagree exactly where it matters: during `fast_clean` the deep round is
       // already queued, so the submit is refused while the client's exit condition
       // reads as met. It would poll, see `fast_clean`, submit, and be refused again,
-      // for ever, with no state named that it could actually wait for (df1fc19c).
+      // for ever, with no state named that it could actually wait for.
       //
       // lore-ok[d3021c5e]: correct, and deliberately not closed by this commit. The
       // ticket asked for a submit at any time, fully async; this refusal is D-55 and it
@@ -881,8 +880,6 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       // not a terminal state, so `expireStale` then swept the review to `expired`
       // after 48 hours, and D-77 reads `expired` as "the ladder did not read the
       // code". A trap with an exit sign on it.
-      //
-      // Raised by Kimi against the commit that wrote that sentence into D-77.
       //
       // BUT ONLY WHEN NOTHING ELSE IS STILL OPEN. `needsHuman` is recomputed from
       // `openConflicts(repoId)`, which is repo-wide: a parked review is blocked by

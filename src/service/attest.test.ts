@@ -63,7 +63,6 @@ describe("attest", () => {
   // stopped. Nothing caught it: `countTiers` reads DISTINCT tier and ignores the
   // outcome entirely, so the attestation — the one artefact this product exists to
   // produce — was being proved against a database state that can no longer occur.
-  // Raised by t1 against this branch (d17c92f8).
   it("counts the tiers that read the tree it is signing", async () => {
     review("passed");
     const at = "2026-08-03T00:00:00.000Z";

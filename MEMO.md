@@ -5,6 +5,29 @@ surprised me.
 
 ---
 
+## 2026-08-07 — what went to `origin/main` without a passing ladder
+
+**Stated because D-77 says a skipped review is stated, never silent.** Seven commits
+were pushed on Vany's call:
+
+- `87bce25` (D-80, subscriptions) — reviewed hard: two reviews, 13 findings, every one
+  answered. It ended `failed` on the per-tier bound, not `passed`. The commit's tree is
+  byte-identical to `9b80270f`, the last tree the ladder actually read, so what went out
+  is what was reviewed — it simply never got a verdict.
+- The six after it — the D-6 revision, the two D-79 prompt changes, `lore propose`, and
+  the comment sweep — **no ladder has read at all.**
+
+Why the review ran out of road rather than finding something: the per-tier bound stopped
+it at round 12 with `t1×6, t2×5, t3×1`, and five of those t1 rounds were the D-6 reset
+re-checking fixes — the very thing the commits behind it delete. Under the new rules the
+same work is three rounds.
+
+**So the honest next action is one fresh review of the pushed tree**, not a fourth
+attempt at the old one. It is the first real test of both changes at once: closed tiers
+staying closed, and a re-read being told it is a re-read.
+
+---
+
 ## 2026-08-07 — session 36: the client cannot be woken, so make leaving cheap
 
 **Measured what session 35 assumed.** Claude Code parses lore's `resources.subscribe:

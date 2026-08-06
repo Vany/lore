@@ -90,8 +90,7 @@ describe("the clone has to be there, and recent (D-63)", () => {
   //
   // Note that `mirror()` above produces exactly this state, and the two tests
   // around it write FETCH_HEAD by hand — so the helper was manufacturing the
-  // dangerous case and every test was stepping over it. Raised by t2 against the
-  // commit that introduced the check.
+  // dangerous case and every test was stepping over it.
   it("refuses a clone whose fetch never landed, even though a remote is configured", async () => {
     const src = join(root, "src-nofetch");
     makeRepo(src);
@@ -108,8 +107,6 @@ describe("the clone has to be there, and recent (D-63)", () => {
     await expect(ensureBare(paths, src)).rejects.toThrow(/make mirror/);
   });
 
-  // Raised by t3 at HIGH, against the fix for the previous round's finding.
-  //
   // The worker decided "this review is already pinned" from `existsSync` on the
   // worktree directory — but `review_submit` also cuts a worktree, through a path
   // that called `addWorktree` with no freshness check at all. So: start a review

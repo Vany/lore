@@ -38,7 +38,7 @@ const HTML_START = new RegExp(`<!--\\s*lore-ok\\[(${SHORT})\\]\\s*:\\s*([\\s\\S]
  * Added because it was silently missing and that cost a justification. This
  * codebase explains itself in `/** ... *\/` blocks, so a long reason lands there by
  * reflex; mine did, `parseLoreOk` skipped it, and the finding it answered could
- * never have settled (b674468b). That is d6d9cd72's failure again — a reason
+ * never have settled. That is the same failure again — a reason
  * written in the right place, about the right code, that nothing ever read.
  *
  * It is also what this file already argued for: a marker that works in one comment
@@ -49,7 +49,7 @@ const STAR_START = new RegExp(`^\\s*\\*\\s*lore-ok\\[(${SHORT})\\]\\s*:\\s*(.*)$
  * A ` * ` line continuing the reason. Never the closing `*\/`, and never a blank ` *`.
  *
  * The blank case is the one that matters, and the first version of this got it
- * wrong while claiming otherwise (11817665). A bare ` *` is a PARAGRAPH BREAK in a
+ * wrong while claiming otherwise. A bare ` *` is a PARAGRAPH BREAK in a
  * JSDoc block, and matching it meant the continuation ran straight through into
  * whatever prose followed — so a justification silently grew an unrelated paragraph
  * that the reviewer then had to rule on. `(.*\S)` requires at least one

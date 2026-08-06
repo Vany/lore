@@ -77,8 +77,7 @@ export type VerdictKind = "fixed" | "justified-accepted" | "justified-rejected";
  * row EXISTED, so a rejected justification was labelled "Already settled — nothing to
  * do", stripped of its `justify_with`, and still counted in `open_count`. A client
  * trusting the per-finding note over the aggregate would merge a defect its reviewer
- * had explicitly refused to accept. Raised by t2 against the commit that introduced
- * the note, with a standalone repro.
+ * had explicitly refused to accept.
  */
 export const SETTLING_VERDICTS: readonly VerdictKind[] = ["fixed", "justified-accepted"];
 
@@ -99,7 +98,7 @@ export function isSettled(v: VerdictKind): boolean {
  * attestation fixtures went on asserting `fastClean`/`escalate`/`passed` and stayed
  * green, since `countTiers` reads DISTINCT tier and never looks at the outcome. A
  * test that describes a state production cannot produce proves nothing about
- * production, and nothing was in a position to notice (d17c92f8).
+ * production, and nothing was in a position to notice.
  */
 export type TierOutcome = "clean" | "findings" | "failed" | "unpayable";
 
@@ -361,8 +360,7 @@ export class Store {
     // above the UPDATE: the false-statement-about-behaviour this repository is worst
     // at, written into the feature that exists to keep clients informed. Woken first,
     // a client re-reads and sees the state it was just told had changed; if the write
-    // then throws, it waits for a second wake that will never come. Caught by t2 on
-    // the commit that wrote it.
+    // then throws, it waits for a second wake that will never come.
     //
     // And ONLY on a state change, which is the promise `spec/mcp-api.md` §2.0.1 makes.
     // Every round boundary writes `state: running` over `running`, and the next round
@@ -383,7 +381,6 @@ export class Store {
    * review — the path the docs lead with — was never told it had been abandoned, and
    * waited on a stream that would never deliver for it again. Exactly the failure the
    * comment on `events` predicts, in a file that comment's author never looked at.
-   * Raised by t1 one round after the subscriptions landed.
    *
    * Ids are read inside the transaction and published after it commits: woken before,
    * a client re-reads and sees a review that is still open.
@@ -605,9 +602,6 @@ export class Store {
     // on until the round ends. The round END is a state change to `findings_ready`,
     // and `updateReview` publishes that. So a wake means exactly one thing — the
     // review's state changed — which is the only thing a client can act on.
-    //
-    // Raised by t2, twice, on consecutive rounds of the review of the commit that
-    // added subscriptions.
     const res = this.db
       .prepare(
         `INSERT INTO finding(review_id, fingerprint, file, line, symbol, severity, claim, evidence,
@@ -924,8 +918,7 @@ export class Store {
    * both say the exit from an escalation is a person deciding and the client calling
    * this. Latent until the resume gate started counting escalated conflicts as
    * blocking, which turned it into a review that could never be resumed and a reply
-   * telling the client to do something the API refuses. Raised by t2 on the round that
-   * introduced the gate.
+   * telling the client to do something the API refuses.
    */
   resolveConflict(repoId: string, keepId: string, retireId: string, reason: string): boolean {
     return this.tx(() => {
@@ -1070,7 +1063,7 @@ export class Store {
    * "so two workers never take the same one". That is true and it is the wrong
    * invariant: what must not happen twice is not a job, it is a ROUND ON A REVIEW.
    *
-   * Observed on `rev_cuZabwdrspNwv3OV6eu0IHA_`, 2026-08-04. Two `fast` jobs existed
+   * Observed 2026-08-04. Two `fast` jobs existed
    * for one review, two worker loops took one each, and both called t1 — 550s and
    * 590s, overlapping. `runRound` reads the ladder, runs a tier and writes the ladder
    * back, so the two interleaved: the state settled at `round: 1, tierRounds: {t1: 1}`
@@ -1162,7 +1155,7 @@ export class Store {
    * `review_submit` is exactly that — it patches the worktree a tier is reading.
    *
    * QUEUED COUNTS, and that is the whole point. Asking only about `running` left a
-   * TOCTOU that t2 found (8b859cdc): a job sits queued, the check says no round is
+   * TOCTOU that t2 found: a job sits queued, the check says no round is
    * in flight, the handler yields on the next `await`, a worker loop claims that
    * job and `computeDiff` starts reading — and the handler resumes and patches the
    * files underneath it. The tree hash then matches a tree the findings never
@@ -1300,8 +1293,6 @@ export class Store {
       // nothing saying so. Swap them and every job at the limit is quietly requeued
       // instead of failed, which is the crash-loop the bound exists to prevent, and
       // the tests would still pass on the original order.
-      //
-      // Found by a reviewer reading this an hour after it was written.
       const requeued = this.db
         .prepare("UPDATE job SET state = 'queued', updated_at = ? WHERE state = 'running' AND attempts < ?")
         .run(now(), maxAttempts);

@@ -137,6 +137,40 @@ describe("an exported constant has a reader", () => {
  *
  * Comments about a continued recipe go OUTSIDE it, as `##` above the target.
  */
+// A COMMENT'S PROVENANCE DECAYS; ITS INCIDENT DOES NOT.
+//
+// `PROG.md` requires a guard to carry what it guards against, and that rule kept
+// collecting a second half nobody asked for: who reported it, in which round, against
+// which commit. That part is bookkeeping, and it rots — a finding fingerprint or a
+// `rev_…` id points at a row the retention sweep deleted weeks ago, so the reader is
+// sent to look something up that no longer exists.
+//
+// Checked here rather than trusted, because it accumulated one comment at a time over
+// two days and nobody noticed until 80 of them existed.
+describe("comments carry the incident, not who reported it", () => {
+  const banned: readonly { readonly what: string; readonly rx: RegExp }[] = [
+    { what: "attribution to a review tier", rx: /\b(?:raised|caught|found|reported) by (?:t[0-9]|Kimi|GLM|a reviewer)\b/i },
+    { what: "a finding fingerprint nobody can look up", rx: /\((?!D-)[0-9a-f]{8}\)/ },
+    { what: "a review id nobody can fetch", rx: /\brev_[A-Za-z0-9_-]{16,}/ },
+    { what: "a pointer into MEMO's session numbering", rx: /\bMEMO session [0-9]+/ },
+  ];
+
+  it.each(banned)("no comment carries $what", ({ rx }) => {
+    const offenders: string[] = [];
+    for (const file of sources()) {
+      for (const [i, line] of readFileSync(file, "utf8").split("\n").entries()) {
+        const s = line.trim();
+        // `lore-ok[...]` markers are functional and use brackets, never parentheses.
+        if (!(s.startsWith("//") || s.startsWith("*")) || s.includes("lore-ok[")) continue;
+        // This file names the patterns it bans, so it would fail against itself.
+        if (file.endsWith("one-definition.test.ts")) continue;
+        if (rx.test(line)) offenders.push(`${file.slice(SRC.length)}:${String(i + 1)}  ${s.slice(0, 90)}`);
+      }
+    }
+    expect(offenders).toStrictEqual([]);
+  });
+});
+
 describe("make recipes do not comment inside a shell continuation", () => {
   it("has no `@#` on a line continuing the previous one", () => {
     const lines = readFileSync(join(SRC, "..", "deploy", "Makefile"), "utf8").split("\n");

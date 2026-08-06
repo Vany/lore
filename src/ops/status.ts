@@ -156,7 +156,7 @@ export function renderStatus(db: DatabaseSync, reviewId?: string, dataDir = "/va
         // is gone. They stay in the two lists on purpose, because rows written before
         // the fix are still in the database and a historical `stopped` must keep
         // rendering red rather than falling through to yellow. Reading them as live
-        // values is what was wrong, not testing for them (a99232da).
+        // values is what was wrong, not testing for them.
         const didNotRun = o === "unpayable" || o === "failed" || o === "stopped";
         const paint = didNotRun ? red : o === "clean" || o === "passed" ? green : o.startsWith("findings") ? cyan : yellow;
         return `${paint(`${label} ${didNotRun ? `✘ ${o}` : o}`)} ${dim(took)}`;

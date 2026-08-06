@@ -149,11 +149,8 @@ async function replicaState(cfg: HeartbeatConfig): Promise<{ state: ReplicaState
  * threshold — and knowledge rows are small, so that is the ordinary case — the
  * replica's newest segment freezes, `lore.db`'s mtime is older still, `behindSec`
  * clamps to zero, and every beat reports `level, ok: true, no page` for hours while
- * knowledge is written and replicated nowhere.
- *
- * Raised by Kimi on its first review round, against the commit that introduced the
- * monitor. Observed on the live deployment while confirming it: `lore.db` stamped
- * 18:56 against a newest replica segment of 22:58 — four hours apart, in the wrong
+ * knowledge is written and replicated nowhere. Observed live: `lore.db` stamped 18:56
+ * against a newest replica segment of 22:58 — four hours apart, in the wrong
  * direction, reported as level. It was *correct* only because litestream was alive;
  * the arithmetic could not tell either way.
  *

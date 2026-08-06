@@ -36,6 +36,20 @@ much that knowledge is worth. When I write a guard I write what it guards agains
 in enough detail to reconstruct the incident. A guard without a reason gets deleted
 by the next reader.
 
+**The incident, never its provenance.** *What broke, and what it cost* is the reason
+the guard survives contact with the next reader. *Who reported it, in which review
+round, against which commit* is bookkeeping, and it decays the moment the review is
+swept — a finding fingerprint or a `rev_…` id in a comment points at a row nobody can
+fetch. So: no "raised by t2 against the commit that…", no "caught by Kimi on its first
+round", no `(a99232da)`, no review ids. Git already knows who and when; the comment is
+for the reader who has only the file.
+
+Same test for *"this used to be X"*: keep it when X is a trap the next editor would
+walk back into — *"this used to close the row twice, and the second write destroyed the
+first"* earns its place — and cut it when it is only a diary of how the code arrived
+here. If the sentence would not stop anyone doing anything, it is narrative, and
+narrative belongs in `MEMO.md`.
+
 ## Tests
 
 - The escalation state machine, fingerprinting, ledger staleness and dedup are

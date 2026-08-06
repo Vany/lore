@@ -42,8 +42,8 @@ export type Severity = (typeof SEVERITIES)[number];
  * That retry is the argument. The model was told the exact rule, cut 44 characters,
  * and still missed — so the retry does not converge here, and the cost of holding
  * the line is a discarded reply, not a shorter one. The last one discarded a real
- * defect: `openFindings` had no latest-verdict gate, found by t2, thrown away for
- * being 58 characters long, and recovered only because the error message quoted it.
+ * defect: `openFindings` had no latest-verdict gate. It was thrown away for being 58
+ * characters long, and recovered only because the error message quoted it.
  *
  * 500 keeps the shape (one long sentence, ~70 words — still a record, not a
  * paragraph) and clears the observed maximum by 40%. It stays four times smaller
@@ -102,7 +102,7 @@ export const FindingSchema = z
     // The table of every accepted and rejected form is in finding.test.ts, NOT in
     // this comment. It lived here once, as prose, while nothing executed it — which
     // is how a refactor could have deleted the preprocess with the suite still green
-    // (b3aa50bc). A comment is a claim nobody runs.
+    // A comment is a claim nobody runs.
     cwe: absent(z.string().regex(/^CWE-\d+$/, "cwe must look like CWE-89")),
   })
   // Strict: an unexpected key means our prompt and this schema have drifted apart.

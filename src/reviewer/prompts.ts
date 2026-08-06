@@ -51,7 +51,7 @@ export interface PromptInput {
  * D-79. The prompts used to ask for volume — T1 was told "expect obvious defects,
  * report them plainly and cheaply, do not agonise" — and the output showed it: eleven
  * findings on one commit, every one correct and nearly all documentation drift, while
- * one semgrep rule was raised 63 times and justified away 63 times. MEMO session 30
+ * one semgrep rule was raised 63 times and justified away 63 times.
  * named it a year earlier: the ladder converges on code and oscillates on prose.
  *
  * The schema was part of the cause. `failureScenario` is required, so a model writes

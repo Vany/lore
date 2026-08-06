@@ -97,7 +97,7 @@ describe("a process we killed did not fail", () => {
   });
 });
 
-// Raised by t1 against the commit that introduced the installer. Two functions held
+//  Two functions held
 // two lists with OPPOSITE precedence: the cache key took `package-lock.json` first,
 // the installer took `pnpm-lock.yaml` first. A repo carrying both got its key from
 // one file while installing from the other — so a change to the lockfile that

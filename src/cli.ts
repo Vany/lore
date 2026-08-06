@@ -342,7 +342,7 @@ export async function main(argv: readonly string[]): Promise<ExitCode> {
       //
       // That success line said `"answered"` until the outcome vocabulary changed in
       // the same branch that wrote this, and the justification was not updated with
-      // it — raised as 285a07bc and 91c17fcb. The ARGUMENT survived the edit and the
+      // it. The ARGUMENT survived the edit and the
       // EVIDENCE did not, which is the failure mode a reader cannot detect: a
       // citation that no longer matches the file it names is indistinguishable from
       // one that was never checked.

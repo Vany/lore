@@ -70,7 +70,7 @@ describe("parseLoreOk", () => {
 // The block-comment form, added because it was silently missing and that cost a
 // justification: this codebase explains itself in `/** ... */`, a long reason lands
 // there by reflex, and `parseLoreOk` skipped it — so the finding it answered could
-// never settle (b674468b).
+// never settle.
 describe("the block-comment form", () => {
   it("reads a lore-ok written as JSDoc", () => {
     const src = ["/**", " * Some prose.", " * lore-ok[a1b2c3d4]: bounded by the caller", " */"].join("\n");

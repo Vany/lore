@@ -472,7 +472,7 @@ export class Reviewer implements ReviewerLike {
         // "nothing parseable" was itself untrue once the schema became a way to
         // fail: a 325-character claim is perfectly parseable JSON that we refuse.
         // The headline now carries both reasons, so the log agrees with the error
-        // thrown three lines below it instead of contradicting it (f7c4a9b8).
+        // thrown three lines below it instead of contradicting it.
         console.error(
           `[lore:log] tier ${tier.id} (${tier.model}) returned nothing usable, twice ` +
             `(first: ${extracted.why}; retry: ${retry.why}). First reply:\n` +
@@ -951,8 +951,7 @@ export function extractList<T>(text: string, key: string, parseOne: ItemParser<T
   // per candidate, so a later, worse candidate masked an earlier, better one. A
   // reply whose fenced block parsed but had no `findings`, followed by a stray
   // brace in trailing prose, reported the stray brace's syntax error and hid the
-  // real fault. Raised against this function by t3 (b8554687), with that exact
-  // reply as the reproduction.
+  // real fault, with that exact reply as the reproduction.
   const NO_JSON = 0;
   const UNPARSEABLE = 1;
   const NO_LIST = 2;

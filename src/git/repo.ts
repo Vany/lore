@@ -50,8 +50,7 @@ export function repoPaths(root: string, repoId: string): RepoPaths {
  * missing `origin/<branch>` to the LOCAL branch, frozen at the clone-time commit, and
  * the review describes a tree nobody is merging — INV-2, with an attestation over it.
  *
- * Raised by t2 against the commit that introduced the check, with the reproduction
- * that confirmed it: after `clone --bare`, `origin/master` does not resolve while
+ * The reproduction: after `clone --bare`, `origin/master` does not resolve while
  * `master` resolves to the clone SHA. Verified before fixing.
  */
 export type MirrorFreshness =
@@ -341,10 +340,9 @@ export async function gitlinks(worktree: string): Promise<readonly Gitlink[]> {
  *
  * Spawned here rather than through `git()` because the patch goes in on stdin, which
  * that wrapper has no way to pass — so this is the one call site the ceiling in D-61
- * did not reach, while SPEC said it applied to "every git invocation". Raised as
- * a88aa1e2 against the commit that introduced the claim. The env is set explicitly
- * below; a reviewer had to find it, which is the argument for the wrapper, not
- * against it.
+ * did not reach, while SPEC said it applied to "every git invocation". The env is set
+ * explicitly below; nothing mechanical would have caught the gap, which is the
+ * argument for the wrapper rather than against it.
  */
 export async function applyPatch(worktree: string, patch: string): Promise<void> {
   const { execFile } = await import("node:child_process");

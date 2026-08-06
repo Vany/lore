@@ -130,9 +130,9 @@ export function asSubscriber<T>(who: Subscriber, fn: () => T): T {
  * an id is real. A stream that wakes on that id confirms it, and tells you when
  * somebody is working, which is the same oracle one layer along.
  *
- * Raised by t2 against the commit that added subscriptions, with the right reading of
- * its own author's comment: the capability bit is declared once, for the server, and is
- * not a per-resource decision.
+ * The capability bit is declared once, for the SERVER, and is not a per-resource
+ * decision — which is what the comment in `server.ts` says and what is easy to read
+ * past.
  *
  * So delivery is filtered here, by the two facts that can change after a stream opens:
  *

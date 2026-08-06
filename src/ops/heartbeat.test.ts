@@ -119,9 +119,7 @@ describe("replica state", () => {
   // file alone made this blind in exactly the case it exists for: litestream dies,
   // writes continue into an unflushed WAL, both watched timestamps freeze, `behindSec`
   // clamps to zero, and it reports `level, ok: true, no page` while knowledge is
-  // written and replicated nowhere.
-  //
-  // Raised by a reviewer against the commit that introduced the monitor. Observed
+  // written and replicated nowhere. Observed
   // live: lore.db stamped 18:56 against a newest replica segment of 22:58 — four
   // hours apart, in the wrong direction, reported as level.
   it("sees a write that is still only in the WAL", async () => {

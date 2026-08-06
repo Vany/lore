@@ -350,7 +350,7 @@ describe("runRound", () => {
     });
   });
 
-  // Raised by a real reviewer against this file, an hour after the model tier's
+  // Found against this file an hour after the model tier's
   // half of the same fix landed: T0 shells out to tsc, semgrep and a sandboxed test
   // suite, any of which can die, and a crash used to leave no row at all.
   it("records that T0 ran even when T0 throws", async () => {
@@ -392,7 +392,7 @@ describe("runRound", () => {
 
   // The attestation signs a TREE (D-40). `review_submit` was once the only writer of
   // that column, so a review needing no fixes reached `passed` having never recorded
-  // one and its attestation read "reviewed tree unknown". Raised as e5700124: the fix
+  // one and its attestation read "reviewed tree unknown": the fix
   // shipped without a test, and reverting the line passed the whole suite.
   it("records the tree the tier actually read, with no submit involved", async () => {
     await runRound({ store, reviewer: new ScriptedReviewer([[]]), reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
@@ -405,7 +405,7 @@ describe("runRound", () => {
   });
 
   // The quota path returns early with its own updateReview, so it missed the tree
-  // recording above (e49a67fe). It reaches `passed_partial`, which is attestable —
+  // recording above. It reaches `passed_partial`, which is attestable —
   // so a review could pass and then be refused an attestation for having no tree,
   // which is the guard causing the fault rather than catching it.
   it("records the tree even when the tier cannot be paid for", async () => {
@@ -451,7 +451,7 @@ describe("runRound", () => {
     // A re-raise of something already settled as fixed must not restart the ladder
     // with nothing for the client to do: openFindings excludes it and undelivered has
     // already delivered it, so `findings_ready` would hand back an empty list for ever
-    // (cadd3821).
+    // .
     it("does not restart the ladder when a fixed finding is raised again", async () => {
       const reviewer = new ScriptedReviewer([[HOLD_BUG], [], [HOLD_BUG]]);
       await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
@@ -466,7 +466,7 @@ describe("runRound", () => {
     // A re-raise moves the goalposts, and both fields the rule reads must move with
     // it. Here the code changes WITHOUT the defect being fixed and t1 says so again;
     // testing the first raise's hunk would then find it absent and record a false
-    // fix for a defect the tier is still complaining about (bd0c15b0).
+    // fix for a defect the tier is still complaining about.
     it("re-scopes a finding that is raised again, so a stale hunk cannot fake a fix", async () => {
       const reviewer = new ScriptedReviewer([[HOLD_BUG], [HOLD_BUG], []]);
       await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
@@ -482,7 +482,7 @@ describe("runRound", () => {
     });
 
     // Unreadable is "cannot tell", not "the code moved". Falling through to `fixed`
-    // turned a permissions error or an I/O fault into a settled verdict (c037b812).
+    // turned a permissions error or an I/O fault into a settled verdict.
     it("does not settle a finding whose file cannot be read", async () => {
       const reviewer = new ScriptedReviewer([[HOLD_BUG], []]);
       await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
@@ -539,7 +539,7 @@ describe("runRound", () => {
     // And it must SURVIVE the next round. The scope is taken from the code the reason
     // defends, not from the ledger it is written in — a hunk of markdown can never be
     // found in the JSON it defends, so recording that expired the justification the
-    // round after it was accepted and restarted the ladder for ever (3f0e2139).
+    // round after it was accepted and restarted the ladder for ever.
     const later = await runRound({
       store, reviewer: new ScriptedReviewer([[]]), reviewId: "r1", principal: "p", worktree: dir, type: TYPE,
     });

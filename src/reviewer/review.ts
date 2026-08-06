@@ -187,7 +187,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // nothing ever read it. Raised every round, never settled, so the ladder reset for
   // ever and the review could not reach `passed` by any route.
   //
-  // Observed on this repo: `d6d9cd72` survived every review of 2026-08-03, and the
+  // Observed on this repo: one semgrep false positive survived every review of a whole
   // justification written for it was never once collected.
   //
   // A finding names its own file, which is the honest set to look in — where the
@@ -195,7 +195,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   //
   // lore-ok[34a89032]: correct — this was NOT in the ticket, which asked for four
   // other fixes. It stands anyway, and the reason is specific rather than general:
-  // it is the fix for the defect that this very review was stuck on. `d6d9cd72`
+  // it is the fix for the defect that this very review was stuck on. That finding
   // could not be settled by any means while the collector read only changed files,
   // so the ladder could not advance past t1 and no later tier could ever be reached.
   // Reverting it would re-block the review that found it.
@@ -205,7 +205,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // code, not the omission — a reviewer noticing an unrequested change against a
   // stated intent is the check working, and it should stay noisy about this.
   // Read ONCE and passed down. `collectJustifications` used to re-run the identical
-  // query (5a90207a), which is not just a wasted round trip: two reads of the same
+  // query, which is not just a wasted round trip: two reads of the same
   // rows in one round can disagree, and the file list would then describe a set of
   // findings the collector never saw.
   const open = store.openFindings(reviewId);
@@ -354,7 +354,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     if (!anyTierRan(tiers, withoutTier.unavailable)) throw e;
 
     const skipped = step({ state: withoutTier, raised: [], tiers, needsHuman: false });
-    // The tree is recorded on THIS path too (e49a67fe). It reaches `passed_partial`,
+    // The tree is recorded on THIS path too. It reaches `passed_partial`,
     // which is attestable — so without it the review would pass and then be refused
     // an attestation for having no tree, which is a regression the guard introduced
     // rather than a fault it caught. T0 and the tiers that could be paid for did read
@@ -595,7 +595,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   promoteRecurring(store, review.repoId);
 
   // 8. Move the ladder.
-  // `fixed` belongs here as much as `accepted` does (cadd3821). The store has always
+  // `fixed` belongs here as much as `accepted` does. The store has always
   // counted both as settled — `settledFingerprints` and `openFindings` agree — and the
   // ladder was the only view that did not. That disagreement livelocks: a re-raised
   // fixed fingerprint looks fresh to `step`, which re-runs the tier, while
@@ -620,7 +620,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // from the ladder — so the column no longer answered which question it was for.
   //
   // Not cosmetic. `make status` paints `stopped` red as DID-NOT-RUN, so on
-  // 2026-08-03 `rev_UsgaL105JyrNJEBD8L9NwKFX` showed `t1·r4 ✘ stopped 485s` for a
+  // A real review showed `t1·r4 ✘ stopped 485s` for a
   // round where t1 answered and was CLEAN; the ladder stopped, not the tier. It
   // took a SQL query to find that out. A tier that ran and found nothing, shown as
   // a tier that did not finish, is INV-1 upside down — and the audit trail is where
@@ -637,7 +637,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // undoes it. Written here because this is the layer that HAS the worktree and
   // knows the tiers just finished reading it.
   // lore-ok[8afe6f81]: true of commit 10ed157 and not of the tree under review,
-  // which carries both the line and its test. The test is the answer to e5700124,
+  // which carries both the line and its test. The test is the answer to the finding,
   // raised against that very commit — a fix, a finding, then the test, which is the
   // loop working rather than a gap in it.
   // Written BEFORE the state, so a client woken by the state change can already read
@@ -800,7 +800,7 @@ async function settleFixed(
     const qualified = f.origin === "t0" ? tier.id === "t0" || here >= 0 : here >= 0 && here >= rank(f.origin);
     if (!qualified) continue;
 
-    // Unreadable is CANNOT TELL, and cannot tell never settles (c037b812). The old
+    // Unreadable is CANNOT TELL, and cannot tell never settles. The old
     // condition fell through to `fixed` when the read failed, so a permissions error
     // or a transient I/O fault read as evidence the code had moved — the opposite of
     // what it means. It is the same rule the absent-scope check above already states
@@ -907,7 +907,7 @@ async function collectJustifications(
   // lockfiles, generated output, anything binary. A finding raised against one of
   // those had NOWHERE to put its reason, so it could only ever be fixed — and if it
   // should not be fixed, it was re-raised for ever with no way to answer. Hit on
-  // `deploy/tiers.zai-openai.json` (c618aec7), where the tier schema is `.strict()`
+  // `deploy/tiers.zai-openai.json`, where the tier schema is `.strict()`
   // so smuggling a key in is a parse error rather than a workaround.
   //
   // Markdown, so the existing `<!-- lore-ok[...] -->` form works and no new syntax
@@ -934,7 +934,7 @@ async function collectJustifications(
       if (finding === undefined) continue; // already settled in an earlier round
 
       // The scope is taken from the code the reason DEFENDS, never from wherever the
-      // reason happens to be written (3f0e2139).
+      // reason happens to be written.
       //
       // `expireStaleVerdicts` looks the hunk up in the FINDING's file, so a scope
       // taken from the scanning file only worked while the two were the same file.

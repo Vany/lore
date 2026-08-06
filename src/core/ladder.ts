@@ -286,7 +286,7 @@ export function step(input: StepInput): { readonly state: LadderState; readonly 
     // global budget, it also fell on rounds where the tier came back CLEAN — and
     // then the cap discarded the very result that ended the ping-pong.
     //
-    // Observed on this repo, 2026-08-03. `rev_UsgaL105JyrNJEBD8L9NwKFX` spent
+    // Observed on this repo, 2026-08-03. One review spent
     // three rounds settling three findings, ran a fourth at t1 for 485s and 29
     // turns, came back clean — and was reported FAILED, because `tierRounds.t1`
     // had reached 4. We paid for a review, it found nothing, and the answer was

@@ -52,7 +52,7 @@ export async function attest(store: Store, reviewId: string, principal: string, 
   if (!isAttestable(review.state)) {
     // Names BOTH attestable states, because `passed` is not the only one and saying
     // so sends a caller to wait for something it may never reach. Seventh place the
-    // same omission turned up (d93dec01); the first six were documentation, and an
+    // same omission turned up; the first six were documentation, and an
     // error message is documentation that arrives when someone is already stuck.
     throw new DidNotRun(
       `review is '${review.state}' — attesting it would be a false claim. ` +
@@ -63,7 +63,7 @@ export async function attest(store: Store, reviewId: string, principal: string, 
   // branch name (D-40), so a line reading "reviewed tree unknown" asserts nothing
   // anyone can check while carrying a real ed25519 signature over it — which is
   // worse than refusing, because it LOOKS verified. That artefact was produced once,
-  // by the first review ever to pass, and `?? "unknown"` was how (659c2f50).
+  // by the first review ever to pass, and `?? "unknown"` was how.
   //
   // Recording the hash every round makes this unreachable for new reviews; the guard is
   // for the ones already in the database, and for whatever else might one day leave
@@ -79,7 +79,7 @@ export async function attest(store: Store, reviewId: string, principal: string, 
   const counts = tally(store, reviewId);
   // THE TIERS THAT READ THE SIGNED TREE, not the tiers that ever ran on this review.
   // Since a closed tier is not re-run after a fix (D-6, revised 2026-08-07), those are
-  // different sets: a finding raised by t1 and answered while the ladder was at t3 is
+  // different sets: a finding from t1, answered while the ladder had reached t3, is
   // re-read by t3 alone. Counting every tier that ever ran would claim more scrutiny
   // than the tree in this signature actually received, and the attestation is the one
   // output whose whole value is that it can be trusted.

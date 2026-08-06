@@ -65,9 +65,6 @@ describe("review", () => {
   // ANNOUNCED AFTER THE WRITE, and the comment saying so used to sit above a call
   // that ran before it. A client woken first re-reads and sees the state it was told
   // had changed; if the write then throws it waits for a second wake that never comes.
-  // Caught by t2 on the commit that wrote the comment — the false-statement-about-
-  // behaviour this repository is worst at, inside the feature meant to keep clients
-  // informed.
   it("wakes a subscriber only once the new state is readable", () => {
     newReview("rev1");
     let stateWhenWoken: string | undefined;
@@ -86,7 +83,7 @@ describe("review", () => {
   // and the next round writes it again, so a review climbing t1→t2→t3 with nothing to
   // report woke its subscriber twice per tier — an LLM turn spent per wake to poll and
   // learn nothing. The same shape as notifying on a re-raised finding, which this file
-  // already refuses. Raised by t2 two rounds after subscriptions landed.
+  // already refuses.
   it("does not wake a subscriber for a write that changes no state", () => {
     newReview("rev1");
     const woken: string[] = [];
@@ -103,8 +100,7 @@ describe("review", () => {
   // THE ONE STATE CHANGE THAT WOKE NOBODY. The expiry sweep wrote `state` with its own
   // SQL, so a client subscribed to a review — the path the docs lead with — was never
   // told it had been abandoned and waited on a stream that would never deliver for it
-  // again. Raised by t1 one round after subscriptions landed, in a file the comment
-  // predicting exactly this had never reached.
+  // again.
   it("wakes a subscriber when the sweep expires their review", () => {
     newReview("rev1");
     newReview("rev2");
@@ -278,10 +274,7 @@ describe("verdicts", () => {
   // that depends on it: when they diverge the review LIVELOCKS — a re-raised
   // fingerprint looks fresh to `step`, which resets the ladder, while `openFindings`
   // excludes it and `undelivered` has already delivered it, so the client is told
-  // `findings_ready` and handed nothing, for ever.
-  //
-  // Raised by t1 — the cheapest tier — one round after SETTLING_VERDICTS was
-  // introduced precisely to stop "settled" being defined twice. It had been applied
+  // `findings_ready` and handed nothing, for ever. It had been applied
   // to `openFindings` and to `review_poll` and not to `settledFingerprints`, so the
   // constant left three definitions where it was meant to leave one.
   //
@@ -429,7 +422,7 @@ describe("orphaned jobs", () => {
 // it was the wrong question. It is that two rounds never run on the same REVIEW,
 // because runRound reads the ladder, runs a tier and writes the ladder back.
 //
-// rev_cuZabwdrspNwv3OV6eu0IHA_, 2026-08-04: review_start queued one job, a
+// Observed 2026-08-04: review_start queued one job, a
 // review_submit 19s later queued a second, two loops took one each, and both paid
 // for a t1 call. The ladder settled at round 1 after two rounds had finished and
 // one completed review was discarded.
@@ -540,7 +533,7 @@ describe("one round at a time per review (D-53)", () => {
   it("says whether a round is pending, for callers that must not touch the worktree", () => {
     expect(store.hasPendingRound("rev1")).toBe(false);
 
-    // QUEUED counts. Asking only about `running` left a TOCTOU (8b859cdc): the
+    // QUEUED counts. Asking only about `running` left a TOCTOU: the
     // handler saw "no round" while a job sat queued, yielded on its next await, and
     // a worker claimed that job and began reading the worktree the handler then
     // patched. Counting queued leaves nothing to claim.

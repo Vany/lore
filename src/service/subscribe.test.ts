@@ -11,7 +11,7 @@
  * that hand-rolls those encodes my guess at the wire rather than the wire. `lore`'s
  * defining failure is a client acting confidently on a contract nobody checked; the
  * paste-able `.mcp.json` was wrong in three independent, individually fatal ways for
- * weeks because it was reasoned about instead of run (MEMO session 31).
+ * weeks because it was reasoned about instead of run.
  *
  * What this pins down, all of which have silent failure modes:
  *
@@ -267,7 +267,7 @@ describe("a subscription is not a way around D-23", () => {
     // alice's review by id — which is all an id-in-a-log gives anyone. The SDK's listen
     // router matches URIs and authorizes nothing, so without `ScopedEventBus` this is
     // an existence-and-activity oracle for exactly the thing `mine()` returns NOT FOUND
-    // for. Raised by t2 against the commit that added subscriptions.
+    // for.
     const bob = await watcher(bobToken, "bob-client");
     // Bob asks for BOTH: alice's review, which is not his, and his own. The barrier is
     // on his own stream — if he were entitled to `revS` it would arrive there first,

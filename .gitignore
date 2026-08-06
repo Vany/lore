@@ -1,4 +1,9 @@
-node_modules/
+# No trailing slash, deliberately. `node_modules/` matches a DIRECTORY and not a
+# SYMLINK to one — and a scratch worktree that links back to the parent's install is
+# exactly how a self-referencing `node_modules -> .` got committed, taking the real
+# install with it. The review loop builds its submission with `git add -A`, so an
+# unignored symlink here reaches a reviewed tree and then origin.
+node_modules
 dist/
 *.tsbuildinfo
 

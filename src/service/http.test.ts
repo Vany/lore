@@ -568,8 +568,7 @@ describe("an empty knowledge base explains itself", () => {
 // `openConflicts(repoId)`, which is repo-wide: a parked review is blocked by EVERY open
 // conflict in the repository, not by one it could name. So settling one of two bought
 // each waiting review a paid round and parked it again at the end of it, while
-// `resumed_reviews` said they were moving. Raised by t1 against the commit that added
-// the resume — the exit sign fixed, pointing at a second wall.
+// `resumed_reviews` said they were moving.
 describe("settling one of several conflicts resumes nothing, and says so", () => {
   const parked = (id: string) => {
     store.createReview({
