@@ -22,6 +22,7 @@ and what it cost to learn, lives in `MEMO.md` and in the git history.
 | `spec/knowledge.md` | the knowledge layer — the product |
 | `spec/review-ladder.md` | tiers, findings, verdicts, invariants |
 | `spec/agent-docs.md` | tool descriptions, resources, the `review` prompt |
+| `spec/propose.md` | `lore propose` — the idea generator, which gates nothing |
 | `spec/deployment.md` | the arm64 host, Tailscale, T0 throughput budget |
 | `spec/operations.md` | client alarms vs devops alerts, the heartbeat, spend control |
 | `research/` | verified external facts, each dated |
@@ -186,6 +187,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-72** | A deploy **drains** — stop claiming, finish what is in flight, then swap | confirmed |
 | **D-73** | A justification is **not part of the code it defends**, and is learned once | confirmed |
 | **D-74** | **One vendor per tier** — the deployed ladder is Z.ai, Moonshot, OpenAI | confirmed |
+| **D-75** | `propose` is an **idea generator for the maintainer**, never a gate | `[OPEN]` |
 
 **D-7, revised.** The earlier version dropped GLM-5.2 on Artificial Analysis's
 *cost per task* — which is tokens consumed × price on their benchmark, not a price.
@@ -892,6 +894,91 @@ and the ids were read from `/config/providers` on the running server. `DEFAULT_T
 still names `openrouter/moonshotai/kimi-k3` for a gateway route nobody here uses, which
 is a guess nothing has verified — it applies only when `LORE_TIERS` is unset, and this
 deployment always sets it.
+
+**D-75 — `propose` generates ideas for the maintainer, and is not part of the ladder.**
+
+Every review this service performs is **diff-scoped**. Nobody ever asks about the
+whole, which is why on 2026-08-06 lore found almost nothing wrong with lore: the
+client found defects by using it and the maintainer found the rest by measuring, while
+the ladder found none of them, because none of them were in a diff.
+
+`lore propose` is the deliberate opposite of a review. It asks the dearest models an
+open question — *what would you change about this codebase if you could change
+anything?* — spends a great deal of quota doing it, and produces **suggestions a human
+appraises**. Run rarely, for inspiration, never on a merge.
+
+**It is a generator, and it is not made safe by being constrained.** The obvious design
+is to make each idea a finding with `evidence` and `failureScenario`, reusing the
+ladder's machinery. That is the wrong instinct and it was the first one tried: a
+finding schema is a **conservatism device**, and forcing a model to be defensible makes
+it boring in exactly the dimension this tool exists to explore. The filter here is a
+person, deliberately, and everything below is about making that person's job possible
+rather than about making the model behave.
+
+**Buy the maximum, not the average.** The value of an idea generator is its best
+output, not its mean, and that inverts the usual design:
+
+- **N models, one idea each — never one model asked for thirty.** Asked for a list, a
+  model pads to fill the count and the padding is generic. Asked for the single change
+  it would make if it could make only one, it answers with what it believes.
+- **Lenses are forced apart.** The same question to three models returns three versions
+  of the safe answer. Each proposer gets a different vantage — the data model, the
+  failure modes, the seams, and one told it has six months and no compatibility
+  constraint. **Consensus here is a smell, not a signal**: agreement means the question
+  was too easy, and the ideas worth having are the ones only one model saw.
+- **A different vendor attacks each proposal.** D-1's independence premise applied to
+  ideas rather than code, and it does most of the filtering for nothing: *"add a
+  repository pattern"* dies the moment a model that did not write it is asked what the
+  change costs and what the repository already says.
+
+**Every proposal carries its own kill criteria, and this is the load-bearing part.**
+Not evidence — that is the conservatism trap again. Four fields, of which the last
+matters most:
+
+- what would have to be **true** for this to be worth doing
+- what it **costs if wrong**
+- what in the repository **contradicts** it
+- **what one measurement would settle it**
+
+A proposal that cannot name its own falsifying measurement is one nobody can appraise,
+and that is precisely the kind that costs a fortnight. The motivating case is the
+session that produced this decision: a large refactor was proposed, `wc -l` and a
+twenty-line export-reachability script killed it in ten minutes, and the measurement
+was the entire appraisal. **The danger is never a bad idea — it is a plausible one.** A
+bad idea dies in five seconds; a plausible-but-wrong one eats a fortnight, and this
+project's whole defect history is confident false statements. So `propose` is built to
+be *hard to be convinced by*, not persuasive.
+
+**The knowledge base screens before a human reads anything.** This is the one filter
+that removes ideas without blunting them, because it removes only the ones already had:
+a proposal to split `store.ts` arrives annotated *"considered 2026-08-06, rejected
+because…"* rather than landing fresh. Everything rejected is written back as a decision
+record, so the second run is cheaper than the first and the same idea cannot cost the
+same appraisal twice.
+
+**Two boundaries, both hard.**
+
+It **never produces a finding, never gates a merge, never attests, and never enters the
+review path.** That separation is exactly what makes it safe to be reckless inside it.
+The moment an unconstrained idea can reach a `passed`, the one output whose entire
+value is that it can be trusted is contaminated.
+
+And it **must never starve the gate.** Measured before building: our largest t2 review
+sent 203,904 cached tokens and hit the 30-minute ceiling, and a whole-repo question has
+no diff to anchor exploration, so a proposer run is at least that expensive. Four
+proposers and four critics is eight deep sessions — enough to empty a rolling
+subscription window, and D-7's argument about T1 applies unchanged: exhausting the
+window stalls *every review in the system*. So `propose` refuses to start while reviews
+are queued or running, and takes a budget as an argument rather than discovering one.
+
+**CLI, not MCP** (D-16). It is run by the maintainer, rarely, and its output is read by
+a person — so it needs no tool description, no client contract and no place in the
+agent docs. It writes a dated document into `proposals/`, beside `research/`.
+
+`[OPEN]` — the shape is decided; nothing has run. Whether these models produce *good*
+architectural ideas is entirely unmeasured, and this is the output most likely to be
+plausible and useless. It is the best first customer for the measurement harness rather
+than a reason to skip it.
 
 **D-73 — a justification is not part of the code it defends, and its fact is learned
 once.**

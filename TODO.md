@@ -583,6 +583,20 @@ landing with a real user, and it should not get lost among the defects below.
 
   </details>
 
+- [ ] **`lore propose` — specced, not built** (D-75, `spec/propose.md`). The idea
+      generator: N models, one idea each, forced-apart lenses, a different vendor
+      attacking each proposal, screened against what the repository already decided.
+      Gates nothing, produces no findings, cannot attest.
+      **Cost is the open question and it is Vany's.** Measured before speccing: the
+      largest t2 review sent 203,904 cached tokens and hit the 30-minute ceiling, and a
+      whole-repo question has no diff to anchor exploration — so one proposer is at
+      least that expensive, and `--budget 8` is eight deep sessions. That is enough to
+      empty a rolling subscription window, which would stall every review in the system
+      (D-7's argument about T1, unchanged). Hence the refusal to start while any review
+      is queued or running.
+      Unmeasured, and the thing most worth knowing: whether these models produce *good*
+      architectural ideas at all. Best first customer for the harness below.
+
 - [ ] **Prove Phase 3's actual done-criterion.** A fresh Claude Code session, given
       no instructions beyond the MCP tool descriptions, drives a review to `passed`.
       Every review so far has been driven by hand with shell scripts, so what is
