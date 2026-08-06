@@ -597,6 +597,96 @@ landing with a real user, and it should not get lost among the defects below.
       Unmeasured, and the thing most worth knowing: whether these models produce *good*
       architectural ideas at all. Best first customer for the harness below.
 
+### 2026-08-06, watching a client work
+
+Collected by observing, not by reasoning. A session drove reviews over MCP while I
+watched the database and the log.
+
+- [ ] **lore knows why a branch cannot be reviewed and tells the one party who cannot
+      act on it.** Five attempts on `epic/RIGID-4-m1-managed`, across two days, every
+      one failing identically:
+
+      | | |
+      |---|---|
+      | attempts | 5 (08-05 ×2, 08-06 ×3) |
+      | diff | 741 KB against a 228 KB demonstrated t1 ceiling — **3.3×** |
+      | spent | ~21 minutes of T0, 10 model calls (first + retry each time), all empty |
+      | outcome | `failed`, every time, same cause |
+
+      D-58's guard fires correctly on every attempt: *"this diff is 741 KB, larger than
+      anything t1 has ever finished (228 KB)… A smaller review scope is the fix, not a
+      longer timeout."* It is `console.error` to `[lore:log]` (`review.ts:196`) and
+      reaches the client **nowhere** — not `failed_because`, not `checks_skipped`, not
+      the poll response.
+
+      What the client gets instead is *"first reply was EMPTY (usually a provider
+      failure inside a 200)"*, and `TOOL_DOCS.poll` tells it `failed` is *"often
+      TRANSIENT — an identical retry frequently succeeds — so retry once before
+      concluding anything"*. **So lore diagnoses the problem correctly, sends the
+      diagnosis to a log the client cannot read, and then instructs the retry loop it
+      is watching.** The client is behaving exactly as documented.
+
+      This is INV-1's shape one layer out: the information exists, is right, and is
+      delivered to whoever cannot use it. The fix is not a bigger warning — it is that
+      the oversize notice must travel to the client, in `checks_skipped` or
+      `failed_because`, saying the diff is N× what this tier has ever completed and
+      that the answer is a smaller review scope.
+
+      **Whether it should also REFUSE above some multiple is a separate, harder call**
+      and is Vany's: D-58 chose warn-and-proceed because a tier may manage more than
+      its previous best and a review stopped by a guess is worse than one that runs
+      long. That argument held at 1.2×. At 3.3×, with five identical empty replies and
+      no successful run anywhere near that size, it is buying nothing and costing
+      quota. Evidence now exists where it did not when D-58 was written.
+
+      **The client's own account, which is worse than the numbers.** From its
+      handover: *"lore — three times, never ran… After you said the viewer was fixed,
+      the third attempt failed byte-identically. So the pre-ready gate has never run on
+      this branch, and `failed` concluded nothing about the code. **This is the one
+      thing I could not work around.**"*
+
+      And then the damage that is not quota. It reported to its operator that it was
+      blocked on *"whether to proceed without a lore pass given **its tier is still
+      broken**"* — a **false diagnosis of lore, which lore manufactured**, escalated to
+      a human as a decision.
+
+      Verified while reading that report: `glm-5-turbo` answers a probe in 5s, and t1
+      **completed a 218 KB diff at 14:55 the same afternoon**, after two of the epic's
+      failures. Recent t1 runs are `ok` across the board. The tier is healthy; the diff
+      is 3.4× the largest it has ever finished. Nothing lore said would let either the
+      client or its operator work that out.
+
+      **What the loop actually cost, beyond quota.** The same handover reports two real
+      defects its local gate could not see — every package runs
+      `vitest --exclude '**/*.integration.test.ts'`, so a green run was not evidence
+      about those files, and one excluded e2e test *"still asserted an unrequested
+      partial approval, i.e. it was asserting the defect that ticket exists to remove."*
+      Whether a test asserts what its name claims is precisely the reading D-71 assigns
+      to the model tiers. lore never ran, so it never looked. That is the value the
+      oversize loop spent five attempts failing to deliver.
+
+- [ ] **A `failed` that names a symptom invites a diagnosis, and clients make one.**
+      Generalised from the entry above, because the oversize case is one instance and
+      the shape will recur.
+
+      `TOOL_DOCS.poll` already tells the client not to infer a cause from the word
+      `failed` and to repeat `failed_because` verbatim. It did. The message it repeated
+      was *"first reply was EMPTY (usually a provider failure inside a 200)"* — true,
+      and a symptom. The doc then adds *"`failed` is often TRANSIENT — an identical
+      retry frequently succeeds — so retry once"*, which is what turned one wrong
+      inference into five attempts and a false report to a human.
+
+      So the rule needs sharpening on OUR side rather than the client's: **where lore
+      knows the cause, `failed_because` must carry the cause and not the symptom.** It
+      knew here — it had computed the ratio and written it to a log. Two candidates,
+      both cheap: `describeReply`'s "usually a provider failure" is a guess presented
+      as an explanation and should be dropped when a better-founded cause is in hand;
+      and a round that failed with a known aggravating condition should attach it.
+
+      Related and unmeasured: the retry advice may be net-harmful. It was written when
+      transport drops were the common failure; the gate should have removed most of
+      those. Worth re-reading the failure mix before leaving that sentence in.
+
 - [ ] **Changing `LORE_TIERS` silently rebinds every open review's cursor.** Found
       2026-08-06 by doing it: the deployment was switched to a Kimi-only ladder to
       prove that tier, then back to the three-vendor one, with a review open in
