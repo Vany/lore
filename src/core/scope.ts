@@ -23,11 +23,18 @@ export interface Scope {
 }
 
 /**
- * Lines that are a `lore-ok` marker or its continuation.
+ * Lines carrying a `lore-ok` MARKER. Not its continuation lines, which stay in the
+ * hash — they are prose the author wrote and are as much part of the file as any
+ * other comment.
  *
- * Matched loosely on purpose — three comment syntaxes, plus continuation lines — and
- * erring toward stripping too much rather than too little. A stray comment line
- * ignored costs nothing; a marker line counted is the livelock below.
+ * That asymmetry is deliberate and worth stating, because the docstring here first
+ * claimed it stripped continuations and did not: the regex requires `lore-ok[` on the
+ * line. What must not shift the hash is the ACT of marking, and the marker line is
+ * that act. A reason that grows a paragraph is an edit like any other.
+ *
+ * Loose across the three comment syntaxes, erring toward stripping too much rather
+ * than too little: a stray line ignored costs nothing, a marker line counted is the
+ * livelock below.
  */
 const ANNOTATION = /^\s*(?:\/\/|\*|<!--|#)?\s*lore-ok\[/;
 

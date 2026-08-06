@@ -65,6 +65,16 @@ binaries out of the target's `node_modules`, so the *install* still runs — and
 install runs lifecycle scripts, with network. That is what the ephemeral container
 contains now:
 
+- no secrets mounted — no tokens, no signing key, no database, and no git credentials,
+  because there are none in the deployment to mount (D-65)
+- no network during the run, and every capability dropped
+- read-only root filesystem apart from the worktree
+- **runs as lore's own uid, not root** — an ownership guard rather than a security one:
+  the cache and scratch directories are reused across reviews, and root-owned leftovers
+  break the next review with a permission error in a directory it owns
+- CPU, memory and PID limits, and a hard timeout
+- destroyed after the run
+
 ### 1.1.2 A tier is told where it stands (D-31)
 
 The same prompt at every tier wastes the expensive ones. A tier's position *is*

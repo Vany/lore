@@ -139,9 +139,10 @@ the whole loop — because **the client is an agent, so the docs are the interfa
      you ──► make mirror ──► git ──► the bare mirror   (lore holds no credentials)
 ```
 
-Tests run in a throwaway copy, mounted read-only from the reviewed tree — a suite
-that writes snapshots or coverage would otherwise mutate the code under review and
-appear in the next round as findings about work nobody did.
+`tsc` and `eslint` run in a throwaway copy, mounted read-only from the reviewed
+tree — they resolve their binaries out of the target's `node_modules`, so the install
+runs, and an install runs lifecycle scripts. lore does not execute a test suite at all
+(D-71): it reads your tests and leaves running them to your CI.
 
 ---
 

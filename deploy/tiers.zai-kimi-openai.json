@@ -1,0 +1,24 @@
+[
+  { "id": "t0", "kind": "deterministic", "stage": "fast" },
+  {
+    "id": "t1",
+    "kind": "model",
+    "model": "zai-coding-plan/glm-5-turbo",
+    "effort": "medium",
+    "stage": "fast"
+  },
+  {
+    "id": "t2",
+    "kind": "model",
+    "model": "kimi-for-coding/k3",
+    "effort": "high",
+    "stage": "deep"
+  },
+  {
+    "id": "t3",
+    "kind": "model",
+    "model": "openai/gpt-5.6-terra",
+    "effort": "high",
+    "stage": "deep"
+  }
+]
