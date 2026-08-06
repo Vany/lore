@@ -35,6 +35,22 @@ Nothing is asked of the client. A mirror older than `MAX_MIRROR_AGE_MS` is refus
 rather than reviewed, and since the client cannot fix that from where it stands, the
 refusal says what to report rather than what to run.
 
+## 1.1 This surface is what validates a change (D-76)
+
+**A change to lore is not validated until a client has driven it over MCP** — real tool
+calls, a real token, the deployed service. A CLI run is evidence about the core and
+never evidence that the product works.
+
+The rule exists because the CLI is always easier: no token, no mirror, no push, and it
+reviews the working tree directly. On 2026-08-06 that is exactly why it was reached
+for, to avoid pushing a branch — and the workaround then failed on its first command,
+because the CLI had never been run from the host and the T0 sandbox's cache root
+defaults to a path only the container has. **A surface nobody exercises does not work.**
+
+The prerequisite is part of the rule rather than a reason to skip it: a review is cut
+from the mirror of the remote (D-65), never from a working copy, so the branch must be
+pushed first. *Push, then review.*
+
 ## 2. Tools
 
 Ten, registered with **underscores**. The dotted form is prose, not an address —

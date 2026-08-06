@@ -597,6 +597,20 @@ landing with a real user, and it should not get lost among the defects below.
       Unmeasured, and the thing most worth knowing: whether these models produce *good*
       architectural ideas at all. Best first customer for the harness below.
 
+- [ ] **Make D-76 mechanical, or accept that it is discipline.** A change to lore is
+      validated over MCP, never by a CLI run — written down 2026-08-06 after I reached
+      for the CLI *because* MCP would have required pushing the branch, which turned an
+      operator's decision into a workaround that avoided asking for it. The workaround
+      then failed on its first command, since the CLI had never been run from the host:
+      `EACCES: mkdir '/var/lib/lore'`, the sandbox cache root defaulting to a container
+      path. A surface nobody exercises does not work.
+      Today nothing enforces it. `src/service/http.test.ts`'s field test drives the real
+      surface in-process — good for drift, not a client over the wire — and the Phase 3
+      criterion below is the real check and still unmet. Options worth weighing: a
+      `make smoke` that provisions a throwaway token and drives start/poll against the
+      running service, or accepting discipline and saying so rather than implying a
+      guard exists.
+
 - [ ] **Prove Phase 3's actual done-criterion.** A fresh Claude Code session, given
       no instructions beyond the MCP tool descriptions, drives a review to `passed`.
       Every review so far has been driven by hand with shell scripts, so what is

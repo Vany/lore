@@ -188,6 +188,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-73** | A justification is **not part of the code it defends**, and is learned once | confirmed |
 | **D-74** | **One vendor per tier** — the deployed ladder is Z.ai, Moonshot, OpenAI | confirmed |
 | **D-75** | `propose` is an **idea generator for the maintainer**, never a gate | `[OPEN]` |
+| **D-76** | A change is validated **over MCP**; a CLI run is never evidence the product works | `[OPEN]` |
 
 **D-7, revised.** The earlier version dropped GLM-5.2 on Artificial Analysis's
 *cost per task* — which is tokens consumed × price on their benchmark, not a price.
@@ -894,6 +895,48 @@ and the ids were read from `/config/providers` on the running server. `DEFAULT_T
 still names `openrouter/moonshotai/kimi-k3` for a gateway route nobody here uses, which
 is a guess nothing has verified — it applies only when `LORE_TIERS` is unset, and this
 deployment always sets it.
+
+**D-76 — a change is exercised through the MCP surface, and a CLI run proves nothing
+about the product.**
+
+MCP is the product; the CLI is the development surface (D-16). What that decision did
+not say is which one **validates a change**, and the answer has to be written down
+because the CLI will always be the easier path: no token, no mirror, no push, and it
+reviews the working tree directly.
+
+Observed 2026-08-06, on this repository, by me. Asked to review lore's own last
+commit, I reached for the CLI — specifically *because* MCP would have needed the
+branch pushed first, since a review is cut from the mirror of the remote (D-65) and
+never from a working copy. The reasoning was sound and the choice was wrong: it routed
+around the only path a client ever takes, and it turned a question that was the
+operator's (*may I push?*) into a workaround that avoided asking. **Quietly choosing
+the easier surface is the same substitution this project refuses everywhere else.**
+
+The workaround did not even work. The CLI had never once been run from the host, and
+failed immediately — `EACCES: mkdir '/var/lib/lore'`, because the T0 sandbox's cache
+root reads `LORE_DATA_DIR` and the default is a path only the container has. A surface
+nobody exercises does not work, which is this project's oldest lesson arriving from the
+direction nobody was watching.
+
+So:
+
+- **A change to lore is not validated until a client has driven it over MCP.** Tool
+  calls, a real token, the deployed service.
+- **A CLI run is evidence about the core, never evidence the product works.** It is
+  the right tool for iterating on the ladder, the parser and the store, which is what
+  D-25 built it for.
+- **The prerequisite is part of the rule, not an excuse.** Validating over MCP requires
+  the branch pushed, because the review is cut from the mirror. That friction is
+  precisely why the CLI gets reached for, and precisely why this is a rule rather than
+  a preference. *Push, then review* is the workflow; a push is the operator's decision
+  to authorise, and asking is cheaper than the workaround.
+
+`[OPEN]` — nothing enforces this mechanically. The field test in `src/service/http.test.ts`
+drives the real MCP surface in-process, which catches drift but is not a client over
+the wire against a deployment; `PLAN.md` Phase 3's done-criterion (a fresh session
+reaching `passed` with no instructions but the tool descriptions) is the real check and
+is still unmet. Until one of those closes, this holds by discipline, which is the
+weakest kind of guard and is named as such.
 
 **D-75 — `propose` generates ideas for the maintainer, and is not part of the ladder.**
 
