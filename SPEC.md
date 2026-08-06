@@ -68,9 +68,18 @@ strongest model on the board on purpose. Greptile reached the same conclusion fr
 ```
 
 A review outlives an MCP request, and **MCP servers cannot initiate requests** — so
-`start` returns an id and the client polls. That is the only correct shape, not a
-workaround (`research/mcp-service-design.md` §2). There is no progress estimate,
-because we cannot honestly give one.
+`start` returns an id and the client polls (`research/mcp-service-design.md` §2). There
+is no progress estimate, because we cannot honestly give one.
+
+**That sentence is true and has been carrying more weight than it can hold.** A server
+cannot initiate a *request*; it can send **notifications**, and the installed SDK
+carries two mechanisms built for exactly this shape — `resources/subscribe` with
+`notifications/resources/updated`, and task-augmented requests with `tasks/status`.
+Polling is therefore the safe floor rather than "the only correct shape", and the
+difference matters because a client that must poll has no deadline, which is why
+reviews are abandoned in `findings_ready` until a sweep expires them (D-70). Checked in
+the SDK on 2026-08-06; what a real client negotiates is unverified and is the thing to
+establish first. `TODO.md`.
 
 Fixes arrive as diffs and are applied to a private worktree without committing —
 the client keeps ownership of its own history. Each submission carries a
@@ -190,6 +199,8 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-75** | `propose` is an **idea generator for the maintainer**, never a gate | `[OPEN]` |
 | **D-76** | A change is validated **over MCP**; a CLI run is never evidence the product works | `[OPEN]` |
 | **D-77** | **Commit, review to a verdict, amend, push.** Nothing reaches origin unreviewed | `[OPEN]` |
+| **D-78** | A review answers to **the token that started it**, not to its repository | `[OPEN]` |
+| **D-79** | A finding is **what the author missed and would be hurt by** — asked, not filed | confirmed |
 
 **D-7, revised.** The earlier version dropped GLM-5.2 on Artificial Analysis's
 *cost per task* — which is tokens consumed × price on their benchmark, not a price.
@@ -928,6 +939,127 @@ and the ids were read from `/config/providers` on the running server. `DEFAULT_T
 still names `openrouter/moonshotai/kimi-k3` for a gateway route nobody here uses, which
 is a guess nothing has verified — it applies only when `LORE_TIERS` is unset, and this
 deployment always sets it.
+
+**D-79 — a finding is something the author missed and would be hurt by, addressed to
+them as a question.**
+
+The prompts do not ask for that, and the output shows it. Vany's diagnosis,
+2026-08-06, and the evidence is our own.
+
+**What we ask for today.** T1 is told *"Expect obvious defects. Report them plainly and
+cheaply; do not agonise."* — an instruction to produce volume. The output contract
+requires a `failureScenario`, so a model writes one for whatever it found rather than
+using *"can I state a real failure?"* as the test for reporting at all. Nothing anywhere
+says the bar is consequence.
+
+**What comes out.** Kimi's review of the D-77 commit produced eleven findings; every one
+was correct and nearly all were documentation drift — *this sentence asserts what the
+code does not do*. Real, worth fixing, and not what an independent auditor is for.
+Meanwhile one semgrep rule has been raised 63 times across this deployment and accepted
+as justified 63 times. MEMO session 30 named the shape a year of evidence now confirms:
+**the ladder converges on code and oscillates on prose.**
+
+**So the purpose is stated in the prompt, not assumed.** A reviewer exists to find what
+the author *missed* and would be hurt by. Two tests, both of which must pass:
+
+- **Consequence.** Can you state concrete inputs or state, and the wrong outcome that
+  follows? If not, it is an observation, not a finding. `failureScenario` stops being a
+  field to fill and becomes the gate for reporting.
+- **Missed.** Would the author, who knows what they meant and has just re-read this,
+  still not have seen it? A defect they would have caught on their own next pass costs
+  a round and teaches nothing.
+
+**Not "non-obvious", and the distinction matters.** An off-by-one is obvious the moment
+it is pointed at, and was still missed — filtering on obviousness would drop the cheap
+tier's whole job (D-31) and much of what a reviewer is actually good for. The filter is
+*would the author still have missed it*, which is a question about the author rather
+than about the defect.
+
+**And prose stays in scope.** D-11 makes specs reviewable, and this was not idle: the
+same review that produced the documentation drift also caught `knowledge_resolve`
+never resuming the review it unblocked — a spec claim that was false because the CODE
+was wrong. What must change is not that prose is read but that a wording nit and a
+production hazard arrive in the same shape at the same severity. A prose finding has to
+clear the consequence test like anything else: *who is misled, into doing what*.
+
+**The finding is addressed to the author, not filed against them.** Today a finding is
+a record: file, line, severity, claim. It should read as an ask with two legitimate
+answers, one of which is disagreement — *"I found this. Fix it, or tell me why it is
+not a problem."* That is already the mechanism (D-10: the reviewer rules on a
+justification), and the presentation hides it. Disagreement is a first-class answer,
+and a client that reads the shape as a verdict argues less well than one that reads it
+as a question.
+
+**Recurrence changes the ask, not the volume.** Where a finding has been seen before,
+the sentence is not *"and here it is again"* but *"this has happened N times — if it is
+wrong, the fix is whatever keeps producing it."* One instance answered N times is a
+process failure being paid for repeatedly. This is the missing verb behind the 63
+accepted justifications: the count is currently an adjective, and it should be the part
+that asks a different question.
+
+**Built 2026-08-06.** `prompts.ts` states the bar before position and before the
+question; `OUTPUT_CONTRACT` makes `failureScenario` the test rather than a field, and
+`claim` "what you would say to the author's face"; an open finding carries `asks`;
+`renderEnrichment` reads the prior *verdicts* and asks accordingly. The schema is
+unchanged, severity stays the engine's (D-67), and a rejected finding still loses only
+its own line (D-66) — this changed what we ask for and how we say it back, nothing
+else.
+
+`src/reviewer/prompts.test.ts` pins the bar rather than the wording, because the
+prompts had no test at all, which is how they drifted into asking for volume in the
+first place.
+
+**Unmeasured, and that is the honest caveat.** Whether this produces better reviews is
+not yet known: `PLAN.md` Phase 1's measurement harness was never built, so the change
+rests on a diagnosis rather than on a before-and-after. The diagnosis is well-evidenced
+— eleven findings on one commit, nearly all documentation drift; one rule raised 63
+times and justified away 63 times — but a prompt rewrite judged by the person who wrote
+it is exactly the shape D-75 exists to be suspicious of. The cheap check is to re-run
+recent reviews' diffs under the new prompts and count what changes; `TODO.md`.
+
+**D-78 — a review answers to the token that started it.**
+
+D-69 scoped access by **repository**: a token reaches its own repo and no other. That
+was the right fix for the bug it found, and it is one step short. Tokens are minted per
+repository and a workgroup provisions several to the same person, so any token for a
+repo can currently poll any review of that repo — including one another agent is in
+the middle of.
+
+**And `review_poll` is not a read.** It returns deltas and marks them delivered, so
+polling somebody else's review silently consumes findings its owner has not seen and
+will never be shown again. Nearly done on 2026-08-06: asked to watch a review this
+session had not started, the obvious move was to poll it, which would have eaten the
+client's findings while reporting on its progress. Caught before the call, by Vany.
+
+So `review_poll`, `review_submit` and `review_attest` require **the token that created
+the review**, not merely one scoped to the same repository. `review_inbox` stays
+repo-scoped, because "everything waiting for me" is a question about a holder rather
+than about one review.
+
+**This is about the delta cursor, not about attribution.** *Who* started a review is
+already answered, and answered at the right level: `principal` is the person, and every
+agent acting on their behalf is them. A first draft of this decision claimed the audit
+trail could not say who — reasoning from "I cannot tell which agent" to a gap that does
+not exist, and Vany corrected it. The question a reader asks is answered; what is not
+protected is one caller's stream of findings from another caller's poll.
+
+**The token itself is never revealed** — not the secret, not a hash prefix, not in
+`make status`, `lore://review/{id}`, or an error. The binding is checked against the
+stored hash internally. A token gets a name at provisioning so an operator can say
+which credential to revoke, and that name is the only handle that ever surfaces;
+`make revoke` should take it rather than the hash prefix it takes today, refusing an
+ambiguous name rather than resolving it (`spec/review-ladder.md` §3.1.2) — revoking the
+wrong client while leaving the intended one live is worse than refusing.
+
+A valid id presented by another token fails as **not found**, never as forbidden, for
+D-23's reason: "this exists but is not yours" confirms the id is real, and the id is
+the one thing worth guessing.
+
+`[OPEN]` — the wrinkle is rotation. Revoking a token orphans the reviews it started,
+which is correct for a compromised credential and inconvenient for a routine
+replacement. The operator view still sees them and the staleness sweep still collects
+them, so nothing is lost silently; whether rotation should be able to hand reviews over
+is a decision, and it wants making before this ships rather than after someone rotates.
 
 **D-77 — commit, review it to a verdict, amend, then push.**
 

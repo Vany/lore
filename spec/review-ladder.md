@@ -133,6 +133,34 @@ with less context than the author is not a peer.**
 Structured records, never prose — prose cannot be deduped, tracked or adjudicated,
 which is `~/c/review`'s central limitation.
 
+**But a record in transport is a QUESTION in meaning** (D-79). A finding is something
+the author missed and would be hurt by, put to them as: *fix this, or tell me why it is
+not a problem.* Both are real answers, the reviewer may be wrong, and an accepted
+justification is worth more than a compliant fix — it becomes a durable fact about why
+the code is the way it is. An open finding carries `asks` saying so, because the record
+shape alone reads as a verdict and clients treated it as one.
+
+**Two tests gate reporting at all, and both must pass.**
+
+- **Consequence.** Concrete inputs or state, then the wrong outcome. `failureScenario`
+  is the *test*, not a field: if it comes out as "this is inconsistent" or "a reader
+  might be confused", there is no finding. It used to be a required field, so a model
+  wrote one for whatever it had already decided to report and a wording nit acquired a
+  plausible consequence on the way out.
+- **Missed.** Would the author, who knows what they meant and has just re-read this,
+  still not have seen it? Not *is it subtle* — an off-by-one is obvious once pointed at
+  and was still missed. The question is about the author, not the defect.
+
+Prose clears the same bar rather than being excluded: documents are reviewable (D-11)
+and drift is a real defect, but a prose finding must say **who is misled into doing
+what**. The review that motivated this produced eleven findings, all correct, nearly
+all wording — and one of them was a spec claim false because the *code* was wrong,
+which is exactly the prose finding worth having.
+
+**Reporting less is the job, not a failure to do it.** Every finding costs the author a
+fix cycle, and a review spending them on observations is one they learn to skim — which
+is how the real one gets skimmed too.
+
 ```jsonc
 {
   "file": "src/pay/hold.ts",

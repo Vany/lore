@@ -15,7 +15,7 @@ import * as z from "zod";
 import { absent } from "../core/optional.ts";
 import { worstSeverity } from "../core/finding.ts";
 import { initialState } from "../core/ladder.ts";
-import { isAttestable, isClean, isTerminal } from "../core/review-state.ts";
+import { isAttestable, isClean, isTerminal, type ReviewState } from "../core/review-state.ts";
 import { DEFAULT_TYPE, reviewType, reviewTypeIds } from "../core/review-type.ts";
 import { applyPatch, treeHash } from "../git/repo.ts";
 import { enrich, renderEnrichment } from "../knowledge/enrich.ts";
@@ -42,6 +42,46 @@ const text = (s: string) => ({ content: [{ type: "text" as const, text: s }] });
  * The moment ids are guessable, every log line containing one becomes a credential
  * (D-23).
  */
+/**
+ * What to do next, per state — the most-read string this service produces.
+ *
+ * It used to be binary: "Every tier agrees" or "NOT clean. Only `passed` means
+ * clean." Both true, neither an instruction, and every production failure of this
+ * surface was a client doing something reasonable that nothing told it not to:
+ *
+ *   * polled once, saw `running`, concluded the branch was clean;
+ *   * got `failed`, retried five times because the docs said retries often succeed,
+ *     then told its user lore was broken;
+ *   * reached `findings_ready` and stopped — the single largest cause of abandoned
+ *     reviews, and not a fault in any client: nothing in the reply said the review
+ *     dies if you walk away.
+ *
+ * So each state names the next call. A client that reads only this field should still
+ * do the right thing, because that is the client we actually have.
+ */
+function nextStep(state: ReviewState): string {
+  switch (state) {
+    case "queued":
+    case "running":
+      return "Still working — this is NOT a result. Poll again in 10s, backing off to 60s. Do not merge, and do not report anything about the branch yet.";
+    case "findings_ready":
+    case "awaiting_diff":
+      return "ACT NOW: answer every finding below — fix it, or write the `justify_with` line at the site — then call review_submit with your diff and tree hash. THE REVIEW DIES IF YOU STOP HERE: it is abandoned after 48h and concludes nothing, and this branch stays unreviewed.";
+    case "fast_clean":
+      return "The CHEAP tiers found nothing; the deep tiers are still running. This is NOT a pass and you must not merge on it. Keep polling.";
+    case "needs_human":
+      return "STOP and ask a person. `open_questions` is the question — take both statements to your user verbatim. Do not answer it yourself and do not close it with lore-ok. When they decide, call knowledge_resolve; that resumes this review.";
+    case "passed":
+      return "Every tier agrees. Call review_attest for the signed line, then merge.";
+    case "passed_partial":
+      return "Every tier that COULD run agrees — weaker evidence than `passed`, honestly labelled. Tell your user which tiers were skipped and why (the attestation names them) before deciding to merge.";
+    case "failed":
+      return "The review DID NOT RUN — this is not 'nothing found' and you must not merge. Read `failed_because` and repeat it to your user verbatim. Retry AT MOST ONCE; if it fails the same way, stop and report it rather than diagnosing lore yourself.";
+    case "expired":
+      return "Nobody answered this review in time, so it concluded NOTHING about the code — not that it was clean. Start a fresh review if this branch still matters.";
+  }
+}
+
 function newReviewId(): string {
   return `rev_${randomBytes(18).toString("base64url")}`;
 }
@@ -185,9 +225,14 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           // Restated on every poll, because failure mode 1 and 7 are the two most
           // likely ways this loop ends with unreviewed code shipped.
           clean: isClean(review.state),
-          note: isClean(review.state)
-            ? "Every tier agrees. You may attest and merge."
-            : "NOT clean. Only `passed` means clean.",
+          // THE NEXT CALL, NAMED. This said only "NOT clean. Only `passed` means
+          // clean." — true, and it left a client holding three findings with no
+          // sentence telling it what to do with them. Every failure this surface has
+          // had in production was a client doing something reasonable that nothing
+          // told it not to: polling once and stopping, retrying a review that could
+          // never succeed, walking away from `findings_ready` (the single largest
+          // cause of abandoned reviews). A state name is not an instruction.
+          note: nextStep(review.state),
           // The branch's own defects FIRST, inherited ones after.
           //
           // Ordering is what a reader actually acts on, and severity alone put two
@@ -231,6 +276,13 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
                     note: "Already settled — nothing to do. Shown because it is new to you.",
                   }
                 : {
+                    // THE FINDING IS A QUESTION, AND THIS IS IT (D-79). A record
+                    // invites compliance; an ask invites judgement, and judgement is
+                    // what a justification is for. The mechanism was always this —
+                    // the reviewer rules on your reason (D-10) — and the shape hid it,
+                    // so clients treated findings as verdicts and argued badly or not
+                    // at all.
+                    asks: "Fix this, or tell me why it is not a problem. Both are real answers, and I may be wrong.",
                     justify_with: `// lore-ok[${short}]: <why this code is correct>`,
                     // Still open, and worse than open: a justification was offered
                     // and refused. Saying so is the difference between "answer this"

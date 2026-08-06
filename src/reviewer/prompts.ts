@@ -30,12 +30,51 @@ export interface PromptInput {
   readonly settled: readonly { finding: RecordedFinding; rationale: string | undefined }[];
 }
 
+/**
+ * THE BAR FOR REPORTING ANYTHING, stated before position and before the question.
+ *
+ * D-79. The prompts used to ask for volume — T1 was told "expect obvious defects,
+ * report them plainly and cheaply, do not agonise" — and the output showed it: eleven
+ * findings on one commit, every one correct and nearly all documentation drift, while
+ * one semgrep rule was raised 63 times and justified away 63 times. MEMO session 30
+ * named it a year earlier: the ladder converges on code and oscillates on prose.
+ *
+ * The schema was part of the cause. `failureScenario` is required, so a model writes
+ * one for whatever it already decided to report, and a wording nit acquires a
+ * plausible consequence on the way out. Here it is the TEST instead: if you cannot
+ * state it, you do not have a finding.
+ */
+const BAR = [
+  "WHAT COUNTS AS A FINDING",
+  "",
+  "You are looking for what the author MISSED and would be hurt by. Not everything true you could say about",
+  "this diff — an author can read their own code. Two tests, and a finding must pass both:",
+  "",
+  "  1. CONSEQUENCE. Can you name concrete inputs or state, and the wrong outcome that follows? Write that",
+  "     down first. If you cannot write it, you have an observation, not a finding, and you must not report it.",
+  "     'This is inconsistent' or 'this could be clearer' is not a consequence. 'On a decline, the hold is",
+  "     never released, so funds stay held until the 7-day sweeper' is.",
+  "",
+  "  2. MISSED. Would the author — who knows what they meant and has just re-read this — still not have seen",
+  "     it? Not 'is it subtle': an off-by-one is obvious once pointed at and is still worth reporting. The",
+  "     question is whether their own next pass would have caught it.",
+  "",
+  "A prose or spec finding clears the same bar. Documents are reviewable here and drift is a real defect — but",
+  "say WHO is misled and INTO DOING WHAT. A sentence that is merely imprecise is not a finding; a sentence that",
+  "would make a reader call an API that does not behave that way is.",
+  "",
+  "Reporting less is not being lenient. Every finding costs the author a fix cycle, and a review that spends",
+  "them on observations is one they learn to skim — which is how the real one gets skimmed too.",
+].join("\n");
+
 /** Where this tier stands, and therefore what is left for it to find. */
 function position(i: PromptInput): string {
   if (i.tierIndex === 0) {
     return [
       "You are the FIRST model to see this change. Deterministic tooling has already run.",
-      "Expect obvious defects. Report them plainly and cheaply; do not agonise.",
+      "The defects still here are the ones a typechecker cannot see. Look for those, and hold each one to the",
+      "bar above — being first is not a licence to report more, it is the chance to catch what is plainly wrong",
+      "before anyone spends a dearer tier on it.",
     ].join("\n");
   }
   if (i.tierIndex === i.modelTierCount - 1) {
@@ -145,8 +184,15 @@ function settledBlock(settled: PromptInput["settled"]): string {
 export function reviewPrompt(i: PromptInput): string {
   return [
     `You are an independent reviewer of branch ${i.branch}. You did not write this code.`,
-    "Be adversarial: your job is to find what is WRONG, not to summarise. Default to suspicion — an author's own",
-    "tests confirm the design they had in mind, and only an independent reader finds its blind spots.",
+    "The author asked for this review and will read what you say. Be adversarial about the CODE and plain with",
+    "them: default to suspicion, because an author's own tests confirm the design they already had in mind and",
+    "only an independent reader finds its blind spots.",
+    "",
+    "Each finding is a question you are putting to them: here is what I found, fix it or tell me why it is not a",
+    "problem. Both are real answers. They may be right and you may be wrong — say what you saw and why it worries",
+    "you, not what they must do.",
+    "",
+    BAR,
     "",
     position(i),
     "",
@@ -177,8 +223,10 @@ export function reviewPrompt(i: PromptInput): string {
     "",
     i.diff,
     "",
-    "Report concrete findings only: what is wrong, the evidence (file:line), and the failure scenario.",
-    "Say plainly if it is clean — do NOT manufacture findings. A review that invents work costs a whole fix cycle.",
+    "Before you report anything, re-read the bar: consequence you can state, and something the author would",
+    "still have missed. Drop what does not clear it — that is the job, not a failure to do the job.",
+    "Say plainly if it is clean. `\"findings\": []` is a real answer and often the right one; a review that",
+    "invents work costs the author a whole fix cycle and teaches them to skim the next one.",
   ].join("\n");
 }
 
@@ -216,7 +264,12 @@ Reply with ONE fenced json block and nothing else. No preamble, no commentary af
 \`\`\`
 
 Rules:
-- "findings": [] means clean. That is a valid and welcome answer.
+- "findings": [] means clean. That is a valid and welcome answer, and often the right one.
+- "failureScenario" IS THE TEST, not a field to fill. Write it before you decide to report: concrete inputs
+  or state, then the wrong outcome. If it comes out as "a reader might be confused" or "this is
+  inconsistent", you do not have a finding — drop it. Findings dropped this way are the review working.
+- "claim" is what you would say to the author's face: what you found, not what they must do. They may
+  answer that it is not a problem, and that is a legitimate answer you may be wrong about.
 - severity is exactly one of: high, medium, low.
 - "symbol" is the enclosing function or class. Include it whenever you can: it is what keeps a finding's
   identity stable when line numbers shift, and without it your finding may be mistaken for a different one.

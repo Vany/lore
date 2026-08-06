@@ -127,7 +127,17 @@ describe("every behaviour a client must know about reaches the texts", () => {
     ["poll", "inherited findings are marked (D-68)", "preexisting"],
     ["poll", "a rejected finding is disclosed (D-66)", "a tier produced a finding the schema refused"],
     ["poll", "recurrence never demotes (D-67)", "never changes"],
-    ["poll", "failed is often transient", "TRANSIENT"],
+    // WAS: ["poll", "failed is often transient", "TRANSIENT"].
+    //
+    // That sentence — "an identical retry frequently succeeds" — was followed
+    // exactly by a client: five attempts on one branch across two days, then a report
+    // to its user that lore's tier was broken. It was not; the branch exceeded that
+    // tier's context window and nothing in the message said so. The advice was wrong
+    // and the client was right to trust it, so the cap is the contract now.
+    ["poll", "a retry is bounded, because an unbounded one looped", "RETRY AT MOST ONCE"],
+    ["poll", "stop rather than diagnose lore yourself", "Diagnosing lore is not your job"],
+    ["poll", "a recurrence count is an instruction, not an adjective", 'WHAT TO DO WITH "seen N×'],
+    ["poll", "a compacted diff narrows what a pass covers", "could not hold your whole diff"],
     ["submit", "this is how a review continues", "THIS IS HOW A REVIEW CONTINUES"],
     ["query", "empty means not bootstrapped yet (D-35)", "count: 0"],
     ["submit", "choose on truth, not on which answer is cheaper (D-73)", "CHOOSE ON WHETHER THE FINDING IS TRUE"],

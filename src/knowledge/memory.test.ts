@@ -100,7 +100,41 @@ describe("what one review learns, the next one knows", () => {
     const e = enrich(store, repoId, current);
 
     expect(e.priorOccurrences).toBe(3);
-    expect(renderEnrichment(e)).toContain("this is a pattern, not an incident");
+    expect(renderEnrichment(e)).toContain("a pattern rather than an incident");
+  });
+
+  // HISTORY MUST ASK FOR SOMETHING (D-79). "Seen 23×" was an adjective: it named a
+  // pattern and requested nothing, so a client answered the line in front of it and
+  // met the same finding next review. Measured: one rule raised 63 times across this
+  // deployment, justified away 63 times, never escalated to a person once.
+  //
+  // The two histories want opposite answers, and only one is fixable by editing.
+  describe("history asks a different question depending on how it was answered", () => {
+    const settle = (id: string, fp: string, verdict: "fixed" | "justified-accepted") => {
+      review(id);
+      store.recordFinding(id, finding(fp));
+      store.recordVerdict(id, { fingerprint: fp, verdict, rationale: "r", scope: undefined, tier: "t1", round: 1 });
+    };
+
+    it("says the CHECK may be wrong when it keeps being justified away", () => {
+      settle("j1", "jfp1", "justified-accepted");
+      settle("j2", "jfp2", "justified-accepted");
+      review("now");
+      const out = renderEnrichment(enrich(store, repoId, finding("jfp9"))) ?? "";
+      expect(out).toMatch(/check itself may be wrong/);
+      // The part that was missing: escalate it, because the author cannot settle this
+      // by editing the line again.
+      expect(out).toMatch(/TELL YOUR USER/);
+    });
+
+    it("says fix the CAUSE when the code keeps reintroducing it", () => {
+      settle("f1", "ffp1", "fixed");
+      settle("f2", "ffp2", "fixed");
+      review("now2");
+      const out = renderEnrichment(enrich(store, repoId, finding("ffp9"))) ?? "";
+      expect(out).toMatch(/what keeps producing it/);
+      expect(out).toMatch(/an Nth manual fix is not/);
+    });
   });
 });
 

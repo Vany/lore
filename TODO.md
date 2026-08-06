@@ -665,6 +665,126 @@ watched the database and the log.
       to the model tiers. lore never ran, so it never looked. That is the value the
       oversize loop spent five attempts failing to deliver.
 
+- [x] **Rewrite the tier prompts and the finding presentation for D-79.** Done
+      2026-08-06. `failureScenario` is the test rather than a field; the bar is stated
+      before position and before the question; an open finding carries `asks`; and
+      `renderEnrichment` reads the prior verdicts and asks accordingly. The first
+      tier no longer hears "expect obvious defects, report them cheaply, do not
+      agonise", which is what it was told while producing eleven findings on one
+      commit, nearly all of them wording. `prompts.test.ts` pins the bar rather than
+      the wording — the prompts had no test at all, which is how they drifted.
+
+- [ ] **Measure whether D-79 actually improved reviews.** The change rests on a
+      diagnosis, not on a before-and-after: `PLAN.md` Phase 1's measurement harness
+      was never built, so a prompt rewrite is currently being judged by the person who
+      wrote it — the exact shape D-75 exists to be suspicious of.
+      Cheapest honest version: take the last N reviews' diffs, re-run them under the
+      new prompts, and count what changed — how many findings, how many carry a real
+      failure scenario, how many the author accepted as true. Halving the count while
+      keeping the two that mattered is evidence. Anything else is taste, and should be
+      reverted rather than defended.
+
+- [ ] **"Seen 23× — a pattern, not an incident" leads to nothing.** Asked by Vany
+      2026-08-06: why does that sentence not make a client fix the underlying problem?
+      Measured rather than reasoned — the three most-recurring findings in the store:
+
+      | count | verdicts | finding |
+      |---:|---|---|
+      | 23× | justified-accepted, justified-rejected | `react-insecure-request` |
+      | 23× | justified-accepted | `react-insecure-request` |
+      | 17× | justified-accepted | `react-insecure-request` |
+
+      **Sixty-three occurrences of ONE semgrep rule, accepted as justified every
+      time.** The sentence is true and the pattern it names is that lore keeps raising
+      a check this repository ruled out sixty-three times.
+
+      Nothing acts on it, for four reasons of which one is fixable:
+
+      - **The client has no verb.** The contract offers fix-this-line or
+        `lore-ok`-this-fingerprint. There is no way to say "this check does not apply
+        to this path here" once and have it hold for the class.
+      - **The enrichment is an adjective.** File, line and `justify_with` all say
+        *answer this occurrence*; the count sits beside them changing nothing. D-9
+        enriches the report, D-67 forbids demoting on familiarity, and neither creates
+        an obligation.
+      - **D-51 makes it survivable.** The justification carries forward and the finding
+        closes unargued, so the loop tolerates it perfectly and nobody is forced to
+        deal with it — it just costs a line in every report and a slot in every prompt,
+        for ever.
+      - **Derivation ignores it, deliberately, and that is the gap.** Only `fixed`
+        findings teach a lesson now (fixed this morning, because counting justified-away
+        ones taught reviewers to hunt for what the team had ruled out). Correct — and
+        the consequence is that repeated ACCEPTANCE teaches nothing at all, when it is
+        the strongest evidence available that a check is wrong for a repository.
+
+      The shape of the fix: N accepted justifications of the same rule on the same path
+      class should derive a **suppression** — knowledge that says *this engine's rule
+      does not apply here, because …*, carrying the reason the team already gave
+      sixty-three times. Not a demotion (D-67 is right that a true finding stays high),
+      and not a deletion: a recorded, reviewable belief that the next round consults
+      before raising. Wants deciding rather than patching, because a suppression the
+      ladder honours is a thing that can go wrong quietly, which is the one shape this
+      project refuses.
+
+- [ ] **Bind a review's delta stream to the token that started it** (D-78).
+
+      **Polling someone else's review consumes their findings.** `review_poll` returns
+      deltas and marks them delivered, and D-69 scopes access by *repository* — so any
+      token for a repo can poll any review of it, and the owner is never shown what was
+      taken. Nearly done on 2026-08-06: asked to watch a review this session had not
+      started, the obvious move was to poll it. Caught before the call.
+
+      Record which token authenticated and require it for `review_poll`,
+      `review_submit` and `review_attest`. `review_inbox` stays repo-scoped —
+      "everything waiting for me" is a question about a holder, not about one review. A
+      valid id from another token fails as NOT FOUND, per D-23.
+
+      **Scope note, after getting this wrong once.** This is not about attribution:
+      *who* started a review is `principal`, the person, and every agent acting on
+      their behalf is them. A first version of this item claimed an audit-trail gap
+      and there is none.
+
+      **The token is never revealed** — not the secret, not a hash prefix, nowhere a
+      client can read. That reverses this morning's `lore tokens` / `make revoke`,
+      which key on the prefix (`auth.ts:86`, `cli.ts:139`): fine as an internal handle,
+      wrong as the thing an operator types. A token gets a NAME at provisioning and
+      `make revoke NAME=<name>` uses it, refusing an ambiguous name rather than
+      resolving it. The `token.label` column already exists and currently holds
+      "provisioned for vany" — the principal again, identifying nothing.
+
+      **Decide rotation before shipping it.** Revoking a token would orphan the reviews
+      it started — right for a compromised credential, inconvenient for a routine
+      replacement, and the procedure written for SPEC open question 5 assumes overlap.
+      Nothing is lost silently (the operator view sees them, the sweep collects them),
+      but whether rotation can hand reviews over is a decision, and making it after
+      someone rotates is the wrong order.
+
+- [ ] **A client can be told a review finished; we have been assuming it cannot.**
+      Checked in the installed SDK 2026-08-06, not recalled:
+
+      | mechanism | where | fits |
+      |---|---|---|
+      | `resources/subscribe` + `notifications/resources/updated`, with a `subscribe` capability flag | `@modelcontextprotocol/core` | `lore://review/{id}` already exists as a resource template — subscribe, get told it changed, re-read |
+      | task-augmented requests, `CreateTaskResult`, `tasks/get`/`status`/`result`/`cancel` | `core` **and** `server` | a tool call that models long-running work natively — which is exactly what `review_start` is |
+
+      **The premise this contradicts is load-bearing.** SPEC §2 and D-41 say *"MCP
+      servers cannot initiate requests"*, and the whole polling design, the two-stage
+      split (D-34) and "the client owns the alarm" rest on it. It is true about
+      *requests* and has been used to justify a conclusion it does not support:
+      servers can send **notifications**, and one of these two is purpose-built for
+      "tell me when this long thing is done".
+
+      The task shape is the better fit — `review_start` exists because a review
+      outlives a request, which is the exact problem `CreateTaskResult` was added for —
+      but it changes the client contract, so it is a decision rather than a patch.
+      Subscription is smaller and additive: no new tools, one existing resource.
+
+      **Unverified and must be, before either is built:** what a real client actually
+      supports. A capability the client does not declare buys nothing, so polling stays
+      as the fallback whatever happens — and "verify the platform, don't recall it" is
+      the lesson from the `.mcp.json` that could never have been pasted (MEMO session
+      31). Point a client at a stub and watch what it negotiates.
+
 - [ ] **Auto-resolve a conflict whose rules can be ordered** (D-39, revised
       2026-08-06). Specced, not built. A person is called only when neither `source`
       rank (taught > ingested > derived) nor `verified_at` can show one rule

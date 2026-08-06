@@ -104,9 +104,26 @@ because it propagates.
 
 ## 5. Use
 
-**At review time** — findings are enriched: *"seen 4× on this branch; the rule
-from 2026-07-11 says X."* A finding with history is far more actionable than the
-same finding raised cold.
+**At review time** — findings are enriched with their history, and **the history has to
+ask for something** (D-79).
+
+It used to say only *"seen 23× before in this repo — this is a pattern, not an
+incident"*. True, and an adjective: it named a pattern and requested nothing, so a
+client answered the single line in front of it and met the same finding next review.
+Measured across this deployment: one semgrep rule raised **63 times and justified away
+63 times**, never once escalated to a person. The count was never the useful part.
+
+So the prior **verdicts** decide the question, because the two histories want opposite
+answers and only one is fixable by editing the line:
+
+| what happened before | what to ask now |
+|---|---|
+| mostly `fixed` | fix this instance, then ask what keeps producing it — a rule, a lint or a helper, because an Nth manual fix is not the answer |
+| mostly `justified-accepted` | the **check** may be wrong here. Answer it as usual, then tell the user it keeps misfiring: only a person can decide to stop it |
+| unsettled | a pattern rather than an incident — worth asking why it recurs, not only fixing it here |
+
+A finding with history is far more actionable than the same finding raised cold, but
+only if it says what to do differently.
 
 **At any time** — `knowledge_query` (D-18). A session asks what is known about a
 path, a module or a pattern before writing code.

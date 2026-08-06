@@ -102,12 +102,21 @@ ONLY \`passed\` means the branch is clean.
 
 - \`failed\` and \`expired\` mean the review did not complete. They are NOT "nothing
   found". Never merge on them. **\`failed_because\` says why** — read it and repeat it
-  to your user verbatim. Do NOT infer a cause from the word \`failed\`: most reasons
-  are operational (a mirror the host refresher stopped updating, a tier that would not
-  parse) and
-  say exactly what to do. A guess here is worse than silence, because it is confident
-  and it is yours. \`failed\` is also often TRANSIENT — an identical retry frequently
-  succeeds — so retry once before concluding anything about how lore is configured.
+  to your user verbatim. Do NOT infer a cause from the word \`failed\`: a guess here is
+  worse than silence, because it is confident and it is yours.
+
+  **RETRY AT MOST ONCE, AND ONLY IF NOTHING CHANGED IN THE MEANTIME.** If the second
+  attempt fails the same way, STOP. It will fail the third time too. This advice used
+  to say "an identical retry frequently succeeds" with no limit, and a client followed
+  it exactly: five attempts on one branch across two days, then a report to its user
+  that lore's reviewing tier was broken. It was not — the branch was too large for that
+  tier's context window, which nothing in the message said. The client did everything
+  right and the instruction was wrong.
+
+  So after ONE failed retry, report to your user: the branch name, \`failed_because\`
+  verbatim, and that lore could not review it. That is a true and useful thing to say.
+  Diagnosing lore is not your job and you do not have the information to do it — say
+  what happened, not why you think it happened.
 - \`fast_clean\` means only the cheap tiers have finished; the deep tiers are still
   running. It is NOT a pass.
 - \`needs_human\` means a question was found that you must not answer yourself.
@@ -137,6 +146,31 @@ in code you actually wrote. \`history\` never changes \`severity\`: a defect see
 less serious for being familiar, and a rule engine that fires every round is still
 telling the truth about the line it fired on. Weigh it; do not discount it.
 
+**WHAT TO DO WITH "seen N× in this repo".** It is not a louder version of the finding
+and it does not change what you owe this one. It tells you which of two problems you
+have, and they have different answers:
+
+  * **The code keeps doing this.** Fix this instance — and say to your user that it has
+    happened N times, because the answer is probably a rule, a lint or a helper, not an
+    Nth manual fix. That sentence is the whole value of the number; nobody else is
+    going to say it.
+  * **This check keeps being wrong here.** Look at how the earlier ones were answered.
+    If they were justified and accepted every time, you are about to write the same
+    justification again — write it, because that is still the contract, and TELL YOUR
+    USER the check is misfiring on this repository. lore cannot yet suppress a rule for
+    a path, so a person deciding to is the only way this stops.
+
+Answering the line and saying nothing is the one response that guarantees you see it
+again next time. Measured here: one semgrep rule raised 63 times across this
+deployment, accepted as justified every time, and never once escalated to a person.
+
+A FINDING IS A QUESTION, NOT A VERDICT. An open one carries \`asks\`: *fix this, or tell
+me why it is not a problem*. Both are real answers and the reviewer may be wrong — it
+did not write this code and does not know what you know. Disagreeing well is worth more
+to this codebase than complying: an accepted justification becomes a durable fact about
+why the code is the way it is, and the next session starts already knowing it. What is
+not an answer is silence — an unanswered finding stops the review advancing, for ever.
+
 Then ONE of three shapes, and they are the whole instruction:
 
   * \`justify_with\` present, nothing else — open, nobody has argued about it. Fix it,
@@ -157,13 +191,20 @@ Then ONE of three shapes, and they are the whole instruction:
     duplicate is fresh surface for the next tier to review.
 
 \`checks_skipped\` appears when something the review would have covered did not reach
-you. Two causes, one meaning:
+you. Three causes, one meaning:
 
   * a deterministic engine did NOT run — no installed dependencies, no test script, a
     suite disabled for the deployment;
   * a tier produced a finding the schema refused, so this review does not contain it.
     The line says which tier and what was wrong with it. The tier looked at the code
-    and saw something; you are not being shown it.
+    and saw something; you are not being shown it;
+  * **a tier could not hold your whole diff and was given part of it.** Your branch is
+    larger than that model's context window, so the diff was cut to fit and the tier
+    was told so. It reviewed what it was given and may have read the rest from the
+    worktree — but it did not read all of it as a diff. **A \`passed\` on a compacted
+    review covers the part that was shown.** The fix is a smaller review: review a
+    narrower commit range, or merge in stages. Say this to your user; they are the only
+    one who can change the scope.
 
 It is not a finding and not a failure; it narrows what the review is evidence OF. Typecheck and
 lint go missing quietly, so this is the only place their absence is stated. Report it
