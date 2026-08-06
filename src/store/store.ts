@@ -504,10 +504,26 @@ export class Store {
    * has no other way to learn that `tsc` or the suite never executed — and a check
    * that did not run must never read as a check that found nothing (INV-1).
    */
-  closeTierRun(id: number, outcome: TierOutcome, unavailable: readonly string[] = []): void {
+  closeTierRun(id: number, outcome: TierOutcome, unavailable: readonly string[] = [], treeHash?: string): void {
     this.db
-      .prepare("UPDATE tier_run SET outcome = ?, unavailable = ?, finished_at = ? WHERE id = ?")
-      .run(outcome, unavailable.length > 0 ? unavailable.join("\n") : null, now(), id);
+      .prepare("UPDATE tier_run SET outcome = ?, unavailable = ?, tree_hash = ?, finished_at = ? WHERE id = ?")
+      .run(outcome, unavailable.length > 0 ? unavailable.join("\n") : null, n(treeHash), now(), id);
+  }
+
+  /**
+   * The tiers that read a particular tree, cheapest-first as recorded.
+   *
+   * Since a closed tier is no longer re-run after a fix, "tiers that ran" and "tiers
+   * that read the tree being signed" are different sets, and only the second is what an
+   * attestation may claim. Runs from before the column existed carry NULL and are
+   * excluded — a run that cannot say which tree it read cannot be counted as having
+   * read this one.
+   */
+  tiersOnTree(reviewId: string, treeHash: string): readonly string[] {
+    const rows = this.db
+      .prepare("SELECT DISTINCT tier FROM tier_run WHERE review_id = ? AND tree_hash = ? ORDER BY tier")
+      .all(reviewId, treeHash) as Record<string, string>[];
+    return rows.map((r) => r["tier"] ?? "");
   }
 
   /**
@@ -550,12 +566,20 @@ export class Store {
     return [...new Set(rows.flatMap((r) => r.unavailable.split("\n")).filter((l) => l.length > 0))];
   }
 
-  recordTierRun(reviewId: string, tier: string, round: number, outcome: TierOutcome, startedAt: string): void {
+  recordTierRun(
+    reviewId: string,
+    tier: string,
+    round: number,
+    outcome: TierOutcome,
+    startedAt: string,
+    treeHash?: string,
+  ): void {
     this.db
       .prepare(
-        "INSERT INTO tier_run(review_id, tier, round, outcome, started_at, finished_at) VALUES(?, ?, ?, ?, ?, ?)",
+        "INSERT INTO tier_run(review_id, tier, round, outcome, tree_hash, started_at, finished_at)" +
+          " VALUES(?, ?, ?, ?, ?, ?, ?)",
       )
-      .run(reviewId, tier, round, outcome, startedAt, now());
+      .run(reviewId, tier, round, outcome, n(treeHash), startedAt, now());
   }
 
   // --------------------------------------------------------------- finding

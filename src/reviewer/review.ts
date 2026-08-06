@@ -160,6 +160,11 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // raised exactly that — "T0 crashes mid-execution, no tier_run row exists, and a
   // reader cannot distinguish 'never ran' from 'ran and died'" — after the model
   // tier's half had been fixed and this half had not.
+  // The tree every tier in THIS round reads, recorded on each run. Since a closed tier
+  // is not re-run after a fix (D-6, revised), "tiers that ran" and "tiers that read the
+  // signed tree" are different sets, and only the second is what an attestation may
+  // claim (`spec/review-ladder.md` §5).
+  const roundTree = await treeHash(worktree);
   const t0RunId = store.openTierRun(reviewId, "t0", review.ladder.round + 1, startedAt);
   let t0;
   try {
@@ -167,10 +172,10 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       engines: type.t0,
     });
   } catch (e) {
-    store.closeTierRun(t0RunId, "failed");
+    store.closeTierRun(t0RunId, "failed", [], roundTree);
     throw e;
   }
-  store.closeTierRun(t0RunId, t0.findings.length > 0 ? "findings" : "clean", t0.unavailable);
+  store.closeTierRun(t0RunId, t0.findings.length > 0 ? "findings" : "clean", t0.unavailable, roundTree);
 
   // 3. Justifications proposed since last round.
   // The changed files PLUS every file that already has an open finding.
@@ -308,6 +313,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       tierRunId,
       result.findings.length > 0 ? "findings" : "clean",
       result.discarded.map((d) => `${tier.id} produced a finding this review does NOT contain — ${d}`),
+      roundTree,
     );
   } catch (e) {
     // The row is already open, so whatever happens next this tier leaves evidence.
@@ -587,7 +593,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // `fixed` belongs here as much as `accepted` does (cadd3821). The store has always
   // counted both as settled — `settledFingerprints` and `openFindings` agree — and the
   // ladder was the only view that did not. That disagreement livelocks: a re-raised
-  // fixed fingerprint looks fresh to `step`, which resets the ladder, while
+  // fixed fingerprint looks fresh to `step`, which re-runs the tier, while
   // `openFindings` excludes it and `undelivered` has already delivered it. The client
   // is told `findings_ready` and handed nothing, for ever, until a bound stops it.
   const withSettled = settle(review.ladder, [...accepted, ...fixed]);

@@ -62,6 +62,30 @@ is a separate call this client never makes, so `lore://review/{review_id}` — t
 the whole subscription design points at — is readable if you construct the URI and
 invisible if you list. Every text expecting a client to read it must spell the URI out.
 
+**And then Vany retired D-6.** *"If a level is closed, it is closed finally, you will
+return there only in the next review… it is submitted, it is reviewed by the model ASAP
+and you can go next."* He is right, and the argument is stronger than the cost one he
+gave: `settle()` runs on whichever tier the round is on, so **after a reset the cheapest
+model ruled on justifications for findings the dearest had raised** — four times in this
+evening's own review, t1 coming back "clean" and closing t2's questions. D-10 says the
+reviewer rules on the answer; the reset had been quietly handing that to a model which
+never asked.
+
+The cost side is real too: every deep finding bought two rounds, five findings cost nine
+rounds, and two reviews died on the per-tier bound that way.
+
+**What it costs, and this is the part that needed building rather than deciding.** The
+tiers below no longer read the last diff, so `passed` is a narrower claim than it was.
+T0 still runs every round — `tsc`, `semgrep`, the tests see every fix — but a weaker
+model's second opinion on the final tree is gone. That makes the attestation's "3 tiers"
+a lie the day it ships, because it counts every tier that ever ran. So `tier_run` now
+records the tree each run actually read, and the signed line names the tiers that read
+the tree being signed, with the earlier ones called out rather than silently dropped.
+Schema 9.
+
+**What it does NOT fix**, and I said so before writing it: the bound is per tier, so a
+prose loop still stops at the same place, just sooner in round count. Cheaper, same wall.
+
 **The subscription surface stays exactly as built.** Correct, tested, free to keep, ready
 the day a harness wires notifications to turns. What it no longer does is open a
 permanently-resident tool description with an instruction the only real client cannot

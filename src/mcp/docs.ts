@@ -515,8 +515,9 @@ Rules that decide whether this works:
 - \`fast_clean\` is not \`passed\` either — the deep tiers have not run.
 - \`passed_partial\` is terminal and will NEVER become \`passed\`, so waiting for that
   never returns. Attest it, and say plainly that the evidence is weaker than a pass.
-- Expect several rounds. Every fix resets the ladder to the cheapest tier, because a
-  fix is unreviewed code.
+- Expect several rounds. A fix does NOT send the review back down the ladder: the tier
+  that raised a finding is the one that judges your answer, and a tier already satisfied
+  stays satisfied for the rest of this review.
 - Do not use lore-ok to make an inconvenient finding go away. The reviewer rules on
   it, and a rejected justification returns worse than it left.
 - Before fixing in unfamiliar code, knowledge_query it — someone may already have
@@ -654,7 +655,8 @@ Rules:
   never ends. Attest it — the line names which tiers were skipped and which vendor
   looked — and tell your user the evidence is weaker than a pass, so the decision to
   merge is theirs.
-- Expect several rounds. Every fix resets the ladder to the cheapest tier.
+- Expect several rounds. A fix does NOT send the review back down the ladder — the tier
+  that raised a finding judges your answer to it.
 - Do not use lore-ok to make an inconvenient finding go away.
 - Before fixing in unfamiliar code, knowledge_query it.
 - When you learn something durable, knowledge_teach it.

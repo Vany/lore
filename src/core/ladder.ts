@@ -303,13 +303,29 @@ export function step(input: StepInput): { readonly state: LadderState; readonly 
       return { state: base, decision: { kind: "stopped", bound: "perTier" } };
     }
 
-    // A fix is unreviewed code, so the next round starts at the cheapest model
-    // tier — the cheapest possible regression check (D-6). Resuming where we left
-    // off would let hastily patched code reach `passed` having never faced the gate.
-    return {
-      state: { ...base, cursor: firstModelTier(tiers, base.unavailable) },
-      decision: { kind: "findings" },
-    };
+    // A CLOSED TIER STAYS CLOSED. The next round runs the SAME tier — the one that
+    // raised the finding — so the author's answer is judged by whoever asked the
+    // question. Revised 2026-08-07; D-6 previously reset to the cheapest tier here.
+    //
+    // The reset was justified as "a fix is unreviewed code, so it must face the cheap
+    // gate again". Two things were wrong with that. The smaller is cost: every t2
+    // finding bought two rounds, because t1 had to re-clear the fix before t2 could
+    // look again — five findings cost nine rounds on this repository's own review, and
+    // two reviews died on the per-tier bound that way.
+    //
+    // The larger is that it broke D-10. `settle()` is run by whichever tier the round
+    // is on, so after a reset **t1 ruled on justifications for findings t2 raised** —
+    // observed four times in one review, t1 coming back "clean" and closing the dearer
+    // model's questions. A cheap model ratifying answers to an expensive model's
+    // findings is worse review, not more of it, and it is exactly what D-10 says must
+    // not happen.
+    //
+    // What is genuinely given up: the tiers BELOW no longer see the last diff. T0 still
+    // runs every round, so tsc, semgrep and the tests read every fix; what is lost is a
+    // second model opinion from a *weaker* model. Against that, the tier still holding
+    // the conversation re-reads the whole diff. The `passed` claim narrows accordingly
+    // and the attestation must say so — see `spec/review-ladder.md` §5.
+    return { state: base, decision: { kind: "findings" } };
   }
 
   // Clean at this tier. A pending human question still blocks everything.

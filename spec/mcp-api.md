@@ -414,8 +414,11 @@ through when a rebase or force-push has made the pinned snapshot meaningless.
   any state ──► failed | expired
 ```
 
-**Reset to T1 after a diff, never resume.** A fix is unreviewed code, and the
-cheapest tier is the cheapest possible regression check.
+**A closed tier stays closed** (D-6, revised 2026-08-07). A diff is re-read by the tier
+that raised the finding, not by the cheapest one: the reviewer rules on the answer
+(D-10), and resetting handed that ruling to a model which never asked the question.
+`passed` therefore names the tiers that read the signed tree — see
+`spec/review-ladder.md` §5.
 
 `failed` and `expired` are **not** `passed`. A review that did not run is not a
 review that found nothing (INV-1) — the invariant that outranks everything else,

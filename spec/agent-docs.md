@@ -272,8 +272,8 @@ Draft returned message:
 > **Rules**
 > - Polls return only new findings. Never re-fix what is not in the response.
 > - `failed` and `expired` are not `passed`. Report and stop; do not merge.
-> - Expect several rounds. Every fix resets the ladder to the cheapest tier,
->   because a fix is unreviewed code.
+> - Expect several rounds. A fix does NOT send the review back down the ladder: the
+>   tier that raised a finding judges your answer to it.
 > - Do not use `lore-ok` to make an inconvenient finding go away. The reviewer rules
 >   on it, and a rejected justification returns worse than it left.
 > - Before fixing in unfamiliar code, `knowledge_query` it — someone may have

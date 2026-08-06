@@ -395,11 +395,23 @@ provenance buries it.
 
 ## 5. Escalation and termination
 
-- Tier produced **new** findings → report; the next pass **resets to T1**.
+- Tier produced **new** findings → report; the next pass runs **the same tier**, so the
+  author's answer is judged by whoever asked the question (D-10).
 - Tier produced **nothing new** → advance one tier. Top tier clean → **passed**.
 
 "New" means a fingerprint not already settled, not a raw count. A tier that
 re-raises three closed findings and nothing else is clean.
+
+**A closed tier stays closed** (D-6, revised 2026-08-07). It used to reset to T1 on
+every change, which meant the cheapest model ruled on the dearest model's findings —
+four times in one review of this repository — and cost two rounds per deep finding.
+
+**So `passed` is a narrower claim than it was, and the attestation says how narrow.**
+Tiers below the cursor do not re-read the last diff. T0 runs every round, so the
+deterministic engines see every fix; the model tiers below do not. `tier_run` records
+the tree each run actually read, and the signed line names the tiers that read the tree
+being signed — never every tier that ever ran, which would assert scrutiny the signature
+does not cover.
 
 ### 5.1 Tiers that cannot be paid for (D-48)
 

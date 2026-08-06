@@ -8,15 +8,19 @@ describe("step", () => {
     expect(DEFAULT_TIERS[initialState().cursor]?.id).toBe("t1");
   });
 
-  it("reports new findings and resets to the cheapest model tier", () => {
-    // Get to t2 first, so the reset is observable rather than a no-op.
+  // A CLOSED TIER STAYS CLOSED. This used to reset to t1, on the grounds that a fix is
+  // unreviewed code — and the effect was that t1 ruled on justifications for findings
+  // t2 had raised, four times in one review of this repository. `settle()` runs on
+  // whichever tier the round is on, so the reset handed D-10's ruling to a cheaper
+  // model that never asked the question. Revised 2026-08-07.
+  it("reports new findings and stays on the tier that raised them", () => {
+    // Get to t2 first, so "stays" is observable rather than a no-op.
     const atT2 = clean(initialState()).state;
     expect(DEFAULT_TIERS[atT2.cursor]?.id).toBe("t2");
 
     const r = step({ state: atT2, raised: ["aaa"] });
     expect(r.decision.kind).toBe("findings");
-    // A fix is unreviewed code; the cheapest tier is the cheapest regression check.
-    expect(DEFAULT_TIERS[r.state.cursor]?.id).toBe("t1");
+    expect(DEFAULT_TIERS[r.state.cursor]?.id).toBe("t2");
   });
 
   it("treats a tier that only re-raises settled findings as clean", () => {
@@ -184,10 +188,13 @@ describe("tiers nobody can pay for (D-48)", () => {
     expect(step({ state: s, raised: [] }).decision.kind).toBe("passed");
   });
 
-  it("resets past unavailable tiers after a fix", () => {
-    const s = markUnavailable(initialState(), "t1");
+  // Nothing steps BACK any more, so an unpayable tier below the cursor is simply not
+  // in the way. The cursor stays where the finding was raised, whatever is unavailable
+  // beneath it.
+  it("does not step back over an unavailable tier after a fix", () => {
+    const atT2 = clean(initialState()).state;
+    const s = markUnavailable(atT2, "t1");
     const r = step({ state: s, raised: ["new"] });
-    // t1 is unpayable, so the cheapest REACHABLE tier is where a fix goes back to.
     expect(DEFAULT_TIERS[r.state.cursor]?.id).toBe("t2");
   });
 

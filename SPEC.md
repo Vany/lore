@@ -135,7 +135,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-3** | TypeScript, no build step (§6) | confirmed |
 | **D-4** | Host-agnostic core; MCP and CLI are both adapters over it | confirmed |
 | **D-5** | Measure before buying any subscription | confirmed |
-| **D-6** | Reset to T1 after any change; advance only on nothing-new | confirmed |
+| **D-6** | A closed tier stays closed; the tier that asked judges the answer | **revised** |
 | **D-7** | GLM-5.2 → Kimi K3 → GPT-5.6 Sol Pro. Three vendors | **revised** |
 | **D-8** | T0 is deterministic tooling, using the *target's* config | confirmed |
 | **D-9** | Learnings enrich every report | confirmed |
@@ -641,6 +641,36 @@ because `deploy/tiers.zai-openai.json` cannot carry a `lore-ok` — JSON has no
 comments and the tier schema is `.strict()` — which is its own open problem, in
 TODO.
 
+**D-6, revised 2026-08-07 — a closed tier stays closed.**
+
+The original reset the ladder to the cheapest model tier after any change, on the
+grounds that a fix is unreviewed code and must face the cheap gate again. Vany's call
+to retire it: *"if a level is closed, it is closed finally, you will return there only
+in the next review… it is submitted, it is reviewed by the model ASAP and you can go
+next."*
+
+**The reset broke D-10.** `settle()` runs on whichever tier the round is on, so after a
+reset the CHEAPEST model ruled on justifications for findings the dearest had raised.
+Observed four times in one review of this repository — t1 coming back "clean" and
+closing t2's questions. D-10 says the reviewer rules on the answer; the reset quietly
+gave that ruling to a model that never asked the question. A cheap model ratifying
+answers to an expensive model's findings is worse review, not more of it.
+
+**And it made the sawtooth.** Every dear-tier finding cost two rounds, because t1 had to
+re-clear the fix before t2 could look again: five findings cost nine rounds, and two
+reviews of this repository died on the per-tier bound that way.
+
+**What is given up, and it is real.** The tiers BELOW no longer read the last diff. T0
+still runs every round, so `tsc`, `semgrep` and the tests see every fix; what is lost is
+a second model opinion, from a *weaker* model, on the final tree. So `passed` now means
+*"every tier agreed, and these tiers read this tree"* — narrower than before, and the
+attestation says which (`spec/review-ladder.md` §5). `tier_run.tree_hash` exists for
+exactly that, because an attestation that counted every tier that ever ran would claim
+scrutiny the signed tree never received.
+
+**What it does NOT fix.** The bound is per tier, not per round, so a conversation that
+loops on prose still stops at the same place — cheaper, same wall. That remains open.
+
 **D-55 — a submit is refused while a round is reading the worktree.**
 
 D-53 stopped two rounds running at once, and stopped there. The worktree has a
@@ -1008,12 +1038,12 @@ each round pays to re-read the repository from scratch, and the measured cache h
 97–99%, so the comparison is not obvious in either direction. **It must be measured
 before this is called cheaper.**
 
-**And it changes what the ladder means.** "Reset to T1 after a fix" (D-6) exists
-because a fix is unreviewed code. If the tier that raised a finding also judges its own
-fix, the reset is no longer where independence comes from — the dearer tiers must still
-see the settled tree, or a conversation with t1 becomes the whole review. The ladder
-still has to climb; what changes is that it climbs from a settled conversation rather
-than from a fresh audit.
+**And it changed what the ladder means** — settled by revising D-6 on 2026-08-07,
+ahead of the conversation half. The tier that raised a finding now judges its own fix,
+which is what D-10 always said and what the reset had been quietly preventing. The
+ladder still climbs; it climbs from a settled conversation rather than from a fresh
+audit, and `passed` names the tiers that read the signed tree rather than implying all
+of them did.
 
 **The subscription half is built; the conversation half is not.** `subscriptions/listen`
 against `lore://review/{review_id}` is live and proved end to end against a real MCP

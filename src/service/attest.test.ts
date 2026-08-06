@@ -64,17 +64,44 @@ describe("attest", () => {
   // outcome entirely, so the attestation — the one artefact this product exists to
   // produce — was being proved against a database state that can no longer occur.
   // Raised by t1 against this branch (d17c92f8).
-  it("counts the tiers that actually ran", async () => {
+  it("counts the tiers that read the tree it is signing", async () => {
     review("passed");
-    store.recordTierRun("r1", "t0", 1, "clean", "2026-08-03T00:00:00.000Z");
-    store.recordTierRun("r1", "t1", 1, "clean", "2026-08-03T00:00:00.000Z");
-    store.recordTierRun("r1", "t2", 2, "findings", "2026-08-03T00:00:00.000Z");
-    store.recordTierRun("r1", "t3", 3, "clean", "2026-08-03T00:00:00.000Z");
+    const at = "2026-08-03T00:00:00.000Z";
+    for (const [tier, round] of [["t0", 1], ["t1", 1], ["t2", 2], ["t3", 3]] as const) {
+      store.recordTierRun("r1", tier, round, "clean", at, "4f2a9c1");
+    }
     // Repeats of the same tier are one tier, not four.
-    store.recordTierRun("r1", "t1", 4, "clean", "2026-08-03T00:00:00.000Z");
+    store.recordTierRun("r1", "t1", 4, "clean", at, "4f2a9c1");
 
     const a = await attest(store, "r1", "p", keyPath);
-    expect(a.line).toContain("4 tiers");
+    expect(a.line).toContain("4 tiers (t0, t1, t2, t3)");
+  });
+
+  // THE CLAIM NARROWS WITH THE LADDER. A closed tier is not re-run after a fix
+  // (D-6, revised 2026-08-07), so a tier that read round 1's tree may never have seen
+  // the tree being signed. Counting it would assert scrutiny the signature does not
+  // cover — in the one output whose entire value is that it can be trusted.
+  it("does not claim a tier that only read an earlier tree", async () => {
+    review("passed");
+    const at = "2026-08-03T00:00:00.000Z";
+    store.recordTierRun("r1", "t0", 1, "clean", at, "older-tree");
+    store.recordTierRun("r1", "t1", 1, "findings", at, "older-tree");
+    store.recordTierRun("r1", "t0", 2, "clean", at, "4f2a9c1");
+    store.recordTierRun("r1", "t2", 2, "clean", at, "4f2a9c1");
+
+    const a = await attest(store, "r1", "p", keyPath);
+    expect(a.line).toContain("2 tiers (t0, t2)");
+    expect(a.line).toContain("1 earlier tier(s) read an earlier tree");
+    expect(a.line).toContain("PARTIAL");
+  });
+
+  // A run recorded before the column existed cannot say which tree it read, and a run
+  // that cannot say must not be counted as having read this one.
+  it("does not count a run that never recorded its tree", async () => {
+    review("passed");
+    store.recordTierRun("r1", "t1", 1, "clean", "2026-08-03T00:00:00.000Z");
+    const a = await attest(store, "r1", "p", keyPath);
+    expect(a.line).toContain("0 tiers (no tier)");
   });
 
   it("counts findings, fixes and justifications truthfully", async () => {

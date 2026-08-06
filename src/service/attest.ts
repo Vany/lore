@@ -77,7 +77,15 @@ export async function attest(store: Store, reviewId: string, principal: string, 
   }
 
   const counts = tally(store, reviewId);
-  const tiers = countTiers(store, reviewId);
+  // THE TIERS THAT READ THE SIGNED TREE, not the tiers that ever ran on this review.
+  // Since a closed tier is not re-run after a fix (D-6, revised 2026-08-07), those are
+  // different sets: a finding raised by t1 and answered while the ladder was at t3 is
+  // re-read by t3 alone. Counting every tier that ever ran would claim more scrutiny
+  // than the tree in this signature actually received, and the attestation is the one
+  // output whose whole value is that it can be trusted.
+  const onTree = store.tiersOnTree(reviewId, review.treeHash);
+  const tiers = onTree.length;
+  const everyTier = countTiers(store, reviewId);
   const skipped = review.ladder.unavailable ?? [];
   const sole = review.ladder.soleVendor;
 
@@ -95,9 +103,19 @@ export async function attest(store: Store, reviewId: string, principal: string, 
   const caveats = [
     skipped.length === 0 ? undefined : `${skipped.join(", ")} could not run`,
     sole === undefined ? undefined : `every tier that ran was ${sole}, so these are not independent opinions`,
+    // Named, not merely subtracted. A reader comparing "2 tiers" here against a trail
+    // showing three would otherwise think the line was wrong; it is the trail that
+    // includes tiers which read an earlier tree.
+    tiers >= everyTier
+      ? undefined
+      : `${String(everyTier - tiers)} earlier tier(s) read an earlier tree and did not re-read this one`,
   ].filter((c) => c !== undefined);
 
-  const scope = caveats.length === 0 ? `${tiers} tiers` : `${tiers} tiers — ${caveats.join("; ")}, so this is PARTIAL`;
+  const named = onTree.length === 0 ? "no tier" : onTree.join(", ");
+  const scope =
+    caveats.length === 0
+      ? `${tiers} tiers (${named})`
+      : `${tiers} tiers (${named}) — ${caveats.join("; ")}, so this is PARTIAL`;
 
   const line =
     `lore: reviewed tree ${review.treeHash} against this repo's rules and lore's own — ` +

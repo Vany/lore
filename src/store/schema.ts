@@ -21,7 +21,7 @@ import { SEVERITIES } from "../core/finding.ts";
 // adds the columns, because this number is what `assertNotDowngrade` compares — left
 // behind, it says a database written by this build is identical to one written before
 // the columns existed (3f464578).
-export const SCHEMA_VERSION = 8;
+export const SCHEMA_VERSION = 9;
 
 /**
  * How findings are ordered wherever the service hands them out: worst first.
@@ -117,6 +117,11 @@ CREATE TABLE IF NOT EXISTS tier_run (
   -- durable record of it: T0 reports it to the model prompt in the same round, but a
   -- client polling later has no other way to learn that tsc or the suite was absent.
   unavailable TEXT,
+  -- THE TREE THIS TIER ACTUALLY READ. Since a closed tier is not re-run after a fix
+  -- (D-6, revised 2026-08-07), the tiers that ran early may never have seen the tree
+  -- that is finally signed — so an attestation counting every tier that ever ran would
+  -- claim more scrutiny than the signed tree received.
+  tree_hash   TEXT,
   started_at  TEXT NOT NULL,
   finished_at TEXT
 );
@@ -280,6 +285,8 @@ export const MIGRATIONS: readonly { readonly table: string; readonly column: str
   { table: "finding", column: "preexisting", sql: "ALTER TABLE finding ADD COLUMN preexisting INTEGER" },
   // Why the ladder stopped, when it is the ladder that stopped it rather than a throw.
   { table: "review", column: "failed_because", sql: "ALTER TABLE review ADD COLUMN failed_because TEXT" },
+  // WHICH TREE this tier actually read, so an attestation cannot over-claim.
+  { table: "tier_run", column: "tree_hash", sql: "ALTER TABLE tier_run ADD COLUMN tree_hash TEXT" },
 ];
 
 /**
