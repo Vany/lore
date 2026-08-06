@@ -583,24 +583,21 @@ landing with a real user, and it should not get lost among the defects below.
 
   </details>
 
-- [ ] **`lore propose` — specced, not built** (D-75, `spec/propose.md`). The idea
-      generator: N models, one idea each, forced-apart lenses, a different vendor
-      attacking each proposal, screened against what the repository already decided.
-      Gates nothing, produces no findings, cannot attest.
-      **Cost is the open question and it is Vany's.** Measured before speccing: the
-      largest t2 review sent 203,904 cached tokens and hit the 30-minute ceiling, and a
-      whole-repo question has no diff to anchor exploration — so one proposer is at
-      least that expensive, and `--budget 8` is eight deep sessions. That is enough to
-      empty a rolling subscription window, which would stall every review in the system
-      (D-7's argument about T1, unchanged). Hence the refusal to start while any review
-      is queued or running.
-      Unmeasured, and the thing most worth knowing: whether these models produce *good*
-      architectural ideas at all. Best first customer for the harness below.
+- [x] **`lore propose` — built 2026-08-07** (D-75, `spec/propose.md`). Vany's folder,
+      commit and mode parameters, plus the `preserves` clause that keeps it a refactor
+      tool. `conductSession` in `opencode.ts` now takes its extractor as a parameter, so
+      proposals get the same gate, the same retry-carrying-what-was-wrong, and the same
+      abort-on-failure that reviews do rather than a second copy of all three.
+      What remains is the item below: nothing has been RUN, and the ideas are unmeasured.
 
-### 2026-08-06, watching a client work
+- [ ] **Run `propose` once and appraise what comes back.** The tool is built and its
+      output has never been read. It is the single most likely thing in this repository
+      to be plausible and useless — `spec/propose.md` §9 says the failure mode is the
+      reader, not the models — so the first run is a measurement, not a feature: take one
+      folder, `--budget 4`, and count how many of the four ideas survive ten minutes of
+      appraisal. If the answer is zero, that is worth knowing before the second run.
+      **The spend is Vany's call**, and it is why `--budget` has no default.
 
-Collected by observing, not by reasoning. A session drove reviews over MCP while I
-watched the database and the log.
 
 - [ ] **lore knows why a branch cannot be reviewed and tells the one party who cannot
       act on it.** Five attempts on `epic/RIGID-4-m1-managed`, across two days, every

@@ -32,6 +32,7 @@ lore — an independent reviewer that remembers the codebase
   lore tokens                                  who holds a token, and for what
   lore revoke --token <short>                  turn one off, by its short hash
   lore doctor                                  check tiers, auth and model ids
+  lore propose --repo <name> --budget <n>      ideas for improving a folder (D-75)
 
   --branch <name>    branch under review (default: current branch)
   --into <name>      branch it will merge into (default: main)
@@ -41,6 +42,23 @@ lore — an independent reviewer that remembers the codebase
   --type <id>        ${reviewTypeIds().join(" | ")} (default: ${DEFAULT_TYPE})
   --db <path>        state file (default: $LORE_DATA_DIR/lore.db, else ~/.lore/lore.db)
   --json             machine-readable output only
+
+lore propose asks the dearest models what they would CHANGE, keeping what the code
+does. It gates nothing and implements nothing: a person appraises the document, and any
+idea taken goes through the ladder like any other change.
+
+  --repo <name>      which registered repository. REQUIRED
+  --budget <n>       MODEL SESSIONS to spend, proposers and critics both. REQUIRED,
+                     because a run can empty a rolling subscription window and stall
+                     every review in the system
+  --folder <path>    the directory the proposals must be ABOUT (default: whole repo)
+  --commit <ref>     what to think about (default: master), cut from lore's own mirror
+  --mode <id>        ${reviewTypeIds().join(" | ")} (default: ${DEFAULT_TYPE})
+  --lens <a,b,c>     data | failure | seams | greenfield (default: all four)
+  --out <dir>        where to write the document (default: proposals/)
+
+It refuses to start while any review is queued or running: reviews are the product and
+this is inspiration.
 
 Exit codes: 0 passed · 1 findings · 2 usage · 3 partial (some tiers unpayable)
             70 did not run · 75 no tier could run at all
@@ -118,6 +136,42 @@ export async function main(argv: readonly string[]): Promise<ExitCode> {
         publicUrl: flagOf(argv, "url") ?? "http://lore.internal:7777/mcp",
       });
       process.stdout.write(renderProvisioned(result));
+      return EXIT.PASS;
+    } finally {
+      store.close();
+    }
+  }
+
+  if (args.command === "propose") {
+    const { proposeCli, parseBudget, parseLenses } = await import("./propose/cli.ts");
+    const { Reviewer, DEFAULT_REVIEWER } = await import("./reviewer/opencode.ts");
+    const repo = flagOf(argv, "repo");
+    if (repo === undefined) {
+      throw new UsageError(
+        "usage: lore propose --repo <name> --budget <sessions> [--folder src/store] [--commit <ref>] " +
+          "[--mode code-arch] [--lens seams,failure,data,greenfield]",
+      );
+    }
+    const store = new Store(args.db);
+    try {
+      const path = await proposeCli({
+        store,
+        reviewer: new Reviewer(DEFAULT_REVIEWER),
+        reposRoot: join(process.env["LORE_DATA_DIR"] ?? join(homedir(), ".lore"), "repos"),
+        repo,
+        budget: parseBudget(flagOf(argv, "budget")),
+        // The repository root by default, so a whole-repo run is the EXPLICIT case
+        // rather than the accidental one (spec/propose.md §1.1).
+        folder: flagOf(argv, "folder") ?? "",
+        // The state the next change starts from. A refactor proposed against a feature
+        // branch is a refactor of work in progress.
+        commit: flagOf(argv, "commit") ?? "master",
+        mode: flagOf(argv, "mode") ?? DEFAULT_TYPE,
+        lenses: parseLenses(flagOf(argv, "lens")),
+        outDir: flagOf(argv, "out") ?? "proposals",
+        now: new Date(),
+      });
+      process.stdout.write(`${path}\n`);
       return EXIT.PASS;
     } finally {
       store.close();

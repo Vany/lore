@@ -123,6 +123,26 @@ export interface ReviewerLike {
   gateState?(): GateState;
 }
 
+/**
+ * What one paid session produced, whatever it was asked for.
+ *
+ * `ReviewerResult` is this with the items named `findings`, kept as its own type because
+ * every caller of `review()` reads that name and a rename would touch the whole ladder
+ * to say nothing new.
+ */
+export interface SessionResult<T> {
+  readonly items: readonly T[];
+  readonly raw: string;
+  readonly inputTokens: number;
+  readonly cachedTokens: number;
+  readonly outputTokens: number;
+  readonly costUsd: number;
+  readonly latencyMs: number;
+  readonly retried: boolean;
+  readonly steps: number | undefined;
+  readonly rejected: readonly string[];
+}
+
 export interface ReviewerResult {
   readonly findings: readonly Finding[];
   readonly raw: string;
@@ -260,7 +280,29 @@ export class Reviewer implements ReviewerLike {
     // agentic exploration between them (`gate.ts`), so bounding individual HTTP calls
     // would bound nothing. Waiting here queues the round instead of failing it, which
     // is the same trade as backpressure: a review that dies on a 429 did not run.
-    return this.gate.run(() => this.conductSession(tier, prompt, worktree, reviewId));
+    const r = await this.gate.run(() =>
+      this.conductSession<Finding>(tier, prompt, worktree, reviewId, findingsOf, OUTPUT_CONTRACT),
+    );
+    return { ...r, findings: r.items, discarded: r.rejected };
+  }
+
+  /**
+   * Ask a tier for something that is NOT findings — `propose`'s proposals today.
+   *
+   * Same gate, same retry, same abort-on-failure: a session that costs quota is a
+   * session that costs quota, and `propose` running outside the gate is what would
+   * burst past the provider ceiling that once killed four reviews in 2.5 minutes
+   * (`spec/propose.md` §7).
+   */
+  async askFor<T>(
+    tier: Tier,
+    prompt: string,
+    worktree: string,
+    extract: (text: string) => Listed<T>,
+    contract: string,
+  ): Promise<SessionResult<T>> {
+    if (tier.model === undefined) throw new DidNotRun(`tier ${tier.id} has no model`);
+    return this.gate.run(() => this.conductSession<T>(tier, prompt, worktree, undefined, extract, contract));
   }
 
   gateState(): GateState {
@@ -323,12 +365,14 @@ export class Reviewer implements ReviewerLike {
   }
 
   /** What `review` does once it holds a slot. */
-  private async conductSession(
+  private async conductSession<T>(
     tier: Tier,
     prompt: string,
     worktree: string,
-    reviewId?: string,
-  ): Promise<ReviewerResult> {
+    reviewId: string | undefined,
+    extract: (text: string) => Listed<T>,
+    contract: string,
+  ): Promise<SessionResult<T>> {
     const started = Date.now();
     const sessionId = await this.createSession(tier);
     // Registered so `cancel` can reach it. Cleared in `finally` whatever happens —
@@ -337,7 +381,7 @@ export class Reviewer implements ReviewerLike {
     if (reviewId !== undefined) this.sessions.set(reviewId, sessionId);
 
     try {
-      return await this.conduct(sessionId, tier, prompt, worktree, started);
+      return await this.conduct(sessionId, tier, prompt, worktree, started, extract, contract);
     } catch (e) {
       // ABANDONING THE REQUEST DOES NOT STOP THE MODEL.
       //
@@ -379,16 +423,28 @@ export class Reviewer implements ReviewerLike {
     }
   }
 
-  private async conduct(
+  /**
+   * One session, one answer, one retry — for whatever the caller asked for.
+   *
+   * `extract` and `contract` are parameters because findings are not the only list a
+   * model is asked for: `propose` asks for proposals, with a different schema and the
+   * same three ways to fail. Everything that made this loop worth keeping — the retry
+   * carrying WHAT was wrong, both replies logged when it fails twice, the abort so a
+   * failure stops the spend — is identical for both, and a second copy of it would
+   * grow a second set of the bugs that were fixed here one at a time.
+   */
+  private async conduct<T>(
     sessionId: string,
     tier: Tier,
     prompt: string,
     worktree: string,
     started: number,
-  ): Promise<ReviewerResult> {
-    const first = await this.ask(sessionId, tier, `${prompt}\n\n${OUTPUT_CONTRACT}`, worktree);
+    extract: (text: string) => Listed<T>,
+    contract: string,
+  ): Promise<SessionResult<T>> {
+    const first = await this.ask(sessionId, tier, `${prompt}\n\n${contract}`, worktree);
 
-    let extracted = extractFindings(first.text);
+    let extracted = extract(first.text);
     let retried = false;
     if (!extracted.ok) {
       // One retry, contract restated — and, since 2026-08-04, carrying WHAT was
@@ -400,10 +456,10 @@ export class Reviewer implements ReviewerLike {
         sessionId,
         tier,
         `Your previous reply could not be used: ${extracted.why}.\n` +
-          `Fix exactly that and reply again with ONLY the json block.\n\n${OUTPUT_CONTRACT}`,
+          `Fix exactly that and reply again with ONLY the json block.\n\n${contract}`,
         worktree,
       );
-      const retry = extractFindings(second.text);
+      const retry = extract(second.text);
       if (!retry.ok) {
         // BOTH replies are in scope here and both used to be thrown away, which made
         // the most frequent failure in this system also the least diagnosable: a round
@@ -431,7 +487,7 @@ export class Reviewer implements ReviewerLike {
         // said "malformed JSON" about valid JSON once, and sent the search an hour
         // in the wrong direction.
         throw new DidNotRun(
-          `tier ${tier.id} (${tier.model}) did not return usable findings after a retry — this review DID NOT RUN. ` +
+          `tier ${tier.id} (${tier.model}) did not return a usable reply after a retry — this DID NOT RUN. ` +
             `${describeReply("first", first.text)}: ${extracted.why}; ` +
             `${describeReply("retry", second.text)}: ${retry.why}. ` +
             "The full replies are on [lore:log].",
@@ -441,11 +497,11 @@ export class Reviewer implements ReviewerLike {
       first.usage = second.usage;
     }
 
-    // Loud, always: a discarded finding is a defect this tier saw and we threw away.
+    // Loud, always: a discarded item is something this tier said and we threw away.
     if (extracted.rejected.length > 0) {
       console.error(
-        `[lore:log] tier ${tier.id} (${tier.model}) had ${extracted.rejected.length} finding(s) rejected by the ` +
-          `schema; the other ${extracted.findings.length} were kept. ${extracted.rejected.join(" | ")}`,
+        `[lore:log] tier ${tier.id} (${tier.model}) had ${extracted.rejected.length} item(s) rejected by the ` +
+          `schema; the other ${extracted.items.length} were kept. ${extracted.rejected.join(" | ")}`,
       );
     }
 
@@ -454,7 +510,7 @@ export class Reviewer implements ReviewerLike {
     const latencyMs = Date.now() - started;
 
     return {
-      findings: extracted.findings,
+      items: extracted.items,
       raw: first.text,
       inputTokens: first.usage.input,
       cachedTokens: first.usage.cached,
@@ -462,7 +518,7 @@ export class Reviewer implements ReviewerLike {
       costUsd: first.usage.cost,
       latencyMs,
       retried,
-      discarded: extracted.rejected,
+      rejected: extracted.rejected,
       steps: await this.countSteps(sessionId),
     };
   }
@@ -844,6 +900,23 @@ export type Extraction =
   | { readonly ok: true; readonly findings: readonly Finding[]; readonly rejected: readonly string[] }
   | { readonly ok: false; readonly why: string };
 
+/**
+ * The same shape for anything a session is asked to return in a list.
+ *
+ * Findings are not the only thing we ask a model for — `propose` asks for proposals,
+ * with a different schema and the same three ways to fail (nothing parseable, parsed
+ * but no list, parsed and every item refused). Generalised rather than copied, because
+ * the candidate-ranking below is the subtle part: it already had a bug where a later,
+ * worse candidate masked an earlier, better one, and a second hand-written copy would
+ * have that bug again within a month.
+ */
+export type Listed<T> =
+  | { readonly ok: true; readonly items: readonly T[]; readonly rejected: readonly string[] }
+  | { readonly ok: false; readonly why: string };
+
+/** One item, or why this one was refused while its siblings survive (D-66). */
+export type ItemParser<T> = (raw: unknown, index: number, total: number) => T | { readonly rejected: string };
+
 /** The first zod issue, as `path: message` — enough to act on, short enough to send. */
 function firstIssue(error: z.ZodError): string {
   const i = error.issues[0];
@@ -853,13 +926,19 @@ function firstIssue(error: z.ZodError): string {
 }
 
 /**
- * Pull findings out of a reply.
+ * Pull a named list out of a reply, however the model wrapped it.
  *
- * Never returns an empty array on failure. An empty array means the model said
- * clean, and conflating "said clean" with "could not be read" is exactly INV-1's
+ * Fenced block, several fenced blocks, a bare object after prose — models do all of
+ * these, and the reply is paid for either way. The ranking below is why this is one
+ * function rather than one per caller: it already had a bug where a later, worse
+ * candidate masked an earlier, better one, and a hand-written second copy would grow
+ * that bug again.
+ *
+ * Never returns an empty list on failure. An empty list means the model said clean —
+ * or had no proposals — and conflating that with "could not be read" is exactly INV-1's
  * failure.
  */
-export function extractFindings(text: string): Extraction {
+export function extractList<T>(text: string, key: string, parseOne: ItemParser<T>): Listed<T> {
   const block = /```(?:json)?\s*([\s\S]*?)```/g;
   const candidates: string[] = [];
   for (const m of text.matchAll(block)) candidates.push(m[1] ?? "");
@@ -878,7 +957,7 @@ export function extractFindings(text: string): Extraction {
   const UNPARSEABLE = 1;
   const NO_LIST = 2;
   let got = NO_JSON;
-  let why = "no JSON object containing a `findings` array";
+  let why = `no JSON object containing a \`${key}\` array`;
   const note = (rank: number, reason: string) => {
     if (rank < got) return;
     got = rank;
@@ -893,9 +972,9 @@ export function extractFindings(text: string): Extraction {
       note(UNPARSEABLE, `JSON did not parse: ${detail(e)}`);
       continue;
     }
-    const list = (parsed as { findings?: unknown })?.findings;
+    const list = (parsed as Record<string, unknown> | null)?.[key];
     if (!Array.isArray(list)) {
-      note(NO_LIST, "parsed as JSON, but there was no `findings` array");
+      note(NO_LIST, `parsed as JSON, but there was no \`${key}\` array`);
       continue;
     }
     // THE VALID FINDINGS SURVIVE ONE BAD SIBLING (D-66).
@@ -919,21 +998,42 @@ export function extractFindings(text: string): Extraction {
     // So: take what parsed, and make the loss LOUD — logged here, carried on the
     // result, and reported to the client so a clean round is never read as a complete
     // one. A reply where NOTHING parsed is still a failed reply.
-    const out: Finding[] = [];
+    const out: T[] = [];
     const rejected: string[] = [];
     for (const [i, raw] of list.entries()) {
-      const res = FindingSchema.safeParse(raw);
-      if (!res.success) {
-        rejected.push(`finding ${i + 1} of ${list.length}: ${firstIssue(res.error)} — ${excerpt(JSON.stringify(raw), 300)}`);
+      const res = parseOne(raw, i, list.length);
+      if (typeof res === "object" && res !== null && "rejected" in res) {
+        rejected.push(res.rejected);
         continue;
       }
-      out.push(res.data);
+      out.push(res as T);
     }
     if (out.length === 0 && rejected.length > 0) {
-      note(NO_LIST, `all ${rejected.length} finding(s) were rejected — ${rejected[0] ?? ""}`);
+      note(NO_LIST, `all ${rejected.length} ${key.replace(/s$/, "")}(s) were rejected — ${rejected[0] ?? ""}`);
       continue;
     }
-    return { ok: true, findings: out, rejected };
+    return { ok: true, items: out, rejected };
   }
   return { ok: false, why };
+}
+
+/**
+ * Pull findings out of a reply.
+ *
+ * Never returns an empty array on failure. An empty array means the model said clean,
+ * and conflating "said clean" with "could not be read" is exactly INV-1's failure.
+ */
+const parseFindingItem: ItemParser<Finding> = (raw, i, n) => {
+  const res = FindingSchema.safeParse(raw);
+  return res.success
+    ? res.data
+    : { rejected: `finding ${i + 1} of ${n}: ${firstIssue(res.error)} — ${excerpt(JSON.stringify(raw), 300)}` };
+};
+
+/** Findings in the generic shape, for `review()`. */
+export const findingsOf = (text: string): Listed<Finding> => extractList<Finding>(text, "findings", parseFindingItem);
+
+export function extractFindings(text: string): Extraction {
+  const r = findingsOf(text);
+  return r.ok ? { ok: true, findings: r.items, rejected: r.rejected } : r;
 }

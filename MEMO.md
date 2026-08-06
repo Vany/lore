@@ -126,6 +126,33 @@ defect, but because a reviewer cannot otherwise tell "the author rewrote a comme
 "the author changed the system", and in that shape of diff it must name a reader who acts
 wrongly.
 
+**Then `lore propose` got built, because "improve code" needed somewhere to live.**
+Vany: *"let's add new functionality, review, analyze, suggest refactor, significantly
+magically improve, beautify piece of code."* Asked to choose the shape, he took the
+conservative option on every axis — *"output is idea, that will be implemented by the
+caller"*, *"but keep the overall functionality"* — which is D-75 as already specced,
+plus `--folder`, `--commit` (head of `master`) and `--mode`.
+
+Two decisions I would not have got right without stating them first:
+
+- **The folder is the SUBJECT, not the boundary.** A proposer reads outward — callers,
+  dependants, the specs that govern the code — because a proposal about a folder made
+  without reading its callers is a proposal about code nobody uses. But the change must
+  land inside or the idea is dropped with its reason. Without that rule, a folder-scoped
+  run silently becomes another whole-repo run costing the same and answering a question
+  nobody asked, which is exactly what a model does unprompted.
+- **`preserves` is what makes it a refactor tool.** Every proposal states what must keep
+  working identically and how a person would check. A model asked to improve something
+  will, given room, improve what it is FOR, and an idea that quietly changes behaviour is
+  not a better version of this code — it is different code wearing its name.
+
+**The one piece of real surgery: `conductSession` now takes its extractor.** It baked in
+the FINDING extractor along with the retry-carrying-what-was-wrong, the both-replies-
+logged-on-double-failure, and the abort-so-a-failure-stops-the-spend. Every one of those
+was fixed here one incident at a time, and a second hand-written copy for proposals would
+have regrown all of them. Generalised instead, with `extractFindings` kept as a thin
+adapter so the whole ladder still reads `findings`.
+
 **Argued against, and not built: a suggestion channel.** Vany's goal was "find errors and
 improve code, if we can", and the temptation is to add advice to findings. A finding's
 whole value is that it demands an answer; a suggestion demands nothing, gets skimmed, and

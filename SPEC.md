@@ -204,7 +204,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-72** | A deploy **drains** — stop claiming, finish what is in flight, then swap | confirmed |
 | **D-73** | A justification is **not part of the code it defends**, and is learned once | confirmed |
 | **D-74** | **One vendor per tier** — the deployed ladder is Z.ai, Moonshot, OpenAI | confirmed |
-| **D-75** | `propose` is an **idea generator for the maintainer**, never a gate | `[OPEN]` |
+| **D-75** | `propose` is an **idea generator for the maintainer**, never a gate | built; ideas unmeasured |
 | **D-76** | A change is validated **over MCP**; a CLI run is never evidence the product works | `[OPEN]` |
 | **D-77** | **Commit, review to a verdict, amend, push.** Nothing reaches origin unreviewed | `[OPEN]` |
 | **D-78** | A review answers to **the token that started it**, not to its repository | `[OPEN]` |
@@ -1551,10 +1551,23 @@ are queued or running, and takes a budget as an argument rather than discovering
 a person — so it needs no tool description, no client contract and no place in the
 agent docs. It writes a dated document into `proposals/`, beside `research/`.
 
-`[OPEN]` — the shape is decided; nothing has run. Whether these models produce *good*
-architectural ideas is entirely unmeasured, and this is the output most likely to be
-plausible and useless. It is the best first customer for the measurement harness rather
-than a reason to skip it.
+**Built 2026-08-07, with three parameters Vany added and one constraint.** `--folder`
+(default the repository root), `--commit` (default the head of `master`, cut from the
+mirror), `--mode` from the review-type vocabulary. The constraint is `preserves`: every
+proposal states what must keep working identically and how a person would check, because
+*"keep the overall functionality"* is what separates a refactor tool from a redesign one.
+A model asked to improve something will, given room, improve what it is FOR.
+
+**And the folder is the subject, not the boundary.** A proposer reads outward — callers,
+dependants, the specs that govern the code — because a proposal about a folder made
+without reading its callers is a proposal about code nobody uses. But the change must
+land inside, or the idea is dropped with its reason. Without that rule a folder-scoped
+run silently becomes another whole-repo run, which is what a model does unprompted.
+
+`[OPEN]` — **nothing has run yet.** Whether these models produce *good* architectural
+ideas is entirely unmeasured, and this is the output most likely to be plausible and
+useless. It is the best first customer for the measurement harness rather than a reason
+to skip it.
 
 **D-73 — a justification is not part of the code it defends, and its fact is learned
 once.**
