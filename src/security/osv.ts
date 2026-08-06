@@ -91,6 +91,13 @@ export async function queryComponents(
  *
  * A gitlink bump is two lines of diff that can move a dependency across a published
  * vulnerability, and nothing about the outer diff would show it.
+ *
+ * **This had no caller until 2026-08-06.** It was written, tested and never invoked,
+ * while `PLAN.md` Phase 5 named it "needed for submodules" and D-36 records that this
+ * workgroup ships submodules rather than monorepos. So the security review enumerated
+ * `package-lock.json`, found nothing in the vendored tree, and the absence read as a
+ * clean result — the `isStale` shape from session 19, in the review type whose whole
+ * output is a claim about what was checked. `engines.ts` calls it now, via `gitlinks`.
  */
 export async function queryCommit(commit: string, fetchImpl: typeof fetch = fetch): Promise<readonly OsvVuln[]> {
   const res = await fetchImpl(`${OSV_API}/query`, {
@@ -181,6 +188,42 @@ export function toFindings(vulnerable: readonly Vulnerable[], lockfile = "packag
     }
   }
   return out;
+}
+
+/**
+ * Findings for a submodule pointer, whose `file` is the gitlink path.
+ *
+ * Separate from `toFindings` because the two disagree about what a reader must go and
+ * look at. A package vulnerability points at the lockfile, where the decision to ship
+ * a version lives and where a fix is applied. A gitlink has no lockfile entry: the
+ * decision is the pointer itself, and the fix is moving it — so pointing at
+ * `package-lock.json` would send a reader to a file that does not mention it.
+ */
+export function commitToFindings(path: string, commit: string, vulns: readonly OsvVuln[]): readonly Finding[] {
+  return vulns.map((v) => {
+    const aliases = (v.aliases ?? []).filter((a) => a.startsWith("CVE-"));
+    const label = aliases[0] ?? v.id;
+    const cwe = cweOf(v);
+    return {
+      file: path,
+      severity: severityOf(v),
+      claim: cap(
+        `submodule ${path} is pinned at a commit affected by ${label}` +
+          `${v.summary === undefined ? "" : `: ${v.summary}`}`,
+        CLAIM_MAX,
+      ),
+      evidence: cap(
+        [
+          `OSV ${v.id}${aliases.length > 0 ? ` (${aliases.join(", ")})` : ""}`,
+          `gitlink ${path} → ${commit}`,
+          "matched by commit, because a submodule has no package version to match on",
+        ].join("\n"),
+        2000,
+      ),
+      failureScenario: cap(v.details ?? v.summary ?? "see the OSV record for exploitation details", 2000),
+      ...(cwe !== undefined ? { cwe } : {}),
+    };
+  });
 }
 
 function cap(s: string, n: number): string {

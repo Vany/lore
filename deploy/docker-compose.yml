@@ -83,6 +83,13 @@ services:
       LORE_TIERS: ${LORE_TIERS:-}     # unset = the three-vendor default ladder
       LORE_WEBHOOK_URL: ${LORE_WEBHOOK_URL:-}
       LORE_HEARTBEAT_URL: ${LORE_HEARTBEAT_URL:-}
+      # Where litestream writes, so the heartbeat can PAGE when the knowledge base has
+      # stopped being replicated. `spec/operations.md` §2.1 has listed that under
+      # "someone should look now" since it was written, and nothing ever sent it: the
+      # only replica check lived in `make status`, which is a command a human runs.
+      # Unset is supported and reports `replica: "unconfigured"` — the check could not
+      # run, which is not the same as passing.
+      LORE_BACKUP_DIR: /backup
       OPENCODE_SERVER: http://opencode:4096
       # The same credentials the opencode service is started with. opencode answers
       # a bare 401 with no hint when these are missing, which cost real time to
@@ -99,6 +106,11 @@ services:
       # path everywhere is the only arrangement where "the path I have" and "the
       # path the daemon sees" are the same string.
       - ${LORE_HOST_DATA:-/var/lib/lore}:${LORE_HOST_DATA:-/var/lib/lore}
+      # READ-ONLY, and only so the service can tell whether it is still being backed
+      # up. litestream owns this directory; lore reads mtimes in it and nothing else.
+      # A page about the replica has to come from something that runs unattended, and
+      # this is the only mount that makes that possible.
+      - ${LORE_HOST_BACKUP:-./backup}:/backup:ro
       # The T0 sandbox launches SIBLING containers for test execution, so untrusted
       # project code never runs in this container — which holds the knowledge
       # database, the attestation signing key and every provider credential (D-24).

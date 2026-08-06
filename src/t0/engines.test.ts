@@ -43,4 +43,14 @@ describe("an optional engine's absence is not a gap in the review", () => {
     writeFileSync(join(dir, "sgconfig.yml"), "ruleDirs: [rules]\n");
     expect(detect(dir, "ast-grep")).toBe(true);
   });
+
+  // `osv` shared `sbom`'s gate, so a repository that vendors purely by gitlink — no
+  // package.json anywhere — skipped the vulnerability check entirely and reported
+  // nothing. The two questions are not the same one: an SBOM enumerates packages,
+  // OSV also answers about commits.
+  it("runs osv for a submodule-only repository that has no package.json", () => {
+    writeFileSync(join(dir, ".gitmodules"), '[submodule "vendor/pay"]\n\tpath = vendor/pay\n');
+    expect(detect(dir, "osv")).toBe(true);
+    expect(detect(dir, "sbom")).toBe(false);
+  });
 });

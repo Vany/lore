@@ -2,7 +2,15 @@ import { CLAIM_MAX } from "../core/finding.ts";
 import { beforeEach, describe, expect, it } from "vitest";
 import { initialState } from "../core/ladder.ts";
 import { Store } from "../store/store.ts";
-import { queryComponents, severityOf, fixedVersion, toFindings, type OsvVuln } from "./osv.ts";
+import {
+  commitToFindings,
+  fixedVersion,
+  queryCommit,
+  queryComponents,
+  severityOf,
+  toFindings,
+  type OsvVuln,
+} from "./osv.ts";
 import type { Component } from "./sbom.ts";
 import { buildVex, justificationFor, stateFor, vulnIdOf, renderVex } from "./vex.ts";
 
@@ -89,6 +97,35 @@ describe("queryComponents", () => {
   it("throws on a non-200 rather than treating the body as a result", async () => {
     const bad = (async () => new Response("upstream error", { status: 503 })) as unknown as typeof fetch;
     await expect(queryComponents([component], bad)).rejects.toThrow(/DID NOT RUN/);
+  });
+});
+
+// THE HALF THAT WAS NEVER CALLED. `queryCommit` shipped with Phase 5, was tested,
+// and had no caller until 2026-08-06 — so on a repository that vendors by submodule,
+// which is how this workgroup ships (D-36), the security review enumerated the
+// lockfile and reported clean about a tree it never queried.
+describe("submodules are queried by commit", () => {
+  const commit = "a".repeat(40);
+
+  it("names the gitlink path, not the lockfile, because that is where the fix goes", () => {
+    const [f] = commitToFindings("vendor/pay", commit, [vuln]);
+    expect(f?.file).toBe("vendor/pay");
+    expect(f?.evidence).toContain(commit);
+    expect(f?.evidence).toMatch(/no package version/);
+  });
+
+  it("obeys the same caps as a package finding", () => {
+    const wordy: OsvVuln = { ...vuln, summary: "x".repeat(600), details: "y".repeat(5000) };
+    const [f] = commitToFindings("vendor/pay", commit, [wordy]);
+    expect((f?.claim ?? "").length).toBeLessThanOrEqual(CLAIM_MAX);
+    expect((f?.failureScenario ?? "").length).toBeLessThanOrEqual(2000);
+  });
+
+  it("throws rather than reporting nothing when OSV cannot be reached", async () => {
+    const dead = (async () => {
+      throw new Error("ECONNREFUSED");
+    }) as unknown as typeof fetch;
+    await expect(queryCommit(commit, dead)).rejects.toThrow(/DID NOT RUN/);
   });
 });
 

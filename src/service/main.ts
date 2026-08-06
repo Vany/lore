@@ -8,7 +8,7 @@
 import { join } from "node:path";
 import { mkdir } from "node:fs/promises";
 import { Alerter } from "../ops/alerts.ts";
-import { DEFAULT_HEARTBEAT, startHeartbeat } from "../ops/heartbeat.ts";
+import { DEFAULT_HEARTBEAT, startHeartbeat, type HeartbeatConfig } from "../ops/heartbeat.ts";
 import { DEFAULT_RETENTION, collect } from "../ops/retention.ts";
 import { DEFAULT_SPEND, mayStart } from "../ops/spend.ts";
 import { repoPaths, worktreeFor } from "../git/repo.ts";
@@ -23,6 +23,14 @@ export interface ServiceConfig {
   readonly host: string;
   readonly webhookUrl?: string;
   readonly heartbeatUrl?: string;
+  /**
+   * Litestream's replica folder, mounted read-only so the service can page when the
+   * knowledge base has stopped being replicated.
+   *
+   * Unset is a supported deployment and reports `replica: "unconfigured"` rather than
+   * anything green — the check cannot run, which is not the same as passing.
+   */
+  readonly backupDir?: string;
   readonly concurrency: number;
   readonly dailyCeilingUsd: number;
 }
@@ -68,6 +76,7 @@ function envNumber(name: string, fallback: number, min = 0): number {
 export function configFromEnv(): ServiceConfig {
   const webhookUrl = env("LORE_WEBHOOK_URL");
   const heartbeatUrl = env("LORE_HEARTBEAT_URL");
+  const backupDir = env("LORE_BACKUP_DIR");
   return {
     dataDir: env("LORE_DATA_DIR") ?? "/var/lib/lore",
     port: envNumber("LORE_PORT", 7777, 1),
@@ -76,6 +85,7 @@ export function configFromEnv(): ServiceConfig {
     host: env("LORE_HOST") ?? "0.0.0.0",
     ...(webhookUrl !== undefined ? { webhookUrl } : {}),
     ...(heartbeatUrl !== undefined ? { heartbeatUrl } : {}),
+    ...(backupDir !== undefined ? { backupDir } : {}),
     // At least one: zero workers is a service that queues for ever in silence.
     concurrency: envNumber("LORE_CONCURRENCY", DEFAULT_WORKER.concurrency, 1),
     dailyCeilingUsd: envNumber("LORE_DAILY_CEILING_USD", DEFAULT_SPEND.dailyCeilingUsd),
@@ -101,13 +111,24 @@ export async function serve(cfg: ServiceConfig): Promise<() => void> {
   );
   const stopWorker = worker.start();
 
+  // ONE heartbeat config, used by both readers.
+  //
+  // It was built twice in this function — once for `startHeartbeat` and once for the
+  // `/status` handler below — and the copies were already free to drift. They would
+  // have, on this very change: adding the replica folder to the beat alone leaves
+  // `/status` answering `replica: "unconfigured"` while the beat pages that it is
+  // behind, which is two opposite claims about one directory from one process.
+  // `url` is the one difference, and it belongs to the beat because only the beat
+  // posts anything.
+  const heartbeat: HeartbeatConfig = {
+    ...DEFAULT_HEARTBEAT,
+    ...(cfg.backupDir !== undefined ? { backupDir: cfg.backupDir } : {}),
+    dataDir: cfg.dataDir,
+  };
+
   const stopBeat = startHeartbeat(
     store,
-    {
-      ...DEFAULT_HEARTBEAT,
-      ...(cfg.heartbeatUrl !== undefined ? { url: cfg.heartbeatUrl } : {}),
-      dataDir: cfg.dataDir,
-    },
+    { ...heartbeat, ...(cfg.heartbeatUrl !== undefined ? { url: cfg.heartbeatUrl } : {}) },
     alerter,
   );
 
@@ -168,7 +189,7 @@ export async function serve(cfg: ServiceConfig): Promise<() => void> {
     {
       port: cfg.port,
       host: cfg.host,
-      heartbeat: { ...DEFAULT_HEARTBEAT, dataDir: cfg.dataDir },
+      heartbeat,
       spend: { ...DEFAULT_SPEND, dailyCeilingUsd: cfg.dailyCeilingUsd },
     },
   );

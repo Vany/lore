@@ -17,7 +17,8 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Finding, Severity } from "../core/finding.ts";
 import type { T0Engine } from "../core/review-type.ts";
-import { queryComponents, toFindings } from "../security/osv.ts";
+import { gitlinks, type Gitlink } from "../git/repo.ts";
+import { commitToFindings, queryCommit, queryComponents, toFindings } from "../security/osv.ts";
 import { generateSbom } from "../security/sbom.ts";
 import { runTool } from "./exec.ts";
 
@@ -92,8 +93,16 @@ export function detect(worktree: string, engine: T0Engine): boolean {
       // they carry CWE metadata that lands in the same namespace as model findings.
       return true;
     case "sbom":
-    case "osv":
       return existsSync(join(worktree, "package.json"));
+    case "osv":
+      // Not the same condition as `sbom`, though it was written as one.
+      //
+      // OSV queries packages FROM the SBOM and submodules by commit. A repository
+      // that vendors purely by gitlink has no `package.json`, so sharing the gate
+      // skipped the whole engine — the vulnerability check declining to run on the
+      // exact repository shape it was built for (D-36), and reporting nothing, which
+      // is the reading INV-1 forbids.
+      return existsSync(join(worktree, "package.json")) || existsSync(join(worktree, ".gitmodules"));
     default:
       return false;
   }
@@ -186,15 +195,35 @@ async function sbom(worktree: string): Promise<EngineOutcome> {
  * both the noise and the value live.
  */
 async function osv(worktree: string): Promise<EngineOutcome> {
+  // Two populations, and the second was never queried.
+  //
+  // Packages come from the SBOM and match on name+version. SUBMODULES have neither:
+  // a gitlink is a bare commit, invisible to any lockfile, and OSV's commit query is
+  // the only thing that can rule on it. `queryCommit` was written and tested for
+  // exactly this and had no caller — so on a repository that vendors by submodule,
+  // which is how this workgroup ships (D-36), the security review enumerated
+  // `package-lock.json` and reported clean about code it never looked at.
+  const links = await gitlinks(worktree).catch(() => [] as readonly Gitlink[]);
   const bom = await generateSbom(worktree);
-  if (bom.components.length === 0) {
+
+  if (bom.components.length === 0 && links.length === 0) {
     return { engine: "osv", findings: [], unavailable: bom.note ?? "nothing to query" };
   }
+
+  const findings: Finding[] = [];
   try {
-    const vulnerable = await queryComponents(bom.components);
-    return { engine: "osv", findings: toFindings(vulnerable) };
+    if (bom.components.length > 0) findings.push(...toFindings(await queryComponents(bom.components)));
+    for (const link of links) {
+      findings.push(...commitToFindings(link.path, link.commit, await queryCommit(link.commit)));
+    }
+    return { engine: "osv", findings };
   } catch (e) {
     // A database we could not reach is not a database that said "clean".
+    //
+    // The WHOLE engine is unavailable, even if one half answered. Returning the
+    // packages we did get while the submodule query died would present a partial
+    // enumeration as a complete one, which is the failure this engine exists to
+    // report rather than commit.
     return {
       engine: "osv",
       findings: [],

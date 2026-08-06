@@ -26,7 +26,7 @@
 
 import type * as z from "zod";
 import { createOpencodeClient } from "@opencode-ai/sdk";
-import { DidNotRun, Exhausted } from "../core/errors.ts";
+import { DidNotRun, Exhausted, ProviderAuthFailed } from "../core/errors.ts";
 import { FindingSchema, type Finding } from "../core/finding.ts";
 import type { Tier } from "../core/ladder.ts";
 import { DEFAULT_TIMEOUT_MS, longFetch } from "./long-fetch.ts";
@@ -477,6 +477,22 @@ export class Reviewer implements ReviewerLike {
       // tier that did not run found nothing, which is not finding nothing.
       if (status === 429 || status === 402 || /rate.?limit|quota|insufficient/i.test(message)) {
         throw new Exhausted(`tier ${tier.id} (${tier.model}) refused on quota: ${message}`);
+      }
+      // A REJECTED CREDENTIAL IS NOT A DIFFICULT BRANCH. It stops every review at this
+      // tier at once and only an operator can fix it, so it gets its own type and the
+      // worker pages on it — a condition `spec/operations.md` §2.1 has listed under
+      // "someone should look now" since it was written, with nothing ever sending it.
+      //
+      // Checked AFTER quota deliberately: 402 is a bill rather than a bad key, and
+      // some providers answer 401 for an exhausted plan. Quota is the kinder reading
+      // and the ladder can step over it (D-48); an auth failure cannot be stepped over,
+      // so the narrower claim goes second and only catches what quota did not.
+      //
+      // Reached here through `providerError`, i.e. the status nested inside a 200 —
+      // the transport's own 401 is opencode refusing us, which `createSession` names
+      // separately and which points at OPENCODE_SERVER_PASSWORD, not at a provider.
+      if (status === 401 || status === 403 || /unauthori[sz]ed|invalid api key|authentication/i.test(message)) {
+        throw new ProviderAuthFailed(tier.model ?? tier.id, `tier ${tier.id}: ${message}`);
       }
       throw new DidNotRun(`tier ${tier.id} (${tier.model}) failed: ${message}`, e);
     }

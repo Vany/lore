@@ -13,7 +13,7 @@
  */
 
 
-import { Exhausted, LoreError } from "../core/errors.ts";
+import { LoreError, ProviderAuthFailed } from "../core/errors.ts";
 import { isTerminal, type ReviewState } from "../core/review-state.ts";
 import { reviewType } from "../core/review-type.ts";
 import { removeWorktree, repoPaths, worktreeFor } from "../git/repo.ts";
@@ -109,9 +109,24 @@ export class Worker {
         this.store.finishJob(job.id, "failed", message);
         // A review that did not run is not a review that found nothing. The state
         // says so, and the client is told so.
-        this.store.updateReview(job.reviewId, { state: e instanceof Exhausted ? "failed" : "failed" });
+        //
+        // One state, not a choice. This read `e instanceof Exhausted ? "failed" :
+        // "failed"` — a ternary whose arms are identical, which looks like a
+        // distinction being drawn and draws none. Quota is handled where it can be
+        // acted on: the ladder marks that tier unpayable and steps over it (D-48), so
+        // an `Exhausted` reaching HERE means nothing was left that could read the code,
+        // and that is a plain failure like any other.
+        this.store.updateReview(job.reviewId, { state: "failed" });
         await this.releaseIfFinished(job.reviewId);
         this.note(false);
+
+        // One review failing is a log line; a rejected credential is not one review.
+        // It stops every review at that tier until a person replaces the key, so it
+        // pages rather than waiting for the failing-as-a-class window to fill — by
+        // which time ten more reviews have been spent proving the same thing.
+        if (e instanceof ProviderAuthFailed) {
+          await this.alerter.send(CONDITIONS.providerAuthFailed(e.provider));
+        }
         await this.alerter.send({
           severity: "log",
           condition: "review round failed",

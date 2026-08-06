@@ -307,6 +307,35 @@ export async function treeHash(worktree: string): Promise<string> {
   return stdout.trim();
 }
 
+/** A submodule pointer: the path it sits at, and the commit it points to. */
+export interface Gitlink {
+  readonly path: string;
+  readonly commit: string;
+}
+
+/**
+ * Every submodule pointer in the tree.
+ *
+ * This workgroup uses submodules rather than monorepos (D-36), so vendored code
+ * arrives as a gitlink with **no package and no version** — which is precisely what
+ * an SBOM cannot describe and what OSV's commit query exists for. Without this the
+ * security review enumerates `package-lock.json` and reports clean about a dependency
+ * tree it never enumerated.
+ *
+ * Mode `160000` is git's gitlink mode; `ls-tree -r` does not descend into one, so each
+ * submodule yields exactly one row whatever it contains.
+ */
+export async function gitlinks(worktree: string): Promise<readonly Gitlink[]> {
+  const { stdout } = await git(worktree, ["ls-tree", "-r", "HEAD"]);
+  const out: Gitlink[] = [];
+  for (const line of stdout.split("\n")) {
+    // <mode> SP <type> SP <sha> TAB <path>
+    const m = /^160000 commit ([0-9a-f]{40})\t(.+)$/.exec(line);
+    if (m?.[1] !== undefined && m[2] !== undefined) out.push({ commit: m[1], path: m[2] });
+  }
+  return out;
+}
+
 /**
  * Apply a unified diff without committing. The client keeps its own history.
  *

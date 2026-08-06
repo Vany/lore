@@ -1,26 +1,12 @@
 # CLAUDE.md — `lore`
 
-Project-local rules. Second part of the general rules in `~/.claude/CLAUDE.md`;
-that file wins on anything not covered here.
+A workgroup MCP service that **remembers a codebase between sessions**. Reviews are
+the mechanism; the shared memory is the product. If a change makes the reviews
+better and the memory worse, it is the wrong change.
 
-## Read before working
-
-1. `SPEC.md` — what this is and why. Decisions live here, marked `D-n`.
-2. `spec/` — `knowledge.md` (the product), `mcp-api.md`, `review-ladder.md`.
-3. `PROG.md` — how code is written here.
-4. `MEMO.md` — what I learned last time.
-5. `TODO.md` — what to do next, in order.
-6. `research/` — grounded external facts, each with a verification date.
-
-## What this project is
-
-A workgroup MCP service that **remembers a codebase between sessions**. Every
-Claude session starts amnesiac; `lore` is the shared memory.
-
-Reviews are how the knowledge gets made — an escalating ladder of **non-Anthropic**
-models, gating a branch before it merges. But the reviewing is the mechanism, not
-the point. If a change makes the reviews better and the memory worse, it is the
-wrong change.
+Ground truth is `SPEC.md`, where decisions are marked `D-n`. Beside it, `spec/`
+holds the surface in detail — `knowledge.md` (the product), `review-ladder.md`,
+`mcp-api.md`, `agent-docs.md`, `deployment.md`, `operations.md`.
 
 ## The one rule that outranks the others
 
@@ -32,8 +18,8 @@ silent failures in one day are the reason this project exists in this shape.
 
 ## Working agreement
 
-- SPEC is ground truth. If reality disagrees with SPEC, I update SPEC in the same
-  change — I do not let code and spec drift apart quietly.
+- If reality disagrees with `SPEC.md`, I update SPEC in the same change. Drift is a
+  defect whichever side moved (D-11), and it is this repository's most common one.
 - **The MCP texts move with the behaviour, in the same change.** `TOOL_DOCS`,
   `RESOURCE_DOCS` and `REVIEW_PROMPT_TEXT` in `src/mcp/docs.ts` — and
   `src/reviewer/prompts.ts` when a *model* is what learns differently. The client is
@@ -50,15 +36,9 @@ silent failures in one day are the reason this project exists in this shape.
   reconstruct it.
 - `[OPEN]` in SPEC means *I decided this alone because it blocked me*. I flag it
   when it becomes load-bearing, rather than letting it harden by default.
-- I verify current versions, APIs and model names before relying on memory. Notes
-  in `research/` carry the date they were checked; anything older than a few weeks
-  gets re-checked, not trusted.
-- I do not add unrequested features. This tool has one job.
-- Money is involved (two subscriptions). Anything that changes *which* model is
+- Notes in `research/` carry the date they were checked; anything older than a few
+  weeks gets re-checked, not trusted. **Model ids are read from opencode's
+  `/config/providers`, never from memory or from what the name implies** — `k3`
+  carries 1M tokens of context and `k3-256k` carries 262k.
+- Money is involved (three subscriptions). Anything that changes *which* model is
   called, or how much quota it burns, is discussed before it ships.
-
-## Boundaries
-
-- No autonomous `git commit`, `push`, or `merge` from the tool itself.
-- Reviewer agents are read-only, always (INV-9).
-- Nothing writes to a user's repo without explicit opt-in (D-2).

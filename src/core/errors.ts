@@ -71,14 +71,23 @@ export class UsageError extends LoreError {
 }
 
 /**
- * A scaffolded path that must never return a plausible default.
+ * A provider rejected our credentials.
  *
- * PROG.md: unimplemented paths throw. A stub returning "clean" would be exactly
- * the failure INV-1 exists to prevent, shipped on day one.
+ * Its own type because the blast radius is not one review: a dead credential stops
+ * every review at that tier at once, and it is a thing an operator must go and fix
+ * rather than a branch being difficult. Separated from `Exhausted` for the same reason
+ * that one was separated from `DidNotRun` — an unpaid bill, a spent quota and a
+ * revoked key each want a different person to do a different thing, and collapsing
+ * them sends the search to the prompt.
+ *
+ * Still exit 70: it did not run.
  */
-export class NotImplemented extends LoreError {
-  constructor(what: string) {
-    super(`${what} is not implemented yet — see TODO.md`, EXIT.DID_NOT_RUN);
+export class ProviderAuthFailed extends DidNotRun {
+  readonly provider: string;
+
+  constructor(provider: string, message: string) {
+    super(`${provider} rejected our credentials — ${message}`);
+    this.provider = provider;
   }
 }
 

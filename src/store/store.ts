@@ -1107,6 +1107,25 @@ export class Store {
       | undefined;
     return Number(row?.["c"] ?? 0);
   }
+
+  /**
+   * Reviews parked on a question nobody has answered for `hours`.
+   *
+   * `needs_human` blocks its review from ever passing (spec/knowledge.md §7.2), so one
+   * that ages is not merely waiting — it is a review that will never finish, and the
+   * only thing that can move it is a person who does not know they are needed. The
+   * ticket condition for this has existed unsent since the alerting table was written.
+   *
+   * `updated_at` rather than `created_at`: the clock starts when the review REACHED
+   * the question, not when the review began.
+   */
+  needsHumanOlderThan(hours: number): number {
+    const cutoff = new Date(Date.now() - hours * 3_600_000).toISOString();
+    const row = this.db
+      .prepare("SELECT COUNT(*) AS c FROM review WHERE state = 'needs_human' AND updated_at < ?")
+      .get(cutoff) as Record<string, number | bigint> | undefined;
+    return Number(row?.["c"] ?? 0);
+  }
 }
 
 function toFinding(row: Record<string, string | number | null>): RecordedFinding {

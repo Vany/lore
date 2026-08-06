@@ -14,7 +14,8 @@
  * SPEC: spec/operations.md §3
  */
 
-import { statfs } from "node:fs/promises";
+import { readdir, stat, statfs } from "node:fs/promises";
+import { join } from "node:path";
 import type { Store } from "../store/store.ts";
 import { Alerter, CONDITIONS } from "./alerts.ts";
 
@@ -23,10 +24,24 @@ export interface HeartbeatConfig {
   readonly url?: string;
   readonly intervalMs: number;
   readonly dataDir: string;
+  /** Litestream's replica folder, if this deployment mounts it. See `replicaState`. */
+  readonly backupDir?: string;
   readonly diskWarnPct: number;
   readonly diskPagePct: number;
   readonly queueWarnDepth: number;
+  readonly needsHumanAgeHours: number;
 }
+
+/**
+ * How far the replica may trail the database before it is called behind.
+ *
+ * `deploy/Makefile`'s `replica-state` implements the same predicate in shell, because
+ * `make status` has to answer while the service is DOWN — which is exactly when a dead
+ * replicator would otherwise go unnoticed, so it cannot be a call into this process.
+ * Two implementations, one number: `one-definition.test.ts` reads the Makefile and
+ * fails if the two disagree.
+ */
+export const REPLICA_BEHIND_SEC = 300;
 
 export const DEFAULT_HEARTBEAT: HeartbeatConfig = {
   intervalMs: 60_000,
@@ -34,28 +49,100 @@ export const DEFAULT_HEARTBEAT: HeartbeatConfig = {
   diskWarnPct: 75,
   diskPagePct: 90,
   queueWarnDepth: 50,
+  needsHumanAgeHours: 24,
 };
 
+/** Four answers, not two — see `replicaState`. */
+export type ReplicaState = "unconfigured" | "absent" | "behind" | "level";
+
 export interface Health {
+  /**
+   * COMPUTED, never a literal.
+   *
+   * It was `true` unconditionally for this service's whole life, including on the same
+   * beat that paged for a critical disk — and the comment beside `/status`'s build
+   * stamp complains that this endpoint "said ok: true" while the deployment ran 21
+   * commits behind. That fix added the stamp and left the constant. A health field
+   * that cannot say no is decoration a reader believes.
+   *
+   * False when any PAGE-severity condition holds. `problems` names them, because
+   * `ok: false` with nothing beside it is the same ambiguity pointing the other way.
+   */
   readonly ok: boolean;
+  readonly problems: readonly string[];
   readonly queueDepth: number;
   readonly diskUsedPct: number;
   readonly spendToday: number;
+  readonly replica: ReplicaState;
+  /** Seconds the database is ahead of the replica. Absent when there is nothing to compare. */
+  readonly replicaBehindSec?: number;
+  readonly needsHumanOverAge: number;
   readonly at: string;
 }
 
 export async function checkHealth(store: Store, cfg: HeartbeatConfig): Promise<Health> {
   const midnight = `${new Date().toISOString().slice(0, 10)}T00:00:00.000Z`;
+  const replica = await replicaState(cfg);
+  const diskUsedPct = await diskUsedPct_(cfg.dataDir);
+  const needsHumanOverAge = store.needsHumanOlderThan(cfg.needsHumanAgeHours);
+
+  const problems: string[] = [];
+  if (diskUsedPct >= cfg.diskPagePct) problems.push(`disk ${diskUsedPct}%`);
+  if (replica.state === "absent") problems.push("replica missing");
+  if (replica.state === "behind") problems.push(`replica ${Math.round((replica.behindSec ?? 0) / 60)}m behind`);
+
   return {
-    ok: true,
+    ok: problems.length === 0,
+    problems,
     queueDepth: store.queueDepth(),
-    diskUsedPct: await diskUsedPct(cfg.dataDir),
+    diskUsedPct,
     spendToday: store.spendSince(midnight),
+    replica: replica.state,
+    ...(replica.behindSec === undefined ? {} : { replicaBehindSec: replica.behindSec }),
+    needsHumanOverAge,
     at: new Date().toISOString(),
   };
 }
 
-async function diskUsedPct(dir: string): Promise<number> {
+/**
+ * Is the replica caught up with the database?
+ *
+ * **Behind, never "not written recently"** (D-59). litestream writes only when there is
+ * something to replicate, so an idle database and a dead replicator look identical
+ * under a freshness test — and the freshness form cried wolf the first time it
+ * mattered, on a replica that was perfectly level.
+ *
+ * `unconfigured` is honest rather than green: a deployment that does not mount the
+ * replica folder cannot be asked this question, and answering "fine" would be a claim
+ * about something nobody looked at.
+ */
+async function replicaState(cfg: HeartbeatConfig): Promise<{ state: ReplicaState; behindSec?: number }> {
+  if (cfg.backupDir === undefined) return { state: "unconfigured" };
+
+  const newest = await newestMtime(cfg.backupDir);
+  if (newest === undefined) return { state: "absent" };
+
+  const db = await stat(join(cfg.dataDir, "lore.db")).catch(() => undefined);
+  if (db === undefined) return { state: "unconfigured" };
+
+  const behindSec = Math.max(0, Math.round((db.mtimeMs - newest) / 1000));
+  return behindSec > REPLICA_BEHIND_SEC ? { state: "behind", behindSec } : { state: "level", behindSec };
+}
+
+/** Newest mtime anywhere under a directory, or undefined if it holds no files. */
+async function newestMtime(dir: string): Promise<number | undefined> {
+  let newest: number | undefined;
+  const entries = await readdir(dir, { withFileTypes: true, recursive: true }).catch(() => undefined);
+  if (entries === undefined) return undefined;
+  for (const e of entries) {
+    if (!e.isFile()) continue;
+    const s = await stat(join(e.parentPath, e.name)).catch(() => undefined);
+    if (s !== undefined && (newest === undefined || s.mtimeMs > newest)) newest = s.mtimeMs;
+  }
+  return newest;
+}
+
+async function diskUsedPct_(dir: string): Promise<number> {
   try {
     const s = await statfs(dir);
     const total = Number(s.blocks) * Number(s.bsize);
@@ -87,6 +174,23 @@ export function startHeartbeat(store: Store, cfg: HeartbeatConfig, alerter: Aler
     }
     if (health.queueDepth >= cfg.queueWarnDepth) {
       await alerter.send(CONDITIONS.queueBacked(health.queueDepth));
+    }
+
+    // The knowledge base IS the product and this device has no redundancy, so these
+    // are pages. Both were dead conditions until now: `spec/operations.md` §2.1 has
+    // listed the replica under "someone should look now" the whole time, and nothing
+    // ever sent it — the only replica check lived in `make status`, which is a command
+    // a human runs, and a page nobody is paged by is not a page.
+    if (health.replica === "absent") await alerter.send(CONDITIONS.backupAbsent());
+    else if (health.replica === "behind") {
+      await alerter.send(CONDITIONS.backupBehind(Math.round((health.replicaBehindSec ?? 0) / 60)));
+    }
+
+    // A ticket, not a page: one review parked on a question is normal, a pile of them
+    // ageing means nobody is answering, and every one of them blocks a review from
+    // ever passing (spec/knowledge.md §7.2).
+    if (health.needsHumanOverAge > 0) {
+      await alerter.send(CONDITIONS.needsHumanAgeing(health.needsHumanOverAge, cfg.needsHumanAgeHours));
     }
 
     if (cfg.url !== undefined) {

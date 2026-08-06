@@ -57,12 +57,39 @@ export class Alerter {
   }
 }
 
-/** The routing table from spec/operations.md §2, as data. */
+/**
+ * The routing table from spec/operations.md §2, as data.
+ *
+ * Every member here must have a caller. Three of them did not for the whole of this
+ * service's life — `backupStale`, `providerAuthFailed` and `needsHumanAgeing` — while
+ * `spec/operations.md` §2.1 listed two of them under *page, someone should look now*.
+ * `one-definition.test.ts` passed throughout, because it asks whether the exported
+ * CONTAINER is read and `CONDITIONS` is read by three modules. It checks members now.
+ */
 export const CONDITIONS = {
-  backupStale: (hours: number): Alert => ({
+  /**
+   * Measured as BEHIND THE DATABASE, never as "not written recently" (D-59).
+   *
+   * The freshness form is what this used to be, and it is why the host-side check was
+   * rewritten: litestream writes only when there is something to replicate, so an idle
+   * database and a dead replicator are identical under a freshness test. It cried wolf
+   * the first time it mattered — the newest replica file and the last write to
+   * `lore.db` carried the same timestamp to the second, and the monitor called it
+   * stale. A page that fires on a healthy service gets muted, and this one guards the
+   * product.
+   */
+  backupBehind: (minutes: number): Alert => ({
     severity: "page",
-    condition: "backup replication stale",
-    detail: `no replication for ${hours}h — the knowledge base IS the product, and this device has no redundancy`,
+    condition: "backup replica behind the database",
+    detail:
+      `the database has changed and the replica has not, for ${minutes}m — the knowledge base IS ` +
+      "the product, and this device has no redundancy",
+  }),
+  /** No replica at all is worse than a late one: there is nothing to restore from. */
+  backupAbsent: (): Alert => ({
+    severity: "page",
+    condition: "backup replica missing",
+    detail: "replication has never written anything — a restore is impossible right now",
   }),
   diskCritical: (pct: number): Alert => ({
     severity: "page",
