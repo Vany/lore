@@ -597,6 +597,25 @@ landing with a real user, and it should not get lost among the defects below.
       Unmeasured, and the thing most worth knowing: whether these models produce *good*
       architectural ideas at all. Best first customer for the harness below.
 
+- [ ] **Changing `LORE_TIERS` silently rebinds every open review's cursor.** Found
+      2026-08-06 by doing it: the deployment was switched to a Kimi-only ladder to
+      prove that tier, then back to the three-vendor one, with a review open in
+      `findings_ready`.
+      `LadderState.cursor` is *"index into the tier list"* and `step()` resolves it as
+      `tiers[prev.cursor]` (`core/ladder.ts:256`) against whatever config is loaded
+      NOW. A review that ran `[t0, t1=kimi]` and stopped at cursor 1 resumes on
+      `[t0, t1=glm, t2=kimi, t3=openai]` with cursor 1 meaning glm — so `tier_run`
+      would carry two rows both called `t1`, naming different models and vendors, in
+      the one table that exists to say whether a review really ran. Not a crash: a
+      corrupted audit trail, which is worse.
+      It also invalidates what was already recorded. That review carries `soleVendor`,
+      true of the ladder it ran on and false of the one it would finish on.
+      Options: pin the resolved tier list into the review row at creation and read it
+      back (most honest, and makes an attestation describe what actually ran); or
+      refuse to resume a review whose recorded tiers no longer match config, which is
+      louder and cheaper. Either way `review_start` should record the ladder, not just
+      an index into a file that can be swapped.
+
 - [ ] **Nothing watches the one disk fact that is ours.** The host-disk alerts are gone
       (2026-08-06): a full disk belongs to whoever owns the machine, exactly as a
       failing suite belongs to whoever owns the repository (D-71), and lore was
