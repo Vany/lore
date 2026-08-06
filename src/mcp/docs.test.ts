@@ -31,6 +31,42 @@ const ALL_DOCS: readonly [string, string][] = [
   ["REVIEW_PROMPT_TEXT", REVIEW_PROMPT_TEXT("b", "i", "t")],
 ];
 
+// THE MOST EXPENSIVE INSTRUCTION THIS SERVICE EVER SHIPPED, and it was in seven
+// strings. "Poll again in 10s, backing off to 60s" against a measured t1 median of 323s
+// and t2 of 820s tells a client to make seven to fifteen calls that cannot return
+// anything — and for an agent client each is a turn. The interval now comes from
+// `check_back_note`, computed per tier from real round times, so no document may carry
+// a hard-coded one: two sources for the same number is how they come to disagree.
+describe("no document hard-codes a polling interval", () => {
+  it.each(ALL_DOCS)("%s names no fixed seconds to poll at", (_name, text) => {
+    const intervals = text.match(/\b\d+\s*s\b(?![a-z])/gi) ?? [];
+    expect(intervals).toStrictEqual([]);
+  });
+
+  it.each(ALL_DOCS)("%s does not tell a client to back off", (_name, text) => {
+    expect(text).not.toMatch(/back(ing)? off/i);
+  });
+});
+
+// A SESSION ENDS AND TAKES ITS SUBSCRIPTION WITH IT; the review does not end with it.
+// D-70 measured abandonment as the dominant cause of wasted reviews, and no
+// notification can reach a client that has gone — so the only thing that closes the
+// loop is the next session asking what is waiting. Both loop documents must say so
+// before they say anything else, because a client reads them top-down.
+describe("the loop starts by asking what is already waiting", () => {
+  const loops: readonly [string, string][] = [
+    ["RESOURCE_DOCS[lore://docs/workflow]", RESOURCE_DOCS["lore://docs/workflow"]?.text ?? ""],
+    ["REVIEW_PROMPT_TEXT", REVIEW_PROMPT_TEXT("b", "i", "t")],
+  ];
+
+  it.each(loops)("%s opens with review_inbox, before review_start", (_name, text) => {
+    const inbox = text.indexOf("review_inbox");
+    const start = text.indexOf("review_start");
+    expect(inbox).toBeGreaterThan(-1);
+    expect(inbox).toBeLessThan(start);
+  });
+});
+
 describe("the docs name tools that exist", () => {
   // The registered names, which is the only thing a client can call. Kept here
   // rather than imported because buildServer needs a Principal and a Store, and the

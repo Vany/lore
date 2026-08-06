@@ -59,9 +59,10 @@ yours. Subscribe, poll once, then wait.
 
 If subscriptions/listen is unavailable or errors, THAT IS NORMAL AND NOT A FAULT IN
 LORE: the method needs a 2026-07-28 connection, and many hosts still negotiate the
-2025 one. Do not report it as a problem. Fall back to review_poll — start at 10s, back
-off to 60s. That works and is the older way; it is a fallback only because it makes you
-spend your turn waiting for something that could have woken you.
+2025 one. Do not report it as a problem, and do not go looking for a way to enable it.
+Use review_poll instead — but ONE call at a time, at the interval its own
+\`check_back_note\` gives you. That interval is measured from this repository's actual
+round times; a tight retry loop is the most expensive thing a client can do here.
 
 Check the acknowledgement, do not assume. The ack echoes the subscriptions the server
 agreed to serve; if yours is not in it, you are not subscribed and nothing will ever
@@ -168,7 +169,9 @@ ONLY \`passed\` means the branch is clean.
   has decided, call knowledge_resolve with the id to keep — or knowledge_escalate if
   they cannot decide either.
 
-While queued or running, wait and poll again — start at 10s, back off to 60s. An
+While queued or running, wait and poll again ONCE at the interval \`check_back_note\`
+gives — the median round for the tier now working, measured on this repository, before
+which nothing can have happened. An
 absence of findings so far is not a clean result.
 
 WHAT EACH FINDING CARRIES.
@@ -381,8 +384,18 @@ the attestation does not describe what is there now.
 `.trim(),
 
   inbox: `
-Deep findings across ALL your open reviews, since you last collected. Use this rather
-than polling each review individually once you have several in flight.
+THE FIRST CALL OF EVERY SESSION. Deep findings across ALL your open reviews, since you
+last collected.
+
+A review outlives the session that started it. You end; your subscription ends with
+you; the review does not — it sits in findings_ready holding a worktree until it is
+abandoned after 48h, having concluded NOTHING about the code. That is the dominant
+cause of wasted reviews here, measured: nothing obliges a client to come back, and no
+notification can reach one that has gone.
+
+So the thing that actually closes the loop is the next session asking what is waiting.
+That is this call. Make it before you start a new review — not instead of polling one
+you are already driving.
 
 Surface \`needs_human\` and high-severity findings to your user through whatever
 alerting you have. Do not merely log them. lore cannot notify anyone — it returns
@@ -474,14 +487,18 @@ export const RESOURCE_DOCS: Readonly<Record<string, { title: string; priority: n
     title: "The review loop, end to end",
     priority: 1.0,
     text: `
+0. review_inbox() — FIRST, before starting anything. A review you started in an
+   earlier session is still open and still yours; nothing else will finish it, and
+   nobody is going to tell you. A session ends and takes its subscription with it, so
+   asking is the only thing that survives you.
 1. review_start(branch, into, ticket) → review_id
-2. SUBSCRIBE, do not loop:
+2. If your host can subscribe, do:
    subscriptions/listen { notifications: { resourceSubscriptions: ["lore://review/<id>"] } }
    You are woken by notifications/resources/updated when the review's STATE changes —
    that is the moment there is something to do, and nothing else wakes you. Check the
    ack: if your URI is not in the filter the server echoes back, you are NOT subscribed.
-   Fall back to review_poll (10s, backing off to 60s) if your host cannot subscribe —
-   that is common (the method needs a 2026-07-28 connection), not a fault to report.
+   Most hosts cannot subscribe — the method needs a 2026-07-28 connection — and that is
+   normal, not a fault to report. Without it, step 3 is the whole loop.
 3. review_poll(review_id) ONCE, straight after subscribing — a subscription has no
    replay, so whatever happened before the stream opened arrives no other way. Then on
    each wake, review_poll again; it returns only what is new.
@@ -609,14 +626,16 @@ by a peer; you are being audited. Treat findings as evidence to investigate, not
 opinions to argue with.
 
 The loop:
+0. review_inbox() — FIRST. A review from an earlier session is still open and still
+   yours, and nothing but this call will tell you.
 1. review_start(branch: "${branch}", into: "${into}", ticket: <paste the ticket, do not summarise>)
-2. SUBSCRIBE, do not loop:
+2. If your host can subscribe, do:
    subscriptions/listen { notifications: { resourceSubscriptions: ["lore://review/<id>"] } }
    You are woken by notifications/resources/updated when the review's STATE changes —
    that is the moment there is something to do, and nothing else wakes you. Check the
    ack: if your URI is not in the filter the server echoes back, you are NOT subscribed.
-   Fall back to review_poll (10s, backing off to 60s) if your host cannot subscribe —
-   that is common (the method needs a 2026-07-28 connection), not a fault to report.
+   Most hosts cannot subscribe — the method needs a 2026-07-28 connection — and that is
+   normal, not a fault to report. Without it, step 3 is the whole loop.
 3. review_poll(review_id) ONCE, straight after subscribing — a subscription has no
    replay, so whatever happened before the stream opened arrives no other way. Then on
    each wake, review_poll again; it returns only what is new.

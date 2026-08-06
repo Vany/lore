@@ -14,11 +14,12 @@ import { McpServer, ResourceTemplate } from "@modelcontextprotocol/server";
 import * as z from "zod";
 import { absent } from "../core/optional.ts";
 import { worstSeverity } from "../core/finding.ts";
-import { initialState } from "../core/ladder.ts";
+import { initialState, type LadderState } from "../core/ladder.ts";
 import { isAttestable, isClean, isTerminal, type ReviewState } from "../core/review-state.ts";
 import { DEFAULT_TYPE, reviewType, reviewTypeIds } from "../core/review-type.ts";
 import { applyPatch, treeHash } from "../git/repo.ts";
 import { enrich, renderEnrichment } from "../knowledge/enrich.ts";
+import { paceFor, paceNote } from "../ops/pace.ts";
 import { buildVex, findingsNeedingTriage, renderVex } from "../security/vex.ts";
 import { FINDING_ORDER_SQL } from "../store/schema.ts";
 import { isSettled, type Store } from "../store/store.ts";
@@ -44,6 +45,28 @@ export interface ServerDeps {
 }
 
 const text = (s: string) => ({ content: [{ type: "text" as const, text: s }] });
+
+/**
+ * What to tell a client that has nothing to do but wait, or `{}` when it does.
+ *
+ * Only the waiting states get a number. In `findings_ready` the next move belongs to
+ * the client, and handing it an interval there would read as permission to sleep on
+ * findings that are already its problem — the abandonment D-70 measured.
+ *
+ * The tier is the one the ladder's cursor points at, which is the one now running or
+ * about to. It changes as the ladder climbs, and the note says so: a client that
+ * cached the first number would be using t1's median to wait for t2.
+ */
+function pacing(store: Store, review: { state: ReviewState; type: string; ladder: LadderState }): object {
+  if (!["queued", "running", "fast_clean"].includes(review.state)) return {};
+  const tier = reviewType(review.type).tiers[review.ladder.cursor];
+  if (tier === undefined) return {};
+  const pace = paceFor(store, tier.id);
+  return {
+    ...(pace === undefined ? {} : { check_back_after_ms: pace.ms }),
+    check_back_note: paceNote(pace),
+  };
+}
 
 /**
  * CSPRNG, never sequential.
@@ -72,7 +95,12 @@ function nextStep(state: ReviewState): string {
   switch (state) {
     case "queued":
     case "running":
-      return "Still working — this is NOT a result. Poll again in 10s, backing off to 60s. Do not merge, and do not report anything about the branch yet.";
+      // NOT "poll again in 10s". That instruction, against a measured t1 median of
+      // 323s and t2 of 820s, buys seven to fifteen calls that cannot return anything
+      // — and for an agent client each is a turn. `check_back_after_ms` in the same
+      // response is the measured answer; this string points at it rather than
+      // repeating a number that would then have two sources.
+      return "Still working — this is NOT a result. Read `check_back_note`, leave, and make ONE call when it says. Do not merge, and do not report anything about the branch yet.";
     case "findings_ready":
     case "awaiting_diff":
       return "ACT NOW: answer every finding below — fix it, or write the `justify_with` line at the site — then call review_submit with your diff and tree hash. THE REVIEW DIES IF YOU STOP HERE: it is abandoned after 48h and concludes nothing, and this branch stays unreviewed.";
@@ -224,11 +252,12 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           // is how it survived the rewrite that moved every text in that file to
           // subscribe-first. A tool description may or may not be in the model's
           // context by the time this returns; the response note always is.
+          ...pacing(store, { state: "queued", type: rt.id, ladder: initialState(rt.tiers) }),
           note:
-            "Started. This does NOT mean it finished. SUBSCRIBE: subscriptions/listen " +
-            `{ notifications: { resourceSubscriptions: ["lore://review/${id}"] } }, then review_poll ` +
-            "ONCE (a subscription has no replay), then wait to be woken. If your host cannot " +
-            "subscribe — common, and not a fault — poll from 10s backing off to 60s until a terminal state.",
+            "Started. This does NOT mean it finished, and NOTHING can have happened yet. Read " +
+            "`check_back_note`, go and do something else, and make ONE call when it says. If your host " +
+            "supports subscriptions/listen — most do not — subscribe to " +
+            `\`lore://review/${id}\` as well and you will be woken instead of having to return.`,
         }),
       );
     },
@@ -339,6 +368,7 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
             };
           }),
           open_count: store.openFindings(review_id).length,
+          ...pacing(store, review),
           // Deterministic, known in milliseconds, and the fact a landing decision
           // actually turns on. It was reaching the reviewer's prompt and stopping
           // there, so a client triaging eight open pull requests would have needed

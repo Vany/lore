@@ -1039,13 +1039,24 @@ against the review's owner and the token's liveness (`spec/mcp-api.md` §2.0.2).
 t2 against the commit that added subscriptions, which is D-77 doing its job on the change
 that made it possible.
 
-One measured fact reshapes the ordering above: `subscriptions/listen` exists **only on a
-2026-07-28 connection**, and the official client SDK negotiates the 2025 era by default.
-A client that connects the ordinary way cannot subscribe however much lore advertises.
-So subscription is the *designed* path and the one the docs lead with, while polling is
-what most clients will actually do until a specific client is shown to negotiate up —
-and the tool texts now say that a failed subscribe is normal rather than a lore fault,
-because "client reports lore as broken" is the failure this project keeps having.
+**Built, correct, and unreachable from the only client we have.** Measured 2026-08-06:
+Claude Code parses `resources.subscribe: true`, records it, and gives the model no verb
+that can send `subscriptions/listen`. The negotiated revision does not matter, because
+there is nothing to reach the method with on either one. The evidence had been sitting
+in the tests all along — they are driven by a hand-built SDK client because the harness
+offers no other way to open that stream.
+
+**And the deeper reason it will stay that way: an agent client is not a process.** It
+exists inside a turn; between turns there is no recipient for a notification. A harness
+would have to convert one into a new turn, which lore cannot influence. So the job is
+not *"wake the client"* but **make leaving cheap, and make "when to come back" a
+measured answer** — `check_back_after_ms` from `usage.latency_ms`, and `review_inbox`
+as the first call of every session, because a session ends, its subscription dies with
+it, and only the next session asking survives that.
+
+The subscription surface stays exactly as built: correct, tested, free to keep, and
+ready the day a harness wires notifications to turns. What it no longer does is open
+the tool descriptions with an instruction the only real client cannot execute.
 
 `[OPEN]` — the conversation half. Two questions before it ships: whether a long
 conversation is cheaper or dearer than repeated cold rounds, measured rather than

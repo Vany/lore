@@ -789,28 +789,28 @@ watched the database and the log.
       in the two runs that hit the bound, count how many were about wording versus
       behaviour.
 
-- [ ] **Find out what Claude Code actually negotiates.** The subscription path is built
-      and the thing that decides whether it is ever used is still unmeasured — this is
-      the same "verify the platform, don't recall it" item as before, and it survived
-      the implementation rather than being answered by it.
+- [x] **Found out what Claude Code actually does.** Measured 2026-08-07, and the answer
+      made the question moot: it parses `resources.subscribe: true`, records it, and
+      exposes **no verb** that can send `subscriptions/listen` — so the negotiated
+      revision does not matter. Deeper: an agent client is not a process, it exists only
+      inside a turn, and between turns there is nothing for a notification to arrive at.
+      Lore cannot wake it and never will; only the harness could.
+      So the job became *make leaving cheap, and make "when to come back" a measured
+      answer* — `check_back_after_ms` and `review_inbox` as step 0. SPEC D-80 and
+      `spec/mcp-async.md` §4 carry the record; the subscription surface stays, correct
+      and unreached.
 
-      What IS measured (2026-08-06): the official client SDK defaults to
-      `versionNegotiation: 'legacy'`, and `subscriptions/listen` exists **only** on a
-      2026-07-28 connection. Connecting with the defaults and calling `listen()` throws
-      *"requires a 2026-07-28-era connection (negotiated: 2025-11-25)"* against a server
-      that is serving the modern era correctly. So the feature is reachable only by a
-      client that asks for the newer revision.
+- [ ] **Does `check_back_after_ms` actually change client behaviour?** Same shape as the
+      restart-refusal item: the number is shipped, the belief that a client will honour
+      it is a hypothesis, and no client has met it yet. Read the poll counts per review
+      after a day of real use and compare against the 10s-to-60s era. If clients keep
+      looping, the instruction is not the lever and something else is.
 
-      That makes polling the majority path, not the fallback for stragglers, and the
-      tool texts now say a failed subscribe is normal rather than a lore fault. If
-      Claude Code turns out to negotiate up, the ordering in `spec/mcp-async.md` §4 is
-      right as written and the abandonment problem (D-70) largely goes away; if it does
-      not, the subscription surface is dead code that costs nothing and buys nothing,
-      and that should be recorded rather than left looking like a feature.
-      **Measure it the way it must be measured:** point a client at the deployed
-      service and read what it sends. Not by reasoning about the SDK default — the
-      `.mcp.json` that could never have been pasted was wrong for weeks in exactly that
-      way (MEMO session 31).
+- [ ] **Nothing checks that the loop documents stay honest about `review_inbox`.**
+      There is a mechanical test that both name it before `review_start`, which is the
+      cheap half. The expensive half is whether a session actually calls it — measurable
+      from `delivered_at` on findings belonging to reviews older than the session that
+      collected them, and currently unmeasured.
 
 - [ ] **Auto-resolve a conflict whose rules can be ordered** (D-39, revised
       2026-08-06). Specced, not built. A person is called only when neither `source`

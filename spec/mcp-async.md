@@ -91,16 +91,27 @@ back off for. Everything about the loop is designed around it.
 
 `review_poll` stays, for two reasons, and neither is reluctance:
 
-**A client that never sends `subscriptions/listen` gets nothing**, and that is the
-common case rather than the odd one. The spec is explicit that a server may send only
-what was subscribed to; worse, `subscriptions/listen` exists only on a 2026-07-28
-connection, and a client on the official SDK negotiates the **2025 era by default**
-(`ClientOptions.versionNegotiation` defaults to `'legacy'` — measured, not read:
-`src/service/subscribe.test.ts` had to pin `2026-07-28` to reach the stream at all).
+**The client we actually have cannot subscribe at all, and the measurement is done.**
+Claude Code parses lore's `resources.subscribe: true`, records it, and exposes no verb
+to the model that can send `subscriptions/listen`. The negotiated protocol revision is
+therefore moot — there is no way to reach the method on either era. The evidence was in
+front of me the whole time and I did not read it: the tests in
+`src/service/subscribe.test.ts` are driven by a hand-built SDK client precisely because
+the harness offers no other way to open that stream.
 
-So the server offering subscriptions changes nothing for a client that connects the
-default way. Polling is not a courtesy to stragglers — it is what every unconfigured
-client will do, and the subscription path is a capability a client has to reach for.
+**And an agent client is not a process.** It exists inside a turn; between turns there
+is nothing for a notification to arrive at. Even with the verb, the harness would have
+to turn a notification into a new turn — machinery lore cannot reach and never will.
+The wake has to be initiated on the client's side.
+
+That retires the framing this section was written in. Lore's job is not *"wake the
+client"* — for the client we have, it cannot. It is:
+
+> **make leaving cheap, and make "when to come back" a measured answer.**
+
+Which is `check_back_after_ms` (`spec/mcp-api.md` §2.0.3), and `review_inbox` as the
+first call of every session — because a session ends, its subscription dies with it,
+and the only thing that survives is the next session asking what is waiting.
 
 **And a notification is a nudge, not a delivery.** It carries a URI and nothing else.
 Something still has to fetch the findings, and `review_poll`'s delta semantics — never
@@ -128,7 +139,5 @@ today and the one we are leaving.
    unknown and must be measured, not argued.
 2. **The deep tiers.** Whether they join the existing conversation, start their own, or
    read a transcript.
-3. **What Claude Code negotiates.** Answered for the official SDK client — legacy
-   unless configured otherwise (§4). Not answered for Claude Code itself, which is the
-   client we actually have; establish it by pointing one at the deployed service and
-   reading what it sends, not by reasoning from the SDK default.
+3. ~~**What Claude Code negotiates.**~~ Answered 2026-08-06 and the answer made the
+   question moot: it exposes no verb for `subscriptions/listen` on either era (§4).

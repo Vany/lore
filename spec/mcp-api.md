@@ -184,6 +184,39 @@ Raised by t2 against the commit that added subscriptions.
 So: subscription answers *when*, `review_poll` answers *what*, and polling remains the
 floor for every client that cannot reach the newer revision.
 
+### 2.0.3 When to come back, measured
+
+`review_start` and `review_poll` return `check_back_after_ms` while a review is
+`queued`, `running` or `fast_clean` — the **median completed round of the tier the
+ladder is currently on**, taken from `usage.latency_ms`. Not in `findings_ready`: there
+the next move belongs to the client, and an interval would read as permission to sleep
+on findings that are already its problem.
+
+**This is not the progress estimate §2 refuses.** *"How far along is this review"* stays
+unanswerable and stays refused. *"Nothing can have happened before the median round of
+this tier"* is a fact about the tier, and it replaces an instruction that was costing
+real money: every text used to say *"poll again in 10s, backing off to 60s"* against a
+measured t1 median of 323s and t2 of 820s — seven to fifteen calls that could not
+possibly return anything, each one a turn for an agent client.
+
+**It refuses rather than guesses**, on D-58's rule: fewer than 20 completed runs, or a
+p90/p10 spread above 6, and no number is offered. t3 is the live example — n=12 across
+126s–1691s, which is early refusals and real reviews pooled together, and a median of
+that describes nothing. Failed runs are excluded for the same reason: they measure how
+fast a tier can die.
+
+### 2.0.4 The templates are invisible to at least one real client
+
+`resources/templates/list` is a separate call from `resources/list`, and §2.0 has always
+said a client reading only the latter never sees the templates. **Measured 2026-08-06
+against Claude Code:** its resource-listing tool returns the five `lore://docs/*` and
+neither template. So `lore://review/{review_id}` — the resource the whole subscription
+design points at — is readable by a client that constructs the URI and undiscoverable by
+one that lists.
+
+The consequence is a documentation obligation, not a code one: every text that expects a
+client to read that resource must spell the URI out, because the client cannot find it.
+
 ### 2.1 `review_poll` returns deltas
 
 Each poll returns findings **new since the caller's last poll**, plus running

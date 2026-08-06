@@ -5,6 +5,70 @@ surprised me.
 
 ---
 
+## 2026-08-07 — session 36: the client cannot be woken, so make leaving cheap
+
+**Measured what session 35 assumed.** Claude Code parses lore's `resources.subscribe:
+true`, records it, and gives the model **no verb that can send `subscriptions/listen`**.
+The negotiated protocol revision is moot: there is nothing to reach the method with on
+either era.
+
+The evidence had been in my hands the whole previous session. `subscribe.test.ts` is
+driven by a hand-built SDK client *because my own harness offers no other way to open
+that stream* — I wrote that test, noticed nothing, and then wrote `research/…` §5 saying
+"establish what the client does by pointing one at it, not by reasoning". Then reasoned
+about it for six hours. Same failure as the `.mcp.json` that could never be pasted,
+committed inside the warning about it.
+
+**And the deeper reason it stays true: an agent client is not a process.** It exists
+inside a turn; between turns there is no recipient for a notification. Even with the
+verb, a harness would have to convert a notification into a new turn — machinery lore
+cannot reach. So the job is not "wake the client". It is **make leaving cheap, and make
+"when to come back" a measured answer.**
+
+**Three changes follow, and the first is the one that was actually costing money.**
+
+- **The backoff loop is gone.** Seven strings said *"poll again in 10s, backing off to
+  60s"*. Measured medians on this deployment: t1 **323s** (n=106), t2 **820s** (n=38).
+  So the shipped instruction was seven to fifteen calls that could not possibly return
+  anything, each one a turn for an agent. `src/mcp/docs.test.ts` now fails the suite if
+  any document names a fixed interval again.
+- **`check_back_after_ms`, from `usage.latency_ms`.** The median completed round of the
+  tier the ladder is on, returned by `review_start` and `review_poll` while waiting is
+  the right move — never in `findings_ready`, where an interval would read as permission
+  to sleep on findings that are already the client's problem. This is NOT the progress
+  estimate SPEC refuses: "how far along" stays unanswerable; "nothing can have happened
+  before this tier's median" is a fact about the tier. It **refuses** below 20 runs or a
+  p90/p10 spread over 6 — t3 is the live example at n=12 across 126s–1691s, two
+  populations pooled — and excludes failed runs, which measure how fast a tier can die.
+- **`review_inbox` is step 0 of every loop.** The real async surface, and it was already
+  built. A session ends and takes its subscription with it; the review does not end with
+  it. D-70 measured abandonment as the dominant cause of wasted reviews, and no
+  notification can reach a client that has gone — so the only thing that closes the loop
+  is the next session asking what is waiting. A mechanical test asserts both loop
+  documents name it before `review_start`.
+
+**Rejected: long-poll `review_poll(wait_ms)`.** Suggested, and it does not survive the
+arithmetic. An agent blocked in a 45s tool call is idle, not free, and 45s against t2's
+820s median is eighteen calls instead of fifteen. It only wins if the wait can approach
+the real latency, and the client timeout forbids that.
+
+**Also rejected: a `lore watch <id>` CLI** that blocks and exits on a state change, run
+as a background task so the harness's own wake fires. It would work — for a client that
+shares a host with lore. That is exactly the assumption D-65 was written to destroy.
+
+**Measured, and it changes a documentation obligation.** `ListMcpResourcesTool` against
+lore returns the five `lore://docs/*` and **neither template**. `resources/templates/list`
+is a separate call this client never makes, so `lore://review/{review_id}` — the resource
+the whole subscription design points at — is readable if you construct the URI and
+invisible if you list. Every text expecting a client to read it must spell the URI out.
+
+**The subscription surface stays exactly as built.** Correct, tested, free to keep, ready
+the day a harness wires notifications to turns. What it no longer does is open a
+permanently-resident tool description with an instruction the only real client cannot
+execute.
+
+---
+
 ## 2026-08-06 — session 35: the server can wake the client, and mostly won't be asked to
 
 **Built the subscription half of D-80.** `subscriptions/listen` on
