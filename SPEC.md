@@ -182,6 +182,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-69** | A token reaches **its own repository** and no other — scoping is per repo, not per principal | confirmed |
 | **D-70** | A finished review **gives its worktree back at once**, through git, not in a week | confirmed |
 | **D-71** | lore **reads** a test suite and never runs it; a failing suite is the repo owner's | confirmed |
+| **D-72** | A deploy **drains** — stop claiming, finish what is in flight, then swap | confirmed |
 
 **D-7, revised.** The earlier version dropped GLM-5.2 on Artificial Analysis's
 *cost per task* — which is tokens consumed × price on their benchmark, not a price.
@@ -851,6 +852,43 @@ A lockfile naming a manager the image does not carry — bun, which is a runtime
 not merely an installer — is reported as an **unavailable engine**. Installing with
 npm instead and presenting the result as that project's suite would be a confident
 claim about something that never ran.
+
+**D-72 — a deploy drains rather than interrupts, and blue/green is the wrong shape.**
+
+`make deploy` sets a drain flag, waits for in-flight rounds to finish, then rebuilds
+and starts. Draining affects **claiming only**: MCP keeps serving throughout, clients
+poll and submit and start reviews as normal, and new work simply queues for the next
+container. Nobody sees an error.
+
+**What a restart costs is model time, not state.** Everything is in SQLite, so
+nothing is lost — but `reclaimOrphanedJobs` requeues an interrupted round and it runs
+again from scratch, paid for twice. One morning that was 109 minutes of t2 work in a
+container that could have been drained first.
+
+**The flag must not survive the restart it was for**, and the starting process clears
+it — in code, so every start path is safe including a plain `docker compose up`. A
+persisted flag would mean a container that starts, claims nothing, and answers
+`/status` with `ok: true` while the queue grows: healthy and doing nothing, which is
+the failure this project exists to refuse. `/status` reports `draining` for the same
+reason — from outside, a drained service and an idle one look identical.
+
+**Two live containers is not a smaller version of this; it is a different and worse
+thing.** `reclaimOrphanedJobs` runs unconditionally at startup and requeues every job
+in `running` state — so a second container would requeue the rounds the first is
+actively working, and both would run them: two workers on one review, both writing
+findings, both stepping the ladder. Making that safe needs a worker identity and lease
+column so a process can tell its own orphans from another's live work, a file-based
+install lock instead of the in-process one, and a proxy for the port.
+
+It would buy nothing. MCP is stateless by construction (`sessionIdGenerator:
+undefined`) and every request is milliseconds; the only long-lived thing here is a
+background job, and a job does not need to be served by a particular container — it
+needs not to be killed halfway. Draining achieves that with a flag and a wait.
+
+**`make drain` says what it is waiting for** — review, branch, elapsed seconds — and
+times out loudly with a choice rather than hanging or quietly giving up. A deep tier
+legitimately takes twenty minutes; a stuck one never finishes, and only a person can
+tell those apart.
 
 **D-71 — lore reads a test suite and never runs it.**
 

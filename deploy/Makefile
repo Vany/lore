@@ -19,7 +19,7 @@ BACKUP  ?= $(shell grep -E '^LORE_HOST_BACKUP=' .env 2>/dev/null | cut -d= -f2)
 BACKUP  := $(if $(BACKUP),$(BACKUP),./backup)
 
 .DEFAULT_GOAL := help
-.PHONY: help preflight sync-opencode push build up down down-hard restart logs status status-json status-local doctor new relocate tokens replica-state mirror mirror-daemon mirror-daemon-off mirror-daemon-log backup-on backup-check backup-drill restore sweep shell
+.PHONY: help preflight sync-opencode push build drain drain-off deploy up down down-hard restart logs status status-json status-local doctor new relocate tokens replica-state mirror mirror-daemon mirror-daemon-off mirror-daemon-log backup-on backup-check backup-drill restore sweep shell
 
 help:
 	@sed -n '2,14p' $(MAKEFILE_LIST) | sed 's/^# \{0,1\}//'
@@ -72,6 +72,58 @@ push:
 ## rather than leaving everyone to assume it is current.
 STAMP = LORE_COMMIT="$$(git -C .. rev-parse --short HEAD 2>/dev/null || echo unknown)$$(git -C .. diff --quiet 2>/dev/null || echo -dirty)" \
         LORE_BUILT_AT="$$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+## Stop taking new rounds, let the ones in flight finish, then deploy (D-72).
+##
+##   make deploy               drain, wait, rebuild, start
+##   make drain                just drain and wait
+##   make drain-off            change your mind
+##
+## A restart loses no state — it is all in SQLite — but it throws away MODEL TIME:
+## an interrupted round is requeued and runs again from scratch, paid for twice. One
+## morning that cost 109 minutes of t2 work.
+##
+## MCP keeps serving throughout. Clients poll, submit and start reviews as normal;
+## new work simply queues and the next container runs it. Nobody sees an error.
+##
+## The flag does not survive the restart it was for: the starting process clears it,
+## so a forgotten drain cannot leave a service that answers ok while doing nothing.
+drain:
+	@$(COMPOSE) exec -T lore node -e "\
+	const {DatabaseSync}=require('node:sqlite'); \
+	const d=new DatabaseSync(process.env.LORE_DATA_DIR+'/lore.db'); \
+	d.prepare(\"INSERT INTO meta(key,value) VALUES('draining','1') ON CONFLICT(key) DO UPDATE SET value='1'\").run();"
+	@echo "draining — no new rounds will be claimed. Waiting for work in flight:"
+	@waited=0; limit=$${DRAIN_TIMEOUT:-1800}; \
+	while :; do \
+		out=$$($(COMPOSE) exec -T lore node -e "\
+		const {DatabaseSync}=require('node:sqlite'); \
+		const d=new DatabaseSync(process.env.LORE_DATA_DIR+'/lore.db',{readOnly:true}); \
+		const rows=d.prepare(\"SELECT j.review_id id, r.branch b, j.updated_at u FROM job j JOIN review r ON r.id=j.review_id WHERE j.state='running'\").all(); \
+		for (const x of rows) console.log('  '+x.id.slice(4,16)+'  '+x.b.slice(0,38)+'  '+Math.round((Date.now()-Date.parse(x.u))/1000)+'s'); \
+		console.log('COUNT '+rows.length);"); \
+		n=$$(printf '%s' "$$out" | sed -n 's/^COUNT //p'); \
+		printf '%s' "$$out" | grep -v '^COUNT ' || true; \
+		test "$$n" = "0" && { echo "  drained — nothing in flight."; break; }; \
+		test "$$waited" -ge "$$limit" && { \
+			echo; \
+			echo "STILL RUNNING after $$limit s. Nothing was killed and nothing is lost."; \
+			echo "A deep tier can legitimately take 20 minutes; a stuck one never finishes."; \
+			echo "Decide: wait longer (make drain DRAIN_TIMEOUT=3600), or accept the loss"; \
+			echo "and run 'make up' — the round will be requeued and re-run from scratch."; \
+			exit 1; }; \
+		sleep 10; waited=$$((waited + 10)); \
+	done
+
+drain-off:
+	@$(COMPOSE) exec -T lore node -e "\
+	const {DatabaseSync}=require('node:sqlite'); \
+	const d=new DatabaseSync(process.env.LORE_DATA_DIR+'/lore.db'); \
+	d.prepare(\"INSERT INTO meta(key,value) VALUES('draining','0') ON CONFLICT(key) DO UPDATE SET value='0'\").run();"
+	@echo "draining off — claiming resumed."
+
+## The deploy you actually want: nothing in flight is thrown away.
+deploy: drain up
 
 build: preflight
 	@$(STAMP) $(COMPOSE) --profile build-only build

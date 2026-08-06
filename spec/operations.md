@@ -125,7 +125,24 @@ Reclamation is therefore a routine duty rather than an error path. What must nev
 happen is an expired review reading as a clean one: `expired` is its own state, never
 `passed`, because a review somebody walked away from told us nothing about the code.
 
-## 6. Transport
+## 6. Deploying without throwing work away (D-72)
+
+    make deploy      drain, wait, rebuild, start
+    make drain       drain and wait, nothing else
+    make drain-off   change your mind
+
+The worker stops **claiming**; everything else keeps working. In-flight rounds run to
+completion, MCP serves normally, and new reviews queue for the next container.
+
+A restart loses no state — it is all in SQLite — but an interrupted round is requeued
+and re-run from scratch, so the cost is model time paid twice. `make drain` names what
+it is waiting for and times out loudly rather than hanging.
+
+The drain flag is cleared by the process that starts after it, so a forgotten drain
+cannot leave a service that reports healthy while claiming nothing. `/status` carries
+`draining`, because from outside a drained service and an idle one look the same.
+
+## 7. Transport
 
 A generic **outbound webhook**, with severity, condition, and a short human
 description. It works with Slack, Alertmanager, a Plane integration or a shell script

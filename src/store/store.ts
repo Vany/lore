@@ -1040,6 +1040,31 @@ export class Store {
     return row?.last_error ?? undefined;
   }
 
+  /**
+   * Stop claiming new rounds, so a deploy can wait for the ones in flight (D-72).
+   *
+   * A restart does not lose state — everything is here on disk — but it does throw
+   * away MODEL TIME: `reclaimOrphanedJobs` requeues an interrupted round and it runs
+   * again from scratch, paid for twice. One morning that cost 109 minutes of t2 work
+   * in a container that could have been drained first.
+   *
+   * In `meta` rather than a file because the job table is already the coordination
+   * point, and this is a fact about the same thing. Draining affects CLAIMING only:
+   * MCP keeps serving, new reviews still queue, and the next process runs them.
+   */
+  setDraining(on: boolean): void {
+    this.db
+      .prepare("INSERT INTO meta(key, value) VALUES('draining', ?) ON CONFLICT(key) DO UPDATE SET value = ?")
+      .run(on ? "1" : "0", on ? "1" : "0");
+  }
+
+  isDraining(): boolean {
+    const row = this.db.prepare("SELECT value FROM meta WHERE key = 'draining'").get() as
+      | Record<string, string>
+      | undefined;
+    return row?.["value"] === "1";
+  }
+
   reclaimOrphanedJobs(maxAttempts = 3): { readonly requeued: number; readonly failed: number } {
     return this.tx(() => {
       const failed = this.db

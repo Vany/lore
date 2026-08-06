@@ -66,6 +66,17 @@ export class Worker {
           " they were left mid-round by a worker that stopped",
       );
     }
+    // A DRAIN MUST NOT SURVIVE THE RESTART IT WAS FOR (D-72).
+    //
+    // This process is the one the drain was waiting for. If the flag persisted, the
+    // new container would start, claim nothing, and answer `/status` with ok: true
+    // while the queue grew for ever — healthy and doing nothing, which is the failure
+    // this project exists to refuse. Cleared here rather than in the Makefile so that
+    // every start path is safe, including a plain `docker compose up`.
+    if (this.store.isDraining()) {
+      this.store.setDraining(false);
+      console.error("[lore:log] startup: cleared a drain flag — this process is the one it was waiting for");
+    }
     this.running = true;
     const loops = Array.from({ length: this.cfg.concurrency }, () => this.loop());
     void Promise.allSettled(loops);
@@ -76,6 +87,13 @@ export class Worker {
 
   private async loop(): Promise<void> {
     while (this.running) {
+      // Draining: finish what is in flight, take nothing new. Checked before claiming
+      // rather than inside `claimJob`, so the store stays a store and the policy of
+      // when to stop working lives with the thing that works.
+      if (this.store.isDraining()) {
+        await sleep(this.cfg.pollMs);
+        continue;
+      }
       const job = this.store.claimJob();
       if (job === undefined) {
         await sleep(this.cfg.pollMs);

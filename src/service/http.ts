@@ -67,6 +67,9 @@ async function handle(
             commit: process.env["LORE_COMMIT"] ?? "unknown",
             built_at: process.env["LORE_BUILT_AT"] ?? "unknown",
           },
+          // Visible without a terminal: a drained service looks idle from outside,
+          // and "nothing to do" and "refusing to take work" are opposite facts.
+          draining: store.isDraining(),
           spend_today_by_tier: spendByTier(store, startOfDayIso()),
           // A ceiling that CANNOT fire must say so. Both providers are subscriptions,
           // so every usage row carries cost_usd = 0 and `spendToday: 0` against a $100
