@@ -38,7 +38,6 @@ export interface RoundInput {
   readonly principal: string;
   readonly worktree: string;
   readonly type: ReviewType;
-  readonly runTests?: boolean;
   /**
    * The deterministic layer, injectable exactly as `reviewer` is.
    *
@@ -94,7 +93,6 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   try {
     t0 = await (input.t0 ?? runT0)(worktree, {
       engines: type.t0,
-      ...(input.runTests !== undefined ? { runTests: input.runTests } : {}),
     });
   } catch (e) {
     store.closeTierRun(t0RunId, "failed");

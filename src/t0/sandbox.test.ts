@@ -34,8 +34,9 @@ describe("the installer follows the lockfile", () => {
     lock(file);
     const cmds = await commandsFor(dir);
     expect(cmds?.name).toBe(name);
+    // Install only. There is no `test` command any more (D-71): lore reads a suite
+    // and never runs it, so the toolchain carries nothing to run one with.
     expect(cmds?.install).toContain(name);
-    expect(cmds?.test).toContain(name);
   });
 
   // A repo with no lockfile at all is not an error: npm is the reasonable default

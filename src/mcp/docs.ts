@@ -413,7 +413,9 @@ case that most needs the record, because the line names what was skipped.
     title: "Why escalation exists",
     priority: 0.5,
     text: `
-T0  the repo's own tsc, eslint, ast-grep, semgrep and tests. Deterministic and free.
+T0  the repo's own tsc, eslint, ast-grep and semgrep. Deterministic and free.
+    lore READS your tests — coverage, and whether one asserts what its name claims —
+    and never RUNS them. A failing suite is yours to find; CI already tells you.
 T1  a cheap, fast model — the gate.
 T2  a stronger model, different vendor.
 T3  the strongest, different vendor again. The last line.

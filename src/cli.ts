@@ -37,7 +37,6 @@ lore — an independent reviewer that remembers the codebase
                      "is this code correct?", never "is this the right code?"
   --target <path>    repo to review (default: cwd)
   --type <id>        ${reviewTypeIds().join(" | ")} (default: ${DEFAULT_TYPE})
-  --run-tests        execute the target's test suite in a sandbox
   --db <path>        state file (default: $LORE_DATA_DIR/lore.db, else ~/.lore/lore.db)
   --json             machine-readable output only
 
@@ -52,7 +51,6 @@ interface Args {
   readonly ticket?: string;
   readonly target: string;
   readonly type: string;
-  readonly runTests: boolean;
   readonly db: string;
   readonly json: boolean;
 }
@@ -73,7 +71,6 @@ export function parseArgs(argv: readonly string[]): Args {
     ...(flag("ticket") !== undefined ? { ticket: flag("ticket") ?? "" } : {}),
     target: resolve(flag("target") ?? process.cwd()),
     type: flag("type") ?? DEFAULT_TYPE,
-    runTests: has("run-tests"),
     // LORE_DATA_DIR before the home directory, because the deployment sets it and a
     // container has no home worth writing to: `lore new` inside one died on
     // `EACCES: mkdir '/.lore'`, having ignored the data directory mounted beside it.
@@ -213,7 +210,6 @@ export async function main(argv: readonly string[]): Promise<ExitCode> {
         principal,
         worktree: args.target,
         type,
-        runTests: args.runTests,
       });
     } catch (e) {
       // lore-ok[178a57e7]: the finding says this marks the review failed without

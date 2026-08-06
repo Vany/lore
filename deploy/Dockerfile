@@ -25,7 +25,7 @@ COPY package.json package-lock.json ./
 # The docker CLIENT, and deliberately not Debian's `docker.io`, which would install
 # a daemon this image must never run.
 #
-# T0 executes the target's test suite by asking the HOST daemon, over the mounted
+# T0 runs the target's own tsc and eslint by asking the HOST daemon, over the mounted
 # socket, to start a SIBLING container (D-24). The socket was mounted from the
 # beginning and the client was not installed, so every attempt reported "docker not
 # found" and the sandbox was unreachable from the one service that uses it — the

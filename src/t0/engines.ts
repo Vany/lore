@@ -94,8 +94,6 @@ export function detect(worktree: string, engine: T0Engine): boolean {
     case "sbom":
     case "osv":
       return existsSync(join(worktree, "package.json"));
-    case "tests":
-      return existsSync(join(worktree, "package.json"));
     default:
       return false;
   }
@@ -106,7 +104,7 @@ export async function runEngine(worktree: string, engine: T0Engine): Promise<Eng
   // target's node_modules, so the service must never run them — `runner.ts` drives
   // them inside the sandbox. Falling through to "has no runner" would read as a
   // missing feature instead of a boundary.
-  if (engine === "tsc" || engine === "eslint" || engine === "tests") {
+  if (engine === "tsc" || engine === "eslint") {
     return {
       engine,
       findings: [],

@@ -59,7 +59,7 @@ code the previous tier already passed.
 
 | tier | engine | vendor | $/M in | $/M out |
 |:--|:--|:--|--:|--:|
-| **T0** | the repo's own `tsc` · `eslint` · `ast-grep` · `semgrep` · tests | — | free | free |
+| **T0** | the repo's own `tsc` · `eslint` · `ast-grep` · `semgrep` | — | free | free |
 | **T1** | GLM-5.2 | Z.ai | 0.28 | 0.89 |
 | **T2** | Kimi K3 | Moonshot | 3.00 | 15.00 |
 | **T3** | GPT-5.6 Sol Pro | OpenAI | 5.00 | 30.00 |
@@ -133,7 +133,7 @@ the whole loop — because **the client is an agent, so the docs are the interfa
                  │                     (three vendors, none of them the author)
                  ├── scheduler        per-provider concurrency, spend ceiling
                  ├── repo cache       a worktree per review, off a bare mirror
-                 ├── T0 sandbox       tests in a container holding NO secrets
+                 ├── T0 sandbox       tsc + eslint in a container holding NO secrets
                  └── SQLite + Litestream ──► local replica ──► your script ──► off-box
 
      you ──► make mirror ──► git ──► the bare mirror   (lore holds no credentials)

@@ -23,9 +23,11 @@ describe("parseArgs", () => {
     expect(parseArgs(["review"]).ticket).toBeUndefined();
   });
 
-  it("treats test execution as opt-in", () => {
-    expect(parseArgs(["review", "--ticket", "t"]).runTests).toBe(false);
-    expect(parseArgs(["review", "--ticket", "t", "--run-tests"]).runTests).toBe(true);
+  // D-71: lore reads a test suite and never runs it, so there is no flag to parse.
+  // `--run-tests` is accepted-and-ignored by nothing: it is simply not a flag, and an
+  // unknown flag is better than one that silently does nothing.
+  it("has no test-execution flag, because lore does not execute tests", () => {
+    expect(parseArgs(["review", "--ticket", "t"])).not.toHaveProperty("runTests");
   });
 });
 

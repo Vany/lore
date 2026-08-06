@@ -20,8 +20,6 @@ import {
   install,
   lockfileKey,
   runInSandbox,
-  runTests as runTestsIn,
-  testFindings,
   type SandboxConfig,
   type Toolchain,
 } from "./sandbox.ts";
@@ -43,8 +41,6 @@ export interface T0Result {
 export interface T0Options {
   readonly engines: readonly T0Engine[];
   readonly sandbox?: SandboxConfig;
-  /** Tests are opt-in per deployment: they execute arbitrary project code. */
-  readonly runTests?: boolean;
 }
 
 /**
@@ -82,14 +78,14 @@ export async function runT0(worktree: string, opts: T0Options): Promise<T0Result
 
   // Host-safe engines only: lore's own binaries, reading files.
   for (const engine of opts.engines) {
-    if (engine === "tsc" || engine === "eslint" || engine === "tests") continue;
+    if (engine === "tsc" || engine === "eslint") continue;
     outcomes.push(await runEngine(worktree, engine));
   }
 
   // Everything that needs the target's node_modules runs in the sandbox, together,
   // off one install.
   outcomes.push(
-    ...(await sandboxed(worktree, opts.sandbox ?? DEFAULT_SANDBOX, opts.engines, opts.runTests === true)),
+    ...(await sandboxed(worktree, opts.sandbox ?? DEFAULT_SANDBOX, opts.engines)),
   );
 
   const skipped = outcomes.filter((o) => o.skipped !== undefined).map((o) => o.skipped ?? "");
@@ -130,9 +126,8 @@ async function sandboxed(
   worktree: string,
   cfg: SandboxConfig,
   engines: readonly T0Engine[],
-  runTests: boolean,
 ): Promise<EngineOutcome[]> {
-  const wanted = engines.filter((e) => e === "tsc" || e === "eslint" || e === "tests");
+  const wanted = engines.filter((e) => e === "tsc" || e === "eslint");
   if (wanted.length === 0) return [];
 
   const cmds = await commandsFor(worktree);
@@ -201,13 +196,6 @@ async function sandboxed(
     const out: EngineOutcome[] = [];
     if (wanted.includes("tsc")) out.push(await checkTypes(cfg, worktree, cacheDir, scratch, cmds, scripts));
     if (wanted.includes("eslint")) out.push(await checkLint(cfg, worktree, cacheDir, scratch, cmds, scripts));
-    if (wanted.includes("tests")) {
-      out.push(
-        runTests
-          ? await suite(cfg, worktree, cacheDir, scratch, cmds, scripts)
-          : { engine: "tests", findings: [], unavailable: "test execution is disabled for this deployment" },
-      );
-    }
     return out;
   } finally {
     await rm(scratch, { recursive: true, force: true }).catch(() => undefined);
@@ -316,35 +304,6 @@ async function checkLint(
     : { engine: "eslint", findings: parsed };
 }
 
-async function suite(
-  cfg: SandboxConfig,
-  worktree: string,
-  cacheDir: string,
-  scratch: string,
-  cmds: Toolchain,
-  scripts: Record<string, string>,
-): Promise<EngineOutcome> {
-  if (scripts["test"] === undefined) {
-    return { engine: "tests", findings: [], unavailable: "this repository declares no `test` script" };
-  }
-  const tests = await runTestsIn(cfg, worktree, cacheDir, scratch, cmds);
-  if (tests.unavailable !== undefined && !tests.timedOut) {
-    return { engine: "tests", findings: [], unavailable: tests.unavailable };
-  }
-  // A timeout IS a fact about the suite and stays a finding — "did not finish" and
-  // "fails" are different claims and both are the branch's. A KILL is ours: the
-  // memory limit stopping a fan-out says nothing about the tests.
-  if (tests.code === KILLED && !tests.timedOut) {
-    return {
-      engine: "tests",
-      findings: [],
-      unavailable: `the suite was killed (exit ${KILLED}) — almost always the sandbox memory limit, not a failing test`,
-    };
-  }
-  return { engine: "tests", findings: testFindings(tests) };
-}
-
-
 /**
  * How many T0 findings the prompt lists before it stops. Unchanged from when this was
  * written — what changed is *which* ones survive the cut (see below).
@@ -359,7 +318,7 @@ export function renderT0(r: T0Result): string {
     parts.push("Deterministic tooling found nothing.");
   } else {
     // Worst first, and sorted BEFORE the cut. These arrive grouped by engine, in the
-    // order the review type lists them — `tsc, eslint, ast-grep, semgrep, tests` for
+    // order the review type lists them — `tsc, eslint, ast-grep, semgrep` for
     // code-arch — so 200+ eslint findings used to displace everything every later
     // engine said: semgrep's `high` findings, and the two the tests stage raises
     // (`installAndTest` above, and `testFindings` in sandbox.ts). Those findings are

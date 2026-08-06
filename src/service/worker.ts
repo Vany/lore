@@ -25,7 +25,6 @@ import { runRound } from "../reviewer/review.ts";
 
 export interface WorkerConfig {
   readonly reposRoot: string;
-  readonly runTests: boolean;
   /** How many rounds may run concurrently. CPU-bound on the deployment host. */
   readonly concurrency: number;
   readonly pollMs: number;
@@ -33,7 +32,6 @@ export interface WorkerConfig {
 
 export const DEFAULT_WORKER: WorkerConfig = {
   reposRoot: "/var/lib/lore/repos",
-  runTests: false,
   // T0 is the throughput bottleneck on an ARM SBC (D-37), and it is CPU-bound —
   // so this is set by cores, not by memory.
   concurrency: 2,
@@ -166,7 +164,6 @@ export class Worker {
       principal,
       worktree,
       type,
-      runTests: this.cfg.runTests,
     });
 
     switch (result.decision.kind) {

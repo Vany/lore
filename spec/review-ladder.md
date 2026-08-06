@@ -12,7 +12,7 @@ already passed.
 
 | Tier | Purpose | Engine | Int. | $/M in | $/M out | vendor |
 |---|---|---|---|---|---|---|
-| **T0** | deterministic | the **target repo's own** `tsc`, ESLint, tests, `ast-grep` | — | free | free | — |
+| **T0** | deterministic | the **target repo's own** `tsc`, ESLint, `ast-grep`, semgrep | — | free | free | — |
 | **T1** | cheap gate | `openrouter/z-ai/glm-5.2` | 51 | 0.28 | 0.89 | Z.ai |
 | **T2** | main reviewer | `openrouter/moonshotai/kimi-k3` | 57 | 3.00 | 15.00 | Moonshot |
 | **T3** | adversarial | `openrouter/openai/gpt-5.6-sol-pro` | 59 | 5.00 | 30.00 | OpenAI |
@@ -49,42 +49,21 @@ tooling, `lore` says so plainly rather than substituting its own opinion.
 T0 also removes the mechanical noise that would otherwise crowd out the findings
 only a model can produce.
 
-### 1.1.1 T0 executes the target's tests, in a container that holds nothing
+### 1.1.1 T0 does NOT execute the target's tests (D-71)
 
-Greptile built TREX because running code finds what reading cannot. T0 therefore
-runs the repo's test suite (D-24).
+lore **reads** a test suite — whether the change is covered, whether a test asserts
+what its name claims, whether a fix arrived without one — and never runs it. That
+reading is a model-tier job and one of the more valuable things the ladder does.
 
-That is **arbitrary code execution** — `npm test` runs whatever the repo and its
-entire dependency tree say, including lifecycle scripts. The threat is not the
-teammate; it is the dependency tree.
+A suite that fails belongs to whoever owns the repository, and their CI already tells
+them. Running it here meant executing an arbitrary dependency tree on the review host
+to rediscover a fact its owner has, and then reporting it as though lore had found
+something. The cost was real and the finding was not ours to make.
 
-**The test container is not the service container.** The service holds the knowledge
-database, the attestation signing key and every provider credential; one careless
-`postinstall` inside it reaches all three. So tests run in a **separate ephemeral
-container per review**:
-
-- no secrets mounted — no tokens, no signing key, no database. There are no git
-  credentials anywhere in the deployment to mount: lore does not fetch (D-65)
-- no network, or egress through a deny-by-default proxy
-- read-only root filesystem apart from the worktree
-- **runs as lore's own uid, not root** — not a security control (the container already
-  has no capabilities, no network and no host filesystem, and the threat is a careless
-  suite rather than a hostile one) but an ownership one: the cache and scratch
-  directories are reused across reviews, and root-owned leftovers in them break the
-  next review with a permission error in a directory it owns
-- CPU, memory and PID limits, and a **hard timeout**
-- destroyed after the run
-
-The worktree goes in; findings come out; nothing else crosses. The timeout is
-mandatory — a hung suite otherwise holds a review slot forever, and looks like a
-slow review rather than a stuck one.
-
-**The suite never runs in the reviewed tree.** Sources are mounted read-only at
-`/src` and copied to a throwaway `/work` per review. A suite that writes —
-snapshots, coverage, build output, a lockfile npm decides to update — would
-otherwise mutate the tree under review, and those files land in the next round's
-diff as findings about work nobody did. **A review that invents its own defects is
-worse than one that misses some.**
+**The sandbox stays, and D-24 still applies to it.** `tsc` and `eslint` resolve their
+binaries out of the target's `node_modules`, so the *install* still runs — and an
+install runs lifecycle scripts, with network. That is what the ephemeral container
+contains now:
 
 ### 1.1.2 A tier is told where it stands (D-31)
 

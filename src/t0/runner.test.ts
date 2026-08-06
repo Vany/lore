@@ -11,6 +11,7 @@
 import { describe, expect, it } from "vitest";
 import type { Finding } from "../core/finding.ts";
 import { renderT0 } from "./runner.ts";
+import { CODE_ARCH } from "../core/review-type.ts";
 import { runEngine } from "./engines.ts";
 import type { T0Engine } from "../core/review-type.ts";
 
@@ -70,7 +71,14 @@ describe("renderT0", () => {
 // out of the target's own `node_modules` — the same dependency tree the sandbox
 // exists to contain. The sandbox had a second door with no lock on it.
 describe("nothing the target controls runs in the service", () => {
-  it.each([["tsc"], ["eslint"], ["tests"]])("refuses to run %s on the host", async (engine) => {
+  // D-71: `tests` was in this list and is no longer an engine at all. lore reads a
+  // suite and never runs it, so there is nothing here to contain — the strongest
+  // version of the boundary, since code that is never executed cannot escape.
+  it("does not know about a test engine, because there is not one", () => {
+    expect(CODE_ARCH.t0).not.toContain("tests");
+  });
+
+  it.each([["tsc"], ["eslint"]])("refuses to run %s on the host", async (engine) => {
     const out = await runEngine(process.cwd(), engine as T0Engine);
     expect(out.findings).toStrictEqual([]);
     expect(out.unavailable).toMatch(/runs in the sandbox/);

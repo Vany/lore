@@ -273,7 +273,17 @@ landing with a real user, and it should not get lost among the defects below.
 
   </details>
 
-- [x] **T0 executes the target's suite** (D-60). Done 2026-08-04.
+- [x] **T0 executed the target's suite, and no longer does** (D-71 supersedes D-24).
+      Removed 2026-08-06 on Vany's call: *"we will analyze it but not run, if test
+      fails it is problem of repo owner."* Not disabled — removed. `tests` is not an
+      engine, `LORE_RUN_TESTS` is gone, and nothing in the sandbox knows how to invoke
+      a suite. Reading tests stays, and is a model-tier job.
+      It had shipped and produced the best finding lore ever made, then spent a day
+      reporting `tests: execution is disabled` on every single review — the `ast-grep`
+      problem in the entry where skimming costs most. The record of what it took to
+      make it work is below, because it is the honest history of a thing we removed.
+
+      **Originally:** done 2026-08-04.
       `LORE_RUN_TESTS=1`, and four faults had to be cleared before anything ran —
       the image had the docker socket but no client, the socket's group was not
       granted, the data directory did not mean the same thing inside the container

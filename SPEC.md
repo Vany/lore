@@ -134,7 +134,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-21** | Credentials in a header, never in the URL | **revised** |
 | **D-22** | `@modelcontextprotocol/server` v2 + Zod v4 schemas | confirmed |
 | **D-23** | `review_id` is CSPRNG and bound to its principal; possession ≠ auth | confirmed |
-| **D-24** | T0 *can* run the target's tests, contained — **off unless enabled** | **revised** |
+| **D-24** | *(superseded — lore reads a suite and never runs it; see D-71)* | superseded |
 | **D-25** | Build order was a walking skeleton: CLI did a real review first | done |
 | **D-26** | Operator status view: is parallelism running, or queueing? | confirmed |
 | **D-27** | Docs in three layers: tool descriptions, resources, prompts | confirmed |
@@ -181,6 +181,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-68** | A finding outside the diff from a pattern engine is **inherited**: reported, ranked last | confirmed |
 | **D-69** | A token reaches **its own repository** and no other — scoping is per repo, not per principal | confirmed |
 | **D-70** | A finished review **gives its worktree back at once**, through git, not in a week | confirmed |
+| **D-71** | lore **reads** a test suite and never runs it; a failing suite is the repo owner's | confirmed |
 
 **D-7, revised.** The earlier version dropped GLM-5.2 on Artificial Analysis's
 *cost per task* — which is tokens consumed × price on their benchmark, not a price.
@@ -851,6 +852,30 @@ not merely an installer — is reported as an **unavailable engine**. Installing
 npm instead and presenting the result as that project's suite would be a confident
 claim about something that never ran.
 
+**D-71 — lore reads a test suite and never runs it.**
+
+Test execution is gone: not disabled, not opt-in, removed. `tests` is no longer a T0
+engine, there is no `LORE_RUN_TESTS`, and nothing in the sandbox knows how to invoke a
+suite. Reading tests remains, and is a model-tier job — is the change covered, does a
+test assert what its name claims, did a fix arrive without one.
+
+**A failing suite belongs to whoever owns the repository.** Their CI runs it on every
+push and already tells them. Running it here meant executing an arbitrary dependency
+tree on the review host to rediscover a fact its owner has — real cost, real risk,
+and a finding that was never ours to make.
+
+This supersedes **D-24**, which made execution opt-in and defaulted it off.
+The honest history is that it shipped, produced its best-ever finding (a suite failing
+where GitHub's `--affected` check could not see it), and was then turned off by default
+the same day — after which every `code-arch` review carried a permanent
+`tests: execution is disabled` in its skipped list. An engine that reports NOT RUN on
+every review is the `ast-grep` problem in the entry that matters most: it trains a
+reader to skim the one list where skimming is expensive.
+
+**The sandbox stays and D-24 is unchanged.** `tsc` and `eslint` resolve their binaries
+out of the target's `node_modules`, so the *install* still runs, and an install runs
+lifecycle scripts with network. That is what the ephemeral container contains.
+
 **D-70 — a finished review gives its worktree back immediately.**
 
 A terminal review's worktree serves nothing. Its tree hash is already recorded,
@@ -1048,17 +1073,15 @@ entry already demonstrates works.
 state handle as authentication."* Cheap to build now; the moment a sequential id is
 stored anywhere, every log line becomes a credential.
 
-**D-24, revised — test execution is opt-in, and defaults to off.**
+**D-24 — the sandbox contains what the target controls.** *(Its test-execution half
+is superseded by D-71: lore reads a suite and never runs one.)*
 
-The containment holds: no network during the run, every capability dropped, no host
-filesystem, no docker socket, no sight of the database, hard limits and an ephemeral
-container. What changed is who decides. Running a repository's suite executes that
-repository's code and its entire dependency tree's code on the operator's machine,
-and a deployment file should not make that choice on their behalf. `LORE_RUN_TESTS=1`
-turns it on; the suite is otherwise reported as an unavailable check, which is a fact
-about the review rather than a silence.
+The containment holds and is still needed: no network during the run, every capability
+dropped, no host filesystem, no docker socket, no sight of the database, hard limits
+and an ephemeral container.
 
-**Off does not mean nothing executes.** `tsc` and `eslint` resolve through the
+**Because running nothing was never the same as executing nothing.** `tsc` and
+`eslint` resolve through the
 target's `node_modules`, so the install still runs — and an install runs lifecycle
 scripts, with network, because a registry needs one. Turning tests off narrows the
 exposure; it does not remove it. A deployment that wants none of it must accept that

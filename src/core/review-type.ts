@@ -17,7 +17,16 @@ import { UsageError } from "./errors.ts";
 import { loadTiers, type Tier } from "./ladder.ts";
 
 /** A deterministic engine run at T0. Names are resolved by the T0 runner. */
-export type T0Engine = "tsc" | "eslint" | "ast-grep" | "semgrep" | "tests" | "sbom" | "osv";
+/**
+ * A deterministic engine run at T0.
+ *
+ * `tests` is not one, and was (D-71). lore READS a test suite — whether the change is
+ * covered, whether a test asserts what its name claims — and never runs it. A suite
+ * that fails belongs to whoever owns the repository; discovering that is CI's job, and
+ * running it here means executing an arbitrary dependency tree on the review host for
+ * a result its owner already has.
+ */
+export type T0Engine = "tsc" | "eslint" | "ast-grep" | "semgrep" | "sbom" | "osv";
 
 export interface ReviewType {
   readonly id: string;
@@ -31,7 +40,7 @@ export interface ReviewType {
 export const CODE_ARCH: ReviewType = {
   id: "code-arch",
   description: "Correctness and design of a prepared merge, judged against its ticket and specs.",
-  t0: ["tsc", "eslint", "ast-grep", "semgrep", "tests"],
+  t0: ["tsc", "eslint", "ast-grep", "semgrep"],
   tiers: loadTiers(),
   question:
     "Is this change correct, well-made, and the change that was actually asked for?",

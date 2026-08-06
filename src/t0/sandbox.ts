@@ -17,7 +17,6 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { Finding } from "../core/finding.ts";
 import { runTool, type ToolResult } from "./exec.ts";
 
 export interface SandboxConfig {
@@ -211,7 +210,6 @@ export interface Toolchain {
    */
   readonly lockfile: string | undefined;
   readonly install: string;
-  readonly test: string;
   /** `<pm> run <script>`, for scripts the target declares itself. */
   readonly run: (script: string) => string;
 }
@@ -226,7 +224,6 @@ export async function toolchain(worktree: string): Promise<Toolchain | undefined
       name: "pnpm",
       lockfile: "pnpm-lock.yaml",
       install: "pnpm install --frozen-lockfile || pnpm install",
-      test: "pnpm test",
       run: (script) => `pnpm run ${script}`,
     };
   }
@@ -235,7 +232,6 @@ export async function toolchain(worktree: string): Promise<Toolchain | undefined
       name: "yarn",
       lockfile: "yarn.lock",
       install: "yarn install --immutable || yarn install",
-      test: "yarn test",
       run: (script) => `yarn run ${script}`,
     };
   }
@@ -250,7 +246,6 @@ const NPM: Toolchain = {
   name: "npm",
   lockfile: "package-lock.json",
   install: "npm ci --no-audit --no-fund || npm install --no-audit --no-fund",
-  test: "npm test --silent",
   run: (script) => `npm run --silent ${script}`,
 };
 
@@ -324,59 +319,3 @@ export async function install(
   );
 }
 
-/**
- * Run the suite with **no network at all**.
- *
- * A test that reaches the internet is not a test of this change, and a dependency
- * that phones home during a test run is exactly what we are guarding against.
- */
-export async function runTests(
-  cfg: SandboxConfig,
-  worktree: string,
-  cacheDir: string,
-  scratch: string,
-  cmds: Toolchain,
-): Promise<ToolResult> {
-  return runTool(
-    worktree,
-    cfg.runtime,
-    [
-      ...baseArgs(cfg, worktree, cacheDir, scratch),
-      "--network", "none",
-      cfg.image,
-      "sh",
-      "-lc",
-      // Re-synced because install may have rewritten a lockfile, and because the
-      // suite must see exactly the sources under review — not whatever the install
-      // phase left behind.
-      `${SYNC} && ${cmds.test}`,
-    ],
-    cfg.timeoutMs,
-  );
-}
-
-/**
- * Turn a failing suite into findings.
- *
- * Deliberately coarse: one finding for the suite, not one per assertion. The
- * models get the output and can be specific; T0's job here is to state the fact
- * that the suite fails, which no model should be paid to discover.
- */
-export function testFindings(result: ToolResult): readonly Finding[] {
-  if (result.ok) return [];
-
-  const tail = `${result.stdout}\n${result.stderr}`.trim().split("\n").slice(-40).join("\n");
-  return [
-    {
-      file: "package.json",
-      severity: "high",
-      claim: result.timedOut
-        ? "the test suite did not finish within the time limit"
-        : "the test suite fails on this branch",
-      evidence: tail.slice(0, 2000),
-      failureScenario: result.timedOut
-        ? "a hang or an unbounded wait; the suite never reports, so nothing downstream can be trusted"
-        : "the branch ships with failing tests, so any claim the tests make about it is void",
-    },
-  ];
-}

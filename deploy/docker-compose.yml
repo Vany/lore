@@ -71,22 +71,15 @@ services:
       # four concurrent cold installs comfortable) rather than guessing here.
       LORE_CONCURRENCY: "${LORE_CONCURRENCY:-12}"
       LORE_DAILY_CEILING_USD: "100"  # stops STARTING reviews when hit, never mid-review
-      # OFF by default, and deliberately (D-24 revised).
+      # LORE_RUN_TESTS is gone (D-71). lore READS a test suite — whether the change
+      # is covered, whether a test asserts what its name claims — and never runs one.
+      # A suite that fails belongs to whoever owns the repository, and CI already
+      # tells them. Running it here meant executing an arbitrary dependency tree on
+      # this host to rediscover something its owner has.
       #
-      # `npm test` runs whatever the repo and its whole dependency tree say. The
-      # sandbox contains it well — no network, no capabilities, no host filesystem,
-      # no docker socket, no sight of the database — but it is still someone else's
-      # code executing on the operator's machine, and that is a choice the operator
-      # makes rather than one this file makes for them.
-      #
-      # Set to "1" to turn it on. What you gain is the one finding no reader can
-      # produce: whether the suite actually passes on this branch.
-      #
-      # NOTE: this does not stop all execution. `tsc` and `eslint` resolve through
-      # the target's node_modules, so the INSTALL still runs — and an install runs
-      # lifecycle scripts, with network. Turning tests off narrows the exposure; it
-      # does not remove it.
-      LORE_RUN_TESTS: "0"
+      # The sandbox stays: `tsc` and `eslint` resolve their binaries out of the
+      # target's node_modules, so the INSTALL still runs, and an install runs
+      # lifecycle scripts. That is what D-24 contains now.
       LORE_TIERS: ${LORE_TIERS:-}     # unset = the three-vendor default ladder
       LORE_WEBHOOK_URL: ${LORE_WEBHOOK_URL:-}
       LORE_HEARTBEAT_URL: ${LORE_HEARTBEAT_URL:-}

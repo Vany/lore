@@ -23,7 +23,6 @@ export interface ServiceConfig {
   readonly host: string;
   readonly webhookUrl?: string;
   readonly heartbeatUrl?: string;
-  readonly runTests: boolean;
   readonly concurrency: number;
   readonly dailyCeilingUsd: number;
 }
@@ -77,7 +76,6 @@ export function configFromEnv(): ServiceConfig {
     host: env("LORE_HOST") ?? "0.0.0.0",
     ...(webhookUrl !== undefined ? { webhookUrl } : {}),
     ...(heartbeatUrl !== undefined ? { heartbeatUrl } : {}),
-    runTests: env("LORE_RUN_TESTS") === "1",
     // At least one: zero workers is a service that queues for ever in silence.
     concurrency: envNumber("LORE_CONCURRENCY", DEFAULT_WORKER.concurrency, 1),
     dailyCeilingUsd: envNumber("LORE_DAILY_CEILING_USD", DEFAULT_SPEND.dailyCeilingUsd),
@@ -98,7 +96,7 @@ export async function serve(cfg: ServiceConfig): Promise<() => void> {
 
   const worker = new Worker(
     store,
-    { ...DEFAULT_WORKER, reposRoot, runTests: cfg.runTests, concurrency: cfg.concurrency },
+    { ...DEFAULT_WORKER, reposRoot, concurrency: cfg.concurrency },
     alerter,
   );
   const stopWorker = worker.start();
