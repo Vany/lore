@@ -351,7 +351,21 @@ export async function applyPatch(worktree: string, patch: string): Promise<void>
   await new Promise<void>((resolve, reject) => {
     const child = execFile(
       "git",
-      ["apply", "--whitespace=nowarn", "-"],
+      // `--recount`: recompute each hunk's line counts from its content instead of
+      // trusting the `@@` header.
+      //
+      // A diff whose LAST line is a whitespace-only context line loses it in transit —
+      // an agent composes the diff as a tool-call argument and the trailing blank is
+      // stripped somewhere between there and here — which leaves a hunk one line
+      // shorter than its header claims. git rejects that as `corrupt patch at line 66`,
+      // a line number in a string the client itself composed, which is the least
+      // debuggable thing it could be told. Reproduced and verified: plain `apply` fails,
+      // `--recount` applies it correctly.
+      //
+      // Being lenient here cannot produce a silently wrong tree. `review_submit` hashes
+      // the result and compares it against the client's `tree_hash` (D-40), so a recount
+      // that guessed wrong fails loudly at that check instead of being reviewed.
+      ["apply", "--recount", "--whitespace=nowarn", "-"],
       {
         cwd: worktree,
         maxBuffer: 64 * 1024 * 1024,
@@ -361,7 +375,7 @@ export async function applyPatch(worktree: string, patch: string): Promise<void>
       },
       (err, _stdout, stderr) => {
         if (err) {
-          reject(new DidNotRun(`patch did not apply cleanly: ${String(stderr).trim().slice(0, 500)}`, err));
+          reject(new DidNotRun(describeApplyFailure(String(stderr)), err));
           return;
         }
         resolve();
@@ -369,4 +383,38 @@ export async function applyPatch(worktree: string, patch: string): Promise<void>
     );
     child.stdin?.end(patch);
   });
+}
+
+/**
+ * Say WHAT is malformed, not where.
+ *
+ * git's own message points at a line number in the patch — a string the client
+ * composed in memory and cannot open, so "line 66" is unusable to the one party that
+ * could fix it. Hit while driving a real review as a client: the message named a
+ * location in my own payload and told me nothing about what was wrong with it.
+ *
+ * Every branch here names the fault and what to do, and says plainly that NOTHING was
+ * applied — otherwise a client cannot tell whether to resend the whole diff or the
+ * remainder, and a half-applied tree is the state this whole path exists to refuse.
+ */
+function describeApplyFailure(stderr: string): string {
+  const detail = stderr.trim().slice(0, 500);
+  const nothing = "Nothing was applied; the worktree is unchanged, so resend the whole diff.";
+
+  if (/corrupt patch/i.test(detail)) {
+    return (
+      "the diff is malformed: a hunk's line count does not match its content, so git could not read it. " +
+      "The usual cause is a context line lost in transit — most often a trailing whitespace-only line at " +
+      "the very end of the diff. Send the diff exactly as `git diff` produced it, without trimming " +
+      `trailing whitespace or blank lines. ${nothing} (git: ${detail})`
+    );
+  }
+  if (/does not (apply|exist)|No such file/i.test(detail)) {
+    return (
+      "the diff does not apply to the tree under review. It was probably generated against a different " +
+      "base — the review is pinned to the tree it started with plus what you have already submitted " +
+      `(D-40), not to your branch as it stands now. ${nothing} (git: ${detail})`
+    );
+  }
+  return `the diff could not be applied. ${nothing} (git: ${detail})`;
 }

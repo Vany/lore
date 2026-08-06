@@ -198,6 +198,17 @@ Applied to the review's private worktree. Nothing is committed or pushed — you
 history stays yours. The tree_hash is verified after applying; a mismatch fails
 loudly rather than reviewing code that exists nowhere.
 
+SEND THE DIFF EXACTLY AS \`git diff\` PRODUCED IT. Do not trim trailing whitespace,
+drop blank lines, or reformat it — a unified diff is whitespace-significant, and a
+context line for a blank source line is a space followed by that line's own content.
+Losing the last one leaves a hunk shorter than its header claims. Both failures here
+name the fault rather than a position, because a line number would point into a string
+you composed in memory and cannot open, and both state plainly that NOTHING was
+applied — so resend the whole diff, never the remainder.
+
+Send EVERY file you changed. The tree hash covers the whole tree, so a diff missing
+one file is refused even though the diff itself applied cleanly.
+
 For a finding you believe is WRONG, do not skip it silently. Write at the site:
 
     // lore-ok[<fingerprint>]: <why this code is correct>
