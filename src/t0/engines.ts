@@ -17,7 +17,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Finding, Severity } from "../core/finding.ts";
 import type { T0Engine } from "../core/review-type.ts";
-import { gitlinks, type Gitlink } from "../git/repo.ts";
+import { gitlinks } from "../git/repo.ts";
 import { commitToFindings, queryCommit, queryComponents, toFindings } from "../security/osv.ts";
 import { generateSbom } from "../security/sbom.ts";
 import { runTool } from "./exec.ts";
@@ -203,22 +203,36 @@ async function osv(worktree: string): Promise<EngineOutcome> {
   // exactly this and had no caller — so on a repository that vendors by submodule,
   // which is how this workgroup ships (D-36), the security review enumerated
   // `package-lock.json` and reported clean about code it never looked at.
-  const links = await gitlinks(worktree).catch(() => [] as readonly Gitlink[]);
-  const bom = await generateSbom(worktree);
-
-  if (bom.components.length === 0 && links.length === 0) {
-    return { engine: "osv", findings: [], unavailable: bom.note ?? "nothing to query" };
-  }
-
+  // ENUMERATION IS INSIDE THE TRY, with the queries.
+  //
+  // It was `gitlinks(worktree).catch(() => [])`, which turned "I could not enumerate
+  // the submodules" into "there are no submodules" — after which the package half
+  // still answered and the result was presented as a complete enumeration. That is
+  // the silent skip this engine was being fixed to remove, preserved on its error
+  // path, and a reviewer raised it against the commit that introduced the fix.
+  //
+  // Removing the `.catch` alone was not enough and I nearly shipped that: the call sat
+  // OUTSIDE the try, so the failure would have escaped `osv()` entirely instead of
+  // reporting the engine unavailable — while a comment three lines above claimed it
+  // "falls through to the outer catch". A false sentence inside the fix for false
+  // sentences. Both halves are in the same try now, which is what makes the claim true.
   const findings: Finding[] = [];
   try {
+    const links = await gitlinks(worktree);
+    const bom = await generateSbom(worktree);
+
+    if (bom.components.length === 0 && links.length === 0) {
+      return { engine: "osv", findings: [], unavailable: bom.note ?? "nothing to query" };
+    }
+
     if (bom.components.length > 0) findings.push(...toFindings(await queryComponents(bom.components)));
     for (const link of links) {
       findings.push(...commitToFindings(link.path, link.commit, await queryCommit(link.commit)));
     }
     return { engine: "osv", findings };
   } catch (e) {
-    // A database we could not reach is not a database that said "clean".
+    // A database we could not reach is not a database that said "clean", and a tree we
+    // could not enumerate is not a tree with nothing in it.
     //
     // The WHOLE engine is unavailable, even if one half answered. Returning the
     // packages we did get while the submodule query died would present a partial
@@ -227,7 +241,7 @@ async function osv(worktree: string): Promise<EngineOutcome> {
     return {
       engine: "osv",
       findings: [],
-      unavailable: `OSV query failed: ${e instanceof Error ? e.message : String(e)}`,
+      unavailable: `OSV enumeration or query failed: ${e instanceof Error ? e.message : String(e)}`,
     };
   }
 }

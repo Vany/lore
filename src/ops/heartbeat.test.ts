@@ -113,6 +113,43 @@ describe("replica state", () => {
     expect(h.replica).toBe("behind");
     expect(h.replicaBehindSec ?? 0).toBeGreaterThan(REPLICA_BEHIND_SEC);
   });
+
+  // THE WAL IS WHERE WRITES GO. The store is in WAL mode, so `lore.db`'s mtime only
+  // advances on checkpoint — and with small rows that can be hours. Reading the main
+  // file alone made this blind in exactly the case it exists for: litestream dies,
+  // writes continue into an unflushed WAL, both watched timestamps freeze, `behindSec`
+  // clamps to zero, and it reports `level, ok: true, no page` while knowledge is
+  // written and replicated nowhere.
+  //
+  // Raised by a reviewer against the commit that introduced the monitor. Observed
+  // live: lore.db stamped 18:56 against a newest replica segment of 22:58 — four
+  // hours apart, in the wrong direction, reported as level.
+  it("sees a write that is still only in the WAL", async () => {
+    const backupDir = replicaAt(REPLICA_BEHIND_SEC + 600);
+    // A checkpoint long ago: the main file is OLDER than the replica, which alone
+    // would clamp to level.
+    const checkpointed = new Date(Date.now() - (REPLICA_BEHIND_SEC + 1200) * 1000);
+    utimesSync(join(dir, "lore.db"), checkpointed, checkpointed);
+    // ...and a write since, which exists only in the WAL.
+    writeFileSync(join(dir, "lore.db-wal"), "pages");
+
+    const h = await checkHealth(store, cfg({ backupDir }));
+    expect(h.replica).toBe("behind");
+    expect(h.ok).toBe(false);
+  });
+
+  // -shm is coordination, rewritten for reasons that are not writes. Counting it
+  // would report change where there was none — the opposite error, equally blind.
+  it("ignores the -shm file, which moves without a write", async () => {
+    const backupDir = replicaAt(60);
+    const old = new Date(Date.now() - (REPLICA_BEHIND_SEC + 1200) * 1000);
+    utimesSync(join(dir, "lore.db"), old, old);
+    writeFileSync(join(dir, "lore.db-wal"), "w");
+    utimesSync(join(dir, "lore.db-wal"), old, old);
+    writeFileSync(join(dir, "lore.db-shm"), "now");
+
+    expect((await checkHealth(store, cfg({ backupDir }))).replica).toBe("level");
+  });
 });
 
 describe("needs_human ageing", () => {

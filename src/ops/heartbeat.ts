@@ -131,11 +131,41 @@ async function replicaState(cfg: HeartbeatConfig): Promise<{ state: ReplicaState
   const newest = await newestMtime(cfg.backupDir);
   if (newest === undefined) return { state: "absent" };
 
-  const db = await stat(join(cfg.dataDir, "lore.db")).catch(() => undefined);
-  if (db === undefined) return { state: "unconfigured" };
+  const changed = await databaseChangedAt(cfg.dataDir);
+  if (changed === undefined) return { state: "unconfigured" };
 
-  const behindSec = Math.max(0, Math.round((db.mtimeMs - newest) / 1000));
+  const behindSec = Math.max(0, Math.round((changed - newest) / 1000));
   return behindSec > REPLICA_BEHIND_SEC ? { state: "behind", behindSec } : { state: "level", behindSec };
+}
+
+/**
+ * When the database last changed — **the WAL counts, and it is usually the only
+ * thing that moves.**
+ *
+ * The store runs in WAL mode (`store/schema.ts`), so a write lands in `lore.db-wal`
+ * and `lore.db`'s own mtime advances only on CHECKPOINT. Reading the main file alone
+ * made this monitor blind in precisely the case it was built for: litestream dies,
+ * writes continue into a WAL that has not reached SQLite's ~1000-page autocheckpoint
+ * threshold — and knowledge rows are small, so that is the ordinary case — the
+ * replica's newest segment freezes, `lore.db`'s mtime is older still, `behindSec`
+ * clamps to zero, and every beat reports `level, ok: true, no page` for hours while
+ * knowledge is written and replicated nowhere.
+ *
+ * Raised by Kimi on its first review round, against the commit that introduced the
+ * monitor. Observed on the live deployment while confirming it: `lore.db` stamped
+ * 18:56 against a newest replica segment of 22:58 — four hours apart, in the wrong
+ * direction, reported as level. It was *correct* only because litestream was alive;
+ * the arithmetic could not tell either way.
+ *
+ * `-shm` is deliberately not consulted: it is shared-memory coordination, rewritten
+ * for reasons that are not writes, so including it would report change where there
+ * was none — the opposite error, and just as blind.
+ */
+async function databaseChangedAt(dataDir: string): Promise<number | undefined> {
+  const db = await stat(join(dataDir, "lore.db")).catch(() => undefined);
+  if (db === undefined) return undefined;
+  const wal = await stat(join(dataDir, "lore.db-wal")).catch(() => undefined);
+  return Math.max(db.mtimeMs, wal?.mtimeMs ?? 0);
 }
 
 /** Newest mtime anywhere under a directory, or undefined if it holds no files. */

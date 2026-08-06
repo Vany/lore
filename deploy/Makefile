@@ -148,6 +148,7 @@ drain:
 	done
 
 drain-off:
+	$(wrong-directory)
 	@$(COMPOSE) exec -T lore node -e "\
 	const {DatabaseSync}=require('node:sqlite'); \
 	const d=new DatabaseSync(process.env.LORE_DATA_DIR+'/lore.db'); \
@@ -190,6 +191,7 @@ logs:
 ## Provision a repo: a revocable token and the .mcp.json to paste. No key is
 ## issued — lore does not fetch, `make mirror` does, as you (D-63).
 new: preflight
+	$(wrong-directory)
 	@test -n "$(NAME)" || { echo "usage: make new NAME=<who> GIT=<ssh-url> [URL=<mcp-url>]"; exit 1; }
 	@test -n "$(GIT)"  || { echo "usage: make new NAME=<who> GIT=<ssh-url> [URL=<mcp-url>]"; exit 1; }
 	$(COMPOSE) exec -T lore node /app/src/index.ts new \
@@ -214,6 +216,7 @@ new: preflight
 ## would attach one codebase's accumulated memory to another's code (D-14, D-19), and
 ## nothing downstream could notice.
 relocate:
+	$(wrong-directory)
 	@test -n "$(REPO)" || { echo "usage: make relocate REPO=<name|url|id> GIT=<new-url>"; exit 1; }
 	@test -n "$(GIT)"  || { echo "usage: make relocate REPO=<name|url|id> GIT=<new-url>"; exit 1; }
 	@id=$$($(COMPOSE) exec -T lore node -e "\
@@ -250,6 +253,7 @@ relocate:
 
 ## Check tiers, auth and model ids BEFORE spending a review on them.
 doctor:
+	$(wrong-directory)
 	$(COMPOSE) exec -T lore node /app/src/index.ts doctor
 
 ## What is happening right now, coloured, for a person.
@@ -313,6 +317,7 @@ tokens:
 ## rather than resolved — picking a winner would lock out a teammate and leave the
 ## leaked token live.
 revoke:
+	$(wrong-directory)
 	@test -n "$(TOKEN)" || { echo "usage: make revoke TOKEN=<short-hash>   (see: make tokens)"; exit 2; }
 	@$(COMPOSE) exec -T lore node /app/src/index.ts revoke --token $(TOKEN) --db $(DATA)/lore.db
 
@@ -387,6 +392,7 @@ mirror-daemon-log:
 	else journalctl --user -u lore-mirror.service -n 40 --no-pager; fi
 
 mirror:
+	$(wrong-directory)
 	@test -n "$(REPO)$(ALL)" || { \
 		echo "usage: make mirror REPO=<name|url|id>   (or ALL=1 for every repo)"; \
 		echo; echo "registered:"; \
@@ -450,7 +456,16 @@ replica-state:
 	test -f "$$db" || { echo "stale no database at $$db"; exit 0; }; \
 	n=$$(find "$(BACKUP)" -type f -name '*.ltx' 2>/dev/null | wc -l | tr -d ' '); \
 	test "$$n" -gt 0 || { echo "stale nothing in $(BACKUP) — replication has never written"; exit 0; }; \
-	dbt=$$(date -r "$$db" +%s 2>/dev/null || stat -c %Y "$$db"); \
+	@# THE WAL COUNTS, and it is usually the only thing that moves. SQLite is in WAL
+	@# mode, so a write lands in lore.db-wal and lore.db's own mtime advances only on
+	@# checkpoint. Reading the main file alone left this blind in exactly the case it
+	@# exists for: litestream dies, writes continue into an unflushed WAL, both
+	@# timestamps freeze, `behind` clamps to 0, and it reports level for hours.
+	@# Raised by a reviewer against the commit that introduced the monitor; the same
+	@# defect was in the TypeScript half (ops/heartbeat.ts) and both are fixed.
+	dbt=$$(for f in "$$db" "$$db-wal"; do \
+		test -f "$$f" && { date -r "$$f" +%s 2>/dev/null || stat -c %Y "$$f"; }; \
+	  done | sort -n | tail -1); \
 	rept=$$(find "$(BACKUP)" -type f -name '*.ltx' -exec sh -c 'date -r "$$1" +%s 2>/dev/null || stat -c %Y "$$1"' _ {} \; | sort -n | tail -1); \
 	behind=$$((dbt - rept)); \
 	if [ "$$behind" -gt 300 ]; then \
@@ -512,6 +527,7 @@ backup-check:
 ## the main file does not contain what is still in the WAL — a backup that looks like
 ## it worked and is missing the newest thing you did.
 backup-drill:
+	$(wrong-directory)
 	@set -e; D=$$(mktemp -d); trap 'docker rm -f lore-drill-ls >/dev/null 2>&1 || true; rm -rf $$D' EXIT; \
 	mkdir -p $$D/db $$D/replica; \
 	printf 'dbs:\n  - path: /var/lib/lore/lore.db\n    replicas:\n      - type: file\n        path: /replica/lore\n        sync-interval: 1s\n' > $$D/litestream.yml; \
@@ -541,6 +557,7 @@ restore:
 
 ## Force the retention sweep rather than waiting for the hourly one.
 sweep:
+	$(wrong-directory)
 	$(COMPOSE) exec -T lore node -e "\
 	import('/app/src/ops/retention.ts').then(async m => { \
 	  const {Store} = await import('/app/src/store/store.ts'); \
@@ -549,4 +566,5 @@ sweep:
 	  s.close(); });"
 
 shell:
+	$(wrong-directory)
 	$(COMPOSE) exec lore sh

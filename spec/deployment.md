@@ -138,6 +138,28 @@ limit — because queueing and running look identical from outside, which is the
 D-26, and until this existed the remote half could not queue at all. It just died.
 
 
+### 3.2 The tier files, and one that is not a ladder
+
+`LORE_TIERS` points at a tiers file that overrides the default ladder entirely
+(`spec/review-ladder.md` §1).
+
+| file | what it is |
+|---|---|
+| `tiers.zai-kimi-openai.json` | **the deployment's ladder** — Z.ai, Moonshot, OpenAI, one vendor per tier (D-74) |
+| `tiers.zai-openai.json` | the previous two-vendor ladder, kept for reference |
+| `tiers.kimi.json` | **not a ladder.** T0 plus Kimi alone, to exercise one tier deliberately |
+
+`tiers.kimi.json` exists because Kimi is T2 and every review either settled at t1 or
+failed before escalating, so a tier that was configured had never executed — and a
+tier that has never executed is not a working tier. Putting it first is the only way
+to make it run.
+
+**It cannot reach `passed`, by construction**: every model tier in it is Moonshot, so
+D-49 applies and `passed_partial` is the ceiling. That is correct and it is why this
+must never be the deployment's ladder. It is written here rather than in the file
+because the tier schema is `.strict()` and JSON has no comments — the same problem
+D-57 solved for justifications, and the reason a reader has to be told somewhere.
+
 ## 4. Resources
 
 | resource | note |

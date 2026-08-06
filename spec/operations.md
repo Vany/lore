@@ -37,13 +37,21 @@ a class** is an alert.
 
 ### 2.1 Page — someone should look now
 
-Every row here is **sent by the heartbeat or by the worker**. Three of them were not,
-for the whole of this service's life — the replica, provider auth, and ageing
-`needs_human` — while this table listed them. The conditions existed in
-`ops/alerts.ts` and nothing called them, and `one-definition.test.ts` passed because
-it asked whether the exported table was read rather than whether each route was. It
-checks members now. A page nobody is paged by is not a page, and a routing table that
-lists a route nobody dispatches is a claim about monitoring that does not exist.
+Every row here is **sent by the heartbeat or by the worker — except `heartbeat
+missed`, which by construction can be sent by neither.** That one is the deadman: it
+is the far end noticing our silence (§3), so no code in this service can raise it, and
+it is the only condition whose alerting path survives this service being dead. The
+distinction matters because auditing coverage is exactly what this preamble is for,
+and an unqualified "every row" told a reader that the watcher is watched from in here.
+It is not.
+
+Three of the rest were sent by nothing at all, for the whole of this service's life —
+the replica, provider auth, and ageing `needs_human` — while this table listed them.
+The conditions existed in `ops/alerts.ts` and nothing called them, and
+`one-definition.test.ts` passed because it asked whether the exported table was read
+rather than whether each route was. It checks members now. A page nobody is paged by
+is not a page, and a routing table that lists a route nobody dispatches is a claim
+about monitoring that does not exist.
 
 | condition | why it is urgent |
 |---|---|

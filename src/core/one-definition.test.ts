@@ -127,6 +127,34 @@ describe("an exported constant has a reader", () => {
 });
 
 /**
+ * A guard applied from a hand-written list is a guard with a hole in it.
+ *
+ * `$(wrong-directory)` was added to eight targets by naming them one at a time, and
+ * `revoke` was left off — so `make tokens` explained where the deployment runs and
+ * `make revoke`, three lines below it, answered with compose's bare "service lore is
+ * not running" at the moment an operator is killing a leaked credential. Found by a
+ * reviewer, not by re-reading the list.
+ *
+ * Same shape as the terminal states written out in six places: the second copy of a
+ * decision always disagrees eventually. Derived here instead — any target that reaches
+ * into the running deployment must carry the guard.
+ */
+describe("every target that touches the deployment is guarded", () => {
+  it("has $(wrong-directory) wherever it runs compose against the container", () => {
+    const makefile = readFileSync(join(SRC, "..", "deploy", "Makefile"), "utf8");
+    // Split into targets: a line starting at column 0 with `name:` begins one.
+    const blocks = makefile.split(/\n(?=[a-z][a-z0-9-]*:)/i);
+    const unguarded = blocks
+      .filter((b) => /\$\(COMPOSE\) exec/.test(b) && !/\$\(wrong-directory\)/.test(b))
+      .map((b) => (/^([a-z][a-z0-9-]*):/i.exec(b)?.[1] ?? "?"));
+    expect(
+      unguarded,
+      `these reach into the running container without checking they are pointed at it:\n  ${unguarded.join("\n  ")}`,
+    ).toStrictEqual([]);
+  });
+});
+
+/**
  * One number, two implementations, in two languages.
  *
  * `make status` has to answer whether the replica is behind while the SERVICE IS
