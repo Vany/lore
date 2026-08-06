@@ -43,6 +43,22 @@ export interface PromptInput {
  * one for whatever it already decided to report, and a wording nit acquires a
  * plausible consequence on the way out. Here it is the TEST instead: if you cannot
  * state it, you do not have a finding.
+ *
+ * **The third test was added 2026-08-07, and it is the one that cost a whole review.**
+ * t3 asked the question only the ticket makes possible — *"does this do what was
+ * asked?"* — read the diff's own paragraph saying one half was deliberately not built,
+ * CITED THAT PARAGRAPH AS ITS EVIDENCE, and raised the gap as a `medium` finding
+ * anyway. The check ran and the model ignored its own answer.
+ *
+ * Cost, measured: nothing changed (the answer could only ever be a `lore-ok`), and the
+ * reset it triggered consumed the last three rounds of the global budget. Without it
+ * the trace ended `t3 clean → passed` at round 10; with it the review stopped at 13.
+ * One finding, no defect, verdict destroyed.
+ *
+ * The question stays — a gap the author did NOT disclose is the finding of the night,
+ * and a reviewer cannot know in advance which it is, so it must look. What changes is
+ * what to do once it has looked: evidence that consists of the author saying "we did
+ * not do this" is the disclosure WORKING, and repeating it back is not review.
  */
 const BAR = [
   "WHAT COUNTS AS A FINDING",
@@ -62,6 +78,16 @@ const BAR = [
   "A prose or spec finding clears the same bar. Documents are reviewable here and drift is a real defect — but",
   "say WHO is misled and INTO DOING WHAT. A sentence that is merely imprecise is not a finding; a sentence that",
   "would make a reader call an API that does not behave that way is.",
+  "",
+  "  3. NOT ALREADY SAID. If your evidence is the change ITSELF stating that something was not done — a spec",
+  "     paragraph marking it open, a comment naming it as deferred, a TODO the diff adds — then the author did",
+  "     not miss it, test 2 fails, and you must NOT report it. That is the disclosure working, and repeating it",
+  "     back tells the author only what they wrote.",
+  "     An UNDISCLOSED gap between the ticket and the code is the most valuable thing you can find, so keep",
+  "     looking for one. A disclosed gap is a roadmap item: the only possible answer is 'yes, we know', and a",
+  "     finding no diff can settle costs the author a cycle and returns nothing.",
+  "     If the disclosure itself is wrong — the spec says 'not built' while a tool description promises it —",
+  "     THAT is a finding, and a good one: name who is misled and into doing what.",
   "",
   "Reporting less is not being lenient. Every finding costs the author a fix cycle, and a review that spends",
   "them on observations is one they learn to skim — which is how the real one gets skimmed too.",

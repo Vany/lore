@@ -1162,6 +1162,25 @@ else.
 prompts had no test at all, which is how they drifted into asking for volume in the
 first place.
 
+**Third test, added 2026-08-07 and paid for in advance.** *Not already said.* If a
+finding's evidence is the change ITSELF recording that something was not done — a spec
+paragraph marking it `[OPEN]`, a comment naming it deferred — then the author did not
+miss it, the second test fails, and it must not be reported.
+
+The evidence is one t3 round on this repository. It asked the question only the ticket
+makes possible, read the diff's own paragraph saying half the ask was deliberately not
+built, **cited that paragraph as its evidence**, and raised the gap as `medium` anyway.
+Nothing changed — the only possible answer was a `lore-ok` — and the reset it triggered
+consumed the last three rounds of the global budget: without it the trace ended `t3
+clean → passed` at round 10, with it the review stopped at 13. One finding, no defect,
+verdict destroyed.
+
+The question stays, and stays valuable: an **undisclosed** gap between ticket and code
+is the most useful thing a review can find, and a reviewer cannot know in advance which
+kind it is, so it must look. What changed is what to do once it has. And a disclosure
+that is itself false — the spec saying "not built" while a tool description promises it
+— remains a finding, and a good one.
+
 **Unmeasured, and that is the honest caveat.** Whether this produces better reviews is
 not yet known: `PLAN.md` Phase 1's measurement harness was never built, so the change
 rests on a diagnosis rather than on a before-and-after. The diagnosis is well-evidenced

@@ -68,6 +68,23 @@ describe("the bar for reporting anything", () => {
   // Documents are reviewable (D-11) and drift is real — the same review that produced
   // a pile of wording nits also caught a spec claim that was false because the CODE
   // was wrong. The bar is the same one, not an exemption.
+  // THE FINDING THAT COST A WHOLE REVIEW. t3 asked the question only the ticket makes
+  // possible — does this do what was asked — read the diff's own paragraph saying one
+  // half was deliberately not built, cited that paragraph as its evidence, and raised
+  // the gap as a `medium` anyway. Nothing changed (the answer could only be a lore-ok),
+  // and the reset it triggered ate the last three rounds of the global budget: without
+  // it the trace ended `t3 clean → passed` at round 10, with it the review stopped at
+  // 13. The question stays; ignoring its own answer does not.
+  it("refuses a finding whose evidence is the change disclosing its own gap", () => {
+    const p = flat(promptAt(0));
+    expect(p).toMatch(/NOT ALREADY SAID/);
+    expect(p).toMatch(/must NOT report it/);
+    // The question itself must survive, or this trades one failure for a worse one.
+    expect(p).toMatch(/UNDISCLOSED gap between the ticket and the code is the most valuable/);
+    // And a disclosure that is itself false is still a finding.
+    expect(p).toMatch(/If the disclosure itself is wrong/);
+  });
+
   it("holds prose to the same bar rather than excluding it", () => {
     const p = promptAt(0);
     expect(flat(p)).toMatch(/prose or spec finding clears the same bar/i);

@@ -86,6 +86,23 @@ Schema 9.
 **What it does NOT fix**, and I said so before writing it: the bound is per tier, so a
 prose loop still stops at the same place, just sooner in round count. Cheaper, same wall.
 
+**And t3 gave D-79 its first measurement, by failing its own bar.** Vany asked the
+right question — *"was the finding from t3 useful?"* — and the answer is no, with a
+number attached. t3 asked the thing only the ticket makes possible, read the diff's own
+paragraph saying half the ask was deliberately unbuilt, cited that paragraph as its
+evidence, and raised it as `medium`. Nothing changed; the reset it triggered ate the
+last three rounds of the global budget; without it the review passed at round 10 and
+with it it stops at 13.
+
+So: the *question* is worth paying for — an undisclosed gap would have been the finding
+of the night, and a reviewer must look because it cannot know in advance which kind it
+is. The *finding* was not: the check ran and the model ignored its own answer. A third
+test now says so in `BAR`, and a disclosure that is itself false stays a finding.
+
+My first draft of that paragraph told the model to put the observation under a `notes`
+field. There is no `notes` field. I invented output surface inside the fix for
+inventing-things drift, in the same hour I fixed five instances of it elsewhere.
+
 **The subscription surface stays exactly as built.** Correct, tested, free to keep, ready
 the day a harness wires notifications to turns. What it no longer does is open a
 permanently-resident tool description with an instruction the only real client cannot

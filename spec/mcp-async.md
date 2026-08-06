@@ -23,20 +23,22 @@ Two halves, at different stages:
         │     ├─ review_poll ONCE — a subscription starts at now, nothing replays
         │     └─ notifications/resources/updated ──► read the resource
         │
-        └─ review_submit(review_id, diff, tree_hash)  ── at ANY time, returns at once
-                                                          the diff goes to the model
-                                                          that raised the finding
+        └─ review_submit(review_id, diff, tree_hash)  ── [OPEN, NOT BUILT] at any time
+                                                          today: only in findings_ready
+                                                          or awaiting_diff (D-55)
 ```
 
-The client is never waiting. It subscribes, does other work, and is woken. It may
-submit the moment it has a fix — including while a tier is reading — because the fix is
-not an interruption of the review, it is the next thing said in it.
+**The bottom branch is a design, not a deployment**, and it is drawn here because the
+rest of the loop is real and it is the shape they will make together. A diagram is
+skimmed, so the caveat is on the line rather than under the picture.
 
-**None of that last sentence is deployed.** It describes the conversation half, which
-is `[OPEN]`. Today D-55 still refuses a submit during a running round, and the states
-that accept a diff are `findings_ready` and `awaiting_diff` — not `fast_clean`, where
-the deep round is already queued against the worktree. The shipped texts say so; this
-section does not describe what a client should do today.
+Today D-55 refuses a submit during a running round; the states that accept a diff are
+`findings_ready` and `awaiting_diff` — not `fast_clean`, where the deep round is already
+queued against the worktree. The shipped texts say exactly that.
+
+What the `[OPEN]` half would be: the client submits the moment it has a fix, including
+while a tier is reading, because the fix is not an interruption of the review — it is
+the next thing said in it, handed to the session that raised the finding.
 
 ## 2. What an event means
 
