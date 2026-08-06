@@ -597,6 +597,16 @@ landing with a real user, and it should not get lost among the defects below.
       Unmeasured, and the thing most worth knowing: whether these models produce *good*
       architectural ideas at all. Best first customer for the harness below.
 
+- [ ] **Nothing watches the one disk fact that is ours.** The host-disk alerts are gone
+      (2026-08-06): a full disk belongs to whoever owns the machine, exactly as a
+      failing suite belongs to whoever owns the repository (D-71), and lore was
+      alerting in red about 826 GB it neither caused nor could fix.
+      What remains unwatched is real. The sandbox `node_modules` cache grows without
+      bound and is **4.4 GB of lore's 4.7 GB total** — a curve with no ceiling and no
+      monitor. The right measure is lore's own footprint against a budget it sets, not
+      the host's percentage. Recorded rather than covered by the number that was
+      measuring something else.
+
 - [ ] **Make D-76 mechanical, or accept that it is discipline.** A change to lore is
       validated over MCP, never by a CLI run — written down 2026-08-06 after I reached
       for the CLI *because* MCP would have required pushing the branch, which turned an

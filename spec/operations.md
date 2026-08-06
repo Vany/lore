@@ -50,7 +50,6 @@ lists a route nobody dispatches is a claim about monitoring that does not exist.
 | **replica behind the database** | the knowledge base *is* the product; losing it loses everything the workgroup taught it. Measured as *behind*, never as *recently written*: litestream writes only when there is something to replicate, so an idle database and a dead replicator look identical under a freshness test. lore mounts the replica folder read-only so the beat can see it at all; a deployment that does not reports `unconfigured`, which is not green |
 | **no replica whatsoever** | worse than a late one — there is nothing to restore from right now. Held back for five minutes after startup: litestream is a sibling container that starts *after* lore and Docker creates the bind path if it is missing, so an empty folder is the normal first seconds of every deploy. `/status` says so immediately regardless; only the unsolicited page waits |
 | **heartbeat missed** (§3) | the service is down, or the monitoring is |
-| disk > 90% | the sandbox's `node_modules` cache grows without bound and is by far the largest thing here — 3.4 GB against 200 MB of repositories, measured 2026-08-05. Worktrees are reclaimed on completion (§6) and are no longer the risk |
 | provider auth failure | every review stops at once. Its own error type, raised where the provider's status is classified and paged by the worker — not folded into the failing-as-a-class window, which would spend ten more reviews proving the same thing before it fired |
 | **daily spend ceiling hit** | a runaway loop at $500–2,600/month can burn fast — but see §4: under a subscription this cannot fire at all |
 | all reviews failing over a window | systematic breakage, not a bad branch |
@@ -59,7 +58,7 @@ lists a route nobody dispatches is a claim about monitoring that does not exist.
 
 Elevated review failure rate; spend anomaly against trend; a mirror `make status`
 shows in red (D-65 — the host refresher has stopped or cannot reach the remote, which
-lore itself cannot detect); disk > 75%;
+lore itself cannot detect);
 queue depth sustained high enough that reviews are waiting on CPU
 (`spec/deployment.md` §3); `needs_human` findings ageing without resolution.
 
@@ -81,6 +80,30 @@ naming them, because `ok: false` alone is the same ambiguity pointing the other 
 That is the same defect as the spend ceiling and the replica monitor, in the field a
 dashboard reads first: a guard whose answer cannot vary is decoration a reader
 believes.
+
+### 2.5 Disk is not lore's to alert on
+
+**Removed 2026-08-06.** There were two disk conditions — page above 90%, ticket above
+75% — reading the host filesystem through `statfs` and feeding `ok`.
+
+**A full disk belongs to whoever owns the machine, exactly as a failing test suite
+belongs to whoever owns the repository (D-71).** lore's entire footprint is under 5 GB
+against a host at 826 GB used, so it was alerting in red, repeatedly, about a condition
+it neither caused nor could fix — and one whose owner already has better tools for it.
+Every alert it emitted that day was noise, and an alert channel is only worth having
+while every entry in it is worth reading.
+
+It also made `ok` a claim about the machine rather than about the service, and reached
+into tests: the heartbeat suite asserted `ok: true` and passed all afternoon at 89%,
+then failed the moment the host crossed 90% with nothing in the code having changed.
+
+**What is genuinely ours is unmonitored, and that is stated rather than implied.** The
+sandbox's `node_modules` cache grows without bound and is the largest thing lore
+writes — 4.4 GB of its 4.7 GB total. That is a real growth curve with no ceiling and
+nothing watching it. The right measure is lore's own footprint, not the host's
+percentage, and it is not built; it is an open item in `TODO.md` rather than a gap
+covered by a number that was measuring something else.
+
 
 ## 3. The deadman: absence of signal must alert
 

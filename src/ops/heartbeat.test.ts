@@ -43,21 +43,8 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-/**
- * `checkHealth` reads the REAL filesystem, so a test that does not pin the disk
- * thresholds is a test about the machine it runs on.
- *
- * Mine were. They asserted `ok: true` and passed all afternoon at 89% — then failed
- * the moment the host crossed 90%, which is `diskPagePct`. Nothing in the code had
- * changed; the disk had. PROG.md says a fake must not be kinder than production, and
- * this is the same rule from the other side: production must not be allowed to leak
- * into a test that is not about it.
- *
- * So the disk is pinned out of the way by default, and the one test that IS about it
- * sets the threshold deliberately.
- */
 function cfg(over: Partial<typeof DEFAULT_HEARTBEAT> = {}) {
-  return { ...DEFAULT_HEARTBEAT, dataDir: dir, diskWarnPct: 101, diskPagePct: 101, ...over };
+  return { ...DEFAULT_HEARTBEAT, dataDir: dir, ...over };
 }
 
 /** A replica folder whose newest file is `agoSec` older than the database. */
@@ -98,14 +85,6 @@ describe("health.ok is computed, never a literal", () => {
     expect(h.replica).toBe("absent");
   });
 
-  // The disk really must be able to make it false — that is the case the literal
-  // `ok: true` was hiding, and the one that fired on this host today. Threshold set to
-  // zero so any real filesystem crosses it, rather than waiting for a full disk.
-  it("is FALSE when the disk is over the page threshold", async () => {
-    const h = await checkHealth(store, cfg({ diskPagePct: 0 }));
-    expect(h.ok).toBe(false);
-    expect(h.problems.join(" ")).toMatch(/disk/);
-  });
 });
 
 describe("replica state", () => {

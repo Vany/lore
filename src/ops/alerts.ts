@@ -91,16 +91,11 @@ export const CONDITIONS = {
     condition: "backup replica missing",
     detail: "replication has never written anything — a restore is impossible right now",
   }),
-  diskCritical: (pct: number): Alert => ({
-    severity: "page",
-    condition: "disk critical",
-    detail: `${pct}% used — worktrees and node_modules caches grow without bound`,
-  }),
-  diskWarning: (pct: number): Alert => ({
-    severity: "ticket",
-    condition: "disk filling",
-    detail: `${pct}% used`,
-  }),
+  // `diskCritical` and `diskWarning` lived here and are gone. A full disk belongs to
+  // whoever owns the machine, exactly as a failing test suite belongs to whoever owns
+  // the repository (D-71). lore's whole footprint is under 5 GB against a host at
+  // 826 GB used — so it was alerting, repeatedly and in red, about somebody else's
+  // problem that it could neither cause nor fix.
   providerAuthFailed: (provider: string): Alert => ({
     severity: "page",
     condition: "provider auth failed",

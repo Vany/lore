@@ -1322,9 +1322,17 @@ obligation is to make urgency **machine-classifiable** — explicit `severity`,
 `needs_human` as its own state, `fast_clean`/`failed`/`expired` never blended into
 "not passed" — so a client never infers urgency from prose.
 
-Separately, `lore` alerts **devops about itself**: backups stale, disk full, provider
-auth dead, spend ceiling hit, reviews failing as a class. One review failing is a log
-line.
+Separately, `lore` alerts **devops about itself**: replication behind, provider auth
+dead, spend ceiling hit, reviews failing as a class, `needs_human` ageing. One review
+failing is a log line.
+
+**Disk is not on that list, deliberately.** It was, and was removed on 2026-08-06: a
+full disk belongs to whoever owns the machine, exactly as a failing test suite belongs
+to whoever owns the repository (D-71). lore's whole footprint is under 5 GB against a
+host at 826 GB used, so it alerted in red about a condition it neither caused nor could
+fix. The one disk fact that IS lore's — the sandbox cache growing without bound, 4.4 GB
+of that 4.7 — has no monitor, and `spec/operations.md` §2.5 says so rather than leaving
+a host percentage standing in for it.
 
 **The heartbeat is the part that matters.** A monitoring system that fails silently
 is INV-1 at a different layer — if the alerting path breaks, "no alerts" and

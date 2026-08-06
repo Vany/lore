@@ -14,7 +14,7 @@
  * SPEC: spec/operations.md §3
  */
 
-import { readdir, stat, statfs } from "node:fs/promises";
+import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { Store } from "../store/store.ts";
 import { Alerter, CONDITIONS } from "./alerts.ts";
@@ -26,8 +26,6 @@ export interface HeartbeatConfig {
   readonly dataDir: string;
   /** Litestream's replica folder, if this deployment mounts it. See `replicaState`. */
   readonly backupDir?: string;
-  readonly diskWarnPct: number;
-  readonly diskPagePct: number;
   readonly queueWarnDepth: number;
   readonly needsHumanAgeHours: number;
   /** Grace before an empty replica folder pages. See `REPLICA_GRACE_MS`. */
@@ -62,8 +60,6 @@ const REPLICA_GRACE_MS = 5 * 60_000;
 export const DEFAULT_HEARTBEAT: HeartbeatConfig = {
   intervalMs: 60_000,
   dataDir: "/var/lib/lore",
-  diskWarnPct: 75,
-  diskPagePct: 90,
   queueWarnDepth: 50,
   needsHumanAgeHours: 24,
   replicaGraceMs: REPLICA_GRACE_MS,
@@ -88,7 +84,6 @@ export interface Health {
   readonly ok: boolean;
   readonly problems: readonly string[];
   readonly queueDepth: number;
-  readonly diskUsedPct: number;
   readonly spendToday: number;
   readonly replica: ReplicaState;
   /** Seconds the database is ahead of the replica. Absent when there is nothing to compare. */
@@ -100,11 +95,9 @@ export interface Health {
 export async function checkHealth(store: Store, cfg: HeartbeatConfig): Promise<Health> {
   const midnight = `${new Date().toISOString().slice(0, 10)}T00:00:00.000Z`;
   const replica = await replicaState(cfg);
-  const diskUsedPct = await diskUsedPct_(cfg.dataDir);
   const needsHumanOverAge = store.needsHumanOlderThan(cfg.needsHumanAgeHours);
 
   const problems: string[] = [];
-  if (diskUsedPct >= cfg.diskPagePct) problems.push(`disk ${diskUsedPct}%`);
   if (replica.state === "absent") problems.push("replica missing");
   if (replica.state === "behind") problems.push(`replica ${Math.round((replica.behindSec ?? 0) / 60)}m behind`);
 
@@ -112,7 +105,6 @@ export async function checkHealth(store: Store, cfg: HeartbeatConfig): Promise<H
     ok: problems.length === 0,
     problems,
     queueDepth: store.queueDepth(),
-    diskUsedPct,
     spendToday: store.spendSince(midnight),
     replica: replica.state,
     ...(replica.behindSec === undefined ? {} : { replicaBehindSec: replica.behindSec }),
@@ -159,17 +151,6 @@ async function newestMtime(dir: string): Promise<number | undefined> {
   return newest;
 }
 
-async function diskUsedPct_(dir: string): Promise<number> {
-  try {
-    const s = await statfs(dir);
-    const total = Number(s.blocks) * Number(s.bsize);
-    const free = Number(s.bavail) * Number(s.bsize);
-    return total === 0 ? 0 : Math.round(((total - free) / total) * 100);
-  } catch {
-    return 0;
-  }
-}
-
 /**
  * Start beating. Returns a stop function.
  *
@@ -194,11 +175,6 @@ export function startHeartbeat(store: Store, cfg: HeartbeatConfig, alerter: Aler
     // have fallen behind, which cannot describe a service that has just started.
     const replicaGrace = Date.now() - startedAt < cfg.replicaGraceMs;
 
-    if (health.diskUsedPct >= cfg.diskPagePct) {
-      await alerter.send(CONDITIONS.diskCritical(health.diskUsedPct));
-    } else if (health.diskUsedPct >= cfg.diskWarnPct) {
-      await alerter.send(CONDITIONS.diskWarning(health.diskUsedPct));
-    }
     if (health.queueDepth >= cfg.queueWarnDepth) {
       await alerter.send(CONDITIONS.queueBacked(health.queueDepth));
     }
