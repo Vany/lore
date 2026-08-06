@@ -5,7 +5,7 @@
 **An independent code reviewer that remembers your codebase between sessions.**
 
 [![ci](https://github.com/Vany/lore/actions/workflows/ci.yml/badge.svg)](https://github.com/Vany/lore/actions/workflows/ci.yml)
-[![tests](https://img.shields.io/badge/tests-488%20passing-brightgreen)](src)
+[![tests](https://img.shields.io/badge/tests-552%20passing-brightgreen)](src)
 [![node](https://img.shields.io/badge/node-%E2%89%A524-339933?logo=node.js&logoColor=white)](package.json)
 [![typescript](https://img.shields.io/badge/typescript-strict%2C%20no%20build%20step-3178C6?logo=typescript&logoColor=white)](tsconfig.json)
 [![mcp](https://img.shields.io/badge/MCP-2026--07--28-000000)](spec/mcp-api.md)
@@ -110,18 +110,25 @@ Exit codes are the API, because the caller is usually a program:
 
 ```bash
 cd deploy
-cp .env.example .env          # two subscriptions by default, or one metered key
+cp .env.example .env          # three subscriptions by default, or one metered key
 make sync-opencode            # stage local config, minus the Anthropic credential
 make up
 make new NAME=you GIT=git@github.com:you/repo.git   # token + the .mcp.json to paste
-make mirror                   # clone/fetch every repo — out here, as you
+make mirror REPO=repo         # clone it once — out here, as you
+make mirror-daemon            # ...and keep it fresh, so nobody has to remember
 ```
 
-`make mirror` is not one-time setup. **lore never talks to a remote**: it holds no
-git credentials, by design, so the fetch happens on the host under your own agent
-and lands in a directory the container already reads. Run it before a review; a
-mirror gone stale is refused, naming the command, rather than reviewed as if it
-were current.
+**lore never talks to a remote**: it holds no git credentials, by design, so the
+fetch happens on the host under your own agent and lands in a directory the container
+already reads.
+
+Keeping that current is the **service's** job, not the client's, and not a person's
+(D-65). The client is an agent, usually on another machine, with no shell here — told
+"run `make mirror`" it can do nothing at all, and a stale mirror was once the single
+largest cause of failed reviews. `make mirror-daemon` installs a five-minute timer
+outside Docker. A mirror past thirty minutes is still refused rather than reviewed as
+if it were current, but now that refusal means the timer is down, so it says what to
+report rather than what to run.
 
 Then point any MCP client at it. `lore` ships its own documentation — tool
 descriptions, `lore://docs/*` resources, and a `/lore:review` prompt that drives
@@ -132,7 +139,7 @@ the whole loop — because **the client is an agent, so the docs are the interfa
 ## Architecture
 
 ```
- MCP client ──► lore  ──► opencode ──► GLM-5.2 · Kimi K3 · GPT-5.6 Sol
+ MCP client ──► lore  ──► opencode ──► GLM-5-turbo · Kimi K3 · GPT-5.6 Terra
                  │                     (three vendors, none of them the author)
                  ├── scheduler        per-provider concurrency, spend ceiling
                  ├── repo cache       a worktree per review, off a bare mirror
@@ -167,12 +174,12 @@ a single day is why this project has the shape it has.
 
 ## Status
 
-**Deployed, and reviewing itself.** ~9,400 lines, 45 modules, 355 tests. Running in
+**Deployed, and reviewing itself.** ~11,600 lines, 47 modules, 552 tests. Running in
 Docker on arm64, driven over MCP.
 
-Measured on the live deployment: **14 reviews, 2 of them to `passed`, both attested;
-493 things it now knows about this codebase; 60 model calls; $0**, because both
-providers are subscriptions rather than metered APIs.
+Measured on the live deployment: **53 reviews, 3 of them to `passed` and attested;
+332 things it currently knows across two codebases; 132 model calls; $0**, because
+all three providers are subscriptions rather than metered APIs.
 
 Most of what it has found, it found in itself. And the shape of those findings is
 the reason the project has the shape it does:
@@ -189,9 +196,16 @@ the failure this tool exists to catch:
 
 - the Orange Pi. The images are arm64 and running, but on a laptop under Docker
   Desktop — and T0's throughput budget was measured for the device, not for this.
-- `passed_partial`, `needs_human` and a real quota exhaustion have **never
-  occurred**. All three have code and tests; a path whose first live execution is
-  during an incident is a path nobody has reviewed.
+- `passed_partial` and a real quota exhaustion have **never occurred**. Both have
+  code and tests; a path whose first live execution is during an incident is a path
+  nobody has reviewed.
+- `needs_human` has occurred exactly once, and **it was wrong** — two ADR sentences
+  restating one constraint, read as a contradiction because negation was cancelled
+  across a whole statement. It stopped a review whose findings were all settled. The
+  cancellation is per clause now, but the lesson is the one worth repeating: a
+  heuristic that escalates to a person must fail quiet, not loud.
+- Kimi is configured as T2 and **has not yet run a round**. A tier that has never
+  executed is not a working tier, and this project says so about everything else.
 - a fresh session driving a review to `passed` from the tool descriptions alone.
   Every review so far was driven by hand, so what is proven is the service — not
   the documentation, which [`spec/agent-docs.md`](spec/agent-docs.md) §1 insists
@@ -201,7 +215,7 @@ the failure this tool exists to catch:
 
 | file | what it holds |
 |:--|:--|
-| [`SPEC.md`](SPEC.md) | purpose, workflow, and every decision `D-1`…`D-65` |
+| [`SPEC.md`](SPEC.md) | purpose, workflow, and every decision `D-1`…`D-74` |
 | [`PLAN.md`](PLAN.md) | build order, and what each phase de-risked |
 | [`spec/knowledge.md`](spec/knowledge.md) | the knowledge layer — the product |
 | [`spec/review-ladder.md`](spec/review-ladder.md) | tiers, findings, verdicts, invariants |

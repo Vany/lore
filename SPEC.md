@@ -3,11 +3,12 @@
 A hosted MCP service that reviews a branch before it merges, and — the actual
 point — **remembers the codebase between sessions**.
 
-Status: **deployed and reviewing itself**, 2026-08-05. All phases in `PLAN.md` have
-code; 391 tests. Live: 21 reviews, 2 attested, 871 knowledge rows, 82 model calls.
-Unproven: the Orange Pi itself, and three paths that have never executed —
-`passed_partial`, `needs_human`, quota exhaustion. `TODO.md` keeps those open rather
-than folding them into a tick.
+Status: **deployed and reviewing itself**, 2026-08-06. All phases in `PLAN.md` have
+code; 552 tests. Live: 53 reviews, 3 attested, 332 live knowledge rows, 132 model
+calls. Unproven: the Orange Pi itself; `passed_partial` and quota exhaustion, which
+have never executed; and Kimi at T2, configured and not yet used for a round.
+`needs_human` has fired once and was wrong. `TODO.md` keeps those open rather than
+folding them into a tick.
 
 **This file describes the system as it stands.** Decisions carry the reasoning that
 makes them right, not the sequence of changes that produced them; what changed when,
@@ -159,7 +160,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-46** | A conflict block must have an exit: resolve, or escalate | confirmed |
 | **D-47** | D-1 is enforced by **absence**: no Anthropic credential is deployed | confirmed |
 | **D-48** | An unfundable tier is *skipped*, not fatal — `passed_partial` | confirmed |
-| **D-49** | A single-vendor ladder reaches `passed_partial`, never `passed` | `[OPEN]` |
+| **D-49** | A single-vendor ladder reaches `passed_partial`, never `passed` | confirmed |
 | **D-50** | Exploration is **counted per review before it is capped**; no cap yet | `[OPEN]` |
 | **D-51** | An accepted justification is **repo knowledge**, carried across reviews | confirmed |
 | **D-52** | The per-tier cap bounds *iteration*, so a clean tier escalates past it | confirmed |
@@ -394,10 +395,17 @@ three times.
 `loadTiers` still warns rather than throwing. A deployment funded for one provider
 must be able to review; it must not be able to claim independence it does not have.
 
-**Why this stayed advisory until now:** the deployed ladder *is* single-vendor —
-Kimi is waitlist-only and a second subscription could not be bought. The honest
-response to "we cannot afford independence" is to say so in the output, not to
-quietly redefine `passed`. `[OPEN]` — revisit when a second vendor is reachable.
+**Why this stayed advisory, and why it no longer is.** When the rule was written the
+deployed ladder *was* single-vendor: Kimi was waitlist-only and a second subscription
+could not be bought, so the honest response to "we cannot afford independence" was to
+say so in the output rather than quietly redefine `passed`. The `[OPEN]` marked that
+it was decided under that constraint and should be revisited when a second vendor
+became reachable.
+
+**It became reachable** (D-74, 2026-08-06): the ladder is Z.ai, Moonshot and OpenAI,
+one vendor per tier. The rule now costs this deployment nothing and would only fire
+if the ladder collapsed back onto one vendor — which is exactly the condition it
+exists to refuse to call `passed`. Confirmed rather than open.
 
 **D-50 — agentic exploration is counted before it is capped.**
 
@@ -1251,7 +1259,10 @@ succeeded.
 3. Greptile's *"How to Make LLMs Shut Up"* is unread (URL 404'd). Noise suppression
    costs a whole fix cycle per false positive in a loop this shape.
 4. Are the free code-specialised models good enough for a zero-cost gate below T1?
-5. Token rotation procedure — a token that cannot be rotated without breaking every
-   client is one nobody will rotate.
+5. *(answered 2026-08-06)* Token rotation: `make new` mints, `make revoke
+   TOKEN=<short>` retires, and the two overlap — a client keeps working on the old
+   token until it is revoked, so rotation is issue, paste, revoke, in that order and
+   with no outage. Revocation is by hash prefix because the secret is shown once and
+   never stored; `spec/mcp-api.md` §1.
 6. What happens when two reviews on one repo produce contradictory knowledge? The
    conflict is recorded (`spec/knowledge.md` §6), but nothing resolves it yet.

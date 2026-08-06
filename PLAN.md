@@ -21,8 +21,11 @@ What could make this project fail, hardest first:
    review N+1 is no better for what review N learned, we built an expensive linter.
 4. **Structured output is unreliable** across three vendors, making "did not run"
    frequent.
-5. **T0 does not fit the CPU budget** on an ARM SBC (D-37).
-6. **arm64 dependency incompatibility** breaks test execution (D-24).
+5. **T0 does not fit the CPU budget** on an ARM SBC (D-37). *Retired: measured at
+   ~25 min/day, an order of magnitude under the estimate.*
+6. **arm64 dependency incompatibility.** Originally framed as breaking test
+   execution; there is none now (D-71). It still breaks the **install**, which takes
+   `tsc` and `eslint` with it, so the risk survives its original reason.
 
 Risks 1, 2 and 4 are reachable **on a laptop, with a CLI, with no service at all**.
 That is why the walking skeleton wins: it kills the top of the list first, where
@@ -65,8 +68,10 @@ ladder against a real branch and converges.
   working-tree diff (INV-3), untracked listing (INV-4), truncation notice (INV-7),
   **submodule expansion** (D-36)
 - **T0** — detect and run the *target's* `tsc`, ESLint, `ast-grep`, and `semgrep`
-  with security rules; then its tests in a sandboxed container (D-24). Normalise all
-  output into findings.
+  with security rules, normalising all output into findings. Originally it also ran
+  the target's tests in a sandboxed container (D-24); **that is gone** — lore reads a
+  suite and never runs one (D-71). The sandbox stays, because `tsc` and `eslint`
+  resolve out of the target's `node_modules` and the install still runs.
 - **opencode boundary** — read-only agent existence check (INV-8), session pooling
   (INV-5/6), agentic reviewer with worktree tools, structured output with one retry
   then loud failure, **prompt caching from the first call** (D-29), usage recorded
@@ -142,7 +147,7 @@ agent must be tested against one.
 
 ---
 
-## Phase 4 — Deployment and operations ✅ *(arm64 tests still pending a device)*
+## Phase 4 — Deployment and operations ✅ *(still running on a laptop, not the device)*
 
 **Goal:** it runs on the Pi and tells someone when it is sick.
 
@@ -176,11 +181,15 @@ turns those into high-severity findings. A reviewer that manufactures defects co
 a fix cycle each. Fixed by building `deploy/sandbox.Dockerfile` with git present.
 
 **The CPU budget was wrong by an order of magnitude, in our favour.** D-37 estimated
-~5 CPU-hours/day for one developer. Measured: a T0 round on this repo is ~2 s of
+~5 CPU-hours/day for one developer. Measured: a T0 round on this repo was ~2 s of
 typecheck plus ~7 s of tests, with installs cached. At 30 PRs × 5 rounds that is
 **~25 minutes/day**, not five hours. T0 is still the local bottleneck, and the
 caching in D-37 is still worth having, but it is not the constraint the plan feared.
 Caveat: lore is a small repo; a large monorepo will be slower.
+
+The ~7 s of tests is no longer spent at all — D-71 removed execution — so the real
+figure is now lower than the one measured here. Left as measured rather than
+re-estimated downward.
 
 **tailscale is not installed on the host.** The security model assumed it: D-33
 reasoned that WireGuard is the perimeter and bearer tokens only scope one teammate
@@ -189,8 +198,7 @@ compose bind now defaults to loopback so that choice has to be made deliberately
 
 | test | method | if it fails |
 |---|---|---|
-| **deps install on arm64** | `npm ci` for each target repo in `arm64v8/node` | D-24 is undeliverable here; emulate (slow) or move the host |
-| **tests pass on arm64** | `npm test` in the same container | same |
+| **deps install on arm64** | `npm ci` for each target repo in `arm64v8/node` | `tsc` and `eslint` go with it — they resolve out of `node_modules` — so T0 loses two engines; emulate (slow) or move the host |
 | **security tooling on arm64** | `semgrep`, `osv-scanner`, `cdxgen` in the image | drop from T0 or run remotely |
 | **T0 CPU budget** | time a full T0 round; multiply by 30 PRs × ~5 rounds | tighten caching, or T0 becomes the queue |
 | **parallel container headroom** | N concurrent T0 runs until CPU saturates | sets the scheduler's concurrency cap |

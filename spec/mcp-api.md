@@ -15,6 +15,15 @@ make new NAME=vany GIT=git@github.com:org/repo.git
    two rows with two clones and its knowledge split between them.
 2. Mints an opaque, revocable bearer token scoped to that repo, shown **once** and
    stored only as a hash.
+
+   **Revocation is by the hash prefix, not the token** — `make tokens` lists them,
+   `make revoke TOKEN=<short>` turns one off. It has to be, because the secret is
+   shown once and never stored, so an operator revoking a leaked, lost, or departed
+   teammate's token has never held it. The original function took the token itself,
+   had no caller, and could not have had one; `revoked_at` was a column printed by
+   `make tokens` that nothing in the system could set. Ambiguity in the prefix is
+   refused rather than resolved (the rule from `spec/review-ladder.md` §3.1.2):
+   picking a winner would lock out a teammate *and* leave the leaked token live.
 3. Emits a paste-able `.mcp.json` fragment with the token **in a header** (D-21).
 
 **No key is issued** (D-65). lore does not clone and does not fetch; a host process

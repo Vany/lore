@@ -1,36 +1,54 @@
 # Deployment and host constraints
 
-Host: **Orange Pi, 32 GB RAM, 4 TB disk, on Tailscale (WireGuard), reachable to
-prod.** That is an **arm64 single-board computer**, and both halves of that phrase
-constrain the design.
+Target host: **Orange Pi, 32 GB RAM, 4 TB disk** — an **arm64 single-board
+computer**, and both halves of that phrase constrain the design. What runs today is
+those images on a MacBook under Docker Desktop; the device is still open in `TODO.md`.
 
 ---
 
-## 1. Tailscale removes a whole category of work
+## 1. There is no Tailscale, so the tokens are the perimeter
 
-The service is never publicly exposed. It listens on the tailnet only.
+**The design assumed a tailnet and the host does not have one** (D-33, revised
+2026-08-03; `PLAN.md` §4.1 records the check as `tailscale on host — ABSENT`). The
+device sits physically in the operator's hands on a private LAN, which is a real
+perimeter but not a cryptographic one.
 
-- **No public TLS, no domain, no certificate renewal.** WireGuard already provides
-  the transport security. TLS termination is an outer concern and deliberately not
-  this project's problem.
-- **No abuse surface.** Rate limiting, bot defence and public-facing hardening are
-  not needed; the network boundary does that job.
-- **Bearer tokens still apply** (D-21, D-23) — not for network defence, but for
-  **per-repo scoping** and for binding `review_id` to a principal. Two teammates on
-  the same tailnet still should not read each other's repos by guessing an id.
+So the compose bind **defaults to loopback**: exposing the service is a decision
+someone makes on purpose, by setting `LORE_BIND`. And the bearer tokens stop being
+mere scoping and do the load-bearing work — they are the only thing between a machine
+on the LAN and every repository lore knows about.
+
+- **No public TLS, no domain, no certificate renewal.** Not because WireGuard
+  provides transport security, but because the service is not reachable from outside
+  the LAN at all. TLS termination stays an outer concern.
+- **Bearer tokens** (D-21, D-23) scope per repo *and* now defend the network edge.
+  They are revocable — `make tokens` lists them, `make revoke TOKEN=<short>` turns one
+  off — which matters more here than it would behind a tailnet.
+- **Abuse hardening is still absent**, and that is a bet on the LAN rather than a
+  reasoned defence. It is the thing to revisit first if `LORE_BIND` ever widens.
+
+Getting the tailnet perimeter back costs one line in `.env` plus installing
+tailscale. Revisit when the device leaves the operator's possession, or when a second
+workgroup member needs access from elsewhere.
 
 ## 2. arm64 is a hard constraint
 
 - Every image — service **and** test containers — must be `linux/arm64`.
 - Node, Bun and `ast-grep` all ship arm64 builds. Fine.
 - **The risk is the target repos' own dependencies.** A Node project whose tree
-  contains a package shipping x86-only prebuilt binaries will fail to install or
-  test on this host, through no fault of ours.
+  contains a package shipping x86-only prebuilt binaries will fail to **install** on
+  this host, through no fault of ours.
 
-**This must be verified early** (TODO T0.5). If the workgroup's repos cannot install
-and test on arm64, D-24 (T0 executes tests) is not deliverable on this host, and the
-options are cross-architecture emulation — brutally slow — or a different host. It
-would be expensive to discover after building the whole sandbox.
+Verified 2026-08-03 on the device (`PLAN.md` §4.1): node runs natively, `npm ci`
+takes 9 s, the suite 7 s, a typecheck 2 s. The one real finding was that
+`node:*-alpine` ships **no git**, which failed 10 tests in the way that matters most
+— not by refusing to run, but by running and producing failures unrelated to the
+change, which T0 would have reported as high-severity findings.
+
+An install failure still costs real engines. lore does not execute a suite (D-71),
+but `tsc` and `eslint` resolve their binaries out of the target's `node_modules`, so
+a tree that cannot install on arm64 silently removes both — reported as
+`checks_skipped`, never as a clean check.
 
 ## 3. T0 is the throughput bottleneck, not the models
 
@@ -38,64 +56,39 @@ An inversion worth stating plainly: **model calls are remote and cost this host
 almost nothing. T0 is local, CPU-bound, and runs on modest ARM cores.** The "free"
 tier is the one that costs wall-clock.
 
-Rough budget at 30 PRs/day, solo:
+Budget at 30 PRs/day, solo:
 
 ```
-30 PRs × ~5 rounds × (install? + tsc + eslint + tests)
+30 PRs × ~5 rounds × (install? + tsc + eslint)
 ```
 
-If T0 takes two minutes per round, that is **~5 hours of CPU per day** for one
-developer. On a handful of ARM cores this is feasible but tight, and a burst of PRs
-will queue. With the workgroup it does not fit.
+**Measured, and the estimate was an order of magnitude too pessimistic in our
+favour.** D-37 guessed ~5 CPU-hours/day; a T0 round on this repo is ~2 s of typecheck
+with installs cached, so 30 PRs × 5 rounds is **~25 minutes/day**. T0 is still the
+local bottleneck and the caching below is still worth having, but it is not the
+constraint the plan feared. Caveat: lore is a small repo; a large monorepo is slower.
 
-So T0 must be engineered for this host, not merely invoked:
+The suite is **not** in that formula. lore reads a test suite and never runs one
+(D-71), so the heaviest thing T0 could have done here is gone — which is most of why
+the measured figure landed where it did.
+
+So T0 is engineered for this host rather than merely invoked:
 
 | technique | why |
 |---|---|
-| `node_modules` cache keyed by lockfile hash | a fresh `npm install` per review would dominate everything |
+| `node_modules` cache keyed by lockfile hash | a fresh install per review would dominate everything |
 | `tsc --incremental` with a persisted build info cache | full typecheck every round is pure waste |
 | **diff-scoped work on rounds ≥ 2** | round 1 checks everything; later rounds re-check what changed and its dependents |
-| test selection by changed files, where the repo supports it | running the full suite five times per PR is the worst case |
 | bounded concurrency | see §3.1 — the binding constraint turned out to be neither |
 
 **Round 1 is thorough; later rounds are incremental.** Without that, the ladder's
 "reset to T1 after every fix" (D-6) multiplies the most expensive local work by the
 round count.
 
-The `npm install` step is itself arbitrary code execution (lifecycle scripts), so it
-belongs inside the sandboxed test container (D-24), not in the service.
-
-## 4. Resources
-
-| resource | note |
-|---|---|
-| 32 GB RAM | generous for an SBC; several parallel test containers fit |
-| 4 TB disk | ample for bare clones, worktrees, `node_modules` caches, SQLite + backups |
-| CPU | **the scarce resource.** Scheduling is CPU-bound, not memory-bound |
-
-Disk being plentiful is what makes aggressive caching the right trade: spend 4 TB to
-save CPU, because CPU is what there is least of.
-
-## 5. Backups
-
-SQLite plus Litestream (SPEC §3). The Pi is a single machine with no redundancy, and
-the knowledge base is the product — losing it loses everything the workgroup has
-taught the service.
-
-**The split (D-59).** Litestream writes a continuously-restorable **local** file
-replica beside the deployment; an outer script carries it off the machine. The
-boundary is deliberate: lore owns the half it can be responsible for without holding
-any credential, and a container with no S3 key cannot leak one. Always on — no
-profile, no credentials, nothing to forget to enable.
-
-A copy on the same disk is **not a backup**. It survives a corrupted database, a bad
-bulk write and a wrong `down-hard`; it does not survive the disk. `make backup-check`
-reports the local half only, and says so.
-
-**Restore is tested, not assumed.** `make backup-drill` restores from a copy with the
-source destroyed first, and `make status` warns when the replica has not been written
-in an hour. The drill uses `VACUUM INTO`: a WAL database copied with `cp` loses
-whatever is still in the write-ahead log.
+The install is itself arbitrary code execution (lifecycle scripts, with network), so
+it belongs inside the sandboxed container (D-24), not in the service. That is true
+even though nothing runs the tests: turning test execution off narrows the exposure
+and does not remove it.
 
 ### 3.1 What actually bounds concurrency
 
@@ -126,6 +119,54 @@ Measured on 2026-08-05 at 12, on a host with 16 cores and 48 GB behind a Docker 
 The lesson is the shape rather than the number: **one knob governing two resources
 with different limits will always be wrong for one of them.** Capping outbound model
 calls separately from worker concurrency is the fix this points at, and is not built.
+
+
+## 4. Resources
+
+| resource | note |
+|---|---|
+| 32 GB RAM | generous for an SBC; several parallel test containers fit |
+| 4 TB disk | ample for bare clones, worktrees, `node_modules` caches, SQLite + backups |
+| CPU | **the scarce resource.** Scheduling is CPU-bound, not memory-bound |
+
+Disk being plentiful is what makes aggressive caching the right trade: spend 4 TB to
+save CPU, because CPU is what there is least of.
+
+## 5. Backups
+
+SQLite plus Litestream (SPEC §3). The Pi is a single machine with no redundancy, and
+the knowledge base is the product — losing it loses everything the workgroup has
+taught the service.
+
+**The split (D-59).** Litestream writes a continuously-restorable **local** file
+replica beside the deployment; an outer script carries it off the machine. The
+boundary is deliberate: lore owns the half it can be responsible for without holding
+any credential, and a container with no S3 key cannot leak one. Always on — no
+profile, no credentials, nothing to forget to enable.
+
+A copy on the same disk is **not a backup**. It survives a corrupted database, a bad
+bulk write and a wrong `down-hard`; it does not survive the disk. `make backup-check`
+reports the local half only, and says so.
+
+**Restore is tested, not assumed.** `make backup-drill` restores from a copy with the
+source destroyed first. The drill uses `VACUUM INTO`: a WAL database copied with `cp`
+loses whatever is still in the write-ahead log.
+
+**Staleness is measured as BEHIND THE DATABASE, never as "not written recently".**
+litestream writes only when there is something to replicate, so an idle database and
+a dead replicator are identical under a freshness test — and the freshness form cried
+wolf the first time it mattered, on a replica that was perfectly level. Both readers
+now compare the replica against the database: `deploy/Makefile`'s `replica-state` for
+`make status`, which has to answer while the service is down, and `ops/heartbeat.ts`
+for the devops page. The threshold exists once in TypeScript and
+`one-definition.test.ts` fails if the shell copy drifts from it.
+
+The page is what changed on 2026-08-06. `spec/operations.md` §2.1 had listed the
+replica under *someone should look now* since it was written, and nothing ever sent
+it: the only check lived in `make status`, which is a command a human runs. lore now
+mounts the replica folder read-only and beats on it. A deployment that does not mount
+it reports `replica: "unconfigured"` — the check could not run, which is not the same
+as passing.
 
 ## 6. The mirror is refreshed by a host process (D-65)
 

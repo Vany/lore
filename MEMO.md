@@ -5,6 +5,75 @@ surprised me.
 
 ---
 
+## 2026-08-06 — session 34: the refactor I argued against, and the debt underneath it
+
+**Vany asked me to plan a huge refactoring toward "state of the art". I argued
+against it and he agreed, then asked for the debt instead.** The measurement is what
+settled it: 11,560 lines, 47 modules, ~250 lines a file, four runtime dependencies,
+**zero `as any`, zero `@ts-ignore`, zero `eslint-disable`**, strict TS with
+`noUncheckedIndexedAccess` and `exactOptionalPropertyTypes`. There was no debt of the
+kind a refactor pays off.
+
+**The argument that mattered was about the comments.** 2,015 comment lines, and
+PROG.md's rule is that each guard carries the incident it guards against. That
+knowledge is bound to *positions in the code*, and moving code is the most effective
+way to sever a guard from its incident — after which "a guard without a reason gets
+deleted by the next reader". A large refactor is how this project would forget its own
+bugs. Set against a defect history where every entry was a false statement about a
+failure rather than a wrong algorithm, the trade is bad.
+
+**What the sweep actually found, and the shape is the same one every time: something
+claimed and not true.**
+
+- **Three of nine devops alerts had no caller** — the replica, provider auth, ageing
+  `needs_human` — while `spec/operations.md` §2.1 listed two of them under *page,
+  someone should look now*. The service could not even SEE the replica: only
+  litestream mounted that folder. So the page was unbuildable, not merely unbuilt.
+- **`/status` reported `ok: true` unconditionally**, including on the beat that paged
+  for a critical disk. The comment three lines below it complains that this endpoint
+  "said ok: true" while the deployment ran 21 commits behind — that fix added the
+  build stamp and left the constant.
+- **`queryCommit` had no caller.** Written for Phase 5, tested, never invoked, while
+  PLAN names it "needed for submodules" and D-36 says submodules are how we ship. The
+  security review enumerated the lockfile and reported clean about a vendored tree it
+  never queried. `isStale` from session 19, in the review type whose entire output is
+  a claim about what was checked.
+- **A token could not be revoked at all.** `revokeToken` wanted the secret, which is
+  shown once and never stored — so the operator revoking a leaked or departed
+  teammate's token could not supply the one argument it had. `make tokens` printed a
+  `revoked_at` column nothing on earth could set.
+
+**Learned — a mechanical check inherits the shape of the question it asks.**
+`one-definition.test.ts` exists precisely to catch declared-but-unreachable things,
+and it passed for the whole life of three dead alerts, because it asks whether the
+exported CONTAINER has a reader and `CONDITIONS` has three. A routing table is where
+this hides: the table being wired reads as the routes being wired. It checks members
+now, and I planted a dead one to watch it fail before believing it.
+
+**Learned — `isClean` is the best single example of the one-definition rule.** Its
+docstring says it is "the only predicate any caller should use... so there is one
+place to be wrong", and every caller wrote `state === "passed"` by hand instead. Four
+of them, including both `clean` fields the MCP surface hands a client — the single
+value a client decides to merge on. The one place to be wrong was five. And
+`passed_partial` has already been omitted from a hand-written state list three times
+in this codebase; in that field it would read as clean.
+
+**The sweep also condemned something innocent, which is worth recording.** My probe
+flagged `SECURITY`, `loadOrCreateKey` and `mintToken` as dead. They are not — they are
+used inside their own files, and `SECURITY` is reachable through the type registry. I
+checked before deleting. The real finding underneath was that the second review type
+had **no test at all**: nothing asserted that `type: "security"` resolves, selects
+sbom/osv rather than tsc, or refuses an unknown id instead of falling through to the
+default. `type` has been in the MCP surface since day one (D-43) with nothing pinning
+what it selects.
+
+**Method note.** Ten minutes of `wc -l`, a 20-line export-reachability script and one
+SQLite query found more than reading the code would have. The same lesson as sessions
+19, 20 and 27 in a new place — but the version worth keeping is narrower: **I cannot
+find "declared and unreachable" by reading, and I have now failed at it four times.**
+
+---
+
 ## 2026-08-06 — session 33: the loop closed, and then ate itself
 
 **The good half, and it is real.** A review of `rigid-monorepo` reached round 2 with

@@ -37,12 +37,21 @@ a class** is an alert.
 
 ### 2.1 Page — someone should look now
 
+Every row here is **sent by the heartbeat or by the worker**. Three of them were not,
+for the whole of this service's life — the replica, provider auth, and ageing
+`needs_human` — while this table listed them. The conditions existed in
+`ops/alerts.ts` and nothing called them, and `one-definition.test.ts` passed because
+it asked whether the exported table was read rather than whether each route was. It
+checks members now. A page nobody is paged by is not a page, and a routing table that
+lists a route nobody dispatches is a claim about monitoring that does not exist.
+
 | condition | why it is urgent |
 |---|---|
-| **replica behind the database** | the knowledge base *is* the product; losing it loses everything the workgroup taught it. Measured as *behind*, never as *recently written*: litestream writes only when there is something to replicate, so an idle database and a dead replicator look identical under a freshness test |
+| **replica behind the database** | the knowledge base *is* the product; losing it loses everything the workgroup taught it. Measured as *behind*, never as *recently written*: litestream writes only when there is something to replicate, so an idle database and a dead replicator look identical under a freshness test. lore mounts the replica folder read-only so the beat can see it at all; a deployment that does not reports `unconfigured`, which is not green |
+| **no replica whatsoever** | worse than a late one — there is nothing to restore from right now |
 | **heartbeat missed** (§3) | the service is down, or the monitoring is |
 | disk > 90% | the sandbox's `node_modules` cache grows without bound and is by far the largest thing here — 3.4 GB against 200 MB of repositories, measured 2026-08-05. Worktrees are reclaimed on completion (§6) and are no longer the risk |
-| provider auth failure | every review stops at once |
+| provider auth failure | every review stops at once. Its own error type, raised where the provider's status is classified and paged by the worker — not folded into the failing-as-a-class window, which would spend ten more reviews proving the same thing before it fired |
 | **daily spend ceiling hit** | a runaway loop at $500–2,600/month can burn fast — but see §4: under a subscription this cannot fire at all |
 | all reviews failing over a window | systematic breakage, not a bad branch |
 
@@ -62,6 +71,16 @@ consumer.
 
 Individual review failures, individual model retries, normal escalation. Loud
 enough to debug from, quiet enough not to train anyone to ignore alerts.
+
+### 2.4 `/status` answers whether it is healthy, and can say no
+
+`ok` was the literal `true` — on every beat, including the one that paged for a
+critical disk. It is computed from the page-level conditions now, with `problems`
+naming them, because `ok: false` alone is the same ambiguity pointing the other way.
+
+That is the same defect as the spend ceiling and the replica monitor, in the field a
+dashboard reads first: a guard whose answer cannot vary is decoration a reader
+believes.
 
 ## 3. The deadman: absence of signal must alert
 

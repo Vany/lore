@@ -157,6 +157,57 @@ itself, which is the uncomfortable part.
       `one-definition.test.ts`, and five of them taught to lore as knowledge, which had
       exactly ONE taught fact before today.
 
+### 2026-08-06 — the debt sweep
+
+Found by measuring the codebase rather than by reading it, after a proposal to
+refactor. The code did not need restructuring — 11.6k lines, 47 modules, zero `any`,
+zero `@ts-ignore`, zero `eslint-disable` — and every item below is something that was
+*claimed* and not true, which is this repository's actual defect class.
+
+- [x] **Three of nine devops alerts had no caller.** `backupStale`,
+      `providerAuthFailed`, `needsHumanAgeing` — defined, believable, sent from
+      nowhere, while `spec/operations.md` §2.1 listed two of them under *page,
+      someone should look now*. The only replica check lived in `make status`, which
+      is a command a human runs. lore now mounts the litestream folder read-only and
+      beats on it; a rejected provider credential gets its own error type and pages
+      immediately rather than waiting for the failing-as-a-class window.
+      The replica condition is **behind the database**, not "not written recently" —
+      rebuilding the freshness form would have re-earned the mute it got in D-59.
+- [x] **`/status` always answered `ok: true`.** A literal, including on the beat that
+      paged for a critical disk. Computed now, with `problems` naming why.
+- [x] **`queryCommit` had no caller.** OSV by commit hash — `PLAN.md` Phase 5 names it
+      "needed for submodules" and D-36 says this workgroup ships submodules. So the
+      security review enumerated `package-lock.json` and reported clean about a
+      vendored tree it never queried. The engine also shared `sbom`'s `package.json`
+      gate, so a submodule-only repository skipped it entirely.
+- [x] **A token could not be revoked.** `revokeToken` took the secret, which is shown
+      once and never stored, so an operator revoking a leaked or lost token could not
+      supply it. `make tokens` printed a `revoked_at` column nothing could set. Now by
+      hash prefix, ambiguity refused rather than resolved. This answers SPEC open
+      question 5.
+- [x] **The check that should have caught all of this asked the wrong question.**
+      `one-definition.test.ts` verified that an exported constant is read; `CONDITIONS`
+      is read by three modules while three of its nine members were dead. It checks
+      members of a routing table now — verified by planting a dead one and watching it
+      fail by name.
+- [x] **`isClean` was written as "the only predicate any caller should use" and no
+      caller used it.** Four hand-written `state === "passed"`, including both `clean`
+      fields the MCP surface hands a client. `passed_partial` has been left out of a
+      hand-written state list three times here; in that field it would read as clean.
+- [x] **Sixteen symbols exported and read only at home**, plus one genuinely dead
+      (`quotaExhausted`, redundant with the live throw in `opencode.ts`). Both halves
+      of the export sweep come back empty now.
+- [x] **D-49's `[OPEN]` closed.** Its condition was "revisit when a second vendor is
+      reachable"; D-74 made it three.
+- [x] **The documents describe the deployed system again.** `spec/deployment.md` was
+      the worst — Tailscale as the perimeter (D-33 retracted it), the T0 budget still
+      counting test runs (D-71 removed them), replica freshness in hours (the Makefile
+      does level-vs-behind), and a `### 3.1` orphaned between `## 5` and `## 6`.
+      README said 488 tests in the badge and 355 in the body against an actual 552,
+      `D-1…D-65` against D-74, GLM-5.2 and Sol in the architecture diagram against the
+      deployed turbo and terra, and told the reader to run `make mirror` before every
+      review, which D-65 made a host timer's job.
+
 - [ ] **Cap outbound model calls separately from worker concurrency.** Raising
       `LORE_CONCURRENCY` to 12 killed four reviews in 2.5 minutes — two `socket hang
       up` in the same second, two empty replies inside a 200. The provider was the
