@@ -103,6 +103,36 @@ My first draft of that paragraph told the model to put the observation under a `
 field. There is no `notes` field. I invented output surface inside the fix for
 inventing-things drift, in the same hour I fixed five instances of it elsewhere.
 
+**Then Vany asked to rethink the prompts, and classifying the evidence found the real
+one.** Eighteen findings across two reviews of one commit: the FIRST pass over new code
+produced 8 findings, all 8 real defects — an authorization hole, a one-way door latent
+for weeks, a publish-before-write, a sweep that woke nobody, two racy tests. The passes
+over my fixes produced 10: one real defect, eight documentation drift, one non-finding.
+
+So the prompts were not broken; something changed between round 1 and round 11. It was
+this: **`position()` keyed on the tier alone, so every round was described as a first
+look.** Round 11's t1 was told *"You are the FIRST model to see this change"* having
+cleared that tree four times. Told it is first, a model re-audits — and a tree whose only
+new material is my comments offers comments. Five such re-reads: 245s, 439s, 252s, 263s,
+491s. 28 minutes, 37% of the review, zero findings.
+
+Fixed by passing `round` and `tierRounds` and giving a re-read its own instruction: judge
+the AUTHOR'S ANSWER, not the tree you already cleared. Carefully not a licence to skim —
+the racy-revocation-test finding came from exactly such a re-read and was real.
+
+Second change: the prompt now states the composition of the diff when ≥75% of added
+lines are prose. Not to suppress documentation findings, which catch our most common real
+defect, but because a reviewer cannot otherwise tell "the author rewrote a comment" from
+"the author changed the system", and in that shape of diff it must name a reader who acts
+wrongly.
+
+**Argued against, and not built: a suggestion channel.** Vany's goal was "find errors and
+improve code, if we can", and the temptation is to add advice to findings. A finding's
+whole value is that it demands an answer; a suggestion demands nothing, gets skimmed, and
+teaches people to skim findings too. I had proved that an hour earlier by inventing
+`notes`. "Improve code" belongs in `lore propose` (D-75) — specced, unbuilt, on demand —
+and it is gated on quota because it calls the largest models by design.
+
 **The subscription surface stays exactly as built.** Correct, tested, free to keep, ready
 the day a harness wires notifications to turns. What it no longer does is open a
 permanently-resident tool description with an instruction the only real client cannot

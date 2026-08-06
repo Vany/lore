@@ -1181,6 +1181,27 @@ kind it is, so it must look. What changed is what to do once it has. And a discl
 that is itself false — the spec saying "not built" while a tool description promises it
 — remains a finding, and a good one.
 
+**The prompt was also lying about position, fixed 2026-08-07.** `position()` keyed on the
+TIER and nothing else, so a tier on its fifth pass was told *"You are the FIRST model to
+see this change"*. On round 11 of this repository's own review that sentence went to t1,
+which had read and cleared that tree four times with t2 and t3 clean behind it. Told it
+is first, a model behaves like it is first: it re-audits, and on a tree whose only new
+material is the author's comments, what it finds is comments. Five such re-reads cost 28
+minutes — 37% of that review's model time — and produced nothing.
+
+A re-read now says what it is: *the tree was cleared, the author has answered, judge the
+ANSWER.* Not a licence to skim — the fix is unreviewed code written under pressure, and
+one of that review's real findings came from exactly such a re-read — a licence to stop
+re-auditing what this tier already passed.
+
+**And the prompt now says what the diff is made of**, when three quarters or more of the
+added lines are comments or documentation. A reviewer given a diff that is almost
+entirely prose will find prose; it cannot otherwise distinguish "the author rewrote a
+comment" from "the author changed the system". Documentation findings still count —
+drift is this repository's most common real defect — but in such a round one must name a
+READER and what they would DO wrongly. Measured on the same review: the first pass found
+8 defects and 0 drift; the passes over the fixes found 1 defect and 8 drift.
+
 **Unmeasured, and that is the honest caveat.** Whether this produces better reviews is
 not yet known: `PLAN.md` Phase 1's measurement harness was never built, so the change
 rests on a diagnosis rather than on a before-and-after. The diagnosis is well-evidenced

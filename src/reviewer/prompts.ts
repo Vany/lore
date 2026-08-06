@@ -28,6 +28,21 @@ export interface PromptInput {
   readonly conflicts?: string;
   /** Findings already settled, with the reasons. Re-raise only with new evidence. */
   readonly settled: readonly { finding: RecordedFinding; rationale: string | undefined }[];
+  /**
+   * Which round of this review is about to run, and how many each tier has already had.
+   *
+   * Absent means "not known", which renders as a first look — the old behaviour, and
+   * correct for the CLI and for tests that do not model a ladder.
+   *
+   * This exists because the prompt was lying. `position()` keyed on the TIER alone, so
+   * on round 11 of this repository's own review t1 was told *"You are the FIRST model
+   * to see this change"* — having already read and cleared that tree four times, with
+   * t2 and t3 clean behind it. Told it is first, a model behaves like it is first: it
+   * re-audits, and on a tree whose only new material is the author's comments, what it
+   * finds is comments. Five such re-reads cost 28 minutes and produced nothing.
+   */
+  readonly round?: number;
+  readonly tierRounds?: Readonly<Record<string, number>>;
 }
 
 /**
@@ -93,8 +108,41 @@ const BAR = [
   "them on observations is one they learn to skim — which is how the real one gets skimmed too.",
 ].join("\n");
 
+/**
+ * What is NEW since this tier last looked, when it has looked before.
+ *
+ * A re-read is a different job from a first look, and saying so is the whole point: the
+ * tree was cleared, the author has answered, and the thing to judge is the answer. That
+ * is not a licence to skim — the fix IS new code, and one of tonight's real findings
+ * (a test that would have stayed green through a regression) came from exactly such a
+ * re-read. It is a licence to stop re-auditing what this tier already passed.
+ */
+function reReadPosition(i: PromptInput, mine: number): string {
+  const others = Object.entries(i.tierRounds ?? {})
+    .filter(([id, n]) => id !== i.tier.id && n > 0)
+    .map(([id, n]) => `${id}×${String(n)}`);
+  return [
+    `You have READ THIS BRANCH ${String(mine)} time(s) already in this review — this is round ${String(i.round ?? 0)}.` +
+      (others.length === 0 ? "" : ` Other tiers have looked too: ${others.join(", ")}.`),
+    "",
+    "So this is NOT a first look, and you must not review it as one. What is new is the AUTHOR'S ANSWER to what",
+    "was raised: a fix, or a justification. Judge that.",
+    "",
+    "  * Does the fix actually close the finding, or move it?",
+    "  * Is the fix ITSELF sound? It is new code, written under time pressure, and nobody has reviewed it. This",
+    "    is where the real defects in a late round live.",
+    "  * Does a justification hold — against the code as it now stands, not against how reasonable it sounds?",
+    "",
+    "Do NOT re-audit what you already passed. You cleared this tree; re-reading it for something you did not",
+    "report the first time is how a review turns into an argument about wording. If you genuinely find something",
+    "you missed, report it — but it must clear the bar above, and 'I looked again' is not new evidence.",
+  ].join("\n");
+}
+
 /** Where this tier stands, and therefore what is left for it to find. */
 function position(i: PromptInput): string {
+  const mine = i.tierRounds?.[i.tier.id] ?? 0;
+  if (mine > 0) return reReadPosition(i, mine);
   if (i.tierIndex === 0) {
     return [
       "You are the FIRST model to see this change. Deterministic tooling has already run.",
@@ -150,6 +198,62 @@ function typeGuidance(typeId: string): string {
     "",
     "Do not guess. If you cannot trace the call path, say that you could not, and why. 'Unexamined' is an honest",
     "answer; 'probably fine' is not.",
+  ].join("\n");
+}
+
+/**
+ * How much of this diff is prose, so a finding about prose can be priced against it.
+ *
+ * Counted from the added lines only: a round that adds 170 comment lines and 20 code
+ * lines is a round about comments, whatever the deletions say.
+ *
+ * The point is NOT to suppress documentation findings. Specs are reviewable here (D-11)
+ * and drift is this repository's most common real defect — the first pass over this
+ * very change found five instances of it. The point is that a reviewer looking at a
+ * diff which is almost entirely prose will find prose, and unless it is told what it is
+ * looking at it cannot tell "the author rewrote a comment" from "the author changed the
+ * system". Measured on this repository's own review: the first pass found 8 defects and
+ * 0 drift; the passes over the fixes found 1 defect and 8 drift.
+ */
+export function proseShare(diff: string): { readonly added: number; readonly prose: number } {
+  let added = 0;
+  let prose = 0;
+  let inProseFile = false;
+  for (const line of diff.split("\n")) {
+    if (line.startsWith("+++ ")) {
+      // `+++ b/spec/foo.md` — the file the following `+` lines belong to.
+      inProseFile = /\.(md|markdown|txt|rst)\s*$/i.test(line);
+      continue;
+    }
+    if (line.startsWith("---") || line.startsWith("diff ") || !line.startsWith("+")) continue;
+    added++;
+    const body = line.slice(1).trim();
+    // Blank lines are neither, and counting them as code would understate every prose
+    // diff — markdown is half blank lines.
+    if (body === "") {
+      added--;
+      continue;
+    }
+    if (inProseFile || /^(\/\/|\/\*|\*|#|--)/.test(body)) prose++;
+  }
+  return { added, prose };
+}
+
+/** Told to the model only when the diff is overwhelmingly prose, so it stays rare enough to read. */
+function compositionBlock(diff: string): string {
+  const { added, prose } = proseShare(diff);
+  if (added < 20 || prose * 4 < added * 3) return "";
+  return [
+    "",
+    "WHAT THIS CHANGE IS MADE OF",
+    `Of ${String(added)} added lines, ${String(prose)} are comments or documentation. This is a change ABOUT`,
+    "prose, so the easy thing to find here is prose — and most of it will be the author saying the same thing a",
+    "different way.",
+    "",
+    "A documentation finding still counts, and drift is a real defect. But in a diff like this one it must name",
+    "a READER and what they would DO wrongly — a client that would call an API that does not behave that way, a",
+    "maintainer who would undo a guard. 'This sentence is now inconsistent with that one' is the finding this",
+    "shape of diff generates endlessly, and answering it writes more prose for the next round to fault.",
   ].join("\n");
 }
 
@@ -243,6 +347,7 @@ export function reviewPrompt(i: PromptInput): string {
     knowledgeBlock(i.knowledge),
     i.conflicts ?? "",
     settledBlock(i.settled),
+    compositionBlock(i.diff),
     "",
     "DETERMINISTIC RESULTS",
     i.t0,

@@ -250,6 +250,11 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       knowledge: relevantTo(store, review.repoId, diff.changedFiles),
       conflicts: renderConflicts(store, review.repoId),
       settled: [...settledForPrompt, ...pending.map((p) => ({ finding: p.finding, rationale: p.reason }))],
+      // WHERE THIS TIER ACTUALLY STANDS. Without it `position()` told every round it was
+      // a first look, so a tier on its fifth pass re-audited a tree it had cleared four
+      // times — and found the only thing such a tree offers, which is comments.
+      round: review.ladder.round + 1,
+      tierRounds: review.ladder.tierRounds,
     });
 
   // COMPACT TO THE READER, rather than to a constant.

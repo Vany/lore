@@ -14,7 +14,7 @@
 import { describe, expect, it } from "vitest";
 import { CODE_ARCH, SECURITY } from "../core/review-type.ts";
 import type { Tier } from "../core/ladder.ts";
-import { OUTPUT_CONTRACT, reviewPrompt } from "./prompts.ts";
+import { OUTPUT_CONTRACT, proseShare, reviewPrompt } from "./prompts.ts";
 
 const TIER: Tier = { id: "t1", kind: "model", model: "v/m", stage: "fast" };
 
@@ -28,7 +28,12 @@ const TIER: Tier = { id: "t1", kind: "model", model: "v/m", stage: "fast" };
  */
 const flat = (s: string) => s.replace(/\s+/g, " ");
 
-const promptAt = (tierIndex: number, modelTierCount = 3, type = CODE_ARCH) =>
+const promptAt = (
+  tierIndex: number,
+  modelTierCount = 3,
+  type = CODE_ARCH,
+  over: Partial<Parameters<typeof reviewPrompt>[0]> = {},
+) =>
   reviewPrompt({
     tier: TIER,
     tierIndex,
@@ -41,6 +46,7 @@ const promptAt = (tierIndex: number, modelTierCount = 3, type = CODE_ARCH) =>
     t0: "T0",
     knowledge: [],
     settled: [],
+    ...over,
   });
 
 describe("the bar for reporting anything", () => {
@@ -83,6 +89,54 @@ describe("the bar for reporting anything", () => {
     expect(p).toMatch(/UNDISCLOSED gap between the ticket and the code is the most valuable/);
     // And a disclosure that is itself false is still a finding.
     expect(p).toMatch(/If the disclosure itself is wrong/);
+  });
+
+  // THE PROMPT WAS LYING. `position()` keyed on the tier alone, so on round 11 of this
+  // repository's own review t1 was told "You are the FIRST model to see this change" —
+  // having read and cleared that tree four times, with t2 and t3 clean behind it. Told
+  // it is first, a model behaves like it is first: it re-audits, and on a tree whose
+  // only new material is the author's comments, what it finds is comments. Five such
+  // re-reads cost 28 minutes — 37% of the review — and produced nothing.
+  it("tells a tier that has looked before that this is not a first look", () => {
+    const p = flat(promptAt(0, 3, CODE_ARCH, { round: 11, tierRounds: { t1: 4, t2: 3, t3: 1 } }));
+    expect(p).not.toMatch(/FIRST model to see this change/);
+    expect(p).toMatch(/READ THIS BRANCH 4 time\(s\) already/);
+    expect(p).toMatch(/round 11/);
+    expect(p).toMatch(/t2×3, t3×1/);
+    // The job on a re-read is the ANSWER, not the tree.
+    expect(p).toMatch(/AUTHOR'S ANSWER/);
+    expect(p).toMatch(/Do NOT re-audit what you already passed/);
+    // But NOT a licence to skim: the fix is unreviewed code, and one of tonight's real
+    // findings came from exactly such a re-read.
+    expect(p).toMatch(/Is the fix ITSELF sound/);
+  });
+
+  it("still tells a tier on its first look that it is first", () => {
+    const p = flat(promptAt(0, 3, CODE_ARCH, { round: 1, tierRounds: { t1: 0 } }));
+    expect(p).toMatch(/FIRST model to see this change/);
+    expect(p).not.toMatch(/READ THIS BRANCH/);
+  });
+
+  // A reviewer looking at a diff that is almost entirely prose will find prose. Saying
+  // what the diff is made of is not a ban on documentation findings — drift is this
+  // repo's most common real defect — it prices them against what actually changed.
+  it("says when a diff is mostly prose, and what a finding must then name", () => {
+    const proseDiff = [
+      "+++ b/spec/thing.md",
+      ...Array.from({ length: 40 }, (_, i) => `+a documentation line ${String(i)}`),
+      "+++ b/src/a.ts",
+      "+const x = 1;",
+      "+const y = 2;",
+    ].join("\n");
+    const p = flat(promptAt(0, 3, CODE_ARCH, { diff: proseDiff }));
+    expect(p).toMatch(/WHAT THIS CHANGE IS MADE OF/);
+    expect(p).toMatch(/42 added lines, 40 are comments or documentation/);
+    expect(p).toMatch(/name a READER and what they would DO wrongly/);
+  });
+
+  it("stays silent about composition on a diff that is mostly code", () => {
+    const codeDiff = ["+++ b/src/a.ts", ...Array.from({ length: 40 }, (_, i) => `+const v${String(i)} = 1;`)].join("\n");
+    expect(flat(promptAt(0, 3, CODE_ARCH, { diff: codeDiff }))).not.toMatch(/WHAT THIS CHANGE IS MADE OF/);
   });
 
   it("holds prose to the same bar rather than excluding it", () => {
@@ -129,5 +183,37 @@ describe("what the ladder still guarantees", () => {
   // The security type's contribution is reachability, not detection (Phase 5).
   it("keeps the security type asking for reachability", () => {
     expect(promptAt(0, 3, SECURITY)).toMatch(/REACHABILITY, not detection/);
+  });
+});
+
+describe("proseShare", () => {
+  it("counts added lines only, never deletions or context", () => {
+    const d = ["+++ b/src/a.ts", "+const a = 1;", "-const b = 2;", " const c = 3;"].join("\n");
+    expect(proseShare(d)).toStrictEqual({ added: 1, prose: 0 });
+  });
+
+  it("treats every added line in a markdown file as prose", () => {
+    const d = ["+++ b/SPEC.md", "+# Heading", "+Some sentence.", "+`code in a fence`"].join("\n");
+    expect(proseShare(d)).toStrictEqual({ added: 3, prose: 3 });
+  });
+
+  it("recognises comment lines inside code files", () => {
+    const d = ["+++ b/src/a.ts", "+// why this exists", "+ * continued", "+const a = 1;"].join("\n");
+    expect(proseShare(d)).toStrictEqual({ added: 3, prose: 2 });
+  });
+
+  // Markdown is half blank lines. Counting them as code would make every prose diff
+  // look mixed, which is exactly the misreading this function exists to prevent.
+  it("ignores blank added lines entirely", () => {
+    const d = ["+++ b/SPEC.md", "+text", "+", "+more"].join("\n");
+    expect(proseShare(d)).toStrictEqual({ added: 2, prose: 2 });
+  });
+
+  // `+++ b/...` is itself a line starting with `+`. Counting it would inflate every
+  // multi-file diff by one per file, and it is the first thing a naive version gets
+  // wrong.
+  it("does not count the file header as an added line", () => {
+    const d = ["diff --git a/x b/x", "--- a/x", "+++ b/src/a.ts", "+const a = 1;"].join("\n");
+    expect(proseShare(d)).toStrictEqual({ added: 1, prose: 0 });
   });
 });
