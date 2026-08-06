@@ -23,6 +23,7 @@ and what it cost to learn, lives in `MEMO.md` and in the git history.
 | `spec/review-ladder.md` | tiers, findings, verdicts, invariants |
 | `spec/agent-docs.md` | tool descriptions, resources, the `review` prompt |
 | `spec/propose.md` | `lore propose` — the idea generator, which gates nothing |
+| `spec/mcp-async.md` | the asynchronous surface: one conversation per tier, nothing polls (D-80) |
 | `spec/deployment.md` | the arm64 host, Tailscale, T0 throughput budget |
 | `spec/operations.md` | client alarms vs devops alerts, the heartbeat, spend control |
 | `research/` | verified external facts, each dated |
@@ -201,6 +202,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-77** | **Commit, review to a verdict, amend, push.** Nothing reaches origin unreviewed | `[OPEN]` |
 | **D-78** | A review answers to **the token that started it**, not to its repository | `[OPEN]` |
 | **D-79** | A finding is **what the author missed and would be hurt by** — asked, not filed | confirmed |
+| **D-80** | A review is **one conversation per tier**, not a series of audits. Fully async | `[OPEN]` |
 
 **D-7, revised.** The earlier version dropped GLM-5.2 on Artificial Analysis's
 *cost per task* — which is tokens consumed × price on their benchmark, not a price.
@@ -939,6 +941,68 @@ and the ids were read from `/config/providers` on the running server. `DEFAULT_T
 still names `openrouter/moonshotai/kimi-k3` for a gateway route nobody here uses, which
 is a guess nothing has verified — it applies only when `LORE_TIERS` is unset, and this
 deployment always sets it.
+
+**D-80 — a review is a conversation, and the whole loop is asynchronous.**
+
+Today a round is a fresh opencode session: prompt, answer, session discarded. A fix
+starts a new one, which re-reads the repository from nothing. The client meanwhile
+polls, because nothing can tell it anything.
+
+Both halves are worked around rather than designed, and the protocol and the model
+runtime each grew the missing piece.
+
+**The session stays open.** One conversation per tier, for the life of the review. The
+reviewer raises a finding; the author's diff is applied and handed to *that same
+session* as the next message — *"this is the change that answers your finding; does
+it?"* — and the model, which already holds the repository, answers whether it is
+settled, or why it is not, or what the fix broke instead.
+
+That is what a review is. A thread between two parties, not a sequence of independent
+audits of a moving tree. And it is how the ratification in D-10 was always described:
+the reviewer rules on the answer. It has been implemented as *a different model
+instance re-deriving everything and inferring assent from silence*, which is the same
+idea with the conversation removed.
+
+**Nothing waits.** `review_submit` applies the patch and returns at once; the model's
+answer arrives later as an event. The client subscribes with `subscriptions/listen` on
+`lore://review/{review_id}` and is woken by `notifications/resources/updated` — it does
+not poll and does not block, and may submit at any moment, including while a tier is
+mid-read (`research/mcp-subscriptions.md`).
+
+**Subscription is the main path and `review_poll` is the fallback**, in that order,
+including in the tool descriptions a client actually reads. The two are not rivals:
+subscription answers *when*, poll answers *what*, and a subscribing client uses both
+without ever sleeping. Polling survives because a client that never sends
+`subscriptions/listen` receives nothing at all — the server may only send what was
+subscribed to — and because a notification carries a URI rather than the findings.
+What is being left behind is not the poll but the loop around it.
+
+**This retires D-55 rather than violating it.** That decision refused a submit during a
+running round because the tier's findings would describe a tree that no longer existed
+— the reviewer reading files changing underneath it, silently. In a conversation the
+change is not silent: it is the next thing said. The model is told what changed and
+answers about the tree as it now stands, which is what D-55 wanted and could not get
+from a request/response round.
+
+**What it costs, and this is the part to watch.** An agentic session re-sends its
+accumulated context every turn (D-50) — one measured call read ~1.5M cached tokens
+before answering. A conversation across ten exchanges grows monotonically, and the
+exchange that settles a one-line fix pays for the whole history. Against that: today
+each round pays to re-read the repository from scratch, and the measured cache hit is
+97–99%, so the comparison is not obvious in either direction. **It must be measured
+before this is called cheaper.**
+
+**And it changes what the ladder means.** "Reset to T1 after a fix" (D-6) exists
+because a fix is unreviewed code. If the tier that raised a finding also judges its own
+fix, the reset is no longer where independence comes from — the dearer tiers must still
+see the settled tree, or a conversation with t1 becomes the whole review. The ladder
+still has to climb; what changes is that it climbs from a settled conversation rather
+than from a fresh audit.
+
+`[OPEN]` — the design is agreed and the consequences above are not yet resolved. Two
+questions before it ships: whether a long conversation is cheaper or dearer than
+repeated cold rounds, measured rather than argued; and how the deep tiers enter a
+conversation the cheap tier has been having.
 
 **D-79 — a finding is something the author missed and would be hurt by, addressed to
 them as a question.**

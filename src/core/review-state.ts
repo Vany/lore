@@ -26,12 +26,22 @@ export const REVIEW_STATES = [
   "failed",
   /** Abandoned or timed out. Also never "found nothing". */
   "expired",
+  /**
+   * Stopped on purpose, by whoever started it.
+   *
+   * Its own state rather than `expired`, because the two mean opposite things about
+   * the person: `expired` is nobody came back, `cancelled` is somebody decided. Both
+   * are terminal, neither is a pass, and neither says anything about the code — but
+   * collapsing them would lose the one fact worth keeping, which is that a human made
+   * a choice. Findings already raised are still real and are handed over.
+   */
+  "cancelled",
 ] as const;
 
 export type ReviewState = (typeof REVIEW_STATES)[number];
 
 /** Terminal states — no further work will happen without a new review. */
-const TERMINAL = new Set<ReviewState>(["passed", "passed_partial", "failed", "expired"]);
+const TERMINAL = new Set<ReviewState>(["passed", "passed_partial", "failed", "expired", "cancelled"]);
 
 /**
  * The same set, for SQL that has to name them.

@@ -16,9 +16,9 @@ import { DEFAULT_TIERS, anyTierRan, markUnavailable, settle, step, type Decision
 import type { Finding } from "../core/finding.ts";
 import { fingerprint } from "../core/fingerprint.ts";
 import { parseLoreOk } from "../core/lore-ok.ts";
-import type { ReviewState } from "../core/review-state.ts";
+import { isTerminal, type ReviewState } from "../core/review-state.ts";
 import type { ReviewType } from "../core/review-type.ts";
-import { TierUnavailable, TooLargeForTier } from "../core/errors.ts";
+import { DidNotRun, TierUnavailable, TooLargeForTier } from "../core/errors.ts";
 import { hunkAround, hunkStillPresent, makeScope, type Scope } from "../core/scope.ts";
 import { blobSha, computeDiff, renderDiff } from "../git/diff.ts";
 import { treeHash } from "../git/repo.ts";
@@ -121,6 +121,19 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
 
   const review = store.getReview(reviewId, principal);
   if (review === undefined) throw new Error(`review ${reviewId} not found for this principal`);
+
+  // TOCTOU with cancellation, closed at the last moment before anything is spent.
+  //
+  // `claimJob` refuses a terminal review's jobs now, but a job claimed microseconds
+  // before `review_cancel` lands is already past that gate — and the next thing this
+  // function does is run T0 and then pay a model tier. Checking here means the worst
+  // case is a round that starts and stops, rather than one that spends and then
+  // writes a ladder step onto a review somebody deliberately ended.
+  if (isTerminal(review.state)) {
+    throw new DidNotRun(
+      `review ${reviewId} is '${review.state}' — no further rounds. Nothing was spent on this one.`,
+    );
+  }
 
   const tiers = type.tiers.length > 0 ? type.tiers : DEFAULT_TIERS;
   const tier = tiers[review.ladder.cursor];
@@ -271,7 +284,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
 
   let result;
   try {
-    result = await input.reviewer.review(tier, prompt, worktree);
+    result = await input.reviewer.review(tier, prompt, worktree, reviewId);
     // Closed with what this tier FOUND, in the same words T0 uses (line 99). The
     // column answers one question — what did this tier do — and `answered` did not
     // answer it: a tier that replied with nothing and one that replied with six

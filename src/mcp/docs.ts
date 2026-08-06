@@ -39,7 +39,20 @@ made, not what was asked, which destroys the only independent statement of inten
 reviewers get.
 
 Returns a review_id IMMEDIATELY. The review takes minutes — this does not mean it
-finished. Call review_poll until it reaches a terminal state.
+finished.
+
+DO NOT SIT IN A POLLING LOOP. Subscribe instead, and go and do something else:
+
+    subscriptions/listen  { notifications: { resourceSubscriptions: ["lore://review/<review_id>"] } }
+
+You will be woken by \`notifications/resources/updated\` whenever the review changes —
+a finding raised, a finding settled, or a terminal state. Read
+\`lore://review/<review_id>\` to see what changed; it carries the whole audit trail.
+The notification tells you WHEN, that resource tells you WHAT.
+
+If your host cannot subscribe, fall back to review_poll — start at 10s, back off to
+60s. That works and is the older way; it is a fallback because it makes you spend your
+turn waiting for something that could have woken you.
 
 PUSH YOUR BRANCH FIRST. lore reads its own mirror of the remote, not your working
 copy, so a commit that exists only on your disk is not in the review.
@@ -83,6 +96,12 @@ Fetch findings discovered since your last poll.
 
 Returns ONLY NEW findings. Anything you have already been shown will not appear again
 — do not re-fix something absent from the response.
+
+USE THIS TO READ, NOT TO WAIT. Subscribe to \`lore://review/<review_id>\` with
+subscriptions/listen and you will be woken when something changes; then call this to
+collect it. The notification says WHEN, this says WHAT. Calling it in a sleep loop is
+the fallback for a host that cannot subscribe — it works, and it spends your turn
+waiting for something that could have woken you.
 
 States: queued, running, findings_ready, awaiting_diff, fast_clean, needs_human,
 passed, passed_partial, failed, expired.
@@ -290,6 +309,40 @@ defends — adding or removing it does not expire the reason — so putting it w
 reader will see it costs you nothing.
 `.trim(),
 
+  cancel: `
+Stop a review you started, and take what it has already found.
+
+Use it when the branch has changed under you, the work is abandoned, or you simply do
+not want to spend more on it. Stopping deliberately is a legitimate ending and a much
+better one than walking away: a review nobody answers holds a pinned worktree until it
+is swept as \`expired\` two days later, and \`expired\` is indistinguishable from
+"nobody was ever going to come back".
+
+WHAT IT DOES, all of it:
+
+  * the review becomes \`cancelled\` — TERMINAL, and its own state rather than
+    \`expired\`, because the two mean opposite things about you: expired is nobody
+    came back, cancelled is somebody decided;
+  * the ladder stops. No further round is claimed, and a round claimed in the same
+    instant finds the review terminal and stops before spending anything;
+  * a model call in flight is ABORTED. \`stopped_in_flight\` says whether there was
+    one. Abandoning a call does not stop a model — an agent kept reading a repository
+    for millions of tokens after lore stopped listening once — so this is the
+    difference between cancelling and pretending to;
+  * every finding it had already produced is returned, delivered or not. They are
+    real: the tiers that ran did read the code;
+  * everything it learned about your repository is KEPT. Knowledge outlives the review
+    that made it, and cancelling costs you none of it.
+
+WHAT IT IS NOT: a pass, and not evidence the branch is clean. The tiers that had not
+run never looked, and what they would have found is unknown. Never merge on a
+\`cancelled\` review — report the findings you were given and say the review was
+stopped before it finished.
+
+Already terminal is refused rather than silently accepted: there is nothing to cancel,
+and the findings are still available from review_poll.
+`.trim(),
+
   attest: `
 Available once state is \`passed\` — or \`passed_partial\`, which is the case that
 most needs a record: the line names which tiers were skipped and, if only one vendor
@@ -398,11 +451,15 @@ export const RESOURCE_DOCS: Readonly<Record<string, { title: string; priority: n
     priority: 1.0,
     text: `
 1. review_start(branch, into, ticket) → review_id
-2. review_poll(review_id) until findings arrive or the state is terminal
-3. For each finding: fix it, or justify it with // lore-ok[fp]: <reason>
-4. review_submit(review_id, diff, tree_hash)
-5. Return to 2. Repeat until the state is TERMINAL — \`passed\`, \`passed_partial\`,
-   \`needs_human\`, \`failed\` or \`expired\`.
+2. SUBSCRIBE, do not loop:
+   subscriptions/listen { notifications: { resourceSubscriptions: ["lore://review/<id>"] } }
+   You are woken by notifications/resources/updated whenever anything changes. Fall back
+   to review_poll (10s, backing off to 60s) only if your host cannot subscribe.
+3. On each wake, review_poll(review_id) — it returns only what is new.
+4. For each finding: fix it, or justify it with // lore-ok[fp]: <reason>
+5. review_submit(review_id, diff, tree_hash) — at any time; it returns at once
+6. Return to 3. Repeat until the state is TERMINAL — \`passed\`, \`passed_partial\`,
+   \`needs_human\`, \`failed\`, \`expired\` or \`cancelled\`.
 
 Rules that decide whether this works:
 - Polls return only new findings. Never re-fix what is not in the response.
@@ -478,9 +535,16 @@ passed_partial  every tier that COULD run agreed — a tier went unpaid, or all 
                 them came from one vendor. Real evidence, weaker evidence. NOT a pass
 failed          did not complete — NOT "found nothing"
 expired         abandoned or timed out — NOT "found nothing"
+cancelled       YOU stopped it — terminal, and NOT "found nothing". The findings it
+                had already produced are real and are yours; what the remaining tiers
+                would have found is unknown
 
 \`passed\` and \`passed_partial\` both support an attestation. The partial one is the
 case that most needs the record, because the line names what was skipped.
+
+\`expired\` and \`cancelled\` are deliberately not the same state, though both are
+terminal and neither is a pass: expired is nobody came back, cancelled is somebody
+decided. Only one of those says anything about a person.
 `.trim(),
   },
 
@@ -515,12 +579,16 @@ opinions to argue with.
 
 The loop:
 1. review_start(branch: "${branch}", into: "${into}", ticket: <paste the ticket, do not summarise>)
-2. review_poll(review_id) until findings arrive or the state is terminal
-3. For each finding: fix it, or justify it with // lore-ok[fp]: <reason>
-4. review_submit(review_id, diff, tree_hash)
-5. Return to 2. Repeat until the state is TERMINAL — \`passed\`, \`passed_partial\`,
-   \`needs_human\`, \`failed\` or \`expired\`. Only \`passed\` and \`passed_partial\` are
-   worth attesting, and only \`passed\` is clean.
+2. SUBSCRIBE, do not loop:
+   subscriptions/listen { notifications: { resourceSubscriptions: ["lore://review/<id>"] } }
+   You are woken by notifications/resources/updated whenever anything changes. Fall back
+   to review_poll (10s, backing off to 60s) only if your host cannot subscribe.
+3. On each wake, review_poll(review_id) — it returns only what is new.
+4. For each finding: fix it, or justify it with // lore-ok[fp]: <reason>
+5. review_submit(review_id, diff, tree_hash) — at any time; it returns at once
+6. Return to 3. Repeat until the state is TERMINAL — \`passed\`, \`passed_partial\`,
+   \`needs_human\`, \`failed\`, \`expired\` or \`cancelled\`.
+   Only \`passed\` and \`passed_partial\` are worth attesting, and only \`passed\` is clean.
 
 Rules:
 - Polls return only new findings. Never re-fix what is not in the response.

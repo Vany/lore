@@ -500,6 +500,22 @@ export class Store {
    * and the CLI all render, and a client that reads only the top of it must be
    * reading the worst of it.
    */
+  /**
+   * Every finding this review raised, delivered or not, worst first.
+   *
+   * `undelivered` is the loop's query — deltas, so a client is never shown the same
+   * finding twice. This is the HANDOVER query: a cancelled review hands over
+   * everything it found, because the client stopping may not be the one that polled,
+   * and "you already saw that one" is the wrong answer when the review is ending and
+   * will never be polled again.
+   */
+  allFindings(reviewId: string): readonly RecordedFinding[] {
+    const rows = this.db
+      .prepare(`SELECT * FROM finding WHERE review_id = ? ORDER BY ${FINDING_ORDER_SQL}`)
+      .all(reviewId) as Record<string, string | number | null>[];
+    return rows.map(toFinding);
+  }
+
   undelivered(reviewId: string): readonly RecordedFinding[] {
     const rows = this.db
       .prepare(`SELECT * FROM finding WHERE review_id = ? AND delivered_at IS NULL ORDER BY ${FINDING_ORDER_SQL}`)
@@ -932,8 +948,17 @@ export class Store {
     return this.tx(() => {
       const row = this.db
         .prepare(
-          `SELECT id, review_id, stage FROM job AS j
+          // A TERMINAL REVIEW NEVER GETS ANOTHER ROUND. This checked only that no
+          // other job for the review was running, so a review that had reached a
+          // verdict — or been cancelled — still had its queued jobs claimed and paid
+          // for. Cancellation made that visible: marking the state stopped nothing,
+          // because nothing between here and `runRound` ever asked what the state was.
+          // Terminal means finished, and the queue is the one place that had not
+          // been told.
+          `SELECT j.id, j.review_id, j.stage FROM job AS j
+           JOIN review AS rv ON rv.id = j.review_id
            WHERE j.state = 'queued'
+             AND rv.state NOT IN (${TERMINAL_SQL})
              AND NOT EXISTS (SELECT 1 FROM job AS r WHERE r.review_id = j.review_id AND r.state = 'running')
            ORDER BY j.id LIMIT 1`,
         )

@@ -32,6 +32,15 @@ export interface ServerDeps {
   /** Queue the review for the background workers. */
   readonly enqueue: (reviewId: string, stage: "fast" | "deep") => void;
   readonly attest: (reviewId: string) => Promise<string>;
+  /**
+   * The reviewer, so `review_cancel` can stop a model call in flight.
+   *
+   * Optional: the CLI and the tests build a server without one, and a cancel that
+   * cannot reach a session still marks the review and hands over its findings — it
+   * just says plainly that nothing was aborted, rather than implying the spend
+   * stopped.
+   */
+  readonly reviewer?: { cancel?(reviewId: string): Promise<boolean> };
 }
 
 const text = (s: string) => ({ content: [{ type: "text" as const, text: s }] });
@@ -79,6 +88,8 @@ function nextStep(state: ReviewState): string {
       return "The review DID NOT RUN — this is not 'nothing found' and you must not merge. Read `failed_because` and repeat it to your user verbatim. Retry AT MOST ONCE; if it fails the same way, stop and report it rather than diagnosing lore yourself.";
     case "expired":
       return "Nobody answered this review in time, so it concluded NOTHING about the code — not that it was clean. Start a fresh review if this branch still matters.";
+    case "cancelled":
+      return "You stopped this review. The findings it had already produced are yours and are listed here; it concluded nothing beyond them, and the tiers that had not run never looked. Start a fresh review when you want the rest.";
   }
 }
 
@@ -503,6 +514,83 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
   );
 
   // ----------------------------------------------------------- review.attest
+
+  // ----------------------------------------------------------- review.cancel
+
+  server.registerTool(
+    "review_cancel",
+    {
+      description: TOOL_DOCS.cancel,
+      inputSchema: z.object({
+        review_id: z.string().min(1),
+        reason: absent(z.string()).describe("why you are stopping — recorded, and the only account anyone gets"),
+      }),
+    },
+    async ({ review_id, reason }) => {
+      const review = mine(review_id);
+      if (isTerminal(review.state)) {
+        throw new Error(
+          `review ${review_id} is already '${review.state}' — there is nothing to cancel. Its findings are still ` +
+            "available from review_poll and lore://review/" + review_id + ".",
+        );
+      }
+
+      // STATE FIRST, then abort — and marking it terminal is what stops the LADDER
+      // only because two other places were taught to ask.
+      //
+      // Neither did. `claimJob` checked that no OTHER job for the review was running
+      // and never what state the review was in, so a cancelled review's queued jobs
+      // were still claimed and paid for; and `runRound` read the review and proceeded
+      // regardless. A first version of this comment claimed the worker already
+      // checked, which was the false-statement-about-behaviour this repository is
+      // worst at, written into the fix for it. Both now refuse a terminal review.
+      //
+      // Order matters for the remaining window: state first means a round claimed in
+      // the same instant finds a terminal review and stops before spending. Aborting
+      // first would leave the session dead and the round still free to advance the
+      // ladder on an empty answer.
+      store.updateReview(review_id, { state: "cancelled" });
+
+      // Abandoning a call does not stop the model: three t2 calls that failed
+      // client-side once went on to consume ~3.7M cached-read tokens between them
+      // because the agent kept exploring after lore stopped listening. So a cancel
+      // that only marks a row would be worse than none — the operator would see a
+      // stopped review and have no reason to suspect it was still billing.
+      const aborted = (await deps.reviewer?.cancel?.(review_id).catch(() => false)) ?? false;
+
+      // EVERYTHING RAISED SO FAR, delivered or not. A cancelled review still found
+      // what it found, and those findings are the only thing of value it produced;
+      // dropping them because the loop stopped early would throw away the work that
+      // was actually paid for. Marked delivered, because this is the handover.
+      const all = store.allFindings(review_id);
+      store.markDelivered(review_id, all.map((f) => f.fingerprint));
+
+      return text(
+        JSON.stringify({
+          review_id,
+          state: "cancelled",
+          stopped_in_flight: aborted,
+          findings: all.map((f) => ({
+            fingerprint: f.fingerprint.slice(0, 8),
+            file: f.file,
+            line: f.line,
+            severity: f.severity,
+            claim: f.claim,
+            evidence: f.evidence,
+            failure_scenario: f.failureScenario,
+          })),
+          ...(reason === undefined ? {} : { reason }),
+          note:
+            `Stopped. ${all.length} finding(s) it had already produced are above and are yours to act on — ` +
+            "they are real. What the remaining tiers would have found is UNKNOWN, so this is not a pass and " +
+            "not evidence the branch is clean. Everything it learned about this repository is kept. " +
+            (aborted
+              ? "The model call in flight was aborted, so it has stopped spending."
+              : "No model call was in flight."),
+        }),
+      );
+    },
+  );
 
   server.registerTool(
     "review_attest",

@@ -95,7 +95,15 @@ export const DEFAULT_REVIEWER: ReviewerConfig = {
  * what makes it testable at all (PROG.md: pure core, effectful edges).
  */
 export interface ReviewerLike {
-  review(tier: Tier, prompt: string, worktree: string): Promise<ReviewerResult>;
+  review(tier: Tier, prompt: string, worktree: string, reviewId?: string): Promise<ReviewerResult>;
+  /**
+   * Stop this review's in-flight model call, and stop paying for it.
+   *
+   * Optional so a fake reviewer need not model it. Returns whether anything was
+   * actually aborted — a cancel that reports success while the agent keeps exploring
+   * is the failure this project refuses, and the caller says which happened.
+   */
+  cancel?(reviewId: string): Promise<boolean>;
   /**
    * Characters of prompt this tier can hold, or `undefined` if unknown.
    *
@@ -196,6 +204,8 @@ export class Reviewer implements ReviewerLike {
   private readonly gate: Gate;
   /** Lazily fetched, cached for the process: model id -> advertised context window. */
   private limits?: Promise<Map<string, number>>;
+  /** review id -> the opencode session currently reading for it, so `cancel` can stop it. */
+  private readonly sessions = new Map<string, string>();
 
   constructor(cfg: ReviewerConfig = DEFAULT_REVIEWER) {
     this.cfg = cfg;
@@ -222,13 +232,35 @@ export class Reviewer implements ReviewerLike {
    * exists (INV-5, INV-6) — reviews are already parallel because each has its own
    * worktree, so sharing sessions would only reintroduce contention.
    */
-  async review(tier: Tier, prompt: string, worktree: string): Promise<ReviewerResult> {
+  /**
+   * Stop whatever this review has in flight, and stop paying for it.
+   *
+   * ABANDONING A CALL DOES NOT STOP THE MODEL. Measured on this deployment: three t2
+   * calls that failed client-side went on to consume ~3.7M cached-read tokens between
+   * them, because the agent kept exploring the repository after lore had stopped
+   * listening. A cancel that only marks a row is worse than none — the operator sees a
+   * stopped review and has no reason to suspect it is still running and still billing.
+   *
+   * Best-effort by construction: if no round is in flight there is nothing to abort,
+   * and a failed abort must not fail the cancellation. It says so rather than
+   * pretending, because "cancelled" that kept spending is exactly the confident false
+   * statement this project exists to refuse.
+   */
+  async cancel(reviewId: string): Promise<boolean> {
+    const sessionId = this.sessions.get(reviewId);
+    if (sessionId === undefined) return false;
+    await this.abort(sessionId);
+    this.sessions.delete(reviewId);
+    return true;
+  }
+
+  async review(tier: Tier, prompt: string, worktree: string, reviewId?: string): Promise<ReviewerResult> {
     if (tier.model === undefined) throw new DidNotRun(`tier ${tier.id} has no model`);
     // The gate wraps the SESSION, not the request. What loads a provider is the
     // agentic exploration between them (`gate.ts`), so bounding individual HTTP calls
     // would bound nothing. Waiting here queues the round instead of failing it, which
     // is the same trade as backpressure: a review that dies on a 429 did not run.
-    return this.gate.run(() => this.conductSession(tier, prompt, worktree));
+    return this.gate.run(() => this.conductSession(tier, prompt, worktree, reviewId));
   }
 
   gateState(): GateState {
@@ -291,9 +323,18 @@ export class Reviewer implements ReviewerLike {
   }
 
   /** What `review` does once it holds a slot. */
-  private async conductSession(tier: Tier, prompt: string, worktree: string): Promise<ReviewerResult> {
+  private async conductSession(
+    tier: Tier,
+    prompt: string,
+    worktree: string,
+    reviewId?: string,
+  ): Promise<ReviewerResult> {
     const started = Date.now();
     const sessionId = await this.createSession(tier);
+    // Registered so `cancel` can reach it. Cleared in `finally` whatever happens —
+    // a stale entry would have a later cancel abort a session that had already ended,
+    // or worse, one belonging to a different round of the same review.
+    if (reviewId !== undefined) this.sessions.set(reviewId, sessionId);
 
     try {
       return await this.conduct(sessionId, tier, prompt, worktree, started);
@@ -306,6 +347,10 @@ export class Reviewer implements ReviewerLike {
       // the caller is not a budget — it just makes the spend invisible.
       await this.abort(sessionId);
       throw e;
+    } finally {
+      if (reviewId !== undefined && this.sessions.get(reviewId) === sessionId) {
+        this.sessions.delete(reviewId);
+      }
     }
   }
 

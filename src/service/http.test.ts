@@ -495,9 +495,20 @@ describe("a failed review says why", () => {
   });
 
   it("carries the recorded reason", async () => {
+    // In the order it actually happens: the review is running, its job fails, and the
+    // review becomes `failed` as a consequence.
+    //
+    // This used to create the review already `failed` and then claim a job for it,
+    // which `claimJob` now refuses — a terminal review never gets another round. The
+    // fixture described a sequence that cannot occur, so it broke the moment the rule
+    // was enforced, and `job` came back undefined while `finishJob(0, …)` silently
+    // wrote nothing.
+    store.updateReview("revF", { state: "running" });
     store.enqueue("revF", "fast");
     const job = store.claimJob();
+    expect(job, "the fixture must actually claim a job, or it tests nothing").toBeDefined();
     store.finishJob(job?.id ?? 0, "failed", "the clone was last fetched 43 minutes ago — run `make mirror`");
+    store.updateReview("revF", { state: "failed" });
 
     const out = await callTool("review_poll", { review_id: "revF" });
     expect(out["state"]).toBe("failed");
