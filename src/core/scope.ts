@@ -23,15 +23,46 @@ export interface Scope {
 }
 
 /**
- * Hash a hunk's text.
+ * Lines that are a `lore-ok` marker or its continuation.
+ *
+ * Matched loosely on purpose — three comment syntaxes, plus continuation lines — and
+ * erring toward stripping too much rather than too little. A stray comment line
+ * ignored costs nothing; a marker line counted is the livelock below.
+ */
+const ANNOTATION = /^\s*(?:\/\/|\*|<!--|#)?\s*lore-ok\[/;
+
+/**
+ * Hash a hunk's text — the CODE, never the annotation about it.
  *
  * Whitespace-insensitive on purpose: a reformat is not a semantic change, and
  * invalidating every verdict in a file because Prettier ran would train people to
  * ignore the reappearing findings. Anything beyond whitespace counts as a change,
  * because we cannot tell which edits preserve the reason.
+ *
+ * **And `lore-ok` lines are stripped, because otherwise a justification invalidates
+ * itself.** We tell the client to write the marker AT THE SITE; the scope that
+ * decides whether the justification survives is the hunk around that same line. So
+ * the reason lived inside the code it depended on staying stable, and writing it was
+ * itself a change to that code.
+ *
+ * Observed as a livelock on 2026-08-06. One semgrep false positive, in a file the
+ * branch never touched, was justified and expired FOUR times across nine rounds:
+ * accepted at round 2, expired, re-accepted at 4, expired, 6, expired, 8, expired.
+ * The recorded hunk was byte-identical every time. It cost 109 minutes of model time
+ * and ended when the review hit a bound, and it re-derived the same rule into the
+ * knowledge base on every cycle — 21 of that repository's 27 derived rules were one
+ * sentence about one false positive.
+ *
+ * This is what `spec/knowledge.md` already said and the code did not do: *a
+ * justification's scope is taken from the code it defends, never from wherever the
+ * reason is written*.
  */
 export function hashHunk(text: string): string {
-  const normalized = text.replace(/\s+/g, " ").trim();
+  const code = text
+    .split("\n")
+    .filter((l) => !ANNOTATION.test(l))
+    .join("\n");
+  const normalized = code.replace(/\s+/g, " ").trim();
   return createHash("sha256").update(normalized).digest("hex").slice(0, 32);
 }
 

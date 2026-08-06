@@ -16,7 +16,7 @@ import { DatabaseSync } from "node:sqlite";
 import { AmbiguousFingerprint } from "../core/errors.ts";
 import type { Finding, Severity } from "../core/finding.ts";
 import type { LadderState } from "../core/ladder.ts";
-import type { ReviewState } from "../core/review-state.ts";
+import { TERMINAL_SQL, type ReviewState } from "../core/review-state.ts";
 import type { Scope } from "../core/scope.ts";
 import { DDL, FINDING_ORDER_SQL, PRAGMAS, SCHEMA_VERSION, applyMigrations, assertNotDowngrade } from "./schema.ts";
 
@@ -266,7 +266,7 @@ export class Store {
     const row = this.db
       .prepare(
         `SELECT id, state, ladder FROM review
-         WHERE repo_id = ? AND branch = ? AND state NOT IN ('passed','passed_partial','failed','expired')
+         WHERE repo_id = ? AND branch = ? AND state NOT IN (${TERMINAL_SQL})
          ORDER BY created_at DESC LIMIT 1`,
       )
       .get(repoId, branch) as Record<string, string> | undefined;
@@ -401,6 +401,21 @@ export class Store {
     const row = this.db.prepare("SELECT 1 AS present FROM usage WHERE cost_usd > 0 LIMIT 1").get() as
       | Record<string, number>
       | undefined;
+    return row !== undefined;
+  }
+
+  /**
+   * Do we already hold this exact statement for this repository?
+   *
+   * Compared on normalised text rather than on provenance: the same reason ratified
+   * in two reviews is one fact about the codebase, however many times it was argued.
+   */
+  hasKnowledgeStatement(repoId: string, statement: string): boolean {
+    const row = this.db
+      .prepare(
+        "SELECT 1 AS present FROM knowledge WHERE repo_id = ? AND retired_at IS NULL AND LOWER(TRIM(statement)) = ? LIMIT 1",
+      )
+      .get(repoId, statement.trim().toLowerCase()) as Record<string, number> | undefined;
     return row !== undefined;
   }
 

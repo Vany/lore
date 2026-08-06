@@ -434,7 +434,18 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
         tier: tier.id,
         round,
       });
-      // An accepted justification is how the codebase acquires a fact about itself.
+      // An accepted justification is how the codebase acquires a fact about itself —
+      // ONCE. Ratifying the same reason again is the same fact, not a new one.
+      //
+      // Nothing checked, so the livelock wrote it every cycle: 21 of one repository's
+      // 27 derived rules were a single sentence about a single false positive,
+      // repeated. The memory that is the product became 78% one restated opinion,
+      // and every one of those copies then went into the next reviewer's prompt.
+      //
+      // Matched on the STATEMENT, which is the fact itself. A second acceptance of a
+      // reason we already hold teaches nothing; a differently-worded reason for the
+      // same finding is a different claim and is kept.
+      if (!store.hasKnowledgeStatement(review.repoId, p.reason))
       store.addKnowledge({
         repoId: review.repoId,
         kind: "rule",

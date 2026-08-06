@@ -13,6 +13,7 @@
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
+import { TERMINAL_SQL } from "../core/review-state.ts";
 import { authenticate } from "../mcp/auth.ts";
 import { buildServer, type ServerDeps } from "../mcp/server.ts";
 import { type SpendConfig, spendByTier, startOfDayIso } from "../ops/spend.ts";
@@ -151,7 +152,7 @@ function activeReviews(store: Store): unknown {
   return store.db
     .prepare(
       `SELECT id, branch, state, type, updated_at FROM review
-       WHERE state NOT IN ('passed', 'failed', 'expired')
+       WHERE state NOT IN (${TERMINAL_SQL})
        ORDER BY updated_at DESC LIMIT 50`,
     )
     .all();

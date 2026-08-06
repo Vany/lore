@@ -25,6 +25,7 @@ import { statSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { LadderState } from "../core/ladder.ts";
+import { TERMINAL_SQL } from "../core/review-state.ts";
 import { MAX_MIRROR_AGE_MS } from "../git/repo.ts";
 
 // Honest in a pipe: colour is for a human at a terminal, and a log file full of
@@ -100,7 +101,7 @@ export function renderStatus(db: DatabaseSync, reviewId?: string, dataDir = "/va
       ? db
           .prepare(
             `SELECT * FROM review
-             WHERE state NOT IN ('passed','failed','expired')
+             WHERE state NOT IN (${TERMINAL_SQL})
                 OR updated_at > datetime('now','-1 day')
              ORDER BY updated_at DESC LIMIT 12`,
           )
