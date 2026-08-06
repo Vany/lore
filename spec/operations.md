@@ -48,7 +48,7 @@ lists a route nobody dispatches is a claim about monitoring that does not exist.
 | condition | why it is urgent |
 |---|---|
 | **replica behind the database** | the knowledge base *is* the product; losing it loses everything the workgroup taught it. Measured as *behind*, never as *recently written*: litestream writes only when there is something to replicate, so an idle database and a dead replicator look identical under a freshness test. lore mounts the replica folder read-only so the beat can see it at all; a deployment that does not reports `unconfigured`, which is not green |
-| **no replica whatsoever** | worse than a late one — there is nothing to restore from right now |
+| **no replica whatsoever** | worse than a late one — there is nothing to restore from right now. Held back for five minutes after startup: litestream is a sibling container that starts *after* lore and Docker creates the bind path if it is missing, so an empty folder is the normal first seconds of every deploy. `/status` says so immediately regardless; only the unsolicited page waits |
 | **heartbeat missed** (§3) | the service is down, or the monitoring is |
 | disk > 90% | the sandbox's `node_modules` cache grows without bound and is by far the largest thing here — 3.4 GB against 200 MB of repositories, measured 2026-08-05. Worktrees are reclaimed on completion (§6) and are no longer the risk |
 | provider auth failure | every review stops at once. Its own error type, raised where the provider's status is classified and paged by the worker — not folded into the failing-as-a-class window, which would spend ten more reviews proving the same thing before it fired |

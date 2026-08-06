@@ -153,10 +153,35 @@ describe("the beat sends the conditions that had no caller", () => {
     expect(a?.severity).toBe("page");
   });
 
-  it("pages when there is no replica at all", async () => {
+  // litestream is a sibling that starts AFTER lore and syncs on its own schedule, and
+  // Docker creates the bind path if it is missing — so an empty replica folder is the
+  // normal first seconds of every deploy. Paging on that would train the operator to
+  // mute the one alert guarding the product, which is D-59's whole lesson earned back
+  // in the check written to avoid it.
+  it("does not page for a missing replica during the startup grace", async () => {
     const backupDir = join(dir, "empty-backup");
     mkdirSync(backupDir, { recursive: true });
     const stop = startHeartbeat(store, cfg({ backupDir, intervalMs: 3_600_000 }), alerter);
+    await new Promise((r) => setTimeout(r, 20));
+    stop();
+    expect(sent.filter((x) => x.condition === "backup replica missing")).toStrictEqual([]);
+  });
+
+  // ...but /status must say so immediately, because a person reading it is asking now.
+  // Only the unsolicited page waits.
+  it("still reports the replica missing in health while the page is held back", async () => {
+    const backupDir = join(dir, "empty-backup");
+    mkdirSync(backupDir, { recursive: true });
+    const h = await checkHealth(store, cfg({ backupDir }));
+    expect(h.replica).toBe("absent");
+    expect(h.ok).toBe(false);
+  });
+
+  it("pages when there is no replica after the grace has passed", async () => {
+    const backupDir = join(dir, "empty-backup");
+    mkdirSync(backupDir, { recursive: true });
+    // A deployment that has been up long enough for litestream to have written.
+    const stop = startHeartbeat(store, cfg({ backupDir, intervalMs: 3_600_000, replicaGraceMs: 0 }), alerter);
     await new Promise((r) => setTimeout(r, 20));
     stop();
     expect(sent.find((x) => x.condition === "backup replica missing")?.severity).toBe("page");

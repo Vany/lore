@@ -30,6 +30,8 @@ export interface HeartbeatConfig {
   readonly diskPagePct: number;
   readonly queueWarnDepth: number;
   readonly needsHumanAgeHours: number;
+  /** Grace before an empty replica folder pages. See `REPLICA_GRACE_MS`. */
+  readonly replicaGraceMs: number;
 }
 
 /**
@@ -43,6 +45,20 @@ export interface HeartbeatConfig {
  */
 export const REPLICA_BEHIND_SEC = 300;
 
+/**
+ * How long after startup an empty replica folder is not yet an emergency.
+ *
+ * litestream starts after lore and syncs on its own schedule, and Docker creates the
+ * bind path if it is missing — so "no replica yet" is the normal first seconds of
+ * every deploy. Paging on that would train the operator to mute the one alert that
+ * guards the product, which is the whole of D-59's lesson.
+ *
+ * `ok`/`problems` are NOT held back by this: `/status` should say the replica is
+ * missing the moment it is, because a person reading it is asking right now. Only the
+ * unsolicited page waits.
+ */
+const REPLICA_GRACE_MS = 5 * 60_000;
+
 export const DEFAULT_HEARTBEAT: HeartbeatConfig = {
   intervalMs: 60_000,
   dataDir: "/var/lib/lore",
@@ -50,6 +66,7 @@ export const DEFAULT_HEARTBEAT: HeartbeatConfig = {
   diskPagePct: 90,
   queueWarnDepth: 50,
   needsHumanAgeHours: 24,
+  replicaGraceMs: REPLICA_GRACE_MS,
 };
 
 /** Four answers, not two — see `replicaState`. */
@@ -162,10 +179,20 @@ async function diskUsedPct_(dir: string): Promise<number> {
  */
 export function startHeartbeat(store: Store, cfg: HeartbeatConfig, alerter: Alerter): () => void {
   let stopped = false;
+  const startedAt = Date.now();
 
   const beat = async (): Promise<void> => {
     if (stopped) return;
     const health = await checkHealth(store, cfg);
+    // litestream is a SIBLING container that starts after this one and syncs on its
+    // own interval, so on a fresh deployment the replica folder is legitimately empty
+    // for the first moments — Docker creates it if the host path does not exist. A
+    // page on the first beat of every deploy is the wolf-crying failure D-59 is about,
+    // earned back in the very check written to avoid it.
+    //
+    // Only `absent` is held back. `behind` already requires a replica to exist and to
+    // have fallen behind, which cannot describe a service that has just started.
+    const replicaGrace = Date.now() - startedAt < cfg.replicaGraceMs;
 
     if (health.diskUsedPct >= cfg.diskPagePct) {
       await alerter.send(CONDITIONS.diskCritical(health.diskUsedPct));
@@ -181,7 +208,7 @@ export function startHeartbeat(store: Store, cfg: HeartbeatConfig, alerter: Aler
     // listed the replica under "someone should look now" the whole time, and nothing
     // ever sent it — the only replica check lived in `make status`, which is a command
     // a human runs, and a page nobody is paged by is not a page.
-    if (health.replica === "absent") await alerter.send(CONDITIONS.backupAbsent());
+    if (health.replica === "absent" && !replicaGrace) await alerter.send(CONDITIONS.backupAbsent());
     else if (health.replica === "behind") {
       await alerter.send(CONDITIONS.backupBehind(Math.round((health.replicaBehindSec ?? 0) / 60)));
     }
