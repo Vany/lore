@@ -154,6 +154,70 @@ if [ ! -r "$STAGE/config/agents/readonly.md" ]; then
   exit 1
 fi
 
+# D-71, ENFORCED THE SAME WAY, because the removal was incomplete for a day.
+#
+# lore READS a test suite and never runs one. `src/reviewer/prompts.ts` was updated
+# when that was decided; the AGENT FILE was not — it said "explores, runs tests" in
+# its description and "You explore the codebase, run tests" in its body, while
+# carrying `bash: true`. So every reviewer since was instructed to do the one thing
+# D-71 removed, with the tool to do it.
+#
+# It survived because of where it lives. Reviewers inherit the OPERATOR's opencode
+# configuration (D-12, D-47), so this file sits outside the repository: lore's own
+# ladder never reviews it, no test covers it, and a behaviour change here cannot
+# reach it. This check is the only thing that can.
+#
+# Matched on the INSTRUCTION, not on the word "test" — reading tests is the point and
+# the prompt should keep saying so.
+#
+# And negated lines are dropped before matching, because a prompt that says "do not
+# run the suite" is the fixed state, not the broken one. Written the naive way first,
+# it refused the very file that corrects the problem — which is `polarity()`'s bug
+# from session 32 (negation cancelled across a whole statement) reappearing in a build
+# gate. Per line, like the fix there.
+# PER CLAUSE, not per line — and this took two wrong attempts, both instructive.
+#
+# Matching the whole line refused the corrected file, whose whole point is the
+# sentence "do not run the project's test suite". Then dropping any line carrying a
+# negation let the ORIGINAL through, because `explores, runs tests, never edits files`
+# has "never" in a clause about editing. Negation binds to its own clause, exactly as
+# `knowledge/conflict.ts` had to learn when a compound ADR sentence came out as its
+# own opposite and stopped a real review.
+# Flattened before splitting, because the instruction wraps. The original said
+#
+#     You explore the codebase, run
+#     tests, and look up context
+#
+# with "run" ending one line and "tests" starting the next, so anything working line
+# by line cannot see it — and that is the exact file this check exists for.
+#
+# `tolower()` rather than IGNORECASE: that is a gawk extension and this host's awk
+# silently ignores it, which let "Do not run the project's test suite" through as an
+# offence on the first attempt. A flag that is quietly not supported is the same class
+# of defect as everything else here.
+OFFENDING=$(tr '\n' ' ' < "$STAGE/config/agents/readonly.md" | awk '
+  {
+    n = split($0, parts, /[,;:.]| — /)
+    for (i = 1; i <= n; i++) {
+      c = tolower(parts[i])
+      if (c ~ /(run|runs|running|execute|executes) (the )?(project.?s |target.?s |full )?(test|tests|suite)/ &&
+          c !~ /(do not|don.t|never|without|instead|rather than|not yours|out of bounds|not to)/) {
+        gsub(/^[ \t]+|[ \t]+$/, "", parts[i])
+        printf "  offending clause: %s\n", parts[i]
+      }
+    }
+  }')
+if [ -n "$OFFENDING" ]; then
+  printf '%s\n' "$OFFENDING" >&2
+  echo "REFUSING: agents/readonly.md instructs the reviewer to RUN tests (lines above)." >&2
+  echo "          lore reads a suite and never runs one (D-71). The reviewer container" >&2
+  echo "          has bash and a checkout, so this is an instruction it can carry out —" >&2
+  echo "          executing an arbitrary dependency tree on the review host to" >&2
+  echo "          rediscover a fact the repository's own CI already reports." >&2
+  echo "          Fix $SRC_CONFIG/agents/readonly.md and re-run." >&2
+  exit 1
+fi
+
 # Last line of defence: prove the staged credentials really are clean.
 if grep -qi '"anthropic"' "$STAGE/data/auth.json"; then
   echo "REFUSING: an Anthropic credential survived into the staged auth.json" >&2

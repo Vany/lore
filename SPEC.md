@@ -1051,6 +1051,43 @@ times out loudly with a choice rather than hanging or quietly giving up. A deep 
 legitimately takes twenty minutes; a stuck one never finishes, and only a person can
 tell those apart.
 
+**D-71 addendum — part of the reviewer's instructions live outside this repository.**
+`[OPEN]`
+
+D-12 and D-47 make reviewers inherit the operator's own opencode configuration, so
+that a reviewer has what a Claude Code session has. The consequence, unnoticed until
+2026-08-06: **the `readonly` agent definition — the prompt every reviewer runs under —
+is not in this repository.** lore's ladder never reviews it, no test covers it, and a
+decision here cannot reach it.
+
+D-71 removed test execution and updated `src/reviewer/prompts.ts`. The agent file still
+said *"explores, runs tests"* in its description and *"You explore the codebase, run
+tests"* in its body, while carrying `bash: true` — so every reviewer afterwards was
+instructed to do the one thing that had just been removed, holding the tool to do it.
+Not proven to have happened; the one session whose tool use is still in the logs made
+53 bash calls to 13 reads, and the instruction was there for all of them.
+
+`sync-opencode.sh` refuses to stage an agent file that instructs running tests, which
+is the same shape as its INV-8 refusal and for the same reason: a check that only warns
+is a comment. It matches **per clause on a flattened file**, and both simpler versions
+were wrong in ways worth keeping:
+
+- matching the line refused the *corrected* file, whose point is the sentence "do not
+  run the project's test suite";
+- dropping any line containing a negation let the *original* through, because
+  `explores, runs tests, never edits files` carries a "never" belonging to a clause
+  about editing.
+
+That is `knowledge/conflict.ts`'s lesson arriving in a build gate — negation binds to
+its own clause, and cancelling it across a statement makes a compound sentence come out
+as its own opposite. The instruction also **wraps across a line break** in the original,
+so anything working line by line cannot see the very file it exists for.
+
+`[OPEN]` — the check covers the one claim that has actually gone stale. Nothing yet
+covers the general problem, which is that an operator's local edit can change what
+every reviewer is told without any of this project's machinery noticing. Owning the
+file here would break D-12 deliberately, so the question is what else is worth pinning.
+
 **D-71 — lore reads a test suite and never runs it.**
 
 Test execution is gone: not disabled, not opt-in, removed. `tests` is no longer a T0

@@ -251,7 +251,8 @@ function uncollectedLines(db: DatabaseSync): string[] {
   const rows = db
     .prepare(
       `SELECT r.branch AS branch, COUNT(*) AS n,
-              SUM(CASE WHEN f.severity = 'high' THEN 1 ELSE 0 END) AS high,
+              SUM(CASE WHEN f.severity = 'high' AND f.preexisting = 0 THEN 1 ELSE 0 END) AS high,
+              SUM(CASE WHEN f.severity = 'high' AND f.preexisting = 1 THEN 1 ELSE 0 END) AS high_pre,
               MIN(f.first_seen) AS since
        FROM finding f JOIN review r ON r.id = f.review_id
        WHERE f.delivered_at IS NULL
@@ -262,12 +263,27 @@ function uncollectedLines(db: DatabaseSync): string[] {
 
   const lines: string[] = [bold("waiting to be collected"), ""];
   for (const r of rows) {
+    // THE BRANCH'S OWN HIGH FINDINGS, counted apart from inherited ones (D-68).
+    //
+    // This counted every `high` alike and read `3 finding(s), 2 high` for a review
+    // whose two high findings were both the semgrep CWE-319 hit on test fixtures the
+    // branch never touches — the false positive this repository has justified over and
+    // over. The one finding the branch actually caused was the `low`. So the operator
+    // view raised the loudest alarm it has for the least urgent thing in the list.
+    //
+    // D-68 already ranks inherited pattern matches below the branch's own for the
+    // CLIENT, on exactly this reasoning; the operator inherited raw severity. An alarm
+    // that fires on the same known noise every day is one that gets ignored, and this
+    // one is meant to say "nobody has read a real defect".
     const high = Number(r["high"] ?? 0);
-    // High severity is the reason this is red rather than dim: nobody has SEEN it.
+    const highPre = Number(r["high_pre"] ?? 0);
     const paint = high > 0 ? red : yellow;
+    const counts =
+      `${r["n"]} finding(s)` +
+      (high > 0 ? `, ${high} high` : "") +
+      (highPre > 0 ? `, ${highPre} high preexisting` : "");
     lines.push(
-      `  ${paint(`${r["n"]} finding(s)${high > 0 ? `, ${high} high` : ""}`)}  ` +
-        `${String(r["branch"])}  ${dim(`unread since ${age(r["since"])}`)}`,
+      `  ${paint(counts)}  ${String(r["branch"])}  ${dim(`unread since ${age(r["since"])}`)}`,
     );
   }
   lines.push("", dim("nobody has polled these. A finding nobody reads is a review that did not run, later."), "");

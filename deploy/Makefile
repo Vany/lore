@@ -18,6 +18,37 @@ DATA    := $(if $(DATA),$(DATA),/var/lib/lore)
 BACKUP  ?= $(shell grep -E '^LORE_HOST_BACKUP=' .env 2>/dev/null | cut -d= -f2)
 BACKUP  := $(if $(BACKUP),$(BACKUP),./backup)
 
+# WHICH DEPLOYMENT THIS IS, checked before anything reports on it.
+#
+# This Makefile lives in the repository AND is copied to the host by `make push`, so
+# it can be run from a directory that is not the running deployment — and it was.
+# Running it from the checkout's `deploy/` gives compose the project name `deploy`,
+# which matches no running container, while DATA falls back to `/var/lib/lore`, which
+# holds no database. `make status` then reported, in red:
+#
+#     service "lore" is not running
+#     !! replica: no database at /var/lib/lore/lore.db
+#     !! database: service "lore" is not running
+#
+# — three alarms saying the product had been lost, while every container was up and the
+# replica was level. That is the worst thing a status command can do, and it is the
+# failure this whole project is about: a command that lies about why it has no status.
+#
+# So a target that inspects the deployment says plainly when it is pointed at nothing.
+# Only for those; `push`, `help` and the build targets are legitimately run from here.
+RUNNING_DIR = $(shell docker inspect lore-lore-1 \
+                --format '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' 2>/dev/null)
+define wrong-directory
+	@if [ -n "$(RUNNING_DIR)" ] && [ "$(RUNNING_DIR)" != "$(CURDIR)" ]; then \
+	  printf '\033[31mThis is not the running deployment.\033[0m\n'; \
+	  printf '  you are here : %s\n' "$(CURDIR)"; \
+	  printf '  lore runs in : %s\n' "$(RUNNING_DIR)"; \
+	  printf 'Nothing is wrong with the service — this directory has no .env and no data.\n'; \
+	  printf 'Run it there:  cd %s && make $@\n' "$(RUNNING_DIR)"; \
+	  exit 1; \
+	fi
+endef
+
 .DEFAULT_GOAL := help
 .PHONY: help preflight sync-opencode push build drain drain-off deploy up down down-hard restart logs status status-json status-local doctor new relocate tokens revoke replica-state db-check mirror mirror-daemon mirror-daemon-off mirror-daemon-log backup-on backup-check backup-drill restore sweep shell
 
@@ -89,6 +120,7 @@ STAMP = LORE_COMMIT="$$(git -C .. rev-parse --short HEAD 2>/dev/null || echo unk
 ## The flag does not survive the restart it was for: the starting process clears it,
 ## so a forgotten drain cannot leave a service that answers ok while doing nothing.
 drain:
+	$(wrong-directory)
 	@$(COMPOSE) exec -T lore node -e "\
 	const {DatabaseSync}=require('node:sqlite'); \
 	const d=new DatabaseSync(process.env.LORE_DATA_DIR+'/lore.db'); \
@@ -152,6 +184,7 @@ restart:
 	$(COMPOSE) restart lore
 
 logs:
+	$(wrong-directory)
 	$(COMPOSE) logs -f --tail=100
 
 ## Provision a repo: a revocable token and the .mcp.json to paste. No key is
@@ -235,6 +268,7 @@ doctor:
 ## answering, and the suggested fix pointed at the wrong thing entirely. A status
 ## command that lies about why it has no status is the failure it exists to catch.
 status:
+	$(wrong-directory)
 	@e=/tmp/lore-status.$$$$.err; \
 	$(COMPOSE) exec -T lore node /app/src/ops/status.ts $(ID) 2>$$e; rc=$$?; \
 	test $$rc -eq 0 || { echo "status could not answer. the error, not a guess:"; head -20 $$e; }; \
@@ -253,6 +287,7 @@ status:
 
 ## The raw JSON, for a script rather than a person.
 status-json:
+	$(wrong-directory)
 	@out=$$(curl -fsS http://127.0.0.1:7777/status 2>&1) \
 		&& printf '%s' "$$out" | python3 -m json.tool \
 		|| { echo "status-json could not answer. the error, not a guess:"; printf '%s\n' "$$out"; exit 1; }
@@ -268,6 +303,7 @@ status-local:
 ## same string `make revoke` accepts. The hand-rolled query printed a `revoked_at`
 ## column and there was nothing in the entire system that could set it.
 tokens:
+	$(wrong-directory)
 	@$(COMPOSE) exec -T lore node /app/src/index.ts tokens --db $(DATA)/lore.db
 
 ## Turn a token off. `make revoke TOKEN=<short>`, from the list above.
@@ -409,6 +445,7 @@ backup-on:
 ## compares the replica against the DATABASE: caught up is fine at any age, and behind
 ## is a problem however recent the files are.
 replica-state:
+	$(wrong-directory)
 	@db="$(DATA)/lore.db"; \
 	test -f "$$db" || { echo "stale no database at $$db"; exit 0; }; \
 	n=$$(find "$(BACKUP)" -type f -name '*.ltx' 2>/dev/null | wc -l | tr -d ' '); \
@@ -434,6 +471,7 @@ replica-state:
 ## with a host sqlite3, and reading it from outside has already cost an hour and
 ## produced SQLITE_IOERR_SHORT_READ inside the running service.
 db-check:
+	$(wrong-directory)
 	@out=$$($(COMPOSE) exec -T lore node -e "\
 	const {DatabaseSync}=require('node:sqlite'); \
 	try { \
@@ -447,6 +485,7 @@ db-check:
 	esac
 
 backup-check:
+	$(wrong-directory)
 	@state=$$($(MAKE) --no-print-directory db-check); \
 	echo "$$state"; \
 	case "$$state" in ok*) ;; *) \

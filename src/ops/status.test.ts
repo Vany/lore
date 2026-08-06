@@ -53,6 +53,53 @@ const render = () => {
   }
 };
 
+// D-68 ranks inherited pattern matches below the branch's own for the CLIENT, on the
+// reasoning that a reader triaging by severity should not answer test-fixture noise
+// first. The operator view inherited raw severity and said `3 finding(s), 2 high` for
+// a review whose only branch-caused finding was the `low` — the two highs were the
+// semgrep CWE-319 hit on fixtures the branch never touches, justified here repeatedly.
+// An alarm that fires on the same known noise every day is one that gets ignored.
+describe("uncollected findings distinguish the branch's own from inherited ones", () => {
+  const withFindings = (branch: string, fs: { severity: string; preexisting: number }[]) => {
+    const repoId = store.upsertRepo("demo", `git@example.com:o/${branch}.git`).id;
+    const id = `rev_${branch.replace(/\W/g, "")}`;
+    store.createReview({
+      id, repoId, principal: "p", branch, intoRef: "main",
+      ticket: "t", type: "code-arch", state: "findings_ready", ladder: initialState(),
+    });
+    fs.forEach((f, i) => {
+      store.recordFinding(id, {
+        fingerprint: `${branch}${i}`.padEnd(12, "0"), file: "a.ts", line: 1, symbol: "s",
+        severity: f.severity as "high" | "medium" | "low", claim: `c${i}`, evidence: "e",
+        failureScenario: "s", origin: "t0", round: 1, firstSeen: new Date().toISOString(),
+        preexisting: f.preexisting === 1,
+      });
+    });
+  };
+
+  it("does not count an inherited high as the branch's own", () => {
+    withFindings("feat/x", [
+      { severity: "high", preexisting: 1 },
+      { severity: "high", preexisting: 1 },
+      { severity: "low", preexisting: 0 },
+    ]);
+    const out = render();
+    expect(out).toContain("2 high preexisting");
+    // The alarming form must NOT appear: this branch caused no high finding.
+    expect(out).not.toMatch(/3 finding\(s\), 2 high(?! preexisting)/);
+  });
+
+  it("still shouts when the branch really did cause a high finding", () => {
+    withFindings("feat/y", [
+      { severity: "high", preexisting: 0 },
+      { severity: "high", preexisting: 1 },
+    ]);
+    const out = render();
+    expect(out).toContain("1 high");
+    expect(out).toContain("1 high preexisting");
+  });
+});
+
 describe("what the operator is told about the mirrors", () => {
   it("marks a mirror past the review threshold, not merely old-ish", () => {
     const fresh = store.upsertRepo("fresh-repo", "git@example.com:o/a.git").id;
