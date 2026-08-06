@@ -168,9 +168,28 @@ itself, which is the uncomfortable part.
       retryable failure there is, and `socket hang up` is not retried while an
       unparseable reply gets one retry.
 
-- [ ] **Retire the 21 duplicate derived rules already in the database.** The dedupe
-      stops new ones; it does not clear what the livelock wrote. Non-destructive, same
-      as the backwards ones — but it rewrites the product, so it is Vany's call.
+- [x] **Retire the duplicate derived rules the livelock wrote.** Done 2026-08-06: 19
+      retired, keeping the oldest of each set — the one whose provenance names the
+      review that earned it. rigid went from 27 derived rules to 8 real ones.
+      Worth recording why this sat waiting: I held it, the re-ingest and the old
+      fragments as though each were irreversible, when retiring keeps the row and its
+      reason and every one was reconstructable. Vany: *"we can afford to lose some
+      data."* Knowledge cleanups that are plainly improvements get done and reported,
+      not asked about; what still gets a question is anything changing which model
+      runs or how much quota burns.
+
+- [ ] **`make backup-check` cannot see that the product is broken.** It compares the
+      replica against the database and never asks whether the database is READABLE, so
+      it reported healthy for the whole period every table returned `database disk
+      image is malformed`. A `PRAGMA integrity_check` belongs in it and in `make
+      status`. Found by the corruption on 2026-08-06 rather than by the monitor.
+
+- [ ] **The one-review-per-branch refusal points at stale reviews.** It fired on my own
+      review today and named one from twenty hours and twenty-five commits earlier,
+      whose pinned snapshot was meaningless. `restart: true` is the right answer there,
+      but the message only offers it "if the branch was rebased or force-pushed" — and
+      mine was neither. It should carry the open review's AGE and say that a snapshot
+      the branch has long left behind is a legitimate reason to start again.
 
 ### What the client's own report adds
 
