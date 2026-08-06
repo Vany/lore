@@ -319,11 +319,10 @@ export function renderT0(r: T0Result): string {
   } else {
     // Worst first, and sorted BEFORE the cut. These arrive grouped by engine, in the
     // order the review type lists them — `tsc, eslint, ast-grep, semgrep` for
-    // code-arch — so 200+ eslint findings used to displace everything every later
-    // engine said: semgrep's `high` findings, and the two the tests stage raises
-    // (`installAndTest` above, and `testFindings` in sandbox.ts). Those findings are
-    // still recorded and still reach the client — `runRound` records all of T0's —
-    // but the tier judged the code without being told the suite fails (D-50).
+    // code-arch — so 200+ eslint findings used to displace everything semgrep said,
+    // including its `high` ones. Those findings are still recorded and still reach
+    // the client — `runRound` records all of T0's — but the tier judged the code
+    // without having been told about them (D-50).
     const ordered = [...r.findings].sort(compareFindings);
     parts.push(`Deterministic tooling found ${r.findings.length} issue(s):`);
     for (const f of ordered.slice(0, LISTED)) {

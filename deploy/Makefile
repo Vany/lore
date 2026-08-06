@@ -41,7 +41,7 @@ preflight:
 	@# consequence is silent and the cause is three layers away.
 	@$(COMPOSE) config 2>/dev/null | grep -A1 "source: $(DATA)$$" | grep -q "target: $(DATA)$$" \
 		|| { echo "the data dir is NOT mounted at the same path inside the container."; \
-		     echo "T0 test execution needs $(DATA) to mean the same thing on both sides, because the"; \
+		     echo "T0's sandbox needs $(DATA) to mean the same thing on both sides, because the"; \
 		     echo "host daemon resolves the sandbox's bind by HOST path and silently mounts an empty"; \
 		     echo "directory when it does not exist. See D-60."; exit 1; }
 	@mkdir -p "$(DATA)"
