@@ -19,10 +19,25 @@ already passed.
 
 **This table is the DEFAULT ladder, and a deployment usually replaces it.** `LORE_TIERS`
 points at a tiers file that overrides every row (`core/ladder.ts`, `loadTiers`), and
-what is deployed today is `deploy/tiers.zai-openai.json`: T1 `zai-coding-plan/glm-5-turbo`,
-T2 `zai-coding-plan/glm-5.2`, T3 `openai/gpt-5.6-terra`, all on subscriptions rather than
-per-token. Read the tiers file for what is actually being spent, and `SPEC.md` D-54 for why
-T1 moved.
+what is deployed today is `deploy/tiers.zai-kimi-openai.json`:
+
+| Tier | Model | Effort | Vendor | Paid by |
+|---|---|---|---|---|
+| **T1** | `zai-coding-plan/glm-5-turbo` | medium | Z.ai | subscription |
+| **T2** | `kimi-for-coding/k3` | high | Moonshot | subscription |
+| **T3** | `openai/gpt-5.6-terra` | high | OpenAI | subscription |
+
+**Three vendors, one per tier**, which is what D-32 and D-49 have always asked for and
+the deployment did not have until 2026-08-06: T1 and T2 were both Z.ai, so two thirds of
+the ladder shared a blind spot. Nothing was reported falsely — D-49's sole-vendor check
+only fires when EVERY tier is one vendor — but the independence was thinner than the
+ladder implies. Read the tiers file for what is actually being spent, and `SPEC.md` D-54
+for why T1 moved.
+
+**`k3`, not `k3-256k`.** The suffix names the SMALLER variant: `k3` carries 1,048,576
+tokens of context and `k3-256k` carries 262,144. The largest review this deployment has
+run sent 204,609 tokens — 78% of the smaller window, with no room for a reply. Chosen on
+the measurement rather than on the name, which reads the wrong way round.
 
 Saying so because an operator consulting "the ladder" to approve a cost or diagnose a T1
 failure would otherwise conclude GLM-5.2 was called when GLM-5-turbo was — the table was

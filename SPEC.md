@@ -184,6 +184,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-71** | lore **reads** a test suite and never runs it; a failing suite is the repo owner's | confirmed |
 | **D-72** | A deploy **drains** — stop claiming, finish what is in flight, then swap | confirmed |
 | **D-73** | A justification is **not part of the code it defends**, and is learned once | confirmed |
+| **D-74** | **One vendor per tier** — the deployed ladder is Z.ai, Moonshot, OpenAI | confirmed |
 
 **D-7, revised.** The earlier version dropped GLM-5.2 on Artificial Analysis's
 *cost per task* — which is tokens consumed × price on their benchmark, not a price.
@@ -853,6 +854,36 @@ A lockfile naming a manager the image does not carry — bun, which is a runtime
 not merely an installer — is reported as an **unavailable engine**. Installing with
 npm instead and presenting the result as that project's suite would be a confident
 claim about something that never ran.
+
+**D-74 — one vendor per tier, and the deployment finally has one.**
+
+The deployed ladder is T1 `zai-coding-plan/glm-5-turbo`, T2 `kimi-for-coding/k3`, T3
+`openai/gpt-5.6-terra` — three vendors on three subscriptions, no metered API.
+
+Until 2026-08-06 T1 and T2 were both Z.ai. Nothing was reported falsely: D-49's
+sole-vendor check fires only when EVERY model tier shares a vendor, and T3 was OpenAI
+throughout. But two thirds of the ladder shared a blind spot, and a ladder's whole
+claim is that a dearer tier is an *independent* look rather than the same opinion
+asked again. The check was doing what it says; what it says is weaker than what the
+ladder implies, and that gap is worth naming rather than leaving for someone to
+discover in a `passed`.
+
+**Moonshot sits at T2 rather than T3** because T3's argument is unchanged (D-30): the
+last line of defence is where an independent vendor is worth most, and OpenAI's capped
+rolling window fits the rarest call in the ladder. T2 is the first deep look and the
+first place independence starts to matter.
+
+**`k3`, not `k3-256k`, and the naming reads backwards.** `k3` carries 1,048,576 tokens
+of context; `k3-256k` carries 262,144 — the suffix names the SMALLER variant. The
+largest review this deployment has run sent 204,609 tokens, which is 78% of the smaller
+window with no room for a reply. Chosen on that measurement; choosing on the name would
+have picked the one that runs out.
+
+**Model ids come from opencode, never from memory.** The provider is `kimi-for-coding`
+and the ids were read from `/config/providers` on the running server. `DEFAULT_TIERS`
+still names `openrouter/moonshotai/kimi-k3` for a gateway route nobody here uses, which
+is a guess nothing has verified — it applies only when `LORE_TIERS` is unset, and this
+deployment always sets it.
 
 **D-73 — a justification is not part of the code it defends, and its fact is learned
 once.**

@@ -57,15 +57,18 @@ Deterministic tooling first — *a model should never be paid to decide what a
 typechecker decides for free*. Then progressively dearer models, each seeing only
 code the previous tier already passed.
 
-| tier | engine | vendor | $/M in | $/M out |
-|:--|:--|:--|--:|--:|
-| **T0** | the repo's own `tsc` · `eslint` · `ast-grep` · `semgrep` | — | free | free |
-| **T1** | GLM-5.2 | Z.ai | 0.28 | 0.89 |
-| **T2** | Kimi K3 | Moonshot | 3.00 | 15.00 |
-| **T3** | GPT-5.6 Sol Pro | OpenAI | 5.00 | 30.00 |
+| tier | engine | vendor | paid by |
+|:--|:--|:--|:--|
+| **T0** | the repo's own `tsc` · `eslint` · `ast-grep` · `semgrep` | — | free |
+| **T1** | GLM-5-turbo | Z.ai | subscription |
+| **T2** | Kimi K3 | Moonshot | subscription |
+| **T3** | GPT-5.6 Terra | OpenAI | subscription |
 
 Three tiers, **three vendors** — two tiers from one model family share blind spots
-and are not two independent opinions.
+and are not two independent opinions. Per-token prices are gone from this table
+because nothing here is metered; what the ladder costs is three subscriptions, and
+`ops/spend.ts` reports `metered: false` rather than implying headroom it cannot
+measure.
 
 **Every reviewer is a model that did not write the code.** That rules out the
 strongest model on the board on purpose: a model reviewing its own output confirms

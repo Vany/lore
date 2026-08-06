@@ -178,6 +178,14 @@ itself, which is the uncomfortable part.
       not asked about; what still gets a question is anything changing which model
       runs or how much quota burns.
 
+- [x] **Kimi is in, and the ladder has one vendor per tier** (D-74). Done 2026-08-06:
+      T1 Z.ai, T2 `kimi-for-coding/k3`, T3 OpenAI, three subscriptions. Model ids read
+      from opencode's `/config/providers`, not from memory — `k3` carries 1M tokens of
+      context against `k3-256k`'s 262k, and our largest review has already sent 204,609.
+      Still unproven in the way that matters: **Kimi has not yet run a round.** A tier
+      that is configured and has never executed is not a working tier, and this project
+      says so about everything else.
+
 - [ ] **Submitting a diff through MCP is fragile in a way clients cannot diagnose.**
       Hit while driving a real review as a client on 2026-08-06, twice:
 

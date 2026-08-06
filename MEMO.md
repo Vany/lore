@@ -66,6 +66,30 @@ so `&&` saw *tail* succeed. Then the same character bit the commit message, wher
 backticks inside a double-quoted shell string get command-substituted. Gate on
 `tsc --noEmit`; write commit bodies from a heredoc.
 
+**Kimi arrived, and the ladder finally has one vendor per tier.** T1 Z.ai, T2
+Moonshot `k3`, T3 OpenAI. Until today T1 and T2 were both Z.ai — nothing reported
+falsely, since D-49's check fires only when EVERY tier shares a vendor, but two thirds
+of the ladder shared a blind spot while the table said "three vendors".
+
+**Learned — read model ids from the provider, never from the name.** `k3` carries 1M
+tokens of context and `k3-256k` carries 262k: the suffix names the SMALLER variant. Our
+largest review has sent 204,609 tokens, which is 78% of the smaller window. Picking on
+the name would have picked the one that runs out, and I nearly did.
+
+**Being a client for an hour taught more than reading the code.** I drove a real review
+through MCP and hit two failures no test covers: a diff whose LAST line is whitespace
+comes back as `corrupt patch at line 66` — a line number in a string the client itself
+composed, which is the least debuggable thing to be told — and sending three of five
+changed files got a `tree hash mismatch`, which was the guard working perfectly and the
+message being excellent. One message was the best in the system and the other the worst,
+in the same session, ten minutes apart.
+
+It also found three more defects in my own work, all the same shape: README explaining
+that tests run in the sandbox two paragraphs below the table I had corrected, a spec
+section ending in a colon pointing at a list I deleted, and a docstring describing a
+regex it was not. **Prose asserting what the code stopped doing is this repository's
+most common defect, and I produce it faster than I catch it.**
+
 **Open.** Model calls need a concurrency cap separate from the workers — raising
 `LORE_CONCURRENCY` to 12 killed four reviews in 2.5 minutes, and the provider was the
 binding constraint rather than the memory or the cache I had worried about.
