@@ -176,7 +176,7 @@ describe("SQL past the store only ever shrinks (a ratchet, not a clean bill)", (
       // pair on ONE LINE, and `store.db\n  .prepare(` — what the formatter produces for
       // anything but the shortest query — walked straight past it. That check was
       // written, and its invariant claimed, one file away from a query it could not
-      // see: it reported seven sites where there are twenty-eight.
+      // see: it reported seven sites where a correct count found twenty-eight.
       //
       // A RATCHET, not a clean bill of health, and deliberately so. The debt below is a
       // real conversion and not one to rush into code that has no ladder verdict — but a
@@ -202,10 +202,14 @@ describe("SQL past the store only ever shrinks (a ratchet, not a clean bill)", (
     // COUNTED, not merely listed, and the file-level version was a hole big enough to
     // drive the whole invariant through: `mcp/server.ts` is already on the list, so a
     // thirtieth `store.db.prepare` added to it kept the suite green. A ratchet that only
-    // notices new FILES ratchets nothing in the fourteen where the debt actually lives.
-    // 28 sites in 14 files, counted by the regex above rather than by hand — the
-    // hand-written first draft of these numbers was wrong in four of them, and the
-    // check caught itself.
+    // notices new FILES ratchets nothing in the files where the debt actually lives.
+    //
+    // These numbers came from the regex above rather than by hand; the hand-written
+    // first draft was wrong in four files and the check caught itself. They are not
+    // totalled anywhere in prose, HERE INCLUDED: a total is the one form the ratchet
+    // cannot keep honest, because converting a site — the change this exists to invite
+    // — shrinks a count and trips neither assertion, leaving a false figure sitting
+    // beside the enforced list with nothing to say which is stale.
     const KNOWN: Readonly<Record<string, number>> = {
       "knowledge/derive.ts": 2, "knowledge/enrich.ts": 2, "mcp/auth.ts": 5, "mcp/server.ts": 1,
       "ops/retention.ts": 2, "ops/spend.ts": 1, "propose/cli.ts": 1, "propose/run.ts": 1,
