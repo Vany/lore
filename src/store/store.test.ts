@@ -436,6 +436,40 @@ describe("orphaned jobs", () => {
     expect(row["finished_at"]).not.toBeNull();
   });
 
+  // ...AND THE ONES IT LEFT OPEN LAST TIME, which is where they actually pile up.
+  //
+  // The loop above is scoped to reviews with a job still `running` — the process died
+  // THIS time. A row orphaned by an earlier kill, whose job was later requeued and then
+  // failed, has no running job left to find it by and stays open for ever. Four such
+  // rows sat in the live database claiming a tier had been reading `rigid-monorepo` for
+  // forty-six hours, on reviews that failed two days earlier, and every restart swept
+  // straight past them. The invariant does not depend on why the row is open: a review
+  // that has reached a verdict has no tier reading it.
+  it("closes an open run on a review that already ended, with no running job to find it by", () => {
+    const runId = store.openTierRun("rev1", "t0", 1, "2026-08-05T21:12:13.026Z");
+    store.enqueue("rev1", "fast");
+    const job = store.db.prepare("SELECT id FROM job WHERE review_id = 'rev1'").get() as { id: number };
+    store.finishJob(job.id, "failed", "the round threw");
+    store.updateReview("rev1", { state: "failed" });
+
+    // Nothing is running, so the job-scoped sweep above has nothing to key on.
+    const running = store.db.prepare("SELECT COUNT(*) c FROM job WHERE state = 'running'").get() as { c: number };
+    expect(Number(running.c)).toBe(0);
+
+    expect(store.reclaimOrphanedJobs().closedRuns).toBe(1);
+    const row = store.db.prepare("SELECT outcome, finished_at FROM tier_run WHERE id = ?").get(runId) as Record<string, string>;
+    expect(row["outcome"]).toBe("failed");
+    expect(row["finished_at"]).not.toBeNull();
+  });
+
+  // And a review still in flight keeps its open row: that one IS working, and closing
+  // it would be the same lie in the other direction.
+  it("leaves an open run alone on a review that has not ended", () => {
+    store.openTierRun("rev1", "t2", 1, new Date().toISOString());
+    store.updateReview("rev1", { state: "running" });
+    expect(store.reclaimOrphanedJobs().closedRuns).toBe(0);
+  });
+
   // A review whose last attempt burned out is not still RUNNING. Nothing will claim
   // that job again, but the review sat in `running` until the sweep called it
   // `expired` — which says nobody came back, and that is false: the ladder died.

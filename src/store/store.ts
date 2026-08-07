@@ -1639,6 +1639,32 @@ export class Store {
         );
       }
 
+      // AND EVERY OPEN RUN ON A REVIEW THAT HAS ALREADY ENDED, which the loop above
+      // cannot reach and which is where the rows actually pile up.
+      //
+      // That loop is scoped to reviews with a job still `running` at startup — the
+      // process died THIS time. A row orphaned by an earlier kill, whose job was later
+      // requeued and then failed, has no running job left to find it by, so it stays
+      // open for ever. Four such rows were sitting in the live database claiming a tier
+      // had been reading `rigid-monorepo` for forty-six hours, on reviews that failed
+      // two days earlier; the sweep that was supposed to catch them ran past them at
+      // every restart. It was written as "clean up after the jobs I am reclaiming" when
+      // the invariant is simpler and does not depend on why the row is open: A REVIEW
+      // THAT HAS REACHED A VERDICT HAS NO TIER READING IT.
+      //
+      // `finished_at` is the operator view's only signal for in-flight work, so a row
+      // that lies about it is INV-1 in the bookkeeping: something that stopped without
+      // saying so, indistinguishable from something still working.
+      closedRuns += Number(
+        this.db
+          .prepare(
+            `UPDATE tier_run SET outcome = 'failed', finished_at = ?
+             WHERE finished_at IS NULL
+               AND review_id IN (SELECT id FROM review WHERE state IN (${TERMINAL_SQL}))`,
+          )
+          .run(at).changes,
+      );
+
       // AND A REVIEW WHOSE LAST ATTEMPT BURNED OUT IS NOT STILL RUNNING. Nothing will
       // ever claim that job again, but the review sat in `running` until the 48h sweep
       // called it `expired` — and `expired` says nobody came back, which is false: the
