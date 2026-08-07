@@ -5,6 +5,53 @@ surprised me.
 
 ---
 
+## 2026-08-08 — session 42: fix it now, and the day that argued for it
+
+**Vany: "we fix bugs in this project immediately."** Written down as D-82, and the
+evidence is a day rather than a preference.
+
+**What deferral actually cost, in order.** The replica monitor was recorded at 19:00 as
+*"cries wolf again, recorded not fixed"* — a careful, correct diagnosis. Thirty minutes
+later the database was unreadable and `/status` was answering `ok: false` **for that
+wrong reason**, pointing at a healthy replicator during the twenty minutes the product
+was dying. Not "the note failed to help": the defect it described did the harm while the
+note sat there. That is the whole argument.
+
+Beside it: *"lore's whole footprint is under 5 GB"* written into a comment as settled
+fact, in the act of deleting the check that measured it — 6.8 GB two days later, unseen.
+And twenty-eight SQL sites behind a reasonable *"not in code with no ladder verdict"*,
+during which `review.token_hash` was added one join from a resource clients read.
+
+**Surprised me: the corruption was the second, not the first.** `data/corrupt-1416` is
+dated 08-06. I had been treating today's as an incident; it is a pattern, and I only saw
+it because I went looking at the directory for something else.
+
+**What got fixed once the default flipped.** SQL past the store 28 → 0, and the ratchet
+became the invariant it was named for. `why` coverage 5 of 66 → 30 of 58. The screen's
+three mechanical misses. Screened-out rows no longer stacking per edit. The sandbox
+cache collected AND watched against a budget lore sets for itself. `[lore:log]` at 60%
+noise. `LORE_TIERS` pinned so a swap cannot rebind an open review's cursor. D-78. The
+settle preview. `lore knowledge` and `make smoke`, both of which existed as gaps only
+because nobody had asked the question that exposes them.
+
+**And what did NOT get built, which matters as much.** D-39 said measure the conflicts
+before automating them. There is one, ever; it would have auto-resolved; and it is the
+one already recorded as a false positive. So the feature that was asked for is not built
+and the number is written down instead — refusing on evidence is not deferral, and D-82
+says so explicitly so the two never get confused.
+
+**The cost is accepted with open eyes.** Fixing everything found makes the diff larger,
+and a larger diff takes more rounds: measured the same day, fourteen commits needed three
+reviews and twenty-one findings to reach `passed`. D-77 still holds. The trade is more
+rounds against fewer notes that quietly stop being true.
+
+**Half of today's real defects came from asking the running system a question** — "what
+is reviewing now?", "why does our client know about refreshing mirror?" — rather than
+from reading the code. That is not a coincidence and it is worth remembering the next
+time I am tempted to audit by reading.
+
+---
+
 ## 2026-08-07 — session 41: a model vetoes the memory, and the gate read its own work
 
 **Vany: "model screen."** The screen from session 40's measurement is built and has run

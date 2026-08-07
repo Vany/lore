@@ -211,6 +211,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-79** | A finding is **what the author missed and would be hurt by** — asked, not filed | confirmed |
 | **D-80** | A review is **one conversation per tier**, not a series of audits. Fully async | subscription live; conversation `[OPEN]` |
 | **D-81** | Extraction stays deterministic; a **model may only VETO** what it mined | built; screen unmeasured |
+| **D-82** | **A defect found is fixed now.** Recording one is the exception and is argued for | confirmed |
 
 **D-7, revised.** The earlier version dropped GLM-5.2 on Artificial Analysis's
 *cost per task* — which is tokens consumed × price on their benchmark, not a price.
@@ -1093,6 +1094,52 @@ the tool descriptions with an instruction the only real client cannot execute.
 conversation is cheaper or dearer than repeated cold rounds, measured rather than
 argued; and how the deep tiers enter a conversation the cheap tier has been having.
 Until then D-55 stands: a submit during a running round is still refused.
+
+**D-82 — a defect found is fixed now; recording it is the exception.**
+
+Vany, after a day of it: *"we fix bugs in this project immediately."*
+
+**The evidence is that deferral here has a specific, repeating cost: the note goes
+stale in the direction that hurts.** Not "we forget" — we write it down carefully, and
+then the world moves and the note stays still.
+
+- The replica monitor was recorded at 19:00 on 2026-08-07 as *"cries wolf again,
+  recorded not fixed"*, with a full diagnosis. Thirty minutes later the database was
+  unreadable and `/status` was answering `ok: false` **for that wrong reason**, pointing
+  an operator at a healthy replicator during the twenty minutes the product was dying.
+  The note did not merely fail to help; the defect it described did the harm.
+- *"lore's whole footprint is under 5 GB"* was written into a comment as a settled fact
+  while deleting the check that measured it. It was 6.8 GB two days later, and nothing
+  noticed, because the only thing watching had gone with the thing it was wrong about.
+- Twenty-eight SQL sites sat behind *"should not be done in code that has no ladder
+  verdict"* — reasonable, and it meant the client-facing shape of `lore://review/{id}`
+  stayed a function of the schema while `review.token_hash` was added one join away.
+- Four `tier_run` rows claimed a tier had been reading for forty-six hours. Nothing
+  alerted; the question *"what is reviewing now?"* found them.
+
+**So the default inverts.** A defect is fixed in the change that finds it. Writing it
+into `TODO.md` instead is a decision that has to be argued, and the argument has to say
+what makes waiting cheaper than fixing — not merely that fixing is inconvenient now.
+
+**Three things this does NOT mean**, because each is a different owner or a different
+question, and calling them deferral would be wrong:
+
+- **Anything changing which model is called, or how much quota it burns, is still
+  Vany's** and waits for him. That is not a delay, it is the person who pays deciding.
+  The per-tier round bound has now killed two converging reviews and still waits, and
+  should.
+- **Measure-first still means measure first.** D-39 said to count the conflicts before
+  automating them; the count was one, and it was a known false positive, so the honest
+  outcome was to record the number and not build. Refusing to build on evidence is not
+  the same as postponing.
+- **A defect in someone else's repository is theirs** (D-71). We report it.
+
+**The cost is real and is accepted with open eyes.** Fixing everything found makes the
+diff larger, and a larger diff takes more review rounds — measured the same day: a
+fourteen-commit change needed three reviews and twenty-one findings to reach `passed`.
+D-77 still holds and nothing skips the ladder. The trade is more rounds against fewer
+notes that quietly stop being true, and the second failure is the one this project
+exists to refuse.
 
 **D-81 — extraction stays deterministic, and a model may only VETO what it mined.**
 

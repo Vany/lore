@@ -10,6 +10,22 @@ were deployed in Docker and had carried two reviews to `passed`. A stale checkli
 is the same defect this tool exists to catch — a claim nobody checks — and it was
 sitting in our own repo while we fixed five of them in the code.
 
+**WHAT BELONGS HERE CHANGED ON 2026-08-08 (D-82): a defect found is fixed now.** This
+file is no longer where a bug waits. What is left in it is one of four things, and each
+says which:
+
+1. **Vany's to decide** — anything changing which model is called or what it costs.
+2. **Waiting on evidence** — measure-first items whose measurement has not been taken,
+   or that need a day of real use.
+3. **Needs somebody who is not me** — Phase 3's fresh-session criterion.
+4. **Argued deferral** — a defect deliberately not fixed, with the argument for why
+   waiting is cheaper than fixing written down beside it.
+
+Anything else that turns up gets fixed in the change that finds it. The reason is in
+SPEC D-82 and it is not tidiness: a recorded defect goes stale in the direction that
+hurts. The replica monitor was recorded, carefully and correctly, thirty minutes before
+it pointed an operator away from a database that had become unreadable.
+
 A phase is ticked when its code is **running and observed**, never when it is
 merely written. Where a phase shipped with a part that has never been exercised,
 that part is pulled out into its own open item rather than hidden inside a tick.
