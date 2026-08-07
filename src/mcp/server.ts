@@ -20,7 +20,7 @@ import { DEFAULT_TYPE, reviewType, reviewTypeIds } from "../core/review-type.ts"
 import { applyPatch, restoreTree, treeHash } from "../git/repo.ts";
 import { enrich, renderEnrichment } from "../knowledge/enrich.ts";
 import { paceFor, paceNote } from "../ops/pace.ts";
-import { codeMoved } from "../reviewer/review.ts";
+import { alreadyAnswered, codeMoved } from "../reviewer/review.ts";
 import { buildVex, findingsNeedingTriage, renderVex } from "../security/vex.ts";
 import { isSettled, type Store } from "../store/store.ts";
 import type { Principal } from "./auth.ts";
@@ -656,9 +656,19 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       //
       // It shares `codeMoved` with the settle path rather than restating the rule: a
       // preview that drifts from what it previews is worse than no preview.
+      //
+      // AND NOT THE ONES ALREADY ANSWERED. The advice this note gives is "say so at the
+      // named line with a lore-ok and submit again" — and it was given to findings whose
+      // named line carried one, sent in that very diff. A warning that fires on the
+      // correct answer is a warning clients learn to skip, and this is the only one that
+      // saves them a deep-tier round.
       const unmoved = (
         await Promise.all(
-          store.openFindings(review_id).map(async (f) => ((await codeMoved(worktree, f)) ? undefined : f)),
+          store.openFindings(review_id).map(async (f) => {
+            if (await codeMoved(worktree, f)) return undefined;
+            const answered = await alreadyAnswered(worktree, review_id, (r, sh) => store.resolveShort(r, sh), f);
+            return answered ? undefined : f;
+          }),
         )
       ).filter((f) => f !== undefined);
 
@@ -672,7 +682,8 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
             : {
                 will_not_settle: unmoved.map((f) => ({ file: f.file, line: f.line, claim: f.claim })),
                 will_not_settle_note:
-                  `${String(unmoved.length)} open finding(s) name code this diff did not change, so the next ` +
+                  `${String(unmoved.length)} open finding(s) name code that has NOT moved and carry no lore-ok, so ` +
+                  "the next " +
                   "round CANNOT settle them however it goes: a tier that stops raising something it never saw " +
                   "move has changed its mind, not been satisfied. If you fixed the cause somewhere else — which " +
                   "is often the right place — say so AT THE NAMED LINE with a `lore-ok[<fingerprint>]: <why>` " +

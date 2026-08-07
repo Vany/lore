@@ -23,9 +23,9 @@ import type { Finding } from "../core/finding.ts";
 import { fingerprint } from "../core/fingerprint.ts";
 import { initialState } from "../core/ladder.ts";
 import { CODE_ARCH } from "../core/review-type.ts";
-import { Store } from "../store/store.ts";
+import { Store, type RecordedFinding } from "../store/store.ts";
 import type { ReviewerLike, ReviewerResult } from "./opencode.ts";
-import { runRound } from "./review.ts";
+import { alreadyAnswered, runRound } from "./review.ts";
 
 /** A model tier that says exactly what the test scripts, and keeps every prompt it saw. */
 class ScriptedReviewer implements ReviewerLike {
@@ -397,5 +397,62 @@ describe("the reviewer's side of an appeal", () => {
     // The instruction, not just the text: silence is assent here as everywhere, and a
     // tier that does not know that cannot rule.
     expect(prompt).toContain("Accept by not raising it again");
+  });
+});
+
+/**
+ * WHAT `review_submit` PROMISES A CLIENT ABOUT ITS NEXT ROUND.
+ *
+ * `will_not_settle` is the only warning that saves a client a deep-tier round: it says,
+ * the instant a patch applies, which open findings the next round cannot possibly settle
+ * — because D-56 requires the named code to have MOVED, and silence over untouched code
+ * is a tier changing its mind rather than being satisfied.
+ *
+ * Its advice is *"say so at the named line with a lore-ok and submit again"*. It gave
+ * that advice about a finding whose named line carried one, sent in that very diff,
+ * because it only ever asked whether the code had moved. A warning that fires on the
+ * correct answer is a warning clients learn to skip — and this one has no second chance,
+ * since ignoring it costs exactly the round it exists to save.
+ *
+ * Tested through `alreadyAnswered`, which is the predicate the preview and the round now
+ * share, so the two cannot drift into disagreeing about what counts as answered.
+ */
+describe("a finding answered at its named line is not still nagged about", () => {
+  const recorded = (f: Finding, fingerprint: string): RecordedFinding => ({
+    ...f,
+    fingerprint,
+    origin: "t0",
+    round: 1,
+    firstSeen: new Date().toISOString(),
+    preexisting: false,
+  });
+
+  it("counts a lore-ok in the finding's own file", async () => {
+    const f = recorded(LOOPBACK, fp(LOOPBACK));
+    const resolve = (_r: string, short: string) => (fp(LOOPBACK).startsWith(short) ? fp(LOOPBACK) : undefined);
+
+    expect(await alreadyAnswered(dir, "r1", resolve, f), "no marker yet").toBe(false);
+    source(`lore-ok[${fp(LOOPBACK).slice(0, 8)}]: the probe is deliberately reachable`);
+    expect(await alreadyAnswered(dir, "r1", resolve, f)).toBe(true);
+  });
+
+  // D-57: a finding in a file with no comment syntax has nowhere else to put its reason,
+  // so missing the ledger would reintroduce the nag for exactly the files that cannot
+  // avoid it.
+  it("counts a lore-ok in the repo-level ledger", async () => {
+    const inJson: Finding = { ...LOOPBACK, file: "deploy/tiers.json" };
+    const f = recorded(inJson, fp(inJson));
+    const resolve = (_r: string, short: string) => (fp(inJson).startsWith(short) ? fp(inJson) : undefined);
+
+    expect(await alreadyAnswered(dir, "r1", resolve, f)).toBe(false);
+    writeFileSync(join(dir, ".lore-ok.md"), `<!-- lore-ok[${fp(inJson).slice(0, 8)}]: the schema is strict -->\n`);
+    expect(await alreadyAnswered(dir, "r1", resolve, f)).toBe(true);
+  });
+
+  // Somebody else's marker in the same file is not an answer to this finding.
+  it("does not count a marker that resolves to a different finding", async () => {
+    const f = recorded(LOOPBACK, fp(LOOPBACK));
+    source("lore-ok[deadbeef]: about something else entirely");
+    expect(await alreadyAnswered(dir, "r1", () => "some-other-fingerprint", f)).toBe(false);
   });
 });

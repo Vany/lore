@@ -1000,6 +1000,39 @@ async function scopeOf(worktree: string, file: string, line: number | undefined)
  * permissions error or a transient I/O fault read as evidence the code had moved — the
  * exact opposite of what it means.
  */
+/**
+ * Is this finding already answered, in the tree, by a `lore-ok` naming it?
+ *
+ * The same question `collectJustifications` asks, asked cheaply and without a store
+ * write, so `review_submit` can preview what the next round will do.
+ *
+ * It exists because the preview nagged a client that had done exactly what the preview
+ * told it to. `will_not_settle` listed everything whose code had not moved and advised
+ * *"say so AT THE NAMED LINE with a lore-ok and submit again"* — including findings whose
+ * named line already carried one, submitted in that very diff. A field that fires on the
+ * correct answer is a field clients learn to skip, and this one is the only warning that
+ * saves them a deep-tier round.
+ *
+ * The LEDGER is read too (D-57): a finding in a file with no comment syntax has nowhere
+ * else to put its reason, and missing that would reintroduce the nag for exactly the
+ * files that cannot avoid it.
+ */
+export async function alreadyAnswered(
+  worktree: string,
+  reviewId: string,
+  resolve: (reviewId: string, short: string) => string | undefined,
+  f: RecordedFinding,
+): Promise<boolean> {
+  for (const file of new Set([f.file, LEDGER])) {
+    const source = await readFile(join(worktree, file), "utf8").catch(() => undefined);
+    if (source === undefined) continue;
+    for (const mark of parseLoreOk(source)) {
+      if (resolve(reviewId, mark.short) === f.fingerprint) return true;
+    }
+  }
+  return false;
+}
+
 export async function codeMoved(worktree: string, f: RecordedFinding): Promise<boolean> {
   if (f.scope === undefined) return false;
   const source = await readFile(join(worktree, f.file), "utf8").catch(() => undefined);
@@ -1108,7 +1141,7 @@ async function expireStaleVerdicts(
  * so rather than to fail the round or to close a finding on a coincidence.
  */
 /** Where a justification lives when its own file cannot hold a comment (D-57). */
-const LEDGER = ".lore-ok.md";
+export const LEDGER = ".lore-ok.md";
 
 /**
  * A justification waiting to be ruled on this round.
