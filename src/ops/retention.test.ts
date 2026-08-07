@@ -1,12 +1,12 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { initialState } from "../core/ladder.ts";
 import type { ReviewState } from "../core/review-state.ts";
 import { Store } from "../store/store.ts";
-import { DEFAULT_RETENTION, collect, expireStale } from "./retention.ts";
+import { DEFAULT_RETENTION, collect, expireStale, type RetentionConfig } from "./retention.ts";
 
 let store: Store;
 let repoId: string;
@@ -202,5 +202,74 @@ describe("expiry never overwrites a verdict", () => {
 
     expect(store.getReview("revPP2", "p")?.state).toBe("passed_partial");
     store.close();
+  });
+});
+
+// THE ONE DISK FACT THAT IS OURS, and nothing was collecting it.
+//
+// The npm cache is keyed by lockfile hash, so every distinct lockfile leaves a
+// directory for ever; scratch gets one per review and the review goes away. Measured
+// 2026-08-07: 5.7 GB of cache and 1.1 GB of scratch, against 4.4 GB recorded a day
+// earlier — a curve with no ceiling, in the data directory that also holds the
+// knowledge base. The host-disk alerts were removed (a full disk belongs to whoever
+// owns the machine); this is the part that is ours to answer for.
+describe("the sandbox cache does not grow for ever", () => {
+  let root: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "lore-cache-"));
+  });
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  const dirAged = (parent: string, name: string, ageDays: number) => {
+    const p = join(parent, name);
+    mkdirSync(p, { recursive: true });
+    writeFileSync(join(p, "blob"), "x".repeat(1024));
+    const at = new Date(Date.now() - ageDays * 86_400_000);
+    utimesSync(p, at, at);
+    return p;
+  };
+
+  const sweep = (over: Partial<RetentionConfig> = {}) =>
+    collect(store, {
+      ...DEFAULT_RETENTION,
+      reposRoot: join(root, "repos"),
+      cacheRoot: join(root, "npm-cache"),
+      scratchRoot: join(root, "scratch"),
+      ...over,
+    });
+
+  it("collects a cache nothing has touched, and says how much it freed", async () => {
+    mkdirSync(join(root, "npm-cache"), { recursive: true });
+    const old = dirAged(join(root, "npm-cache"), "lockfile-aaa", 30);
+
+    const r = await sweep();
+    expect(r.cacheDirsRemoved).toBe(1);
+    expect(r.cacheBytesFreed).toBeGreaterThan(0);
+    expect(existsSync(old)).toBe(false);
+  });
+
+  // The cache exists to make an install cheap. Collecting a warm one would turn every
+  // review into a cold install, which is the cost this directory is paying to avoid.
+  it("leaves a cache that is still being used", async () => {
+    mkdirSync(join(root, "npm-cache"), { recursive: true });
+    const warm = dirAged(join(root, "npm-cache"), "lockfile-bbb", 1);
+
+    expect((await sweep()).cacheDirsRemoved).toBe(0);
+    expect(existsSync(warm)).toBe(true);
+  });
+
+  it("collects abandoned scratch as well as cache", async () => {
+    mkdirSync(join(root, "scratch"), { recursive: true });
+    dirAged(join(root, "scratch"), "rev_gone", 30);
+    expect((await sweep()).cacheDirsRemoved).toBe(1);
+  });
+
+  // A deployment that does not mount these has nothing to collect, and inventing the
+  // directories to sweep them would be the sweep creating what it cleans up.
+  it("does nothing when the deployment has no sandbox roots", async () => {
+    const r = await collect(store, { ...DEFAULT_RETENTION, reposRoot: join(root, "repos"), cacheRoot: undefined, scratchRoot: undefined });
+    expect(r.cacheDirsRemoved).toBe(0);
+    expect(r.cacheBytesFreed).toBe(0);
   });
 });

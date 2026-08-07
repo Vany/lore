@@ -94,13 +94,19 @@ const STARTS_MID_SENTENCE = /^[a-z]/;
  * wrong within a day. It was 8 in one comment and 15 in three others by the time a
  * review noticed, and the true answer that morning was 18. Dates, not counts.
  *
+ * `4` makes a BULLET ONE STATEMENT — first sentence the rule, the rest its `why` — and
+ * adds the lead-in, label and gerund-head refusals. Before it, a bullet was taken whole
+ * and then split back into sentences, so every multi-sentence bullet shed its tail as a
+ * free-standing "team decision" and the reason a rule exists was discarded in the same
+ * motion. Measured on this repository: `why` coverage 5 of 66 -> 30 of 58.
+ *
  * `3` asks the mid-sentence guard about the text as WRITTEN rather than about the
  * markup-stripped text, which `2` had been silently refusing real rules over — a
  * statement opening on a code span reduced to a lowercase word and was thrown away as a
  * lifted clause. The bump is what brings those back: the rows `2` never wrote are not
  * recoverable by editing a document, only by the reader changing and saying so.
  */
-const EXTRACT_VERSION = "3";
+const EXTRACT_VERSION = "4";
 
 /**
  * The SCREEN's version, and it is half of what decides which rules live (D-81).
@@ -185,21 +191,64 @@ export interface Screened {
 export type Screen = (doc: string, candidates: readonly Candidate[]) => Promise<Screened>;
 
 /**
+ * A LEAD-IN IS NOT A RULE. "Two things a client must get right, both of which fail
+ * silently:" announces what follows and arrives without it; `Arguments: branch
+ * (required), into (required)` is a label line whose `required` trips the modal test.
+ * Both were live, and both are shapes a regex can name — unlike the residue the model
+ * screen exists for (D-81), which differs by what the words MEAN.
+ */
+const LEAD_IN = /:$/;
+const LABEL = /^[A-Z][a-z]+:\s/;
+
+/**
+ * A bullet whose first sentence NAMES AN APPROACH rather than states a rule.
+ *
+ * "Counting the reply's own step-start parts reads one however far the agent went",
+ * "Watching opencode's event stream … degrades in silence" — both are accounts of a
+ * tried-and-rejected implementation, and both arrived as confident team decisions.
+ */
+const GERUND_HEAD = /^[A-Z][a-z]+ing\b/;
+
+/**
  * Pull rule-shaped statements out of markdown.
  *
- * Bullets first, because a bulleted rule is almost always the whole rule; then
- * standalone sentences carrying a modal. Headings, code fences and quotes are
- * skipped: a rule inside a code block is an example of a rule, not one.
+ * **A BULLET IS ONE STATEMENT: the first sentence is the rule, the rest is the WHY.**
+ * This used to take a bullet whole and then split it back into sentences, offering each
+ * one alone — so every multi-sentence bullet shed its tail as a free-standing "team
+ * decision": *"The audit half of that design could never have fired"*, *"The easy
+ * defects are gone; look at design, seams…"*. The reason a rule exists was thrown away
+ * in the same motion, because it is almost always the NEXT sentence and `splitReason`
+ * only looks inside one.
+ *
+ * Measured over this repository's own documents: `why` coverage goes from 5 of 66 to
+ * **29 of 56**, with real reasons — *"The moment ids are guessable, every log line that
+ * contains one becomes a credential"* — and the tail-fragment class disappears at
+ * source rather than being filtered later.
+ *
+ * The modal may appear ANYWHERE in the bullet, not only in its first sentence. Requiring
+ * it in the first sentence is stricter and measures better on paper (40 rules, ~9% junk)
+ * and drops `CLAUDE.md` entirely, because its bullets lead with an unmodalised summary —
+ * the repository's own top-level rule document contributing nothing is the wrong answer
+ * whatever the precision.
+ *
+ * Headings, code fences and quotes are skipped: a rule inside a code block is an example
+ * of a rule, not one.
  */
 export function extractRules(markdown: string): readonly Candidate[] {
   const out: Candidate[] = [];
   const seen = new Set<string>();
 
-  for (const block of blocks(markdown)) {
-    for (const sentence of sentences(block)) {
-      const cleaned = stripMarkup(sentence);
+  for (const { block, isBullet } of blocks(markdown)) {
+    const parts = sentences(block);
+    // A bullet is ONE unit; a paragraph is judged sentence by sentence as before.
+    for (const unit of isBullet ? [parts] : parts.map((p) => [p])) {
+      const whole = stripMarkup(unit.join(" "));
+      const cleaned = stripMarkup(unit[0] ?? "");
+      const sentence = unit[0] ?? "";
+      if (!MODAL.test(whole)) continue;
       if (cleaned.length < MIN_LENGTH || cleaned.length > MAX_LENGTH) continue;
-      if (!MODAL.test(cleaned) || NOT_A_RULE.test(cleaned)) continue;
+      if (NOT_A_RULE.test(cleaned) || LEAD_IN.test(cleaned) || LABEL.test(cleaned)) continue;
+      if (GERUND_HEAD.test(cleaned)) continue;
       // Asked of the text as WRITTEN, not of the stripped text, and the difference is
       // a whole class of rule. A statement opening on a code span — `` `fast_clean`,
       // `failed` and `expired` are distinct states, never blended into "not passed" ``
@@ -211,11 +260,16 @@ export function extractRules(markdown: string): readonly Candidate[] {
       const opener = sentence.replace(/^[*_]+/, "");
       if (NOT_SELF_CONTAINED.test(cleaned) || STARTS_MID_SENTENCE.test(opener)) continue;
 
-      const { statement, why } = splitReason(cleaned);
-      const key = statement.toLowerCase();
+      // The rest of the bullet is the reason, unless the first sentence already carries
+      // one of its own — `because`/`since`/`so that` inside it wins, being the author
+      // saying so explicitly rather than us inferring from position.
+      const split = splitReason(cleaned);
+      const rest = unit.slice(1).join(" ");
+      const why = split.why ?? (rest.length > 0 ? tidy(stripMarkup(rest)).slice(0, MAX_LENGTH) : undefined);
+      const key = split.statement.toLowerCase();
       if (seen.has(key)) continue;
       seen.add(key);
-      out.push({ statement, why });
+      out.push({ statement: split.statement, why });
     }
   }
   return out;
@@ -236,8 +290,8 @@ export function extractRules(markdown: string): readonly Candidate[] {
  * modal as readily as prose does — `| D-2 | lore never commits or pushes |` — and
  * arrives as pipes and alignment rather than as a sentence anyone can act on.
  */
-function blocks(markdown: string): string[] {
-  const out: string[] = [];
+function blocks(markdown: string): { block: string; isBullet: boolean }[] {
+  const out: { block: string; isBullet: boolean }[] = [];
   let current: string[] = [];
   let inFence = false;
   let isBullet = false;
@@ -272,7 +326,7 @@ function blocks(markdown: string): string[] {
     // lifted out alone, that arrive with their subjects missing. A document that states
     // its rules as one-line paragraphs (which plenty do) still works; SPEC.md's
     // multi-sentence incident narrative does not.
-    if (block.length > 0 && (isBullet || sentences(block).length === 1)) out.push(block);
+    if (block.length > 0 && (isBullet || sentences(block).length === 1)) out.push({ block, isBullet });
     current = [];
   };
 

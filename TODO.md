@@ -556,7 +556,13 @@ are what that session's own numbers say is in the way, not what reading suggeste
       **Vany's call: it changes quota burn.** Not doing it is also a decision, and its
       cost is now measured rather than guessed.
 
-- [ ] **Screened-out rows accumulate one copy per document edit, for ever.** Measured
+- [x] **Fixed 2026-08-07.** `recordScreenedOut` deletes any earlier refusal of the same
+      statement from the same document before writing, so there is one row per refused
+      statement rather than one per time it was refused. The newest reason wins, being
+      the one from the current reader and the current wording.
+      *The measurement:*
+
+- [x] ~~Screened-out rows accumulate one copy per document edit, for ever.~~ Measured
       after a single afternoon: 23 rows for 15 distinct statements, three copies of some.
       `retireForChangedBlob` only touches `retired_at IS NULL`, and a screen refusal is
       born retired — so an edited document writes a fresh set and the old set is never
@@ -577,8 +583,14 @@ are what that session's own numbers say is in the way, not what reading suggeste
       write a `lore-ok` line gets it parsed as one, and an 8-hex-character collision with
       a live fingerprint would silently justify a finding nobody answered.
 
-- [ ] **The screen's three misses are mechanical, and I measured the rules that catch
-      them without shipping them.** Live after the first real run: `Arguments: branch
+- [x] **Fixed 2026-08-07**, shipped with the bullet-whole change: lead-in (`…:`),
+      `Label:` and gerund-head refusals. `Arguments: branch (required)` and
+      `Two things a client must get right…:` are gone before the model is asked, which
+      is work the screen no longer pays for.
+      *The measurement:*
+
+- [x] ~~The screen's three misses are mechanical, and I measured the rules that catch
+      them without shipping them.~~ Live after the first real run: `Arguments: branch
       (required), into (required)` (a label line), the t2 prompt text `The easy defects
       are gone; look at design…` (quoted from elsewhere), and one carrying a stray `"*`
       markdown artifact. The lead-in, `Label:` and gerund-head refusals were measured at
@@ -818,8 +830,20 @@ are what that session's own numbers say is in the way, not what reading suggeste
       whose refusal rate jumps is one where somebody has been writing session notes into a
       spec, and today that somebody was me.
 
-- [ ] **Only 3 of 61 extracted rules carry a `why`, and the fix is measured but not
-      taken.** `splitReason` fires on *because / since / so that / otherwise* inside one
+- [x] **Fixed 2026-08-07: a bullet is one statement, and the rest is its `why`.**
+      Coverage went from **5 of 66 to 30 of 58** over this repository's own documents,
+      with real reasons — *"The moment ids are guessable, every log line that contains
+      one becomes a credential"*. It removes the tail-fragment class at source rather
+      than filtering it later, and the lead-in, label and gerund-head refusals went in
+      with it. EXTRACT_VERSION 4.
+      **The known cost, recorded rather than hidden**: a bullet that really holds two
+      rules keeps only the first as a rule; the second becomes the reason, so it still
+      reaches every prompt, attached rather than standing alone. Rarer than a rule
+      followed by its justification, which was producing most of the fragments.
+      *The original entry:*
+
+- [x] ~~Only 3 of 61 extracted rules carry a `why`, and the fix is measured but not
+      taken.~~ `splitReason` fires on *because / since / so that / otherwise* inside one
       sentence, and a bulleted rule states its reason as the NEXT sentence — so the
       reason is right there and gets thrown away, or worse, becomes its own contextless
       "rule".
@@ -1174,6 +1198,16 @@ are what that session's own numbers say is in the way, not what reading suggeste
       refuse to resume a review whose recorded tiers no longer match config, which is
       louder and cheaper. Either way `review_start` should record the ladder, not just
       an index into a file that can be swapped.
+
+- [x] **Half fixed 2026-08-07: the retention sweep now COLLECTS it.** Cache and scratch
+      directories untouched for fourteen days are removed and the bytes freed are
+      reported, so the number is visible rather than discovered with `du`. Fourteen
+      rather than zero because the cache exists to make an install cheap and a repository
+      reviewed fortnightly should still find its dependencies warm.
+      **Still open: nothing WATCHES it.** There is no budget and no alert, so the curve
+      is now bounded but unobserved — and it was 5.7 GB of cache plus 1.1 GB of scratch
+      when measured, against the 4.4 GB recorded a day earlier.
+      *The original entry:*
 
 - [ ] **Nothing watches the one disk fact that is ours.** The host-disk alerts are gone
       (2026-08-06): a full disk belongs to whoever owns the machine, exactly as a

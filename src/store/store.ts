@@ -1014,6 +1014,22 @@ export class Store {
    */
   recordScreenedOut(item: Omit<KnowledgeItem, "id" | "verifiedAt">, because: string): void {
     const at = now();
+    // ONE ROW PER REFUSED STATEMENT, NOT ONE PER TIME IT WAS REFUSED.
+    //
+    // A document is re-ingested whenever it changes, so a statement the screen keeps
+    // rejecting was recorded again on every edit — and nothing collected the old copies,
+    // because `retireForChangedBlob` only touches rows that are still live and these are
+    // born retired. Measured after a single afternoon: 23 rows for 15 distinct
+    // statements, three copies of some, on files edited most sessions. The same
+    // unbounded shape as the livelock that once wrote 21 duplicate derived rules.
+    //
+    // The newest reason wins, which is the one worth keeping: it came from the current
+    // reader and the current wording of the document.
+    this.db
+      .prepare(
+        "DELETE FROM knowledge WHERE repo_id = ? AND provenance IS ? AND statement = ? AND retired_reason LIKE 'screened out:%'",
+      )
+      .run(item.repoId, n(item.provenance), item.statement);
     this.db
       .prepare(
         `INSERT INTO knowledge(id, repo_id, kind, source, statement, why, path, cwe, provenance,

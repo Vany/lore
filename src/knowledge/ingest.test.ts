@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -130,7 +130,9 @@ describe("wrapped markdown is one rule, not several", () => {
 
     const rules = extractRules(md);
     expect(rules).toHaveLength(1);
-    expect(rules[0]?.statement).toContain("I update SPEC in the same change");
+    // The bullet is ONE rule: its first sentence, with the rest as the reason.
+    expect(rules[0]?.statement).toBe("SPEC is ground truth");
+    expect(rules[0]?.why).toContain("I update SPEC in the same change");
     // The tail must not have become a rule of its own.
     expect(rules.some((r) => /^change —/.test(r.statement))).toBe(false);
   });
@@ -146,10 +148,35 @@ describe("wrapped markdown is one rule, not several", () => {
     expect(extractRules(md)).toStrictEqual([]);
   });
 
-  // Two rules in one bullet are still two rules.
-  it("splits a bullet into sentences", () => {
+  // A BULLET IS ONE RULE, AND THE REST IS WHY, which is the trade this reader makes
+  // deliberately. It used to split a bullet back into sentences and offer each alone —
+  // so every multi-sentence bullet shed its tail as a free-standing "team decision"
+  // ("The audit half of that design could never have fired") and the reason a rule
+  // exists was thrown away in the same motion, because it is almost always the NEXT
+  // sentence. Measured: `why` coverage 5 of 66 -> 30 of 58.
+  //
+  // THE KNOWN COST, recorded rather than hidden: a bullet that really does hold two
+  // rules keeps only the first as a rule. The second is not lost — it becomes the
+  // reason, so it still reaches every prompt — but it is attached rather than standing
+  // on its own. Two rules crammed into one bullet is rarer than a rule followed by its
+  // justification, and the second shape was producing most of the fragments.
+  it("takes a bullet as one rule, with the rest as its reason", () => {
     const md = "- Reviewer agents are read-only, always. A fake reviewer must not be kinder than production.";
-    expect(extractRules(md)).toHaveLength(2);
+    const rules = extractRules(md);
+    expect(rules).toHaveLength(1);
+    expect(rules[0]?.statement).toBe("Reviewer agents are read-only, always");
+    expect(rules[0]?.why).toContain("kinder than production");
+  });
+
+  // Shapes a regex CAN name, unlike the residue the model screen exists for (D-81).
+  it("refuses a lead-in and a label line", () => {
+    expect(extractRules("- Two things a client must get right, both of which fail silently:")).toStrictEqual([]);
+    expect(extractRules("- Arguments: `branch` (required), `into` (required).")).toStrictEqual([]);
+  });
+
+  it("refuses a bullet that names an approach rather than stating a rule", () => {
+    const md = "- Watching opencode's event stream and aborting on the cap looks right and must never be trusted.";
+    expect(extractRules(md)).toStrictEqual([]);
   });
 
   // THE SHAPE DECIDES. A paragraph carrying a modal is almost always the STORY of a
@@ -302,11 +329,11 @@ describe("the screen's veto over what was mined", () => {
     dir = mkdtempSync(join(tmpdir(), "lore-screen-"));
     writeFileSync(
       join(dir, "PROG.md"),
-      "- Handles are CSPRNG-generated, never sequential\n- Cost. A conversation must re-send its context\n",
-      // Two candidates come out of that: the CSPRNG rule, and "A conversation must
-      // re-send its context" — the tail of a bullet whose "Cost." lead-in is under the
-      // length floor. The second is exactly the shape the screen exists to refuse: true,
-      // and meaningless to a reviewer told it is one of this team's decisions.
+      "- Handles are CSPRNG-generated, never sequential\n- The distinction is load-bearing and must not erode\n",
+      // Two candidates. The second is exactly what the SCREEN exists for and no regex
+      // can name: rule-shaped, correctly punctuated, carrying a modal — and meaningless
+      // read alone, because "The distinction" points at something in a paragraph that
+      // was never captured. It was live in the store.
     );
     store = new Store(":memory:");
     repoId = store.upsertRepo("r", "git@example.com:o/r.git").id;
@@ -329,7 +356,7 @@ describe("the screen's veto over what was mined", () => {
   it("keeps what survived and stamps it with the reader that screened it", async () => {
     const out = await ingestDocs(store, repoId, dir, {
       files: ["PROG.md"],
-      screen: refusing("A conversation", "a stray sentence about cost, not a rule"),
+      screen: refusing("The distinction", "\"The distinction\" has no antecedent"),
     });
 
     expect(out.added).toBe(1);
@@ -344,16 +371,16 @@ describe("the screen's veto over what was mined", () => {
   // nobody knows it is missing and re-reading the document will not bring it back,
   // because the reader that mined it also refused it. So the refusal is a row.
   it("records what it threw away, with the reason, where an operator can find it", async () => {
-    await ingestDocs(store, repoId, dir, { files: ["PROG.md"], screen: refusing("A conversation", "a stray sentence about cost, not a rule") });
+    await ingestDocs(store, repoId, dir, { files: ["PROG.md"], screen: refusing("The distinction", "\"The distinction\" has no antecedent") });
 
     const rows = store.db
       .prepare("SELECT statement, retired_reason FROM knowledge WHERE repo_id = ? AND retired_at IS NOT NULL")
       .all(repoId) as { statement: string; retired_reason: string }[];
     expect(rows).toHaveLength(1);
-    expect(rows[0]?.statement).toBe("A conversation must re-send its context");
-    expect(rows[0]?.retired_reason).toBe("screened out: a stray sentence about cost, not a rule");
+    expect(rows[0]?.statement).toBe("The distinction is load-bearing and must not erode");
+    expect(rows[0]?.retired_reason).toBe('screened out: "The distinction" has no antecedent');
     // And it is not live, so no reviewer is ever shown it.
-    expect(store.knowledgeFor(repoId).map((k) => k.statement)).not.toContain("A conversation must re-send its context");
+    expect(store.knowledgeFor(repoId).map((k) => k.statement)).not.toContain("The distinction is load-bearing and must not erode");
   });
 
   // A QUOTA REFUSAL MUST NOT EMPTY A REPOSITORY'S MEMORY. The knowledge base is the
@@ -380,7 +407,7 @@ describe("the screen's veto over what was mined", () => {
 
     const second = await ingestDocs(store, repoId, dir, {
       files: ["PROG.md"],
-      screen: refusing("A conversation", "a stray sentence about cost, not a rule"),
+      screen: refusing("The distinction", "\"The distinction\" has no antecedent"),
     });
     expect(second.retired).toBe(2);
     expect(second.added).toBe(1);
@@ -467,6 +494,26 @@ describe("the screen's veto over what was mined", () => {
     expect(Number(after.c)).toBe(Number(before.c));
   });
 
+  // ONE ROW PER REFUSED STATEMENT, however often it is refused. A document is
+  // re-ingested on every edit, so a statement the screen keeps rejecting was recorded
+  // again each time and nothing collected the old copies — `retireForChangedBlob` only
+  // touches live rows and these are born retired. 23 rows for 15 statements after one
+  // afternoon, on files edited most sessions.
+  it("does not stack a fresh refusal row every time a document is edited", async () => {
+    const screen = refusing("The distinction", '"The distinction" has no antecedent');
+    const dead = () =>
+      Number((store.db.prepare("SELECT COUNT(*) c FROM knowledge WHERE retired_reason LIKE 'screened out:%'").get() as { c: number }).c);
+
+    await ingestDocs(store, repoId, dir, { files: ["PROG.md"], screen });
+    expect(dead()).toBe(1);
+
+    // The document changes — a normal edit — so everything is re-extracted and
+    // re-screened, and the same statement is refused again.
+    writeFileSync(join(dir, "PROG.md"), readFileSync(join(dir, "PROG.md"), "utf8") + "\n- Fakes must not be kinder than production\n");
+    await ingestDocs(store, repoId, dir, { files: ["PROG.md"], screen });
+    expect(dead()).toBe(1);
+  });
+
   // A DEGRADED READER MUST NEVER UNDO A GOOD ONE'S WORK, and this is the concurrent
   // shape of it: two reviews of one repository ingest the same changed document, A's
   // screen succeeds and refuses a candidate, B's provider call fails. B finds no
@@ -485,7 +532,7 @@ describe("the screen's veto over what was mined", () => {
     const slowAndFailing: Screen = async (_doc, candidates) => {
       await ingestDocs(store, repoId, dir, {
         files: ["PROG.md"],
-        screen: refusing("A conversation", "a stray sentence about cost, not a rule"),
+        screen: refusing("The distinction", "\"The distinction\" has no antecedent"),
       });
       return { kept: candidates, refused: [], ran: false };
     };
@@ -495,7 +542,7 @@ describe("the screen's veto over what was mined", () => {
     const live = store.knowledgeFor(repoId).map((k) => k.statement);
     expect(b.added).toBe(0);
     // A's verdict stands: the statement the model rejected is still not live.
-    expect(live).not.toContain("A conversation must re-send its context");
+    expect(live).not.toContain("The distinction is load-bearing and must not erode");
     expect(live).toStrictEqual(["Handles are CSPRNG-generated, never sequential"]);
     expect(store.knowledgeFor(repoId).every((k) => k.extractor === EXTRACTOR_VERSION)).toBe(true);
   });

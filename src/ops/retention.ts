@@ -12,6 +12,8 @@
  * SPEC: spec/operations.md §5
  */
 
+import { readdir, rm, stat } from "node:fs/promises";
+import { join } from "node:path";
 import { TERMINAL_SQL, isTerminal, type ReviewState } from "../core/review-state.ts";
 import { pruneWorktrees, removeWorktree, repoPaths } from "../git/repo.ts";
 import type { Store } from "../store/store.ts";
@@ -33,19 +35,90 @@ export interface RetentionConfig {
   /** Hours before an untouched, unfinished review is called expired. */
   readonly staleHours: number;
   readonly reposRoot: string;
+  /**
+   * Days an unused sandbox cache or scratch directory survives.
+   *
+   * **The one disk fact that is ours, and nothing was collecting it.** The npm cache is
+   * keyed by lockfile hash so every distinct lockfile leaves a directory for ever;
+   * scratch gets one per review and the review goes away. Measured 2026-08-07: 5.7 GB of
+   * cache and 1.1 GB of scratch, against 4.4 GB recorded a day earlier — a curve with no
+   * ceiling, in a data directory that also holds the knowledge base.
+   *
+   * Fourteen days rather than zero: the cache exists to make an install cheap, and a
+   * repository reviewed fortnightly should still find its dependencies warm. What it
+   * must not do is keep every lockfile any branch has ever had.
+   */
+  readonly cacheDays: number;
+  /** Where the sandbox keeps its npm cache and per-review scratch, if this deployment has one. */
+  readonly cacheRoot?: string | undefined;
+  readonly scratchRoot?: string | undefined;
 }
 
 export const DEFAULT_RETENTION: RetentionConfig = {
   worktreeDays: 0,
   reviewDays: 90,
   staleHours: 48,
-  reposRoot: "/var/lib/lore/repos",
+  cacheDays: 14,
+  reposRoot: `${process.env["LORE_DATA_DIR"] ?? "/var/lib/lore"}/repos`,
+  cacheRoot: `${process.env["LORE_DATA_DIR"] ?? "/var/lib/lore"}/npm-cache`,
+  scratchRoot: `${process.env["LORE_DATA_DIR"] ?? "/var/lib/lore"}/scratch`,
 };
 
 export interface RetentionResult {
   readonly worktreesRemoved: number;
   readonly reviewsDeleted: number;
   readonly reviewsExpired: number;
+  /** Sandbox cache and scratch directories collected, and roughly what they held. */
+  readonly cacheDirsRemoved: number;
+  readonly cacheBytesFreed: number;
+}
+
+/**
+ * Collect sandbox directories nothing has touched lately.
+ *
+ * Best-effort throughout: a permissions fault on one directory must not stop the rest,
+ * and this is housekeeping — the sweep it runs inside collects worktrees and rows that
+ * matter more. It reports what it freed so the number is visible rather than assumed;
+ * an uncollected cache announced itself as 5.7 GB only because somebody ran `du`.
+ */
+async function collectSandbox(cfg: RetentionConfig): Promise<{ dirs: number; bytes: number }> {
+  const cutoff = Date.now() - cfg.cacheDays * 86_400_000;
+  let dirs = 0;
+  let bytes = 0;
+
+  for (const root of [cfg.cacheRoot, cfg.scratchRoot]) {
+    if (root === undefined) continue;
+    const entries = await readdir(root, { withFileTypes: true }).catch(() => undefined);
+    if (entries === undefined) continue;
+    for (const e of entries) {
+      if (!e.isDirectory()) continue;
+      const path = join(root, e.name);
+      const s = await stat(path).catch(() => undefined);
+      // mtime, not atime: many filesystems mount `noatime`, so a read leaves no trace
+      // and an actively-used cache would look abandoned. An npm cache is WRITTEN on
+      // every install that adds a package, which is the event worth keeping it for.
+      if (s === undefined || s.mtimeMs > cutoff) continue;
+      const size = await dirSize(path);
+      const gone = await rm(path, { recursive: true, force: true }).then(() => true, () => false);
+      if (!gone) continue;
+      dirs++;
+      bytes += size;
+    }
+  }
+  return { dirs, bytes };
+}
+
+/** Bytes under a directory, best-effort — a size nobody can read is reported as zero. */
+async function dirSize(dir: string): Promise<number> {
+  const entries = await readdir(dir, { withFileTypes: true, recursive: true }).catch(() => undefined);
+  if (entries === undefined) return 0;
+  let total = 0;
+  for (const e of entries) {
+    if (!e.isFile()) continue;
+    const s = await stat(join(e.parentPath, e.name)).catch(() => undefined);
+    total += s?.size ?? 0;
+  }
+  return total;
 }
 
 function daysAgo(n: number): string {
@@ -123,5 +196,12 @@ export async function collect(store: Store, cfg: RetentionConfig = DEFAULT_RETEN
     .prepare(`DELETE FROM review WHERE state IN (${TERMINAL_SQL}) AND updated_at < ?`)
     .run(daysAgo(cfg.reviewDays));
 
-  return { worktreesRemoved, reviewsDeleted: Number(deleted.changes), reviewsExpired };
+  const sandbox = await collectSandbox(cfg);
+  return {
+    worktreesRemoved,
+    reviewsDeleted: Number(deleted.changes),
+    reviewsExpired,
+    cacheDirsRemoved: sandbox.dirs,
+    cacheBytesFreed: sandbox.bytes,
+  };
 }
