@@ -579,6 +579,33 @@ are what that session's own numbers say is in the way, not what reading suggeste
       With the screen's own residue now known, they are complementary rather than
       redundant: cheap, deterministic, and they remove work the model is paying for.
 
+- [ ] **The replica monitor cries wolf again, and it is the third version of the same
+      mistake.** Observed 2026-08-07 immediately after a deploy: `/status` reported
+      `ok: false, "replica 14m behind"` while litestream's own log said
+      `txid.replica = txid.db = 000000000000061a` on every sync — the replica held
+      exactly the transaction the database was at.
+
+      | | |
+      |---|---|
+      | newest replica file | `…-000000000000061a.ltx`, mtime 18:46:49 |
+      | `lore.db-wal` mtime | 19:00:21 |
+      | litestream | `txid.replica == txid.db` |
+
+      `replicaState` compares FILE MTIMES: newest replica file against
+      `max(lore.db, lore.db-wal)`. SQLite touches `-wal` on open and on checkpoint, not
+      only on commit, so a restart moves it with no transaction behind it. The quantity
+      that matters is the transaction id — and litestream puts it **in the filename**.
+
+      v1 asked *was a file written in the last hour*, and an idle database looked like a
+      dead replicator. v2 (2026-08-06) compares the replica against the database, which
+      is the right idea measured with the wrong instrument. A monitor that cries wolf
+      gets muted, and this one guards the knowledge base, which is the product.
+
+      Not a one-line change: `deploy/Makefile`'s `replica-state` implements the same
+      predicate in shell — deliberately, so `make status` can answer while the service is
+      DOWN — and `one-definition.test.ts` fails if the two disagree. Both move together
+      or neither does.
+
 - [ ] **Three people hold tokens on `rigid-monorepo` and the perimeter changed.**
       Provisioned 2026-08-07 for `koray` and `max`; `LORE_BIND` moved from `127.0.0.1`
       to `0.0.0.0` on Vany's call, so the service answers on every interface this laptop
