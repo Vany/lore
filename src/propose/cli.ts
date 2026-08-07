@@ -82,7 +82,11 @@ export async function proposeCli(i: ProposeCliInput): Promise<string> {
   // The same cut a review takes (D-65), so a stale mirror refuses here too: thinking
   // hard about a tree from three hours ago is worse than not thinking, because the
   // output looks exactly as confident.
-  const id = `propose_${i.now.toISOString().replace(/[^0-9]/g, "")}`;
+  // The FOLDER is in the id, not just the clock. Eleven folders started in the same
+  // second would otherwise collide on one worktree, and the collision is silent: git
+  // hands the second caller the first caller's checkout.
+  const slug = (i.folder || "root").replace(/[^A-Za-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  const id = `propose_${slug}_${i.now.toISOString().replace(/[^0-9]/g, "")}`;
   const worktree = await worktreeFor(paths, id, i.commit, repo["git_url"] ?? "");
   try {
     // The RESOLVED SHA. `master` means something different next week, and this document
@@ -123,7 +127,10 @@ export async function proposeCli(i: ProposeCliInput): Promise<string> {
     // point, and a run that spent eight deep sessions and then died formatting a path
     // would have burned a subscription window for nothing.
     await mkdir(i.outDir, { recursive: true });
-    const path = join(i.outDir, `${i.now.toISOString().slice(0, 10)}-${sha.slice(0, 7)}.md`);
+    // The folder belongs in the NAME. A per-folder sweep shares one commit and one
+    // date, so without it every run overwrites the last and ten of eleven documents
+    // are lost — after they were paid for.
+    const path = join(i.outDir, `${i.now.toISOString().slice(0, 10)}-${sha.slice(0, 7)}-${slug}.md`);
     await writeFile(path, doc, "utf8");
 
     if (result.sessionsSpent === 0) {
