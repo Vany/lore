@@ -66,7 +66,10 @@ incident story is full of "must", "never" and "always" describing what went wron
 arrived decontextualised — *"It has to be, because the secret is shown once"*, *"A
 required field is therefore free money"* — with their subjects in sentences that were
 never captured, and were then shown to every model under *"treat these as this team's
-decisions"*. The same document now yields 15, and the whole repository 66 instead of 218.
+decisions"*. Under the narrowed reader the same document gave **15** and the whole
+repository **66 instead of 218** — measured 2026-08-06, and a measurement rather than a
+standing figure. `SPEC.md` is edited most sessions, so its yield moves without the
+extractor changing; four places once carried that number and three of them disagreed.
 
 A rule is **one statement**. A narrative paragraph sets something up, says what
 happened, and draws a conclusion — and it is the middle sentences, lifted out alone,

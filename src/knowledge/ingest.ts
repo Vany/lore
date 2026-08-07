@@ -86,10 +86,13 @@ const STARTS_MID_SENTENCE = /^[a-z]/;
  * when its document changes (D-20) — because a rule must not outlive the reader that
  * produced it any more than it may outlive the text.
  *
- * `2` is the narrowing that stopped mining narrative paragraphs: measured on this
- * repository, SPEC.md produced 111 rules and 108 of them came from prose, arriving as
- * fragments whose subjects were in sentences that were never captured. Under `2` it
- * produces 15.
+ * `2` is the narrowing that stopped mining narrative paragraphs: measured 2026-08-06,
+ * SPEC.md produced 111 rules and 108 of them came from prose, arriving as fragments
+ * whose subjects were in sentences that were never captured. Under `2` the same document
+ * gave 15 — a hundredfold-smaller share of narrative, which is the point, and NOT a
+ * standing figure: SPEC.md is edited most sessions, so a bare "it yields N" here is
+ * wrong within a day. It was 8 in one comment and 15 in three others by the time a
+ * review noticed, and the true answer that morning was 18. Dates, not counts.
  *
  * `3` asks the mid-sentence guard about the text as WRITTEN rather than about the
  * markup-stripped text, which `2` had been silently refusing real rules over — a

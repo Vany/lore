@@ -1547,7 +1547,9 @@ the artefact it exists to produce, aimed at the judgement everything else rests 
 Three changes, in `spec/knowledge.md` §2.1.1 and §2.2.0:
 
 1. **Only rule-shaped content is ingested** — bullets, and single-sentence paragraphs.
-   `SPEC.md` goes from 111 rules to 15, the repository from 218 to 66.
+   Measured 2026-08-06: `SPEC.md` went from 111 rules to 15, the repository from 218 to
+   66. A measurement with a date, not a standing figure — `SPEC.md` is edited most
+   sessions, so its yield moves without the reader changing.
 2. **A statement that cannot stand alone is not a rule** — dangling referents and
    mid-sentence starts are refused.
 3. **An accepted justification is a verdict, not a rule.** It is already in every prompt

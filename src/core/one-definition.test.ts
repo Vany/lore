@@ -178,12 +178,16 @@ describe("SQL past the store only ever shrinks (a ratchet, not a clean bill)", (
       // written, and its invariant claimed, one file away from a query it could not
       // see: it reported seven sites where there are twenty-eight.
       //
-      // A RATCHET, not a clean bill of health, and deliberately so. Twenty-eight sites
-      // across fifteen files is a real conversion and not one to rush into code that
-      // has no ladder verdict — but a check that permitted what it means to forbid
-      // would be decoration, and a number nobody can see would rot. So the invariant
-      // this can honestly enforce today is: NO NEW FILE reaches through, and the ones
-      // that do may only shrink. `TODO.md` carries the list to zero.
+      // A RATCHET, not a clean bill of health, and deliberately so. The debt below is a
+      // real conversion and not one to rush into code that has no ladder verdict — but a
+      // check that permitted what it means to forbid would be decoration, and a number
+      // nobody can see would rot. So the invariant this can honestly enforce today is:
+      // NO NEW FILE and NO NEW SITE, and both may only shrink. `TODO.md` carries it to zero.
+      //
+      // THE SIZE OF THE DEBT IS THE LIST, and is not restated in prose here. This comment
+      // said "fifteen files" over a fourteen-entry list — the same number was corrected in
+      // `TODO.md` and missed three lines above the thing that disproves it, in the one
+      // file this codebase tasks with keeping its own statements true.
       for (const line of src.split("\n")) {
         if (/(?<![A-Za-z0-9_])(?:store|this|i\.store|deps\.store)\.db\b/.test(line)) {
           const rel = file.slice(SRC.length).replace(/^\//, "");

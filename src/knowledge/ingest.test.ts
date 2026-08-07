@@ -153,10 +153,16 @@ describe("wrapped markdown is one rule, not several", () => {
   });
 
   // THE SHAPE DECIDES. A paragraph carrying a modal is almost always the STORY of a
-  // decision rather than the decision — measured on this repository, SPEC.md produced
-  // 111 rules and 108 of them came from paragraphs of incident narrative, arriving as
-  // fragments with their subjects in sentences that were never captured. That same
-  // document now yields 8.
+  // decision rather than the decision — measured 2026-08-06, SPEC.md produced 111 rules
+  // and 108 of them came from paragraphs of incident narrative, arriving as fragments
+  // with their subjects in sentences that were never captured.
+  //
+  // What it yields TODAY is deliberately not written here. SPEC.md is edited most
+  // sessions, so the figure moves without the extractor changing: this comment said 8
+  // while three other places said 15 and the real answer was 18, which is a false alarm
+  // planted in the middle of an audit this branch itself orders. The behaviour below is
+  // what the test holds; the count is a measurement with a date on it, kept in the one
+  // place that explains the reader (`EXTRACTOR_VERSION`).
   it("does not mine a narrative paragraph for rules", () => {
     const md =
       "The audit half of that design could never have fired. A reviewer ran it against a dead port and " +
