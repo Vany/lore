@@ -14,7 +14,7 @@
 
 import { readdir, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
-import { TERMINAL_SQL, isTerminal, type ReviewState } from "../core/review-state.ts";
+import { isTerminal, type ReviewState } from "../core/review-state.ts";
 import { pruneWorktrees, removeWorktree, repoPaths } from "../git/repo.ts";
 import type { Store } from "../store/store.ts";
 
@@ -148,17 +148,11 @@ export async function collect(store: Store, cfg: RetentionConfig = DEFAULT_RETEN
 
   // Worktrees for finished reviews. `passed_partial` is in this set now; spelled
   // out, it was missing, so a partial pass held its worktree for ever.
-  const finished = store.db
-    .prepare(
-      // `<=`, not `<`. With `worktreeDays: 0` the cutoff IS now, and a review that
-      // finished in the same millisecond as the sweep would fall outside a strict
-      // comparison — harmless, since the worker already released it and the next pass
-      // would catch it, but it makes "zero days" mean something other than "all of
-      // them" for no reason.
-      `SELECT id, repo_id, state FROM review
-       WHERE state IN (${TERMINAL_SQL}) AND updated_at <= ?`,
-    )
-    .all(daysAgo(cfg.worktreeDays)) as Record<string, string>[];
+  // `<=`, not `<`. With `worktreeDays: 0` the cutoff IS now, and a review that
+  // finished in the same millisecond as the sweep would fall outside a strict
+  // comparison — harmless, since the worker already released it and the next pass would
+  // catch it, but it makes "zero days" mean something other than "all of them".
+  const finished = store.finishedBefore(daysAgo(cfg.worktreeDays));
 
   let worktreesRemoved = 0;
   for (const row of finished) {
@@ -192,14 +186,12 @@ export async function collect(store: Store, cfg: RetentionConfig = DEFAULT_RETEN
 
   // Old review rows. Findings and verdicts cascade; knowledge does not — it has no
   // foreign key to a review precisely so that it outlives one.
-  const deleted = store.db
-    .prepare(`DELETE FROM review WHERE state IN (${TERMINAL_SQL}) AND updated_at < ?`)
-    .run(daysAgo(cfg.reviewDays));
+  const reviewsDeleted = store.deleteReviewsBefore(daysAgo(cfg.reviewDays));
 
   const sandbox = await collectSandbox(cfg);
   return {
     worktreesRemoved,
-    reviewsDeleted: Number(deleted.changes),
+    reviewsDeleted,
     reviewsExpired,
     cacheDirsRemoved: sandbox.dirs,
     cacheBytesFreed: sandbox.bytes,

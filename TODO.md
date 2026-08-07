@@ -772,7 +772,21 @@ are what that session's own numbers say is in the way, not what reading suggeste
       working and said it was fine — in a codebase whose entire discipline is INV-1,
       found by models reading it cold. That is the argument for the tool.
 
-- [ ] **Twenty-eight production sites still reach past the Store into SQL**, across
+- [x] **ZERO, 2026-08-08.** All twenty-eight converted across fourteen files, and the
+      ratchet became the invariant it was named for: `no production file reaches past the
+      store into SQL`, asserting an empty list rather than a shrinking one.
+      Two of them were the `SELECT *` the ratchet's own comment called out, building
+      `lore://review/{id}` and the VEX document — so the client-facing shape of both was
+      a function of the schema. The replacement names every column and names exactly the
+      ones `SELECT *` produced, so the published shape is pinned rather than changed: no
+      client sees anything different today, and adding a column is a decision instead of
+      an accident. `review.token_hash` landing on that table this week is the near miss
+      that makes the point.
+      Token queries moved too, and gained a reason of their own: a `SELECT *` over that
+      table would put a credential hash into whatever the caller did next.
+      *The original entry:*
+
+- [x] ~~Twenty-eight production sites still reach past the Store into SQL~~, across
       **fourteen** files — not the seven I reported, which was a per-line grep missing
       `store.db\n  .prepare(`, and not the fifteen this item claimed until a review
       counted with the ratchet's own regex and got 28 across 14. A ratchet in

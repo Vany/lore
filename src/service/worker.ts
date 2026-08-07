@@ -18,7 +18,7 @@
 
 
 import { LoreError, ProviderAuthFailed } from "../core/errors.ts";
-import { isTerminal, type ReviewState } from "../core/review-state.ts";
+import { isTerminal } from "../core/review-state.ts";
 import { reviewType } from "../core/review-type.ts";
 import { removeWorktree, repoPaths, worktreeFor } from "../git/repo.ts";
 import { bootstrap } from "../knowledge/bootstrap.ts";
@@ -180,21 +180,16 @@ export class Worker {
 
   private async runJob(reviewId: string): Promise<void> {
     // The principal is on the row; the worker acts for whoever owns the review.
-    const owner = this.store.db
-      .prepare("SELECT principal FROM review WHERE id = ?")
-      .get(reviewId) as Record<string, string> | undefined;
-    const principal = owner?.["principal"] ?? "";
+    const principal = this.store.principalOf(reviewId) ?? "";
     const review = this.store.getReview(reviewId, principal);
     if (review === undefined) throw new LoreError(`review ${reviewId} vanished`, 70);
 
-    const repo = this.store.db
-      .prepare("SELECT git_url FROM repo WHERE id = ?")
-      .get(review.repoId) as Record<string, string> | undefined;
+    const gitUrl = this.store.gitUrlOf(review.repoId);
     const paths = repoPaths(this.cfg.reposRoot, review.repoId);
     // Cutting a base checks the mirror is present and fresh; reusing one only checks
     // it is present (D-40, D-63). That decision lives in one place because when it
     // lived in two, they disagreed and the disagreement was reachable.
-    const worktree = await worktreeFor(paths, reviewId, review.branch, repo?.["git_url"] ?? "");
+    const worktree = await worktreeFor(paths, reviewId, review.branch, gitUrl ?? "");
 
     this.store.updateReview(reviewId, { state: "running" });
 
@@ -277,12 +272,10 @@ export class Worker {
    * reason to fail a review that has already finished.
    */
   private async releaseIfFinished(reviewId: string): Promise<void> {
-    const row = this.store.db
-      .prepare("SELECT repo_id, state FROM review WHERE id = ?")
-      .get(reviewId) as Record<string, string> | undefined;
-    if (row === undefined || !isTerminal((row["state"] ?? "") as ReviewState)) return;
+    const at = this.store.repoAndStateOf(reviewId);
+    if (at === undefined || !isTerminal(at.state)) return;
 
-    const paths = repoPaths(this.cfg.reposRoot, row["repo_id"] ?? "");
+    const paths = repoPaths(this.cfg.reposRoot, at.repoId);
     await removeWorktree(paths, reviewId).catch((e: unknown) => {
       void this.alerter.send({
         severity: "log",

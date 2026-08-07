@@ -102,13 +102,11 @@ export function criticFor(tiers: readonly Tier[], proposer: Tier): Tier | undefi
 export async function propose(deps: ProposeDeps, input: ProposeInput): Promise<ProposeResult> {
   // BEFORE ANYTHING IS SPENT. A review already queued is work someone is waiting on;
   // this is not.
-  const busy = deps.store.db
-    .prepare("SELECT id, branch FROM review WHERE state IN ('queued', 'running', 'fast_clean')")
-    .all() as Record<string, string>[];
+  const busy = deps.store.reviewsInFlight();
   if (busy.length > 0) {
     throw new DidNotRun(
       `refusing to start: ${String(busy.length)} review(s) are still running — ` +
-        `${busy.map((r) => `${r["id"] ?? ""} (${r["branch"] ?? ""})`).join(", ")}. ` +
+        `${busy.map((r) => `${r.id} (${r.branch})`).join(", ")}. ` +
         "Reviews are the product and this is inspiration; a proposer session costs what a deep review costs " +
         "and would compete for the same provider window. Wait for them, then run this again.",
     );

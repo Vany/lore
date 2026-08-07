@@ -892,6 +892,309 @@ export class Store {
     );
   }
 
+  /**
+   * Every finding this repository has raised, with the verdict that settled it.
+   *
+   * The input to recurrence derivation. `verdict` is the LATEST one, because a
+   * justification accepted and later rejected is a different lesson from one that
+   * stood, and a cluster nobody has answered teaches nothing yet.
+   */
+  findingsWithVerdict(repoId: string): readonly { readonly cwe: string | undefined; readonly claim: string; readonly file: string; readonly verdict: string | undefined }[] {
+    const rows = this.db
+      .prepare(
+        `SELECT f.cwe AS cwe, f.claim AS claim, f.file AS file,
+                (SELECT v.verdict FROM verdict v
+                  WHERE v.review_id = f.review_id AND v.fingerprint = f.fingerprint
+                  ORDER BY v.id DESC LIMIT 1) AS verdict
+         FROM finding f JOIN review r ON r.id = f.review_id
+         WHERE r.repo_id = ?`,
+      )
+      .all(repoId) as Record<string, string | null>[];
+    return rows.map((r) => ({
+      cwe: un(r["cwe"] ?? null),
+      claim: r["claim"] ?? "",
+      file: r["file"] ?? "",
+      verdict: un(r["verdict"] ?? null),
+    }));
+  }
+
+  /** Does any live rule for this repository come from this source? */
+  hasKnowledgeFrom(repoId: string, provenance: string): boolean {
+    return (
+      this.db
+        .prepare("SELECT 1 FROM knowledge WHERE repo_id = ? AND provenance = ? AND retired_at IS NULL LIMIT 1")
+        .get(repoId, provenance) !== undefined
+    );
+  }
+
+  /**
+   * What this repository decided about findings LIKE this one, elsewhere.
+   *
+   * Matched on the normalised claim OR the CWE, not the fingerprint: the same defect in
+   * another file is the same lesson described differently, and the fingerprint cannot
+   * see that (D-44). The current finding is excluded, so "prior" means what it says.
+   */
+  priorVerdictsLike(repoId: string, fingerprint: string, normalizedClaim: string, cwe: string | undefined): readonly string[] {
+    const rows = this.db
+      .prepare(
+        `SELECT v.verdict AS verdict
+         FROM finding fi
+         JOIN review r ON r.id = fi.review_id
+         JOIN verdict v ON v.fingerprint = fi.fingerprint AND v.review_id = fi.review_id
+         WHERE r.repo_id = ?
+           AND fi.fingerprint != ?
+           AND (LOWER(TRIM(fi.claim)) = ? OR (fi.cwe IS NOT NULL AND fi.cwe = ?))
+           AND v.id = (SELECT MAX(v2.id) FROM verdict v2
+                       WHERE v2.fingerprint = v.fingerprint AND v2.review_id = v.review_id)`,
+      )
+      .all(repoId, fingerprint, normalizedClaim, cwe ?? " ") as Record<string, string>[];
+    return rows.map((r) => r["verdict"] ?? "");
+  }
+
+  /** How many times this repository has raised a finding like this one, elsewhere. */
+  countPriorLike(repoId: string, fingerprint: string, normalizedClaim: string, cwe: string | undefined): number {
+    const row = this.db
+      .prepare(
+        `SELECT COUNT(*) AS c
+         FROM finding fi JOIN review r ON r.id = fi.review_id
+         WHERE r.repo_id = ?
+           AND fi.fingerprint != ?
+           AND (LOWER(TRIM(fi.claim)) = ? OR (fi.cwe IS NOT NULL AND fi.cwe = ?))`,
+      )
+      .get(repoId, fingerprint, normalizedClaim, cwe ?? " ") as Record<string, number> | undefined;
+    return Number(row?.["c"] ?? 0);
+  }
+
+  /**
+   * Every finding of a review, worst first, WITH ITS COLUMNS NAMED.
+   *
+   * `SELECT *` built `lore://review/{id}` and the VEX document, which made the
+   * client-facing shape of both a function of the schema: every column a future
+   * migration adds would have shipped to every client silently, without anyone deciding
+   * to publish it. `token_hash` landing on a review row is the near miss that makes the
+   * point — it is one join away from this table.
+   *
+   * The field names are exactly what `SELECT *` produced, deliberately: this pins the
+   * published shape rather than changing it, so no client sees anything different
+   * today, and adding a column is now a decision instead of an accident.
+   */
+  findingRowsForReview(reviewId: string): readonly Record<string, string | number | null>[] {
+    return this.db
+      .prepare(
+        `SELECT review_id, fingerprint, file, line, symbol, severity, claim, evidence,
+                failure_scenario, cwe, origin, preexisting, round, first_seen, delivered_at,
+                scope_blob, scope_hunk
+         FROM finding WHERE review_id = ? ORDER BY ${FINDING_ORDER_SQL}`,
+      )
+      .all(reviewId) as Record<string, string | number | null>[];
+  }
+
+  /** Spend and call count per tier since a moment — the operator's cost view. */
+  spendByTierSince(sinceIso: string): readonly { readonly tier: string; readonly usd: number; readonly calls: number }[] {
+    const rows = this.db
+      .prepare(
+        `SELECT tier, COALESCE(SUM(cost_usd), 0) AS usd, COUNT(*) AS calls
+         FROM usage WHERE at >= ? GROUP BY tier ORDER BY usd DESC`,
+      )
+      .all(sinceIso) as Record<string, string | number | bigint>[];
+    return rows.map((r) => ({
+      tier: String(r["tier"] ?? ""),
+      usd: Number(r["usd"] ?? 0),
+      calls: Number(r["calls"] ?? 0),
+    }));
+  }
+
+  /** A repository by name or id, for a command that took whichever the operator typed. */
+  repoByNameOrId(nameOrId: string): RepoRow | undefined {
+    const row = this.db
+      .prepare("SELECT id, name, git_url FROM repo WHERE name = ? OR id = ?")
+      .get(nameOrId, nameOrId) as Record<string, string> | undefined;
+    if (row === undefined) return undefined;
+    return { id: row["id"] ?? "", name: row["name"] ?? "", gitUrl: row["git_url"] ?? "" };
+  }
+
+  /** Reviews that have not finished — what `propose` refuses to compete with. */
+  reviewsInFlight(): readonly { readonly id: string; readonly branch: string }[] {
+    const rows = this.db
+      .prepare("SELECT id, branch FROM review WHERE state IN ('queued', 'running', 'fast_clean')")
+      .all() as Record<string, string>[];
+    return rows.map((r) => ({ id: r["id"] ?? "", branch: r["branch"] ?? "" }));
+  }
+
+  /** Which tier first raised this finding, for deciding whether a re-raise is stronger. */
+  originOfFinding(reviewId: string, fingerprint: string): string | undefined {
+    const row = this.db
+      .prepare("SELECT origin FROM finding WHERE review_id = ? AND fingerprint = ?")
+      .get(reviewId, fingerprint) as Record<string, string> | undefined;
+    return row?.["origin"];
+  }
+
+  /** How many findings a review raised, and how its verdicts settled — for the attestation. */
+  findingCount(reviewId: string): number {
+    const row = this.db
+      .prepare("SELECT COUNT(*) AS c FROM finding WHERE review_id = ?")
+      .get(reviewId) as Record<string, number | bigint> | undefined;
+    return Number(row?.["c"] ?? 0);
+  }
+
+  /**
+   * Verdict counts by kind, per FINDING and by its LATEST verdict.
+   *
+   * The same rule `settledFingerprints` uses. Counting verdict rows was wrong twice over
+   * and the first attestation ever produced showed both: verdicts are append-only, so a
+   * justification carried across rounds counted repeatedly, and one later overturned
+   * counted as both.
+   */
+  latestVerdictCounts(reviewId: string): readonly { readonly verdict: string; readonly c: number }[] {
+    const rows = this.db
+      .prepare(
+        `SELECT v.verdict, COUNT(*) AS c FROM verdict v
+         WHERE v.review_id = ?
+           AND v.id = (SELECT MAX(id) FROM verdict w WHERE w.review_id = v.review_id AND w.fingerprint = v.fingerprint)
+         GROUP BY v.verdict`,
+      )
+      .all(reviewId) as Record<string, string | number | bigint>[];
+    return rows.map((r) => ({ verdict: String(r["verdict"] ?? ""), c: Number(r["c"] ?? 0) }));
+  }
+
+  /** How many DISTINCT tiers ran — what an attestation may claim looked at the code. */
+  tiersThatRan(reviewId: string): number {
+    const row = this.db
+      .prepare("SELECT COUNT(DISTINCT tier) AS c FROM tier_run WHERE review_id = ?")
+      .get(reviewId) as Record<string, number | bigint> | undefined;
+    return Number(row?.["c"] ?? 0);
+  }
+
+  /** A review's branch, repo and remote — what the worker needs to cut a worktree. */
+  reviewLocation(reviewId: string): { readonly branch: string; readonly repoId: string; readonly gitUrl: string } | undefined {
+    const row = this.db
+      .prepare("SELECT r.branch, r.repo_id, p.git_url FROM review r JOIN repo p ON p.id = r.repo_id WHERE r.id = ?")
+      .get(reviewId) as Record<string, string> | undefined;
+    if (row === undefined) return undefined;
+    return { branch: row["branch"] ?? "", repoId: row["repo_id"] ?? "", gitUrl: row["git_url"] ?? "" };
+  }
+
+  /** Who a review belongs to. The worker acts for whoever owns it. */
+  principalOf(reviewId: string): string | undefined {
+    const row = this.db.prepare("SELECT principal FROM review WHERE id = ?").get(reviewId) as
+      | Record<string, string>
+      | undefined;
+    return row?.["principal"];
+  }
+
+  /** A repository's remote. */
+  gitUrlOf(repoId: string): string | undefined {
+    const row = this.db.prepare("SELECT git_url FROM repo WHERE id = ?").get(repoId) as
+      | Record<string, string>
+      | undefined;
+    return row?.["git_url"];
+  }
+
+  /** Reviews holding findings nobody has collected — `/status`'s uncollected section. */
+  uncollectedByReview(): readonly Record<string, string | number | null>[] {
+    return this.db
+      .prepare(
+        `SELECT r.id, r.branch,
+                COUNT(*) AS undelivered,
+                SUM(CASE WHEN f.severity = 'high' THEN 1 ELSE 0 END) AS high,
+                MIN(f.first_seen) AS waiting_since
+         FROM finding f JOIN review r ON r.id = f.review_id
+         WHERE f.delivered_at IS NULL
+         GROUP BY r.id, r.branch
+         ORDER BY waiting_since`,
+      )
+      .all() as Record<string, string | number | null>[];
+  }
+
+  /** Reviews that have not reached a verdict, newest first. */
+  reviewsUnfinished(limit = 50): readonly Record<string, string | null>[] {
+    return this.db
+      .prepare(
+        `SELECT id, branch, state, type, updated_at FROM review
+         WHERE state NOT IN (${TERMINAL_SQL})
+         ORDER BY updated_at DESC LIMIT ?`,
+      )
+      .all(limit) as Record<string, string | null>[];
+  }
+
+  /** Finished reviews whose worktrees the sweep may release. */
+  finishedBefore(iso: string): readonly Record<string, string>[] {
+    return this.db
+      .prepare(
+        `SELECT id, repo_id, state FROM review
+         WHERE state IN (${TERMINAL_SQL}) AND updated_at <= ?`,
+      )
+      .all(iso) as Record<string, string>[];
+  }
+
+  /** Delete finished reviews older than a cutoff. Returns how many rows went. */
+  deleteReviewsBefore(iso: string): number {
+    const res = this.db
+      .prepare(`DELETE FROM review WHERE state IN (${TERMINAL_SQL}) AND updated_at < ?`)
+      .run(iso);
+    return Number(res.changes);
+  }
+
+  /** A review's repository and state, for deciding whether its worktree may be released. */
+  repoAndStateOf(reviewId: string): { readonly repoId: string; readonly state: ReviewState } | undefined {
+    const row = this.db.prepare("SELECT repo_id, state FROM review WHERE id = ?").get(reviewId) as
+      | Record<string, string>
+      | undefined;
+    if (row === undefined) return undefined;
+    return { repoId: row["repo_id"] ?? "", state: (row["state"] ?? "failed") as ReviewState };
+  }
+
+  // ----------------------------------------------------------------- token
+  //
+  // The token table's queries live here rather than in `mcp/auth.ts` for the same reason
+  // every other query does — one place that knows the schema — and for one specific to
+  // credentials: a `SELECT *` over this table would put a hash into whatever the caller
+  // does next. Every method below names its columns.
+
+  insertToken(hash: string, principal: string, repoId: string, label: string | undefined): void {
+    this.db
+      .prepare("INSERT INTO token(hash, principal, repo_id, label, created_at) VALUES(?, ?, ?, ?, ?)")
+      .run(hash, principal, repoId, n(label), now());
+  }
+
+  /**
+   * Every live token's hash and what it is scoped to.
+   *
+   * Returns them ALL, because the comparison that follows is timing-safe and a
+   * `WHERE hash = ?` would leak through the query planner what a constant-time compare
+   * exists to hide.
+   */
+  liveTokens(): readonly { readonly hash: string; readonly principal: string; readonly repoId: string }[] {
+    const rows = this.db
+      .prepare("SELECT hash, principal, repo_id FROM token WHERE revoked_at IS NULL")
+      .all() as Record<string, string>[];
+    return rows.map((r) => ({ hash: r["hash"] ?? "", principal: r["principal"] ?? "", repoId: r["repo_id"] ?? "" }));
+  }
+
+  /** Who holds a token, for what, and whether it still works — the operator's view. */
+  tokensWithRepo(): readonly Record<string, string | null>[] {
+    return this.db
+      .prepare(
+        "SELECT t.hash, t.principal, t.label, t.created_at, t.revoked_at, r.name AS repo" +
+          " FROM token t LEFT JOIN repo r ON r.id = t.repo_id ORDER BY t.created_at",
+      )
+      .all() as Record<string, string | null>[];
+  }
+
+  /** Tokens whose hash starts with this prefix. Several means the prefix is ambiguous. */
+  tokensByPrefix(prefix: string): readonly Record<string, string | null>[] {
+    return this.db
+      .prepare(
+        "SELECT t.hash, t.principal, t.revoked_at, r.name AS repo FROM token t" +
+          " LEFT JOIN repo r ON r.id = t.repo_id WHERE t.hash LIKE ?",
+      )
+      .all(`${prefix.toLowerCase()}%`) as Record<string, string | null>[];
+  }
+
+  revokeTokenByHash(hash: string): void {
+    this.db.prepare("UPDATE token SET revoked_at = ? WHERE hash = ?").run(now(), hash);
+  }
+
   // --------------------------------------------------------------- verdict
 
   recordVerdict(reviewId: string, v: Omit<VerdictRow, "createdAt">): void {

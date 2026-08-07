@@ -67,14 +67,12 @@ export function parseBudget(raw: string | undefined): number {
 }
 
 export async function proposeCli(i: ProposeCliInput): Promise<string> {
-  const repo = i.store.db
-    .prepare("SELECT id, name, git_url FROM repo WHERE name = ? OR id = ?")
-    .get(i.repo, i.repo) as Record<string, string> | undefined;
+  const repo = i.store.repoByNameOrId(i.repo);
   if (repo === undefined) {
     const known = i.store.repos().map((r) => r.name).join(", ");
     throw new UsageError(`no repository '${i.repo}' — known: ${known || "none; run `lore new` first"}`);
   }
-  const repoId = repo["id"] ?? "";
+  const repoId = repo.id;
   const paths = repoPaths(i.reposRoot, repoId);
 
   // The same cut a review takes (D-65), so a stale mirror refuses here too: thinking
@@ -85,7 +83,7 @@ export async function proposeCli(i: ProposeCliInput): Promise<string> {
   // hands the second caller the first caller's checkout.
   const slug = (i.folder || "root").replace(/[^A-Za-z0-9]+/g, "-").replace(/^-|-$/g, "");
   const id = `propose_${slug}_${i.now.toISOString().replace(/[^0-9]/g, "")}`;
-  const worktree = await worktreeFor(paths, id, i.commit, repo["git_url"] ?? "");
+  const worktree = await worktreeFor(paths, id, i.commit, repo.gitUrl);
   try {
     // The RESOLVED SHA. `master` means something different next week, and this document
     // is read weeks later by someone reconstructing what was actually looked at.

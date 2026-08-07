@@ -15,7 +15,6 @@
  * SPEC: research/security-review.md §4.2
  */
 
-import { FINDING_ORDER_SQL } from "../store/schema.ts";
 import type { RecordedFinding, Store, VerdictKind } from "../store/store.ts";
 
 /** CycloneDX vulnerability analysis states. */
@@ -111,9 +110,7 @@ export function buildVex(
   // Worst first, like every other list of findings this service emits: the statements
   // are read in order, and a VEX consumer that stops early should stop on the least
   // important one.
-  const findings = store.db
-    .prepare(`SELECT * FROM finding WHERE review_id = ? ORDER BY ${FINDING_ORDER_SQL}`)
-    .all(reviewId) as Record<string, string | number | null>[];
+  const findings = store.findingRowsForReview(reviewId);
 
   const vulnerabilities: unknown[] = [];
 

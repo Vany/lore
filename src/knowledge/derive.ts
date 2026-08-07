@@ -55,24 +55,15 @@ export function clusters(store: Store, repoId: string, threshold = RECURRENCE_TH
   // So the verdict comes along, and a cluster is only a MISTAKE when the repository
   // actually treated it as one. `justified-accepted` recurring is the opposite lesson
   // and is derived as such; a cluster nobody has answered teaches nothing yet.
-  const rows = store.db
-    .prepare(
-      `SELECT f.cwe AS cwe, f.claim AS claim, f.file AS file,
-              (SELECT v.verdict FROM verdict v
-                WHERE v.review_id = f.review_id AND v.fingerprint = f.fingerprint
-                ORDER BY v.id DESC LIMIT 1) AS verdict
-       FROM finding f JOIN review r ON r.id = f.review_id
-       WHERE r.repo_id = ?`,
-    )
-    .all(repoId) as Record<string, string | null>[];
+  const rows = store.findingsWithVerdict(repoId);
 
   const byCwe = new Map<string, { count: number; exemplar: string; paths: Set<string> }>();
   const byClaim = new Map<string, { count: number; exemplar: string; paths: Set<string> }>();
 
   for (const row of rows) {
-    const claim = row["claim"] ?? "";
-    const file = row["file"] ?? "";
-    const cwe = row["cwe"];
+    const claim = row.claim;
+    const file = row.file;
+    const cwe = row.cwe;
     // Only what the repository CONFIRMED as a defect by fixing it. An unanswered
     // finding might be either, and guessing is what produced the backwards rule.
     if (row["verdict"] !== "fixed") continue;
@@ -148,8 +139,5 @@ export function promoteRecurring(store: Store, repoId: string, threshold = RECUR
 }
 
 function exists(store: Store, repoId: string, provenance: string): boolean {
-  const row = store.db
-    .prepare("SELECT 1 AS present FROM knowledge WHERE repo_id = ? AND provenance = ? AND retired_at IS NULL LIMIT 1")
-    .get(repoId, provenance) as Record<string, number> | undefined;
-  return row !== undefined;
+  return store.hasKnowledgeFrom(repoId, provenance);
 }

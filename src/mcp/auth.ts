@@ -49,9 +49,7 @@ export function hashToken(token: string): string {
 
 export function grantToken(store: Store, repoId: string, principal: string, label?: string): string {
   const token = mintToken();
-  store.db
-    .prepare("INSERT INTO token(hash, principal, repo_id, label, created_at) VALUES(?, ?, ?, ?, ?)")
-    .run(hashToken(token), principal, repoId, label ?? null, new Date().toISOString());
+  store.insertToken(hashToken(token), principal, repoId, label);
   return token;
 }
 
@@ -67,17 +65,13 @@ export function authenticate(store: Store, header: string | undefined): Principa
   if (token === undefined) return undefined;
 
   const given = Buffer.from(hashToken(token), "hex");
-  const rows = store.db
-    .prepare("SELECT hash, principal, repo_id FROM token WHERE revoked_at IS NULL")
-    .all() as Record<string, string>[];
-
-  for (const row of rows) {
-    const known = Buffer.from(row["hash"] ?? "", "hex");
+  for (const row of store.liveTokens()) {
+    const known = Buffer.from(row.hash, "hex");
     if (known.length === given.length && timingSafeEqual(known, given)) {
       return {
-        principal: row["principal"] ?? "",
-        repoId: row["repo_id"] ?? "",
-        tokenHash: row["hash"] ?? "",
+        principal: row.principal,
+        repoId: row.repoId,
+        tokenHash: row.hash,
       };
     }
   }
@@ -96,12 +90,7 @@ export interface TokenRow {
 }
 
 export function listTokens(store: Store): readonly TokenRow[] {
-  const rows = store.db
-    .prepare(
-      "SELECT t.hash, t.principal, t.label, t.created_at, t.revoked_at, r.name AS repo" +
-        " FROM token t LEFT JOIN repo r ON r.id = t.repo_id ORDER BY t.created_at",
-    )
-    .all() as Record<string, string | null>[];
+  const rows = store.tokensWithRepo();
   return rows.map((r) => ({
     short: (r["hash"] ?? "").slice(0, 8),
     principal: r["principal"] ?? "",
@@ -139,12 +128,7 @@ export type RevokeResult =
 export function revokeByPrefix(store: Store, prefix: string): RevokeResult {
   if (!/^[0-9a-f]{4,64}$/i.test(prefix)) return { kind: "not-found" };
 
-  const rows = store.db
-    .prepare(
-      "SELECT t.hash, t.principal, t.revoked_at, r.name AS repo FROM token t" +
-        " LEFT JOIN repo r ON r.id = t.repo_id WHERE t.hash LIKE ?",
-    )
-    .all(`${prefix.toLowerCase()}%`) as Record<string, string | null>[];
+  const rows = store.tokensByPrefix(prefix);
 
   if (rows.length === 0) return { kind: "not-found" };
   if (rows.length > 1) return { kind: "ambiguous", matches: rows.map((r) => (r["hash"] ?? "").slice(0, 12)) };
@@ -153,9 +137,7 @@ export function revokeByPrefix(store: Store, prefix: string): RevokeResult {
   const already = row["revoked_at"];
   if (already !== null && already !== undefined) return { kind: "already-revoked", at: already };
 
-  store.db
-    .prepare("UPDATE token SET revoked_at = ? WHERE hash = ?")
-    .run(new Date().toISOString(), row["hash"] ?? "");
+  store.revokeTokenByHash(row["hash"] ?? "");
   return { kind: "revoked", principal: row["principal"] ?? "", repo: row["repo"] ?? "(unknown)" };
 }
 

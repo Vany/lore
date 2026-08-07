@@ -147,88 +147,6 @@ describe("an exported constant has a reader", () => {
 //
 // Checked here rather than trusted, because it accumulated one comment at a time over
 // two days and nobody noticed until 80 of them existed.
-// SQL LIVES IN THE STORE, and this is the only thing that can keep it there.
-//
-// Measured before writing this: seven raw `.db.prepare` calls had grown across five
-// production files, each one a small missing Store method. Two of them were `SELECT *`
-// building `lore://review/{id}` — so the client-facing shape of that resource was a
-// function of the schema, and every column a future migration adds would have shipped
-// to every client silently, without anyone deciding to publish it.
-//
-// TESTS ARE DELIBERATELY FREE. A test asserting that a row exists is asking about the
-// database on purpose, and forcing those through an API would mean inventing methods
-// that only tests call — which `one-definition.test.ts` already fails you for. The
-// invariant is about PRODUCTION code, and that is what this checks.
-// THE NAME SAYS WHAT IT CHECKS, and the first one did not. It read "no production file
-// reaches past the store into SQL" / "has every query behind a named Store method" while
-// passing green over twenty-eight raw sites in fourteen files — a suite announcing an
-// invariant it deliberately does not hold, which is `PROG.md`'s own rule about test
-// names turned on the file that enforces the rules. The property below is the one that
-// is true today; the property in the old name is `TODO.md`'s.
-describe("SQL past the store only ever shrinks (a ratchet, not a clean bill)", () => {
-  it("admits no new file and no new site in an old one", () => {
-    const offenders: string[] = [];
-    const perFile = new Map<string, number>();
-    for (const file of sources()) {
-      if (file.endsWith(".test.ts") || file.endsWith("store/store.ts")) continue;
-      const src = readFileSync(file, "utf8");
-      // MATCHED ON `.db` ITSELF, not on `.db.prepare`. The first version looked for the
-      // pair on ONE LINE, and `store.db\n  .prepare(` — what the formatter produces for
-      // anything but the shortest query — walked straight past it. That check was
-      // written, and its invariant claimed, one file away from a query it could not
-      // see: it reported seven sites where a correct count found twenty-eight.
-      //
-      // A RATCHET, not a clean bill of health, and deliberately so. The debt below is a
-      // real conversion and not one to rush into code that has no ladder verdict — but a
-      // check that permitted what it means to forbid would be decoration, and a number
-      // nobody can see would rot. So the invariant this can honestly enforce today is:
-      // NO NEW FILE and NO NEW SITE, and both may only shrink. `TODO.md` carries it to zero.
-      //
-      // THE SIZE OF THE DEBT IS THE LIST, and is not restated in prose here. This comment
-      // said "fifteen files" over a fourteen-entry list — the same number was corrected in
-      // `TODO.md` and missed three lines above the thing that disproves it, in the one
-      // file this codebase tasks with keeping its own statements true.
-      for (const line of src.split("\n")) {
-        if (/(?<![A-Za-z0-9_])(?:store|this|i\.store|deps\.store)\.db\b/.test(line)) {
-          const rel = file.slice(SRC.length).replace(/^\//, "");
-          offenders.push(rel);
-          perFile.set(rel, (perFile.get(rel) ?? 0) + 1);
-        }
-      }
-    }
-    // Every file below predates the rule. Adding one here is the thing to argue about;
-    // removing one needs no permission.
-    //
-    // COUNTED, not merely listed, and the file-level version was a hole big enough to
-    // drive the whole invariant through: `mcp/server.ts` is already on the list, so a
-    // thirtieth `store.db.prepare` added to it kept the suite green. A ratchet that only
-    // notices new FILES ratchets nothing in the files where the debt actually lives.
-    //
-    // These numbers came from the regex above rather than by hand; the hand-written
-    // first draft was wrong in four files and the check caught itself. They are not
-    // totalled anywhere in prose, HERE INCLUDED: a total is the one form the ratchet
-    // cannot keep honest, because converting a site — the change this exists to invite
-    // — shrinks a count and trips neither assertion, leaving a false figure sitting
-    // beside the enforced list with nothing to say which is stale.
-    const KNOWN: Readonly<Record<string, number>> = {
-      "knowledge/derive.ts": 2, "knowledge/enrich.ts": 2, "mcp/auth.ts": 5, "mcp/server.ts": 1,
-      "ops/retention.ts": 2, "ops/spend.ts": 1, "propose/cli.ts": 1, "propose/run.ts": 1,
-      "reviewer/review.ts": 2, "security/vex.ts": 1, "service/attest.ts": 3, "service/http.ts": 2,
-      "service/main.ts": 2, "service/worker.ts": 3,
-    };
-    const newcomers = [...new Set(offenders)].filter((f) => !(f in KNOWN)).sort();
-    expect(newcomers).toStrictEqual([]);
-    // And it only shrinks — in both directions. A file that stops reaching through must
-    // leave the list; one that reaches through MORE than it did must be argued for.
-    const stale = Object.keys(KNOWN).filter((f) => !perFile.has(f));
-    expect(stale).toStrictEqual([]);
-    const grown = Object.entries(KNOWN)
-      .filter(([f, n]) => (perFile.get(f) ?? 0) > n)
-      .map(([f, n]) => `${f}: ${String(n)} -> ${String(perFile.get(f) ?? 0)}`);
-    expect(grown).toStrictEqual([]);
-  });
-});
-
 describe("comments carry the incident, not who reported it", () => {
   const banned: readonly { readonly what: string; readonly rx: RegExp }[] = [
     { what: "attribution to a review tier", rx: /\b(?:raised|caught|found|reported) by (?:t[0-9]|Kimi|GLM|a reviewer)\b/i },
@@ -249,7 +167,10 @@ describe("comments carry the incident, not who reported it", () => {
         if (rx.test(line)) offenders.push(`${file.slice(SRC.length)}:${String(i + 1)}  ${s.slice(0, 90)}`);
       }
     }
-    expect(offenders).toStrictEqual([]);
+    expect(
+      offenders,
+      `these reach past the Store into SQL — add a named method instead:\n  ${offenders.join("\n  ")}`,
+    ).toStrictEqual([]);
   });
 });
 

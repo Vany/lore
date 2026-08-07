@@ -70,15 +70,5 @@ export async function mayStart(store: Store, cfg: SpendConfig, alerter: Alerter)
 
 /** Per-tier spend, for the operator view — where the money actually goes. */
 export function spendByTier(store: Store, sinceIso: string): readonly { tier: string; usd: number; calls: number }[] {
-  const rows = store.db
-    .prepare(
-      `SELECT tier, COALESCE(SUM(cost_usd), 0) AS usd, COUNT(*) AS calls
-       FROM usage WHERE at >= ? GROUP BY tier ORDER BY usd DESC`,
-    )
-    .all(sinceIso) as Record<string, string | number | bigint>[];
-  return rows.map((r) => ({
-    tier: String(r["tier"] ?? ""),
-    usd: Number(r["usd"] ?? 0),
-    calls: Number(r["calls"] ?? 0),
-  }));
+  return store.spendByTierSince(sinceIso);
 }

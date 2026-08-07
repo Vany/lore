@@ -136,9 +136,7 @@ export function render(a: Attestation): string {
 }
 
 function tally(store: Store, reviewId: string): { raised: number; fixed: number; justified: number } {
-  const row = store.db
-    .prepare("SELECT COUNT(*) AS c FROM finding WHERE review_id = ?")
-    .get(reviewId) as Record<string, number | bigint> | undefined;
+  const total = store.findingCount(reviewId);
   // Counted per FINDING, by its LATEST verdict — the same rule `settledFingerprints`
   // uses. Counting verdict rows was wrong twice over, and the first attestation ever
   // produced showed both: verdicts are append-only, so a justification carried
@@ -146,28 +144,17 @@ function tally(store: Store, reviewId: string): { raised: number; fixed: number;
   // "1 findings, 0 fixed, 3 justified". A finding rejected and then accepted would
   // likewise have been counted under both. An attestation is a claim about findings,
   // not about how many times we wrote a row.
-  const verdicts = store.db
-    .prepare(
-      `SELECT v.verdict, COUNT(*) AS c FROM verdict v
-       WHERE v.review_id = ?
-         AND v.id = (SELECT MAX(id) FROM verdict w WHERE w.review_id = v.review_id AND w.fingerprint = v.fingerprint)
-       GROUP BY v.verdict`,
-    )
-    .all(reviewId) as Record<string, string | number | bigint>[];
+  const verdicts = store.latestVerdictCounts(reviewId);
 
   let fixed = 0;
   let justified = 0;
   for (const v of verdicts) {
-    const c = Number(v["c"] ?? 0);
-    if (v["verdict"] === "fixed") fixed += c;
-    if (v["verdict"] === "justified-accepted") justified += c;
+    if (v.verdict === "fixed") fixed += v.c;
+    if (v.verdict === "justified-accepted") justified += v.c;
   }
-  return { raised: Number(row?.["c"] ?? 0), fixed, justified };
+  return { raised: total, fixed, justified };
 }
 
 function countTiers(store: Store, reviewId: string): number {
-  const row = store.db
-    .prepare("SELECT COUNT(DISTINCT tier) AS c FROM tier_run WHERE review_id = ?")
-    .get(reviewId) as Record<string, number | bigint> | undefined;
-  return Number(row?.["c"] ?? 0);
+  return store.tiersThatRan(reviewId);
 }

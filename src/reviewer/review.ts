@@ -585,10 +585,8 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       // things the settling rule depends on, and both describe the last raise rather
       // than the first (D-56). The scope moves with the code; the origin rises to the
       // strongest tier that has confirmed the defect, and never falls.
-      const prev = store.db
-        .prepare("SELECT origin FROM finding WHERE review_id = ? AND fingerprint = ?")
-        .get(reviewId, fp) as Record<string, string> | undefined;
-      const stronger = tierRank(tiers, origin) > tierRank(tiers, prev?.["origin"] ?? origin) ? origin : undefined;
+      const prev = store.originOfFinding(reviewId, fp);
+      const stronger = tierRank(tiers, origin) > tierRank(tiers, prev ?? origin) ? origin : undefined;
       store.refreshFinding(reviewId, fp, scope, stronger);
     }
   }
@@ -970,12 +968,10 @@ async function expireStaleVerdicts(
     // claim about it, so there is nothing to go stale.
     if (verdict?.verdict !== "justified-accepted" || verdict.scope === undefined) continue;
 
-    const finding = store.db
-      .prepare("SELECT file FROM finding WHERE review_id = ? AND fingerprint = ?")
-      .get(reviewId, fingerprint) as Record<string, string> | undefined;
-    if (finding === undefined) continue;
+    const file = store.fileOfFinding(reviewId, fingerprint);
+    if (file === undefined) continue;
 
-    const source = await readFile(join(worktree, finding["file"] ?? ""), "utf8").catch(() => undefined);
+    const source = await readFile(join(worktree, file), "utf8").catch(() => undefined);
     const stillThere = source !== undefined && hunkStillPresent(source, verdict.scope.hunk);
     if (stillThere) continue;
 

@@ -21,7 +21,6 @@ import {
   toNodeHandler,
 } from "@modelcontextprotocol/node";
 import { type AuthInfo, createMcpHandler, type McpRequestContext } from "@modelcontextprotocol/server";
-import { TERMINAL_SQL } from "../core/review-state.ts";
 import { authenticate, type Principal } from "../mcp/auth.ts";
 import { asSubscriber, eventsFor, NO_EVENTS, ScopedEventBus } from "../mcp/events.ts";
 import { buildServer, type ServerDeps } from "../mcp/server.ts";
@@ -255,26 +254,9 @@ async function handle(
  * one undelivered for six hours is a client that walked away.
  */
 function uncollectedFindings(store: Store): unknown {
-  return store.db
-    .prepare(
-      `SELECT r.id, r.branch,
-              COUNT(*) AS undelivered,
-              SUM(CASE WHEN f.severity = 'high' THEN 1 ELSE 0 END) AS high,
-              MIN(f.first_seen) AS waiting_since
-       FROM finding f JOIN review r ON r.id = f.review_id
-       WHERE f.delivered_at IS NULL
-       GROUP BY r.id, r.branch
-       ORDER BY waiting_since`,
-    )
-    .all();
+  return store.uncollectedByReview();
 }
 
 function activeReviews(store: Store): unknown {
-  return store.db
-    .prepare(
-      `SELECT id, branch, state, type, updated_at FROM review
-       WHERE state NOT IN (${TERMINAL_SQL})
-       ORDER BY updated_at DESC LIMIT 50`,
-    )
-    .all();
+  return store.reviewsUnfinished();
 }

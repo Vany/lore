@@ -22,7 +22,6 @@ import { enrich, renderEnrichment } from "../knowledge/enrich.ts";
 import { paceFor, paceNote } from "../ops/pace.ts";
 import { codeMoved } from "../reviewer/review.ts";
 import { buildVex, findingsNeedingTriage, renderVex } from "../security/vex.ts";
-import { FINDING_ORDER_SQL } from "../store/schema.ts";
 import { isSettled, type Store } from "../store/store.ts";
 import type { Principal } from "./auth.ts";
 import { REVIEW_PROMPT_TEXT, RESOURCE_DOCS, TOOL_DOCS } from "./docs.ts";
@@ -1086,9 +1085,7 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       const review = mine(id);
       // Verdicts and runs are a chronology, so they order by id; findings are a list
       // someone reads top-down, so they order worst first like everywhere else.
-      const findings = store.db
-        .prepare(`SELECT * FROM finding WHERE review_id = ? ORDER BY ${FINDING_ORDER_SQL}`)
-        .all(id);
+      const findings = store.findingRowsForReview(id);
       const verdicts = store.verdictsFor(id);
       const runs = store.tierRunsFor(id);
       return {

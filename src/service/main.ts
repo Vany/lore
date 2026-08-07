@@ -181,11 +181,9 @@ export async function serve(cfg: ServiceConfig): Promise<() => void> {
       // never-fetched mirror (t3, high). The old `.catch(() => <path>)` went with it:
       // it turned any failure into a path to a directory that was never created.
       worktreeFor: async (reviewId) => {
-        const row = store.db
-          .prepare("SELECT r.branch, r.repo_id, p.git_url FROM review r JOIN repo p ON p.id = r.repo_id WHERE r.id = ?")
-          .get(reviewId) as Record<string, string> | undefined;
-        const paths = repoPaths(reposRoot, row?.["repo_id"] ?? "");
-        return worktreeFor(paths, reviewId, row?.["branch"] ?? "", row?.["git_url"] ?? "");
+        const at = store.reviewLocation(reviewId);
+        const paths = repoPaths(reposRoot, at?.repoId ?? "");
+        return worktreeFor(paths, reviewId, at?.branch ?? "", at?.gitUrl ?? "");
       },
       enqueue: (reviewId, stage) => {
         // Checked before starting, never mid-review: killing a review halfway
@@ -196,10 +194,7 @@ export async function serve(cfg: ServiceConfig): Promise<() => void> {
         });
       },
       attest: async (reviewId) => {
-        const row = store.db
-          .prepare("SELECT principal FROM review WHERE id = ?")
-          .get(reviewId) as Record<string, string> | undefined;
-        return render(await attest(store, reviewId, row?.["principal"] ?? "", keyPath));
+        return render(await attest(store, reviewId, store.principalOf(reviewId) ?? "", keyPath));
       },
     },
     {
