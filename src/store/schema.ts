@@ -21,7 +21,7 @@ import { SEVERITIES } from "../core/finding.ts";
 // adds the columns, because this number is what `assertNotDowngrade` compares — left
 // behind, it says a database written by this build is identical to one written before
 // the columns existed.
-export const SCHEMA_VERSION = 11;
+export const SCHEMA_VERSION = 12;
 
 /**
  * How findings are ordered wherever the service hands them out: worst first.
@@ -91,6 +91,14 @@ CREATE TABLE IF NOT EXISTS review (
   -- days, not a threat model. NULL means repository scope, which is what rows written
   -- before this column were started under.
   token_hash  TEXT,
+  -- THE LADDER THIS REVIEW STARTED ON, one id:model per tier.
+  --
+  -- LadderState.cursor is an index into the tier list, resolved against whatever
+  -- config is loaded NOW. Switch LORE_TIERS with a review open and cursor 1 stops
+  -- meaning the tier it meant: tier_run then carries two rows both called t1
+  -- naming different models, in the one table that exists to say whether a review
+  -- really ran. Not a crash — a corrupted audit trail, which is worse.
+  tiers       TEXT,
   branch      TEXT NOT NULL,
   into_ref    TEXT NOT NULL,
   ticket      TEXT NOT NULL,
@@ -319,6 +327,9 @@ export const MIGRATIONS: readonly { readonly table: string; readonly column: str
   // behaviour those reviews were started under, which is the only honest thing to give
   // a row that was never bound to anything.
   { table: "review", column: "token_hash", sql: "ALTER TABLE review ADD COLUMN token_hash TEXT" },
+  // WHICH LADDER this review started on, so swapping `LORE_TIERS` cannot silently
+  // rebind its cursor to a different model. NULL predates the column and is not checked.
+  { table: "review", column: "tiers", sql: "ALTER TABLE review ADD COLUMN tiers TEXT" },
 ];
 
 /**

@@ -393,4 +393,16 @@ export function settle(state: LadderState, fingerprints: readonly string[]): Lad
 // a refusal on quota is never a reason to fall through to the next tier — is enforced
 // where the refusal is actually seen, and D-48 is where it is written down.
 
+/**
+ * A ladder as a string, for pinning it to a review that must finish on the same one.
+ *
+ * `id:model` per tier, in order. Both halves matter: a tier renamed is a different
+ * position, and a tier repointed at another model is a different reviewer wearing the
+ * same name — which is the case that corrupts the record, because `tier_run` stores
+ * only the id.
+ */
+export function ladderFingerprint(tiers: readonly Tier[]): string {
+  return tiers.map((t) => `${t.id}:${t.model ?? t.kind}`).join(",");
+}
+
 export { anyTierRan };

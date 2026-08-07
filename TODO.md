@@ -572,7 +572,15 @@ are what that session's own numbers say is in the way, not what reading suggeste
       appending. The all-refused case was fixed 2026-08-07; this is the changed-document
       case and it is still open.
 
-- [ ] **`[lore:log]` is 60% noise, and it is the log INV-1 depends on.** 29 lines in
+- [x] **Fixed 2026-08-07.** A `lore-ok` is permanent in the source, so every later round
+      found it matching nothing in ITS review and said so — 18 of 29 lines in three
+      hours. Markers this repository HAS raised before are counted and summarised in one
+      line; a marker matching nothing anywhere still gets its own, because that is the
+      case the warning was written for (a typo, or an agent answering something never
+      asked) and silence there would hide it.
+      *The measurement:*
+
+- [x] ~~`[lore:log]` is 60% noise, and it is the log INV-1 depends on.~~ 29 lines in
       three hours, **18 of them** `lore-ok[…] matches no finding in this review —
       ignored`: historical markers permanently in the source, 66 in this tree and rising
       with every justification anyone writes. The D-58 oversize warning and the knowledge
@@ -1180,7 +1188,17 @@ are what that session's own numbers say is in the way, not what reading suggeste
       transport drops were the common failure; the gate should have removed most of
       those. Worth re-reading the failure mix before leaving that sentence in.
 
-- [ ] **Changing `LORE_TIERS` silently rebinds every open review's cursor.** Found
+- [x] **Fixed 2026-08-07: the ladder is pinned to the review that started on it.**
+      `review.tiers` records `id:model` per tier at `review_start`, and a round refuses
+      to resume when it no longer matches the configured ladder, naming both. REFUSED
+      rather than remapped — remapping needs a rule for a tier that vanished and another
+      for one that appeared, and each is a guess about what the operator meant. Reviews
+      predating the column are not checked: they were never pinned to anything, and
+      stranding them over a comparison nobody made would be the guard causing the harm it
+      prevents. SCHEMA_VERSION 12.
+      *The original entry:*
+
+- [x] ~~Changing `LORE_TIERS` silently rebinds every open review's cursor.~~ Found
       2026-08-06 by doing it: the deployment was switched to a Kimi-only ladder to
       prove that tier, then back to the three-vendor one, with a review open in
       `findings_ready`.

@@ -40,6 +40,8 @@ export interface ReviewRow {
    * findings and the owner is shown nothing.
    */
   readonly tokenHash?: string | undefined;
+  /** The ladder this review started on, `<id>:<model>` per tier. See `schema.ts`. */
+  readonly tiers?: string | undefined;
   readonly branch: string;
   readonly intoRef: string;
   readonly ticket: string;
@@ -265,14 +267,15 @@ export class Store {
     const t = now();
     this.db
       .prepare(
-        `INSERT INTO review(id, repo_id, principal, token_hash, branch, into_ref, ticket, type, state, tree_hash, ladder, created_at, updated_at)
-         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO review(id, repo_id, principal, token_hash, tiers, branch, into_ref, ticket, type, state, tree_hash, ladder, created_at, updated_at)
+         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         r.id,
         r.repoId,
         r.principal,
         n(r.tokenHash),
+        n(r.tiers),
         r.branch,
         r.intoRef,
         r.ticket,
@@ -352,6 +355,7 @@ export class Store {
       state: (row["state"] ?? "failed") as ReviewState,
       treeHash: un(row["tree_hash"] ?? null),
       tokenHash: un(row["token_hash"] ?? null),
+      tiers: un(row["tiers"] ?? null),
       ladder: JSON.parse(row["ladder"] ?? "{}") as LadderState,
     };
   }
@@ -860,6 +864,32 @@ export class Store {
     if (matches.length === 0) return undefined;
     if (matches.length > 1) throw new AmbiguousFingerprint(short, matches);
     return matches[0] ?? "";
+  }
+
+  /**
+   * Has any review of this repository ever raised a finding with this short prefix?
+   *
+   * **Tells a HISTORICAL marker from a typo**, which the round could not do before and
+   * which is the whole difference between a useful log line and noise. A `lore-ok`
+   * written into the source is permanent: the review that earned it ends, the marker
+   * stays, and every later round finds it matching nothing in ITS review and said so.
+   * 66 of them in this tree and rising with every justification anyone writes —
+   * measured, 18 of 29 log lines in three hours, in the log the oversize warning and
+   * the knowledge counts share. A log nobody reads is where a "did not run" hides,
+   * which this project has now been bitten by twice in one day.
+   *
+   * A marker matching nothing ANYWHERE is the case worth naming individually: a typo,
+   * or an agent believing it answered a finding it never touched.
+   */
+  shortKnownToRepo(repoId: string, short: string): boolean {
+    return (
+      this.db
+        .prepare(
+          `SELECT 1 FROM finding f JOIN review r ON r.id = f.review_id
+           WHERE r.repo_id = ? AND f.fingerprint LIKE ? LIMIT 1`,
+        )
+        .get(repoId, `${short}%`) !== undefined
+    );
   }
 
   // --------------------------------------------------------------- verdict

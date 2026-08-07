@@ -19,7 +19,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Exhausted } from "../core/errors.ts";
 import type { Tier } from "../core/ladder.ts";
 import { fingerprint } from "../core/fingerprint.ts";
-import { initialState } from "../core/ladder.ts";
+import { initialState, ladderFingerprint } from "../core/ladder.ts";
 import { CODE_ARCH } from "../core/review-type.ts";
 import { Store } from "../store/store.ts";
 import type { Finding } from "../core/finding.ts";
@@ -423,6 +423,39 @@ describe("runRound", () => {
     // The expensive half never happened, and the cancelled state was not overwritten.
     expect(reviewer.prompts).toHaveLength(0);
     expect(store.getReview("r1", "p")?.state).toBe("cancelled");
+  });
+
+  // SWAPPING `LORE_TIERS` WITH A REVIEW OPEN silently rebound its cursor. Done
+  // deliberately on 2026-08-06 — the deployment went to a Kimi-only ladder to prove that
+  // tier, then back — with a review sitting in findings_ready. `ladder.cursor` is an
+  // index resolved against whatever config is loaded now, so cursor 1 stopped meaning
+  // the tier it meant, and `tier_run` would carry two rows both called `t1` naming
+  // different vendors: a corrupted audit trail with an attestation over it.
+  //
+  // Refused rather than remapped. Remapping needs a rule for a tier that vanished and
+  // another for one that appeared, and each is a guess about what the operator meant.
+  it("refuses to resume a review that began on a different ladder", async () => {
+    store.db.prepare("UPDATE review SET tiers = ? WHERE id = 'r1'").run("t0:deterministic,t1:kimi-for-coding/k3");
+    await expect(
+      runRound({ store, reviewer: new ScriptedReviewer([[]]), reviewId: "r1", principal: "p", worktree: dir, type: TYPE }),
+    ).rejects.toThrow(/began on a different ladder/);
+  });
+
+  // A review pinned to the ladder it is actually running on carries on, and one from
+  // before the column exists was never pinned to anything — stranding those over a
+  // comparison nobody made would be the guard causing the harm it prevents.
+  it("resumes a review pinned to this ladder, and one pinned to nothing", async () => {
+    const pinned = ladderFingerprint(TYPE.tiers);
+    store.db.prepare("UPDATE review SET tiers = ? WHERE id = 'r1'").run(pinned);
+    await expect(
+      runRound({ store, reviewer: new ScriptedReviewer([[]]), reviewId: "r1", principal: "p", worktree: dir, type: TYPE }),
+    ).resolves.toBeDefined();
+
+    store.db.prepare("UPDATE review SET tiers = NULL WHERE id = 'r1'").run();
+    store.updateReview("r1", { state: "running" });
+    await expect(
+      runRound({ store, reviewer: new ScriptedReviewer([[]]), reviewId: "r1", principal: "p", worktree: dir, type: TYPE }),
+    ).resolves.toBeDefined();
   });
 
   it("records that T0 ran even when T0 throws", async () => {

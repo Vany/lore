@@ -16,6 +16,7 @@ import {
   DEFAULT_TIERS,
   anyTierRan,
   markUnavailable,
+  ladderFingerprint,
   settle,
   step,
   type Decision,
@@ -146,6 +147,35 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   }
 
   const tiers = type.tiers.length > 0 ? type.tiers : DEFAULT_TIERS;
+
+  // THE LADDER THIS REVIEW STARTED ON, OR NONE AT ALL.
+  //
+  // `ladder.cursor` is an index resolved against whatever config is loaded now. Switch
+  // `LORE_TIERS` with a review open — done deliberately on 2026-08-06, to prove the Kimi
+  // tier and then switch back — and cursor 1 stops meaning the tier it meant. The review
+  // resumes on a different model, and `tier_run` ends up with two rows both called `t1`
+  // naming different vendors, in the one table that exists to say whether a review
+  // really ran. Not a crash: a corrupted audit trail, which is worse, and an attestation
+  // over the top of it.
+  //
+  // REFUSED rather than remapped. Remapping would need a rule for a tier that no longer
+  // exists and another for one that appeared, and every such rule is a guess about what
+  // the operator meant. Refusing costs a restarted review and says exactly why; the
+  // client can start a fresh one against the ladder that is actually configured.
+  // Reviews started before the column exists carry nothing and are not checked — they
+  // were never pinned to anything, and inventing a ladder for them would strand work
+  // over a comparison nobody made.
+  const started = review.tiers;
+  const nowRunning = ladderFingerprint(tiers);
+  if (started !== undefined && started !== nowRunning) {
+    throw new DidNotRun(
+      `review ${reviewId} began on a different ladder and cannot be resumed on this one — it started with ` +
+        `[${started}] and the service is now configured with [${nowRunning}]. Its cursor is an index into the ` +
+        `first list, so continuing would run a different model under the same tier name and record it as though ` +
+        `nothing had changed. Start a fresh review of this branch against the current ladder.`,
+    );
+  }
+
   const tier = tiers[review.ladder.cursor];
   if (tier === undefined) throw new Error(`ladder cursor ${review.ladder.cursor} out of range`);
 
@@ -218,7 +248,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // findings the collector never saw.
   const open = store.openFindings(reviewId);
   const justifiableFiles = [...new Set([...diff.changedFiles, ...open.map((f) => f.file)])];
-  const pending = await collectJustifications(store, reviewId, worktree, justifiableFiles, open);
+  const pending = await collectJustifications(store, reviewId, review.repoId, worktree, justifiableFiles, open);
 
   // 4. Expire justifications whose code has changed, BEFORE the model tier runs.
   //
@@ -971,6 +1001,7 @@ const LEDGER = ".lore-ok.md";
 async function collectJustifications(
   store: Store,
   reviewId: string,
+  repoId: string,
   worktree: string,
   files: readonly string[],
   /** The caller's open findings — the same read `files` was derived from. */
@@ -980,6 +1011,8 @@ async function collectJustifications(
   const byFingerprint = new Map(open.map((f) => [f.fingerprint, f]));
 
   const out: { finding: RecordedFinding; reason: string; scope: ReturnType<typeof makeScope> | undefined }[] = [];
+  // Counted, not printed one by one. See `shortKnownToRepo`.
+  let carriedOver = 0;
 
   // The repo-level ledger, always read (D-57).
   //
@@ -1003,11 +1036,23 @@ async function collectJustifications(
     for (const mark of parseLoreOk(source)) {
       const fp = store.resolveShort(reviewId, mark.short);
       if (fp === undefined) {
-        // Named so a typo is findable. Silence here would mean an agent believes it
-        // answered a finding it never touched.
-        console.error(
-          `[lore:log] lore-ok[${mark.short}] at ${file}:${mark.line} matches no finding in this review — ignored`,
-        );
+        // A MARKER FROM AN EARLIER REVIEW IS NORMAL, AND WAS SHOUTING. A `lore-ok` is
+        // permanent in the source: the review that earned it ends, the marker stays,
+        // and every later round found it matching nothing in ITS review and said so —
+        // 18 of 29 log lines in three hours, in the log the oversize warning shares.
+        // Counted here and summarised once below.
+        //
+        // A marker matching nothing ANYWHERE still gets its own line. That is the case
+        // the warning was written for: a typo, or an agent believing it answered a
+        // finding it never touched, and silence there would hide it.
+        if (store.shortKnownToRepo(repoId, mark.short)) {
+          carriedOver++;
+        } else {
+          console.error(
+            `[lore:log] lore-ok[${mark.short}] at ${file}:${mark.line} matches NO finding this repository has ` +
+              `ever raised — a typo, or an answer to something that was never asked. Ignored.`,
+          );
+        }
         continue;
       }
       const finding = byFingerprint.get(fp);

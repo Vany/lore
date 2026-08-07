@@ -14,7 +14,7 @@ import { McpServer, ResourceTemplate } from "@modelcontextprotocol/server";
 import * as z from "zod";
 import { absent } from "../core/optional.ts";
 import { worstSeverity } from "../core/finding.ts";
-import { initialState, type LadderState } from "../core/ladder.ts";
+import { initialState, ladderFingerprint, type LadderState } from "../core/ladder.ts";
 import { isAttestable, isClean, isTerminal, type ReviewState } from "../core/review-state.ts";
 import { DEFAULT_TYPE, reviewType, reviewTypeIds } from "../core/review-type.ts";
 import { applyPatch, restoreTree, treeHash } from "../git/repo.ts";
@@ -270,6 +270,9 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
         principal: who.principal,
         // The token this review answers to (D-78) — see `mine`.
         tokenHash: who.tokenHash,
+        // And the ladder it starts on, so swapping `LORE_TIERS` cannot silently rebind
+        // its cursor to a different model half way through.
+        tiers: ladderFingerprint(rt.tiers),
         branch,
         intoRef: into,
         ticket,
