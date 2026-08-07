@@ -440,6 +440,45 @@ describe("the screen's veto over what was mined", () => {
     expect(store.knowledgeFor(repoId).every((k) => k.extractor === UNSCREENED)).toBe(true);
   });
 
+  // THE DEGRADED MODE MUST NOT BE THE ONE THAT CORRUPTS THE RECORD. While the provider
+  // is down every review comes back to retry, which is right — and the pass that follows
+  // would otherwise retire every unscreened row (`extractor IS NOT '3.1'` matches
+  // `3.1-unscreened`) with the reason "extracted by an older reader", which is false
+  // because the reader never changed, then re-insert the identical set with fresh ids.
+  // One full dead copy of the rule base per review, for the length of the outage, in the
+  // path whose entire purpose is to survive an outage.
+  //
+  // Nothing called `ingestDocs` twice with the screen failing before this.
+  const failing: Screen = (_doc, candidates) => Promise.resolve({ kept: candidates, refused: [], ran: false });
+
+  it("rewrites nothing on a second pass while the screen is still down", async () => {
+    const first = await ingestDocs(store, repoId, dir, { files: ["PROG.md"], screen: failing });
+    expect(first.added).toBe(2);
+
+    const before = store.db.prepare("SELECT COUNT(*) c FROM knowledge WHERE repo_id = ?").get(repoId) as { c: number };
+    const second = await ingestDocs(store, repoId, dir, { files: ["PROG.md"], screen: failing });
+    const after = store.db.prepare("SELECT COUNT(*) c FROM knowledge WHERE repo_id = ?").get(repoId) as { c: number };
+
+    expect(second.added).toBe(0);
+    expect(second.retired).toBe(0);
+    // Still reported as unscreened, because it still is — the caller must keep hearing it.
+    expect(second.unscreened).toBe(1);
+    expect(Number(after.c)).toBe(Number(before.c));
+  });
+
+  // ...and the same must hold with no screen configured at all, which is the other way
+  // a deployment sits in this state indefinitely.
+  it("rewrites nothing on a second pass with no screen configured", async () => {
+    await ingestDocs(store, repoId, dir, { files: ["PROG.md"] });
+    const before = store.db.prepare("SELECT COUNT(*) c FROM knowledge WHERE repo_id = ?").get(repoId) as { c: number };
+    const second = await ingestDocs(store, repoId, dir, { files: ["PROG.md"] });
+    const after = store.db.prepare("SELECT COUNT(*) c FROM knowledge WHERE repo_id = ?").get(repoId) as { c: number };
+
+    expect(second.added).toBe(0);
+    expect(second.retired).toBe(0);
+    expect(Number(after.c)).toBe(Number(before.c));
+  });
+
   // THE SCREEN IS HALF OF WHAT DECIDES WHICH RULES LIVE, so the stamp has to name it.
   // Versioning only `extractRules` recreated the exact trap the stamp was built to
   // close, one layer up: the prompt or the tier could change and nothing already stored

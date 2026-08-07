@@ -147,6 +147,16 @@ prefix keeps them out of the per-tier latency distribution `check_back_after_ms`
 screen session is not a review round, and pooling them would promise a waiting client a
 four-second answer from a tier that takes ten minutes.
 
+**And while it stays down, nothing is rewritten.** The retry is right — one attempt per
+document per review is the only thing that heals the base when a provider comes back —
+but the pass that follows a failed retry would otherwise retire every unscreened row
+(they cannot carry the current stamp, by construction) with the reason *"extracted by an
+older reader"*, which is false because the reader never changed, and re-insert the
+identical set. One full dead copy of the rule base per review, for the length of an
+outage, in the path whose entire purpose is to survive one. So a pass that would write
+exactly what is already there writes nothing, and still reports the document as
+unscreened.
+
 **A refusal counts as having read the document**, and that is what gives the cost a
 floor. The question is *did this reader process this text*, so it is asked of the live
 rules **and** the screen's own born-retired rows. Asked of live rules alone, a document

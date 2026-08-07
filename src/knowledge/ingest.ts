@@ -436,6 +436,24 @@ export async function ingestDocs(
     const extractor = screened.ran ? EXTRACTOR_VERSION : UNSCREENED;
     if (!screened.ran) unscreened++;
 
+    // STILL DOWN, AND NOTHING WOULD CHANGE — so change nothing, and this is the whole
+    // difference between degrading and thrashing.
+    //
+    // The cheap check above compares against `EXTRACTOR_VERSION`, which an unscreened row
+    // can never carry, and that is deliberate: it is what brings us back to retry. But
+    // when the retry fails too, the rows this pass would write are byte-for-byte the rows
+    // already there — and without this the transaction below retires every one of them
+    // (`extractor IS NOT ?` matches `-unscreened`) with the reason "extracted by an older
+    // reader", which is false because the reader never changed, and then re-inserts the
+    // identical set with fresh ids. Once per review, per document, for the whole length
+    // of an outage: a full dead copy of the rule base each time, and an audit trail of
+    // retirements nobody earned. The fail-open path exists to survive a provider being
+    // down, so it must not be the path that corrupts the record while it is.
+    //
+    // The retry itself is kept. It is one attempt per document per review and it is the
+    // only thing that heals the base when the provider comes back.
+    if (!screened.ran && store.hasKnowledgeBlob(repoId, rel, blob, UNSCREENED)) continue;
+
     store.tx(() => {
       retired += store.retireForChangedBlob(repoId, rel, blob, EXTRACTOR_VERSION);
       // RE-ASKED INSIDE THE TRANSACTION. The cheap check above raced the screen: two
