@@ -212,6 +212,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-80** | A review is **one conversation per tier**, not a series of audits. Fully async | subscription live; conversation `[OPEN]` |
 | **D-81** | Extraction stays deterministic; a **model may only VETO** what it mined | built; screen unmeasured |
 | **D-82** | **A defect found is fixed now**, and the batch is reviewed whole — one big diff, not many | confirmed |
+| **D-83** | A project's **development rules are appealable**: cite one, the tier rules on it | specced, not built |
 
 **D-7, revised.** The earlier version dropped GLM-5.2 on Artificial Analysis's
 *cost per task* — which is tokens consumed × price on their benchmark, not a price.
@@ -1094,6 +1095,68 @@ the tool descriptions with an instruction the only real client cannot execute.
 conversation is cheaper or dearer than repeated cold rounds, measured rather than
 argued; and how the deep tiers enter a conversation the cheap tier has been having.
 Until then D-55 stands: a submit during a running round is still refused.
+
+**D-83 — a project's development rules are appealable, and an appeal is argued to the
+tier rather than granted.**
+
+Vany: *"project may have development rules… model must have access to this rules, and
+client may appeal to this rule, when rejected finding."*
+
+**Most of this already exists and the missing piece is small and specific.**
+`knowledge_teach` already lets a client record a rule over MCP; ingestion already reads
+`CLAUDE.md`, `PROG.md` and ADRs; both land in one store; and `relevantTo()` already puts
+rules in front of every reviewer. What does not exist is the APPEAL — a way to answer a
+finding with *"this applies a standard this project has ruled against"* rather than with
+reasoning from scratch.
+
+The difference is not cosmetic. A `lore-ok` today says *trust my judgement about this
+line*. An appeal says *you are enforcing something we decided not to enforce*, which is
+a claim about the REVIEWER rather than about the code, and it is the claim 63 accepted
+justifications of one semgrep rule have been making one occurrence at a time with no way
+to say it once.
+
+**THE TIER DECIDES, and that is the whole design.** The rule and the appeal go into the
+next round's prompt; the reviewing model closes the finding by not re-raising it, or
+rejects the appeal by raising it again. lore never closes a finding because a rule was
+cited at it. D-10 is the reason: the author never closes its own finding, and a rule the
+author also wrote would otherwise be a way to do exactly that — write the rule, cite the
+rule, silence the check, with the audit trail reading like due process.
+
+**An accepted appeal settles the CLASS under a PATH, not the one finding.** It records a
+suppression — *this engine's rule does not apply under `src/…`, because `<the rule>`* —
+carrying the reason the team gave. Not a demotion: D-67 is right that a true finding
+stays high, and this is not about severity. It is about a check that is wrong for a
+place, said once instead of sixty-three times.
+
+**Stored in the knowledge base, and NOT injected wholesale.** This is the half that
+differs from how knowledge works today, and it is deliberate: up to sixty rules already
+go into every prompt under *"treat these as this team's decisions"*, and a fifth of them
+were fragments before D-81. Development rules would double that cost to say something no
+reviewer needs until a client cites one.
+
+So the prompt **indicates** rather than recites: this project has N development rules,
+and a `lore-ok` citing one is a statement of team policy rather than an opinion — weigh
+it as such. **The rule's text arrives with the appeal**, because that is the only moment
+it is relevant, and it arrives in full so the tier rules on what was actually written.
+
+**Any token holder may add one, and who added it is recorded.** The same trust
+`knowledge_teach` already extends, for the same reason: three colleagues share
+`rigid-monorepo` and every other part of this system treats them as colleagues. What
+makes that safe is that a rule cannot silence anything by itself — it can only be argued.
+
+`[OPEN]` — **specced, not built.** Three things want settling first, and none is
+guesswork:
+
+- **How a client cites a rule.** A `lore-ok[<fp>]: rule <id> — <note>` form costs no new
+  tool and reuses a parser that already has three shapes; a dedicated `review_appeal`
+  call is clearer and is a fourth thing an agent must learn. The docs are the interface,
+  so the cheaper surface is probably the better one.
+- **What a suppression does to a later round.** It must be consulted BEFORE a T0 engine
+  reports, or it saves nothing; and a suppression the ladder honours silently is exactly
+  the shape this project refuses, so it has to appear in `checks_skipped`.
+- **Whether the model can ORIGINATE the appeal's opposite** — *"this rule is wrong"*.
+  Today it cannot say anything but findings, which is the same gap that leaves the
+  escalation path unwired. Worth solving once, for both.
 
 **D-82 — a defect found is fixed now; recording it is the exception.**
 

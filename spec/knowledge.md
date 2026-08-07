@@ -194,6 +194,49 @@ dead rows — unbounded, in exactly the case where the screen had the most to sa
 it, is not yet known. The born-retired rows are what makes that answerable: read them and
 count how many should have lived.
 
+### 2.3 A development rule can be appealed to (D-83)
+
+A client answers a finding it disagrees with by writing a `lore-ok` at the site, and the
+reviewer ratifies it by not re-raising. That works, and it makes the same argument from
+scratch every time — 63 accepted justifications of one semgrep rule on this workgroup's
+repositories, each one a fresh act of persuasion about a question already settled.
+
+**An appeal is a different claim.** A `lore-ok` says *trust my judgement about this
+line*. An appeal says *you are enforcing a standard this project decided not to enforce*
+— a claim about the REVIEWER, not about the code, and one a rule can carry.
+
+**The tier decides.** The cited rule and the appeal go into the next round's prompt; the
+model closes the finding by not re-raising it, or rejects the appeal by raising it again.
+lore never closes a finding because a rule was pointed at it. The author never closes its
+own finding (D-10), and a rule the author also wrote would otherwise be exactly that
+route — write the rule, cite the rule, silence the check, with an audit trail that reads
+like due process.
+
+**Accepted, it settles the class under a path**, not the single finding: *this engine's
+rule does not apply under `src/…`, because `<the rule>`*, carrying the reason the team
+gave. Not a demotion — D-67 stands, a true finding keeps its severity. This is about a
+check being wrong for a place, said once rather than sixty-three times. A suppression is
+a reviewable, revocable row like any other, and it appears in `lore knowledge`.
+
+**INDICATED IN THE PROMPT, NOT RECITED.** Every other kind of rule is injected under
+*"treat these as this team's decisions"* — up to sixty of them, and a fifth were
+fragments before D-81. Development rules would double that to say something no reviewer
+needs until somebody cites one.
+
+So the prompt carries their EXISTENCE and their STANDING: this project has N development
+rules, and a `lore-ok` citing one is team policy rather than an opinion. **The text
+arrives with the appeal**, in full, because that is the only moment it is relevant and
+the tier must rule on what was actually written.
+
+**Any token holder may add one**, recorded with who and when — the trust
+`knowledge_teach` already extends. It is safe because a rule silences nothing by itself;
+it can only be argued.
+
+**Not built.** `SPEC.md` D-83 carries the three open questions: how a client cites a rule,
+where a suppression is consulted (before a T0 engine reports, and never silently — it
+belongs in `checks_skipped`), and whether a model can originate the opposite claim, which
+is the same gap that leaves the escalation path unwired.
+
 ### 2.2 A recurrence is only a lesson once the repository has answered it
 
 ### 2.2.0 An accepted justification is a verdict, not a rule

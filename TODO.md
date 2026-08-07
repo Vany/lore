@@ -1012,6 +1012,16 @@ are what that session's own numbers say is in the way, not what reading suggeste
       keeping the two that mattered is evidence. Anything else is taste, and should be
       reverted rather than defended.
 
+- [ ] **Build D-83: development rules are appealable** — specced 2026-08-08, not built.
+      The design is settled (SPEC D-83, `spec/knowledge.md` §2.3): the tier rules on an
+      appeal, an accepted one suppresses the class under a path, rules live in the
+      knowledge base but are INDICATED rather than injected, and any token holder may add
+      one. Three open questions before code: how a client cites a rule, where a
+      suppression is consulted (before a T0 engine reports, and never silently), and
+      whether a model can originate the opposite claim.
+      **This is the answer to the item below**, which measured the problem and could not
+      name the fix.
+
 - [ ] **"Seen 23× — a pattern, not an incident" leads to nothing.** Asked by Vany
       2026-08-06: why does that sentence not make a client fix the underlying problem?
       Measured rather than reasoned — the three most-recurring findings in the store:
