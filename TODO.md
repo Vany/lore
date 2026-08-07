@@ -825,10 +825,12 @@ are what that session's own numbers say is in the way, not what reading suggeste
       and `DISTINCT` over three columns is not one row per statement.
       *The measurement that motivated it, kept:*
 
-- [ ] **The refusal rate per document is surfaced but nothing WATCHES it.** `make
-      knowledge` prints it and a person has to look. A document whose share climbs is one
-      carrying change-narrative that belongs in `MEMO.md`, and that is worth an alert
-      rather than an inspection. Measured per document on the first real screen run: `CLAUDE.md` and
+- [x] **Fixed 2026-08-07: `make status` carries it**, in the place an operator already
+      looks — live rules, any UNSCREENED documents in red, and the worst refusal share
+      per repository, with `make knowledge REFUSALS=1` named for the detail. A floor of
+      four candidates before a share is reported, because the first version's "worst"
+      was an ADR with one candidate refused, printed as 100% — a ratio on a denominator
+      of one, in the line a reader is meant to act on. Measured per document on the first real screen run: `CLAUDE.md` and
       `PROG.md` were refused **0 of 13**; every one of the fifteen refusals came from the
       explanatory specs, and the worst three were the three edited most that day.
       `CLAUDE.md` says specs describe the system as it stands and change-narrative belongs
@@ -1222,9 +1224,14 @@ are what that session's own numbers say is in the way, not what reading suggeste
       reported, so the number is visible rather than discovered with `du`. Fourteen
       rather than zero because the cache exists to make an install cheap and a repository
       reviewed fortnightly should still find its dependencies warm.
-      **Still open: nothing WATCHES it.** There is no budget and no alert, so the curve
-      is now bounded but unobserved — and it was 5.7 GB of cache plus 1.1 GB of scratch
-      when measured, against the 4.4 GB recorded a day earlier.
+      **And watched, same day**: the heartbeat measures lore's own footprint against a
+      10 GB budget it sets for itself and raises a TICKET over it — not a page, and never
+      a refusal, because running out of disk is the operator's to act on. Not the host's
+      percentage, which belongs to whoever owns the machine (D-71) and is what the
+      removed alerts got wrong. The comment that replaced those said "lore's whole
+      footprint is under 5 GB" as though it were stable; it was 6.8 GB two days later,
+      unnoticed, because the only thing watching had been deleted along with what was
+      wrong about it.
       *The original entry:*
 
 - [ ] **Nothing watches the one disk fact that is ours.** The host-disk alerts are gone

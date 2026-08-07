@@ -229,12 +229,75 @@ export function renderStatus(db: DatabaseSync, reviewId?: string, dataDir = "/va
   }
 
   out.push(...uncollectedLines(db));
+  out.push(...memoryLines(db));
   out.push(...mirrorLines(db, dataDir));
 
   // Repeated because a coloured tick is exactly the thing a tired reader
   // over-trusts, and these two states are the ones that cost the most when misread.
   out.push(dim("only PASSED is clean. passed_partial and fast_clean are not passes."));
   return `${out.join("\n")}\n`;
+}
+
+/**
+ * The memory, which is the product, in the place the operator already looks.
+ *
+ * Two facts and no more, because a status page that grows stops being read.
+ *
+ * **Unscreened documents** are a degraded memory, and it is invisible from outside: the
+ * review runs, the prompt is full of rules, and a fifth of them being fragments looks
+ * exactly like a fifth of them being rules.
+ *
+ * **The worst refusal share** is a drift metric on our own writing, which is not what
+ * the screen was built for and is more useful than what it was built for. Measured
+ * 2026-08-07: `CLAUDE.md` and `PROG.md` were refused 0 of 13, while every refusal came
+ * from an explanatory spec — worst in the three edited most that day. `CLAUDE.md` says
+ * specs describe the system as it stands and change-narrative belongs in `MEMO.md`, so
+ * a document whose share climbs is one where somebody has been writing session notes
+ * into a spec. `lore knowledge` has the detail; this says whether to go and look.
+ */
+function memoryLines(db: DatabaseSync): string[] {
+  const rows = db
+    .prepare(
+      `SELECT rp.name repo,
+              COUNT(DISTINCT CASE WHEN k.retired_at IS NULL THEN k.statement END) live,
+              COUNT(DISTINCT CASE WHEN k.extractor LIKE '%-unscreened' AND k.retired_at IS NULL
+                                  THEN k.provenance END) unscreened
+       FROM knowledge k JOIN repo rp ON rp.id = k.repo_id
+       GROUP BY rp.name ORDER BY rp.name`,
+    )
+    .all() as Row[];
+  if (rows.length === 0) return [];
+
+  const lines: string[] = [bold("memory"), ""];
+  for (const r of rows) {
+    const unscreened = Number(r["unscreened"] ?? 0);
+    const worst = db
+      .prepare(
+        `SELECT provenance,
+                COUNT(DISTINCT CASE WHEN retired_at IS NULL THEN statement END) kept,
+                COUNT(DISTINCT CASE WHEN retired_reason LIKE 'screened out:%' THEN statement END) refused
+         FROM knowledge k JOIN repo rp ON rp.id = k.repo_id
+         WHERE rp.name = ? AND k.source = 'ingested' AND k.provenance IS NOT NULL
+         -- AT LEAST FOUR CANDIDATES BEFORE A SHARE MEANS ANYTHING. Without a floor the
+         -- "worst" document was an ADR with one candidate, refused, reported as 100% —
+         -- a ratio on a denominator of one, in the line a reader is meant to act on.
+         GROUP BY provenance HAVING refused > 0 AND kept + refused >= 4
+         ORDER BY CAST(refused AS REAL) / (kept + refused) DESC LIMIT 1`,
+      )
+      .get(String(r["repo"])) as Row | undefined;
+
+    const share =
+      worst === undefined
+        ? ""
+        : dim(
+            `  worst: ${String(worst["provenance"])} ` +
+              `${String(Math.round((100 * Number(worst["refused"])) / (Number(worst["kept"]) + Number(worst["refused"]))))}% refused`,
+          );
+    const mark = unscreened > 0 ? red(`✗ ${String(unscreened)} document(s) UNSCREENED`) : green("✓ screened");
+    lines.push(`  ${mark}  ${String(r["repo"])}  ${dim(`${String(r["live"])} live rules`)}${share}`);
+  }
+  lines.push("", dim("detail: make knowledge REFUSALS=1 — a spec with a high share is carrying MEMO.md's job."), "");
+  return lines;
 }
 
 /**

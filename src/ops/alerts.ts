@@ -115,6 +115,24 @@ export const CONDITIONS = {
   // the repository (D-71). lore's whole footprint is under 5 GB against a host at
   // 826 GB used — so it was alerting, repeatedly and in red, about somebody else's
   // problem that it could neither cause nor fix.
+  //
+  // WHAT REPLACES THEM IS THE HALF THAT IS OURS. "under 5 GB" was measured once and
+  // written down; it was 6.8 GB two days later, and nothing had noticed because the
+  // only thing watching had been deleted along with the thing that was wrong about it.
+  // A budget lore sets for itself is a claim it can be held to; the host's percentage
+  // never was.
+  footprintOverBudget: (bytes: number, budget: number): Alert => ({
+    // `ticket`, not `page`: growing past a self-set budget is something to go and look
+    // at, not something to wake anybody for. The sweep collects, so this fires when
+    // collection is losing rather than when anything has broken.
+    severity: "ticket",
+    condition: "lore's own footprint is over its budget",
+    detail:
+      `lore is using ${(bytes / 1e9).toFixed(1)} GB against a ${(budget / 1e9).toFixed(1)} GB budget it sets for ` +
+      "itself. The sandbox npm cache is keyed by lockfile so it grows with every distinct one; the retention " +
+      "sweep collects what is unused, and this fires when collection is not keeping up. Not the host's disk — " +
+      "that belongs to whoever owns the machine.",
+  }),
   providerAuthFailed: (provider: string): Alert => ({
     severity: "page",
     condition: "provider auth failed",

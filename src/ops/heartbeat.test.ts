@@ -351,3 +351,47 @@ describe("the beat sends the conditions that had no caller", () => {
     expect(sent.filter((x) => x.condition.startsWith("backup"))).toStrictEqual([]);
   });
 });
+
+// THE HALF OF THE DISK QUESTION THAT IS OURS.
+//
+// The host-percentage alerts were removed on the right argument — a full disk belongs to
+// whoever owns the machine (D-71) — and the comment replacing them recorded "lore's
+// whole footprint is under 5 GB" as if that were stable. It was 6.8 GB two days later:
+// the sandbox npm cache is keyed by lockfile and grows with every distinct one, and
+// nothing noticed, because the only thing watching had been deleted along with what was
+// wrong about it. A budget lore sets for ITSELF is a claim it can be held to.
+describe("lore watches its own footprint, not the host's disk", () => {
+  it("says when it is over the budget it set for itself", async () => {
+    writeFileSync(join(dir, "big"), "x".repeat(4096));
+    const h = await checkHealth(store, cfg({ footprintBudgetBytes: 1024 }));
+    expect(h.footprintOverBudget).toBe(true);
+    expect(h.footprintBytes ?? 0).toBeGreaterThan(1024);
+  });
+
+  it("says nothing while it is inside it", async () => {
+    const h = await checkHealth(store, cfg({ footprintBudgetBytes: 1e9 }));
+    expect(h.footprintOverBudget).toBe(false);
+  });
+
+  // A TICKET, NOT A PAGE, and never a refusal. Growing past a self-set budget is
+  // something to go and look at; the sweep collects, so this fires when collection is
+  // losing rather than when anything has broken. Refusing a review over it would stop
+  // work for a problem only the operator can act on.
+  it("raises a ticket rather than waking anybody", async () => {
+    writeFileSync(join(dir, "big"), "x".repeat(4096));
+    const stop = startHeartbeat(store, cfg({ footprintBudgetBytes: 1024, intervalMs: 3_600_000 }), alerter);
+    await new Promise((r) => setTimeout(r, 20));
+    stop();
+    const a = sent.find((x) => x.condition === "lore's own footprint is over its budget");
+    expect(a?.severity).toBe("ticket");
+    expect(a?.detail).toMatch(/budget it sets for itself/);
+  });
+
+  // An unreadable footprint must not read as a footprint of zero — which is how the
+  // previous disk check managed to be both noisy and blind.
+  it("reports nothing rather than zero when it cannot measure", async () => {
+    const h = await checkHealth(store, cfg({ dataDir: join(dir, "not-there") }));
+    expect(h.footprintBytes).toBeUndefined();
+    expect(h.footprintOverBudget).toBe(false);
+  });
+});

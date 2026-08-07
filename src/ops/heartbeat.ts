@@ -30,6 +30,23 @@ export interface HeartbeatConfig {
   readonly needsHumanAgeHours: number;
   /** Grace before an empty replica folder pages. See `REPLICA_GRACE_MS`. */
   readonly replicaGraceMs: number;
+  /**
+   * How much disk lore may use for itself before it says so.
+   *
+   * **The half of the disk question that IS ours.** The host-percentage alerts were
+   * removed on the right argument — a full disk belongs to whoever owns the machine
+   * (D-71) — and the comment that replaced them recorded "lore's whole footprint is
+   * under 5 GB" as though that were stable. It was 6.8 GB two days later, because the
+   * sandbox npm cache is keyed by lockfile and grows with every distinct one, and
+   * nothing noticed: the only thing watching had been deleted along with what was wrong
+   * about it.
+   *
+   * Ten gigabytes is a budget rather than a limit, chosen against the 6.8 GB observed
+   * and the fourteen-day collection now in the sweep. It warns; it never refuses a
+   * review, because running out of disk is the operator's to act on and a review
+   * stopped by a guess is worse than one that runs.
+   */
+  readonly footprintBudgetBytes: number;
 }
 
 /**
@@ -63,6 +80,7 @@ export const DEFAULT_HEARTBEAT: HeartbeatConfig = {
   queueWarnDepth: 50,
   needsHumanAgeHours: 24,
   replicaGraceMs: REPLICA_GRACE_MS,
+  footprintBudgetBytes: 10 * 1e9,
 };
 
 /** Four answers, not two — see `replicaState`. */
@@ -89,7 +107,29 @@ export interface Health {
   /** Seconds the database is ahead of the replica. Absent when there is nothing to compare. */
   readonly replicaBehindSec?: number;
   readonly needsHumanOverAge: number;
+  /** What lore is using for itself, and whether that is more than it budgeted. */
+  readonly footprintBytes?: number;
+  readonly footprintOverBudget: boolean;
   readonly at: string;
+}
+
+/**
+ * Bytes under lore's own data directory.
+ *
+ * Best-effort and NOT counted as a problem when it cannot be read: a footprint nobody
+ * could measure must not read as a footprint of zero, which is how the previous disk
+ * check managed to be both noisy and blind.
+ */
+async function footprintBytes(dataDir: string): Promise<number | undefined> {
+  const entries = await readdir(dataDir, { withFileTypes: true, recursive: true }).catch(() => undefined);
+  if (entries === undefined) return undefined;
+  let total = 0;
+  for (const e of entries) {
+    if (!e.isFile()) continue;
+    const s = await stat(join(e.parentPath, e.name)).catch(() => undefined);
+    total += s?.size ?? 0;
+  }
+  return total;
 }
 
 export async function checkHealth(store: Store, cfg: HeartbeatConfig): Promise<Health> {
@@ -109,12 +149,16 @@ export async function checkHealth(store: Store, cfg: HeartbeatConfig): Promise<H
   // reported as the thing that found nothing. It cost 7ms against the live file.
   const fault = store.integrityFault();
   if (fault !== undefined) problems.push(`DATABASE UNREADABLE: ${fault}`);
+  const footprint = await footprintBytes(cfg.dataDir);
+  const overBudget = footprint !== undefined && footprint > cfg.footprintBudgetBytes;
   if (replica.state === "absent") problems.push("replica missing");
   if (replica.state === "behind") problems.push(`replica ${Math.round((replica.behindSec ?? 0) / 60)}m behind`);
 
   return {
     ok: problems.length === 0,
     problems,
+    ...(footprint === undefined ? {} : { footprintBytes: footprint }),
+    footprintOverBudget: overBudget,
     queueDepth: store.queueDepth(),
     spendToday: store.spendSince(midnight),
     replica: replica.state,
@@ -202,6 +246,10 @@ export function startHeartbeat(store: Store, cfg: HeartbeatConfig, alerter: Aler
     // listed the replica under "someone should look now" the whole time, and nothing
     // ever sent it — the only replica check lived in `make status`, which is a command
     // a human runs, and a page nobody is paged by is not a page.
+    // The half of the disk question that is ours. See `footprintBudgetBytes`.
+    if (health.footprintOverBudget) {
+      await alerter.send(CONDITIONS.footprintOverBudget(health.footprintBytes ?? 0, cfg.footprintBudgetBytes));
+    }
     if (health.replica === "absent" && !replicaGrace) await alerter.send(CONDITIONS.backupAbsent());
     else if (health.replica === "behind") {
       await alerter.send(CONDITIONS.backupBehind(Math.round((health.replicaBehindSec ?? 0) / 60)));
