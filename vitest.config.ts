@@ -50,6 +50,20 @@
 import { configDefaults, defineConfig } from "vitest/config";
 
 export default defineConfig({
+  // THE PATTERNS ABOVE ONLY MEAN ANYTHING FROM ONE DIRECTORY, and nothing pinned it.
+  //
+  // Vitest searches upward for this file but sets `root` to the CWD, so a run started
+  // from `lore/` sees the very same tree as `data/npm-cache/…` — no `lore/` segment
+  // left for `**\/lore\/data\/**` to match. The exclusion evaporates without a word:
+  // `npx vitest run` from there discovers 4,434 tests instead of 797, most of them
+  // vendored copies of other people's suites and stale scratch checkouts, and a dozen
+  // files fail for reasons that have nothing to do with this repository.
+  //
+  // That is this file's own subject matter — a green suite going red because of where
+  // a sibling checkout sits — recurring a third time, in the guard against it. Pinning
+  // the root to where this file lives makes every pattern here mean one thing wherever
+  // the command is run from, which is the property the patterns were always assuming.
+  root: import.meta.dirname,
   test: {
     exclude: [...configDefaults.exclude, "**/.claude/**", "**/lore/data/**", "**/repos/*/wt/*/**"],
   },
