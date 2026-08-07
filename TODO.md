@@ -614,6 +614,29 @@ landing with a real user, and it should not get lost among the defects below.
       working and said it was fine — in a codebase whose entire discipline is INV-1,
       found by models reading it cold. That is the argument for the tool.
 
+- [ ] **Twenty-eight production sites still reach past the Store into SQL**, across
+      fifteen files — not the seven I reported, which was a per-line grep missing
+      `store.db\n  .prepare(`. A ratchet in `one-definition.test.ts` holds the list and
+      fails on any new file; the list only shrinks. Each site is a small missing method,
+      and the conversion is mechanical — but it is fifteen files of behaviour-adjacent
+      change and should not be done in code that has no ladder verdict.
+
+- [ ] **Re-measure the knowledge base after the next review of each repo.** The
+      extractor stamp retires the old rows on the next ingest, so the live store should
+      fall from 399 live ingested rules to roughly 66 for lore and proportionally for
+      rigid-monorepo — without anyone editing a document. Verify that actually happens
+      rather than assuming it: this is the same class of change as session 32's
+      re-ingest, which needed a manual sweep because nothing triggered on the reader.
+      Then read twenty at random. If they still do not read like rules, the shape test
+      is not the right discriminator and the honest next step is to stop mining prose
+      and require `knowledge_teach`.
+
+- [ ] **Only 3 of 66 extracted rules carry a `why`.** `splitReason` fires on
+      *because / since / so that / otherwise* inside one sentence, and a bulleted rule
+      usually states its reason as the NEXT sentence. Worth fixing, because `why` is
+      what the project says separates a rule from something the next reader deletes —
+      and this half of D-20 is still unmet even for the rules that survive.
+
 - [ ] **The nineteen seam proposals are unappraised, not rejected.** `refactor.md` holds
       them. Each names one measurement; none has been run. The reason none was taken is
       that this codebase binds its incidents to positions in the code, and moving code

@@ -149,7 +149,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-17** | One OpenRouter key. No subscriptions — usage is cheaper | answered |
 | **D-18** | Knowledge is queryable by any token holder, any time | confirmed |
 | **D-19** | Knowledge is per-repo; no cross-repo layer | confirmed |
-| **D-20** | Sources: taught > ingested > derived, each with provenance | confirmed |
+| **D-20** | Sources: taught > ingested > derived, each with provenance | confirmed; extended 2026-08-07 |
 | **D-21** | Credentials in a header, never in the URL | **revised** |
 | **D-22** | `@modelcontextprotocol/server` v2 + Zod v4 schemas | confirmed |
 | **D-23** | `review_id` is CSPRNG and bound to its principal; possession ≠ auth | confirmed |
@@ -1470,6 +1470,52 @@ the wire against a deployment; `PLAN.md` Phase 3's done-criterion (a fresh sessi
 reaching `passed` with no instructions but the tool descriptions) is the real check and
 is still unmet. Until one of those closes, this holds by discipline, which is the
 weakest kind of guard and is named as such.
+
+**D-20, extended 2026-08-07 — the knowledge base holds rules, not quotations.**
+
+Vany asked me to find a significant improvement, and it was not in the code. It was in
+the artefact D-14 calls the product.
+
+**The store held 423 live rows. Nine had been written as rules.** The other 414 were
+sentences copied out of prose composed for a different reader: `extractRules` lifted
+them from spec paragraphs, and an accepted `lore-ok` was filed verbatim as a fact about
+the codebase. **92% had no `why`** — while `TOOL_DOCS.teach` tells every client that a
+rule without one gets deleted by the next reader. We required that of humans and nothing
+of ourselves.
+
+What that produced: *"It has to be, because the secret is shown once"*. *"A required
+field is therefore free money for every in-flight decision"*. *"Asked to review lore's
+own last commit, I reached for the CLI"* — a MEMO diary entry, stored as something the
+codebase knows about itself. Subjects missing, "therefore" pointing at a sentence never
+captured.
+
+**And up to sixty of them go into every review prompt, every round**, under *"WHAT THIS
+CODEBASE ALREADY KNOWS ABOUT ITSELF — treat these as this team's decisions, not
+suggestions."* 218 of the 399 came from lore's own documents, so on each round three
+frontier models were handed sixty fragments of lore's incident diary and told they were
+binding. That is this project's defining defect — a confident false statement — inside
+the artefact it exists to produce, aimed at the judgement everything else rests on.
+
+Three changes, in `spec/knowledge.md` §2.1.1 and §2.2.0:
+
+1. **Only rule-shaped content is ingested** — bullets, and single-sentence paragraphs.
+   `SPEC.md` goes from 111 rules to 15, the repository from 218 to 66.
+2. **A statement that cannot stand alone is not a rule** — dangling referents and
+   mid-sentence starts are refused.
+3. **An accepted justification is a verdict, not a rule.** It is already in every prompt
+   with its finding, and already outlives its review through the verdict table.
+
+**And the reader is now part of what a rule depends on.** `source_blob` enforced *a rule
+must not outlive its text*; nothing enforced *nor the reader that produced it*, so
+narrowing the extractor would have changed nothing already stored — re-ingestion
+triggers on the document, and no document changed. Every ingested rule now carries the
+extractor version, and an older stamp retires it. `ingestDocs` runs on every review, so
+the store heals itself on the next one.
+
+**Why nobody had seen this.** Eleven folders of models reviewed `src/` in the `propose`
+sweep and not one of them looked at the database, because they were pointed at the code.
+I measured the machine — 0 suppressions, 0 dead exports, 745 tests — and never opened the
+output. `refactor.md` is a document about a program; the program's product is a table.
 
 **D-75 — `propose` generates ideas for the maintainer, and is not part of the ladder.**
 

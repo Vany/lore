@@ -207,10 +207,37 @@ describe("runRound", () => {
 
     expect(second.accepted).toStrictEqual([fingerprint(HOLD_BUG)]);
     expect(store.latestVerdict("r1", fingerprint(HOLD_BUG))?.verdict).toBe("justified-accepted");
-    // An accepted justification is how the codebase acquires a fact about itself.
+    // The reason lives on the VERDICT, where it keeps its finding.
+    expect(store.latestVerdict("r1", fingerprint(HOLD_BUG))?.rationale).toContain("finally block");
+  });
+
+  // AN ACCEPTED JUSTIFICATION IS A VERDICT, NOT A RULE. It used to be written as both,
+  // and the knowledge copy lost the one thing that made it legible: its finding. What
+  // remained went to the next model under "treat these as this team's decisions" — a
+  // sentence with no subject, presented as binding.
+  //
+  // Nothing is lost. The reason is in every prompt with its finding through
+  // `settledBlock`, and it already outlives its review (D-51) because carrying reads
+  // the VERDICT table across the repo's reviews, never knowledge.
+  it("does not also file the reason as a rule about the codebase", async () => {
+    const reviewer = new ScriptedReviewer([[HOLD_BUG], []]);
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
+    const short = fingerprint(HOLD_BUG).slice(0, 8);
+    writeFileSync(
+      join(dir, "src/hold.ts"),
+      [
+        "export function capture() {",
+        `  // lore-ok[${short}]: the caller releases the hold in its finally block`,
+        "  return 1;",
+        "}",
+        "",
+      ].join("\n"),
+    );
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
+
     expect(
       store.knowledgeFor(repoId).some((k) => k.statement.includes("releases the hold in its finally block")),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("rejects a justification the reviewer raises anyway, and does not settle it", async () => {

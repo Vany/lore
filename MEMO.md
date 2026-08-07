@@ -5,6 +5,55 @@ surprised me.
 
 ---
 
+## 2026-08-07 — session 40: the product was full of quotations
+
+**Vany, after I answered a hygiene question twice: "meditate over all of the code, i
+believe you can see opportunity for significant improvement."** He was right and I had
+been looking in the wrong place.
+
+**423 live knowledge rows. Nine written as rules.** The other 414 were sentences copied
+out of prose composed for a different reader — `extractRules` lifting them from spec
+paragraphs, and accepted `lore-ok` reasons filed verbatim as facts about the codebase.
+92% had no `why`, while `TOOL_DOCS.teach` tells every client that a rule without one gets
+deleted by the next reader.
+
+And up to sixty of them entered every review prompt, every round, under *"treat these as
+this team's decisions"*. 218 of 399 came from lore's own docs. So three frontier models
+were being handed fragments of lore's incident diary — *"It has to be, because the secret
+is shown once"* — and told they were binding.
+
+**The measurement that located it:** 97% of SPEC.md's extracted rules came from
+paragraphs, not bullets. SPEC.md is 1,700 lines of decision *narrative*, and every
+incident story is full of "must", "never", "always" describing what went wrong. PROG.md
+was the counter-example — a real rule list — and every one of its ten reads like a rule.
+
+**What changed.** Bullets and single-sentence paragraphs only; dangling referents and
+mid-sentence starts refused; accepted justifications no longer filed as rules. 218 → 66
+for this repository, 111 → 15 for SPEC.md, PROG.md's ten untouched.
+
+**The durable half is the extractor stamp.** `source_blob` enforced *a rule must not
+outlive its text*. Nothing enforced *nor the reader that produced it* — so narrowing the
+extractor would have left all 399 fragments live, because re-ingestion triggers on the
+document and no document had changed. That is the identical trap MEMO records from
+session 32, where a fixed ingester left every row written by the broken one. Now the
+version is stamped and an older stamp retires the row; `ingestDocs` runs on every review,
+so the store heals on the next one with no manual migration.
+
+**Two things I got wrong on the way, both caught by measurement rather than by care.**
+The first attempt kept paragraphs under a rule-ish heading and changed nothing — SPEC.md's
+`## 5. Decisions` spans 1,800 lines, so the whole narrative was under a decision heading.
+And the `.db` check I wrote an hour earlier reported seven leak sites where there are
+twenty-eight: it matched `.db.prepare` on ONE LINE, and the formatter puts `store.db` and
+`.prepare(` on separate ones. That check was written, and its invariant claimed, one file
+away from a query it could not see.
+
+**Why nobody had seen the real thing.** Eleven folders of models read `src/` in the
+propose sweep and not one opened the database, because I pointed them at the code. I
+measured the machine and never looked at what it produces. `refactor.md` is a document
+about a program; the program's product is a table.
+
+---
+
 ## 2026-08-07 — session 39: measured before refactoring, and the refactor mostly evaporated
 
 **Vany: "analyze our code, repay technical debts and plan amazing refactoring… state of

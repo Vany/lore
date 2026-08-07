@@ -49,8 +49,54 @@ Mitigation is mandatory, not optional:
 - Every ingested rule stores the **source file and its blob sha**.
 - When the file changes, rules derived from it are **re-derived, not retained**.
 - A rule never outlives the text that justified it.
+- **Nor the reader that produced it.** Every ingested rule also stores the extractor
+  version, and a rule carrying an older stamp is retired on the next ingest exactly as
+  a rule whose document changed is. Without this half, improving the extractor changes
+  nothing already stored: re-ingestion triggers on the source document, and narrowing
+  the reader does not change any document. 399 fragments survived that way.
+
+### 2.1.1 Only rule-SHAPED content is a rule
+
+The extractor takes **bullets**, and **paragraphs that are a single sentence**. It does
+not mine multi-sentence prose, whatever heading it sits under.
+
+Measured on this repository: `SPEC.md` produced **111 rules, 108 of them from
+paragraphs** — from a document that is 1,700 lines of decision *narrative*, where every
+incident story is full of "must", "never" and "always" describing what went wrong. They
+arrived decontextualised — *"It has to be, because the secret is shown once"*, *"A
+required field is therefore free money"* — with their subjects in sentences that were
+never captured, and were then shown to every model under *"treat these as this team's
+decisions"*. The same document now yields 15, and the whole repository 66 instead of 218.
+
+A rule is **one statement**. A narrative paragraph sets something up, says what
+happened, and draws a conclusion — and it is the middle sentences, lifted out alone,
+that arrive with nothing to attach to. A document that states its rules one to a line
+still works, which is the common shape for a `CLAUDE.md`.
+
+Two further refusals, both measured against what was live in the store:
+
+- A statement beginning with a **dangling referent** — *it, this, that, they, therefore*
+  — has its subject somewhere that was not captured.
+- A statement **starting mid-sentence** is a clause whose beginning is gone.
+
+A heading cannot rescue a paragraph, and the first attempt at this tried: taking
+paragraphs under a rule-ish heading changed nothing, because `SPEC.md`'s
+`## 5. Decisions` spans 1,800 lines. The known loss is an ADR's `## Decision` paragraph,
+which really is the rule; `knowledge_teach` states one in a single call.
 
 ### 2.2 A recurrence is only a lesson once the repository has answered it
+
+### 2.2.0 An accepted justification is a verdict, not a rule
+
+It used to be written as both. A `lore-ok` reason is addressed to one reviewer about one
+finding — *"correct, this was NOT in the ticket, which asked for four other fixes"* — and
+as a knowledge row it loses the finding, leaving a sentence with no subject presented as
+a team decision.
+
+Nothing is lost by not storing it. The reason is already in every prompt **with its
+finding** through the settled block, and it already outlives its review (D-51) because
+carrying reads the **verdict** table across the repo's reviews by fingerprint, never
+knowledge. What the loop genuinely learns is the *pattern*, and that is §2.2.
 
 A cluster becomes a `mistake` rule only from findings the repository **fixed**. Not
 from findings it justified away, and not from findings nobody has answered.

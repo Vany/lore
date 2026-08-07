@@ -47,6 +47,45 @@ const MODAL = /\b(must not|must|never|always|do not|don't|shall|required|forbidd
 /** Prose that looks like a rule but is about the document, not the code. */
 const NOT_A_RULE = /^(see |read |this (file|document|section)|table of contents)/i;
 
+/**
+ * A statement that cannot stand alone is not a rule — it is a piece of one.
+ *
+ * Every row here is shown to a model under *"WHAT THIS CODEBASE ALREADY KNOWS ABOUT
+ * ITSELF — treat these as this team's decisions"*, with nothing around it. So the test
+ * is exactly that: read alone, does it say something?
+ *
+ * Two shapes fail, and both were in the live store:
+ *
+ *   * **A dangling referent.** "It has to be, because the secret is shown once", "This
+ *     retires the refusal in D-55", "A required field is therefore free money". The
+ *     subject was in the sentence before, which was not captured, so the model is free
+ *     to bind it to whatever it happens to be reading.
+ *   * **A mid-sentence start.** "matching the line refused the corrected file",
+ *     "dropping any line containing a negation let the original through" — a clause
+ *     lifted out of a sentence whose beginning is gone.
+ *
+ * Deliberately not a grammar check. These two catch what was actually there, and a
+ * cleverer test would start rejecting real rules, which costs more than it saves: a
+ * rule that never arrives is invisible, while a fragment is at least legible as noise.
+ */
+const NOT_SELF_CONTAINED = /^(it|its|this|that|these|those|they|their|then|so|therefore|and|but|which|hence|thus)\b/i;
+const STARTS_MID_SENTENCE = /^[a-z]/;
+
+/**
+ * The reader's version, stamped on every rule it writes.
+ *
+ * BUMP THIS whenever `extractRules` changes what it accepts. Rules carrying an older
+ * stamp are retired on the next ingest and re-extracted, exactly as a rule is retired
+ * when its document changes (D-20) — because a rule must not outlive the reader that
+ * produced it any more than it may outlive the text.
+ *
+ * `2` is the narrowing that stopped mining narrative paragraphs: measured on this
+ * repository, SPEC.md produced 111 rules and 108 of them came from prose, arriving as
+ * fragments whose subjects were in sentences that were never captured. Under `2` it
+ * produces 15.
+ */
+export const EXTRACTOR_VERSION = "2";
+
 const MIN_LENGTH = 20;
 const MAX_LENGTH = 280;
 
@@ -71,6 +110,7 @@ export function extractRules(markdown: string): readonly Candidate[] {
       const cleaned = stripMarkup(sentence);
       if (cleaned.length < MIN_LENGTH || cleaned.length > MAX_LENGTH) continue;
       if (!MODAL.test(cleaned) || NOT_A_RULE.test(cleaned)) continue;
+      if (NOT_SELF_CONTAINED.test(cleaned) || STARTS_MID_SENTENCE.test(cleaned)) continue;
 
       const { statement, why } = splitReason(cleaned);
       const key = statement.toLowerCase();
@@ -101,9 +141,39 @@ function blocks(markdown: string): string[] {
   const out: string[] = [];
   let current: string[] = [];
   let inFence = false;
+  let isBullet = false;
 
   const flush = () => {
-    if (current.length > 0) out.push(current.join(" "));
+    // THE SHAPE DECIDES, NOT THE WORDS.
+    //
+    // A bullet is written as a discrete statement — someone chose to give it its own
+    // line, and it is the whole rule. A PARAGRAPH is prose, and a modal inside prose is
+    // usually the story of a decision rather than the decision: "it must never have
+    // happened", "we always assumed". Measured on this repository: 111 rules came out
+    // of SPEC.md and 108 of them were paragraphs, from a document that is 1,700 lines
+    // of incident narrative. They arrived as fragments — "It has to be, because the
+    // secret is shown once", "A required field is therefore free money" — with the
+    // subject in a sentence that was never captured, and were then injected into every
+    // review prompt under "treat these as this team's decisions".
+    //
+    // A HEADING CANNOT RESCUE A PARAGRAPH, and the first attempt at this tried. Taking
+    // paragraphs under a rule-ish heading changed nothing here: SPEC.md's `## 5.
+    // Decisions` spans 1,800 lines, so the entire narrative sat under a decision
+    // heading. Prose is prose wherever it is filed.
+    //
+    // The known loss is an ADR's `## Decision` paragraph, which really is the rule. It
+    // is recorded rather than worked around: a heuristic that reads it would have to
+    // distinguish it from `## Context` by something other than the heading, and nothing
+    // measured here does. `knowledge_teach` states such a rule in one call.
+    const block = current.join(" ");
+    // A BULLET, OR A PARAGRAPH THAT IS ONE SENTENCE.
+    //
+    // A rule is one statement. A narrative paragraph is several — it sets something up,
+    // says what happened, and draws a conclusion — and it is the middle sentences,
+    // lifted out alone, that arrive with their subjects missing. A document that states
+    // its rules as one-line paragraphs (which plenty do) still works; SPEC.md's
+    // multi-sentence incident narrative does not.
+    if (block.length > 0 && (isBullet || sentences(block).length === 1)) out.push(block);
     current = [];
   };
 
@@ -121,6 +191,7 @@ function blocks(markdown: string): string[] {
     // A blank line, a heading, a quote or a table row all end whatever came before.
     if (line.length === 0 || line.startsWith("#") || line.startsWith(">") || line.startsWith("|")) {
       flush();
+      isBullet = false;
       continue;
     }
 
@@ -128,9 +199,12 @@ function blocks(markdown: string): string[] {
     if (bullet !== null) {
       // A new bullet ends the previous one; its own continuation lines follow.
       flush();
+      isBullet = true;
       current.push(bullet[1] ?? "");
       continue;
     }
+    // A continuation line belongs to whatever it continues; a fresh paragraph does not.
+    if (current.length === 0) isBullet = false;
     current.push(line);
   }
   flush();
@@ -229,10 +303,10 @@ export async function ingestDocs(
     // disk wait, and every other writer queues behind it.
     const rules = extractRules(source);
     store.tx(() => {
-      retired += store.retireForChangedBlob(repoId, rel, blob);
+      retired += store.retireForChangedBlob(repoId, rel, blob, EXTRACTOR_VERSION);
       // Already ingested at this exact blob: nothing to do, and re-inserting would
       // duplicate every rule on every review.
-      if (hasBlob(store, repoId, rel, blob)) return;
+      if (store.hasKnowledgeBlob(repoId, rel, blob)) return;
       for (const c of rules) {
         store.addKnowledge({
           repoId,
@@ -244,6 +318,7 @@ export async function ingestDocs(
           cwe: undefined,
           provenance: rel,
           sourceBlob: blob,
+          extractor: EXTRACTOR_VERSION,
           // Below taught (1.0) and above a single derived observation: the document
           // says so, but nobody has confirmed the extraction understood it.
           confidence: 0.8,
@@ -310,15 +385,6 @@ async function discoverable(worktree: string): Promise<readonly string[]> {
 function pathScopeFor(rel: string): string | undefined {
   const dir = RULE_DIRS.find((d) => rel.startsWith(`${d}/`));
   return dir === undefined ? undefined : dir;
-}
-
-function hasBlob(store: Store, repoId: string, provenance: string, blob: string): boolean {
-  const row = store.db
-    .prepare(
-      "SELECT 1 AS present FROM knowledge WHERE repo_id = ? AND provenance = ? AND source_blob = ? AND retired_at IS NULL LIMIT 1",
-    )
-    .get(repoId, provenance, blob) as Record<string, number> | undefined;
-  return row !== undefined;
 }
 
 function hashOf(s: string): string {

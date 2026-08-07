@@ -554,30 +554,26 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
         tier: tier.id,
         round,
       });
-      // An accepted justification is how the codebase acquires a fact about itself —
-      // ONCE. Ratifying the same reason again is the same fact, not a new one.
+      // AN ACCEPTED JUSTIFICATION IS A VERDICT, NOT A RULE, and it used to be written
+      // here as both.
       //
-      // Nothing checked, so the livelock wrote it every cycle: 21 of one repository's
-      // 27 derived rules were a single sentence about a single false positive,
-      // repeated. The memory that is the product became 78% one restated opinion,
-      // and every one of those copies then went into the next reviewer's prompt.
+      // A `lore-ok` reason is addressed to one reviewer about one finding — "correct,
+      // this was NOT in the ticket, which asked for four other fixes". Stored as a
+      // knowledge row it loses the finding, and what remains is shown to the next model
+      // under *"WHAT THIS CODEBASE ALREADY KNOWS ABOUT ITSELF — treat these as this
+      // team's decisions"*: a sentence with no subject, presented as binding.
       //
-      // Matched on the STATEMENT, which is the fact itself. A second acceptance of a
-      // reason we already hold teaches nothing; a differently-worded reason for the
-      // same finding is a different claim and is kept.
-      if (!store.hasKnowledgeStatement(review.repoId, p.reason))
-      store.addKnowledge({
-        repoId: review.repoId,
-        kind: "rule",
-        source: "derived",
-        statement: p.reason,
-        why: `accepted justification for: ${p.finding.claim}`,
-        path: p.finding.file,
-        ...(p.finding.cwe !== undefined ? { cwe: p.finding.cwe } : { cwe: undefined }),
-        provenance: p.finding.fingerprint,
-        sourceBlob: undefined,
-        confidence: 0.7,
-      });
+      // Nothing is lost by not writing it, which is the part worth checking rather than
+      // assuming. The reason is already in every prompt, WITH its finding, through
+      // `settledBlock` — `file:line — claim → justified: reason`. And it already
+      // outlives its review (D-51): carrying is done from the VERDICT table, joined
+      // across the repo's reviews by fingerprint, never from knowledge.
+      //
+      // What the loop genuinely learns is the PATTERN, and `promoteRecurring` writes
+      // that as an authored rule once a claim has recurred three times — "this codebase
+      // repeatedly produces CWE-459 findings (7 so far), check for it explicitly" —
+      // which is a statement about the codebase rather than a quotation from an
+      // argument about one line.
     }
   }
 

@@ -21,7 +21,7 @@ import { SEVERITIES } from "../core/finding.ts";
 // adds the columns, because this number is what `assertNotDowngrade` compares — left
 // behind, it says a database written by this build is identical to one written before
 // the columns existed.
-export const SCHEMA_VERSION = 9;
+export const SCHEMA_VERSION = 10;
 
 /**
  * How findings are ordered wherever the service hands them out: worst first.
@@ -203,6 +203,15 @@ CREATE TABLE IF NOT EXISTS knowledge (
   -- is re-derived, never retained -- a stale doc must not become a confidently
   -- wrong rule applied to every future session.
   source_blob    TEXT,
+  -- WHICH READER produced this, for ingested rules.
+  --
+  -- D-20 says a rule must not outlive the text that justified it, and source_blob
+  -- enforces exactly that. It does not enforce the other half: a rule must not outlive
+  -- the EXTRACTOR that produced it. When the reader improves, everything it wrote
+  -- before stays live until somebody happens to edit the document -- which is how 399
+  -- decontextualised fragments survived, because re-ingestion triggers on the source
+  -- changing and the source had not changed.
+  extractor      TEXT,
   scope_blob     TEXT,
   scope_hunk     TEXT,
   confidence     REAL,
@@ -297,6 +306,8 @@ export const MIGRATIONS: readonly { readonly table: string; readonly column: str
   { table: "review", column: "failed_because", sql: "ALTER TABLE review ADD COLUMN failed_because TEXT" },
   // WHICH TREE this tier actually read, so an attestation cannot over-claim.
   { table: "tier_run", column: "tree_hash", sql: "ALTER TABLE tier_run ADD COLUMN tree_hash TEXT" },
+  // WHICH EXTRACTOR produced an ingested rule, so improving the reader retires its output.
+  { table: "knowledge", column: "extractor", sql: "ALTER TABLE knowledge ADD COLUMN extractor TEXT" },
 ];
 
 /**

@@ -164,13 +164,38 @@ describe("no production file reaches past the store into SQL", () => {
     const offenders: string[] = [];
     for (const file of sources()) {
       if (file.endsWith(".test.ts") || file.endsWith("store/store.ts")) continue;
-      for (const [i, line] of readFileSync(file, "utf8").split("\n").entries()) {
-        if (/\.db\s*\.\s*(prepare|exec)\b/.test(line)) {
-          offenders.push(`${file.slice(SRC.length)}:${String(i + 1)}  ${line.trim().slice(0, 80)}`);
+      const src = readFileSync(file, "utf8");
+      // MATCHED ON `.db` ITSELF, not on `.db.prepare`. The first version looked for the
+      // pair on ONE LINE, and `store.db\n  .prepare(` — what the formatter produces for
+      // anything but the shortest query — walked straight past it. That check was
+      // written, and its invariant claimed, one file away from a query it could not
+      // see: it reported seven sites where there are twenty-eight.
+      //
+      // A RATCHET, not a clean bill of health, and deliberately so. Twenty-eight sites
+      // across fifteen files is a real conversion and not one to rush into code that
+      // has no ladder verdict — but a check that permitted what it means to forbid
+      // would be decoration, and a number nobody can see would rot. So the invariant
+      // this can honestly enforce today is: NO NEW FILE reaches through, and the ones
+      // that do may only shrink. `TODO.md` carries the list to zero.
+      for (const [i, line] of src.split("\n").entries()) {
+        if (/(?<![A-Za-z0-9_])(?:store|this|i\.store|deps\.store)\.db\b/.test(line)) {
+          offenders.push(file.slice(SRC.length).replace(/^\//, ""));
+          void i;
         }
       }
     }
-    expect(offenders).toStrictEqual([]);
+    // Every file below predates the rule. Adding one here is the thing to argue about;
+    // removing one needs no permission.
+    const KNOWN = [
+      "knowledge/derive.ts", "knowledge/enrich.ts", "mcp/auth.ts", "mcp/server.ts", "ops/pace.ts", "ops/retention.ts",
+      "ops/spend.ts", "propose/cli.ts", "propose/run.ts", "reviewer/review.ts", "security/vex.ts",
+      "service/attest.ts", "service/http.ts", "service/main.ts", "service/worker.ts",
+    ];
+    const newcomers = [...new Set(offenders)].filter((f) => !KNOWN.includes(f)).sort();
+    expect(newcomers).toStrictEqual([]);
+    // And the list only shrinks: a file that stops reaching through must leave it.
+    const stale = KNOWN.filter((f) => !offenders.includes(f));
+    expect(stale).toStrictEqual([]);
   });
 });
 

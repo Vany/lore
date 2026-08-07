@@ -126,6 +126,8 @@ export interface KnowledgeItem {
   readonly cwe: string | undefined;
   readonly provenance: string | undefined;
   readonly sourceBlob: string | undefined;
+  /** For ingested rules: which extractor version produced this. */
+  readonly extractor?: string | undefined;
   readonly confidence: number | undefined;
   readonly verifiedAt: string;
 }
@@ -906,8 +908,8 @@ export class Store {
     this.db
       .prepare(
         `INSERT INTO knowledge(id, repo_id, kind, source, statement, why, path, cwe, provenance,
-                               source_blob, confidence, verified_at)
-         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                               source_blob, extractor, confidence, verified_at)
+         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         item.id,
@@ -920,6 +922,7 @@ export class Store {
         n(item.cwe),
         n(item.provenance),
         n(item.sourceBlob),
+        n(item.extractor),
         n(item.confidence),
         item.verifiedAt,
       );
@@ -950,14 +953,32 @@ export class Store {
    * rule injected into every future session (D-20). This is the single guard
    * against the knowledge base rotting.
    */
-  retireForChangedBlob(repoId: string, provenance: string, currentBlob: string): number {
+  /** Is this document already ingested at this blob, by this reader? */
+  hasKnowledgeBlob(repoId: string, provenance: string, blob: string): boolean {
+    return (
+      this.db
+        .prepare(
+          "SELECT 1 FROM knowledge WHERE repo_id = ? AND provenance = ? AND source_blob = ? AND retired_at IS NULL LIMIT 1",
+        )
+        .get(repoId, provenance, blob) !== undefined
+    );
+  }
+
+  retireForChangedBlob(repoId: string, provenance: string, currentBlob: string, extractor?: string): number {
+    // EITHER HALF GOING STALE RETIRES THE RULE. The text changing was always handled;
+    // the READER changing was not, and that is the gap that let 399 decontextualised
+    // fragments outlive the extractor that made them — re-ingestion triggers on the
+    // source document, and the source document had not changed.
     const res = this.db
       .prepare(
-        `UPDATE knowledge SET retired_at = ?, retired_reason = 'source document changed'
-         WHERE repo_id = ? AND provenance = ? AND source_blob IS NOT NULL
-           AND source_blob != ? AND retired_at IS NULL`,
+        `UPDATE knowledge
+         SET retired_at = ?,
+             retired_reason = CASE WHEN source_blob != ? THEN 'source document changed'
+                                   ELSE 'extracted by an older reader' END
+         WHERE repo_id = ? AND provenance = ? AND source_blob IS NOT NULL AND retired_at IS NULL
+           AND (source_blob != ? OR extractor IS NOT ?)`,
       )
-      .run(now(), repoId, provenance, currentBlob);
+      .run(now(), currentBlob, repoId, provenance, currentBlob, n(extractor));
     // node:sqlite reports `changes` as number | bigint.
     return Number(res.changes);
   }
