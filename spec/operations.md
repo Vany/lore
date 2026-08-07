@@ -135,9 +135,23 @@ It also made `ok` a claim about the machine rather than about the service, and r
 into tests: the heartbeat suite asserted `ok: true` and passed all afternoon at 89%,
 then failed the moment the host crossed 90% with nothing in the code having changed.
 
+**The measurement is cached and never taken inside a request.** It was, and it took the
+service down within a minute of deploying on 2026-08-08: one `readdir` plus one `stat`
+per file, against 374,457 files in 7.1 GB, across a Docker Desktop bind mount where every
+call crosses the VM boundary. `/status` stopped answering; `/healthz` kept saying `ok`, so
+from outside the service looked alive while the endpoint that reports its health hung.
+
+Worse than slow — `checkHealth` awaited it *before* reporting anything, so the integrity
+and replica checks were queued behind it. **The thing that watches was blocked by the size
+of the thing it watches**, and it degrades exactly as the cache grows, which is exactly
+when the number begins to matter. A reader now gets the last measurement or `undefined`,
+and a stale one schedules a walk it does not wait for; one walk at a time, hourly. A disk
+budget is a slow-moving number and `undefined` was already the honest answer for "not
+measured".
+
 **What is genuinely ours is unmonitored, and that is stated rather than implied.** The
 sandbox's `node_modules` cache grows without bound and is the largest thing lore
-writes — 4.4 GB of its 4.7 GB total. That is a real growth curve with no ceiling and
+writes — 5.6 GB of its 7.1 GB total. That is a real growth curve with no ceiling and
 nothing watching it. The right measure is lore's own footprint, not the host's
 percentage, and it is not built; it is an open item in `TODO.md` rather than a gap
 covered by a number that was measuring something else.

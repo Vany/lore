@@ -114,13 +114,42 @@ export interface Health {
 }
 
 /**
- * Bytes under lore's own data directory.
+ * Bytes under lore's own data directory — CACHED, and never awaited by a caller.
  *
  * Best-effort and NOT counted as a problem when it cannot be read: a footprint nobody
  * could measure must not read as a footprint of zero, which is how the previous disk
  * check managed to be both noisy and blind.
+ *
+ * **IT MUST NOT BE COMPUTED IN A REQUEST.** It was, and it took the service down on
+ * 2026-08-08 within a minute of deploying: `readdir` plus one `stat` per file, against
+ * 374,457 files in 7.1 GB — of which 5.6 GB is the sandbox npm cache — across a Docker
+ * Desktop bind mount, where every one of those calls crosses the VM boundary. `/status`
+ * stopped answering at all, and `/healthz` kept returning `ok`, so from outside the
+ * service looked alive while the endpoint that reports its health hung for minutes.
+ *
+ * Worse than slow: `checkHealth` awaits this BEFORE it reports anything, so the integrity
+ * check and the replica check were stuck behind it too. The thing that watches was
+ * blocked by the size of the thing it watches — and it degrades exactly as the cache
+ * grows, which is to say exactly when the number starts to matter.
+ *
+ * So a reader gets the last measurement immediately, or `undefined` if there has never
+ * been one, and a stale cache schedules a refresh it does not wait for. A disk budget is
+ * a slow-moving number; measuring it hourly is not a compromise, it is the right rate.
+ * `undefined` is already the honest answer for "not measured" everywhere downstream.
  */
-async function footprintBytes(dataDir: string): Promise<number | undefined> {
+export const FOOTPRINT_TTL_MS = 3_600_000;
+
+/**
+ * Keyed by the directory it measured.
+ *
+ * `dataDir` never changes in a running service, so an unkeyed cache would be correct
+ * there and wrong everywhere else — it handed one test the measurement of another test's
+ * directory. A cache that ignores its input is a bug that happens to be dormant.
+ */
+const footprints = new Map<string, { readonly bytes: number | undefined; readonly at: number }>();
+const measuring = new Set<string>();
+
+async function measureFootprint(dataDir: string): Promise<number | undefined> {
   const entries = await readdir(dataDir, { withFileTypes: true, recursive: true }).catch(() => undefined);
   if (entries === undefined) return undefined;
   let total = 0;
@@ -130,6 +159,41 @@ async function footprintBytes(dataDir: string): Promise<number | undefined> {
     total += s?.size ?? 0;
   }
   return total;
+}
+
+/**
+ * The cached footprint, and a background refresh when it is stale.
+ *
+ * Synchronous on purpose — the signature is the guarantee. An `async` one would invite
+ * the next caller to await it, which is the bug.
+ */
+function footprintBytes(dataDir: string, now: number): number | undefined {
+  const cached = footprints.get(dataDir);
+  const fresh = cached !== undefined && now - cached.at < FOOTPRINT_TTL_MS;
+  // `measuring` because a walk of this size outlives many beats: without it, every beat
+  // during the first walk starts another one, and they multiply against the same mount.
+  if (!fresh && !measuring.has(dataDir)) {
+    measuring.add(dataDir);
+    void measureFootprint(dataDir).then(
+      (bytes) => {
+        footprints.set(dataDir, { bytes, at: Date.now() });
+        measuring.delete(dataDir);
+      },
+      () => {
+        // A failed walk is recorded as unmeasured rather than retried in a tight loop:
+        // the next beat past the TTL tries again, and until then the answer is honest.
+        footprints.set(dataDir, { bytes: undefined, at: Date.now() });
+        measuring.delete(dataDir);
+      },
+    );
+  }
+  return cached?.bytes;
+}
+
+/** For tests: module state outlives a test, and a stale measurement is a false pass. */
+export function resetFootprintCache(): void {
+  footprints.clear();
+  measuring.clear();
 }
 
 export async function checkHealth(store: Store, cfg: HeartbeatConfig): Promise<Health> {
@@ -149,15 +213,17 @@ export async function checkHealth(store: Store, cfg: HeartbeatConfig): Promise<H
   // reported as the thing that found nothing. It cost 7ms against the live file.
   const fault = store.integrityFault();
   if (fault !== undefined) problems.push(`DATABASE UNREADABLE: ${fault}`);
-  const footprint = await footprintBytes(cfg.dataDir);
-  const overBudget = footprint !== undefined && footprint > cfg.footprintBudgetBytes;
+  // Read from cache; a stale one refreshes in the background. Never awaited — see the
+  // note on `footprintBytes`, which is the outage this signature exists to prevent.
+  const bytes = footprintBytes(cfg.dataDir, Date.now());
+  const overBudget = bytes !== undefined && bytes > cfg.footprintBudgetBytes;
   if (replica.state === "absent") problems.push("replica missing");
   if (replica.state === "behind") problems.push(`replica ${Math.round((replica.behindSec ?? 0) / 60)}m behind`);
 
   return {
     ok: problems.length === 0,
     problems,
-    ...(footprint === undefined ? {} : { footprintBytes: footprint }),
+    ...(bytes === undefined ? {} : { footprintBytes: bytes }),
     footprintOverBudget: overBudget,
     queueDepth: store.queueDepth(),
     spendToday: store.spendSince(midnight),
