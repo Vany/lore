@@ -505,9 +505,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     if (prior?.scope === undefined) continue;
 
     const file = newFindings.find((f) => f.fingerprint === fp)?.file
-      ?? (store.db.prepare("SELECT file FROM finding WHERE review_id = ? AND fingerprint = ?").get(reviewId, fp) as
-        | Record<string, string>
-        | undefined)?.["file"];
+      ?? store.fileOfFinding(reviewId, fp);
     if (file === undefined) continue;
 
     const source = await readFile(join(worktree, file), "utf8").catch(() => undefined);

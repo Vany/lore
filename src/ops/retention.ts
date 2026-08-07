@@ -113,9 +113,8 @@ export async function collect(store: Store, cfg: RetentionConfig = DEFAULT_RETEN
   // gone. `git worktree remove` cannot collect those, so they accumulate silently —
   // twelve were found on the deployment, left over from a data directory that moved.
   // Per repository, once, because that is the scope git prunes at.
-  const repos = store.db.prepare("SELECT id FROM repo").all() as Record<string, string>[];
-  for (const r of repos) {
-    await pruneWorktrees(repoPaths(cfg.reposRoot, r["id"] ?? "")).catch(() => undefined);
+  for (const repo of store.repos()) {
+    await pruneWorktrees(repoPaths(cfg.reposRoot, repo.id)).catch(() => undefined);
   }
 
   // Old review rows. Findings and verdicts cascade; knowledge does not — it has no

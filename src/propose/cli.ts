@@ -71,9 +71,7 @@ export async function proposeCli(i: ProposeCliInput): Promise<string> {
     .prepare("SELECT id, name, git_url FROM repo WHERE name = ? OR id = ?")
     .get(i.repo, i.repo) as Record<string, string> | undefined;
   if (repo === undefined) {
-    const known = (i.store.db.prepare("SELECT name FROM repo ORDER BY name").all() as Record<string, string>[])
-      .map((r) => r["name"] ?? "")
-      .join(", ");
+    const known = i.store.repos().map((r) => r.name).join(", ");
     throw new UsageError(`no repository '${i.repo}' — known: ${known || "none; run `lore new` first"}`);
   }
   const repoId = repo["id"] ?? "";

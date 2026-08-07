@@ -5,6 +5,57 @@ surprised me.
 
 ---
 
+## 2026-08-07 — session 39: measured before refactoring, and the refactor mostly evaporated
+
+**Vany: "analyze our code, repay technical debts and plan amazing refactoring… state of
+the art."** Almost word for word what he asked in session 34, where I measured, argued
+against a large refactor, and he agreed. So the question was whether the answer still
+holds after tonight, which added `propose`, subscriptions, `pace`, and schema 9.
+
+**It holds, and here are today's numbers.** 15,437 source lines across 56 files, 9,417
+test lines across 40, 745 tests. **Zero `as any`, zero `@ts-ignore`, zero
+`eslint-disable`** — the four the grep found are the phrase "as any" in prose. Zero
+unresolved TODO/FIXME markers in code. **Zero dead exports**, checked by scanning every
+exported function for a second reference.
+
+**The one measured debt was real, and far smaller than it was sold as.** `refactor.md`'s
+biggest proposal was *make `Store.db` private*, and it named 26 files. That count
+included tests. In production it was **seven `.db.prepare` calls across five files**, and
+every one was a small missing Store method. All seven are now behind named methods and
+the count is zero.
+
+**Two of the seven were worse than a style problem.** `lore://review/{id}` built its
+audit trail with `SELECT *` on `verdict` and `tier_run`, so the client-facing shape of
+that resource was a function of the schema: every column a future migration adds would
+have shipped to every client, silently, without anyone deciding to publish it. The
+columns are named now, which makes adding one an act rather than a consequence.
+
+**And `store.ts` is not the god object it looks like.** 1,474 lines, of which **582 are
+comments** — 40%. About 890 lines of code across 104 methods: roughly eight lines each.
+That is a wide, thin data-access layer with dense documentation, which is exactly what
+`PROG.md` asks for. Splitting it would move a hundred small methods and every incident
+comment bound to them, to make two files that are each still a data-access layer.
+
+**A mechanical check now holds the line**, in `one-definition.test.ts`, because this
+codebase's own argument is that reading for a shape does not work — seven of these grew
+one at a time and nobody noticed. Tests are deliberately exempt: a test asserting a row
+exists is asking about the database on purpose, and forcing those through an API would
+mean inventing methods only tests call, which the same file already fails you for.
+
+**What I did NOT do, and this is the position.** Nineteen seam proposals remain
+unappraised in `refactor.md` — extract a health snapshot, a knowledge compiler, port
+`ProposeDeps` off `Store`. None fixes anything currently wrong. Every one moves code
+whose guards are comments bound to positions in that code, and this project's defect
+history is entirely false statements about behaviour rather than wrong algorithms. A
+refactor is how this repository would forget its own bugs. They keep their measurements
+and wait for a reason beyond tidiness.
+
+**The real debt is not in the code.** Ten commits have reached `origin/main` without a
+ladder verdict, in a project whose entire thesis is that reviews gate code. That is the
+thing to repay, and it is a review run rather than a refactor.
+
+---
+
 ## 2026-08-07 — session 38: appraising the 32, and what eight of them were worth
 
 **Vany: "implement all useful."** So the appraisal that TODO said had never been done.

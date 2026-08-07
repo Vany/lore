@@ -982,8 +982,8 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       const findings = store.db
         .prepare(`SELECT * FROM finding WHERE review_id = ? ORDER BY ${FINDING_ORDER_SQL}`)
         .all(id);
-      const verdicts = store.db.prepare("SELECT * FROM verdict WHERE review_id = ? ORDER BY id").all(id);
-      const runs = store.db.prepare("SELECT * FROM tier_run WHERE review_id = ? ORDER BY id").all(id);
+      const verdicts = store.verdictsFor(id);
+      const runs = store.tierRunsFor(id);
       return {
         contents: [
           {

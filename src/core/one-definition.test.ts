@@ -147,6 +147,33 @@ describe("an exported constant has a reader", () => {
 //
 // Checked here rather than trusted, because it accumulated one comment at a time over
 // two days and nobody noticed until 80 of them existed.
+// SQL LIVES IN THE STORE, and this is the only thing that can keep it there.
+//
+// Measured before writing this: seven raw `.db.prepare` calls had grown across five
+// production files, each one a small missing Store method. Two of them were `SELECT *`
+// building `lore://review/{id}` — so the client-facing shape of that resource was a
+// function of the schema, and every column a future migration adds would have shipped
+// to every client silently, without anyone deciding to publish it.
+//
+// TESTS ARE DELIBERATELY FREE. A test asserting that a row exists is asking about the
+// database on purpose, and forcing those through an API would mean inventing methods
+// that only tests call — which `one-definition.test.ts` already fails you for. The
+// invariant is about PRODUCTION code, and that is what this checks.
+describe("no production file reaches past the store into SQL", () => {
+  it("has every query behind a named Store method", () => {
+    const offenders: string[] = [];
+    for (const file of sources()) {
+      if (file.endsWith(".test.ts") || file.endsWith("store/store.ts")) continue;
+      for (const [i, line] of readFileSync(file, "utf8").split("\n").entries()) {
+        if (/\.db\s*\.\s*(prepare|exec)\b/.test(line)) {
+          offenders.push(`${file.slice(SRC.length)}:${String(i + 1)}  ${line.trim().slice(0, 80)}`);
+        }
+      }
+    }
+    expect(offenders).toStrictEqual([]);
+  });
+});
+
 describe("comments carry the incident, not who reported it", () => {
   const banned: readonly { readonly what: string; readonly rx: RegExp }[] = [
     { what: "attribution to a review tier", rx: /\b(?:raised|caught|found|reported) by (?:t[0-9]|Kimi|GLM|a reviewer)\b/i },

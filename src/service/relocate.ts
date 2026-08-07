@@ -39,13 +39,8 @@ export class RelocateError extends Error {}
  * repository, a url that already belongs to a different one, and a no-op.
  */
 export function relocate(store: Store, nameOrUrl: string, to: string): Relocation {
-  const rows = store.db.prepare("SELECT id, name, git_url FROM repo").all() as {
-    id: string;
-    name: string;
-    git_url: string;
-  }[];
-
-  const matches = rows.filter((r) => r.id === nameOrUrl || r.name === nameOrUrl || r.git_url === nameOrUrl);
+  const rows = store.repos();
+  const matches = rows.filter((r) => r.id === nameOrUrl || r.name === nameOrUrl || r.gitUrl === nameOrUrl);
   if (matches.length === 0) {
     throw new RelocateError(
       `no repository matches ${JSON.stringify(nameOrUrl)}. Registered: ${rows.map((r) => r.name).join(", ") || "(none)"}`,
@@ -56,7 +51,7 @@ export function relocate(store: Store, nameOrUrl: string, to: string): Relocatio
   if (matches.length > 1) {
     throw new RelocateError(
       `${JSON.stringify(nameOrUrl)} matches ${matches.length} repositories (${matches
-        .map((r) => `${r.name} ${r.git_url}`)
+        .map((r) => `${r.name} ${r.gitUrl}`)
         .join("; ")}). Name it by id.`,
     );
   }
@@ -64,12 +59,12 @@ export function relocate(store: Store, nameOrUrl: string, to: string): Relocatio
   const repo = matches[0];
   if (repo === undefined) throw new RelocateError("unreachable: match without a row");
 
-  if (repo.git_url === to) {
+  if (repo.gitUrl === to) {
     throw new RelocateError(`${repo.name} is already at ${to} — nothing to do.`);
   }
 
   // The collision that would recreate the split this exists to prevent.
-  const taken = rows.find((r) => r.git_url === to && r.id !== repo.id);
+  const taken = rows.find((r) => r.gitUrl === to && r.id !== repo.id);
   if (taken !== undefined) {
     throw new RelocateError(
       `${to} is already registered as ${taken.name} (${taken.id}). Two rows for one url is the ` +
@@ -77,8 +72,8 @@ export function relocate(store: Store, nameOrUrl: string, to: string): Relocatio
     );
   }
 
-  store.db.prepare("UPDATE repo SET git_url = ? WHERE id = ?").run(to, repo.id);
-  return { repoId: repo.id, name: repo.name, from: repo.git_url, to };
+  store.relocateRepo(repo.id, to);
+  return { repoId: repo.id, name: repo.name, from: repo.gitUrl, to };
 }
 
 export function renderRelocation(r: Relocation): string {

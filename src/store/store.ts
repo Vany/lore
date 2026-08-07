@@ -442,6 +442,64 @@ export class Store {
     return this.db.prepare("SELECT 1 FROM token WHERE hash = ? AND revoked_at IS NULL").get(hash) !== undefined;
   }
 
+  /**
+   * The audit trail's two chronologies, with their columns NAMED.
+   *
+   * `lore://review/{id}` used to build these with `SELECT *` from the MCP layer, which
+   * is two faults in one line. The smaller is that the query lived outside the store at
+   * all. The larger is that `*` makes the client-facing shape of this resource a
+   * function of the schema: every column added here — a model name, an internal
+   * bookkeeping flag, whatever the next migration needs — would ship to every client
+   * that reads the trail, silently, without anyone deciding to publish it.
+   *
+   * Named columns make that a decision instead of a consequence. These are exactly what
+   * the resource already returned on the day this was written; adding to either list is
+   * now an act, and `spec/mcp-api.md` §2.0 is where it has to be written down.
+   */
+  verdictsFor(reviewId: string): readonly Record<string, unknown>[] {
+    return this.db
+      .prepare(
+        `SELECT id, review_id, fingerprint, verdict, rationale, scope_blob, scope_hunk, tier, model, round,
+                created_at
+         FROM verdict WHERE review_id = ? ORDER BY id`,
+      )
+      .all(reviewId) as Record<string, unknown>[];
+  }
+
+  tierRunsFor(reviewId: string): readonly Record<string, unknown>[] {
+    return this.db
+      .prepare(
+        `SELECT id, review_id, tier, round, outcome, unavailable, tree_hash, started_at, finished_at
+         FROM tier_run WHERE review_id = ? ORDER BY id`,
+      )
+      .all(reviewId) as Record<string, unknown>[];
+  }
+
+  /** Every repository, for the operator-facing paths that enumerate them. */
+  repos(): readonly RepoRow[] {
+    const rows = this.db.prepare("SELECT id, name, git_url FROM repo ORDER BY name").all() as Record<string, string>[];
+    return rows.map((r) => ({ id: r["id"] ?? "", name: r["name"] ?? "", gitUrl: r["git_url"] ?? "" }));
+  }
+
+  /** Point a repository at a new remote, keeping its id and everything hanging off it. */
+  relocateRepo(repoId: string, gitUrl: string): void {
+    this.db.prepare("UPDATE repo SET git_url = ? WHERE id = ?").run(gitUrl, repoId);
+  }
+
+  /**
+   * Where a finding was raised, by fingerprint.
+   *
+   * Used when a `lore-ok` names a fingerprint whose finding is not in the round's own
+   * list — a justification for something a previous round settled. The file is what
+   * makes the marker placeable.
+   */
+  fileOfFinding(reviewId: string, fingerprint: string): string | undefined {
+    const row = this.db
+      .prepare("SELECT file FROM finding WHERE review_id = ? AND fingerprint = ?")
+      .get(reviewId, fingerprint) as Record<string, string> | undefined;
+    return row?.["file"];
+  }
+
   /** Reviews for a principal, newest first — backs `review.inbox`. */
   /**
    * A principal's reviews, optionally narrowed to one repository.
