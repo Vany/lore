@@ -115,6 +115,31 @@ to say so, or the model does not know it.
 GPT-5.6 Sol scores 59 at max effort and 56 at high — 95% of the capability for 41%
 of the cost. The ladder walks `(model, effort)` pairs, not models.
 
+
+### A window a provider advertises is not always the window it enforces
+
+`compactToFit` shrinks the diff to the tier that will read it, using the context limit
+opencode reports from `/config/providers`. That is the right number to compact against
+and it is not always the number that applies.
+
+Measured 2026-08-07: `zai-coding-plan/glm-5-turbo` advertises **200,000 tokens**, so a
+104 KB prompt sat well inside the computed budget and was sent unchanged — and the
+endpoint answered `400 Prompt exceeds max length`. A subscription plan can cap a request
+far below the model's nominal context, and nothing publishes that ceiling.
+
+**So the refusal is classified as `TooLargeForTier`, not as a failure.** The difference
+is the whole review: generic, it killed the run and six commits went unreviewed while t2
+(1M) and t3 (500k) could each have held the diff comfortably. As a tier that could not
+look, the ladder steps over it and finishes `passed_partial` — weaker evidence, honestly
+labelled (D-48).
+
+**It does not claim a limit it does not have.** The pre-call refusal names the window,
+because there we computed that we would exceed it. This one says the provider refused it
+and quotes what the provider said, because the number we hold is demonstrably not the
+number that applies — printing it would invent the explanation. Quota is still checked
+FIRST: an exhausted plan can answer with wording about limits, and stepping over a tier
+for the wrong reason spends an escalation on a problem that waiting would fix.
+
 ## 2. Reviewers are agents, not prompts
 
 Greptile's v3 went agentic and measured **70.5% higher comment acceptance**.

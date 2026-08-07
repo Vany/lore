@@ -97,7 +97,8 @@ export class TooLargeForTier extends TierUnavailable {
   readonly tierId: string;
   readonly model: string;
   readonly promptTokens: number;
-  readonly contextLimit: number;
+  /** The advertised window, or `undefined` when the provider refused without naming one. */
+  readonly contextLimit: number | undefined;
 
   constructor(tierId: string, model: string, promptTokens: number, contextLimit: number) {
     super(
@@ -111,6 +112,33 @@ export class TooLargeForTier extends TierUnavailable {
     this.model = model;
     this.promptTokens = promptTokens;
     this.contextLimit = contextLimit;
+  }
+
+  /**
+   * The provider refused the prompt as too long, and the advertised window said it fit.
+   *
+   * A separate constructor because the honest message is different: above, we KNOW the
+   * limit and computed that we would exceed it, which is a fact about the model. Here we
+   * checked, believed it would fit, sent it, and were refused — so the number we have is
+   * not the number that applies, and claiming one would be inventing it.
+   *
+   * Observed 2026-08-07: `zai-coding-plan/glm-5-turbo` advertises 200,000 tokens of
+   * context through opencode's `/config/providers`, a 104 KB prompt was therefore well
+   * inside `compactToFit`'s budget and sent unchanged, and the endpoint answered
+   * 400 "Prompt exceeds max length". A subscription plan can cap a request far below the
+   * model's nominal context and nothing publishes that ceiling.
+   */
+  static refusedAsTooLong(tierId: string, model: string, promptChars: number, providerSaid: string): TooLargeForTier {
+    const e = new TooLargeForTier(tierId, model, Math.round(promptChars / 4), 1);
+    return Object.assign(e, {
+      contextLimit: undefined,
+      message:
+        `tier ${tierId} (${model}) REFUSED this review as too long: "${providerSaid}". The prompt was about ` +
+        `${Math.round(promptChars / 1024).toLocaleString()} KB and fit the window this model advertises, so the ` +
+        `limit that actually applies is smaller than the one it publishes and lore cannot read it. Not a defect ` +
+        `in the branch and not a fault in the model — this tier is skipped and a larger one looks instead. To ` +
+        `get every tier to look, review a smaller range.`,
+    });
   }
 }
 

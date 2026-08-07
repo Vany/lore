@@ -12,7 +12,7 @@
 
 import { createServer, type Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { Exhausted } from "../core/errors.ts";
+import { Exhausted, TooLargeForTier } from "../core/errors.ts";
 import { CLAIM_MAX } from "../core/finding.ts";
 import type { Tier } from "../core/ladder.ts";
 import { Reviewer, countStepParts, extractFindings, splitModel, toolsUsed } from "./opencode.ts";
@@ -468,6 +468,43 @@ describe("a call that is no longer wanted", () => {
     replies = [{ parts: [{ type: "text", text: '```json\n{"findings":[]}\n```' }] }];
     const r = await reviewer().review(TIER, "review this", "/tmp/wt", "rev1", () => true);
     expect(r.findings).toStrictEqual([]);
+  });
+});
+
+// TOO LONG IS A TIER THAT CANNOT LOOK, NOT A REVIEW THAT FAILED (D-48).
+//
+// `compactToFit` refuses before spending when the prompt cannot fit the model's
+// ADVERTISED window — and the advertised window is not always the limit that applies.
+// Live on 2026-08-07: `zai-coding-plan/glm-5-turbo` publishes 200,000 tokens of context,
+// so a 104 KB prompt was well inside the computed budget and sent unchanged, and the
+// endpoint answered 400 "Prompt exceeds max length". Generic, that failed the whole
+// review — six commits unreviewed, while t2 (1M) and t3 (500k) could each have held the
+// diff comfortably. Classified, the ladder steps over t1 and finishes passed_partial.
+describe("a prompt the provider refuses as too long", () => {
+  it("is a tier that could not look, so the ladder can step over it", async () => {
+    replies = [{ info: { error: { name: "APIError", data: { message: "Prompt exceeds max length", statusCode: 400 } } } }];
+    await expect(reviewer().review(TIER, "review this", "/tmp/wt")).rejects.toThrow(TooLargeForTier);
+  });
+
+  // It must NOT claim a limit it does not have. We checked the advertised window,
+  // believed it would fit, and were refused — so the number we hold is not the number
+  // that applies, and printing it would be inventing the explanation.
+  it("says the provider refused it, rather than naming a window it fitted", async () => {
+    replies = [{ info: { error: { name: "APIError", data: { message: "Prompt exceeds max length", statusCode: 400 } } } }];
+    const err = await reviewer().review(TIER, "review this", "/tmp/wt").catch((e: unknown) => e);
+    const msg = err instanceof Error ? err.message : "";
+    expect(msg).toContain("REFUSED this review as too long");
+    expect(msg).toContain("Prompt exceeds max length");
+    expect(msg).toMatch(/smaller than the one it publishes/);
+    expect((err as TooLargeForTier).contextLimit).toBeUndefined();
+  });
+
+  // Quota is checked first and stays first: a plan that is out of budget can answer
+  // with wording that mentions limits, and stepping over a tier for the wrong reason
+  // spends the ladder's escalation on a problem waiting is the fix for.
+  it("still reads an exhausted plan as quota, not as size", async () => {
+    replies = [{ info: { error: { name: "APIError", data: { message: "quota exceeded for this plan", statusCode: 429 } } } }];
+    await expect(reviewer().review(TIER, "review this", "/tmp/wt")).rejects.toThrow(Exhausted);
   });
 });
 

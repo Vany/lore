@@ -26,7 +26,7 @@
 
 import type * as z from "zod";
 import { createOpencodeClient } from "@opencode-ai/sdk";
-import { DidNotRun, Exhausted, ProviderAuthFailed } from "../core/errors.ts";
+import { DidNotRun, Exhausted, ProviderAuthFailed, TooLargeForTier } from "../core/errors.ts";
 import { FindingSchema, type Finding } from "../core/finding.ts";
 import type { Tier } from "../core/ladder.ts";
 import { Gate, type GateState } from "./gate.ts";
@@ -770,6 +770,25 @@ export class Reviewer implements ReviewerLike {
       // separately and which points at OPENCODE_SERVER_PASSWORD, not at a provider.
       if (status === 401 || status === 403 || /unauthori[sz]ed|invalid api key|authentication/i.test(message)) {
         throw new ProviderAuthFailed(tier.model ?? tier.id, `tier ${tier.id}: ${message}`);
+      }
+      // TOO LONG IS A TIER THAT CANNOT LOOK, NOT A REVIEW THAT FAILED (D-48).
+      //
+      // `compactToFit` already refuses before spending when the prompt cannot fit the
+      // model's ADVERTISED window — and the advertised window is not always the limit
+      // that applies. `zai-coding-plan/glm-5-turbo` advertises 200,000 tokens of
+      // context, so a 104 KB prompt was nowhere near the computed budget and was sent
+      // unchanged; the endpoint answered 400 "Prompt exceeds max length". A subscription
+      // plan can cap a request well below the model's nominal context, and nothing
+      // publishes that number.
+      //
+      // Classified rather than left generic, because the two answers are worlds apart.
+      // Generic, this failed the WHOLE REVIEW: t1 died, the ladder stopped, and six
+      // commits went unreviewed although t2 (1M context) and t3 (500k) could each have
+      // held the diff comfortably. As `TooLargeForTier` the ladder steps over t1 and
+      // finishes `passed_partial` — weaker evidence, honestly labelled, which is the
+      // whole of D-48. The same lesson as the 741 KB branch that failed five times.
+      if (/exceed|too long|too large|maximum context|context length|max length/i.test(message)) {
+        throw TooLargeForTier.refusedAsTooLong(tier.id, tier.model ?? "", text.length, message);
       }
       throw new DidNotRun(`tier ${tier.id} (${tier.model}) failed: ${message}`, e);
     }
