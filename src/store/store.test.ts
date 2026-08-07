@@ -689,20 +689,52 @@ describe("knowledge", () => {
     store.addKnowledge({
       repoId, kind: "rule", source: "ingested", statement: "amounts are integers in minor units",
       why: "float money", path: "src/pay", cwe: undefined, provenance: "PROG.md",
-      sourceBlob: "blobA", confidence: 0.9,
+      sourceBlob: "blobA", extractor: "3", confidence: 0.9,
     });
     expect(store.knowledgeFor(repoId)).toHaveLength(1);
-    expect(store.retireForChangedBlob(repoId, "PROG.md", "blobB")).toBe(1);
+    expect(store.retireForChangedBlob(repoId, "PROG.md", "blobB", "3")).toBe(1);
     expect(store.knowledgeFor(repoId)).toHaveLength(0);
   });
 
   it("keeps rules whose source is unchanged", () => {
     store.addKnowledge({
       repoId, kind: "rule", source: "ingested", statement: "s", why: undefined, path: undefined,
-      cwe: undefined, provenance: "PROG.md", sourceBlob: "blobA", confidence: undefined,
+      cwe: undefined, provenance: "PROG.md", sourceBlob: "blobA", extractor: "3", confidence: undefined,
     });
-    expect(store.retireForChangedBlob(repoId, "PROG.md", "blobA")).toBe(0);
+    expect(store.retireForChangedBlob(repoId, "PROG.md", "blobA", "3")).toBe(0);
     expect(store.knowledgeFor(repoId)).toHaveLength(1);
+  });
+
+  // WRITTEN AND NEVER READ BACK. `addKnowledge` stamped the reader's version and
+  // `toKnowledge` did not map it, so every row came out of the Store with
+  // `extractor: undefined` however it was stored. The audit that re-measured this base
+  // had to reach past the Store into raw SQL to see the column at all, and anyone
+  // trusting the interface would have concluded the stamping never landed — or treated
+  // a current row as one an older reader wrote, which is what retirement turns on.
+  it("hands back the reader that produced a rule, not just the document", () => {
+    store.addKnowledge({
+      repoId, kind: "rule", source: "ingested", statement: "handles are CSPRNG-generated, never sequential",
+      why: undefined, path: undefined, cwe: undefined, provenance: "spec/mcp-api.md",
+      sourceBlob: "blobA", extractor: "3", confidence: 0.8,
+    });
+    expect(store.knowledgeFor(repoId)[0]?.extractor).toBe("3");
+  });
+
+  // A ROW STAMPED BY THE CURRENT READER IS NOT AN OLD ROW, and the guard decides that by
+  // comparison — so the stamp has to be supplied. It used to be optional, which meant the
+  // pre-existing three-argument call bound NULL, `extractor IS NOT NULL` matched every
+  // stamped row, and one call retired a document's whole live rule set with a reason no
+  // reader had earned. It is a required parameter now; this pins the behaviour the type
+  // signature protects.
+  it("retires a rule the current reader did not produce, and keeps one it did", () => {
+    for (const [statement, extractor] of [["old reader must go", "2"], ["current reader must stay", "3"]]) {
+      store.addKnowledge({
+        repoId, kind: "rule", source: "ingested", statement: statement ?? "", why: undefined, path: undefined,
+        cwe: undefined, provenance: "PROG.md", sourceBlob: "blobA", extractor, confidence: undefined,
+      });
+    }
+    expect(store.retireForChangedBlob(repoId, "PROG.md", "blobA", "3")).toBe(1);
+    expect(store.knowledgeFor(repoId).map((k) => k.statement)).toStrictEqual(["current reader must stay"]);
   });
 
   it("records conflicts rather than resolving them", () => {

@@ -35,6 +35,7 @@ import { detectAndRecord, renderConflicts } from "../knowledge/conflict.ts";
 import { promoteRecurring } from "../knowledge/derive.ts";
 import { relevantTo } from "../knowledge/enrich.ts";
 import { ingestDocs } from "../knowledge/ingest.ts";
+import { screenFor } from "../knowledge/screen.ts";
 import { runT0, renderT0 } from "../t0/runner.ts";
 import type { RecordedFinding, Store } from "../store/store.ts";
 import type { ReviewerLike } from "./opencode.ts";
@@ -229,9 +230,33 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     })
     .filter((x): x is { finding: RecordedFinding; rationale: string | undefined } => x !== undefined);
 
-  // Re-ingest the repo's own documents. Deterministic and free, and it is what
-  // makes a rule die when the paragraph that justified it is deleted (D-20).
-  await ingestDocs(store, review.repoId, worktree);
+  // Re-ingest the repo's own documents. It is what makes a rule die when the paragraph
+  // that justified it is deleted (D-20).
+  //
+  // SCREENED BY THE CHEAPEST MODEL TIER, and that is the one place a model is paid for
+  // what a rule could not decide. Extraction is still deterministic and free; the screen
+  // only ever refuses, and only where three successive regex narrowings all plateaued at
+  // about a fifth of survivors not being rules. It costs nothing on a review where no
+  // document changed — `ingestDocs` asks that before it asks the model — and where the
+  // tier cannot be reached, every candidate is kept and stamped so the next ingest
+  // retries. The knowledge base is the product; it is never emptied to protect a filter.
+  const screenTier = tiers.find((t) => t.kind === "model" && t.model !== undefined);
+  const ask = input.reviewer.askFor?.bind(input.reviewer);
+  const ingested = await ingestDocs(store, review.repoId, worktree, {
+    ...(screenTier === undefined || ask === undefined ? {} : { screen: screenFor(ask, screenTier, worktree) }),
+  });
+  // SAID OUT LOUD, because a degraded memory is invisible from the outside: the review
+  // runs, the prompt is full of rules, and a fifth of them being fragments looks exactly
+  // like a fifth of them being rules. The rows carry the stamp that heals it, so this is
+  // a notice rather than an alarm — but a count nobody prints is a count nobody has.
+  if (ingested.unscreened > 0 || ingested.screenedOut > 0) {
+    console.error(
+      `[lore:log] ${reviewId}: knowledge ${String(ingested.added)} kept, ${String(ingested.screenedOut)} screened out` +
+        (ingested.unscreened > 0
+          ? `, ${String(ingested.unscreened)} document(s) UNSCREENED and stamped for the next ingest to retry`
+          : ""),
+    );
+  }
   detectAndRecord(store, review.repoId);
 
   const build = (diffText: string): string =>

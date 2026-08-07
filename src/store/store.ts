@@ -956,6 +956,47 @@ export class Store {
     return item;
   }
 
+  /**
+   * A candidate the screen threw away, written as a row that is BORN RETIRED.
+   *
+   * The whole objection to filtering a knowledge base is that a rule which never arrives
+   * is invisible: nobody knows it is missing, and reading the document again will not
+   * bring it back, because the reader that mined it also refused it. So the refusal is a
+   * row — never live, never shown to a reviewer, never counted — carrying the statement
+   * and the model's reason, so *"why is that rule not in the base"* has an answer an
+   * operator can query.
+   *
+   * `retired_reason` is prefixed rather than given its own column: every other retirement
+   * writes its reason there and the operator views already read it, and a second column
+   * would be a second thing to remember to look at.
+   */
+  recordScreenedOut(item: Omit<KnowledgeItem, "id" | "verifiedAt">, because: string): void {
+    const at = now();
+    this.db
+      .prepare(
+        `INSERT INTO knowledge(id, repo_id, kind, source, statement, why, path, cwe, provenance,
+                               source_blob, extractor, confidence, verified_at, retired_at, retired_reason)
+         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        randomUUID(),
+        item.repoId,
+        item.kind,
+        item.source,
+        item.statement,
+        n(item.why),
+        n(item.path),
+        n(item.cwe),
+        n(item.provenance),
+        n(item.sourceBlob),
+        n(item.extractor),
+        n(item.confidence),
+        at,
+        at,
+        `screened out: ${because}`,
+      );
+  }
+
   /** Live knowledge for a repo, optionally narrowed to a path prefix. */
   knowledgeFor(repoId: string, pathPrefix?: string, limit = 200): readonly KnowledgeItem[] {
     const rows = (
@@ -974,24 +1015,44 @@ export class Store {
   }
 
   /**
+   * Is this document already ingested at this blob, BY THIS READER?
+   *
+   * The reader half is why the parameter is here: the sentence claimed it and the query
+   * did not ask, which was survivable only because `retireForChangedBlob` runs first
+   * inside the same transaction and clears the stale-reader rows before this is
+   * consulted. It stopped being survivable once ingest grew a step that costs money —
+   * this is the cheap question asked BEFORE the screen, so an unchanged document does
+   * not buy a model call on every review.
+   */
+  hasKnowledgeBlob(repoId: string, provenance: string, blob: string, extractor: string): boolean {
+    return (
+      this.db
+        .prepare(
+          "SELECT 1 FROM knowledge WHERE repo_id = ? AND provenance = ? AND source_blob = ? AND extractor IS ?" +
+            " AND retired_at IS NULL LIMIT 1",
+        )
+        .get(repoId, provenance, blob, extractor) !== undefined
+    );
+  }
+
+  /**
    * Retire knowledge derived from a document that has changed.
    *
    * Re-derived, never retained: a stale doc must not become a confidently wrong
    * rule injected into every future session (D-20). This is the single guard
    * against the knowledge base rotting.
    */
-  /** Is this document already ingested at this blob, by this reader? */
-  hasKnowledgeBlob(repoId: string, provenance: string, blob: string): boolean {
-    return (
-      this.db
-        .prepare(
-          "SELECT 1 FROM knowledge WHERE repo_id = ? AND provenance = ? AND source_blob = ? AND retired_at IS NULL LIMIT 1",
-        )
-        .get(repoId, provenance, blob) !== undefined
-    );
-  }
 
-  retireForChangedBlob(repoId: string, provenance: string, currentBlob: string, extractor?: string): number {
+  /**
+   * `extractor` is REQUIRED, and that is a guard rather than a style preference.
+   *
+   * Optional, it was a trap with the pre-existing three-argument call shape as its
+   * trigger: omitted, it binds NULL, `extractor IS NOT NULL` matches every stamped row,
+   * and one call retires a document's entire live rule set with the reason "extracted by
+   * an older reader" — which no reader earned. A hotfix written against last week's
+   * signature would have compiled. Required, it is a type error.
+   */
+  retireForChangedBlob(repoId: string, provenance: string, currentBlob: string, extractor: string): number {
     // EITHER HALF GOING STALE RETIRES THE RULE. The text changing was always handled;
     // the READER changing was not, and that is the gap that let 399 decontextualised
     // fragments outlive the extractor that made them — re-ingestion triggers on the
@@ -1586,6 +1647,13 @@ function toKnowledge(row: Record<string, string | number | null>): KnowledgeItem
     cwe: un(row["cwe"] as string | null) ?? undefined,
     provenance: un(row["provenance"] as string | null) ?? undefined,
     sourceBlob: un(row["source_blob"] as string | null) ?? undefined,
+    // WRITTEN AND NEVER READ BACK is the shape this codebase teaches against, and this
+    // field is the one where it costs most: `retireForChangedBlob` decides what to
+    // retire by comparing stamps, so anybody auditing the base through the Store saw
+    // `undefined` on every row and would conclude the stamping never landed — or, worse,
+    // treat a current row as one an older reader wrote. The audit that re-measured this
+    // base had to go around the Store into raw SQL to see the column at all.
+    extractor: un(row["extractor"] as string | null) ?? undefined,
     confidence: un(row["confidence"] as number | null) ?? undefined,
     verifiedAt: String(row["verified_at"] ?? ""),
   };

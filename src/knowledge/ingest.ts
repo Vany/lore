@@ -102,10 +102,50 @@ export const EXTRACTOR_VERSION = "3";
 const MIN_LENGTH = 20;
 const MAX_LENGTH = 280;
 
+/**
+ * The stamp for rows written when the screen COULD NOT RUN.
+ *
+ * A distinct value rather than a flag column, so it heals through machinery that already
+ * exists: `retireForChangedBlob` is called with `EXTRACTOR_VERSION`, sees a row that does
+ * not carry it, and retires it — so the next ingest re-extracts and re-screens. Keeping
+ * the unscreened rows is deliberate (a repository with no memory is worse than one with
+ * some fragments in it), and this is what stops "deliberate" from turning into "for ever".
+ */
+export const UNSCREENED = `${EXTRACTOR_VERSION}-unscreened`;
+
 export interface Candidate {
   readonly statement: string;
   readonly why: string | undefined;
 }
+
+/** A candidate the screen threw away, and the reason it gave for it. */
+export interface Refusal {
+  readonly statement: string;
+  readonly because: string;
+}
+
+export interface Screened {
+  readonly kept: readonly Candidate[];
+  readonly refused: readonly Refusal[];
+  /**
+   * False when the screen could not run at all.
+   *
+   * NOT the same as "refused nothing", and conflating them is how a broken classifier
+   * would read as an approving one. The caller stamps the rows differently so the next
+   * ingest tries again.
+   */
+  readonly ran: boolean;
+}
+
+/**
+ * A veto over what was mined, applied per document.
+ *
+ * Injected rather than imported, so `ingestDocs` stays free and deterministic wherever
+ * no model is configured — the CLI's pure paths, the tests, and any deployment that
+ * would rather have the fragments than the spend. Absent, every candidate is kept and
+ * stamped `UNSCREENED`.
+ */
+export type Screen = (doc: string, candidates: readonly Candidate[]) => Promise<Screened>;
 
 /**
  * Pull rule-shaped statements out of markdown.
@@ -287,6 +327,22 @@ export interface IngestResult {
   readonly documents: number;
   readonly added: number;
   readonly retired: number;
+  /** Candidates the screen threw away, recorded so "why is that rule gone" is answerable. */
+  readonly screenedOut: number;
+  /**
+   * Documents whose candidates were kept WITHOUT being screened.
+   *
+   * Reported rather than logged, because a caller that wanted a screen and silently got
+   * none has a knowledge base a fifth of which is fragments and no way to know it — the
+   * exact shape INV-1 refuses, one layer in from a review.
+   */
+  readonly unscreened: number;
+}
+
+export interface IngestOptions {
+  /** Restrict to these documents; otherwise everything discoverable. */
+  readonly files?: readonly string[];
+  readonly screen?: Screen;
 }
 
 /**
@@ -300,13 +356,15 @@ export async function ingestDocs(
   store: Store,
   repoId: string,
   worktree: string,
-  files?: readonly string[],
+  opts: IngestOptions = {},
 ): Promise<IngestResult> {
   let added = 0;
   let retired = 0;
   let documents = 0;
+  let screenedOut = 0;
+  let unscreened = 0;
 
-  for (const rel of files ?? (await discoverable(worktree))) {
+  for (const rel of opts.files ?? (await discoverable(worktree))) {
     const source = await readFile(join(worktree, rel), "utf8").catch(() => undefined);
     if (source === undefined) continue;
     documents++;
@@ -322,14 +380,33 @@ export async function ingestDocs(
     // not heal on the next pass either — the blob is already recorded as seen.
     //
     // The file read stays outside: I/O in a transaction holds a write lock across a
-    // disk wait, and every other writer queues behind it.
+    // disk wait, and every other writer queues behind it. So does the screen, and there
+    // the stakes are higher — it is a model call, so a transaction around it would hold
+    // a write lock for half a minute and queue every other writer behind a provider.
+    //
+    // ASKED BEFORE ANYTHING IS SPENT. `ingestDocs` runs on every single review, and
+    // almost always finds every document unchanged; without this the screen would buy a
+    // model call per document per review for ever, to write nothing. This is the same
+    // question the transaction asks below, asked early and for free.
+    if (store.hasKnowledgeBlob(repoId, rel, blob, EXTRACTOR_VERSION)) continue;
+
     const rules = extractRules(source);
+    // Absent screen: everything is kept and STAMPED AS UNSCREENED, never stamped as
+    // though a screen had passed it. The two are different facts and the stamp is what
+    // makes the next ingest come back and do the work.
+    const screened: Screened =
+      opts.screen === undefined ? { kept: rules, refused: [], ran: false } : await opts.screen(rel, rules);
+    const extractor = screened.ran ? EXTRACTOR_VERSION : UNSCREENED;
+    if (!screened.ran) unscreened++;
+
     store.tx(() => {
       retired += store.retireForChangedBlob(repoId, rel, blob, EXTRACTOR_VERSION);
-      // Already ingested at this exact blob: nothing to do, and re-inserting would
-      // duplicate every rule on every review.
-      if (store.hasKnowledgeBlob(repoId, rel, blob)) return;
-      for (const c of rules) {
+      // RE-ASKED INSIDE THE TRANSACTION. The cheap check above raced the screen: two
+      // reviews of one repository can reach here together, and the second would insert a
+      // duplicate set of every rule in the document. Cheap, and it is the only thing
+      // standing between a concurrent deploy and a doubled knowledge base.
+      if (store.hasKnowledgeBlob(repoId, rel, blob, extractor)) return;
+      for (const c of screened.kept) {
         store.addKnowledge({
           repoId,
           kind: "rule",
@@ -340,16 +417,37 @@ export async function ingestDocs(
           cwe: undefined,
           provenance: rel,
           sourceBlob: blob,
-          extractor: EXTRACTOR_VERSION,
+          extractor,
           // Below taught (1.0) and above a single derived observation: the document
           // says so, but nobody has confirmed the extraction understood it.
           confidence: 0.8,
         });
         added++;
       }
+      // In the SAME write as the rules it was chosen against, so the record of what was
+      // refused cannot survive a crash that lost what was kept, or the other way round.
+      for (const r of screened.refused) {
+        store.recordScreenedOut(
+          {
+            repoId,
+            kind: "rule",
+            source: "ingested",
+            statement: r.statement,
+            why: undefined,
+            path: pathScopeFor(rel),
+            cwe: undefined,
+            provenance: rel,
+            sourceBlob: blob,
+            extractor,
+            confidence: 0.8,
+          },
+          r.because,
+        );
+        screenedOut++;
+      }
     });
   }
-  return { documents, added, retired };
+  return { documents, added, retired, screenedOut, unscreened };
 }
 
 /**

@@ -94,6 +94,43 @@ paragraphs under a rule-ish heading changed nothing, because `SPEC.md`'s
 `## 5. Decisions` spans 1,800 lines. The known loss is an ADR's `## Decision` paragraph,
 which really is the rule; `knowledge_teach` states one in a single call.
 
+### 2.1.2 A model vetoes what the reader mined (D-81)
+
+The shape test took this repository from 423 live ingested rules to 61, and about a
+fifth of the survivors are still not rules. Two further deterministic narrowings moved
+that to 18% and stopped: what remains differs from a rule by **what the words mean**, and
+every rule sharp enough to separate *"Cost. A conversation re-sends its accumulated
+context every turn"* from *"Handles are CSPRNG-generated, never sequential"* also refused
+real rules.
+
+So the cheapest model tier is asked, once per document: **which of these are not rules?**
+
+- **It only removes.** Extraction stays a pure function of the document — free,
+  deterministic, the same answer twice. The model picks a subset of what came out.
+- **It is asked for the FAILURES, never the survivors.** A model listing what to keep
+  drops items it did not get to, and each omission silently deletes a rule; listing what
+  fails means an omission keeps one. The prompt says the errors are not symmetrical and
+  says why, because a model told merely to be careful balances them.
+- **A refusal is recorded.** Each rejected candidate is written as a knowledge row that
+  is born retired, carrying the model's reason (`retired_reason: screened out: …`). It is
+  never live and no reviewer sees it, but *"why is that rule not in the base"* has an
+  answer — which is the whole objection to filtering, since a rule that never arrives is
+  otherwise invisible for ever.
+- **It fails open, and says so.** Unreachable, out of quota or unparseable, every
+  candidate is kept and the rows are stamped `<version>-unscreened` — never as though a
+  screen had passed them, because a broken classifier must not read as an approving one.
+  The next ingest retires that stamp and re-screens. The knowledge base is the product
+  and is never emptied to protect a filter; the stamp is what stops *kept for now*
+  becoming *kept for ever*.
+
+**Cost.** One call per document, and only for a document whose text or reader changed —
+`ingestDocs` asks that first, because it runs on every review and almost always finds
+nothing changed.
+
+**Unmeasured.** Whether the model removes the right fifth, and what it wrongly takes with
+it, is not yet known. The born-retired rows are what makes that answerable: read them and
+count how many should have lived.
+
 ### 2.2 A recurrence is only a lesson once the repository has answered it
 
 ### 2.2.0 An accepted justification is a verdict, not a rule

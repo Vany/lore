@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Store } from "../store/store.ts";
-import { EXTRACTOR_VERSION, extractRules, ingestDocs, rank } from "./ingest.ts";
+import { EXTRACTOR_VERSION, UNSCREENED, extractRules, ingestDocs, rank, type Screen } from "./ingest.ts";
 
 describe("extractRules", () => {
   it("takes bulleted rules", () => {
@@ -281,5 +281,126 @@ describe("the documents that get read", () => {
     expect(adr?.path).toBe("docs/adr");
     expect(root?.path).toBeUndefined();
     store.close();
+  });
+});
+
+// The screen is a model, so every test here is about what happens when the model is
+// wrong, absent, or expensive — never about it being right, which is not this module's
+// property to hold.
+describe("the screen's veto over what was mined", () => {
+  let dir: string;
+  let store: Store;
+  let repoId: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "lore-screen-"));
+    writeFileSync(
+      join(dir, "PROG.md"),
+      "- Handles are CSPRNG-generated, never sequential\n- Cost. A conversation must re-send its context\n",
+      // Two candidates come out of that: the CSPRNG rule, and "A conversation must
+      // re-send its context" — the tail of a bullet whose "Cost." lead-in is under the
+      // length floor. The second is exactly the shape the screen exists to refuse: true,
+      // and meaningless to a reviewer told it is one of this team's decisions.
+    );
+    store = new Store(":memory:");
+    repoId = store.upsertRepo("r", "git@example.com:o/r.git").id;
+  });
+  afterEach(() => {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const refusing = (statement: string, because: string): Screen =>
+    (_doc, candidates) =>
+      Promise.resolve({
+        kept: candidates.filter((c) => !c.statement.includes(statement)),
+        refused: candidates.filter((c) => c.statement.includes(statement)).map((c) => ({ statement: c.statement, because })),
+        ran: true,
+      });
+
+  it("keeps what survived and stamps it with the reader that screened it", async () => {
+    const out = await ingestDocs(store, repoId, dir, {
+      files: ["PROG.md"],
+      screen: refusing("A conversation", "a stray sentence about cost, not a rule"),
+    });
+
+    expect(out.added).toBe(1);
+    expect(out.screenedOut).toBe(1);
+    expect(out.unscreened).toBe(0);
+    const live = store.knowledgeFor(repoId);
+    expect(live.map((k) => k.statement)).toStrictEqual(["Handles are CSPRNG-generated, never sequential"]);
+    expect(live[0]?.extractor).toBe(EXTRACTOR_VERSION);
+  });
+
+  // THE WHOLE OBJECTION TO A FILTER is that a rule which never arrives is invisible —
+  // nobody knows it is missing and re-reading the document will not bring it back,
+  // because the reader that mined it also refused it. So the refusal is a row.
+  it("records what it threw away, with the reason, where an operator can find it", async () => {
+    await ingestDocs(store, repoId, dir, { files: ["PROG.md"], screen: refusing("A conversation", "a stray sentence about cost, not a rule") });
+
+    const rows = store.db
+      .prepare("SELECT statement, retired_reason FROM knowledge WHERE repo_id = ? AND retired_at IS NOT NULL")
+      .all(repoId) as { statement: string; retired_reason: string }[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.statement).toBe("A conversation must re-send its context");
+    expect(rows[0]?.retired_reason).toBe("screened out: a stray sentence about cost, not a rule");
+    // And it is not live, so no reviewer is ever shown it.
+    expect(store.knowledgeFor(repoId).map((k) => k.statement)).not.toContain("A conversation must re-send its context");
+  });
+
+  // A QUOTA REFUSAL MUST NOT EMPTY A REPOSITORY'S MEMORY. The knowledge base is the
+  // product; a review running with a fifth of its rules being fragments is worth more
+  // than one running blind, and the stamp is what stops "for now" becoming "for ever".
+  it("keeps everything and stamps it unscreened when the screen could not run", async () => {
+    const out = await ingestDocs(store, repoId, dir, {
+      files: ["PROG.md"],
+      screen: (_doc, candidates) => Promise.resolve({ kept: candidates, refused: [], ran: false }),
+    });
+
+    expect(out.added).toBe(2);
+    expect(out.unscreened).toBe(1);
+    expect(store.knowledgeFor(repoId).every((k) => k.extractor === UNSCREENED)).toBe(true);
+  });
+
+  // ...and the next ingest comes back for them, which is the half that makes keeping
+  // them defensible rather than a silent downgrade.
+  it("re-screens the rows a failed screen left behind, with the document unchanged", async () => {
+    await ingestDocs(store, repoId, dir, {
+      files: ["PROG.md"],
+      screen: (_doc, candidates) => Promise.resolve({ kept: candidates, refused: [], ran: false }),
+    });
+
+    const second = await ingestDocs(store, repoId, dir, {
+      files: ["PROG.md"],
+      screen: refusing("A conversation", "a stray sentence about cost, not a rule"),
+    });
+    expect(second.retired).toBe(2);
+    expect(second.added).toBe(1);
+    expect(store.knowledgeFor(repoId).map((k) => k.extractor)).toStrictEqual([EXTRACTOR_VERSION]);
+  });
+
+  // `ingestDocs` runs on EVERY review and almost always finds every document unchanged.
+  // Without the cheap check first, the screen would buy a model call per document per
+  // review, for ever, to write nothing at all.
+  it("does not ask the model when nothing about the document or the reader changed", async () => {
+    let asked = 0;
+    const counting: Screen = (_doc, candidates) => {
+      asked++;
+      return Promise.resolve({ kept: candidates, refused: [], ran: true });
+    };
+
+    await ingestDocs(store, repoId, dir, { files: ["PROG.md"], screen: counting });
+    expect(asked).toBe(1);
+    await ingestDocs(store, repoId, dir, { files: ["PROG.md"], screen: counting });
+    expect(asked).toBe(1);
+  });
+
+  // Without a screen configured the rows are stamped unscreened, NOT as though a screen
+  // had passed them — otherwise a deployment with no model would look identical to one
+  // whose screen approved everything, and would never be revisited.
+  it("stamps rows unscreened when no screen is configured at all", async () => {
+    const out = await ingestDocs(store, repoId, dir, { files: ["PROG.md"] });
+    expect(out.unscreened).toBe(1);
+    expect(store.knowledgeFor(repoId).every((k) => k.extractor === UNSCREENED)).toBe(true);
   });
 });

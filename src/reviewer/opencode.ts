@@ -105,6 +105,21 @@ export interface ReviewerLike {
    */
   cancel?(reviewId: string): Promise<boolean>;
   /**
+   * Ask a tier for something that is not findings — a knowledge screen, a proposal.
+   *
+   * Optional for the same reason `cancel` is: a fake reviewer in a round test has no
+   * business modelling it, and a round whose reviewer cannot answer this simply ingests
+   * without screening and stamps the rows so the next one retries. A knowledge base is
+   * never emptied because a classifier was unavailable.
+   */
+  askFor?<T>(
+    tier: Tier,
+    prompt: string,
+    worktree: string,
+    extract: (text: string) => Listed<T>,
+    contract: string,
+  ): Promise<SessionResult<T>>;
+  /**
    * Characters of prompt this tier can hold, or `undefined` if unknown.
    *
    * The round compacts the diff to fit before spending anything. Optional so a fake

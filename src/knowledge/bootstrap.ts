@@ -18,6 +18,7 @@ import type { ReviewerLike } from "../reviewer/opencode.ts";
 import type { Store } from "../store/store.ts";
 import { detectAndRecord } from "./conflict.ts";
 import { ingestDocs } from "./ingest.ts";
+import { screenFor } from "./screen.ts";
 
 export interface BootstrapResult {
   readonly documents: number;
@@ -64,14 +65,23 @@ export async function bootstrap(opts: {
   reviewer?: ReviewerLike;
   tier?: Tier;
 }): Promise<BootstrapResult> {
-  const docs = await ingestDocs(opts.store, opts.repoId, opts.worktree);
+  // The cheap tier. This is a survey, not a judgement — paying the top tier to
+  // describe a directory structure would be the same mistake as paying a model
+  // to run a typechecker. Resolved before the ingest because the screen wants it too.
+  const tier = opts.tier ?? DEFAULT_TIERS.find((t) => t.kind === "model") ?? DEFAULT_TIERS[1];
+  const ask = opts.reviewer?.askFor?.bind(opts.reviewer);
+
+  // Screened HERE too, rather than left for the next review to redo. This is the first
+  // review of a repository, so it is the ingest that writes the whole base — leaving it
+  // unscreened would mean the first review, the one with no other memory to fall back
+  // on, is the one that reads the fragments. Without a reviewer it ingests unscreened
+  // and stamped, which is the documented no-model path (D-81).
+  const docs = await ingestDocs(opts.store, opts.repoId, opts.worktree, {
+    ...(ask === undefined || tier === undefined ? {} : { screen: screenFor(ask, tier, opts.worktree) }),
+  });
 
   let factsFromCode = 0;
   if (opts.reviewer !== undefined) {
-    // The cheap tier. This is a survey, not a judgement — paying the top tier to
-    // describe a directory structure would be the same mistake as paying a model
-    // to run a typechecker.
-    const tier = opts.tier ?? DEFAULT_TIERS.find((t) => t.kind === "model") ?? DEFAULT_TIERS[1];
     if (tier !== undefined) {
       const result = await opts.reviewer.review(tier, ARCHITECTURE_PROMPT, opts.worktree);
       for (const f of result.findings) {

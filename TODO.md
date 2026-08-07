@@ -615,27 +615,56 @@ landing with a real user, and it should not get lost among the defects below.
       found by models reading it cold. That is the argument for the tool.
 
 - [ ] **Twenty-eight production sites still reach past the Store into SQL**, across
-      fifteen files — not the seven I reported, which was a per-line grep missing
-      `store.db\n  .prepare(`. A ratchet in `one-definition.test.ts` holds the list and
-      fails on any new file; the list only shrinks. Each site is a small missing method,
-      and the conversion is mechanical — but it is fifteen files of behaviour-adjacent
-      change and should not be done in code that has no ladder verdict.
+      **fourteen** files — not the seven I reported, which was a per-line grep missing
+      `store.db\n  .prepare(`, and not the fifteen this item claimed until a review
+      counted with the ratchet's own regex and got 28 across 14. A ratchet in
+      `one-definition.test.ts` holds the list with a COUNT PER FILE and fails on a new
+      file or a new site in an old one; both only shrink. Each site is a small missing
+      method and the conversion is mechanical — but it is fourteen files of
+      behaviour-adjacent change and should not be done in code with no ladder verdict.
 
-- [ ] **Re-measure the knowledge base after the next review of each repo.** The
-      extractor stamp retires the old rows on the next ingest, so the live store should
-      fall from 399 live ingested rules to roughly 66 for lore and proportionally for
-      rigid-monorepo — without anyone editing a document. Verify that actually happens
-      rather than assuming it: this is the same class of change as session 32's
-      re-ingest, which needed a manual sweep because nothing triggered on the reader.
-      Then read twenty at random. If they still do not read like rules, the shape test
-      is not the right discriminator and the honest next step is to stop mining prose
-      and require `knowledge_teach`.
+- [x] **Re-measured 2026-08-07, and the stamp worked.** lore fell from **399 live
+      ingested rules to 61** against a prediction of ~66, on the first review after the
+      deploy, with nobody editing a document — which is the half that needed watching
+      rather than assuming. rigid-monorepo still holds 181 old-reader rows and retires
+      them on its own next review.
+      Read twenty at random, then all 61: **about a fifth are still not rules**, and the
+      cause was structural rather than semantic. `blocks()` takes a bullet whole and
+      `extractRules` then split it back into sentences, so every multi-sentence bullet
+      shed its tail as a free-standing "team decision" — *"The audit half of that design
+      could never have fired"*, *"The easy defects are gone; look at design, seams…"*.
+      Measured three variants over the real documents rather than arguing: bullet-whole
+      with the modal required in the first sentence gives 38 rules and ~9% junk but
+      **drops `CLAUDE.md` entirely**, because its bullets lead with an unmodalised
+      summary. Bullet-whole with the modal anywhere gives 51 and ~18%. Adding lead-in,
+      label and gerund-head refusals: still ~18%. Three narrowings, one floor.
+      So the residue went to a model instead (D-81, below). The shape test was the right
+      discriminator and is not a sufficient one; "stop mining prose" was the wrong
+      conclusion to reach from the 20%, because 41 of the 61 are genuinely good rules
+      nobody would have thought to teach by hand.
 
-- [ ] **Only 3 of 66 extracted rules carry a `why`.** `splitReason` fires on
-      *because / since / so that / otherwise* inside one sentence, and a bulleted rule
-      usually states its reason as the NEXT sentence. Worth fixing, because `why` is
-      what the project says separates a rule from something the next reader deletes —
-      and this half of D-20 is still unmet even for the rules that survive.
+- [ ] **The screen has not been measured.** D-81 ships a model veto over what the
+      extractor mined, and the 18% is what the DETERMINISTIC reader leaves — whether the
+      model removes that fifth, and what it wrongly takes with it, is unknown until it
+      has run on both repositories. The born-retired rows are what makes it answerable:
+      read them and count how many should have lived. Until that is done this is a
+      change believed to help, which is the shape `propose` exists to be suspicious of.
+
+- [ ] **Only 3 of 61 extracted rules carry a `why`, and the fix is measured but not
+      taken.** `splitReason` fires on *because / since / so that / otherwise* inside one
+      sentence, and a bulleted rule states its reason as the NEXT sentence — so the
+      reason is right there and gets thrown away, or worse, becomes its own contextless
+      "rule".
+      Measured 2026-08-07 over the real documents: treating a bullet as ONE statement,
+      first sentence the rule and the rest the `why`, takes it from **3 of 61 to 25 of
+      51** — real reasons, like *"The moment ids are guessable, every log line that
+      contains one becomes a credential"*. It also removes the tail-fragment class at
+      source.
+      Not taken yet because it changes what every rule IS, not merely which survive, and
+      it lands on top of a screen (D-81) that has itself not been measured. Doing both
+      at once would leave neither attributable. Do this after the screen has a number.
+      `why` is what the project says separates a rule from something the next reader
+      deletes, so this half of D-20 stays unmet meanwhile, and knowingly.
 
 - [ ] **The nineteen seam proposals are unappraised, not rejected.** `refactor.md` holds
       them. Each names one measurement; none has been run. The reason none was taken is

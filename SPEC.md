@@ -210,6 +210,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-78** | A review answers to **the token that started it**, not to its repository | `[OPEN]` |
 | **D-79** | A finding is **what the author missed and would be hurt by** — asked, not filed | confirmed |
 | **D-80** | A review is **one conversation per tier**, not a series of audits. Fully async | subscription live; conversation `[OPEN]` |
+| **D-81** | Extraction stays deterministic; a **model may only VETO** what it mined | built; screen unmeasured |
 
 **D-7, revised.** The earlier version dropped GLM-5.2 on Artificial Analysis's
 *cost per task* — which is tokens consumed × price on their benchmark, not a price.
@@ -1092,6 +1093,53 @@ the tool descriptions with an instruction the only real client cannot execute.
 conversation is cheaper or dearer than repeated cold rounds, measured rather than
 argued; and how the deep tiers enter a conversation the cheap tier has been having.
 Until then D-55 stands: a submit during a running round is still refused.
+
+**D-81 — extraction stays deterministic, and a model may only VETO what it mined.**
+
+Doc ingestion has always been a pure function of the document, on the argument that it
+runs on every change, must be free, and must give the same answer twice. The first two
+still hold; the third is now qualified, and this records what bought the qualification.
+
+**Three successive deterministic narrowings all stopped in the same place.** The reader
+that took every declarative sentence produced 423 live rules for this repository, about
+nine tenths of them not rules. The shape test (bullets and single-sentence paragraphs,
+with dangling-referent and mid-sentence refusals) cut that to 61 — a real win, and the
+measurement that justified it. Adding lead-in, label and gerund-head refusals took it to
+51. **The share that are not rules went 90% → 20% → 18%.** The floor is not a coincidence:
+what remains differs from a rule by what the words *mean*, and every rule sharp enough to
+separate *"Cost. A conversation re-sends its accumulated context every turn"* from
+*"Handles are CSPRNG-generated, never sequential"* also refused real rules — the strictest
+variant measured dropped `CLAUDE.md` entirely, because its bullets lead with an
+unmodalised summary.
+
+**Why a fifth is not tolerable.** Up to sixty of these enter every review prompt under
+*"treat these as this team's decisions"*. A fragment there is not noise in a file; it is a
+confident instruction to a model reading somebody's branch, and the reader cannot tell it
+from the rules beside it.
+
+So the cheapest model tier is asked one question per document — *which of these are not
+rules* — and three properties keep the non-determinism bounded:
+
+- **It only removes.** It never rewrites, invents or reorders. The base is still a
+  function of the documents; the model chooses a subset.
+- **A refusal is a row.** Every rejected candidate is written born-retired with the
+  model's reason, so *"why is that rule not in the base"* is answerable. This is the
+  whole objection to filtering — a rule that never arrives is invisible — and it is
+  answered with a record rather than with confidence.
+- **It fails open and says so.** Unreachable, out of quota, or unparseable, every
+  candidate is kept and stamped `-unscreened`, which the next ingest retires and
+  re-screens. The knowledge base is the product; it is never emptied to protect a
+  filter, and "kept for now" never silently becomes "kept for ever".
+
+**What it costs.** One t1 call per document, and only for a document whose text or reader
+changed — `ingestDocs` asks that before it asks the model, because it runs on every review
+and almost always finds nothing changed. Eleven calls for this repository after a reader
+bump, one after an edit.
+
+`[OPEN]` — **the screen has not been measured.** The 18% is what the deterministic reader
+leaves; whether the model actually removes it, and what it wrongly removes with it, is
+unknown until it has run on both repositories. The born-retired rows are what makes that
+measurable: read them and count how many should have lived.
 
 **D-79 — a finding is something the author missed and would be hurt by, addressed to
 them as a question.**
