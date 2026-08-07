@@ -731,12 +731,28 @@ are what that session's own numbers say is in the way, not what reading suggeste
       conclusion to reach from the 20%, because 41 of the 61 are genuinely good rules
       nobody would have thought to teach by hand.
 
-- [ ] **The screen has not been measured.** D-81 ships a model veto over what the
-      extractor mined, and the 18% is what the DETERMINISTIC reader leaves — whether the
-      model removes that fifth, and what it wrongly takes with it, is unknown until it
-      has run on both repositories. The born-retired rows are what makes it answerable:
-      read them and count how many should have lived. Until that is done this is a
-      change believed to help, which is the shape `propose` exists to be suspicious of.
+- [x] **The screen is measured, 2026-08-07, and it works.** First real run on this
+      repository: **52 kept, 15 refused, and every refusal correct on inspection** —
+      including three I had marked only "marginal" and one from prose written an hour
+      earlier. Junk share 20% → 6%.
+      **Cost, from `usage` once it recorded these at all**: 12 calls, 24s average and 99s
+      worst, 70,800 fresh input tokens against 132,096 cached, $0 under the subscription.
+      Against the same day's tiers — t2 156 min, t1 38, t3 27 — that is roughly **2% of
+      review time**.
+      What it does NOT catch is below. And `SPEC.md` D-81 still carries `[OPEN] — the
+      screen has not been measured`, which is now stale in our favour: close it with the
+      next change that fires a review rather than spending a review cycle on a paragraph.
+
+- [ ] **The refusal rate per document is a drift metric on our own writing, and nothing
+      reads it.** Measured per document on the first real screen run: `CLAUDE.md` and
+      `PROG.md` were refused **0 of 13**; every one of the fifteen refusals came from the
+      explanatory specs, and the worst three were the three edited most that day.
+      `CLAUDE.md` says specs describe the system as it stands and change-narrative belongs
+      in `MEMO.md` — so the screen is mechanically detecting where that rule was broken,
+      which is not what it was built for and is more useful than what it was built for.
+      Cheap to surface: refusals grouped by `provenance` in the operator view. A document
+      whose refusal rate jumps is one where somebody has been writing session notes into a
+      spec, and today that somebody was me.
 
 - [ ] **Only 3 of 61 extracted rules carry a `why`, and the fix is measured but not
       taken.** `splitReason` fires on *because / since / so that / otherwise* inside one

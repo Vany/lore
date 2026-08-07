@@ -55,6 +55,22 @@ per-round counts falling to one — and any single fresh finding in a fourth t2 
 it. `core/ladder.ts` already learned this lesson once, for clean rounds, and the comment
 recording it is three lines above the counter that has not learned it yet.
 
+**The screen's cost, measured 2026-08-07 once `usage` finally recorded it**: 12 calls,
+**24s average and 99s worst**, 70,800 fresh input tokens against 132,096 cached (a 65%
+hit, so the repeated prompt is doing its job), 14,948 out, $0 under the subscription.
+Against the same day's review tiers — t2 156 minutes, t1 38, t3 27 — the screen is about
+**five minutes of 221, near enough 2%**. That is the half of D-81's `[OPEN]` about cost;
+the other half, whether it removes the right fifth, came out 15 refusals of 15 correct
+with three mechanical misses left. `SPEC.md` still says the screen is unmeasured and is
+now stale in our favour — to be closed with the next change that fires a review.
+
+**Ended `passed`, and the attestation is the interesting part**: *"2 tiers (t0, t3) — 2
+earlier tier(s) read an earlier tree and did not re-read this one, so this is PARTIAL,
+4 findings, 4 fixed"*. Under the revised D-6 a closed tier stays closed, so t1 and t2
+cleared an earlier tree and never saw the final one. The attestation distinguishes tiers
+that RAN from tiers that read the SIGNED tree, and signs only the second. Nobody had to
+decide that today; the machinery said it.
+
 **Also today**: tokens for `koray` and `max` on `rigid-monorepo`, and `LORE_BIND` moved to
 `0.0.0.0` on Vany's call — so the tokens are the perimeter now, and D-78 stopped being
 hypothetical. `rigid-monorepo` reached **117 verdicts** against the zero that `TODO.md`
