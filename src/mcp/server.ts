@@ -156,9 +156,16 @@ function subscribeTo(reviewId: string): object {
       "only moment there is anything for you to do. Then call review_poll ONCE straight away — a " +
       "subscription carries no history, so anything that happened before your stream opened is waiting " +
       "and nothing will announce it. CHECK THE ACKNOWLEDGEMENT: if your subscription is not echoed in it, " +
-      "you are not subscribed and nothing will ever arrive. If the method errors, that is NORMAL and not " +
-      "a fault in lore — it needs a 2026-07-28 connection and many hosts still negotiate the 2025 one; " +
-      "fall back to `check_back_after_ms`.",
+      "you are not subscribed and nothing will ever arrive. " +
+      // The two walls I hit driving this service as a client, neither of which the old
+      // text mentioned. Both produce an error that reads like a fault in lore.
+      "TWO THINGS THAT LOOK LIKE LORE FAILING AND ARE NOT. (1) `subscriptions/listen` needs a 2026-07-28 " +
+      "connection, and SDK clients default to the 2025 one — you usually have to opt in rather than being " +
+      "unable to: on the TypeScript SDK that is `versionNegotiation: { mode: 'auto' }` in the client " +
+      "options, and without it the method is refused as unsupported by the negotiated version. (2) This " +
+      "request is LONG-LIVED: it holds the stream open and does not return promptly, so a default request " +
+      "timeout cancels your own subscription and reports a timeout. Give it no timeout, or a long one. " +
+      "If it still cannot be established, that is normal — fall back to `check_back_after_ms`.",
   };
 }
 

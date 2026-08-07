@@ -60,8 +60,18 @@ sitting in findings_ready — nothing further will ever happen, because the next
 yours. Subscribe, poll once, then wait.
 
 If subscriptions/listen is unavailable or errors, THAT IS NORMAL AND NOT A FAULT IN
-LORE: the method needs a 2026-07-28 connection, and many hosts still negotiate the
-2025 one. Do not report it as a problem, and do not go looking for a way to enable it.
+LORE: the method needs a 2026-07-28 connection, and SDK clients default to the 2025 one.
+Two failures here look like lore being broken and are not, and both cost real time on
+this repository's own reviews:
+
+  * *"not supported by the negotiated protocol version"* — you have to OPT IN to the
+    newer era, and can usually just do it. On the TypeScript SDK that is
+    \`versionNegotiation: { mode: 'auto' }\` in the client options.
+  * *"request timed out"* — this request is LONG-LIVED. It holds the stream open and does
+    not return promptly, so a default timeout cancels your own subscription. Give it no
+    timeout, or a long one.
+
+If neither helps, use review_poll — but do not report it as a fault.
 Use review_poll instead — but ONE call at a time, at the interval its own
 \`check_back_note\` gives you. That interval is measured from this repository's actual
 round times; a tight retry loop is the most expensive thing a client can do here.
