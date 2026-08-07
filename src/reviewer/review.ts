@@ -838,6 +838,31 @@ async function scopeOf(worktree: string, file: string, line: number | undefined)
  *     observation to both open and close it, so no justification could ever actually
  *     expire — quietly removing the guard against rubber-stamping (§4.1).
  */
+/**
+ * Has the code this finding NAMED actually changed?
+ *
+ * D-56's half of settling: silence from a tier is only evidence of a fix if the thing
+ * it stopped mentioning has moved, because a tier that simply stops mentioning untouched
+ * code has changed its mind rather than been satisfied.
+ *
+ * Exported because `review_submit` answers the same question the instant a patch lands,
+ * and a client that learns a round later has waited ten to twenty-five minutes to be
+ * told something that was knowable immediately. ONE definition, not two: this is exactly
+ * the shape where a preview and the rule it previews drift apart and the preview starts
+ * lying, which is worse than not having one.
+ *
+ * ABSENT SCOPE AND AN UNREADABLE FILE BOTH MEAN "CANNOT TELL", and cannot tell never
+ * settles. The condition here used to fall through to `fixed` when the read failed, so a
+ * permissions error or a transient I/O fault read as evidence the code had moved — the
+ * exact opposite of what it means.
+ */
+export async function codeMoved(worktree: string, f: RecordedFinding): Promise<boolean> {
+  if (f.scope === undefined) return false;
+  const source = await readFile(join(worktree, f.file), "utf8").catch(() => undefined);
+  if (source === undefined) return false;
+  return !hunkStillPresent(source, f.scope.hunk);
+}
+
 async function settleFixed(
   store: Store,
   reviewId: string,
@@ -857,21 +882,12 @@ async function settleFixed(
   for (const f of open) {
     if (raised.has(f.fingerprint)) continue;
     if (answered.has(f.fingerprint)) continue;
-    if (f.scope === undefined) continue;
-
     // T0 re-scans the whole worktree every round, so its silence is authoritative
     // for its own findings and means nothing for anyone else's.
     const qualified = f.origin === "t0" ? tier.id === "t0" || here >= 0 : here >= 0 && here >= rank(f.origin);
     if (!qualified) continue;
 
-    // Unreadable is CANNOT TELL, and cannot tell never settles. The old
-    // condition fell through to `fixed` when the read failed, so a permissions error
-    // or a transient I/O fault read as evidence the code had moved — the opposite of
-    // what it means. It is the same rule the absent-scope check above already states
-    // and it has to hold on both paths, or the weaker one decides.
-    const source = await readFile(join(worktree, f.file), "utf8").catch(() => undefined);
-    if (source === undefined) continue;
-    if (hunkStillPresent(source, f.scope.hunk)) continue;
+    if (!(await codeMoved(worktree, f))) continue;
 
     store.recordVerdict(reviewId, {
       fingerprint: f.fingerprint,

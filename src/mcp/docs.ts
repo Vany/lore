@@ -312,6 +312,18 @@ applied — so resend the whole diff, never the remainder.
 Send EVERY file you changed. The tree hash covers the whole tree, so a diff missing
 one file is refused even though the diff itself applied cleanly.
 
+DIFF FROM THE TREE HASH THIS CALL RETURNS, not from your latest commit. A review is
+pinned to the tree it began with plus whatever you have already submitted, so once you
+have submitted anything, your branch and the review's tree have diverged. The reply's
+tree_hash is what the next diff must be built against.
+
+READ \`will_not_settle\` IN THE REPLY. It lists open findings that name code this diff
+did not change. Those CANNOT be settled by the next round however it goes — a tier that
+stops raising something it never saw move has changed its mind, not been satisfied — so
+if you fixed the cause elsewhere, which is often the right place, say so at the named
+line with a lore-ok and submit again. Ignoring it costs a full deep-tier round to learn
+the same thing.
+
 For a finding you believe is WRONG, do not skip it silently. Write at the site:
 
     // lore-ok[<fingerprint>]: <why this code is correct>

@@ -29,6 +29,7 @@ lore — an independent reviewer that remembers the codebase
   lore serve                                   run the MCP service
   lore new --name <who> --git <ssh-url>        provision a repo and token
   lore relocate --repo <name> --git <new-url>  a repo moved: keep its history
+  lore knowledge [--repo <name>] [--refusals]  what the memory holds, and what it refused
   lore tokens                                  who holds a token, and for what
   lore revoke --token <short>                  turn one off, by its short hash
   lore doctor                                  check tiers, auth and model ids
@@ -172,6 +173,37 @@ export async function main(argv: readonly string[]): Promise<ExitCode> {
         now: new Date(),
       });
       process.stdout.write(`${path}\n`);
+      return EXIT.PASS;
+    } finally {
+      store.close();
+    }
+  }
+
+  // THE PRODUCT HAD NO OPERATOR VIEW. `lore` could list tokens, repositories and tiers;
+  // the memory this service exists to build could only be read with hand-written SQL
+  // through the container, which meant only whoever wrote the SQL could read it.
+  if (args.command === "knowledge") {
+    const { knowledgeReport, renderKnowledge } = await import("./knowledge/report.ts");
+    const store = new Store(args.db);
+    try {
+      const want = flagOf(argv, "repo");
+      const repos = store.repos().filter((r) => want === undefined || r.name === want);
+      if (repos.length === 0) {
+        process.stderr.write(
+          want === undefined
+            ? "no repositories registered — provision one with `lore new`\n"
+            : `no repository named ${want}. Registered: ${store.repos().map((r) => r.name).join(", ") || "(none)"}\n`,
+        );
+        return EXIT.USAGE;
+      }
+      const reports = repos.map((r) => knowledgeReport(store, r.name, r.id));
+      if (args.json) {
+        process.stdout.write(`${JSON.stringify(reports, null, 2)}\n`);
+        return EXIT.PASS;
+      }
+      process.stdout.write(
+        `${reports.map((r) => renderKnowledge(r, { refusals: argv.includes("--refusals") })).join("\n\n")}\n`,
+      );
       return EXIT.PASS;
     } finally {
       store.close();

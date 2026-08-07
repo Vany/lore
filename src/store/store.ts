@@ -1036,6 +1036,83 @@ export class Store {
       );
   }
 
+  /** Live rules for a repository, counted by where they came from. */
+  liveKnowledgeBySource(repoId: string): readonly { readonly source: string; readonly n: number }[] {
+    const rows = this.db
+      .prepare(
+        "SELECT source, COUNT(*) n FROM knowledge WHERE repo_id = ? AND retired_at IS NULL GROUP BY source ORDER BY source",
+      )
+      .all(repoId) as { source: string; n: number }[];
+    return rows.map((r) => ({ source: r.source, n: Number(r.n) }));
+  }
+
+  /**
+   * Kept against refused, per source document — the operator's view of the screen.
+   *
+   * COUNT(DISTINCT statement), not COUNT(*), and the difference is a factor of three. A
+   * refusal is re-recorded every time its document changes and nothing collects the old
+   * copies, so counting rows read `spec/mcp-api.md` as 69% refused when three statements
+   * had been written three times each; the honest figure was 43%. A report whose first
+   * number is wrong by that much is worse than no report.
+   */
+  knowledgeByDocument(repoId: string): readonly { readonly provenance: string; readonly kept: number; readonly refused: number }[] {
+    const rows = this.db
+      .prepare(
+        `SELECT provenance,
+                COUNT(DISTINCT CASE WHEN retired_at IS NULL THEN statement END) kept,
+                COUNT(DISTINCT CASE WHEN retired_reason LIKE 'screened out:%' THEN statement END) refused
+         FROM knowledge
+         WHERE repo_id = ? AND source = 'ingested' AND provenance IS NOT NULL
+         GROUP BY provenance
+         HAVING kept > 0 OR refused > 0
+         ORDER BY refused DESC, provenance`,
+      )
+      .all(repoId) as { provenance: string; kept: number; refused: number }[];
+    return rows.map((r) => ({ provenance: r.provenance, kept: Number(r.kept), refused: Number(r.refused) }));
+  }
+
+  /**
+   * What the screen threw away, and the reason it gave (D-81).
+   *
+   * The whole objection to filtering a memory is that a rule which never arrives is
+   * invisible. These rows are the answer to that — and were unreadable outside a SQL
+   * prompt until this existed, which made the guarantee worth about as much as not
+   * having made it.
+   */
+  screenRefusals(repoId: string): readonly { readonly provenance: string; readonly statement: string; readonly because: string }[] {
+    // ONE ROW PER STATEMENT, and `DISTINCT` over three columns is not that. A refusal is
+    // re-recorded whenever its document changes, and the model words the reason freshly
+    // each time — so distinct triples counted 40 where the tally beside it counted 15,
+    // and a report that disagrees with itself in two adjacent lines is worse than none.
+    // The same trap as `knowledgeByDocument`, one function away, caught by reading the
+    // two numbers together. MAX() picks the most recent wording arbitrarily but
+    // consistently; every copy says the same thing in different words.
+    const rows = this.db
+      .prepare(
+        `SELECT COALESCE(provenance, '?') provenance, statement, MAX(retired_reason) retired_reason
+         FROM knowledge
+         WHERE repo_id = ? AND retired_reason LIKE 'screened out:%'
+         GROUP BY provenance, statement
+         ORDER BY provenance, statement`,
+      )
+      .all(repoId) as { provenance: string; statement: string; retired_reason: string }[];
+    return rows.map((r) => ({
+      provenance: r.provenance,
+      statement: r.statement,
+      because: r.retired_reason.replace(/^screened out: /, ""),
+    }));
+  }
+
+  /** Documents whose rules were kept WITHOUT a screen passing them — degraded, healing. */
+  unscreenedDocuments(repoId: string): number {
+    const row = this.db
+      .prepare(
+        "SELECT COUNT(DISTINCT provenance) n FROM knowledge WHERE repo_id = ? AND retired_at IS NULL AND extractor LIKE '%-unscreened'",
+      )
+      .get(repoId) as { n: number } | undefined;
+    return Number(row?.n ?? 0);
+  }
+
   /** Live knowledge for a repo, optionally narrowed to a path prefix. */
   knowledgeFor(repoId: string, pathPrefix?: string, limit = 200): readonly KnowledgeItem[] {
     const rows = (

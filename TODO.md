@@ -743,8 +743,20 @@ are what that session's own numbers say is in the way, not what reading suggeste
       screen has not been measured`, which is now stale in our favour: close it with the
       next change that fires a review rather than spending a review cycle on a paragraph.
 
-- [ ] **The refusal rate per document is a drift metric on our own writing, and nothing
-      reads it.** Measured per document on the first real screen run: `CLAUDE.md` and
+- [x] **Built 2026-08-07: `lore knowledge` / `make knowledge`.** The product had no
+      operator view at all — `lore` could list tokens, repositories and tiers, and the
+      memory this service exists to build could only be read with hand-written SQL
+      through the container, which meant only whoever wrote the SQL could read it. It
+      shows live rules by source, kept-against-refused per document with the share, the
+      unscreened count, and `--refusals` prints what was thrown away with the model's own
+      reason — which is what makes D-81's "a refusal is recorded, not silent" worth
+      anything. **It caught itself on first run**: the refusal list counted 40 beside a
+      tally of 15, because a statement re-screened gets a freshly-worded reason each time
+      and `DISTINCT` over three columns is not one row per statement.
+      *The measurement that motivated it, kept:*
+
+- [ ] ~~The refusal rate per document is a drift metric~~ — SURFACED, still unread by
+      anything automatic. Measured per document on the first real screen run: `CLAUDE.md` and
       `PROG.md` were refused **0 of 13**; every one of the fifteen refusals came from the
       explanatory specs, and the worst three were the three edited most that day.
       `CLAUDE.md` says specs describe the system as it stands and change-narrative belongs

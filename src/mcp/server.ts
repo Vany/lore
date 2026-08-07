@@ -20,6 +20,7 @@ import { DEFAULT_TYPE, reviewType, reviewTypeIds } from "../core/review-type.ts"
 import { applyPatch, restoreTree, treeHash } from "../git/repo.ts";
 import { enrich, renderEnrichment } from "../knowledge/enrich.ts";
 import { paceFor, paceNote } from "../ops/pace.ts";
+import { codeMoved } from "../reviewer/review.ts";
 import { buildVex, findingsNeedingTriage, renderVex } from "../security/vex.ts";
 import { FINDING_ORDER_SQL } from "../store/schema.ts";
 import { isSettled, type Store } from "../store/store.ts";
@@ -634,7 +635,50 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
 
       store.updateReview(review_id, { state: "queued", treeHash: applied });
       deps.enqueue(review_id, "fast");
-      return text(JSON.stringify({ review_id, state: "queued", tree_hash: applied }));
+
+      // WHAT THIS DIFF CANNOT SETTLE, said now rather than in twenty minutes.
+      //
+      // D-56 settles a finding only when the tier stops raising it AND the code it named
+      // has moved, because silence over untouched code is a tier changing its mind, not a
+      // fix. That is deterministic and costs a file read — and it was being answered a
+      // ROUND later, so a client learned which of its answers had not landed after ten
+      // to twenty-five minutes of deep-tier time. Measured on this repository: three
+      // fixes submitted, two of them made in a COLLABORATOR rather than at the named
+      // line, both sat open for a further round, which is one t2 round bought to learn
+      // something knowable the instant the patch applied.
+      //
+      // "Fix it where the cause is" is an ordinary and often correct shape, so every
+      // client meets this repeatedly. The answer is not to weaken D-56 — it is right —
+      // but to say at the moment it is actionable that a justification at the site is
+      // what settles a fix made elsewhere.
+      //
+      // It shares `codeMoved` with the settle path rather than restating the rule: a
+      // preview that drifts from what it previews is worse than no preview.
+      const unmoved = (
+        await Promise.all(
+          store.openFindings(review_id).map(async (f) => ((await codeMoved(worktree, f)) ? undefined : f)),
+        )
+      ).filter((f) => f !== undefined);
+
+      return text(
+        JSON.stringify({
+          review_id,
+          state: "queued",
+          tree_hash: applied,
+          ...(unmoved.length === 0
+            ? {}
+            : {
+                will_not_settle: unmoved.map((f) => ({ file: f.file, line: f.line, claim: f.claim })),
+                will_not_settle_note:
+                  `${String(unmoved.length)} open finding(s) name code this diff did not change, so the next ` +
+                  "round CANNOT settle them however it goes: a tier that stops raising something it never saw " +
+                  "move has changed its mind, not been satisfied. If you fixed the cause somewhere else — which " +
+                  "is often the right place — say so AT THE NAMED LINE with a `lore-ok[<fingerprint>]: <why>` " +
+                  "comment and submit again; the tier ratifies that by not raising it. Otherwise they will come " +
+                  "back, and each round costs you the deep tier's full time.",
+              }),
+        }),
+      );
     },
   );
 
