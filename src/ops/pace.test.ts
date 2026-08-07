@@ -40,6 +40,59 @@ describe("paceFor", () => {
     expect(Math.round((pace?.ms ?? 0) / 1000)).toBeLessThan(320);
   });
 
+  // THE BUG THIS FIELD SHIPPED WITH, in Vany's words: "what happens if we will not fit
+  // in time? will the user wait another 300 secs when the response is almost here?"
+  //
+  // Yes, it did. The interval was the median whatever the clock said, so a 400s round
+  // against a 323s median sent the client away at 323s, found it still running, and
+  // said 323s AGAIN — returning at 646s for an answer that existed at 400. On t2, whose
+  // median is 820s, a 900s round put the client back at 1,640s: twelve minutes with the
+  // answer already written.
+  it("shrinks the wait as the round outlives the median", () => {
+    runs("t1", 40, 200, 400);
+    const fresh = paceFor(store, "t1")?.ms ?? 0;
+    const late = paceFor(store, "t1", 300_000)?.ms ?? 0;
+    expect(late).toBeLessThan(fresh);
+    // 300s in, on a distribution ending at 400s, what is left is under two minutes.
+    expect(late / 1000).toBeLessThan(120);
+  });
+
+  it("is the plain median before the round has started", () => {
+    runs("t1", 40, 200, 400);
+    expect(paceFor(store, "t1", 0)?.ms).toBe(paceFor(store, "t1")?.ms);
+  });
+
+  // Surviving past the median is evidence about which half of the distribution this
+  // round is in. Throwing it away is what cost the twelve minutes.
+  it("never sends a client past the point the answer is likely to arrive", () => {
+    runs("t1", 40, 200, 400);
+    for (const elapsedS of [100, 200, 250, 300, 350]) {
+      const wait = paceFor(store, "t1", elapsedS * 1000);
+      expect(elapsedS + (wait?.ms ?? 0) / 1000).toBeLessThan(400 + 31);
+    }
+  });
+
+  // Past every completed run there is no distribution left to ask, and inventing one
+  // at exactly the moment the data ran out is how the original bug read.
+  it("says plainly when a round has outlasted every run of its tier", () => {
+    runs("t1", 40, 200, 400);
+    const pace = paceFor(store, "t1", 900_000);
+    expect(pace?.overdue).toBe(true);
+    expect(paceNote(pace)).toMatch(/no measurement left to offer/i);
+    // And NOT a sign of failure: deep rounds have a long tail, and a client told
+    // otherwise reports lore as broken.
+    expect(paceNote(pace)).toMatch(/NOT a sign that anything is wrong/);
+  });
+
+  // The arithmetic tends to zero as a round ages; two seconds is the retry loop this
+  // replaced, wearing a measured number.
+  it("never suggests an interval short enough to be a busy loop", () => {
+    runs("t1", 40, 200, 400);
+    for (const elapsedS of [395, 399, 500, 5000]) {
+      expect((paceFor(store, "t1", elapsedS * 1000)?.ms ?? 0)).toBeGreaterThanOrEqual(30_000);
+    }
+  });
+
   // D-58's rule: with too little data, say nothing rather than guessing. A default
   // interval would be indistinguishable from a measured one to whoever reads it.
   it("refuses on a thin sample", () => {
@@ -77,9 +130,10 @@ describe("paceNote", () => {
     expect(note).toMatch(/ONE CALL/);
     expect(note).toContain("t1");
     expect(note).toContain("40");
-    // It is a fact about the tier, and a client that reads it as a prediction about
-    // its own review will conclude something wrong the first time a round runs long.
-    expect(note).toMatch(/half of all rounds take longer/i);
+    // The number SHRINKS as the round ages, and a client that caches the first one
+    // waits twice as long as it needs to. That has to be said, not implied.
+    expect(note).toMatch(/READ THIS FIELD AGAIN EVERY TIME/);
+    expect(note).toMatch(/do not reuse the number/i);
   });
 
   it("admits there is no number rather than inventing a default", () => {

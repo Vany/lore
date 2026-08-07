@@ -45,9 +45,20 @@ const MIN_RUNS = 20;
  */
 const MAX_SPREAD = 6;
 
+/**
+ * The shortest interval this will ever suggest.
+ *
+ * The conditional median tends to zero as a round outlives the distribution, and a
+ * client told to come back in two seconds is the 10-second retry loop this replaced,
+ * wearing a measured number.
+ */
+const FLOOR_MS = 30_000;
+
 export interface Pace {
   /** Milliseconds before anything can plausibly have changed. */
   readonly ms: number;
+  /** This round has outlasted every completed run of its tier: no data left to offer. */
+  readonly overdue: boolean;
   /** The tier this describes, so the client can see the number is not about its review. */
   readonly tier: string;
   /** How many runs it came from — the reader's own check on how much to trust it. */
@@ -65,22 +76,40 @@ export interface Pace {
  * returns in seconds — and pooling them with real reviews drags the median toward a
  * number that describes nothing anyone is waiting for.
  */
-export function paceFor(store: Store, tier: string): Pace | undefined {
-  const rows = store.db
-    .prepare(
-      "SELECT latency_ms FROM usage WHERE tier = ? AND latency_ms IS NOT NULL AND outcome != 'failed'" +
-        " ORDER BY latency_ms",
-    )
-    .all(tier) as { latency_ms: number }[];
+export function paceFor(store: Store, tier: string, elapsedMs = 0): Pace | undefined {
+  const all = store.latenciesFor(tier);
+  if (all.length < MIN_RUNS) return undefined;
 
-  if (rows.length < MIN_RUNS) return undefined;
+  const at = (rows: readonly number[], p: number) => rows[Math.min(rows.length - 1, Math.floor(rows.length * p))] ?? 0;
+  const p10 = at(all, 0.1);
+  if (p10 <= 0 || at(all, 0.9) / p10 > MAX_SPREAD) return undefined;
 
-  const at = (p: number) => rows[Math.min(rows.length - 1, Math.floor(rows.length * p))]?.latency_ms ?? 0;
-  const p10 = at(0.1);
-  const p50 = at(0.5);
-  if (p10 <= 0 || at(0.9) / p10 > MAX_SPREAD) return undefined;
+  // CONDITIONED ON HOW LONG THIS ROUND HAS ALREADY RUN, and that is the whole point.
+  //
+  // The first version returned the median every time, whatever the clock said. So a
+  // round of 400s against a 323s median told the client to come back at 323s, found it
+  // still running, and told it 323s AGAIN — returning at 646s for an answer that had
+  // existed since 400. On t2, whose median is 820s, a 900s round put the client back at
+  // 1,640s: over twelve minutes with the answer sitting unread. The instruction shipped
+  // with it — "come back again after the same interval" — made it explicit.
+  //
+  // The honest quantity is the median of what is LEFT, over the runs that lasted at
+  // least this long. It equals the plain median at elapsed 0, and shrinks from there:
+  // surviving past the median is evidence about which half of the distribution this
+  // round is in, and throwing that evidence away is what cost the twelve minutes.
+  const remaining = all.filter((ms) => ms > elapsedMs).map((ms) => ms - elapsedMs);
 
-  return { ms: p50, tier, runs: rows.length };
+  // PAST EVERY RUN EVER RECORDED. There is no distribution left to ask, so the honest
+  // answer is a short interval and a sentence saying why — this round is longer than
+  // anything measured, and the next thing to happen could be the answer or a timeout.
+  // Substituting a median here would be inventing data at exactly the moment we ran out.
+  if (remaining.length === 0) {
+    return { ms: FLOOR_MS, tier, runs: all.length, overdue: true };
+  }
+
+  // Floored, because the arithmetic tends to zero as a round ages and a client told to
+  // return in two seconds is the busy loop this replaced.
+  return { ms: Math.max(FLOOR_MS, at(remaining, 0.5)), tier, runs: all.length, overdue: false };
 }
 
 /**
@@ -99,11 +128,20 @@ export function paceNote(pace: Pace | undefined): string {
     );
   }
   const secs = Math.round(pace.ms / 1000);
+  if (pace.overdue) {
+    return (
+      `MAKE ONE CALL AFTER ~${String(secs)}s, THEN LEAVE. This round has now run longer than every completed ` +
+      `${pace.tier} round on this repository (${String(pace.runs)} of them), so there is no measurement left to ` +
+      "offer you — the next thing to happen could be the answer or a failure, and a longer interval here would " +
+      "be invented rather than measured. This is NOT a sign that anything is wrong; deep rounds have a long tail."
+    );
+  }
   return (
-    `MAKE ONE CALL AFTER ~${String(secs)}s, THEN LEAVE. That is the median round for ${pace.tier} on this ` +
-    `repository across ${String(pace.runs)} completed runs — nothing can have happened before it, so polling ` +
-    "sooner returns `running` and costs you a turn for nothing. It is a fact about the TIER, not a prediction " +
-    "about this review: half of all rounds take longer, and a round that has escalated is a different tier " +
-    "with a different number. If it is still running when you return, come back again after the same interval."
+    `MAKE ONE CALL AFTER ~${String(secs)}s, THEN LEAVE. That is how much longer ${pace.tier} rounds typically ` +
+    `run from where this one already is, measured across ${String(pace.runs)} completed runs on this ` +
+    "repository — so polling sooner returns `running` and costs you a turn for nothing.\n" +
+    "READ THIS FIELD AGAIN EVERY TIME; do not reuse the number. It SHRINKS as the round ages, because a round " +
+    "that has already outlived the median is not another median away from finishing — it is most of the way " +
+    "there. Reusing the first interval is how a client waits twice as long as it needed to."
   );
 }

@@ -187,7 +187,7 @@ describe("no production file reaches past the store into SQL", () => {
     // Every file below predates the rule. Adding one here is the thing to argue about;
     // removing one needs no permission.
     const KNOWN = [
-      "knowledge/derive.ts", "knowledge/enrich.ts", "mcp/auth.ts", "mcp/server.ts", "ops/pace.ts", "ops/retention.ts",
+      "knowledge/derive.ts", "knowledge/enrich.ts", "mcp/auth.ts", "mcp/server.ts", "ops/retention.ts",
       "ops/spend.ts", "propose/cli.ts", "propose/run.ts", "reviewer/review.ts", "security/vex.ts",
       "service/attest.ts", "service/http.ts", "service/main.ts", "service/worker.ts",
     ];

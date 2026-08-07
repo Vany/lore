@@ -57,11 +57,20 @@ const text = (s: string) => ({ content: [{ type: "text" as const, text: s }] });
  * about to. It changes as the ladder climbs, and the note says so: a client that
  * cached the first number would be using t1's median to wait for t2.
  */
-function pacing(store: Store, review: { state: ReviewState; type: string; ladder: LadderState }): object {
+function pacing(
+  store: Store,
+  review: { id: string; state: ReviewState; type: string; ladder: LadderState },
+): object {
   if (!["queued", "running", "fast_clean"].includes(review.state)) return {};
   const tier = reviewType(review.type).tiers[review.ladder.cursor];
   if (tier === undefined) return {};
-  const pace = paceFor(store, tier.id);
+  // HOW LONG THIS ROUND HAS ALREADY RUN. Without it every poll gets the same number,
+  // so a client that comes back at the median and finds the round still going is sent
+  // away for another full median — twelve minutes, on t2, with the answer already
+  // written. Absent when no round is in flight (`queued`), which is elapsed zero.
+  const startedAt = store.roundStartedAt(review.id);
+  const elapsed = startedAt === undefined ? 0 : Math.max(0, Date.now() - startedAt);
+  const pace = paceFor(store, tier.id, elapsed);
   return {
     ...(pace === undefined ? {} : { check_back_after_ms: pace.ms }),
     check_back_note: paceNote(pace),
@@ -252,7 +261,7 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           // is how it survived the rewrite that moved every text in that file to
           // subscribe-first. A tool description may or may not be in the model's
           // context by the time this returns; the response note always is.
-          ...pacing(store, { state: "queued", type: rt.id, ladder: initialState(rt.tiers) }),
+          ...pacing(store, { id, state: "queued", type: rt.id, ladder: initialState(rt.tiers) }),
           note:
             "Started. This does NOT mean it finished, and NOTHING can have happened yet. Read " +
             "`check_back_note`, go and do something else, and make ONE call when it says. If your host " +

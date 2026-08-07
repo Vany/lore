@@ -199,6 +199,24 @@ real money: every text used to say *"poll again in 10s, backing off to 60s"* aga
 measured t1 median of 323s and t2 of 820s — seven to fifteen calls that could not
 possibly return anything, each one a turn for an agent client.
 
+**It is conditioned on how long the round has already run**, and that is not a detail.
+The first version returned the median whatever the clock said, so a client that came back
+at the median and found the round still going was sent away for another whole median — on
+t2 that put it back at 1,528s for an answer written at 900s. The number now answers *how
+much longer, from here*: the median of the runs that lasted at least this long. Measured
+on this deployment, a t1 round at 322s elapsed goes from "322s more" to **109s**, and a t2
+round at 764s from "764s more" to **183s**. At elapsed zero it is the plain median, so the
+first call is unchanged.
+
+**So the client must re-read the field, not cache it**, and the note says so in those
+words. Reusing the first interval is precisely how a client waits twice as long as it
+needs to.
+
+**Past every completed run, it says so and offers a short floor.** There is no
+distribution left to ask, and substituting a median at the moment the data ran out is
+inventing it. The note also says this is not a sign of failure — deep rounds have a long
+tail, and a client told otherwise reports lore as broken.
+
 **It refuses rather than guesses**, on D-58's rule: fewer than 20 completed runs, or a
 p90/p10 spread above 6, and no number is offered. t3 is the live example — n=12 across
 126s–1691s, which is early refusals and real reviews pooled together, and a median of

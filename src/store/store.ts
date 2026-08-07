@@ -502,6 +502,35 @@ export class Store {
     return row?.["file"];
   }
 
+  /** Completed round latencies for a tier, ascending — the input to `check_back_after_ms`. */
+  latenciesFor(tier: string): readonly number[] {
+    const rows = this.db
+      .prepare(
+        "SELECT latency_ms FROM usage WHERE tier = ? AND latency_ms IS NOT NULL AND outcome != 'failed'" +
+          " ORDER BY latency_ms",
+      )
+      .all(tier) as { latency_ms: number }[];
+    return rows.map((r) => r.latency_ms);
+  }
+
+  /**
+   * When the round now in flight started, or `undefined` if none is.
+   *
+   * The open `tier_run` — `finished_at IS NULL` — is the one still working. Needed
+   * because "how long should I wait" is not a property of the tier alone: a round that
+   * has already run for longer than the median has a shorter wait left, not another
+   * whole median.
+   */
+  roundStartedAt(reviewId: string): number | undefined {
+    const row = this.db
+      .prepare(
+        "SELECT started_at FROM tier_run WHERE review_id = ? AND finished_at IS NULL ORDER BY id DESC LIMIT 1",
+      )
+      .get(reviewId) as Record<string, string> | undefined;
+    const at = row?.["started_at"];
+    return at === undefined ? undefined : Date.parse(at);
+  }
+
   /** Reviews for a principal, newest first — backs `review.inbox`. */
   /**
    * A principal's reviews, optionally narrowed to one repository.
