@@ -610,6 +610,39 @@ describe("settling one of several conflicts resumes nothing, and says so", () =>
   });
 });
 
+// THE TOOL PROMISED THE REASON WAS "RECORDED, AND THE ONLY ACCOUNT ANYONE GETS", and it
+// was recorded nowhere. It went into the reply and was dropped, so two reviews a real
+// client cancelled on 2026-08-07 read as `cancelled` with no account at all — whatever
+// it said about why is gone. A false statement in an interface text, in the one field
+// whose entire purpose is to survive the call.
+describe("a cancelled review keeps the reason it was cancelled for", () => {
+  const started = (id: string) => {
+    store.createReview({
+      id, repoId, principal: "alice", branch: "feat/z", intoRef: "main",
+      ticket: "t", type: "code-arch", state: "running", ladder: initialState(),
+    });
+  };
+
+  it("records it, and hands it back on a later poll", async () => {
+    started("revC");
+    await callTool("review_cancel", { review_id: "revC", reason: "the branch was rebased under it" });
+
+    const out = await callTool("review_poll", { review_id: "revC" });
+    expect(out["state"]).toBe("cancelled");
+    expect(String(out["failed_because"])).toContain("the branch was rebased under it");
+    // Who stopped it, not only why: a cancel is somebody's decision.
+    expect(String(out["failed_because"])).toContain("alice");
+  });
+
+  // A cancel with no reason is honest about having none, rather than inventing one.
+  it("says plainly when nobody gave a reason", async () => {
+    started("revD");
+    await callTool("review_cancel", { review_id: "revD" });
+    const out = await callTool("review_poll", { review_id: "revD" });
+    expect(String(out["failed_because"])).toMatch(/no reason was recorded/);
+  });
+});
+
 // Six reviews of one branch in two hours, four of another, and 13 of 30 reviews
 // stopping at round 1 — measured on the first day a real client drove this.
 //

@@ -400,7 +400,11 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           // who has to act on it, and an invitation to guess. A client given only
           // the word published a diagnosis that was the opposite of the truth.
           ...(() => {
-            if (!["failed", "expired"].includes(review.state)) return {};
+            // `cancelled` belongs here too. Somebody stopped this review and said why,
+            // and the next session to look at it — or the same one after a restart —
+            // has no other way to learn that. Without it a cancel reads exactly like an
+            // abandonment, which is the distinction the state exists to draw.
+            if (!["failed", "expired", "cancelled"].includes(review.state)) return {};
             const why = store.failureReason(review_id);
             return why === undefined
               ? {
@@ -633,6 +637,19 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       // checked, which was the false-statement-about-behaviour this repository is
       // worst at, written into the fix for it. Both now refuse a terminal review.
       //
+      // WRITTEN DOWN, because the tool description promises exactly that — "recorded,
+      // and the only account anyone gets" — and it was not. The reason went into the
+      // reply and nowhere else, so two reviews cancelled by a real client on
+      // 2026-08-07 read as `cancelled` with no account at all, and whatever it said
+      // about why is gone. A false statement in an interface text, in the field whose
+      // entire purpose is to survive.
+      //
+      // Before the state, so a subscriber woken by the change can already read it.
+
+      if (reason !== undefined && reason.trim() !== "") {
+        store.setFailureReason(review_id, `cancelled by ${who.principal}: ${reason.trim()}`);
+      }
+
       // Order matters for the remaining window: state first means a round claimed in
       // the same instant finds a terminal review and stops before spending. Aborting
       // first would leave the session dead and the round still free to advance the
