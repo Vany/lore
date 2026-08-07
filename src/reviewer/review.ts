@@ -1170,6 +1170,10 @@ async function collectJustifications(
   const byFingerprint = new Map(open.map((f) => [f.fingerprint, f]));
 
   const out: Pending[] = [];
+  // lore-ok[5dee6c43]: upheld, and written at the end of this function rather than here,
+  // which is where the count is complete. The claim was exactly right — this was
+  // incremented per marker and read by nothing, so the noise it replaced became total
+  // silence, and a comment promised a summary that did not exist.
   // Counted, not printed one by one. See `shortKnownToRepo`.
   let carriedOver = 0;
 
