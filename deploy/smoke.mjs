@@ -107,6 +107,13 @@ await check("every tool carries a description an agent can act on", async () => 
   return "all described";
 });
 
+// lore-ok[b4f8eb05]: upheld, and fixed at the cause rather than here. The claim was
+// exactly right — `review_inbox` called `undelivered` + `markDelivered` for every review
+// it listed, so this "consumes nothing" check consumed. The fix belongs in the INBOX, not
+// in the test that trusted it: `mcp/server.ts` no longer marks anything delivered, and
+// `TOOL_DOCS.inbox` now states it plainly rather than leaving it to be inferred. Leaving
+// the check here and weakening its claim would have kept the lie and lost the coverage.
+//
 // `review_inbox` is the one call that is safe to make here: it reads what is waiting for
 // this token and consumes nothing.
 await check("review_inbox answers, and consumes nothing", async () => {
