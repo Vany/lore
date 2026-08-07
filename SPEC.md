@@ -211,7 +211,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-79** | A finding is **what the author missed and would be hurt by** — asked, not filed | confirmed |
 | **D-80** | A review is **one conversation per tier**, not a series of audits. Fully async | subscription live; conversation `[OPEN]` |
 | **D-81** | Extraction stays deterministic; a **model may only VETO** what it mined | built; screen unmeasured |
-| **D-82** | **A defect found is fixed now.** Recording one is the exception and is argued for | confirmed |
+| **D-82** | **A defect found is fixed now**, and the batch is reviewed whole — one big diff, not many | confirmed |
 
 **D-7, revised.** The earlier version dropped GLM-5.2 on Artificial Analysis's
 *cost per task* — which is tokens consumed × price on their benchmark, not a price.
@@ -1134,12 +1134,33 @@ question, and calling them deferral would be wrong:
   the same as postponing.
 - **A defect in someone else's repository is theirs** (D-71). We report it.
 
-**The cost is real and is accepted with open eyes.** Fixing everything found makes the
-diff larger, and a larger diff takes more review rounds — measured the same day: a
-fourteen-commit change needed three reviews and twenty-one findings to reach `passed`.
-D-77 still holds and nothing skips the ladder. The trade is more rounds against fewer
-notes that quietly stop being true, and the second failure is the one this project
-exists to refuse.
+**And ONE BIG DIFF IS BETTER THAN MANY SMALL ONES, which is not the trade-off it first
+looked like.** I wrote this the other way round and Vany corrected it; the arithmetic
+says he is right, and by a wide margin.
+
+**The ladder reads a TREE, not a diff.** A round costs a full t0 sweep, a document
+re-ingest, and one model call at the current tier — measured 2026-08-07: t1 averages
+441s, t2 766s, t3 245s. Almost none of that scales with how many commits are in front of
+it. So the unit of cost is the ROUND, and the unit of value is the CHANGE, and batching
+moves one without moving the other. Fourteen commits reached `passed` in three reviews.
+Reviewed one at a time they would have been fourteen, each paying for its own t0, its own
+ingest, and its own climb from t1 — four to five times the model time for a strictly
+weaker result.
+
+**Weaker, because findings interact.** t3's last pass on that batch produced a chain: a
+concurrent-ingest race, a session the cancel could not reach, the provider-gate window
+one layer earlier, and then the worker writing `failed` over the `cancelled` that the
+third fix had just made reachable. Each is invisible with the others absent. A reviewer
+shown one commit at a time sees four unrelated small things, at best.
+
+**The real limit on a big diff is the context window, not the review process** — and it
+is now handled: a prompt a tier cannot hold makes that tier `TooLargeForTier`, so the
+ladder steps over it and finishes `passed_partial` rather than failing the review (D-48).
+That is what turns "too big" from a wall into a degradation.
+
+D-77 still holds and nothing skips the ladder. What changes is that batching is the
+DEFAULT rather than a compromise: fix everything found, review it together, push it
+together.
 
 **D-81 — extraction stays deterministic, and a model may only VETO what it mined.**
 

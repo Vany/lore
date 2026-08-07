@@ -26,6 +26,11 @@ SPEC D-82 and it is not tidiness: a recorded defect goes stale in the direction 
 hurts. The replica monitor was recorded, carefully and correctly, thirty minutes before
 it pointed an operator away from a database that had become unreadable.
 
+**And the batch is reviewed WHOLE.** A round costs a t0 sweep, an ingest and one model
+call whether it reads one commit or twenty, so fourteen commits in three reviews is four
+to five times cheaper than fourteen reviews — and stronger, because findings interact:
+t3's best pass this week found a chain of four defects each invisible without the others.
+
 A phase is ticked when its code is **running and observed**, never when it is
 merely written. Where a phase shipped with a part that has never been exercised,
 that part is pulled out into its own open item rather than hidden inside a tick.

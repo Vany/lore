@@ -40,10 +40,20 @@ one already recorded as a false positive. So the feature that was asked for is n
 and the number is written down instead — refusing on evidence is not deferral, and D-82
 says so explicitly so the two never get confused.
 
-**The cost is accepted with open eyes.** Fixing everything found makes the diff larger,
-and a larger diff takes more rounds: measured the same day, fourteen commits needed three
-reviews and twenty-one findings to reach `passed`. D-77 still holds. The trade is more
-rounds against fewer notes that quietly stop being true.
+**I got the cost backwards and Vany corrected it.** I wrote that fixing everything makes
+the diff larger and larger diffs cost more rounds — citing "fourteen commits needed three
+reviews" as the price. That number is the *saving*. The ladder reads a TREE: a round costs
+a t0 sweep, an ingest and one model call (t1 441s, t2 766s, t3 245s measured today), and
+almost none of it scales with commit count. Fourteen commits reviewed singly would be
+fourteen reviews, not three — four to five times the model time.
+
+And weaker, because findings interact: t3's last pass produced a CHAIN — an ingest race,
+a session the cancel could not reach, the gate window one layer earlier, then the worker
+overwriting the `cancelled` the third fix had just made reachable. Each is invisible with
+the others absent.
+
+The real limit on a big diff is the context window, and that now degrades instead of
+failing (`TooLargeForTier`, D-48). So batching is the default, not a compromise.
 
 **Half of today's real defects came from asking the running system a question** — "what
 is reviewing now?", "why does our client know about refreshing mirror?" — rather than
