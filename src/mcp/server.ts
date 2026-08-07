@@ -109,7 +109,7 @@ function nextStep(state: ReviewState): string {
       // — and for an agent client each is a turn. `check_back_after_ms` in the same
       // response is the measured answer; this string points at it rather than
       // repeating a number that would then have two sources.
-      return "Still working — this is NOT a result. Read `check_back_note`, leave, and make ONE call when it says. Do not merge, and do not report anything about the branch yet.";
+      return "Still working — this is NOT a result. Read `check_back_note` THIS TIME (it shrinks as the round ages — never reuse the last one), leave, and make ONE call when it says. Do not merge, and do not report anything about the branch yet.";
     case "findings_ready":
     case "awaiting_diff":
       return "ACT NOW: answer every finding below — fix it, or write the `justify_with` line at the site — then call review_submit with your diff and tree hash. THE REVIEW DIES IF YOU STOP HERE: it is abandoned after 48h and concludes nothing, and this branch stays unreviewed.";
@@ -264,7 +264,8 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           ...pacing(store, { id, state: "queued", type: rt.id, ladder: initialState(rt.tiers) }),
           note:
             "Started. This does NOT mean it finished, and NOTHING can have happened yet. Read " +
-            "`check_back_note`, go and do something else, and make ONE call when it says. If your host " +
+            "`check_back_note` — re-read it on every reply, it shrinks as the round ages — go and do " +
+            "something else, and make ONE call when it says. If your host " +
             "supports subscriptions/listen — most do not — subscribe to " +
             `\`lore://review/${id}\` as well and you will be woken instead of having to return.`,
         }),

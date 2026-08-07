@@ -64,6 +64,11 @@ Use review_poll instead — but ONE call at a time, at the interval its own
 \`check_back_note\` gives you. That interval is measured from this repository's actual
 round times; a tight retry loop is the most expensive thing a client can do here.
 
+RE-READ THE INTERVAL EVERY TIME. NEVER REUSE THE LAST ONE. It answers "how much longer
+FROM HERE", so it shrinks as a round ages — a round that has already outlived the
+typical one is not another typical one away from finishing, it is nearly done. Caching
+the first number is how a client waits twice as long as it needed to.
+
 Check the acknowledgement, do not assume. The ack echoes the subscriptions the server
 agreed to serve; if yours is not in it, you are not subscribed and nothing will ever
 arrive on that stream.
@@ -170,9 +175,18 @@ ONLY \`passed\` means the branch is clean.
   they cannot decide either.
 
 While queued or running, wait and poll again ONCE at the interval \`check_back_note\`
-gives — the median round for the tier now working, measured on this repository, before
-which nothing can have happened. An
-absence of findings so far is not a clean result.
+gives. It is not a constant and it is not the tier's average: it answers HOW MUCH LONGER
+FROM HERE, measured across this repository's completed rounds, so it SHRINKS every time
+you come back and find the round still going.
+
+So re-read it on every reply and never reuse the last one. Cache it, and a round that
+runs slightly long costs you a second full wait for an answer that was already written —
+on the deep tier that is over ten minutes of nothing.
+
+If it tells you the round has outlasted every recorded run of its tier, that is not a
+failure and not a reason to retry or report anything: deep rounds have a long tail, and
+there is simply no measurement left to offer you. An absence of findings so far is not a
+clean result.
 
 WHAT EACH FINDING CARRIES.
 
@@ -502,6 +516,9 @@ export const RESOURCE_DOCS: Readonly<Record<string, { title: string; priority: n
 3. review_poll(review_id) ONCE, straight after subscribing — a subscription has no
    replay, so whatever happened before the stream opened arrives no other way. Then on
    each wake, review_poll again; it returns only what is new.
+   Not subscribed? Then step 3 is the whole loop: leave, come back when
+   \`check_back_note\` says, and RE-READ IT on every reply — never reuse the last
+   number. It shrinks as the round ages, and caching it doubles your wait.
 4. For each finding: fix it, or justify it with // lore-ok[fp]: <reason>
 5. review_submit(review_id, diff, tree_hash) — ONLY while the state is findings_ready
    or awaiting_diff. fast_clean is NOT one of them: the deep round is already queued
@@ -640,6 +657,9 @@ The loop:
 3. review_poll(review_id) ONCE, straight after subscribing — a subscription has no
    replay, so whatever happened before the stream opened arrives no other way. Then on
    each wake, review_poll again; it returns only what is new.
+   Not subscribed? Then step 3 is the whole loop: leave, come back when
+   \`check_back_note\` says, and RE-READ IT on every reply — never reuse the last
+   number. It shrinks as the round ages, and caching it doubles your wait.
 4. For each finding: fix it, or justify it with // lore-ok[fp]: <reason>
 5. review_submit(review_id, diff, tree_hash) — ONLY while the state is findings_ready
    or awaiting_diff. fast_clean is NOT one of them: the deep round is already queued

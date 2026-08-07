@@ -48,6 +48,35 @@ describe("no document hard-codes a polling interval", () => {
   });
 });
 
+// THE INTERVAL IS NOT A CONSTANT, AND A DOCUMENT THAT IMPLIES IT IS COSTS REAL TIME.
+//
+// `check_back_after_ms` answers "how much longer FROM HERE", so it shrinks every time a
+// client comes back and finds the round still going. The first version returned the
+// median whatever the clock said, and the texts described it as "the median round for
+// the tier" — so a client that cached it waited a second full median for an answer that
+// already existed: over ten minutes on the deep tier.
+//
+// The behaviour is fixed. This is here because the DOCUMENT is what a client acts on,
+// and the sentence that caused the loss was a description, not the code.
+describe("the texts say the wait shrinks, and never to cache it", () => {
+  const mentions = ALL_DOCS.filter(([, text]) => text.includes("check_back_note"));
+
+  it("is described somewhere at all", () => {
+    expect(mentions.length).toBeGreaterThan(0);
+  });
+
+  it.each(mentions)("%s tells the client to read it again rather than reuse it", (_name, text) => {
+    const flat = text.replace(/\s+/g, " ");
+    expect(flat).toMatch(/re-?read it|read it again|read it every time|READ IT AGAIN|re-read the interval/i);
+    expect(flat).toMatch(/never reuse|do not cache|do not reuse|never cache/i);
+  });
+
+  it.each(mentions)("%s does not call it a fixed property of the tier", (_name, text) => {
+    // "the median round for the tier now working" was the sentence that invited caching.
+    expect(text.replace(/\s+/g, " ")).not.toMatch(/the median round for the tier/i);
+  });
+});
+
 // A SESSION ENDS AND TAKES ITS SUBSCRIPTION WITH IT; the review does not end with it.
 // D-70 measured abandonment as the dominant cause of wasted reviews, and no
 // notification can reach a client that has gone — so the only thing that closes the
