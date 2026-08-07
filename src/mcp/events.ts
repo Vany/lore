@@ -95,8 +95,16 @@ export interface Subscriber {
 
 /** What the bus must be able to ask about a subscriber, without importing the store. */
 export interface SubscriberChecks {
-  /** The principal and repo a review belongs to, or `undefined` if there is no such review. */
-  ownerOf(reviewId: string): { readonly principal: string; readonly repoId: string } | undefined;
+  /**
+   * Who a review belongs to, or `undefined` if there is no such review.
+   *
+   * `tokenHash` is the binding `mine()` enforces (D-78) and is absent on reviews started
+   * before that column existed, which means repository scope — the behaviour they were
+   * started under.
+   */
+  ownerOf(
+    reviewId: string,
+  ): { readonly principal: string; readonly repoId: string; readonly tokenHash?: string } | undefined;
   /** Whether the token that opened a stream is still live. */
   tokenLive(hash: string): boolean;
 }
@@ -203,7 +211,7 @@ export class ScopedEventBus implements ServerEventBus {
 
   private mayHear(
     event: ServerEvent,
-    owner: { readonly principal: string; readonly repoId: string } | undefined,
+    owner: { readonly principal: string; readonly repoId: string; readonly tokenHash?: string } | undefined,
     who: Subscriber | undefined,
   ): boolean {
     if (who === undefined) {
@@ -220,6 +228,19 @@ export class ScopedEventBus implements ServerEventBus {
     // Unknown or foreign review: silence, exactly as `mine()` answers NOT FOUND.
     if (owner === undefined) return false;
     if (owner.principal !== who.principal || owner.repoId !== who.repoId) return false;
+    // AND THE SAME TOKEN BINDING `mine()` APPLIES, which this claimed parity with while
+    // authorising on principal and repo alone. After D-78 a person's second token was
+    // woken on every state change of a review that `review_poll` refuses as NOT FOUND —
+    // so a client could be told repeatedly that something had happened and be unable to
+    // find out what, for ever.
+    //
+    // A revoked binding falls back to repository scope, exactly as `mine()` does and for
+    // the same reason: stranding a colleague's in-flight work is worse than the accident
+    // it prevents, among people already trusted with the repository. The two rules are
+    // written twice because the bus must not import the store; they must stay identical,
+    // and `events.test.ts` asserts the pair.
+    const bound = owner.tokenHash;
+    if (bound !== undefined && bound !== who.tokenHash && this.checks.tokenLive(bound)) return false;
     return this.checks.tokenLive(who.tokenHash);
   }
 }

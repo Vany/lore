@@ -105,6 +105,72 @@ export function engineRuleClass(claim: string): string | undefined {
 }
 
 /**
+ * Every site one rule matched in one file, collapsed into one entry.
+ *
+ * A finding's identity is `sha256(claim, file, symbol)` and deliberately excludes the
+ * line — a defect that moved three lines down is the same defect, and keying on position
+ * would make every fix look like a fresh discovery. Pattern engines report no symbol, so
+ * TWO MATCHES OF ONE RULE IN ONE FILE produced the same fingerprint and the store's
+ * `ON CONFLICT DO NOTHING` dropped the second. Silently: the client saw one site, fixed
+ * it, and had no way to learn there was another.
+ *
+ * A customer report of this class arrived on 2026-08-08 — a rule reporting the safe one
+ * of two identical XSS sinks and missing the unsafe one, found only by grepping the sink
+ * by hand. Their two sites were in different FILES, which lore does distinguish, so this
+ * is not what happened to them; it is the same defect one step further in, and it was
+ * ours.
+ *
+ * Grouped rather than fingerprinted by line, which would trade a false negative for
+ * permanent churn: every edit above a match would retire one finding and raise an
+ * identical one below it. One finding naming all its sites is also what an answer
+ * actually addresses — the customer's fix routed both sinks through a single helper.
+ *
+ * Shared by semgrep and ast-grep because they have the same shape, and a second copy of
+ * this decision would be the defect it fixes, written twice.
+ */
+function bySite<T>(
+  matches: readonly T[],
+  of: (m: T) => { readonly rule: string; readonly file: string; readonly line: number },
+): { readonly match: T; readonly file: string; readonly lines: readonly number[] }[] {
+  const groups = new Map<string, { match: T; file: string; lines: number[] }>();
+  for (const m of matches) {
+    const { rule, file, line } = of(m);
+    const key = `${rule}\u0000${file}`;
+    const at = groups.get(key);
+    if (at === undefined) groups.set(key, { match: m, file, lines: [line] });
+    else at.lines.push(line);
+  }
+  return [...groups.values()].map((g) => ({ ...g, lines: [...new Set(g.lines)].sort((a, b) => a - b) }));
+}
+
+/**
+ * What to append to a claim when a rule matched more than once in one file.
+ *
+ * In the CLAIM, not only the evidence: the model tier's T0 summary is one line per
+ * finding, so a count living anywhere else is a count it never sees. Capped, so a rule
+ * matching two hundred times cannot push the sentence past `CLAIM_MAX` and lose its own
+ * message to truncation.
+ */
+function sitesSuffix(lines: readonly number[]): string {
+  if (lines.length < 2) return "";
+  const shown = lines.slice(0, 8);
+  const more = lines.length > shown.length ? `, +${String(lines.length - shown.length)} more` : "";
+  return ` [${String(lines.length)} sites in this file: ${shown.join(", ")}${more}]`;
+}
+
+/** The evidence line, naming every site, and saying plainly that fixing one is not enough. */
+function sitesEvidence(tool: string, rule: string, file: string, lines: readonly number[]): string {
+  const at = lines.map((l) => `${file}:${String(l)}`).join(", ");
+  return (
+    `${tool} ${rule} at ${at}` +
+    (lines.length < 2
+      ? ""
+      : "\nEVERY ONE OF THESE IS A SEPARATE SITE. Fixing the first does not fix the rest — answer the whole " +
+        "set, and prefer a change that makes the pattern safe by construction over arguing each site's inputs.")
+  );
+}
+
+/**
  * Engines that mean nothing without project-authored rules.
  *
  * Their absence is not a gap in the review, so it is not reported as one. Contrast
@@ -351,6 +417,50 @@ interface SemgrepResult {
   extra?: { message?: string; severity?: string; metadata?: { cwe?: string | string[] } };
 }
 
+/**
+ * What semgrep could NOT read, which it reports beside what it found.
+ *
+ * `type` is a tagged union in an array — `["PartialParsing", [spans]]` — so only the
+ * head is a discriminator worth reading.
+ */
+interface SemgrepError {
+  level?: string;
+  type?: unknown;
+  path?: string;
+  message?: string;
+}
+
+/**
+ * Files semgrep failed to parse, as one line per file.
+ *
+ * IT EXITS ZERO AND REPORTS `results: []` FOR A FILE IT COULD NOT READ. The failure goes
+ * into `errors` at level `warn`, which lore discarded entirely — so a file with one piece
+ * of syntax semgrep's parser does not handle was scanned, skipped, and reported as
+ * carrying no findings. That is INV-1 inside the deterministic tier, and it is the worst
+ * place for it: T0 is what a model tier is told it need not re-derive.
+ *
+ * Found while reproducing a customer report of this rule class reporting the SAFE site of
+ * two identical XSS sinks and missing the unsafe one. The fixture had a bad identifier,
+ * semgrep answered `results: [], errors: [PartialParsing]`, and lore would have called
+ * that clean — which is the same shape as the report, arrived at by accident.
+ */
+function semgrepUnread(errors: readonly SemgrepError[]): readonly string[] {
+  const byFile = new Map<string, string>();
+  for (const e of errors) {
+    const kind = Array.isArray(e.type) ? String(e.type[0] ?? "") : String(e.type ?? "");
+    // Parse failures only. A rule that could not be fetched is a different problem and
+    // semgrep already fails loudly for it; this is about code that was silently skipped.
+    if (!/Parsing|Lexical|Syntax/i.test(kind)) continue;
+    const file = e.path ?? "(unknown file)";
+    if (!byFile.has(file)) byFile.set(file, kind);
+  }
+  return [...byFile].map(
+    ([file, kind]) =>
+      `semgrep could not parse ${file} (${kind}) — it was SKIPPED, not found clean. Anything in it is ` +
+      "unexamined by every semgrep rule.",
+  );
+}
+
 async function semgrep(worktree: string): Promise<EngineOutcome> {
   const r = await runTool(
     worktree,
@@ -360,29 +470,56 @@ async function semgrep(worktree: string): Promise<EngineOutcome> {
   );
   if (r.unavailable !== undefined) return { engine: "semgrep", findings: [], unavailable: r.unavailable };
 
-  const parsed = parseJson<{ results?: SemgrepResult[] }>(r.stdout);
+  const parsed = parseSemgrep(r.stdout, worktree);
   if (parsed === undefined) {
     return { engine: "semgrep", findings: [], unavailable: "semgrep produced unparseable output" };
   }
+  const { findings, unread } = parsed;
+  return { engine: "semgrep", findings, ...(unread.length === 0 ? {} : { unavailable: unread.join("\n") }) };
+}
+
+/**
+ * semgrep's JSON, as findings plus what it could not read. Pure, so it has a test.
+ *
+ * Split out for the reason `parseTsc` and `parseEslint` are: the interesting behaviour is
+ * in the parsing, and a function that shells out cannot be exercised. Both defects this
+ * fixes — a dropped second site, and a file reported clean that was never parsed — live
+ * entirely on this side of the process boundary.
+ */
+export function parseSemgrep(
+  stdout: string,
+  worktree: string,
+): { readonly findings: readonly Finding[]; readonly unread: readonly string[] } | undefined {
+  const parsed = parseJson<{ results?: SemgrepResult[]; errors?: SemgrepError[] }>(stdout);
+  if (parsed === undefined) return undefined;
+  // WHAT IT COULD NOT READ, in the same channel as an engine that could not run — because
+  // it is the same fact. See `semgrepUnread`.
+  const unread = semgrepUnread(parsed.errors ?? []);
 
   const findings: Finding[] = [];
-  for (const res of parsed.results ?? []) {
+  for (const { match: res, file, lines } of bySite(parsed.results ?? [], (r) => ({
+    rule: r.check_id ?? "semgrep",
+    file: relativise(worktree, r.path),
+    line: r.start?.line ?? 0,
+  }))) {
     const raw = res.extra?.metadata?.cwe;
     const cweText = Array.isArray(raw) ? raw[0] : raw;
     const cwe = /^(CWE-\d+)/.exec(cweText ?? "")?.[1];
+    const first = lines[0];
     findings.push(
       finding({
-        file: relativise(worktree, res.path),
-        ...(res.start?.line !== undefined ? { line: res.start.line } : {}),
+        file,
+        ...(first !== undefined && first > 0 ? { line: first } : {}),
         severity: semgrepSeverity(res.extra?.severity),
-        claim: ruleClaim(res.check_id, res.extra?.message ?? "rule matched", "semgrep"),
-        evidence: `semgrep ${res.check_id ?? ""} at ${relativise(worktree, res.path)}:${res.start?.line ?? 0}`,
+        claim: `${ruleClaim(res.check_id, res.extra?.message ?? "rule matched", "semgrep")}${sitesSuffix(lines)}`,
+        evidence: sitesEvidence("semgrep", res.check_id ?? "", file, lines),
         failureScenario: "matches a published pattern for a known weakness class",
         ...(cwe !== undefined ? { cwe } : {}),
       }),
     );
   }
-  return { engine: "semgrep", findings };
+
+  return { findings, unread };
 }
 
 function semgrepSeverity(s: string | undefined): Severity {
@@ -418,17 +555,23 @@ async function astGrep(worktree: string): Promise<EngineOutcome> {
     return { engine: "ast-grep", findings: [], unavailable: "ast-grep produced unparseable output" };
   }
 
-  const findings = parsed.map((m) =>
-    finding({
-      file: relativise(worktree, m.file),
-      // ast-grep reports 0-indexed lines; findings are 1-indexed everywhere else.
-      ...(m.range?.start?.line !== undefined ? { line: m.range.start.line + 1 } : {}),
+  // Grouped exactly as semgrep's are, and for the same reason — see `bySite`. ast-grep
+  // reports 0-indexed lines; findings are 1-indexed everywhere else.
+  const findings = bySite(parsed, (m) => ({
+    rule: m.ruleId ?? "ast-grep",
+    file: relativise(worktree, m.file),
+    line: (m.range?.start?.line ?? -1) + 1,
+  })).map(({ match: m, file, lines }) => {
+    const first = lines[0];
+    return finding({
+      file,
+      ...(first !== undefined && first > 0 ? { line: first } : {}),
       severity: m.severity === "error" ? "medium" : "low",
-      claim: ruleClaim(m.ruleId, m.message ?? "pattern matched", "ast-grep"),
-      evidence: `ast-grep ${m.ruleId ?? ""} at ${relativise(worktree, m.file)}`,
+      claim: `${ruleClaim(m.ruleId, m.message ?? "pattern matched", "ast-grep")}${sitesSuffix(lines)}`,
+      evidence: sitesEvidence("ast-grep", m.ruleId ?? "", file, lines),
       failureScenario: "matches a structural rule this project has chosen to enforce",
-    }),
-  );
+    });
+  });
   return { engine: "ast-grep", findings };
 }
 

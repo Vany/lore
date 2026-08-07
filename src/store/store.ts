@@ -470,12 +470,24 @@ export class Store {
    * not exist, which the bus treats identically to one that is somebody else's: see
    * `ScopedEventBus`, and `mine()`'s NOT FOUND, for the same reason.
    */
-  ownerOf(reviewId: string): { readonly principal: string; readonly repoId: string } | undefined {
+  ownerOf(
+    reviewId: string,
+  ): { readonly principal: string; readonly repoId: string; readonly tokenHash?: string } | undefined {
     const row = this.db
-      .prepare("SELECT principal, repo_id FROM review WHERE id = ?")
-      .get(reviewId) as Record<string, string> | undefined;
+      .prepare("SELECT principal, repo_id, token_hash FROM review WHERE id = ?")
+      .get(reviewId) as Record<string, string | null> | undefined;
     if (row === undefined) return undefined;
-    return { principal: row["principal"] ?? "", repoId: row["repo_id"] ?? "" };
+    // `token_hash` travels with it so a SUBSCRIPTION can apply the same rule `mine()`
+    // does (D-78). Without it the stream authorised on principal+repo alone, so a second
+    // token of the same person was woken on every state change of a review that
+    // `review_poll` would answer NOT FOUND for — and the file's own comment claimed the
+    // two were in step.
+    const hash = row["token_hash"];
+    return {
+      principal: String(row["principal"] ?? ""),
+      repoId: String(row["repo_id"] ?? ""),
+      ...(typeof hash === "string" && hash !== "" ? { tokenHash: hash } : {}),
+    };
   }
 
   /**

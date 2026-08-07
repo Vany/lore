@@ -5,6 +5,57 @@ surprised me.
 
 ---
 
+## 2026-08-08 — session 45: a customer's false negative, and ten findings against my own day
+
+**A report arrived from `rigid-monorepo`: semgrep flagged the SAFE one of two identical
+XSS sinks and missed the unsafe one.** It named two candidate causes and could not
+separate them — semgrep emitting one match, or lore collapsing them by fingerprint. lore's
+half is answerable by reading: the fingerprint is `sha256(claim, file, symbol)`, so two
+different FILES cannot collapse. Their miss was not ours.
+
+**But the same defect one step further in WAS ours, and it is a false negative.** A pattern
+engine reports no symbol, so two matches of one rule in ONE file hash identically and the
+store's `ON CONFLICT DO NOTHING` dropped the second — silently. Proved it in three lines
+before fixing it. Both engines now emit one finding naming every site, in the claim as well
+as the evidence, because the model tier's T0 summary is one line per finding and a count
+living anywhere else is a count it never sees. Grouped rather than keyed by line: that
+would trade a false negative for permanent churn, since every edit above a match would
+retire one finding and raise an identical one below it.
+
+**And a second one, found by accident.** My reproduction fixture had a bad identifier.
+semgrep answered `results: [], errors: [PartialParsing]` and exited zero — and lore read
+only `results`. So a file semgrep could not parse was scanned, skipped, and reported as
+carrying nothing. INV-1 inside the deterministic tier, which is the worst place for it,
+because T0 is what a model tier is told it need not re-derive. It goes in `checks_skipped`
+now, like any engine that could not run.
+
+**The generalisable half of the customer's lesson is theirs and it is right:** a scanner's
+silence on a sink class is not coverage.
+
+**Then the ladder read my own day's work and found ten things**, one high. `review_inbox`
+consumed deltas exactly as `review_poll` does — while its own documentation AND
+`smoke.mjs` both said it consumed nothing. So `make smoke`, a read-only health check I ran
+tonight, emptied the delta queue of every review it listed. It is repo-scoped, so no
+colleague's findings were taken; the claim was false anyway, in a comment, above the code
+doing the damage.
+
+**Two of the ten were my corruption fix being wrong in the way it was proudest of.** The
+integrity check was written third under a comment saying FIRST — and `replicaState` calls
+`lastWriteAt`, which throws on a malformed database, so mid-run corruption made
+`checkHealth` reject before reaching the one check that names the cause. The existing test
+passed because it damages pages the live handle has CACHED. And `CONDITIONS.databaseUnreadable`
+was only ever sent from the startup path, so a database that went bad while running paged
+nobody. A test with a stub that throws on everything except `integrityFault` asserts the
+order now, which no arrangement of bytes could.
+
+**Surprised me: the appeal parser accepted `rule 1234`.** Four hex characters is also a
+number, so *"rule 1234 of the style guide covers this"* — an ordinary justification — was
+read as an appeal to a rule nobody wrote, and the tier was told to judge its central claim
+unsupported. `cite_as` hands back exactly eight characters, so there was never a reason to
+accept fewer.
+
+---
+
 ## 2026-08-08 — session 44: the database moves off the bind, and I deployed the wrong file
 
 **The corruption is diagnosed and fixed at the cause.** `lore.db` was on a Docker Desktop

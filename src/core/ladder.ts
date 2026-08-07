@@ -396,13 +396,23 @@ export function settle(state: LadderState, fingerprints: readonly string[]): Lad
 /**
  * A ladder as a string, for pinning it to a review that must finish on the same one.
  *
- * `id:model` per tier, in order. Both halves matter: a tier renamed is a different
- * position, and a tier repointed at another model is a different reviewer wearing the
- * same name — which is the case that corrupts the record, because `tier_run` stores
- * only the id.
+ * EVERY FIELD THAT CHANGES WHAT THE TIER DOES, in order. A tier renamed is a different
+ * position; a tier repointed at another model is a different reviewer wearing the same
+ * name — which is the case that corrupts the record, since `tier_run` stores only the id.
+ *
+ * `effort` and `stage` were omitted, and both are the same kind of change wearing the
+ * same name. D-29 says escalating effort is cheaper than escalating model: it is a
+ * deliberate lever, so moving t1 from `medium` to `max` mid-review means the rounds
+ * before and after were done by measurably different reviewers, recorded identically.
+ * `stage` decides whether the tier answers inline or asynchronously, which changes when
+ * a client is told anything at all.
+ *
+ * Built from a literal list rather than `Object.values`, so adding a field to `Tier` does
+ * not silently join the pin — a pin that changes for a field nobody meant to pin on would
+ * refuse every open review at the next deploy.
  */
 export function ladderFingerprint(tiers: readonly Tier[]): string {
-  return tiers.map((t) => `${t.id}:${t.model ?? t.kind}`).join(",");
+  return tiers.map((t) => `${t.id}:${t.model ?? t.kind}:${t.effort ?? "-"}:${t.stage}`).join(",");
 }
 
 export { anyTierRan };

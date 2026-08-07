@@ -6,7 +6,16 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { detect, engineRuleClass, parseEslint, parseTsc, ruleClaim, runEngine } from "./engines.ts";
+import { detect, engineRuleClass, parseEslint, parseSemgrep, parseTsc, ruleClaim, runEngine } from "./engines.ts";
+import { fingerprint } from "../core/fingerprint.ts";
+import type { Finding } from "../core/finding.ts";
+
+/** The findings half of `parseSemgrep`, which is what most of these assert about. */
+const semgrepFindings = (stdout: string, worktree: string): readonly Finding[] =>
+  parseSemgrep(stdout, worktree)?.findings ?? [];
+
+/** The other half: what semgrep could not read. */
+const semgrepUnread = (stdout: string): readonly string[] => parseSemgrep(stdout, "/w")?.unread ?? [];
 
 
 // ast-grep reported itself missing on every review of every repository lore has ever
@@ -109,5 +118,117 @@ describe("an engine finding says which rule fired", () => {
     ]) {
       expect(engineRuleClass(claim), claim).toBeUndefined();
     }
+  });
+});
+
+/**
+ * TWO MATCHES OF ONE RULE IN ONE FILE MUST NOT BECOME ONE FINDING.
+ *
+ * A finding's identity is `sha256(claim, file, symbol)` — no line, deliberately, because
+ * a defect that moved three lines down is the same defect. A pattern engine reports no
+ * symbol, so two matches of one rule in one file hashed identically and the store's
+ * `ON CONFLICT DO NOTHING` dropped the second. Silently. The client saw one site, fixed
+ * it, and had nothing to tell it there was another.
+ *
+ * That is a FALSE NEGATIVE on a sink class, which is the worst failure this service can
+ * produce: a reviewer reading "1 finding, now fixed" reasonably concludes the class is
+ * clean. A customer hit the same class across two FILES on 2026-08-08 — which lore does
+ * distinguish — and found the missed sink only by grepping for it by hand.
+ *
+ * The fix is one finding naming every site, not a line-keyed fingerprint: that would
+ * trade the false negative for permanent churn, since every edit above a match would
+ * retire one finding and raise an identical one below it.
+ */
+describe("a rule matching twice in one file reports both sites", () => {
+  const two = JSON.stringify({
+    results: [
+      { path: "/w/app/layout.tsx", start: { line: 123 }, check_id: "react-dangerouslysetinnerhtml", extra: { message: "Setting HTML from code is risky", severity: "WARNING" } },
+      { path: "/w/app/layout.tsx", start: { line: 32 }, check_id: "react-dangerouslysetinnerhtml", extra: { message: "Setting HTML from code is risky", severity: "WARNING" } },
+    ],
+  });
+
+  it("carries every line, in the claim the model actually reads", () => {
+    const f = semgrepFindings(two, "/w");
+    expect(f, "one finding, not two - and not one that has lost a site").toHaveLength(1);
+    expect(f[0]?.claim, "the T0 summary shows the claim alone, so the count must live there").toContain(
+      "[2 sites in this file: 32, 123]",
+    );
+    expect(f[0]?.evidence).toContain("app/layout.tsx:32");
+    expect(f[0]?.evidence).toContain("app/layout.tsx:123");
+    expect(f[0]?.evidence, "fixing the first must not read as fixing the class").toMatch(/SEPARATE SITE/);
+    // The earliest site, so the reader starts at the top of the file.
+    expect(f[0]?.line).toBe(32);
+  });
+
+  // The identity must still be stable: this is one finding about one rule in one file,
+  // and it has to survive the author fixing the first site and re-running.
+  it("keeps the same fingerprint when a site is added or removed", () => {
+    const one = JSON.stringify({
+      results: [
+        { path: "/w/app/layout.tsx", start: { line: 32 }, check_id: "react-dangerouslysetinnerhtml", extra: { message: "Setting HTML from code is risky", severity: "WARNING" } },
+      ],
+    });
+    const a = semgrepFindings(two, "/w")[0];
+    const b = semgrepFindings(one, "/w")[0];
+    expect(a).toBeDefined();
+    expect(b).toBeDefined();
+    // Different claims (the suffix names the sites), so DIFFERENT fingerprints — which is
+    // correct and is the point: answering "there are two here" is not answering "there is
+    // one here", and the ladder must see the second as a fresh statement.
+    expect(fingerprint(a as Finding)).not.toBe(fingerprint(b as Finding));
+  });
+
+  it("still separates two files, which is what a fingerprint already did", () => {
+    const across = JSON.stringify({
+      results: [
+        { path: "/w/app/layout.tsx", start: { line: 123 }, check_id: "react-dangerouslysetinnerhtml", extra: { message: "risky", severity: "WARNING" } },
+        { path: "/w/components/json-ld.tsx", start: { line: 32 }, check_id: "react-dangerouslysetinnerhtml", extra: { message: "risky", severity: "WARNING" } },
+      ],
+    });
+    const f = semgrepFindings(across, "/w");
+    expect(f.map((x) => x.file).sort()).toStrictEqual(["app/layout.tsx", "components/json-ld.tsx"]);
+    expect(new Set(f.map((x) => fingerprint(x))).size, "two files, two identities").toBe(2);
+  });
+});
+
+/**
+ * A FILE SEMGREP COULD NOT PARSE IS NOT A FILE WITH NO FINDINGS.
+ *
+ * semgrep exits zero and answers `results: []` for a file its parser choked on, putting
+ * the failure in `errors` at level `warn`. lore read only `results`, so the file was
+ * scanned, skipped, and reported as carrying nothing — INV-1 inside the deterministic
+ * tier, which is the worst place for it, because T0 is what a model tier is told it need
+ * not re-derive.
+ *
+ * Found by accident while reproducing a customer's false negative: the fixture had a bad
+ * identifier, semgrep answered exactly this, and lore would have called it clean.
+ */
+describe("a file semgrep could not read", () => {
+  it("is reported as unavailable, never as clean", () => {
+    const out = JSON.stringify({
+      results: [],
+      errors: [
+        { code: 3, level: "warn", type: ["PartialParsing", [{ path: "app/layout.tsx" }]], path: "app/layout.tsx", message: "Syntax error" },
+      ],
+    });
+    const unread = semgrepUnread(out);
+    expect(unread, "silence here is the failure INV-1 forbids").toHaveLength(1);
+    expect(unread[0]).toContain("app/layout.tsx");
+    expect(unread[0]).toMatch(/SKIPPED, not found clean/);
+  });
+
+  it("says nothing when there is nothing to say", () => {
+    expect(semgrepUnread(JSON.stringify({ results: [], errors: [] }))).toStrictEqual([]);
+  });
+
+  // A rule that could not be fetched is a different problem and semgrep fails loudly for
+  // it. This channel is for code that was silently skipped, and it only keeps working
+  // while every entry in it is worth reading.
+  it("ignores errors that are not parse failures", () => {
+    const out = JSON.stringify({
+      results: [],
+      errors: [{ level: "warn", type: ["Timeout", []], path: "big.ts", message: "timed out" }],
+    });
+    expect(semgrepUnread(out)).toStrictEqual([]);
   });
 });

@@ -197,12 +197,7 @@ export function resetFootprintCache(): void {
 }
 
 export async function checkHealth(store: Store, cfg: HeartbeatConfig): Promise<Health> {
-  const midnight = `${new Date().toISOString().slice(0, 10)}T00:00:00.000Z`;
-  const replica = await replicaState(store, cfg);
-  const needsHumanOverAge = store.needsHumanOlderThan(cfg.needsHumanAgeHours);
-
-  const problems: string[] = [];
-  // FIRST, AND ON EVERY BEAT. On 2026-08-07 this database became unreadable — every
+  // FIRST, AND ACTUALLY FIRST. On 2026-08-07 this database became unreadable — every
   // statement, including `sqlite_master`, answering `database disk image is malformed` —
   // and nothing noticed for twenty minutes. It surfaced because `make mirror` happened
   // to fail. `/status` was answering at the time, said `ok: false` for an unrelated and
@@ -210,9 +205,38 @@ export async function checkHealth(store: Store, cfg: HeartbeatConfig): Promise<H
   //
   // A health check that reports on the queue and the replica while never asking whether
   // the data is there is INV-1 at the top of the stack: the thing that did not run
-  // reported as the thing that found nothing. It cost 7ms against the live file.
+  // reported as the thing that found nothing. It costs 7ms against the live file.
+  //
+  // It was written third, under a comment saying FIRST, and the comment was the part that
+  // mattered: `replicaState` calls `store.lastWriteAt()` and `needsHumanOlderThan` runs a
+  // query, both on the LIVE handle, and both throw on a malformed database. So mid-run
+  // corruption made `checkHealth` reject before ever reaching the one check that would
+  // have named the cause — the caller got an exception where it should have got
+  // `ok: false, problems: ["DATABASE UNREADABLE: …"]`.
+  //
+  // `integrityFault` opens a FRESH read-only connection and returns rather than throwing,
+  // which is exactly why it can go first and why everything after it may assume nothing.
   const fault = store.integrityFault();
-  if (fault !== undefined) problems.push(`DATABASE UNREADABLE: ${fault}`);
+  if (fault !== undefined) {
+    // RETURNED HERE, not merely recorded. Every remaining reader touches the live handle
+    // and would throw; a report that dies while assembling itself tells nobody anything.
+    return {
+      ok: false,
+      problems: [`DATABASE UNREADABLE: ${fault}`],
+      footprintOverBudget: false,
+      queueDepth: 0,
+      spendToday: 0,
+      replica: "unconfigured",
+      needsHumanOverAge: 0,
+      at: new Date().toISOString(),
+    };
+  }
+
+  const midnight = `${new Date().toISOString().slice(0, 10)}T00:00:00.000Z`;
+  const replica = await replicaState(store, cfg);
+  const needsHumanOverAge = store.needsHumanOlderThan(cfg.needsHumanAgeHours);
+
+  const problems: string[] = [];
   // Read from cache; a stale one refreshes in the background. Never awaited — see the
   // note on `footprintBytes`, which is the outage this signature exists to prevent.
   const bytes = footprintBytes(cfg.dataDir, Date.now());
@@ -302,6 +326,18 @@ export function startHeartbeat(store: Store, cfg: HeartbeatConfig, alerter: Aler
     // Only `absent` is held back. `behind` already requires a replica to exist and to
     // have fallen behind, which cannot describe a service that has just started.
     const replicaGrace = Date.now() - startedAt < cfg.replicaGraceMs;
+
+    // THE FAULT THAT ENDS THE SERVICE, PAGED FROM THE BEAT TOO.
+    //
+    // `CONDITIONS.databaseUnreadable` existed only on the startup-refusal path, so a
+    // database that went bad WHILE RUNNING put the words in `/status` and paged nobody —
+    // and `/status` is a thing a person has to think to look at. This is the beat's whole
+    // purpose: to say it unprompted. First, and returning, because everything below reads
+    // a health report whose other fields are placeholders on this path.
+    if (health.problems.some((p) => p.startsWith("DATABASE UNREADABLE"))) {
+      await alerter.send(CONDITIONS.databaseUnreadable(health.problems[0] ?? "unreadable"));
+      return;
+    }
 
     if (health.queueDepth >= cfg.queueWarnDepth) {
       await alerter.send(CONDITIONS.queueBacked(health.queueDepth));

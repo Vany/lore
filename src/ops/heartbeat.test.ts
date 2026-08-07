@@ -171,6 +171,68 @@ describe("a database nobody can read is not a healthy service", () => {
     return s;
   };
 
+  /**
+   * THE ORDER IS THE PROPERTY, and the test above cannot see it.
+   *
+   * `rotUnderneath` damages pages the live handle already has CACHED, so its queries keep
+   * answering and only a fresh reader notices — which is why `integrityFault` opens one.
+   * That means the check happened to run before anything threw, and the assertion held for
+   * a reason unrelated to ordering.
+   *
+   * On a database whose damage the live handle DOES hit, every other reader in
+   * `checkHealth` throws: `replicaState` calls `lastWriteAt`, and `needsHumanOlderThan`
+   * and `queueDepth` are ordinary queries. Written third under a comment saying FIRST, the
+   * integrity check was never reached — the caller got an exception where it should have
+   * got the one report that names the cause. A health check that dies while assembling
+   * itself tells nobody anything, which is INV-1 wearing a stack trace.
+   *
+   * A stub rather than a fixture, because the point is exactly that NOTHING ELSE IS
+   * CALLED — and no arrangement of bytes can assert that.
+   */
+  it("asks about integrity before anything that would throw", async () => {
+    const calls: string[] = [];
+    const refuses = new Proxy(
+      {},
+      {
+        get(_t, prop: string) {
+          if (prop === "integrityFault") return () => "database disk image is malformed";
+          return (...args: unknown[]) => {
+            calls.push(prop);
+            void args;
+            throw new Error(`database disk image is malformed (via ${prop})`);
+          };
+        },
+      },
+    ) as unknown as Store;
+
+    const h = await checkHealth(refuses, cfg());
+    expect(h.ok).toBe(false);
+    expect(h.problems.join(" ")).toMatch(/DATABASE UNREADABLE/);
+    expect(calls, "nothing else may be asked: on this path every one of them throws").toStrictEqual([]);
+  });
+
+  // `CONDITIONS.databaseUnreadable` lived only on the startup-refusal path, so a database
+  // that went bad WHILE RUNNING put the words in `/status` and paged nobody — and
+  // `/status` is a thing a person has to think to look at. Saying it unprompted is the
+  // beat's entire purpose.
+  it("pages, rather than only recording it in /status", async () => {
+    const broken = rotUnderneath();
+    try {
+      const stop = startHeartbeat(broken, cfg({ intervalMs: 3_600_000 }), alerter);
+      await until(() => sent.some((x) => x.condition.startsWith("database unreadable")));
+      stop();
+      const a = sent.find((x) => x.condition.startsWith("database unreadable"));
+      expect(a?.severity).toBe("page");
+      expect(a?.detail).toMatch(/make restore/);
+    } finally {
+      try {
+        broken.close();
+      } catch {
+        // Closing a corrupt database can itself fail; the test is about the alert.
+      }
+    }
+  });
+
   it("says the database is unreadable, rather than reporting on the queue", async () => {
     const broken = rotUnderneath();
     try {

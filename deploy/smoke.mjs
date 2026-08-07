@@ -20,6 +20,13 @@
  * consumes deltas (D-78), so a smoke test that polled would take findings their owner
  * has not seen — a check that damages what it checks.
  *
+ * That claim was FALSE for `review_inbox` until 2026-08-08, and this file asserted it in
+ * a comment while doing the damage: the inbox called `undelivered` + `markDelivered` for
+ * every review it listed, exactly as `review_poll` does. `make smoke` therefore emptied
+ * the delta queue of every review belonging to the token it was given, and its owner was
+ * shown nothing the next time it polled. The inbox no longer consumes; this comment is
+ * the record of why that matters here specifically.
+ *
  * Exit 0 or a named failure. Run: `make smoke`.
  */
 

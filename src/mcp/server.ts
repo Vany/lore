@@ -809,11 +809,22 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
     "review_inbox",
     { description: TOOL_DOCS.inbox, inputSchema: z.object({}) },
     async () => {
-      // Scoped to the token's repository, not merely to its principal.
+      // IT DOES NOT CONSUME, and it used to.
+      //
+      // `undelivered` + `markDelivered` is `review_poll`'s contract: it returns deltas
+      // and takes them off the queue, which is why polling somebody else's review is
+      // refused (D-78). The inbox did exactly the same thing while its own documentation
+      // and `smoke.mjs` both said it consumed nothing — so a read-only health check
+      // silently emptied the delta queue of every review it listed, and the owner was
+      // shown nothing next time it polled.
+      //
+      // The inbox answers "what is waiting for me", which is a question about state, not
+      // a handover. `undeliveredCount` reads the same rows without marking them, so the
+      // numbers are unchanged and the client still calls `review_poll` to collect —
+      // which is what every doc already tells it to do.
       const reviews = store.listReviews(who.principal, who.repoId);
       const items = reviews.map((r) => {
         const fresh = store.undelivered(r.id);
-        store.markDelivered(r.id, fresh.map((f) => f.fingerprint));
         return {
           review_id: r.id,
           branch: r.branch,

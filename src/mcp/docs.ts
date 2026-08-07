@@ -445,11 +445,18 @@ alerting you have. Do not merely log them. lore cannot notify anyone — it retu
 information and you decide what deserves attention. A finding nobody sees is a
 finding nobody found.
 
-THIS IS THE ONE CALL ABOUT YOU RATHER THAN ABOUT ONE REVIEW. It lists reviews started
-with YOUR token. A repository can have several holders, and every other call takes a
-review id and answers only for the token that started that review — so a colleague's
-review will not appear here, is theirs to drive, and polling it would take findings
-they have not seen. If you know an id that is not in this list, leave it alone.
+IT CONSUMES NOTHING. Counts and a preview, not a handover: the findings stay queued and
+you still collect them with review_poll, which is the only call that takes deltas off the
+queue. So it is safe to call at the start of every session, and safe for a health check
+to call — it used to consume exactly as review_poll does, while saying it did not, which
+quietly emptied the queue of every review it listed.
+
+THIS IS THE ONE CALL ABOUT YOU RATHER THAN ABOUT ONE REVIEW. It lists reviews for YOUR
+PRINCIPAL on this repository. Note the difference from every other call, which is bound
+to the token that STARTED the review (D-78): two tokens issued to the same person on the
+same repository share an inbox, and each will see the other's reviews here — but a
+review_poll on one of those ids still answers NOT FOUND. Different people never share an
+inbox. If you know an id that is not in this list, leave it alone.
 `.trim(),
 
   query: `

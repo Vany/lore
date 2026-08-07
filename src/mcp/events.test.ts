@@ -121,3 +121,48 @@ describe("ScopedEventBus", () => {
     expect(errors).toContain("socket gone");
   });
 });
+
+/**
+ * A SUBSCRIPTION MUST BE AS NARROW AS `mine()`, and it claimed to be while it was not.
+ *
+ * After D-78 a review is bound to the token that started it, and `review_poll` on it from
+ * a different live token of the SAME PERSON answers NOT FOUND. The stream authorised on
+ * principal and repository alone, so that second token was woken on every state change of
+ * a review it could never read — told repeatedly that something had happened and unable
+ * to find out what.
+ *
+ * The rules are written twice on purpose: the bus must not import the store. That makes
+ * them exactly the kind of pair that drifts, so the pair is what this asserts.
+ */
+describe("a stream hears only what its own token could read", () => {
+  const BOUND = "hash-alice";
+  const SECOND: Subscriber = { principal: "alice", repoId: "repo-a", tokenHash: "hash-alice-2" };
+
+  const checks = (live: (h: string) => boolean): SubscriberChecks => ({
+    ownerOf: (id) => (id === "revBound" ? { principal: "alice", repoId: "repo-a", tokenHash: BOUND } : undefined),
+    tokenLive: live,
+  });
+
+  it("wakes the token that started the review", () => {
+    const bus = new ScopedEventBus(checks(() => true));
+    const heard = listenAs(bus, ALICE);
+    bus.publish(updated("revBound"));
+    expect(heard).toStrictEqual([updated("revBound")]);
+  });
+
+  it("stays silent for another live token of the same person", () => {
+    const bus = new ScopedEventBus(checks(() => true));
+    const heard = listenAs(bus, SECOND);
+    bus.publish(updated("revBound"));
+    expect(heard, "review_poll answers NOT FOUND here, so the stream must say nothing").toStrictEqual([]);
+  });
+
+  // The same rotation answer `mine()` gives, and for the same reason: stranding a
+  // colleague's in-flight work is worse than the accident it prevents.
+  it("falls back to repository scope once the binding is revoked", () => {
+    const bus = new ScopedEventBus(checks((h) => h !== BOUND));
+    const heard = listenAs(bus, SECOND);
+    bus.publish(updated("revBound"));
+    expect(heard).toStrictEqual([updated("revBound")]);
+  });
+});

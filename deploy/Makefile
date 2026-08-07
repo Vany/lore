@@ -32,7 +32,19 @@ DB      ?= /var/lib/lore/db
 # compose names a volume `<project>_<name>`, and the project defaults to this directory.
 PROJECT ?= $(if $(COMPOSE_PROJECT_NAME),$(COMPOSE_PROJECT_NAME),$(notdir $(CURDIR)))
 DBVOL   = $(PROJECT)_lore-db
-DBRUN   = docker run --rm -v $(DBVOL):$(DB) -e LORE_DB_DIR=$(DB) --entrypoint node lore-lore:latest
+# compose names the image `<project>-<service>` and the volume `<project>_<name>`, so both
+# halves have to follow PROJECT or they describe different deployments — the volume was
+# parameterised and the image was not, which is correct only where the project is
+# literally `lore`.
+# ONE LIST, because two were already wrong: the guard compared nine files and the
+# reconciler copied twelve, so tier-config drift never blocked `make up` and
+# `sync-deployed` silently overwrote three files the operator was never told differed.
+# A guard and its remedy disagreeing about scope is the guard's whole value gone.
+DEPLOY_FILES = Makefile docker-compose.yml litestream.yml Dockerfile opencode.Dockerfile \
+               sandbox.Dockerfile smoke.mjs mirror-refresh.sh sync-opencode.sh \
+               tiers.kimi.json tiers.zai-kimi-openai.json tiers.zai-openai.json
+DBIMG   = $(PROJECT)-lore:latest
+DBRUN   = docker run --rm -v $(DBVOL):$(DB) -e LORE_DB_DIR=$(DB) --entrypoint node $(DBIMG)
 BACKUP  ?= $(shell grep -E '^LORE_HOST_BACKUP=' .env 2>/dev/null | cut -d= -f2)
 BACKUP  := $(if $(BACKUP),$(BACKUP),./backup)
 
@@ -197,8 +209,7 @@ build: preflight
 define check-deployed
 	@test -d ../deploy || exit 0; \
 	drift=""; \
-	for f in Makefile docker-compose.yml litestream.yml Dockerfile opencode.Dockerfile \
-	         sandbox.Dockerfile smoke.mjs mirror-refresh.sh sync-opencode.sh; do \
+	for f in $(DEPLOY_FILES); do \
 		test -f "../deploy/$$f" || continue; \
 		cmp -s "./$$f" "../deploy/$$f" || drift="$$drift $$f"; \
 	done; \
@@ -215,9 +226,7 @@ endef
 ## deployment has twice held the newer version of a file.
 sync-deployed:
 	@test -d ../deploy || { echo "no ../deploy beside this deployment — nothing to sync from"; exit 1; }
-	@for f in Makefile docker-compose.yml litestream.yml Dockerfile opencode.Dockerfile \
-	          sandbox.Dockerfile smoke.mjs mirror-refresh.sh sync-opencode.sh \
-	          tiers.kimi.json tiers.zai-kimi-openai.json tiers.zai-openai.json; do \
+	@for f in $(DEPLOY_FILES); do \
 		test -f "../deploy/$$f" && cp "../deploy/$$f" "./$$f" && echo "  $$f"; \
 	done
 	@echo "synced from ../deploy. .env and opencode/ are yours and were not touched."
@@ -359,9 +368,16 @@ status-json:
 		|| { echo "status-json could not answer. the error, not a guess:"; printf '%s\n' "$$out"; exit 1; }
 
 ## Same view, straight against a local database — no container, no service.
-## Development on a laptop, where lore runs as plain node.
+## Development on a laptop, where lore runs as plain node and both directories are one.
+##
+## It set LORE_DATA_DIR alone, which was right while the database lived under it and
+## became a path with no database in it the moment the two split — the same failure this
+## change fixed for `make status`, one target below it. Both are set, so `dbPath()` and
+## the mirror check each get the directory they mean.
 status-local:
-	@LORE_DATA_DIR=$${LORE_DATA_DIR:-$$PWD/../lore} node ../src/ops/status.ts $(ID)
+	@LORE_DATA_DIR=$${LORE_DATA_DIR:-$$PWD/../lore} \
+	 LORE_DB_DIR=$${LORE_DB_DIR:-$${LORE_DATA_DIR:-$$PWD/../lore}} \
+	 node ../src/ops/status.ts $(ID)
 
 ## THE PRODUCT, INSPECTED. What the memory holds, per document, and what the screen
 ## refused with the reason it gave (D-81).

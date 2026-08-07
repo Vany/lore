@@ -42,8 +42,22 @@ export interface LoreOk {
   readonly rule?: string;
 }
 
-/** `rule <short>` opening a reason, with an optional dash before the note. */
-const APPEAL = new RegExp(`^rule\\s+([0-9a-f]{4,${String(SHORT_LENGTH)}})\\s*[—–:-]?\\s*([\\s\\S]*)$`, "i");
+/**
+ * `rule <id>` opening a reason, with an optional dash before the note.
+ *
+ * THE FULL SHORT ID, never an abbreviation of it. Four hex characters were accepted, and
+ * four hex characters is also `1234` — so *"rule 1234 of the style guide covers this"*,
+ * an ordinary justification, was read as an appeal to a rule that does not exist, and the
+ * tier was told to judge its central claim as unsupported. The author had cited nothing.
+ *
+ * There is no cost to requiring all eight: `knowledge_teach` hands back exactly eight as
+ * `cite_as`, so nobody is ever in a position to type fewer. A longer paste is taken whole
+ * — `policyByShort` matches on prefix, so a full uuid resolves as well as its head.
+ */
+const APPEAL = new RegExp(
+  `^rule\\s+([0-9a-f]{${String(SHORT_LENGTH)}}[0-9a-f-]*)\\s*[—–:-]?\\s*([\\s\\S]*)$`,
+  "i",
+);
 
 /**
  * Split a cited rule off the front of a reason.

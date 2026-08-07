@@ -125,6 +125,14 @@ describe("citing a development rule", () => {
     ]);
   });
 
+  // A client that pastes the whole id rather than the eight it was handed: taken whole,
+  // because `policyByShort` matches on prefix and a full id resolves as well as its head.
+  it("takes a longer id whole rather than splitting it", () => {
+    const m = parseLoreOk("// lore-ok[a1b2c3d4]: rule 3f9a2c11-aaaa-bbbb — behind the overlay")[0];
+    expect(m?.rule).toBe("3f9a2c11-aaaa-bbbb");
+    expect(m?.reason).toBe("behind the overlay");
+  });
+
   it("accepts the separators an agent will actually type", () => {
     for (const sep of ["—", "–", "-", ":", ""]) {
       const src = `// lore-ok[a1b2c3d4]: rule 3f9a2c11 ${sep} behind the overlay`;
@@ -152,6 +160,11 @@ describe("citing a development rule", () => {
       "rule of thumb: this path is bounded by the caller",
       "rules here are enforced at the boundary instead",
       "rule 12 of the style guide covers this",
+      // FOUR HEX DIGITS IS ALSO A NUMBER. Accepted once, so an ordinary justification
+      // saying "rule 1234 of the style guide" was read as an appeal to a rule nobody
+      // wrote, and the tier was told its central claim was unsupported.
+      "rule 1234 of the style guide covers this",
+      "rule 0000 is about naming, which is not what this line does",
       "rule zzz — not a hex id",
     ]) {
       expect(parseLoreOk(`// lore-ok[a1b2c3d4]: ${reason}`)[0], reason).toStrictEqual({
