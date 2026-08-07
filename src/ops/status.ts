@@ -24,6 +24,7 @@
 import { statSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { dataDir, dbPath } from "../core/paths.ts";
 import type { LadderState } from "../core/ladder.ts";
 import { TERMINAL_SQL } from "../core/review-state.ts";
 import { MAX_MIRROR_AGE_MS } from "../git/repo.ts";
@@ -403,8 +404,12 @@ function mirrorLines(db: DatabaseSync, dataDir: string): string[] {
 // a dead refresher — had no test. Opening a database and writing to stdout at import
 // time makes a module unusable from a test, so it does not get one.
 if (import.meta.main) {
-  const dbPath = process.env["LORE_DATA_DIR"] ?? "/var/lib/lore";
-  const db = new DatabaseSync(`${dbPath}/lore.db`, { readOnly: true });
-  process.stdout.write(renderStatus(db, process.argv[2], dbPath));
+  // The DATABASE and the DATA directory are two different places now (see `paths.ts`).
+  // This read them as one and looked for `lore.db` under the data directory, which since
+  // the split holds no database at all — `make status` died with `unable to open database
+  // file` while the service beside it was perfectly healthy. The mirror check below is
+  // about `repos/`, so it genuinely wants the other one.
+  const db = new DatabaseSync(dbPath(), { readOnly: true });
+  process.stdout.write(renderStatus(db, process.argv[2], dataDir()));
   db.close();
 }

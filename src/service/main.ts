@@ -6,6 +6,7 @@
  */
 
 import { join } from "node:path";
+import { dataDir, dbDir, dbFileIn } from "../core/paths.ts";
 import { mkdir } from "node:fs/promises";
 import { Alerter, CONDITIONS } from "../ops/alerts.ts";
 import { DEFAULT_HEARTBEAT, startHeartbeat, type HeartbeatConfig } from "../ops/heartbeat.ts";
@@ -96,8 +97,12 @@ export function configFromEnv(): ServiceConfig {
   const heartbeatUrl = env("LORE_HEARTBEAT_URL");
   const backupDir = env("LORE_BACKUP_DIR");
   return {
-    dataDir: env("LORE_DATA_DIR") ?? "/var/lib/lore",
-    ...(env("LORE_DB_DIR") !== undefined ? { dbDir: env("LORE_DB_DIR") ?? "" } : {}),
+    // Through `paths.ts`, which is the one definition. The service used to default to
+    // `/var/lib/lore` while the CLI defaulted to `~/.lore`, so the two disagreed about
+    // where state lived whenever the variable was unset — and the container always sets
+    // it, which is exactly what kept that from being noticed.
+    dataDir: dataDir(),
+    dbDir: dbDir(),
     port: envNumber("LORE_PORT", 7777, 1),
     // Binds to the tailnet interface in production; 0.0.0.0 inside a container
     // that is only reachable through it.
@@ -150,7 +155,7 @@ function openOrRefuse(dbPath: string): { readonly store: Store } | { readonly fa
 
 export async function serve(cfg: ServiceConfig): Promise<() => void> {
   await mkdir(cfg.dataDir, { recursive: true });
-  const dbPath = join(cfg.dbDir ?? cfg.dataDir, "lore.db");
+  const dbFile = dbFileIn(cfg.dbDir ?? cfg.dataDir);
 
   // BEFORE ANYTHING ELSE, AND WITHOUT EXITING IF IT FAILS.
   //
@@ -164,7 +169,7 @@ export async function serve(cfg: ServiceConfig): Promise<() => void> {
   // So the check moves to the one moment that is always reached, and a failure serves a
   // refusal instead of dying. `serveRefusing` starts NO worker, NO heartbeat and NO
   // sweep: writing into a damaged file is how a recoverable fault becomes permanent.
-  const opened = openOrRefuse(dbPath);
+  const opened = openOrRefuse(dbFile);
   if ("fault" in opened) {
     // The page goes out first, in case nobody ever curls anything. Fire-and-forget by
     // design — an alert that blocks startup on a webhook timeout is a second outage.
@@ -172,7 +177,7 @@ export async function serve(cfg: ServiceConfig): Promise<() => void> {
       ...(cfg.webhookUrl !== undefined ? { webhookUrl: cfg.webhookUrl } : {}),
       timeoutMs: 10_000,
     }).send(CONDITIONS.databaseUnreadable(opened.fault));
-    const refusal = serveRefusing({ port: cfg.port, bind: cfg.host, dbPath, fault: opened.fault });
+    const refusal = serveRefusing({ port: cfg.port, bind: cfg.host, dbPath: dbFile, fault: opened.fault });
     return refusal.stop;
   }
   const store = opened.store;

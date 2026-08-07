@@ -14,6 +14,7 @@
 
 import { readdir, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
+import { dataDir } from "../core/paths.ts";
 import { isTerminal, type ReviewState } from "../core/review-state.ts";
 import { pruneWorktrees, removeWorktree, repoPaths } from "../git/repo.ts";
 import type { Store } from "../store/store.ts";
@@ -59,9 +60,9 @@ export const DEFAULT_RETENTION: RetentionConfig = {
   reviewDays: 90,
   staleHours: 48,
   cacheDays: 14,
-  reposRoot: `${process.env["LORE_DATA_DIR"] ?? "/var/lib/lore"}/repos`,
-  cacheRoot: `${process.env["LORE_DATA_DIR"] ?? "/var/lib/lore"}/npm-cache`,
-  scratchRoot: `${process.env["LORE_DATA_DIR"] ?? "/var/lib/lore"}/scratch`,
+  reposRoot: join(dataDir(), "repos"),
+  cacheRoot: join(dataDir(), "npm-cache"),
+  scratchRoot: join(dataDir(), "scratch"),
 };
 
 export interface RetentionResult {

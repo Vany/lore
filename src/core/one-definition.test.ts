@@ -197,6 +197,52 @@ describe("sources are text", () => {
   });
 });
 
+/**
+ * Where the database is, decided ONCE.
+ *
+ * `LORE_DATA_DIR` and `LORE_DB_DIR` were read in five places with two different
+ * fallbacks — the service defaulted to `/var/lib/lore` and the CLI to `~/.lore`, and the
+ * container always sets the variable, which is precisely what kept them from disagreeing
+ * anywhere anybody looked.
+ *
+ * Then the database moved out of the data directory on 2026-08-08 and only three of the
+ * readers were updated. `make status` died with `unable to open database file` beside a
+ * perfectly healthy service, having looked in a directory that no longer holds one.
+ *
+ * Same shape as the terminal states written out six times: the second copy of a decision
+ * always disagrees eventually, and the disagreement surfaces at the worst moment.
+ */
+describe("the state directories have one definition", () => {
+  it("is read from the environment only in core/paths.ts", () => {
+    const offenders = FILES.filter(
+      (f) => f.path !== "core/paths.ts" && /process\.env\[.(?:LORE_DATA_DIR|LORE_DB_DIR).\]/.test(f.text),
+    ).map((f) => f.path);
+    expect(
+      offenders,
+      `read LORE_DATA_DIR / LORE_DB_DIR directly — call dataDir(), dbDir() or dbPath():\n  ${offenders.join("\n  ")}`,
+    ).toStrictEqual([]);
+  });
+
+  /**
+   * The database is `<dbDir>/lore.db`, and every reader must get it from the same place.
+   * A hand-built path is how one of them came to look under the data directory.
+   *
+   * CODE ONLY. The first version matched the filename anywhere and flagged three files
+   * that merely discuss it in prose — a guard that fires on comments is one somebody
+   * silences. It looks for the two ways the path is actually constructed: a `join` whose
+   * last argument is the filename, and a template or string ending `/lore.db`.
+   */
+  const BUILT_BY_HAND = /join\([^)]*["'`]lore\.db["'`]\)|[/}]lore\.db["'`]/;
+
+  it("never builds the database path by hand", () => {
+    const offenders = FILES.filter((f) => f.path !== "core/paths.ts" && BUILT_BY_HAND.test(f.text)).map((f) => f.path);
+    expect(
+      offenders,
+      `construct the database path themselves — call dbPath():\n  ${offenders.join("\n  ")}`,
+    ).toStrictEqual([]);
+  });
+});
+
 describe("make recipes do not comment inside a shell continuation", () => {
   it("has no `@#` on a line continuing the previous one", () => {
     const lines = readFileSync(join(SRC, "..", "deploy", "Makefile"), "utf8").split("\n");

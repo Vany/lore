@@ -17,6 +17,7 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { dataDir } from "../core/paths.ts";
 import { runTool, type ToolResult } from "./exec.ts";
 
 export interface SandboxConfig {
@@ -61,8 +62,8 @@ export const DEFAULT_SANDBOX: SandboxConfig = {
   // correct on a deployment whose data directory happens to be there. Anywhere else
   // it is a path the lore container cannot even create (EACCES), and before that it
   // was a path the host silently mounted as empty.
-  cacheRoot: `${process.env["LORE_DATA_DIR"] ?? "/var/lib/lore"}/npm-cache`,
-  scratchRoot: `${process.env["LORE_DATA_DIR"] ?? "/var/lib/lore"}/scratch`,
+  cacheRoot: join(dataDir(), "npm-cache"),
+  scratchRoot: join(dataDir(), "scratch"),
   // The uid lore is actually running as, asked of the process rather than configured
   // — a second place to write it down is a second place for it to disagree.
   uid: typeof process.getuid === "function" ? process.getuid() : 1000,

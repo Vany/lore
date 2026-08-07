@@ -41,6 +41,17 @@ empty, perfectly valid database — so `make tokens` would answer "no tokens" an
 the path. Reading commands refuse a database that does not exist now. Only `lore new` and
 `lore review` create one, because bringing one into existence is their job.
 
+**A fourth copy of "where is the database", found by `make status` dying.** I split
+`LORE_DATA_DIR` into a data directory and a database directory and updated three of the
+four readers; `ops/status.ts` still looked for `lore.db` under the data directory and died
+with `unable to open database file` beside a perfectly healthy service. The other four
+readers also disagreed about the FALLBACK — the service defaulted to `/var/lib/lore`, the
+CLI to `~/.lore` — and nobody had noticed because the container always sets the variable.
+`core/paths.ts` is the one definition now, and `one-definition.test.ts` fails if anything
+else reads either variable or spells the filename. First version of that guard fired on
+three files that only DISCUSS the path in prose; a guard that fires on comments is one
+somebody silences, so it matches the two code forms instead.
+
 **What I did not build, and told Vany why.** He chose "also stop the CLI opening the live
 DB". On ext4 that buys no corruption safety — multi-process SQLite is the normal supported
 configuration, and the danger was the filesystem, not the second process. What was real in

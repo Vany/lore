@@ -9,10 +9,10 @@
 
 import { mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { EXIT, LoreError, UsageError, type ExitCode } from "./core/errors.ts";
+import { dataDir, dbPath } from "./core/paths.ts";
 import { compareFindings } from "./core/finding.ts";
 import { initialState } from "./core/ladder.ts";
 import { DEFAULT_TYPE, reviewType, reviewTypeIds } from "./core/review-type.ts";
@@ -112,15 +112,6 @@ function openExisting(path: string): Store {
   return new Store(path);
 }
 
-/** Where state lives, resolved the same way the service resolves it. */
-function dbDirDefault(): string {
-  const dbDir = process.env["LORE_DB_DIR"];
-  if (dbDir !== undefined && dbDir !== "") return dbDir;
-  const dataDir = process.env["LORE_DATA_DIR"];
-  if (dataDir !== undefined && dataDir !== "") return dataDir;
-  return join(homedir(), ".lore");
-}
-
 export function parseArgs(argv: readonly string[]): Args {
   const flag = (name: string): string | undefined => flagOf(argv, name);
   const has = (name: string): boolean => argv.includes(`--${name}`);
@@ -143,7 +134,7 @@ export function parseArgs(argv: readonly string[]): Args {
     // off the host bind onto a volume and the data directory no longer contains it —
     // a CLI that kept looking there would quietly CREATE a second, empty database and
     // report an empty knowledge base as the truth.
-    db: flag("db") ?? join(dbDirDefault(), "lore.db"),
+    db: flag("db") ?? dbPath(),
     json: has("json"),
   };
 }
@@ -207,7 +198,7 @@ export async function main(argv: readonly string[]): Promise<ExitCode> {
       const path = await proposeCli({
         store,
         reviewer: new Reviewer(DEFAULT_REVIEWER),
-        reposRoot: join(process.env["LORE_DATA_DIR"] ?? join(homedir(), ".lore"), "repos"),
+        reposRoot: join(dataDir(), "repos"),
         repo,
         budget: parseBudget(flagOf(argv, "budget")),
         // The repository root by default, so a whole-repo run is the EXPLICIT case
