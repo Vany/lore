@@ -79,7 +79,7 @@ const NOT_SELF_CONTAINED = /^(it|its|this|that|these|those|they|their|then|so|th
 const STARTS_MID_SENTENCE = /^[a-z]/;
 
 /**
- * The reader's version, stamped on every rule it writes.
+ * The EXTRACTOR's version — the deterministic half of what a row's reader was.
  *
  * BUMP THIS whenever `extractRules` changes what it accepts. Rules carrying an older
  * stamp are retired on the next ingest and re-extracted, exactly as a rule is retired
@@ -100,7 +100,35 @@ const STARTS_MID_SENTENCE = /^[a-z]/;
  * lifted clause. The bump is what brings those back: the rows `2` never wrote are not
  * recoverable by editing a document, only by the reader changing and saying so.
  */
-export const EXTRACTOR_VERSION = "3";
+const EXTRACT_VERSION = "3";
+
+/**
+ * The SCREEN's version, and it is half of what decides which rules live (D-81).
+ *
+ * BUMP THIS whenever `screenPrompt`, the refusal contract, or which tier is asked
+ * changes what the screen throws away.
+ *
+ * It needs its own number because the reader that produces a row is now two readers, and
+ * versioning only the first recreates the exact trap the first version was built to close.
+ * `extractRules` could change and retire what it wrote; the screen could change and
+ * nothing happened — unchanged documents would keep an old screen's vetoes for ever, a
+ * wrongly-refused rule staying invisible in precisely the way the decontextualised
+ * fragments did before any stamp existed. And the next planned change to this code is
+ * "measure the screen, then improve the prompt", which walks straight into it.
+ *
+ * `1` is the first screen: refuse-by-number, one batched call per document, cheapest
+ * model tier.
+ */
+const SCREEN_VERSION = "1";
+
+/**
+ * What is written to `knowledge.extractor`, and what retirement compares.
+ *
+ * Both halves, so a change to either retires what the pair produced. Read as one opaque
+ * token everywhere else — nothing outside this file should be parsing it apart, because
+ * the moment something does, the two versions have to agree about a format as well.
+ */
+export const EXTRACTOR_VERSION = `${EXTRACT_VERSION}.${SCREEN_VERSION}`;
 
 const MIN_LENGTH = 20;
 const MAX_LENGTH = 280;

@@ -35,7 +35,7 @@ import { detectAndRecord, renderConflicts } from "../knowledge/conflict.ts";
 import { promoteRecurring } from "../knowledge/derive.ts";
 import { relevantTo } from "../knowledge/enrich.ts";
 import { ingestDocs } from "../knowledge/ingest.ts";
-import { screenFor } from "../knowledge/screen.ts";
+import { screenFor, screenUsage, type ScreenUsage } from "../knowledge/screen.ts";
 import { runT0, renderT0 } from "../t0/runner.ts";
 import type { RecordedFinding, Store } from "../store/store.ts";
 import type { ReviewerLike } from "./opencode.ts";
@@ -242,8 +242,13 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // retries. The knowledge base is the product; it is never emptied to protect a filter.
   const screenTier = tiers.find((t) => t.kind === "model" && t.model !== undefined);
   const ask = input.reviewer.askFor?.bind(input.reviewer);
+  // A tier is billed the same whoever asked it, so a screen session lands in `usage`
+  // exactly as a round does.
+  const recordScreen = (u: ScreenUsage) => store.recordUsage(screenUsage(u, review.repoId, reviewId));
   const ingested = await ingestDocs(store, review.repoId, worktree, {
-    ...(screenTier === undefined || ask === undefined ? {} : { screen: screenFor(ask, screenTier, worktree) }),
+    ...(screenTier === undefined || ask === undefined
+      ? {}
+      : { screen: screenFor(ask, screenTier, worktree, recordScreen) }),
   });
   // SAID OUT LOUD, because a degraded memory is invisible from the outside: the review
   // runs, the prompt is full of rules, and a fifth of them being fragments looks exactly

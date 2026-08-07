@@ -126,9 +126,26 @@ So the cheapest model tier is asked, once per document: **which of these are not
   and is never emptied to protect a filter; the stamp is what stops *kept for now*
   becoming *kept for ever*.
 
+**The reader of a row is BOTH halves, and the stamp names both.** `knowledge.extractor`
+carries `<extract>.<screen>`. Versioning only the extractor recreated the trap the stamp
+was built to close, one layer up: the prompt, the contract or the tier could change and
+nothing already stored would move, so an unchanged document kept an old screen's vetoes
+for ever and a wrongly-refused rule stayed invisible — exactly what the decontextualised
+fragments did before any stamp existed. The next planned change here is *measure the
+screen, then improve the prompt*, which walks straight into it.
+
 **Cost.** One call per document, and only for a document whose text or reader changed —
 `ingestDocs` asks that first, because it runs on every review and almost always finds
 nothing changed.
+
+**And it is recorded**, under `screen:<tier>` in `usage`, from both callers — the round
+and the bootstrap. These were the only model calls in the system with no usage row, so
+this section's own cost claim could not be checked against anything, `ops/spend`
+under-reported by a whole class of call, and a cheap-tier screen that decided to go
+exploring the worktree would have burned minutes of quota leaving no trace. The `screen:`
+prefix keeps them out of the per-tier latency distribution `check_back_after_ms` reads: a
+screen session is not a review round, and pooling them would promise a waiting client a
+four-second answer from a tier that takes ten minutes.
 
 **A refusal counts as having read the document**, and that is what gives the cost a
 floor. The question is *did this reader process this text*, so it is asked of the live

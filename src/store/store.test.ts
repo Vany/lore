@@ -680,6 +680,28 @@ describe("tier runs are opened before the tier is asked anything", () => {
     const n = store.db.prepare("SELECT COUNT(*) c FROM tier_run WHERE review_id = 'rev1'").get() as Record<string, number>;
     expect(Number(n["c"])).toBe(1);
   });
+
+  // `roundStartedAt` feeds `check_back_after_ms`, which is conditioned on how long the
+  // round has run and compared against the CURSOR TIER's latencies. It used to answer
+  // with any open row — and during T0 the only open row is T0's, while the cursor
+  // already points at the model tier. On a repository whose T0 takes minutes (this
+  // deployment has measured ~21) that told a client the model round had been open
+  // longer than every completed one before the model was asked anything, then jumped
+  // the advertised wait back UP when the model's row opened — contradicting the field's
+  // own promise that it only ever shrinks.
+  it("answers about the tier asked for, not whatever row is open", () => {
+    const t0Start = new Date(Date.now() - 600_000).toISOString();
+    store.openTierRun("rev1", "t0", 1, t0Start);
+
+    // T0 is in flight and the model tier has not begun.
+    expect(store.roundStartedAt("rev1", "t0")).toBe(Date.parse(t0Start));
+    expect(store.roundStartedAt("rev1", "t1")).toBeUndefined();
+
+    // Once it does, that is what the model tier's elapsed is measured from.
+    const t1Start = new Date().toISOString();
+    store.openTierRun("rev1", "t1", 1, t1Start);
+    expect(store.roundStartedAt("rev1", "t1")).toBe(Date.parse(t1Start));
+  });
 });
 
 describe("knowledge", () => {

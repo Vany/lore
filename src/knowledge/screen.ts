@@ -46,7 +46,7 @@
  */
 
 import type { Tier } from "../core/ladder.ts";
-import { extractList, type Listed } from "../reviewer/opencode.ts";
+import { extractList, type Listed, type SessionResult } from "../reviewer/opencode.ts";
 import type { Candidate, Screen, Screened } from "./ingest.ts";
 
 /**
@@ -139,7 +139,69 @@ export type Ask = (
   worktree: string,
   extract: (text: string) => Listed<Refused>,
   contract: string,
-) => Promise<{ readonly items: readonly Refused[] }>;
+) => Promise<SessionResult<Refused>>;
+
+/**
+ * Where a screen session's cost is recorded.
+ *
+ * These were the only model calls in the system with no `usage` row. The type here used
+ * to be narrowed to `{items}` — tidy, and it discarded the tokens and the latency, so
+ * D-81's own cost claim ("one t1 call per document") could not be checked against
+ * anything, `ops/spend` under-reported by a whole class of call, and a cheap-tier screen
+ * that decided to go exploring the worktree would burn minutes of quota leaving no trace.
+ * A tier is billed the same whoever asked it.
+ */
+export interface ScreenUsage {
+  readonly tier: string;
+  readonly model: string | undefined;
+  readonly inputTokens: number;
+  readonly cachedTokens: number;
+  readonly outputTokens: number;
+  readonly costUsd: number;
+  readonly latencyMs: number;
+  readonly steps: number | undefined;
+  readonly refused: number;
+}
+
+/**
+ * A screen session as the `usage` table wants it.
+ *
+ * Written here, once, rather than at each of the two call sites — the round and the
+ * bootstrap both screen, and two hand-written copies of a field mapping is the shape
+ * `PROG.md` names outright: one thing defined twice always disagrees eventually.
+ *
+ * The tier is prefixed `screen:` so these rows count against SPEND but stay out of the
+ * per-tier latency distribution `check_back_after_ms` reads. A screen session is not a
+ * review round and pooling them would tell a waiting client to expect a four-second
+ * answer from a tier that takes ten minutes.
+ */
+export function screenUsage(u: ScreenUsage, repoId: string, reviewId?: string): {
+  readonly repoId: string;
+  readonly reviewId?: string;
+  readonly tier: string;
+  readonly model?: string;
+  readonly inputTokens: number;
+  readonly cachedTokens: number;
+  readonly outputTokens: number;
+  readonly costUsd: number;
+  readonly latencyMs: number;
+  readonly steps?: number;
+  readonly outcome: string;
+} {
+  return {
+    repoId,
+    ...(reviewId === undefined ? {} : { reviewId }),
+    tier: u.tier,
+    ...(u.model === undefined ? {} : { model: u.model }),
+    inputTokens: u.inputTokens,
+    cachedTokens: u.cachedTokens,
+    outputTokens: u.outputTokens,
+    costUsd: u.costUsd,
+    latencyMs: u.latencyMs,
+    ...(u.steps === undefined ? {} : { steps: u.steps }),
+    outcome: u.refused > 0 ? "findings" : "clean",
+  };
+}
 
 /**
  * Bind a screen to a tier and a worktree.
@@ -149,8 +211,12 @@ export type Ask = (
  * spending a deep tier on it would take quota from the thing that actually reads
  * branches. It runs once per document per re-ingest, which for this repository is
  * eleven calls after a reader change and one after an edit.
+ *
+ * `spent` is handed every completed session's cost. It is a callback rather than a Store
+ * because this module has no business knowing about one, and because the caller is the
+ * only thing that knows which repository is being ingested.
  */
-export function screenFor(ask: Ask, tier: Tier, worktree: string): Screen {
+export function screenFor(ask: Ask, tier: Tier, worktree: string, spent?: (u: ScreenUsage) => void): Screen {
   return async (doc, candidates) => {
     if (candidates.length === 0) return { kept: [], refused: [], ran: true };
 
@@ -162,7 +228,21 @@ export function screenFor(ask: Ask, tier: Tier, worktree: string): Screen {
         (text) => extractList<Refused>(text, KEY, refusedOf),
         CONTRACT,
       );
-      return partition(candidates, result.items);
+      const out = partition(candidates, result.items);
+      // Recorded on the way past, before anything can throw on the result. A session
+      // that completed cost what it cost whatever we then decide about its answer.
+      spent?.({
+        tier: `screen:${tier.id}`,
+        model: tier.model,
+        inputTokens: result.inputTokens,
+        cachedTokens: result.cachedTokens,
+        outputTokens: result.outputTokens,
+        costUsd: result.costUsd,
+        latencyMs: result.latencyMs,
+        steps: result.steps,
+        refused: out.refused.length,
+      });
+      return out;
     } catch (e) {
       // FAILS OPEN, AND THE CALLER STAMPS THE ROWS SO IT HEALS. A quota refusal, a dead
       // provider or an unparseable reply must not empty a repository's memory — the

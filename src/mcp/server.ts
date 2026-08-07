@@ -68,7 +68,10 @@ function pacing(
   // so a client that comes back at the median and finds the round still going is sent
   // away for another full median — twelve minutes, on t2, with the answer already
   // written. Absent when no round is in flight (`queued`), which is elapsed zero.
-  const startedAt = store.roundStartedAt(review.id);
+  // Asked about THE TIER BEING PACED, not about whatever row happens to be open. During
+  // T0 the only open run is T0's, and the cursor already points at the model tier — so
+  // this used to condition a T0-window elapsed on the model tier's distribution.
+  const startedAt = store.roundStartedAt(review.id, tier.id);
   const elapsed = startedAt === undefined ? 0 : Math.max(0, Date.now() - startedAt);
   const pace = paceFor(store, tier.id, review.repoId, elapsed);
   return {

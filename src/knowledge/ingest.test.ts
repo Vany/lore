@@ -439,4 +439,26 @@ describe("the screen's veto over what was mined", () => {
     expect(out.unscreened).toBe(1);
     expect(store.knowledgeFor(repoId).every((k) => k.extractor === UNSCREENED)).toBe(true);
   });
+
+  // THE SCREEN IS HALF OF WHAT DECIDES WHICH RULES LIVE, so the stamp has to name it.
+  // Versioning only `extractRules` recreated the exact trap the stamp was built to
+  // close, one layer up: the prompt or the tier could change and nothing already stored
+  // would move, so an unchanged document kept an old screen's vetoes for ever and a
+  // wrongly-refused rule stayed invisible — which is what the fragments did before any
+  // stamp existed. The next planned change to this code is "measure the screen, then
+  // improve the prompt", which walks straight into it.
+  it("names both readers in the stamp, so a screen change retires what it produced", () => {
+    const [extract, screenV] = EXTRACTOR_VERSION.split(".");
+    expect(extract).toBeDefined();
+    expect(screenV).toBeDefined();
+
+    // A row from the same extractor but an older SCREEN is not a current row.
+    store.addKnowledge({
+      repoId, kind: "rule", source: "ingested", statement: "an older screen kept this",
+      why: undefined, path: undefined, cwe: undefined, provenance: "PROG.md",
+      sourceBlob: "blobA", extractor: `${String(extract)}.0`, confidence: 0.8,
+    });
+    expect(store.hasKnowledgeBlob(repoId, "PROG.md", "blobA", EXTRACTOR_VERSION)).toBe(false);
+    expect(store.retireForChangedBlob(repoId, "PROG.md", "blobA", EXTRACTOR_VERSION)).toBe(1);
+  });
 });

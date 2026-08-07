@@ -18,7 +18,7 @@ import type { ReviewerLike } from "../reviewer/opencode.ts";
 import type { Store } from "../store/store.ts";
 import { detectAndRecord } from "./conflict.ts";
 import { ingestDocs } from "./ingest.ts";
-import { screenFor } from "./screen.ts";
+import { screenFor, screenUsage } from "./screen.ts";
 
 export interface BootstrapResult {
   readonly documents: number;
@@ -77,7 +77,17 @@ export async function bootstrap(opts: {
   // on, is the one that reads the fragments. Without a reviewer it ingests unscreened
   // and stamped, which is the documented no-model path (D-81).
   const docs = await ingestDocs(opts.store, opts.repoId, opts.worktree, {
-    ...(ask === undefined || tier === undefined ? {} : { screen: screenFor(ask, tier, opts.worktree) }),
+    ...(ask === undefined || tier === undefined
+      ? {}
+      : {
+          screen: screenFor(ask, tier, opts.worktree, (u) =>
+            // No `reviewId`: provisioning has none, and this spend belongs to the
+            // repository rather than to any review. Recorded all the same — bootstrap
+            // screens every document a repo has, which is the largest single burst of
+            // screen calls the system ever makes.
+            opts.store.recordUsage(screenUsage(u, opts.repoId)),
+          ),
+        }),
   });
 
   let factsFromCode = 0;

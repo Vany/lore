@@ -527,19 +527,32 @@ export class Store {
   }
 
   /**
-   * When the round now in flight started, or `undefined` if none is.
+   * When THIS TIER'S run in flight started, or `undefined` if it has not begun.
    *
-   * The open `tier_run` — `finished_at IS NULL` — is the one still working. Needed
-   * because "how long should I wait" is not a property of the tier alone: a round that
-   * has already run for longer than the median has a shorter wait left, not another
+   * Needed because "how long should I wait" is not a property of the tier alone: a round
+   * that has already run for longer than the median has a shorter wait left, not another
    * whole median.
+   *
+   * **Asked per tier, and it has to be.** Any open `tier_run` used to answer, and during
+   * T0 the only open row is T0's — while the ladder cursor already points at the model
+   * tier, so `pacing` compared a T0-window elapsed against the MODEL tier's latencies. On
+   * a repository where T0 takes minutes (this deployment has measured ~21) every poll
+   * from a few minutes in computed elapsed past every recorded model run and told the
+   * client the round had been open longer than any completed one — before the tier had
+   * been asked anything, which is the exact false claim the previous fix was for. Then
+   * the model tier's row opened and the advertised wait jumped back UP to the full
+   * median, contradicting the field's own promise that it only shrinks.
+   *
+   * `undefined` before the tier starts is the honest answer and the caller wants it:
+   * elapsed zero, so the first call gets the plain median.
    */
-  roundStartedAt(reviewId: string): number | undefined {
+  roundStartedAt(reviewId: string, tier: string): number | undefined {
     const row = this.db
       .prepare(
-        "SELECT started_at FROM tier_run WHERE review_id = ? AND finished_at IS NULL ORDER BY id DESC LIMIT 1",
+        "SELECT started_at FROM tier_run WHERE review_id = ? AND tier = ? AND finished_at IS NULL" +
+          " ORDER BY id DESC LIMIT 1",
       )
-      .get(reviewId) as Record<string, string> | undefined;
+      .get(reviewId, tier) as Record<string, string> | undefined;
     const at = row?.["started_at"];
     return at === undefined ? undefined : Date.parse(at);
   }

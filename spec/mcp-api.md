@@ -241,6 +241,16 @@ so the wait shrank too fast and the overdue branch could tell a client the round
 outrun every recorded run before the tier had been asked anything. The stamp is now taken
 where the tier's own work begins.
 
+**Elapsed is asked of the tier being paced**, not of whatever round is open. During T0
+the only open `tier_run` is T0's while the ladder cursor already points at the model
+tier — so answering with any open row compared a T0-window elapsed against the model
+tier's latencies. On a repository whose T0 takes minutes (this deployment has measured
+~21), every poll from a few minutes in reported the model round as past every recorded
+run before it had been asked anything, and then the advertised wait jumped back **up**
+when the model's own row opened, contradicting the field's own promise that it only
+shrinks. Before the tier starts there is no elapsed, which is the honest answer and the
+one the caller wants: the first call gets the plain median.
+
 **It is still not exact, and the note no longer claims more than it can support.** The
 provider gate can queue a session behind another review's, inside the call and invisible
 here, so the overdue sentence says the round has been **open** longer rather than working
