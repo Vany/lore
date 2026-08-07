@@ -21,6 +21,20 @@ import { DEFAULT_WORKER, Worker } from "./worker.ts";
 
 export interface ServiceConfig {
   readonly dataDir: string;
+  /**
+   * Where `lore.db` lives, when that is not `dataDir`.
+   *
+   * Split because the two have opposite requirements. `dataDir` MUST be a host bind:
+   * the T0 sandbox asks the host daemon to bind a worktree into a sibling container by
+   * absolute path, and the daemon resolves it on the host. SQLite must NOT be on one:
+   * on Docker Desktop for macOS a bind is virtiofs, whose locking SQLite's own
+   * howtocorrupt.html §2.1 names as a corruption cause when two processes share the
+   * file — which lore and litestream do, and which cost three corruptions in three days.
+   *
+   * Defaults to `dataDir`, so a deployment that has not been split behaves exactly as
+   * it did and the CLI keeps working against a plain directory.
+   */
+  readonly dbDir?: string;
   readonly port: number;
   readonly host: string;
   readonly webhookUrl?: string;
@@ -83,6 +97,7 @@ export function configFromEnv(): ServiceConfig {
   const backupDir = env("LORE_BACKUP_DIR");
   return {
     dataDir: env("LORE_DATA_DIR") ?? "/var/lib/lore",
+    ...(env("LORE_DB_DIR") !== undefined ? { dbDir: env("LORE_DB_DIR") ?? "" } : {}),
     port: envNumber("LORE_PORT", 7777, 1),
     // Binds to the tailnet interface in production; 0.0.0.0 inside a container
     // that is only reachable through it.
@@ -135,7 +150,7 @@ function openOrRefuse(dbPath: string): { readonly store: Store } | { readonly fa
 
 export async function serve(cfg: ServiceConfig): Promise<() => void> {
   await mkdir(cfg.dataDir, { recursive: true });
-  const dbPath = join(cfg.dataDir, "lore.db");
+  const dbPath = join(cfg.dbDir ?? cfg.dataDir, "lore.db");
 
   // BEFORE ANYTHING ELSE, AND WITHOUT EXITING IF IT FAILS.
   //

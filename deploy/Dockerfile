@@ -64,9 +64,25 @@ ENV LORE_COMMIT=${LORE_COMMIT} \
 
 # Reviews run as this user; the data volume is chowned to it in compose.
 RUN useradd --system --create-home --uid 10001 lore
+
+# THE MOUNT POINT FOR THE DATABASE VOLUME, CREATED WORLD-WRITABLE ON PURPOSE.
+#
+# Docker seeds a fresh named volume from whatever the image has at that path, ownership
+# included — and compose overrides the runtime user to LORE_UID, which is the HOST user
+# who owns the bind-mounted data directory and is not the uid baked in above. Anything
+# fixed here would be wrong for somebody's LORE_UID, and a volume the service cannot
+# write is a service that cannot start.
+#
+# Sticky, so the mode is not a way for one process to remove another's file. The
+# directory holds the database and nothing else, and the only two processes that can
+# reach it are lore and litestream — this container already grants the docker socket,
+# which is a far larger privilege than a writable directory inside the VM.
+RUN mkdir -p /var/lib/lore/db && chmod 1777 /var/lib/lore/db
+
 USER lore
 
 ENV LORE_DATA_DIR=/var/lib/lore \
+    LORE_DB_DIR=/var/lib/lore/db \
     LORE_PORT=7777 \
     NODE_ENV=production
 

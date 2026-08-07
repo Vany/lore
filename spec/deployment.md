@@ -183,6 +183,63 @@ D-57 solved for justifications, and the reason a reader has to be told somewhere
 Disk being plentiful is what makes aggressive caching the right trade: spend 4 TB to
 save CPU, because CPU is what there is least of.
 
+## 4.1 The database is in a volume; everything else is a host bind
+
+Two storage requirements that point in opposite directions, so there are two mounts.
+
+**`LORE_DATA_DIR` must be a host bind, at the identical path on both sides.** The T0
+sandbox asks the host daemon to bind a worktree into a sibling container by absolute
+path, and the daemon resolves that path on the HOST — a named volume would mount an
+empty directory and the suite would report clean for code it never saw. Worktrees, git
+mirrors and the sandbox npm cache all live there.
+
+**`LORE_DB_DIR` must NOT be, and that is what changed on 2026-08-08.** On Docker Desktop
+for macOS a bind is virtiofs — the container reports it as `fakeowner` over
+`/run/host_mark` — and SQLite's own `howtocorrupt.html` §2.1 names a filesystem with
+unreliable locking primitives, plus two or more processes sharing the file, as a cause of
+corruption. lore and litestream are those two processes. This database was corrupted
+**three times in three days**, and the damaged b-tree was `knowledge` every time, which
+is the table a review bulk-writes during doc ingest.
+
+So `lore.db` lives in the `lore-db` named volume: ext4 inside the Linux VM, where locking
+is ordinary kernel locking and two processes sharing a SQLite file is the supported
+arrangement it has always been.
+
+**Nothing operational is lost by the database having no host path**, because the thing a
+person carries away was never the database — it is the replica, and that stays a host
+bind. What did need answering is the down case: `make db-check` and `make replica-state`
+have to work while lore is *not running*, since that is when they are asked. They use a
+throwaway container against the volume, which is strictly better than the `compose exec`
+they used before — a crash-looping service could not exec, so the check that says *your
+database is unreadable* was unreachable in the one state it exists for.
+
+**One definition of where it lives.** `LORE_DB_DIR` is set in the image and in compose;
+the CLI resolves `LORE_DB_DIR`, then `LORE_DATA_DIR`, then `~/.lore`, in the same order
+the service does, and the Makefile passes no `--db` at all. A second copy of that decision
+in a Makefile is how `make revoke` came to answer *unable to open database file* at the
+moment an operator was killing a leaked credential. Every CLI command that READS existing
+state now refuses a database that does not exist rather than creating an empty one — a
+command that could not look must not report as a command that found nothing.
+
+## 4.2 `deploy/` is tracked; the deployment is a copy, and copies drift
+
+The deployment directory is gitignored (it holds the knowledge base and every reviewed
+worktree), so `deploy/` in the repository and the deployment beside it are two copies of
+one decision. On 2026-08-08 they had diverged in **both** directions: `make knowledge` and
+`make smoke` existed only in the deployment, and so did the `replica-state` fix that reads
+the database's own write log instead of file mtimes. An evening was spent editing the
+tracked copy while deploying the other, and the volume change appeared to do nothing —
+compose was reading a file that had not been touched.
+
+The near-miss is the reason this is written down: porting the change onto the stale copy
+would have silently reverted the replica-state fix, in the monitor that exists to stop the
+wolf-crying.
+
+`make up` now refuses when the two differ, naming the files, and `make sync-deployed`
+takes the repository's version — deliberately, never automatically, because the deployment
+has twice held the newer copy. Skipped where no repository sits beside the deployment,
+which is every remote host; there `make push` is what keeps them equal.
+
 ## 5. Backups
 
 SQLite plus Litestream (SPEC §3). The Pi is a single machine with no redundancy, and
@@ -198,6 +255,10 @@ profile, no credentials, nothing to forget to enable.
 A copy on the same disk is **not a backup**. It survives a corrupted database, a bad
 bulk write and a wrong `down-hard`; it does not survive the disk. `make backup-check`
 reports the local half only, and says so.
+
+Litestream replicates the **volume**, and writes its replica to the host bind — which is
+the only crossing that remains, and it is a directory of append-only segments rather than
+a database being locked.
 
 **Restore is tested, not assumed.** `make backup-drill` restores from a copy with the
 source destroyed first. The drill uses `VACUUM INTO`: a WAL database copied with `cp`

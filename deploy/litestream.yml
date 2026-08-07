@@ -16,13 +16,13 @@
 #
 # Restore:
 #   make restore                      (or)
-#   litestream restore -config /etc/litestream.yml $LORE_DATA_DIR/lore.db
+#   litestream restore -config /etc/litestream.yml $LORE_DB_DIR/lore.db
 #
 # Verify the whole path end to end, on a copy, without touching the live database:
 #   make backup-drill
 
 dbs:
-  - path: ${LORE_DATA_DIR}/lore.db
+  - path: ${LORE_DB_DIR}/lore.db
     replicas:
       - type: file
         path: /backup/lore

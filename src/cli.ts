@@ -8,6 +8,7 @@
  */
 
 import { mkdir } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -43,7 +44,7 @@ lore — an independent reviewer that remembers the codebase
                      "is this code correct?", never "is this the right code?"
   --target <path>    repo to review (default: cwd)
   --type <id>        ${reviewTypeIds().join(" | ")} (default: ${DEFAULT_TYPE})
-  --db <path>        state file (default: $LORE_DATA_DIR/lore.db, else ~/.lore/lore.db)
+  --db <path>        state file (default: $LORE_DB_DIR, else $LORE_DATA_DIR, else ~/.lore)
   --json             machine-readable output only
 
 lore propose asks the dearest models what they would CHANGE, keeping what the code
@@ -83,6 +84,43 @@ function flagOf(argv: readonly string[], name: string): string | undefined {
   return i >= 0 ? argv[i + 1] : undefined;
 }
 
+/**
+ * Open a database that must already exist, and refuse loudly when it does not.
+ *
+ * `new Store(path)` CREATES the file, which is right for `lore new` and for the service
+ * and catastrophic for everything else: pointed one directory wrong, `make tokens`
+ * answers "no tokens", `lore knowledge` answers "no rules", and both are read as facts
+ * about the workgroup rather than as facts about the path. That is INV-1 in the operator
+ * tools — a command that could not look, reporting as a command that found nothing.
+ *
+ * Not hypothetical, and the reason this exists: the database moved off the host bind
+ * onto a volume on 2026-08-08, so every stale `--db` in a script now points at a
+ * directory where SQLite will happily make a new, empty, perfectly valid database.
+ *
+ * The message names the three places the path can come from, because "no such file" on
+ * its own does not tell an operator which of them they got wrong.
+ */
+function openExisting(path: string): Store {
+  if (!existsSync(path)) {
+    throw new UsageError(
+      `no database at ${path}. This command reads existing state and will not create one.\n` +
+        "  The path comes from --db, else $LORE_DB_DIR, else $LORE_DATA_DIR, else ~/.lore.\n" +
+        "  In the deployment the database lives in the `lore-db` volume, not under the data\n" +
+        "  directory — reach it with `docker compose exec lore ...` and no --db at all.",
+    );
+  }
+  return new Store(path);
+}
+
+/** Where state lives, resolved the same way the service resolves it. */
+function dbDirDefault(): string {
+  const dbDir = process.env["LORE_DB_DIR"];
+  if (dbDir !== undefined && dbDir !== "") return dbDir;
+  const dataDir = process.env["LORE_DATA_DIR"];
+  if (dataDir !== undefined && dataDir !== "") return dataDir;
+  return join(homedir(), ".lore");
+}
+
 export function parseArgs(argv: readonly string[]): Args {
   const flag = (name: string): string | undefined => flagOf(argv, name);
   const has = (name: string): boolean => argv.includes(`--${name}`);
@@ -94,12 +132,18 @@ export function parseArgs(argv: readonly string[]): Args {
     ...(flag("ticket") !== undefined ? { ticket: flag("ticket") ?? "" } : {}),
     target: resolve(flag("target") ?? process.cwd()),
     type: flag("type") ?? DEFAULT_TYPE,
-    // LORE_DATA_DIR before the home directory, because the deployment sets it and a
-    // container has no home worth writing to: `lore new` inside one died on
-    // `EACCES: mkdir '/.lore'`, having ignored the data directory mounted beside it.
-    // Same shape as every other invisible default this project has been bitten by —
-    // the service and the CLI disagreed about where state lives, and neither said so.
-    db: flag("db") ?? join(process.env["LORE_DATA_DIR"] ?? join(homedir(), ".lore"), "lore.db"),
+    // LORE_DB_DIR, then LORE_DATA_DIR, then the home directory — the same order the
+    // service resolves, because the service and the CLI disagreeing about where state
+    // lives is a bug neither of them can see.
+    //
+    // LORE_DATA_DIR came before the home directory for a reason that still holds: the
+    // deployment sets it and a container has no home worth writing to, so `lore new`
+    // inside one died on `EACCES: mkdir '/.lore'` having ignored the data directory
+    // mounted beside it. LORE_DB_DIR now comes before BOTH, because the database moved
+    // off the host bind onto a volume and the data directory no longer contains it —
+    // a CLI that kept looking there would quietly CREATE a second, empty database and
+    // report an empty knowledge base as the truth.
+    db: flag("db") ?? join(dbDirDefault(), "lore.db"),
     json: has("json"),
   };
 }
@@ -130,6 +174,9 @@ export async function main(argv: readonly string[]): Promise<ExitCode> {
       throw new UsageError("usage: lore new --name <who> --git <ssh-url> [--db <path>] [--url <public-url>]");
     }
     await mkdir(dirOf(args.db), { recursive: true });
+    // NOT `openExisting`: this is the one command whose job is to bring a database into
+    // existence. Every other one reads state somebody else wrote, and creating an empty
+    // file there answers a question it could not actually look at.
     const store = new Store(args.db);
     try {
       const result = await provision({
@@ -155,7 +202,7 @@ export async function main(argv: readonly string[]): Promise<ExitCode> {
           "[--mode code-arch] [--lens seams,failure,data,greenfield]",
       );
     }
-    const store = new Store(args.db);
+    const store = openExisting(args.db);
     try {
       const path = await proposeCli({
         store,
@@ -186,7 +233,7 @@ export async function main(argv: readonly string[]): Promise<ExitCode> {
   // through the container, which meant only whoever wrote the SQL could read it.
   if (args.command === "knowledge") {
     const { knowledgeReport, renderKnowledge } = await import("./knowledge/report.ts");
-    const store = new Store(args.db);
+    const store = openExisting(args.db);
     try {
       const want = flagOf(argv, "repo");
       const repos = store.repos().filter((r) => want === undefined || r.name === want);
@@ -218,7 +265,7 @@ export async function main(argv: readonly string[]): Promise<ExitCode> {
   if (args.command === "rule") {
     const { addRule, ruleReport, renderRules, CITE_LENGTH } = await import("./knowledge/rules.ts");
     const want = flagOf(argv, "repo");
-    const store = new Store(args.db);
+    const store = openExisting(args.db);
     try {
       const repos = store.repos().filter((r) => want === undefined || r.name === want);
       const repo = repos[0];
@@ -281,7 +328,7 @@ export async function main(argv: readonly string[]): Promise<ExitCode> {
 
   if (args.command === "tokens") {
     const { listTokens } = await import("./mcp/auth.ts");
-    const store = new Store(args.db);
+    const store = openExisting(args.db);
     try {
       const rows = listTokens(store);
       if (rows.length === 0) {
@@ -310,7 +357,7 @@ export async function main(argv: readonly string[]): Promise<ExitCode> {
     if (short === undefined) {
       throw new UsageError("usage: lore revoke --token <short-hash> [--db <path>]  (see `lore tokens`)");
     }
-    const store = new Store(args.db);
+    const store = openExisting(args.db);
     try {
       const r = revokeByPrefix(store, short);
       switch (r.kind) {
@@ -345,7 +392,7 @@ export async function main(argv: readonly string[]): Promise<ExitCode> {
     if (repo === undefined || git === undefined) {
       throw new UsageError("usage: lore relocate --repo <name|url|id> --git <new-url> [--db <path>]");
     }
-    const store = new Store(args.db);
+    const store = openExisting(args.db);
     try {
       process.stdout.write(renderRelocation(relocate(store, repo, git)));
       return EXIT.PASS;
@@ -379,9 +426,10 @@ export async function main(argv: readonly string[]): Promise<ExitCode> {
     throw new UsageError("cannot determine the branch — pass --branch");
   }
 
-  await mkdir(join(args.db, "..").replace(/\/[^/]*$/, ""), { recursive: true }).catch(() => undefined);
   await mkdir(dirOf(args.db), { recursive: true });
 
+  // Also creates: `lore review` runs standalone against a local checkout, with no
+  // service and frequently no database yet. It is the other bootstrap.
   const store = new Store(args.db);
   try {
     const origin = (await gitMaybe(args.target, ["remote", "get-url", "origin"])) ?? args.target;

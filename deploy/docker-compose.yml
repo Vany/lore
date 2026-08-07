@@ -52,6 +52,20 @@ services:
     environment:
       # SAME PATH AS THE HOST, deliberately — see the volume below.
       LORE_DATA_DIR: ${LORE_HOST_DATA:-/var/lib/lore}
+      # THE DATABASE LIVES SOMEWHERE ELSE, and this is the whole point of the split.
+      #
+      # Everything else under LORE_DATA_DIR must be a host bind (worktrees, see below).
+      # SQLite must NOT be: a host bind on Docker Desktop for macOS is virtiofs, which
+      # the container reports as `fakeowner` over /run/host_mark, and SQLite's own
+      # howtocorrupt.html §2.1 names a filesystem with unreliable locking plus two or
+      # more processes as a cause of corruption. lore and litestream are those two
+      # processes, and this database was corrupted three times in three days — the
+      # damaged tree each time being `knowledge`, which a review bulk-writes.
+      #
+      # A named volume is ext4 inside the Linux VM, so locking is ordinary kernel
+      # locking. Nothing about the database needs to be visible from the host: the
+      # thing a human carries away is the REPLICA, and that stays a host bind.
+      LORE_DB_DIR: /var/lib/lore/db
       LORE_PORT: "7777"
       # How many ROUNDS run at once. Governs both halves of a round, which have very
       # different costs: the model call is remote and merely waits (t1 averages 304s,
@@ -117,6 +131,10 @@ services:
       # path everywhere is the only arrangement where "the path I have" and "the
       # path the daemon sees" are the same string.
       - ${LORE_HOST_DATA:-/var/lib/lore}:${LORE_HOST_DATA:-/var/lib/lore}
+      # THE DATABASE, AND ONLY THE DATABASE — see LORE_DB_DIR above for why it cannot
+      # live on the bind. Shared with litestream, which is the only other process that
+      # opens it; within one Linux kernel that is a supported SQLite arrangement.
+      - lore-db:/var/lib/lore/db
       # READ-ONLY, and only so the service can tell whether it is still being backed
       # up. litestream owns this directory; lore reads mtimes in it and nothing else.
       # A page about the replica has to come from something that runs unattended, and
@@ -260,16 +278,21 @@ services:
   litestream:
     image: litestream/litestream:latest
     environment:
-      # litestream.yml reads the database path from here, so it follows the same
-      # host-equals-container rule as everything else.
-      LORE_DATA_DIR: ${LORE_HOST_DATA:-/var/lib/lore}
+      # litestream.yml reads the database path from here. It is the VOLUME, not the
+      # host bind: replicating a file over virtiofs from a second container is half of
+      # the corruption this split exists to end.
+      LORE_DB_DIR: /var/lib/lore/db
     platform: linux/arm64
     restart: unless-stopped
     command: ["replicate"]
     volumes:
-      - ${LORE_HOST_DATA:-/var/lib/lore}:${LORE_HOST_DATA:-/var/lib/lore}
-      # The handoff. An outer script takes files out of THIS directory and off the
-      # machine; nothing in lore knows how, and that is the whole point of the split.
+      # The database, in the volume it shares with lore. No host bind here at all: the
+      # only reason this container existed on one was the database, and that has moved.
+      - lore-db:/var/lib/lore/db
+      # The handoff, and the one thing that STAYS on the host. An outer script takes
+      # files out of THIS directory and off the machine; nothing in lore knows how, and
+      # that is the whole point of the split. It is also why moving the database inside
+      # costs nothing operationally — what a person carries away was never the database.
       - ${LORE_HOST_BACKUP:-./backup}:/backup
       - ./litestream.yml:/etc/litestream.yml:ro
     depends_on:
@@ -277,3 +300,6 @@ services:
 
 volumes:
   opencode-data:
+  # ext4 inside the Linux VM, which is the entire point — see LORE_DB_DIR. NOT backed up
+  # by being a volume; litestream replicates it to the host bind above, as it always did.
+  lore-db:

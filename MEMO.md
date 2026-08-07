@@ -5,6 +5,51 @@ surprised me.
 
 ---
 
+## 2026-08-08 — session 44: the database moves off the bind, and I deployed the wrong file
+
+**The corruption is diagnosed and fixed at the cause.** `lore.db` was on a Docker Desktop
+macOS bind mount — virtiofs, which the container reports as `fakeowner` over
+`/run/host_mark` — with lore and litestream both holding it open. SQLite's own
+`howtocorrupt.html` §2.1 names exactly that: unreliable locking primitives plus two or
+more processes. Three corruptions in three days, the damaged b-tree `knowledge` every
+time, which is the table a review bulk-writes during ingest. It now lives in a named
+volume: ext4 inside the VM, where two processes sharing a SQLite file is the arrangement
+it has always been.
+
+**Everything else stays on the bind, and that is not a compromise.** The T0 sandbox asks
+the host daemon to bind a worktree into a sibling container by absolute path, resolved on
+the HOST — a volume there would mount an empty directory and report a clean suite for code
+it never saw. Two mounts because there are two requirements pointing opposite ways.
+
+**I DEPLOYED THE WRONG FILE FOR AN HOUR.** `deploy/` is tracked; `lore/` is the gitignored
+deployment; they are two copies. I edited the tracked one and ran `make up` in the other,
+and the volume change appeared to do nothing at all — compose was reading a file I had not
+touched. The service came up on a fresh empty database in the container's writable layer
+and answered `ok: true` about it.
+
+**The near-miss is worse than the hour.** The copies had drifted in BOTH directions: `make
+knowledge` and `make smoke` existed only in the deployment, and so did the replica-state
+fix that reads the database's own write log rather than file mtimes. Porting my change
+onto the stale copy — which is exactly what I was about to do — would have silently
+reverted that fix, in the monitor that exists to stop the wolf-crying. `make up` now
+refuses when the two differ, and I proved the refusal fires before believing it.
+
+**Surprised me: the CLI would have made a second database rather than complain.** Once the
+file moved, every stale `--db` pointed at a directory where SQLite happily creates a new,
+empty, perfectly valid database — so `make tokens` would answer "no tokens" and
+`lore knowledge` "no rules", and both read as facts about the workgroup rather than about
+the path. Reading commands refuse a database that does not exist now. Only `lore new` and
+`lore review` create one, because bringing one into existence is their job.
+
+**What I did not build, and told Vany why.** He chose "also stop the CLI opening the live
+DB". On ext4 that buys no corruption safety — multi-process SQLite is the normal supported
+configuration, and the danger was the filesystem, not the second process. What was real in
+that ask was the SECOND COPY of "where does state live", which had already been wrong
+today, so the Makefile now passes no `--db` at all and one env variable decides. The RPC
+layer is not built and the reason is on the table rather than in a note.
+
+---
+
 ## 2026-08-08 — session 43: a check can be switched off, and it says so every time
 
 **D-83 built.** A project can write down what it has decided NOT to enforce, and a client

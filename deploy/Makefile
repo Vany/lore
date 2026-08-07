@@ -15,6 +15,24 @@
 COMPOSE ?= docker compose
 DATA    ?= $(shell grep -E '^LORE_HOST_DATA=' .env 2>/dev/null | cut -d= -f2)
 DATA    := $(if $(DATA),$(DATA),/var/lib/lore)
+# WHERE THE DATABASE IS, which since 2026-08-08 is NOT under $(DATA).
+#
+# It lives in the `lore-db` named volume — ext4 inside the Linux VM — because a host
+# bind on Docker Desktop is virtiofs, and SQLite plus unreliable locking plus two
+# processes (lore and litestream) is howtocorrupt.html 2.1. Three corruptions in three
+# days, the damaged tree being `knowledge` each time.
+#
+# The path is INSIDE a container and there is deliberately no host-side equivalent. Every
+# recipe that reads it either execs into the running service or runs a throwaway
+# container against the volume; `db-shell` below is the one place that is written out.
+DB      ?= /var/lib/lore/db
+# Read the database with no running service — for `make status` and `make db-check`,
+# which have to answer WHILE LORE IS DOWN, since that is when the question is asked.
+# One process, one connection, gone when it exits.
+# compose names a volume `<project>_<name>`, and the project defaults to this directory.
+PROJECT ?= $(if $(COMPOSE_PROJECT_NAME),$(COMPOSE_PROJECT_NAME),$(notdir $(CURDIR)))
+DBVOL   = $(PROJECT)_lore-db
+DBRUN   = docker run --rm -v $(DBVOL):$(DB) -e LORE_DB_DIR=$(DB) --entrypoint node lore-lore:latest
 BACKUP  ?= $(shell grep -E '^LORE_HOST_BACKUP=' .env 2>/dev/null | cut -d= -f2)
 BACKUP  := $(if $(BACKUP),$(BACKUP),./backup)
 
@@ -123,14 +141,14 @@ drain:
 	$(wrong-directory)
 	@$(COMPOSE) exec -T lore node -e "\
 	const {DatabaseSync}=require('node:sqlite'); \
-	const d=new DatabaseSync(process.env.LORE_DATA_DIR+'/lore.db'); \
+	const d=new DatabaseSync(process.env.LORE_DB_DIR+'/lore.db'); \
 	d.prepare(\"INSERT INTO meta(key,value) VALUES('draining','1') ON CONFLICT(key) DO UPDATE SET value='1'\").run();"
 	@echo "draining — no new rounds will be claimed. Waiting for work in flight:"
 	@waited=0; limit=$${DRAIN_TIMEOUT:-1800}; \
 	while :; do \
 		out=$$($(COMPOSE) exec -T lore node -e "\
 		const {DatabaseSync}=require('node:sqlite'); \
-		const d=new DatabaseSync(process.env.LORE_DATA_DIR+'/lore.db',{readOnly:true}); \
+		const d=new DatabaseSync(process.env.LORE_DB_DIR+'/lore.db',{readOnly:true}); \
 		const rows=d.prepare(\"SELECT j.review_id id, r.branch b, j.updated_at u FROM job j JOIN review r ON r.id=j.review_id WHERE j.state='running'\").all(); \
 		for (const x of rows) console.log('  '+x.id.slice(4,16)+'  '+x.b.slice(0,38)+'  '+Math.round((Date.now()-Date.parse(x.u))/1000)+'s'); \
 		console.log('COUNT '+rows.length);"); \
@@ -151,7 +169,7 @@ drain-off:
 	$(wrong-directory)
 	@$(COMPOSE) exec -T lore node -e "\
 	const {DatabaseSync}=require('node:sqlite'); \
-	const d=new DatabaseSync(process.env.LORE_DATA_DIR+'/lore.db'); \
+	const d=new DatabaseSync(process.env.LORE_DB_DIR+'/lore.db'); \
 	d.prepare(\"INSERT INTO meta(key,value) VALUES('draining','0') ON CONFLICT(key) DO UPDATE SET value='0'\").run();"
 	@echo "draining off — claiming resumed."
 
@@ -161,9 +179,53 @@ deploy: drain up
 build: preflight
 	@$(STAMP) $(COMPOSE) --profile build-only build
 
+## THE DEPLOYED COPY MUST MATCH THE REPOSITORY'S.
+##
+## `lore/` is the deployment and is gitignored; `deploy/` is what is tracked. They are
+## two copies of one decision, and on 2026-08-08 they had silently diverged in BOTH
+## directions: `make knowledge` and `make smoke` existed only in the deployment, and the
+## replica-state fix that reads the database's own write log — rather than file mtimes,
+## which was the wolf-crying monitor — existed only there too. I then spent an evening
+## editing the tracked copy and deploying the other one, and the volume change appeared
+## to do nothing at all because compose was reading a file I had not touched.
+##
+## Worse than wasted time: porting my change onto the stale copy would have REVERTED the
+## replica-state fix, silently, in the monitor that exists to avoid crying wolf.
+##
+## Skipped where there is no repository beside the deployment, which is every remote
+## host — there `make push` is what keeps them equal, and this has nothing to compare.
+define check-deployed
+	@test -d ../deploy || exit 0; \
+	drift=""; \
+	for f in Makefile docker-compose.yml litestream.yml Dockerfile opencode.Dockerfile \
+	         sandbox.Dockerfile smoke.mjs mirror-refresh.sh sync-opencode.sh; do \
+		test -f "../deploy/$$f" || continue; \
+		cmp -s "./$$f" "../deploy/$$f" || drift="$$drift $$f"; \
+	done; \
+	test -z "$$drift" || { \
+		echo "REFUSING: the deployment differs from the repository in:$$drift"; \
+		echo "  Two copies of one decision, and they have already reverted a fix by drifting."; \
+		echo "  Reconcile deliberately — the deployment sometimes holds work the repo lacks:"; \
+		echo "      diff ../deploy/<file> ./<file>"; \
+		echo "  then \`make sync-deployed\` to take the repository's version."; \
+		exit 1; }
+endef
+
+## Take the repository's copy, once the diff has been read. Never automatic: the
+## deployment has twice held the newer version of a file.
+sync-deployed:
+	@test -d ../deploy || { echo "no ../deploy beside this deployment — nothing to sync from"; exit 1; }
+	@for f in Makefile docker-compose.yml litestream.yml Dockerfile opencode.Dockerfile \
+	          sandbox.Dockerfile smoke.mjs mirror-refresh.sh sync-opencode.sh \
+	          tiers.kimi.json tiers.zai-kimi-openai.json tiers.zai-openai.json; do \
+		test -f "../deploy/$$f" && cp "../deploy/$$f" "./$$f" && echo "  $$f"; \
+	done
+	@echo "synced from ../deploy. .env and opencode/ are yours and were not touched."
+
 ## Always re-derives the opencode config first: a container running yesterday's
 ## credentials while the operator has since fixed them is a confusing failure.
 up: preflight sync-opencode
+	$(check-deployed)
 	@$(STAMP) $(COMPOSE) --profile build-only build sandbox
 	@$(STAMP) $(COMPOSE) up -d --build
 	@echo
@@ -195,7 +257,7 @@ new: preflight
 	@test -n "$(NAME)" || { echo "usage: make new NAME=<who> GIT=<ssh-url> [URL=<mcp-url>]"; exit 1; }
 	@test -n "$(GIT)"  || { echo "usage: make new NAME=<who> GIT=<ssh-url> [URL=<mcp-url>]"; exit 1; }
 	$(COMPOSE) exec -T lore node /app/src/index.ts new \
-		--name "$(NAME)" --git "$(GIT)" --db "$(DATA)/lore.db" \
+		--name "$(NAME)" --git "$(GIT)" \
 		$(if $(URL),--url "$(URL)",)
 
 ## A repository MOVED: same repo, new url. Keeps its id and everything attached.
@@ -221,7 +283,7 @@ relocate:
 	@test -n "$(GIT)"  || { echo "usage: make relocate REPO=<name|url|id> GIT=<new-url>"; exit 1; }
 	@id=$$($(COMPOSE) exec -T lore node -e "\
 	const {DatabaseSync}=require('node:sqlite'); \
-	const d=new DatabaseSync(process.env.LORE_DATA_DIR+'/lore.db'); \
+	const d=new DatabaseSync(process.env.LORE_DB_DIR+'/lore.db'); \
 	const w=process.argv[1]; \
 	const r=d.prepare('SELECT id,name,git_url FROM repo').all().filter(x=>x.id===w||x.name===w||x.git_url===w); \
 	if(r.length!==1){console.error('need exactly one match for '+JSON.stringify(w)+', got '+r.length);process.exit(1);} \
@@ -247,7 +309,7 @@ relocate:
 		echo "  no mirror yet — identity cannot be checked, and is not being claimed"; \
 	fi; \
 	rm -f /tmp/lore-reloc.$$$$; \
-	$(COMPOSE) exec -T lore node /app/src/index.ts relocate --repo "$(REPO)" --git "$(GIT)" --db "$(DATA)/lore.db" || exit 1; \
+	$(COMPOSE) exec -T lore node /app/src/index.ts relocate --repo "$(REPO)" --git "$(GIT)" || exit 1; \
 	test -d "$$b/objects" && { git -C "$$b" remote set-url origin "$(GIT)"; echo "mirror origin repointed."; }; \
 	echo "next:  make mirror REPO=$(GIT)"
 
@@ -301,6 +363,43 @@ status-json:
 status-local:
 	@LORE_DATA_DIR=$${LORE_DATA_DIR:-$$PWD/../lore} node ../src/ops/status.ts $(ID)
 
+## THE PRODUCT, INSPECTED. What the memory holds, per document, and what the screen
+## refused with the reason it gave (D-81).
+##
+##   make knowledge                     every repository
+##   make knowledge REPO=lore           one of them
+##   make knowledge REFUSALS=1          and the statements it threw away
+##
+## The refusal SHARE per document is the reading worth having, and it is not what this
+## was built for: rule documents refuse at 0%, and a spec whose share climbs is one
+## carrying change-narrative that CLAUDE.md says belongs in MEMO.md. Measured
+## 2026-08-07, CLAUDE.md and PROG.md were refused 0 of 13 while every refusal came from
+## the explanatory specs — worst in the three edited most that day.
+knowledge:
+	$(wrong-directory)
+	@$(COMPOSE) exec -T lore node /app/src/index.ts knowledge \
+		$(if $(REPO),--repo "$(REPO)",) $(if $(REFUSALS),--refusals,)
+
+## DRIVE THE REAL MCP SURFACE, over the wire, as a client (D-76).
+##
+##   make smoke TOKEN=lore_...      or LORE_TOKEN in the environment
+##
+## D-76 says a change is validated over MCP and that a CLI run is never evidence the
+## product works — and nothing enforced it. This is the cheap half: transport,
+## authentication, the tool registry, and that every tool carries a description an agent
+## could act on. READ-ONLY by construction — it never starts or polls a review, because
+## review_poll consumes deltas (D-78) and a check that damages what it checks is worse
+## than none.
+##
+## The expensive half stays open and stays honest: a fresh session driving a review to
+## passed on the tool descriptions alone is Phase 3's real criterion and cannot be a
+## script, because what is under test is whether the docs teach an agent nobody briefed.
+smoke:
+	$(wrong-directory)
+	@test -n "$(TOKEN)$(LORE_TOKEN)" || { echo "usage: make smoke TOKEN=<a live token>   (make tokens lists holders)"; exit 2; }
+	@LORE_TOKEN="$(or $(TOKEN),$(LORE_TOKEN))" LORE_MCP_URL="$(or $(MCP_URL),http://127.0.0.1:7777/mcp)" \
+		node smoke.mjs
+
 ## Who holds a token, for which repository, and whether it still works.
 ##
 ## Through the CLI rather than an inline SELECT, so the short hash it prints is the
@@ -308,7 +407,7 @@ status-local:
 ## column and there was nothing in the entire system that could set it.
 tokens:
 	$(wrong-directory)
-	@$(COMPOSE) exec -T lore node /app/src/index.ts tokens --db $(DATA)/lore.db
+	@$(COMPOSE) exec -T lore node /app/src/index.ts tokens
 
 ## Turn a token off. `make revoke TOKEN=<short>`, from the list above.
 ##
@@ -319,7 +418,7 @@ tokens:
 revoke:
 	$(wrong-directory)
 	@test -n "$(TOKEN)" || { echo "usage: make revoke TOKEN=<short-hash>   (see: make tokens)"; exit 2; }
-	@$(COMPOSE) exec -T lore node /app/src/index.ts revoke --token $(TOKEN) --db $(DATA)/lore.db
+	@$(COMPOSE) exec -T lore node /app/src/index.ts revoke --token $(TOKEN)
 
 ## Keep every mirror fresh, forever, without anyone remembering to.
 ##
@@ -398,12 +497,12 @@ mirror:
 		echo; echo "registered:"; \
 		$(COMPOSE) exec -T lore node -e "\
 		const {DatabaseSync}=require('node:sqlite'); \
-		const d=new DatabaseSync(process.env.LORE_DATA_DIR+'/lore.db'); \
+		const d=new DatabaseSync(process.env.LORE_DB_DIR+'/lore.db'); \
 		for (const r of d.prepare('SELECT name, git_url FROM repo').all()) console.log('  '+r.name+'  '+r.git_url);"; \
 		exit 1; }
 	@$(COMPOSE) exec -T lore node -e "\
 	const {DatabaseSync}=require('node:sqlite'); \
-	const d=new DatabaseSync(process.env.LORE_DATA_DIR+'/lore.db'); \
+	const d=new DatabaseSync(process.env.LORE_DB_DIR+'/lore.db'); \
 	const want=process.argv[1]||''; \
 	const rows=d.prepare('SELECT id, name, git_url FROM repo').all() \
 	  .filter(r => want==='' || r.id===want || r.name===want || r.git_url.includes(want)); \
@@ -431,55 +530,41 @@ mirror:
 backup-on:
 	$(COMPOSE) up -d litestream
 	@echo "replicating to $(BACKUP). Verify with: make backup-check"
-
-## Is the backup real, or just configured? Untested backups are beliefs.
-## Is the replica caught up with the database?
+## WHAT THE DATABASE ITSELF SAYS IT LAST WROTE, not when its files were touched.
 ##
-## Prints "ok <detail>" or "stale <detail>". Exit status is not used, so both callers
-## can decide for themselves what to do about it.
+## SQLite touches lore.db-wal on open and on checkpoint, not only on commit, so a
+## restart moved it with no transaction behind it — and this printed "14m behind" while
+## litestream's own log said txid.replica == txid.db on the same second, during the
+## twenty minutes the DATABASE was in fact unreadable. A monitor that cries wolf does
+## not merely get muted; it points at the wrong thing.
 ##
-## THE QUESTION IS NOT "WAS A FILE WRITTEN RECENTLY".
-##
-## It was, and it cried wolf the first time it mattered. litestream writes only when
-## there is something to replicate, so an IDLE database produces no new files — which
-## is the healthy state, and is exactly what "nothing written in an hour" also looks
-## like when replication has died. Measured while checking it: the newest replica file
-## and the last write to lore.db carried the same timestamp to the second, and the
-## monitor called that STALE.
-##
-## A monitor that cries wolf gets ignored, and this one guards the product. So it
-## compares the replica against the DATABASE: caught up is fine at any age, and behind
-## is a problem however recent the files are.
-##
-## THE WAL COUNTS, and it is usually the only thing that moves. SQLite is in WAL mode,
-## so a write lands in lore.db-wal and lore.db's own mtime advances only on checkpoint.
-## Reading the main file alone left this blind in exactly the case it exists for:
-## litestream dies, writes continue into an unflushed WAL, both timestamps freeze,
-## `behind` clamps to 0, and it reports level for hours. Raised by a reviewer against
-## the commit that introduced the monitor; the same defect was in the TypeScript half
-## (ops/heartbeat.ts) and both are fixed.
-##
-## These lines are `##` OUTSIDE the recipe rather than `@#` inside it. Written the
-## other way they landed in the middle of a `\`-continued shell command, where `@#` is
-## not a make prefix but shell text — `@#: command not found`, exit 127, and `make
-## status` reporting the replica broken while it was perfectly level. The wolf-crying
-## failure this monitor exists to avoid, reintroduced by its own fix, and caught only
-## because a status run happened to be watched.
+## Asked through the running service, because that is the coherent reader of a WAL
+## database. With the service DOWN there is nobody to ask, so it falls back to file times
+## in a throwaway container against the volume AND SAYS WHICH IT USED — answering while
+## lore is down is the whole reason this exists in shell rather than as a call into the
+## process.
 replica-state:
 	$(wrong-directory)
-	@db="$(DATA)/lore.db"; \
-	test -f "$$db" || { echo "stale no database at $$db"; exit 0; }; \
-	n=$$(find "$(BACKUP)" -type f -name '*.ltx' 2>/dev/null | wc -l | tr -d ' '); \
+	@n=$$(find "$(BACKUP)" -type f -name '*.ltx' 2>/dev/null | wc -l | tr -d ' '); \
 	test "$$n" -gt 0 || { echo "stale nothing in $(BACKUP) — replication has never written"; exit 0; }; \
-	dbt=$$(for f in "$$db" "$$db-wal"; do \
-		test -f "$$f" && { date -r "$$f" +%s 2>/dev/null || stat -c %Y "$$f"; }; \
-	  done | sort -n | tail -1); \
+	dbt=$$($(COMPOSE) exec -T lore node -e "\
+	  const {DatabaseSync}=require('node:sqlite'); \
+	  const d=new DatabaseSync(process.env.LORE_DB_DIR+'/lore.db',{readOnly:true}); \
+	  const r=d.prepare(\"SELECT MAX(t) t FROM (SELECT MAX(updated_at) t FROM review UNION ALL SELECT MAX(updated_at) FROM job UNION ALL SELECT MAX(verified_at) FROM knowledge UNION ALL SELECT MAX(at) FROM usage UNION ALL SELECT MAX(first_seen) FROM finding)\").get(); \
+	  console.log(r && r.t ? Math.floor(Date.parse(r.t)/1000) : 0);" 2>/dev/null | tr -d '\r'); \
+	if [ -z "$$dbt" ]; then \
+		dbt=$$($(DBRUN) -e "const{statSync}=require('node:fs');\
+		  const t=['/lore.db','/lore.db-wal'].map(f=>{try{return Math.floor(statSync(process.env.LORE_DB_DIR+f).mtimeMs/1000)}catch{return 0}}); \
+		  console.log(Math.max(...t));" 2>/dev/null | tr -d '\r'); \
+		how=" (from file times: the service is down, so its own write log is unreadable)"; \
+	fi; \
+	test -n "$$dbt" && test "$$dbt" != "0" || { echo "stale no database in the $(DBVOL) volume"; exit 0; }; \
 	rept=$$(find "$(BACKUP)" -type f -name '*.ltx' -exec sh -c 'date -r "$$1" +%s 2>/dev/null || stat -c %Y "$$1"' _ {} \; | sort -n | tail -1); \
 	behind=$$((dbt - rept)); \
 	if [ "$$behind" -gt 300 ]; then \
-		echo "stale the database has changed but the replica has not, for $$((behind / 60))m"; \
+		echo "stale the database has changed but the replica has not, for $$((behind / 60))m$$how"; \
 	else \
-		echo "ok replica is level with the database ($$n segments, $$behind s behind)"; \
+		echo "ok replica is level with the database ($$n segments, $$behind s behind)$$how"; \
 	fi
 
 ## Is the DATABASE readable? Replicating a corrupted file faithfully is not a backup.
@@ -490,15 +575,21 @@ replica-state:
 ## backup-check reported healthy, because it only ever compared timestamps. A replica
 ## that is perfectly level with an unreadable database is a faithful copy of nothing.
 ##
-## Through the container: WAL over a Docker Desktop bind mount does not coordinate
-## with a host sqlite3, and reading it from outside has already cost an hour and
-## produced SQLITE_IOERR_SHORT_READ inside the running service.
+## Through a THROWAWAY container, not `compose exec`: this has to answer while lore is
+## down, which is precisely when somebody asks it — a crash-looping service could not
+## exec, so the check that says "your database is unreadable" was itself unreachable in
+## the one state it exists for.
+##
+## Never from the host. The database is in a volume now and has no host path at all; even
+## when it had one, WAL over a Docker Desktop bind did not coordinate with a host
+## sqlite3, and reading it from outside produced SQLITE_IOERR_SHORT_READ inside the
+## running service.
 db-check:
 	$(wrong-directory)
-	@out=$$($(COMPOSE) exec -T lore node -e "\
+	@out=$$($(DBRUN) -e "\
 	const {DatabaseSync}=require('node:sqlite'); \
 	try { \
-	  const d=new DatabaseSync('$(DATA)/lore.db', {readOnly:true}); \
+	  const d=new DatabaseSync(process.env.LORE_DB_DIR + '/lore.db', {readOnly:true}); \
 	  const r=d.prepare('PRAGMA integrity_check').get(); \
 	  console.log(Object.values(r)[0]); \
 	} catch (e) { console.log('unreadable: ' + e.message); }" 2>&1 | tr -d '\r'); \
@@ -539,7 +630,7 @@ backup-drill:
 	@set -e; D=$$(mktemp -d); trap 'docker rm -f lore-drill-ls >/dev/null 2>&1 || true; rm -rf $$D' EXIT; \
 	mkdir -p $$D/db $$D/replica; \
 	printf 'dbs:\n  - path: /var/lib/lore/lore.db\n    replicas:\n      - type: file\n        path: /replica/lore\n        sync-interval: 1s\n' > $$D/litestream.yml; \
-	$(COMPOSE) exec -T lore node -e "const{DatabaseSync}=require('node:sqlite');new DatabaseSync('$(DATA)/lore.db').exec(\"VACUUM INTO '/tmp/drill.db'\")"; \
+	$(COMPOSE) exec -T lore node -e "const{DatabaseSync}=require('node:sqlite');new DatabaseSync(process.env.LORE_DB_DIR+'/lore.db').exec(\"VACUUM INTO '/tmp/drill.db'\")"; \
 	$(COMPOSE) cp lore:/tmp/drill.db $$D/db/lore.db >/dev/null; \
 	$(COMPOSE) exec -T lore rm -f /tmp/drill.db; \
 	before=$$(docker run --rm --entrypoint node -v $$D/db:/var/lib/lore lore-lore:latest -e "const{DatabaseSync}=require('node:sqlite');const d=new DatabaseSync('/var/lib/lore/lore.db');console.log(['knowledge','finding','verdict','review'].map(t=>t+'='+d.prepare('SELECT count(*) c FROM '+t).get().c).join(' '))"); \
@@ -556,10 +647,10 @@ backup-drill:
 
 ## Restore from backup. Overwrites the live database.
 restore:
-	@echo "This overwrites $(DATA)/lore.db with the newest replica."
+	@echo "This overwrites the database in the $(DBVOL) volume with the newest replica."
 	@printf 'Type RESTORE to confirm: ' && read ans && [ "$$ans" = "RESTORE" ] || { echo "aborted"; exit 1; }
 	$(COMPOSE) stop lore
-	$(COMPOSE) run --rm litestream restore -o "$(DATA)/lore.db" "$(DATA)/lore.db"
+	$(COMPOSE) run --rm --no-deps litestream restore -o "$(DB)/lore.db" "$(DB)/lore.db"
 	$(COMPOSE) start lore
 	@echo "restored. Verify with: make status"
 
@@ -569,7 +660,7 @@ sweep:
 	$(COMPOSE) exec -T lore node -e "\
 	import('/app/src/ops/retention.ts').then(async m => { \
 	  const {Store} = await import('/app/src/store/store.ts'); \
-	  const s = new Store('$(DATA)/lore.db'); \
+	  const s = new Store(process.env.LORE_DB_DIR + '/lore.db'); \
 	  console.log(await m.collect(s, {...m.DEFAULT_RETENTION, reposRoot: '$(DATA)/repos'})); \
 	  s.close(); });"
 
