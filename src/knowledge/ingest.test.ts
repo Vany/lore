@@ -401,6 +401,36 @@ describe("the screen's veto over what was mined", () => {
     expect(asked).toBe(1);
   });
 
+  // ...INCLUDING WHEN NOTHING SURVIVED, which is where the cheap check leaked and had no
+  // floor. Asking only about LIVE rules meant a document whose every candidate was
+  // legitimately refused looked unread on every subsequent review: a model call each
+  // time, each one inserting another identical set of dead rows, for ever — in exactly
+  // the case where the screen has the most to say.
+  it("does not re-ask about a document whose candidates were all refused", async () => {
+    let asked = 0;
+    const refusingAll: Screen = (_doc, candidates) => {
+      asked++;
+      return Promise.resolve({
+        kept: [],
+        refused: candidates.map((c) => ({ statement: c.statement, because: "none of these are rules" })),
+        ran: true,
+      });
+    };
+
+    const first = await ingestDocs(store, repoId, dir, { files: ["PROG.md"], screen: refusingAll });
+    expect(first.added).toBe(0);
+    expect(first.screenedOut).toBe(2);
+
+    const second = await ingestDocs(store, repoId, dir, { files: ["PROG.md"], screen: refusingAll });
+    expect(asked).toBe(1);
+    expect(second.screenedOut).toBe(0);
+    // And the dead rows did not double.
+    const dead = store.db
+      .prepare("SELECT COUNT(*) c FROM knowledge WHERE repo_id = ? AND retired_at IS NOT NULL")
+      .get(repoId) as { c: number };
+    expect(Number(dead.c)).toBe(2);
+  });
+
   // Without a screen configured the rows are stamped unscreened, NOT as though a screen
   // had passed them — otherwise a deployment with no model would look identical to one
   // whose screen approved everything, and would never be revisited.

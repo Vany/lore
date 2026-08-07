@@ -380,6 +380,29 @@ describe("runRound", () => {
   // Found against this file an hour after the model tier's
   // half of the same fix landed: T0 shells out to tsc, semgrep and a sandboxed test
   // suite, any of which can die, and a crash used to leave no row at all.
+  // `roundStartedAt` reads this column to condition `check_back_after_ms`, and the
+  // distribution it is conditioned against (`usage.latency_ms`) times the MODEL SESSION
+  // alone. Stamped at `runRound` entry, the two measured different things: T0's engines,
+  // the doc ingest and the knowledge screen's own model call all counted as elapsed
+  // against a distribution that contained none of them, so the wait shrank too fast and
+  // the overdue branch could tell a client the round had outrun every recorded run
+  // before the tier had been asked anything.
+  it("stamps a model tier's run from when its own work begins, not from entry", async () => {
+    const SLOW_T0_MS = 25;
+    const slow: NonNullable<Parameters<typeof runRound>[0]["t0"]> = async () => {
+      await new Promise((r) => setTimeout(r, SLOW_T0_MS));
+      return { findings: [], outcomes: [], unavailable: [], skipped: [] };
+    };
+
+    const entered = Date.now();
+    await runRound({ store, reviewer: new ScriptedReviewer([[]]), reviewId: "r1", principal: "p", worktree: dir, type: TYPE, t0: slow });
+
+    const row = store.db
+      .prepare("SELECT started_at FROM tier_run WHERE review_id = 'r1' AND tier = 't1'")
+      .get() as { started_at: string };
+    expect(Date.parse(row.started_at) - entered).toBeGreaterThanOrEqual(SLOW_T0_MS);
+  });
+
   it("records that T0 ran even when T0 throws", async () => {
     const exploding = (async () => {
       throw new Error("semgrep died");

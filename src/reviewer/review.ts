@@ -324,7 +324,21 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     );
   }
 
-  const tierRunId = store.openTierRun(reviewId, tier.id, review.ladder.round + 1, startedAt);
+  // STAMPED WHEN THE TIER'S OWN WORK BEGINS, not when `runRound` was entered.
+  //
+  // `roundStartedAt` reads this column to condition `check_back_after_ms` on how long the
+  // round has already run — against a distribution taken from `usage.latency_ms`, which
+  // measures the MODEL SESSION alone. Stamping it at entry made the two quantities
+  // different things: everything before this line (T0's engines, the doc ingest, and now
+  // the screen's own model call) counted as elapsed against a distribution that never
+  // included any of it. The wait shrank too fast, and on a slow T0 the overdue branch
+  // could tell a client the round had outrun every recorded run before the tier had been
+  // asked anything — a false statement in the field a waiting client acts on.
+  //
+  // Still not exact: the provider gate can queue this session behind another review's,
+  // and that wait is inside `reviewer.review` where nothing here can see it. Narrower
+  // than it was, and `paceNote` no longer claims more than it can support.
+  const tierRunId = store.openTierRun(reviewId, tier.id, review.ladder.round + 1, new Date().toISOString());
 
   let result;
   try {

@@ -130,6 +130,13 @@ So the cheapest model tier is asked, once per document: **which of these are not
 `ingestDocs` asks that first, because it runs on every review and almost always finds
 nothing changed.
 
+**A refusal counts as having read the document**, and that is what gives the cost a
+floor. The question is *did this reader process this text*, so it is asked of the live
+rules **and** the screen's own born-retired rows. Asked of live rules alone, a document
+whose every candidate was legitimately refused left nothing behind and looked unread on
+every later review: a model call each time, each one writing another identical set of
+dead rows — unbounded, in exactly the case where the screen had the most to say.
+
 **Unmeasured.** Whether the model removes the right fifth, and what it wrongly takes with
 it, is not yet known. The born-retired rows are what makes that answerable: read them and
 count how many should have lived.

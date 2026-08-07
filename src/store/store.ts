@@ -544,7 +544,6 @@ export class Store {
     return at === undefined ? undefined : Date.parse(at);
   }
 
-  /** Reviews for a principal, newest first — backs `review.inbox`. */
   /**
    * A principal's reviews, optionally narrowed to one repository.
    *
@@ -1015,7 +1014,7 @@ export class Store {
   }
 
   /**
-   * Is this document already ingested at this blob, BY THIS READER?
+   * Has THIS READER already read this document at THIS BLOB — whatever survived?
    *
    * The reader half is why the parameter is here: the sentence claimed it and the query
    * did not ask, which was survivable only because `retireForChangedBlob` runs first
@@ -1023,13 +1022,25 @@ export class Store {
    * consulted. It stopped being survivable once ingest grew a step that costs money —
    * this is the cheap question asked BEFORE the screen, so an unchanged document does
    * not buy a model call on every review.
+   *
+   * **A SCREENED-OUT ROW COUNTS AS HAVING READ IT**, and asking only about live rules was
+   * a leak with no floor. A document whose every candidate the screen legitimately
+   * refuses leaves no live row, so it looked unread on the next review and the one after:
+   * a model call per review for ever, each one inserting another identical set of dead
+   * rows — precisely in the case where the screen has the most to say. The question this
+   * needs to answer is "did this reader process this text", and a refusal answers it.
+   *
+   * Rows retired for any OTHER reason are correctly not evidence: `retireForChangedBlob`
+   * only ever retires rows whose blob or reader differs from the arguments here, so they
+   * cannot match, and a rule a person retired through `knowledge_resolve` should not stop
+   * the document being read again.
    */
   hasKnowledgeBlob(repoId: string, provenance: string, blob: string, extractor: string): boolean {
     return (
       this.db
         .prepare(
           "SELECT 1 FROM knowledge WHERE repo_id = ? AND provenance = ? AND source_blob = ? AND extractor IS ?" +
-            " AND retired_at IS NULL LIMIT 1",
+            " AND (retired_at IS NULL OR retired_reason LIKE 'screened out:%') LIMIT 1",
         )
         .get(repoId, provenance, blob, extractor) !== undefined
     );

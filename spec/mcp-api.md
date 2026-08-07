@@ -232,6 +232,23 @@ distribution left to ask, and substituting a median at the moment the data ran o
 inventing it. The note also says this is not a sign of failure — deep rounds have a long
 tail, and a client told otherwise reports lore as broken.
 
+**Elapsed and the distribution must measure the same thing**, and they did not. The
+distribution is `usage.latency_ms`, which times the model session alone; elapsed came
+from `tier_run.started_at`, which was stamped when the round was *entered* — before T0's
+engines, before the document ingest, and before the knowledge screen's own model call.
+Everything in that gap counted as elapsed against a distribution containing none of it,
+so the wait shrank too fast and the overdue branch could tell a client the round had
+outrun every recorded run before the tier had been asked anything. The stamp is now taken
+where the tier's own work begins.
+
+**It is still not exact, and the note no longer claims more than it can support.** The
+provider gate can queue a session behind another review's, inside the call and invisible
+here, so the overdue sentence says the round has been **open** longer rather than working
+longer, and says plainly that a round can wait behind another before it is asked
+anything. A client told "this has run longer than everything we have measured" about a
+round that has not started would report lore as broken, which is the failure mode this
+whole field exists to remove.
+
 **It refuses rather than guesses**, on D-58's rule: fewer than 20 completed runs, or a
 p90/p10 spread above 6, and no number is offered. t3 is the live example — n=12 across
 126s–1691s, which is early refusals and real reviews pooled together, and a median of

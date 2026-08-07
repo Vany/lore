@@ -157,10 +157,13 @@ export function paceNote(pace: Pace | undefined): string {
   const secs = Math.round(pace.ms / 1000);
   if (pace.overdue) {
     return (
-      `MAKE ONE CALL AFTER ~${String(secs)}s, THEN LEAVE. This round has now run longer than every completed ` +
-      `${pace.tier} round on this repository (${String(pace.sample)} of them), so there is no measurement left to ` +
-      "offer you — the next thing to happen could be the answer or a failure, and a longer interval here would " +
-      "be invented rather than measured. This is NOT a sign that anything is wrong; deep rounds have a long tail."
+      `MAKE ONE CALL AFTER ~${String(secs)}s, THEN LEAVE. This round has been open longer than every completed ` +
+      `${pace.tier} round on this repository took to answer (${String(pace.sample)} of them), so there is no ` +
+      "measurement left to offer you — the next thing to happen could be the answer or a failure, and a longer " +
+      "interval here would be invented rather than measured.\n" +
+      "OPEN LONGER, not necessarily working longer: this counts from when the round began, and a round can wait " +
+      "behind another review for a provider before it is asked anything. This is NOT a sign that anything is " +
+      "wrong, and deep rounds have a long tail."
     );
   }
   return (
