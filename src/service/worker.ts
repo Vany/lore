@@ -82,8 +82,19 @@ export class Worker {
       console.error("[lore:log] startup: cleared a drain flag — this process is the one it was waiting for");
     }
     this.running = true;
-    const loops = Array.from({ length: this.cfg.concurrency }, () => this.loop());
-    void Promise.allSettled(loops);
+    // NOT `void Promise.allSettled(loops)`. That collected every rejection and threw
+    // it away, so a loop dying took the service's capacity with it in silence —
+    // concurrency N to N-1 to zero, with `/healthz` still answering ok. Each loop now
+    // reports its own ending, and an ending while `running` is true is a page.
+    let alive = this.cfg.concurrency;
+    for (const loop of Array.from({ length: this.cfg.concurrency }, () => this.loop())) {
+      void loop.catch((e: unknown) => {
+        alive--;
+        const detail = e instanceof Error ? (e.stack ?? e.message) : String(e);
+        console.error(`[lore:log] a worker loop stopped: ${detail}`);
+        if (this.running) void this.alerter.send(CONDITIONS.workerLoopDied(alive, detail));
+      });
+    }
     return () => {
       this.running = false;
     };
@@ -91,14 +102,29 @@ export class Worker {
 
   private async loop(): Promise<void> {
     while (this.running) {
-      // Draining: finish what is in flight, take nothing new. Checked before claiming
-      // rather than inside `claimJob`, so the store stays a store and the policy of
-      // when to stop working lives with the thing that works.
-      if (this.store.isDraining()) {
+      // THE CLAIM ITSELF CAN THROW, and it used to take the loop with it. The guard
+      // below covers everything a round does; `isDraining()` and `claimJob()` are store
+      // calls that sit outside it, so a locked database or a full disk killed this loop
+      // — and the capacity it represented — without stopping the process. A fault here
+      // is reported and slept through, because the alternative is a service that
+      // quietly runs at reduced concurrency and eventually at none.
+      let job;
+      try {
+        // Draining: finish what is in flight, take nothing new. Checked before claiming
+        // rather than inside `claimJob`, so the store stays a store and the policy of
+        // when to stop working lives with the thing that works.
+        if (this.store.isDraining()) {
+          await sleep(this.cfg.pollMs);
+          continue;
+        }
+        job = this.store.claimJob();
+      } catch (e) {
+        const detail = e instanceof Error ? e.message : String(e);
+        console.error(`[lore:log] could not claim work: ${detail}`);
+        await this.alerter.send(CONDITIONS.workerLoopDied(this.cfg.concurrency, detail));
         await sleep(this.cfg.pollMs);
         continue;
       }
-      const job = this.store.claimJob();
       if (job === undefined) {
         await sleep(this.cfg.pollMs);
         continue;

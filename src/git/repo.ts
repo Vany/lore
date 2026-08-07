@@ -344,6 +344,28 @@ export async function gitlinks(worktree: string): Promise<readonly Gitlink[]> {
  * explicitly below; nothing mechanical would have caught the gap, which is the
  * argument for the wrapper rather than against it.
  */
+/**
+ * Put a worktree back to a tree it was at, discarding everything since.
+ *
+ * For the one caller that needs it: `review_submit` applies a patch, hashes the result,
+ * and refuses the submit when the hash is not what the client said. That refusal used to
+ * leave the patch APPLIED — the review row still naming the old tree, the worktree
+ * holding a partial apply nobody has seen — while telling the client *"Nothing was
+ * reviewed. Re-send the full diff for the tree you actually have."* The client then
+ * re-sends against a base that has silently moved, and the second apply lands on top of
+ * the first one's wreckage.
+ *
+ * `read-tree` then `checkout-index -af` rather than `reset --hard`: the worktree carries
+ * the review's accepted diffs as uncommitted changes, and a hard reset would throw away
+ * every earlier round with the failed one. `clean -fd` removes files the patch created,
+ * which `checkout-index` would leave behind.
+ */
+export async function restoreTree(worktree: string, tree: string): Promise<void> {
+  await git(worktree, ["read-tree", tree]);
+  await git(worktree, ["checkout-index", "-a", "-f"]);
+  await git(worktree, ["clean", "-fd"]);
+}
+
 export async function applyPatch(worktree: string, patch: string): Promise<void> {
   const { execFile } = await import("node:child_process");
   await new Promise<void>((resolve, reject) => {

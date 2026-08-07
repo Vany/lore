@@ -5,6 +5,67 @@ surprised me.
 
 ---
 
+## 2026-08-07 — session 38: appraising the 32, and what eight of them were worth
+
+**Vany: "implement all useful."** So the appraisal that TODO said had never been done.
+Of 32 proposals, **eight were real defects and are now fixed**; the rest were refactors
+whose value is unmeasured, and this project's own history says a large refactor severs
+guards from the incidents that justify them.
+
+**The five the critic killed by itself** — *"Do not build this"*, *"points at the wrong
+seam"*, *"prescribes an unnecessarily expensive cure"* — are the cross-vendor critic
+earning its cost. A proposer wrote them; a different vendor read the code and refused to
+endorse them. That is the design working, and it is worth more than the eight fixes: a
+tool that only agreed with itself would have shipped all five.
+
+**What was actually wrong, in order of how badly it lied:**
+
+- **OSV answers were zipped to questions by POSITION.** A short batch response left the
+  trailing components with no result and they were reported CLEAN — in a security
+  review, for packages nobody looked at. INV-1 inside the scanner. It now refuses the
+  batch and says how many answers it got for how many questions.
+- **A crashed round left its `tier_run` open for ever.** `finished_at IS NULL` is the
+  signal for *a tier is working*, and the reclaim fixed the queue while leaving that row
+  lying, so the operator view showed a tier still running weeks later.
+- **And left its review `running` for ever.** Nothing would claim that job again, so the
+  review sat until the 48h sweep called it `expired` — which says nobody came back, and
+  that is false: the ladder died. Now `failed`, with a reason naming the host.
+- **Worker loops died silently.** `isDraining()` and `claimJob()` sat outside the
+  per-job guard, and `void Promise.allSettled(loops)` discarded the rejection — so a
+  store fault took the service's capacity from N to N-1 to zero while `/healthz`
+  answered ok. A service that has stopped working and says it is fine. It survives the
+  fault now, and an ending pages.
+- **`review_submit` refused a patch it had already applied**, telling the client
+  *"Nothing was reviewed"* — true of the review, false of the worktree — so the re-send
+  it asked for landed on a base that had silently moved. `restoreTree` puts it back,
+  and deliberately not with `reset --hard`, which would throw away every earlier
+  accepted round with the failed one.
+- **Document ingestion retired the old rules and inserted the new ones outside a
+  transaction.** Between them the repository believes the document says nothing, and it
+  does not heal: re-ingestion triggers on the blob changing, and the blob is already
+  recorded as seen.
+- **The T0 install lock covered the writer and not the readers.** `tsc` and `eslint` ran
+  outside it against the shared `node_modules` the next review was free to rewrite — the
+  race the lock exists to prevent, moved one step later. Cost of extending it: T0 runs
+  5–11s here and the lock is per lockfile hash.
+- **`upsertRepo` was check-then-act with no constraint.** Two provisions of one
+  repository both insert, and then tokens, reviews and knowledge split across two rows.
+  A unique index makes it impossible rather than unlikely.
+
+**What I did not take, and why.** Ten proposals were seam work — make `Store.db`
+private, extract a health snapshot, a knowledge compiler, port `ProposeDeps` off
+`Store`. Several are probably right. None of them fixes anything that is currently
+wrong, all of them move code that carries its incidents in comments bound to position,
+and the measurement each one offers is about structure rather than behaviour. They stay
+in `refactor.md`, which is the correct place for an idea nobody has needed yet.
+
+**The honest score for `propose`: 8 defects and 5 self-rejections out of 32 for 88
+sessions.** That is worth the quota — but the number that matters is that four of the
+eight were INV-1 shaped, in a codebase whose whole discipline is INV-1, found by models
+reading it cold.
+
+---
+
 ## 2026-08-07 — session 37: propose ran, and the first thing it found was itself
 
 **88 sessions across the eleven folders of `src/`**, four lenses each, every proposal

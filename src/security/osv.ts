@@ -76,7 +76,27 @@ export async function queryComponents(
     }
 
     const parsed = (await res.json()) as { results?: { vulns?: OsvVuln[] }[] };
-    for (const [j, result] of (parsed.results ?? []).entries()) {
+    const results = parsed.results ?? [];
+
+    // THE ANSWERS ARE MATCHED TO THE QUESTIONS BY POSITION AND NOTHING ELSE. OSV's
+    // batch API returns one result per query, in order, and this zips them against the
+    // chunk that was sent — so a response that is SHORT leaves the last components with
+    // no result at all, and they were reported as clean. Not "we could not check" —
+    // clean, in a security review, for a package nobody looked at. That is INV-1 inside
+    // the scanner, and it is the failure this whole project is named for.
+    //
+    // Refused rather than partially trusted: a vulnerability check that examined some
+    // unknown subset of the dependencies is not a vulnerability check.
+    if (results.length !== chunk.length) {
+      throw new DidNotRun(
+        `OSV answered ${String(results.length)} result(s) for ${String(chunk.length)} component(s) — the ` +
+          "answers are matched to the queries BY POSITION, so a mismatched batch would attribute one " +
+          "package's vulnerabilities to another and report the remainder as clean. The vulnerability check " +
+          "DID NOT RUN.",
+      );
+    }
+
+    for (const [j, result] of results.entries()) {
       const component = chunk[j];
       if (component === undefined) continue;
       const vulns = result.vulns ?? [];

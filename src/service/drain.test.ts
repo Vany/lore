@@ -8,7 +8,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { Alerter } from "../ops/alerts.ts";
+import { Alerter, CONDITIONS, type Alert } from "../ops/alerts.ts";
 import { initialState } from "../core/ladder.ts";
 import { Store } from "../store/store.ts";
 import { DEFAULT_WORKER, Worker } from "./worker.ts";
@@ -100,5 +100,54 @@ describe("a drain does not survive the restart it was for", () => {
     } finally {
       stop();
     }
+  });
+});
+
+// A SERVICE THAT HAS STOPPED WORKING AND SAYS IT IS FINE.
+//
+// The per-job guard catches everything a round can throw. `isDraining()` and
+// `claimJob()` sat outside it, so a store-layer fault — a locked database, a full disk
+// — killed the loop, and `void Promise.allSettled(loops)` collected the rejection and
+// discarded it. Concurrency fell from N to N-1 to zero while `/healthz` answered ok and
+// `/status` reported `ok: true`, and nothing anywhere could notice.
+describe("a store fault does not silently cost the service its capacity", () => {
+  /** An alerter that records rather than sends, so the page is observable. */
+  const recorder = () => {
+    const sent: Alert[] = [];
+    const a = new Alerter({ timeoutMs: 10 });
+    a.send = async (alert: Alert) => {
+      sent.push(alert);
+    };
+    return { alerter: a, sent };
+  };
+
+  it("keeps the loop alive when claiming throws, and pages", async () => {
+    const { alerter, sent } = recorder();
+    let thrown = 0;
+    const original = store.claimJob.bind(store);
+    store.claimJob = () => {
+      if (thrown++ < 2) throw new Error("database is locked");
+      return original();
+    };
+
+    const worker = new Worker(store, { ...DEFAULT_WORKER, concurrency: 1, pollMs: 1 }, alerter);
+    const stop = worker.start();
+    await new Promise((r) => setTimeout(r, 60));
+    stop();
+
+    // It threw twice and carried on: the loop is still claiming afterwards.
+    expect(thrown).toBeGreaterThan(2);
+    expect(sent.some((a) => a.severity === "page" && a.condition.includes("stopped claiming work"))).toBe(true);
+  });
+
+  it("says how much capacity is left, because zero is the number that matters", () => {
+    const { alerter, sent } = recorder();
+    void alerter;
+    void sent;
+    // The detail names the remaining loop count; at zero, reviews queue for ever.
+    const a = CONDITIONS.workerLoopDied(0, "disk full");
+    expect(a.severity).toBe("page");
+    expect(a.detail).toContain("0 loop(s)");
+    expect(a.detail).toContain("queue for ever");
   });
 });

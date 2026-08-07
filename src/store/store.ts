@@ -230,11 +230,19 @@ export class Store {
     if (existing !== undefined) {
       return { id: existing["id"] ?? "", name: existing["name"] ?? "", gitUrl };
     }
+    // ON CONFLICT, because the read above is a check-then-act with no lock between it
+    // and this insert: two provisions of one repository racing both find nothing and
+    // both insert, and then tokens, reviews and knowledge split across two rows for one
+    // repository. The unique index in `DDL` is what makes this reachable rather than
+    // decorative; this arm turns the race into a no-op instead of a throw.
     const id = randomUUID();
     this.db
-      .prepare("INSERT INTO repo(id, name, git_url, created_at) VALUES(?, ?, ?, ?)")
+      .prepare("INSERT INTO repo(id, name, git_url, created_at) VALUES(?, ?, ?, ?) ON CONFLICT(git_url) DO NOTHING")
       .run(id, name, gitUrl, now());
-    return { id, name, gitUrl };
+    const row = this.db.prepare("SELECT id, name FROM repo WHERE git_url = ?").get(gitUrl) as
+      | Record<string, string>
+      | undefined;
+    return { id: row?.["id"] ?? id, name: row?.["name"] ?? name, gitUrl };
   }
 
   // ---------------------------------------------------------------- review
@@ -1273,31 +1281,85 @@ export class Store {
     return row?.["value"] === "1";
   }
 
-  reclaimOrphanedJobs(maxAttempts = 3): { readonly requeued: number; readonly failed: number } {
-    return this.tx(() => {
-      const failed = this.db
-        .prepare(
-          `UPDATE job SET state = 'failed', last_error = ?, updated_at = ?
-           WHERE state = 'running' AND attempts >= ?`,
-        )
-        .run(
-          `abandoned by a worker that stopped mid-round, and it had already used its ${maxAttempts} attempts`,
-          now(),
-          maxAttempts,
+  reclaimOrphanedJobs(maxAttempts = 3): {
+    readonly requeued: number;
+    readonly failed: number;
+    readonly closedRuns: number;
+    readonly reviewsFailed: number;
+  } {
+    const woken: string[] = [];
+    const out = this.tx(() => {
+      const at = now();
+      // READ FIRST. The two UPDATEs this used to be were correct only because of the
+      // order they appeared in — the first set the burnt-out rows to `failed` so the
+      // second's `attempts < ?` could not see them — with nothing saying so, and
+      // swapping them would have quietly requeued every job at the limit, which is the
+      // crash-loop the bound exists to prevent. Driving both from one read of the rows
+      // removes the ordering dependency instead of commenting on it.
+      const orphans = this.db
+        .prepare("SELECT id, review_id, attempts FROM job WHERE state = 'running'")
+        .all() as Record<string, string | number>[];
+      const burntOut = orphans.filter((j) => Number(j["attempts"] ?? 0) >= maxAttempts);
+      const retryable = orphans.filter((j) => Number(j["attempts"] ?? 0) < maxAttempts);
+
+      for (const j of burntOut) {
+        this.db
+          .prepare("UPDATE job SET state = 'failed', last_error = ?, updated_at = ? WHERE id = ?")
+          .run(
+            `abandoned by a worker that stopped mid-round, and it had already used its ${String(maxAttempts)} attempts`,
+            at,
+            j["id"] as number,
+          );
+      }
+      for (const j of retryable) {
+        this.db.prepare("UPDATE job SET state = 'queued', updated_at = ? WHERE id = ?").run(at, j["id"] as number);
+      }
+
+      // THE TIER RUN OUTLIVES THE JOB THAT OWNED IT. `openTierRun` leaves `finished_at`
+      // NULL on purpose: null and recent means a tier is working, null and old means
+      // something stopped without saying so. A process that dies mid-round leaves that
+      // row open FOR EVER, so the operator view shows a tier still running weeks later
+      // and nothing distinguishes it from one that is. Reclaiming the job and leaving
+      // its row open fixes the queue and leaves the evidence lying.
+      let closedRuns = 0;
+      for (const id of new Set(orphans.map((j) => String(j["review_id"] ?? "")))) {
+        closedRuns += Number(
+          this.db
+            .prepare(
+              "UPDATE tier_run SET outcome = 'failed', finished_at = ? WHERE review_id = ? AND finished_at IS NULL",
+            )
+            .run(at, id).changes,
         );
-      // `attempts < ?` is REDUNDANT and stays, because the redundancy is the point.
-      //
-      // The statement above has already set the burnt-out rows to 'failed', so they no
-      // longer match `state = 'running'` and this would skip them anyway — correct,
-      // but correct only because of the order these two statements appear in, with
-      // nothing saying so. Swap them and every job at the limit is quietly requeued
-      // instead of failed, which is the crash-loop the bound exists to prevent, and
-      // the tests would still pass on the original order.
-      const requeued = this.db
-        .prepare("UPDATE job SET state = 'queued', updated_at = ? WHERE state = 'running' AND attempts < ?")
-        .run(now(), maxAttempts);
-      return { requeued: Number(requeued.changes), failed: Number(failed.changes) };
+      }
+
+      // AND A REVIEW WHOSE LAST ATTEMPT BURNED OUT IS NOT STILL RUNNING. Nothing will
+      // ever claim that job again, but the review sat in `running` until the 48h sweep
+      // called it `expired` — and `expired` says nobody came back, which is false: the
+      // ladder died. `failed` with a reason is the true answer and the one a client can
+      // act on. A review that already reached a verdict is left alone.
+      for (const j of burntOut) {
+        const id = String(j["review_id"] ?? "");
+        const changed = this.db
+          .prepare(
+            `UPDATE review SET state = 'failed', failed_because = ?, updated_at = ?
+             WHERE id = ? AND state NOT IN (${TERMINAL_SQL})`,
+          )
+          .run(
+            `Every attempt at a round died along with the process running it, ${String(maxAttempts)} times over. ` +
+              "This is NOT a pass and NOT 'nothing found' — no tier ever finished reading the code. Something on " +
+              "the lore host is killing the worker; find that before starting another review of this branch.",
+            at,
+            id,
+          );
+        if (Number(changed.changes) > 0 && !woken.includes(id)) woken.push(id);
+      }
+
+      return { requeued: retryable.length, failed: burntOut.length, closedRuns, reviewsFailed: woken.length };
     });
+    // AFTER the commit, never inside it: a subscriber woken from within the transaction
+    // re-reads and sees the state it was just told had changed.
+    for (const id of woken) this.events.changed(id);
+    return out;
   }
 
   finishJob(id: number, state: "done" | "failed", error?: string): void {

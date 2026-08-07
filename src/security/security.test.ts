@@ -85,6 +85,23 @@ describe("queryComponents", () => {
     expect(out[0]?.component.name).toBe("lodash");
   });
 
+  // THE ANSWERS ARE MATCHED TO THE QUERIES BY POSITION AND NOTHING ELSE. A short
+  // response left the trailing components with no result, and they were reported as
+  // CLEAN — not "we could not check" — in a security review, for packages nobody
+  // looked at. INV-1 inside the scanner.
+  it("refuses a batch whose answers do not line up with its questions", async () => {
+    const short = (async () =>
+      new Response(JSON.stringify({ results: [{ vulns: [vuln] }] }), { status: 200 })) as unknown as typeof fetch;
+    await expect(
+      queryComponents([component, { ...component, name: "unchecked-pkg" }], short),
+    ).rejects.toThrow(/DID NOT RUN/);
+  });
+
+  it("says how many answers it got for how many questions", async () => {
+    const short = (async () => new Response(JSON.stringify({ results: [] }), { status: 200 })) as unknown as typeof fetch;
+    await expect(queryComponents([component], short)).rejects.toThrow(/0 result\(s\) for 1 component\(s\)/);
+  });
+
   // A database we could not reach is NOT a database that said "clean". Returning
   // an empty list here would ship a known-vulnerable tree under a green result.
   it("throws when OSV is unreachable rather than reporting nothing found", async () => {

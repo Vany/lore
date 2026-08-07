@@ -162,41 +162,54 @@ async function sandboxed(
     // Serialising costs almost nothing after the first one: a warm cache installs in
     // about 200ms, measured. It is the cold install that takes minutes, and that one
     // has to happen exactly once anyway.
-    const installed = await withInstallLock(cacheDir, () => install(cfg, worktree, cacheDir, scratch, cmds));
-    if (installed.unavailable !== undefined) {
-      return wanted.map((engine) => ({
-        engine,
-        findings: [],
-        unavailable: `install could not run: ${installed.unavailable ?? ""}`,
-      }));
-    }
-    if (!installed.ok) {
-      // One finding, not one per engine — it is a single fact about the branch. The
-      // others report unavailable, because that is what they are.
-      const tail = `${installed.stdout}\n${installed.stderr}`.trim().split("\n").slice(-30).join("\n").slice(0, 2000);
-      return wanted.map((engine, i) => ({
-        engine,
-        findings:
-          i > 0
-            ? []
-            : [
-                {
-                  file: "package.json",
-                  severity: "high" as const,
-                  claim: `dependencies do not install with ${cmds.name}, so nothing that needs them could run`,
-                  evidence: tail,
-                  failureScenario:
-                    "the suite, the typecheck and the lint all resolve through node_modules — none of them ran, so none of their claims exist",
-                },
-              ],
-        unavailable: `dependencies failed to install with ${cmds.name}`,
-      }));
-    }
+    // THE LOCK COVERS THE READERS TOO, not just the writer.
+    //
+    // It used to wrap `install` alone — and then `tsc` and `eslint` ran outside it,
+    // reading the very `node_modules` the next review was free to start rewriting. The
+    // race the comment above describes was not removed, only moved one step later:
+    // A typechecks against the cache while B installs into it, and A reports errors
+    // that are not real, about somebody else's branch, in our own voice.
+    //
+    // The cost is bounded and small. T0 runs in 5–11s on this deployment, measured
+    // across every review in the table, and the serialisation is per LOCKFILE HASH —
+    // two repos, or two branches with different dependencies, never wait on each other.
+    return await withInstallLock(cacheDir, async () => {
+      const installed = await install(cfg, worktree, cacheDir, scratch, cmds);
+      if (installed.unavailable !== undefined) {
+        return wanted.map((engine) => ({
+          engine,
+          findings: [],
+          unavailable: `install could not run: ${installed.unavailable ?? ""}`,
+        }));
+      }
+      if (!installed.ok) {
+        // One finding, not one per engine — it is a single fact about the branch. The
+        // others report unavailable, because that is what they are.
+        const tail = `${installed.stdout}\n${installed.stderr}`.trim().split("\n").slice(-30).join("\n").slice(0, 2000);
+        return wanted.map((engine, i) => ({
+          engine,
+          findings:
+            i > 0
+              ? []
+              : [
+                  {
+                    file: "package.json",
+                    severity: "high" as const,
+                    claim: `dependencies do not install with ${cmds.name}, so nothing that needs them could run`,
+                    evidence: tail,
+                    failureScenario:
+                      "the suite, the typecheck and the lint all resolve through node_modules — none of them ran, so none of their claims exist",
+                  },
+                ],
+          unavailable: `dependencies failed to install with ${cmds.name}`,
+        }));
+      }
 
-    const out: EngineOutcome[] = [];
-    if (wanted.includes("tsc")) out.push(await checkTypes(cfg, worktree, cacheDir, scratch, cmds, scripts));
-    if (wanted.includes("eslint")) out.push(await checkLint(cfg, worktree, cacheDir, scratch, cmds, scripts));
-    return out;
+      const out: EngineOutcome[] = [];
+      if (wanted.includes("tsc")) out.push(await checkTypes(cfg, worktree, cacheDir, scratch, cmds, scripts));
+      if (wanted.includes("eslint")) out.push(await checkLint(cfg, worktree, cacheDir, scratch, cmds, scripts));
+      return out;
+    });
   } finally {
     await rm(scratch, { recursive: true, force: true }).catch(() => undefined);
   }

@@ -87,6 +87,23 @@ export const CONDITIONS = {
       `the database has changed and the replica has not, for ${minutes}m — the knowledge base IS ` +
       "the product, and this device has no redundancy",
   }),
+  /**
+   * A worker loop stopped, and the process did not.
+   *
+   * The per-job guard catches everything a round can throw; `isDraining()` and
+   * `claimJob()` sit outside it, so a store-layer fault — a locked database, a full
+   * disk — killed the loop, and its rejection went to a discarded `allSettled`.
+   * Concurrency then falls silently from N to N-1 to zero while `/healthz` answers ok
+   * and `/status` reports `ok: true`: a service that has stopped working and says it is
+   * fine. Pages, because nothing else in the system can notice it.
+   */
+  workerLoopDied: (remaining: number, detail: string): Alert => ({
+    severity: "page",
+    condition: "a worker loop stopped claiming work",
+    detail:
+      `${remaining} loop(s) still running. The process is alive and healthy-looking, so nothing else will ` +
+      `report this — at zero, reviews queue for ever and every client waits on a service that answers ok. ${detail}`,
+  }),
   /** No replica at all is worse than a late one: there is nothing to restore from. */
   backupAbsent: (): Alert => ({
     severity: "page",

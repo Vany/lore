@@ -216,29 +216,41 @@ export async function ingestDocs(
     documents++;
 
     const blob = (await blobSha(worktree, rel)) ?? hashOf(source);
-    retired += store.retireForChangedBlob(repoId, rel, blob);
 
-    // Already ingested at this exact blob: nothing to do, and re-inserting would
-    // duplicate every rule on every review.
-    if (hasBlob(store, repoId, rel, blob)) continue;
-
-    for (const c of extractRules(source)) {
-      store.addKnowledge({
-        repoId,
-        kind: "rule",
-        source: "ingested",
-        statement: c.statement,
-        why: c.why,
-        path: pathScopeFor(rel),
-        cwe: undefined,
-        provenance: rel,
-        sourceBlob: blob,
-        // Below taught (1.0) and above a single derived observation: the document
-        // says so, but nobody has confirmed the extraction understood it.
-        confidence: 0.8,
-      });
-      added++;
-    }
+    // RETIRE AND RE-EXTRACT AS ONE WRITE. These are two halves of one fact — *this
+    // document changed, so what it used to say is no longer true and here is what it
+    // says now* — and between them the repository believes the document says NOTHING.
+    // A crash there is not a lost update: it is a codebase that has silently forgotten
+    // its own rules, and the next review runs against an empty knowledge base and
+    // learns nothing from it. Re-ingestion triggers on the blob changing, so it does
+    // not heal on the next pass either — the blob is already recorded as seen.
+    //
+    // The file read stays outside: I/O in a transaction holds a write lock across a
+    // disk wait, and every other writer queues behind it.
+    const rules = extractRules(source);
+    store.tx(() => {
+      retired += store.retireForChangedBlob(repoId, rel, blob);
+      // Already ingested at this exact blob: nothing to do, and re-inserting would
+      // duplicate every rule on every review.
+      if (hasBlob(store, repoId, rel, blob)) return;
+      for (const c of rules) {
+        store.addKnowledge({
+          repoId,
+          kind: "rule",
+          source: "ingested",
+          statement: c.statement,
+          why: c.why,
+          path: pathScopeFor(rel),
+          cwe: undefined,
+          provenance: rel,
+          sourceBlob: blob,
+          // Below taught (1.0) and above a single derived observation: the document
+          // says so, but nobody has confirmed the extraction understood it.
+          confidence: 0.8,
+        });
+        added++;
+      }
+    });
   }
   return { documents, added, retired };
 }

@@ -236,13 +236,26 @@ export function startHeartbeat(store: Store, cfg: HeartbeatConfig, alerter: Aler
     }
   };
 
-  void beat();
-  const timer = setInterval(() => void beat(), cfg.intervalMs);
-  // Do not hold the process open for a heartbeat.
-  timer.unref?.();
+  // SINGLE-FLIGHT, not an interval. `setInterval(() => void beat())` fires again
+  // whether or not the last beat finished — and a beat does I/O: it reads the replica
+  // state off disk and POSTs to a deadman with a 10s timeout. On a slow disk or a
+  // hanging endpoint, beats pile up, each holding its own timeout, and the far end
+  // receives a burst that says nothing about the interval it was meant to measure.
+  // Awaiting each one and scheduling the next from its completion makes the period a
+  // floor rather than a promise, which is the honest shape for a health signal.
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const schedule = (): void => {
+    if (stopped) return;
+    timer = setTimeout(() => {
+      void beat().finally(schedule);
+    }, cfg.intervalMs);
+    // Do not hold the process open for a heartbeat.
+    timer.unref?.();
+  };
+  void beat().finally(schedule);
 
   return () => {
     stopped = true;
-    clearInterval(timer);
+    if (timer !== undefined) clearTimeout(timer);
   };
 }

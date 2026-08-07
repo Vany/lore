@@ -8,11 +8,11 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { applyPatch } from "./repo.ts";
+import { applyPatch, restoreTree, treeHash } from "./repo.ts";
 
 let dir: string;
 
@@ -104,5 +104,49 @@ describe("what a failed apply tells the client", () => {
     );
     expect(err?.message).toMatch(/Nothing was applied/);
     expect(readFileSync(join(dir, "f.txt"), "utf8")).toBe("a\nb\nc\n \n");
+  });
+});
+
+// THE REFUSAL HAS TO UNDO ITS OWN DAMAGE.
+//
+// `review_submit` applies a patch, hashes the result, and refuses when the hash is not
+// what the client said — and that refusal used to leave the patch APPLIED, while telling
+// the client "Nothing was reviewed. Re-send the full diff for the tree you actually
+// have." True of the review and false of the worktree, so the re-send landed on top of a
+// partial apply against a base that had silently moved.
+describe("restoreTree puts a worktree back where it was", () => {
+  it("undoes an applied patch, leaving the tree it started at", async () => {
+    const before = await treeHash(dir);
+    await applyPatch(dir, WELL_FORMED);
+    expect(await treeHash(dir)).not.toBe(before);
+
+    await restoreTree(dir, before);
+    expect(await treeHash(dir)).toBe(before);
+    expect(readFileSync(join(dir, "f.txt"), "utf8")).toBe("a\nb\nc\n \n");
+  });
+
+  // A hard reset would have thrown away every earlier accepted round with the failed
+  // one: the worktree carries a review's accepted diffs as uncommitted changes.
+  it("keeps earlier uncommitted work, restoring only to the given tree", async () => {
+    writeFileSync(join(dir, "earlier.txt"), "an earlier accepted round\n");
+    const before = await treeHash(dir);
+
+    await applyPatch(dir, WELL_FORMED);
+    await restoreTree(dir, before);
+
+    expect(await treeHash(dir)).toBe(before);
+    expect(readFileSync(join(dir, "earlier.txt"), "utf8")).toBe("an earlier accepted round\n");
+  });
+
+  // `checkout-index` restores tracked content and would leave a file the patch created.
+  it("removes files the patch added", async () => {
+    const before = await treeHash(dir);
+    const adds = ["--- /dev/null", "+++ b/new.txt", "@@ -0,0 +1 @@", "+created by the patch", ""].join("\n");
+    await applyPatch(dir, adds);
+    expect(existsSync(join(dir, "new.txt"))).toBe(true);
+
+    await restoreTree(dir, before);
+    expect(existsSync(join(dir, "new.txt"))).toBe(false);
+    expect(await treeHash(dir)).toBe(before);
   });
 });

@@ -103,6 +103,16 @@ CREATE TABLE IF NOT EXISTS review (
   created_at  TEXT NOT NULL,
   updated_at  TEXT NOT NULL
 );
+-- ONE ROW PER REPOSITORY, enforced rather than assumed. upsertRepo reads by git_url
+-- and inserts when it finds nothing, which is a check-then-act with no lock between
+-- the two:
+-- two provisions of the same repository racing both see nothing and both insert. Then
+-- tokens, reviews and knowledge split across two rows for one repository — the knowledge
+-- base halves, and a client holding the older token cannot see reviews started under the
+-- newer one: one thing defined twice always disagrees eventually, with rows instead of
+-- constants. Verified against the deployed database before adding: none exist there,
+-- so this cannot fail an open.
+CREATE UNIQUE INDEX IF NOT EXISTS repo_by_git_url ON repo(git_url);
 CREATE INDEX IF NOT EXISTS review_by_principal ON review(principal, updated_at DESC);
 CREATE INDEX IF NOT EXISTS review_by_repo ON review(repo_id, updated_at DESC);
 

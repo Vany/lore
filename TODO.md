@@ -605,15 +605,21 @@ landing with a real user, and it should not get lost among the defects below.
       screen classified every rule containing "do not" as a decision-against, which is
       most rules a codebase has.
 
-- [ ] **Appraise the 32 proposals — the measurement that has NOT been done.** The tool
-      ran; whether its ideas are any good is still entirely unknown, and `spec/propose.md`
-      §9 says the failure mode is the reader rather than the models. The cheap version:
-      take the `Settled by` line off each of the 32 and run it. Count how many die in
-      under ten minutes. If most survive, the tool earns a second sweep; if most die,
-      the interesting question is whether `settledBy` is being written to be survivable
-      rather than to be decisive, which would be the prompt's fault and fixable.
-      Until that count exists, "propose works" is a claim about a tool that has produced
-      output, not about output anyone has used.
+- [x] **Appraised the 32 proposals, 2026-08-07.** Eight were real defects and are fixed
+      (MEMO session 38); five the cross-vendor critic killed by itself, which is the
+      design working and is worth more than the eight; the remaining nineteen are seam
+      work whose value is unmeasured and which stay in `refactor.md`.
+      **Four of the eight were INV-1 shaped** — a check that did not run reported as
+      clean, a tier run open for ever, a review stuck `running`, a service that stopped
+      working and said it was fine — in a codebase whose entire discipline is INV-1,
+      found by models reading it cold. That is the argument for the tool.
+
+- [ ] **The nineteen seam proposals are unappraised, not rejected.** `refactor.md` holds
+      them. Each names one measurement; none has been run. The reason none was taken is
+      that this codebase binds its incidents to positions in the code, and moving code
+      is how it forgets its own bugs — so a seam change needs a reason beyond being
+      tidier. If one of them ever has that reason, its `Settled by` line is already
+      written.
 
 
 - [ ] **lore knows why a branch cannot be reviewed and tells the one party who cannot

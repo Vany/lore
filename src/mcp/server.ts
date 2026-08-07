@@ -17,7 +17,7 @@ import { worstSeverity } from "../core/finding.ts";
 import { initialState, type LadderState } from "../core/ladder.ts";
 import { isAttestable, isClean, isTerminal, type ReviewState } from "../core/review-state.ts";
 import { DEFAULT_TYPE, reviewType, reviewTypeIds } from "../core/review-type.ts";
-import { applyPatch, treeHash } from "../git/repo.ts";
+import { applyPatch, restoreTree, treeHash } from "../git/repo.ts";
 import { enrich, renderEnrichment } from "../knowledge/enrich.ts";
 import { paceFor, paceNote } from "../ops/pace.ts";
 import { buildVex, findingsNeedingTriage, renderVex } from "../security/vex.ts";
@@ -555,6 +555,8 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
         );
       }
 
+      // Recorded BEFORE the patch, because the refusal below has to be able to undo it.
+      const before = await treeHash(worktree);
       await applyPatch(worktree, diff);
 
       const applied = await treeHash(worktree);
@@ -562,9 +564,24 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
         // Without this check a fuzzy or partial apply leaves us reviewing a tree
         // that exists nowhere — not in git, not on the client's disk — and
         // reporting on it with full confidence (D-40).
+        //
+        // AND THE WORKTREE IS PUT BACK. It used to be left with the patch applied while
+        // the client was told "Nothing was reviewed" — true of the review and false of
+        // the worktree — so the re-send it was asked for landed on top of the partial
+        // apply, against a base that had silently moved. "Nothing was applied" is now a
+        // statement about the tree rather than a hope.
+        await restoreTree(worktree, before).catch((e: unknown) => {
+          // Loud, and the error says so: a worktree we could not restore is a base
+          // nobody can reason about, and the next submit would be reviewed against it.
+          console.error(
+            `[lore:log] could not restore ${review_id}'s worktree after a rejected patch — ` +
+              `it is left at a tree nobody has seen: ${e instanceof Error ? e.message : String(e)}`,
+          );
+        });
         throw new Error(
           `tree hash mismatch after applying: you sent ${tree_hash}, the patch produced ${applied}. ` +
-            `Nothing was reviewed. Re-send the full diff for the tree you actually have.`,
+            `Nothing was applied — the worktree is back at the tree it started this call with — and nothing ` +
+            `was reviewed. Re-send the full diff for the tree you actually have.`,
         );
       }
 

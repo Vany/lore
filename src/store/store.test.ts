@@ -53,6 +53,33 @@ describe("repo", () => {
   });
 });
 
+describe("repo", () => {
+  // CHECK-THEN-ACT WITH NO LOCK. `upsertRepo` reads by git_url and inserts when it finds
+  // nothing; two provisions of one repository racing both find nothing and both insert.
+  // Tokens, reviews and knowledge then split across two rows for one repository — the
+  // knowledge base halves, and a client holding the older token cannot see reviews
+  // started under the newer one.
+  it("cannot hold two rows for one repository", () => {
+    const first = store.upsertRepo("demo", "git@x:same.git");
+    // The race, simulated: an insert that the read said was safe.
+    const second = store.upsertRepo("demo-again", "git@x:same.git");
+    expect(second.id).toBe(first.id);
+    const rows = store.db.prepare("SELECT COUNT(*) AS n FROM repo WHERE git_url = 'git@x:same.git'").get() as {
+      n: number;
+    };
+    expect(Number(rows.n)).toBe(1);
+  });
+
+  it("refuses a duplicate at the schema, not only in the read", () => {
+    store.upsertRepo("demo", "git@x:same.git");
+    expect(() =>
+      store.db
+        .prepare("INSERT INTO repo(id, name, git_url, created_at) VALUES('x', 'sneaky', 'git@x:same.git', 'now')")
+        .run(),
+    ).toThrow();
+  });
+});
+
 describe("review", () => {
   // Possession of a review id is never authentication (D-23). Another principal
   // presenting a VALID id must fail exactly as a forged one does.
@@ -373,7 +400,7 @@ describe("orphaned jobs", () => {
     expect(store.claimJob()).toBeDefined();
     expect(store.queueDepth()).toBe(0); // stranded, and the queue looks empty
 
-    expect(store.reclaimOrphanedJobs()).toStrictEqual({ requeued: 1, failed: 0 });
+    expect(store.reclaimOrphanedJobs()).toMatchObject({ requeued: 1, failed: 0 });
     expect(store.queueDepth()).toBe(1);
     expect(store.claimJob()?.reviewId).toBe("rev1");
   });
@@ -385,13 +412,56 @@ describe("orphaned jobs", () => {
     // Claims 1 and 2 are survivable; each reclaim puts it back.
     for (let i = 0; i < 2; i++) {
       expect(store.claimJob()).toBeDefined();
-      expect(store.reclaimOrphanedJobs()).toStrictEqual({ requeued: 1, failed: 0 });
+      expect(store.reclaimOrphanedJobs()).toMatchObject({ requeued: 1, failed: 0 });
     }
     // The third claim takes attempts to 3, and dying again is where it stops.
     expect(store.claimJob()).toBeDefined();
-    expect(store.reclaimOrphanedJobs()).toStrictEqual({ requeued: 0, failed: 1 });
+    expect(store.reclaimOrphanedJobs()).toMatchObject({ requeued: 0, failed: 1 });
     expect(store.queueDepth()).toBe(0);
     expect(store.claimJob()).toBeUndefined();
+  });
+
+  // THE TIER RUN OUTLIVES THE JOB. `openTierRun` leaves `finished_at` NULL so a reader
+  // can tell working from stopped-without-saying-so — and a process that died mid-round
+  // left the row open for ever, so the operator view showed a tier still running weeks
+  // later. Reclaiming the job and leaving its row open fixed the queue and left the
+  // evidence lying.
+  it("closes the tier runs a dead worker left open", () => {
+    store.enqueue("rev1", "fast");
+    store.claimJob();
+    const runId = store.openTierRun("rev1", "t1", 1, "2026-08-07T00:00:00.000Z");
+    expect(store.reclaimOrphanedJobs().closedRuns).toBe(1);
+    const row = store.db.prepare("SELECT outcome, finished_at FROM tier_run WHERE id = ?").get(runId) as Record<string, string>;
+    expect(row["outcome"]).toBe("failed");
+    expect(row["finished_at"]).not.toBeNull();
+  });
+
+  // A review whose last attempt burned out is not still RUNNING. Nothing will claim
+  // that job again, but the review sat in `running` until the sweep called it
+  // `expired` — which says nobody came back, and that is false: the ladder died.
+  it("fails the review whose every attempt died, and says why", () => {
+    store.enqueue("rev1", "fast");
+    for (let i = 0; i < 3; i++) {
+      store.claimJob();
+      if (i < 2) store.reclaimOrphanedJobs();
+    }
+    const out = store.reclaimOrphanedJobs();
+    expect(out.failed).toBe(1);
+    expect(out.reviewsFailed).toBe(1);
+    expect(store.getReview("rev1", PRINCIPAL)?.state).toBe("failed");
+    expect(store.failureReason("rev1")).toMatch(/died along with the process/);
+    expect(store.failureReason("rev1")).toMatch(/NOT a pass/);
+  });
+
+  it("does not overwrite a review that already reached a verdict", () => {
+    store.enqueue("rev1", "fast");
+    for (let i = 0; i < 3; i++) {
+      store.claimJob();
+      if (i < 2) store.reclaimOrphanedJobs();
+    }
+    store.updateReview("rev1", { state: "passed" });
+    expect(store.reclaimOrphanedJobs().reviewsFailed).toBe(0);
+    expect(store.getReview("rev1", PRINCIPAL)?.state).toBe("passed");
   });
 
   // The two statements were correct only because of the order they appear in, and
@@ -414,7 +484,7 @@ describe("orphaned jobs", () => {
     store.enqueue("rev1", "fast");
     const job = store.claimJob();
     store.finishJob(job?.id ?? 0, "done");
-    expect(store.reclaimOrphanedJobs()).toStrictEqual({ requeued: 0, failed: 0 });
+    expect(store.reclaimOrphanedJobs()).toMatchObject({ requeued: 0, failed: 0 });
   });
 });
 
