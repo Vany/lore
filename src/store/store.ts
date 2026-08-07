@@ -173,6 +173,8 @@ function now(): string {
 
 export class Store {
   readonly db: DatabaseSync;
+  /** Where this database lives, so `integrityFault` can ask a FRESH reader about it. */
+  private readonly path: string;
 
   /**
    * Who to tell when a review moves — set once during wiring, after the MCP handler
@@ -192,6 +194,7 @@ export class Store {
   events: ReviewEvents = NO_EVENTS;
 
   constructor(path: string) {
+    this.path = path;
     this.db = new DatabaseSync(path);
     for (const p of PRAGMAS) this.db.exec(p);
     this.db.exec(DDL);
@@ -1036,6 +1039,85 @@ export class Store {
       );
   }
 
+  /**
+   * When this database last recorded anything, in its own timestamps.
+   *
+   * **The question the replica monitor actually needs**, and not the one it was asking.
+   * It compared the newest replica file against `max(mtime(lore.db), mtime(lore.db-wal))`
+   * — and SQLite touches `-wal` on open and on checkpoint, not only on commit. A restart
+   * therefore moved it with no transaction behind it, and `/status` reported
+   * "replica 14m behind" while litestream's own log said `txid.replica == txid.db` on
+   * every sync. Measured 2026-08-07, and it pointed an operator at a healthy replicator
+   * during the twenty minutes the DATABASE was unreadable.
+   *
+   * These are lore's own written timestamps, so they move when and only when something
+   * was actually recorded — which is exactly the event litestream would have a new
+   * segment for. Idle database: both sides freeze, level. Dead replicator with writes
+   * continuing: this advances and the replica does not, behind. Both correct, and the
+   * touched-WAL case that cried wolf produces no movement at all.
+   *
+   * `undefined` for a database nothing has ever been written to.
+   */
+  lastWriteAt(): string | undefined {
+    const row = this.db
+      .prepare(
+        `SELECT MAX(t) AS t FROM (
+           SELECT MAX(updated_at) t FROM review
+           UNION ALL SELECT MAX(updated_at) FROM job
+           UNION ALL SELECT MAX(verified_at) FROM knowledge
+           UNION ALL SELECT MAX(at) FROM usage
+           UNION ALL SELECT MAX(first_seen) FROM finding
+         )`,
+      )
+      .get() as { t: string | null } | undefined;
+    return row?.t ?? undefined;
+  }
+
+  /**
+   * Could a NEW reader open this database and read it?
+   *
+   * **Asked on a fresh connection, and that is the whole point.** SQLite serves an open
+   * connection from its page cache, so a long-lived process can go on answering from
+   * memory while the file beneath it is unreadable — which is exactly what happened on
+   * 2026-08-07: `/status` kept replying for twenty minutes while every new connection
+   * (`make mirror`, a shell query, a restart) failed with `database disk image is
+   * malformed`. A check on the live handle reproduced that and reported clean, so it
+   * would have shipped watching nothing.
+   *
+   * The question that matters is not "can I still read my cache" but "can anyone else
+   * read this file" — litestream, the next process, a restore. That is a new reader.
+   *
+   * `quick_check` rather than `integrity_check`: it skips the index-versus-table
+   * cross-check, the part whose cost grows with the data, and still catches every
+   * structural fault — 7ms against 10ms on the live 3 MB file, both trivial today and
+   * only one of them still trivial at a hundred times the size. `make db-check` remains
+   * the thorough one, for when somebody is asking deliberately.
+   *
+   * Returns the fault, or `undefined` when it is fine. It THROWS nothing: a corrupt
+   * database makes every statement fail, including this one, and a health check that
+   * dies rather than reporting is the failure it exists to catch wearing another hat.
+   */
+  integrityFault(): string | undefined {
+    // An in-memory database has no file for a second reader to open, and opening the
+    // name again would make a different, empty one — which would report a clean bill
+    // about something that is not this store. Ask the live handle instead.
+    if (this.path === ":memory:") return faultOf(() => this.db);
+
+    let fresh: DatabaseSync | undefined;
+    try {
+      return faultOf(() => {
+        fresh = new DatabaseSync(this.path, { readOnly: true });
+        return fresh;
+      });
+    } finally {
+      try {
+        fresh?.close();
+      } catch {
+        // A corrupt database can fail to close. The answer is already computed.
+      }
+    }
+  }
+
   /** Live rules for a repository, counted by where they came from. */
   liveKnowledgeBySource(repoId: string): readonly { readonly source: string; readonly n: number }[] {
     const rows = this.db
@@ -1787,6 +1869,17 @@ function toFinding(row: Record<string, string | number | null>): RecordedFinding
       ? { scope: { blob: scopeBlob, hunk: scopeHunk } }
       : {}),
   };
+}
+
+/** Run `quick_check` on whatever connection is handed over, reporting rather than throwing. */
+function faultOf(open: () => DatabaseSync): string | undefined {
+  try {
+    const rows = open().prepare("PRAGMA quick_check").all() as { quick_check?: string }[];
+    const first = rows[0]?.quick_check ?? "ok";
+    return first === "ok" ? undefined : first;
+  } catch (e) {
+    return e instanceof Error ? e.message : String(e);
+  }
 }
 
 function toKnowledge(row: Record<string, string | number | null>): KnowledgeItem {

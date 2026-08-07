@@ -94,10 +94,21 @@ export interface Health {
 
 export async function checkHealth(store: Store, cfg: HeartbeatConfig): Promise<Health> {
   const midnight = `${new Date().toISOString().slice(0, 10)}T00:00:00.000Z`;
-  const replica = await replicaState(cfg);
+  const replica = await replicaState(store, cfg);
   const needsHumanOverAge = store.needsHumanOlderThan(cfg.needsHumanAgeHours);
 
   const problems: string[] = [];
+  // FIRST, AND ON EVERY BEAT. On 2026-08-07 this database became unreadable — every
+  // statement, including `sqlite_master`, answering `database disk image is malformed` —
+  // and nothing noticed for twenty minutes. It surfaced because `make mirror` happened
+  // to fail. `/status` was answering at the time, said `ok: false` for an unrelated and
+  // WRONG reason, and had no opinion at all about the one fault that ends the service.
+  //
+  // A health check that reports on the queue and the replica while never asking whether
+  // the data is there is INV-1 at the top of the stack: the thing that did not run
+  // reported as the thing that found nothing. It cost 7ms against the live file.
+  const fault = store.integrityFault();
+  if (fault !== undefined) problems.push(`DATABASE UNREADABLE: ${fault}`);
   if (replica.state === "absent") problems.push("replica missing");
   if (replica.state === "behind") problems.push(`replica ${Math.round((replica.behindSec ?? 0) / 60)}m behind`);
 
@@ -125,44 +136,24 @@ export async function checkHealth(store: Store, cfg: HeartbeatConfig): Promise<H
  * replica folder cannot be asked this question, and answering "fine" would be a claim
  * about something nobody looked at.
  */
-async function replicaState(cfg: HeartbeatConfig): Promise<{ state: ReplicaState; behindSec?: number }> {
+async function replicaState(store: Store, cfg: HeartbeatConfig): Promise<{ state: ReplicaState; behindSec?: number }> {
   if (cfg.backupDir === undefined) return { state: "unconfigured" };
 
   const newest = await newestMtime(cfg.backupDir);
   if (newest === undefined) return { state: "absent" };
 
-  const changed = await databaseChangedAt(cfg.dataDir);
-  if (changed === undefined) return { state: "unconfigured" };
+  // WHEN LORE LAST WROTE, not when the files were last touched. See `lastWriteAt`: a
+  // restart moves `lore.db-wal`'s mtime with no transaction behind it, and that read as
+  // fourteen minutes behind on a replica litestream reported level at the same second.
+  // Nothing to compare means nothing has ever been written, which is level by any
+  // reading — a fresh deployment is not a backup emergency.
+  const wrote = store.lastWriteAt();
+  if (wrote === undefined) return { state: "level", behindSec: 0 };
+  const changed = Date.parse(wrote);
+  if (!Number.isFinite(changed)) return { state: "unconfigured" };
 
   const behindSec = Math.max(0, Math.round((changed - newest) / 1000));
   return behindSec > REPLICA_BEHIND_SEC ? { state: "behind", behindSec } : { state: "level", behindSec };
-}
-
-/**
- * When the database last changed — **the WAL counts, and it is usually the only
- * thing that moves.**
- *
- * The store runs in WAL mode (`store/schema.ts`), so a write lands in `lore.db-wal`
- * and `lore.db`'s own mtime advances only on CHECKPOINT. Reading the main file alone
- * made this monitor blind in precisely the case it was built for: litestream dies,
- * writes continue into a WAL that has not reached SQLite's ~1000-page autocheckpoint
- * threshold — and knowledge rows are small, so that is the ordinary case — the
- * replica's newest segment freezes, `lore.db`'s mtime is older still, `behindSec`
- * clamps to zero, and every beat reports `level, ok: true, no page` for hours while
- * knowledge is written and replicated nowhere. Observed live: `lore.db` stamped 18:56
- * against a newest replica segment of 22:58 — four hours apart, in the wrong
- * direction, reported as level. It was *correct* only because litestream was alive;
- * the arithmetic could not tell either way.
- *
- * `-shm` is deliberately not consulted: it is shared-memory coordination, rewritten
- * for reasons that are not writes, so including it would report change where there
- * was none — the opposite error, and just as blind.
- */
-async function databaseChangedAt(dataDir: string): Promise<number | undefined> {
-  const db = await stat(join(dataDir, "lore.db")).catch(() => undefined);
-  if (db === undefined) return undefined;
-  const wal = await stat(join(dataDir, "lore.db-wal")).catch(() => undefined);
-  return Math.max(db.mtimeMs, wal?.mtimeMs ?? 0);
 }
 
 /** Newest mtime anywhere under a directory, or undefined if it holds no files. */
