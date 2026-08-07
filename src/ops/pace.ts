@@ -161,9 +161,10 @@ export function paceNote(pace: Pace | undefined): string {
       `${pace.tier} round on this repository took to answer (${String(pace.sample)} of them), so there is no ` +
       "measurement left to offer you — the next thing to happen could be the answer or a failure, and a longer " +
       "interval here would be invented rather than measured.\n" +
-      "OPEN LONGER, not necessarily working longer: this counts from when the round began, and a round can wait " +
-      "behind another review for a provider before it is asked anything. This is NOT a sign that anything is " +
-      "wrong, and deep rounds have a long tail."
+      `OPEN LONGER, not necessarily working longer: this counts from when ${pace.tier} itself began — after the ` +
+      "deterministic checks, not from when you started the review — and from there a round can still wait behind " +
+      "another review for a provider before it is asked anything. This is NOT a sign that anything is wrong, and " +
+      "deep rounds have a long tail."
     );
   }
   return (

@@ -87,6 +87,22 @@ describe("paceFor", () => {
     expect(paceNote(pace)).toMatch(/NOT a sign that anything is wrong/);
   });
 
+  // AND IT SAYS WHAT THE CLOCK STARTED ON, because that sentence has already been wrong
+  // once. Elapsed is measured from the TIER's own start; the note claimed it counted
+  // "from when the round began" — a client that had been waiting since `review_start`
+  // reads that as including T0, so on a repository whose T0 takes ~21 minutes the note's
+  // only offered explanation cannot account for the gap, the reassurance collapses, and
+  // it reports lore as broken. Which is the failure this whole field exists to remove.
+  it("says which clock the overdue claim is about, and it is the tier's", () => {
+    runs("t2", 40, 200, 400);
+    const note = paceNote(paceFor(store, "t2", REPO, 900_000));
+    expect(note).toMatch(/counts from when t2 itself began/);
+    // The two things that would make it a lie again: claiming the review's clock, or
+    // implying the tier has been working the whole time.
+    expect(note).not.toMatch(/from when the round began|since you started/i);
+    expect(note).toMatch(/not necessarily working longer/i);
+  });
+
   // The arithmetic tends to zero as a round ages; two seconds is the retry loop this
   // replaced, wearing a measured number.
   it("never suggests an interval short enough to be a busy loop", () => {

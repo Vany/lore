@@ -127,6 +127,12 @@ const SCREEN_VERSION = "1";
  * Both halves, so a change to either retires what the pair produced. Read as one opaque
  * token everywhere else — nothing outside this file should be parsing it apart, because
  * the moment something does, the two versions have to agree about a format as well.
+ *
+ * lore-ok[666e3353]: this is that fix. The screen was unversioned and the finding was
+ * right that it recreated D-20's trap one layer up — a prompt or tier change would have
+ * left every stored veto in place for ever. `SCREEN_VERSION` above is the second half
+ * and this is what retirement now compares, so a change to either reader retires what
+ * the pair produced.
  */
 export const EXTRACTOR_VERSION = `${EXTRACT_VERSION}.${SCREEN_VERSION}`;
 

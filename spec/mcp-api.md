@@ -259,6 +259,15 @@ anything. A client told "this has run longer than everything we have measured" a
 round that has not started would report lore as broken, which is the failure mode this
 whole field exists to remove.
 
+**And the note names which clock it means**, because that sentence has already been
+wrong once: it said the count ran "from when the round began" in the same change that
+moved the stamp to the tier's own start. A client that has been waiting since
+`review_start` reads that as including T0, so on a repository whose T0 takes ~21 minutes
+the note's own explanation cannot account for the gap and the reassurance collapses. It
+now says it counts from when **that tier** began, after the deterministic checks. A test
+in `pace.test.ts` holds the claim, since prose about a measurement drifts from the
+measurement exactly as easily as a doc drifts from code.
+
 **It refuses rather than guesses**, on D-58's rule: fewer than 20 completed runs, or a
 p90/p10 spread above 6, and no number is offered. t3 is the live example — n=12 across
 126s–1691s, which is early refusals and real reviews pooled together, and a median of

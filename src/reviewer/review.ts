@@ -166,6 +166,13 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // signed tree" are different sets, and only the second is what an attestation may
   // claim (`spec/review-ladder.md` §5).
   const roundTree = await treeHash(worktree);
+  // lore-ok[bb2c32f5]: the reasoning is right and the fix belongs one layer down, so
+  // this line is deliberately unchanged. T0's row IS stamped at entry, and that is
+  // correct — T0's work does start here. What was wrong is that `roundStartedAt`
+  // answered with ANY open run, so during T0 the model tier's pacing read T0's clock.
+  // It takes the tier now (`store.ts`), which makes the answer right for every tier at
+  // once rather than relying on each one stamping itself defensively — and it returns
+  // `undefined` before a tier begins, which is the honest elapsed-zero the caller wants.
   const t0RunId = store.openTierRun(reviewId, "t0", review.ladder.round + 1, startedAt);
   let t0;
   try {
