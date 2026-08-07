@@ -168,6 +168,26 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
   const mine = (reviewId: string) => {
     const r = store.getReview(reviewId, who.principal);
     if (r === undefined || r.repoId !== who.repoId) throw new Error(`review ${reviewId} not found`);
+    // AND THE TOKEN THAT STARTED IT (D-78). `review_poll` returns deltas and MARKS THEM
+    // DELIVERED, so a colleague polling a review they did not start silently takes its
+    // findings and the owner is shown nothing at all. Repository scope was right while a
+    // repository meant one holder; `rigid-monorepo` has three.
+    //
+    // Not a threat model — these are colleagues, and `principal` already says who a
+    // review belongs to. It is an ACCIDENT model: the obvious way to answer "how is that
+    // review doing" is to poll it, and doing so costs somebody else their findings with
+    // nothing anywhere to say so. I nearly did it myself the day this was written.
+    //
+    // A REVOKED BINDING FALLS BACK TO REPOSITORY SCOPE, which is the rotation question
+    // this carried. Revoking a token would otherwise strand every review it started —
+    // right for a compromised credential and wrong for the routine replacement that is
+    // the common case, and stranding a colleague's in-flight work is a worse failure
+    // than the accident this prevents, against people who are already trusted with the
+    // repository. Reversible if the threat model ever changes; say so if it should.
+    const bound = r.tokenHash;
+    if (bound !== undefined && bound !== who.tokenHash && store.tokenLive(bound)) {
+      throw new Error(`review ${reviewId} not found`);
+    }
     return r;
   };
 
@@ -247,6 +267,8 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
         id,
         repoId: who.repoId,
         principal: who.principal,
+        // The token this review answers to (D-78) — see `mine`.
+        tokenHash: who.tokenHash,
         branch,
         intoRef: into,
         ticket,

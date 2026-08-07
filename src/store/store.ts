@@ -31,6 +31,15 @@ export interface ReviewRow {
   readonly id: string;
   readonly repoId: string;
   readonly principal: string;
+  /**
+   * The token that started it (D-78), or `undefined` for a row that predates the column.
+   *
+   * NOT attribution — *who* started a review is `principal`, and every agent acting for
+   * a person is that person. This exists because `review_poll` returns deltas and marks
+   * them delivered, so a colleague polling a review they did not start takes its
+   * findings and the owner is shown nothing.
+   */
+  readonly tokenHash?: string | undefined;
   readonly branch: string;
   readonly intoRef: string;
   readonly ticket: string;
@@ -253,13 +262,14 @@ export class Store {
     const t = now();
     this.db
       .prepare(
-        `INSERT INTO review(id, repo_id, principal, branch, into_ref, ticket, type, state, tree_hash, ladder, created_at, updated_at)
-         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO review(id, repo_id, principal, token_hash, branch, into_ref, ticket, type, state, tree_hash, ladder, created_at, updated_at)
+         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         r.id,
         r.repoId,
         r.principal,
+        n(r.tokenHash),
         r.branch,
         r.intoRef,
         r.ticket,
@@ -338,6 +348,7 @@ export class Store {
       type: row["type"] ?? "",
       state: (row["state"] ?? "failed") as ReviewState,
       treeHash: un(row["tree_hash"] ?? null),
+      tokenHash: un(row["token_hash"] ?? null),
       ladder: JSON.parse(row["ladder"] ?? "{}") as LadderState,
     };
   }

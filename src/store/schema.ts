@@ -21,7 +21,7 @@ import { SEVERITIES } from "../core/finding.ts";
 // adds the columns, because this number is what `assertNotDowngrade` compares — left
 // behind, it says a database written by this build is identical to one written before
 // the columns existed.
-export const SCHEMA_VERSION = 10;
+export const SCHEMA_VERSION = 11;
 
 /**
  * How findings are ordered wherever the service hands them out: worst first.
@@ -85,6 +85,12 @@ CREATE TABLE IF NOT EXISTS review (
   -- The token principal this handle belongs to. Every call re-checks it: possession
   -- of a review id is never authentication (D-23).
   principal   TEXT NOT NULL,
+  -- WHICH TOKEN started it (D-78). A poll RETURNS DELTAS AND MARKS THEM DELIVERED, so
+  -- a colleague polling a review they did not start silently takes its findings and the
+  -- owner is shown nothing — with three holders on one repository that is a matter of
+  -- days, not a threat model. NULL means repository scope, which is what rows written
+  -- before this column were started under.
+  token_hash  TEXT,
   branch      TEXT NOT NULL,
   into_ref    TEXT NOT NULL,
   ticket      TEXT NOT NULL,
@@ -308,6 +314,11 @@ export const MIGRATIONS: readonly { readonly table: string; readonly column: str
   { table: "tier_run", column: "tree_hash", sql: "ALTER TABLE tier_run ADD COLUMN tree_hash TEXT" },
   // WHICH EXTRACTOR produced an ingested rule, so improving the reader retires its output.
   { table: "knowledge", column: "extractor", sql: "ALTER TABLE knowledge ADD COLUMN extractor TEXT" },
+  // WHICH TOKEN started this review, so its findings are not consumed by a colleague
+  // (D-78). NULL on every row that predates it, and NULL means repository scope — the
+  // behaviour those reviews were started under, which is the only honest thing to give
+  // a row that was never bound to anything.
+  { table: "review", column: "token_hash", sql: "ALTER TABLE review ADD COLUMN token_hash TEXT" },
 ];
 
 /**

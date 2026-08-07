@@ -207,7 +207,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-75** | `propose` is an **idea generator for the maintainer**, never a gate | built; ideas unmeasured |
 | **D-76** | A change is validated **over MCP**; a CLI run is never evidence the product works | `[OPEN]` |
 | **D-77** | **Commit, review to a verdict, amend, push.** Nothing reaches origin unreviewed | `[OPEN]` |
-| **D-78** | A review answers to **the token that started it**, not to its repository | `[OPEN]` |
+| **D-78** | A review answers to **the token that started it**, not to its repository | built |
 | **D-79** | A finding is **what the author missed and would be hurt by** — asked, not filed | confirmed |
 | **D-80** | A review is **one conversation per tier**, not a series of audits. Fully async | subscription live; conversation `[OPEN]` |
 | **D-81** | Extraction stays deterministic; a **model may only VETO** what it mined | built; screen unmeasured |
@@ -1296,11 +1296,26 @@ A valid id presented by another token fails as **not found**, never as forbidden
 D-23's reason: "this exists but is not yours" confirms the id is real, and the id is
 the one thing worth guessing.
 
-`[OPEN]` — the wrinkle is rotation. Revoking a token orphans the reviews it started,
-which is correct for a compromised credential and inconvenient for a routine
-replacement. The operator view still sees them and the staleness sweep still collects
-them, so nothing is lost silently; whether rotation should be able to hand reviews over
-is a decision, and it wants making before this ships rather than after someone rotates.
+**Rotation was the wrinkle, and it is decided: a revoked binding falls back to
+repository scope.** Revoking a token would otherwise orphan every review it started —
+correct for a compromised credential, wrong for the routine replacement that is the
+common case. What this defends against is an ACCIDENT between colleagues, not an
+attacker: the obvious way to answer *"how is that review doing"* is to poll it. Against
+that, stranding somebody's in-flight work on a rotation is the worse failure, and the
+people who could then reach those reviews are the ones already trusted with the
+repository. Reversible if the threat model ever changes, and the change is one clause.
+
+**A review with no recorded token stays repository-scoped.** Rows written before the
+column was added were started under that rule and were never bound to anything;
+inventing a binding for them would lock out the client that legitimately owns them.
+
+Built 2026-08-07. `mine()` in `src/mcp/server.ts` is the single gate, so `review_poll`,
+`review_submit`, `review_cancel`, `review_attest`, `review_vex` and the
+`lore://review/{id}` resource are all bound by construction rather than one at a time —
+`review_inbox` is the only reader that does not go through it, which is exactly the
+split above. `TOOL_DOCS.poll` and `TOOL_DOCS.inbox` say so to the client, because a
+client that finds a colleague's review NOT FOUND on a repository it holds a token for
+would otherwise conclude lore had lost it.
 
 **D-77 — commit, review it to a verdict, amend, then push.**
 

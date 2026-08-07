@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { initialState } from "../core/ladder.ts";
 import { DEFAULT_SPEND } from "../ops/spend.ts";
 import { DEFAULT_HEARTBEAT } from "../ops/heartbeat.ts";
-import { grantToken } from "../mcp/auth.ts";
+import { grantToken, hashToken, revokeByPrefix } from "../mcp/auth.ts";
 import { Store } from "../store/store.ts";
 import { TOOL_DOCS } from "../mcp/docs.ts";
 import { startHttp } from "./http.ts";
@@ -948,5 +948,79 @@ describe("findings the branch did not cause are marked and ranked below", () => 
     record("d", "src/mine.ts", "high", false);
     const out = await callTool("review_poll", { review_id: "revP" });
     expect((out["new_findings"] as Record<string, unknown>[])[0]).not.toHaveProperty("preexisting");
+  });
+});
+
+// A POLL TAKES THE FINDINGS IT RETURNS, and that is what makes repository scope wrong
+// once a repository has more than one holder (D-78).
+//
+// `review_poll` returns deltas and marks them delivered, so a colleague polling a review
+// they did not start silently consumes its findings and the owner is shown nothing —
+// not the findings, and not the fact that somebody took them. `rigid-monorepo` went from
+// one token to three on 2026-08-07, which is what turned this from a note into a defect.
+//
+// Not a threat model. `principal` already records who a review belongs to and these are
+// colleagues; it is an ACCIDENT model, because the obvious way to answer "how is that
+// review doing" is to poll it.
+describe("a review answers to the token that started it", () => {
+  const started = (id: string, tokenHash: string | undefined) => {
+    store.createReview({
+      id, repoId, principal: "alice", branch: "feat/z", intoRef: "main",
+      ticket: "t", type: "code-arch", state: "findings_ready", ladder: initialState(),
+      ...(tokenHash === undefined ? {} : { tokenHash }),
+    });
+  };
+
+  /** A second token on the SAME repository and the SAME principal — the workgroup case. */
+  const sameRepoOtherToken = () => grantToken(store, repoId, "alice");
+
+  const pollWith = async (reviewId: string, bearer: string) => {
+    const res = await mcp(
+      { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "review_poll", arguments: { review_id: reviewId } } },
+      bearer,
+    );
+    const line = (await res.text()).split("\n").find((l) => l.startsWith("data:")) ?? "";
+    return JSON.parse(line.slice("data:".length)) as { result?: { content?: { text?: string }[]; isError?: boolean } };
+  };
+
+  it("refuses a holder who did not start it, as NOT FOUND", async () => {
+    started("revT", hashToken(token));
+    const rpc = await pollWith("revT", sameRepoOtherToken());
+    const text = String(rpc.result?.content?.[0]?.text ?? "");
+    // NOT FOUND rather than forbidden, per D-23: "this exists but is not yours" confirms
+    // the id is real, and an id is the one thing worth guessing.
+    expect(text).toContain("not found");
+    expect(text).not.toMatch(/forbidden|not yours/i);
+  });
+
+  it("lets the token that started it through", async () => {
+    started("revU", hashToken(token));
+    const out = await callTool("review_poll", { review_id: "revU" });
+    expect(out["review_id"]).toBe("revU");
+  });
+
+  // Rows written before the column exists were started under repository scope, and that
+  // is the only honest thing to give them: they were never bound to anything.
+  it("leaves a review with no recorded token on repository scope", async () => {
+    started("revV", undefined);
+    const rpc = await pollWith("revV", sameRepoOtherToken());
+    expect(String(rpc.result?.content?.[0]?.text ?? "")).toContain("revV");
+  });
+
+  // THE ROTATION ANSWER. Revoking a token would otherwise strand every review it
+  // started — right for a compromised credential, wrong for the routine replacement
+  // that is the common case. Stranding a colleague's in-flight work is a worse failure
+  // than the accident this prevents, among people already trusted with the repository.
+  it("falls back to repository scope once the binding token is revoked", async () => {
+    const departing = grantToken(store, repoId, "alice");
+    started("revW", hashToken(departing));
+
+    const before = await pollWith("revW", token);
+    expect(String(before.result?.content?.[0]?.text ?? "")).toContain("not found");
+
+    revokeByPrefix(store, hashToken(departing).slice(0, 8));
+
+    const after = await pollWith("revW", token);
+    expect(String(after.result?.content?.[0]?.text ?? "")).toContain("revW");
   });
 });

@@ -121,6 +121,11 @@ Fetch findings discovered since your last poll.
 Returns ONLY NEW findings. Anything you have already been shown will not appear again
 — do not re-fix something absent from the response.
 
+THIS CALL CONSUMES WHAT IT RETURNS, so it answers only for the token that started the
+review. A review you did not start is NOT FOUND here, even on a repository you hold a
+token for, because polling it would take findings its owner has never seen and nothing
+anywhere would say so. review_inbox is how you find what is yours.
+
 USE THIS TO READ, NOT TO WAIT. Subscribe to \`lore://review/<review_id>\` with
 subscriptions/listen and you will be woken when something changes; then call this to
 collect it. CALL IT ONCE RIGHT AFTER SUBSCRIBING TOO — a subscription carries no
@@ -415,6 +420,12 @@ Surface \`needs_human\` and high-severity findings to your user through whatever
 alerting you have. Do not merely log them. lore cannot notify anyone — it returns
 information and you decide what deserves attention. A finding nobody sees is a
 finding nobody found.
+
+THIS IS THE ONE CALL ABOUT YOU RATHER THAN ABOUT ONE REVIEW. It lists reviews started
+with YOUR token. A repository can have several holders, and every other call takes a
+review id and answers only for the token that started that review — so a colleague's
+review will not appear here, is theirs to drive, and polling it would take findings
+they have not seen. If you know an id that is not in this list, leave it alone.
 `.trim(),
 
   query: `

@@ -36,7 +36,14 @@ function mintToken(): string {
   return `${PREFIX}${randomBytes(32).toString("base64url")}`;
 }
 
-function hashToken(token: string): string {
+/**
+ * The row's key for a token — never a credential, and never shown to a client.
+ *
+ * Exported so a test can bind a review to a token it minted (D-78) without a second
+ * spelling of `sha256(token)`, which is the shape `PROG.md` names: one thing defined
+ * twice always disagrees eventually.
+ */
+export function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
