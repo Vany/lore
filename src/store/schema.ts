@@ -21,7 +21,7 @@ import { SEVERITIES } from "../core/finding.ts";
 // adds the columns, because this number is what `assertNotDowngrade` compares — left
 // behind, it says a database written by this build is identical to one written before
 // the columns existed.
-export const SCHEMA_VERSION = 13;
+export const SCHEMA_VERSION = 14;
 
 /**
  * How findings are ordered wherever the service hands them out: worst first.
@@ -197,6 +197,19 @@ CREATE TABLE IF NOT EXISTS verdict (
   tier        TEXT,
   model       TEXT,
   round       INTEGER,
+  -- The development rule this acceptance rested on, when it was an APPEAL (D-83).
+  --
+  -- NULL for an ordinary justification, which is the common case and the important
+  -- distinction: an ordinary reason was argued on its own words and nothing can be
+  -- withdrawn from under it, so it carries forward for ever (D-51). An appeal borrowed
+  -- a rule's authority, and when the rule is retired the acceptance goes with it.
+  --
+  -- Recorded rather than inferred. It was first derived by matching the finding's engine
+  -- rule class and path against the suppression table, which is broader than the claim
+  -- the comment beside it made: an ORDINARY justification of a finding that merely shared
+  -- a class and file with some other appeal was blocked from carrying too. A column says
+  -- exactly what happened; a match says something adjacent to it.
+  via_rule    TEXT,
   created_at  TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS verdict_by_finding ON verdict(review_id, fingerprint, id DESC);
@@ -364,6 +377,10 @@ export const MIGRATIONS: readonly { readonly table: string; readonly column: str
   // WHICH LADDER this review started on, so swapping `LORE_TIERS` cannot silently
   // rebind its cursor to a different model. NULL predates the column and is not checked.
   { table: "review", column: "tiers", sql: "ALTER TABLE review ADD COLUMN tiers TEXT" },
+  // WHICH DEVELOPMENT RULE an acceptance rested on, so retiring the rule retires the
+  // acceptance (D-83). NULL means an ordinary justification, which is what every row
+  // written before this column was.
+  { table: "verdict", column: "via_rule", sql: "ALTER TABLE verdict ADD COLUMN via_rule TEXT" },
 ];
 
 /**

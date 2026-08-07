@@ -158,6 +158,23 @@ export const CONDITIONS = {
     condition: "queue depth sustained",
     detail: `${depth} reviews waiting — T0 is CPU-bound on this host and is the bottleneck`,
   }),
+  /**
+   * The database cannot be read, so lore is serving a refusal and nothing else.
+   *
+   * The one fault that ends the service outright, and the one that had no alert. It went
+   * unnoticed for twenty minutes on 2026-08-07 because `make mirror` happened to fail,
+   * and on 2026-08-08 it crash-looped the process — so the heartbeat that had just been
+   * taught to check integrity never got a beat in. Pages, and pages FIRST: every review
+   * handle in the system is unreachable, and none of them passed.
+   */
+  databaseUnreadable: (fault: string): Alert => ({
+    severity: "page",
+    condition: "database unreadable — lore is refusing to serve",
+    detail:
+      `${fault}. No review is running and none can start; the worker, heartbeat and sweep are stopped ` +
+      "so nothing writes further into a damaged file. Restore it: `make backup-check`, then `make restore`. " +
+      "This does not clear by itself and lore will not retry.",
+  }),
   needsHumanAgeing: (count: number, hours: number): Alert => ({
     severity: "ticket",
     condition: "needs_human findings ageing",

@@ -64,10 +64,14 @@ describe("the operator's view of development rules", () => {
         policyShort: rule.id.slice(0, 8), reviewId: "r1", tier: "t1",
       });
 
+      expect(store.isLivePolicy(repoId, rule.id.slice(0, 8))).toBe(true);
       expect(store.retirePolicy(repoId, rule.id.slice(0, 8), "moved off the overlay")).toBe("retired");
       expect(ruleReport(store, repoId).rules).toStrictEqual([]);
       expect(store.liveSuppressions(repoId)).toStrictEqual([]);
-      expect(store.revokedSuppressions(repoId)).toStrictEqual([{ ruleClass: "avoid-bind-all", path: "src/http.ts" }]);
+      expect(store.isLivePolicy(repoId, rule.id.slice(0, 8))).toBe(false);
+      // The row survives the rule on purpose: it is the record of what earlier reviews
+      // did not cover, and deleting it would erase the only evidence of the gap.
+      expect((store.db.prepare("SELECT COUNT(*) c FROM suppression").get() as { c: number }).c).toBe(1);
     } finally {
       store.close();
     }

@@ -1022,7 +1022,7 @@ are what that session's own numbers say is in the way, not what reading suggeste
       sweep — including the individual verdict, which D-51 would otherwise carry forward
       for ever. Only T0 findings whose claim names a rule: a model finding is judgement,
       not a pattern, and a claim that is a sentence has no class, so nothing appeals past a red
-      suite. SCHEMA_VERSION 13.
+      suite. SCHEMA_VERSION 14.
       **The remaining open question** is whether a model can originate the opposite claim
       — *this rule is wrong* — which is the same gap that leaves the escalation path
       unwired, and is worth solving once for both.

@@ -7,7 +7,7 @@
 
 import { join } from "node:path";
 import { mkdir } from "node:fs/promises";
-import { Alerter } from "../ops/alerts.ts";
+import { Alerter, CONDITIONS } from "../ops/alerts.ts";
 import { DEFAULT_HEARTBEAT, startHeartbeat, type HeartbeatConfig } from "../ops/heartbeat.ts";
 import { DEFAULT_RETENTION, collect } from "../ops/retention.ts";
 import { DEFAULT_SPEND, mayStart } from "../ops/spend.ts";
@@ -16,6 +16,7 @@ import { DEFAULT_REVIEWER, Reviewer } from "../reviewer/opencode.ts";
 import { Store } from "../store/store.ts";
 import { attest, render } from "./attest.ts";
 import { startHttp } from "./http.ts";
+import { serveRefusing } from "./refusing.ts";
 import { DEFAULT_WORKER, Worker } from "./worker.ts";
 
 export interface ServiceConfig {
@@ -100,9 +101,66 @@ export function configFromEnv(): ServiceConfig {
   };
 }
 
+/**
+ * Open the database, or say why not — never throw.
+ *
+ * Two ways it can be unusable and both must land here. The constructor itself can die
+ * (its `DDL` and migrations are statements like any other), and it can succeed against a
+ * file whose damage is in a tree nothing has touched yet — which is what happened: the
+ * open went through, `PRAGMA quick_check` would have caught it, and the first real
+ * transaction was where it surfaced, four frames inside a worker.
+ *
+ * `integrityFault` opens a FRESH read-only connection deliberately. Asking the live
+ * handle answers from its page cache, which is how a check can report clean against a
+ * file no other process can read at all.
+ */
+function openOrRefuse(dbPath: string): { readonly store: Store } | { readonly fault: string } {
+  let store;
+  try {
+    store = new Store(dbPath);
+  } catch (e) {
+    return { fault: e instanceof Error ? e.message : String(e) };
+  }
+  const fault = store.integrityFault();
+  if (fault === undefined) return { store };
+  // Closed before refusing. A held handle on a damaged file keeps its WAL and shm alive
+  // and gives a restore something to fight with.
+  try {
+    store.close();
+  } catch {
+    // A corrupt database can fail to close. The answer is already known.
+  }
+  return { fault };
+}
+
 export async function serve(cfg: ServiceConfig): Promise<() => void> {
   await mkdir(cfg.dataDir, { recursive: true });
-  const store = new Store(join(cfg.dataDir, "lore.db"));
+  const dbPath = join(cfg.dataDir, "lore.db");
+
+  // BEFORE ANYTHING ELSE, AND WITHOUT EXITING IF IT FAILS.
+  //
+  // A malformed database made every statement throw, `reclaimOrphanedJobs` took the
+  // process with it, `main()` exited 70, Docker restarted, and that loop would have run
+  // for ever — with `/status` refusing connections the whole time, which reads exactly
+  // like the machine being off. The heartbeat's integrity check, added the day before
+  // for the same fault, never got to run: it only runs while the service is healthy
+  // enough to run it.
+  //
+  // So the check moves to the one moment that is always reached, and a failure serves a
+  // refusal instead of dying. `serveRefusing` starts NO worker, NO heartbeat and NO
+  // sweep: writing into a damaged file is how a recoverable fault becomes permanent.
+  const opened = openOrRefuse(dbPath);
+  if ("fault" in opened) {
+    // The page goes out first, in case nobody ever curls anything. Fire-and-forget by
+    // design — an alert that blocks startup on a webhook timeout is a second outage.
+    void new Alerter({
+      ...(cfg.webhookUrl !== undefined ? { webhookUrl: cfg.webhookUrl } : {}),
+      timeoutMs: 10_000,
+    }).send(CONDITIONS.databaseUnreadable(opened.fault));
+    const refusal = serveRefusing({ port: cfg.port, bind: cfg.host, dbPath, fault: opened.fault });
+    return refusal.stop;
+  }
+  const store = opened.store;
 
   const alerter = new Alerter({
     ...(cfg.webhookUrl !== undefined ? { webhookUrl: cfg.webhookUrl } : {}),

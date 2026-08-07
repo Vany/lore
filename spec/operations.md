@@ -89,6 +89,36 @@ That is the same defect as the spend ceiling and the replica monitor, in the fie
 dashboard reads first: a guard whose answer cannot vary is decoration a reader
 believes.
 
+### 2.4.1 An unreadable database is served, not died on
+
+The one fault that ends the service outright, and the one it used to handle worst. On
+2026-08-08 the database became malformed mid-review; the first statement after startup
+threw, the process exited 70, Docker restarted it, and that loop would have run for ever.
+For every second of it `/status` was a refused connection — which from outside is
+indistinguishable from the machine being off, the port having moved, or Docker being
+broken.
+
+The heartbeat had been taught to check integrity on every beat the day before, after the
+same fault went unnoticed for twenty minutes. It was no use, and the reason generalises:
+**a check only runs while the service is healthy enough to run it.** A database bad enough
+to kill startup kills the check that would have reported it — INV-1 one layer up, where
+the thing that did not run is the thing that says whether things ran.
+
+So the integrity check moved to the one moment that is always reached — immediately after
+the open, on a fresh read-only connection, because the live handle answers from its page
+cache. A fault does not exit. It:
+
+- pages once, with the cause and the remedy (`CONDITIONS.databaseUnreadable`);
+- starts **no** worker, heartbeat or sweep — writing into a damaged file is how a
+  recoverable fault becomes permanent;
+- serves `503` on every route. `/status` answers JSON with `ok: false` and the same
+  `problems` key the healthy path uses, so a monitor needs no second shape; everything
+  else, `/mcp` included, gets the plain-text refusal. Never `200`: a client handed a
+  success with an error body carries on.
+
+It does not retry, and says so. A malformed database is malformed on the next open too,
+and restarting only overwrites the evidence in the logs.
+
 ### 2.5 Disk is not lore's to alert on
 
 **Removed 2026-08-06.** There were two disk conditions — page above 90%, ticket above

@@ -650,8 +650,6 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   //     a review, applied across them. Carrying one forward blind is how a ladder
   //     rots into rubber-stamping.
   const carried: string[] = [];
-  // Read once for the whole loop: it is the same answer for every fingerprint.
-  const revoked = store.revokedSuppressions(review.repoId);
   // See `originalJustification`: the prefix used to nest, once per review.
   for (const fp of raisedFingerprints) {
     if (modelRaised.has(fp)) continue;
@@ -671,12 +669,13 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     // (D-51) — so `lore rule --retire` would report "every check it silenced reports
     // again" while the one place it was actually argued stayed silent.
     //
-    // Only findings an appeal settled. Everything else carries as it always has: an
-    // ordinary justification was argued on its own words and had no rule withdrawn from
-    // under it.
-    const claim = newFindings.find((f) => f.fingerprint === fp)?.claim ?? store.claimOfFinding(reviewId, fp);
-    const cls = claim === undefined ? undefined : engineRuleClass(claim);
-    if (cls !== undefined && revoked.some((r) => r.ruleClass === cls && r.path === file)) continue;
+    // ASKED OF THE VERDICT, which is the only thing that knows. This first matched the
+    // finding's engine rule class and path against revoked suppressions, and that is
+    // broader than it sounds: an ORDINARY justification of a finding that merely shared
+    // a class and a file with somebody else's appeal was blocked from carrying forward
+    // too, and re-argued from scratch for a rule it never invoked. `via_rule` is NULL on
+    // every ordinary justification, so those carry exactly as they always have.
+    if (prior.viaRule !== undefined && !store.isLivePolicy(review.repoId, prior.viaRule)) continue;
 
     const source = await readFile(join(worktree, file), "utf8").catch(() => undefined);
     if (source === undefined || !hunkStillPresent(source, prior.scope.hunk)) continue;
@@ -691,6 +690,10 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       scope: prior.scope,
       tier: CARRIED_TIER,
       round,
+      // The provenance travels with the carry, or the chain breaks at the first hop: a
+      // carried row with no `via_rule` looks like an ordinary justification to the NEXT
+      // review, and retiring the rule would stop reaching it.
+      ...(prior.viaRule === undefined ? {} : { viaRule: prior.viaRule }),
     });
     carried.push(fp);
   }
@@ -723,6 +726,13 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
         ...(p.scope !== undefined ? { scope: p.scope } : { scope: undefined }),
         tier: tier.id,
         round,
+        // WHAT THIS ACCEPTANCE RESTS ON. NULL for an ordinary justification, which is
+        // the load-bearing distinction: an ordinary reason was argued on its own words
+        // and carries forward for ever (D-51), while an appeal borrowed a rule's
+        // authority and must lose it when the rule is withdrawn. Written only when the
+        // citation RESOLVED — an appeal to a rule that does not exist is judged on its
+        // words like any other reason.
+        ...(p.citedRule === undefined ? {} : { viaRule: p.citedRule }),
       });
 
       // AN ACCEPTED APPEAL SETTLES THE CLASS FOR THAT PATH, not just this fingerprint

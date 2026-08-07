@@ -229,6 +229,14 @@ being carried forward as settled, or `lore rule --retire` would report that ever
 now reports again while the one place it mattered stayed silent. The suppression ROWS are
 kept when the rule dies; they are the record of what earlier reviews did not cover.
 
+**The verdict records what it rests on**, in `verdict.via_rule` — the rule for an appeal,
+NULL for an ordinary justification. That distinction is load-bearing rather than
+bookkeeping: an ordinary reason was argued on its own words with no rule beneath it, so
+nothing can be withdrawn from under it and it carries forward for ever (D-51). Recorded
+rather than inferred, because inferring it from the finding's rule class and path also
+caught ordinary justifications that merely shared a class and a file with somebody else's
+appeal, and re-opened them for a rule they never cited.
+
 **Only a T0 finding, and only one that names a rule.** A model tier's finding has no
 engine rule at the head of its claim, and re-raising it is judgement rather than a pattern
 re-firing — silencing a class of those would be silencing a kind of thought. Neither does

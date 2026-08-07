@@ -89,10 +89,29 @@ const t0Reporting = (...findings: readonly Finding[]): Parameters<typeof runRoun
     typeof runRound
   >[0]["t0"];
 
-const source = (comment?: string): void =>
+/**
+ * The file under review. Two functions, because one test needs two findings in it.
+ *
+ * The comment slot is always emitted — blank when there is nothing to say — so a line
+ * number means the same thing whether or not a `lore-ok` is present. A finding whose
+ * line does not exist in the file gets no scope, and a verdict with no scope can never
+ * carry forward (D-56), which looks exactly like the bug a test is trying to catch.
+ */
+const source = (comment?: string, second?: string): void =>
   writeFileSync(
     join(dir, "src/hold.ts"),
-    ["export function capture() {", ...(comment === undefined ? [] : [`  // ${comment}`]), "  return 1;", "}", ""].join("\n"),
+    [
+      "export function capture() {",
+      comment === undefined ? "" : `  // ${comment}`,
+      "  return 1;",
+      "}",
+      "",
+      "export function probe() {",
+      second === undefined ? "" : `  // ${second}`,
+      "  return 2;",
+      "}",
+      "",
+    ].join("\n"),
   );
 
 const newReview = (id: string): void =>
@@ -227,6 +246,56 @@ describe("an accepted appeal settles the class for that path", () => {
       store, reviewer: new ScriptedReviewer([[]]), reviewId: "r2", principal: "p", worktree: dir, type: TYPE, ...(t0 ? { t0 } : {}),
     });
     expect(store.openFindings("r2").map((f) => f.claim)).toStrictEqual([LOOPBACK.claim]);
+  });
+
+  /**
+   * RETIRING A RULE MUST NOT DISTURB SOMEBODY ELSE'S JUSTIFICATION.
+   *
+   * The first version of the retire path asked whether the finding's engine rule class
+   * and path matched a revoked suppression — which is broader than the claim it was
+   * making. An ORDINARY `lore-ok`, citing no rule at all, on a finding that merely shared
+   * a class and a file with somebody else's appeal, was blocked from carrying forward and
+   * had to be re-argued for a rule it never invoked.
+   *
+   * The verdict now records what it rests on, so the two cases cannot be confused: an
+   * appeal carries `via_rule`, an ordinary reason carries NULL and is untouchable.
+   */
+  it("leaves an ordinary justification of the same class and file alone", async () => {
+    // A second finding, SAME engine rule and SAME file, justified without citing
+    // anything. It has to come first: once the appeal is accepted the class is silenced
+    // for that file, so nothing of that class is ever recorded there again.
+    const probe: Finding = { ...LOOPBACK, line: 8, symbol: "probe", claim: "avoid-bind-all: binds 0.0.0.0 in the probe" };
+    const both = t0Reporting(probe, LOOPBACK);
+    const reviewer = new ScriptedReviewer([[], [], []]);
+
+    // 1. The ordinary justification, argued on its own words. No rule exists for it.
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE, ...(both ? { t0: both } : {}) });
+    source(undefined, `lore-ok[${fp(probe).slice(0, 8)}]: the probe is deliberately reachable`);
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE, ...(both ? { t0: both } : {}) });
+    expect(store.settledFingerprints("r1")).toContain(fp(probe));
+
+    // 2. The APPEAL, on the other finding, buying a suppression for the same (class, file).
+    source(
+      `lore-ok[${fp(LOOPBACK).slice(0, 8)}]: rule ${cite()} — this service is behind the overlay`,
+      `lore-ok[${fp(probe).slice(0, 8)}]: the probe is deliberately reachable`,
+    );
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE, ...(both ? { t0: both } : {}) });
+    expect(store.liveSuppressions(repoId)).toHaveLength(1);
+
+    // 3. Withdraw the rule. It never had anything to do with the probe's justification.
+    expect(store.retirePolicy(repoId, cite(), "we moved off the overlay")).toBe("retired");
+
+    newReview("r2");
+    await runRound({
+      store, reviewer: new ScriptedReviewer([[]]), reviewId: "r2", principal: "p", worktree: dir, type: TYPE,
+      ...(both ? { t0: both } : {}),
+    });
+    expect(
+      store.settledFingerprints("r2"),
+      "an ordinary reason must survive the retirement of a rule it never cited",
+    ).toContain(fp(probe));
+    // And the appeal's own finding is back open, which is the half that SHOULD change.
+    expect(store.openFindings("r2").map((f) => f.fingerprint)).toStrictEqual([fp(LOOPBACK)]);
   });
 
   // Narrow on purpose. A directory-wide suppression is a wider claim than the one that

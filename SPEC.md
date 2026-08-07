@@ -1157,12 +1157,17 @@ still open and is not blocking.
   lands in `checks_skipped` naming the engine rule, the path, the development rule and the
   date. It is scoped to the FILE that was argued about, never a directory: a wider
   suppression than the one that was argued is a check switched off where no tier looked.
-- **A suppression is only as alive as its rule.** Both reads join to live knowledge, so
-  `knowledge_retire` (or `lore rule --retire`) switches every check it bought back on at
-  the next review with nothing to sweep — including the individual finding it was argued
-  about, which would otherwise keep being carried forward as settled (D-51) while the
-  operator was told every check now reports again. The rows are kept: they are the record
-  of what earlier reviews did not cover.
+- **A suppression is only as alive as its rule.** `knowledge_retire` (or `lore rule
+  --retire`) switches every check it bought back on at the next review with nothing to
+  sweep — the class by a JOIN to live knowledge, and the individual finding it was argued
+  about through `verdict.via_rule`, which would otherwise keep being carried forward as
+  settled (D-51) while the operator was told every check now reports again. The
+  suppression rows are kept: they are the record of what earlier reviews did not cover.
+  `via_rule` is NULL for an ordinary justification, and that is the point — an ordinary
+  reason was argued on its own words and nothing can be withdrawn from under it. It is
+  recorded rather than inferred because the first version matched the finding's rule class
+  and path against revoked suppressions, which also re-opened ordinary justifications that
+  merely shared a class and a file with somebody else's appeal.
 - **Only a T0 finding whose claim names a rule.** A model finding has no engine rule at
   the head of its claim and re-raising it is judgement, not a pattern re-firing; silencing
   a class of those is silencing a kind of thought. A claim that is a sentence yields no

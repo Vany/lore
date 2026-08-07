@@ -120,6 +120,8 @@ export interface VerdictRow {
   readonly scope: Scope | undefined;
   readonly tier: string | undefined;
   readonly round: number | undefined;
+  /** The development rule this acceptance rested on, when it was an appeal (D-83). */
+  readonly viaRule?: string | undefined;
   readonly createdAt: string;
 }
 
@@ -544,14 +546,6 @@ export class Store {
       .prepare("SELECT file FROM finding WHERE review_id = ? AND fingerprint = ?")
       .get(reviewId, fingerprint) as Record<string, string> | undefined;
     return row?.["file"];
-  }
-
-  /** The claim, for a finding raised in an earlier round — its engine rule class is in it. */
-  claimOfFinding(reviewId: string, fingerprint: string): string | undefined {
-    const row = this.db
-      .prepare("SELECT claim FROM finding WHERE review_id = ? AND fingerprint = ?")
-      .get(reviewId, fingerprint) as Record<string, string> | undefined;
-    return row?.["claim"];
   }
 
   /**
@@ -1218,8 +1212,9 @@ export class Store {
   recordVerdict(reviewId: string, v: Omit<VerdictRow, "createdAt">): void {
     this.db
       .prepare(
-        `INSERT INTO verdict(review_id, fingerprint, verdict, rationale, scope_blob, scope_hunk, tier, round, created_at)
-         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO verdict(review_id, fingerprint, verdict, rationale, scope_blob, scope_hunk, tier, round,
+                             via_rule, created_at)
+         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         reviewId,
@@ -1230,6 +1225,7 @@ export class Store {
         n(v.scope?.hunk),
         n(v.tier),
         n(v.round),
+        n(v.viaRule),
         now(),
       );
   }
@@ -1251,6 +1247,7 @@ export class Store {
         typeof blob === "string" && typeof hunk === "string" ? { blob, hunk } : undefined,
       tier: un(row["tier"] as string | null) ?? undefined,
       round: un(row["round"] as number | null) ?? undefined,
+      viaRule: un(row["via_rule"] as string | null) ?? undefined,
       createdAt: String(row["created_at"] ?? ""),
     };
   }
@@ -1297,6 +1294,7 @@ export class Store {
       scope: typeof blob === "string" && typeof hunk === "string" ? { blob, hunk } : undefined,
       tier: un(row["tier"] as string | null) ?? undefined,
       round: un(row["round"] as number | null) ?? undefined,
+      viaRule: un(row["via_rule"] as string | null) ?? undefined,
       createdAt: String(row["created_at"] ?? ""),
     };
   }
@@ -1571,29 +1569,28 @@ export class Store {
   }
 
   /**
-   * (class, path) pairs an appeal once bought and whose rule is now gone.
+   * Is this development rule still standing?
    *
-   * The rows are kept when a rule is retired, so this is the difference between the two
-   * reads — and it is what makes `lore rule --retire` true rather than half true. The
-   * class suppression dies with the rule by construction; the individual verdict the
-   * appeal earned would otherwise keep being carried into the next review (D-51), and
-   * the finding that was silenced HERE would stay silent for ever while the operator was
-   * told every check it silenced now reports again.
+   * Asked of a verdict's `via_rule` before that verdict is carried into a new review.
+   * The class suppression dies with its rule by construction — `liveSuppressions` joins —
+   * but the individual acceptance the appeal earned would otherwise keep being carried
+   * forward (D-51), so the one place the rule was actually argued would stay silent for
+   * ever while `lore rule --retire` reported that every check now reports again.
    *
-   * Only a decision an APPEAL bought is affected. An ordinary justification carries
-   * forward exactly as it always did: it was argued on its own words, and no rule was
-   * withdrawn from under it.
+   * Only a verdict an APPEAL bought carries a `via_rule`. An ordinary justification was
+   * argued on its own words with no rule beneath it, and carries forward exactly as it
+   * always did — the first version of this asked whether the finding's rule CLASS and
+   * PATH matched a revoked suppression, which also caught ordinary justifications that
+   * happened to share a class and a file with somebody else's appeal.
    */
-  revokedSuppressions(repoId: string): readonly { readonly ruleClass: string; readonly path: string }[] {
-    const rows = this.db
+  isLivePolicy(repoId: string, short: string): boolean {
+    const row = this.db
       .prepare(
-        "SELECT s.rule_class, s.path FROM suppression s" +
-          " WHERE s.repo_id = ? AND NOT EXISTS (" +
-          "   SELECT 1 FROM knowledge k WHERE k.repo_id = s.repo_id AND k.kind = 'policy'" +
-          "     AND k.retired_at IS NULL AND k.id LIKE s.policy_short || '%')",
+        "SELECT 1 AS live FROM knowledge WHERE repo_id = ? AND kind = 'policy' AND retired_at IS NULL" +
+          " AND id LIKE ? LIMIT 1",
       )
-      .all(repoId) as { rule_class: string; path: string }[];
-    return rows.map((r) => ({ ruleClass: r.rule_class, path: r.path }));
+      .get(repoId, `${short}%`) as Record<string, number> | undefined;
+    return row !== undefined;
   }
 
   /**

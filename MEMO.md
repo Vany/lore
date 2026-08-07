@@ -48,6 +48,40 @@ model raised it, no rule class, tier disagreed — each a different line, each t
 between "argue your case" and "write a rule, cite it, switch the check off". The feature is
 mostly the things it declines to do.
 
+**THE DATABASE CORRUPTED AGAIN, MID-REVIEW — the third time in three days.** The damaged
+tree was `knowledge`, which is the table a review bulk-writes during doc ingest, and the
+restore from the litestream replica was clean and current (it even had the review I had
+started four minutes earlier). Nothing was lost. `data/corrupt-0808-0119` holds the file.
+
+**What is new is the diagnosis.** The database lives on a Docker Desktop macOS bind mount
+— the container reports it as `fakeowner` over `/run/host_mark/Users`, i.e. virtiofs — and
+TWO containers hold it open, lore and litestream. SQLite's own `howtocorrupt.html` §2.1
+names exactly this: a filesystem whose locking primitives are buggy, plus two or more
+processes, equals corruption. That is not a hypothesis about our code; it is the documented
+failure mode of the deployment shape. The fix is to move the live database off the bind
+mount and onto a Docker named volume — ext4 inside the VM, real kernel locking — keeping
+the replica folder on the host so the outer script still reaches it. Vany's call: it is a
+data move on his machine.
+
+**What was mine, and is fixed: lore died where it should have spoken.** The first statement
+after startup threw, `main()` exited 70, Docker restarted, and that loop would have run for
+ever with `/status` refusing connections — indistinguishable from the machine being off. I
+had added an integrity check to the heartbeat the day before, for this exact fault. It was
+no use, and the reason generalises past this bug: **a check only runs while the service is
+healthy enough to run it.** So the check moved to startup and a failure now serves a
+refusal — 503 everywhere, `/status` naming the fault and the remedy in the same `problems`
+key the healthy path uses, no worker, no heartbeat, no sweep. It does not retry and says so.
+
+**The reviewer caught a real defect in the D-83 work, and a subtle one.** I gated the
+carry-forward on whether the finding's engine rule class and path matched a REVOKED
+suppression — and wrote a comment saying "only findings an appeal settled". Those are
+different statements: an ordinary `lore-ok`, citing nothing, on a finding that merely
+shared a class and a file with somebody else's appeal, was blocked from carrying forward
+and had to be re-argued for a rule it never invoked. The fix is a column — `verdict.via_rule`
+— so the verdict says what it rests on instead of the code inferring it. NULL for an
+ordinary justification, which is the whole distinction. The regression test was checked
+against the broken behaviour first: it fails there and passes here.
+
 ---
 
 ## 2026-08-08 — session 42: fix it now, and the day that argued for it
