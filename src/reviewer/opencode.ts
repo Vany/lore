@@ -909,7 +909,17 @@ function excerpt(text: string, max: number): string {
  */
 function describeReply(which: string, text: string): string {
   const t = (text ?? "").trim();
-  if (t.length === 0) return `${which} reply was EMPTY (usually a provider failure inside a 200)`;
+  // "usually a provider failure inside a 200" USED TO BE HERE and is gone. It was a
+  // guess presented as an explanation, in a string the client is told to repeat to its
+  // user verbatim — and a client did exactly that, five times over two days, about a
+  // branch whose real fault was a diff 3.4x the largest that tier had ever finished,
+  // ending with a false report to a human that lore's tier was broken.
+  //
+  // What replaces it says only what is known — the reply was empty — and points at the
+  // thing that DOES know. Where lore has the cause it belongs in `failed_because`, and
+  // where it does not, silence beats a plausible story: a symptom invites a diagnosis,
+  // and clients make one.
+  if (t.length === 0) return `${which} reply was EMPTY — nothing to parse, and no reason given in the reply itself`;
   // Says only what it can SEE — a size and whether braces are present. It used to
   // call anything with braces "malformed JSON", which was a guess, and on 2026-08-04
   // it guessed wrong about a reply whose JSON was perfect and whose claim was 25

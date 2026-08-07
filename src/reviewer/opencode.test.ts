@@ -560,7 +560,13 @@ describe("abandoning a call", () => {
 // died AFTER the model had been paid for, and nothing anywhere recorded what it
 // actually said. Observed on a real review of this repo.
 describe("an unparseable reply says what shape it was", () => {
-  it("names an empty reply as empty, because that is a provider fault not a prompt one", async () => {
+  // AND SAYS ONLY THAT. "usually a provider failure inside a 200" was here, in a string
+  // TOOL_DOCS.poll tells a client to repeat to its user verbatim — a guess presented as
+  // an explanation. A client repeated it five times over two days about a branch whose
+  // real fault was a diff 3.4x the largest that tier had ever finished, and ended by
+  // telling a person lore's tier was broken. Where lore knows the cause it belongs in
+  // failed_because; where it does not, silence beats a plausible story.
+  it("names an empty reply as empty, and does not guess why", async () => {
     replies = [{ parts: [{ type: "text", text: "" }] }, { parts: [{ type: "text", text: "" }] }];
     const err = await reviewer()
       .review(TIER, "review this", "/tmp/wt")
@@ -568,7 +574,7 @@ describe("an unparseable reply says what shape it was", () => {
 
     expect(err?.message).toMatch(/DID NOT RUN/);
     expect(err?.message).toMatch(/EMPTY/);
-    expect(err?.message).toMatch(/provider failure inside a 200/);
+    expect(err?.message).not.toMatch(/usually|probably|provider failure inside/);
   });
 
   // Prose means the model answered and ignored the contract — a prompt problem, and

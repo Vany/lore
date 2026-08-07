@@ -1134,10 +1134,18 @@ are what that session's own numbers say is in the way, not what reading suggeste
       spends a person, a wrong auto-resolution is recoverable because the reason is
       kept. The detector has fired once in production and was wrong, so stopping is
       currently the more expensive error.
-      Worth measuring first rather than assuming: how many of the conflicts now sitting
-      in the store would each rule settle, and how many would still need a person. If
-      the answer is "nearly all auto-resolve", the heuristic's precision matters less
-      than it does today, which is its own argument.
+      **MEASURED 2026-08-07, and the measurement says do not build it yet.** The store
+      holds **one** conflict, ever, and it is resolved. Under the proposed rules it
+      would have settled on `verified_at` — and it is the one this file already records
+      as a FALSE POSITIVE, so auto-resolution would have silently retired a rule that
+      should never have been touched, with a reason that read as considered.
+      That is the whole argument reversed by its own evidence: the asymmetry claim —
+      a wrong escalation spends a person, a wrong auto-resolution is recoverable —
+      assumes the detector is usually right. At n=1 with that one wrong, the honest
+      reading is that the DETECTOR is what needs work before anything is automated on
+      top of it. Building on a sample of one is the trap D-50 names.
+      Revisit when there are conflicts to reason about. Until then the escalation is
+      rare enough that stopping costs almost nothing, and it stops the right way.
 
 - [ ] **The reviewing model cannot ask for a human, and the spec says it can.** Found
       2026-08-06 by Vany asking what we actually tell a model about escalating.

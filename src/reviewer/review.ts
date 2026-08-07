@@ -377,13 +377,21 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // rather than refusing — the tier may well manage it, and a review stopped by a
   // guess is worse than one that runs long.
   const ceiling = store.largestCompletedDiff(tier.id);
-  if (ceiling !== undefined && diff.totalChars > ceiling) {
-    console.error(
-      `[lore:log] ${reviewId}: this diff is ${Math.round(diff.totalChars / 1024)} KB, larger than anything ` +
-        `${tier.id} has ever finished (${Math.round(ceiling / 1024)} KB). It may exceed the tier's time budget ` +
-        `and fail after spending it. A smaller review scope is the fix, not a longer timeout.`,
-    );
-  }
+  const oversize =
+    ceiling !== undefined && diff.totalChars > ceiling
+      ? `${tier.id} was given ${String(Math.round(diff.totalChars / 1024))} KB, larger than anything it has ever ` +
+        `finished (${String(Math.round(ceiling / 1024))} KB) — a smaller review scope is the fix, not a longer timeout`
+      : undefined;
+  // WRITTEN TO A LOG THE CLIENT CANNOT READ, and that was the whole defect. lore
+  // computed this ratio correctly on five attempts across two days and sent it here,
+  // while the client got "first reply was EMPTY (usually a provider failure)" and a doc
+  // telling it `failed` is often transient. It retried, then told its operator lore's
+  // tier was broken — a false diagnosis lore manufactured, escalated to a person.
+  //
+  // The log line stays for the operator. What is new is that when the round then FAILS,
+  // this travels with the failure (below), because a symptom invites a diagnosis and a
+  // client given only a symptom will make one.
+  if (oversize !== undefined) console.error(`[lore:log] ${reviewId}: ${oversize}`);
 
   // STAMPED WHEN THE TIER'S OWN WORK BEGINS, not when `runRound` was entered.
   //
@@ -442,7 +450,13 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       //
       // `checks_skipped` is the channel that already exists for "this review does not
       // cover what you might assume", and it is what the client repeats to its user.
-      e instanceof TierUnavailable ? [`${tier.id} did not look at this code — ${e.message}`] : [],
+      // The oversize notice reaches the CLIENT here, not only the log. `checks_skipped`
+      // is what a client repeats to its user, and "this tier was given more than it has
+      // ever finished" is the difference between a diagnosable failure and a guess.
+      [
+        ...(e instanceof TierUnavailable ? [`${tier.id} did not look at this code — ${e.message}`] : []),
+        ...(oversize === undefined ? [] : [oversize]),
+      ],
     );
     // A tier nobody can pay for, or whose window cannot hold the diff, is a limitation
     // rather than a failure (D-48). Record it, step over it, and let the ladder finish
