@@ -68,7 +68,42 @@ function finding(f: {
   };
 }
 
-/** Is this engine configured in the target at all? */
+/**
+ * The engine rule a T0 finding came from, read back off its claim.
+ *
+ * Every engine here that HAS a rule id writes it the same way — `<id>: <message>` —
+ * because that is the only place a `Finding` can carry it: the schema is the wire
+ * contract with the models (`core/finding.ts`), and a field meaningless to a model
+ * does not belong in the prompt they are given.
+ *
+ * D-83 needs that id as a first-class thing: an accepted appeal suppresses a rule
+ * CLASS for a path, and "the class" is exactly this. Reading it back off a string is
+ * an unhappy shape, so `engines.test.ts` asserts every engine's output parses to the
+ * id it was built from — the convention is checked, not trusted.
+ *
+ * Constrained to what a rule id can look like, never a sentence: no spaces before the
+ * colon. `tests: \`npm test\` fails on this branch` has one, so a script failure yields
+ * no class and can never be suppressed wholesale — which is right. Nothing appeals its
+ * way out of "the suite does not pass".
+ */
+const RULE_CLASS = /^([A-Za-z][A-Za-z0-9._/-]*):\s/;
+
+/**
+ * Write a claim so its rule id can be read back. The one definition of the convention.
+ *
+ * All four rule-bearing engines went through it independently before this existed, four
+ * template literals that happened to agree — and `engineRuleClass` was a fifth copy of
+ * the same decision, in the opposite direction. `engines.test.ts` asserts the round trip
+ * rather than the shape, so the two cannot drift into disagreeing about one engine.
+ */
+export function ruleClaim(id: string | undefined, message: string, fallback: string): string {
+  return `${id ?? fallback}: ${message}`;
+}
+
+export function engineRuleClass(claim: string): string | undefined {
+  return RULE_CLASS.exec(claim)?.[1];
+}
+
 /**
  * Engines that mean nothing without project-authored rules.
  *
@@ -262,7 +297,7 @@ export function parseTsc(output: string): Finding[] {
         line: Number(m[2]),
         // It does not compile. Nothing downstream matters until it does.
         severity: "high",
-        claim: `${m[4]}: ${m[5] ?? ""}`,
+        claim: ruleClaim(m[4], m[5] ?? "", "tsc"),
         evidence: raw.trim(),
         failureScenario: "the project does not typecheck, so this cannot ship as-is",
       }),
@@ -297,7 +332,7 @@ export function parseEslint(stdout: string, worktree: string): Finding[] | undef
           file: relativise(worktree, file.filePath),
           ...(m.line !== undefined ? { line: m.line } : {}),
           severity: m.severity === 2 ? "medium" : "low",
-          claim: `${m.ruleId ?? "eslint"}: ${m.message}`,
+          claim: ruleClaim(m.ruleId ?? undefined, m.message, "eslint"),
           evidence: `eslint ${m.ruleId ?? ""} at ${relativise(worktree, file.filePath)}:${m.line ?? 0}`,
           failureScenario: "violates a rule this project has chosen to enforce",
         }),
@@ -340,7 +375,7 @@ async function semgrep(worktree: string): Promise<EngineOutcome> {
         file: relativise(worktree, res.path),
         ...(res.start?.line !== undefined ? { line: res.start.line } : {}),
         severity: semgrepSeverity(res.extra?.severity),
-        claim: `${res.check_id ?? "semgrep"}: ${res.extra?.message ?? "rule matched"}`,
+        claim: ruleClaim(res.check_id, res.extra?.message ?? "rule matched", "semgrep"),
         evidence: `semgrep ${res.check_id ?? ""} at ${relativise(worktree, res.path)}:${res.start?.line ?? 0}`,
         failureScenario: "matches a published pattern for a known weakness class",
         ...(cwe !== undefined ? { cwe } : {}),
@@ -389,7 +424,7 @@ async function astGrep(worktree: string): Promise<EngineOutcome> {
       // ast-grep reports 0-indexed lines; findings are 1-indexed everywhere else.
       ...(m.range?.start?.line !== undefined ? { line: m.range.start.line + 1 } : {}),
       severity: m.severity === "error" ? "medium" : "low",
-      claim: `${m.ruleId ?? "ast-grep"}: ${m.message ?? "pattern matched"}`,
+      claim: ruleClaim(m.ruleId, m.message ?? "pattern matched", "ast-grep"),
       evidence: `ast-grep ${m.ruleId ?? ""} at ${relativise(worktree, m.file)}`,
       failureScenario: "matches a structural rule this project has chosen to enforce",
     }),

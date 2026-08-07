@@ -1012,17 +1012,24 @@ are what that session's own numbers say is in the way, not what reading suggeste
       keeping the two that mattered is evidence. Anything else is taste, and should be
       reverted rather than defended.
 
-- [ ] **Build D-83: development rules are appealable** — specced 2026-08-08, not built.
-      The design is settled (SPEC D-83, `spec/knowledge.md` §2.3): the tier rules on an
-      appeal, an accepted one suppresses the class under a path, rules live in the
-      knowledge base but are INDICATED rather than injected, and any token holder may add
-      one. Three open questions before code: how a client cites a rule, where a
-      suppression is consulted (before a T0 engine reports, and never silently), and
-      whether a model can originate the opposite claim.
-      **This is the answer to the item below**, which measured the problem and could not
-      name the fix.
+- [x] **Built 2026-08-08** (D-83). `lore-ok[<fp>]: rule <id> — <why>` is the citation, in
+      all three comment forms; the cited rule's full text is quoted to the tier and the
+      TIER rules on it — lore never closes a finding because a rule was pointed at it
+      (D-10). An accepted appeal records a suppression for (engine rule class, FILE), which
+      is consulted before T0's findings are recorded and announced in `checks_skipped`
+      every time. Both reads join to live knowledge, so `knowledge_retire` / `lore rule
+      --retire` switches every check it bought back on at the next review with nothing to
+      sweep — including the individual verdict, which D-51 would otherwise carry forward
+      for ever. Only T0 findings whose claim names a rule: a model finding is judgement,
+      not a pattern, and a claim that is a sentence has no class, so nothing appeals past a red
+      suite. SCHEMA_VERSION 13.
+      **The remaining open question** is whether a model can originate the opposite claim
+      — *this rule is wrong* — which is the same gap that leaves the escalation path
+      unwired, and is worth solving once for both.
+      *The item below is what measured the problem; this is the fix it could not name.*
 
-- [ ] **"Seen 23× — a pattern, not an incident" leads to nothing.** Asked by Vany
+- [x] **"Seen 23× — a pattern, not an incident" leads to nothing.** ANSWERED by D-83
+      above: the client now has the verb it lacked. Asked by Vany
       2026-08-06: why does that sentence not make a client fix the underlying problem?
       Measured rather than reasoned — the three most-recurring findings in the store:
 

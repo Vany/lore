@@ -123,7 +123,17 @@ export interface VerdictRow {
   readonly createdAt: string;
 }
 
-export type KnowledgeKind = "rule" | "fact" | "mistake";
+/**
+ * `policy` is a DEVELOPMENT RULE a client can appeal to (D-83).
+ *
+ * The others describe the codebase; a policy describes what this project has decided to
+ * enforce and what it has decided not to. That difference has one consequence and it is
+ * the reason for a separate kind: **a policy is not injected into review prompts.**
+ * Up to sixty rules already go in under "treat these as this team's decisions", and a
+ * policy says nothing a reviewer needs until somebody cites it — so the prompt carries
+ * their EXISTENCE, and a cited policy's text arrives with the appeal.
+ */
+export type KnowledgeKind = "rule" | "fact" | "mistake" | "policy";
 export type KnowledgeSource = "taught" | "ingested" | "derived";
 
 export interface KnowledgeItem {
@@ -534,6 +544,14 @@ export class Store {
       .prepare("SELECT file FROM finding WHERE review_id = ? AND fingerprint = ?")
       .get(reviewId, fingerprint) as Record<string, string> | undefined;
     return row?.["file"];
+  }
+
+  /** The claim, for a finding raised in an earlier round — its engine rule class is in it. */
+  claimOfFinding(reviewId: string, fingerprint: string): string | undefined {
+    const row = this.db
+      .prepare("SELECT claim FROM finding WHERE review_id = ? AND fingerprint = ?")
+      .get(reviewId, fingerprint) as Record<string, string> | undefined;
+    return row?.["claim"];
   }
 
   /**
@@ -1465,6 +1483,155 @@ export class Store {
         // A corrupt database can fail to close. The answer is already computed.
       }
     }
+  }
+
+  /**
+   * A development rule by short id, for an appeal that cited one (D-83).
+   *
+   * Ambiguity is REFUSED rather than resolved, exactly as `resolveShort` refuses an
+   * ambiguous finding: silently picking one of two policies would let an appeal succeed
+   * against a rule the author did not mean, and the reviewer would rule on the wrong
+   * text with no sign anything had gone astray.
+   */
+  policyByShort(repoId: string, short: string): KnowledgeItem | undefined {
+    const rows = this.db
+      .prepare(
+        "SELECT * FROM knowledge WHERE repo_id = ? AND kind = 'policy' AND retired_at IS NULL AND id LIKE ?",
+      )
+      .all(repoId, `${short}%`) as Record<string, string | number | null>[];
+    if (rows.length !== 1) return undefined;
+    return toKnowledge(rows[0] as Record<string, string | number | null>);
+  }
+
+  /**
+   * Record that a tier accepted an appeal, for the whole (rule class, path) (D-83).
+   *
+   * `INSERT OR REPLACE` on the unique triple: re-accepting the same appeal refreshes
+   * which review and tier stand behind it, rather than accumulating rows that all say
+   * the same thing with different dates.
+   */
+  recordSuppression(s: {
+    readonly repoId: string;
+    readonly ruleClass: string;
+    readonly path: string;
+    readonly policyShort: string;
+    readonly reviewId: string;
+    readonly tier: string;
+  }): void {
+    this.db
+      .prepare(
+        "INSERT OR REPLACE INTO suppression(repo_id, rule_class, path, policy_short, review_id, tier, accepted_at)" +
+          " VALUES(?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run(s.repoId, s.ruleClass, s.path, s.policyShort, s.reviewId, s.tier, now());
+  }
+
+  /**
+   * Suppressions that are still authorised, with the rule that authorises each.
+   *
+   * The JOIN is the mechanism, not an optimisation. A suppression is a check switched
+   * off, and the only thing that makes that legitimate is a live development rule
+   * saying so — so retiring the rule must switch the check back on, at the next review,
+   * without anything sweeping the table. An `INNER JOIN` on live knowledge is how that
+   * happens by construction rather than by a cleanup job somebody has to remember.
+   *
+   * A rule whose short id has since become ambiguous (a second policy created with the
+   * same prefix) yields two rows and is refused below for the reason `policyByShort`
+   * refuses it: silently applying the wrong rule's authority is worse than re-raising.
+   */
+  liveSuppressions(repoId: string): readonly {
+    readonly ruleClass: string;
+    readonly path: string;
+    readonly policyShort: string;
+    readonly statement: string;
+    readonly acceptedAt: string;
+    readonly tier: string;
+  }[] {
+    const rows = this.db
+      .prepare(
+        "SELECT s.rule_class, s.path, s.policy_short, s.accepted_at, s.tier, k.statement, COUNT(*) AS n" +
+          " FROM suppression s JOIN knowledge k" +
+          "   ON k.repo_id = s.repo_id AND k.kind = 'policy' AND k.retired_at IS NULL" +
+          "   AND k.id LIKE s.policy_short || '%'" +
+          " WHERE s.repo_id = ?" +
+          " GROUP BY s.id" +
+          " ORDER BY s.rule_class, s.path",
+      )
+      .all(repoId) as { rule_class: string; path: string; policy_short: string; accepted_at: string; tier: string; statement: string; n: number }[];
+    return rows
+      .filter((r) => Number(r.n) === 1)
+      .map((r) => ({
+        ruleClass: r.rule_class,
+        path: r.path,
+        policyShort: r.policy_short,
+        statement: r.statement,
+        acceptedAt: r.accepted_at,
+        tier: r.tier,
+      }));
+  }
+
+  /**
+   * (class, path) pairs an appeal once bought and whose rule is now gone.
+   *
+   * The rows are kept when a rule is retired, so this is the difference between the two
+   * reads — and it is what makes `lore rule --retire` true rather than half true. The
+   * class suppression dies with the rule by construction; the individual verdict the
+   * appeal earned would otherwise keep being carried into the next review (D-51), and
+   * the finding that was silenced HERE would stay silent for ever while the operator was
+   * told every check it silenced now reports again.
+   *
+   * Only a decision an APPEAL bought is affected. An ordinary justification carries
+   * forward exactly as it always did: it was argued on its own words, and no rule was
+   * withdrawn from under it.
+   */
+  revokedSuppressions(repoId: string): readonly { readonly ruleClass: string; readonly path: string }[] {
+    const rows = this.db
+      .prepare(
+        "SELECT s.rule_class, s.path FROM suppression s" +
+          " WHERE s.repo_id = ? AND NOT EXISTS (" +
+          "   SELECT 1 FROM knowledge k WHERE k.repo_id = s.repo_id AND k.kind = 'policy'" +
+          "     AND k.retired_at IS NULL AND k.id LIKE s.policy_short || '%')",
+      )
+      .all(repoId) as { rule_class: string; path: string }[];
+    return rows.map((r) => ({ ruleClass: r.rule_class, path: r.path }));
+  }
+
+  /**
+   * Retire a development rule by short id, and say which of the four things happened.
+   *
+   * The suppressions it bought are NOT deleted, and that is deliberate: `liveSuppressions`
+   * joins them to the live rule, so they stop applying the moment this row is retired,
+   * and the rows stay readable as the record of a check that WAS off and why. Deleting
+   * them would erase the only evidence that a review once did not cover something.
+   */
+  retirePolicy(repoId: string, short: string, reason: string): "retired" | "not-found" | "ambiguous" {
+    const rows = this.db
+      .prepare("SELECT id FROM knowledge WHERE repo_id = ? AND kind = 'policy' AND retired_at IS NULL AND id LIKE ?")
+      .all(repoId, `${short}%`) as { id: string }[];
+    if (rows.length === 0) return "not-found";
+    if (rows.length > 1) return "ambiguous";
+    this.db
+      .prepare("UPDATE knowledge SET retired_at = ?, retired_reason = ? WHERE id = ?")
+      .run(now(), reason, (rows[0] as { id: string }).id);
+    return "retired";
+  }
+
+  /** Every live development rule, with the short id an appeal cites it by. */
+  policies(repoId: string): readonly KnowledgeItem[] {
+    const rows = this.db
+      .prepare(
+        "SELECT * FROM knowledge WHERE repo_id = ? AND kind = 'policy' AND retired_at IS NULL ORDER BY verified_at",
+      )
+      .all(repoId) as Record<string, string | number | null>[];
+    return rows.map((r) => toKnowledge(r));
+  }
+
+  /** How many development rules this repository has — what the prompt indicates. */
+  policyCount(repoId: string): number {
+    const row = this.db
+      .prepare("SELECT COUNT(*) AS c FROM knowledge WHERE repo_id = ? AND kind = 'policy' AND retired_at IS NULL")
+      .get(repoId) as Record<string, number> | undefined;
+    return Number(row?.["c"] ?? 0);
   }
 
   /** Live rules for a repository, counted by where they came from. */

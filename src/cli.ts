@@ -30,6 +30,8 @@ lore — an independent reviewer that remembers the codebase
   lore new --name <who> --git <ssh-url>        provision a repo and token
   lore relocate --repo <name> --git <new-url>  a repo moved: keep its history
   lore knowledge [--repo <name>] [--refusals]  what the memory holds, and what it refused
+  lore rule --repo <name> [--add ... | --retire ...]  development rules a finding may
+                                               be appealed to (D-83)
   lore tokens                                  who holds a token, and for what
   lore revoke --token <short>                  turn one off, by its short hash
   lore doctor                                  check tiers, auth and model ids
@@ -204,6 +206,73 @@ export async function main(argv: readonly string[]): Promise<ExitCode> {
       process.stdout.write(
         `${reports.map((r) => renderKnowledge(r, { refusals: argv.includes("--refusals") })).join("\n\n")}\n`,
       );
+      return EXIT.PASS;
+    } finally {
+      store.close();
+    }
+  }
+
+  // Development rules, from the operator's side. The client's side is `knowledge_teach`
+  // and `knowledge_retire` over MCP; this exists because the person who decides what a
+  // team enforces is often at the deployment host holding no token (D-83).
+  if (args.command === "rule") {
+    const { addRule, ruleReport, renderRules, CITE_LENGTH } = await import("./knowledge/rules.ts");
+    const want = flagOf(argv, "repo");
+    const store = new Store(args.db);
+    try {
+      const repos = store.repos().filter((r) => want === undefined || r.name === want);
+      const repo = repos[0];
+      if (repo === undefined || repos.length > 1) {
+        process.stderr.write(
+          repos.length > 1
+            ? `--repo is required with ${String(repos.length)} repositories registered: ${store.repos().map((r) => r.name).join(", ")}\n`
+            : `no repository named ${want ?? "(any)"}. Registered: ${store.repos().map((r) => r.name).join(", ") || "(none)"}\n`,
+        );
+        return EXIT.USAGE;
+      }
+
+      const statement = flagOf(argv, "add");
+      const retire = flagOf(argv, "retire");
+      if (statement !== undefined) {
+        const why = flagOf(argv, "why");
+        // REFUSED WITHOUT A REASON, not defaulted. A development rule with no why is the
+        // one a later reader deletes because they cannot tell it from an accident — and
+        // this rule can switch a check off, so the reader deserves the argument.
+        if (why === undefined) throw new UsageError('usage: lore rule --add "<statement>" --why "<reason>" [--path <p>]');
+        const path = flagOf(argv, "path");
+        const item = addRule(store, repo.id, {
+          statement,
+          why,
+          ...(path !== undefined ? { path } : {}),
+          by: `operator on ${repo.name}`,
+        });
+        process.stdout.write(
+          `recorded. Appeal a finding to it with:\n\n  lore-ok[<fingerprint>]: rule ${item.id.slice(0, CITE_LENGTH)} — <why it covers this code>\n\n` +
+            "The reviewing tier decides. lore never closes a finding because a rule was cited at it.\n",
+        );
+        return EXIT.PASS;
+      }
+
+      if (retire !== undefined) {
+        const why = flagOf(argv, "why");
+        if (why === undefined) throw new UsageError("usage: lore rule --retire <short-id> --why \"<why it no longer holds>\"");
+        switch (store.retirePolicy(repo.id, retire, `retired by operator: ${why}`)) {
+          case "retired":
+            process.stdout.write(
+              `retired ${retire}. Every check it silenced reports again from the next review; the suppression ` +
+                "records are kept as evidence of what earlier reviews did not cover.\n",
+            );
+            return EXIT.PASS;
+          case "ambiguous":
+            process.stderr.write(`'${retire}' matches more than one rule — give more characters.\n`);
+            return EXIT.USAGE;
+          case "not-found":
+            process.stderr.write(`no live development rule of ${repo.name} starts with '${retire}'.\n`);
+            return EXIT.USAGE;
+        }
+      }
+
+      process.stdout.write(`${renderRules(ruleReport(store, repo.id))}\n`);
       return EXIT.PASS;
     } finally {
       store.close();

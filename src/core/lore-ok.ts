@@ -23,6 +23,38 @@ export interface LoreOk {
   readonly reason: string;
   /** 1-indexed line where the marker appears. */
   readonly line: number;
+  /**
+   * A development rule this reason APPEALS TO, by short id (D-83).
+   *
+   * `lore-ok[a1b2c3d4]: rule 3f9a2c11 — loopback URLs in tests are not transport`
+   *
+   * A different claim from the rest of the reason, and the difference is the point. An
+   * ordinary justification says *trust my judgement about this line*. An appeal says
+   * *you are enforcing a standard this project decided not to enforce* — a claim about
+   * the REVIEWER rather than about the code — and it is answerable by pointing at
+   * something the team wrote down rather than by arguing again.
+   *
+   * Parsed out of the reason rather than given its own tool: `review_submit` is already
+   * the channel for answering a finding, the marker already travels with the code the
+   * reviewer is reading, and the docs are the interface — a fourth thing for an agent to
+   * discover costs more than a convention inside a form it already knows.
+   */
+  readonly rule?: string;
+}
+
+/** `rule <short>` opening a reason, with an optional dash before the note. */
+const APPEAL = new RegExp(`^rule\\s+([0-9a-f]{4,${String(SHORT_LENGTH)}})\\s*[—–:-]?\\s*([\\s\\S]*)$`, "i");
+
+/**
+ * Split a cited rule off the front of a reason.
+ *
+ * The note is kept as the reason and may be empty: *"this is policy R"* is a complete
+ * argument, and forcing prose after it would only invite restating the rule.
+ */
+export function appealOf(reason: string): { readonly rule?: string; readonly reason: string } {
+  const m = APPEAL.exec(reason.trim());
+  if (m === null) return { reason };
+  return { rule: (m[1] ?? "").toLowerCase(), reason: (m[2] ?? "").trim() };
 }
 
 const SHORT = `[0-9a-f]{${SHORT_LENGTH}}`;
@@ -106,16 +138,21 @@ export function parseLoreOk(source: string): LoreOk[] {
     // A marker with no reason is not a justification. Dropping it silently would
     // let an empty comment close a finding, which is exactly the "write your way
     // past it" failure the reviewer-rules-on-it design exists to prevent.
-    if (reason.length > 0) found.push({ short, reason, line: i + 1 });
+    if (reason.length > 0) {
+      const a = appealOf(reason);
+      found.push({ short, reason: a.reason, line: i + 1, ...(a.rule === undefined ? {} : { rule: a.rule }) });
+    }
   }
 
   for (const m of source.matchAll(HTML_START)) {
     const reason = (m[2] ?? "").replace(/\s+/g, " ").trim();
     if (reason.length === 0) continue;
+    const a = appealOf(reason);
     found.push({
       short: m[1] ?? "",
-      reason,
+      reason: a.reason,
       line: source.slice(0, m.index).split("\n").length,
+      ...(a.rule === undefined ? {} : { rule: a.rule }),
     });
   }
 

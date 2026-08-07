@@ -66,9 +66,16 @@ nothing.
 | `review_inbox` | — | `{reviews[], needs_human, note}` across all the caller's reviews |
 | `review_vex` | `review_id*` | `{summary, untriaged, document}` — CycloneDX VEX |
 | `knowledge_query` | `path`, `contains` | `{count, items[]}` |
-| `knowledge_teach` | `statement*`, `why*`, `path`, `kind` | `{id, recorded}` |
+| `knowledge_teach` | `statement*`, `why*`, `path`, `kind` | `{id, recorded}`, plus `cite_as` for a `policy` |
+| `knowledge_retire` | `rule*`, `why*` | `{retired}` — withdraw a development rule (D-83) |
 | `knowledge_resolve` | `keep*`, `retire*`, `reason*` | `{resolved, retired, note}` |
 | `knowledge_escalate` | `left*`, `right*`, `note*` | the conflict, raised for a person |
+
+`kind: "policy"` records a **development rule**, which a finding can be appealed to:
+`lore-ok[<fingerprint>]: rule <cite_as> — <why it covers this code>`. Reviewers are told
+how many exist, never what they say; the text travels with the appeal that cites it, and
+the tier rules on it (D-83). `knowledge_retire` is the other half — a rule that cannot be
+withdrawn is a check that cannot be switched back on.
 
 `review_poll` and `review_inbox` both return a `note` that restates the one rule in
 machine-readable position: *only `passed` means clean*. A client that reads `state`

@@ -21,7 +21,7 @@ import { SEVERITIES } from "../core/finding.ts";
 // adds the columns, because this number is what `assertNotDowngrade` compares — left
 // behind, it says a database written by this build is identical to one written before
 // the columns existed.
-export const SCHEMA_VERSION = 12;
+export const SCHEMA_VERSION = 13;
 
 /**
  * How findings are ordered wherever the service hands them out: worst first.
@@ -204,7 +204,7 @@ CREATE INDEX IF NOT EXISTS verdict_by_finding ON verdict(review_id, fingerprint,
 CREATE TABLE IF NOT EXISTS knowledge (
   id             TEXT PRIMARY KEY,
   repo_id        TEXT NOT NULL REFERENCES repo(id),
-  -- rule | fact | mistake
+  -- rule | fact | mistake | policy  (policy = a development rule an appeal may cite, D-83)
   kind           TEXT NOT NULL,
   -- taught | ingested | derived  (precedence, highest first: D-20)
   source         TEXT NOT NULL,
@@ -235,6 +235,40 @@ CREATE TABLE IF NOT EXISTS knowledge (
 );
 CREATE INDEX IF NOT EXISTS knowledge_live ON knowledge(repo_id, retired_at);
 CREATE INDEX IF NOT EXISTS knowledge_by_path ON knowledge(repo_id, path);
+
+-- What a tier decided when it ACCEPTED an appeal to a development rule (D-83).
+--
+-- The verdict table already remembers that one finding was justified, keyed by its
+-- fingerprint -- which is the exact claim about the exact code. That is too narrow for
+-- an appeal: the author's claim is not "this line is fine", it is "this project decided
+-- not to enforce this rule here", and the very next edit to the file produces a new
+-- fingerprint for the same rule and re-raises it. Answering the same appeal forever is
+-- the loop D-57 exists to end.
+--
+-- So the unit is (engine rule class, path), which is what a person appealing means.
+-- Deliberately NOT a directory prefix: a wider suppression than the one that was
+-- argued for is a check silently switched off in files nobody looked at.
+--
+-- policy_short is not decoration. A suppression is only as alive as the rule that
+-- authorised it: retire the rule and every suppression it bought stops applying, on the
+-- next review, with no sweep -- the same shape as D-20 for ingested rules.
+CREATE TABLE IF NOT EXISTS suppression (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  repo_id      TEXT NOT NULL REFERENCES repo(id),
+  -- The engine's own rule id, as it appears at the head of the finding's claim.
+  rule_class   TEXT NOT NULL,
+  -- Exactly the file the appeal was accepted for, repo-relative.
+  path         TEXT NOT NULL,
+  -- Short id of the development rule cited, resolved against knowledge at read time.
+  policy_short TEXT NOT NULL,
+  -- Who decided, and where it can be read back. A suppression with no audit trail is
+  -- an unexplained hole in the review.
+  review_id    TEXT NOT NULL,
+  tier         TEXT NOT NULL,
+  accepted_at  TEXT NOT NULL,
+  UNIQUE(repo_id, rule_class, path)
+);
+CREATE INDEX IF NOT EXISTS suppression_by_repo ON suppression(repo_id);
 
 CREATE TABLE IF NOT EXISTS knowledge_conflict (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,

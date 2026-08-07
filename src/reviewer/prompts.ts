@@ -24,6 +24,8 @@ export interface PromptInput {
   readonly diff: string;
   readonly t0: string;
   readonly knowledge: readonly KnowledgeItem[];
+  /** How many development rules exist — INDICATED, never listed. See `policyBlock`. */
+  readonly policyCount?: number;
   /** Rendered contradictions the reviewer must settle, or "" (D-39). */
   readonly conflicts?: string;
   /** Findings already settled, with the reasons. Re-raise only with new evidence. */
@@ -257,6 +259,26 @@ function compositionBlock(diff: string): string {
   ].join("\n");
 }
 
+/**
+ * That this project HAS development rules, without saying what they are (D-83).
+ *
+ * Sixty rules already occupy space the diff wants, and a policy says nothing a reviewer
+ * needs until somebody cites one — so this is a standing, not a list. What it buys is
+ * that an appeal arrives as an argument the tier knows how to weigh, rather than as a
+ * client asserting something about a document the reviewer has never heard of.
+ */
+function policyBlock(count: number): string {
+  if (count === 0) return "";
+  return [
+    "",
+    `THIS PROJECT HAS ${String(count)} DEVELOPMENT RULE(S) — decisions about what it does and does not enforce.`,
+    "They are NOT listed here, deliberately; you do not need them unless one is cited at you.",
+    "When a lore-ok APPEALS TO one, the rule's full text is quoted with it. Treat that as this team's stated",
+    "policy rather than the author's opinion — and still rule on it: does the rule actually cover this code?",
+    "Accept by not raising the finding again. Reject by raising it, and say why the rule does not reach this case.",
+  ].join("\n");
+}
+
 function knowledgeBlock(items: readonly KnowledgeItem[]): string {
   if (items.length === 0) return "";
   const lines = items.slice(0, 60).map((k) => {
@@ -345,6 +367,7 @@ export function reviewPrompt(i: PromptInput): string {
     "",
     indent(i.ticket),
     knowledgeBlock(i.knowledge),
+    policyBlock(i.policyCount ?? 0),
     i.conflicts ?? "",
     settledBlock(i.settled),
     compositionBlock(i.diff),

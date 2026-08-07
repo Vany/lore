@@ -214,6 +214,19 @@ to review.
 >
 > Taught rules outrank rules inferred from reviews. Record the *why*: a rule
 > without one gets deleted by the next reader who disagrees with it.
+>
+> `kind: "policy"` is a **development rule** — a decision about what this project does and
+> does not enforce. Reviewers are never shown one; they are told how many exist. The reply
+> carries `cite_as`, which is how a finding is appealed to it.
+
+### `knowledge_retire`
+
+> Withdraw a development rule that no longer holds, with the reason — which is kept.
+>
+> The other half of an appeal (D-83): an accepted appeal stops an engine's rule being
+> reported for a path, and it holds for exactly as long as the rule behind it does.
+> Refused on an ambiguous id, because retiring the wrong rule switches checks back on
+> somewhere nobody is looking.
 
 ---
 

@@ -212,7 +212,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-80** | A review is **one conversation per tier**, not a series of audits. Fully async | subscription live; conversation `[OPEN]` |
 | **D-81** | Extraction stays deterministic; a **model may only VETO** what it mined | built; screen unmeasured |
 | **D-82** | **A defect found is fixed now**, and the batch is reviewed whole — one big diff, not many | confirmed |
-| **D-83** | A project's **development rules are appealable**: cite one, the tier rules on it | specced, not built |
+| **D-83** | A project's **development rules are appealable**: cite one, the tier rules on it | built |
 
 **D-7, revised.** The earlier version dropped GLM-5.2 on Artificial Analysis's
 *cost per task* — which is tokens consumed × price on their benchmark, not a price.
@@ -1144,19 +1144,33 @@ it is relevant, and it arrives in full so the tier rules on what was actually wr
 `rigid-monorepo` and every other part of this system treats them as colleagues. What
 makes that safe is that a rule cannot silence anything by itself — it can only be argued.
 
-`[OPEN]` — **specced, not built.** Three things want settling first, and none is
-guesswork:
+**Built.** Two of the three open questions are settled by building them; the third is
+still open and is not blocking.
 
-- **How a client cites a rule.** A `lore-ok[<fp>]: rule <id> — <note>` form costs no new
-  tool and reuses a parser that already has three shapes; a dedicated `review_appeal`
-  call is clearer and is a fourth thing an agent must learn. The docs are the interface,
-  so the cheaper surface is probably the better one.
-- **What a suppression does to a later round.** It must be consulted BEFORE a T0 engine
-  reports, or it saves nothing; and a suppression the ladder honours silently is exactly
-  the shape this project refuses, so it has to appear in `checks_skipped`.
-- **Whether the model can ORIGINATE the appeal's opposite** — *"this rule is wrong"*.
-  Today it cannot say anything but findings, which is the same gap that leaves the
-  escalation path unwired. Worth solving once, for both.
+- **How a client cites a rule:** `lore-ok[<fp>]: rule <id> — <why it covers this code>`,
+  in any of the three comment forms the parser already reads. No new tool — the docs are
+  the interface, and a fourth call an agent must learn costs more than a fourth shape in a
+  parser that has three. `knowledge_teach` at kind `policy` returns the id to cite.
+- **What a suppression does to a later round:** the engines run, and their findings are
+  filtered before anything is recorded — which is where the saving is, since a suppressed
+  finding never resets settling, never costs a round and is never re-argued. Every one
+  lands in `checks_skipped` naming the engine rule, the path, the development rule and the
+  date. It is scoped to the FILE that was argued about, never a directory: a wider
+  suppression than the one that was argued is a check switched off where no tier looked.
+- **A suppression is only as alive as its rule.** Both reads join to live knowledge, so
+  `knowledge_retire` (or `lore rule --retire`) switches every check it bought back on at
+  the next review with nothing to sweep — including the individual finding it was argued
+  about, which would otherwise keep being carried forward as settled (D-51) while the
+  operator was told every check now reports again. The rows are kept: they are the record
+  of what earlier reviews did not cover.
+- **Only a T0 finding whose claim names a rule.** A model finding has no engine rule at
+  the head of its claim and re-raising it is judgement, not a pattern re-firing; silencing
+  a class of those is silencing a kind of thought. A claim that is a sentence yields no
+  class either, so nothing appeals its way past a red suite.
+
+`[OPEN]` — **whether the model can ORIGINATE the appeal's opposite**: *"this rule is
+wrong"*. Today a tier can say nothing but findings, which is the same gap that leaves the
+escalation path unwired. Worth solving once, for both.
 
 **D-82 — a defect found is fixed now; recording it is the exception.**
 

@@ -5,6 +5,51 @@ surprised me.
 
 ---
 
+## 2026-08-08 — session 43: a check can be switched off, and it says so every time
+
+**D-83 built.** A project can write down what it has decided NOT to enforce, and a client
+answers a finding with `lore-ok[<fp>]: rule <id> — <why it covers this code>`. The tier
+gets the rule's full text and rules on it; lore never closes a finding because a rule was
+pointed at it, because the author never closes its own finding (D-10) and a rule the
+author also wrote would otherwise be exactly that route.
+
+**The design question was what an accepted appeal SETTLES**, and Vany answered it: the
+class, for that path. That is the whole value. Settling by fingerprint is what the ladder
+already did, and it is why one semgrep rule was argued sixty-three times — the next edit
+to the file makes a new fingerprint and the identical argument starts again.
+
+**Two things I only found by writing the messages first.** The `checks_skipped` notice I
+wrote says *"retire the rule to switch it back on"*, and there was no way to retire a rule
+— a sentence naming an action nothing could perform. So `knowledge_retire` and `lore rule`
+exist. Then the CLI's reply says *"every check it silenced reports again"*, and that was
+half true: the class hole closes by a JOIN, but the individual verdict the appeal earned
+kept being carried forward as settled (D-51), so the one place it had actually been argued
+stayed silent for ever. `revokedSuppressions` closes that. Writing the promise before the
+mechanism is how both were caught — worth repeating deliberately.
+
+**A NUL byte was hiding a file from every grep.** `enrich.ts` held `k.path ?? "\0"` where
+a space was meant. Behaviourally identical, so nothing failed — but `file` reported it as
+data and `grep` reported NOTHING for it, silently. Above it sat a doc comment claiming
+policies were filtered out of reviewer prompts, over code that did not filter them; I had
+written the comment and believed it, and could not find the function by name to check.
+Caught by a test asserting the prompt did not contain the rule text. This repository
+enforces several invariants by grepping its own sources, so a file that greps as empty
+passes all of them: `one-definition.test.ts` now refuses a NUL in any source.
+
+**The engine rule class is read off the head of a claim**, `<rule id>: <message>`, because
+`Finding` is the wire contract with the models and a field meaningless to them does not
+belong in their prompt. Four engines had independently written that shape; `ruleClaim` is
+now the one definition and `engineRuleClass` its inverse, with the ROUND TRIP tested rather
+than either half. A claim that is a sentence yields no class, which is what stops anything
+appealing its way past a red suite.
+
+**Surprised me: three of the four tests that matter are refusals.** Rule does not resolve,
+model raised it, no rule class, tier disagreed — each a different line, each the difference
+between "argue your case" and "write a rule, cite it, switch the check off". The feature is
+mostly the things it declines to do.
+
+---
+
 ## 2026-08-08 — session 42: fix it now, and the day that argued for it
 
 **Vany: "we fix bugs in this project immediately."** Written down as D-82, and the

@@ -38,6 +38,7 @@ import { relevantTo } from "../knowledge/enrich.ts";
 import { ingestDocs } from "../knowledge/ingest.ts";
 import { screenFor, screenUsage, type ScreenUsage } from "../knowledge/screen.ts";
 import { runT0, renderT0 } from "../t0/runner.ts";
+import { engineRuleClass } from "../t0/engines.ts";
 import type { RecordedFinding, Store } from "../store/store.ts";
 import type { ReviewerLike } from "./opencode.ts";
 import { reviewPrompt } from "./prompts.ts";
@@ -213,6 +214,42 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     store.closeTierRun(t0RunId, "failed", [], roundTree);
     throw e;
   }
+
+  // APPEALS ALREADY ACCEPTED, APPLIED BEFORE T0 REPORTS (D-83).
+  //
+  // Here rather than inside `runT0`: the engines are a pure function of the worktree
+  // and have no store, and — more to the point — running them is not what an appeal
+  // saves. What it saves is the ladder churn. A suppressed finding is never recorded,
+  // so it never resets settling, never costs a round, and is never re-argued. Filtering
+  // after the engines have spoken and before anything is written is exactly that.
+  //
+  // AND IT IS SAID OUT LOUD. A check switched off silently is the shape this whole
+  // service exists to refuse, so each one lands in `checks_skipped` — the channel a
+  // client already repeats to its user — naming the rule, the path, and the development
+  // rule that bought it. Someone reading a later `passed` can see what it does not cover
+  // and can go and argue with the rule instead of with the review.
+  //
+  // The model tier reads the same list (`renderT0`), which is the escape hatch and not
+  // an accident: a tier is NOT bound by a suppression an engine's rule bought. If it
+  // looks at that code and thinks it is genuinely wrong it raises the finding itself —
+  // and a model finding has no engine rule class, so no appeal can silence it by class.
+  // A team can decide a pattern-matcher is wrong for a place; it cannot decide a reader
+  // may not look.
+  const suppressed = store.liveSuppressions(review.repoId);
+  const silenced: string[] = [];
+  const t0Findings = t0.findings.filter((f) => {
+    const cls = engineRuleClass(f.claim);
+    const s = cls === undefined ? undefined : suppressed.find((x) => x.ruleClass === cls && x.path === f.file);
+    if (s === undefined) return true;
+    silenced.push(
+      `${cls ?? ""} was NOT reported at ${f.file} — ${s.tier} accepted an appeal to this project's ` +
+        `development rule ${s.policyShort} ("${s.statement}") on ${s.acceptedAt.slice(0, 10)}. Anything that ` +
+        "rule would have caught here is unexamined; retire the rule to switch it back on.",
+    );
+    return false;
+  });
+  t0 = { ...t0, findings: t0Findings, unavailable: [...t0.unavailable, ...new Set(silenced)] };
+
   store.closeTierRun(t0RunId, t0.findings.length > 0 ? "findings" : "clean", t0.unavailable, roundTree);
 
   // 3. Justifications proposed since last round.
@@ -334,6 +371,9 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       // Selected against the changed files, not dumped wholesale: everything a repo
       // knows would crowd the diff out of the context window.
       knowledge: relevantTo(store, review.repoId, diff.changedFiles),
+      // INDICATED, not listed (D-83). A policy decides nothing until it is cited, and
+      // sixty rules already occupy the space the diff wants.
+      policyCount: store.policyCount(review.repoId),
       conflicts: renderConflicts(store, review.repoId),
       settled: [...settledForPrompt, ...pending.map((p) => ({ finding: p.finding, rationale: p.reason }))],
       // WHERE THIS TIER ACTUALLY STANDS. Without it `position()` told every round it was
@@ -610,6 +650,8 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   //     a review, applied across them. Carrying one forward blind is how a ladder
   //     rots into rubber-stamping.
   const carried: string[] = [];
+  // Read once for the whole loop: it is the same answer for every fingerprint.
+  const revoked = store.revokedSuppressions(review.repoId);
   // See `originalJustification`: the prefix used to nest, once per review.
   for (const fp of raisedFingerprints) {
     if (modelRaised.has(fp)) continue;
@@ -619,6 +661,22 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     const file = newFindings.find((f) => f.fingerprint === fp)?.file
       ?? store.fileOfFinding(reviewId, fp);
     if (file === undefined) continue;
+
+    // NOT IF THE RULE THAT BOUGHT IT HAS BEEN WITHDRAWN (D-83).
+    //
+    // `liveSuppressions` already closes the forward-looking hole — a retired rule stops
+    // silencing the class at the next review, by a JOIN rather than a sweep. This closes
+    // the backward-looking one. Without it the exact finding the appeal was made about
+    // keeps being carried in as settled, for ever, because a verdict outlives its review
+    // (D-51) — so `lore rule --retire` would report "every check it silenced reports
+    // again" while the one place it was actually argued stayed silent.
+    //
+    // Only findings an appeal settled. Everything else carries as it always has: an
+    // ordinary justification was argued on its own words and had no rule withdrawn from
+    // under it.
+    const claim = newFindings.find((f) => f.fingerprint === fp)?.claim ?? store.claimOfFinding(reviewId, fp);
+    const cls = claim === undefined ? undefined : engineRuleClass(claim);
+    if (cls !== undefined && revoked.some((r) => r.ruleClass === cls && r.path === file)) continue;
 
     const source = await readFile(join(worktree, file), "utf8").catch(() => undefined);
     if (source === undefined || !hunkStillPresent(source, prior.scope.hunk)) continue;
@@ -666,6 +724,40 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
         tier: tier.id,
         round,
       });
+
+      // AN ACCEPTED APPEAL SETTLES THE CLASS FOR THAT PATH, not just this fingerprint
+      // (D-83). The verdict above is keyed by fingerprint — the exact claim about the
+      // exact code — and for an appeal that is the wrong unit: the author's claim is
+      // "this project decided not to enforce this rule here", so the next edit to the
+      // file produces a fresh fingerprint and re-raises the identical argument. Answering
+      // it forever is the loop D-57 exists to end.
+      //
+      // Three conditions, and none is incidental:
+      //
+      //   * a rule was CITED and resolved — otherwise this is an ordinary reason, and
+      //     ordinary reasons do not switch checks off;
+      //   * the finding came from T0 — a model tier's finding has no rule class, and
+      //     re-raising it is judgement rather than a pattern re-firing. Suppressing a
+      //     class of thought is not a thing this should be able to do;
+      //   * the claim yields a class. A script failure ("`npm test` fails on this
+      //     branch") has none, so nothing appeals its way past a red suite.
+      //
+      // The tier that accepted it is a model tier by construction: this loop runs in a
+      // model round, and `modelRaised` is what rejects. A deterministic engine can
+      // neither read the appeal nor rule on it.
+      const cls = p.citedRule === undefined || p.finding.origin !== "t0"
+        ? undefined
+        : engineRuleClass(p.finding.claim);
+      if (cls !== undefined && p.citedRule !== undefined) {
+        store.recordSuppression({
+          repoId: review.repoId,
+          ruleClass: cls,
+          path: p.finding.file,
+          policyShort: p.citedRule,
+          reviewId,
+          tier: tier.id,
+        });
+      }
       // AN ACCEPTED JUSTIFICATION IS A VERDICT, NOT A RULE, and it used to be written
       // here as both.
       //
@@ -1008,6 +1100,20 @@ async function expireStaleVerdicts(
 /** Where a justification lives when its own file cannot hold a comment (D-57). */
 const LEDGER = ".lore-ok.md";
 
+/**
+ * A justification waiting to be ruled on this round.
+ *
+ * `citedRule` is what makes it an APPEAL rather than an argument (D-83): the author is
+ * not saying the finding is wrong, but that this project decided not to enforce it —
+ * and if a tier agrees, that decision outlives this one fingerprint.
+ */
+interface Pending {
+  readonly finding: RecordedFinding;
+  readonly reason: string;
+  readonly scope: ReturnType<typeof makeScope> | undefined;
+  readonly citedRule?: string;
+}
+
 async function collectJustifications(
   store: Store,
   reviewId: string,
@@ -1016,11 +1122,11 @@ async function collectJustifications(
   files: readonly string[],
   /** The caller's open findings — the same read `files` was derived from. */
   open: readonly RecordedFinding[],
-): Promise<readonly { finding: RecordedFinding; reason: string; scope: ReturnType<typeof makeScope> | undefined }[]> {
+): Promise<readonly Pending[]> {
   if (open.length === 0) return [];
   const byFingerprint = new Map(open.map((f) => [f.fingerprint, f]));
 
-  const out: { finding: RecordedFinding; reason: string; scope: ReturnType<typeof makeScope> | undefined }[] = [];
+  const out: Pending[] = [];
   // Counted, not printed one by one. See `shortKnownToRepo`.
   let carriedOver = 0;
 
@@ -1081,10 +1187,33 @@ async function collectJustifications(
       // Taking it from the finding is also the more honest rule for the in-file case
       // it replaces: the reason should go stale when the CODE moves, not when someone
       // rewords the comment beside it.
+      // AN APPEAL CARRIES THE RULE'S TEXT, because the tier must rule on what was
+      // actually written rather than on an id it cannot look up — reviewers have no
+      // lore MCP and no way to fetch anything (D-83). A cited rule that does not
+      // resolve is NOT silently dropped: the reason says so, so the tier judges a
+      // justification whose central claim it can see is unsupported, rather than one
+      // that merely reads oddly.
+      const cited = mark.rule === undefined ? undefined : store.policyByShort(repoId, mark.rule);
+      const reason =
+        mark.rule === undefined
+          ? mark.reason
+          : cited === undefined
+            ? `[APPEALS TO RULE ${mark.rule}, WHICH DOES NOT RESOLVE — no such development rule for this ` +
+              `repository, or the id is ambiguous. Judge this as an unsupported claim.] ${mark.reason}`
+            : `[APPEAL TO THIS PROJECT'S DEVELOPMENT RULE ${mark.rule}: "${cited.statement}"` +
+              `${cited.why === undefined ? "" : ` — ${cited.why}`}. The author says this finding enforces ` +
+              `something the project decided not to enforce. Rule on THAT: does the rule cover this code? ` +
+              `Accept by not raising it again; reject by raising it, and say why the rule does not apply.] ` +
+              `${mark.reason}`;
+
       out.push({
         finding,
-        reason: mark.reason,
+        reason,
         scope: await scopeOf(worktree, finding.file, finding.line),
+        // Carried only when the citation RESOLVED. An appeal to a rule that does not
+        // exist is judged on its words like any other reason; it must not be able to
+        // buy a suppression, or an unresolvable id would switch a check off.
+        ...(cited === undefined || mark.rule === undefined ? {} : { citedRule: mark.rule }),
       });
     }
   }

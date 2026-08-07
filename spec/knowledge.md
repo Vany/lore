@@ -212,11 +212,35 @@ own finding (D-10), and a rule the author also wrote would otherwise be exactly 
 route — write the rule, cite the rule, silence the check, with an audit trail that reads
 like due process.
 
-**Accepted, it settles the class under a path**, not the single finding: *this engine's
-rule does not apply under `src/…`, because `<the rule>`*, carrying the reason the team
+**Accepted, it settles the class for that path**, not the single finding: *this engine's
+rule is not reported in `src/http.ts`, because `<the rule>`*, carrying the reason the team
 gave. Not a demotion — D-67 stands, a true finding keeps its severity. This is about a
-check being wrong for a place, said once rather than sixty-three times. A suppression is
-a reviewable, revocable row like any other, and it appears in `lore knowledge`.
+check being wrong for a place, said once rather than sixty-three times.
+
+The path is the FILE the appeal was argued about, never a directory prefix. A wider
+suppression than the one that was argued is a check switched off in files no tier looked
+at, which is the failure this whole mechanism is built to avoid rather than commit.
+
+**A suppression is only as alive as its rule.** The read joins to live knowledge, so
+retiring the rule switches every check it bought back on at the next review, with nothing
+to sweep — the same shape D-20 gives an ingested rule whose paragraph was deleted. That
+covers the individual verdict too: the finding the appeal was actually argued about stops
+being carried forward as settled, or `lore rule --retire` would report that every check
+now reports again while the one place it mattered stayed silent. The suppression ROWS are
+kept when the rule dies; they are the record of what earlier reviews did not cover.
+
+**Only a T0 finding, and only one that names a rule.** A model tier's finding has no
+engine rule at the head of its claim, and re-raising it is judgement rather than a pattern
+re-firing — silencing a class of those would be silencing a kind of thought. Neither does
+a claim that is a sentence: `\`npm test\` fails on this branch` yields no class, so nothing
+appeals its way past a red suite.
+
+**Consulted before T0 reports, and never silently.** The engines run and their findings
+are filtered before anything is recorded — which is where the saving is, since a suppressed
+finding never resets settling, never costs a round, and is never re-argued. Every one lands
+in `checks_skipped` naming the engine rule, the path, the development rule and the date,
+so a reader of a later `passed` can see what it does not cover and go and argue with the
+rule instead of with the review.
 
 **INDICATED IN THE PROMPT, NOT RECITED.** Every other kind of rule is injected under
 *"treat these as this team's decisions"* — up to sixty of them, and a fifth were
@@ -230,12 +254,20 @@ the tier must rule on what was actually written.
 
 **Any token holder may add one**, recorded with who and when — the trust
 `knowledge_teach` already extends. It is safe because a rule silences nothing by itself;
-it can only be argued.
+it can only be argued. `knowledge_retire` withdraws one, and the reason is kept: it is
+what a later reader gets when they ask why a check came back. An operator with no token
+reaches the same two doors through `lore rule`, which lists every rule beside the checks
+it is currently silencing — separately those two mislead in opposite directions, a rule
+list reading as harmless prose and a suppression list as unexplained holes.
 
-**Not built.** `SPEC.md` D-83 carries the three open questions: how a client cites a rule,
-where a suppression is consulted (before a T0 engine reports, and never silently — it
-belongs in `checks_skipped`), and whether a model can originate the opposite claim, which
-is the same gap that leaves the escalation path unwired.
+**How a client cites one:** `lore-ok[<fingerprint>]: rule <id> — <why it covers this
+code>`, in any of the three comment forms the parser already reads, including the
+markdown ledger. No new tool: the docs are the interface, and a fourth call an agent must
+learn costs more than a fourth shape in a parser that has three.
+
+**Still open:** whether a model can originate the opposite claim — *this rule is wrong*.
+Today a tier can say nothing but findings, which is the same gap that leaves the
+escalation path unwired, and it is worth solving once for both.
 
 ### 2.2 A recurrence is only a lesson once the repository has answered it
 

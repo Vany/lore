@@ -927,7 +927,9 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
         statement: z.string().min(1).describe("the rule or fact, stated plainly"),
         why: z.string().min(1).describe("the reason — a rule without one gets deleted by the next reader"),
         path: absent(z.string()).describe("scope it to a file or directory when it is not repo-wide"),
-        kind: absent(z.enum(["rule", "fact", "mistake"])),
+        kind: absent(z.enum(["rule", "fact", "mistake", "policy"])).describe(
+          "policy = a development rule a review can be APPEALED to (D-83); default rule",
+        ),
       }),
     },
     async ({ statement, why, path, kind }) => {
@@ -943,7 +945,70 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
         sourceBlob: undefined,
         confidence: 1,
       });
-      return text(JSON.stringify({ id: item.id, recorded: true }));
+      // THE SHORT ID IS THE HANDLE AN APPEAL USES, so it is returned where it is
+      // created. A policy nobody can cite is a policy nobody can appeal to, and the
+      // client has no other way to learn the id it needs.
+      return text(
+        JSON.stringify({
+          id: item.id,
+          recorded: true,
+          ...(item.kind === "policy"
+            ? {
+                cite_as: item.id.slice(0, 8),
+                note:
+                  "A development rule. It is NOT added to reviewer prompts — reviewers are told this " +
+                  "project has policies, not what they say. To appeal a finding to it, answer that finding " +
+                  `with: lore-ok[<fingerprint>]: rule ${item.id.slice(0, 8)} — <why it applies here>. ` +
+                  "The reviewing tier rules on the appeal; lore never closes a finding because a rule was " +
+                  "cited at it.",
+              }
+            : {}),
+        }),
+      );
+    },
+  );
+
+  // ------------------------------------------------------- knowledge.retire
+
+  // A RULE THAT CANNOT BE REVOKED IS A CHECK THAT CANNOT BE SWITCHED BACK ON.
+  //
+  // An accepted appeal suppresses an engine rule for a path for as long as the
+  // development rule that authorised it is live (D-83), and `checks_skipped` tells the
+  // reader exactly that — "retire the rule to switch it back on". Without this tool that
+  // sentence named an action nothing could perform, which is the same defect as a review
+  // that reports a state the client cannot act on.
+  server.registerTool(
+    "knowledge_retire",
+    {
+      description: TOOL_DOCS.retire,
+      inputSchema: z.object({
+        rule: z.string().min(4).describe("short id of the development rule, as `cite_as` gave it"),
+        why: z.string().min(1).describe("why it no longer holds — this is kept, and is what a later reader gets"),
+      }),
+    },
+    async ({ rule, why }) => {
+      const outcome = store.retirePolicy(who.repoId, rule, `retired by ${who.principal}: ${why}`);
+      // Ambiguity is refused rather than resolved, exactly as `policyByShort` refuses it:
+      // retiring the wrong rule silently re-enables checks somewhere nobody is looking.
+      return text(
+        JSON.stringify(
+          outcome === "retired"
+            ? {
+                retired: true,
+                note:
+                  "Every suppression this rule authorised stops applying from the next review. The " +
+                  "suppression rows are kept on purpose — they are the record of what earlier reviews " +
+                  "did not cover.",
+              }
+            : {
+                retired: false,
+                because:
+                  outcome === "ambiguous"
+                    ? `more than one development rule starts with '${rule}' — give more characters`
+                    : `no live development rule of this repository starts with '${rule}'`,
+              },
+        ),
+      );
     },
   );
 

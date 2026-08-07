@@ -106,3 +106,59 @@ describe("the block-comment form", () => {
     expect(parseLoreOk(["/**", " * lore-ok[a1b2c3d4]:", " */"].join("\n"))).toStrictEqual([]);
   });
 });
+
+/**
+ * An APPEAL is a different claim from a justification, and the parser has to tell them
+ * apart (D-83).
+ *
+ * "trust my judgement about this line" and "you are enforcing something we decided not
+ * to enforce" get different treatment downstream: only the second quotes a team rule to
+ * the tier, and only the second can buy a suppression if the tier agrees. The whole
+ * distinction rests on this regex, so the near-misses are tested as carefully as the
+ * hits — a reason that merely BEGINS with the word "rule" must stay an ordinary reason,
+ * or an author acquires an authority they never cited.
+ */
+describe("citing a development rule", () => {
+  it("separates the rule id from the reason", () => {
+    expect(parseLoreOk("// lore-ok[a1b2c3d4]: rule 3f9a2c11 — loopback in tests is not transport")).toStrictEqual([
+      { short: "a1b2c3d4", reason: "loopback in tests is not transport", line: 1, rule: "3f9a2c11" },
+    ]);
+  });
+
+  it("accepts the separators an agent will actually type", () => {
+    for (const sep of ["—", "–", "-", ":", ""]) {
+      const src = `// lore-ok[a1b2c3d4]: rule 3f9a2c11 ${sep} behind the overlay`;
+      expect(parseLoreOk(src)[0], sep).toMatchObject({ rule: "3f9a2c11", reason: "behind the overlay" });
+    }
+  });
+
+  it("reads an appeal written in the block-comment form", () => {
+    const src = ["/**", " * lore-ok[a1b2c3d4]: rule 3f9a2c11 — behind", " * the overlay", " */"].join("\n");
+    expect(parseLoreOk(src)[0]).toMatchObject({ rule: "3f9a2c11", reason: "behind the overlay" });
+  });
+
+  it("reads an appeal from the markdown ledger form", () => {
+    expect(parseLoreOk("<!-- lore-ok[a1b2c3d4]: rule 3f9a2c11 — the schema is strict -->")[0]).toMatchObject({
+      rule: "3f9a2c11",
+      reason: "the schema is strict",
+    });
+  });
+
+  // The near-misses. Each of these is an ordinary reason that happens to start with the
+  // word, and reading any of them as a citation would hand the author an authority they
+  // did not invoke — or, worse, one that resolves to somebody else's rule.
+  it("is not triggered by a reason that merely begins with the word", () => {
+    for (const reason of [
+      "rule of thumb: this path is bounded by the caller",
+      "rules here are enforced at the boundary instead",
+      "rule 12 of the style guide covers this",
+      "rule zzz — not a hex id",
+    ]) {
+      expect(parseLoreOk(`// lore-ok[a1b2c3d4]: ${reason}`)[0], reason).toStrictEqual({
+        short: "a1b2c3d4",
+        reason,
+        line: 1,
+      });
+    }
+  });
+});

@@ -174,6 +174,29 @@ describe("comments carry the incident, not who reported it", () => {
   });
 });
 
+/**
+ * A NUL byte makes a source file invisible to every text tool at once.
+ *
+ * `enrich.ts` carried one inside a string literal — `k.path ?? "\0"` where a space was
+ * meant — and the two behave identically, so nothing failed. What broke was every
+ * SEARCH: `grep` classifies the file as binary and reports nothing, silently, so
+ * `relevantTo` could not be found by name and a doc comment claiming policies were
+ * filtered sat above code that did not filter them for as long as nobody executed it.
+ *
+ * That is worse than a bug, because this repository enforces several of its invariants
+ * by grepping its own sources — including the tests in this file. A file that greps as
+ * empty passes every one of them.
+ */
+describe("sources are text", () => {
+  it("has no NUL byte in any source file", () => {
+    const offenders = sources().filter((f) => readFileSync(f).includes(0)).map((f) => f.slice(SRC.length));
+    expect(
+      offenders,
+      `grep reports NOTHING for these files, including the checks in this suite:\n  ${offenders.join("\n  ")}`,
+    ).toStrictEqual([]);
+  });
+});
+
 describe("make recipes do not comment inside a shell continuation", () => {
   it("has no `@#` on a line continuing the previous one", () => {
     const lines = readFileSync(join(SRC, "..", "deploy", "Makefile"), "utf8").split("\n");

@@ -334,6 +334,18 @@ Those three forms are the whole list; anything else is never read. If the file h
 no comment syntax at all — JSON, a lockfile, generated output — put it in
 .lore-ok.md at the repo root, using the markdown form.
 
+APPEAL TO A DEVELOPMENT RULE when the finding enforces something this project decided
+NOT to enforce. That is a different claim from "this line is fine", and it is answerable
+by pointing at what the team wrote down instead of arguing again:
+
+    // lore-ok[<fingerprint>]: rule <rule-id> — why it covers this code
+
+Record a rule with knowledge_teach at kind "policy"; the reply gives you the id to cite.
+Reviewers are NOT shown your rules — they are told this project has some — so the rule's
+full text is quoted to the tier alongside your appeal, and the tier rules on it. lore
+never closes a finding because a rule was cited at it: the author does not close its own
+findings, and a rule the author also wrote would otherwise be a way to do exactly that.
+
 Writing that PROPOSES a piece of lore. The reviewer decides whether your reasoning
 holds. Accepted, the finding closes and your reason becomes a fact this codebase
 knows about itself. Rejected, the finding returns at HIGHER severity — a wrong
@@ -516,6 +528,32 @@ Record something durable about this codebase, with its reason.
 
 Taught rules outrank rules inferred from reviews. Record the WHY: a rule without one
 gets deleted by the next reader who disagrees with it.
+
+kind "policy" is different from the rest, and is the one to use for A DECISION ABOUT
+WHAT THIS PROJECT ENFORCES — "we do not treat loopback binds in tests as a finding".
+Reviewers are NOT shown policies; they are told how many exist and that a lore-ok
+citing one is team policy rather than an opinion. The text travels with the appeal
+that cites it, which is the only moment it is relevant. The reply gives you the id.
+
+Anyone holding a token for this repository may add one, and who added it is recorded.
+That is safe because a rule silences nothing by itself: it can only be argued to a
+reviewing tier, which accepts it by not raising the finding again, or rejects it.
+`.trim(),
+
+  retire: `
+Withdraw a development rule that no longer holds.
+
+Takes the short id, and the reason — which is KEPT, and is what a later reader finds
+when they ask why a check came back.
+
+This is the other half of an appeal. An accepted appeal stops an engine's rule being
+reported for a path, and it holds for exactly as long as the development rule behind
+it does: retire the rule and every check it silenced reports again at the next review,
+with nothing to sweep. The suppression records themselves are kept deliberately — they
+are the evidence of what earlier reviews did not cover.
+
+Refused when the id matches more than one rule. Retiring the wrong one switches checks
+back on somewhere nobody is looking, and lore cannot tell which you meant.
 `.trim(),
 } as const;
 
