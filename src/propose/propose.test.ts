@@ -128,6 +128,23 @@ describe("restates", () => {
     ).toBe(false);
   });
 
+  // MEASURED ON THE FIRST REAL SWEEP. The ingested rule "The prompts do not ask for
+  // that, and the output shows it" reduces to four terms, three of which turned up in
+  // an unrelated 200-word paragraph about a budget guard — so a genuinely new idea was
+  // reported to the reader as already decided. That is the expensive direction of this
+  // filter: the reader never learns what they were not shown.
+  it("does not match a short statement on three common words in a long idea", () => {
+    expect(
+      restates(
+        "The budget guard in propose() is a guard whose silence is ambiguous. sessionsSpent is incremented " +
+          "only after a successful ask, so when every call fails the budget check never fires and the loop " +
+          "attempts every lens, each one creating a session and consuming tokens without the ceiling " +
+          "taking effect. Ask for the output it shows.",
+        "The prompts do not ask for that, and the output shows it",
+      ),
+    ).toBe(false);
+  });
+
   it("refuses to match on a statement too short to mean anything", () => {
     expect(restates("anything at all about the store", "no globals")).toBe(false);
   });
@@ -153,6 +170,30 @@ describe("screen", () => {
     expect(s?.because.join(" ")).toContain("named no files");
   });
 
+  // MEASURED ON THE FIRST REAL SWEEP: four proposals named src/knowledge/compiler.ts,
+  // src/ops/health.ts, src/mcp/submit.ts and its test — none of which exist. Nothing
+  // checked, so an invented sibling rode in on a real path and the reader had no way to
+  // tell which was which.
+  it("says which named files are not in the tree, and keeps the idea", () => {
+    const real = (p: string) => p !== "src/store/schema.ts";
+    const [s] = screen([proposal()], "src/store", [], real);
+    expect(s?.demotions).toContain("invented-paths");
+    expect(s?.because.join(" ")).toContain("src/store/schema.ts");
+    // Kept, not dropped: the idea may be sound and one path invented.
+    expect(s?.demotions).not.toContain("out-of-scope");
+  });
+
+  it("drops a proposal whose every named file is imaginary", () => {
+    const [s] = screen([proposal()], "src/store", [], () => false);
+    expect(s?.demotions).toContain("out-of-scope");
+    expect(s?.because.join(" ")).toContain("names only files that do not exist");
+  });
+
+  it("takes paths on trust when nothing can check them", () => {
+    const [s] = screen([proposal()], "src/store", []);
+    expect(s?.demotions).toStrictEqual([]);
+  });
+
   it("marks a proposal unappraisable and says which half is missing", () => {
     const [s] = screen([lacking("settledBy")], "src/store", []);
     expect(s?.demotions).toStrictEqual(["unappraisable"]);
@@ -164,6 +205,20 @@ describe("screen", () => {
     const [s] = screen([lacking("preserves")], "src/store", []);
     expect(s?.demotions).toStrictEqual(["unappraisable"]);
     expect(s?.because.join(" ")).toContain("keeps working");
+  });
+
+  // ALMOST EVERY RULE IN A CODEBASE IS A PROHIBITION — "reviewers do not write to the
+  // repo" — so matching on "do not" classified the whole knowledge base as decisions
+  // this project had made AGAINST things, and any idea sharing words with one was
+  // reported as already rejected. Measured on the first real sweep.
+  it("does not treat an ordinary prohibition as a decision against something", () => {
+    const k = known({
+      kind: "rule",
+      source: "ingested",
+      statement: "Reviewers do not write to the repository, because independence is the whole point of them.",
+    });
+    const [s] = screen([proposal({ idea: "Reviewers do not write to the repository, independence is the point." })], "src/store", [k]);
+    expect(s?.demotions).not.toContain("already-decided");
   });
 
   it("annotates an idea this repository already rejected, with the date", () => {
@@ -182,7 +237,9 @@ describe("screen", () => {
   it("keeps an idea that argues with a taught rule, and says so", () => {
     const k = known({
       source: "taught",
-      statement: "The store's query and migration surfaces stay in one file so a migration cannot drift from it.",
+      statement:
+        "The store's query surface and its migration surface stay in one file, so a migration cannot drift " +
+        "from the queries it changes.",
     });
     const [s] = screen([proposal()], "src/store", [k]);
     expect(s?.demotions).toContain("contradicts-taught");

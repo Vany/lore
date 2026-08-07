@@ -27,7 +27,10 @@ lore propose --repo <name> --budget 8
 | `--lens a,b,c` | which vantages to run | all four |
 | `--json` | the document as data, for a script | off |
 
-Writes `proposals/YYYY-MM-DD-<n>.md` and prints the path. Exit `0` when it produced a
+Writes `proposals/YYYY-MM-DD-<sha>-<folder>.md` and prints the path. The SHA and the
+folder are both in the name because a per-folder sweep shares one commit and one date —
+without the folder, eleven runs write eleven times to one path and ten documents are
+lost after being paid for. Exit `0` when it produced a
 document, `70` when it did not — *did not run* is never *found nothing*, here as
 everywhere.
 
@@ -75,7 +78,7 @@ looks equally confident.
               knowledge screen ──► already decided? annotate and rank last
                     │
                     ▼
-              proposals/<date>.md
+        proposals/<date>-<sha>-<folder>.md
 ```
 
 **One idea per proposer, never a list.** Asked for thirty a model pads to fill the

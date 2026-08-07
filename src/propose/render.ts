@@ -59,14 +59,10 @@ export function renderProposals(
 ): string {
   const survived = screened.filter((s) => s.demotions.length === 0);
   const dropped = screened.filter((s) => s.demotions.includes("out-of-scope"));
-  const unappraisable = screened.filter(
-    (s) => !s.demotions.includes("out-of-scope") && s.demotions.includes("unappraisable"),
-  );
+  const weak = (s: Screened) => s.demotions.includes("unappraisable") || s.demotions.includes("invented-paths");
+  const unappraisable = screened.filter((s) => !s.demotions.includes("out-of-scope") && weak(s));
   const decided = screened.filter(
-    (s) =>
-      s.demotions.length > 0 &&
-      !s.demotions.includes("out-of-scope") &&
-      !s.demotions.includes("unappraisable"),
+    (s) => s.demotions.length > 0 && !s.demotions.includes("out-of-scope") && !weak(s),
   );
 
   const lines: string[] = [
@@ -114,7 +110,7 @@ export function renderProposals(
   );
   n = section(
     "Unappraisable",
-    "No falsifying measurement, or no statement of what it keeps working. Kept and ranked last rather than dropped: silently discarding a generator's output is worse than printing a weak idea.",
+    "No falsifying measurement, no statement of what it keeps working, or a file named that is not in the tree. Kept and ranked last rather than dropped: silently discarding a generator's output is worse than printing a weak idea.",
     unappraisable,
     n,
   );

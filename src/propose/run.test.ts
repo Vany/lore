@@ -139,6 +139,33 @@ describe("the budget is in sessions, and a critic is a session", () => {
     expect(r.silent.join(" ")).toContain("budget");
   });
 
+  // THE CEILING HAS TO HOLD WHEN EVERY CALL FAILS, and it did not. `sessionsSpent`
+  // counts successes, so a session that created an opencode session, sent a prompt,
+  // burned tokens and then threw never incremented it — the check never fired and the
+  // loop attempted every lens regardless of the budget. Found by `propose` reading its
+  // own folder on its first real run, which is the whole argument for the tool.
+  it("stops at the budget even when every call fails", async () => {
+    const r = await propose(
+      { store, repoId, ask: scripted([null, null, null, null]) },
+      input({ lenses: ["seams", "data", "failure", "greenfield"], budget: 1 }),
+    );
+    // ONE attempt, not four.
+    expect(asked).toHaveLength(1);
+    expect(r.sessionsSpent).toBe(0);
+    expect(r.silent.filter((s) => s.includes("budget"))).toHaveLength(3);
+  });
+
+  it("counts a failed proposer against the budget before trying the next lens", async () => {
+    const r = await propose(
+      { store, repoId, ask: scripted([[IDEA], [IDEA], null, [IDEA]]) },
+      input({ lenses: ["seams", "data", "failure"], budget: 3 }),
+    );
+    // seams: proposer + critic = 2. data: proposer fails = 3. failure: over budget.
+    expect(asked).toHaveLength(3);
+    expect(r.sessionsSpent).toBe(2);
+    expect(r.silent.join(" ")).toContain("failure: not run");
+  });
+
   // A budget of 1 buys a proposer and no critic. The idea still comes through — with
   // the fact that nothing challenged it attached to the idea, not to a footnote.
   it("says on the proposal itself when the budget left no critic", async () => {

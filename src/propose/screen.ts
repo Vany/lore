@@ -22,6 +22,21 @@ import { inScope, type Demotion, type Proposal, type Screened } from "./proposal
 /** How much of a statement must appear in an idea before we call it the same idea. */
 const MIN_OVERLAP = 0.5;
 
+/**
+ * How many meaningful terms a statement needs before it can identify anything.
+ *
+ * Four was too few, and the failure was measured on the first real run: the ingested
+ * rule *"The prompts do not ask for that, and the output shows it"* reduces to
+ * `{ask, output, prompt, show}`, and three of those four turned up in an unrelated
+ * 200-word paragraph about a budget guard. Three common words inside a long idea is
+ * noise, not a restatement — and the idea was hidden behind a decision that had
+ * nothing to do with it.
+ */
+const MIN_TERMS = 6;
+
+/** And an absolute floor, so a long statement cannot match on its filler alone. */
+const MIN_SHARED = 5;
+
 /** Words too common to carry meaning when matching an idea against a decision. */
 const STOP = new Set([
   "the", "a", "an", "and", "or", "of", "to", "in", "is", "it", "that", "this", "for", "on", "with",
@@ -57,11 +72,11 @@ function terms(s: string): Set<string> {
  */
 export function restates(idea: string, statement: string): boolean {
   const a = terms(statement);
-  if (a.size < 4) return false;
+  if (a.size < MIN_TERMS) return false;
   const b = terms(idea);
   let hit = 0;
   for (const w of a) if (b.has(w)) hit++;
-  return hit / a.size >= MIN_OVERLAP;
+  return hit >= MIN_SHARED && hit / a.size >= MIN_OVERLAP;
 }
 
 /**
@@ -74,19 +89,45 @@ export function screen(
   proposals: readonly Proposal[],
   folder: string,
   knowledge: readonly KnowledgeItem[],
+  /**
+   * Does this path exist in the tree that was read?
+   *
+   * Optional so the pure tests need no filesystem; when absent, paths are taken on
+   * trust and nothing is annotated — which is exactly what the first sweep did, and
+   * why four proposals shipped naming files that were never there.
+   */
+  exists?: (path: string) => boolean,
 ): readonly Screened[] {
   // A rejection is recorded as a `mistake` — the kinds are rule | fact | mistake, and
   // "we considered X and rejected it because Y" is the mistake we would otherwise make
   // again. The text test catches rejections taught as rules, which is how a person
   // writes one by hand.
+  //
+  // `do not` and `don't` USED TO BE IN THAT LIST and had to come out. Almost every rule
+  // in a codebase is phrased as a prohibition — "reviewers do not write to the repo" —
+  // so the pattern classified the whole knowledge base as decisions-against, and any
+  // idea unlucky enough to share words with one was reported to the reader as already
+  // rejected. Measured on the first real run.
   const rejected = knowledge.filter(
-    (k) => k.kind === "mistake" || /\b(?:considered|rejected|decided against|do not|don't)\b/i.test(k.statement),
+    (k) => k.kind === "mistake" || /\b(?:considered|rejected|decided against)\b/i.test(k.statement),
   );
   const taught = knowledge.filter((k) => k.source === "taught");
 
   const screened = proposals.map((proposal): Screened => {
     const demotions: Demotion[] = [];
     const because: string[] = [];
+
+    const absent = exists === undefined ? [] : proposal.touches.filter((p) => !exists(p));
+    // Everything it named is imaginary, so there is no idea here to appraise — the
+    // same answer as an idea about somewhere else, for the same reason.
+    if (exists !== undefined && proposal.touches.length > 0 && absent.length === proposal.touches.length) {
+      demotions.push("out-of-scope");
+      because.push(`names only files that do not exist: ${absent.join(", ")}`);
+    } else if (absent.length > 0) {
+      // Kept: the idea may be sound and one path invented. The reader is told which.
+      demotions.push("invented-paths");
+      because.push(`names ${String(absent.length)} file(s) that do not exist: ${absent.join(", ")} — read the rest with that in mind`);
+    }
 
     if (!inScope(folder, proposal.touches)) {
       demotions.push("out-of-scope");
@@ -130,6 +171,7 @@ export function screen(
     if (s.demotions.length === 0) return 0;
     if (s.demotions.includes("out-of-scope")) return 3;
     if (s.demotions.includes("unappraisable")) return 2;
+    if (s.demotions.includes("invented-paths")) return 2;
     return 1;
   };
   return [...screened].sort((a, b) => rank(a) - rank(b));

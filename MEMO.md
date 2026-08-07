@@ -5,6 +5,51 @@ surprised me.
 
 ---
 
+## 2026-08-07 — session 37: propose ran, and the first thing it found was itself
+
+**88 sessions across the eleven folders of `src/`**, four lenses each, every proposal
+challenged by a critic from another vendor. 32 survived to `Appraise these`. Vany's call
+on the spend — I argued for one folder first and he reaffirmed all eleven.
+
+**The tool's first useful act was to fault its own code.** Reading `src/propose`, it
+found the filename collision I had fixed by hand an hour earlier — independently — and
+then went further than I had: `spec/propose.md` §1 promised `YYYY-MM-DD-<n>.md` while
+the code shipped `<sha>`. I wrote both the spec and the code that night and did not see
+it.
+
+It also found a real defect: the budget guard checked `sessionsSpent`, which is
+incremented only AFTER a successful `ask`. A session that opens, sends a prompt, burns
+tokens and then throws never incremented it — so a run where every call failed never
+tripped the ceiling and attempted every lens anyway. The operator's stated budget did
+not exist on the failure path. That is a guard whose silence is ambiguous, which is the
+shape PROG.md already names, in a guard written to enforce a spend limit.
+
+**Two faults in the tool, both measured rather than imagined:**
+
+- **Four proposals named files that do not exist** — `src/knowledge/compiler.ts`,
+  `src/ops/health.ts`, `src/mcp/submit.ts` and its test. The scope rule passed them
+  because one named path WAS real and inside the folder, so an invented sibling rides in
+  on a genuine one. `touches` is now checked against the worktree that was read: every
+  path imaginary is a drop, some imaginary is an annotation, and the reader is told
+  which. A path in a proposal was a claim until something checked it.
+- **The knowledge screen called almost everything a decision-against.** The classifier
+  matched `do not` and `don't` — and nearly every rule in a codebase is a prohibition
+  ("reviewers do not write to the repo"), so the whole knowledge base read as decisions
+  this project had made against things. Any idea sharing words with one was reported as
+  already rejected. That is the expensive direction of that filter: a false match hides
+  a new idea behind an old decision and the reader never learns what they were not shown.
+  Both the classifier and `restates` are tightened, with the real cases as tests — a
+  four-term statement can no longer identify anything, because "The prompts do not ask
+  for that, and the output shows it" reduces to four terms and three of them turned up
+  in an unrelated paragraph about a budget guard.
+
+**What has NOT been measured, and it is the whole question:** whether the 32 ideas are
+any good. `spec/propose.md` §9 says the failure mode of this tool is its reader. The
+cheap test is in TODO: take each `Settled by` line and run it, and count how many die in
+ten minutes.
+
+---
+
 ## 2026-08-07 — what went to `origin/main` without a passing ladder
 
 **Stated because D-77 says a skipped review is stated, never silent.** Seven commits

@@ -590,13 +590,30 @@ landing with a real user, and it should not get lost among the defects below.
       abort-on-failure that reviews do rather than a second copy of all three.
       What remains is the item below: nothing has been RUN, and the ideas are unmeasured.
 
-- [ ] **Run `propose` once and appraise what comes back.** The tool is built and its
-      output has never been read. It is the single most likely thing in this repository
-      to be plausible and useless — `spec/propose.md` §9 says the failure mode is the
-      reader, not the models — so the first run is a measurement, not a feature: take one
-      folder, `--budget 4`, and count how many of the four ideas survive ten minutes of
-      appraisal. If the answer is zero, that is worth knowing before the second run.
-      **The spend is Vany's call**, and it is why `--budget` has no default.
+- [x] **Ran `propose` across all eleven folders of `src/`, 2026-08-07.** 88 sessions,
+      32 proposals surviving to `Appraise these`; `refactor.md` carries them and
+      `lore/data/proposals/` the per-folder documents. Vany's call on the spend, after I
+      argued for one folder first.
+      **It paid for itself on its own folder.** It independently found the filename
+      collision fixed by hand an hour earlier — and went further: `spec/propose.md` §1
+      promised `YYYY-MM-DD-<n>.md` while the code shipped `<sha>`, drift introduced the
+      same night. And it found a live defect: the budget guard checked `sessionsSpent`,
+      incremented only after a SUCCESSFUL ask, so a run where every call failed never
+      tripped the ceiling. Both fixed.
+      Two faults in the tool, both fixed and both measured rather than imagined: four
+      proposals named files that do not exist and nothing checked, and the knowledge
+      screen classified every rule containing "do not" as a decision-against, which is
+      most rules a codebase has.
+
+- [ ] **Appraise the 32 proposals — the measurement that has NOT been done.** The tool
+      ran; whether its ideas are any good is still entirely unknown, and `spec/propose.md`
+      §9 says the failure mode is the reader rather than the models. The cheap version:
+      take the `Settled by` line off each of the 32 and run it. Count how many die in
+      under ten minutes. If most survive, the tool earns a second sweep; if most die,
+      the interesting question is whether `settledBy` is being written to be survivable
+      rather than to be decisive, which would be the prompt's fault and fixable.
+      Until that count exists, "propose works" is a claim about a tool that has produced
+      output, not about output anyone has used.
 
 
 - [ ] **lore knows why a branch cannot be reviewed and tells the one party who cannot

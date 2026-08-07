@@ -52,7 +52,21 @@ export interface Proposal {
  * an idea about somewhere else is an answer to a question nobody asked, while the others
  * are ideas the reader might still want, weakly stated or already had.
  */
-export type Demotion = "out-of-scope" | "unappraisable" | "already-decided" | "contradicts-taught";
+export type Demotion =
+  | "out-of-scope"
+  | "unappraisable"
+  | "already-decided"
+  | "contradicts-taught"
+  /**
+   * At least one named file is not in the tree.
+   *
+   * Measured on the first real sweep: four proposals named `src/knowledge/compiler.ts`,
+   * `src/ops/health.ts`, `src/mcp/submit.ts` and its test — none of which exist. The
+   * scope rule passed them because ONE named path was real and inside the folder, so an
+   * invented sibling rides in on a genuine one, and the reader has no way to tell which
+   * is which. A path in a proposal is a claim until something checks it.
+   */
+  | "invented-paths";
 
 export interface Screened {
   readonly proposal: Proposal;

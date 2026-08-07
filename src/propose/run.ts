@@ -28,6 +28,8 @@ import { vendorOf } from "../core/ladder.ts";
 import type { Listed, SessionResult } from "../reviewer/opencode.ts";
 import { extractList } from "../reviewer/opencode.ts";
 import type { KnowledgeItem, Store } from "../store/store.ts";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { criticPrompt, PROPOSAL_CONTRACT, proposerPrompt, type LensInput } from "./lens.ts";
 import { parseProposal, type Lens, type Proposal, type Screened } from "./proposal.ts";
 import { screen } from "./screen.ts";
@@ -119,11 +121,23 @@ export async function propose(deps: ProposeDeps, input: ProposeInput): Promise<P
   const screenedAll: Proposal[] = [];
   const silent: string[] = [];
   let sessionsSpent = 0;
+  /**
+   * Sessions ATTEMPTED, which is what the ceiling is about.
+   *
+   * `sessionsSpent` counts successes and is what the document reports. Enforcing the
+   * budget with it was a guard whose silence was ambiguous: a session that creates an
+   * opencode session, sends a prompt, burns tokens and then throws never incremented
+   * it — so a run where every call failed never tripped the ceiling and attempted every
+   * lens anyway. The operator's stated budget did not exist on the failure path.
+   *
+   * Found by `propose` reading its own folder on its first real run.
+   */
+  let attempted = 0;
 
   for (const lens of input.lenses) {
     // Budget is in SESSIONS and a critic is a session. Checked before each, so a run
     // stops between lenses rather than half-way through one.
-    if (sessionsSpent + 1 > input.budget) {
+    if (attempted + 1 > input.budget) {
       silent.push(`${lens}: not run — the budget of ${String(input.budget)} session(s) was already spent`);
       continue;
     }
@@ -139,6 +153,7 @@ export async function propose(deps: ProposeDeps, input: ProposeInput): Promise<P
 
     let idea: Proposal | undefined;
     try {
+      attempted++;
       const r = await deps.ask(proposer, proposerPrompt(base), input.worktree, proposalsOf, PROPOSAL_CONTRACT);
       sessionsSpent++;
       deps.store.recordUsage({
@@ -168,7 +183,7 @@ export async function propose(deps: ProposeDeps, input: ProposeInput): Promise<P
     }
 
     const critic = criticFor(models, proposer);
-    if (critic === undefined || sessionsSpent + 1 > input.budget) {
+    if (critic === undefined || attempted + 1 > input.budget) {
       // UNCRITICISED, and it says so on the proposal rather than in a footnote. A
       // reader who believes a second vendor challenged this when none did is exactly
       // who §9 is about.
@@ -184,6 +199,7 @@ export async function propose(deps: ProposeDeps, input: ProposeInput): Promise<P
     }
 
     try {
+      attempted++;
       const c = await deps.ask(
         critic,
         criticPrompt(base, JSON.stringify(idea, null, 2)),
@@ -224,5 +240,8 @@ export async function propose(deps: ProposeDeps, input: ProposeInput): Promise<P
     }
   }
 
-  return { screened: screen(screenedAll, input.folder, input.knowledge), sessionsSpent, silent };
+  // Checked against the worktree that was actually read, not against the repository as
+  // it stands now — the proposals describe that tree and nothing else.
+  const exists = (p: string): boolean => existsSync(join(input.worktree, p));
+  return { screened: screen(screenedAll, input.folder, input.knowledge, exists), sessionsSpent, silent };
 }
