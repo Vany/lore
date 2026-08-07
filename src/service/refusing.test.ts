@@ -82,6 +82,11 @@ describe("a service whose database is unreadable", () => {
     // It must NOT throw. Throwing here is the crash-loop, and the crash-loop is the bug.
     stop = await serve(cfg(dir, 17781));
 
+    // lore-ok[8f44300f]: rule de7fb2b3 — this is the test's own server, bound to
+    // 127.0.0.1 on an ephemeral port moments earlier by the line above, and spoken to
+    // from the same process. There is no transport to encrypt. Serving it over TLS would
+    // mean a certificate fixture for every test that checks an HTTP contract, to defend
+    // a loopback socket against nothing.
     const res = await fetch("http://127.0.0.1:17781/status");
     expect(res.status, "503, so a monitor sees a failure without parsing the body").toBe(503);
     const body = (await res.json()) as { ok: boolean; problems: string[]; serving: boolean; detail: string };
