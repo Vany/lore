@@ -7,7 +7,13 @@
  * could have been drained first.
  */
 
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { DidNotRun } from "../core/errors.ts";
+import type { ReviewerLike } from "../reviewer/opencode.ts";
 import { Alerter, CONDITIONS, type Alert } from "../ops/alerts.ts";
 import { initialState } from "../core/ladder.ts";
 import { Store } from "../store/store.ts";
@@ -100,6 +106,103 @@ describe("a drain does not survive the restart it was for", () => {
     } finally {
       stop();
     }
+  });
+});
+
+// A REVIEW THAT ALREADY ENDED KEEPS THE ENDING IT WAS GIVEN.
+//
+// The round refuses to spend on a review somebody cancelled — before the tier, and again
+// when a call queued at the provider gate finally gets a slot. Both refusals THROW, and
+// the worker's catch wrote `failed` over whatever the state was. So a cancel would be
+// replaced by a word meaning the opposite: not "we stopped this" but "we could not read
+// the code", losing the reason `review_cancel` had just recorded and telling the client
+// to consider retrying a review it deliberately ended.
+//
+// THE SETUP IS REAL GIT, and it has to be. Two shorter versions of this test passed
+// against the unfixed code: cancelling BEFORE the worker starts means `claimJob` refuses
+// the job and the catch is never reached at all, and with no mirror `worktreeFor` throws
+// while the review is still `queued`. The only faithful shape is the one that happens in
+// production — the job is claimed, the round begins, and the cancel lands while a model
+// call is in flight.
+describe("a worker does not overwrite an ending somebody chose", () => {
+  let root: string;
+
+  const makeRepo = (dir: string) => {
+    mkdirSync(dir, { recursive: true });
+    const g = (...a: string[]) => execFileSync("git", a, { cwd: dir, stdio: "ignore" });
+    g("init", "-q", "-b", "main");
+    g("config", "user.email", "t@e.com");
+    g("config", "user.name", "t");
+    writeFileSync(join(dir, "a.txt"), "a\n");
+    g("add", "-A");
+    g("commit", "-qm", "x");
+  };
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "lore-worker-"));
+  });
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  /** A repo the worker can actually cut a worktree from, mirrored as `make mirror` leaves it. */
+  const withMirror = (repoId: string) => {
+    const src = join(root, "src");
+    makeRepo(src);
+    const bare = join(root, "repos", repoId, "bare.git");
+    mkdirSync(join(bare, ".."), { recursive: true });
+    execFileSync("git", ["clone", "--bare", src, bare], { stdio: "ignore" });
+    // A bare clone alone is the DANGEROUS shape lore refuses: a remote with no
+    // FETCH_HEAD is a clone whose fetch failed, and reviewing it would review the
+    // commit it was cloned at rather than the branch being merged. `make mirror`
+    // leaves this behind, and freshness is read from its mtime.
+    writeFileSync(join(bare, "FETCH_HEAD"), "");
+    return src;
+  };
+
+  /** Cancels the review the moment it is asked, then refuses — exactly what the gate guard does. */
+  const cancelsThenRefuses = (reviewId: string): ReviewerLike => ({
+    review: () => {
+      store.updateReview(reviewId, { state: "cancelled" });
+      store.setFailureReason(reviewId, "cancelled by alice: superseded by a rebase");
+      return Promise.reject(new DidNotRun("was ended while this call waited for a provider slot"));
+    },
+  });
+
+  it("leaves a cancelled review cancelled when the round refuses mid-flight", async () => {
+    const repoId = store.upsertRepo("r", join(root, "src")).id;
+    withMirror(repoId);
+    store.createReview({
+      id: "rev1", repoId, principal: "p", branch: "main", intoRef: "main",
+      ticket: "t", type: "code-arch", state: "queued", ladder: initialState(),
+    });
+    store.enqueue("rev1", "fast");
+
+    const worker = new Worker(
+      store,
+      { ...DEFAULT_WORKER, concurrency: 1, pollMs: 5, reposRoot: join(root, "repos") },
+      new Alerter({ timeoutMs: 10 }),
+      cancelsThenRefuses("rev1"),
+    );
+    const stop = worker.start();
+    try {
+      await new Promise((r) => setTimeout(r, 400));
+    } finally {
+      stop();
+    }
+
+    expect(store.stateOf("rev1")).toBe("cancelled");
+    expect(store.failureReason("rev1")).toContain("superseded by a rebase");
+  });
+
+  it("still fails a review that was still wanted", async () => {
+    queuedReview("rev2");
+    const worker = new Worker(store, { ...DEFAULT_WORKER, concurrency: 1, pollMs: 5 }, new Alerter({ timeoutMs: 10 }));
+    const stop = worker.start();
+    try {
+      await new Promise((r) => setTimeout(r, 150));
+    } finally {
+      stop();
+    }
+    expect(store.stateOf("rev2")).toBe("failed");
   });
 });
 

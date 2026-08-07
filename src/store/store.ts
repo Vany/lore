@@ -342,6 +342,22 @@ export class Store {
     };
   }
 
+  /**
+   * A review's state, with no principal — for machinery that acts on a review rather
+   * than answering somebody about one.
+   *
+   * `getReview` requires a principal because possession of an id is never authentication
+   * (D-23), and that is right for every path a client can reach. The worker is not on
+   * such a path: it holds a job, and needs to know whether the review that job belongs to
+   * has already ended before it writes an outcome over it.
+   */
+  stateOf(id: string): ReviewState | undefined {
+    const row = this.db.prepare("SELECT state FROM review WHERE id = ?").get(id) as
+      | Record<string, string>
+      | undefined;
+    return row?.["state"] as ReviewState | undefined;
+  }
+
   updateReview(id: string, patch: { state?: ReviewState; ladder?: LadderState; treeHash?: string }): void {
     // Read first, so the wake below can be about a CHANGE rather than about a write.
     const before = this.db.prepare("SELECT state FROM review WHERE id = ?").get(id) as

@@ -146,7 +146,19 @@ export class Worker {
         // acted on: the ladder marks that tier unpayable and steps over it (D-48), so
         // an `Exhausted` reaching HERE means nothing was left that could read the code,
         // and that is a plain failure like any other.
-        this.store.updateReview(job.reviewId, { state: "failed" });
+        //
+        // A REVIEW THAT ALREADY ENDED KEEPS THE ENDING IT WAS GIVEN. Some of what lands
+        // here is the round refusing to spend on a review somebody stopped — the terminal
+        // check before the tier, and the gate guard when a queued call finally gets its
+        // slot. Both throw, and writing `failed` over `cancelled` would replace a person's
+        // decision, and their recorded reason, with a word that means the opposite: not
+        // "we stopped this" but "we could not read the code". The client is then told the
+        // review did not run and to consider retrying, about a review it deliberately
+        // ended. `failed` is for a review that was still wanted.
+        const current = this.store.stateOf(job.reviewId);
+        if (current === undefined || !isTerminal(current)) {
+          this.store.updateReview(job.reviewId, { state: "failed" });
+        }
         await this.releaseIfFinished(job.reviewId);
         this.note(false);
 
