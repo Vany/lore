@@ -147,6 +147,13 @@ state after the ingest, because that check used to be the only one and everythin
 it used to be free; without it a cancelled review would still have its tier asked, paid
 for, and its state overwritten by a ladder result.
 
+**And the provider gate is a third window, with no session in it at all.** A call can
+wait a long time for a slot, and it holds nothing while it waits — so a cancel finds
+nothing to abort, says so correctly, and then the slot frees and the queued call spends
+anyway. The question is therefore asked at the moment a slot is won and before anything
+is created, for the screen **and** the tier: they queue at the same gate and the window
+is the gate, not the caller.
+
 **And it is recorded**, under `screen:<tier>` in `usage`, from both callers — the round
 and the bootstrap. These were the only model calls in the system with no usage row, so
 this section's own cost claim could not be checked against anything, `ops/spend`

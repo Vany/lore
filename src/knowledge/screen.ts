@@ -140,6 +140,7 @@ export type Ask = (
   extract: (text: string) => Listed<Refused>,
   contract: string,
   reviewId?: string,
+  stillWanted?: () => boolean,
 ) => Promise<SessionResult<Refused>>;
 
 /**
@@ -226,9 +227,14 @@ export function screenFor(
   ask: Ask,
   tier: Tier,
   worktree: string,
-  opts: { readonly reviewId?: string; readonly spent?: (u: ScreenUsage) => void } = {},
+  opts: {
+    readonly reviewId?: string;
+    readonly spent?: (u: ScreenUsage) => void;
+    /** Asked once a provider slot is won: `false` means do not spend it. */
+    readonly stillWanted?: () => boolean;
+  } = {},
 ): Screen {
-  const { reviewId, spent } = opts;
+  const { reviewId, spent, stillWanted } = opts;
   return async (doc, candidates) => {
     if (candidates.length === 0) return { kept: [], refused: [], ran: true };
 
@@ -240,6 +246,7 @@ export function screenFor(
         (text) => extractList<Refused>(text, KEY, refusedOf),
         CONTRACT,
         reviewId,
+        stillWanted,
       );
       const out = partition(candidates, result.items);
       // Recorded on the way past, before anything can throw on the result. A session

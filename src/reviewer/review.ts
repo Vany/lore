@@ -252,10 +252,16 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // A tier is billed the same whoever asked it, so a screen session lands in `usage`
   // exactly as a round does.
   const recordScreen = (u: ScreenUsage) => store.recordUsage(screenUsage(u, review.repoId, reviewId));
+  // IS THIS STILL WANTED. Asked at the one moment a queued call has a provider slot and
+  // has not yet spent it — a call can wait a long time at the gate holding no session,
+  // so `review_cancel` finds nothing to abort and says so truthfully, and then the slot
+  // frees and the queued call spends on a review somebody ended. One predicate, given to
+  // both the screen and the tier, because the window is the gate and both queue at it.
+  const stillWanted = () => !isTerminal(store.getReview(reviewId, principal)?.state ?? review.state);
   const ingested = await ingestDocs(store, review.repoId, worktree, {
     ...(screenTier === undefined || ask === undefined
       ? {}
-      : { screen: screenFor(ask, screenTier, worktree, { reviewId, spent: recordScreen }) }),
+      : { screen: screenFor(ask, screenTier, worktree, { reviewId, spent: recordScreen, stillWanted }) }),
   });
   // ASKED AGAIN, because the ingest above can now take minutes and spend money.
   //
@@ -367,7 +373,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
 
   let result;
   try {
-    result = await input.reviewer.review(tier, prompt, worktree, reviewId);
+    result = await input.reviewer.review(tier, prompt, worktree, reviewId, stillWanted);
     // Closed with what this tier FOUND, in the same words T0 uses (line 99). The
     // column answers one question — what did this tier do — and `answered` did not
     // answer it: a tier that replied with nothing and one that replied with six

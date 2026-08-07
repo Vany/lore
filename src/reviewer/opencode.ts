@@ -95,7 +95,14 @@ export const DEFAULT_REVIEWER: ReviewerConfig = {
  * what makes it testable at all (PROG.md: pure core, effectful edges).
  */
 export interface ReviewerLike {
-  review(tier: Tier, prompt: string, worktree: string, reviewId?: string): Promise<ReviewerResult>;
+  review(
+    tier: Tier,
+    prompt: string,
+    worktree: string,
+    reviewId?: string,
+    /** Asked once a provider slot is won: `false` means do not spend it. */
+    stillWanted?: () => boolean,
+  ): Promise<ReviewerResult>;
   /**
    * Stop this review's in-flight model call, and stop paying for it.
    *
@@ -120,6 +127,8 @@ export interface ReviewerLike {
     contract: string,
     /** The review this belongs to, so a cancel can reach it. Absent outside a review. */
     reviewId?: string,
+    /** Asked once a provider slot is won: `false` means do not spend it. */
+    stillWanted?: () => boolean,
   ): Promise<SessionResult<T>>;
   /**
    * Characters of prompt this tier can hold, or `undefined` if unknown.
@@ -291,13 +300,40 @@ export class Reviewer implements ReviewerLike {
     return true;
   }
 
-  async review(tier: Tier, prompt: string, worktree: string, reviewId?: string): Promise<ReviewerResult> {
+  /**
+   * The last free moment: a slot has been won, nothing has been created or sent yet.
+   *
+   * A call can wait a long time at the provider gate — that is what the gate is for —
+   * and it holds no session while it waits, because the session does not exist until
+   * `conductSession` runs. So `cancel` finds nothing to abort and truthfully reports
+   * nothing in flight, and then the slot frees and the queued call spends anyway on a
+   * review somebody ended. Asking here closes that window for BOTH callers, which is why
+   * it lives at the one point they share rather than in each of them.
+   */
+  private guard<T>(reviewId: string | undefined, stillWanted: (() => boolean) | undefined, run: () => Promise<T>) {
+    return this.gate.run(() => {
+      if (stillWanted?.() === false) {
+        throw new DidNotRun(
+          `review ${reviewId ?? "?"} was ended while this call waited for a provider slot — nothing was spent on it.`,
+        );
+      }
+      return run();
+    });
+  }
+
+  async review(
+    tier: Tier,
+    prompt: string,
+    worktree: string,
+    reviewId?: string,
+    stillWanted?: () => boolean,
+  ): Promise<ReviewerResult> {
     if (tier.model === undefined) throw new DidNotRun(`tier ${tier.id} has no model`);
     // The gate wraps the SESSION, not the request. What loads a provider is the
     // agentic exploration between them (`gate.ts`), so bounding individual HTTP calls
     // would bound nothing. Waiting here queues the round instead of failing it, which
     // is the same trade as backpressure: a review that dies on a 429 did not run.
-    const r = await this.gate.run(() =>
+    const r = await this.guard(reviewId, stillWanted, () =>
       this.conductSession<Finding>(tier, prompt, worktree, reviewId, findingsOf, OUTPUT_CONTRACT),
     );
     return { ...r, findings: r.items, discarded: r.rejected };
@@ -327,9 +363,13 @@ export class Reviewer implements ReviewerLike {
      * `propose` genuinely has no review to belong to.
      */
     reviewId?: string,
+    /** Asked once a gate slot is won: `false` means do not spend it. See `guard`. */
+    stillWanted?: () => boolean,
   ): Promise<SessionResult<T>> {
     if (tier.model === undefined) throw new DidNotRun(`tier ${tier.id} has no model`);
-    return this.gate.run(() => this.conductSession<T>(tier, prompt, worktree, reviewId, extract, contract));
+    return this.guard(reviewId, stillWanted, () =>
+      this.conductSession<T>(tier, prompt, worktree, reviewId, extract, contract),
+    );
   }
 
   gateState(): GateState {

@@ -448,6 +448,29 @@ describe("counting how far the reviewer explored", () => {
   });
 });
 
+// THE GATE QUEUE IS A WINDOW WITH NO SESSION IN IT. A call waiting for a provider slot
+// has not created a session yet, so `cancel` finds nothing to abort and reports so
+// truthfully — and then the slot frees and the queued call spends on a review somebody
+// ended. The check belongs where the slot is won: after the wait, before anything exists.
+describe("a call that is no longer wanted", () => {
+  it("does not create a session or spend, and says nothing was spent", async () => {
+    replies = [{ parts: [{ type: "text", text: '```json\n{"findings":[]}\n```' }] }];
+    const before = captured.length;
+
+    await expect(
+      reviewer().review(TIER, "review this", "/tmp/wt", "rev1", () => false),
+    ).rejects.toThrow(/ended while this call waited for a provider slot — nothing was spent/);
+
+    expect(captured.slice(before)).toStrictEqual([]);
+  });
+
+  it("proceeds normally when it is still wanted", async () => {
+    replies = [{ parts: [{ type: "text", text: '```json\n{"findings":[]}\n```' }] }];
+    const r = await reviewer().review(TIER, "review this", "/tmp/wt", "rev1", () => true);
+    expect(r.findings).toStrictEqual([]);
+  });
+});
+
 describe("abandoning a call", () => {
   // Measured live: three T2 calls that failed client-side went on to consume
   // ~3.7M cached-read tokens between them, because the agent kept exploring after
