@@ -5,7 +5,7 @@ point — **remembers the codebase between sessions**.
 
 Status: **deployed and reviewing itself**, 2026-08-06. All phases in `PLAN.md` have
 code; 552 tests. Live: 53 reviews, 3 attested, 332 live knowledge rows, 132 model
-calls. Unproven: the Orange Pi itself; `passed_partial` and quota exhaustion, which
+calls. Unproven: `passed_partial` and quota exhaustion, which
 have never executed; and Kimi at T2, configured and not yet used for a round.
 `needs_human` has fired once and was wrong. `TODO.md` keeps those open rather than
 folding them into a tick.
@@ -162,7 +162,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-30** | T3 context capped below 272k tokens; crossing it doubles the rate | confirmed |
 | **D-31** | Tier prompts differ by position; T3 is told it is the last line | confirmed |
 | **D-32** | T3 always runs. No sampling — the attestation keeps its meaning | confirmed |
-| **D-33** | arm64 Orange Pi, LAN-bound. No tailscale yet — tokens are the perimeter | **revised** |
+| **D-33** | The host is whatever the workgroup can reach; **tokens are the perimeter** | **revised twice** |
 | **D-34** | Two stages: T0+T1 inline, T2+T3 async, collected via `review_inbox` | confirmed |
 | **D-35** | Bootstrap on first review — at provisioning there is nothing to clone | **revised** |
 | **D-36** | Git submodules, not monorepos — a gitlink bump is expanded | confirmed |

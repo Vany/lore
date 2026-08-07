@@ -1279,9 +1279,17 @@ are what that session's own numbers say is in the way, not what reading suggeste
       proven is the service, not the documentation — and `spec/agent-docs.md` §1 says
       the docs *are* the interface.
 
-- [ ] **The Orange Pi.** The deployment is arm64 and running, but on a MacBook via
-      Docker Desktop. `spec/deployment.md` and `PLAN.md` §4.1 target the device, and
-      D-37's T0 throughput budget was measured for it, not for this.
+- [x] **The Orange Pi is dropped, 2026-08-07, on Vany's call.** The deployment target is
+      this machine: arm64 images under Docker Desktop, reachable to the workgroup over
+      tailscale since `LORE_BIND` moved to `0.0.0.0`. Two people now hold tokens against
+      it, which is the thing the device was going to be for.
+      **What the device was carrying, and where it went**: D-37's T0 throughput budget
+      was measured on RK3588 hardware (`PLAN.md` §4.1, still a real measurement of a real
+      board and kept as history). Nothing in the running system depends on it — T0's
+      concurrency comes from `LORE_CONCURRENCY` sized by cores at runtime, and the
+      sandbox memory limits were raised for this host after a 2 GB OOM. The one honest
+      loss is that "unproven: the device" leaves the list without ever being proven, and
+      that is now a decision rather than an omission.
 
 ---
 

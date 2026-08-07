@@ -1,35 +1,47 @@
 # Deployment and host constraints
 
-Target host: **Orange Pi, 32 GB RAM, 4 TB disk** — an **arm64 single-board
-computer**, and both halves of that phrase constrain the design. What runs today is
-those images on a MacBook under Docker Desktop; the device is still open in `TODO.md`.
+Target host: **whatever the workgroup can reach.** Today that is a MacBook under Docker
+Desktop, bound to `0.0.0.0` and reached over tailscale by three token holders.
+
+**The Orange Pi was the target and was dropped 2026-08-07** (Vany's call), after the
+laptop had been serving real reviews for four days and two colleagues were provisioned
+against it. The design constraints it imposed are kept because they were right for
+reasons that outlived it: the images are **arm64**, so a single-board host stays
+available rather than becoming a port; nothing assumes a big machine; and `LORE_CONCURRENCY`
+is sized from cores at runtime rather than written down, which is why moving hosts has
+never required a config change. `PLAN.md` §4.1 keeps the measurements taken on RK3588 —
+they were real, and they are history rather than a target.
 
 ---
 
-## 1. There is no Tailscale, so the tokens are the perimeter
+## 1. The tokens are the perimeter
 
-**The design assumed a tailnet and the host does not have one** (D-33, revised
-2026-08-03; `PLAN.md` §4.1 records the check as `tailscale on host — ABSENT`). The
-device sits physically in the operator's hands on a private LAN, which is a real
-perimeter but not a cryptographic one.
+**Every version of this section has ended in the same place, by a different route.**
+D-33 originally assumed a tailnet; the Orange Pi turned out not to have one, so the
+bind defaulted to loopback and the tokens carried the load. The device is gone, the
+laptop that replaced it *is* on a tailnet — and on 2026-08-07 `LORE_BIND` was set to
+`0.0.0.0` on Vany's call, so the service answers on every interface it has.
 
-So the compose bind **defaults to loopback**: exposing the service is a decision
-someone makes on purpose, by setting `LORE_BIND`. And the bearer tokens stop being
-mere scoping and do the load-bearing work — they are the only thing between a machine
-on the LAN and every repository lore knows about.
+The conclusion survives all of that, which is why it is the heading: **the bearer
+tokens are the only thing between a caller and every repository lore knows about.**
 
-- **No public TLS, no domain, no certificate renewal.** Not because WireGuard
-  provides transport security, but because the service is not reachable from outside
-  the LAN at all. TLS termination stays an outer concern.
-- **Bearer tokens** (D-21, D-23) scope per repo *and* now defend the network edge.
-  They are revocable — `make tokens` lists them, `make revoke TOKEN=<short>` turns one
-  off — which matters more here than it would behind a tailnet.
-- **Abuse hardening is still absent**, and that is a bet on the LAN rather than a
-  reasoned defence. It is the thing to revisit first if `LORE_BIND` ever widens.
-
-Getting the tailnet perimeter back costs one line in `.env` plus installing
-tailscale. Revisit when the device leaves the operator's possession, or when a second
-workgroup member needs access from elsewhere.
+- **`LORE_BIND` is a deliberate decision, recorded where it is made.** It defaults to
+  loopback so that exposing the service is something somebody chooses; `lore/.env`
+  carries the current value and the reason. `0.0.0.0` rather than the tailnet address
+  specifically: pinning the tailnet IP fails to bind if it ever changes, and this
+  laptop travels — so the honest statement is *every interface*, not *the safe one*.
+- **This machine travels.** On any café or hotel wifi it joins, port 7777 answers.
+  That is the cost of the bind, it was accepted knowingly, and it is why the sentence
+  above is not decoration.
+- **No public TLS, no domain, no certificate renewal.** TLS termination stays an outer
+  concern; there is no proxy in front of this today.
+- **Bearer tokens** (D-21, D-23, D-78) scope per repository, bind a review to the token
+  that started it, and defend the network edge. Revocable: `make tokens` lists holders,
+  `make revoke TOKEN=<short>` turns one off.
+- **Abuse hardening is still absent** — no rate limit, no lockout, no request ceiling.
+  It was a bet on the LAN and is now a bet on the tailnet plus a 32-byte CSPRNG token.
+  It is the first thing to revisit, and more urgent than it was: three people hold
+  tokens and the bind is open.
 
 ## 2. arm64 is a hard constraint
 

@@ -194,8 +194,6 @@ the reason the project has the shape it does:
 What is **not** proven, stated plainly because a checklist that hides its gaps is
 the failure this tool exists to catch:
 
-- the Orange Pi. The images are arm64 and running, but on a laptop under Docker
-  Desktop — and T0's throughput budget was measured for the device, not for this.
 - `passed_partial` and a real quota exhaustion have **never occurred**. Both have
   code and tests; a path whose first live execution is during an incident is a path
   nobody has reviewed.

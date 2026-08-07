@@ -164,6 +164,11 @@ agent must be tested against one.
 
 ### 4.1 The arm64 tests — ✅ RUN 2026-08-03 on the device
 
+> **The device was dropped 2026-08-07.** The deployment runs on a laptop the workgroup
+> reaches over tailscale. These measurements are kept because they were real and because
+> the arm64 constraint they justified still holds — the images stay arm64, so a
+> single-board host remains available rather than becoming a port.
+
 Orange Pi, RK3588, aarch64, 8 cores, 31 GiB, 3.2 TB free. Docker 29.6, compose 5.3.
 
 | test | result |

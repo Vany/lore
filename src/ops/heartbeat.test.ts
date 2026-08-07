@@ -23,6 +23,24 @@ let dir: string;
 let sent: Alert[];
 let alerter: Alerter;
 
+/**
+ * Wait for an alert to arrive, rather than racing a fixed sleep.
+ *
+ * These tests started the heartbeat, slept 20ms and asserted. That held while a beat was
+ * a couple of SQL reads — and stopped holding the moment the beat grew an integrity
+ * check (a fresh connection) and a footprint walk (the whole data directory). One test
+ * went flaky under full-suite load on the same day those landed: green alone, green on
+ * a re-run, red once in a while, which is the shape that teaches people to re-run
+ * instead of read.
+ *
+ * A timeout that is generous and a condition that is exact: the assertion still fails
+ * if the alert never comes, and it no longer fails because the machine was busy.
+ */
+const until = async (ready: () => boolean, ms = 2_000): Promise<void> => {
+  const deadline = Date.now() + ms;
+  while (!ready() && Date.now() < deadline) await new Promise((r) => setTimeout(r, 5));
+};
+
 /** Captures what would have gone to the webhook. No network, no config to forget. */
 class Capturing extends Alerter {
   override async send(a: Alert): Promise<void> {
@@ -293,7 +311,7 @@ describe("needs_human ageing", () => {
   it("sends the ticket that was never wired", async () => {
     parked("old", 48);
     const stop = startHeartbeat(store, cfg({ intervalMs: 3_600_000 }), alerter);
-    await new Promise((r) => setTimeout(r, 20));
+    await until(() => sent.some((a) => a.condition === "needs_human findings ageing"));
     stop();
     expect(sent.map((a) => a.condition)).toContain("needs_human findings ageing");
   });
@@ -304,7 +322,7 @@ describe("the beat sends the conditions that had no caller", () => {
     const backupDir = replicaAt(REPLICA_BEHIND_SEC + 600);
     wroteAgo(0);
     const stop = startHeartbeat(store, cfg({ backupDir, intervalMs: 3_600_000 }), alerter);
-    await new Promise((r) => setTimeout(r, 20));
+    await until(() => sent.some((x) => x.condition === "backup replica behind the database"));
     stop();
     const a = sent.find((x) => x.condition === "backup replica behind the database");
     expect(a?.severity).toBe("page");
@@ -315,11 +333,17 @@ describe("the beat sends the conditions that had no caller", () => {
   // normal first seconds of every deploy. Paging on that would train the operator to
   // mute the one alert guarding the product, which is D-59's whole lesson earned back
   // in the check written to avoid it.
+  // PROVING AN ABSENCE NEEDS A BARRIER, not a sleep. "Nothing arrived in 20ms" is a
+  // statement about the machine, and it passes just as well when the beat never ran at
+  // all — so the same test would go green against a heartbeat that had stopped working
+  // entirely. Something else from the SAME beat is made to fire, and its arrival is the
+  // proof the beat happened; only then is the absence a claim about behaviour.
   it("does not page for a missing replica during the startup grace", async () => {
     const backupDir = join(dir, "empty-backup");
     mkdirSync(backupDir, { recursive: true });
-    const stop = startHeartbeat(store, cfg({ backupDir, intervalMs: 3_600_000 }), alerter);
-    await new Promise((r) => setTimeout(r, 20));
+    writeFileSync(join(dir, "big"), "x".repeat(4096)); // fires the footprint ticket
+    const stop = startHeartbeat(store, cfg({ backupDir, intervalMs: 3_600_000, footprintBudgetBytes: 1024 }), alerter);
+    await until(() => sent.some((x) => x.condition === "lore's own footprint is over its budget"));
     stop();
     expect(sent.filter((x) => x.condition === "backup replica missing")).toStrictEqual([]);
   });
@@ -339,14 +363,15 @@ describe("the beat sends the conditions that had no caller", () => {
     mkdirSync(backupDir, { recursive: true });
     // A deployment that has been up long enough for litestream to have written.
     const stop = startHeartbeat(store, cfg({ backupDir, intervalMs: 3_600_000, replicaGraceMs: 0 }), alerter);
-    await new Promise((r) => setTimeout(r, 20));
+    await until(() => sent.some((x) => x.condition === "backup replica missing"));
     stop();
     expect(sent.find((x) => x.condition === "backup replica missing")?.severity).toBe("page");
   });
 
   it("stays quiet about a replica it was never given", async () => {
-    const stop = startHeartbeat(store, cfg({ intervalMs: 3_600_000 }), alerter);
-    await new Promise((r) => setTimeout(r, 20));
+    writeFileSync(join(dir, "big"), "x".repeat(4096)); // the barrier — see above
+    const stop = startHeartbeat(store, cfg({ intervalMs: 3_600_000, footprintBudgetBytes: 1024 }), alerter);
+    await until(() => sent.some((x) => x.condition === "lore's own footprint is over its budget"));
     stop();
     expect(sent.filter((x) => x.condition.startsWith("backup"))).toStrictEqual([]);
   });
@@ -380,7 +405,7 @@ describe("lore watches its own footprint, not the host's disk", () => {
   it("raises a ticket rather than waking anybody", async () => {
     writeFileSync(join(dir, "big"), "x".repeat(4096));
     const stop = startHeartbeat(store, cfg({ footprintBudgetBytes: 1024, intervalMs: 3_600_000 }), alerter);
-    await new Promise((r) => setTimeout(r, 20));
+    await until(() => sent.some((x) => x.condition === "lore's own footprint is over its budget"));
     stop();
     const a = sent.find((x) => x.condition === "lore's own footprint is over its budget");
     expect(a?.severity).toBe("ticket");
