@@ -133,7 +133,7 @@ describe("screenFor", () => {
       answering('```json\n{"not_rules":[{"n":1,"because":"a topic label"}]}\n```'),
       TIER,
       "/tmp/wt",
-      (u) => spent.push(u),
+      { spent: (u) => void spent.push(u) },
     );
     await screen("PROG.md", candidates("Cost. Something must happen", "Fakes must not be kinder"));
 
@@ -157,7 +157,7 @@ describe("screenFor", () => {
   // reads to answer what it costs.
   it("records nothing when the session did not complete", async () => {
     const spent: unknown[] = [];
-    const screen = screenFor(throwing("quota exhausted"), TIER, "/tmp/wt", (u) => spent.push(u));
+    const screen = screenFor(throwing("quota exhausted"), TIER, "/tmp/wt", { spent: (u) => void spent.push(u) });
     await screen("PROG.md", candidates("Fakes must not be kinder than production"));
     expect(spent).toStrictEqual([]);
   });

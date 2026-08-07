@@ -316,6 +316,8 @@ describe("the screen's veto over what was mined", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  const failing: Screen = (_doc, candidates) => Promise.resolve({ kept: candidates, refused: [], ran: false });
+
   const refusing = (statement: string, because: string): Screen =>
     (_doc, candidates) =>
       Promise.resolve({
@@ -449,7 +451,6 @@ describe("the screen's veto over what was mined", () => {
   // path whose entire purpose is to survive an outage.
   //
   // Nothing called `ingestDocs` twice with the screen failing before this.
-  const failing: Screen = (_doc, candidates) => Promise.resolve({ kept: candidates, refused: [], ran: false });
 
   it("rewrites nothing on a second pass while the screen is still down", async () => {
     const first = await ingestDocs(store, repoId, dir, { files: ["PROG.md"], screen: failing });
@@ -464,6 +465,39 @@ describe("the screen's veto over what was mined", () => {
     // Still reported as unscreened, because it still is — the caller must keep hearing it.
     expect(second.unscreened).toBe(1);
     expect(Number(after.c)).toBe(Number(before.c));
+  });
+
+  // A DEGRADED READER MUST NEVER UNDO A GOOD ONE'S WORK, and this is the concurrent
+  // shape of it: two reviews of one repository ingest the same changed document, A's
+  // screen succeeds and refuses a candidate, B's provider call fails. B finds no
+  // unscreened row, retires nothing of A's (A's rows carry the current blob and reader),
+  // and would insert every candidate live and unscreened — including the one the model
+  // had just rejected, which then goes back into every reviewer prompt until some later
+  // ingest happens to heal it. There is no uniqueness constraint to catch it and no
+  // ordering between the two reviews to rely on.
+  // INTERLEAVED, not sequential, and the first version of this test was wrong for
+  // exactly that reason: run one after the other, B's cheap check sees A's rows and
+  // stops before the screen, so the test passed against the unfixed code. The race needs
+  // B to pass that check while nothing is written yet, then have A land during B's
+  // provider call. B's screen does A's whole ingest, which is a faithful and
+  // deterministic stand-in for the interleaving.
+  it("does not let a failed screen reinstate what a successful one refused", async () => {
+    const slowAndFailing: Screen = async (_doc, candidates) => {
+      await ingestDocs(store, repoId, dir, {
+        files: ["PROG.md"],
+        screen: refusing("A conversation", "a stray sentence about cost, not a rule"),
+      });
+      return { kept: candidates, refused: [], ran: false };
+    };
+
+    const b = await ingestDocs(store, repoId, dir, { files: ["PROG.md"], screen: slowAndFailing });
+
+    const live = store.knowledgeFor(repoId).map((k) => k.statement);
+    expect(b.added).toBe(0);
+    // A's verdict stands: the statement the model rejected is still not live.
+    expect(live).not.toContain("A conversation must re-send its context");
+    expect(live).toStrictEqual(["Handles are CSPRNG-generated, never sequential"]);
+    expect(store.knowledgeFor(repoId).every((k) => k.extractor === EXTRACTOR_VERSION)).toBe(true);
   });
 
   // ...and the same must hold with no screen configured at all, which is the other way

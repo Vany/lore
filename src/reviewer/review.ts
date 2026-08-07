@@ -255,8 +255,21 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   const ingested = await ingestDocs(store, review.repoId, worktree, {
     ...(screenTier === undefined || ask === undefined
       ? {}
-      : { screen: screenFor(ask, screenTier, worktree, recordScreen) }),
+      : { screen: screenFor(ask, screenTier, worktree, { reviewId, spent: recordScreen }) }),
   });
+  // ASKED AGAIN, because the ingest above can now take minutes and spend money.
+  //
+  // The check at the top of this function was the only one, and it was written when
+  // everything between it and the tier call was free. The screen made that false: a
+  // client can cancel while a screen session is in flight, and this would then open the
+  // model tier, spend it too, and write a ladder result over a review somebody
+  // deliberately ended. The tier call is the expensive one, so this is the last moment
+  // the check is worth anything.
+  if (isTerminal(store.getReview(reviewId, principal)?.state ?? review.state)) {
+    throw new DidNotRun(
+      `review ${reviewId} was ended while its documents were being read — no tier was asked, and nothing was spent on one.`,
+    );
+  }
   // SAID OUT LOUD, because a degraded memory is invisible from the outside: the review
   // runs, the prompt is full of rules, and a fifth of them being fragments looks exactly
   // like a fifth of them being rules. The rows carry the stamp that heals it, so this is

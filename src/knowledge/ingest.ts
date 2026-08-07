@@ -461,6 +461,18 @@ export async function ingestDocs(
       // duplicate set of every rule in the document. Cheap, and it is the only thing
       // standing between a concurrent deploy and a doubled knowledge base.
       if (store.hasKnowledgeBlob(repoId, rel, blob, extractor)) return;
+      // AND A FAILED SCREEN NEVER OVERWRITES A SUCCESSFUL ONE. The check above asks only
+      // about the stamp THIS pass would write, so with two concurrent reviews of one
+      // changed document — A screening cleanly, B's provider call failing — B found no
+      // unscreened row, retired nothing of A's (A's rows carry the current blob and
+      // reader), and inserted every candidate live and unscreened. Including the ones the
+      // model had just rejected, which then went back into every reviewer prompt until
+      // some later ingest happened to heal it.
+      //
+      // A degraded reader must never undo a good one's work. There is no uniqueness
+      // constraint on `knowledge` to catch this, and no ordering between the two reviews
+      // to rely on — only this question, asked while the write lock is held.
+      if (!screened.ran && store.hasKnowledgeBlob(repoId, rel, blob, EXTRACTOR_VERSION)) return;
       for (const c of screened.kept) {
         store.addKnowledge({
           repoId,

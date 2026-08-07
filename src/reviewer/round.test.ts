@@ -403,6 +403,28 @@ describe("runRound", () => {
     expect(Date.parse(row.started_at) - entered).toBeGreaterThanOrEqual(SLOW_T0_MS);
   });
 
+  // THE INGEST CAN NOW TAKE MINUTES AND SPEND MONEY, and the terminal check at the top
+  // of `runRound` was the only one — written when everything between it and the tier call
+  // was free. The knowledge screen made that false: a client can cancel while a screen
+  // session is in flight, and the round would then open the model tier, spend it too, and
+  // write a ladder result over a review somebody deliberately ended.
+  it("does not ask a tier for a review that was cancelled while its documents were read", async () => {
+    const reviewer = new ScriptedReviewer([[HOLD_BUG]]);
+    // The cancel lands DURING the ingest, which is where the gap was.
+    const cancellingT0 = (async () => {
+      store.updateReview("r1", { state: "cancelled" });
+      return { findings: [], outcomes: [], unavailable: [], skipped: [] };
+    }) as unknown as NonNullable<Parameters<typeof runRound>[0]["t0"]>;
+
+    await expect(
+      runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE, t0: cancellingT0 }),
+    ).rejects.toThrow(/ended while its documents were being read/);
+
+    // The expensive half never happened, and the cancelled state was not overwritten.
+    expect(reviewer.prompts).toHaveLength(0);
+    expect(store.getReview("r1", "p")?.state).toBe("cancelled");
+  });
+
   it("records that T0 ran even when T0 throws", async () => {
     const exploding = (async () => {
       throw new Error("semgrep died");

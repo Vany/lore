@@ -139,6 +139,7 @@ export type Ask = (
   worktree: string,
   extract: (text: string) => Listed<Refused>,
   contract: string,
+  reviewId?: string,
 ) => Promise<SessionResult<Refused>>;
 
 /**
@@ -215,8 +216,19 @@ export function screenUsage(u: ScreenUsage, repoId: string, reviewId?: string): 
  * `spent` is handed every completed session's cost. It is a callback rather than a Store
  * because this module has no business knowing about one, and because the caller is the
  * only thing that knows which repository is being ingested.
+ *
+ * `reviewId` is what makes the session CANCELLABLE. Without it `conductSession` never
+ * registers the session, so `review_cancel` reports nothing in flight — truthfully, by
+ * its own bookkeeping — while the screen goes on spending. It is absent at provisioning,
+ * which has no review to belong to.
  */
-export function screenFor(ask: Ask, tier: Tier, worktree: string, spent?: (u: ScreenUsage) => void): Screen {
+export function screenFor(
+  ask: Ask,
+  tier: Tier,
+  worktree: string,
+  opts: { readonly reviewId?: string; readonly spent?: (u: ScreenUsage) => void } = {},
+): Screen {
+  const { reviewId, spent } = opts;
   return async (doc, candidates) => {
     if (candidates.length === 0) return { kept: [], refused: [], ran: true };
 
@@ -227,6 +239,7 @@ export function screenFor(ask: Ask, tier: Tier, worktree: string, spent?: (u: Sc
         worktree,
         (text) => extractList<Refused>(text, KEY, refusedOf),
         CONTRACT,
+        reviewId,
       );
       const out = partition(candidates, result.items);
       // Recorded on the way past, before anything can throw on the result. A session

@@ -138,6 +138,15 @@ screen, then improve the prompt*, which walks straight into it.
 `ingestDocs` asks that first, because it runs on every review and almost always finds
 nothing changed.
 
+**A screen session belongs to its review, and can be cancelled with it.** It is the first
+thing to spend a model inside `runRound` that is not the tier itself, so `review_cancel`
+must be able to reach it: without the review id the session is never registered, and a
+client cancelling mid-screen is told nothing is in flight — truthfully, by the
+bookkeeping — while the screen goes on spending. The round also re-reads the review's
+state after the ingest, because that check used to be the only one and everything after
+it used to be free; without it a cancelled review would still have its tier asked, paid
+for, and its state overwritten by a ladder result.
+
 **And it is recorded**, under `screen:<tier>` in `usage`, from both callers — the round
 and the bootstrap. These were the only model calls in the system with no usage row, so
 this section's own cost claim could not be checked against anything, `ops/spend`
@@ -146,6 +155,16 @@ exploring the worktree would have burned minutes of quota leaving no trace. The 
 prefix keeps them out of the per-tier latency distribution `check_back_after_ms` reads: a
 screen session is not a review round, and pooling them would promise a waiting client a
 four-second answer from a tier that takes ten minutes.
+
+**A failed screen never overwrites a successful one**, which is the concurrent form of
+the same rule. Two reviews of one repository can ingest the same changed document
+together: if one screens cleanly and the other's provider call fails, the failing pass
+finds no unscreened row, retires nothing of the good pass's work — its rows carry the
+current blob and reader — and would insert every candidate live and unscreened,
+reinstating the very statements the model rejected into every later prompt. There is no
+uniqueness constraint on `knowledge` to catch that and no ordering between the reviews to
+rely on, so the question is asked once more inside the transaction, while the write lock
+is held. A degraded reader may not undo a good one.
 
 **And while it stays down, nothing is rewritten.** The retry is right — one attempt per
 document per review is the only thing that heals the base when a provider comes back —

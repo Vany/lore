@@ -118,6 +118,8 @@ export interface ReviewerLike {
     worktree: string,
     extract: (text: string) => Listed<T>,
     contract: string,
+    /** The review this belongs to, so a cancel can reach it. Absent outside a review. */
+    reviewId?: string,
   ): Promise<SessionResult<T>>;
   /**
    * Characters of prompt this tier can hold, or `undefined` if unknown.
@@ -315,9 +317,19 @@ export class Reviewer implements ReviewerLike {
     worktree: string,
     extract: (text: string) => Listed<T>,
     contract: string,
+    /**
+     * The review this session belongs to, so `review_cancel` can abort it.
+     *
+     * Hard-coded `undefined` here until the knowledge screen became the first `askFor`
+     * caller running INSIDE a review. That made the session uncancellable: a client
+     * cancelling mid-screen was told nothing was in flight — truthfully, by the
+     * bookkeeping — while the screen went on spending its quota. Optional because
+     * `propose` genuinely has no review to belong to.
+     */
+    reviewId?: string,
   ): Promise<SessionResult<T>> {
     if (tier.model === undefined) throw new DidNotRun(`tier ${tier.id} has no model`);
-    return this.gate.run(() => this.conductSession<T>(tier, prompt, worktree, undefined, extract, contract));
+    return this.gate.run(() => this.conductSession<T>(tier, prompt, worktree, reviewId, extract, contract));
   }
 
   gateState(): GateState {

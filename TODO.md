@@ -43,6 +43,13 @@ and answered none of them, so nothing has ever been learned from it: the knowled
 base is the product, and for the one repo with a real user it is not being written.
 The five items below are what the numbers say is in the way, in order of size.
 
+> **Superseded 2026-08-07, in the right direction.** `rigid-monorepo` now carries
+> **117 verdicts** and 9 derived rules, against the zero above. Two of its branches
+> reached `passed`, including `epic/RIGID-4-m1-managed` — the one that failed five
+> times across two days and is still open below as an item. The table stays because it
+> is what the fixes were decided on; this note stays with it so nobody argues from the
+> zero again.
+
 What the numbers also confirm, so it is not re-litigated: **prompt caching works**
 (97.3% of everything sent to t1 was cached, 99.1% for t2, 95.8% for t3 — 7.8M cached
 against 183k fresh, D-29); **the retry earns its place** (5 of 53 t1 replies and 5 of
@@ -498,6 +505,87 @@ landing with a real user, and it should not get lost among the defects below.
       suite failing, which the author's commit says is deliberate. Two rounds of
       confident false claims about someone else's branch before it was right.
 
+### 2026-08-07 — the day three people got tokens, and what the loop cost
+
+Measured over one session that drove three reviews of this repository to a verdict: **17
+findings, every one real**, 8 t2 calls and 112 minutes of deep-tier time. The items here
+are what that session's own numbers say is in the way, not what reading suggested.
+
+- [ ] **`review_submit` knows what will settle and does not say so, for a round.** The
+      largest measured saving on this list. Findings are settled by `settleFixed`, which
+      is deterministic — not re-raised, and the hunk it named has moved — so at submit
+      time lore already knows which of the client's fixes cannot settle. It waits a
+      whole round (10–25 minutes, measured today) to say so by not settling them.
+      Observed: three fixes submitted, two landed in a COLLABORATOR rather than at the
+      named line, both sat open for a further round. "Fix it where the cause is" is an
+      ordinary shape, so every client meets this repeatedly. The reply should say *"2 of
+      3 name code this diff did not change; they will not settle on silence (D-56) —
+      change the named line, or leave a `lore-ok` there saying where the fix landed"*.
+      Costs nothing, changes no model routing, and teaches the mechanism at the one
+      moment it is actionable.
+      Second half, one sentence: `TOOL_DOCS.submit` should say the returned `tree_hash`
+      is what to diff FROM next time. Getting that wrong is a foot-gun I hit once today;
+      the refusal message caught it perfectly, which is the expensive way to learn it.
+
+- [ ] **The per-tier bound counts rounds, not progress — and it has now killed two
+      CONVERGING reviews.** `TODO.md` already argued the bound is the wrong instrument
+      from a prose loop that never converged. Today is the opposite case, which is what
+      makes it decidable:
+
+      | | findings | settled | per-round | outcome |
+      |---|---:|---:|---|---|
+      | review 1 | 13 | 11 | 6, 3, 2 | bound |
+      | review 2 |  6 |  5 | 3, 1, 1, 1 | bound |
+
+      Both were answering nearly everything asked. Any single fresh finding in a fourth
+      t2 round trips the bound however much was settled, so a review that answers 5 of 6
+      questions gets the same verdict as one that answers none — and each restart costs
+      a fresh t0+t1+t2 over the same tree (t1 alone was 1,251s on the third pass).
+      **`core/ladder.ts` already learned this once**: the bound used to fire on CLEAN
+      rounds too, and the comment there records a review that ran 485s, came back clean,
+      and was reported `failed` by a counter. Bounding on **rounds that settled nothing**
+      is that same correction one step further, and it still stops the prose loop, which
+      settled nothing round after round — that is the discriminator the counter lacks.
+      **Vany's call: it changes quota burn.** Not doing it is also a decision, and its
+      cost is now measured rather than guessed.
+
+- [ ] **Screened-out rows accumulate one copy per document edit, for ever.** Measured
+      after a single afternoon: 23 rows for 15 distinct statements, three copies of some.
+      `retireForChangedBlob` only touches `retired_at IS NULL`, and a screen refusal is
+      born retired — so an edited document writes a fresh set and the old set is never
+      collected. `SPEC.md` and `spec/*` are edited most sessions. Same shape as the
+      livelock that once wrote 21 duplicate derived rules, and the fix belongs beside it:
+      retire-or-replace refusals for the same (provenance, statement) rather than
+      appending. The all-refused case was fixed 2026-08-07; this is the changed-document
+      case and it is still open.
+
+- [ ] **`[lore:log]` is 60% noise, and it is the log INV-1 depends on.** 29 lines in
+      three hours, **18 of them** `lore-ok[…] matches no finding in this review —
+      ignored`: historical markers permanently in the source, 66 in this tree and rising
+      with every justification anyone writes. The D-58 oversize warning and the knowledge
+      counts share that log. A log nobody reads is exactly where a "did not run" hides.
+      Two of the 18 are sharper than noise: `lore-ok[a1b2c3d4]` at `src/mcp/docs.ts:551`
+      is **the example marker inside our own documentation**, parsed as though it were
+      real. Harmless by luck here — but any repository whose docs SHOW clients how to
+      write a `lore-ok` line gets it parsed as one, and an 8-hex-character collision with
+      a live fingerprint would silently justify a finding nobody answered.
+
+- [ ] **The screen's three misses are mechanical, and I measured the rules that catch
+      them without shipping them.** Live after the first real run: `Arguments: branch
+      (required), into (required)` (a label line), the t2 prompt text `The easy defects
+      are gone; look at design…` (quoted from elsewhere), and one carrying a stray `"*`
+      markdown artifact. The lead-in, `Label:` and gerund-head refusals were measured at
+      the time (51 rules, ~18%) and left out because the model screen was chosen instead.
+      With the screen's own residue now known, they are complementary rather than
+      redundant: cheap, deterministic, and they remove work the model is paying for.
+
+- [ ] **Three people hold tokens on `rigid-monorepo` and the perimeter changed.**
+      Provisioned 2026-08-07 for `koray` and `max`; `LORE_BIND` moved from `127.0.0.1`
+      to `0.0.0.0` on Vany's call, so the service answers on every interface this laptop
+      joins and **the tokens are the perimeter**. Two consequences that were theoretical
+      yesterday: D-78 below is now live rather than hypothetical, and nothing yet has
+      ever driven this service except sessions I primed — see Phase 3's done-criterion.
+
 ## Later
 
 - [x] **Exercise the three paths that have never happened.** Done 2026-08-05:
@@ -674,7 +762,24 @@ landing with a real user, and it should not get lost among the defects below.
       written.
 
 
-- [ ] **lore knows why a branch cannot be reviewed and tells the one party who cannot
+- [x] **Mostly closed 2026-08-06 by `b860690`, and confirmed in production 2026-08-07:
+      `epic/RIGID-4-m1-managed` reached `passed`.** `TooLargeForTier` decides before the
+      call, from the model's own advertised window, and travels to the client in
+      `checks_skipped` — so the branch that failed five times is reviewed rather than
+      diagnosed. `compactToFit` shrinks the diff to the tier that will read it instead of
+      to a constant.
+      **What remains open is narrower and is the D-58 half**: the time-budget warning —
+      *"this diff is N KB, larger than anything this tier has ever finished"* — is still
+      `console.error` only. That case is different in kind: the diff FITS the window, so
+      nothing refuses, and the risk is a tier spending its whole budget and timing out.
+      It is worth carrying to the client for the same reason the context case was, and
+      it has never happened since the context fix, so there is no evidence to size it by.
+      *The original entry is kept below: it is the best record this repository has of
+      what a correct diagnosis costs when it reaches the wrong reader.*
+
+  <details><summary>the original item, and what the loop cost</summary>
+
+      **lore knows why a branch cannot be reviewed and tells the one party who cannot
       act on it.** Five attempts on `epic/RIGID-4-m1-managed`, across two days, every
       one failing identically:
 
@@ -736,6 +841,8 @@ landing with a real user, and it should not get lost among the defects below.
       Whether a test asserts what its name claims is precisely the reading D-71 assigns
       to the model tiers. lore never ran, so it never looked. That is the value the
       oversize loop spent five attempts failing to deliver.
+
+  </details>
 
 - [x] **Rewrite the tier prompts and the finding presentation for D-79.** Done
       2026-08-06. `failureScenario` is the test rather than a field; the bar is stated
@@ -799,6 +906,12 @@ landing with a real user, and it should not get lost among the defects below.
       project refuses.
 
 - [ ] **Bind a review's delta stream to the token that started it** (D-78).
+
+      **Live as of 2026-08-07, not hypothetical.** `koray` and `max` hold tokens on
+      `rigid-monorepo` and the service now answers on every interface. Three holders and
+      one repository is the exact arrangement this describes: whoever polls a review
+      first takes its findings, the others are shown silence, and nothing tells anybody
+      it happened. This is the item to do first.
 
       **Polling someone else's review consumes their findings.** `review_poll` returns
       deltas and marks them delivered, and D-69 scopes access by *repository* — so any

@@ -5,6 +5,64 @@ surprised me.
 
 ---
 
+## 2026-08-07 — session 41: a model vetoes the memory, and the gate read its own work
+
+**Vany: "model screen."** The screen from session 40's measurement is built and has run
+against a real provider. And the day's other half was the D-77 gate turned on fourteen
+commits of my own work, which produced **17 findings and not one false positive**.
+
+**The screen works, and better than the numbers predicted.** Three deterministic
+narrowings had all plateaued at about a fifth of survivors not being rules, so the
+cheapest tier is now asked, once per document, *which of these are NOT rules*. First real
+run on this repository: **52 kept, 15 refused, and every refusal correct on inspection**
+— including the three I had marked "marginal" and one from prose I had written an hour
+earlier. Junk share 20% → 6%. It only removes; a refusal is written as a knowledge row
+born retired carrying the model's reason, so *"why is that rule absent"* is answerable;
+and when it cannot run every candidate is kept and stamped so the next ingest retries.
+
+**Surprised me: the refusal rate is a drift metric on our own writing.** Per document,
+`CLAUDE.md` and `PROG.md` were refused **0 of 13**. Every refusal came from the
+explanatory specs, and the worst three were the three I had edited most that day.
+`CLAUDE.md` says specs describe the system as it stands and change-narrative belongs in
+here — so the screen is mechanically detecting where I broke that rule. Not what it was
+built for, and more useful than what it was built for.
+
+**The gate found things reading would not have.** Four of the seventeen were false claims
+in client-facing text: `check_back_after_ms` pooled across every repository while the note
+said "measured on this repository"; `Pace.runs` reporting the full sample while the median
+came from a shrinking subset, growing more confident-looking as the evidence thinned;
+`review_cancel` inheriting a fallback that would hand back an unrelated round's transport
+error as a person's stated reason. And twice it caught **my own fix left half done** — the
+elapsed stamp moved, but `roundStartedAt` still answered with any open run; and the screen
+versioned, but the sentence explaining it describing the measurement as it was before.
+
+**What I got wrong about the loop, for three reviews.** I fixed findings and expected
+silence to settle them. It does not: D-56 requires the code the finding NAMED to have
+moved, and a fix that correctly lands in a collaborator leaves that line untouched. The
+author's move is a justification at the site, and I did not reach for one until the third
+review. Every miss cost a full t2 round. The mechanism was there the whole time and the
+finding's own `asks` line says it — *"Fix this, or tell me why it is not a problem"*.
+
+**Measured, because the flow question deserves numbers: 8 t2 calls, 112 minutes of deep
+tier, 9 rounds, 17 findings.** The cost is dominated by round-trips, not round length. So
+the two things worth building are the ones that remove a round-trip — submit-time settle
+feedback, which lore can compute for free the instant a patch applies, and a bound that
+counts rounds which settled NOTHING rather than rounds. Both are in `TODO.md` with the
+evidence; the second changes quota and is Vany's.
+
+**The bound killed two converging reviews.** 13 findings settling 11, then 6 settling 5,
+per-round counts falling to one — and any single fresh finding in a fourth t2 round ends
+it. `core/ladder.ts` already learned this lesson once, for clean rounds, and the comment
+recording it is three lines above the counter that has not learned it yet.
+
+**Also today**: tokens for `koray` and `max` on `rigid-monorepo`, and `LORE_BIND` moved to
+`0.0.0.0` on Vany's call — so the tokens are the perimeter now, and D-78 stopped being
+hypothetical. `rigid-monorepo` reached **117 verdicts** against the zero that `TODO.md`
+still called "the whole story", and `epic/RIGID-4-m1-managed` — five identical failures
+across two days — reached `passed`.
+
+---
+
 ## 2026-08-07 — session 40: the product was full of quotations
 
 **Vany, after I answered a hygiene question twice: "meditate over all of the code, i

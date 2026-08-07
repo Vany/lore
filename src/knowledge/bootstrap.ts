@@ -80,13 +80,13 @@ export async function bootstrap(opts: {
     ...(ask === undefined || tier === undefined
       ? {}
       : {
-          screen: screenFor(ask, tier, opts.worktree, (u) =>
-            // No `reviewId`: provisioning has none, and this spend belongs to the
-            // repository rather than to any review. Recorded all the same — bootstrap
-            // screens every document a repo has, which is the largest single burst of
-            // screen calls the system ever makes.
-            opts.store.recordUsage(screenUsage(u, opts.repoId)),
-          ),
+          // No `reviewId`: provisioning has no review, so there is nothing for a cancel
+          // to reach and nothing to attribute the spend to beyond the repository. It is
+          // recorded all the same — bootstrap screens every document a repo has, which is
+          // the largest single burst of screen calls the system ever makes.
+          screen: screenFor(ask, tier, opts.worktree, {
+            spent: (u) => opts.store.recordUsage(screenUsage(u, opts.repoId)),
+          }),
         }),
   });
 
