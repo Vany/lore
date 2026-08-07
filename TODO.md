@@ -1114,11 +1114,15 @@ are what that session's own numbers say is in the way, not what reading suggeste
       after a day of real use and compare against the 10s-to-60s era. If clients keep
       looping, the instruction is not the lever and something else is.
 
-- [ ] **Nothing checks that the loop documents stay honest about `review_inbox`.**
-      There is a mechanical test that both name it before `review_start`, which is the
-      cheap half. The expensive half is whether a session actually calls it — measurable
-      from `delivered_at` on findings belonging to reviews older than the session that
-      collected them, and currently unmeasured.
+- [x] **Measured 2026-08-07, and the loop closes.** All **265 of 265** findings have
+      been collected. Time from raised to collected: p50 0.1h, p90 15.8h, max 22h — and
+      **88 were collected more than an hour later, 40 more than twelve hours later**,
+      which no single session spans. Spread across four days (52 late on the 4th, 25 on
+      the 5th), so it is not an artefact of my own polling today, which accounts for 8.
+      Sessions do come back and `review_inbox` is what brings them.
+      What is still not proven is that they come back BECAUSE of it rather than by
+      habit; that needs a client that has never been told, which is Phase 3's criterion
+      below and cannot be measured from this table.
 
 - [ ] **Auto-resolve a conflict whose rules can be ordered** (D-39, revised
       2026-08-06). Specced, not built. A person is called only when neither `source`
@@ -1244,7 +1248,18 @@ are what that session's own numbers say is in the way, not what reading suggeste
       the host's percentage. Recorded rather than covered by the number that was
       measuring something else.
 
-- [ ] **Make D-76 mechanical, or accept that it is discipline.** A change to lore is
+- [x] **The cheap half is mechanical, 2026-08-07: `make smoke`.** Six checks driving the
+      real MCP surface over the wire, from OUTSIDE the container — transport, the 401,
+      a real client connecting, every tool the loop needs registered, and every tool
+      carrying a description an agent could act on, since the docs are the interface.
+      READ-ONLY by construction: it never starts or polls a review, because `review_poll`
+      consumes deltas (D-78) and a check that damages what it checks is worse than none.
+      **The expensive half stays open**, below: a fresh session driving a review to
+      `passed` on the tool descriptions alone cannot be a script, because what is under
+      test is whether the docs teach an agent nobody briefed.
+      *The original entry:*
+
+- [x] ~~Make D-76 mechanical, or accept that it is discipline.~~ A change to lore is
       validated over MCP, never by a CLI run — written down 2026-08-06 after I reached
       for the CLI *because* MCP would have required pushing the branch, which turned an
       operator's decision into a workaround that avoided asking for it. The workaround
