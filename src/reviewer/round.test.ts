@@ -873,30 +873,16 @@ describe("the paths that only happen when something has gone wrong", () => {
   });
 });
 
-// 21 of one repository's 27 derived rules were a single sentence about a single false
-// positive, written once per livelock cycle. The memory that is the product became
-// 78% one restated opinion — and every copy went into the next reviewer's prompt.
-describe("ratifying the same reason twice is one fact, not two", () => {
-  it("holds the statement once however often it is argued", () => {
-    const same = "msw intercepts in-process; nothing is transmitted";
-
-    expect(store.hasKnowledgeStatement(repoId, same)).toBe(false);
-    store.addKnowledge({
-      repoId, kind: "rule", source: "derived", statement: same,
-      why: "accepted justification", path: undefined, cwe: undefined,
-      provenance: undefined, sourceBlob: undefined, confidence: 0.7,
-    });
-    expect(store.hasKnowledgeStatement(repoId, same)).toBe(true);
-    // Case and surrounding space are not a different fact.
-    expect(store.hasKnowledgeStatement(repoId, `  ${same.toUpperCase()}  `)).toBe(true);
-  });
-
-  it("does not confuse a differently-worded reason for the same one", () => {
-    store.addKnowledge({
-      repoId, kind: "rule", source: "derived", statement: "msw intercepts in-process",
-      why: "accepted justification", path: undefined, cwe: undefined,
-      provenance: undefined, sourceBlob: undefined, confidence: 0.7,
-    });
-    expect(store.hasKnowledgeStatement(repoId, "auth.test is a reserved TLD")).toBe(false);
-  });
-});
+// The statement-level dedup these tests covered went with the write path they guarded.
+//
+// 21 of one repository's 27 derived rules were one sentence about one false positive,
+// written once per livelock cycle, and `hasKnowledgeStatement` was the answer. Then the
+// per-justification `addKnowledge` call was removed entirely — a justification teaches
+// nothing now, only a `fixed` finding does — and the guard outlived what it guarded.
+// Four test references and no production caller is a method that exists to be tested,
+// and it read as covered because the dead-export scan counts test files.
+//
+// The remaining deriver, `promoteRecurring`, is idempotent by PROVENANCE rather than by
+// text (`derive.ts`, `recurrence:<kind>:<key>`), which is the stronger property: it also
+// refuses a second copy when the wording drifts. Nothing was left uncovered by deleting
+// this; the cover was for code that is gone.

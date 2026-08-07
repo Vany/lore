@@ -85,6 +85,19 @@ and answers about the tree as it now stands.
 `review_cancel` remains the way to stop, and is now the only thing that ends a review
 early.
 
+**Its `reason` is stored, and a cancel may never borrow an explanation.** The tool
+describes the reason as *"recorded, and the only account anyone gets"*, so it is written
+to `review.failed_because` with who stopped it — a cancel is somebody's decision, not a
+thing that happened — and `review_poll` surfaces it for `cancelled` alongside `failed`
+and `expired`. Without that it is written and unreadable, and a cancel reads exactly like
+an abandonment, which is the distinction the state exists to draw.
+
+`failureReason` otherwise falls back to the last `job.last_error`, and that fallback is
+**refused for `cancelled`**. For a `failed` review a round's error is usually the truest
+account there is; for a cancelled one it would hand back a transport error from an
+unrelated earlier round as a person's stated reason. A cancel with nothing recorded says
+nothing was recorded, and tells the reader not to infer why.
+
 ## 4. Subscription is the way; polling is the fallback
 
 **Subscribing is how a client is meant to use this**, and the docs say so in that order.

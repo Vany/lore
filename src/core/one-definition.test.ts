@@ -159,9 +159,16 @@ describe("an exported constant has a reader", () => {
 // database on purpose, and forcing those through an API would mean inventing methods
 // that only tests call — which `one-definition.test.ts` already fails you for. The
 // invariant is about PRODUCTION code, and that is what this checks.
-describe("no production file reaches past the store into SQL", () => {
-  it("has every query behind a named Store method", () => {
+// THE NAME SAYS WHAT IT CHECKS, and the first one did not. It read "no production file
+// reaches past the store into SQL" / "has every query behind a named Store method" while
+// passing green over twenty-eight raw sites in fourteen files — a suite announcing an
+// invariant it deliberately does not hold, which is `PROG.md`'s own rule about test
+// names turned on the file that enforces the rules. The property below is the one that
+// is true today; the property in the old name is `TODO.md`'s.
+describe("SQL past the store only ever shrinks (a ratchet, not a clean bill)", () => {
+  it("admits no new file and no new site in an old one", () => {
     const offenders: string[] = [];
+    const perFile = new Map<string, number>();
     for (const file of sources()) {
       if (file.endsWith(".test.ts") || file.endsWith("store/store.ts")) continue;
       const src = readFileSync(file, "utf8");
@@ -177,25 +184,40 @@ describe("no production file reaches past the store into SQL", () => {
       // would be decoration, and a number nobody can see would rot. So the invariant
       // this can honestly enforce today is: NO NEW FILE reaches through, and the ones
       // that do may only shrink. `TODO.md` carries the list to zero.
-      for (const [i, line] of src.split("\n").entries()) {
+      for (const line of src.split("\n")) {
         if (/(?<![A-Za-z0-9_])(?:store|this|i\.store|deps\.store)\.db\b/.test(line)) {
-          offenders.push(file.slice(SRC.length).replace(/^\//, ""));
-          void i;
+          const rel = file.slice(SRC.length).replace(/^\//, "");
+          offenders.push(rel);
+          perFile.set(rel, (perFile.get(rel) ?? 0) + 1);
         }
       }
     }
     // Every file below predates the rule. Adding one here is the thing to argue about;
     // removing one needs no permission.
-    const KNOWN = [
-      "knowledge/derive.ts", "knowledge/enrich.ts", "mcp/auth.ts", "mcp/server.ts", "ops/retention.ts",
-      "ops/spend.ts", "propose/cli.ts", "propose/run.ts", "reviewer/review.ts", "security/vex.ts",
-      "service/attest.ts", "service/http.ts", "service/main.ts", "service/worker.ts",
-    ];
-    const newcomers = [...new Set(offenders)].filter((f) => !KNOWN.includes(f)).sort();
+    //
+    // COUNTED, not merely listed, and the file-level version was a hole big enough to
+    // drive the whole invariant through: `mcp/server.ts` is already on the list, so a
+    // thirtieth `store.db.prepare` added to it kept the suite green. A ratchet that only
+    // notices new FILES ratchets nothing in the fourteen where the debt actually lives.
+    // 28 sites in 14 files, counted by the regex above rather than by hand — the
+    // hand-written first draft of these numbers was wrong in four of them, and the
+    // check caught itself.
+    const KNOWN: Readonly<Record<string, number>> = {
+      "knowledge/derive.ts": 2, "knowledge/enrich.ts": 2, "mcp/auth.ts": 5, "mcp/server.ts": 1,
+      "ops/retention.ts": 2, "ops/spend.ts": 1, "propose/cli.ts": 1, "propose/run.ts": 1,
+      "reviewer/review.ts": 2, "security/vex.ts": 1, "service/attest.ts": 3, "service/http.ts": 2,
+      "service/main.ts": 2, "service/worker.ts": 3,
+    };
+    const newcomers = [...new Set(offenders)].filter((f) => !(f in KNOWN)).sort();
     expect(newcomers).toStrictEqual([]);
-    // And the list only shrinks: a file that stops reaching through must leave it.
-    const stale = KNOWN.filter((f) => !offenders.includes(f));
+    // And it only shrinks — in both directions. A file that stops reaching through must
+    // leave the list; one that reaches through MORE than it did must be argued for.
+    const stale = Object.keys(KNOWN).filter((f) => !perFile.has(f));
     expect(stale).toStrictEqual([]);
+    const grown = Object.entries(KNOWN)
+      .filter(([f, n]) => (perFile.get(f) ?? 0) > n)
+      .map(([f, n]) => `${f}: ${String(n)} -> ${String(perFile.get(f) ?? 0)}`);
+    expect(grown).toStrictEqual([]);
   });
 });
 

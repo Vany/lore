@@ -502,14 +502,27 @@ export class Store {
     return row?.["file"];
   }
 
-  /** Completed round latencies for a tier, ascending — the input to `check_back_after_ms`. */
-  latenciesFor(tier: string): readonly number[] {
+  /**
+   * Completed round latencies for a tier on ONE repository, ascending — the input to
+   * `check_back_after_ms`.
+   *
+   * Scoped by repository because `paceNote` tells the client the number was "measured
+   * across N completed runs on this repository" and, pooled, it was not: one `lore.db`
+   * serves every repo a workgroup provisions, and a 741 KB monorepo and an 80 KB diff
+   * of our own do not take the same time at the same tier. The column was there and
+   * written the whole time (`recordUsage`); only the read ignored it.
+   *
+   * The honest cost is that scoping shrinks the sample, and a tier below `MIN_RUNS`
+   * for a repository now gets no interval rather than another repository's. That is
+   * the trade this file already makes everywhere else: no number beats a wrong one.
+   */
+  latenciesFor(tier: string, repoId: string): readonly number[] {
     const rows = this.db
       .prepare(
-        "SELECT latency_ms FROM usage WHERE tier = ? AND latency_ms IS NOT NULL AND outcome != 'failed'" +
-          " ORDER BY latency_ms",
+        "SELECT latency_ms FROM usage WHERE tier = ? AND repo_id = ? AND latency_ms IS NOT NULL" +
+          " AND outcome != 'failed' ORDER BY latency_ms",
       )
-      .all(tier) as { latency_ms: number }[];
+      .all(tier, repoId) as { latency_ms: number }[];
     return rows.map((r) => r.latency_ms);
   }
 
@@ -621,10 +634,6 @@ export class Store {
   }
 
   /**
-   * Every engine that could not run in this review, deduplicated, worst-case first
-   * seen. Empty means everything the review type asks for actually executed.
-   */
-  /**
    * Has any model call this deployment ever made reported a cost?
    *
    * Distinguishes "spent nothing" from "cannot measure spending". Asked of ALL of
@@ -639,20 +648,9 @@ export class Store {
   }
 
   /**
-   * Do we already hold this exact statement for this repository?
-   *
-   * Compared on normalised text rather than on provenance: the same reason ratified
-   * in two reviews is one fact about the codebase, however many times it was argued.
+   * Every engine that could not run in this review, deduplicated, worst-case first
+   * seen. Empty means everything the review type asks for actually executed.
    */
-  hasKnowledgeStatement(repoId: string, statement: string): boolean {
-    const row = this.db
-      .prepare(
-        "SELECT 1 AS present FROM knowledge WHERE repo_id = ? AND retired_at IS NULL AND LOWER(TRIM(statement)) = ? LIMIT 1",
-      )
-      .get(repoId, statement.trim().toLowerCase()) as Record<string, number> | undefined;
-    return row !== undefined;
-  }
-
   unavailableChecks(reviewId: string): readonly string[] {
     const rows = this.db
       .prepare("SELECT unavailable FROM tier_run WHERE review_id = ? AND unavailable IS NOT NULL ORDER BY id")
@@ -1341,7 +1339,18 @@ export class Store {
     return row?.behind_by ?? undefined;
   }
 
-  failureReason(reviewId: string): string | undefined {
+  /**
+   * Why a review will not finish.
+   *
+   * `inferFromJobs` decides whether a round that THREW may answer for it, and the
+   * caller owns that choice because it depends on the state. For `failed` the job
+   * error is usually the truest account there is. For `cancelled` it is a fabrication:
+   * somebody stopped the review deliberately, and a transport error from an unrelated
+   * round two hours earlier would be handed back as their reason — in the field
+   * `review_cancel` calls "the only account anyone gets". A cancel with nothing
+   * recorded must say nothing was recorded.
+   */
+  failureReason(reviewId: string, inferFromJobs = true): string | undefined {
     // The review's own reason first. `job.last_error` only ever covers a round that
     // THREW; a review stopped by the ladder — a round bound reached — left every job
     // `done` with no error, so `review_poll` answered "no reason was recorded, which is
@@ -1352,6 +1361,7 @@ export class Store {
       | undefined;
     const stated = own?.["failed_because"];
     if (typeof stated === "string" && stated !== "") return stated;
+    if (!inferFromJobs) return undefined;
 
     const row = this.db
       .prepare("SELECT last_error FROM job WHERE review_id = ? AND last_error IS NOT NULL ORDER BY id DESC LIMIT 1")

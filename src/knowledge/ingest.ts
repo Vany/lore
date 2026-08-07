@@ -67,6 +67,13 @@ const NOT_A_RULE = /^(see |read |this (file|document|section)|table of contents)
  * Deliberately not a grammar check. These two catch what was actually there, and a
  * cleverer test would start rejecting real rules, which costs more than it saves: a
  * rule that never arrives is invisible, while a fragment is at least legible as noise.
+ *
+ * They are asked DIFFERENT questions of different text, which is not an accident.
+ * A dangling referent is about meaning, so it reads the stripped text — `**It** has
+ * to be` is the same fault as `It has to be`. A mid-sentence start is about how the
+ * author wrote it, so it reads the text as written: a rule opening on a code span is
+ * the author starting a statement, and judging it after the backticks are gone
+ * refused a real rule for beginning with a lowercase `f`.
  */
 const NOT_SELF_CONTAINED = /^(it|its|this|that|these|those|they|their|then|so|therefore|and|but|which|hence|thus)\b/i;
 const STARTS_MID_SENTENCE = /^[a-z]/;
@@ -83,8 +90,14 @@ const STARTS_MID_SENTENCE = /^[a-z]/;
  * repository, SPEC.md produced 111 rules and 108 of them came from prose, arriving as
  * fragments whose subjects were in sentences that were never captured. Under `2` it
  * produces 15.
+ *
+ * `3` asks the mid-sentence guard about the text as WRITTEN rather than about the
+ * markup-stripped text, which `2` had been silently refusing real rules over — a
+ * statement opening on a code span reduced to a lowercase word and was thrown away as a
+ * lifted clause. The bump is what brings those back: the rows `2` never wrote are not
+ * recoverable by editing a document, only by the reader changing and saying so.
  */
-export const EXTRACTOR_VERSION = "2";
+export const EXTRACTOR_VERSION = "3";
 
 const MIN_LENGTH = 20;
 const MAX_LENGTH = 280;
@@ -110,7 +123,16 @@ export function extractRules(markdown: string): readonly Candidate[] {
       const cleaned = stripMarkup(sentence);
       if (cleaned.length < MIN_LENGTH || cleaned.length > MAX_LENGTH) continue;
       if (!MODAL.test(cleaned) || NOT_A_RULE.test(cleaned)) continue;
-      if (NOT_SELF_CONTAINED.test(cleaned) || STARTS_MID_SENTENCE.test(cleaned)) continue;
+      // Asked of the text as WRITTEN, not of the stripped text, and the difference is
+      // a whole class of rule. A statement opening on a code span — `` `fast_clean`,
+      // `failed` and `expired` are distinct states, never blended into "not passed" ``
+      // (spec/operations.md) — survives markup-stripping as a lowercase `f` and was
+      // refused as a lifted clause. It is a bulleted rule with a modal, and it was
+      // silently gone. Backticks are the author saying "a statement starts here";
+      // emphasis is not, so leading `*` and `_` come off before the question is asked
+      // or `*matching* the line refused…` walks straight through the guard.
+      const opener = sentence.replace(/^[*_]+/, "");
+      if (NOT_SELF_CONTAINED.test(cleaned) || STARTS_MID_SENTENCE.test(opener)) continue;
 
       const { statement, why } = splitReason(cleaned);
       const key = statement.toLowerCase();

@@ -61,8 +61,25 @@ export interface Pace {
   readonly overdue: boolean;
   /** The tier this describes, so the client can see the number is not about its review. */
   readonly tier: string;
-  /** How many runs it came from — the reader's own check on how much to trust it. */
+  /**
+   * How many runs THIS number came from — the reader's own check on how much to trust it.
+   *
+   * The conditioned count, not the sample size, and they diverge exactly where trust
+   * matters least. A t2 round that has already run 1,500s is compared against the two
+   * recorded runs that lasted that long, not against all 34 — so reporting 34 offered
+   * the reader a confidence the estimate did not have, in the one field that exists
+   * for them to check it with. At elapsed zero the two are the same number.
+   */
   readonly runs: number;
+  /**
+   * Every completed run of this tier on this repository.
+   *
+   * Kept separate rather than letting `runs` mean one thing early and another late.
+   * The overdue sentence is a claim about the WHOLE record — "longer than every round
+   * we have" — and needs this; the interval is a claim about a subset and needs the
+   * other. One field doing both is how a number ends up describing neither.
+   */
+  readonly sample: number;
 }
 
 /**
@@ -76,8 +93,8 @@ export interface Pace {
  * returns in seconds — and pooling them with real reviews drags the median toward a
  * number that describes nothing anyone is waiting for.
  */
-export function paceFor(store: Store, tier: string, elapsedMs = 0): Pace | undefined {
-  const all = store.latenciesFor(tier);
+export function paceFor(store: Store, tier: string, repoId: string, elapsedMs = 0): Pace | undefined {
+  const all = store.latenciesFor(tier, repoId);
   if (all.length < MIN_RUNS) return undefined;
 
   const at = (rows: readonly number[], p: number) => rows[Math.min(rows.length - 1, Math.floor(rows.length * p))] ?? 0;
@@ -104,12 +121,22 @@ export function paceFor(store: Store, tier: string, elapsedMs = 0): Pace | undef
   // anything measured, and the next thing to happen could be the answer or a timeout.
   // Substituting a median here would be inventing data at exactly the moment we ran out.
   if (remaining.length === 0) {
-    return { ms: FLOOR_MS, tier, runs: all.length, overdue: true };
+    return { ms: FLOOR_MS, tier, runs: 0, sample: all.length, overdue: true };
   }
 
   // Floored, because the arithmetic tends to zero as a round ages and a client told to
   // return in two seconds is the busy loop this replaced.
-  return { ms: Math.max(FLOOR_MS, at(remaining, 0.5)), tier, runs: all.length, overdue: false };
+  //
+  // `runs` counts the CONDITIONED sample — the runs this median was actually drawn
+  // from. Reporting the full sample here was a quiet overstatement: it grew more
+  // confident-looking the longer a round ran, while the evidence behind it shrank.
+  return {
+    ms: Math.max(FLOOR_MS, at(remaining, 0.5)),
+    tier,
+    runs: remaining.length,
+    sample: all.length,
+    overdue: false,
+  };
 }
 
 /**
@@ -131,15 +158,16 @@ export function paceNote(pace: Pace | undefined): string {
   if (pace.overdue) {
     return (
       `MAKE ONE CALL AFTER ~${String(secs)}s, THEN LEAVE. This round has now run longer than every completed ` +
-      `${pace.tier} round on this repository (${String(pace.runs)} of them), so there is no measurement left to ` +
+      `${pace.tier} round on this repository (${String(pace.sample)} of them), so there is no measurement left to ` +
       "offer you — the next thing to happen could be the answer or a failure, and a longer interval here would " +
       "be invented rather than measured. This is NOT a sign that anything is wrong; deep rounds have a long tail."
     );
   }
   return (
     `MAKE ONE CALL AFTER ~${String(secs)}s, THEN LEAVE. That is how much longer ${pace.tier} rounds typically ` +
-    `run from where this one already is, measured across ${String(pace.runs)} completed runs on this ` +
-    "repository — so polling sooner returns `running` and costs you a turn for nothing.\n" +
+    `run from where this one already is, measured across the ${String(pace.runs)} runs on this repository that ` +
+    `had already been going this long (of ${String(pace.sample)} completed) — so polling sooner returns ` +
+    "`running` and costs you a turn for nothing.\n" +
     "READ THIS FIELD AGAIN EVERY TIME; do not reuse the number. It SHRINKS as the round ages, because a round " +
     "that has already outlived the median is not another median away from finishing — it is most of the way " +
     "there. Reusing the first interval is how a client waits twice as long as it needed to."

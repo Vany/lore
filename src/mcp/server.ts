@@ -59,7 +59,7 @@ const text = (s: string) => ({ content: [{ type: "text" as const, text: s }] });
  */
 function pacing(
   store: Store,
-  review: { id: string; state: ReviewState; type: string; ladder: LadderState },
+  review: { id: string; repoId: string; state: ReviewState; type: string; ladder: LadderState },
 ): object {
   if (!["queued", "running", "fast_clean"].includes(review.state)) return {};
   const tier = reviewType(review.type).tiers[review.ladder.cursor];
@@ -70,7 +70,7 @@ function pacing(
   // written. Absent when no round is in flight (`queued`), which is elapsed zero.
   const startedAt = store.roundStartedAt(review.id);
   const elapsed = startedAt === undefined ? 0 : Math.max(0, Date.now() - startedAt);
-  const pace = paceFor(store, tier.id, elapsed);
+  const pace = paceFor(store, tier.id, review.repoId, elapsed);
   return {
     ...(pace === undefined ? {} : { check_back_after_ms: pace.ms }),
     check_back_note: paceNote(pace),
@@ -261,7 +261,7 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           // is how it survived the rewrite that moved every text in that file to
           // subscribe-first. A tool description may or may not be in the model's
           // context by the time this returns; the response note always is.
-          ...pacing(store, { id, state: "queued", type: rt.id, ladder: initialState(rt.tiers) }),
+          ...pacing(store, { id, repoId: who.repoId, state: "queued", type: rt.id, ladder: initialState(rt.tiers) }),
           note:
             "Started. This does NOT mean it finished, and NOTHING can have happened yet. Read " +
             "`check_back_note` — re-read it on every reply, it shrinks as the round ages — go and do " +
@@ -405,11 +405,19 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
             // has no other way to learn that. Without it a cancel reads exactly like an
             // abandonment, which is the distinction the state exists to draw.
             if (!["failed", "expired", "cancelled"].includes(review.state)) return {};
-            const why = store.failureReason(review_id);
+            // A CANCEL MAY NOT BORROW A ROUND'S ERROR. `failureReason` falls back to the
+            // last `job.last_error` because for a `failed` review that is usually the
+            // truest account there is — but a cancelled one was stopped by a person, and
+            // handing back a transport error from an unrelated earlier round would
+            // manufacture their reason. The state whose whole purpose is to say somebody
+            // decided this must not answer with something that merely happened.
+            const why = store.failureReason(review_id, review.state !== "cancelled");
             return why === undefined
               ? {
                   failed_because:
-                    "no reason was recorded, which is itself a defect — report it rather than inferring a cause",
+                    review.state === "cancelled"
+                      ? "cancelled with no reason recorded — say that, and do not infer why"
+                      : "no reason was recorded, which is itself a defect — report it rather than inferring a cause",
                 }
               : { failed_because: why };
           })(),

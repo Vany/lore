@@ -639,7 +639,26 @@ describe("a cancelled review keeps the reason it was cancelled for", () => {
     started("revD");
     await callTool("review_cancel", { review_id: "revD" });
     const out = await callTool("review_poll", { review_id: "revD" });
-    expect(String(out["failed_because"])).toMatch(/no reason was recorded/);
+    expect(String(out["failed_because"])).toMatch(/no reason recorded/);
+  });
+
+  // AND IT MAY NOT BORROW ONE FROM A ROUND THAT THREW. `failureReason` falls back to the
+  // most recent `job.last_error`, which is right for `failed` — that error usually IS the
+  // truest account — and a fabrication for `cancelled`, where somebody made a decision.
+  // The first version of this fix inherited the fallback silently, and the test written
+  // beside it cancelled a review with no jobs at all, so the path was never exercised:
+  // a transport error from an unrelated earlier round would have been handed back as the
+  // person's stated reason, in the field the tool calls "the only account anyone gets".
+  it("never reports a round's error as the reason a person stopped it", async () => {
+    started("revE");
+    store.enqueue("revE", "fast");
+    const job = store.db.prepare("SELECT id FROM job WHERE review_id = 'revE'").get() as { id: number };
+    store.finishJob(job.id, "failed", "socket hang up talking to the provider");
+
+    await callTool("review_cancel", { review_id: "revE" });
+    const out = await callTool("review_poll", { review_id: "revE" });
+    expect(String(out["failed_because"])).not.toContain("socket hang up");
+    expect(String(out["failed_because"])).toMatch(/no reason recorded/);
   });
 });
 

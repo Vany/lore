@@ -79,6 +79,16 @@ Two further refusals, both measured against what was live in the store:
   — has its subject somewhere that was not captured.
 - A statement **starting mid-sentence** is a clause whose beginning is gone.
 
+The two are asked of **different text**, and that is not an implementation detail. A
+dangling referent is about meaning, so it is judged on the markup-stripped statement:
+`**It** has to be` is the same fault as `It has to be`. A mid-sentence start is about how
+the author wrote it, so it is judged on the text **as written**. Judging it after
+stripping cost real rules — `` `fast_clean`, `failed` and `expired` are distinct states,
+never blended into "not passed" `` is a bulleted rule with a modal that became a
+lowercase `f` and was refused as a lifted clause, and it had been in the store under the
+previous reader. Backticks are an author saying a statement starts here; emphasis is not,
+so leading `*` and `_` come off first or an italicised clause walks straight through.
+
 A heading cannot rescue a paragraph, and the first attempt at this tried: taking
 paragraphs under a rule-ish heading changed nothing, because `SPEC.md`'s
 `## 5. Decisions` spans 1,800 lines. The known loss is an ADR's `## Decision` paragraph,

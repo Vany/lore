@@ -57,6 +57,21 @@ describe("extractRules", () => {
     expect(extractRules("- matching the line refused the corrected file, which must never happen")).toStrictEqual([]);
   });
 
+  // AND ASKS IT OF THE TEXT AS WRITTEN. The guard ran on the markup-stripped text, so a
+  // rule opening on a code span became a lowercase word and was refused as a lifted
+  // clause — this exact line from `spec/operations.md` was ingested under the old reader
+  // and silently vanished under the new one. Backticks are an author saying a statement
+  // begins here; the only fixture for this guard was a gerund fragment, so nothing said.
+  it("keeps a rule that opens on a code span", () => {
+    const [rule] = extractRules('- `fast_clean`, `failed` and `expired` are distinct states, never blended into "not passed"');
+    expect(rule?.statement).toBe('fast_clean, failed and expired are distinct states, never blended into "not passed"');
+  });
+
+  // Emphasis is not that signal, and stripping it must not open the same hole.
+  it("still refuses a lifted clause wearing italics", () => {
+    expect(extractRules("- *matching* the line refused the corrected file, which must never happen")).toStrictEqual([]);
+  });
+
   it("ignores navigational prose that only looks like a rule", () => {
     expect(extractRules("- See SPEC.md, which you must read before working here.")).toStrictEqual([]);
   });

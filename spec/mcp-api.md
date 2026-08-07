@@ -188,9 +188,17 @@ floor for every client that cannot reach the newer revision.
 
 `review_start` and `review_poll` return `check_back_after_ms` while a review is
 `queued`, `running` or `fast_clean` — the **median completed round of the tier the
-ladder is currently on**, taken from `usage.latency_ms`. Not in `findings_ready`: there
-the next move belongs to the client, and an interval would read as permission to sleep
-on findings that are already its problem.
+ladder is currently on, on this repository**, taken from `usage.latency_ms`. Not in
+`findings_ready`: there the next move belongs to the client, and an interval would read
+as permission to sleep on findings that are already its problem.
+
+**Scoped per repository, because the note claims it is.** One `lore.db` serves every
+repository a workgroup provisions, and their branches are not alike: a monorepo's 741 KB
+diffs and lore's own 80 KB ones take the same tier wildly different times. Pooled, both
+clients were handed one number and told it was *"measured on this repository"* — false
+for at least one of them, in a field neither can check. The honest cost is that the
+sample shrinks: a tier below the floor for a repository now gets **no** interval rather
+than another repository's, which is the same trade as the thin-sample refusal below.
 
 **This is not the progress estimate §2 refuses.** *"How far along is this review"* stays
 unanswerable and stays refused. *"Nothing can have happened before the median round of
@@ -211,6 +219,13 @@ first call is unchanged.
 **So the client must re-read the field, not cache it**, and the note says so in those
 words. Reusing the first interval is precisely how a client waits twice as long as it
 needs to.
+
+**The run count in the note is the conditioned one**, not the sample size, and the
+difference is the reader's whole basis for trusting the number. A t2 round 1,500s in is
+compared against the two recorded runs that lasted that long, not against all 34 —
+reporting 34 made the estimate look *more* certain exactly as the evidence behind it
+shrank, in the one field that exists for a client to check it with. The note carries
+both: the conditioned count it was computed from, and the full sample it came out of.
 
 **Past every completed run, it says so and offers a short floor.** There is no
 distribution left to ask, and substituting a median at the moment the data ran out is
