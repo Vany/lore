@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_TIERS, anyTierRan, initialState, loadTiers, markUnavailable, settle, soleVendorOf, step, vendorOf, type Decision, type LadderState, type Tier } from "./ladder.ts";
+import {
+  ladderChanged, DEFAULT_TIERS, anyTierRan, initialState, loadTiers, markUnavailable, settle, soleVendorOf, step, vendorOf, type Decision, type LadderState, type Tier } from "./ladder.ts";
 
 const clean = (state: LadderState) => step({ state, raised: [] });
 
@@ -318,5 +319,48 @@ describe("settle", () => {
   it("accumulates without duplicating", () => {
     const s = settle(settle(initialState(), ["a", "b"]), ["b", "c"]);
     expect([...s.settled].sort()).toStrictEqual(["a", "b", "c"]);
+  });
+});
+
+/**
+ * A PIN'S FORMAT CHANGING IS NOT A LADDER CHANGING.
+ *
+ * The pin exists so a review cannot resume on a different reviewer wearing the same tier
+ * name — `tier_run` records only the id, so that would corrupt the audit trail rather
+ * than merely crash. Refusing is deliberately expensive, which is why it must be right.
+ *
+ * Adding `effort` and `stage` to the pin refused every review open at the deploy,
+ * including one that had cost half an evening of model time on this repository. The
+ * tiers were identical; only the spelling had grown. The comment above
+ * `ladderFingerprint` warned about this exact shape two lines before the code that did it.
+ */
+describe("comparing a stored ladder pin with the running one", () => {
+  const OLD = "t0:deterministic,t1:zai/glm,t2:kimi/k3";
+  const NEW = "t0:deterministic:-:fast,t1:zai/glm:medium:fast,t2:kimi/k3:high:deep";
+
+  it("does not refuse a pin that merely gained fields", () => {
+    expect(ladderChanged(OLD, NEW)).toBe(false);
+  });
+
+  it("still refuses a tier repointed at another model, at either format", () => {
+    expect(ladderChanged(OLD, "t0:deterministic:-:fast,t1:openai/gpt:medium:fast,t2:kimi/k3:high:deep")).toBe(true);
+    expect(ladderChanged(NEW, "t0:deterministic:-:fast,t1:openai/gpt:medium:fast,t2:kimi/k3:high:deep")).toBe(true);
+  });
+
+  it("still refuses a tier renamed", () => {
+    expect(ladderChanged(OLD, "t0:deterministic:-:fast,tA:zai/glm:medium:fast,t2:kimi/k3:high:deep")).toBe(true);
+  });
+
+  // A gained or lost tier moves every cursor after it, which is the corruption the whole
+  // check exists for — so the count matters at any format.
+  it("refuses a ladder that gained or lost a tier", () => {
+    expect(ladderChanged(OLD, `${NEW},t3:openai/terra:high:deep`)).toBe(true);
+    expect(ladderChanged(OLD, "t0:deterministic:-:fast,t1:zai/glm:medium:fast")).toBe(true);
+  });
+
+  // The fields the NEW pin added are compared once both sides have them: that is the
+  // whole point of adding them, and D-29 makes effort a deliberate lever.
+  it("refuses an effort change once both pins record it", () => {
+    expect(ladderChanged(NEW, NEW.replace("medium", "max"))).toBe(true);
   });
 });

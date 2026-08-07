@@ -16,6 +16,7 @@ import {
   DEFAULT_TIERS,
   anyTierRan,
   markUnavailable,
+  ladderChanged,
   ladderFingerprint,
   settle,
   step,
@@ -166,9 +167,12 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // Reviews started before the column exists carry nothing and are not checked — they
   // were never pinned to anything, and inventing a ladder for them would strand work
   // over a comparison nobody made.
+  // Compared field by field rather than as strings — see `ladderChanged`. A pin that
+  // merely grew a field is not a ladder that moved, and refusing on that costs exactly
+  // the work this check exists to protect.
   const started = review.tiers;
   const nowRunning = ladderFingerprint(tiers);
-  if (started !== undefined && started !== nowRunning) {
+  if (started !== undefined && ladderChanged(started, nowRunning)) {
     throw new DidNotRun(
       `review ${reviewId} began on a different ladder and cannot be resumed on this one — it started with ` +
         `[${started}] and the service is now configured with [${nowRunning}]. Its cursor is an index into the ` +

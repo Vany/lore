@@ -415,4 +415,35 @@ export function ladderFingerprint(tiers: readonly Tier[]): string {
   return tiers.map((t) => `${t.id}:${t.model ?? t.kind}:${t.effort ?? "-"}:${t.stage}`).join(",");
 }
 
+/**
+ * Has the ladder actually changed, comparing only what the stored pin can speak about?
+ *
+ * A PIN'S FORMAT CHANGING IS NOT A LADDER CHANGING, and treating it as one is expensive:
+ * adding `effort` and `stage` to the pin refused every review that was open at the
+ * deploy, including one that had cost half an evening of model time on this repository.
+ * The tiers were identical; only the spelling had grown. The comment above
+ * `ladderFingerprint` warned about this exact shape two lines before the code that did it.
+ *
+ * So the comparison is per tier, field by field, bounded by the SHORTER of the two — an
+ * old pin still catches everything it could always catch (a tier renamed, a tier
+ * repointed at another model) and simply has no opinion about fields it never recorded.
+ * A pin gaining a field is silent; a pin whose recorded fields disagree still refuses.
+ *
+ * Tier COUNT still matters at any format: a ladder that gained or lost a tier moves every
+ * cursor after the change, which is the corruption this whole check exists for.
+ */
+export function ladderChanged(started: string, nowRunning: string): boolean {
+  if (started === nowRunning) return false;
+  const was = started.split(",");
+  const now = nowRunning.split(",");
+  if (was.length !== now.length) return true;
+  return was.some((tier, i) => {
+    const a = tier.split(":");
+    const b = (now[i] ?? "").split(":");
+    const shared = Math.min(a.length, b.length);
+    for (let f = 0; f < shared; f++) if (a[f] !== b[f]) return true;
+    return false;
+  });
+}
+
 export { anyTierRan };
