@@ -144,29 +144,31 @@ function bySite<T>(
 }
 
 /**
- * What to append to a claim when a rule matched more than once in one file.
+ * The evidence, naming every site, and saying plainly that fixing one is not enough.
  *
- * In the CLAIM, not only the evidence: the model tier's T0 summary is one line per
- * finding, so a count living anywhere else is a count it never sees. Capped, so a rule
- * matching two hundred times cannot push the sentence past `CLAIM_MAX` and lose its own
- * message to truncation.
+ * EVERY SITE LIVES HERE AND NOTHING ABOUT THEM TOUCHES THE CLAIM. The count and the line
+ * numbers went into the claim first, so the model's one-line T0 summary would carry them
+ * — and the claim IS the fingerprint (`sha256(claim, file, symbol)`). That reintroduced
+ * exactly the churn grouping was chosen to avoid, in the same change, under a comment
+ * saying it had been avoided: any edit above a multi-site match renumbers the sites,
+ * which rewrites the claim, which changes the identity, so the old finding can never
+ * settle and a new one is raised in its place for ever.
+ *
+ * Fixing one of two sites does it too, via the count alone — which is the case where
+ * churn hurts most, because it is the moment the author is answering.
+ *
+ * The client is who acts on this and the client gets the evidence, so nothing is lost
+ * that matters. A stable identity is worth more than a denser summary line.
  */
-function sitesSuffix(lines: readonly number[]): string {
-  if (lines.length < 2) return "";
-  const shown = lines.slice(0, 8);
-  const more = lines.length > shown.length ? `, +${String(lines.length - shown.length)} more` : "";
-  return ` [${String(lines.length)} sites in this file: ${shown.join(", ")}${more}]`;
-}
-
-/** The evidence line, naming every site, and saying plainly that fixing one is not enough. */
 function sitesEvidence(tool: string, rule: string, file: string, lines: readonly number[]): string {
   const at = lines.map((l) => `${file}:${String(l)}`).join(", ");
   return (
     `${tool} ${rule} at ${at}` +
     (lines.length < 2
       ? ""
-      : "\nEVERY ONE OF THESE IS A SEPARATE SITE. Fixing the first does not fix the rest — answer the whole " +
-        "set, and prefer a change that makes the pattern safe by construction over arguing each site's inputs.")
+      : `\n${String(lines.length)} SEPARATE SITES IN THIS FILE. Fixing the first does not fix the rest — ` +
+        "answer the whole set, and prefer a change that makes the pattern safe by construction over arguing " +
+        "each site's inputs.")
   );
 }
 
@@ -511,7 +513,7 @@ export function parseSemgrep(
         file,
         ...(first !== undefined && first > 0 ? { line: first } : {}),
         severity: semgrepSeverity(res.extra?.severity),
-        claim: `${ruleClaim(res.check_id, res.extra?.message ?? "rule matched", "semgrep")}${sitesSuffix(lines)}`,
+        claim: ruleClaim(res.check_id, res.extra?.message ?? "rule matched", "semgrep"),
         evidence: sitesEvidence("semgrep", res.check_id ?? "", file, lines),
         failureScenario: "matches a published pattern for a known weakness class",
         ...(cwe !== undefined ? { cwe } : {}),
@@ -567,7 +569,7 @@ async function astGrep(worktree: string): Promise<EngineOutcome> {
       file,
       ...(first !== undefined && first > 0 ? { line: first } : {}),
       severity: m.severity === "error" ? "medium" : "low",
-      claim: `${ruleClaim(m.ruleId, m.message ?? "pattern matched", "ast-grep")}${sitesSuffix(lines)}`,
+      claim: ruleClaim(m.ruleId, m.message ?? "pattern matched", "ast-grep"),
       evidence: sitesEvidence("ast-grep", m.ruleId ?? "", file, lines),
       failureScenario: "matches a structural rule this project has chosen to enforce",
     });

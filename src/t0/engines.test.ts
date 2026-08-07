@@ -147,21 +147,28 @@ describe("a rule matching twice in one file reports both sites", () => {
     ],
   });
 
-  it("carries every line, in the claim the model actually reads", () => {
+  it("carries every line, in the evidence", () => {
     const f = semgrepFindings(two, "/w");
     expect(f, "one finding, not two - and not one that has lost a site").toHaveLength(1);
-    expect(f[0]?.claim, "the T0 summary shows the claim alone, so the count must live there").toContain(
-      "[2 sites in this file: 32, 123]",
-    );
     expect(f[0]?.evidence).toContain("app/layout.tsx:32");
     expect(f[0]?.evidence).toContain("app/layout.tsx:123");
-    expect(f[0]?.evidence, "fixing the first must not read as fixing the class").toMatch(/SEPARATE SITE/);
+    expect(f[0]?.evidence, "fixing the first must not read as fixing the class").toMatch(/2 SEPARATE SITES/);
     // The earliest site, so the reader starts at the top of the file.
     expect(f[0]?.line).toBe(32);
   });
 
-  // The identity must still be stable: this is one finding about one rule in one file,
-  // and it has to survive the author fixing the first site and re-running.
+  /**
+   * AND NOTHING ABOUT THE SITES REACHES THE CLAIM, which is the fingerprint.
+   *
+   * The count and the line numbers went into the claim first, so the model's one-line T0
+   * summary would carry them — reintroducing exactly the churn grouping was chosen to
+   * avoid, in the same change, under a comment saying it had been avoided. Any edit above
+   * a multi-site match renumbers the sites, which rewrites the claim, which changes the
+   * identity: the old finding can never settle and a new one takes its place for ever.
+   *
+   * Fixing one of two sites does it through the count alone — the moment the author is
+   * actually answering, which is the worst moment to lose the thread.
+   */
   it("keeps the same fingerprint when a site is added or removed", () => {
     const one = JSON.stringify({
       results: [
@@ -172,10 +179,21 @@ describe("a rule matching twice in one file reports both sites", () => {
     const b = semgrepFindings(one, "/w")[0];
     expect(a).toBeDefined();
     expect(b).toBeDefined();
-    // Different claims (the suffix names the sites), so DIFFERENT fingerprints — which is
-    // correct and is the point: answering "there are two here" is not answering "there is
-    // one here", and the ladder must see the second as a fresh statement.
-    expect(fingerprint(a as Finding)).not.toBe(fingerprint(b as Finding));
+    expect(a?.claim, "the sites live in the evidence, never here").not.toMatch(/site|32|123/);
+    expect(fingerprint(a as Finding)).toBe(fingerprint(b as Finding));
+  });
+
+  // The line moving is the other half of the same property: it is not in the hash either.
+  it("keeps the same fingerprint when every site shifts down the file", () => {
+    const moved = JSON.stringify({
+      results: [
+        { path: "/w/app/layout.tsx", start: { line: 140 }, check_id: "react-dangerouslysetinnerhtml", extra: { message: "Setting HTML from code is risky", severity: "WARNING" } },
+        { path: "/w/app/layout.tsx", start: { line: 49 }, check_id: "react-dangerouslysetinnerhtml", extra: { message: "Setting HTML from code is risky", severity: "WARNING" } },
+      ],
+    });
+    const a = semgrepFindings(two, "/w")[0];
+    const b = semgrepFindings(moved, "/w")[0];
+    expect(fingerprint(a as Finding)).toBe(fingerprint(b as Finding));
   });
 
   it("still separates two files, which is what a fingerprint already did", () => {

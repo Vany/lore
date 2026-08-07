@@ -204,13 +204,21 @@ build: preflight
 ## Worse than wasted time: porting my change onto the stale copy would have REVERTED the
 ## replica-state fix, silently, in the monitor that exists to avoid crying wolf.
 ##
+## DELETION IS DRIFT TOO. The first version skipped a file the repository no longer has
+## (`test -f || continue`), so one removed upstream stayed in force here with the guard
+## green — and `sync-deployed` only copied, so the remedy could not answer the guard even
+## once it noticed. Both halves handle it now.
+##
 ## Skipped where there is no repository beside the deployment, which is every remote
 ## host — there `make push` is what keeps them equal, and this has nothing to compare.
 define check-deployed
 	@test -d ../deploy || exit 0; \
 	drift=""; \
 	for f in $(DEPLOY_FILES); do \
-		test -f "../deploy/$$f" || continue; \
+		if [ ! -f "../deploy/$$f" ]; then \
+			test -f "./$$f" && drift="$$drift $$f(deleted-upstream)"; \
+			continue; \
+		fi; \
 		cmp -s "./$$f" "../deploy/$$f" || drift="$$drift $$f"; \
 	done; \
 	test -z "$$drift" || { \
@@ -227,7 +235,11 @@ endef
 sync-deployed:
 	@test -d ../deploy || { echo "no ../deploy beside this deployment — nothing to sync from"; exit 1; }
 	@for f in $(DEPLOY_FILES); do \
-		test -f "../deploy/$$f" && cp "../deploy/$$f" "./$$f" && echo "  $$f"; \
+		if [ -f "../deploy/$$f" ]; then \
+			cp "../deploy/$$f" "./$$f" && echo "  $$f"; \
+		elif [ -f "./$$f" ]; then \
+			rm -f "./$$f" && echo "  $$f (removed: gone from the repository)"; \
+		fi; \
 	done
 	@echo "synced from ../deploy. .env and opencode/ are yours and were not touched."
 

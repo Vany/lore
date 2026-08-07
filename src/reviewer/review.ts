@@ -1260,6 +1260,24 @@ async function collectJustifications(
       });
     }
   }
+
+  // THE SUMMARY THE COUNTER WAS FOR, and it was never written.
+  //
+  // `carriedOver` was incremented per marker and read by nothing, so the noise this
+  // replaced — 18 of 29 log lines in three hours — became total silence instead of one
+  // line. Both are wrong in the same direction: a marker from an earlier review is
+  // NORMAL, and an operator reading the log should be able to tell "37 old markers, as
+  // expected" from "no markers at all", which is what a typo in the ledger looks like.
+  //
+  // One line, at the end, naming the count. A marker matching nothing ANYWHERE still gets
+  // its own line above — that is the case worth shouting about.
+  if (carriedOver > 0) {
+    console.error(
+      `[lore:log] ${String(carriedOver)} lore-ok marker(s) in this tree belong to earlier reviews of this ` +
+        "repository and matched nothing open here. That is normal — a marker is permanent in the source — " +
+        "and they were ignored.",
+    );
+  }
   return out;
 }
 

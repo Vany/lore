@@ -59,7 +59,15 @@ export function ruleReport(store: Store, repoId: string): {
       return {
         cite,
         item,
-        silencing: live.filter((s) => cite.startsWith(s.policyShort)).map((s) => `${s.ruleClass} in ${s.path}`),
+        // MATCHED AGAINST THE FULL ID, not against the eight characters shown.
+        //
+        // `policyShort` is whatever the author cited, and the parser deliberately accepts
+        // more than eight — a client that pastes the whole id is answered correctly by
+        // `policyByShort`, which matches on prefix. Comparing it to the TRUNCATED cite
+        // meant every such suppression vanished from this view, so `lore rule` reported
+        // "silencing nothing yet" about a rule that was actively switching a check off.
+        // That is the one line an operator reads this page for.
+        silencing: live.filter((s) => item.id.startsWith(s.policyShort)).map((s) => `${s.ruleClass} in ${s.path}`),
       };
     }),
   };
