@@ -91,3 +91,36 @@ describe("provisioning the same url twice", () => {
     expect(b.token).not.toBe(a.token);
   });
 });
+
+// THE FIRST THING A NEW OPERATOR READS, and it was two days out of date.
+//
+// D-65 (2026-08-05) moved mirror refreshing to a host timer precisely because it "is
+// not the client's responsibility" — and this output went on saying "run it again
+// before each review", a chore that had been automatic since. Nothing pinned it, which
+// is how it survived: `TOOL_DOCS` has a mechanical check that the client-facing texts
+// stay honest, and the operator-facing one had none.
+//
+// It matters more than a stale sentence usually would. An operator who believes the
+// refresh is theirs will not install the daemon, and the first they hear of it is a
+// client relaying a refusal they cannot act on.
+describe("what a new operator is told about mirrors", () => {
+  it("says refresh ONCE and names the timer that does the rest", async () => {
+    const out = renderProvisioned(await make("git@github.com:org/repo.git"));
+    expect(out).toContain("make mirror REPO=repo");
+    expect(out).toContain("make mirror-daemon");
+    expect(out).toMatch(/ONCE, not before every review/);
+  });
+
+  it("never tells anybody to refresh before each review", async () => {
+    const out = renderProvisioned(await make("git@github.com:org/repo.git"));
+    expect(out).not.toMatch(/before each review|before every review\b(?!\.)/i);
+  });
+
+  // lore cannot tell whether the timer is alive — it holds no credentials and does not
+  // fetch — so the operator has to be told where to look rather than left to assume
+  // silence means health.
+  it("says how to see whether it is still working", async () => {
+    const out = renderProvisioned(await make("git@github.com:org/repo.git"));
+    expect(out).toContain("make status");
+  });
+});
