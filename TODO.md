@@ -511,7 +511,14 @@ Measured over one session that drove three reviews of this repository to a verdi
 findings, every one real**, 8 t2 calls and 112 minutes of deep-tier time. The items here
 are what that session's own numbers say is in the way, not what reading suggested.
 
-- [ ] **`review_submit` knows what will settle and does not say so, for a round.** The
+- [x] **Built 2026-08-07.** `review_submit` returns `will_not_settle` — the open
+      findings naming code the diff did not change — sharing `codeMoved` with the real
+      settle path rather than restating the rule, because a preview that drifts from what
+      it previews is worse than none. `TOOL_DOCS.submit` also now says to diff from the
+      returned `tree_hash`, which was a foot-gun I hit myself the same day.
+      *The measurement that justified it:*
+
+- [x] ~~`review_submit` knows what will settle and does not say so, for a round.~~ The
       largest measured saving on this list. Findings are settled by `settleFixed`, which
       is deterministic — not re-raised, and the hunk it named has moved — so at submit
       time lore already knows which of the client's fixes cannot settle. It waits a
@@ -579,8 +586,24 @@ are what that session's own numbers say is in the way, not what reading suggeste
       With the screen's own residue now known, they are complementary rather than
       redundant: cheap, deterministic, and they remove work the model is paying for.
 
-- [ ] **The replica monitor cries wolf again, and it is the third version of the same
-      mistake.** Observed 2026-08-07 immediately after a deploy: `/status` reported
+- [x] **Fixed 2026-08-07, together with the integrity check — because the false alarm
+      is what pointed an operator AWAY from the real fault.** `replicaState` now compares
+      the newest replica file against what lore's own timestamps say it last WROTE, not
+      against file mtimes; all four cases hold (idle level, dead replicator behind,
+      unflushed WAL behind, touched-WAL-no-commit level). `deploy/Makefile`'s twin asks
+      the container and falls back to file times SAYING WHICH IT USED, because it must
+      answer while the service is down. Verified both ways.
+      **And the incident that made it urgent**: the database became unreadable for twenty
+      minutes and nothing noticed — `/status` was answering `ok:false` for this wrong
+      reason the whole time. `checkHealth` now asks a FRESH reader whether the database
+      can be read, on every beat. A check on the live handle reported clean against a
+      genuinely corrupt file, because SQLite serves an open connection from its page
+      cache; finding that out cost two attempts and is why the check opens a new
+      connection.
+      *The original entry:*
+
+- [x] ~~The replica monitor cries wolf again, and it is the third version of the same
+      mistake.~~ Observed 2026-08-07 immediately after a deploy: `/status` reported
       `ok: false, "replica 14m behind"` while litestream's own log said
       `txid.replica = txid.db = 000000000000061a` on every sync — the replica held
       exactly the transaction the database was at.
@@ -782,8 +805,10 @@ are what that session's own numbers say is in the way, not what reading suggeste
       and `DISTINCT` over three columns is not one row per statement.
       *The measurement that motivated it, kept:*
 
-- [ ] ~~The refusal rate per document is a drift metric~~ — SURFACED, still unread by
-      anything automatic. Measured per document on the first real screen run: `CLAUDE.md` and
+- [ ] **The refusal rate per document is surfaced but nothing WATCHES it.** `make
+      knowledge` prints it and a person has to look. A document whose share climbs is one
+      carrying change-narrative that belongs in `MEMO.md`, and that is worth an alert
+      rather than an inspection. Measured per document on the first real screen run: `CLAUDE.md` and
       `PROG.md` were refused **0 of 13**; every one of the fifteen refusals came from the
       explanatory specs, and the worst three were the three edited most that day.
       `CLAUDE.md` says specs describe the system as it stands and change-narrative belongs
@@ -960,7 +985,16 @@ are what that session's own numbers say is in the way, not what reading suggeste
       ladder honours is a thing that can go wrong quietly, which is the one shape this
       project refuses.
 
-- [ ] **Bind a review's delta stream to the token that started it** (D-78).
+- [x] **Built 2026-08-07** (D-78). `mine()` is the single gate, so poll, submit, cancel,
+      attest, vex and the `lore://review/{id}` resource are bound by construction;
+      `review_inbox` stays repo-scoped and is now the answer to "which of these are
+      mine". **Rotation decided**: a revoked binding falls back to repository scope,
+      because stranding a colleague's in-flight work is worse than the accident this
+      prevents among people already trusted with the repository. One clause to reverse.
+      SCHEMA_VERSION 11.
+      *The original entry, and the reasoning:*
+
+- [x] ~~Bind a review's delta stream to the token that started it~~ (D-78).
 
       **Live as of 2026-08-07, not hypothetical.** `koray` and `max` hold tokens on
       `rigid-monorepo` and the service now answers on every interface. Three holders and
