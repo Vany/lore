@@ -133,6 +133,35 @@ function nextStep(state: ReviewState): string {
   }
 }
 
+/**
+ * The subscribe call, ready to send, with the id already in it.
+ *
+ * The docs described the shape with a `<review_id>` placeholder and left the client to
+ * assemble it. That is a small tax charged at exactly the wrong moment — the reply that
+ * says "go away and wait" is the one a client acts on immediately — and the observed
+ * behaviour is that clients skip it and fall into a sleep-poll loop, which is the most
+ * expensive thing they can do here. I did it myself, all evening, against this service.
+ *
+ * So the concrete call travels in the reply, beside the interval. A client that copies
+ * one field gets it right; one that reads none of them still has `check_back_after_ms`.
+ */
+function subscribeTo(reviewId: string): object {
+  return {
+    subscribe: {
+      method: "subscriptions/listen",
+      params: { notifications: { resourceSubscriptions: [`lore://review/${reviewId}`] } },
+    },
+    subscribe_note:
+      "Send this ONCE and stop polling on a timer: you are woken on every STATE change, which is the " +
+      "only moment there is anything for you to do. Then call review_poll ONCE straight away — a " +
+      "subscription carries no history, so anything that happened before your stream opened is waiting " +
+      "and nothing will announce it. CHECK THE ACKNOWLEDGEMENT: if your subscription is not echoed in it, " +
+      "you are not subscribed and nothing will ever arrive. If the method errors, that is NORMAL and not " +
+      "a fault in lore — it needs a 2026-07-28 connection and many hosts still negotiate the 2025 one; " +
+      "fall back to `check_back_after_ms`.",
+  };
+}
+
 function newReviewId(): string {
   return `rev_${randomBytes(18).toString("base64url")}`;
 }
@@ -290,12 +319,14 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           // subscribe-first. A tool description may or may not be in the model's
           // context by the time this returns; the response note always is.
           ...pacing(store, { id, repoId: who.repoId, state: "queued", type: rt.id, ladder: initialState(rt.tiers) }),
+          // THE CALL ITSELF, not a description of it. See `subscribeTo`.
+          ...subscribeTo(id),
           note:
-            "Started. This does NOT mean it finished, and NOTHING can have happened yet. Read " +
-            "`check_back_note` — re-read it on every reply, it shrinks as the round ages — go and do " +
-            "something else, and make ONE call when it says. If your host " +
-            "supports subscriptions/listen — most do not — subscribe to " +
-            `\`lore://review/${id}\` as well and you will be woken instead of having to return.`,
+            "Started. This does NOT mean it finished, and NOTHING can have happened yet. SEND THE " +
+            "`subscribe` CALL BELOW, then poll ONCE, then leave — you will be woken. If your host cannot " +
+            "subscribe, read `check_back_note` instead, re-read it on every reply because it shrinks as " +
+            "the round ages, and make ONE call when it says. Either way, go and do something else: a " +
+            "sleep-poll loop is the most expensive thing a client can do here.",
         }),
       );
     },
@@ -407,6 +438,11 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           }),
           open_count: store.openFindings(review_id).length,
           ...pacing(store, review),
+          // Only while there is something to wait FOR. In `findings_ready` the next move
+          // is the client's, and handing it a subscribe call there would read as
+          // permission to sleep on findings that are already its problem — the
+          // abandonment D-70 measured. Terminal states have nothing left to announce.
+          ...(["queued", "running", "fast_clean"].includes(review.state) ? subscribeTo(review_id) : {}),
           // Deterministic, known in milliseconds, and the fact a landing decision
           // actually turns on. It was reaching the reviewer's prompt and stopping
           // there, so a client triaging eight open pull requests would have needed

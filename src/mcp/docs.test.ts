@@ -20,6 +20,7 @@
  * the code does.
  */
 
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { REVIEW_STATES, isAttestable, isTerminal } from "../core/review-state.ts";
 import { RESOURCE_DOCS, REVIEW_PROMPT_TEXT, TOOL_DOCS } from "./docs.ts";
@@ -209,5 +210,35 @@ describe("every behaviour a client must know about reaches the texts", () => {
     ["submit", "a marker at the site is safe now (D-73)", "safe to write at the site"],
   ])("%s tells the client: %s", (tool, _why, needle) => {
     expect(TOOL_DOCS[tool as keyof typeof TOOL_DOCS]).toContain(needle);
+  });
+});
+
+/**
+ * THE SUBSCRIBE CALL TRAVELS IN THE REPLY, ASSEMBLED.
+ *
+ * The docs described the shape with a `<review_id>` placeholder and left the client to
+ * build it. That is a tax charged at exactly the wrong moment — the reply that says "go
+ * away and wait" is the one a client acts on immediately — and the observed behaviour is
+ * that clients skip it and fall into a sleep-poll loop, which is the most expensive thing
+ * they can do here.
+ *
+ * Checked mechanically because the two halves are in different files: a reply carrying a
+ * malformed call is worse than one carrying none, since a client that copies it verbatim
+ * gets a silent stream and concludes lore is quiet.
+ */
+describe("the subscribe call handed to a client", () => {
+  it("is the real method and the real resource template", () => {
+    // `subscriptions/listen` and `resourceSubscriptions` are the protocol's spelling, and
+    // `lore://review/{id}` is what `RESOURCE_DOCS` and the template registration use.
+    const src = readFileSync(new URL("./server.ts", import.meta.url), "utf8");
+    expect(src).toContain('method: "subscriptions/listen"');
+    expect(src).toContain("resourceSubscriptions: [`lore://review/${reviewId}`]");
+  });
+
+  // The prose must not carry a second copy of the shape: one of them would be wrong
+  // eventually, and the doc is the one nobody executes.
+  it("is not also spelled out in the docs it replaced", () => {
+    expect(TOOL_DOCS.start).not.toContain("resourceSubscriptions");
+    expect(TOOL_DOCS.start, "the docs point at the field instead").toContain("`subscribe`");
   });
 });

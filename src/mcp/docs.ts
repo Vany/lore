@@ -41,9 +41,11 @@ reviewers get.
 Returns a review_id IMMEDIATELY. The review takes minutes — this does not mean it
 finished.
 
-DO NOT SIT IN A POLLING LOOP. Subscribe instead, and go and do something else:
+DO NOT SIT IN A POLLING LOOP. Subscribe instead, and go and do something else.
 
-    subscriptions/listen  { notifications: { resourceSubscriptions: ["lore://review/<review_id>"] } }
+THE REPLY CARRIES THE CALL, in a \`subscribe\` field, with this review's id already in it
+— send that rather than assembling one from this description. It is repeated on every
+poll that is still waiting, and it is absent once the next move is yours.
 
 You will be woken by \`notifications/resources/updated\` whenever the review's STATE
 changes — and only then. That is the moment there is something for you to do; findings
