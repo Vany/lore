@@ -85,8 +85,18 @@ function finding(f: {
  * colon. `tests: \`npm test\` fails on this branch` has one, so a script failure yields
  * no class and can never be suppressed wholesale — which is right. Nothing appeals its
  * way out of "the suite does not pass".
+ *
+ * THE LEADING `@` IS NOT COSMETIC. Without it `@typescript-eslint/no-floating-promises`
+ * and `@next/next/no-img-element` — which is most of the rules a TypeScript project
+ * actually enforces — yielded no class at all, so an appeal against one was accepted, the
+ * fingerprint settled, and no suppression was recorded. The class went on firing and
+ * nothing anywhere said why. D-83 quietly did not work for the common case.
+ *
+ * It does not re-open the sentence hole. OSV writes `@scope/pkg@1.0.0 is affected by
+ * CVE-…: summary`, and the second `@` is outside the character class, so the match ends
+ * before the colon it would need.
  */
-const RULE_CLASS = /^([A-Za-z][A-Za-z0-9._/-]*):\s/;
+const RULE_CLASS = /^(@?[A-Za-z][A-Za-z0-9._/-]*):\s/;
 
 /**
  * Write a claim so its rule id can be read back. The one definition of the convention.

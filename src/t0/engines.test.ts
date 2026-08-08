@@ -77,7 +77,18 @@ describe("an optional engine's absence is not a gap in the review", () => {
  */
 describe("an engine finding says which rule fired", () => {
   it("reads back the id every engine wrote", () => {
-    for (const id of ["TS2345", "no-unused-vars", "javascript.lang.security.audit.sqli", "my-rules/no-raw-sql"]) {
+    for (const id of [
+      "TS2345",
+      "no-unused-vars",
+      "javascript.lang.security.audit.sqli",
+      "my-rules/no-raw-sql",
+      // SCOPED IDS, which is most of what a TypeScript project enforces. Without the
+      // leading `@` these yielded no class, so an appeal against one was accepted, the
+      // fingerprint settled, and no suppression was recorded — the check went on firing
+      // and nothing said why. D-83 quietly did not work for the common case.
+      "@typescript-eslint/no-floating-promises",
+      "@next/next/no-img-element",
+    ]) {
       expect(engineRuleClass(ruleClaim(id, "some message", "fallback"))).toBe(id);
     }
   });
@@ -111,6 +122,9 @@ describe("an engine finding says which rule fired", () => {
    */
   it("gives no class to a claim that is a sentence", () => {
     for (const claim of [
+      // And the leading `@` must not re-open the sentence hole: OSV writes a scoped
+      // package the same way, and its second `@` ends the match before any colon.
+      "@scope/pkg@1.0.0 is affected by CVE-2021-23337: command injection",
       "`npm test` fails on this branch",
       "dependencies do not install with npm, so nothing that needs them could run",
       "lodash@4.17.20 is affected by CVE-2021-23337: command injection",

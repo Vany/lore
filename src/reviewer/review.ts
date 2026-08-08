@@ -780,6 +780,17 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       const cls = p.citedRule === undefined || p.finding.origin !== "t0"
         ? undefined
         : engineRuleClass(p.finding.claim);
+      // AN APPEAL THAT BUYS NOTHING SAYS SO. Accepted, the fingerprint settles either
+      // way — but without a class there is no suppression, so the check goes on firing
+      // and the author is left thinking the argument was won once and for all. Silence
+      // here is the difference between "we decided this" and "we decide this every time".
+      if (p.citedRule !== undefined && cls === undefined) {
+        console.error(
+          `[lore:log] appeal to rule ${p.citedRule} accepted for ${p.finding.file} but buys no class ` +
+            `suppression: ${p.finding.origin === "t0" ? "the claim names no engine rule" : "a model raised it"}. ` +
+            "This one finding is settled; the same thing will be raised again.",
+        );
+      }
       if (cls !== undefined && p.citedRule !== undefined) {
         store.recordSuppression({
           repoId: review.repoId,
