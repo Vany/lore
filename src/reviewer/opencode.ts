@@ -787,12 +787,44 @@ export class Reviewer implements ReviewerLike {
       // held the diff comfortably. As `TooLargeForTier` the ladder steps over t1 and
       // finishes `passed_partial` — weaker evidence, honestly labelled, which is the
       // whole of D-48. The same lesson as the 741 KB branch that failed five times.
-      if (/exceed|too long|too large|maximum context|context length|max length/i.test(message)) {
+      // THE SUBJECT MUST BE THE PROMPT, not merely the word "exceed" somewhere.
+      //
+      // The bare substring set matched any provider error containing "exceeded" — a rate
+      // limit, a quota, a spend cap, a token budget — and every one of those was then
+      // classified as "this tier's window is too small". The consequence is the opposite
+      // of the one it was built for: `TooLargeForTier` makes the ladder STEP OVER the
+      // tier and finish `passed_partial`, so a transient rate limit would silently
+      // downgrade a review's evidence instead of failing it, and the attestation would
+      // claim a tier had been honestly skipped when it had merely been throttled.
+      //
+      // So the phrase has to be about length AND about the input. Anchored on the pairing
+      // rather than on either word: "maximum context length" and "prompt is too long" both
+      // match, "rate limit exceeded" and "quota exceeded" do not.
+      if (isTooLong(message)) {
         throw TooLargeForTier.refusedAsTooLong(tier.id, tier.model ?? "", text.length, message);
       }
       throw new DidNotRun(`tier ${tier.id} (${tier.model}) failed: ${message}`, e);
     }
   }
+}
+
+/**
+ * Is this provider error about the PROMPT being too big, rather than about anything else
+ * a provider says "exceeded" about?
+ *
+ * Exported so it can be aimed at: it decides between failing a review and DOWNGRADING one
+ * (`TooLargeForTier` makes the ladder step over the tier and finish `passed_partial`,
+ * D-48), and a predicate that important should not live unreachable inside a catch block.
+ *
+ * Anchored on the PAIRING of a length phrase with an input subject rather than on either
+ * alone. The first version matched the bare substring `exceed`, so "rate limit exceeded"
+ * and "quota exceeded" were read as context overflows — silently trading a transient
+ * failure for an attestation claiming a tier had been honestly skipped.
+ */
+export function isTooLong(message: string): boolean {
+  const aboutLength = /too (?:long|large|many tokens)|maximum (?:context|prompt|input)|context (?:length|window)|max(?:imum)? length|length limit/i;
+  const aboutInput = /prompt|context|input|message|token count|request body/i;
+  return aboutLength.test(message) && aboutInput.test(message);
 }
 
 interface Usage {

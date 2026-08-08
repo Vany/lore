@@ -275,6 +275,38 @@ describe("findings are ranked worst first", () => {
     expect(got).toStrictEqual(["medium", "low"]);
   });
 
+  /**
+   * THE INBOX CONSUMES NOTHING, and it used to consume exactly as `review_poll` does.
+   *
+   * `undelivered` + `markDelivered` is the POLL's contract: it hands over deltas and
+   * takes them off the queue, which is why polling somebody else's review is refused
+   * (D-78). The inbox did the same while its own documentation AND `smoke.mjs` both said
+   * it did not — so a read-only health check emptied the delta queue of every review it
+   * listed, and the owner was shown nothing the next time it polled.
+   *
+   * The fix shipped with no regression test anywhere, which is how it could silently come
+   * back. Two calls and the same answer is the whole property.
+   */
+  it("does not consume what it lists, however often it is called", async () => {
+    const first = await callTool("review_inbox", {});
+    const again = await callTool("review_inbox", {});
+    const count = (o: Record<string, unknown>) =>
+      (o["reviews"] as { new_findings: number }[]).map((r) => r.new_findings);
+    expect(count(first)).toStrictEqual([2]);
+    expect(count(again), "a second call must see exactly what the first saw").toStrictEqual([2]);
+
+    // And the poll, which IS the handover, still gets everything.
+    const poll = await callTool("review_poll", { review_id: "rev1" });
+    expect((poll["new_findings"] as unknown[]).length).toBe(2);
+  });
+
+  // ...and the poll's own contract is unchanged: it consumes, so a second call is empty.
+  it("leaves review_poll consuming, which is what the inbox must not do", async () => {
+    await callTool("review_poll", { review_id: "rev1" });
+    const second = await callTool("review_poll", { review_id: "rev1" });
+    expect((second["new_findings"] as unknown[]).length).toBe(0);
+  });
+
   it("reports the worst severity in the inbox, not the first row", async () => {
     const out = await callTool("review_inbox", {});
     const reviews = out["reviews"] as { highest: string; findings: { severity: string }[] }[];

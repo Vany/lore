@@ -240,7 +240,17 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // A team can decide a pattern-matcher is wrong for a place; it cannot decide a reader
   // may not look.
   const suppressed = store.liveSuppressions(review.repoId);
+  //
+  // TWO AUDIENCES, TWO TEXTS. The client's version quotes the rule; the reviewer's does
+  // not, and that is D-83's design rather than an omission — `knowledge_teach` promises
+  // that reviewers are told a project HAS development rules and never what they say, and
+  // that a rule's text arrives only with the appeal that cites it. Writing the statement
+  // into `t0.unavailable` put it into `renderT0`, and `renderT0` is in every model prompt
+  // for every later round: one accepted appeal would have injected its rule into every
+  // review of that repository for ever, which is exactly the standing injection the
+  // design refuses. The client's channel is the audit trail and wants the whole reason.
   const silenced: string[] = [];
+  const silencedForTier: string[] = [];
   const t0Findings = t0.findings.filter((f) => {
     const cls = engineRuleClass(f.claim);
     const s = cls === undefined ? undefined : suppressed.find((x) => x.ruleClass === cls && x.path === f.file);
@@ -250,8 +260,16 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
         `development rule ${s.policyShort} ("${s.statement}") on ${s.acceptedAt.slice(0, 10)}. Anything that ` +
         "rule would have caught here is unexamined; retire the rule to switch it back on.",
     );
+    silencedForTier.push(
+      `${cls ?? ""} was NOT reported at ${f.file} — a tier accepted an appeal to one of this project's ` +
+        "development rules. Nothing checked that rule's subject here; you are free to raise the underlying " +
+        "problem yourself if you see it, and a finding you raise cannot be silenced this way.",
+    );
     return false;
   });
+  // `unavailable` reaches the CLIENT, through `unavailableChecks`; `t0ForTier` is what
+  // `renderT0` turns into prompt text a few lines below.
+  const t0ForTier = { ...t0, findings: t0Findings, unavailable: [...t0.unavailable, ...new Set(silencedForTier)] };
   t0 = { ...t0, findings: t0Findings, unavailable: [...t0.unavailable, ...new Set(silenced)] };
 
   store.closeTierRun(t0RunId, t0.findings.length > 0 ? "findings" : "clean", t0.unavailable, roundTree);
@@ -371,7 +389,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       branch: review.branch,
       ticket: review.ticket,
       diff: diffText,
-      t0: renderT0(t0),
+      t0: renderT0(t0ForTier),
       // Selected against the changed files, not dumped wholesale: everything a repo
       // knows would crowd the diff out of the context window.
       knowledge: relevantTo(store, review.repoId, diff.changedFiles),

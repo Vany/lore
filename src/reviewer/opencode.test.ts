@@ -15,7 +15,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Exhausted, TooLargeForTier } from "../core/errors.ts";
 import { CLAIM_MAX } from "../core/finding.ts";
 import type { Tier } from "../core/ladder.ts";
-import { Reviewer, countStepParts, extractFindings, splitModel, toolsUsed } from "./opencode.ts";
+import { Reviewer, countStepParts, extractFindings, splitModel, toolsUsed, isTooLong } from "./opencode.ts";
 
 const TIER: Tier = { id: "t1", kind: "model", model: "openrouter/z-ai/glm-5.2", stage: "fast" };
 
@@ -763,5 +763,42 @@ describe("what the reviewer reached for", () => {
   it("falls back through the shapes a tool part might use", () => {
     const data = [msg({ type: "tool", name: "grep" }, { type: "tool", state: { title: "webfetch" } }, { type: "tool" })];
     expect(toolsUsed(data)).toStrictEqual({ grep: 1, webfetch: 1, unknown: 1 });
+  });
+});
+
+/**
+ * "TOO LONG FOR THIS TIER" IS A DOWNGRADE, SO IT MUST NOT BE GUESSED.
+ *
+ * `TooLargeForTier` makes the ladder STEP OVER the tier and finish `passed_partial`
+ * (D-48) — weaker evidence, honestly labelled. That is right when the tier's window
+ * genuinely could not hold the diff, and wrong for everything else: a transient rate
+ * limit classified this way silently downgrades a review's evidence instead of failing
+ * it, and the attestation then claims a tier was honestly skipped when it was throttled.
+ *
+ * The first version matched the bare substring `exceed`, so every "rate limit exceeded"
+ * and "quota exceeded" a provider has ever sent was read as a context overflow.
+ */
+describe("classifying a provider error as a window that was too small", () => {
+  const tooLong = [
+    "Prompt exceeds max length",
+    "This model's maximum context length is 128000 tokens",
+    "input is too long for the requested model",
+    "context window exceeded for this request",
+    "request body too large",
+  ];
+  const notTooLong = [
+    "rate limit exceeded",
+    "quota exceeded for this billing period",
+    "daily spend limit exceeded",
+    "concurrent request limit exceeded, retry later",
+    "too many requests",
+  ];
+
+  it.each(tooLong)("reads %s as too long", (message) => {
+    expect(isTooLong(message), message).toBe(true);
+  });
+
+  it.each(notTooLong)("does NOT read %s as too long", (message) => {
+    expect(isTooLong(message), `${message} — this would silently downgrade the review`).toBe(false);
   });
 });

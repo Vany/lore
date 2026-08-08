@@ -1436,14 +1436,30 @@ export class Store {
    * `undefined` for a database nothing has ever been written to.
    */
   lastWriteAt(): string | undefined {
+    // EVERY TABLE THAT CARRIES A TIMESTAMP, because the claim above is only true if the
+    // list is complete. It named five and missed five kinds of write outright: issuing or
+    // revoking a token, retiring knowledge, opening or resolving a conflict, recording a
+    // verdict, and accepting an appeal. A workgroup can spend an afternoon doing nothing
+    // but answering findings — all verdicts — and this would not move, so a dead
+    // replicator would read as level throughout. The monitor's whole job is to notice
+    // that, and it was blind to the writes a review actually produces most of.
     const row = this.db
       .prepare(
         `SELECT MAX(t) AS t FROM (
            SELECT MAX(updated_at) t FROM review
            UNION ALL SELECT MAX(updated_at) FROM job
            UNION ALL SELECT MAX(verified_at) FROM knowledge
+           UNION ALL SELECT MAX(retired_at) FROM knowledge
            UNION ALL SELECT MAX(at) FROM usage
            UNION ALL SELECT MAX(first_seen) FROM finding
+           UNION ALL SELECT MAX(created_at) FROM verdict
+           UNION ALL SELECT MAX(created_at) FROM token
+           UNION ALL SELECT MAX(revoked_at) FROM token
+           UNION ALL SELECT MAX(created_at) FROM knowledge_conflict
+           UNION ALL SELECT MAX(resolved_at) FROM knowledge_conflict
+           UNION ALL SELECT MAX(accepted_at) FROM suppression
+           UNION ALL SELECT MAX(started_at) FROM tier_run
+           UNION ALL SELECT MAX(created_at) FROM repo
          )`,
       )
       .get() as { t: string | null } | undefined;

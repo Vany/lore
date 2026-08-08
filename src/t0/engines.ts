@@ -130,12 +130,17 @@ export function engineRuleClass(claim: string): string | undefined {
  */
 function bySite<T>(
   matches: readonly T[],
-  of: (m: T) => { readonly rule: string; readonly file: string; readonly line: number },
+  of: (m: T) => { readonly claim: string; readonly file: string; readonly line: number },
 ): { readonly match: T; readonly file: string; readonly lines: readonly number[] }[] {
   const groups = new Map<string, { match: T; file: string; lines: number[] }>();
   for (const m of matches) {
-    const { rule, file, line } = of(m);
-    const key = `${rule}\u0000${file}`;
+    const { claim, file, line } = of(m);
+    // KEYED ON THE CLAIM, which is exactly what the fingerprint hashes. Keying on the
+    // rule id instead is too coarse for a compiler: two TS2345s carry different messages
+    // and are different errors, so merging them would LOSE one — the same harm as the
+    // collapse, arrived at from the other side. semgrep collapses precisely because its
+    // claim is the rule's generic message, identical at every match.
+    const key = `${claim}\u0000${file}`;
     const at = groups.get(key);
     if (at === undefined) groups.set(key, { match: m, file, lines: [line] });
     else at.lines.push(line);
@@ -355,23 +360,36 @@ const TSC_LINE = /^(.+?)\((\d+),(\d+)\):\s+error\s+(TS\d+):\s+(.*)$/;
 
 /** Parse `tsc --noEmit --pretty false` output. Exported so the sandbox can use it. */
 export function parseTsc(output: string): Finding[] {
-  const findings: Finding[] = [];
-  for (const raw of output.split("\n")) {
-    const m = TSC_LINE.exec(raw.trim());
-    if (m === null) continue;
-    findings.push(
-      finding({
-        file: m[1] ?? "",
-        line: Number(m[2]),
-        // It does not compile. Nothing downstream matters until it does.
-        severity: "high",
-        claim: ruleClaim(m[4], m[5] ?? "", "tsc"),
-        evidence: raw.trim(),
-        failureScenario: "the project does not typecheck, so this cannot ship as-is",
-      }),
-    );
-  }
-  return findings;
+  // GROUPED LIKE THE PATTERN ENGINES, and for the same reason — see `bySite`. The
+  // multi-site fix landed on semgrep and ast-grep and not here, leaving the defect the
+  // change was written for still live in the tier that runs on every review.
+  //
+  // Rarer here than in semgrep, because the key is the CLAIM and a compiler's message
+  // usually names the types involved — but "Object is possibly 'undefined'" and its like
+  // are byte-identical at every occurrence, and those are the ones a file has forty of.
+  const matched = output
+    .split("\n")
+    .map((raw) => ({ raw: raw.trim(), m: TSC_LINE.exec(raw.trim()) }))
+    .filter((x): x is { raw: string; m: RegExpExecArray } => x.m !== null);
+
+  return bySite(matched, ({ m }) => ({
+    claim: ruleClaim(m[4], m[5] ?? "", "tsc"),
+    file: m[1] ?? "",
+    line: Number(m[2]),
+  })).map(({ match: { m, raw }, file, lines }) => {
+    const first = lines[0];
+    return finding({
+      file,
+      ...(first !== undefined && first > 0 ? { line: first } : {}),
+      // It does not compile. Nothing downstream matters until it does.
+      severity: "high",
+      claim: ruleClaim(m[4], m[5] ?? "", "tsc"),
+      // The raw compiler line when there is one site: that is what a reader wants, and
+      // grouping must not rewrite the single case it was not built for.
+      evidence: lines.length < 2 ? raw : sitesEvidence("tsc", m[4] ?? "", file, lines),
+      failureScenario: "the project does not typecheck, so this cannot ship as-is",
+    });
+  });
 }
 
 // --------------------------------------------------------------------- eslint
@@ -392,22 +410,25 @@ export function parseEslint(stdout: string, worktree: string): Finding[] | undef
   const parsed = parseJson<EslintFile[]>(stdout);
   if (parsed === undefined) return undefined;
 
-  const findings: Finding[] = [];
-  for (const file of parsed) {
-    for (const m of file.messages) {
-      findings.push(
-        finding({
-          file: relativise(worktree, file.filePath),
-          ...(m.line !== undefined ? { line: m.line } : {}),
-          severity: m.severity === 2 ? "medium" : "low",
-          claim: ruleClaim(m.ruleId ?? undefined, m.message, "eslint"),
-          evidence: `eslint ${m.ruleId ?? ""} at ${relativise(worktree, file.filePath)}:${m.line ?? 0}`,
-          failureScenario: "violates a rule this project has chosen to enforce",
-        }),
-      );
-    }
-  }
-  return findings;
+  // GROUPED LIKE THE PATTERN ENGINES — see `bySite`. eslint is the loudest engine here
+  // and the most likely to match one rule many times in one file, so the silent collapse
+  // this fixes was at its worst exactly where it was least visible.
+  const flat = parsed.flatMap((f) => f.messages.map((m) => ({ m, path: relativise(worktree, f.filePath) })));
+  return bySite(flat, ({ m, path }) => ({
+    claim: ruleClaim(m.ruleId ?? undefined, m.message, "eslint"),
+    file: path,
+    line: m.line ?? 0,
+  })).map(({ match: { m }, file, lines }) => {
+    const first = lines[0];
+    return finding({
+      file,
+      ...(first !== undefined && first > 0 ? { line: first } : {}),
+      severity: m.severity === 2 ? "medium" : "low",
+      claim: ruleClaim(m.ruleId ?? undefined, m.message, "eslint"),
+      evidence: sitesEvidence("eslint", m.ruleId ?? "", file, lines),
+      failureScenario: "violates a rule this project has chosen to enforce",
+    });
+  });
 }
 
 // -------------------------------------------------------------------- semgrep
@@ -500,7 +521,7 @@ export function parseSemgrep(
 
   const findings: Finding[] = [];
   for (const { match: res, file, lines } of bySite(parsed.results ?? [], (r) => ({
-    rule: r.check_id ?? "semgrep",
+    claim: ruleClaim(r.check_id, r.extra?.message ?? "rule matched", "semgrep"),
     file: relativise(worktree, r.path),
     line: r.start?.line ?? 0,
   }))) {
@@ -560,7 +581,7 @@ async function astGrep(worktree: string): Promise<EngineOutcome> {
   // Grouped exactly as semgrep's are, and for the same reason — see `bySite`. ast-grep
   // reports 0-indexed lines; findings are 1-indexed everywhere else.
   const findings = bySite(parsed, (m) => ({
-    rule: m.ruleId ?? "ast-grep",
+    claim: ruleClaim(m.ruleId, m.message ?? "pattern matched", "ast-grep"),
     file: relativise(worktree, m.file),
     line: (m.range?.start?.line ?? -1) + 1,
   })).map(({ match: m, file, lines }) => {

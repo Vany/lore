@@ -250,3 +250,85 @@ describe("a file semgrep could not read", () => {
     expect(semgrepUnread(out)).toStrictEqual([]);
   });
 });
+
+/**
+ * AND THE SAME FOR THE ENGINES THAT RUN ON EVERY REVIEW.
+ *
+ * The multi-site fix landed on semgrep and ast-grep and not on eslint or tsc — so the
+ * exact defect the change was written for stayed live in the two engines that run most
+ * often.
+ *
+ * THE KEY IS THE CLAIM, not the rule id, because the claim is what the fingerprint
+ * hashes. That distinction matters most here: two `TS2345`s carry different messages and
+ * are different errors, so keying on the code would MERGE them — losing one, which is the
+ * same harm as the collapse arrived at from the other side. semgrep collapses precisely
+ * because its claim is the rule's generic message, identical at every match.
+ */
+describe("eslint and tsc group only genuinely identical diagnostics", () => {
+  it("groups two identical eslint messages and leaves distinct ones alone", () => {
+    const json = JSON.stringify([
+      {
+        filePath: "/w/src/a.ts",
+        messages: [
+          { ruleId: "eqeqeq", severity: 2, message: "Expected === and instead saw ==.", line: 4 },
+          { ruleId: "eqeqeq", severity: 2, message: "Expected === and instead saw ==.", line: 40 },
+          { ruleId: "no-unused-vars", severity: 2, message: "'x' is unused.", line: 12 },
+        ],
+      },
+    ]);
+    const f = parseEslint(json, "/w") ?? [];
+    expect(f, "the two identical ones become one; the distinct one stays its own").toHaveLength(2);
+    const eq = f.find((x) => x.claim.startsWith("eqeqeq"));
+    expect(eq?.evidence).toContain("src/a.ts:4");
+    expect(eq?.evidence).toContain("src/a.ts:40");
+    expect(eq?.evidence).toMatch(/2 SEPARATE SITES/);
+    expect(eq?.claim, "the sites live in the evidence, never in the hash").not.toMatch(/site|:40/);
+    expect(eq?.line, "the earliest site, so the reader starts at the top").toBe(4);
+  });
+
+  // Two of one rule with DIFFERENT messages are two defects, and merging them would lose
+  // one — the collapse this fixes, from the other direction.
+  it("does not merge one eslint rule's differing messages", () => {
+    const json = JSON.stringify([
+      {
+        filePath: "/w/src/a.ts",
+        messages: [
+          { ruleId: "no-unused-vars", severity: 2, message: "'x' is unused.", line: 4 },
+          { ruleId: "no-unused-vars", severity: 2, message: "'y' is unused.", line: 40 },
+        ],
+      },
+    ]);
+    expect(parseEslint(json, "/w") ?? []).toHaveLength(2);
+  });
+
+  it("groups a tsc message a file has many of", () => {
+    const out = [
+      "src/a.ts(3,7): error TS2532: Object is possibly 'undefined'.",
+      "src/a.ts(31,7): error TS2532: Object is possibly 'undefined'.",
+      "src/b.ts(9,1): error TS2532: Object is possibly 'undefined'.",
+    ].join("\n");
+    const f = parseTsc(out);
+    expect(f.map((x) => x.file).sort()).toStrictEqual(["src/a.ts", "src/b.ts"]);
+    const a = f.find((x) => x.file === "src/a.ts");
+    expect(a?.line).toBe(3);
+    expect(a?.evidence).toContain("src/a.ts:31");
+  });
+
+  it("does not merge two tsc errors that merely share a code", () => {
+    const out = [
+      "src/a.ts(3,7): error TS2345: Argument of type 'x' is not assignable.",
+      "src/a.ts(31,7): error TS2345: Argument of type 'y' is not assignable.",
+    ].join("\n");
+    expect(parseTsc(out), "different messages are different errors").toHaveLength(2);
+  });
+
+  // A single diagnostic must be unchanged — this is a grouping, not a rewrite, and tsc's
+  // one-site evidence is the raw compiler line, which is what a reader wants.
+  it("leaves a single tsc diagnostic exactly as it was", () => {
+    const one = "src/a.ts(3,7): error TS2345: Argument of type 'x' is not assignable.";
+    const f = parseTsc(one);
+    expect(f).toHaveLength(1);
+    expect(f[0]?.evidence).toBe(one);
+    expect(f[0]?.line).toBe(3);
+  });
+});

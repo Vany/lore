@@ -216,6 +216,41 @@ describe("an accepted appeal settles the class for that path", () => {
     expect(result.t0Unavailable.join("\n")).toContain("avoid-bind-all was NOT reported at src/hold.ts");
   });
 
+  /**
+   * AND THE REVIEWER IS NOT SHOWN THE RULE, which is the same promise the prompt makes.
+   *
+   * `knowledge_teach` says reviewers are told a project HAS development rules and never
+   * what they say, and that a rule's text arrives only with the appeal citing it. The
+   * suppression notice went into `t0.unavailable`, which `renderT0` turns into prompt
+   * text — so ONE accepted appeal would have injected its rule into every review of that
+   * repository, for ever. Precisely the standing injection the design refuses, arriving
+   * through the channel built to be honest about gaps.
+   */
+  it("tells the reviewer a check was silenced without quoting the rule at it", async () => {
+    await appeal(`rule ${cite()} — this service is behind the overlay`);
+
+    newReview("r2");
+    const reviewer = new ScriptedReviewer([[]]);
+    const t0 = t0Reporting(LOOPBACK);
+    await runRound({ store, reviewer, reviewId: "r2", principal: "p", worktree: dir, type: TYPE, ...(t0 ? { t0 } : {}) });
+
+    const prompt = reviewer.prompts[0] ?? "";
+    expect(prompt, "the tier is told the gap exists").toMatch(/was NOT reported at src\/hold\.ts/);
+    expect(prompt, "and NOT what the rule says").not.toContain("the container's network is the boundary");
+    // The ID may well appear — the author's own `lore-ok` comment is in the diff, and the
+    // reviewer must see the code as written. It is the rule's TEXT that must not be
+    // standing in the prompt, because that is what turns one appeal into a permanent
+    // injection for every later review.
+    // The escape hatch is stated, because a tier is not bound by a suppression an
+    // engine's rule bought — and a model finding cannot be silenced by class at all.
+    expect(prompt).toMatch(/free to raise the underlying problem yourself/);
+
+    // The CLIENT still gets the whole reason: that channel is the audit trail.
+    const skipped = store.unavailableChecks("r2").join("\n");
+    expect(skipped).toContain("the container's network is the boundary");
+    expect(skipped).toContain(cite());
+  });
+
   // A suppressed check is a check that did not run, and INV-1 governs it exactly as it
   // governs an engine that could not start. Silence here would be the failure this
   // service exists to refuse, dressed as a feature.

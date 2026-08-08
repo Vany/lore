@@ -116,7 +116,12 @@ await check("every tool carries a description an agent can act on", async () => 
 //
 // `review_inbox` is the one call that is safe to make here: it reads what is waiting for
 // this token and consumes nothing.
-await check("review_inbox answers, and consumes nothing", async () => {
+// NAMED FOR WHAT IT TESTS. It was "review_inbox answers, and consumes nothing" while
+// exercising only "answers" — the test-named-for-a-property-it-does-not-test shape this
+// repository's own taught rule calls worse than no test, and it was carrying the very
+// claim that turned out to be false. Non-consumption is asserted where it can be:
+// `service/http.test.ts`, with two calls and the same answer.
+await check("review_inbox answers", async () => {
   const res = await client.callTool({ name: "review_inbox", arguments: {} });
   const text = res.content?.[0]?.text ?? "";
   const body = JSON.parse(text);
