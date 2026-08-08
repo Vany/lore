@@ -47,6 +47,10 @@ THE REPLY CARRIES THE CALL, in a \`subscribe\` field, with this review's id alre
 — send that rather than assembling one from this description. It is repeated on every
 poll that is still waiting, and it is absent once the next move is yours.
 
+TWO SHAPES, SO YOU DO NOT HAVE TO GUESS. \`subscribe\` is the raw JSON-RPC frame;
+\`subscribe_filter\` is the same thing unwrapped, which is what an SDK's listen() helper
+takes. Use whichever matches the call you are making.
+
 You will be woken by \`notifications/resources/updated\` whenever the review's STATE
 changes — and only then. That is the moment there is something for you to do; findings
 being recorded mid-round is not, because you cannot submit until the round ends. Read
@@ -88,6 +92,11 @@ the first number is how a client waits twice as long as it needed to.
 Check the acknowledgement, do not assume. The ack echoes the subscriptions the server
 agreed to serve; if yours is not in it, you are not subscribed and nothing will ever
 arrive on that stream.
+
+READ THE NOTIFICATION, not your SDK's handle. notifications/subscriptions/acknowledged
+carries the filter the server agreed to. The TypeScript SDK's McpSubscription.honoredFilter
+can be empty on a subscription that is working perfectly, so a client that checked the
+handle would fall back to polling for no reason at all.
 
 Subscribe only to review ids YOU started. A subscription to somebody else's is
 accepted and then silent forever — deliberately, because refusing would confirm the id

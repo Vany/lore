@@ -38,6 +38,7 @@
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { initialState } from "../core/ladder.ts";
+import { subscribeTo } from "../mcp/server.ts";
 import { grantToken, revokeByPrefix } from "../mcp/auth.ts";
 import { reviewUri } from "../mcp/events.ts";
 import { DEFAULT_HEARTBEAT } from "../ops/heartbeat.ts";
@@ -170,6 +171,41 @@ const FINDING = {
 };
 
 describe("subscriptions/listen", () => {
+  /**
+   * THE FILTER WE HAND OUT IS THE ONE `listen()` TAKES.
+   *
+   * `review_start` and every waiting `review_poll` carry two shapes: `subscribe`, the raw
+   * JSON-RPC frame, and `subscribe_filter`, the same thing unwrapped. An SDK's listen()
+   * helper takes the second — give it the first and it sends a filter with no recognised
+   * keys, so the server honours nothing, acknowledges cheerfully, and the stream is
+   * silent for ever.
+   *
+   * The field is fed straight into `listen()` here, with no re-shaping, because a test
+   * that reshapes proves the reshaping rather than the field.
+   *
+   * IT IS NOT THE ANSWER TO THE DELIVERY PROBLEM, and this comment says so because I
+   * briefly wrote that it was. Driving the deployed service, a subscription was
+   * acknowledged and no wake ever arrived; the wrapped filter looked like the cause until
+   * this test was run against BOTH shapes and honoured both. The cause is still unknown.
+   */
+  it("hands out a filter that listen() honours, as-is", async () => {
+    // The very object `review_start` and a waiting `review_poll` put in their replies.
+    const handed = subscribeTo("revS") as {
+      subscribe: { method: string; params: { notifications: unknown } };
+      subscribe_filter: { resourceSubscriptions: string[] };
+    };
+    expect(handed.subscribe_filter, "an SDK helper needs the unwrapped shape").toBeDefined();
+    expect(handed.subscribe.params.notifications, "and the raw frame still carries the wrapped one")
+      .toStrictEqual(handed.subscribe_filter);
+
+    const sub = await alice.client.listen(handed.subscribe_filter);
+    expect(
+      sub.honoredFilter.resourceSubscriptions ?? [],
+      "honoured nothing — the client would wait for ever on an accepted stream",
+    ).toContain(reviewUri("revS"));
+    await sub.close();
+  });
+
   it("negotiates the modern protocol revision at all", () => {
     // If this fails, every other test in this file is testing the legacy fallback
     // and passing for the wrong reason. Named separately so that shows up as its

@@ -145,18 +145,31 @@ function nextStep(state: ReviewState): string {
  * So the concrete call travels in the reply, beside the interval. A client that copies
  * one field gets it right; one that reads none of them still has `check_back_after_ms`.
  */
-function subscribeTo(reviewId: string): object {
+export function subscribeTo(reviewId: string): object {
+  const filter = { resourceSubscriptions: [`lore://review/${reviewId}`] };
   return {
-    subscribe: {
-      method: "subscriptions/listen",
-      params: { notifications: { resourceSubscriptions: [`lore://review/${reviewId}`] } },
-    },
+    // The wire-accurate JSON-RPC call, for a client sending raw frames.
+    subscribe: { method: "subscriptions/listen", params: { notifications: filter } },
+    // AND THE FILTER ON ITS OWN, because an SDK helper takes a `SubscriptionFilter` while
+    // the frame above nests it under `notifications`. Handing one shape and naming the
+    // other call is an ambiguity a client has to resolve by reading an SDK's types, at
+    // the moment we are telling it to go away and wait.
+    //
+    // NOT a diagnosis of the delivery problem. Driving this service, a subscription was
+    // acknowledged and never woke, and the wrapped filter looked like the cause — it is
+    // not: `subscribe.test.ts` honours both shapes. The cause is still unknown and
+    // recorded as such rather than guessed at, which is the whole reason that test now
+    // feeds this field straight into `listen()` instead of re-shaping it.
+    subscribe_filter: filter,
     subscribe_note:
       "Send this ONCE and stop polling on a timer: you are woken on every STATE change, which is the " +
       "only moment there is anything for you to do. Then call review_poll ONCE straight away — a " +
       "subscription carries no history, so anything that happened before your stream opened is waiting " +
       "and nothing will announce it. CHECK THE ACKNOWLEDGEMENT: if your subscription is not echoed in it, " +
-      "you are not subscribed and nothing will ever arrive. " +
+      "you are not subscribed and nothing will ever arrive — read the acknowledgement " +
+      "NOTIFICATION itself (`notifications/subscriptions/acknowledged`), because an SDK handle's " +
+      "`honoredFilter` can be empty on a subscription that is working, and a client that trusted the " +
+      "handle would fall back for no reason. " +
       // The two walls I hit driving this service as a client, neither of which the old
       // text mentioned. Both produce an error that reads like a fault in lore.
       "TWO THINGS THAT LOOK LIKE LORE FAILING AND ARE NOT. (1) `subscriptions/listen` needs a 2026-07-28 " +
@@ -166,8 +179,9 @@ function subscribeTo(reviewId: string): object {
       "with your SDK's SUBSCRIPTION call, not as an ordinary request: an ordinary request applies your " +
       "client's request timeout to the whole stream, so the subscription is acknowledged and then cancelled " +
       "by your own client a minute later, and raising the timeout only moves the moment. On the TypeScript " +
-      "SDK that is `client.listen({ notifications: ... })`, which resolves on the acknowledgement and hands " +
-      "back a handle whose `closed` promise says WHY a stream ended. " +
+      "SDK that is `client.listen(...)`, and it takes `subscribe_filter` — `subscribe.params` nests the " +
+      "same thing under `notifications` for a raw frame. The handle's `closed` promise says WHY a stream " +
+      "ended. " +
       "If it still cannot be established, that is normal — fall back to `check_back_after_ms`.",
   };
 }

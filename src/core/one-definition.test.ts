@@ -355,6 +355,42 @@ describe("every target that touches the deployment is guarded", () => {
  * is the shape this file is about, and the honest response is not to pretend
  * otherwise but to make the copies unable to disagree quietly.
  */
+/**
+ * ...AND SO DOES THE WRITE CLOCK, which is the other half of the same duplication.
+ *
+ * `lastWriteAt` and `deploy/Makefile`'s `replica-state` answer the same question in two
+ * languages, for the reason the threshold does: `make status` must work while the service
+ * is DOWN. Extending the TypeScript side from five columns to fifteen left the shell at
+ * five, so the monitor a person runs and the monitor that pages disagreed about what
+ * counts as a write — and the shell one, the one used in an incident, was the blind one.
+ */
+describe("the write clock agrees with the shell that reimplements it", () => {
+  it("names the same timestamp columns on both sides", async () => {
+    const store = readFileSync(join(SRC, "store", "store.ts"), "utf8");
+    const makefile = readFileSync(join(SRC, "..", "deploy", "Makefile"), "utf8");
+    // Bounded by the surrounding CODE, not by brackets: the union's own `MAX(col)`
+    // parentheses close before the subquery's does, so any attempt to match the group
+    // stops one column in — which is how the first version of this check found nothing
+    // and said the store had no union at all.
+    const between = (text: string, from: string, to: string): string => {
+      const i = text.indexOf(from);
+      if (i === -1) return "";
+      const j = text.indexOf(to, i);
+      return j === -1 ? text.slice(i) : text.slice(i, j);
+    };
+    const columns = (region: string): string[] =>
+      [...region.matchAll(/MAX\((\w+)\)\s+(?:t\s+)?FROM\s+(\w+)/g)]
+        .map((m) => `${m[2] ?? ""}.${m[1] ?? ""}`)
+        .sort();
+    const inStore = columns(between(store, "lastWriteAt(", "return row?.t"));
+    expect(inStore.length, "did not find lastWriteAt's union — update this check").toBeGreaterThan(5);
+    expect(
+      columns(between(makefile, "replica-state:", "\nrept=")),
+      "deploy/Makefile's replica-state is blind to writes lastWriteAt counts",
+    ).toStrictEqual(inStore);
+  });
+});
+
 describe("the replica threshold agrees with the shell that reimplements it", () => {
   it("matches deploy/Makefile's replica-state", async () => {
     const { REPLICA_BEHIND_SEC } = await import("../ops/heartbeat.ts");
