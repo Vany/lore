@@ -498,6 +498,28 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       roundTree,
     );
   } catch (e) {
+    // WHAT IT SPENT BEFORE IT DIED. `Reviewer` recovers this from the session opencode
+    // leaves behind and attaches it to the error; without it a failed call writes no
+    // `usage` row at all, so the tokens it burned are invisible while the provider
+    // counted every one. Two 45-minute t1 attempts against an exhausted plan left our
+    // trailing-5h usage reading ZERO on 2026-08-09 — under-counting exactly when a quota
+    // calculation has to be right.
+    const spent = (e as { spent?: { input: number; cached: number; output: number } }).spent;
+    if (spent !== undefined) {
+      store.recordUsage({
+        repoId: review.repoId,
+        reviewId,
+        tier: tier.id,
+        ...(tier.model !== undefined ? { model: tier.model } : {}),
+        inputTokens: spent.input,
+        cachedTokens: spent.cached,
+        outputTokens: spent.output,
+        costUsd: 0,
+        // The row says the call did NOT succeed, so a reader cannot mistake recovered
+        // spend for a completed review.
+        outcome: "failed",
+      });
+    }
     // The row is already open, so whatever happens next this tier leaves evidence.
     // Before this existed, a `glm-5.2` call that ran 30 minutes and timed out wrote
     // NOTHING, and the operator view could not tell it from a tier that never

@@ -457,12 +457,44 @@ export class Reviewer implements ReviewerLike {
       // the repository after we had stopped listening. A timeout that only frees
       // the caller is not a budget — it just makes the spend invisible.
       await this.abort(sessionId);
+      // WHAT IT SPENT BEFORE IT DIED, recovered from the session it leaves behind.
+      //
+      // A call that fails writes no `usage` row, so the tokens it burned are invisible
+      // to us — and the provider counted every one. Measured 2026-08-09: two t1 attempts
+      // ran 45 minutes each against an exhausted Z.ai plan and our trailing-5h usage read
+      // ZERO, which is the shape a quota calculation must never have. It under-counts
+      // exactly when the provider is at its limit, which is the one moment it has to be
+      // right.
+      //
+      // The session survives the failure and its messages still carry per-message
+      // `tokens`, so this reads them back. Best-effort by construction: it must never
+      // mask the error that caused it, and an unreadable session simply records nothing
+      // — which is what happens today for every failure.
+      // ATTACHED TO THE ERROR, not stored on `this`. An instance field would be shared
+      // by every concurrent round — at LORE_MODEL_CONCURRENCY 4 one review's spend would
+      // be recorded against another's, which is worse than not recording it.
+      const spent = await this.usageOf(sessionId).catch(() => undefined);
+      if (spent !== undefined && e instanceof Error) {
+        (e as Error & { spent?: Usage }).spent = spent;
+      }
       throw e;
     } finally {
       if (reviewId !== undefined && this.sessions.get(reviewId) === sessionId) {
         this.sessions.delete(reviewId);
       }
     }
+  }
+
+  /**
+   * Tokens a session consumed, summed over its assistant messages.
+   *
+   * Read AFTER a failure, from the session opencode leaves behind. `cost` is deliberately
+   * not summed: these are subscriptions, every message reports 0, and a dollar figure that
+   * is structurally zero is the inert ceiling `/status` already warns about. Credits and
+   * tokens are the units that mean anything here.
+   */
+  private async usageOf(sessionId: string): Promise<Usage | undefined> {
+    return usageFromMessages(await this.client.session.messages({ path: { id: sessionId } }));
   }
 
   /**
@@ -825,6 +857,34 @@ export function isTooLong(message: string): boolean {
   const aboutLength = /too (?:long|large|many tokens)|maximum (?:context|prompt|input)|context (?:length|window)|max(?:imum)? length|length limit/i;
   const aboutInput = /prompt|context|input|message|token count|request body/i;
   return aboutLength.test(message) && aboutInput.test(message);
+}
+
+/**
+ * Tokens a session consumed, summed over its assistant messages.
+ *
+ * Exported so it can be aimed at: it is the input to any quota accounting, it runs only
+ * on the failure path where nothing else observes it, and getting it wrong under-counts
+ * silently. `cost` is deliberately not summed — these are subscriptions, every message
+ * reports 0, and a dollar figure that is structurally zero is the inert ceiling
+ * `/status` already warns about.
+ */
+export async function usageFromMessages(res: unknown): Promise<Usage | undefined> {
+  const rows = ((res as { data?: unknown[] } | undefined)?.data ?? []) as {
+    info?: { role?: string; tokens?: Record<string, unknown> };
+  }[];
+  let input = 0;
+  let cached = 0;
+  let output = 0;
+  for (const r of rows) {
+    if (r.info?.role !== "assistant") continue;
+    const t = r.info.tokens ?? {};
+    const cache = (t["cache"] ?? {}) as Record<string, unknown>;
+    input += Number(t["input"] ?? 0);
+    output += Number(t["output"] ?? 0);
+    cached += Number(cache["read"] ?? 0) + Number(cache["write"] ?? 0);
+  }
+  if (input + cached + output === 0) return undefined;
+  return { input, cached, output, cost: 0 };
 }
 
 interface Usage {

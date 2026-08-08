@@ -15,7 +15,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Exhausted, TooLargeForTier } from "../core/errors.ts";
 import { CLAIM_MAX } from "../core/finding.ts";
 import type { Tier } from "../core/ladder.ts";
-import { Reviewer, countStepParts, extractFindings, splitModel, toolsUsed, isTooLong } from "./opencode.ts";
+import { Reviewer, countStepParts, extractFindings, splitModel, toolsUsed, isTooLong, usageFromMessages } from "./opencode.ts";
 
 const TIER: Tier = { id: "t1", kind: "model", model: "openrouter/z-ai/glm-5.2", stage: "fast" };
 
@@ -800,5 +800,48 @@ describe("classifying a provider error as a window that was too small", () => {
 
   it.each(notTooLong)("does NOT read %s as too long", (message) => {
     expect(isTooLong(message), `${message} — this would silently downgrade the review`).toBe(false);
+  });
+});
+
+/**
+ * A CALL THAT FAILS STILL SPENT SOMETHING, and until 2026-08-09 we recorded none of it.
+ *
+ * `usage` rows are written only on success, so a failed call's tokens were invisible —
+ * while the provider counted every one. Measured that day: two t1 attempts ran 45 minutes
+ * each against an exhausted Z.ai plan, and the trailing-5h usage read ZERO. Any quota
+ * accounting built on that under-counts exactly when the provider is at its limit, which
+ * is the one moment it has to be right.
+ *
+ * The session survives the failure and its messages still carry per-message `tokens`, so
+ * the spend is read back from there.
+ */
+describe("spend recovered from a call that failed", () => {
+  const messages = (rows: unknown[]) => ({ data: rows });
+
+  it("sums the assistant messages, including cache reads and writes", async () => {
+    const sum = await usageFromMessages(
+      messages([
+        { info: { role: "user", tokens: { input: 999 } } },
+        { info: { role: "assistant", tokens: { input: 10, output: 3, cache: { read: 100, write: 5 } } } },
+        { info: { role: "assistant", tokens: { input: 20, output: 7, cache: { read: 200, write: 0 } } } },
+      ]),
+    );
+    // The user turn is not the model's spend; cache read AND write both count.
+    expect(sum).toStrictEqual({ input: 30, cached: 305, output: 10, cost: 0 });
+  });
+
+  // Nothing spent is `undefined`, never a row of zeroes: a zero row is
+  // indistinguishable from a call that ran and used nothing, and this must not invent
+  // spend it cannot see.
+  it("reports nothing rather than zero when the session shows no tokens", async () => {
+    expect(await usageFromMessages(messages([{ info: { role: "assistant", tokens: {} } }]))).toBeUndefined();
+    expect(await usageFromMessages(messages([]))).toBeUndefined();
+  });
+
+  // Subscriptions report cost 0 on every message, so a dollar total is structurally
+  // meaningless here — the units that mean anything are tokens and credits.
+  it("does not pretend to a dollar cost", async () => {
+    const sum = await usageFromMessages(messages([{ info: { role: "assistant", tokens: { input: 1, output: 1 } } }]));
+    expect(sum?.cost).toBe(0);
   });
 });
