@@ -42,15 +42,34 @@ import { request as httpsRequest } from "node:https";
 //
 // The "wastes spend ceiling budget" half does not hold today for a more embarrassing
 // reason: both configured vendors are subscriptions reporting cost_usd = 0, so the
-// ceiling sums zero and guards nothing (D-50, open). A shorter timeout would not
-// protect a budget nothing is measuring.
+// ceiling sums zero and guards nothing (D-50, open). This is not that ceiling: it is a
+// hang detector, and the abort on every failure path is what frees the session once it
+// fires.
+// 45 MINUTES, AND THE NUMBER IS MEASURED RATHER THAN CHOSEN.
 //
-// What DOES bound a stuck call is the abort on every failure path, added after three
-// abandoned T2 calls kept exploring and consumed ~3.7M cache-read tokens. Revisit
-// this number when usage.steps has a distribution behind it — that is the same
-// [OPEN] as the exploration cap, and setting either from a guess is what D-50
-// exists to refuse.
-export const DEFAULT_TIMEOUT_MS = 30 * 60_000;
+// This bounds a HANG. It is not a budget, and if it sits below a legitimate call it stops
+// being a hang detector and becomes truncation — which is what 30 minutes was: the
+// recorded maximum across every tier is 1851s (a t2 round on this repository), so 1800s
+// was already below an observed good call and would have killed it.
+//
+// The distribution behind this, from `usage.latency_ms` on 2026-08-08:
+//
+//   | tier | n   | p50  | p90   | max   |
+//   |------|-----|------|-------|-------|
+//   | t1   | 129 | 322s | 590s  | 1250s |
+//   | t2   | 68  | 762s | 1275s | 1851s |
+//   | t3   | 22  | 147s | 1633s | 1766s |
+//
+// 2700s clears the observed maximum by 46%. A hang therefore costs at most 45 minutes
+// where it previously cost hours — a t2 ran 2h46m before the provider refused it — and no
+// call anybody has ever recorded is cut short.
+//
+// PER-TIER WOULD BE BETTER and is deliberately not done here: the opencode client is
+// built once and shared, so it would mean a client per tier, and the numbers above are
+// not yet a distribution worth splitting on for t3 (n=22). That is the same [OPEN] as the
+// exploration cap — D-50 refuses a threshold set from a guess, and this one is set from
+// the only thing that is not one.
+export const DEFAULT_TIMEOUT_MS = 45 * 60_000;
 
 export function longFetch(timeoutMs = DEFAULT_TIMEOUT_MS): (request: Request) => Promise<Response> {
   return async (request: Request): Promise<Response> => {
