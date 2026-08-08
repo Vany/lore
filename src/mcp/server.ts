@@ -852,7 +852,21 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       // because the agent kept exploring after lore stopped listening. So a cancel
       // that only marks a row would be worse than none — the operator would see a
       // stopped review and have no reason to suspect it was still billing.
-      const aborted = (await deps.reviewer?.cancel?.(review_id).catch(() => false)) ?? false;
+      // THREE OUTCOMES, NOT TWO. `aborted` false used to mean "nothing was in flight",
+      // and it also meant "I was never given a reviewer, so I could not look" — which is
+      // what the deployed service actually did. `startHttp` was built with `store`,
+      // `worktreeFor`, `enqueue` and `attest` and no `reviewer`, so this expression was
+      // `undefined ?? false` on every cancel there has ever been, and the reply said
+      // "No model call was in flight" while a screen session created 45 seconds earlier
+      // went on running. Measured 2026-08-08 on rev_NYiv0xfO: `stopped_in_flight: false`,
+      // opencode still holding the session, lore's gate still holding the slot.
+      //
+      // The wiring is fixed in `service/main.ts`. This stays because the CLI and the
+      // tests legitimately build a server without one, and INV-1 applies to a cancel
+      // exactly as it applies to a review: not knowing whether the spend stopped is a
+      // thing to SAY, not a thing to round down to "no".
+      const canAbort = deps.reviewer?.cancel !== undefined;
+      const aborted = canAbort && ((await deps.reviewer?.cancel?.(review_id).catch(() => false)) ?? false);
 
       // EVERYTHING RAISED SO FAR, delivered or not. A cancelled review still found
       // what it found, and those findings are the only thing of value it produced;
@@ -865,7 +879,7 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
         JSON.stringify({
           review_id,
           state: "cancelled",
-          stopped_in_flight: aborted,
+          stopped_in_flight: canAbort ? aborted : null,
           findings: all.map((f) => ({
             fingerprint: f.fingerprint.slice(0, 8),
             file: f.file,
@@ -880,9 +894,13 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
             `Stopped. ${all.length} finding(s) it had already produced are above and are yours to act on — ` +
             "they are real. What the remaining tiers would have found is UNKNOWN, so this is not a pass and " +
             "not evidence the branch is clean. Everything it learned about this repository is kept. " +
-            (aborted
-              ? "The model call in flight was aborted, so it has stopped spending."
-              : "No model call was in flight."),
+            (!canAbort
+              ? "WHETHER A MODEL CALL IS STILL RUNNING IS UNKNOWN — this server was built without a reviewer, " +
+                "so nothing here could reach a session to abort it. If one was in flight it is still exploring " +
+                "and still spending. Tell an operator."
+              : aborted
+                ? "The model call in flight was aborted, so it has stopped spending."
+                : "No model call was in flight."),
         }),
       );
     },

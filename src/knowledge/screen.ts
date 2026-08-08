@@ -45,6 +45,7 @@
  * SPEC: spec/knowledge.md §2.1.2
  */
 
+import { TooLargeForTier } from "../core/errors.ts";
 import type { Tier } from "../core/ladder.ts";
 import { extractList, type Listed, type SessionResult } from "../reviewer/opencode.ts";
 import type { Candidate, Screen, Screened } from "./ingest.ts";
@@ -235,8 +236,32 @@ export function screenFor(
   } = {},
 ): Screen {
   const { reviewId, spent, stillWanted } = opts;
+  /**
+   * Why this screen has stopped asking, once it has.
+   *
+   * ONE FAULT ENDS THE PASS, and this is the most expensive thing in this file.
+   *
+   * The screen is one call PER DOCUMENT and it fails open, so a tier that cannot answer
+   * at all was asked again for every remaining document — each one waiting out the full
+   * 2700s hang deadline. Measured 2026-08-08 on rev_NYiv0xfO: t1's Z.ai plan was
+   * exhausted until 2026-08-10, six documents had changed, and the review sat in the
+   * screen for 45 minutes per document, never reaching a tier at all. Four and a half
+   * hours to learn one fact six times.
+   *
+   * It costs nothing to stop. The remaining documents are stamped `UNSCREENED`, which is
+   * exactly what a single failure already did to the one it happened on, and that stamp
+   * is what brings the next ingest back to do the work. Degrading, not thrashing.
+   */
+  let stopped: string | undefined;
   return async (doc, candidates) => {
     if (candidates.length === 0) return { kept: [], refused: [], ran: true };
+    if (stopped !== undefined) {
+      // Said once per document rather than swallowed: a screen that quietly stopped
+      // running would look identical to one that found nothing to refuse, and the whole
+      // point of `ran: false` is that those two are different facts.
+      console.error(`[lore:log] knowledge screen skipped ${doc} — ${stopped}`);
+      return { kept: candidates, refused: [], ran: false };
+    }
 
     try {
       const result = await ask(
@@ -269,7 +294,22 @@ export function screenFor(
       // knowledge base is the product, and a review running without it is worth less
       // than a review running with a fifth of its rules being fragments. `ran: false`
       // is what makes this recoverable rather than a silent downgrade.
-      console.error(`[lore:log] knowledge screen did not run for ${doc}: ${e instanceof Error ? e.message : String(e)}`);
+      const why = e instanceof Error ? e.message : String(e);
+      console.error(`[lore:log] knowledge screen did not run for ${doc}: ${why}`);
+      // WHICH FAULTS END THE PASS, and the split is between the tier and the document.
+      //
+      // `TooLargeForTier` is about THIS document's prompt — the next one may be a tenth
+      // the size and screen perfectly — so it must not condemn the rest. Everything else
+      // that reaches here is a property of the tier or the provider: an exhausted plan, a
+      // rejected key, an unreachable opencode, a hang. None of those becomes untrue by
+      // asking about a different document, and each costs the full deadline to re-learn.
+      //
+      // Erring toward stopping is the cheap direction. Stopping wrongly costs one ingest's
+      // screening, recovered automatically on the next review; continuing wrongly costs
+      // 45 minutes per remaining document, and the review has not started yet.
+      if (!(e instanceof TooLargeForTier)) {
+        stopped = `${tier.id} (${tier.model ?? "?"}) could not answer and will not be asked again this pass: ${why}`;
+      }
       return { kept: candidates, refused: [], ran: false };
     }
   };

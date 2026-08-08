@@ -180,6 +180,8 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-48** | A tier that cannot ANSWER — unfundable, or dead after its retry — is *skipped*, not fatal — `passed_partial` | confirmed; widened 2026-08-08 |
 | **D-84** | **Z.ai names its limit and its reset time; opencode swallows both.** Quota reaches lore as a hang, not a status code | measured 2026-08-09 |
 | **D-85** | A tier on a metered plan carries `skip_if_quota` — one attempt, then skip. A failed call's tokens are recorded | built 2026-08-09 |
+| **D-86** | **A cancel stops both ends**, and `stopped_in_flight: null` says when the server could not look | built 2026-08-09 |
+| **D-87** | The knowledge screen stops for the pass on a fault that belongs to the TIER, not to the document | built 2026-08-09 |
 | **D-49** | A single-vendor ladder reaches `passed_partial`, never `passed` | confirmed |
 | **D-50** | Exploration is **counted per review before it is capped**; no cap yet | `[OPEN]` |
 | **D-51** | An accepted justification is **repo knowledge**, carried across reviews | confirmed |
@@ -1356,6 +1358,58 @@ was skipped. That is not cosmetic: the entire purpose of telling a tier where it
 (D-31/32) is to stop it re-deriving what the tiers below established — so a tier told the
 easy defects are gone, when nobody looked for them, deliberately looks past exactly the
 defects nobody has looked for. It counts tiers that can actually run.
+
+**D-86 — a cancel stops both ends, and says so when it could not.**
+
+Cancelling has two halves and lore was doing neither reliably.
+
+**Telling opencode to stop does not free lore.** `session.prompt` is one long HTTP
+request, and the server abandoning the model does nothing to it. Measured 2026-08-08:
+three sessions aborted through opencode's API all answered 200, and ninety seconds later
+`/status` still read `inFlight: 2` with **no active review at all** — provider slots held
+for reviews that no longer existed, until each hit its 2700s deadline. `Reviewer` now
+keeps an `AbortController` per session and passes its signal to the request, so `abort`
+does both: opencode stops the model, lore stops waiting. Ours goes first because it is
+instant and cannot fail, and a slow opencode must not hold a client's cancel open.
+
+**A cancelled request is named as ours, not as the tier failing.** Everything downstream
+treats a throw as the tier misbehaving — `runRound` closes the tier run `failed`,
+`tierFailureCount` counts it, and one more count promotes that tier's work to a dearer
+one. A cancel presenting as a tier failure would spend somebody else's quota answering
+for a review a person deliberately ended. `longFetch` carries `AbortSignal.reason` for
+the same reason: a cancel, an idle socket and a blown deadline all arrived at the caller
+as the word *aborted*, and they lead three different places.
+
+**`stopped_in_flight` is three-valued.** The deployed service could not abort anything at
+all: `startHttp` was built with `store`, `worktreeFor`, `enqueue` and `attest` and **no
+reviewer**, so `deps.reviewer?.cancel?.()` was `undefined ?? false` on every cancel it
+ever served, and the reply told the client *"No model call was in flight"* while a
+session opened seconds earlier ran on. `null` now means *this server could not look*,
+distinct from `false` meaning *nothing was running*. INV-1 applies to a cancel exactly as
+to a review. The wiring is fixed; `src/service/cancel-wiring.test.ts` fails without it,
+because every other test in the suite built the server the same broken way production did
+— so the defect was the only path under test.
+
+**D-87 — the knowledge screen stops for the pass on a fault that belongs to the tier.**
+
+The screen is one model call per changed document and it fails open, so a tier that could
+not answer at all was asked again for every remaining document, each waiting out the full
+hang deadline. On 2026-08-08 t1's plan was exhausted, six documents had changed, and a
+review sat in the screen for 45 minutes per document — four and a half hours — and never
+reached a tier at all. The answer was known after the first call and re-bought five more
+times. `skip_if_quota` (D-85) did not help: it governs the ladder's retry, and the screen
+runs before `openTierRun` and had never heard of it.
+
+The split is between the TIER and the DOCUMENT. `TooLargeForTier` is about this
+document's prompt — the next may be a tenth the size — so it does not condemn the pass.
+An exhausted plan, a rejected key, an unreachable opencode or a hang are properties of
+the tier, and none becomes untrue by asking about a different file.
+
+Stopping costs nothing that was not already lost: the remaining documents are stamped
+`unscreened`, which is exactly what one failure already did to the document it happened
+on, and that stamp is what brings the next ingest back to do the work. Erring toward
+stopping is the cheap direction — stopping wrongly costs one ingest's screening,
+continuing wrongly costs the deadline per document before the review has begun.
 
 **D-82 — a defect found is fixed now; recording it is the exception.**
 

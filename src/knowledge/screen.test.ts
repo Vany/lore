@@ -10,6 +10,7 @@
  */
 
 import { describe, expect, it } from "vitest";
+import { TooLargeForTier } from "../core/errors.ts";
 import type { Tier } from "../core/ladder.ts";
 import type { Candidate } from "./ingest.ts";
 import { partition, screenFor, screenPrompt, type Ask } from "./screen.ts";
@@ -150,6 +151,58 @@ describe("screenFor", () => {
         refused: 1,
       },
     ]);
+  });
+
+  /**
+   * ONE FAULT ENDS THE PASS — the four-and-a-half-hour bug.
+   *
+   * The screen is one call per document and it fails open, so a tier that could not
+   * answer at all was asked again for every remaining document, each waiting out the
+   * full 2700s hang deadline. On 2026-08-08 t1's plan was exhausted, six documents had
+   * changed, and rev_NYiv0xfO sat in the screen for 45 minutes a document and never
+   * reached a tier. Asking costs three quarters of an hour; the answer was already known
+   * after the first one.
+   */
+  it("stops asking a tier that could not answer, and stamps the rest unscreened", async () => {
+    let asked = 0;
+    const ask: Ask = () => {
+      asked++;
+      return Promise.reject(new Error("quota exhausted"));
+    };
+    const screen = screenFor(ask, TIER, "/tmp/wt");
+
+    const first = await screen("SPEC.md", candidates("A rule never outlives the text that justified it"));
+    const second = await screen("PROG.md", candidates("Fakes must not be kinder than production"));
+    const third = await screen("MEMO.md", candidates("Cost. Something must happen"));
+
+    expect(asked, "asked once, not once per document").toBe(1);
+    // Every document still keeps its candidates and still says it did not run — the
+    // knowledge base is the product, and stopping early must degrade nothing but speed.
+    for (const out of [first, second, third]) {
+      expect(out.ran).toBe(false);
+      expect(out.kept).toHaveLength(1);
+      expect(out.refused).toStrictEqual([]);
+    }
+  });
+
+  // THE OTHER HALF OF THAT SPLIT. `TooLargeForTier` is about THIS document's prompt, not
+  // about the tier — the next document may be a tenth the size and screen perfectly — so
+  // it must not condemn the rest of the pass. Getting this wrong silently stops screening
+  // a whole repository because one long file did not fit.
+  it("keeps going after a document too large for the tier", async () => {
+    let asked = 0;
+    const ask: Ask = () => {
+      asked++;
+      return Promise.reject(
+        TooLargeForTier.refusedAsTooLong(TIER.id, TIER.model ?? "", 900_000, "prompt is too long"),
+      );
+    };
+    const screen = screenFor(ask, TIER, "/tmp/wt");
+
+    await screen("HUGE.md", candidates("A rule never outlives the text that justified it"));
+    await screen("SMALL.md", candidates("Cost. Something must happen"));
+
+    expect(asked, "the second document gets its own chance").toBe(2);
   });
 
   // A session that never completed cost nothing we can attribute, and inventing a zero

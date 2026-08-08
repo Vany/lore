@@ -53,7 +53,7 @@ pushed first. *Push, then review.*
 
 ## 2. Tools
 
-Ten, registered with **underscores**. The dotted form is prose, not an address —
+Twelve, registered with **underscores**. The dotted form is prose, not an address —
 every document here once used it and an agent following them literally called
 nothing.
 
@@ -62,6 +62,7 @@ nothing.
 | `review_start` | `branch*`, `into*`, `ticket*`, `type` | `{review_id, state: "queued", note}` — returns immediately |
 | `review_poll` | `review_id*` | `{state, clean, note, new_findings[], open_count}` — §2.1.1 |
 | `review_submit` | `review_id*`, `diff*`, `tree_hash*` | `{review_id, state, tree_hash}` |
+| `review_cancel` | `review_id*`, `reason` | `{state: "cancelled", stopped_in_flight, findings[], note}` — §2.5 |
 | `review_attest` | `review_id*` | the signed line, with its tree hash |
 | `review_inbox` | — | `{reviews[], needs_human, note}` across all the caller's reviews |
 | `review_vex` | `review_id*` | `{summary, untriaged, document}` — CycloneDX VEX |
@@ -471,6 +472,39 @@ Measured before the refusal existed: six reviews of one branch in two hours, and
 Refused rather than silently returning the open review: handing back an id that is not
 the one asked for is a quiet substitution. `restart: true` is the deliberate way
 through when a rebase or force-push has made the pinned snapshot meaningless.
+
+### 2.5 `review_cancel` stops both ends, and says when it could not
+
+`cancelled` is its own terminal state, not `expired`: expired means nobody came back,
+cancelled means somebody decided. The findings already raised come back with it — the
+tiers that ran did read the code — and everything learned about the repository is kept.
+
+**Stopping means stopping in two places.** Abandoning the HTTP call does not stop the
+model: an agent once went on reading a repository for millions of tokens after lore
+had stopped listening. Telling opencode to abort does not free lore either — that was
+measured on 2026-08-08, when three aborted sessions all answered 200 and the gate still
+read `inFlight: 2` ninety seconds later, holding provider slots for reviews that no
+longer existed until each hit its 2700s deadline. So `cancel` aborts the session **and**
+the request: opencode stops the model, lore stops waiting for it.
+
+**`stopped_in_flight` has three values, and they are three different claims.**
+
+| value | claim |
+|---|---|
+| `true` | a call was running; it has been stopped at both ends |
+| `false` | nothing was running |
+| `null` | **this server could not look** — no reviewer was wired into it |
+
+`null` exists because the deployed service answered `false` for months without being
+able to look at all: `startHttp` was built with `store`, `worktreeFor`, `enqueue` and
+`attest` and no reviewer, so the handler's `deps.reviewer?.cancel?.()` was
+`undefined ?? false` on every cancel it ever served — rendered to the client as *"No
+model call was in flight"* while a session opened seconds earlier ran on. A cancel that
+cannot stop the model is worse than no cancel, because the operator sees a stopped
+review and has no reason to suspect it is still billing. INV-1 applies to a cancel
+exactly as it applies to a review: not knowing is a thing to say, not a thing to round
+down to *no*. A deployed lore never answers `null`; the CLI and the tests can, and
+`src/service/cancel-wiring.test.ts` is what keeps the deployment honest.
 
 ## 3. Review state machine
 

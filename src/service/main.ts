@@ -261,6 +261,20 @@ export async function serve(cfg: ServiceConfig): Promise<() => void> {
     store,
     {
       store,
+      // THE SAME REVIEWER THE WORKER USES, so `review_cancel` can reach the session it
+      // is cancelling. Omitting it was not a missing feature: it made `review_cancel`
+      // unable to stop spend in the only build that matters, and — worse — say so
+      // backwards. `deps.reviewer?.cancel?.()` collapsed to `undefined ?? false`, which
+      // the reply rendered as "No model call was in flight" while an opencode session
+      // opened seconds earlier kept running and lore's gate kept holding its slot
+      // (measured on rev_NYiv0xfO, 2026-08-08). A cancel that cannot stop the model is
+      // the failure mode `Reviewer.cancel`'s own comment calls worse than no cancel at
+      // all, and it shipped because nothing connected the two objects.
+      //
+      // ONE INSTANCE, deliberately: `sessions` maps review id to the session in flight,
+      // and a second Reviewer would have a second, empty map — a cancel that looks in
+      // the wrong drawer and truthfully reports finding nothing.
+      reviewer,
       // `review_submit` needs a worktree to apply a diff into and hash. That makes
       // this a base-cutting path exactly as much as the worker's is, so it asks the
       // same question through the same function — it used to call `addWorktree`

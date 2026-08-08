@@ -252,6 +252,15 @@ export class Reviewer implements ReviewerLike {
   private limits?: Promise<Map<string, number>>;
   /** review id -> the opencode session currently reading for it, so `cancel` can stop it. */
   private readonly sessions = new Map<string, string>();
+  /**
+   * session id -> the controller for OUR request to it.
+   *
+   * Separate from `sessions` because they answer different questions and have different
+   * lifetimes: `sessions` says which session belongs to a review, this says which socket
+   * is still open. `propose` has no review id and so no entry in the first map, but its
+   * request hangs exactly as a review's does.
+   */
+  private readonly aborters = new Map<string, AbortController>();
 
   constructor(cfg: ReviewerConfig = DEFAULT_REVIEWER) {
     this.cfg = cfg;
@@ -446,6 +455,19 @@ export class Reviewer implements ReviewerLike {
     // a stale entry would have a later cancel abort a session that had already ended,
     // or worse, one belonging to a different round of the same review.
     if (reviewId !== undefined) this.sessions.set(reviewId, sessionId);
+    // AND OUR OWN END OF THE WIRE, because telling opencode to stop does not free us.
+    //
+    // Measured 2026-08-08: three sessions aborted through opencode's API all answered
+    // 200, and ninety seconds later `/status` still read `inFlight: 2` with no active
+    // review at all. `session.prompt` is one long HTTP request, and nothing about the
+    // server abandoning the model closes it — so lore went on waiting for a reply that
+    // could never come, holding a provider slot for a review that no longer existed,
+    // until its own 2700s deadline expired.
+    //
+    // Two halves of one act, and `abort` now does both: opencode stops the model, this
+    // stops us waiting for it.
+    const aborter = new AbortController();
+    this.aborters.set(sessionId, aborter);
 
     try {
       return await this.conduct(sessionId, tier, prompt, worktree, started, extract, contract);
@@ -482,6 +504,10 @@ export class Reviewer implements ReviewerLike {
       if (reviewId !== undefined && this.sessions.get(reviewId) === sessionId) {
         this.sessions.delete(reviewId);
       }
+      // Same reason the session entry goes: a controller left behind would let a later
+      // cancel abort a request that has already finished, and would leak one entry per
+      // session for the life of the process.
+      this.aborters.delete(sessionId);
     }
   }
 
@@ -510,6 +536,16 @@ export class Reviewer implements ReviewerLike {
    * values.
    */
   private async abort(sessionId: string): Promise<void> {
+    // OURS FIRST, and it is instant. Asking opencode is a network call that can itself
+    // hang, and `cancel` awaits this — so a slow opencode would hold a client's cancel
+    // open while we sat waiting for a reply we had already decided to discard. Freeing
+    // our own socket cannot fail and cannot block, so it goes first.
+    //
+    // It does NOT stop the model. That is what the request below is for, and the order
+    // between them matters only for how fast the caller is released.
+    this.aborters.get(sessionId)?.abort(new Error(`session ${sessionId} was aborted by lore`));
+    this.aborters.delete(sessionId);
+
     const failure = await this.client.session
       .abort({ path: { id: sessionId } })
       .then((r) => ((r.response?.status ?? 200) >= 400 ? `opencode answered ${r.response?.status}` : undefined))
@@ -745,10 +781,25 @@ export class Reviewer implements ReviewerLike {
     text: string,
     worktree: string,
   ): Promise<{ text: string; usage: Usage }> {
+    // LOUD, not `?? null`. A missing controller means this request cannot be cancelled,
+    // which is precisely the defect the controller was added to fix — and defaulting to
+    // "no signal" would restore it silently for whatever new caller forgot to register
+    // one. `conductSession` is the only way in and it always registers, so reaching this
+    // is a programming error and should read as one.
+    const signal = this.aborters.get(sessionId)?.signal;
+    if (signal === undefined) {
+      throw new DidNotRun(`session ${sessionId} has no abort controller — it would be impossible to cancel`);
+    }
     try {
       const res = await this.client.session.prompt({
         path: { id: sessionId },
         query: { directory: worktree },
+        // THE ONE THING THAT MAKES A CANCEL REACH THIS REQUEST. The generated client
+        // spreads its options into the `RequestInit` it builds (`client.gen.js`:
+        // `{redirect, ...opts, body}` → `new Request(url, requestInit)`), and
+        // `longFetch` destroys the socket when that signal fires. Without it, `abort`
+        // freed opencode and left us holding an open request until the 2700s deadline.
+        signal,
         body: {
           model: splitModel(tier.model ?? ""),
           agent: this.cfg.agent,
@@ -834,6 +885,15 @@ export class Reviewer implements ReviewerLike {
       // match, "rate limit exceeded" and "quota exceeded" do not.
       if (isTooLong(message)) {
         throw TooLargeForTier.refusedAsTooLong(tier.id, tier.model ?? "", text.length, message);
+      }
+      // WE STOPPED THIS, and saying so is not decoration. Everything below this line in
+      // the caller treats a throw as the tier misbehaving: `runRound` closes the tier
+      // run `failed`, `tierFailureCount` counts it, and one more such count promotes the
+      // tier's work to a dearer one. A cancel that presented as "tier t1 failed" would
+      // spend somebody else's quota answering for a review a person deliberately ended,
+      // and would leave a failure in the record naming the wrong culprit.
+      if (this.aborters.get(sessionId)?.signal.aborted === true || /aborted by lore/.test(message)) {
+        throw new DidNotRun(`tier ${tier.id} (${tier.model}) was stopped by lore, not by the provider: ${message}`, e);
       }
       throw new DidNotRun(`tier ${tier.id} (${tier.model}) failed: ${message}`, e);
     }

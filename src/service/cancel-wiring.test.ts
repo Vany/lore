@@ -1,0 +1,118 @@
+/**
+ * `review_cancel` must be able to reach the model call it is cancelling.
+ *
+ * On 2026-08-08 it could not, in the only build that matters. `startHttp` was given
+ * `store`, `worktreeFor`, `enqueue` and `attest` — and no reviewer — so the handler's
+ * `deps.reviewer?.cancel?.(id)` evaluated to `undefined ?? false` on every cancel the
+ * service had ever served. The reply then rendered that `false` as **"No model call was
+ * in flight"** while an opencode session opened forty-five seconds earlier went on
+ * running and lore's own gate went on holding its provider slot.
+ *
+ * `Reviewer.cancel`'s comment already says a cancel that only marks a row is worse than
+ * no cancel at all, because the operator sees a stopped review and has no reason to
+ * suspect it is still billing. That is exactly what shipped, and nothing caught it,
+ * because every existing test builds the server the same way production did — without a
+ * reviewer — so the broken path was the only path under test.
+ *
+ * So this file tests the WIRING, through `serve()`, which is the thing that was wrong.
+ * A unit test of the handler cannot see this defect: the handler was correct.
+ */
+
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { initialState } from "../core/ladder.ts";
+import { grantToken } from "../mcp/auth.ts";
+import { Store } from "../store/store.ts";
+import { serve } from "./main.ts";
+
+let dir: string;
+let stop: (() => void) | undefined;
+let token: string;
+const PORT = 17_791;
+
+beforeEach(() => {
+  dir = mkdtempSync(join(tmpdir(), "lore-cancel-"));
+  // Seeded before the service opens the file, so `serve` finds a repo, a token and a
+  // review already there. Closed again: two writers on one SQLite file is the fault
+  // that cost this project three databases.
+  const store = new Store(join(dir, "lore.db"));
+  const repo = store.upsertRepo("demo", "git@x:demo.git");
+  token = grantToken(store, repo.id, "alice");
+  store.createReview({
+    id: "rev_cancel_me",
+    repoId: repo.id,
+    principal: "alice",
+    branch: "feat/x",
+    intoRef: "main",
+    ticket: "do the thing",
+    type: "code-arch",
+    state: "running",
+    ladder: initialState(),
+  });
+  store.close();
+});
+
+afterEach(() => {
+  stop?.();
+  stop = undefined;
+  rmSync(dir, { recursive: true, force: true });
+});
+
+// lore-ok[8f44300f]: rule de7fb2b3 — this is the test's own server, bound to 127.0.0.1
+// on a fixed port moments earlier and spoken to from the same process. There is no
+// transport to encrypt, and no real review, branch or finding exists inside it.
+const cancel = async (): Promise<Record<string, unknown>> => {
+  const res = await fetch(`http://127.0.0.1:${String(PORT)}/mcp`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      accept: "application/json, text/event-stream",
+      authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: { name: "review_cancel", arguments: { review_id: "rev_cancel_me", reason: "testing the wiring" } },
+    }),
+  });
+  const line = (await res.text()).split("\n").find((l) => l.startsWith("data:"));
+  const rpc = JSON.parse((line ?? "").slice("data:".length)) as { result?: { content?: { text?: string }[] } };
+  return JSON.parse(rpc.result?.content?.[0]?.text ?? "{}") as Record<string, unknown>;
+};
+
+describe("the deployed service's review_cancel", () => {
+  /**
+   * `null` is the state this test exists to forbid, and `false` is the state it wants.
+   *
+   * The two are not the same claim and the distinction is the whole point: `false` means
+   * *I looked and nothing was running*, `null` means *I could not look*. With no reviewer
+   * wired the handler can only honestly say the second, and a client acting on the first
+   * would believe a cancelled review had stopped spending.
+   *
+   * There is genuinely nothing in flight here — no worker has claimed this review — so a
+   * correctly wired service answers `false`.
+   */
+  it("can reach a session to abort, so it answers false rather than 'I could not look'", async () => {
+    stop = await serve({
+      dataDir: dir,
+      port: PORT,
+      host: "127.0.0.1",
+      concurrency: 1,
+      modelConcurrency: 1,
+      dailyCeilingUsd: 10,
+    });
+
+    const out = await cancel();
+
+    expect(out["state"]).toBe("cancelled");
+    expect(out["stopped_in_flight"], "null means no reviewer was wired — the 2026-08-08 defect").toBe(false);
+    // The unwired sentence, in its own words. Not a bare /UNKNOWN/: the ordinary note
+    // already says what the remaining tiers would have found is UNKNOWN, and matching
+    // that would have passed against the very build this test exists to fail.
+    expect(String(out["note"])).not.toMatch(/WHETHER A MODEL CALL IS STILL RUNNING IS UNKNOWN/);
+    expect(String(out["note"])).toContain("No model call was in flight");
+  });
+});

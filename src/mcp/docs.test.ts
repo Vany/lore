@@ -242,3 +242,45 @@ describe("the subscribe call handed to a client", () => {
     expect(TOOL_DOCS.start, "the docs point at the field instead").toContain("`subscribe`");
   });
 });
+
+/**
+ * `spec/mcp-api.md` §2 lists the tools. That list was WRONG in two ways at once.
+ *
+ * It said "Ten", listed eleven, and omitted `review_cancel` entirely — a tool that has
+ * been registered, documented in `TOOL_DOCS` and callable by every client for as long as
+ * it has existed. The table is what a person reads to learn what this service offers, so
+ * a tool missing from it is a tool nobody knows to use, and a count that disagrees with
+ * its own rows is a document nobody has read carefully in a while.
+ *
+ * Drift is a defect whichever side moved (D-11), and this side moves by hand. So the
+ * count and the rows are both read back from the file and compared against what the
+ * server actually registers.
+ */
+describe("the tool table in spec/mcp-api.md", () => {
+  const spec = readFileSync(new URL("../../spec/mcp-api.md", import.meta.url), "utf8");
+  const registered = [
+    ...readFileSync(new URL("./server.ts", import.meta.url), "utf8").matchAll(
+      /server\.registerTool\(\s*"([a-z_]+)"/g,
+    ),
+  ].map((m) => m[1] ?? "");
+
+  it("lists every tool the server registers", () => {
+    // SCOPED TO SECTION 2's OWN TABLE. Matching backticked snake_case row openers across
+    // the whole document swept up §2.5's three-valued `stopped_in_flight` table — `true`,
+    // `false`, `null` — and reported them as undocumented tools. A check that fails for a
+    // reason unrelated to the thing it guards gets disabled, not fixed.
+    const section = /^## 2\. Tools$([\s\S]*?)^#/m.exec(spec)?.[1] ?? "";
+    expect(section, "section 2 moved or was renamed").not.toBe("");
+    const listed = [...section.matchAll(/^\|\s*`([a-z_]+)`\s*\|/gm)].map((m) => m[1] ?? "");
+    expect([...registered].sort()).toStrictEqual([...listed].sort());
+  });
+
+  // The sentence above the table counts them, and a hand-written count is a fact that
+  // rots on its own. "Ten" survived two tools being added.
+  it("counts them correctly in words", () => {
+    const words = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight",
+      "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen"];
+    const claimed = /^(\w+), registered with \*\*underscores\*\*/m.exec(spec)?.[1] ?? "";
+    expect(claimed.toLowerCase()).toBe(words[registered.length]);
+  });
+});

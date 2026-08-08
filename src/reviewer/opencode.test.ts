@@ -53,6 +53,8 @@ let messagesStatus = 200;
 let messages: unknown = undefined;
 /** `POST /session/:id/abort`: the call that is supposed to stop the spending. */
 let abortStatus = 200;
+/** Accept the prompt and never answer it, so a cancel has something real to interrupt. */
+let hangPrompt = false;
 
 /**
  * What `GET /session/:id/message` really answers, taken from a live opencode 1.18.9.
@@ -114,6 +116,11 @@ function start(): Promise<void> {
           return;
         }
         if (path.endsWith("/message")) {
+          // A PROMPT THAT NEVER COMES BACK — an exhausted Z.ai plan through opencode,
+          // which accepts the session and answers nothing at all (D-84). Every other
+          // fixture here answers instantly, so nothing could exercise a cancel against
+          // a call that is genuinely still open, which is the only state a cancel is for.
+          if (hangPrompt) return;
           res.writeHead(status, { "content-type": "application/json" });
           res.end(JSON.stringify(replies.shift() ?? {}));
           return;
@@ -169,6 +176,7 @@ beforeEach(async () => {
   messagesStatus = 200;
   messages = undefined;
   abortStatus = 200;
+  hangPrompt = false;
   await start();
 });
 
@@ -553,6 +561,59 @@ describe("abandoning a call", () => {
       console.error = realError;
     }
     expect(logged.join("\n")).toMatch(/could not abort session ses_test/);
+  });
+});
+
+/**
+ * A CANCEL HAS TO STOP BOTH ENDS.
+ *
+ * `abort` told opencode to stop the model and left our own request open, so a cancelled
+ * review went on holding a provider slot until its 2700s deadline. Measured on the
+ * deployment 2026-08-08: three sessions aborted with HTTP 200, and ninety seconds later
+ * `/status` still read `inFlight: 2` with no active review at all.
+ *
+ * Both halves are pinned here, because either alone is a false claim of having stopped:
+ * without the remote abort the model keeps exploring and keeps billing, and without the
+ * local one lore keeps waiting for an answer that can never arrive.
+ */
+describe("cancelling a call that is still open", () => {
+  it("frees the caller instead of waiting out the deadline", async () => {
+    hangPrompt = true;
+    const r = reviewer();
+    const started = Date.now();
+    // A ten-second `timeoutMs` is the fixture's deadline. If the cancel does not reach
+    // this request it fails at ten seconds with "did not respond within" — which is what
+    // the defect looked like, only forty-five minutes long.
+    const inFlight = r.review(TIER, "review this", "/tmp/wt", "rev_hung");
+    // Long enough for `createSession` to answer and the prompt to be sent; the session
+    // is not registered until then, and a cancel arriving earlier would find nothing.
+    await new Promise((res) => setTimeout(res, 200));
+
+    await expect(r.cancel("rev_hung"), "it found the session to cancel").resolves.toBe(true);
+    // NAMED AS OURS, not as the tier failing. `runRound` closes a tier run `failed` on
+    // any throw and `tierFailureCount` counts it — one more count promotes that tier's
+    // work to a dearer one. A cancel presenting as a tier failure would spend somebody
+    // else's quota answering for a review a person deliberately ended.
+    await expect(inFlight).rejects.toThrow(/stopped by lore/);
+    expect(Date.now() - started, "the cancel ended it, not the 10s fixture deadline").toBeLessThan(5_000);
+  });
+
+  it("still tells opencode to stop the model, which abandoning the socket does not", async () => {
+    hangPrompt = true;
+    const r = reviewer();
+    const inFlight = r.review(TIER, "review this", "/tmp/wt", "rev_hung");
+    await new Promise((res) => setTimeout(res, 200));
+    await r.cancel("rev_hung");
+    await expect(inFlight).rejects.toThrow();
+
+    expect(captured.some((c) => c.path.includes("/abort")), "the model is still exploring until this lands").toBe(true);
+  });
+
+  // A review with nothing in flight must not report that it stopped something. The
+  // handler renders this straight into "the model call in flight was aborted", and a
+  // client repeats that to its user.
+  it("reports false when that review has no session", async () => {
+    await expect(reviewer().cancel("rev_never_started")).resolves.toBe(false);
   });
 });
 

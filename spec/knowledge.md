@@ -138,11 +138,31 @@ screen, then improve the prompt*, which walks straight into it.
 `ingestDocs` asks that first, because it runs on every review and almost always finds
 nothing changed.
 
+**One fault ends the pass.** A tier that could not answer is not asked again for the
+remaining documents; they are stamped `unscreened` without a call, and the next ingest
+retries them. Failing open per document was the right answer to the wrong question: it
+kept the memory intact and made the *cost* of a dead provider proportional to how many
+documents happened to change. On 2026-08-08 t1's plan was exhausted, six documents had
+changed, and a review sat in the screen for the full hang deadline on each of them —
+four and a half hours before any tier was asked anything. The answer was known after the
+first call and re-bought five more times.
+
+The split is between the TIER and the DOCUMENT. `TooLargeForTier` is about this
+document's prompt — the next may be a tenth the size and screen perfectly — so it does
+not condemn the pass. An exhausted plan, a rejected key, an unreachable opencode or a
+hang are properties of the tier, and none becomes untrue by asking about a different
+file. Erring toward stopping is the cheap direction: stopping wrongly costs one ingest's
+screening, recovered on the next review; continuing wrongly costs the hang deadline per
+remaining document, before the review has started.
+
 **A screen session belongs to its review, and can be cancelled with it.** It is the first
 thing to spend a model inside `runRound` that is not the tier itself, so `review_cancel`
 must be able to reach it: without the review id the session is never registered, and a
 client cancelling mid-screen is told nothing is in flight — truthfully, by the
-bookkeeping — while the screen goes on spending. The round also re-reads the review's
+bookkeeping — while the screen goes on spending. Registering it was necessary and was
+not sufficient: the deployed service passed no reviewer to `startHttp` at all, so no
+cancel could reach any session, screen or tier. See `spec/mcp-api.md` on
+`stopped_in_flight`. The round also re-reads the review's
 state after the ingest, because that check used to be the only one and everything after
 it used to be free; without it a cancelled review would still have its tier asked, paid
 for, and its state overwritten by a ladder result.

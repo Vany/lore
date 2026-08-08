@@ -145,8 +145,17 @@ export function longFetch(timeoutMs = DEFAULT_TIMEOUT_MS): (request: Request) =>
 
       req.on("error", reject);
 
-      if (request.signal.aborted) req.destroy(new Error("aborted"));
-      else request.signal.addEventListener("abort", () => req.destroy(new Error("aborted")), { once: true });
+      // CARRYING THE REASON, because "aborted" alone is indistinguishable from the two
+      // other ways this request dies. A cancel, an idle socket and a blown deadline all
+      // arrived at the caller as the same five characters, and the caller has to tell
+      // them apart: one is a person ending a review, the others are a tier failing.
+      // `AbortSignal.reason` is what the aborter passed, so it says which.
+      const why = (): Error => {
+        const r: unknown = request.signal.reason;
+        return r instanceof Error ? r : new Error(typeof r === "string" && r !== "" ? r : "aborted");
+      };
+      if (request.signal.aborted) req.destroy(why());
+      else request.signal.addEventListener("abort", () => req.destroy(why()), { once: true });
 
       if (body !== undefined) req.write(body);
       req.end();

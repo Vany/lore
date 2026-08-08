@@ -5,6 +5,65 @@ surprised me.
 
 ---
 
+## 2026-08-09 — session 48: the request flow, and four ways a cancel was a lie
+
+**A review that never reached a tier at all.** `rev_NYiv0xfO` sat "running, round 0" for
+45 minutes on t1, and I assumed it was the tier. It was not: the database had **no t1
+`tier_run` row**, only t0. The hang was in the *knowledge screen*, which
+`review.ts:339` binds to the cheapest model tier — t1 — and which runs inside
+`ingestDocs`, before `openTierRun` exists. `skip_if_quota`, built the day before for
+exactly this provider, governs the ladder's retry and had never heard of the screen.
+
+Six documents had changed. The screen is one call per document and fails open, so it was
+about to buy the same dead answer six times at 45 minutes each: **four and a half hours
+before any tier was asked anything**. Two of the six were already spent when I looked.
+
+**Reading the flow, not the code, is what found the other three.** I only got there by
+following one request end to end — `/status`, then `tier_run`, then opencode's session
+list, then the message timestamps. Each layer agreed with the layer above and all of them
+were wrong about the same thing.
+
+- opencode's sessions: mine created 22:31:31, **completed 23:16:31**, zero tokens, no
+  error. Forty-five minutes to the millisecond of the deadline, and a new session opened
+  in the same millisecond. That is what told me the loop was per-document.
+- `review_cancel` answered `stopped_in_flight: false` while that session was open. Not a
+  handler bug — `startHttp` was built with `store`, `worktreeFor`, `enqueue` and `attest`
+  and **no reviewer**, so `deps.reviewer?.cancel?.()` was `undefined ?? false` on every
+  cancel the service has ever served. The comment above that line already said a cancel
+  that only marks a row is worse than none. It was describing what shipped.
+- Aborting all three sessions through opencode returned 200, and ninety seconds later
+  `/status` still read `inFlight: 2` with no active review. Telling the server to stop
+  does nothing to our own open HTTP request. `session.prompt` had no `AbortSignal`.
+
+**What made the wiring bug invisible was the test suite agreeing with it.** Every test
+builds `startHttp` the same way production did — without a reviewer — so the broken path
+was the only path under test, and the correct-looking handler passed. The new test drives
+`serve()` instead, and I checked it fails without the fix rather than assuming: `expected
+null to be false`.
+
+**`false` and `null` are different claims and I had been rounding one to the other.**
+`stopped_in_flight` is now three-valued: stopped, nothing running, *could not look*. INV-1
+applies to a cancel exactly as to a review, and I had not noticed because the field is a
+boolean and booleans invite exactly that collapse.
+
+**The spec table said "Ten" and listed eleven, with `review_cancel` missing.** Found by
+accident while documenting it. Now checked mechanically against `registerTool` — including
+the count in words, because a hand-written count rots on its own. My first version of that
+check swept up the new three-valued table's `true`/`false`/`null` rows and reported them
+as undocumented tools; a check that fails for an unrelated reason gets disabled, not fixed,
+so it is scoped to §2's own table.
+
+**What I got wrong on the way.** I said "the call in flight isn't the one `skip_if_quota`
+guards" only after measuring; before measuring I had told Vany the review was t1's tier run
+hanging, which was the obvious reading and the wrong one. The database was one query away
+the whole time.
+
+**Left for Vany** (changes which model is called): nothing holds Z.ai's reset time, which
+we have — `2026-08-10 18:19:09`, measured. A per-tier `unavailable_until` would skip the
+call outright, no credentials, no probe. `TODO.md` carries it.
+
+---
+
 ## 2026-08-09 — session 47: a subscription at its limit answers nothing
 
 **Z.ai ran out of quota and said so by saying nothing.** No 429, no error, no refusal —

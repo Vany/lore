@@ -422,10 +422,17 @@ WHAT IT DOES, all of it:
     came back, cancelled is somebody decided;
   * the ladder stops. No further round is claimed, and a round claimed in the same
     instant finds the review terminal and stops before spending anything;
-  * a model call in flight is ABORTED. \`stopped_in_flight\` says whether there was
-    one. Abandoning a call does not stop a model — an agent kept reading a repository
-    for millions of tokens after lore stopped listening once — so this is the
-    difference between cancelling and pretending to;
+  * a model call in flight is ABORTED, at BOTH ends: opencode is told to stop the
+    model, and lore stops waiting for it. Abandoning a call does not stop a model — an
+    agent kept reading a repository for millions of tokens after lore stopped listening
+    once — and telling the server to stop does not free lore either, which left a
+    cancelled review holding a provider slot for another 45 minutes;
+  * \`stopped_in_flight\` has THREE values and they are three different claims.
+    \`true\`: a call was running and has been stopped. \`false\`: nothing was running.
+    \`null\`: THIS SERVER COULD NOT LOOK — it was built without a reviewer, so if a call
+    was in flight it is still exploring and still spending. Treat \`null\` as "tell an
+    operator", never as "nothing was running". A deployed lore never answers \`null\`;
+    the CLI and tests can;
   * every finding it had already produced is returned, delivered or not. They are
     real: the tiers that ran did read the code;
   * everything it learned about your repository is KEPT. Knowledge outlives the review

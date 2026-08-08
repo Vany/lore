@@ -60,3 +60,31 @@ describe("a call that never finishes", () => {
     ).rejects.toThrow(/did not respond within|ran past/);
   });
 });
+
+/**
+ * A CANCEL HAS TO END THE WAIT, and until 2026-08-08 nothing here was ever asked to.
+ *
+ * Aborting the session through opencode's own API frees opencode and does nothing to
+ * this request: measured on the deployment, three sessions aborted with HTTP 200 and
+ * ninety seconds later `/status` still read `inFlight: 2` with no active review at all.
+ * lore waited out its full 2700s deadline for replies that could never arrive, holding
+ * provider slots for reviews that no longer existed.
+ */
+describe("a call somebody cancelled", () => {
+  it("ends when its signal fires, not when its deadline does", async () => {
+    const port = await dribbling(60_000);
+    const ctl = new AbortController();
+    const started = Date.now();
+    // A deadline far beyond the test: if the signal is ignored, this hangs rather than
+    // failing fast, which is exactly how the defect presented.
+    const call = longFetch(120_000)(new Request(`http://127.0.0.1:${String(port)}/`, { signal: ctl.signal }));
+    setTimeout(() => ctl.abort(new Error("session ses_x was aborted by lore")), 50);
+
+    // THE REASON TRAVELS. "aborted" alone is indistinguishable from an idle socket and a
+    // blown deadline, and the caller has to tell them apart: one is a person ending a
+    // review, the others are a tier failing — and `runRound` promotes a tier's work to a
+    // dearer one on the strength of that difference.
+    await expect(call).rejects.toThrow(/aborted by lore/);
+    expect(Date.now() - started, "the signal ended it, not the 120s deadline").toBeLessThan(3000);
+  });
+});

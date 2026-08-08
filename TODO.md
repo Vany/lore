@@ -499,10 +499,17 @@ landing with a real user, and it should not get lost among the defects below.
       What is built already keeps reviews finishing: the deadline bounds the stall, and
       D-48-widened promotes the tier's work upward at `passed_partial`.
 
-      What is NOT built is the tracking, and it has a measurable price: with t1 pointed at
-      an exhausted provider, every new review spends **two dead attempts** before
-      promoting — 90 minutes of wall-clock at the 45-minute deadline, per review, to
-      re-learn a fact the service already had. `unavailable` is per-review state.
+      What is NOT built is the tracking, and it has a measurable price. It was **two dead
+      tier attempts** per review; `skip_if_quota` (D-85) took that to one, and D-87 took
+      the screen from one call per changed document to one for the pass. What is left is
+      the first call of each, and it is still the full 45-minute deadline every time,
+      re-learning a fact whose expiry date we already know.
+
+      **We know the reset time and nothing in the running system holds it.** Z.ai named it
+      — `2026-08-10 18:19:09` — in a refusal measured directly on 2026-08-08, and it lives
+      only in SPEC prose. The cheapest honest shape needs no credentials and no inference:
+      a per-tier `unavailable_until` the operator sets, skipping the tier without calling
+      until it passes. The probe-and-infer design below is the expensive alternative.
 
       The shape of it: presume exhaustion from repeated timeouts while another vendor
       answers, cool the tier off SERVICE-WIDE for the window, re-probe once it could
