@@ -102,6 +102,28 @@ export function longFetch(timeoutMs = DEFAULT_TIMEOUT_MS): (request: Request) =>
       req.on("timeout", () => {
         req.destroy(new Error(`opencode did not respond within ${Math.round(timeoutMs / 1000)}s`));
       });
+
+      // AND A REAL DEADLINE, because the option above is not one.
+      //
+      // `http.request`'s `timeout` is SOCKET INACTIVITY: it fires when nothing has been
+      // read for that long, and every byte resets it. An agentic tier streams as it
+      // works, so it keeps the socket busy and the "30 minute timeout" never fires — a
+      // t2 round on this repository ran 67 minutes and was still going, with the bound
+      // everybody believed in doing nothing at all.
+      //
+      // That is the exact shape this service exists to refuse: a guard that reads as
+      // enforced and enforces nothing. The deadline below is the bound the constant has
+      // always claimed to be.
+      const deadline = setTimeout(() => {
+        req.destroy(new Error(`opencode ran past ${Math.round(timeoutMs / 1000)}s without finishing`));
+      }, timeoutMs);
+      // `unref` so a pending deadline cannot hold the process open past its work.
+      deadline.unref?.();
+      const done = (): void => {
+        clearTimeout(deadline);
+      };
+      req.on("close", done);
+
       req.on("error", reject);
 
       if (request.signal.aborted) req.destroy(new Error("aborted"));
