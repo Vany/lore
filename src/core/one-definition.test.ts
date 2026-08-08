@@ -363,6 +363,14 @@ describe("every target that touches the deployment is guarded", () => {
  * is DOWN. Extending the TypeScript side from five columns to fifteen left the shell at
  * five, so the monitor a person runs and the monitor that pages disagreed about what
  * counts as a write — and the shell one, the one used in an incident, was the blind one.
+ *
+ * IT COMPARES THE COLUMN LIST AND NOTHING ELSE, which is worth saying because the two
+ * halves drifted again immediately in a way this cannot see: on a database that exists
+ * and has never been written to, `lastWriteAt` answers `undefined` and the heartbeat says
+ * `level`, while the shell printed a red "no database in the volume". Same question,
+ * opposite answers, identical column lists. A reader who assumes this guard covers
+ * "the two agree" rather than "the two name the same columns" is the next person to be
+ * surprised by it.
  */
 describe("the write clock agrees with the shell that reimplements it", () => {
   it("names the same timestamp columns on both sides", async () => {

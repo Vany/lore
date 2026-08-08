@@ -108,6 +108,27 @@ describe("a service whose database is unreadable", () => {
     expect(await res.text()).toMatch(/cannot be read/);
   });
 
+  /**
+   * A DIRECTORY THAT DOES NOT EXIST YET IS A FRESH INSTALL, NOT A CORRUPTION.
+   *
+   * `serve()` created `dataDir` and not `dbDir`, which stopped being the same directory
+   * when the database moved to its own volume. So `new Store()` threw on a path that had
+   * simply never been made, `openOrRefuse` classified the throw as corruption, and the
+   * service refused to serve — telling the operator to run `make backup-check` and
+   * `make restore` on a box with no backup and nothing to restore, and refusing to retry
+   * once the directory appeared.
+   *
+   * The most innocent state in the system, answered with its gravest message, by the
+   * guard written to make grave states legible.
+   */
+  it("creates a database directory that does not exist rather than calling it corrupt", async () => {
+    const cfgWithDbDir = { ...cfg(dir, 17784), dbDir: join(dir, "never-made", "db") };
+    stop = await serve(cfgWithDbDir);
+    const res = await fetch("http://127.0.0.1:17784/status");
+    expect(res.status, "a fresh install must serve, not refuse").toBe(200);
+    expect(((await res.json()) as { ok: boolean }).ok).toBe(true);
+  });
+
   // The healthy path must be untouched: this is a guard, not a new mode to fall into.
   it("serves normally when the database is fine", async () => {
     execFileSync("mkdir", ["-p", join(dir, "repos")]);

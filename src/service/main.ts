@@ -155,6 +155,15 @@ function openOrRefuse(dbPath: string): { readonly store: Store } | { readonly fa
 
 export async function serve(cfg: ServiceConfig): Promise<() => void> {
   await mkdir(cfg.dataDir, { recursive: true });
+  // BOTH DIRECTORIES, because they stopped being the same one.
+  //
+  // Only `dataDir` was created, so a `LORE_DB_DIR` pointing at a directory that does not
+  // exist yet — a fresh install, which is every install once — made `new Store()` throw,
+  // and `openOrRefuse` classifies any throw as corruption. The service then refused to
+  // serve and told the operator to run `make backup-check` and `make restore`, on a box
+  // with no backup and nothing to restore, and would not retry after the directory was
+  // created. The most innocent state in the system, answered with its gravest message.
+  await mkdir(cfg.dbDir ?? cfg.dataDir, { recursive: true });
   const dbFile = dbFileIn(cfg.dbDir ?? cfg.dataDir);
 
   // BEFORE ANYTHING ELSE, AND WITHOUT EXITING IF IT FAILS.

@@ -566,6 +566,12 @@ backup-on:
 ## twenty minutes the DATABASE was in fact unreadable. A monitor that cries wolf does
 ## not merely get muted; it points at the wrong thing.
 ##
+## A DATABASE NOBODY HAS WRITTEN TO YET IS LEVEL, NOT MISSING. `lastWriteAt` answers
+## `undefined` there and the heartbeat reports `level`; this printed a red "no database in
+## the volume" for the same state, so the two monitors disagreed about a fresh install and
+## the one a person runs was the alarming one. Empty output means the read FAILED, which
+## is a different thing again and says so.
+##
 ## Asked through the running service, because that is the coherent reader of a WAL
 ## database. With the service DOWN there is nobody to ask, so it falls back to file times
 ## in a throwaway container against the volume AND SAYS WHICH IT USED — answering while
@@ -586,7 +592,8 @@ replica-state:
 		  console.log(Math.max(...t));" 2>/dev/null | tr -d '\r'); \
 		how=" (from file times: the service is down, so its own write log is unreadable)"; \
 	fi; \
-	test -n "$$dbt" && test "$$dbt" != "0" || { echo "stale no database in the $(DBVOL) volume"; exit 0; }; \
+	test -n "$$dbt" || { echo "stale could not read the database in the $(DBVOL) volume"; exit 0; }; \
+	test "$$dbt" != "0" || { echo "ok replica is level — the database exists and nothing has ever been written to it"; exit 0; }; \
 	rept=$$(find "$(BACKUP)" -type f -name '*.ltx' -exec sh -c 'date -r "$$1" +%s 2>/dev/null || stat -c %Y "$$1"' _ {} \; | sort -n | tail -1); \
 	behind=$$((dbt - rept)); \
 	if [ "$$behind" -gt 300 ]; then \
