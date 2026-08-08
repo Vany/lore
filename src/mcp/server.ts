@@ -920,9 +920,9 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       // shown nothing next time it polled.
       //
       // The inbox answers "what is waiting for me", which is a question about state, not
-      // a handover. `undeliveredCount` reads the same rows without marking them, so the
-      // numbers are unchanged and the client still calls `review_poll` to collect —
-      // which is what every doc already tells it to do.
+      // a handover. `store.undelivered` READS; only `markDelivered` hands over, and it is
+      // simply not called here — so the numbers are unchanged and the client still calls
+      // `review_poll` to collect, which is what every doc already tells it to do.
       const reviews = store.listReviews(who.principal, who.repoId);
       const items = reviews.map((r) => {
         const fresh = store.undelivered(r.id);
