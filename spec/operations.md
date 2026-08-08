@@ -119,6 +119,21 @@ cache. A fault does not exit. It:
 It does not retry, and says so. A malformed database is malformed on the next open too,
 and restarting only overwrites the evidence in the logs.
 
+### 2.4.2 A provider at its limit is invisible from in here
+
+`/status` and the heartbeat know about the queue, the replica, the database, the footprint
+and — since 2026-08-08 — stale mirrors. They know nothing about a PROVIDER that has
+stopped answering, which is the condition that stops the gate every review must clear.
+
+It is the same class of fact as the stale mirror, and that one reported `ok: true` for
+seventeen hours. The difference is that a stale mirror is a file lore can stat, and a
+provider's remaining quota is not published by anybody (D-84, D-50). What lore can see is
+the shape: repeated timeouts from one provider while another answers in seconds.
+
+Not built. Recorded here rather than covered by a check that measures something else,
+which is the failure §2.5 is about — and named so that a reader of this table does not
+read its absence as coverage.
+
 ### 2.5 Disk is not lore's to alert on
 
 **Removed 2026-08-06.** There were two disk conditions — page above 90%, ticket above

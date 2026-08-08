@@ -178,6 +178,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-46** | A conflict block must have an exit: resolve, or escalate | confirmed |
 | **D-47** | D-1 is enforced by **absence**: no Anthropic credential is deployed | confirmed |
 | **D-48** | A tier that cannot ANSWER — unfundable, or dead after its retry — is *skipped*, not fatal — `passed_partial` | confirmed; widened 2026-08-08 |
+| **D-84** | **An exhausted subscription may answer NOTHING AT ALL.** Quota detection cannot rely on a status code | measured 2026-08-09 |
 | **D-49** | A single-vendor ladder reaches `passed_partial`, never `passed` | confirmed |
 | **D-50** | Exploration is **counted per review before it is capped**; no cap yet | `[OPEN]` |
 | **D-51** | An accepted justification is **repo knowledge**, carried across reviews | confirmed |
@@ -1176,6 +1177,66 @@ still open and is not blocking.
 `[OPEN]` — **whether the model can ORIGINATE the appeal's opposite**: *"this rule is
 wrong"*. Today a tier can say nothing but findings, which is the same gap that leaves the
 escalation path unwired. Worth solving once, for both.
+
+**D-84 — an exhausted subscription may answer nothing at all, and quota detection
+cannot rely on a status code.**
+
+Vany, 2026-08-09: *"z.ai is out of the limits. we must track it."*
+
+**What was measured.** The same one-line prompt — *"Reply with exactly: OK"* — through
+lore's own SDK path and its own `longFetch`:
+
+| provider / model | result |
+|---|---|
+| `kimi-for-coding/k3` | 200 in 4s |
+| `openai/gpt-5.6-terra` | 200 in 3s, replied `OK` |
+| `zai-coding-plan/glm-5-turbo` | never returned; cut at 240s |
+| `zai-coding-plan/glm-5.2` | never returned; cut at 75s |
+
+Two vendors answered in seconds through the identical harness, and BOTH Z.ai models
+answered nothing — so this is the account, not a model, and not opencode, the network or
+lore.
+
+**The part that matters to the design: there was no 429.** `Reviewer.review` classifies
+quota on `status === 429 || 402` or a message matching `rate.?limit|quota|insufficient`,
+and an exhausted Z.ai subscription produces none of them. It accepts the request and
+never replies. So the one signal lore relies on to say *"this tier could not be paid
+for"* is absent in exactly the case it was written for, and the condition arrives instead
+as a hang — indistinguishable, at the call site, from a broken provider or a slow one.
+
+**This is why the hang deadline is load-bearing rather than defensive.** Until
+2026-08-08 the 30-minute bound could not fire at all (`http.request`'s `timeout` is
+socket-inactivity, and a streaming peer resets it), so an exhausted subscription simply
+consumed the review — a t2 ran 2h46m. The deadline is what converts an invisible stall
+into a bounded, reportable event, and D-48-widened is what keeps the review alive
+afterwards.
+
+**What "track it" has to mean, and what it cannot.** lore cannot read a subscription's
+remaining quota: no provider here publishes one, which is the same wall D-50 hits. What
+it CAN do is notice the shape — repeated timeouts from one provider, while other vendors
+answer — and say so rather than rediscovering it per review.
+
+`[OPEN]`, and the cost is measurable rather than theoretical: with t1 pointed at an
+exhausted provider, every new review now spends **two dead attempts** before promoting —
+at the 45-minute deadline that is 90 minutes of wall-clock per review to re-learn a fact
+the service already had. Three things follow, and the third is Vany's:
+
+- **Record the shape.** A tier whose calls time out repeatedly, while another vendor
+  answers in seconds, is presumed out of quota. That is an inference, so it must be
+  labelled as one wherever it is shown.
+- **Cool off rather than re-probe.** Z.ai's Coding Plan is a **5-hour rolling window**
+  (D-5/D-17), so exhaustion is temporary and self-healing. A service-wide cool-off on the
+  tier — skip it immediately, re-probe once the window could plausibly have refilled — is
+  what turns 90 minutes per review into one probe per window. Today `unavailable` is
+  per-review state and every new review pays the discovery again.
+- **Say it where an operator looks.** `/status` and the heartbeat know nothing about it;
+  `make status` shows tier runs but not "this provider has answered nothing for an hour".
+  A provider at its limit stops the gate every review must clear, which is the same class
+  of fact as a stale mirror — and that one was `ok: true` for seventeen hours.
+
+**Not built here**, because a cool-off changes which model is called and how much quota
+burns, which is Vany's to decide (§9). What IS built is the part that keeps reviews
+finishing: the deadline, and promotion to the next tier.
 
 **D-48, widened — a tier that cannot ANSWER is skipped, not only one nobody can pay for.**
 

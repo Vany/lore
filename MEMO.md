@@ -5,6 +5,40 @@ surprised me.
 
 ---
 
+## 2026-08-09 — session 47: a subscription at its limit answers nothing
+
+**Z.ai ran out of quota and said so by saying nothing.** No 429, no error, no refusal —
+the request is accepted and never answered. Both its models, while `kimi-for-coding/k3`
+and `openai/gpt-5.6-terra` replied to the identical one-line prompt in 4s and 3s through
+the same harness. So it was the account, not a model, and not opencode or the network.
+
+**That breaks the assumption quota detection rests on.** `Reviewer.review` classifies
+exhaustion from `429`/`402` or a message matching `rate.?limit|quota|insufficient`. An
+exhausted subscription produced none of them, so the one signal lore has for "this tier
+could not be paid for" is absent in exactly the case it was written for — and the
+condition arrives as a hang, indistinguishable at the call site from a broken provider.
+
+**Two things built yesterday turned out to be load-bearing rather than defensive.** The
+hang deadline: until 2026-08-08 it could not fire at all, so an exhausted subscription
+just consumed the review — a t2 ran 2h46m. And D-48 widened to promote a hung tier's work
+upward, which is the only reason reviews still finish with t1 dead.
+
+**Surprised me: I proved it wrong twice before proving it right.** My first probe failed
+identically on all three providers, which meant my request shape was wrong and the result
+said nothing — I nearly reported "the provider is broken" from it. The second control
+collapsed its shell arguments and "answered in 0s" with empty text. Only the third, using
+lore's own SDK path and its own `longFetch` with the model passed by environment, produced
+a result worth trusting. Three attempts to ask one question honestly.
+
+**What is recorded and not built.** D-84 carries the measurement and the cost: with t1 on
+an exhausted provider, every review now spends two dead attempts before promoting — 90
+minutes of wall-clock, per review, to re-learn what the service already knew. A
+service-wide cool-off with a re-probe after the window is the answer; it changes which
+model is called, so it is Vany's. `/status` is blind to it, which is the stale-mirror
+failure of yesterday in a different organ.
+
+---
+
 ## 2026-08-08 — session 46: subscriptions, and getting the cause wrong twice before measuring
 
 **Subscriptions work, and the reason they never did for me was two nested keys.**

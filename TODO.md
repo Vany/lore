@@ -488,6 +488,29 @@ landing with a real user, and it should not get lost among the defects below.
       own demonstrated best rather than a constant — with no evidence it says
       nothing, and a timed-out run never raises the ceiling.
 
+- [ ] **Cool a provider off instead of rediscovering it every review** (D-84).
+      Vany's to decide: it changes which model is called and what it burns.
+
+      Z.ai went out of quota on 2026-08-09 and answered NOTHING — no 429, no error, both
+      its models silent while kimi and openai replied in 3-4s to the same one-line prompt.
+      So the classifier's quota signal is absent in exactly the case it was written for,
+      and the condition arrives as a hang.
+
+      What is built already keeps reviews finishing: the deadline bounds the stall, and
+      D-48-widened promotes the tier's work upward at `passed_partial`.
+
+      What is NOT built is the tracking, and it has a measurable price: with t1 pointed at
+      an exhausted provider, every new review spends **two dead attempts** before
+      promoting — 90 minutes of wall-clock at the 45-minute deadline, per review, to
+      re-learn a fact the service already had. `unavailable` is per-review state.
+
+      The shape of it: presume exhaustion from repeated timeouts while another vendor
+      answers, cool the tier off SERVICE-WIDE for the window, re-probe once it could
+      plausibly have refilled (Z.ai is a 5-hour rolling window, D-5/D-17), and label the
+      inference as an inference wherever it is shown. Plus `/status` saying so — a
+      provider at its limit is currently invisible from inside the service
+      (`spec/operations.md` §2.4.2), which is the stale-mirror failure again.
+
 - [ ] **Set the exploration cap from data** (D-50) — and the data still says *not yet*.
       84 completed runs, re-measured 2026-08-05 (the 2026-08-04 table had 54):
 

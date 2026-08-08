@@ -116,6 +116,39 @@ GPT-5.6 Sol scores 59 at max effort and 56 at high — 95% of the capability for
 of the cost. The ladder walks `(model, effort)` pairs, not models.
 
 
+### An exhausted subscription may answer nothing at all (D-84)
+
+Quota is detected from a status code — `429`, `402`, or a message matching
+`rate.?limit|quota|insufficient`. **A Z.ai subscription at its limit sends none of them.**
+
+Measured 2026-08-09, the same one-line prompt through lore's own SDK path:
+`kimi-for-coding/k3` answered in 4s, `openai/gpt-5.6-terra` in 3s, and BOTH Z.ai models
+never answered at all — cut at the deadline. Two vendors in seconds through the identical
+harness, so it was the account, not a model, and not opencode, the network or lore.
+
+So the one signal the classifier depends on is absent in exactly the case it exists for,
+and the condition arrives as a **hang** — at the call site indistinguishable from a broken
+provider or a slow one.
+
+Two consequences, and neither is optional:
+
+- **The hang deadline is load-bearing.** Until 2026-08-08 it could not fire at all
+  (`http.request`'s `timeout` is socket-inactivity, and a streaming peer resets it), so an
+  exhausted subscription simply consumed the review — a t2 ran 2h46m. The deadline is what
+  turns an invisible stall into a bounded, reportable event.
+- **The tier must be steppable on a hang, not only on a refusal.** That is D-48 widened:
+  after its retry is spent, the tier's work passes up and the review finishes
+  `passed_partial` rather than dying. Without it, a provider at its limit takes down the
+  gate every review must clear.
+
+`[OPEN]` — lore cannot read a subscription's remaining quota; nothing here publishes one.
+What it can do is notice the SHAPE — repeated timeouts from one provider while another
+answers in seconds — and cool the tier off service-wide for the window rather than
+re-discovering it once per review. Z.ai's plan is a 5-hour rolling window (D-5/D-17), so
+exhaustion is temporary and self-healing; today `unavailable` is per-review, so every new
+review pays two dead attempts to learn what the service already knew. SPEC D-84 carries
+the cost and the decision.
+
 ### A window a provider advertises is not always the window it enforces
 
 `compactToFit` shrinks the diff to the tier that will read it, using the context limit
