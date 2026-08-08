@@ -566,6 +566,12 @@ backup-on:
 ## twenty minutes the DATABASE was in fact unreadable. A monitor that cries wolf does
 ## not merely get muted; it points at the wrong thing.
 ##
+## ZERO MEANS DIFFERENT THINGS ON THE TWO PATHS, so only one of them may say it. Asking
+## the service, 0 is "no row carried a timestamp" — the database exists and nothing has
+## been written. Asking the filesystem, 0 is `statSync` throwing for BOTH files — there is
+## no database at all. The fallback says `none` for that, so the two answers cannot be
+## read as each other.
+##
 ## A DATABASE NOBODY HAS WRITTEN TO YET IS LEVEL, NOT MISSING. `lastWriteAt` answers
 ## `undefined` there and the heartbeat reports `level`; this printed a red "no database in
 ## the volume" for the same state, so the two monitors disagreed about a fresh install and
@@ -589,10 +595,11 @@ replica-state:
 	if [ -z "$$dbt" ]; then \
 		dbt=$$($(DBRUN) -e "const{statSync}=require('node:fs');\
 		  const t=['/lore.db','/lore.db-wal'].map(f=>{try{return Math.floor(statSync(process.env.LORE_DB_DIR+f).mtimeMs/1000)}catch{return 0}}); \
-		  console.log(Math.max(...t));" 2>/dev/null | tr -d '\r'); \
+		  console.log(Math.max(...t) || 'none');" 2>/dev/null | tr -d '\r'); \
 		how=" (from file times: the service is down, so its own write log is unreadable)"; \
 	fi; \
 	test -n "$$dbt" || { echo "stale could not read the database in the $(DBVOL) volume"; exit 0; }; \
+	test "$$dbt" != "none" || { echo "stale no database in the $(DBVOL) volume"; exit 0; }; \
 	test "$$dbt" != "0" || { echo "ok replica is level — the database exists and nothing has ever been written to it"; exit 0; }; \
 	rept=$$(find "$(BACKUP)" -type f -name '*.ltx' -exec sh -c 'date -r "$$1" +%s 2>/dev/null || stat -c %Y "$$1"' _ {} \; | sort -n | tail -1); \
 	behind=$$((dbt - rept)); \
