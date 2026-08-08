@@ -67,7 +67,7 @@ export type MirrorFreshness =
  * nothing new, which is what makes its ABSENCE mean "never fetched" rather than
  * "nothing changed".
  */
-async function mirrorFreshness(localPath: string): Promise<MirrorFreshness> {
+export async function mirrorFreshness(localPath: string): Promise<MirrorFreshness> {
   const hasRemote = await gitMaybe(localPath, ["config", "--get", "remote.origin.url"]);
   if (hasRemote === undefined) return { kind: "no-remote" };
   for (const candidate of [join(localPath, ".git", "FETCH_HEAD"), join(localPath, "FETCH_HEAD")]) {

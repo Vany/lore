@@ -9,6 +9,7 @@
  * catch this asked whether `CONDITIONS` had a reader, which it did.
  */
 
+import { execFileSync } from "node:child_process";
 import { closeSync, mkdirSync, mkdtempSync, openSync, rmSync, utimesSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -477,6 +478,60 @@ describe("the beat sends the conditions that had no caller", () => {
 // the sandbox npm cache is keyed by lockfile and grows with every distinct one, and
 // nothing noticed, because the only thing watching had been deleted along with what was
 // wrong about it. A budget lore sets for ITSELF is a claim it can be held to.
+/**
+ * A STALE MIRROR REFUSES EVERY REVIEW, and the beat did not know.
+ *
+ * `assertFresh` refuses a review cut from a mirror older than MAX_MIRROR_AGE_MS (D-65):
+ * reviewing a stale tree describes code nobody is merging. The refresher is a HOST
+ * process lore cannot see or start, so when it stops, every review stops — and `/status`
+ * went on answering `ok: true`, because it only ever asked about the queue, the replica
+ * and the database.
+ *
+ * Seventeen hours of it on 2026-08-08: the registry moved into a volume, the refresher
+ * kept reading the old path, and a customer's review was refused for a mirror 1026
+ * minutes old while the service called itself healthy.
+ */
+describe("a mirror too stale to review is not a healthy service", () => {
+  const mirror = (name: string, fetchedMsAgo: number | undefined): string => {
+    const repo = store.upsertRepo(name, `git@example.com:${name}.git`);
+    const bare = join(dir, "repos", repo.id, "bare.git");
+    mkdirSync(bare, { recursive: true });
+    // `mirrorFreshness` wants a remote AND a FETCH_HEAD; without the remote it answers
+    // `no-remote`, which is a different state and deliberately not stale.
+    execFileSync("git", ["init", "-q", "--bare", bare]);
+    execFileSync("git", ["-C", bare, "remote", "add", "origin", `git@example.com:${name}.git`]);
+    if (fetchedMsAgo !== undefined) {
+      const head = join(bare, "FETCH_HEAD");
+      writeFileSync(head, "");
+      const at = new Date(Date.now() - fetchedMsAgo);
+      utimesSync(head, at, at);
+    }
+    return repo.id;
+  };
+
+  it("says which repository is stale, and that its reviews are refused", async () => {
+    mirror("stale-repo", 90 * 60_000);
+    const h = await checkHealth(store, cfg());
+    expect(h.ok).toBe(false);
+    expect(h.problems.join(" ")).toContain("stale-repo");
+    expect(h.problems.join(" "), "the consequence, not just the age").toMatch(/REFUSED/);
+  });
+
+  it("is quiet about a mirror inside the window", async () => {
+    mirror("fresh-repo", 60_000);
+    const h = await checkHealth(store, cfg());
+    expect(h.problems.filter((p) => p.startsWith("mirror stale"))).toStrictEqual([]);
+  });
+
+  // A repository provisioned a minute ago has no mirror yet. That is an ordinary state
+  // with its own message at review time, and paging about it would fire on every `make new`.
+  it("does not call a never-fetched mirror stale", async () => {
+    mirror("brand-new", undefined);
+    const h = await checkHealth(store, cfg());
+    expect(h.problems.filter((p) => p.startsWith("mirror stale"))).toStrictEqual([]);
+  });
+});
+
 describe("lore watches its own footprint, not the host's disk", () => {
   /**
    * The walk is a BACKGROUND job now, so a test has to let it land.

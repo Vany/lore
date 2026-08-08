@@ -45,7 +45,13 @@ export PATH
 
 DATA=$(grep -E '^LORE_HOST_DATA=' .env 2>/dev/null | cut -d= -f2)
 DATA=${DATA:-/var/lib/lore}
+# The MIRRORS stay under $DATA on the host bind — the T0 sandbox binds worktree paths
+# into sibling containers by host-resolved absolute path, so they cannot move.
+# The REGISTRY moved into a volume on 2026-08-08 (spec/deployment.md 4.1). Both are read
+# below, host path first, so an unmigrated deployment keeps working unchanged.
 DB="$DATA/lore.db"
+PROJECT=${COMPOSE_PROJECT_NAME:-$(basename "$PWD")}
+DBVOL="${PROJECT}_lore-db"
 INTERVAL=${LORE_MIRROR_INTERVAL:-300}
 
 # Long enough that a fetch never blocks the next pass for ever; short enough that a
@@ -71,36 +77,61 @@ fi
 # the user's session can fetch and a system-wide daemon could not.
 export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o BatchMode=yes -o ConnectTimeout=20}"
 
-one_pass() {
-  if [ ! -f "$DB" ]; then
-    log "no registry at $DB — nothing to refresh (is LORE_HOST_DATA right?)"
+# The repository list, from wherever the registry actually is.
+#
+# THE HOST PATH FIRST, and the volume second, because that order is what makes an
+# unmigrated deployment behave exactly as it did. A migrated one has no host file at all.
+#
+# **This is the one place docker is needed**, and it was worth avoiding: the header above
+# says this must keep working while the container is down, restarting or being rebuilt —
+# which is exactly when a stale mirror goes unnoticed. A throwaway `docker run` still
+# satisfies that; it needs the daemon, not the service. It fails only when docker itself
+# is down, and then the service is down too and a stale mirror is not the problem.
+#
+# It cost seventeen hours of stale mirrors to learn this file existed: the database moved
+# into a volume and this went on reading the host path, logging "no registry" every five
+# minutes into a file nobody reads, until a customer's review was refused for a mirror
+# 1026 minutes old.
+read_registry() {
+  if [ -f "$DB" ]; then
+    if command -v sqlite3 >/dev/null 2>&1; then
+      sqlite3 -readonly -noheader -separator "$(printf '\t')" "$DB" "SELECT id, name, git_url FROM repo" 2>&1
+      return $?
+    fi
+    if command -v node >/dev/null 2>&1; then
+      node -e '
+        const { DatabaseSync } = require("node:sqlite");
+        const d = new DatabaseSync(process.argv[1], { readOnly: true });
+        for (const r of d.prepare("SELECT id, name, git_url FROM repo").all()) {
+          console.log([r.id, r.name, r.git_url].join("\t"));
+        }
+      ' "$DB" 2>&1
+      return $?
+    fi
+    log "neither sqlite3 nor node is on PATH ($PATH) — cannot read $DB. apt install sqlite3"
     return 99
   fi
 
-  # Read-only in both readers: this must never be the thing that corrupts the
-  # registry, and it has no business writing to it anyway.
-  #
-  # `sqlite3` first because it lives at /usr/bin on macOS — a path every supervisor
-  # already has — while node is wherever a package manager put it. node is the
-  # fallback for a host with no sqlite3 CLI. If neither is present that is a fact
-  # worth stating, not a reason to report an empty repository list, which would look
-  # exactly like "nothing needs fetching".
-  if command -v sqlite3 >/dev/null 2>&1; then
-    repos=$(sqlite3 -readonly -noheader -separator "$(printf '\t')" "$DB" \
-      "SELECT id, name, git_url FROM repo" 2>&1) \
-      || { log "could not read $DB with sqlite3: $repos"; return 99; }
-  elif command -v node >/dev/null 2>&1; then
-    repos=$(node -e '
+  if command -v docker >/dev/null 2>&1 && docker volume inspect "$DBVOL" >/dev/null 2>&1; then
+    docker run --rm -v "$DBVOL":/db --entrypoint node "${PROJECT}-lore:latest" -e '
       const { DatabaseSync } = require("node:sqlite");
-      const d = new DatabaseSync(process.argv[1], { readOnly: true });
+      const d = new DatabaseSync("/db/lore.db", { readOnly: true });
       for (const r of d.prepare("SELECT id, name, git_url FROM repo").all()) {
         console.log([r.id, r.name, r.git_url].join("\t"));
       }
-    ' "$DB" 2>&1) || { log "could not read $DB with node: $repos"; return 99; }
-  else
-    log "neither sqlite3 nor node is on PATH ($PATH) — cannot read the registry. apt install sqlite3"
-    return 99
+    ' 2>&1 | tr -d '\r'
+    return $?
   fi
+
+  log "no registry: no $DB, and no readable $DBVOL volume (is LORE_HOST_DATA right, and has docker started?)"
+  return 99
+}
+
+one_pass() {
+
+  # Read-only in every reader: this must never be the thing that corrupts the registry,
+  # and it has no business writing to it anyway.
+  repos=$(read_registry) || { log "could not read the registry: $repos"; return 99; }
 
   [ -z "$repos" ] && { log "no repositories registered yet"; return 0; }
 

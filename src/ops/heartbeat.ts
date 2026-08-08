@@ -16,6 +16,7 @@
 
 import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
+import { MAX_MIRROR_AGE_MS, mirrorFreshness } from "../git/repo.ts";
 import type { Store } from "../store/store.ts";
 import { Alerter, CONDITIONS } from "./alerts.ts";
 
@@ -196,6 +197,27 @@ export function resetFootprintCache(): void {
   measuring.clear();
 }
 
+/**
+ * Registered repositories whose mirror is too old for a review to be cut from it.
+ *
+ * The same `mirrorFreshness` and `MAX_MIRROR_AGE_MS` the refusal uses — a monitor that
+ * reimplements the predicate it monitors ends up disagreeing with it, which is how a
+ * "stale" that refuses nothing and a "fresh" that refuses everything both become
+ * possible.
+ *
+ * Never-fetched is NOT stale: a repository provisioned a minute ago has no mirror yet and
+ * that is an ordinary state with its own message at review time.
+ */
+async function staleMirrorNames(store: Store, dataDir: string): Promise<readonly string[]> {
+  const out: string[] = [];
+  for (const repo of store.repos()) {
+    const fresh = await mirrorFreshness(join(dataDir, "repos", repo.id, "bare.git")).catch(() => undefined);
+    if (fresh?.kind !== "fetched") continue;
+    if (Date.now() - fresh.at.getTime() > MAX_MIRROR_AGE_MS) out.push(repo.name);
+  }
+  return out;
+}
+
 export async function checkHealth(store: Store, cfg: HeartbeatConfig): Promise<Health> {
   // FIRST, AND ACTUALLY FIRST. On 2026-08-07 this database became unreadable — every
   // statement, including `sqlite_master`, answering `database disk image is malformed` —
@@ -237,6 +259,26 @@ export async function checkHealth(store: Store, cfg: HeartbeatConfig): Promise<H
   const needsHumanOverAge = store.needsHumanOlderThan(cfg.needsHumanAgeHours);
 
   const problems: string[] = [];
+  // A STALE MIRROR REFUSES EVERY REVIEW, and nothing here knew.
+  //
+  // `assertFresh` refuses a review cut from a mirror older than MAX_MIRROR_AGE_MS (D-65),
+  // because reviewing a stale tree describes code nobody is merging. The refresher is a
+  // HOST process lore cannot see or start — so when it stops, every review stops, and
+  // `/status` went on answering `ok: true` because it only ever asked about the queue,
+  // the replica and the database.
+  //
+  // That happened for seventeen hours on 2026-08-08: the registry moved into a volume,
+  // the refresher went on reading the old path, and a customer's review was refused for
+  // a mirror 1026 minutes old while the service called itself healthy. `make status`
+  // showed it in red the whole time — but that is a command a person runs, and the whole
+  // point of the beat is to say it unprompted.
+  const staleMirrors = await staleMirrorNames(store, cfg.dataDir);
+  if (staleMirrors.length > 0) {
+    problems.push(
+      `mirror stale: ${staleMirrors.join(", ")} — every review of these is REFUSED until the host ` +
+        "refresher runs again",
+    );
+  }
   // Read from cache; a stale one refreshes in the background. Never awaited — see the
   // note on `footprintBytes`, which is the outage this signature exists to prevent.
   const bytes = footprintBytes(cfg.dataDir, Date.now());
