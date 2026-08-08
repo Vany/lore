@@ -162,9 +162,12 @@ function subscribeTo(reviewId: string): object {
       "TWO THINGS THAT LOOK LIKE LORE FAILING AND ARE NOT. (1) `subscriptions/listen` needs a 2026-07-28 " +
       "connection, and SDK clients default to the 2025 one — you usually have to opt in rather than being " +
       "unable to: on the TypeScript SDK that is `versionNegotiation: { mode: 'auto' }` in the client " +
-      "options, and without it the method is refused as unsupported by the negotiated version. (2) This " +
-      "request is LONG-LIVED: it holds the stream open and does not return promptly, so a default request " +
-      "timeout cancels your own subscription and reports a timeout. Give it no timeout, or a long one. " +
+      "options, and without it the method is refused as unsupported by the negotiated version. (2) Send it " +
+      "with your SDK's SUBSCRIPTION call, not as an ordinary request: an ordinary request applies your " +
+      "client's request timeout to the whole stream, so the subscription is acknowledged and then cancelled " +
+      "by your own client a minute later, and raising the timeout only moves the moment. On the TypeScript " +
+      "SDK that is `client.listen({ notifications: ... })`, which resolves on the acknowledgement and hands " +
+      "back a handle whose `closed` promise says WHY a stream ended. " +
       "If it still cannot be established, that is normal — fall back to `check_back_after_ms`.",
   };
 }

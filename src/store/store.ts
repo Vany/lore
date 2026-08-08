@@ -1436,8 +1436,10 @@ export class Store {
    * `undefined` for a database nothing has ever been written to.
    */
   lastWriteAt(): string | undefined {
-    // EVERY TABLE THAT CARRIES A TIMESTAMP, because the claim above is only true if the
-    // list is complete. It named five and missed five kinds of write outright: issuing or
+    // EVERY TIMESTAMP COLUMN, because the claim above is only true if the list is
+    // complete — and a TABLE-shaped list is not the same thing. `finding` was named and
+    // `delivered_at` still missed, which is the column `markDelivered` writes on every
+    // poll: the single most frequent write this service makes. It named five and missed five kinds of write outright: issuing or
     // revoking a token, retiring knowledge, opening or resolving a conflict, recording a
     // verdict, and accepting an appeal. A workgroup can spend an afternoon doing nothing
     // but answering findings — all verdicts — and this would not move, so a dead
@@ -1452,6 +1454,7 @@ export class Store {
            UNION ALL SELECT MAX(retired_at) FROM knowledge
            UNION ALL SELECT MAX(at) FROM usage
            UNION ALL SELECT MAX(first_seen) FROM finding
+           UNION ALL SELECT MAX(delivered_at) FROM finding
            UNION ALL SELECT MAX(created_at) FROM verdict
            UNION ALL SELECT MAX(created_at) FROM token
            UNION ALL SELECT MAX(revoked_at) FROM token

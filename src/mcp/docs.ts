@@ -67,9 +67,13 @@ this repository's own reviews:
   * *"not supported by the negotiated protocol version"* — you have to OPT IN to the
     newer era, and can usually just do it. On the TypeScript SDK that is
     \`versionNegotiation: { mode: 'auto' }\` in the client options.
-  * *"request timed out"* — this request is LONG-LIVED. It holds the stream open and does
-    not return promptly, so a default timeout cancels your own subscription. Give it no
-    timeout, or a long one.
+  * *"request timed out"* a minute or two after a SUCCESSFUL acknowledgement — you sent it
+    as an ordinary request, so your own client's request timeout applies to the whole
+    stream and then cancels the subscription you just opened. Raising the timeout only
+    moves the moment. Use your SDK's subscription call, which resolves on the
+    acknowledgement and holds the stream: on the TypeScript SDK that is
+    \`client.listen({ notifications: … })\`, and it hands back a handle whose \`closed\`
+    promise tells you WHY a stream ended — \`remote\` means re-listen.
 
 If neither helps, use review_poll — but do not report it as a fault.
 Use review_poll instead — but ONE call at a time, at the interval its own
