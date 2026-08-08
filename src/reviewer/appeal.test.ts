@@ -379,6 +379,42 @@ describe("what an appeal may not do", () => {
     expect(store.liveSuppressions(repoId)).toStrictEqual([]);
   });
 
+  /**
+   * AND IT SAYS SO WHERE THE AUTHOR CAN READ IT.
+   *
+   * Accepted, the fingerprint settles either way — so without this the author is told
+   * their argument won, and believes it settled the class, while the same check goes on
+   * raising it. That is a worse outcome than the finding, because it is a false belief
+   * about what was decided.
+   *
+   * `checks_skipped`, not the log. The first version wrote it to stderr — the channel
+   * defect this same branch fixed for the oversize notice, where "written to a log no
+   * client can read" WAS the bug, reintroduced two files away within a day.
+   */
+  it("tells the client, in checks_skipped, when an appeal bought no suppression", async () => {
+    await appeal(`rule ${cite()} — behind the overlay`, { finding: SUITE_RED });
+    const skipped = store.unavailableChecks("r1").join("\n");
+    expect(skipped, "the author must not be left thinking the class was settled").toContain(
+      "settled THIS finding only",
+    );
+    expect(skipped).toContain(cite());
+    expect(skipped).toMatch(/names no engine rule/);
+  });
+
+  // A model finding is a different sentence: its judgement is never suppressed by class,
+  // and it may simply not be raised again — so the notice must not promise it will be.
+  it("says the accurate thing for a model-raised finding", async () => {
+    const modelFound: Finding = { ...LOOPBACK, claim: "avoid-bind-all: the model phrased it this way" };
+    const reviewer = new ScriptedReviewer([[modelFound], []]);
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
+    source(`lore-ok[${fp(modelFound).slice(0, 8)}]: rule ${cite()} — behind the overlay`);
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
+
+    const skipped = store.unavailableChecks("r1").join("\n");
+    expect(skipped).toContain("a model raised it");
+    expect(skipped, "it may never come back; do not claim it will").toMatch(/may or may not be raised again/);
+  });
+
   // An id that resolves to nothing must not be able to switch a check off, and the tier
   // must be TOLD its central claim is unsupported rather than left to wonder why the
   // reason reads oddly.

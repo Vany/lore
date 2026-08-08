@@ -202,7 +202,11 @@ describe("SQL lives in the Store", () => {
   // A query through a Store's handle — `store.db.prepare`, `this.db.prepare` — which is
   // the shape the twenty-eight took. Not `new DatabaseSync`, which is a separate
   // connection and is what `status.ts` legitimately does.
-  const THROUGH_THE_STORE = /\b(?:store|this|deps\.store|s)\.db\.(?:prepare|exec)\b/;
+  // `\s*` between the two, because a formatter breaks a long chain across lines and
+  // `store.db\n  .prepare(` is EXACTLY the shape the deleted ratchet's own comment named
+  // as what defeated its first version. Writing the replacement with the same hole, in
+  // the change that restored it, is the failure this file is about — twice over.
+  const THROUGH_THE_STORE = /\b(?:store|this|deps\.store|s)\.db\s*\.\s*(?:prepare|exec)\b/;
   const EXEMPT = new Set(["ops/status.ts"]);
 
   it("is never written through a Store handle outside store/", () => {

@@ -157,11 +157,12 @@ export function subscribeTo(reviewId: string): object {
     //
     // MEASURED, over the wire, after two wrong guesses about it:
     //
-    //   * `client.listen({ notifications: { resourceSubscriptions: [...] } })` — the
-    //     acknowledgement arrives with an EMPTY honoured filter and no event ever comes.
-    //     The stream is open, healthy and useless.
-    //   * `client.listen({ resourceSubscriptions: [...] })` — honoured filter echoes the
-    //     review, and the wake arrives (377s later, on the round boundary).
+    //   * WRONG — `listen()` given the raw frame's params, `{ notifications: { ... } }`:
+    //     the acknowledgement arrives with an EMPTY honoured filter and no event ever
+    //     comes. The stream is open, healthy and useless.
+    //   * RIGHT — `listen()` given `subscribe_filter`, `{ resourceSubscriptions: [...] }`:
+    //     honoured filter echoes the review, and the wake arrives (377s later, on the
+    //     round boundary).
     //
     // In-process, `subscribe.test.ts` honours BOTH, so the suite cannot tell them apart
     // and did not catch this. That is stated there rather than papered over: the test

@@ -78,7 +78,8 @@ this repository's own reviews:
     stream and then cancels the subscription you just opened. Raising the timeout only
     moves the moment. Use your SDK's subscription call, which resolves on the
     acknowledgement and holds the stream: on the TypeScript SDK that is
-    \`client.listen({ notifications: … })\`, and it hands back a handle whose \`closed\`
+    \`client.listen(subscribe_filter)\` — the UNWRAPPED shape, see below — and it hands
+    back a handle whose \`closed\`
     promise tells you WHY a stream ended — \`remote\` means re-listen.
 
 If neither helps, use review_poll — but do not report it as a fault.
@@ -603,6 +604,9 @@ export const RESOURCE_DOCS: Readonly<Record<string, { title: string; priority: n
 1. review_start(branch, into, ticket) → review_id
 2. If your host can subscribe, do:
    subscriptions/listen { notifications: { resourceSubscriptions: ["lore://review/<id>"] } }
+   ^ the RAW JSON-RPC frame. An SDK's listen() helper takes subscribe_filter instead —
+     the same thing unwrapped. Passing it these params yields an empty honoured filter
+     and a stream that never delivers.
    You are woken by notifications/resources/updated when the review's STATE changes —
    that is the moment there is something to do, and nothing else wakes you. Check the
    ack: if your URI is not in the filter the server echoes back, you are NOT subscribed.
@@ -744,6 +748,9 @@ The loop:
 1. review_start(branch: "${branch}", into: "${into}", ticket: <paste the ticket, do not summarise>)
 2. If your host can subscribe, do:
    subscriptions/listen { notifications: { resourceSubscriptions: ["lore://review/<id>"] } }
+   ^ the RAW JSON-RPC frame. An SDK's listen() helper takes subscribe_filter instead —
+     the same thing unwrapped. Passing it these params yields an empty honoured filter
+     and a stream that never delivers.
    You are woken by notifications/resources/updated when the review's STATE changes —
    that is the moment there is something to do, and nothing else wakes you. Check the
    ack: if your URI is not in the filter the server echoes back, you are NOT subscribed.

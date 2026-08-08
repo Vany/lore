@@ -722,6 +722,8 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
 
   // 6. Rule on the pending justifications. Silence is assent.
   const accepted: string[] = [...carried];
+  /** Appeals accepted that bought no class suppression — the client is told (D-83). */
+  const appealBoughtNothing: string[] = [];
   const rejected: string[] = [];
   for (const p of pending) {
     if (modelRaised.has(p.finding.fingerprint)) {
@@ -780,15 +782,23 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       const cls = p.citedRule === undefined || p.finding.origin !== "t0"
         ? undefined
         : engineRuleClass(p.finding.claim);
-      // AN APPEAL THAT BUYS NOTHING SAYS SO. Accepted, the fingerprint settles either
-      // way — but without a class there is no suppression, so the check goes on firing
-      // and the author is left thinking the argument was won once and for all. Silence
-      // here is the difference between "we decided this" and "we decide this every time".
+      // AN APPEAL THAT BUYS NOTHING SAYS SO, TO THE AUTHOR. Accepted, the fingerprint
+      // settles either way — but without a class there is no suppression, so nothing was
+      // decided beyond this one finding and the author is left believing otherwise.
+      //
+      // `checks_skipped`, not the log. The first version wrote it to stderr, which is the
+      // channel defect this same branch fixed for the oversize notice — "written to a log
+      // no client can read" was the whole of that bug, reintroduced two files away. This
+      // is precisely a "the review does not cover what you would assume" fact, which is
+      // what that channel is for.
       if (p.citedRule !== undefined && cls === undefined) {
-        console.error(
-          `[lore:log] appeal to rule ${p.citedRule} accepted for ${p.finding.file} but buys no class ` +
-            `suppression: ${p.finding.origin === "t0" ? "the claim names no engine rule" : "a model raised it"}. ` +
-            "This one finding is settled; the same thing will be raised again.",
+        appealBoughtNothing.push(
+          p.finding.origin === "t0"
+            ? `the appeal to rule ${p.citedRule} at ${p.finding.file} settled THIS finding only — its claim ` +
+              "names no engine rule, so no class was suppressed and the same check will raise it again."
+            : `the appeal to rule ${p.citedRule} at ${p.finding.file} settled THIS finding only — a model ` +
+              "raised it, and a model's judgement is never suppressed by class. It may or may not be raised " +
+              "again; nothing was decided beyond this one finding.",
         );
       }
       if (cls !== undefined && p.citedRule !== undefined) {
@@ -823,6 +833,9 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       // argument about one line.
     }
   }
+
+  // Said to the CLIENT, once the loop knows. See `appealBoughtNothing`.
+  store.noteChecksSkipped(tierRunId, appealBoughtNothing);
 
   // 6b. Settle what the author FIXED. Silence rules here exactly as it does above,
   // with two guards: only a tier qualified to see it may close it, and the code must

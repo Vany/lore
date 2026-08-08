@@ -721,6 +721,25 @@ export class Store {
    * Every engine that could not run in this review, deduplicated, worst-case first
    * seen. Empty means everything the review type asks for actually executed.
    */
+  /**
+   * Add to what a tier run says it did NOT cover, after the row is closed.
+   *
+   * `closeTierRun` happens when the tier answers; some facts about what the round did not
+   * cover are only known after — an accepted appeal that bought no class suppression is
+   * decided in the reconciliation that follows. Appended rather than replaced, because
+   * the reason the tier was closed with is not superseded by this.
+   */
+  noteChecksSkipped(tierRunId: number, lines: readonly string[]): void {
+    if (lines.length === 0) return;
+    const row = this.db.prepare("SELECT unavailable FROM tier_run WHERE id = ?").get(tierRunId) as
+      | { unavailable: string | null }
+      | undefined;
+    const existing = row?.unavailable ?? "";
+    this.db
+      .prepare("UPDATE tier_run SET unavailable = ? WHERE id = ?")
+      .run([existing, ...lines].filter((l) => l.length > 0).join("\n"), tierRunId);
+  }
+
   unavailableChecks(reviewId: string): readonly string[] {
     const rows = this.db
       .prepare("SELECT unavailable FROM tier_run WHERE review_id = ? AND unavailable IS NOT NULL ORDER BY id")
