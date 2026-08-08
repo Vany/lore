@@ -889,6 +889,64 @@ describe("the paths that only happen when something has gone wrong", () => {
     return last;
   };
 
+  /**
+   * A tier that HANGS is stepped over too, once its retry is spent.
+   *
+   * Vany: *"if a low tier is limited it's okay, just pass its work to a higher tier."*
+   * D-48 did that for a tier nobody can PAY for and not for one that simply never
+   * answers — and the difference is invisible where it matters: the review is dead
+   * either way, and why it is dead is not the client's to fix.
+   *
+   * Measured on a customer's repository: t1 was cut at the deadline on both attempts and
+   * the whole review failed, while two other vendors sat there able to read the code.
+   * That repo's t1 has 54 recorded calls with a maximum of 1047s, so it was a hang.
+   *
+   * NOT on the first failure: a provider blip deserves the cheap tier again, not
+   * promotion to the dearer one. Both halves are asserted, because the expensive half is
+   * the one that would go unnoticed.
+   */
+  class Hangs implements ReviewerLike {
+    private readonly broke: readonly string[];
+    calls = 0;
+    constructor(broke: readonly string[]) {
+      this.broke = broke;
+    }
+    async review(tier: Tier): Promise<ReviewerResult> {
+      if (this.broke.includes(tier.id)) {
+        this.calls++;
+        throw new Error(`opencode ran past 2700s without finishing`);
+      }
+      return new ScriptedReviewer([[]]).review(tier, "", "");
+    }
+  }
+
+  it("fails the round the FIRST time a tier cannot answer, so a blip is retried cheaply", async () => {
+    const reviewer = new Hangs(["t1"]);
+    await expect(
+      runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: { ...CODE_ARCH, t0: [] as const } }),
+    ).rejects.toThrow(/ran past/);
+    expect(store.getReview("r1", "p")?.state, "still open — the client may retry the cheap tier").not.toBe("failed");
+  });
+
+  it("passes a hung tier's work to the next one once its retry is spent", async () => {
+    const reviewer = new Hangs(["t1"]);
+    const type = { ...CODE_ARCH, t0: [] as const };
+    // First failure: thrown, as above. The worker records it and the round is retried.
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type }).catch(() => undefined);
+    // Second: the budget is spent, so t1 is skipped and the deeper tiers do the work.
+    let last;
+    for (let i = 0; i < 8; i++) {
+      last = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type }).catch(() => undefined);
+      if (last === undefined || !["escalate", "fastClean"].includes(last.decision.kind)) break;
+    }
+    expect(last?.decision.kind, "the review reaches a verdict instead of dying").toBe("passedPartial");
+    expect(store.getReview("r1", "p")?.state).toBe("passed_partial");
+    // And the client is TOLD, in the channel it repeats to its user.
+    const skipped = store.unavailableChecks("r1").join("\n");
+    expect(skipped).toMatch(/could not answer on either attempt and was SKIPPED/);
+    expect(skipped, "one fewer independent vendor read this code").toMatch(/one fewer independent vendor/);
+  });
+
   // D-48: a tier nobody can pay for is stepped over, and the review finishes with
   // what it could afford — as `passed_partial`, never `passed`. "We did everything we
   // can" and "everything agrees" are different claims.

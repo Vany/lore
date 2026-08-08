@@ -177,7 +177,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-45** | The project is **`lore`** | confirmed |
 | **D-46** | A conflict block must have an exit: resolve, or escalate | confirmed |
 | **D-47** | D-1 is enforced by **absence**: no Anthropic credential is deployed | confirmed |
-| **D-48** | An unfundable tier is *skipped*, not fatal — `passed_partial` | confirmed |
+| **D-48** | A tier that cannot ANSWER — unfundable, or dead after its retry — is *skipped*, not fatal — `passed_partial` | confirmed; widened 2026-08-08 |
 | **D-49** | A single-vendor ladder reaches `passed_partial`, never `passed` | confirmed |
 | **D-50** | Exploration is **counted per review before it is capped**; no cap yet | `[OPEN]` |
 | **D-51** | An accepted justification is **repo knowledge**, carried across reviews | confirmed |
@@ -1176,6 +1176,37 @@ still open and is not blocking.
 `[OPEN]` — **whether the model can ORIGINATE the appeal's opposite**: *"this rule is
 wrong"*. Today a tier can say nothing but findings, which is the same gap that leaves the
 escalation path unwired. Worth solving once, for both.
+
+**D-48, widened — a tier that cannot ANSWER is skipped, not only one nobody can pay for.**
+
+Vany: *"if a low tier is limited it's okay, just pass its work to a higher tier."*
+
+D-48 already did that for `TierUnavailable`. It did not for a tier that simply never
+answers, and from where it matters the two are the same event: the review is dead, and
+the reason is not the client's to fix. A customer hit it — t1 cut at the deadline on both
+attempts, the whole review failed, while two other vendors sat there able to read the
+code. That repository's t1 has 54 recorded calls with a maximum of 1047s, so it was a
+hang rather than slowness.
+
+**Not on the first failure.** A provider blip deserves the cheap tier again, not
+promotion to the dearer one; promotion spends the expensive quota, which is precisely why
+it must not answer a transient fault. The trigger is the tier having already ended badly
+once in THIS review, read from the `tier_run` rows already recorded rather than tracked
+separately.
+
+**It costs a vendor, and the result says so.** The outcome is `passed_partial`, the
+`checks_skipped` entry names the tier, the error and the consequence — *"this review is
+evidence from one fewer independent vendor"* — and the attestation cannot claim what did
+not run. Independence is the ladder's premise (D-1); spending one to keep a review alive
+is a trade, not a free win, and the label is what keeps it honest.
+
+**The promoted tier is now told the truth.** `position()` counted the CONFIGURED index, so
+a promoted t2 was told *"cheaper tiers found nothing new"* about a tier that never looked,
+and t3 that *"2 independent reviewers from different vendors found nothing left"* when one
+was skipped. That is not cosmetic: the entire purpose of telling a tier where it stands
+(D-31/32) is to stop it re-deriving what the tiers below established — so a tier told the
+easy defects are gone, when nobody looked for them, deliberately looks past exactly the
+defects nobody has looked for. It counts tiers that can actually run.
 
 **D-82 — a defect found is fixed now; recording it is the exception.**
 

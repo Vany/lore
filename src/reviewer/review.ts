@@ -382,8 +382,15 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   const build = (diffText: string): string =>
     reviewPrompt({
       tier,
-      tierIndex: tiers.filter((t) => t.kind === "model").findIndex((t) => t.id === tier.id),
-      modelTierCount: tiers.filter((t) => t.kind === "model").length,
+      // COUNTED OVER TIERS THAT CAN RUN, not positions in the configured ladder — see
+      // `PromptInput.tierIndex`. A skipped tier is not a reviewer that read this code.
+      ...(() => {
+        const usable = tiers.filter((t) => t.kind === "model" && !review.ladder.unavailable.includes(t.id));
+        return {
+          tierIndex: Math.max(0, usable.findIndex((t) => t.id === tier.id)),
+          modelTierCount: usable.length,
+        };
+      })(),
       type,
       worktree,
       branch: review.branch,
@@ -520,6 +527,54 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
         ...(oversize === undefined ? [] : [oversize]),
       ],
     );
+
+    // A TIER THAT CANNOT ANSWER HANDS ITS WORK UP, ONCE ITS RETRY IS SPENT.
+    //
+    // Vany: *"if a low tier is limited it's okay, just pass its work to a higher tier."*
+    // D-48 already did that for a tier nobody can PAY for. It did not for a tier that
+    // simply never answers, and the difference is invisible from where it matters: the
+    // review is dead either way, and the reason it is dead is not the client's to fix.
+    //
+    // Measured on a customer's repository: t1 hung and was cut at the deadline on both
+    // attempts, and the whole review failed. That repo's t1 has 54 recorded calls with a
+    // maximum of 1047s, so this was a hang and not slowness — and the answer to a hung
+    // reviewer is the same as to an unaffordable one. Two other vendors were sitting
+    // there able to read the code.
+    //
+    // NOT ON THE FIRST FAILURE. A provider blip deserves the cheap tier again rather than
+    // promotion to the dearer one, so this waits until the tier has already failed once
+    // in THIS review — the retry budget, spent, in the evidence we already record.
+    // Promotion costs the dearer tier's quota, which is exactly why it must not be the
+    // response to a transient fault.
+    const alreadyFailed = store.tierFailureCount(reviewId, tier.id) > 1;
+    if (!(e instanceof TierUnavailable) && alreadyFailed && anyTierRan(tiers, [...review.ladder.unavailable, tier.id])) {
+      // Said in the channel a client repeats to its user. A promoted tier means the
+      // review covers LESS than a reader would assume, which is what this channel is for.
+      store.noteChecksSkipped(tierRunId, [
+        `${tier.id} (${tier.model ?? "?"}) could not answer on either attempt and was SKIPPED — its work ` +
+          `passed to the next tier. Anything only ${tier.id} would have caught is unexamined, and this review ` +
+          `is evidence from one fewer independent vendor. Last error: ${e instanceof Error ? e.message : String(e)}`,
+      ]);
+      const promoted = markUnavailable(review.ladder, tier.id);
+      const stepped2 = step({ state: promoted, raised: [], tiers, needsHuman: false });
+      const why2 = stoppedBecause(stepped2.decision, stepped2.state);
+      if (why2 !== undefined) store.setFailureReason(reviewId, why2);
+      store.updateReview(reviewId, {
+        ladder: stepped2.state,
+        state: toReviewState(stepped2.decision),
+        treeHash: await treeHash(worktree),
+      });
+      return {
+        decision: stepped2.decision,
+        tier,
+        newFindings: [],
+        accepted: [],
+        rejected: [],
+        expired,
+        fixed: [],
+        t0Unavailable: [...t0.unavailable, `${tier.id}: ${e instanceof Error ? e.message : String(e)}`],
+      };
+    }
     // A tier nobody can pay for, or whose window cannot hold the diff, is a limitation
     // rather than a failure (D-48). Record it, step over it, and let the ladder finish
     // with what remains — but only if something else can still look. If nothing can,

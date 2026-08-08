@@ -15,6 +15,21 @@ import type { KnowledgeItem, RecordedFinding } from "../store/store.ts";
 
 export interface PromptInput {
   readonly tier: Tier;
+  /**
+   * How many model tiers ACTUALLY READ this tree before me, and how many will in all.
+   *
+   * Both count tiers that can run, not positions in the configured ladder. When a tier
+   * is skipped — unpayable, or dead after its retries (D-48) — the ladder promotes its
+   * work to the next one, and the promoted tier used to be told "cheaper tiers and
+   * deterministic tooling found nothing new" about a tier that never looked. Worse for
+   * the last one: "2 independent reviewers, from different vendors, found nothing left"
+   * when one of the two was skipped.
+   *
+   * That is not a cosmetic inaccuracy. The whole purpose of telling a tier where it
+   * stands (D-31/32) is to stop it re-deriving what the tiers below established — so a
+   * tier told the easy defects are gone, when nobody looked for them, deliberately
+   * looks past exactly the defects nobody has looked for.
+   */
   readonly tierIndex: number;
   readonly modelTierCount: number;
   readonly type: ReviewType;

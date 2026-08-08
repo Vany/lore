@@ -111,7 +111,19 @@ export function isSettled(v: VerdictKind): boolean {
  * test that describes a state production cannot produce proves nothing about
  * production, and nothing was in a position to notice.
  */
-export type TierOutcome = "clean" | "findings" | "failed" | "unpayable";
+/**
+ * What a tier run DID — a different vocabulary from `ReviewState`, sharing the word
+ * `failed` with it. The two were once written into this one column and the column stopped
+ * answering which question it was for; `one-definition.test.ts` bans review states spelled
+ * out in SQL partly because of that collision.
+ */
+export const TIER_OUTCOMES = ["clean", "findings", "failed", "unpayable"] as const;
+export type TierOutcome = (typeof TIER_OUTCOMES)[number];
+
+/** The outcomes that mean the tier did NOT read the code, as a SQL list. Derived, never spelled out. */
+const DID_NOT_LOOK_SQL = TIER_OUTCOMES.filter((o) => o === "failed" || o === "unpayable")
+  .map((o) => `'${o}'`)
+  .join(", ");
 
 export interface VerdictRow {
   readonly fingerprint: string;
@@ -738,6 +750,21 @@ export class Store {
     this.db
       .prepare("UPDATE tier_run SET unavailable = ? WHERE id = ?")
       .run([existing, ...lines].filter((l) => l.length > 0).join("\n"), tierRunId);
+  }
+
+  /**
+   * How many times this tier has ENDED BADLY in this review — failed or unpayable.
+   *
+   * The retry budget, read from the evidence already recorded rather than tracked
+   * separately. A tier that could not answer once deserves the cheap attempt again; one
+   * that could not answer twice has spent it, and its work passes to the next tier
+   * rather than killing the review (D-48, extended).
+   */
+  tierFailureCount(reviewId: string, tier: string): number {
+    const row = this.db
+      .prepare(`SELECT COUNT(*) AS c FROM tier_run WHERE review_id = ? AND tier = ? AND outcome IN (${DID_NOT_LOOK_SQL})`)
+      .get(reviewId, tier) as Record<string, number> | undefined;
+    return Number(row?.["c"] ?? 0);
   }
 
   unavailableChecks(reviewId: string): readonly string[] {
