@@ -174,10 +174,10 @@ export function subscribeTo(reviewId: string): object {
       "only moment there is anything for you to do. Then call review_poll ONCE straight away — a " +
       "subscription carries no history, so anything that happened before your stream opened is waiting " +
       "and nothing will announce it. CHECK THE ACKNOWLEDGEMENT: if your subscription is not echoed in it, " +
-      "you are not subscribed and nothing will ever arrive — read the acknowledgement " +
-      "NOTIFICATION itself (`notifications/subscriptions/acknowledged`), because an SDK handle's " +
-      "`honoredFilter` can be empty on a subscription that is working, and a client that trusted the " +
-      "handle would fall back for no reason. " +
+      "you are not subscribed and nothing will ever arrive. An EMPTY honoured filter is never healthy: " +
+      "the usual cause is giving an SDK's listen() the raw params instead of `subscribe_filter`, which " +
+      "validates against an all-optional schema and matches nothing. Compare what came back with what you " +
+      "sent. " +
       // The two walls I hit driving this service as a client, neither of which the old
       // text mentioned. Both produce an error that reads like a fault in lore.
       "TWO THINGS THAT LOOK LIKE LORE FAILING AND ARE NOT. (1) `subscriptions/listen` needs a 2026-07-28 " +

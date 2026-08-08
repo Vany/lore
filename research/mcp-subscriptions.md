@@ -1,8 +1,13 @@
 # MCP subscriptions and long-running work
 
-**Verified 2026-08-06** against the published spec revision `2026-07-28` and the
-installed `@modelcontextprotocol` packages. Re-check before relying on it: this is the
-newest part of the protocol and the one most likely to move.
+**Wire protocol verified 2026-08-06. §7, the SDK layer, added 2026-08-08** after four
+wrong diagnoses in one evening — read that section before writing any client, because
+every trap in it fails SILENTLY and the wire half below is not enough to avoid them.
+
+Checked against the published spec revision `2026-07-28` and against the INSTALLED
+`@modelcontextprotocol` packages at **2.0.0**, which is what this deployment runs.
+Re-check before relying on it: this is the newest part of the protocol and the one most
+likely to move.
 
 Sources:
 - <https://modelcontextprotocol.io/specification/2026-07-28/basic/patterns/subscriptions>
@@ -175,3 +180,111 @@ client that worked (MEMO session 31), and this is the same class of assumption a
 the same client.
 
 **Polling therefore stays**, whatever is built on top. It is the floor, not the shape.
+
+---
+
+## 7. Using the TypeScript SDK (`@modelcontextprotocol/client` 2.0.0)
+
+**Checked 2026-08-08 against `node_modules`, not from memory.** Everything here was
+learned by getting it wrong against the live service; each one produces an acknowledged,
+open, healthy stream that delivers nothing, which is indistinguishable from "the review
+has not changed yet".
+
+### 7.1 `listen()` takes the filter UNWRAPPED — the single worst trap
+
+```ts
+// core/dist: the two shapes, and why one is silently accepted
+const SubscriptionFilterSchema = z.object({
+  toolsListChanged: z.boolean().optional(),
+  promptsListChanged: z.boolean().optional(),
+  resourcesListChanged: z.boolean().optional(),
+  resourceSubscriptions: z.array(z.string()).optional(),
+});
+const SubscriptionsListenRequestParamsSchema =
+  BaseRequestParamsSchema.extend({ notifications: SubscriptionFilterSchema });
+```
+
+`client.listen(filter)` takes a **`SubscriptionFilter`** and wraps it into
+`params.notifications` itself.
+
+```ts
+await client.listen({ resourceSubscriptions: [uri] });              // RIGHT
+await client.listen({ notifications: { resourceSubscriptions: [uri] } }); // WRONG
+```
+
+The wrong form is not rejected. `SubscriptionFilterSchema` is a plain `z.object` with
+**every field optional**, so a filter whose only key is `notifications` validates
+perfectly and matches nothing. The server honours an empty filter, acknowledges it, and
+sends no events for ever.
+
+**So an empty `honoredFilter` means exactly what it says: nothing was honoured.** I
+briefly documented the opposite — that it "can be empty on a subscription that is
+working" — after seeing it empty on a subscription I had broken this way. Measured:
+unwrapped → `honoredFilter.resourceSubscriptions` echoes the URI and the wake arrives;
+wrapped → `{}` and silence.
+
+### 7.2 The 2026 era is opt-in
+
+```ts
+LATEST_PROTOCOL_VERSION            = "2025-11-25"
+DEFAULT_NEGOTIATED_PROTOCOL_VERSION = "2025-03-26"
+```
+
+`subscriptions/listen` needs revision `2026-07-28`, and the client will not negotiate it
+unless asked:
+
+```ts
+new Client(info, { capabilities: {}, versionNegotiation: { mode: "auto" } })
+```
+
+Without it the method throws `MethodNotSupportedByProtocolVersion` — which reads like the
+SERVER lacking support, and is not. `mode: "auto"` probes with `server/discover` and
+falls back to the legacy handshake; `{ pin: "2026-07-28" }` fails loudly instead.
+
+Note `resources/subscribe` is **removed** in the modern era: on a 2026 connection it
+throws, and the listen filter is the whole mechanism. There is no "subscribe first".
+
+### 7.3 Register a handler; the fallback will not fire
+
+```ts
+client.setNotificationHandler("notifications/resources/updated", (n) => { ... });
+```
+
+A plain method string. `fallbackNotificationHandler` fires only when nothing else is
+registered, and the SDK registers its own for this method — so a client that only sets
+the fallback receives nothing and concludes the server is quiet.
+
+`ResourceUpdatedNotification` is exported as a TYPE, not a runtime schema value; passing
+it where a schema is expected yields `undefined`.
+
+### 7.4 Do not send it as an ordinary request
+
+`client.request({ method: "subscriptions/listen", ... })` applies the client's request
+timeout to the WHOLE STREAM, so the subscription is acknowledged and then cancelled by
+your own client when that elapses. Raising the timeout only moves the moment.
+`client.listen()` resolves on the acknowledgement and holds the stream; the standard
+timeout applies to the ack phase only.
+
+### 7.5 `closed` distinguishes the three endings
+
+```ts
+sub.closed.then((how) => { /* 'local' | 'graceful' | 'remote' */ });
+```
+
+`local` is your own `close()` or abort — **including your process exiting**, which is
+worth knowing before reading `remote` into a short-lived script. `graceful` is the server
+ending it deliberately. `remote` is an unexpected drop: re-listen if you still want
+events.
+
+### 7.6 What lore must do on the server
+
+Declare the capability explicitly — `registerResource` advertises `listChanged` and stops
+there, and the listen router honours `resourceSubscriptions` only against a declared
+`subscribe` bit:
+
+```ts
+new McpServer(info, { capabilities: { resources: { subscribe: true } } })
+```
+
+Without it the server accepts the subscription, acknowledges it with an empty filter, and
+never delivers — the same observable failure as §7.1, from the other side.

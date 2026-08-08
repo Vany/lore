@@ -96,10 +96,11 @@ Check the acknowledgement, do not assume. The ack echoes the subscriptions the s
 agreed to serve; if yours is not in it, you are not subscribed and nothing will ever
 arrive on that stream.
 
-READ THE NOTIFICATION, not your SDK's handle. notifications/subscriptions/acknowledged
-carries the filter the server agreed to. The TypeScript SDK's McpSubscription.honoredFilter
-can be empty on a subscription that is working perfectly, so a client that checked the
-handle would fall back to polling for no reason at all.
+AN EMPTY HONOURED FILTER MEANS NOTHING WAS HONOURED — it is never a healthy subscription.
+The commonest cause is passing the raw params to an SDK helper: listen() takes
+subscribe_filter, and a filter whose only key is 'notifications' validates against a
+schema whose fields are all optional, so it is accepted and matches nothing. Compare what
+came back against what you sent.
 
 Subscribe only to review ids YOU started. A subscription to somebody else's is
 accepted and then silent forever — deliberately, because refusing would confirm the id
