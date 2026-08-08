@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  ladderChanged, DEFAULT_TIERS, anyTierRan, initialState, loadTiers, markUnavailable, settle, soleVendorOf, step, vendorOf, type Decision, type LadderState, type Tier } from "./ladder.ts";
+  ladderChanged, DEFAULT_TIERS, anyTierRan, initialState, loadTiers, markUnavailable, settle, soleVendorOf, step, vendorOf, type Decision, type LadderState, type Tier, ladderFingerprint } from "./ladder.ts";
 
 const clean = (state: LadderState) => step({ state, raised: [] });
 
@@ -362,5 +362,50 @@ describe("comparing a stored ladder pin with the running one", () => {
   // whole point of adding them, and D-29 makes effort a deliberate lever.
   it("refuses an effort change once both pins record it", () => {
     expect(ladderChanged(NEW, NEW.replace("medium", "max"))).toBe(true);
+  });
+});
+
+/**
+ * `skip_if_quota` — optional, and absent means exactly what it meant before.
+ *
+ * A retry only pays for itself when the fault might be transient, and an exhausted plan
+ * is not: Z.ai answers "Weekly/Monthly Limit Exhausted, resets at …", which does not
+ * become untrue by asking again. Each attempt costs the full deadline, so on a metered
+ * subscription the retry is 45 minutes of wall-clock spent to re-learn a fact with a
+ * published expiry date.
+ */
+describe("skip_if_quota in the tier config", () => {
+  const tier = (extra: string) => `[{"id":"t0","kind":"deterministic","stage":"fast"},
+    {"id":"t1","kind":"model","model":"zai/glm","stage":"fast"${extra}},
+    {"id":"t2","kind":"model","model":"kimi/k3","stage":"deep"}]`;
+
+  it("is accepted and read back", () => {
+    const tiers = loadTiers(tier(`,"skip_if_quota":true`));
+    expect(tiers.find((t) => t.id === "t1")?.skip_if_quota).toBe(true);
+  });
+
+  // Optional: every ladder written before this field keeps working unchanged, which is
+  // the whole reason it is not mandatory.
+  it("is absent by default rather than false", () => {
+    expect(loadTiers(tier(""))?.find((t) => t.id === "t1")?.skip_if_quota).toBeUndefined();
+  });
+
+  it("is still refused when it is not a boolean", () => {
+    expect(() => loadTiers(tier(`,"skip_if_quota":"yes"`))).toThrow(/malformed/i);
+  });
+
+  /**
+   * NOT IN THE PIN, deliberately.
+   *
+   * `ladderFingerprint` refuses to resume a review whose tiers changed meaning — a
+   * different model wearing the same name. This changes neither which model is called nor
+   * how it is asked, so pinning it would refuse every open review at the next config
+   * change over a policy the review does not depend on. That is the failure the pin
+   * itself caused on 2026-08-08 when `effort` was added to it.
+   */
+  it("does not change the ladder pin", () => {
+    const withFlag = loadTiers(tier(`,"skip_if_quota":true`));
+    const without = loadTiers(tier(""));
+    expect(ladderFingerprint([...withFlag])).toBe(ladderFingerprint([...without]));
   });
 });

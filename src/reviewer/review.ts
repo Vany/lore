@@ -568,12 +568,21 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     // in THIS review — the retry budget, spent, in the evidence we already record.
     // Promotion costs the dearer tier's quota, which is exactly why it must not be the
     // response to a transient fault.
-    const alreadyFailed = store.tierFailureCount(reviewId, tier.id) > 1;
+    // `skip_if_quota` SPENDS NO SECOND ATTEMPT. A retry only pays for itself when the
+    // fault might be transient, and an exhausted plan is not: Z.ai answers "Weekly/Monthly
+    // Limit Exhausted, resets at …", which does not become untrue by asking again. Each
+    // attempt costs the full deadline, so the retry was 45 minutes of wall-clock spent to
+    // re-learn a fact with a published expiry date.
+    //
+    // Absent, the tier keeps the old behaviour — one retry, then promote — because for a
+    // metered API a blip really is worth asking twice.
+    const attemptsSpent = tier.skip_if_quota === true ? 0 : 1;
+    const alreadyFailed = store.tierFailureCount(reviewId, tier.id) > attemptsSpent;
     if (!(e instanceof TierUnavailable) && alreadyFailed && anyTierRan(tiers, [...review.ladder.unavailable, tier.id])) {
       // Said in the channel a client repeats to its user. A promoted tier means the
       // review covers LESS than a reader would assume, which is what this channel is for.
       store.noteChecksSkipped(tierRunId, [
-        `${tier.id} (${tier.model ?? "?"}) could not answer on either attempt and was SKIPPED — its work ` +
+        `${tier.id} (${tier.model ?? "?"}) could not answer${tier.skip_if_quota === true ? " and is marked skip_if_quota" : " on either attempt"} and was SKIPPED — its work ` +
           `passed to the next tier. Anything only ${tier.id} would have caught is unexamined, and this review ` +
           `is evidence from one fewer independent vendor. Last error: ${e instanceof Error ? e.message : String(e)}`,
       ]);

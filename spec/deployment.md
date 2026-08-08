@@ -161,6 +161,19 @@ D-26, and until this existed the remote half could not queue at all. It just die
 | `tiers.zai-openai.json` | the previous two-vendor ladder, kept for reference |
 | `tiers.kimi.json` | **not a ladder.** T0 plus Kimi alone, to exercise one tier deliberately |
 
+**`skip_if_quota` (optional, per tier).** A tier on a metered subscription: if it cannot
+answer, skip it rather than spending a second attempt. Set on **t1** in every tiers file,
+because t1 is the Z.ai Coding Plan seat and Z.ai's answer to an exhausted plan is *"Weekly/
+Monthly Limit Exhausted. Your limit will reset at …"* — which does not become untrue by
+asking again. Each attempt costs the full 45-minute deadline, so the retry was 45 minutes
+of wall-clock spent to re-learn a fact with a published expiry date.
+
+Absent means the previous behaviour — one retry, then promote (D-48 widened) — because for
+a metered API a blip really is worth asking twice. It is deliberately NOT part of
+`ladderFingerprint`: it changes neither which model is called nor how it is asked, and
+pinning it would refuse every open review at the next config change, which is exactly what
+adding `effort` to the pin did on 2026-08-08.
+
 `tiers.kimi.json` exists because Kimi is T2 and every review either settled at t1 or
 failed before escalating, so a tier that was configured had never executed — and a
 tier that has never executed is not a working tier. Putting it first is the only way

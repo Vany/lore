@@ -1,10 +1,15 @@
 [
-  { "id": "t0", "kind": "deterministic", "stage": "fast" },
+  {
+    "id": "t0",
+    "kind": "deterministic",
+    "stage": "fast"
+  },
   {
     "id": "t1",
     "kind": "model",
     "model": "kimi-for-coding/k3",
     "effort": "high",
-    "stage": "fast"
+    "stage": "fast",
+    "skip_if_quota": true
   }
 ]

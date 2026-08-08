@@ -141,6 +141,12 @@ Two consequences, and neither is optional:
   `passed_partial` rather than dying. Without it, a provider at its limit takes down the
   gate every review must clear.
 
+**`skip_if_quota` is the part of this that IS built.** A tier carrying it skips on its
+FIRST failure instead of spending a second attempt, because an exhausted plan does not
+become available by asking again — Z.ai names the reset time in its refusal. It is set on
+t1, the Coding Plan seat. Absent, a tier keeps the retry, since for a metered API a blip is
+worth asking twice.
+
 `[OPEN]` — lore cannot read a subscription's remaining quota; nothing here publishes one.
 What it can do is notice the SHAPE — repeated timeouts from one provider while another
 answers in seconds — and cool the tier off service-wide for the window rather than

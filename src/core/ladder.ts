@@ -25,6 +25,24 @@ export interface Tier {
   readonly effort?: "low" | "medium" | "high" | "max";
   /** `fast` tiers answer inline; `deep` tiers run asynchronously (D-34). */
   readonly stage: Stage;
+  /**
+   * This tier is on a metered subscription: if it cannot answer, SKIP it rather than
+   * spending a second attempt on it.
+   *
+   * Optional, and absent means the old behaviour — one retry, then promote (D-48
+   * widened). The flag exists because a retry only pays for itself when the fault might
+   * be transient, and an exhausted plan is not: Z.ai's answers *"Weekly/Monthly Limit
+   * Exhausted, resets at …"*, which does not become untrue by asking again. Measured
+   * 2026-08-09, each attempt cost the full 45-minute deadline, so the retry was 45
+   * minutes of wall-clock spent to re-learn a fact with a published expiry date.
+   *
+   * NOT part of `ladderFingerprint`. The pin refuses to resume a review whose tiers have
+   * changed meaning — a different model wearing the same name — and this changes neither
+   * which model is called nor how it is asked. Flipping it mid-review is safe, and
+   * pinning it would refuse every open review at the next config change for a policy the
+   * review does not depend on.
+   */
+  readonly skip_if_quota?: boolean;
 }
 
 /**
@@ -49,6 +67,7 @@ const TierSchema = z
     model: absent(z.string().min(1)),
     effort: absent(z.enum(["low", "medium", "high", "max"])),
     stage: z.enum(["fast", "deep"]),
+    skip_if_quota: absent(z.boolean()),
   })
   .strict()
   .refine((t) => t.kind !== "model" || t.model !== undefined, {

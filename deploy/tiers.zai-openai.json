@@ -9,7 +9,8 @@
     "kind": "model",
     "model": "zai-coding-plan/glm-5-turbo",
     "effort": "medium",
-    "stage": "fast"
+    "stage": "fast",
+    "skip_if_quota": true
   },
   {
     "id": "t2",

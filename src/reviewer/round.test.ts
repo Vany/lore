@@ -928,6 +928,22 @@ describe("the paths that only happen when something has gone wrong", () => {
     expect(store.getReview("r1", "p")?.state, "still open — the client may retry the cheap tier").not.toBe("failed");
   });
 
+  // `skip_if_quota` spends NO second attempt: an exhausted plan does not become
+  // available by asking again, and each attempt costs the full deadline.
+  it("skips a skip_if_quota tier on the FIRST failure, spending no second attempt", async () => {
+    const reviewer = new Hangs(["t1"]);
+    const tiers = CODE_ARCH.tiers.map((t) => (t.id === "t1" ? { ...t, skip_if_quota: true } : t));
+    const type = { ...CODE_ARCH, tiers, t0: [] as const };
+    let last;
+    for (let i = 0; i < 8; i++) {
+      last = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type }).catch(() => undefined);
+      if (last === undefined || !["escalate", "fastClean"].includes(last.decision.kind)) break;
+    }
+    expect(last?.decision.kind).toBe("passedPartial");
+    expect(reviewer.calls, "one attempt, not two — that is the whole point of the flag").toBe(1);
+    expect(store.unavailableChecks("r1").join("\n")).toContain("marked skip_if_quota");
+  });
+
   it("passes a hung tier's work to the next one once its retry is spent", async () => {
     const reviewer = new Hangs(["t1"]);
     const type = { ...CODE_ARCH, t0: [] as const };
