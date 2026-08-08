@@ -200,6 +200,12 @@ started is honest, while a review that runs and cannot be paid for is not.
 
 **The ceiling cannot fire under a subscription, and says so.** It sums `cost_usd`,
 and both current providers bill a flat rate, so every usage row carries zero.
+
+**A failed call now leaves a usage row too** (D-85), written with `outcome: 'failed'` and
+read back from the session opencode leaves behind — before 2026-08-09 a call that timed
+out recorded nothing while the provider counted every token. Anything reading this table
+for latency or round counts should exclude that outcome; anything summing tokens across
+both outcomes is currently wrong for a different reason, recorded in SPEC §3.
 `/status` reports `spend_ceiling.metered: false` with a note that a zero means
 *unmeasured*, not *headroom* — because "$0 spent against a $100 ceiling" and "nothing
 here can measure spending" are opposite facts that look identical in a dashboard. A

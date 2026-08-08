@@ -511,6 +511,19 @@ landing with a real user, and it should not get lost among the defects below.
       provider at its limit is currently invisible from inside the service
       (`spec/operations.md` §2.4.2), which is the stale-mirror failure again.
 
+- [ ] **The success and failure paths count tokens differently, and I caused it.**
+      The failure path (D-85) sums every assistant message — the session. The success path
+      reads the ONE message a prompt reply carries — a single turn. In a real 73-turn
+      session the per-message cache reads were 100k-450k each and summed to 17.9M, so
+      identical work now records a far larger row when it FAILS than when it succeeds, and
+      any total across both is meaningless.
+
+      Fixing the failure-path blindness introduced this. `usageFromMessages` already
+      exists and the success path can use it; `GET /session/:id` returns the true totals
+      in ~700 bytes. It changes what the spend ceiling sees — inert today, since every row
+      carries cost 0 on these subscriptions — which is why it is a decision rather than a
+      quiet edit.
+
 - [ ] **Set the exploration cap from data** (D-50) — and the data still says *not yet*.
       84 completed runs, re-measured 2026-08-05 (the 2026-08-04 table had 54):
 

@@ -178,7 +178,8 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-46** | A conflict block must have an exit: resolve, or escalate | confirmed |
 | **D-47** | D-1 is enforced by **absence**: no Anthropic credential is deployed | confirmed |
 | **D-48** | A tier that cannot ANSWER — unfundable, or dead after its retry — is *skipped*, not fatal — `passed_partial` | confirmed; widened 2026-08-08 |
-| **D-84** | **An exhausted subscription may answer NOTHING AT ALL.** Quota detection cannot rely on a status code | measured 2026-08-09 |
+| **D-84** | **Z.ai names its limit and its reset time; opencode swallows both.** Quota reaches lore as a hang, not a status code | measured 2026-08-09 |
+| **D-85** | A tier on a metered plan carries `skip_if_quota` — one attempt, then skip. A failed call's tokens are recorded | built 2026-08-09 |
 | **D-49** | A single-vendor ladder reaches `passed_partial`, never `passed` | confirmed |
 | **D-50** | Exploration is **counted per review before it is capped**; no cap yet | `[OPEN]` |
 | **D-51** | An accepted justification is **repo knowledge**, carried across reviews | confirmed |
@@ -521,15 +522,28 @@ run, so the session total is the review's). `NULL` when it could not be taken �
 never `0`, which would be a claim that the tier explored nothing, and would bias the
 distribution downwards exactly when the measurement broke.
 
-`[OPEN]` — set the cap from that column once there is a distribution, and note three
-things it will not contain. `bootstrap()`'s model call records no usage row at all. Usage is recorded only for reviews that **complete**, so
-a runaway ended by a timeout leaves no row (the motivating incident did answer, and
-would have been recorded). And `usage`'s token columns are read from the ONE
-assistant message a prompt reply carries, so they describe a single turn rather than
-the session — in a real 73-turn session the per-message cache reads were 100k–450k
-each and summed to 17.9M. `GET /session/:id` returns the session's true totals in
-~700 bytes, so closing that is small; it changes what the spend ceiling sees, which
-makes it a money decision rather than a bug fix.
+`[OPEN]` — set the cap from that column once there is a distribution, and note what it
+does and does not contain. `bootstrap()`'s model call records no usage row at all.
+
+**A failed call now DOES leave a row** (D-85), read back from the session opencode leaves
+behind and written with `outcome: 'failed'`. Before 2026-08-09 it left none, so two
+45-minute attempts against an exhausted plan showed as zero spend while the provider
+counted every token.
+
+**And that has made the two paths disagree, which is worse than either alone.** The
+SUCCESS path reads the token columns from the ONE assistant message a prompt reply
+carries, so it describes a single turn rather than the session — in a real 73-turn session
+the per-message cache reads were 100k–450k each and summed to 17.9M. The FAILURE path sums
+every assistant message, so it records the session. Identical work therefore produces a
+much larger row when it fails than when it succeeds, and any total across both is
+meaningless.
+
+That is a defect introduced by fixing the other one, and it is stated rather than left to
+be discovered by whoever first sums the column. Closing it is small — `usageFromMessages`
+already exists and the success path can use it, or `GET /session/:id` returns the true
+totals in ~700 bytes. It changes what the spend ceiling sees, which is why it is written
+here rather than done quietly; the ceiling is inert today (every row carries `cost: 0` on
+these subscriptions), so the practical risk is low and the honesty requirement is not.
 
 **D-51 — an accepted justification outlives the review that accepted it.**
 
@@ -1178,13 +1192,14 @@ still open and is not blocking.
 wrong"*. Today a tier can say nothing but findings, which is the same gap that leaves the
 escalation path unwired. Worth solving once, for both.
 
-**D-84 — an exhausted subscription may answer nothing at all, and quota detection
-cannot rely on a status code.**
+**D-84 — Z.ai names its limit and its reset time; opencode swallows both, so quota
+reaches lore as a hang rather than a status code.**
 
 Vany, 2026-08-09: *"z.ai is out of the limits. we must track it."*
 
-**What was measured.** The same one-line prompt — *"Reply with exactly: OK"* — through
-lore's own SDK path and its own `longFetch`:
+**What was measured, in two passes — and the second corrected the first.**
+
+Through lore's own SDK path, the same one-line prompt — *"Reply with exactly: OK"*:
 
 | provider / model | result |
 |---|---|
@@ -1197,7 +1212,27 @@ Two vendors answered in seconds through the identical harness, and BOTH Z.ai mod
 answered nothing — so this is the account, not a model, and not opencode, the network or
 lore.
 
-**The part that matters to the design: there was no 429.** `Reviewer.review` classifies
+**Then the provider was asked directly, bypassing opencode, and it answers perfectly
+well:**
+
+```
+HTTP 429
+{"error":{"code":"1310","message":"Weekly/Monthly Limit Exhausted.
+           Your limit will reset at 2026-08-10 18:19:09"}}
+```
+
+Immediate, with the code, which limit (weekly, not the 5-hour one) and the exact reset
+time. Not in headers — the `X-RateLimit-*` headers belong to the open-platform RPM/TPM
+path and neither endpoint sent any; the Coding Plan puts it in the body.
+
+**So the first conclusion was wrong and is corrected here rather than left standing.** An
+exhausted subscription does NOT answer nothing. **opencode** answers nothing: the
+assistant message it leaves behind carries no error, no retry part and no `finish`. It
+swallows the 429 whole, almost certainly by treating it as retryable and retrying inside
+the one request. That is the root cause of a customer's failed reviews and of a t2 round
+that ran 2h46m.
+
+**The part that matters to the design: no 429 reaches lore.** `Reviewer.review` classifies
 quota on `status === 429 || 402` or a message matching `rate.?limit|quota|insufficient`,
 and an exhausted Z.ai subscription produces none of them. It accepts the request and
 never replies. So the one signal lore relies on to say *"this tier could not be paid
@@ -1211,10 +1246,19 @@ consumed the review — a t2 ran 2h46m. The deadline is what converts an invisib
 into a bounded, reportable event, and D-48-widened is what keeps the review alive
 afterwards.
 
-**What "track it" has to mean, and what it cannot.** lore cannot read a subscription's
-remaining quota: no provider here publishes one, which is the same wall D-50 hits. What
-it CAN do is notice the shape — repeated timeouts from one provider, while other vendors
-answer — and say so rather than rediscovering it per review.
+**What "track it" has to mean, and what it cannot.** The number exists and is one cheap
+call away — but that call needs the provider key, and lore deliberately holds none:
+`auth.json` is mounted into opencode alone (D-24), so that a container holding the
+knowledge base and the signing key cannot leak a provider credential.
+
+`[OPEN]` — **whether lore may read the provider keys, read-only, for quota checks.** It
+buys a 4-token call that returns exhausted/not plus an exact reset time, replacing a dead
+45-minute attempt per review and letting the tier be skipped before anything is spent. It
+costs a stated security property. Vany's, and not taken here.
+
+Failing that, what lore CAN do is notice the shape — repeated timeouts from one provider
+while other vendors answer in seconds — and say so rather than rediscovering it per
+review.
 
 `[OPEN]`, and the cost is measurable rather than theoretical: with t1 pointed at an
 exhausted provider, every new review now spends **two dead attempts** before promoting —
@@ -1237,6 +1281,50 @@ the service already had. Three things follow, and the third is Vany's:
 **Not built here**, because a cool-off changes which model is called and how much quota
 burns, which is Vany's to decide (§9). What IS built is the part that keeps reviews
 finishing: the deadline, and promotion to the next tier.
+
+**D-85 — a tier on a metered plan skips rather than retries, and a failed call's tokens
+are recorded.**
+
+Two things follow from D-84, and both are built.
+
+**`skip_if_quota`, optional, per tier, set on t1.** A tier carrying it is skipped on its
+FIRST failure instead of spending a second attempt. A retry only pays for itself when the
+fault might be transient, and an exhausted plan is not — Z.ai names the reset time in its
+refusal, and that does not become untrue by asking again. Each attempt costs the full
+deadline, so the retry was 45 minutes of wall-clock to re-learn a fact with a published
+expiry date. t1 is the Coding Plan seat, which is why it is the one marked.
+
+Absent means the previous behaviour — one retry, then promote — because for a metered API
+a blip really is worth asking twice. It is deliberately **not** part of
+`ladderFingerprint`: it changes neither which model is called nor how it is asked, so
+pinning it would refuse every open review at the next config change. That is exactly what
+adding `effort` to the pin did on 2026-08-08, killing a converging review.
+
+**A failed call's tokens are recorded, and this changes what `usage` means.** Rows were
+written only on success, so a failed call's spend was invisible while the provider counted
+every token: two 45-minute attempts against the exhausted plan left the trailing-5h usage
+reading **zero**. Any accounting built on that under-counts precisely when the provider is
+at its limit, which is the one moment it must be right.
+
+The session survives the failure and still carries per-message tokens, so the spend is read
+back and written with `outcome: 'failed'` — so a reader cannot mistake recovered spend for
+a completed review, and anything averaging latency or counting rounds can exclude it.
+
+Two details that are load-bearing rather than incidental:
+
+- **Attached to the error, not stored on the Reviewer.** An instance field is shared by
+  every concurrent round, so at `LORE_MODEL_CONCURRENCY 4` one review's spend would be
+  recorded against another's — worse than not recording it at all.
+- **Nothing spent reports absent, never a row of zeroes.** A zero row is indistinguishable
+  from a call that ran and used nothing. And no dollar total is written: these are
+  subscriptions, every message reports `cost: 0`, and a structurally-zero cost is the inert
+  ceiling `/status` already warns about. Tokens and credits are the only units that mean
+  anything here.
+
+**The hang deadline is 2700s, and the number is measured.** It bounds a hang; if it sits
+below a legitimate call it is not a detector but truncation — which 1800s was, since the
+recorded maximum across every tier is 1851s. From `usage.latency_ms`: t1 n=129 max 1250s,
+t2 n=68 max 1851s, t3 n=22 max 1766s. 2700s clears the observed maximum by 46%.
 
 **D-48, widened — a tier that cannot ANSWER is skipped, not only one nobody can pay for.**
 

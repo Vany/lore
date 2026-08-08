@@ -116,15 +116,28 @@ GPT-5.6 Sol scores 59 at max effort and 56 at high — 95% of the capability for
 of the cost. The ladder walks `(model, effort)` pairs, not models.
 
 
-### An exhausted subscription may answer nothing at all (D-84)
+### Quota arrives as a hang, because opencode swallows the refusal (D-84)
 
 Quota is detected from a status code — `429`, `402`, or a message matching
-`rate.?limit|quota|insufficient`. **A Z.ai subscription at its limit sends none of them.**
+`rate.?limit|quota|insufficient`. **None of them reaches lore when a Z.ai plan is
+exhausted**, and the reason is not the provider.
 
-Measured 2026-08-09, the same one-line prompt through lore's own SDK path:
-`kimi-for-coding/k3` answered in 4s, `openai/gpt-5.6-terra` in 3s, and BOTH Z.ai models
-never answered at all — cut at the deadline. Two vendors in seconds through the identical
-harness, so it was the account, not a model, and not opencode, the network or lore.
+Measured 2026-08-09 in two passes, and the second corrected the first. Through lore's SDK
+path: `kimi-for-coding/k3` answered in 4s, `openai/gpt-5.6-terra` in 3s, and both Z.ai
+models never answered at all. Asked DIRECTLY, bypassing opencode, Z.ai answers instantly
+and completely:
+
+```
+HTTP 429
+{"error":{"code":"1310","message":"Weekly/Monthly Limit Exhausted.
+           Your limit will reset at 2026-08-10 18:19:09"}}
+```
+
+So the provider names the limit, which limit it is, and the exact reset time. **opencode
+is what answers nothing**: the assistant message it leaves carries no error, no retry part
+and no `finish`. It swallows the 429 whole. The `X-RateLimit-*` headers belong to the
+open-platform RPM/TPM path; the Coding Plan puts everything in the body, and neither
+endpoint sent any headers.
 
 So the one signal the classifier depends on is absent in exactly the case it exists for,
 and the condition arrives as a **hang** — at the call site indistinguishable from a broken

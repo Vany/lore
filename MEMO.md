@@ -30,6 +30,30 @@ collapsed its shell arguments and "answered in 0s" with empty text. Only the thi
 lore's own SDK path and its own `longFetch` with the model passed by environment, produced
 a result worth trusting. Three attempts to ask one question honestly.
 
+**Then I asked Z.ai directly and the first conclusion was wrong.** It is not that an
+exhausted subscription answers nothing — Z.ai answers immediately and completely: `HTTP
+429, code 1310, "Weekly/Monthly Limit Exhausted. Your limit will reset at 2026-08-10
+18:19:09"`. **opencode** is what answers nothing: the assistant message it leaves carries
+no error, no retry part, no finish. It swallows the 429 whole. So the root cause of a
+customer's failed reviews, and of a t2 round that ran 2h46m, is our proxy — not the
+provider, which was being perfectly clear.
+
+D-84 is corrected in place rather than left standing. Writing the wrong cause into a spec
+and then measuring properly is this week's whole pattern; at least this time the
+correction went into the same document.
+
+**Built on the back of it: `skip_if_quota`, and a failed call's tokens.** The flag is an
+optional per-tier boolean on t1 — one attempt, then skip, because an exhausted plan names
+its reset time and does not become available by asking again. And `usage` rows are now
+written for failed calls, read back from the session, because two 45-minute attempts had
+left the trailing-5h reading ZERO while the provider counted every token.
+
+**Surprised me: fixing that introduced a worse inconsistency.** The failure path sums every
+assistant message — the session. The success path reads the ONE message a prompt reply
+carries — a single turn. In a real 73-turn session the per-message cache reads summed to
+17.9M, so identical work now records a far larger row when it fails than when it succeeds.
+Written into SPEC and TODO rather than left for whoever first sums the column.
+
 **What is recorded and not built.** D-84 carries the measurement and the cost: with t1 on
 an exhausted provider, every review now spends two dead attempts before promoting — 90
 minutes of wall-clock, per review, to re-learn what the service already knew. A
