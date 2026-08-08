@@ -1063,13 +1063,25 @@ async function scopeOf(worktree: string, file: string, line: number | undefined)
  * else to put its reason, and missing that would reintroduce the nag for exactly the
  * files that cannot avoid it.
  */
+/**
+ * Files a unified diff touches, for the preview's marker scan.
+ *
+ * `+++ b/<path>` is the post-image name, which is the one that exists in the worktree
+ * after the patch applies. `/dev/null` is a deletion and has no marker to find.
+ */
+export function filesInDiff(diff: string): readonly string[] {
+  return [...diff.matchAll(/^\+\+\+ b\/(.+)$/gm)].map((m) => (m[1] ?? "").trim()).filter((p) => p.length > 0);
+}
+
 export async function alreadyAnswered(
   worktree: string,
   reviewId: string,
   resolve: (reviewId: string, short: string) => string | undefined,
   f: RecordedFinding,
+  /** Also scanned, because the round reads every changed file (`justifiableFiles`). */
+  alsoScan: readonly string[] = [],
 ): Promise<boolean> {
-  for (const file of new Set([f.file, LEDGER])) {
+  for (const file of new Set([f.file, LEDGER, ...alsoScan])) {
     const source = await readFile(join(worktree, file), "utf8").catch(() => undefined);
     if (source === undefined) continue;
     for (const mark of parseLoreOk(source)) {

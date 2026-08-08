@@ -20,9 +20,9 @@ import { DEFAULT_TYPE, reviewType, reviewTypeIds } from "../core/review-type.ts"
 import { applyPatch, restoreTree, treeHash } from "../git/repo.ts";
 import { enrich, renderEnrichment } from "../knowledge/enrich.ts";
 import { paceFor, paceNote } from "../ops/pace.ts";
-import { alreadyAnswered, codeMoved } from "../reviewer/review.ts";
+import { alreadyAnswered, codeMoved, filesInDiff } from "../reviewer/review.ts";
 import { buildVex, findingsNeedingTriage, renderVex } from "../security/vex.ts";
-import { isSettled, type Store } from "../store/store.ts";
+import { isSettled, type RecordedFinding, type Store } from "../store/store.ts";
 import type { Principal } from "./auth.ts";
 import { REVIEW_PROMPT_TEXT, RESOURCE_DOCS, TOOL_DOCS } from "./docs.ts";
 
@@ -730,22 +730,55 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       // named line carried one, sent in that very diff. A warning that fires on the
       // correct answer is a warning clients learn to skip, and this is the only one that
       // saves them a deep-tier round.
-      const unmoved = (
-        await Promise.all(
-          store.openFindings(review_id).map(async (f) => {
-            if (await codeMoved(worktree, f)) return undefined;
-            const answered = await alreadyAnswered(worktree, review_id, (r, sh) => store.resolveShort(r, sh), f);
-            return answered ? undefined : f;
-          }),
-        )
-      ).filter((f) => f !== undefined);
+      // ADVISORY MEANS IT CAN NEVER BREAK THE REPLY. `resolveShort` throws on an
+      // ambiguous 8-hex prefix, and this runs AFTER the patch is applied, the review is
+      // queued and the job is enqueued — so a throw here reported a failed submit for a
+      // mutation that had already committed, and a client doing the obvious thing would
+      // resend it. A preview whose failure looks like the operation's failure is worse
+      // than no preview.
+      //
+      // Not swallowed either: an omitted `will_not_settle` reads as "nothing will fail to
+      // settle", which is the opposite of "I could not tell".
+      let unmoved: RecordedFinding[] | undefined;
+      try {
+        unmoved = (
+          await Promise.all(
+            store.openFindings(review_id).map(async (f) => {
+              if (await codeMoved(worktree, f)) return undefined;
+              // EVERY FILE THE DIFF TOUCHED, not just the finding's own. The round reads
+              // markers from every changed file, so a `lore-ok` written where the fix
+              // was made — which the note itself calls "often the right place" — settles
+              // in the round and was invisible here, leaving the preview nagging about a
+              // finding that was already answered.
+              const answered = await alreadyAnswered(
+                worktree,
+                review_id,
+                (r, sh) => store.resolveShort(r, sh),
+                f,
+                filesInDiff(diff),
+              );
+              return answered ? undefined : f;
+            }),
+          )
+        ).filter((f) => f !== undefined);
+      } catch (e) {
+        console.error(`[lore:log] will_not_settle preview could not run: ${e instanceof Error ? e.message : ""}`);
+      }
 
       return text(
         JSON.stringify({
           review_id,
           state: "queued",
           tree_hash: applied,
-          ...(unmoved.length === 0
+          ...(unmoved === undefined
+            ? {
+                will_not_settle_note:
+                  "The submit SUCCEEDED. The preview of what the next round cannot settle could not be " +
+                  "computed — usually an ambiguous `lore-ok[...]` prefix matching two findings — so this " +
+                  "reply says nothing either way about them. Do not read its absence as 'everything will " +
+                  "settle'.",
+              }
+            : unmoved.length === 0
             ? {}
             : {
                 will_not_settle: unmoved.map((f) => ({ file: f.file, line: f.line, claim: f.claim })),

@@ -25,7 +25,7 @@ import { initialState } from "../core/ladder.ts";
 import { CODE_ARCH } from "../core/review-type.ts";
 import { Store, type RecordedFinding } from "../store/store.ts";
 import type { ReviewerLike, ReviewerResult } from "./opencode.ts";
-import { alreadyAnswered, runRound } from "./review.ts";
+import { alreadyAnswered, filesInDiff, runRound } from "./review.ts";
 
 /** A model tier that says exactly what the test scripts, and keeps every prompt it saw. */
 class ScriptedReviewer implements ReviewerLike {
@@ -525,5 +525,41 @@ describe("a finding answered at its named line is not still nagged about", () =>
     const f = recorded(LOOPBACK, fp(LOOPBACK));
     source("lore-ok[deadbeef]: about something else entirely");
     expect(await alreadyAnswered(dir, "r1", () => "some-other-fingerprint", f)).toBe(false);
+  });
+});
+
+/**
+ * The submit-time preview must never be able to break the submit it previews.
+ *
+ * `will_not_settle` runs AFTER the patch is applied, the review is queued and the job is
+ * enqueued. `resolveShort` throws on an ambiguous 8-hex prefix, so a throw there reported
+ * a FAILED submit for a mutation that had already committed — and a client doing the
+ * obvious thing resends it.
+ *
+ * And it reads the same files the round does. The round scans every changed file, so a
+ * `lore-ok` written where the fix was made — which the preview's own advice calls "often
+ * the right place" — settled in the round while the preview went on naming the finding.
+ */
+describe("the submit-time preview", () => {
+  const recorded = (f: Finding): RecordedFinding => ({
+    ...f, fingerprint: fp(f), origin: "t0", round: 1, firstSeen: new Date().toISOString(), preexisting: false,
+  });
+
+  it("sees a lore-ok written in another file the diff touched", async () => {
+    const f = recorded(LOOPBACK);
+    const resolve = (_r: string, short: string) => (fp(LOOPBACK).startsWith(short) ? fp(LOOPBACK) : undefined);
+    writeFileSync(join(dir, "src/other.ts"), `// lore-ok[${fp(LOOPBACK).slice(0, 8)}]: fixed at the cause here\n`);
+
+    expect(await alreadyAnswered(dir, "r1", resolve, f), "not scanned without the diff's files").toBe(false);
+    expect(await alreadyAnswered(dir, "r1", resolve, f, ["src/other.ts"])).toBe(true);
+  });
+
+  it("takes the post-image names out of a diff, and not /dev/null", () => {
+    const diff = [
+      "--- a/src/a.ts", "+++ b/src/a.ts", "@@ -1 +1 @@",
+      "--- a/src/gone.ts", "+++ /dev/null",
+      "--- /dev/null", "+++ b/src/new.ts",
+    ].join("\n");
+    expect(filesInDiff(diff)).toStrictEqual(["src/a.ts", "src/new.ts"]);
   });
 });
