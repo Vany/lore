@@ -215,6 +215,28 @@ describe("a database nobody can read is not a healthy service", () => {
   // that went bad WHILE RUNNING put the words in `/status` and paged nobody — and
   // `/status` is a thing a person has to think to look at. Saying it unprompted is the
   // beat's entire purpose.
+  // ONCE. A corrupt database does not heal, so an unlatched beat re-sends the same page
+  // for ever and fills the alert channel with the one condition it exists for — until
+  // whoever is on the other end mutes it, which is the failure every wolf-crying guard in
+  // this file was written to avoid.
+  it("pages ONCE, not on every beat", async () => {
+    const broken = rotUnderneath();
+    try {
+      const stop = startHeartbeat(broken, cfg({ intervalMs: 20 }), alerter);
+      await until(() => sent.some((x) => x.condition.startsWith("database unreadable")));
+      // Long enough for many more beats at 20ms.
+      await new Promise((r) => setTimeout(r, 300));
+      stop();
+      expect(sent.filter((x) => x.condition.startsWith("database unreadable"))).toHaveLength(1);
+    } finally {
+      try {
+        broken.close();
+      } catch {
+        // Closing a corrupt database can itself fail; the test is about the alert.
+      }
+    }
+  });
+
   it("pages, rather than only recording it in /status", async () => {
     const broken = rotUnderneath();
     try {

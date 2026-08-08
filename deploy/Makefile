@@ -243,10 +243,53 @@ sync-deployed:
 	done
 	@echo "synced from ../deploy. .env and opencode/ are yours and were not touched."
 
+## THE DATABASE MOVED TO A VOLUME, AND NOBODY ELSE'S HAS.
+##
+## Before 2026-08-08 `lore.db` lived under $(DATA) on the host bind. The compose change
+## points the service at the `lore-db` volume instead — and a volume that does not exist
+## yet is created EMPTY, so an existing deployment would come up on a brand new database
+## and report zero rules, zero reviews and no tokens. Everything the workgroup taught it,
+## apparently gone, with the service answering `ok: true` about it.
+##
+## I migrated this machine by hand and did not notice the next operator has no path at
+## all. So `make up` refuses when the old file is present and the volume is empty, and
+## `make migrate-db` is the path — which is `VACUUM INTO`, because a WAL database copied
+## with `cp` loses whatever is still in the log.
+define check-db-migrated
+	@test -f "$(DATA)/lore.db" || exit 0; \
+	if docker volume inspect $(DBVOL) >/dev/null 2>&1; then \
+		n=$$($(DBRUN) -e "const{existsSync}=require('node:fs');console.log(existsSync(process.env.LORE_DB_DIR+'/lore.db')?1:0)" 2>/dev/null | tr -d '\r'); \
+		test "$$n" = "1" && exit 0; \
+	fi; \
+	echo "REFUSING: $(DATA)/lore.db exists, and the $(DBVOL) volume has no database."; \
+	echo "  The database moved to a volume (see spec/deployment.md 4.1). Starting now would"; \
+	echo "  come up on an EMPTY one and report no rules, no reviews and no tokens."; \
+	echo "      make migrate-db      # VACUUM INTO the volume, then verify"; \
+	echo "  The old file is left where it is; delete it yourself once you are satisfied."; \
+	exit 1
+endef
+
+## Copy an existing host-bind database into the volume. Idempotent: refuses if the volume
+## already has one, so it can never overwrite a live database with an older copy.
+migrate-db:
+	$(wrong-directory)
+	@test -f "$(DATA)/lore.db" || { echo "no $(DATA)/lore.db to migrate"; exit 1; }
+	@$(COMPOSE) stop lore litestream >/dev/null 2>&1 || true
+	@docker volume create $(DBVOL) >/dev/null
+	@if $(DBRUN) -e "const{existsSync}=require('node:fs');process.exit(existsSync(process.env.LORE_DB_DIR+'/lore.db')?0:1)" 2>/dev/null; then 		echo "REFUSING: the $(DBVOL) volume already holds a database. Nothing was touched."; exit 1; fi
+	@# VACUUM INTO, not cp: a WAL database copied file-by-file loses what is still in the log.
+	@sqlite3 "$(DATA)/lore.db" "VACUUM INTO '/tmp/lore-migrate.db'"
+	@docker run --rm -v $(DBVOL):$(DB) -v /tmp:/host alpine sh -c 		'cp /host/lore-migrate.db $(DB)/lore.db && chmod 1777 $(DB) && chmod 666 $(DB)/lore.db'
+	@rm -f /tmp/lore-migrate.db
+	@echo "migrated. Verifying:"
+	@$(MAKE) --no-print-directory db-check
+	@echo "The old $(DATA)/lore.db is untouched — delete it yourself once you are satisfied."
+
 ## Always re-derives the opencode config first: a container running yesterday's
 ## credentials while the operator has since fixed them is a confusing failure.
 up: preflight sync-opencode
 	$(check-deployed)
+	$(check-db-migrated)
 	@$(STAMP) $(COMPOSE) --profile build-only build sandbox
 	@$(STAMP) $(COMPOSE) up -d --build
 	@echo

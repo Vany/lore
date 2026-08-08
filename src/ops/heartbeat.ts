@@ -311,6 +311,8 @@ async function newestMtime(dir: string): Promise<number | undefined> {
  * only one that survives the alerter being broken.
  */
 export function startHeartbeat(store: Store, cfg: HeartbeatConfig, alerter: Alerter): () => void {
+  /** Latched so the one permanent fault pages once, not on every beat. */
+  let pagedUnreadable = false;
   let stopped = false;
   const startedAt = Date.now();
 
@@ -327,17 +329,28 @@ export function startHeartbeat(store: Store, cfg: HeartbeatConfig, alerter: Aler
     // have fallen behind, which cannot describe a service that has just started.
     const replicaGrace = Date.now() - startedAt < cfg.replicaGraceMs;
 
-    // THE FAULT THAT ENDS THE SERVICE, PAGED FROM THE BEAT TOO.
+    // THE FAULT THAT ENDS THE SERVICE, PAGED FROM THE BEAT TOO — AND ONCE.
     //
     // `CONDITIONS.databaseUnreadable` existed only on the startup-refusal path, so a
     // database that went bad WHILE RUNNING put the words in `/status` and paged nobody —
     // and `/status` is a thing a person has to think to look at. This is the beat's whole
     // purpose: to say it unprompted. First, and returning, because everything below reads
     // a health report whose other fields are placeholders on this path.
+    //
+    // ONCE, because the startup path says "pages once" and a beat repeats for ever. A
+    // corrupt database does not heal, so every subsequent beat would re-send the same
+    // page — the alert channel filled by the one condition it exists for, until whoever
+    // is on the other end mutes it. Latched rather than rate-limited: the condition is
+    // binary and permanent until a person restores, so "again" carries no information.
+    // The latch clears if the database becomes readable, so a restore re-arms it.
     if (health.problems.some((p) => p.startsWith("DATABASE UNREADABLE"))) {
-      await alerter.send(CONDITIONS.databaseUnreadable(health.problems[0] ?? "unreadable"));
+      if (!pagedUnreadable) {
+        pagedUnreadable = true;
+        await alerter.send(CONDITIONS.databaseUnreadable(health.problems[0] ?? "unreadable"));
+      }
       return;
     }
+    pagedUnreadable = false;
 
     if (health.queueDepth >= cfg.queueWarnDepth) {
       await alerter.send(CONDITIONS.queueBacked(health.queueDepth));
