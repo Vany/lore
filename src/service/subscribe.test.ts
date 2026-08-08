@@ -183,10 +183,16 @@ describe("subscriptions/listen", () => {
    * The field is fed straight into `listen()` here, with no re-shaping, because a test
    * that reshapes proves the reshaping rather than the field.
    *
-   * IT IS NOT THE ANSWER TO THE DELIVERY PROBLEM, and this comment says so because I
-   * briefly wrote that it was. Driving the deployed service, a subscription was
-   * acknowledged and no wake ever arrived; the wrapped filter looked like the cause until
-   * this test was run against BOTH shapes and honoured both. The cause is still unknown.
+   * THIS TEST CANNOT TELL THE TWO SHAPES APART, and that is stated rather than left for
+   * somebody to discover. In-process both are honoured; over the wire only the unwrapped
+   * one is, and the wrapped one yields an empty honoured filter and a stream that never
+   * delivers. So the `toStrictEqual` on the two fields is the assertion that
+   * discriminates — it fails the moment what we hand out stops agreeing with itself — and
+   * the `listen()` call below is live confirmation, not a guard.
+   *
+   * Recorded because I got the cause wrong twice: first claiming the shape WAS the
+   * problem before checking, then claiming it was NOT after this test honoured both.
+   * Neither was measured. The wire was.
    */
   it("hands out a filter that listen() honours, as-is", async () => {
     // The very object `review_start` and a waiting `review_poll` put in their replies.

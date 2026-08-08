@@ -47,9 +47,11 @@ THE REPLY CARRIES THE CALL, in a \`subscribe\` field, with this review's id alre
 — send that rather than assembling one from this description. It is repeated on every
 poll that is still waiting, and it is absent once the next move is yours.
 
-TWO SHAPES, SO YOU DO NOT HAVE TO GUESS. \`subscribe\` is the raw JSON-RPC frame;
-\`subscribe_filter\` is the same thing unwrapped, which is what an SDK's listen() helper
-takes. Use whichever matches the call you are making.
+TWO SHAPES, AND THE WRONG ONE FAILS SILENTLY. \`subscribe\` is the raw JSON-RPC frame;
+\`subscribe_filter\` is the same thing unwrapped, and an SDK's listen() helper takes THAT.
+Measured against this service: give listen() the raw params and the acknowledgement comes
+back with an empty honoured filter and no event ever arrives — an open, healthy, useless
+stream. Give it \`subscribe_filter\` and the wake arrives.
 
 You will be woken by \`notifications/resources/updated\` whenever the review's STATE
 changes — and only then. That is the moment there is something for you to do; findings

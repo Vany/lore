@@ -151,15 +151,22 @@ export function subscribeTo(reviewId: string): object {
     // The wire-accurate JSON-RPC call, for a client sending raw frames.
     subscribe: { method: "subscriptions/listen", params: { notifications: filter } },
     // AND THE FILTER ON ITS OWN, because an SDK helper takes a `SubscriptionFilter` while
-    // the frame above nests it under `notifications`. Handing one shape and naming the
-    // other call is an ambiguity a client has to resolve by reading an SDK's types, at
-    // the moment we are telling it to go away and wait.
+    // the frame above nests it under `notifications`. This is not a convenience: handing
+    // out only the frame is what made every subscription against this service silent for
+    // an evening.
     //
-    // NOT a diagnosis of the delivery problem. Driving this service, a subscription was
-    // acknowledged and never woke, and the wrapped filter looked like the cause — it is
-    // not: `subscribe.test.ts` honours both shapes. The cause is still unknown and
-    // recorded as such rather than guessed at, which is the whole reason that test now
-    // feeds this field straight into `listen()` instead of re-shaping it.
+    // MEASURED, over the wire, after two wrong guesses about it:
+    //
+    //   * `client.listen({ notifications: { resourceSubscriptions: [...] } })` — the
+    //     acknowledgement arrives with an EMPTY honoured filter and no event ever comes.
+    //     The stream is open, healthy and useless.
+    //   * `client.listen({ resourceSubscriptions: [...] })` — honoured filter echoes the
+    //     review, and the wake arrives (377s later, on the round boundary).
+    //
+    // In-process, `subscribe.test.ts` honours BOTH, so the suite cannot tell them apart
+    // and did not catch this. That is stated there rather than papered over: the test
+    // asserts the two fields agree in SHAPE, which does discriminate, and calls `listen()`
+    // for live confirmation, which does not.
     subscribe_filter: filter,
     subscribe_note:
       "Send this ONCE and stop polling on a timer: you are woken on every STATE change, which is the " +

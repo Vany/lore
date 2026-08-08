@@ -5,6 +5,43 @@ surprised me.
 
 ---
 
+## 2026-08-08 — session 46: subscriptions, and getting the cause wrong twice before measuring
+
+**Subscriptions work, and the reason they never did for me was two nested keys.**
+`client.listen()` takes a `SubscriptionFilter`; the `subscribe` field I had just added
+hands out the raw JSON-RPC frame, which nests the same thing under `notifications`. Over
+the wire the wrapped shape is acknowledged with an EMPTY honoured filter and delivers
+nothing — an open, healthy, useless stream. Unwrapped: honoured, and the wake arrives.
+Measured on the round boundary at +377s, after an evening of believing the feature was
+broken.
+
+**I got the cause wrong twice before measuring it, in opposite directions.** First I wrote
+the shape up as the cause in three files before checking. Then the in-process test honoured
+BOTH shapes, so I reversed and recorded "cause unknown" — also in three files. Only the
+wire settled it, and the wire agreed with the first guess. The lesson is not "trust your
+instinct": it is that both write-ups happened before the measurement that could decide.
+
+**The test cannot tell the two shapes apart, and that is now written in it.** In-process
+something normalises the wrapped form, so `subscribe.test.ts` passes either way — a test
+named for a property it does not test, which is the shape this repository bans. What does
+discriminate is the assertion that the two handed-out fields agree with each other; the
+`listen()` call is live confirmation, not a guard. Saying so is better than deleting it or
+letting the next reader assume it protects them.
+
+**Three other things the reviewer was right about**, all of them my own claims being
+false: I recorded that the SQL ratchet "became a real invariant" and no such assertion
+existed — only its failure message, pasted onto an unrelated guard. `lastWriteAt` claimed
+to cover every timestamp column and missed `delivered_at`, the one `markDelivered` writes
+on every poll. And the shell twin of that query still named five columns while the store's
+read fifteen, so the monitor a person runs *in an incident* was the blind one.
+
+**The tally, because it is the point.** Twenty-two findings across five rounds; eight were
+my own comments, commit messages or specs asserting a property the code did not have. The
+ladder caught every one. The rate says to write the claim after the check exists, not in
+the same breath — and I broke that rule again on the subscription while writing this up.
+
+---
+
 ## 2026-08-08 — session 45: a customer's false negative, and ten findings against my own day
 
 **A report arrived from `rigid-monorepo`: semgrep flagged the SAFE one of two identical
