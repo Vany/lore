@@ -212,8 +212,13 @@ during which `review.token_hash` was added one join from a resource clients read
 dated 08-06. I had been treating today's as an incident; it is a pattern, and I only saw
 it because I went looking at the directory for something else.
 
-**What got fixed once the default flipped.** SQL past the store 28 → 0, and the ratchet
-became the invariant it was named for. `why` coverage 5 of 66 → 30 of 58. The screen's
+**What got fixed once the default flipped.** SQL past the store 28 → 0 — and the ratchet
+did NOT become the invariant it was named for, which I recorded here as if it had. Caught
+on 2026-08-08 by a reviewer reading this very sentence against the suite: no such test was
+ever written, and what survived was the ratchet's failure message pasted onto the
+comment-attribution guard, where it read as nonsense about SQL while scanning for
+`raised by t3`. The work was real; nothing was holding it. It exists now, and I watched it
+fail before believing it. `why` coverage 5 of 66 → 30 of 58. The screen's
 three mechanical misses. Screened-out rows no longer stacking per edit. The sandbox
 cache collected AND watched against a budget lore sets for itself. `[lore:log]` at 60%
 noise. `LORE_TIERS` pinned so a swap cannot rebind an open review's cursor. D-78. The

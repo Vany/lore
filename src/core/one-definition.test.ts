@@ -169,8 +169,69 @@ describe("comments carry the incident, not who reported it", () => {
     }
     expect(
       offenders,
+      `these comments carry bookkeeping that will rot — keep the incident, drop the pointer:\n  ${offenders.join("\n  ")}`,
+    ).toStrictEqual([]);
+  });
+});
+
+/**
+ * SQL LIVES IN THE STORE. Asserted, because I claimed it was and it was not.
+ *
+ * Twenty-eight sites outside `store/` were moved behind named methods, and the commit
+ * message, `MEMO.md` and `TODO.md` all recorded that "the ratchet became a real
+ * invariant — an assertion of an empty list rather than a shrinking one". No such
+ * assertion was ever written. What survived was the ratchet's FAILURE MESSAGE, pasted
+ * onto the comment-attribution guard above, where it read as nonsense about SQL while
+ * scanning for `raised by t3`.
+ *
+ * That is the worst defect this file exists to catch, committed in this file: a guard
+ * everybody believes in, holding nothing. The work was real and nothing was protecting
+ * it, so the next hand-written query would have walked straight back in — which is
+ * exactly how the twenty-eight accumulated.
+ *
+ * Why it matters beyond tidiness: a query written at the call site is one the Store
+ * cannot maintain. `review.token_hash` was added one join away from the resource clients
+ * read, and the client-facing shape of `lore://review/{id}` stayed a function of the
+ * schema because the join lived somewhere nobody looked.
+ *
+ * `ops/status.ts` is the one exemption and it is a real one, not a grandfathering: it
+ * opens its own READ-ONLY connection and must answer while the service is down, which is
+ * the only time anyone runs it. It never imports the Store at all.
+ */
+describe("SQL lives in the Store", () => {
+  // A query through a Store's handle — `store.db.prepare`, `this.db.prepare` — which is
+  // the shape the twenty-eight took. Not `new DatabaseSync`, which is a separate
+  // connection and is what `status.ts` legitimately does.
+  const THROUGH_THE_STORE = /\b(?:store|this|deps\.store|s)\.db\.(?:prepare|exec)\b/;
+  const EXEMPT = new Set(["ops/status.ts"]);
+
+  it("is never written through a Store handle outside store/", () => {
+    const offenders = FILES.filter(
+      (f) => !f.path.startsWith("store/") && !EXEMPT.has(f.path) && THROUGH_THE_STORE.test(f.text),
+    ).map((f) => f.path);
+    expect(
+      offenders,
       `these reach past the Store into SQL — add a named method instead:\n  ${offenders.join("\n  ")}`,
     ).toStrictEqual([]);
+  });
+
+  // AN EMPTY LIST, NOT A SHRINKING ONE — which is the sentence that was written down
+  // about a test that did not exist. A budget that can be raised is a budget that gets
+  // raised; this one cannot be satisfied by adding a line to a number.
+  it("has no exemption that is merely historical", () => {
+    for (const path of EXEMPT) {
+      const f = FILES.find((x) => x.path === path);
+      expect(f, `${path} is exempt and does not exist — delete the exemption`).toBeDefined();
+      expect(
+        f?.text.includes("new DatabaseSync"),
+        `${path} is exempt because it opens its OWN read-only connection; if it stopped doing that, ` +
+          "the exemption is no longer the thing it was granted for",
+      ).toBe(true);
+      expect(
+        /from "\.\.\/store\/store\.ts"/.test(f?.text ?? ""),
+        `${path} imports the Store — then it should use it rather than being exempt`,
+      ).toBe(false);
+    }
   });
 });
 

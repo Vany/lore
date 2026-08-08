@@ -796,6 +796,9 @@ are what that session's own numbers say is in the way, not what reading suggeste
 - [x] **ZERO, 2026-08-08.** All twenty-eight converted across fourteen files, and the
       ratchet became the invariant it was named for: `no production file reaches past the
       store into SQL`, asserting an empty list rather than a shrinking one.
+      **The assertion did not exist.** Recorded here and in the commit message as done, and
+      it was not: only the failure message survived, pasted onto an unrelated guard. Written
+      for real on 2026-08-08, and watched failing before being believed.
       Two of them were the `SELECT *` the ratchet's own comment called out, building
       `lore://review/{id}` and the VEX document — so the client-facing shape of both was
       a function of the schema. The replacement names every column and names exactly the
