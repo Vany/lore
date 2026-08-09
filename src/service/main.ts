@@ -11,11 +11,12 @@ import { mkdir } from "node:fs/promises";
 import { Alerter, CONDITIONS } from "../ops/alerts.ts";
 import { DEFAULT_HEARTBEAT, startHeartbeat, type HeartbeatConfig } from "../ops/heartbeat.ts";
 import { DEFAULT_RETENTION, collect } from "../ops/retention.ts";
-import { DEFAULT_SPEND, mayStart } from "../ops/spend.ts";
+import { DEFAULT_SPEND } from "../ops/spend.ts";
 import { repoPaths, worktreeFor } from "../git/repo.ts";
 import { DEFAULT_REVIEWER, Reviewer } from "../reviewer/opencode.ts";
 import { Store } from "../store/store.ts";
 import { attest, render } from "./attest.ts";
+import { enqueueOrFail } from "./enqueue.ts";
 import { startHttp } from "./http.ts";
 import { serveRefusing } from "./refusing.ts";
 import { DEFAULT_WORKER, Worker } from "./worker.ts";
@@ -286,13 +287,12 @@ export async function serve(cfg: ServiceConfig): Promise<() => void> {
         const paths = repoPaths(reposRoot, at?.repoId ?? "");
         return worktreeFor(paths, reviewId, at?.branch ?? "", at?.gitUrl ?? "");
       },
+      // `enqueueOrFail` and not a closure, because a closure built in here cannot be
+      // tested — and the last defect of exactly this shape (the MCP server handed no
+      // reviewer) survived its whole life inside one. It is the only path by which a
+      // review the client was told is `queued` can silently never run; see there.
       enqueue: (reviewId, stage) => {
-        // Checked before starting, never mid-review: killing a review halfway
-        // leaves it neither passed nor honestly failed, and wastes what was spent.
-        void mayStart(store, { ...DEFAULT_SPEND, dailyCeilingUsd: cfg.dailyCeilingUsd }, alerter).then((v) => {
-          if (v.allowed) store.enqueue(reviewId, stage);
-          else store.updateReview(reviewId, { state: "failed" });
-        });
+        void enqueueOrFail(store, { ...DEFAULT_SPEND, dailyCeilingUsd: cfg.dailyCeilingUsd }, alerter, reviewId, stage);
       },
       attest: async (reviewId) => {
         return render(await attest(store, reviewId, store.principalOf(reviewId) ?? "", keyPath));

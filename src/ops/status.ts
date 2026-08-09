@@ -60,6 +60,9 @@ const STATE_STYLE: Readonly<Record<string, { paint: (s: string) => string; mark:
   findings_ready: { paint: cyan, mark: "●", note: "findings are waiting for you" },
   awaiting_diff: { paint: cyan, mark: "○", note: "waiting for your fixes" },
   needs_human: { paint: magenta, mark: "?", note: "a question you must not answer yourself" },
+  // "a tier is working" is only true SOMETIMES, and `phaseNote` below replaces it when
+  // it is not. Kept as the default because a review whose tier row is open is the
+  // ordinary case; see there for the 45 minutes this cost.
   running: { paint: blue, mark: "▸", note: "a tier is working" },
   queued: { paint: dim, mark: "·", note: "accepted, not started" },
   failed: { paint: red, mark: "✘", note: "DID NOT COMPLETE — not 'found nothing'" },
@@ -93,6 +96,34 @@ function age(iso: unknown): string {
 }
 
 type Row = Record<string, string | number | null>;
+
+/**
+ * What a `running` review is ACTUALLY doing, when it is not what the label says.
+ *
+ * `STATE_STYLE.running` reads "a tier is working" for every running review, and on
+ * 2026-08-08 that sentence sent me looking in the wrong place for forty-five minutes.
+ * `rev_NYiv0xfO` had been running for three quarters of an hour under it; the hang was
+ * in the knowledge screen, which spends a model BEFORE `openTierRun` exists, so no tier
+ * had been asked anything and none was working. I reported a hung tier to Vany on the
+ * strength of this line. The database said otherwise one query away.
+ *
+ * The evidence is already recorded and needs no new column: a tier that is working has
+ * an OPEN `tier_run` row — `openTierRun` writes it before the call and `closeTierRun`
+ * stamps `finished_at` after. So no open row on a running review means the round is
+ * somewhere before the tier, and the round's own phases say which.
+ *
+ * Deliberately narrow: it never claims more than the rows support. Between t0 finishing
+ * and a tier opening lie the document ingest and the screen, and nothing distinguishes
+ * them in the schema — so it says "before any tier", which is the fact that matters, and
+ * names both candidates rather than guessing one.
+ */
+function phaseNote(runs: readonly Row[], state: string): string | undefined {
+  if (state !== "running") return undefined;
+  const open = runs.filter((t) => t["finished_at"] === null || t["finished_at"] === undefined);
+  if (open.length > 0) return undefined;
+  if (runs.length === 0) return "starting — the deterministic sweep has not finished a round yet";
+  return "NO TIER IS WORKING — the round is reading your documents (ingest, then the screen), which spends a model before any tier is asked";
+}
 
 export function renderStatus(db: DatabaseSync, reviewId?: string, dataDir = "/var/lib/lore"): string {
   const out: string[] = [];
@@ -131,13 +162,22 @@ export function renderStatus(db: DatabaseSync, reviewId?: string, dataDir = "/va
     out.push(
       `${st.paint(`${st.mark} ${String(r["state"]).toUpperCase()}`)}  ${bold(String(r["branch"]))} ${dim("→")} ${String(r["into_ref"]).slice(0, 12)}  ${dim(id)}`,
     );
-    out.push(`    ${dim(st.note)}  ${dim("·")} ${dim(`round ${ladder.round ?? 0}, updated ${age(r["updated_at"])}`)}`);
 
     // The tier ladder, with what actually ran. This is the line that was missing:
     // "running" alone never said which tier, and that is the whole question.
+    //
+    // READ BEFORE THE NOTE IS PRINTED, because the note now depends on it: whether any
+    // tier row is open is what separates "a tier is working" from "no tier has been
+    // asked yet", and those are the two readings of a stalled review.
     const runs = db
       .prepare("SELECT tier, round, outcome, started_at, finished_at FROM tier_run WHERE review_id = ? ORDER BY id")
       .all(id) as Row[];
+    const phase = phaseNote(runs, String(r["state"]));
+    // Yellow, not dim: a running review that has not reached a tier is the shape of the
+    // stall that cost four and a half hours, and it must not read as ordinary progress.
+    const note = phase === undefined ? dim(st.note) : yellow(phase);
+    out.push(`    ${note}  ${dim("·")} ${dim(`round ${ladder.round ?? 0}, updated ${age(r["updated_at"])}`)}`);
+
     if (runs.length > 0) {
       const cells = runs.map((t) => {
         const secs = secondsBetween(t["started_at"], t["finished_at"]);

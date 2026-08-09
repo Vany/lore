@@ -5,6 +5,49 @@ surprised me.
 
 ---
 
+## 2026-08-09 — session 49: three more holes of the same shape
+
+Kept pulling the same thread — *what does the system claim, and what could make that
+claim false without anything noticing* — and it kept paying.
+
+**"A tier is working" was a label, not a fact.** `STATE_STYLE.running` prints that
+sentence for every running review, and it is what I read for forty-five minutes while
+`rev_NYiv0xfO` was stuck in the screen with no tier asked at all. I then reported a hung
+tier to Vany on the strength of it. The operator view is where a stall gets diagnosed, so
+a confident wrong sentence there does not merely fail to help — it aims the search. The
+evidence needed no new column: a tier that is working has an OPEN `tier_run` row.
+
+**The enqueue had no failure path at all.** `review_start` writes the row, answers
+`state: "queued"`, and enqueues afterwards in a bare `void promise.then(...)`. A throw
+anywhere in there was an unhandled rejection — a dead process, by Node's default — on the
+way to a review with no job, and nothing reconciles that: `reclaimOrphanedJobs` frees jobs
+stuck `running`, not reviews that never got one. It would have waited two days for the
+sweep to call it `expired`, which means *nobody came back*.
+
+**The pattern is the closure.** Both this and yesterday's missing reviewer lived inside a
+lambda built in `serve()`, where no test can reach them. So `enqueueOrFail` is a file now,
+with four tests including the broken-store case. That is the actual lesson from two days:
+*an untestable closure is where this codebase hides its holes*, and the fix is to stop
+writing them rather than to test harder.
+
+**What I checked and found sound**, recorded because a sweep that only lists hits reads as
+if everything else was examined and nothing was:
+
+- the ladder cannot reach `passed_partial` with no tier having read the code — both
+  promotion paths refuse when nothing is left, and `step()` only decides it from a tier
+  that came back clean;
+- INV-9 is enforced at the filesystem, not by prompt: the repos bind into opencode `:ro`;
+- `Alerter.send` never throws, so `mayStart` could only reject on a database fault;
+- `getReview` matches the principal exactly, so `attest`'s `?? ""` fallback cannot widen
+  scope — it fails closed;
+- `anyTierRan` is correct at both call sites but **named wrong** — it means *could still
+  run*, not *did run*. Left alone this round; it is one bad reading away from mattering.
+
+Also: `spec/mcp-api.md` said "Ten", listed eleven, and omitted `review_cancel` entirely.
+Now checked mechanically against `registerTool`.
+
+---
+
 ## 2026-08-09 — session 48: the request flow, and four ways a cancel was a lie
 
 **A review that never reached a tier at all.** `rev_NYiv0xfO` sat "running, round 0" for

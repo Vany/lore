@@ -104,6 +104,26 @@ export const CONDITIONS = {
       `${remaining} loop(s) still running. The process is alive and healthy-looking, so nothing else will ` +
       `report this — at zero, reviews queue for ever and every client waits on a service that answers ok. ${detail}`,
   }),
+  /**
+   * A review the client was told is `queued`, which no worker will ever claim.
+   *
+   * `review_start` writes the row, answers `state: "queued"`, and enqueues afterwards —
+   * so a throw between those two leaves a review with NO JOB, and nothing reconciles
+   * that: `reclaimOrphanedJobs` frees jobs stuck `running`, not reviews that never got
+   * one. The client polls something no worker can see, until the sweep calls it
+   * `expired` two days later, which reads as *nobody came back*.
+   *
+   * Pages, for the same reason `workerLoopDied` does: the service is alive, `/status`
+   * says `ok: true`, and nothing else in the system can notice one missing job.
+   */
+  reviewNotQueued: (reviewId: string, stage: string, why: string): Alert => ({
+    severity: "page",
+    condition: "review accepted but not queued",
+    detail:
+      `${reviewId} (${stage}) was answered 'queued' and could not be enqueued: ${why}. It is marked failed ` +
+      "rather than left waiting, so the client's next poll says so — but a review that cannot be queued at " +
+      "all usually means the database is refusing writes, and the next one will fail the same way.",
+  }),
   /** No replica at all is worse than a late one: there is nothing to restore from. */
   backupAbsent: (): Alert => ({
     severity: "page",

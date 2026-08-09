@@ -174,3 +174,59 @@ describe("findings nobody has collected", () => {
     expect(render()).not.toContain("waiting to be collected");
   });
 });
+
+/**
+ * "A tier is working" was a label, not a fact, and it cost forty-five minutes.
+ *
+ * `rev_NYiv0xfO` sat `running` under that sentence for three quarters of an hour on
+ * 2026-08-08 while the hang was in the knowledge screen — which spends a model BEFORE
+ * `openTierRun` exists, so no tier had been asked anything and none was working. I read
+ * the line and reported a hung tier to Vany. The database disagreed one query away: no
+ * `tier_run` row for any model tier at all.
+ *
+ * The operator view is where a stall is diagnosed, so a confident wrong sentence there
+ * is worse than none — it does not merely fail to help, it aims the search.
+ */
+describe("what a running review is actually doing", () => {
+  const running = (id: string) => {
+    const repo = store.upsertRepo("demo", "git@x:demo.git");
+    store.createReview({
+      id, repoId: repo.id, principal: "alice", branch: "feat/x", intoRef: "main",
+      ticket: "t", type: "code-arch", state: "running", ladder: initialState(),
+    });
+    return repo.id;
+  };
+
+  it("says NO TIER IS WORKING when the round has not reached one", () => {
+    running("rev_screen");
+    // t0 done, nothing else opened — the exact shape of the four-and-a-half-hour stall.
+    const t0 = store.openTierRun("rev_screen", "t0", 1, new Date().toISOString());
+    store.closeTierRun(t0, "clean", []);
+
+    const out = render();
+    expect(out).toMatch(/NO TIER IS WORKING/);
+    expect(out, "and it must say where the round really is").toMatch(/ingest|screen/);
+    expect(out).not.toMatch(/a tier is working/);
+  });
+
+  // The ordinary case must be untouched: this is a correction, not a new alarm to
+  // learn to ignore.
+  it("still says a tier is working when one has an open row", () => {
+    running("rev_tier");
+    const t0 = store.openTierRun("rev_tier", "t0", 1, new Date().toISOString());
+    store.closeTierRun(t0, "clean", []);
+    store.openTierRun("rev_tier", "t1", 1, new Date().toISOString());
+
+    const out = render();
+    expect(out).toContain("a tier is working");
+    expect(out).not.toMatch(/NO TIER IS WORKING/);
+  });
+
+  // Before t0 has closed anything there is nothing to be wrong about yet, and calling
+  // that "no tier is working" would fire on every review's first seconds.
+  it("says it is starting when nothing has run at all", () => {
+    running("rev_fresh");
+    const out = render();
+    expect(out).toMatch(/starting/);
+  });
+});

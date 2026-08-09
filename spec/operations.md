@@ -61,6 +61,7 @@ about monitoring that does not exist.
 | provider auth failure | every review stops at once. Its own error type, raised where the provider's status is classified and paged by the worker — not folded into the failing-as-a-class window, which would spend ten more reviews proving the same thing before it fired |
 | **daily spend ceiling hit** | a runaway loop at $500–2,600/month can burn fast — but see §4: under a subscription this cannot fire at all |
 | all reviews failing over a window | systematic breakage, not a bad branch |
+| **a review accepted but never queued** | `review_start` writes the row, answers `state: "queued"`, and enqueues afterwards — so a throw in between leaves a review with **no job**, and nothing reconciles that: `reclaimOrphanedJobs` frees jobs stuck `running`, not reviews that never got one. It would wait until the sweep called it `expired` two days later, which means *nobody came back*. The review is now marked `failed` with the reason, so the client's next poll says so; the page is because the process stays alive and `/status` still reads `ok: true`, exactly as for a dead worker loop — one missing job is invisible to everything else |
 
 ### 2.2 Ticket — next working day
 

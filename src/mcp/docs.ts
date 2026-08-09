@@ -699,7 +699,8 @@ instead of the thing you never scroll to.
     priority: 0.8,
     text: `
 queued          accepted, not started
-running         a tier is working
+running         the round is working — that is the deterministic sweep, reading your
+                repository's documents, or a model tier. Not necessarily a tier yet
 findings_ready  new findings are waiting for you
 awaiting_diff   waiting for your fixes
 fast_clean      cheap tiers clean, deep tiers still running — NOT a pass
