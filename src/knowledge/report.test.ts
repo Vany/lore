@@ -72,18 +72,26 @@ describe("knowledgeReport", () => {
     expect(out).toContain("a topic label with no list");
   });
 
-  // A degraded memory looks exactly like a healthy one from outside: the review runs and
-  // the prompt is full of rules. This is the only thing that says otherwise.
-  it("says plainly when documents were kept without being screened", () => {
+  /**
+   * Since D-89 this is a QUEUE, not a degradation: extraction keeps every candidate live
+   * and the background pass judges them within the hour. It is still printed, because a
+   * queue that has stopped draining looks exactly like one that is draining — the count
+   * failing to fall across days is the signal, and only a person can see that.
+   */
+  it("says how many documents are waiting for the screen", () => {
     kept("PROG.md", "Fakes must not be kinder than production", "3.1-unscreened");
     const r = knowledgeReport(store, "demo", repoId);
     expect(r.unscreened).toBe(1);
-    expect(renderKnowledge(r)).toContain("UNSCREENED");
+    const out = renderKnowledge(r);
+    expect(out).toContain("waiting for the screen");
+    // The rules are LIVE meanwhile, and saying so is the difference between a queue and
+    // a hole: a reader told only "unscreened" reasonably assumes they are being withheld.
+    expect(out).toContain("live and in use");
   });
 
-  it("says nothing about unscreened documents when every one was screened", () => {
+  it("says nothing about the screen queue when every document has been judged", () => {
     kept("PROG.md", "Fakes must not be kinder than production");
-    expect(renderKnowledge(knowledgeReport(store, "demo", repoId))).not.toContain("UNSCREENED");
+    expect(renderKnowledge(knowledgeReport(store, "demo", repoId))).not.toContain("waiting for the screen");
   });
 
   it("groups live rules by where they came from", () => {

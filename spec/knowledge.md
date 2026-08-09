@@ -155,9 +155,33 @@ file. Erring toward stopping is the cheap direction: stopping wrongly costs one 
 screening, recovered on the next review; continuing wrongly costs the hang deadline per
 remaining document, before the review has started.
 
-**A screen session belongs to its review, and can be cancelled with it.** It is the first
-thing to spend a model inside `runRound` that is not the tier itself, so `review_cancel`
-must be able to reach it: without the review id the session is never registered, and a
+**IT RUNS IN THE BACKGROUND, AND NO REVIEW WAITS FOR IT (D-89).** The screen used to run
+inside `runRound`, before the tier. That put a model call which only decides *what the
+prompt looks like* on the critical path of every review that touched a document — and let
+a dead cheap tier wedge a review before any tier had been asked anything, at the full hang
+deadline per changed document.
+
+The review never needed it, and the deployment had already proved so: candidates the
+screen has not judged are kept, stamped, and **live**, and 27 of 181 live rules were in
+exactly that state on a service that had been reviewing for a week. Waiting decided only
+*when* the fragments left the prompt.
+
+So the round now extracts and stamps, and an hourly pass judges the backlog. It reads the
+**rows**, not the repository — the screen's whole input is a document path and a list of
+statements, both of which the rows carry — so it needs no worktree, no mirror and no
+opinion about which branch is current, and it judges exactly what a reviewer would be
+handed. It queues at the same provider gate as a review, so it cannot starve one.
+
+**Unscreened is therefore a queue, not a fault**, and the operator view says so in yellow
+rather than red: it is the ordinary state after any document edit. What no check inside
+the service can see is a count that stops falling — that is a stopped screen, and it looks
+identical hour to hour from in here.
+
+**A screen session started by a review belongs to it, and can be cancelled with it.**
+Historically the first thing to spend a model inside `runRound` that was not the tier, so
+`review_cancel` had to be able to reach it — still true of the provisioning screen, and of
+any future inline caller. The BACKGROUND pass has no review and so is not cancellable,
+exactly as `propose` is not; it stops with the process. The requirement was: without the review id the session is never registered, and a
 client cancelling mid-screen is told nothing is in flight — truthfully, by the
 bookkeeping — while the screen goes on spending. Registering it was necessary and was
 not sufficient: the deployed service passed no reviewer to `startHttp` at all, so no

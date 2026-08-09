@@ -183,6 +183,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-86** | **A cancel stops both ends**, and `stopped_in_flight: null` says when the server could not look | built 2026-08-09 |
 | **D-87** | The knowledge screen stops for the pass on a fault that belongs to the TIER, not to the document | built 2026-08-09 |
 | **D-88** | **A tier skipped BELOW one that passed does not weaken the verdict.** The ladder is a gate; its work was done again above it | built 2026-08-09 |
+| **D-89** | **The knowledge screen runs in the background.** No review waits for a model call that only decides what its prompt looks like | built 2026-08-09 |
 | **D-49** | A single-vendor ladder reaches `passed_partial`, never `passed` | confirmed |
 | **D-50** | Exploration is **counted per review before it is capped**; no cap yet | `[OPEN]` |
 | **D-51** | An accepted justification is **repo knowledge**, carried across reviews | confirmed |
@@ -1445,6 +1446,44 @@ The short form: §1 says the ladder is ordered by VENDOR and not by capability �
 3× GPT-5.6 Terra for two fewer points and is in the ladder only because it is a third
 vendor — and t1 has raised 13 high-or-critical findings to t2's 3. Neither is decisive,
 because the gate means t1 simply goes first.
+
+**D-89 — the knowledge screen runs in the background.**
+
+Vany: *"can we run it in the background?"*
+
+The screen decides which extracted candidates are not rules (D-81). It ran inside
+`runRound`, before the tier — so a model call that only decides *what the prompt looks
+like* sat on the critical path of every review that touched a document, and a dead cheap
+tier could wedge a review **before any tier had been asked anything**. On 2026-08-08 that
+cost four and a half hours.
+
+**The review never needed it, and production already proved that.** A screen that cannot
+run keeps every candidate, stamps it `<version>-unscreened`, and those rows are LIVE.
+When this was written, **27 of 181 live rules had never been screened** on a service that
+had been reviewing for a week. Waiting decided only *when* the fragments left the prompt.
+
+So the coupling is cut rather than tuned:
+
+- **stays on the review path** — the deterministic extract. Free, and the review must see
+  today's rules.
+- **moves off** — the model call, to a pass on the retention sweep's hourly timer.
+
+**It works from the ROWS, not from the repository.** The screen's whole input is a
+document path and a list of statements, and the rows carry both — so the background pass
+needs no worktree, no mirror, and no opinion about which branch is current. It judges
+exactly the rows a reviewer would be handed.
+
+Three things this changes in kind:
+
+- **Unscreened is a QUEUE, not a fault.** `make status` said `✗ … UNSCREENED` in red;
+  that is now the ordinary state after any document edit. Red for the ordinary state is
+  how an operator learns to ignore a colour. What still deserves attention — and what no
+  check inside the service can see — is a count that stops falling.
+- **Quota is spent outside a review.** Same volume, since it only fires when a document
+  changed, but at a time nobody requested. It queues at the same provider gate, so it
+  cannot starve a review.
+- **A background screen has no review**, so `review_cancel` cannot reach it, exactly as
+  for `propose` and provisioning. It stops with the process.
 
 **D-82 — a defect found is fixed now; recording it is the exception.**
 

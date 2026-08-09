@@ -37,7 +37,6 @@ import { detectAndRecord, renderConflicts } from "../knowledge/conflict.ts";
 import { promoteRecurring } from "../knowledge/derive.ts";
 import { relevantTo } from "../knowledge/enrich.ts";
 import { ingestDocs } from "../knowledge/ingest.ts";
-import { screenFor, screenUsage, type ScreenUsage } from "../knowledge/screen.ts";
 import { runT0, renderT0 } from "../t0/runner.ts";
 import { engineRuleClass } from "../t0/engines.ts";
 import type { RecordedFinding, Store } from "../store/store.ts";
@@ -329,29 +328,31 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // Re-ingest the repo's own documents. It is what makes a rule die when the paragraph
   // that justified it is deleted (D-20).
   //
-  // SCREENED BY THE CHEAPEST MODEL TIER, and that is the one place a model is paid for
-  // what a rule could not decide. Extraction is still deterministic and free; the screen
-  // only ever refuses, and only where three successive regex narrowings all plateaued at
-  // about a fifth of survivors not being rules. It costs nothing on a review where no
-  // document changed — `ingestDocs` asks that before it asks the model — and where the
-  // tier cannot be reached, every candidate is kept and stamped so the next ingest
-  // retries. The knowledge base is the product; it is never emptied to protect a filter.
-  const screenTier = tiers.find((t) => t.kind === "model" && t.model !== undefined);
-  const ask = input.reviewer.askFor?.bind(input.reviewer);
-  // A tier is billed the same whoever asked it, so a screen session lands in `usage`
-  // exactly as a round does.
-  const recordScreen = (u: ScreenUsage) => store.recordUsage(screenUsage(u, review.repoId, reviewId));
   // IS THIS STILL WANTED. Asked at the one moment a queued call has a provider slot and
-  // has not yet spent it — a call can wait a long time at the gate holding no session,
-  // so `review_cancel` finds nothing to abort and says so truthfully, and then the slot
-  // frees and the queued call spends on a review somebody ended. One predicate, given to
-  // both the screen and the tier, because the window is the gate and both queue at it.
+  // has not yet spent it — a call can wait a long time at the gate holding no session, so
+  // `review_cancel` finds nothing to abort and says so truthfully, and then the slot frees
+  // and the queued call spends on a review somebody ended.
+  //
+  // It used to be shared with the screen, which queued at the same gate. Since D-89 the
+  // screen is not on this path at all, so this guards the tier alone.
   const stillWanted = () => !isTerminal(store.getReview(reviewId, principal)?.state ?? review.state);
-  const ingested = await ingestDocs(store, review.repoId, worktree, {
-    ...(screenTier === undefined || ask === undefined
-      ? {}
-      : { screen: screenFor(ask, screenTier, worktree, { reviewId, spent: recordScreen, stillWanted }) }),
-  });
+
+  // NO SCREEN HERE, DELIBERATELY (D-89). Extraction is deterministic and free and stays
+  // on this path, because the review must see today's rules. Deciding which of the
+  // extracted candidates are not rules is a model call, and it moved to a background pass
+  // (`knowledge/rescreen.ts`) that no review waits for.
+  //
+  // It was here, before the tier, which put a model call on the critical path of every
+  // review that touched a document — and let a dead cheap tier wedge a review BEFORE ANY
+  // TIER HAD BEEN ASKED ANYTHING. On 2026-08-08 that cost four and a half hours: t1's plan
+  // was exhausted, six documents had changed, and the round spent the full hang deadline
+  // on each of them without ever reaching a reviewer.
+  //
+  // The review never needed it. Candidates the screen has not judged are kept, stamped
+  // `<version>-unscreened`, and are LIVE — 27 of 181 live rules were in exactly that state
+  // when this was written, on a service that had been reviewing for a week. Waiting only
+  // decided WHEN the fragments left the prompt, never whether the review could run.
+  const ingested = await ingestDocs(store, review.repoId, worktree, {});
   // ASKED AGAIN, because the ingest above can now take minutes and spend money.
   //
   // The check at the top of this function was the only one, and it was written when
@@ -365,16 +366,14 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       `review ${reviewId} was ended while its documents were being read — no tier was asked, and nothing was spent on one.`,
     );
   }
-  // SAID OUT LOUD, because a degraded memory is invisible from the outside: the review
-  // runs, the prompt is full of rules, and a fifth of them being fragments looks exactly
-  // like a fifth of them being rules. The rows carry the stamp that heals it, so this is
-  // a notice rather than an alarm — but a count nobody prints is a count nobody has.
-  if (ingested.unscreened > 0 || ingested.screenedOut > 0) {
+  // UNSCREENED IS THE NORMAL OUTCOME HERE NOW (D-89), not a degradation. This path does
+  // not screen at all: it extracts, keeps everything, stamps it, and leaves the judging
+  // to the background pass. The old wording — "the screen could not run" — would have
+  // reported a healthy review as a broken one on every document change.
+  if (ingested.unscreened > 0) {
     console.error(
-      `[lore:log] ${reviewId}: knowledge ${String(ingested.added)} kept, ${String(ingested.screenedOut)} screened out` +
-        (ingested.unscreened > 0
-          ? `, ${String(ingested.unscreened)} document(s) UNSCREENED and stamped for the next ingest to retry`
-          : ""),
+      `[lore:log] ${reviewId}: knowledge ${String(ingested.added)} kept from ` +
+        `${String(ingested.unscreened)} changed document(s), queued for the background screen`,
     );
   }
   detectAndRecord(store, review.repoId);

@@ -1836,6 +1836,71 @@ export class Store {
   }
 
   /**
+   * Live rules that were kept without ever being screened, with the document they came
+   * from — the backlog the background screen works through (D-89).
+   *
+   * These are ordinary live rules and reviewers use them; the stamp says only that
+   * nothing has judged whether they are rules at all. `<version>-unscreened` is written
+   * whenever the screen could not run, and the whole point of it is that it can be found
+   * again. Until D-89 the only thing that came back for them was the next review of the
+   * same repository, which is why 27 of 181 live rules had sat unscreened.
+   *
+   * Grouped by document version — `(provenance, source_blob)` — because that is the unit
+   * the screen judges: it is asked "which of these are not rules?" about one document's
+   * candidates at once, and a prompt mixing two documents would be a different question.
+   */
+  unscreenedRules(repoId: string, unscreenedStamp: string): readonly {
+    readonly id: string;
+    readonly statement: string;
+    readonly why: string | undefined;
+    readonly provenance: string;
+    readonly sourceBlob: string;
+  }[] {
+    const rows = this.db
+      .prepare(
+        `SELECT id, statement, why, provenance, source_blob FROM knowledge
+         WHERE repo_id = ? AND retired_at IS NULL AND extractor IS ?
+           AND provenance IS NOT NULL AND source_blob IS NOT NULL
+         ORDER BY provenance, id`,
+      )
+      .all(repoId, unscreenedStamp) as Record<string, string | null>[];
+    return rows.map((r) => ({
+      id: r["id"] ?? "",
+      statement: r["statement"] ?? "",
+      why: un(r["why"] ?? null),
+      provenance: r["provenance"] ?? "",
+      sourceBlob: r["source_blob"] ?? "",
+    }));
+  }
+
+  /**
+   * Record what a late screen decided about rules already in the base (D-89).
+   *
+   * ONE WRITE, because the two halves are one fact — *these survived, those did not* —
+   * and a crash between them leaves a document half-judged with nothing to say so.
+   *
+   * The refused rows are RETIRED IN PLACE rather than deleted and re-inserted as
+   * screened-out. They are already the row; retiring carries the model's reason onto the
+   * history that already exists, where `recordScreenedOut` would leave the live row
+   * behind and add a second one beside it.
+   */
+  settleLateScreen(
+    kept: readonly string[],
+    refused: readonly { readonly id: string; readonly because: string }[],
+    stamp: string,
+  ): void {
+    this.tx(() => {
+      const promote = this.db.prepare("UPDATE knowledge SET extractor = ? WHERE id = ? AND retired_at IS NULL");
+      for (const id of kept) promote.run(stamp, id);
+      const retire = this.db.prepare(
+        "UPDATE knowledge SET retired_at = ?, retired_reason = ?, extractor = ? WHERE id = ? AND retired_at IS NULL",
+      );
+      const at = now();
+      for (const r of refused) retire.run(at, `screened out: ${r.because}`, stamp, r.id);
+    });
+  }
+
+  /**
    * Retire knowledge derived from a document that has changed.
    *
    * Re-derived, never retained: a stale doc must not become a confidently wrong

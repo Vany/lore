@@ -350,7 +350,17 @@ function memoryLines(db: DatabaseSync): string[] {
             `  worst: ${String(worst["provenance"])} ` +
               `${String(Math.round((100 * Number(worst["refused"])) / (Number(worst["kept"]) + Number(worst["refused"]))))}% refused`,
           );
-    const mark = unscreened > 0 ? red(`✗ ${String(unscreened)} document(s) UNSCREENED`) : green("✓ screened");
+    // YELLOW, NOT RED, SINCE D-89: unscreened is a QUEUE, not a fault. Extraction keeps
+    // every candidate live and the background pass judges them within the hour, so a
+    // document sitting here is waiting rather than broken — and red for the ordinary
+    // state after any document edit is how an operator learns to ignore a colour.
+    //
+    // What it cannot see, and the operator can, is a count that stops falling. That is a
+    // stopped screen, and it looks identical hour to hour from inside.
+    const mark =
+      unscreened > 0
+        ? yellow(`◔ ${String(unscreened)} document(s) awaiting the screen`)
+        : green("✓ screened");
     lines.push(`  ${mark}  ${String(r["repo"])}  ${dim(`${String(r["live"])} live rules`)}${share}`);
   }
   lines.push("", dim("detail: make knowledge REFUSALS=1 — a spec with a high share is carrying MEMO.md's job."), "");

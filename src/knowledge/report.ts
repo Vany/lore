@@ -77,12 +77,14 @@ export function renderKnowledge(r: KnowledgeReport, opts: { readonly refusals: b
   out.push(`${r.repo} — ${String(live)} live rules (${r.bySource.map((s) => `${String(s.n)} ${s.source}`).join(", ")})`);
 
   if (r.unscreened > 0) {
-    // Said first and said plainly: a degraded memory looks exactly like a healthy one
-    // from outside — the review runs, the prompt is full of rules, and a fifth of them
-    // being fragments is invisible.
+    // A QUEUE, NOT A FAULT, since D-89. Extraction keeps every candidate and the
+    // background screen judges them within the hour; a document sitting here is waiting,
+    // not broken. It is still worth printing, because a queue that stops draining looks
+    // exactly like one that is draining — the number staying put across days is the
+    // signal, and it is the operator who can see that and the code that cannot.
     out.push(
-      `  ${String(r.unscreened)} document(s) UNSCREENED — the screen could not run, every candidate was kept,` +
-        ` and the next ingest will retry`,
+      `  ${String(r.unscreened)} document(s) waiting for the screen — every candidate is live and in use;` +
+        ` the background pass judges them within the hour. A count that does not fall is a stopped screen`,
     );
   }
 

@@ -6,6 +6,7 @@
  */
 
 import { join } from "node:path";
+import { loadTiers } from "../core/ladder.ts";
 import { dataDir, dbDir, dbFileIn } from "../core/paths.ts";
 import { mkdir } from "node:fs/promises";
 import { Alerter, CONDITIONS } from "../ops/alerts.ts";
@@ -17,6 +18,7 @@ import { DEFAULT_REVIEWER, Reviewer } from "../reviewer/opencode.ts";
 import { Store } from "../store/store.ts";
 import { attest, render } from "./attest.ts";
 import { enqueueOrFail } from "./enqueue.ts";
+import { RESCREEN_INTERVAL_MS, screeningPass } from "./screening.ts";
 import { startHttp } from "./http.ts";
 import { serveRefusing } from "./refusing.ts";
 import { DEFAULT_WORKER, Worker } from "./worker.ts";
@@ -257,6 +259,19 @@ export async function serve(cfg: ServiceConfig): Promise<() => void> {
     );
   }, 3_600_000);
   sweep.unref?.();
+
+  // THE SCREEN, OFF THE REVIEW PATH (D-89). Deciding which extracted candidates are not
+  // rules is a model call, and it used to run inside `runRound` before the tier — which
+  // let a dead cheap tier wedge a review before any tier had been asked anything, at the
+  // full hang deadline per changed document.
+  //
+  // Same hour as the sweep, and nothing waits on either. `DEFAULT_TIERS` is not used: the
+  // deployment's own ladder decides which tier is cheapest, and asking a model the
+  // configuration does not name would spend quota nobody approved.
+  const screening = setInterval(() => {
+    void screeningPass(store, reviewer, loadTiers());
+  }, RESCREEN_INTERVAL_MS);
+  screening.unref?.();
 
   const http = startHttp(
     store,
