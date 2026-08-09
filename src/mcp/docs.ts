@@ -282,8 +282,9 @@ Then ONE of three shapes, and they are the whole instruction:
     decided. Do not write a lore-ok for one of these; the file already has one, and a
     duplicate is fresh surface for the next tier to review.
 
-\`checks_skipped\` appears when something the review would have covered did not reach
-you. Three causes, one meaning:
+\`checks_skipped\` is where the review tells you what it did that you would not otherwise
+see. MOST of it narrows what the review is evidence of; one entry does not, and the
+difference is stated on each line rather than left for you to guess:
 
   * a deterministic engine did NOT run — no installed dependencies, no test script, a
     suite disabled for the deployment;
@@ -297,8 +298,18 @@ you. Three causes, one meaning:
     review covers the part that was shown.** The fix is a smaller review: review a
     narrower commit range, or merge in stages. Say this to your user; they are the only
     one who can change the scope.
+  * **a tier was not asked at all**, because its provider told lore its plan is out and
+    when it resets. The line names the tier and the time. That tier read nothing, so the
+    review is evidence from one fewer independent vendor — but it is not broken, and
+    retrying will not help until the time passes.
+  * **a tier was answered by a different provider** — "was answered by … because it was
+    not free". This one is NOT a narrowing. The tier RAN and its opinion counts in full;
+    the same model was simply reached through a metered route because the subscription
+    was out. It is here because it cost money, which is a fact about the review worth
+    passing on, not a gap in it.
 
-It is not a finding and not a failure; it narrows what the review is evidence OF. Typecheck and
+It is never a finding and never a failure. Every line but the last narrows what the
+review is evidence OF; the last one narrows nothing and reports a cost. Typecheck and
 lint go missing quietly, so this is the only place their absence is stated. Report it
 to your user alongside the result: a \`passed\` where the suite never ran means the
 tiers that DID run agree, not that the tests do. \`checks_skipped_note\` accompanies it

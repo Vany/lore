@@ -404,7 +404,10 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // already carried it — and then STORED the result for the next round to carry, so the
   // same disclosure grew by one copy per round for the life of the review.
   const t0ForTier = { ...t0, findings: t0Findings, unavailable: [...new Set([...carriedForTier, ...silencedForTier])] };
-  t0 = { ...t0, findings: t0Findings, unavailable: [...t0.unavailable, ...new Set(silenced)] };
+  // THE SAME DEDUP, ON THE CLIENT'S LIST TOO. The fix above was applied to the
+  // reviewer-facing list alone, so the stored client text went on growing by one identical
+  // sentence per reused round — under a comment two lines up saying it had been fixed.
+  t0 = { ...t0, findings: t0Findings, unavailable: [...new Set([...t0.unavailable, ...silenced])] };
 
   store.closeTierRun(
     t0RunId,
