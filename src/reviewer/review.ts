@@ -702,13 +702,34 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
         const { until } = retryAt(Date.now(), 1, e.resetAt);
         store.markTierUnavailable(tier.id, until, `the provider said its limit resets then`, 1, true);
       }
-      result = await input.reviewer.review(
-        { ...tier, model: tier.fallback },
-        prompt,
-        worktree,
-        reviewId,
-        stillWanted,
-      );
+      // A FALLBACK MAY ONLY IMPROVE THE OUTCOME, NEVER WORSEN IT.
+      //
+      // Unguarded, this call's own failure escaped as itself — and a twin that HANGS, or
+      // returns an unusable reply after its retry, throws `DidNotRun`, which the outer
+      // catch rethrows and which fails the whole review. Without a fallback configured the
+      // primary's `Exhausted` alone would have been stepped over with the verdict intact
+      // (D-48, D-88). So configuring one made things strictly worse in precisely the
+      // outage window it was bought for.
+      //
+      // Whatever the twin does, the fact the ladder has to act on is unchanged: this
+      // tier's own provider is out. So the ORIGINAL `Exhausted` is what leaves here, and
+      // the ladder does exactly what it would have done had no fallback existed.
+      try {
+        result = await input.reviewer.review(
+          { ...tier, model: tier.fallback },
+          prompt,
+          worktree,
+          reviewId,
+          stillWanted,
+        );
+      } catch (twin) {
+        console.error(
+          `[lore:log] ${reviewId}: the fallback ${tier.fallback} failed too — ` +
+            `${twin instanceof Error ? twin.message : String(twin)}`,
+        );
+        fellBackTo = undefined;
+        throw e;
+      }
     }
     // Closed with what this tier FOUND, in the same words T0 uses (line 99). The
     // column answers one question — what did this tier do — and `answered` did not

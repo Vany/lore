@@ -1359,6 +1359,45 @@ describe("falling back to a metered twin", () => {
     expect(reviewer.asked, "one call: the twin would fail the same way").toHaveLength(1);
   });
 
+  /**
+   * A FALLBACK MAY ONLY IMPROVE THE OUTCOME, NEVER WORSEN IT.
+   *
+   * A twin that HANGS, or returns an unusable reply after its retry, throws `DidNotRun` —
+   * which the outer catch rethrows and which fails the whole review. Without a fallback
+   * configured, the primary's `Exhausted` alone would have been stepped over with the
+   * verdict intact (D-48, D-88). So an unguarded fallback made things strictly worse in
+   * exactly the outage window it was bought for.
+   */
+  it("steps the tier over when the twin fails for a reason that is not quota", async () => {
+    const type = withFallback("openrouter/twin");
+    const primary = type.tiers.find((t) => t.id === "t1")?.model ?? "";
+    class TwinHangs implements ReviewerLike {
+      readonly asked: string[] = [];
+      async review(tier: Tier): Promise<ReviewerResult> {
+        this.asked.push(tier.model ?? "?");
+        if (tier.model === primary) throw new Exhausted("primary is out");
+        // ONLY THE TWIN HANGS. The first version of this fixture threw for every model
+        // that was not the primary, so t2 and t3 failed too and the review died of that
+        // rather than of the thing under test — a fixture broader than its claim.
+        if (tier.model === "openrouter/twin") throw new Error("opencode ran past 2700s without finishing");
+        return { findings: [], discarded: [], raw: "", inputTokens: 0, cachedTokens: 0, outputTokens: 0, costUsd: 0, latencyMs: 1, retried: false, steps: 1 };
+      }
+    }
+    const reviewer = new TwinHangs();
+
+    let last;
+    for (let i = 0; i < 8; i++) {
+      last = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type }).catch(() => undefined);
+      if (last === undefined || !["escalate", "fastClean"].includes(last.decision.kind)) break;
+    }
+
+    expect(reviewer.asked.slice(0, 2)).toStrictEqual([primary, "openrouter/twin"]);
+    // The ladder does what it would have done with no fallback configured: step over the
+    // tier and finish. NOT a failed review.
+    expect(last?.decision.kind, "a dead twin must not cost more than no twin").toBe("passed");
+    expect(store.getReview("r1", "p")?.state).toBe("passed");
+  });
+
   // No fallback for the fallback. If the metered provider refuses too, the ladder's own
   // answer is the right one — a chain of retries is how a bounded cost becomes unbounded.
   it("gives up when the twin is out too, rather than chaining", async () => {
