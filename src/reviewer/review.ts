@@ -368,7 +368,20 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // accepted appeal would have become a standing injection into that repository's reviews,
   // which is the exact failure the split exists to prevent, reintroduced by an
   // optimisation that never looked at what it was copying.
-  const carriedForTier = reuseT0 ? previousT0?.unavailableForTier ?? [] : t0.unavailable;
+  // SUPPRESSION NOTICES ARE REBUILT, NEVER CARRIED. Every other line in a stored
+  // `unavailable` is a fact about the engines that ran and stays true; a suppression
+  // notice is a fact about what is live NOW, and a rule retired mid-review left its
+  // "this check is off" standing in every later round and in the verdict — while the
+  // finding it silenced was never re-raised, because the tree had not moved. The
+  // notice's own remedy ("retire the rule to switch it back on") did not work inside
+  // the review that gave the advice.
+  //
+  // Matched on the shape THIS FILE generates a few lines below, which is the only
+  // producer of it.
+  const isSuppressionNotice = (line: string): boolean => / was NOT reported at /.test(line);
+  const carriedForTier = (reuseT0 ? previousT0?.unavailableForTier ?? [] : t0.unavailable).filter(
+    (l) => !isSuppressionNotice(l),
+  );
 
   // A REUSED ROUND STILL DISCLOSES WHAT IS SWITCHED OFF (D-83 × D-92).
   //
@@ -407,7 +420,11 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // THE SAME DEDUP, ON THE CLIENT'S LIST TOO. The fix above was applied to the
   // reviewer-facing list alone, so the stored client text went on growing by one identical
   // sentence per reused round — under a comment two lines up saying it had been fixed.
-  t0 = { ...t0, findings: t0Findings, unavailable: [...new Set([...t0.unavailable, ...silenced])] };
+  t0 = {
+    ...t0,
+    findings: t0Findings,
+    unavailable: [...new Set([...t0.unavailable.filter((l) => !isSuppressionNotice(l)), ...silenced])],
+  };
 
   store.closeTierRun(
     t0RunId,
@@ -727,6 +744,27 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
           `[lore:log] ${reviewId}: the fallback ${tier.fallback} failed too — ` +
             `${twin instanceof Error ? twin.message : String(twin)}`,
         );
+        // WHAT THE TWIN SPENT BEFORE IT DIED, recorded against the twin.
+        //
+        // The outer catch recovers spend from the error it receives — and this path
+        // rethrows the PRIMARY's `Exhausted`, whose session spent nothing, so the twin's
+        // tokens were dropped entirely. The twin is the metered one: a failed fallback
+        // burned real money that no `usage` row recorded, which left the round-boundary
+        // ceiling blind to exactly the runaway shape it is the only guard against.
+        const twinSpent = (twin as { spent?: { input: number; cached: number; output: number } }).spent;
+        if (twinSpent !== undefined) {
+          store.recordUsage({
+            repoId: review.repoId,
+            reviewId,
+            tier: tier.id,
+            model: tier.fallback,
+            inputTokens: twinSpent.input,
+            cachedTokens: twinSpent.cached,
+            outputTokens: twinSpent.output,
+            costUsd: 0,
+            outcome: "failed",
+          });
+        }
         fellBackTo = undefined;
         throw e;
       }

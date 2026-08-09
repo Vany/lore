@@ -1398,6 +1398,43 @@ describe("falling back to a metered twin", () => {
     expect(store.getReview("r1", "p")?.state).toBe("passed");
   });
 
+  /**
+   * A FAILED TWIN STILL SPENT MONEY, and the ceiling has to be able to see it.
+   *
+   * The outer catch recovers spend from the error it receives, and this path rethrows the
+   * PRIMARY's `Exhausted` — whose session spent nothing. So a failed fallback burned real
+   * metered tokens that no `usage` row recorded, leaving the round-boundary ceiling blind
+   * to exactly the runaway it is the only guard against.
+   */
+  it("records what the twin spent even when the twin failed", async () => {
+    const type = withFallback("openrouter/twin");
+    const primary = type.tiers.find((t) => t.id === "t1")?.model ?? "";
+    class TwinBurnsThenDies implements ReviewerLike {
+      async review(tier: Tier): Promise<ReviewerResult> {
+        if (tier.model === primary) throw new Exhausted("primary is out");
+        if (tier.model === "openrouter/twin") {
+          const e = new Error("opencode ran past 2700s without finishing") as Error & {
+            spent?: { input: number; cached: number; output: number };
+          };
+          e.spent = { input: 1_000, cached: 250_000, output: 500 };
+          throw e;
+        }
+        return { findings: [], discarded: [], raw: "", inputTokens: 0, cachedTokens: 0, outputTokens: 0, costUsd: 0, latencyMs: 1, retried: false, steps: 1 };
+      }
+    }
+
+    await runRound({ store, reviewer: new TwinBurnsThenDies(), reviewId: "r1", principal: "p", worktree: dir, type }).catch(
+      () => undefined,
+    );
+
+    const row = store.db
+      .prepare("SELECT model, cached_tokens c, outcome FROM usage WHERE review_id='r1' AND tier='t1'")
+      .get() as Record<string, string | number> | undefined;
+    expect(row?.["model"], "attributed to the twin, which is the metered one").toBe("openrouter/twin");
+    expect(row?.["c"]).toBe(250_000);
+    expect(row?.["outcome"], "and marked failed, so it cannot read as a completed round").toBe("failed");
+  });
+
   // No fallback for the fallback. If the metered provider refuses too, the ladder's own
   // answer is the right one — a chain of retries is how a bounded cost becomes unbounded.
   it("gives up when the twin is out too, rather than chaining", async () => {
