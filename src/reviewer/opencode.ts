@@ -558,6 +558,11 @@ export class Reviewer implements ReviewerLike {
     contract: string,
   ): Promise<SessionResult<T>> {
     const started = Date.now();
+    // SUBSCRIBED BEFORE THE SESSION EXISTS, not after. The stream takes a moment to
+    // connect and there is no replay, so events published in that window are gone.
+    // Opening it first buys the whole of `createSession` as head start and costs nothing:
+    // the subscription is per-process and idempotent, so this is a no-op after the first.
+    this.listen();
     const sessionId = await this.createSession(tier);
     // Registered so `cancel` can reach it. Cleared in `finally` whatever happens —
     // a stale entry would have a later cancel abort a session that had already ended,
@@ -589,7 +594,6 @@ export class Reviewer implements ReviewerLike {
     // round catches is this exact object, carrying the provider's words and its reset
     // time. Everything downstream — D-48's step-over, `skip_if_quota`, D-90's cool-off —
     // already knows what to do with an `Exhausted`; none of it had to change.
-    this.listen();
     this.watchers.set(sessionId, (status) => {
       const refusal = quotaRefusal(status);
       if (refusal === undefined) return;

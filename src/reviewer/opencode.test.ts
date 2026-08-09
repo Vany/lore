@@ -211,6 +211,17 @@ afterEach(() => {
 
 const reviewer = () => new Reviewer({ baseUrl, agent: "readonly", timeoutMs: 10_000, modelConcurrency: 4 });
 
+/**
+ * Found BY PATH, never by position.
+ *
+ * These read `captured[0]` and `captured[1]` until D-91 added an event subscription that
+ * opens before the session does — and three tests then failed for a reason having nothing
+ * to do with what they assert. A positional index into "every request lore made" is a
+ * dependency on the whole client's behaviour, declared nowhere.
+ */
+const asked = (match: string): Captured | undefined => captured.find((c) => c.path.includes(match));
+const prompted = (): Captured | undefined => captured.find((c) => c.path.includes("/message") && c.method === "POST");
+
 describe("splitModel", () => {
   it("splits provider from model, keeping slashes in the model id", () => {
     expect(splitModel("openrouter/z-ai/glm-5.2")).toStrictEqual({
@@ -231,8 +242,8 @@ describe("Reviewer.review", () => {
 
     expect(result.findings).toHaveLength(1);
     expect(result.findings[0]?.claim).toBe("decline path leaves the hold active");
-    expect(captured[0]?.path).toContain("/session");
-    expect(captured[1]?.path).toContain("/session/ses_test/message");
+    expect(asked("/session")?.path).toContain("/session");
+    expect(prompted()?.path).toContain("/session/ses_test/message");
   });
 
   // INV-8, made structural. `--agent` silently falls back to the write-capable
@@ -241,7 +252,7 @@ describe("Reviewer.review", () => {
     replies = [{ parts: [{ type: "text", text: FINDING_JSON }] }];
     await reviewer().review(TIER, "review this", "/tmp/wt");
 
-    const body = captured[1]?.body as { agent?: string; tools?: Record<string, boolean>; model?: unknown };
+    const body = prompted()?.body as { agent?: string; tools?: Record<string, boolean>; model?: unknown };
     expect(body.agent).toBe("readonly");
     expect(body.tools).toMatchObject({ write: false, edit: false, patch: false });
     expect(body.model).toStrictEqual({ providerID: "openrouter", modelID: "z-ai/glm-5.2" });
@@ -250,7 +261,7 @@ describe("Reviewer.review", () => {
   it("points the session at the worktree under review", async () => {
     replies = [{ parts: [{ type: "text", text: FINDING_JSON }] }];
     await reviewer().review(TIER, "review this", "/tmp/wt");
-    expect(captured[1]?.path).toContain("directory=");
+    expect(prompted()?.path).toContain("directory=");
   });
 
   // The shape varies by opencode version, which is exactly why this is defensive.
