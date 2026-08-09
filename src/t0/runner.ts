@@ -83,10 +83,20 @@ export async function withInstallLock<T>(cacheDir: string, fn: () => Promise<T>)
 export async function runT0(worktree: string, opts: T0Options): Promise<T0Result> {
   const outcomes: EngineOutcome[] = [];
 
+  // FILES THAT STILL EXIST, because a branch's diff names the ones it DELETED too.
+  // `git diff --name-only` lists them and they are not in the worktree, and semgrep
+  // treats a missing scanning root as fatal (`InvalidScanningRootError`, exit 2) — so a
+  // single deleted file killed the entire semgrep run, and the failure surfaced as
+  // "semgrep produced unparseable output", which points at the wrong thing entirely.
+  //
+  // Filtered here rather than in the caller: this is the layer that holds the worktree,
+  // and a caller computing a diff has no reason to know which engines read the disk.
+  const files = opts.files?.filter((f) => existsSync(join(worktree, f)));
+
   // Host-safe engines only: lore's own binaries, reading files.
   for (const engine of opts.engines) {
     if (engine === "tsc" || engine === "eslint") continue;
-    outcomes.push(await runEngine(worktree, engine, opts.files));
+    outcomes.push(await runEngine(worktree, engine, files));
   }
 
   // Everything that needs the target's node_modules runs in the sandbox, together,

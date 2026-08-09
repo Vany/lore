@@ -252,7 +252,22 @@ export type Scope = readonly string[] | undefined;
  */
 const MAX_SCOPED_PATHS = 200;
 
-/** The paths to hand an engine, or `["."]` when there are too many or none. */
+/**
+ * The paths to hand an engine, or `["."]` when there are too many or none.
+ *
+ * lore-ok[3ce0faea]: the finding is right and the fix is in `runT0`, one layer up. A
+ * branch's diff names the files it DELETED as well as the ones it changed, those paths
+ * are not in the worktree, and semgrep treats a missing scanning root as fatal — one
+ * deleted file would kill the whole run and surface as "semgrep produced unparseable
+ * output", pointing at the wrong thing entirely.
+ *
+ * Filtering here was the wrong place and I tried it first: this function has no worktree,
+ * so it cannot ask whether a path exists without being handed a second argument that only
+ * one caller could supply. `runT0` already holds the worktree and is the single point
+ * every engine's scope passes through, so the check happens there, once, before any
+ * engine is called. This function keeps the concern it can actually answer — how many
+ * paths are too many for an argv.
+ */
 export function scopePaths(scope: Scope): readonly string[] {
   if (scope === undefined || scope.length === 0 || scope.length > MAX_SCOPED_PATHS) return ["."];
   return scope;

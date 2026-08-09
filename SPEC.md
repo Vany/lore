@@ -1418,6 +1418,9 @@ runs before `openTierRun` and had never heard of it.
 
 The split is between the TIER and the DOCUMENT. `TooLargeForTier` is about this
 document's prompt — the next may be a tenth the size — so it does not condemn the pass.
+**The result carries which it was**: `ran: false` said only *"nothing was screened"* and
+meant both, so one oversized document ended the pass and marked a healthy tier unavailable
+for an hour. `Screened.tierFault` is the distinction, and the background pass reads it.
 An exhausted plan, a rejected key, an unreachable opencode or a hang are properties of
 the tier, and none becomes untrue by asking about a different file.
 
@@ -1548,6 +1551,12 @@ The line is between a fact and an inference, and it is the whole of this decisio
   earned it — `skip_if_quota` (D-85) already spends only one attempt — because imposing it
   across reviews would narrow one review's coverage using evidence it never saw.
 
+**The row records WHICH IT IS, because for a while only the write side knew.** Both marks
+go under the same `tier-unavailable:` key, and a review reading it could not tell a stated
+time from a guess — so the rule above was honoured where marks are written and broken
+where they are read. `stated` is now on the row and defaults to **false**, so a mark
+written before the field existed bounds the screen and never a review.
+
 A skipped tier is still disclosed: the `tier_run` row closes `unpayable`, `checks_skipped`
 says *"was not asked"* and names when it will be retried, and D-88 decides whether the
 verdict is weakened by where the tier sat. **"Not asked" must never be quieter than "asked
@@ -1626,6 +1635,13 @@ more money — and it drops the inherited matches in untouched code that D-68 al
 last and a team ends up justifying repeatedly. Beyond 200 paths it scans the tree instead:
 an argv is not unbounded, and the fallback **widens** coverage, which is the only safe
 direction for a bound nobody can see from outside.
+
+**Deleted files are filtered out first.** A branch's diff names what it removed as well as
+what it changed, those paths are not in the worktree, and semgrep treats a missing
+scanning root as fatal — so one deleted file killed the whole semgrep run and surfaced as
+*"semgrep produced unparseable output"*, which points at the wrong thing entirely. The
+filter lives in `runT0`, the layer that holds the worktree; a caller computing a diff has
+no reason to know which engines read the disk.
 
 **`tsc` and `eslint` are NOT narrowed, and that is a refusal rather than an omission.**
 Type checking is whole-program. Changing one exported signature breaks its callers, and

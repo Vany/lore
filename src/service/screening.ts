@@ -14,6 +14,7 @@
  */
 
 import { retryAt } from "../core/cooloff.ts";
+import { dataDir } from "../core/paths.ts";
 import { rescreen } from "../knowledge/rescreen.ts";
 import { screenFor, screenUsage, type ScreenUsage } from "../knowledge/screen.ts";
 import type { Tier } from "../core/ladder.ts";
@@ -67,10 +68,18 @@ export async function screeningPass(
     // under `screen:<tier>` exactly as the inline one did — with no review id, because
     // there is no review. `ops/spend` therefore still sees every model call lore makes.
     const spent = (u: ScreenUsage) => store.recordUsage(screenUsage(u, repo.id));
-    // NO WORKTREE. `rescreen` works from the rows, which already carry the document path
-    // and the statements, so this needs no checkout and no opinion about which branch is
-    // current. The path handed to `screenFor` is unused by it for that reason.
-    const screen = screenFor(ask, tier, "", { spent });
+    // A REAL DIRECTORY, because this one IS used and the comment here used to say it was
+    // not. `screenFor` forwards it to `ask()`, which sends it as `query: {directory}` on
+    // `session.prompt` — so `""` was telling opencode to run the session in a path that
+    // does not exist, and both plausible behaviours (refuse, or silently use its own cwd)
+    // are wrong in a way nothing would have reported — and the comment here asserted the
+    // opposite, which is why it went unexamined.
+    //
+    // `rescreen` genuinely needs no worktree: it reads the rows, which carry the document
+    // path and the statements. But opencode needs somewhere to be, so it gets lore's data
+    // directory — mounted read-only into the opencode container at the same absolute path
+    // (`deploy/docker-compose.yml`), and the one path guaranteed to exist on both sides.
+    const screen = screenFor(ask, tier, dataDir(), { spent });
     try {
       const r = await rescreen(store, repo.id, screen);
 
@@ -97,7 +106,7 @@ export async function screeningPass(
         const why = stated
           ? "the provider said its limit resets then"
           : `${String(failures)} consecutive screen call(s) went unanswered`;
-        store.markTierUnavailable(tier.id, until, why, failures);
+        store.markTierUnavailable(tier.id, until, why, failures, stated);
         // SAID ONCE, when the decision is made rather than every hour it holds. This is
         // the line that tells an operator a provider is down, which the service has never
         // been able to say from the inside (`spec/operations.md` §2.4.2).

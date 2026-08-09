@@ -187,6 +187,16 @@ export interface Screened {
    * and the caller falls back to its own backoff.
    */
   readonly retryAfter?: string;
+  /**
+   * True when the TIER could not answer, false when this DOCUMENT was the problem.
+   *
+   * `ran: false` said only "nothing was screened" and meant both, which is a real
+   * difference: D-87 stops the pass for a tier fault and deliberately does not for a
+   * `TooLargeForTier`, because the next document may be a tenth the size. Without this
+   * flag, one oversized document ended the pass AND marked a perfectly healthy tier
+   * unavailable for an hour.
+   */
+  readonly tierFault?: boolean;
 }
 
 /**

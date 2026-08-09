@@ -536,7 +536,12 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     // guessed four hours"*, because then one review's bad luck would silently narrow
     // another review's coverage, which is a claim about evidence nobody gathered.
     const down = store.tierUnavailable(tier.id);
-    if (down !== undefined && down.until > new Date().toISOString()) {
+    // `stated` AND NOT MERELY PRESENT. The background screen writes a mark for its own
+    // doubling backoff too, under the same key — so without this a guess made by a screen
+    // pass would silently decide a review's coverage, which is the exact thing the comment
+    // above and SPEC D-90 both promise does not happen. The promise was kept on the write
+    // side and broken on the read side.
+    if (down !== undefined && down.stated && down.until > new Date().toISOString()) {
       throw new Exhausted(
         `tier ${tier.id} (${tier.model ?? "?"}) was not asked: ${down.why}, so lore is not calling it before ` +
           `${down.until}. It is retried automatically and one success clears this.`,
@@ -576,7 +581,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     // imposed on other reviews would decide their coverage from evidence they never saw.
     if (e instanceof Exhausted && e.resetAt !== undefined) {
       const { until } = retryAt(Date.now(), 1, e.resetAt);
-      store.markTierUnavailable(tier.id, until, `the provider said its limit resets then`, 1);
+      store.markTierUnavailable(tier.id, until, `the provider said its limit resets then`, 1, true);
     }
     const spent = (e as { spent?: { input: number; cached: number; output: number } }).spent;
     if (spent !== undefined) {

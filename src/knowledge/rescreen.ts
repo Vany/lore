@@ -74,6 +74,13 @@ export async function rescreen(store: Store, repoId: string, screen: Screen): Pr
     const doc = group[0]?.provenance ?? "";
     const candidates: readonly Candidate[] = group.map((r) => ({ statement: r.statement, why: r.why }));
     const out = await screen(doc, candidates);
+    // THE TIER'S FAULT, not this document's. `ran: false` covers both, and treating them
+    // alike ended the pass — and marked a healthy tier down for an hour — because one file
+    // was too big for the window. A document fault costs that document its screening and
+    // nothing else; it keeps its stamp and comes back next hour like any other.
+    if (!out.ran && out.tierFault !== true) {
+      continue;
+    }
     if (!out.ran) {
       // The tier could not answer. `screenFor` stops asking for the rest of this pass
       // after a fault that belongs to the tier (D-87), so the remaining documents come

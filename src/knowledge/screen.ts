@@ -314,7 +314,17 @@ export function screenFor(
       // swallowed: the caller decides when to try again, and this is the difference
       // between waiting exactly as long as necessary and guessing.
       const resetAt = e instanceof Exhausted ? e.resetAt : undefined;
-      return { kept: candidates, refused: [], ran: false, ...(resetAt === undefined ? {} : { retryAfter: resetAt }) };
+      // WHOSE FAULT IT WAS, said explicitly. `ran: false` alone made a document too large
+      // for this tier indistinguishable from the tier being down, so one oversized file
+      // stopped the whole pass and got a healthy tier marked unavailable.
+      const tierFault = !(e instanceof TooLargeForTier);
+      return {
+        kept: candidates,
+        refused: [],
+        ran: false,
+        tierFault,
+        ...(resetAt === undefined ? {} : { retryAfter: resetAt }),
+      };
     }
   };
 }

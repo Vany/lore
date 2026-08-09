@@ -1069,7 +1069,9 @@ describe("a tier the provider said is out", () => {
 
   it("is not asked, and the round steps over it", async () => {
     const reviewer = new Counting();
-    store.markTierUnavailable("t1", new Date(Date.now() + 3_600_000).toISOString(), "the provider said its limit resets then", 1);
+    // `stated: true` — the provider named this time. Only a stated time may skip a tier
+    // in a REVIEW; the test below holds the other half.
+    store.markTierUnavailable("t1", new Date(Date.now() + 3_600_000).toISOString(), "the provider said its limit resets then", 1, true);
     const type = { ...CODE_ARCH, t0: [] as const };
 
     let last;
@@ -1086,6 +1088,24 @@ describe("a tier the provider said is out", () => {
     // or not it cost the verdict, and "not asked" must not be quieter than "asked and
     // failed" — that would make the cheaper path the less honest one.
     expect(store.unavailableChecks("r1").join("\n")).toMatch(/was not asked/);
+  });
+
+  /**
+   * A GUESS MAY NOT DECIDE A REVIEW'S COVERAGE, and this is the half the code got wrong.
+   *
+   * The background screen writes a mark for its own doubling backoff under the same key.
+   * SPEC D-90 and the comment at the call site both promise a review acts only on a time
+   * the PROVIDER stated — the write side honoured it and the read side did not, so a
+   * screen pass's guess would silently narrow a review that never saw the failure.
+   */
+  it("is still asked when the wait was only our own guess", async () => {
+    const reviewer = new Counting();
+    store.markTierUnavailable("t1", new Date(Date.now() + 3_600_000).toISOString(), "2 screen call(s) went unanswered", 2, false);
+    const type = { ...CODE_ARCH, t0: [] as const };
+
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type });
+
+    expect(reviewer.seen, "a guess bounds the screen, never a review").toStrictEqual(["t1"]);
   });
 
   // An EXPIRED mark is not a mark. The window closing is the whole mechanism by which a

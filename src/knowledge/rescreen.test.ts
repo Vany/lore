@@ -39,8 +39,19 @@ const refusing = (...refuse: readonly string[]): Screen =>
       ran: true,
     });
 
-/** What `screenFor` returns when the tier could not answer at all. */
-const cannotRun: Screen = (_doc, candidates) => Promise.resolve({ kept: candidates, refused: [], ran: false });
+/** What `screenFor` returns when the TIER could not answer at all. */
+const cannotRun: Screen = (_doc, candidates) =>
+  Promise.resolve({ kept: candidates, refused: [], ran: false, tierFault: true });
+
+/**
+ * What it returns when THIS DOCUMENT was the problem — too large for the tier's window.
+ *
+ * `ran: false` alone covered both, and treating them alike meant one oversized file ended
+ * the pass and got a healthy tier marked unavailable for an hour. D-87 draws the line;
+ * this fixture is the half that was missing when it was drawn.
+ */
+const tooLarge: Screen = (_doc, candidates) =>
+  Promise.resolve({ kept: candidates, refused: [], ran: false, tierFault: false });
 
 describe("screening the base after the fact", () => {
   it("retires what the screen refuses and promotes what it keeps", async () => {
@@ -102,6 +113,28 @@ describe("screening the base after the fact", () => {
       const row = store.db.prepare("SELECT retired_reason, extractor FROM knowledge WHERE id = ?").get(id) as Record<string, string | null>;
       expect(row["retired_reason"]).toBeNull();
       expect(row["extractor"], "still in the backlog, so the next pass retries it").toBe(UNSCREENED);
+    }
+    store.close();
+  });
+
+  it("keeps going when it was the DOCUMENT that could not be screened", async () => {
+    const { store, repoId } = seed();
+    const a = rule(store, repoId, "one", "SPEC.md", "b1", UNSCREENED);
+    const b = rule(store, repoId, "two", "PROG.md", "b2", UNSCREENED);
+    let asked = 0;
+    const counting: Screen = (doc, candidates) => {
+      asked++;
+      return tooLarge(doc, candidates);
+    };
+
+    const r = await rescreen(store, repoId, counting);
+
+    expect(asked, "the next document may be a tenth the size").toBe(2);
+    expect(r.deferred, "nothing is deferred: the tier is fine").toBe(0);
+    // And nothing was marked, in either direction — the documents keep their stamp.
+    for (const id of [a.id, b.id]) {
+      const row = store.db.prepare("SELECT extractor FROM knowledge WHERE id = ?").get(id) as Record<string, string>;
+      expect(row["extractor"]).toBe(UNSCREENED);
     }
     store.close();
   });
