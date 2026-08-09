@@ -109,15 +109,36 @@ export async function screeningPass(
       // provider did not answer — not that a document was awkward.
       if (r.deferred > 0) {
         const failures = (store.tierUnavailable(tier.id)?.failures ?? 0) + 1;
-        const until = new Date(Date.now() + coolOffMs(failures)).toISOString();
-        store.markTierUnavailable(tier.id, until, `${String(failures)} consecutive screen call(s) went unanswered`, failures);
+        // THE PROVIDER'S OWN DEADLINE BEATS OUR GUESS (D-91). When Z.ai says *"your limit
+        // will reset at 2026-08-10 18:19:09"* there is nothing to infer: waiting exactly
+        // that long is both the shortest correct wait and the longest safe one. The
+        // doubling backoff below is what to do when NOBODY SAID — it was written believing
+        // nobody ever would, which D-84 got wrong.
+        //
+        // Clamped, because a parsed timestamp is attacker-adjacent input in the general
+        // case and a typo in the far future would retire a tier for ever. A minute is the
+        // floor so a bad parse cannot become a busy loop; a week is the ceiling because a
+        // tier nobody retries for longer than that is a tier nobody would notice coming
+        // back.
+        const said = r.retryAfter === undefined ? undefined : Date.parse(r.retryAfter);
+        const guessed = Date.now() + coolOffMs(failures);
+        const chosen =
+          said === undefined || Number.isNaN(said)
+            ? guessed
+            : Math.min(Date.now() + 7 * 24 * 3_600_000, Math.max(Date.now() + 60_000, said));
+        const until = new Date(chosen).toISOString();
+        const why =
+          said === undefined || Number.isNaN(said)
+            ? `${String(failures)} consecutive screen call(s) went unanswered`
+            : `the provider said its limit resets then`;
+        store.markTierUnavailable(tier.id, until, why, failures);
         // SAID ONCE, when the decision is made rather than every hour it holds. This is
         // the line that tells an operator a provider is down, which the service has never
         // been able to say from the inside (`spec/operations.md` §2.4.2).
         log(
           `lore: ${tier.id} (${tier.model ?? "?"}) did not answer — not asking it again before ${until} ` +
-            `(failure ${String(failures)}). ${String(r.deferred)} document(s) of ${repo.name} keep waiting; ` +
-            "their rules stay live and in use.",
+            `(${why}; failure ${String(failures)}). ${String(r.deferred)} document(s) of ${repo.name} keep ` +
+            "waiting; their rules stay live and in use.",
         );
       } else if (r.documents > 0) {
         // IT ANSWERED, so whatever we believed about it being down is stale. Kept in the

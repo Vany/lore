@@ -74,8 +74,23 @@ export abstract class TierUnavailable extends LoreError {}
 
 /** A tier's provider is out of budget or rate limit. Never a reason to skip it. */
 export class Exhausted extends TierUnavailable {
-  constructor(message: string) {
+  /**
+   * When the provider says the limit lifts, ISO, if it said so.
+   *
+   * Z.ai names it — *"Your limit will reset at 2026-08-10 18:19:09"* — and lore spent
+   * three days believing that fact was unreachable. It is not: opencode publishes the
+   * refusal verbatim on its event stream, keyed by session (D-91). We had been reading
+   * the message body, where it genuinely is swallowed, and concluded it was gone.
+   *
+   * Optional, because most refusals name no time and a guess is worse than none: absent
+   * means fall back to the doubling cool-off, which is what D-90 does when nobody tells
+   * it anything.
+   */
+  readonly resetAt: string | undefined;
+
+  constructor(message: string, resetAt?: string) {
     super(message, EXIT.EXHAUSTED);
+    this.resetAt = resetAt;
   }
 }
 

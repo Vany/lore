@@ -15,7 +15,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Exhausted, TooLargeForTier } from "../core/errors.ts";
 import { CLAIM_MAX } from "../core/finding.ts";
 import type { Tier } from "../core/ladder.ts";
-import { Reviewer, countStepParts, extractFindings, splitModel, toolsUsed, isTooLong, usageFromMessages } from "./opencode.ts";
+import { Reviewer, countStepParts, extractFindings, quotaRefusal, splitModel, toolsUsed, isTooLong, usageFromMessages } from "./opencode.ts";
 
 const TIER: Tier = { id: "t1", kind: "model", model: "openrouter/z-ai/glm-5.2", stage: "fast" };
 
@@ -55,6 +55,8 @@ let messages: unknown = undefined;
 let abortStatus = 200;
 /** Accept the prompt and never answer it, so a cancel has something real to interrupt. */
 let hangPrompt = false;
+/** Events the fake opencode will publish on `/event`, in order. */
+let pending: unknown[] = [];
 
 /**
  * What `GET /session/:id/message` really answers, taken from a live opencode 1.18.9.
@@ -133,6 +135,28 @@ function start(): Promise<void> {
           res.end(sessionStatus >= 400 ? "" : JSON.stringify(sessionBody));
           return;
         }
+        // THE CHANNEL D-91 READS. A real opencode narrates every session here while the
+        // prompt request is still open; the fixture holds the connection and writes
+        // whatever a test pushes, so a quota refusal can arrive DURING a hanging call —
+        // which is the only arrangement that proves anything about this feature.
+        if (path === "/event") {
+          res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
+          // A CURSOR PER CONNECTION, never a shift. A shared queue that consumes is a
+          // fixture where one test's stream eats the next test's event — which is exactly
+          // what happened, and it failed the feature rather than the harness. A real
+          // event stream broadcasts; so does this.
+          let sent = 0;
+          const t = setInterval(() => {
+            while (sent < pending.length) {
+              res.write(`data: ${JSON.stringify(pending[sent])}\n\n`);
+              sent++;
+            }
+          }, 10);
+          res.on("close", () => {
+            clearInterval(t);
+          });
+          return;
+        }
         if (path.endsWith("/abort")) {
           res.writeHead(abortStatus, { "content-type": "application/json" });
           res.end(abortStatus >= 400 ? "" : "true");
@@ -177,6 +201,7 @@ beforeEach(async () => {
   messages = undefined;
   abortStatus = 200;
   hangPrompt = false;
+  pending = [];
   await start();
 });
 
@@ -904,5 +929,132 @@ describe("spend recovered from a call that failed", () => {
   it("does not pretend to a dollar cost", async () => {
     const sum = await usageFromMessages(messages([{ info: { role: "assistant", tokens: { input: 1, output: 1 } } }]));
     expect(sum?.cost).toBe(0);
+  });
+});
+
+/**
+ * WAITING IS THE BUG (D-91).
+ *
+ * `session.prompt` is one long HTTP request that says nothing until it returns, so an
+ * exhausted plan cost the full 2700s deadline. Meanwhile opencode was narrating the same
+ * call on `/event`: measured 2026-08-09, the provider's exact refusal — *with its reset
+ * time* — arrived SEVEN SECONDS after the prompt, then four more times in ninety seconds.
+ *
+ *   {"type":"session.status","properties":{"sessionID":"ses_…","status":{
+ *      "type":"retry","attempt":1,
+ *      "message":"Weekly/Monthly Limit Exhausted. Your limit will reset at 2026-08-10 18:19:09"}}}
+ *
+ * D-84 said opencode swallows the limit and the reset time. It swallows them in the
+ * message body, which is where lore was looking, and publishes them here.
+ */
+describe("reading what opencode says about a call in flight", () => {
+  it("recognises a quota refusal and takes the reset time out of it", () => {
+    const r = quotaRefusal({
+      type: "retry",
+      attempt: 1,
+      message: "Weekly/Monthly Limit Exhausted. Your limit will reset at 2026-08-10 18:19:09",
+    });
+    expect(r?.message).toContain("Weekly/Monthly Limit Exhausted");
+    expect(r?.resetAt, "the fact lore spent three days believing was unreachable").toBe("2026-08-10T18:19:09.000Z");
+  });
+
+  // A retry is opencode saying it will ask again, which is CORRECT behaviour for a 500.
+  // Failing the call on every retry would turn a recoverable blip into a dead tier, and
+  // the ladder would step over a provider that was about to answer.
+  it("leaves an ordinary retry alone", () => {
+    expect(quotaRefusal({ type: "retry", attempt: 1, message: "connection reset by peer" })).toBeUndefined();
+    expect(quotaRefusal({ type: "busy" })).toBeUndefined();
+    expect(quotaRefusal({ type: "retry" }), "no message is nothing to classify").toBeUndefined();
+  });
+
+  // A refusal that names no time is still a refusal — it just leaves the caller to its
+  // own backoff. Returning nothing here would make lore hang out the full deadline for
+  // any provider that phrases its limit differently.
+  it("classifies a refusal that names no reset time", () => {
+    const r = quotaRefusal({ type: "retry", message: "rate limit exceeded, try later" });
+    expect(r?.message).toContain("rate limit");
+    expect(r?.resetAt).toBeUndefined();
+  });
+});
+
+/**
+ * The refactor's actual claim: a call dies when the answer arrives, not when a clock says so.
+ *
+ * With an exhausted plan the prompt request never returns, so before D-91 this cost the
+ * full 2700s deadline — 45 minutes of holding a provider slot for a fact that had already
+ * been published. The fixture reproduces exactly that: a prompt that never answers, and a
+ * refusal on the event stream while it hangs.
+ */
+describe("a quota refusal on the event stream", () => {
+  it("fails the call in flight instead of waiting out the deadline", async () => {
+    hangPrompt = true;
+    const r = reviewer();
+    const started = Date.now();
+    const inFlight = r.review(TIER, "review this", "/tmp/wt", "rev_quota");
+    // Long enough for the session to exist and its watcher to be registered; a refusal
+    // arriving before that has nowhere to go, which is the race the deadline still covers.
+    await new Promise((res) => setTimeout(res, 250));
+    pending.push({
+      type: "session.status",
+      properties: {
+        sessionID: "ses_test",
+        status: {
+          type: "retry",
+          attempt: 1,
+          message: "Weekly/Monthly Limit Exhausted. Your limit will reset at 2026-08-10 18:19:09",
+        },
+      },
+    });
+
+    // EXHAUSTED, not DidNotRun. The distinction decides whether the ladder steps over the
+    // tier and finishes (D-48) or fails the whole review — and "Weekly/Monthly Limit
+    // Exhausted" matches none of the classifier's patterns, so it only arrives correctly
+    // because the abort reason is already the right type.
+    await expect(inFlight).rejects.toThrow(Exhausted);
+    expect(Date.now() - started, "seconds, against a 10s fixture deadline and 2700s in production").toBeLessThan(5_000);
+    r.close();
+  });
+
+  it("carries the reset time the provider named, so nobody has to guess", async () => {
+    hangPrompt = true;
+    const r = reviewer();
+    const inFlight = r.review(TIER, "review this", "/tmp/wt", "rev_quota2");
+    await new Promise((res) => setTimeout(res, 250));
+    pending.push({
+      type: "session.status",
+      properties: {
+        sessionID: "ses_test",
+        status: { type: "retry", message: "Weekly/Monthly Limit Exhausted. Your limit will reset at 2026-08-10 18:19:09" },
+      },
+    });
+
+    const err = await inFlight.then(() => undefined, (e: unknown) => e);
+    expect((err as Exhausted).resetAt, "D-90 waits exactly this long instead of doubling a guess").toBe(
+      "2026-08-10T18:19:09.000Z",
+    );
+    r.close();
+  });
+
+  // A retry is opencode saying it will try again, and for a 500 that is correct. Killing
+  // the call on any retry would turn a recoverable blip into a stepped-over tier.
+  it("lets an ordinary retry run on", async () => {
+    hangPrompt = true;
+    const r = reviewer();
+    const inFlight = r.review(TIER, "review this", "/tmp/wt", "rev_blip");
+    await new Promise((res) => setTimeout(res, 250));
+    pending.push({
+      type: "session.status",
+      properties: { sessionID: "ses_test", status: { type: "retry", attempt: 1, message: "connection reset by peer" } },
+    });
+    await new Promise((res) => setTimeout(res, 400));
+
+    // Still open: the fixture's own 10s deadline is what will end it, exactly as before.
+    const settled = await Promise.race([inFlight.then(() => "settled", () => "settled"), new Promise((res) => setTimeout(() => res("open"), 300))]);
+    expect(settled).toBe("open");
+    // Ended deliberately rather than left to the fixture's deadline, so the suite does
+    // not carry a ten-second wait per run.
+    await r.cancel("rev_blip");
+    await inFlight.catch(() => undefined);
+    r.close();
   });
 });

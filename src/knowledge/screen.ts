@@ -45,7 +45,7 @@
  * SPEC: spec/knowledge.md §2.1.2
  */
 
-import { TooLargeForTier } from "../core/errors.ts";
+import { Exhausted, TooLargeForTier } from "../core/errors.ts";
 import type { Tier } from "../core/ladder.ts";
 import { extractList, type Listed, type SessionResult } from "../reviewer/opencode.ts";
 import type { Candidate, Screen, Screened } from "./ingest.ts";
@@ -310,7 +310,11 @@ export function screenFor(
       if (!(e instanceof TooLargeForTier)) {
         stopped = `${tier.id} (${tier.model ?? "?"}) could not answer and will not be asked again this pass: ${why}`;
       }
-      return { kept: candidates, refused: [], ran: false };
+      // THE PROVIDER'S OWN DEADLINE, when it gave one (D-91). Passed up rather than
+      // swallowed: the caller decides when to try again, and this is the difference
+      // between waiting exactly as long as necessary and guessing.
+      const resetAt = e instanceof Exhausted ? e.resetAt : undefined;
+      return { kept: candidates, refused: [], ran: false, ...(resetAt === undefined ? {} : { retryAfter: resetAt }) };
     }
   };
 }

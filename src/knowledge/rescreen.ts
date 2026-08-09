@@ -36,6 +36,8 @@ export interface RescreenResult {
   readonly refused: number;
   /** Documents left for the next pass because the tier stopped answering. */
   readonly deferred: number;
+  /** When the provider said its limit lifts, if it said so (D-91). */
+  readonly retryAfter?: string;
 }
 
 /**
@@ -47,6 +49,7 @@ export interface RescreenResult {
 export async function rescreen(store: Store, repoId: string, screen: Screen): Promise<RescreenResult> {
   const rows = store.unscreenedRules(repoId, UNSCREENED);
   if (rows.length === 0) return { documents: 0, kept: 0, refused: 0, deferred: 0 };
+  let retryAfter: string | undefined;
 
   // Grouped by DOCUMENT VERSION, not by document. Two blobs of one file can both have
   // live rules — a row from an older blob survives if nothing re-ingested it — and
@@ -76,6 +79,7 @@ export async function rescreen(store: Store, repoId: string, screen: Screen): Pr
       // after a fault that belongs to the tier (D-87), so the remaining documents come
       // back here identically and cheaply — they keep their stamp, stay live, and wait.
       deferred += byDoc.size - documents;
+      retryAfter = out.retryAfter;
       break;
     }
     documents++;
@@ -100,5 +104,5 @@ export async function rescreen(store: Store, repoId: string, screen: Screen): Pr
     refused += refusedRows.length;
   }
 
-  return { documents, kept, refused, deferred };
+  return { documents, kept, refused, deferred, ...(retryAfter === undefined ? {} : { retryAfter }) };
 }

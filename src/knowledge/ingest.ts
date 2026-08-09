@@ -178,6 +178,15 @@ export interface Screened {
    * ingest tries again.
    */
   readonly ran: boolean;
+  /**
+   * When the provider said its limit lifts, ISO — present only when it said so (D-91).
+   *
+   * Carried out of the screen rather than logged, because the caller is the only thing
+   * that can act on it: it decides when to ask again, and a guess there costs either a
+   * 45-minute hang or hours of a working tier left unused. Absent means nobody told us,
+   * and the caller falls back to its own backoff.
+   */
+  readonly retryAfter?: string;
 }
 
 /**

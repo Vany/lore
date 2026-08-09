@@ -26,12 +26,57 @@
 
 import type * as z from "zod";
 import { createOpencodeClient } from "@opencode-ai/sdk";
-import { DidNotRun, Exhausted, ProviderAuthFailed, TooLargeForTier } from "../core/errors.ts";
+import { DidNotRun, Exhausted, ProviderAuthFailed, TierUnavailable, TooLargeForTier } from "../core/errors.ts";
 import { FindingSchema, type Finding } from "../core/finding.ts";
 import type { Tier } from "../core/ladder.ts";
 import { Gate, type GateState } from "./gate.ts";
 import { DEFAULT_TIMEOUT_MS, longFetch } from "./long-fetch.ts";
 import { OUTPUT_CONTRACT } from "./prompts.ts";
+
+/**
+ * What opencode publishes about a session while it is working (D-91).
+ *
+ * Measured against a live 1.18.11 rather than taken from the schema, because the schema
+ * types `status` loosely and the field that matters is inside it:
+ *
+ *   {"type":"session.status","properties":{"sessionID":"ses_…","status":{
+ *      "type":"retry","attempt":1,
+ *      "message":"Weekly/Monthly Limit Exhausted. Your limit will reset at 2026-08-10 18:19:09",
+ *      "next":1786237732180}}}
+ *
+ * Only the fields lore reads are named. Everything else on that stream is somebody
+ * else's business, and a wider type would invite depending on it.
+ */
+export interface OpencodeStatus {
+  readonly type?: string;
+  readonly attempt?: number;
+  readonly message?: string;
+}
+
+/**
+ * The provider's refusal, if this is one, with the reset time it named.
+ *
+ * Exported so it can be aimed at: it decides whether a review dies in seven seconds or
+ * forty-five minutes, and the difference between a quota refusal and an ordinary retry is
+ * a substring match nobody should have to find inside a stream handler.
+ *
+ * `retry` is opencode telling us it will ask again. That is fine and expected for a 500;
+ * for an exhausted plan it is a promise to keep failing, once every few seconds, until
+ * our deadline. The MESSAGE is what separates them, and it is the provider's own words.
+ */
+export function quotaRefusal(status: OpencodeStatus): { readonly message: string; readonly resetAt?: string } | undefined {
+  const message = status.message ?? "";
+  if (status.type !== "retry" || message === "") return undefined;
+  if (!/limit exhausted|rate.?limit|quota|insufficient|out of credit/i.test(message)) return undefined;
+  const at = /reset(?:s)?(?: at)?\s+(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2})/i.exec(message);
+  // TREATED AS UTC, and the provider does not say. Z.ai is a Beijing company and this may
+  // well be UTC+8, in which case lore waits eight hours longer than it must — the safe
+  // direction, and it self-corrects: the tier is retried after it, succeeds, and the mark
+  // is cleared. Reading it the other way would mean one more 45-minute hang, which is the
+  // cost this whole change exists to remove.
+  const resetAt = at?.[1] === undefined ? undefined : new Date(`${at[1].replace(" ", "T")}Z`).toISOString();
+  return resetAt === undefined ? { message } : { message, resetAt };
+}
 
 export interface ReviewerConfig {
   readonly baseUrl: string;
@@ -261,6 +306,17 @@ export class Reviewer implements ReviewerLike {
    * request hangs exactly as a review's does.
    */
   private readonly aborters = new Map<string, AbortController>();
+  /**
+   * session id -> what to do when opencode says something about that session.
+   *
+   * The whole point of D-91. `session.prompt` is one long HTTP request that tells us
+   * nothing until it returns, but opencode is *narrating the same call* on `/event` — and
+   * during an exhausted-plan hang the narration is the only place the answer exists.
+   */
+  private readonly watchers = new Map<string, (status: OpencodeStatus) => void>();
+  /** The subscription, started on first use and never restarted twice at once. */
+  private listening?: Promise<void>;
+  private closed = false;
 
   constructor(cfg: ReviewerConfig = DEFAULT_REVIEWER) {
     this.cfg = cfg;
@@ -301,6 +357,58 @@ export class Reviewer implements ReviewerLike {
    * pretending, because "cancelled" that kept spending is exactly the confident false
    * statement this project exists to refuse.
    */
+  /**
+   * Listen to what opencode says about its own work, once, for the life of the process.
+   *
+   * THE CHANNEL WE WERE NOT READING (D-91). `session.prompt` is one long HTTP request
+   * that tells us nothing until it returns; opencode narrates the same call on `/event`.
+   * Measured 2026-08-09 against an exhausted Z.ai plan: the request hung for the full
+   * 2700s deadline, while the stream carried the provider's exact refusal — *and its
+   * reset time* — SEVEN SECONDS after the prompt was sent, then four more times inside
+   * ninety seconds. Forty-five minutes of waiting for a fact that had already arrived.
+   *
+   * D-84 said opencode swallows the limit and the reset time. It swallows them in the
+   * message body, which is where we were looking, and publishes them here.
+   *
+   * Lazily started, because a Reviewer that never calls a model should not hold a socket
+   * open — the CLI builds one per invocation.
+   */
+  private listen(): void {
+    if (this.listening !== undefined || this.closed) return;
+    this.listening = (async () => {
+      // Reconnects for as long as the process wants sessions watched. A stream that dies
+      // is not a fault to report on its own: opencode restarts, and the deadline is still
+      // there as the backstop for everything this loop is not awake for.
+      while (!this.closed) {
+        try {
+          const res = await this.client.event.subscribe();
+          for await (const ev of res.stream) {
+            if (this.closed) break;
+            const e = ev as { type?: string; properties?: { sessionID?: string; status?: OpencodeStatus } };
+            if (e.type !== "session.status") continue;
+            const id = e.properties?.sessionID;
+            const status = e.properties?.status;
+            if (id === undefined || status === undefined) continue;
+            this.watchers.get(id)?.(status);
+          }
+        } catch {
+          // Deliberately silent and deliberately not fatal. This is an optimisation: with
+          // the stream up a dead provider costs seconds, and without it the 2700s deadline
+          // does what it always did. Logging every reconnect would train a reader to skip
+          // the log, and failing a review because a side-channel dropped would be worse
+          // than the problem it solves.
+        }
+        if (this.closed) break;
+        await new Promise((r) => setTimeout(r, 2_000));
+      }
+    })();
+  }
+
+  /** Stop listening. Idempotent; the CLI and the tests both end without a service. */
+  close(): void {
+    this.closed = true;
+  }
+
   async cancel(reviewId: string): Promise<boolean> {
     const sessionId = this.sessions.get(reviewId);
     if (sessionId === undefined) return false;
@@ -469,6 +577,31 @@ export class Reviewer implements ReviewerLike {
     const aborter = new AbortController();
     this.aborters.set(sessionId, aborter);
 
+    // AND WE LISTEN TO WHAT OPENCODE SAYS ABOUT IT (D-91).
+    //
+    // This is the difference between seven seconds and forty-five minutes. The prompt
+    // request tells us nothing until it returns; the event stream carries the provider's
+    // refusal — with the reset time — within seconds, and then repeats it every few
+    // seconds while opencode retries something that cannot succeed.
+    //
+    // Aborting with an `Exhausted` as the REASON is what makes this arrive at the caller
+    // correctly: `longFetch` destroys the socket with `signal.reason`, so the error the
+    // round catches is this exact object, carrying the provider's words and its reset
+    // time. Everything downstream — D-48's step-over, `skip_if_quota`, D-90's cool-off —
+    // already knows what to do with an `Exhausted`; none of it had to change.
+    this.listen();
+    this.watchers.set(sessionId, (status) => {
+      const refusal = quotaRefusal(status);
+      if (refusal === undefined) return;
+      aborter.abort(
+        new Exhausted(
+          `tier ${tier.id} (${tier.model ?? "?"}) refused on quota: ${refusal.message}` +
+            (refusal.resetAt === undefined ? "" : ` (opencode reported this on attempt ${String(status.attempt ?? 1)})`),
+          refusal.resetAt,
+        ),
+      );
+    });
+
     try {
       return await this.conduct(sessionId, tier, prompt, worktree, started, extract, contract);
     } catch (e) {
@@ -506,8 +639,10 @@ export class Reviewer implements ReviewerLike {
       }
       // Same reason the session entry goes: a controller left behind would let a later
       // cancel abort a request that has already finished, and would leak one entry per
-      // session for the life of the process.
+      // session for the life of the process. The watcher is the same hazard with a
+      // longer fuse — the stream outlives every call on it.
       this.aborters.delete(sessionId);
+      this.watchers.delete(sessionId);
     }
   }
 
@@ -831,6 +966,13 @@ export class Reviewer implements ReviewerLike {
 
       return { text: collectText(res.data), usage: collectUsage(res.data) };
     } catch (e) {
+      // ALREADY CLASSIFIED, and re-deriving it would lose what it carries. When the event
+      // stream fails a call (D-91), the abort reason IS an `Exhausted` holding the
+      // provider's words and its reset time — and the classifier below would not even
+      // recognise it: *"Weekly/Monthly Limit Exhausted"* matches none of
+      // `rate.?limit|quota|insufficient`, so it would arrive as a plain `DidNotRun` and
+      // the ladder would fail the review instead of stepping over the tier.
+      if (e instanceof TierUnavailable) throw e;
       const status = e instanceof HttpStatus ? e.status : undefined;
       const message = e instanceof Error ? e.message : String(e);
       // Quota is never a reason to fall through to another tier or provider: a

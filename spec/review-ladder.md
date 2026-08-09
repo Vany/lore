@@ -116,7 +116,23 @@ GPT-5.6 Sol scores 59 at max effort and 56 at high — 95% of the capability for
 of the cost. The ladder walks `(model, effort)` pairs, not models.
 
 
-### Quota arrives as a hang, because opencode swallows the refusal (D-84)
+### Quota arrives as a hang — but opencode says so on its event stream (D-84, corrected by D-91)
+
+**Read this section knowing its conclusion was wrong.** The hang is real and everything
+measured below happened. What was false is *"the refusal is unreachable"*: opencode
+swallows it in the message BODY and publishes it, verbatim and within about seven seconds,
+on `/event`, keyed by session —
+
+```
+{"type":"session.status","properties":{"sessionID":"ses_…","status":{
+   "type":"retry","attempt":1,
+   "message":"Weekly/Monthly Limit Exhausted. Your limit will reset at 2026-08-10 18:19:09"}}}
+```
+
+so lore subscribes and fails the call in seconds instead of waiting out 2700s (D-91). The
+rest of this section is kept because the measurements stand and because the mistake is
+worth being able to find: nobody asked which channel had been read.
+
 
 Quota is detected from a status code — `429`, `402`, or a message matching
 `rate.?limit|quota|insufficient`. **None of them reaches lore when a Z.ai plan is

@@ -178,13 +178,14 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-46** | A conflict block must have an exit: resolve, or escalate | confirmed |
 | **D-47** | D-1 is enforced by **absence**: no Anthropic credential is deployed | confirmed |
 | **D-48** | A tier that cannot ANSWER — unfundable, or dead after its retry — is *skipped*, not fatal. What that costs the verdict is D-88 | confirmed; widened 2026-08-08, narrowed 2026-08-09 |
-| **D-84** | **Z.ai names its limit and its reset time; opencode swallows both.** Quota reaches lore as a hang, not a status code | measured 2026-08-09 |
+| **D-84** | ~~opencode swallows the limit and the reset time~~ — **WRONG, see D-91.** It swallows them in the message BODY and publishes them on its event stream | corrected 2026-08-09 |
 | **D-85** | A tier on a metered plan carries `skip_if_quota` — one attempt, then skip. A failed call's tokens are recorded | built 2026-08-09 |
 | **D-86** | **A cancel stops both ends**, and `stopped_in_flight: null` says when the server could not look | built 2026-08-09 |
 | **D-87** | The knowledge screen stops for the pass on a fault that belongs to the TIER, not to the document | built 2026-08-09 |
 | **D-88** | **A tier skipped BELOW one that passed does not weaken the verdict.** The ladder is a gate; its work was done again above it | built 2026-08-09 |
 | **D-89** | **The knowledge screen runs in the background.** No review waits for a model call that only decides what its prompt looks like | built 2026-08-09 |
-| **D-90** | **A tier that stopped answering is not asked again** until a doubling cool-off expires — service-wide, learned, and visible | built 2026-08-09 |
+| **D-90** | **A tier that stopped answering is not asked again** — until the provider's own reset time (D-91), or a doubling cool-off when it named none | built 2026-08-09 |
+| **D-91** | **Subscribe, never wait.** opencode narrates every call on its event stream; a quota refusal arrives in ~7s, with its reset time | built 2026-08-09 |
 | **D-49** | A single-vendor ladder reaches `passed_partial`, never `passed` | confirmed |
 | **D-50** | Exploration is **counted per review before it is capped**; no cap yet | `[OPEN]` |
 | **D-51** | An accepted justification is **repo knowledge**, carried across reviews | confirmed |
@@ -1198,7 +1199,18 @@ wrong"*. Today a tier can say nothing but findings, which is the same gap that l
 escalation path unwired. Worth solving once, for both.
 
 **D-84 — Z.ai names its limit and its reset time; opencode swallows both, so quota
-reaches lore as a hang rather than a status code.**
+reaches lore as a hang rather than a status code.** — **CORRECTED BY D-91.**
+
+**The second half is false and it cost three days.** opencode swallows the limit and the
+reset time *in the message body*, which is where lore was looking. It publishes both,
+verbatim and within seconds, on its event stream — a channel nothing here had subscribed
+to. Everything below about the hang is accurate; every conclusion drawn from *"the fact is
+unreachable"* is not, including the cool-off that guesses a duration the provider states
+and the credential trade I twice put to Vany as the only way to learn it.
+
+Kept in full rather than rewritten, because the measurements are real and the reasoning
+was sound on a premise nobody checked — and *"which channel did you read?"* is the
+question this failure teaches. D-91 has what is true now.
 
 Vany, 2026-08-09: *"z.ai is out of the limits. we must track it."*
 
@@ -1524,6 +1536,54 @@ learns per review, because a review's own evidence is what its verdict rests on 
 `skip_if_quota` (D-85) already spends only one attempt on it. Extending the cool-off to
 the ladder would let one review's failure decide another's coverage, which is a bigger
 claim than anything measured so far supports.
+
+**D-91 — subscribe to what opencode says; never wait out a clock for a fact it has
+already published.**
+
+Vany: *"flat cost is stupid, can we subscribe for finish or fail?"* and then *"wasting
+time is a crime."*
+
+**D-84 was wrong, and three days of work rested on it.** It said Z.ai names its limit and
+its reset time and opencode swallows both. opencode swallows them **in the message body**
+— which is where lore was looking — and publishes them verbatim on `/event`, keyed by
+session. Measured 2026-08-09 against the live exhausted plan:
+
+```
+{"type":"session.status","properties":{"sessionID":"ses_…","status":{
+   "type":"retry","attempt":1,
+   "message":"Weekly/Monthly Limit Exhausted. Your limit will reset at 2026-08-10 18:19:09",
+   "next":1786237732180}}}
+```
+
+The prompt went out at 01:08:45; that arrived by **01:08:52**, and four more inside ninety
+seconds. lore was waiting **2700 seconds** for a fact that took seven.
+
+`session.prompt` is one long HTTP request that says nothing until it returns. The
+`Reviewer` now holds one subscription for the life of the process and routes
+`session.status` by `sessionID` to the call in flight. A `retry` whose message is a quota
+refusal aborts that call immediately — **with an `Exhausted` as the abort reason**, so the
+error the round catches already carries the provider's words and its reset time, and every
+consumer downstream (D-48's step-over, `skip_if_quota`, D-90's cool-off) needed no change.
+
+Three things this corrects:
+
+- **The 45-minute flat cost is gone.** A dead tier costs seconds. The 2700s deadline stays
+  as the backstop for a stream that is down — it is now the exception, not the mechanism.
+- **D-90 stops guessing.** Its doubling backoff was written believing nobody would ever
+  tell us when the limit lifts. When the provider names a time, that time is used, clamped
+  to [now+1min, now+7d]; the doubling is the fallback for a refusal that names none.
+- **The credential question is closed.** I twice put it to Vany that reading provider keys
+  would buy the reset time at the cost of a stated security property. It buys nothing
+  lore cannot already hear.
+
+**An ordinary `retry` is left alone.** opencode retrying a 500 is correct behaviour, and
+killing the call on any retry would turn a recoverable blip into a stepped-over tier. Only
+the message separates them, and it is the provider's own words.
+
+**The reset time is read as UTC and the provider does not say which zone it means.** Z.ai
+is a Beijing company, so this may be UTC+8 and lore may wait eight hours too long — the
+safe direction, and self-correcting: the tier is retried after it, succeeds, and the mark
+clears. Reading it the other way costs one more hang, which is the thing being removed.
 
 **D-82 — a defect found is fixed now; recording it is the exception.**
 

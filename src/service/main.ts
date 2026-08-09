@@ -327,6 +327,11 @@ export async function serve(cfg: ServiceConfig): Promise<() => void> {
   return () => {
     http.close();
     clearInterval(sweep);
+    clearInterval(screening);
+    // The event subscription (D-91) holds a socket open and reconnects on its own, so a
+    // stop that did not say so would keep the process alive after every test and every
+    // shutdown. `screening` likewise: it was added with the timer and not the teardown.
+    reviewer.close();
     stopBeat();
     stopWorker();
     store.close();
