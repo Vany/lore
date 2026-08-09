@@ -209,3 +209,50 @@ it("refuses to sign a passed review that recorded no tree", async () => {
   });
   await expect(attest(store, "r2", "p", keyPath)).rejects.toThrow(/no tree hash/);
 });
+
+/**
+ * PARTIAL is a claim, and D-88 made it possible to overclaim it.
+ *
+ * Every caveat used to end in "so this is PARTIAL", which was right while any skipped
+ * tier forbade a pass. Since D-88 a tier skipped BELOW one that answered does not weaken
+ * the verdict — the ladder is a gate, so its work was done again above it — and stamping
+ * PARTIAL on that review understates a complete one, in the single output whose whole
+ * value is that it can be trusted.
+ *
+ * The skip is still NAMED. Disclosure never depended on the verdict and must not start
+ * to: a signed line that quietly stopped mentioning a tier it did not run is precisely
+ * what a reader has no other way to detect.
+ */
+describe("what a signed line calls PARTIAL", () => {
+  /** Every tier read the signed tree, so the only question left is the ladder's. */
+  const allOnTree = (...tiers: readonly string[]) => {
+    const at = "2026-08-03T00:00:00.000Z";
+    for (const t of tiers) store.recordTierRun("r1", t, 1, "clean", at, "4f2a9c1");
+  };
+  const skip = (...ids: readonly string[]) => {
+    const s2 = { ...initialState(), unavailable: [...ids] };
+    store.db.prepare("UPDATE review SET ladder = ? WHERE id = 'r1'").run(JSON.stringify(s2));
+  };
+
+  it("names a tier skipped below the one that passed, without calling the review partial", async () => {
+    review("passed");
+    allOnTree("t0", "t2", "t3");
+    skip("t1");
+
+    const a = await attest(store, "r1", "p", keyPath);
+
+    expect(a.line, "the client is still told which tier did not run").toContain("t1 could not run");
+    expect(a.line, "but the verdict was a full pass (D-88)").not.toContain("PARTIAL");
+  });
+
+  it("still calls it PARTIAL when the ladder did", async () => {
+    review("passed_partial");
+    allOnTree("t0", "t1", "t2");
+    skip("t3");
+
+    const a = await attest(store, "r1", "p", keyPath);
+
+    expect(a.line).toContain("t3 could not run");
+    expect(a.line, "nothing read this code at t3's level").toContain("PARTIAL");
+  });
+});

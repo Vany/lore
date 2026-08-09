@@ -526,7 +526,16 @@ inverted, inside the change that relaxes the rule.
 
 **Every skipped tier is still disclosed**, on a `passed` exactly as on a
 `passed_partial` — `checks_skipped` names it, the operator view lists it, and the
-attestation names only the tiers that read the signed tree. What D-88 changed is which
+attestation names only the tiers that read the signed tree.
+
+**The signed line says PARTIAL for two independent reasons, and only one of them is the
+verdict.** Every caveat used to end in "so this is PARTIAL", which was correct while any
+skip forbade a pass; stamping it on a D-88 `passed` would UNDERSTATE a complete review, in
+the one output whose whole value is that it can be trusted. So PARTIAL now means the
+ladder's verdict was partial, **or** a tier that ran read an earlier tree and — since a
+closed tier is not re-run after a fix (D-6) — never re-read the one being signed. The
+second is a fact about what the signature covers, true even on a full pass, and no ladder
+state records it. The caveats themselves print either way. What D-88 changed is which
 skips cost the verdict, never which are mentioned. A `passed` that quietly stopped naming
 a tier it did not run would be the silent downgrade this project exists to refuse.
 

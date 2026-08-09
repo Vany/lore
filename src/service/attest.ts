@@ -112,10 +112,39 @@ export async function attest(store: Store, reviewId: string, principal: string, 
   ].filter((c) => c !== undefined);
 
   const named = onTree.length === 0 ? "no tier" : onTree.join(", ");
+  // PARTIAL IS THE LADDER'S VERDICT, NOT THIS FILE'S OPINION OF IT (D-88).
+  //
+  // Every caveat above used to end in "so this is PARTIAL", back when any skipped tier
+  // forbade a pass. Since D-88 a tier skipped BELOW one that answered does not weaken the
+  // verdict — its work was done again above it — so a review can reach `passed` with a
+  // caveat attached, and stamping PARTIAL on it would be the mirror of the sin this line
+  // exists to prevent: understating a review that was complete, in the one output whose
+  // value is that it can be trusted.
+  //
+  // Read from the STATE rather than re-derived from `skipped`. The rule for what a skip
+  // costs lives in `step()`; a second copy here would be free to disagree with the
+  // verdict it is attesting, which is worse than either answer alone.
+  //
+  // The caveats themselves are printed either way. Disclosure never depended on the
+  // verdict and must not start to — a signed line that quietly stopped naming a tier it
+  // did not run is exactly what a reader has no other way to detect.
+  // TWO INDEPENDENT SOURCES OF PARTIAL, and keying only off the verdict conflated them.
+  //
+  //   * the LADDER's verdict — a tier above the one that answered never ran, or every
+  //     tier that ran was one vendor. That is `passed_partial`, and D-88 decides it.
+  //   * the SIGNED TREE — a tier that ran read an EARLIER tree and, since a closed tier
+  //     is not re-run after a fix (D-6), never re-read this one. That is a fact about
+  //     what this signature covers, it is true on a full `passed`, and no ladder state
+  //     records it.
+  //
+  // The second is why this cannot simply read the state: a `passed` whose t1 verdict was
+  // given against a tree two fixes ago is genuinely partial COVER of the tree being
+  // signed, whatever the verdict says. A test caught me collapsing them.
+  const partial = review.state === "passed_partial" || tiers < everyTier;
   const scope =
     caveats.length === 0
       ? `${tiers} tiers (${named})`
-      : `${tiers} tiers (${named}) — ${caveats.join("; ")}, so this is PARTIAL`;
+      : `${tiers} tiers (${named}) — ${caveats.join("; ")}${partial ? ", so this is PARTIAL" : ""}`;
 
   const line =
     `lore: reviewed tree ${review.treeHash} against this repo's rules and lore's own — ` +
