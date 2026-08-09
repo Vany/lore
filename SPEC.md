@@ -177,11 +177,12 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-45** | The project is **`lore`** | confirmed |
 | **D-46** | A conflict block must have an exit: resolve, or escalate | confirmed |
 | **D-47** | D-1 is enforced by **absence**: no Anthropic credential is deployed | confirmed |
-| **D-48** | A tier that cannot ANSWER — unfundable, or dead after its retry — is *skipped*, not fatal — `passed_partial` | confirmed; widened 2026-08-08 |
+| **D-48** | A tier that cannot ANSWER — unfundable, or dead after its retry — is *skipped*, not fatal. What that costs the verdict is D-88 | confirmed; widened 2026-08-08, narrowed 2026-08-09 |
 | **D-84** | **Z.ai names its limit and its reset time; opencode swallows both.** Quota reaches lore as a hang, not a status code | measured 2026-08-09 |
 | **D-85** | A tier on a metered plan carries `skip_if_quota` — one attempt, then skip. A failed call's tokens are recorded | built 2026-08-09 |
 | **D-86** | **A cancel stops both ends**, and `stopped_in_flight: null` says when the server could not look | built 2026-08-09 |
 | **D-87** | The knowledge screen stops for the pass on a fault that belongs to the TIER, not to the document | built 2026-08-09 |
+| **D-88** | **A tier skipped BELOW one that passed does not weaken the verdict.** The ladder is a gate; its work was done again above it | built 2026-08-09 |
 | **D-49** | A single-vendor ladder reaches `passed_partial`, never `passed` | confirmed |
 | **D-50** | Exploration is **counted per review before it is capped**; no cap yet | `[OPEN]` |
 | **D-51** | An accepted justification is **repo knowledge**, carried across reviews | confirmed |
@@ -1411,6 +1412,40 @@ on, and that stamp is what brings the next ingest back to do the work. Erring to
 stopping is the cheap direction — stopping wrongly costs one ingest's screening,
 continuing wrongly costs the deadline per document before the review has begun.
 
+**D-88 — a tier skipped below one that passed does not weaken the verdict.**
+
+Vany: *"quota on t1 must allow to skip it and start t2. passing of t2 must make t1 not
+needed."*
+
+The ladder is a **gate** — dearer tiers only see code the cheaper ones already passed —
+so whatever a skipped cheap tier would have read was read again above it. Its absence
+made the review dearer, not less certain. Every skip used to force `passed_partial`,
+which said the opposite.
+
+| where the skipped tier sat | outcome |
+|---|---|
+| below the dearest tier that answered | does not prevent `passed` |
+| at or above it | `passed_partial` — nothing read this code at that level |
+
+D-49's sole-vendor rule is untouched and independent.
+
+**The pivot is the dearest tier that ANSWERED, never the cursor**, because `runRound`
+promotes a dead tier by calling `step` with nothing raised — so a tier that failed arrives
+at the decision indistinguishable from one that came back clean, except for its entry in
+`unavailable`. Reading the cursor would forgive the top tier's own failure and call the
+review `passed` when nothing had read it at that level: INV-1 inverted, inside the change
+that relaxes the rule.
+
+**Every skipped tier is still disclosed on a `passed`.** What changed is which skips cost
+the verdict, never which are named.
+
+I argued against this and was overruled; both objections and the measurement behind them
+are in `spec/review-ladder.md` §5.1.1, kept because they may age better than the decision.
+The short form: §1 says the ladder is ordered by VENDOR and not by capability — K3 costs
+3× GPT-5.6 Terra for two fewer points and is in the ladder only because it is a third
+vendor — and t1 has raised 13 high-or-critical findings to t2's 3. Neither is decisive,
+because the gate means t1 simply goes first.
+
 **D-82 — a defect found is fixed now; recording it is the exception.**
 
 Vany, after a day of it: *"we fix bugs in this project immediately."*
@@ -1832,7 +1867,8 @@ broken"*. That is a reasonable person reaching the only conclusion available —
 is unreviewed code shipping, arrived at honestly.
 
 **What is ours and what is not.** A tier nobody can pay for is already handled: it is
-recorded unavailable and stepped over, and the review reaches `passed_partial` (D-48).
+recorded unavailable and stepped over (D-48); whether the review still reaches `passed`
+turns on whether a dearer tier answered above it (D-88).
 A provider that is simply down is not a defect here and the answer is to wait, not to
 push. Everything else — an empty reply nobody explained, a prompt that will not fit, a
 message that sends its reader the wrong way — is ours, and is fixed before the commit

@@ -5,6 +5,47 @@ surprised me.
 
 ---
 
+## 2026-08-09 — session 50: I argued the ladder was a panel, and lost
+
+Vany: *"quota on t1 must allow to skip it and start t2. passing of t2 must make t1 not
+needed."* I disagreed, argued it, was overruled, and built it (D-88).
+
+**The argument, for the record.** `spec/review-ladder.md` §1 says the ladder is ordered
+by VENDOR, not capability — intercepts 51/57/59, and K3 is kept at 3× the price of
+GPT-5.6 Terra for two fewer points *because it buys a third vendor*. Under a capability
+reading, t2 has no reason to exist. And our findings table does not look like a subset
+relation: t2 has raised 111 findings with 3 high+, t1 **95 with 13** — the largest source
+of high-severity model findings we have.
+
+**Why neither settles it, which is why I could argue but not win.** The ladder is a gate,
+so t1 goes first and its findings are fixed before t2 ever sees that code. The numbers
+refute *"t1 is obviously redundant"*; they cannot show *"t1 is necessary"*. There is no
+experiment in our data that separates *found it* from *found it first*.
+
+**The part I got right and kept.** One label for every skip was wrong under either model:
+"the cheap first pass did not run" and "nobody ran the adversarial tier" printed
+identically. Now they do not.
+
+**The trap I nearly built.** The obvious implementation forgives every skip at or below
+the cursor. But `runRound` promotes a dead tier by calling `step` with nothing raised — so
+a tier that FAILED arrives at the decision looking exactly like one that came back clean,
+except for its `unavailable` entry. With the cursor as the pivot, a t3 that hung would
+have been forgiven and the review called `passed` with nothing having read it at that
+level: INV-1 inverted, inside the change that relaxes the rule. The pivot is
+`highestThatRan`, and there is a test that fails without it.
+
+**What did not move.** Every skipped tier is still disclosed on a `passed` —
+`checks_skipped`, the operator view, and an attestation that names only the tiers that
+read the signed tree. D-49's sole-vendor rule is untouched: t1 skipped with only t3 left
+is still `passed_partial`.
+
+**Also corrected.** My cancel reason said *"re-run once the screen honours
+skip_if_quota"*, which framed a cost problem as a validity problem — the same conflation
+Vany was pointing at. That review needs re-running because it never reached any tier, not
+because t1 was missing.
+
+---
+
 ## 2026-08-09 — session 49: three more holes of the same shape
 
 Kept pulling the same thread — *what does the system claim, and what could make that

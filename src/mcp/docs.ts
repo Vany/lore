@@ -706,8 +706,12 @@ awaiting_diff   waiting for your fixes
 fast_clean      cheap tiers clean, deep tiers still running — NOT a pass
 needs_human     a question you must not answer yourself — NOT a pass
 passed          every tier agrees. The only clean state.
-passed_partial  every tier that COULD run agreed — a tier went unpaid, or all of
-                them came from one vendor. Real evidence, weaker evidence. NOT a pass
+passed_partial  every tier that COULD run agreed, and something above them did not.
+                A tier ABOVE the one that passed never ran, or every tier that ran came
+                from one vendor. Real evidence, weaker evidence. NOT a pass.
+                A tier skipped BELOW one that passed does not land here: the ladder is
+                a gate, so the tier above re-read everything it would have (D-88).
+                checks_skipped names every tier that did not run, either way
 failed          did not complete — NOT "found nothing"
 expired         abandoned or timed out — NOT "found nothing"
 cancelled       YOU stopped it — terminal, and NOT "found nothing". The findings it

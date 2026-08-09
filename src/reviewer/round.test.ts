@@ -939,8 +939,14 @@ describe("the paths that only happen when something has gone wrong", () => {
       last = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type }).catch(() => undefined);
       if (last === undefined || !["escalate", "fastClean"].includes(last.decision.kind)) break;
     }
-    expect(last?.decision.kind).toBe("passedPartial");
+    // `passed`, not `passedPartial` (D-88): t1 is the CHEAPEST tier and both tiers above
+    // it read this code. The ladder is a gate — dearer tiers only see what the cheaper
+    // ones passed — so t1's absence made the review dearer, not less certain.
+    expect(last?.decision.kind).toBe("passed");
     expect(reviewer.calls, "one attempt, not two — that is the whole point of the flag").toBe(1);
+    // AND IT IS STILL DISCLOSED. What D-88 changed is which skips cost the verdict,
+    // never which are mentioned: a `passed` that quietly stopped naming t1 would be the
+    // silent downgrade this project exists to refuse.
     expect(store.unavailableChecks("r1").join("\n")).toContain("marked skip_if_quota");
   });
 
@@ -955,24 +961,24 @@ describe("the paths that only happen when something has gone wrong", () => {
       last = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type }).catch(() => undefined);
       if (last === undefined || !["escalate", "fastClean"].includes(last.decision.kind)) break;
     }
-    expect(last?.decision.kind, "the review reaches a verdict instead of dying").toBe("passedPartial");
-    expect(store.getReview("r1", "p")?.state).toBe("passed_partial");
-    // And the client is TOLD, in the channel it repeats to its user.
+    expect(last?.decision.kind, "the review reaches a verdict instead of dying").toBe("passed");
+    expect(store.getReview("r1", "p")?.state, "t2 and t3 read this code; t1 only made that cheaper (D-88)").toBe("passed");
+    // And the client is TOLD, in the channel it repeats to its user — a hung t1 is not a
+    // weaker verdict now, but it is still a fact about what this review did.
     const skipped = store.unavailableChecks("r1").join("\n");
     expect(skipped).toMatch(/could not answer on either attempt and was SKIPPED/);
-    expect(skipped, "one fewer independent vendor read this code").toMatch(/one fewer independent vendor/);
   });
 
-  // D-48: a tier nobody can pay for is stepped over, and the review finishes with
-  // what it could afford — as `passed_partial`, never `passed`. "We did everything we
-  // can" and "everything agrees" are different claims.
-  it("reaches passed_partial when a tier could not be paid for", async () => {
-    // t1 is unpayable; the deeper tiers still look and agree. "We did everything we
-    // can" is a different claim from "everything agrees", and only one is a pass.
+  // D-48 steps over a tier nobody can pay for; D-88 decides what that costs. A tier
+  // BELOW one that passed costs nothing, because the ladder is a gate and everything it
+  // would have read was read again by the tier above it.
+  it("still passes when a tier below the top one could not be paid for", async () => {
+    // t1 is unpayable; the deeper tiers still look and agree.
     const result = await toEnd(new Unpayable(["t1"]), { ...CODE_ARCH, t0: [] as const });
 
-    expect(result?.decision.kind).toBe("passedPartial");
-    expect(store.getReview("r1", "p")?.state).toBe("passed_partial");
+    // D-88: below a tier that passed, so it does not cost the verdict.
+    expect(result?.decision.kind).toBe("passed");
+    expect(store.getReview("r1", "p")?.state).toBe("passed");
     // The tier's own row says WHY, so the operator view cannot confuse it with a
     // tier that never started.
     const runs = store.db.prepare("SELECT outcome FROM tier_run WHERE review_id = 'r1'").all() as { outcome: string }[];

@@ -230,6 +230,26 @@ function anyTierRan(tiers: readonly Tier[], unavailable: readonly string[]): boo
   return tiers.some((t) => t.kind === "model" && !unavailable.includes(t.id));
 }
 
+/**
+ * The index of the dearest tier that actually answered, at or below the cursor.
+ *
+ * `-1` when none did, which is the only honest answer for a review whose every tier was
+ * unavailable — and callers must not read that as "tier 0 ran".
+ *
+ * This exists because the cursor is not the fact it looks like. `runRound` promotes a
+ * dead tier's work by calling `step` with `raised: []`, so a tier that FAILED arrives
+ * here indistinguishable from one that came back clean, except for its entry in
+ * `unavailable`. That entry is therefore the only trustworthy signal, and this is the one
+ * place that reads it.
+ */
+function highestThatRan(tiers: readonly Tier[], cursor: number, unavailable: readonly string[]): number {
+  for (let i = Math.min(cursor, tiers.length - 1); i >= 0; i--) {
+    const t = tiers[i];
+    if (t?.kind === "model" && !unavailable.includes(t.id)) return i;
+  }
+  return -1;
+}
+
 export type Decision =
   /** New findings. Report them; the next round resets to the first model tier. */
   | { readonly kind: "findings" }
@@ -368,12 +388,41 @@ export function step(input: StepInput): { readonly state: LadderState; readonly 
     // consequence is a comment.
     const skipped = base.unavailable;
     const sole = soleVendorOf(tiers, skipped);
+    // A TIER SKIPPED BELOW ONE THAT PASSED DOES NOT WEAKEN THE VERDICT (D-88).
+    //
+    // Vany: *"quota on t1 must allow to skip it and start t2. passing of t2 must make t1
+    // not needed."* The ladder is a gate — dearer tiers only see code the cheaper ones
+    // already passed — so a cheaper tier's work is *subsumed* by whatever ran above it.
+    // It made that work cheaper, not more certain, and charging the verdict for its
+    // absence said the opposite.
+    //
+    // I argued against this and was overruled; the argument is in `spec/review-ladder.md`
+    // §1 and the decision is D-88, both of which now carry it. What I got right is that
+    // one label for every skip was wrong either way: *"the cheap first pass did not run"*
+    // and *"nobody ran the adversarial tier"* printed identically.
+    //
+    // MEASURED AGAINST WHAT ACTUALLY RAN, not against the cursor. The cursor is NOT
+    // reliably a tier that answered: `runRound`'s promotion path calls `step` with
+    // `raised: []` after a tier FAILED, which arrives here as "clean at this tier" with
+    // that tier sitting in `unavailable`. Forgiving everything below the cursor would
+    // then forgive the top tier's own failure and call the review `passed` when nothing
+    // had read it at that level — INV-1, inverted, inside the change that relaxes the
+    // rule. So the pivot is the highest tier that is NOT unavailable.
+    const ranTo = highestThatRan(tiers, prev.cursor, skipped);
+    const above = skipped.filter((id) => {
+      const i = tiers.findIndex((t) => t.id === id);
+      return i > ranTo;
+    });
     return {
       state: { ...base, cursor: prev.cursor, ...(sole === undefined ? {} : { soleVendor: sole }) },
       decision:
-        skipped.length === 0 && sole === undefined
+        above.length === 0 && sole === undefined
           ? { kind: "passed" }
-          : { kind: "passedPartial", skipped, ...(sole === undefined ? {} : { soleVendor: sole }) },
+          : // `skipped`, not `above`: the client is still told every tier that did not
+            // run. What changed is which of them costs the verdict, never which of them
+            // is disclosed — a `passed` that quietly stopped mentioning t1 would be the
+            // silent downgrade this whole project exists to refuse.
+            { kind: "passedPartial", skipped, ...(sole === undefined ? {} : { soleVendor: sole }) },
     };
   }
 

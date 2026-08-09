@@ -174,12 +174,57 @@ describe("tiers nobody can pay for (D-48)", () => {
     expect(r.decision.kind).toBe("fastClean");
   });
 
-  // "We did everything we can" must never be reported as "every tier agreed".
-  it("reaches passedPartial, never passed, when a tier was skipped", () => {
+  /**
+   * A SKIP ABOVE THE TIER THAT PASSED still costs the verdict, and this is the half
+   * D-88 did not relax. Nothing read this code at t3's level, so "we did everything we
+   * can" is the honest claim and "every tier agreed" is not.
+   */
+  it("reaches passedPartial when the skipped tier was ABOVE the one that passed", () => {
     let s = markUnavailable(initialState(), "t3");
     s = step({ state: s, raised: [] }).state; // t1 -> t2
     const r = step({ state: s, raised: [] });
     expect(r.decision).toStrictEqual({ kind: "passedPartial", skipped: ["t3"] });
+  });
+
+  /**
+   * D-88. Vany: *"quota on t1 must allow to skip it and start t2. passing of t2 must
+   * make t1 not needed."*
+   *
+   * The ladder is a gate — dearer tiers only see code the cheaper ones already passed —
+   * so a cheaper tier's absence makes the review DEARER, not less certain. t2 and t3 read
+   * everything t1 would have, and they are two distinct vendors, so D-49 has nothing to
+   * say either.
+   */
+  it("reaches a full pass when the skipped tier was BELOW the ones that passed", () => {
+    // Walked to the end rather than stepped a fixed number of times: `markUnavailable`
+    // does not move the cursor, so how many steps this takes is an implementation detail
+    // and hard-coding it makes the test pass for the wrong reason when it changes.
+    let s = markUnavailable(initialState(), "t1");
+    let d = step({ state: s, raised: [] }).decision;
+    for (let i = 0; i < 6 && (d.kind === "fastClean" || d.kind === "escalate"); i++) {
+      const r = step({ state: s, raised: [] });
+      s = r.state;
+      d = r.decision;
+    }
+    expect(d.kind, "t2 and t3 read it, and they are two distinct vendors").toBe("passed");
+  });
+
+  /**
+   * THE TRAP UNDER D-88, and the reason the pivot is not the cursor.
+   *
+   * `runRound` promotes a dead tier's work by calling `step` with `raised: []`, so a tier
+   * that FAILED arrives here looking exactly like one that came back clean — except for
+   * its entry in `unavailable`. When that tier is the TOP one, the cursor sits on a tier
+   * that never answered, and forgiving everything at or below the cursor would forgive
+   * the failure itself and call the review `passed`. That is INV-1 inverted, inside the
+   * change that relaxes the rule.
+   */
+  it("does not forgive the top tier's own failure just because the cursor is on it", () => {
+    // Cursor 3 is t3, and t3 is what could not answer — the state `runRound` builds when
+    // it promotes a dead top tier.
+    const s = { ...markUnavailable(initialState(), "t3"), cursor: 3 };
+    const r = step({ state: s, raised: [] });
+    expect(r.decision.kind, "nothing read this code at t3's level").toBe("passedPartial");
   });
 
   it("still reaches a full pass when nothing was skipped", () => {

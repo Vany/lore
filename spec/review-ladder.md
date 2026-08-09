@@ -493,16 +493,64 @@ does not cover.
 ### 5.1 Tiers that cannot be paid for (D-48)
 
 A provider refusing on quota marks that tier **unavailable** and the ladder steps
-over it. When every tier that could run agrees, the outcome is `passed_partial`
-rather than `passed`: *we did everything we can*.
-
-This is not a softening of INV-1. The review *ran* — it simply ran shorter than
-configured, and the result says so in its own state, its own exit code, and its own
-attestation line. What INV-1 forbids is a review that did not run being reported as
-one that found nothing; a review that ran three of four tiers and says exactly that
-is the opposite of that failure.
+over it. Whether that costs the verdict depends on WHERE the tier sat — see §5.1.1.
 
 If **no** model tier could run, there is no review and it is a plain failure.
+
+### 5.1.1 A skip below a tier that passed costs nothing (D-88)
+
+Vany: *"quota on t1 must allow to skip it and start t2. passing of t2 must make t1 not
+needed."*
+
+**The ladder is a gate** — §1: dearer tiers only see code the cheaper ones already
+passed. So whatever a cheaper tier would have read, the tier above it read as well. Its
+absence made the review DEARER, not less certain, and charging the verdict for it said
+the opposite of what the gate structure means.
+
+A skip therefore lands in one of two places:
+
+| where the skipped tier sat | outcome | why |
+|---|---|---|
+| **below** the dearest tier that answered | does not prevent `passed` | its work was done again, above it |
+| **at or above** it | `passed_partial` | nothing read this code at that level |
+
+`soleVendor` (D-49) is unchanged and independent: if every tier that ran came from one
+vendor it is still `passed_partial`, however the skips lie.
+
+**The pivot is the dearest tier that ANSWERED, never the cursor.** `runRound` promotes a
+dead tier's work by calling `step` with no findings raised, so a tier that FAILED arrives
+at the decision looking exactly like one that came back clean — its entry in
+`unavailable` is the only difference. Reading the cursor would forgive the top tier's own
+failure and call the review `passed` when nothing had read it at that level: INV-1
+inverted, inside the change that relaxes the rule.
+
+**Every skipped tier is still disclosed**, on a `passed` exactly as on a
+`passed_partial` — `checks_skipped` names it, the operator view lists it, and the
+attestation names only the tiers that read the signed tree. What D-88 changed is which
+skips cost the verdict, never which are mentioned. A `passed` that quietly stopped naming
+a tier it did not run would be the silent downgrade this project exists to refuse.
+
+**This overruled an argument, and the argument is kept because it may age better than the
+decision.** I put two objections and Vany decided against both:
+
+1. *The ladder is not ordered by capability.* §1 says so in its own words — the
+   intercepts are 51 / 57 / 59, and K3 is kept at 3× the price of GPT-5.6 Terra for two
+   fewer points **because it buys a third vendor**. If tiers were a capability ordering,
+   t2 would not be in the ladder at all.
+2. *Our own findings do not look like a subset relation.* All time: t2 raised 111
+   findings with 3 high or critical, **t1 raised 95 with 13** — the largest source of
+   high-severity model findings in the system. The confound is real and unresolvable from
+   this data: the ladder is a gate, so t1 goes first and its findings are fixed before t2
+   ever sees that code. The numbers refute *"t1 is obviously redundant"*; they cannot
+   prove *"t1 is necessary."*
+
+What survives from that exchange regardless of who was right: one label for every skip
+was wrong either way. *"The cheap first pass did not run"* and *"nobody ran the
+adversarial tier"* printed identically, and now do not.
+
+This is not a softening of INV-1. The review *ran*, and the result says exactly which
+tiers read the tree — in its state, its exit code and its attestation. What INV-1 forbids
+is a review that did not run being reported as one that found nothing.
 
 Four independent bounds guarantee termination:
 

@@ -13,9 +13,9 @@
  *
  * COLOUR IS LOAD-BEARING HERE, and there is one rule it must never break:
  * **`passed_partial` is not green.** It is the state most likely to be misread as a
- * pass — every tier that could run agreed, but a tier was skipped or every tier came
- * from one vendor (D-48, D-49). Green would undo in one glance what the whole
- * escalation ladder exists to say.
+ * pass — every tier that could run agreed, but a tier ABOVE the one that passed was
+ * skipped, or every tier that ran came from one vendor (D-48, D-49, D-88). Green would
+ * undo in one glance what the whole escalation ladder exists to say.
  *
  *   node src/ops/status.ts             every open review
  *   node src/ops/status.ts <review_id> one review, in full
@@ -55,7 +55,7 @@ const magenta = c("35");
  */
 const STATE_STYLE: Readonly<Record<string, { paint: (s: string) => string; mark: string; note: string }>> = {
   passed: { paint: green, mark: "✔", note: "every tier agreed" },
-  passed_partial: { paint: yellow, mark: "◑", note: "NOT a pass — a tier was skipped, or one vendor reviewed it all" },
+  passed_partial: { paint: yellow, mark: "◑", note: "NOT a pass — a tier ABOVE the one that passed never ran, or one vendor reviewed it all" },
   fast_clean: { paint: yellow, mark: "◔", note: "NOT a pass — only the cheap tiers are done" },
   findings_ready: { paint: cyan, mark: "●", note: "findings are waiting for you" },
   awaiting_diff: { paint: cyan, mark: "○", note: "waiting for your fixes" },
@@ -206,12 +206,28 @@ export function renderStatus(db: DatabaseSync, reviewId?: string, dataDir = "/va
     }
 
     // The single most important line, so it is its own line and not a colour on a
-    // cell someone might not look at. `unavailable` is what D-48 records when nobody
-    // could pay for a tier, and a review that reached its end with entries here is
-    // "we did everything we can", never "everything agreed".
+    // cell someone might not look at. `unavailable` is what D-48 records when a tier
+    // could not answer.
+    //
+    // TWO SENTENCES SINCE D-88, because a skip means two different things and one of
+    // them is not bad news. "that code is unreviewed" was true of every skip only while
+    // any skip forbade a pass; now a tier below one that PASSED had its work done again
+    // by the tier above it, and printing it in red as unreviewed code would send an
+    // operator hunting a gap that is not there. A skip with nothing above it still is
+    // one, and keeps the red.
+    //
+    // Both are still SHOWN. What changed is what the line claims, never whether the
+    // fact appears — a verdict that quietly stopped naming a tier it did not run would
+    // be the silent downgrade this whole view exists to prevent.
     const skipped = ladder.unavailable ?? [];
     if (skipped.length > 0) {
-      out.push(`    ${red(`✘ ${skipped.length} tier(s) never ran: ${skipped.join(", ")}`)} ${dim("— that code is unreviewed")}`);
+      const state = String(r["state"]);
+      const covered = state === "passed";
+      out.push(
+        covered
+          ? `    ${dim(`· ${skipped.length} tier(s) did not run: ${skipped.join(", ")} — below a tier that passed, so their work was done again above them (D-88)`)}`
+          : `    ${red(`✘ ${skipped.length} tier(s) never ran: ${skipped.join(", ")}`)} ${dim("— that code is unreviewed at their level")}`,
+      );
     }
     if (ladder.soleVendor !== undefined) {
       out.push(`    ${yellow(`◑ every tier that ran was ${ladder.soleVendor}`)} ${dim("— one opinion asked repeatedly, not independent reviews (D-49)")}`);
