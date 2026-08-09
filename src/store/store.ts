@@ -2474,16 +2474,24 @@ export class Store {
   }
 
   /** Every tier currently in a cool-off, for the operator view. */
-  unavailableTiers(nowIso: string): readonly { readonly tier: string; readonly until: string; readonly why: string }[] {
+  unavailableTiers(
+    nowIso: string,
+  ): readonly { readonly tier: string; readonly until: string; readonly why: string; readonly stated: boolean }[] {
     const rows = this.db
       .prepare("SELECT key, value FROM meta WHERE key LIKE 'tier-unavailable:%'")
       .all() as Record<string, string>[];
-    const out: { tier: string; until: string; why: string }[] = [];
+    const out: { tier: string; until: string; why: string; stated: boolean }[] = [];
     for (const r of rows) {
       const tier = (r["key"] ?? "").slice("tier-unavailable:".length);
       try {
-        const v = JSON.parse(r["value"] ?? "{}") as { until?: string; why?: string };
-        if ((v.until ?? "") > nowIso) out.push({ tier, until: v.until ?? "", why: v.why ?? "" });
+        const v = JSON.parse(r["value"] ?? "{}") as { until?: string; why?: string; stated?: boolean };
+        // `stated` TRAVELS, because the two marks mean different things to a reader: a
+        // provider's word stops reviews calling the tier, our own guess stops only the
+        // background screen. A field named `tiers_not_being_asked` that carried both was
+        // telling a monitor reviews were degraded when they were not.
+        if ((v.until ?? "") > nowIso) {
+          out.push({ tier, until: v.until ?? "", why: v.why ?? "", stated: v.stated === true });
+        }
       } catch {
         // See `tierUnavailable`: an unparseable row is treated as absent.
       }

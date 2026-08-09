@@ -163,19 +163,31 @@ export function renderStatus(db: DatabaseSync, reviewId?: string, dataDir = "/va
   for (const d of downRows) {
     let until = "";
     let why = "";
+    let stated = false;
     try {
-      const v = JSON.parse(String(d["value"] ?? "{}")) as { until?: string; why?: string };
+      const v = JSON.parse(String(d["value"] ?? "{}")) as { until?: string; why?: string; stated?: boolean };
       until = v.until ?? "";
       why = v.why ?? "";
+      stated = v.stated === true;
     } catch {
       // An unparseable mark is treated as absent, exactly as the store treats it.
     }
     if (until <= nowIso) continue;
     const tier = String(d["key"] ?? "").slice("tier-unavailable:".length);
+    // TWO MARKS, TWO CONSEQUENCES, and one banner used to claim the stronger one for
+    // both. Only a time the PROVIDER STATED stops a review calling the tier (D-90); a
+    // backoff the background screen guessed bounds the screen alone, and reviews go on
+    // asking. Printing "reviews step over it" for a guess told an operator their reviews
+    // were degraded when they were not — and would have sent them hunting a coverage gap
+    // that does not exist.
     out.push(
-      `${red(`✘ ${tier} IS NOT BEING ASKED`)} ${dim(`until ${until.slice(0, 19)}Z — ${why}.`)}`,
-      `  ${dim("it stopped answering, so lore stopped calling it (D-90). Reviews step over it and say so;")}`,
-      `  ${dim("the knowledge screen waits. It is retried automatically, and one success clears this.")}`,
+      stated
+        ? `${red(`✘ ${tier} IS NOT BEING ASKED`)} ${dim(`until ${until.slice(0, 19)}Z — ${why}.`)}`
+        : `${yellow(`◔ ${tier} is rested by the knowledge screen`)} ${dim(`until ${until.slice(0, 19)}Z — ${why}.`)}`,
+      stated
+        ? `  ${dim("the provider named that time, so reviews step over the tier and say so; the screen waits too.")}`
+        : `  ${dim("this is lore's own guess, not the provider's word — REVIEWS STILL CALL THIS TIER normally.")}`,
+      `  ${dim("It is retried automatically, and one success clears this.")}`,
       "",
     );
   }

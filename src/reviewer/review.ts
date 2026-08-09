@@ -399,7 +399,11 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     }
   }
 
-  const t0ForTier = { ...t0, findings: t0Findings, unavailable: [...carriedForTier, ...new Set(silencedForTier)] };
+  // DEDUPED ACROSS THE JOIN, not within the fresh half. The Set wrapped only the newly
+  // built notices, so a reused round re-appended the identical sentence to a list that
+  // already carried it — and then STORED the result for the next round to carry, so the
+  // same disclosure grew by one copy per round for the life of the review.
+  const t0ForTier = { ...t0, findings: t0Findings, unavailable: [...new Set([...carriedForTier, ...silencedForTier])] };
   t0 = { ...t0, findings: t0Findings, unavailable: [...t0.unavailable, ...new Set(silenced)] };
 
   store.closeTierRun(
@@ -742,6 +746,16 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     // worth of latency each time. A failure that named no time stays local to this
     // review — `skip_if_quota` already spends only one attempt on it — because a guess
     // imposed on other reviews would decide their coverage from evidence they never saw.
+    // lore-ok[d887094d]: right, and fixed one layer in rather than here. This write is
+    // the FAILURE path — the tier could not answer and nothing rescued it — and it is
+    // still correct for that case, which is why the line the finding named has not moved.
+    // What was missing is the other case: a fallback that SUCCEEDS never reaches this
+    // catch, so the reset time it had just learned was dropped, D-90's stated-skip never
+    // engaged, and every later review re-paid the rediscovery.
+    //
+    // The recording now happens where the fact arrives — in the fallback's own catch,
+    // beside the decision to use the twin — so it is kept whether or not the round that
+    // learned it goes on to succeed. Both paths write it; neither depends on the other.
     if (e instanceof Exhausted && e.resetAt !== undefined) {
       const { until } = retryAt(Date.now(), 1, e.resetAt);
       store.markTierUnavailable(tier.id, until, `the provider said its limit resets then`, 1, true);

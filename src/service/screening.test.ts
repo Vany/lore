@@ -151,11 +151,37 @@ describe("the cool-off after a tier stops answering", () => {
     const store = new Store(":memory:");
     const future = new Date(Date.now() + 60_000).toISOString();
     store.markTierUnavailable("t1", future, "3 consecutive screen call(s) went unanswered", 3);
+    // `stated: false` — this mark is lore's own backoff, so reviews still call the tier.
+    // The flag travels because the name `tiers_not_being_asked` is true only for the
+    // other kind, and a monitor cannot infer which it has.
     expect(store.unavailableTiers(new Date().toISOString())).toStrictEqual([
-      { tier: "t1", until: future, why: "3 consecutive screen call(s) went unanswered" },
+      { tier: "t1", until: future, why: "3 consecutive screen call(s) went unanswered", stated: false },
     ]);
     store.markTierUnavailable("t1", new Date(Date.now() - 60_000).toISOString(), "over", 3);
     expect(store.unavailableTiers(new Date().toISOString())).toStrictEqual([]);
+    store.close();
+  });
+});
+
+/**
+ * The operator views must not flatten a provider's word into lore's own guess.
+ *
+ * Only a STATED time stops a review calling the tier (D-90); a backoff the background
+ * screen guessed bounds the screen alone. One banner claimed the stronger consequence for
+ * both, which would send an operator hunting a coverage gap that does not exist.
+ */
+describe("what the operator is told about a rested tier", () => {
+  it("carries whether the provider said so, or lore guessed", () => {
+    const store = new Store(":memory:");
+    const soon = new Date(Date.now() + 60_000).toISOString();
+    store.markTierUnavailable("t1", soon, "the provider said its limit resets then", 1, true);
+    store.markTierUnavailable("t2", soon, "2 screen call(s) went unanswered", 2, false);
+
+    const seen = store.unavailableTiers(new Date().toISOString());
+    const by = new Map(seen.map((t) => [t.tier, t]));
+
+    expect(by.get("t1")?.stated, "the provider named this — reviews step over it").toBe(true);
+    expect(by.get("t2")?.stated, "our own guess — reviews still call this tier").toBe(false);
     store.close();
   });
 });

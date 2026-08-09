@@ -598,10 +598,15 @@ export class Reviewer implements ReviewerLike {
    * message, and reporting it as a ladder misconfiguration would send an operator to edit
    * a tiers file that is perfectly correct.
    */
-  async missingModels(ids: readonly string[]): Promise<readonly string[]> {
+  async missingModels(ids: readonly string[]): Promise<readonly string[] | undefined> {
     const res = await this.client.config.providers().catch(() => undefined);
     const providers = res?.data?.providers ?? [];
-    if (providers.length === 0) return [];
+    // `undefined` IS NOT AN EMPTY LIST. Returning `[]` here collapsed "opencode was
+    // unreachable" and "the response was not the shape we expect" into the same value as
+    // "every fallback is present" — and the caller then announced the fallback ready,
+    // which is INV-1 in the one line an operator reads to believe it. A check that did
+    // not run must never report as a check that found nothing.
+    if (providers.length === 0) return undefined;
     const known = new Set<string>();
     for (const p of providers) for (const id of Object.keys(p.models ?? {})) known.add(`${p.id}/${id}`);
     return ids.filter((id) => !known.has(id));

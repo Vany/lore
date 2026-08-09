@@ -199,6 +199,11 @@ async function handle(
           // answering, lore backs off, and from outside the service just looks sluggish.
           // Empty is the healthy case and stays in the payload, because a key that
           // disappears when things are fine teaches a monitor to ignore its absence.
+          // `stated` on each entry, because the two marks are not the same claim. A time
+          // the PROVIDER named stops reviews calling that tier; a backoff lore guessed
+          // bounds only the background screen, and reviews go on asking normally. A
+          // monitor reading the name alone would report degraded coverage that is not
+          // happening — which is why the flag travels rather than the reader inferring.
           tiers_not_being_asked: store.unavailableTiers(new Date().toISOString()),
           uncollected: uncollectedFindings(store),
           active: activeReviews(store),

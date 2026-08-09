@@ -302,7 +302,17 @@ export async function serve(cfg: ServiceConfig): Promise<() => void> {
   void (async () => {
     const wanted = [...new Set(loadTiers().flatMap((t) => (t.fallback === undefined ? [] : [t.fallback])))];
     if (wanted.length === 0) return;
-    const missing = await reviewer.missingModels(wanted).catch(() => [] as readonly string[]);
+    const missing = await reviewer.missingModels(wanted).catch(() => undefined);
+    if (missing === undefined) {
+      // NOT "ready". opencode was unreachable or answered a shape we do not know, so
+      // nothing was verified — and saying "ready" here would be the one claim this check
+      // exists to make trustworthy, made without evidence.
+      console.error(
+        `lore: could not verify the quota fallback (${wanted.join(", ")}) — opencode did not answer with a ` +
+          "provider list. The ladder is unaffected; whether the fallback would work is UNKNOWN, not confirmed.",
+      );
+      return;
+    }
     if (missing.length === 0) {
       console.error(`lore: quota fallback ready — ${wanted.join(", ")}`);
       return;
