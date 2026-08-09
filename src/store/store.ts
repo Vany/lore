@@ -693,10 +693,44 @@ export class Store {
    * has no other way to learn that `tsc` or the suite never executed — and a check
    * that did not run must never read as a check that found nothing (INV-1).
    */
-  closeTierRun(id: number, outcome: TierOutcome, unavailable: readonly string[] = [], treeHash?: string): void {
+  closeTierRun(
+    id: number,
+    outcome: TierOutcome,
+    unavailable: readonly string[] = [],
+    treeHash?: string,
+    /**
+     * The same list as the REVIEWER is shown, when the two differ (D-83).
+     *
+     * They differ for one reason and it matters: a suppression notice tells the client
+     * which development rule silenced a check AND quotes it, while the reviewer is told a
+     * check was silenced and never what the rule says. Storing only the client's was
+     * harmless while every round recomputed both — and became a standing injection once a
+     * round could REUSE a stored t0 (D-92), because the reused text feeds `renderT0` and
+     * from there every later model prompt.
+     *
+     * Absent means the two are the same, which is true of every tier but t0.
+     */
+    unavailableForTier?: readonly string[],
+  ): void {
     this.db
-      .prepare("UPDATE tier_run SET outcome = ?, unavailable = ?, tree_hash = ?, finished_at = ? WHERE id = ?")
-      .run(outcome, unavailable.length > 0 ? unavailable.join("\n") : null, n(treeHash), now(), id);
+      .prepare(
+        "UPDATE tier_run SET outcome = ?, unavailable = ?, unavailable_for_tier = ?, tree_hash = ?, finished_at = ? WHERE id = ?",
+      )
+      .run(
+        outcome,
+        unavailable.length > 0 ? unavailable.join("\n") : null,
+        // NULL AND EMPTY STRING MEAN DIFFERENT THINGS HERE, and collapsing them was
+        // wrong. NULL is "nobody recorded a reviewer-facing list" — an old row, or a tier
+        // other than t0, where the two audiences are identical and the client's list is
+        // the right fallback. `""` is a recorded answer meaning "nothing to tell the
+        // reviewer", which must NOT fall back to a client list that may quote a rule.
+        // SQLite hands both back as a property of the row, so `undefined` cannot separate
+        // them; the value has to.
+        unavailableForTier === undefined ? null : unavailableForTier.join("\n"),
+        n(treeHash),
+        now(),
+        id,
+      );
   }
 
   /**
@@ -782,18 +816,31 @@ export class Store {
    * engine that could not run is a check nobody made — and it must survive into the round
    * that reuses the result, or reusing would quietly drop it.
    */
-  lastT0(reviewId: string): { readonly treeHash: string; readonly unavailable: readonly string[] } | undefined {
+  lastT0(reviewId: string): {
+    readonly treeHash: string;
+    readonly unavailable: readonly string[];
+    readonly unavailableForTier: readonly string[];
+  } | undefined {
     const row = this.db
       .prepare(
-        `SELECT tree_hash, unavailable FROM tier_run
+        `SELECT tree_hash, unavailable, unavailable_for_tier FROM tier_run
          WHERE review_id = ? AND tier = 't0' AND finished_at IS NOT NULL AND tree_hash IS NOT NULL
          ORDER BY id DESC LIMIT 1`,
       )
       .get(reviewId) as Record<string, string | null> | undefined;
     const treeHash = row?.["tree_hash"];
     if (treeHash === undefined || treeHash === null) return undefined;
-    const raw = row?.["unavailable"] ?? "";
-    return { treeHash, unavailable: raw.split("\n").filter((l) => l.length > 0) };
+    const lines = (v: string | null | undefined): readonly string[] => (v ?? "").split("\n").filter((l) => l.length > 0);
+    const client = lines(row?.["unavailable"]);
+    // NULL FALLS BACK, EMPTY DOES NOT. Null is a row nobody recorded a reviewer-facing
+    // list for — written before the split, or by a tier where the two audiences are the
+    // same — and the client's list is then the honest answer. An empty string is a
+    // recorded "nothing to tell the reviewer", and falling back there would put a client
+    // list that may quote a development rule into a model prompt, which is the whole
+    // defect this split exists to close.
+    const stored = row?.["unavailable_for_tier"] ?? null;
+    const forTier = stored === null ? client : lines(stored);
+    return { treeHash, unavailable: client, unavailableForTier: forTier };
   }
 
   unavailableChecks(reviewId: string): readonly string[] {

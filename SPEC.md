@@ -1629,6 +1629,16 @@ fingerprints for the deduplicator to drop. What does **not** survive by itself i
 `unavailable` — an engine that could not run is a check nobody made — so it is carried
 forward explicitly, and a test holds it there.
 
+**And it is carried forward PER AUDIENCE.** `unavailable` has two versions: the client's
+quotes the development rule an accepted appeal cited, the reviewer's says a check was
+silenced and never what the rule says (D-83). Only the client's was ever stored, which was
+harmless while every round recomputed both — and became a **standing prompt injection**
+the moment a round could reuse a stored t0, because the reused text feeds `renderT0` and
+`renderT0` is in every model prompt for every later round. One accepted appeal would have
+put its rule into that repository's reviews for ever. `tier_run.unavailable_for_tier`
+holds the reviewer's version; NULL there means *nobody recorded one* and falls back to the
+client's, while an empty string means *nothing to tell the reviewer* and does not.
+
 **The pattern engines see the branch, not the repository.** semgrep and ast-grep match one
 file at a time, so scanning a monorepo to review a ten-file branch is the same answer for
 more money — and it drops the inherited matches in untouched code that D-68 already ranks

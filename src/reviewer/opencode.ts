@@ -74,8 +74,20 @@ export function quotaRefusal(status: OpencodeStatus): { readonly message: string
   // direction, and it self-corrects: the tier is retried after it, succeeds, and the mark
   // is cleared. Reading it the other way would mean one more 45-minute hang, which is the
   // cost this whole change exists to remove.
-  const resetAt = at?.[1] === undefined ? undefined : new Date(`${at[1].replace(" ", "T")}Z`).toISOString();
-  return resetAt === undefined ? { message } : { message, resetAt };
+  // A DATE SHAPE IS NOT A DATE, and `toISOString()` on an invalid one THROWS.
+  //
+  // `\d{4}-\d{2}-\d{2}` matches `2026-13-45 99:99:99` perfectly well. That RangeError
+  // would be thrown inside the watcher, from inside the event loop's deliberately silent
+  // catch — so the abort would never fire, the stream would quietly reconnect, and the
+  // call would wait out the full 2700s. The exact hang this function exists to remove,
+  // reintroduced through its own parser, and invisible.
+  //
+  // `retryAt` in `core/cooloff.ts` already treats this input as untrusted and has a test
+  // for an unparseable time. That care belonged here too — at the parse site that runs
+  // first, where a throw has somewhere much worse to land.
+  const parsed = at?.[1] === undefined ? Number.NaN : Date.parse(`${at[1].replace(" ", "T")}Z`);
+  if (Number.isNaN(parsed)) return { message };
+  return { message, resetAt: new Date(parsed).toISOString() };
 }
 
 export interface ReviewerConfig {
@@ -389,7 +401,15 @@ export class Reviewer implements ReviewerLike {
             const id = e.properties?.sessionID;
             const status = e.properties?.status;
             if (id === undefined || status === undefined) continue;
-            this.watchers.get(id)?.(status);
+            // GUARDED, because a watcher that throws lands in the silent catch below,
+            // ends the `for await`, and reconnects — losing every other session's events
+            // for two seconds and telling nobody. A watcher's job is to fail ONE call
+            // fast; it must not be able to blind the stream for all of them.
+            try {
+              this.watchers.get(id)?.(status);
+            } catch (e) {
+              console.error(`[lore:log] a session watcher threw: ${e instanceof Error ? e.message : String(e)}`);
+            }
           }
         } catch {
           // Deliberately silent and deliberately not fatal. This is an optimisation: with

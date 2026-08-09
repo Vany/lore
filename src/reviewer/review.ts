@@ -310,10 +310,27 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   });
   // `unavailable` reaches the CLIENT, through `unavailableChecks`; `t0ForTier` is what
   // `renderT0` turns into prompt text a few lines below.
-  const t0ForTier = { ...t0, findings: t0Findings, unavailable: [...t0.unavailable, ...new Set(silencedForTier)] };
+  // THE REUSED ROUND MUST NOT HAND THE CLIENT'S TEXT TO A MODEL.
+  //
+  // `t0.unavailable` is the client's list and quotes the development rule an accepted
+  // appeal cited; `t0ForTier` is the reviewer's and deliberately does not (D-83, and the
+  // comment above `silenced`). When t0 is REUSED the list comes back out of the database,
+  // and only the client's was ever stored — so the reused round fed the rule's text
+  // straight into `renderT0`, which is in every model prompt for every later round. One
+  // accepted appeal would have become a standing injection into that repository's reviews,
+  // which is the exact failure the split exists to prevent, reintroduced by an
+  // optimisation that never looked at what it was copying.
+  const carriedForTier = reuseT0 ? previousT0?.unavailableForTier ?? [] : t0.unavailable;
+  const t0ForTier = { ...t0, findings: t0Findings, unavailable: [...carriedForTier, ...new Set(silencedForTier)] };
   t0 = { ...t0, findings: t0Findings, unavailable: [...t0.unavailable, ...new Set(silenced)] };
 
-  store.closeTierRun(t0RunId, t0.findings.length > 0 ? "findings" : "clean", t0.unavailable, roundTree);
+  store.closeTierRun(
+    t0RunId,
+    t0.findings.length > 0 ? "findings" : "clean",
+    t0.unavailable,
+    roundTree,
+    t0ForTier.unavailable,
+  );
 
   // 3. Justifications proposed since last round.
   // The changed files PLUS every file that already has an open finding.

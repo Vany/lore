@@ -1173,3 +1173,46 @@ describe("t0 on a tree that has not moved", () => {
     for (const row of rows) expect(row.unavailable ?? "").toContain("eslint: no config");
   });
 });
+
+/**
+ * A REUSED t0 MUST NOT HAND THE CLIENT'S TEXT TO A MODEL (D-83 × D-92).
+ *
+ * The client's `unavailable` quotes the development rule an accepted appeal cited; the
+ * reviewer's says a check was silenced and never what the rule says — `knowledge_teach`
+ * promises exactly that, and a rule's text reaches a tier only with the appeal citing it.
+ *
+ * Both were recomputed every round, so one column held only the client's version and
+ * nothing noticed. Reusing a stored t0 (D-92) then read that column back into `renderT0`,
+ * which is in every model prompt for every later round: one accepted appeal would have
+ * become a standing injection into that repository's reviews for ever.
+ */
+describe("what a reused t0 tells a reviewer", () => {
+  it("carries the reviewer's list forward, not the client's", async () => {
+    const CLIENT = 'X was NOT reported at a.ts — t1 accepted an appeal to rule abc ("never do Y") on 2026-08-09';
+    const TIER = "X was NOT reported at a.ts — an appeal to a development rule was accepted";
+    const t0RunId = store.openTierRun("r1", "t0", 1, new Date().toISOString());
+    store.closeTierRun(t0RunId, "clean", [CLIENT], "tree-1", [TIER]);
+
+    const back = store.lastT0("r1");
+
+    expect(back?.unavailable, "the audit trail keeps the whole reason").toStrictEqual([CLIENT]);
+    expect(back?.unavailableForTier, "the prompt gets the fact without the rule").toStrictEqual([TIER]);
+    expect(back?.unavailableForTier.join(" "), "the rule's own words never travel").not.toContain("never do Y");
+  });
+
+  /**
+   * A row written before the split existed has no tier-facing column, and the honest
+   * reading is "the two were the same" — those rows predate t0 reuse, so nothing feeds
+   * them to a model. An EMPTY tier list is a real answer and must not be confused with an
+   * absent one, or every reused round would silently fall back to the client's text.
+   */
+  it("tells an absent column from an empty one", async () => {
+    const old = store.openTierRun("r1", "t0", 1, new Date().toISOString());
+    store.closeTierRun(old, "clean", ["eslint: no config"], "tree-old");
+    expect(store.lastT0("r1")?.unavailableForTier).toStrictEqual(["eslint: no config"]);
+
+    const fresh = store.openTierRun("r1", "t0", 2, new Date().toISOString());
+    store.closeTierRun(fresh, "clean", ["eslint: no config"], "tree-new", []);
+    expect(store.lastT0("r1")?.unavailableForTier, "nothing to tell the reviewer is an answer").toStrictEqual([]);
+  });
+});

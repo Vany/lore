@@ -1069,3 +1069,26 @@ describe("a quota refusal on the event stream", () => {
     r.close();
   });
 });
+
+/**
+ * A DATE SHAPE IS NOT A DATE, and this one runs inside the event watcher.
+ *
+ * `\d{4}-\d{2}-\d{2}` matches `2026-13-45 99:99:99`, and `toISOString()` on an invalid
+ * Date THROWS. That RangeError would be raised inside the watcher, from inside the stream
+ * loop's deliberately silent catch — so the abort would never fire, the stream would
+ * quietly reconnect, and the call would wait out the full 2700s. The exact hang D-91
+ * removes, reintroduced through its own parser, and invisible while it happened.
+ */
+describe("a refusal whose reset time is malformed", () => {
+  it("still classifies the refusal, and names no time", () => {
+    const r = quotaRefusal({ type: "retry", message: "Limit Exhausted. Your limit will reset at 2026-13-45 99:99:99" });
+    expect(r?.message, "the refusal is real whatever the date says").toContain("Limit Exhausted");
+    expect(r?.resetAt, "an unparseable time is no time, never a thrown error").toBeUndefined();
+  });
+
+  it("does not throw for any date-shaped nonsense", () => {
+    for (const t of ["0000-00-00 00:00:00", "9999-99-99 99:99:99", "2026-02-30 12:00:00"]) {
+      expect(() => quotaRefusal({ type: "retry", message: `quota exceeded, resets at ${t}` })).not.toThrow();
+    }
+  });
+});
