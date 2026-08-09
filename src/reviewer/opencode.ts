@@ -1145,6 +1145,14 @@ export async function usageFromMessages(res: unknown): Promise<Usage | undefined
   let input = 0;
   let cached = 0;
   let output = 0;
+  // SUMMED, not hard-zeroed. This returned `cost: 0` on the reasoning that every provider
+  // here bills a flat subscription and reports nothing — true until D-93 put a METERED
+  // provider on the fallback path. The daily ceiling sums `cost_usd`, so a failed metered
+  // call recorded with a zero contributed exactly nothing to the only guard against
+  // runaway spend, which is precisely the row it was added to make visible. A provider
+  // that genuinely reports nothing still sums to zero, so the subscription case is
+  // unchanged.
+  let cost = 0;
   for (const r of rows) {
     if (r.info?.role !== "assistant") continue;
     const t = r.info.tokens ?? {};
@@ -1152,9 +1160,10 @@ export async function usageFromMessages(res: unknown): Promise<Usage | undefined
     input += Number(t["input"] ?? 0);
     output += Number(t["output"] ?? 0);
     cached += Number(cache["read"] ?? 0) + Number(cache["write"] ?? 0);
+    cost += Number((r.info as { cost?: unknown }).cost ?? 0);
   }
   if (input + cached + output === 0) return undefined;
-  return { input, cached, output, cost: 0 };
+  return { input, cached, output, cost: Number.isFinite(cost) ? cost : 0 };
 }
 
 interface Usage {

@@ -740,6 +740,15 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
           stillWanted,
         );
       } catch (twin) {
+        // A CANCEL IS NOT A PROVIDER FAULT, and must not be laundered into one.
+        //
+        // "Never worse than no fallback" is a rule about the PROVIDER failing. When a
+        // cancel lands while the twin is in flight — or queued at the gate — the twin
+        // throws because the review ended, and rethrowing the primary's `Exhausted`
+        // instead sent that through D-48's step-over, which writes the ladder's state
+        // over the `cancelled` the client was just told it got. The review came back to
+        // life and the worker enqueued its next round.
+        if (!stillWanted()) throw twin;
         console.error(
           `[lore:log] ${reviewId}: the fallback ${tier.fallback} failed too — ` +
             `${twin instanceof Error ? twin.message : String(twin)}`,
@@ -751,7 +760,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
         // tokens were dropped entirely. The twin is the metered one: a failed fallback
         // burned real money that no `usage` row recorded, which left the round-boundary
         // ceiling blind to exactly the runaway shape it is the only guard against.
-        const twinSpent = (twin as { spent?: { input: number; cached: number; output: number } }).spent;
+        const twinSpent = (twin as { spent?: { input: number; cached: number; output: number; cost: number } }).spent;
         if (twinSpent !== undefined) {
           store.recordUsage({
             repoId: review.repoId,
@@ -761,7 +770,10 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
             inputTokens: twinSpent.input,
             cachedTokens: twinSpent.cached,
             outputTokens: twinSpent.output,
-            costUsd: 0,
+            // WHAT THE PROVIDER SAID IT COST. Recorded as a hard zero, this row could not
+            // move the ceiling that sums `cost_usd` — so the guard stayed blind to the
+            // metered spend the row exists to expose.
+            costUsd: twinSpent.cost,
             outcome: "failed",
           });
         }
@@ -826,7 +838,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       const { until } = retryAt(Date.now(), 1, e.resetAt);
       store.markTierUnavailable(tier.id, until, `the provider said its limit resets then`, 1, true);
     }
-    const spent = (e as { spent?: { input: number; cached: number; output: number } }).spent;
+    const spent = (e as { spent?: { input: number; cached: number; output: number; cost: number } }).spent;
     if (spent !== undefined) {
       store.recordUsage({
         repoId: review.repoId,
@@ -836,7 +848,9 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
         inputTokens: spent.input,
         cachedTokens: spent.cached,
         outputTokens: spent.output,
-        costUsd: 0,
+        // Whatever the provider reported, which is zero for every flat subscription and
+        // real for a metered one — the number the daily ceiling sums.
+        costUsd: spent.cost,
         // The row says the call did NOT succeed, so a reader cannot mistake recovered
         // spend for a completed review.
         outcome: "failed",

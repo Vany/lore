@@ -16,7 +16,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { Exhausted } from "../core/errors.ts";
+import { DidNotRun, Exhausted } from "../core/errors.ts";
 import type { Tier } from "../core/ladder.ts";
 import { fingerprint } from "../core/fingerprint.ts";
 import { initialState, ladderFingerprint } from "../core/ladder.ts";
@@ -1433,6 +1433,62 @@ describe("falling back to a metered twin", () => {
     expect(row?.["model"], "attributed to the twin, which is the metered one").toBe("openrouter/twin");
     expect(row?.["c"]).toBe(250_000);
     expect(row?.["outcome"], "and marked failed, so it cannot read as a completed round").toBe("failed");
+  });
+
+  /**
+   * A CANCEL MUST NOT BE LAUNDERED INTO A PROVIDER FAULT.
+   *
+   * "Never worse than no fallback" is a rule about the PROVIDER failing. A cancel landing
+   * while the twin is in flight makes the twin throw because the review ended — and
+   * rethrowing the primary's `Exhausted` sent that through D-48's step-over, which writes
+   * the ladder's state over the `cancelled` the client was just told it got. The review
+   * came back to life and the worker enqueued its next round.
+   */
+  it("lets a cancel through instead of resurrecting the review", async () => {
+    const type = withFallback("openrouter/twin");
+    const primary = type.tiers.find((t) => t.id === "t1")?.model ?? "";
+    class CancelledMidFallback implements ReviewerLike {
+      async review(tier: Tier): Promise<ReviewerResult> {
+        if (tier.model === primary) throw new Exhausted("primary is out");
+        // The client cancels while the twin is in flight.
+        store.updateReview("r1", { state: "cancelled" });
+        throw new DidNotRun("review r1 was ended while this call waited for a provider slot");
+      }
+    }
+
+    await runRound({ store, reviewer: new CancelledMidFallback(), reviewId: "r1", principal: "p", worktree: dir, type }).catch(
+      () => undefined,
+    );
+
+    expect(store.getReview("r1", "p")?.state, "a cancelled review stays cancelled").toBe("cancelled");
+  });
+
+  // A failed twin's spend has to be a number the ceiling can add up. Recorded as a hard
+  // zero, the row could not move the only guard against runaway metered spend — which is
+  // the entire reason the row exists.
+  it("records what the provider said the failed twin cost", async () => {
+    const type = withFallback("openrouter/twin");
+    const primary = type.tiers.find((t) => t.id === "t1")?.model ?? "";
+    class TwinCostsThenDies implements ReviewerLike {
+      async review(tier: Tier): Promise<ReviewerResult> {
+        if (tier.model === primary) throw new Exhausted("primary is out");
+        if (tier.model === "openrouter/twin") {
+          const e = new Error("opencode ran past 2700s") as Error & { spent?: Record<string, number> };
+          e.spent = { input: 1_000, cached: 250_000, output: 500, cost: 0.42 };
+          throw e;
+        }
+        return { findings: [], discarded: [], raw: "", inputTokens: 0, cachedTokens: 0, outputTokens: 0, costUsd: 0, latencyMs: 1, retried: false, steps: 1 };
+      }
+    }
+
+    await runRound({ store, reviewer: new TwinCostsThenDies(), reviewId: "r1", principal: "p", worktree: dir, type }).catch(
+      () => undefined,
+    );
+
+    const row = store.db
+      .prepare("SELECT cost_usd FROM usage WHERE review_id='r1' AND tier='t1'")
+      .get() as Record<string, number> | undefined;
+    expect(row?.["cost_usd"], "the ceiling sums this column").toBe(0.42);
   });
 
   // No fallback for the fallback. If the metered provider refuses too, the ladder's own
