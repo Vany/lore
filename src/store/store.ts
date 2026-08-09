@@ -711,10 +711,12 @@ export class Store {
      * Absent means the two are the same, which is true of every tier but t0.
      */
     unavailableForTier?: readonly string[],
+    /** The engine set that produced this row, so a reuse can refuse a changed one (D-92). */
+    engines?: readonly string[],
   ): void {
     this.db
       .prepare(
-        "UPDATE tier_run SET outcome = ?, unavailable = ?, unavailable_for_tier = ?, tree_hash = ?, finished_at = ? WHERE id = ?",
+        "UPDATE tier_run SET outcome = ?, unavailable = ?, unavailable_for_tier = ?, engines = ?, tree_hash = ?, finished_at = ? WHERE id = ?",
       )
       .run(
         outcome,
@@ -727,6 +729,9 @@ export class Store {
         // SQLite hands both back as a property of the row, so `undefined` cannot separate
         // them; the value has to.
         unavailableForTier === undefined ? null : unavailableForTier.join("\n"),
+        // Sorted, so the same set written in two orders compares equal — the question is
+        // WHICH engines ran, not the order a config happened to list them in.
+        engines === undefined ? null : [...engines].sort().join(","),
         n(treeHash),
         now(),
         id,
@@ -833,10 +838,12 @@ export class Store {
      * reason to re-derive it, at the price of one t0 run on reviews open across a deploy.
      */
     readonly unavailableForTier: readonly string[] | undefined;
+    /** The engine set that produced it, or `undefined` for a row written before D-92. */
+    readonly engines: string | undefined;
   } | undefined {
     const row = this.db
       .prepare(
-        `SELECT tree_hash, unavailable, unavailable_for_tier FROM tier_run
+        `SELECT tree_hash, unavailable, unavailable_for_tier, engines FROM tier_run
          WHERE review_id = ? AND tier = 't0' AND finished_at IS NOT NULL AND tree_hash IS NOT NULL
          ORDER BY id DESC LIMIT 1`,
       )
@@ -850,7 +857,7 @@ export class Store {
     // and the caller must re-derive rather than guess — see the field's own note.
     const stored = row?.["unavailable_for_tier"] ?? null;
     const forTier = stored === null ? undefined : lines(stored);
-    return { treeHash, unavailable: client, unavailableForTier: forTier };
+    return { treeHash, unavailable: client, unavailableForTier: forTier, engines: row?.["engines"] ?? undefined };
   }
 
   unavailableChecks(reviewId: string): readonly string[] {

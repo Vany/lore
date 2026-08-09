@@ -274,8 +274,17 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // so reusing it would feed the rule into `renderT0` and the reusing round would then
   // re-store it, making the injection permanent for this review. Not knowing is a reason
   // to run the engines again, which costs one t0 on a review open across a deploy.
+  // AND THE SAME ENGINE SET. The reuse rests on "a deterministic engine set given the same
+  // bytes cannot answer differently", and the SET was a free variable nothing pinned —
+  // while the model ladder's fingerprint is pinned and a change refuses the review a few
+  // lines above. A deploy that adds or drops a t0 engine mid-review would otherwise carry
+  // the old set's answer forward as though it were the new set's.
+  const engineKey = [...type.t0].sort().join(",");
   const reuseT0 =
-    previousT0 !== undefined && previousT0.treeHash === roundTree && previousT0.unavailableForTier !== undefined;
+    previousT0 !== undefined &&
+    previousT0.treeHash === roundTree &&
+    previousT0.unavailableForTier !== undefined &&
+    previousT0.engines === engineKey;
   let t0;
   try {
     t0 = reuseT0
@@ -432,6 +441,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     t0.unavailable,
     roundTree,
     t0ForTier.unavailable,
+    type.t0,
   );
 
   // 3. Justifications proposed since last round.

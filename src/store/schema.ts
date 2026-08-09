@@ -21,7 +21,7 @@ import { SEVERITIES } from "../core/finding.ts";
 // adds the columns, because this number is what `assertNotDowngrade` compares — left
 // behind, it says a database written by this build is identical to one written before
 // the columns existed.
-export const SCHEMA_VERSION = 15;
+export const SCHEMA_VERSION = 16;
 
 /**
  * How findings are ordered wherever the service hands them out: worst first.
@@ -368,6 +368,13 @@ export const MIGRATIONS: readonly { readonly table: string; readonly column: str
   // stored t0 (D-92), because the reused text goes straight into `renderT0` and from there
   // into every later model prompt.
   { table: "tier_run", column: "unavailable_for_tier", sql: "ALTER TABLE tier_run ADD COLUMN unavailable_for_tier TEXT" },
+  // WHICH ENGINES PRODUCED THIS ROW. D-92 reuses a t0 result when the tree has not moved,
+  // on the reasoning that a deterministic engine set given the same bytes cannot answer
+  // differently — and left the SET a free variable. The model ladder is pinned and a
+  // change refuses the review (`ladderChanged`); its deterministic half was not, so a
+  // deploy that adds or drops an engine mid-review would carry the old set's answer
+  // forward as though it were the new set's.
+  { table: "tier_run", column: "engines", sql: "ALTER TABLE tier_run ADD COLUMN engines TEXT" },
   { table: "review", column: "behind_by", sql: "ALTER TABLE review ADD COLUMN behind_by INTEGER" },
   // Whether this finding is about code the branch never touched (D-68).
   { table: "finding", column: "preexisting", sql: "ALTER TABLE finding ADD COLUMN preexisting INTEGER" },

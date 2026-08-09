@@ -1155,6 +1155,26 @@ describe("t0 on a tree that has not moved", () => {
   });
 
   /**
+   * THE ENGINE SET IS PART OF THE KEY, not just the tree.
+   *
+   * The reuse rests on "a deterministic engine set given the same bytes cannot answer
+   * differently" — and the SET was a free variable nothing pinned, while the model
+   * ladder's fingerprint is pinned and a change refuses the review. A deploy that adds or
+   * drops a t0 engine mid-review would have carried the old set's answer forward as
+   * though it were the new set's.
+   */
+  it("runs again when the engine set has changed under it", async () => {
+    const calls = { n: 0 };
+    const reviewer = new ScriptedReviewer([[], [], []]);
+
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: { ...CODE_ARCH, t0: [] as const }, t0: countingT0(calls) });
+    // Same tree, DIFFERENT engines: the stored answer is another set's answer.
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: { ...CODE_ARCH, t0: ["semgrep"] as const }, t0: countingT0(calls) });
+
+    expect(calls.n, "a different engine set is a different question").toBe(2);
+  });
+
+  /**
    * `unavailable` MUST survive the reuse. It is a real coverage statement — an engine
    * that could not run is a check nobody made — and it reaches the model prompt and the
    * client verbatim. Dropping it would make a reused round quietly claim more coverage
