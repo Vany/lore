@@ -2325,6 +2325,79 @@ export class Store {
     return row?.["value"] === "1";
   }
 
+  /**
+   * A tier that could not answer, SERVICE-WIDE, and when to try it again (D-90).
+   *
+   * Vany: *"if t1 is skipped, it must not even initiate screen."*
+   *
+   * Until this existed, "this tier is dead" was known only inside one review's ladder —
+   * `LadderState.unavailable`, which is per-review by construction. So every review, and
+   * then every background screen pass, re-learned it from scratch at the cost of a full
+   * hang deadline. With an exhausted Z.ai plan that was 45 minutes an hour, for ever,
+   * against a fact whose reset time we already knew.
+   *
+   * The fact is LEARNED, never inferred from a name or a schedule: it is written when a
+   * call actually fails with a fault that belongs to the tier rather than to the request,
+   * and cleared the moment one succeeds. That is the only evidence lore can get, because
+   * opencode swallows the provider's refusal (D-84) — there is no status code to read and
+   * no limit to retrieve.
+   *
+   * In `meta` for the same reason `draining` is: it is one fact about the service, read
+   * by whatever is about to spend, and it must survive a restart — a process that forgot
+   * would go straight back to hanging.
+   */
+  markTierUnavailable(tierId: string, untilIso: string, why: string, failures: number): void {
+    this.db
+      .prepare("INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+      .run(`tier-unavailable:${tierId}`, JSON.stringify({ until: untilIso, why, failures }));
+  }
+
+  /** Forgotten the moment the tier answers — a stale mark is a tier we stop using for nothing. */
+  clearTierUnavailable(tierId: string): void {
+    this.db.prepare("DELETE FROM meta WHERE key = ?").run(`tier-unavailable:${tierId}`);
+  }
+
+  /**
+   * What is known about a tier being down, or `undefined` if nothing is.
+   *
+   * Returns the record even when it has EXPIRED, with `until` in the past, because the
+   * caller needs the failure count to decide how long to wait after the next failure —
+   * and because an operator reading this wants to know a tier failed at all, not only
+   * that it is currently in a cool-off.
+   */
+  tierUnavailable(tierId: string): { readonly until: string; readonly why: string; readonly failures: number } | undefined {
+    const row = this.db.prepare("SELECT value FROM meta WHERE key = ?").get(`tier-unavailable:${tierId}`) as
+      | Record<string, string>
+      | undefined;
+    if (row?.["value"] === undefined) return undefined;
+    try {
+      const v = JSON.parse(row["value"]) as { until?: string; why?: string; failures?: number };
+      return { until: v.until ?? "", why: v.why ?? "", failures: v.failures ?? 1 };
+    } catch {
+      // A meta row we cannot parse is a row we wrote wrong; treating it as "no record"
+      // costs one hang and self-heals, where throwing would take down whatever read it.
+      return undefined;
+    }
+  }
+
+  /** Every tier currently in a cool-off, for the operator view. */
+  unavailableTiers(nowIso: string): readonly { readonly tier: string; readonly until: string; readonly why: string }[] {
+    const rows = this.db
+      .prepare("SELECT key, value FROM meta WHERE key LIKE 'tier-unavailable:%'")
+      .all() as Record<string, string>[];
+    const out: { tier: string; until: string; why: string }[] = [];
+    for (const r of rows) {
+      const tier = (r["key"] ?? "").slice("tier-unavailable:".length);
+      try {
+        const v = JSON.parse(r["value"] ?? "{}") as { until?: string; why?: string };
+        if ((v.until ?? "") > nowIso) out.push({ tier, until: v.until ?? "", why: v.why ?? "" });
+      } catch {
+        // See `tierUnavailable`: an unparseable row is treated as absent.
+      }
+    }
+    return out;
+  }
+
   reclaimOrphanedJobs(maxAttempts = 3): {
     readonly requeued: number;
     readonly failed: number;

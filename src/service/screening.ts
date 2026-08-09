@@ -30,6 +30,34 @@ import type { Store } from "../store/store.ts";
 export const RESCREEN_INTERVAL_MS = 3_600_000;
 
 /**
+ * How long a tier is left alone after it fails, doubling while it keeps failing.
+ *
+ * Vany: *"if t1 is skipped, it must not even initiate screen."* Not calling at all is the
+ * only thing that costs nothing; a deadline merely bounds the waste. But lore cannot ask
+ * a provider whether it is available — opencode swallows the refusal (D-84), so the ONLY
+ * evidence is a call that failed, and the only question is how long to believe it.
+ *
+ * Doubling, because the two failure modes want opposite answers and we cannot tell them
+ * apart at the moment of failure. A provider blip wants a quick retry; an exhausted
+ * subscription wants a very long one — the plan that caused this reset four days later,
+ * and the refusal named the date lore never gets to see. Backing off converges on either:
+ * a blip costs one wasted hour, and a four-day outage costs 1+2+4+8+16+24+24… ≈ seven
+ * wasted calls instead of ninety-six.
+ *
+ * Capped at a day, because a tier nobody has tried for longer than that is a tier nobody
+ * would notice coming back, and the backlog it screens has no deadline at all.
+ *
+ * NOTHING IS INFERRED FROM THE CLOCK. There is no schedule here and no guess about a
+ * provider's window: the mark is written when a call fails and deleted when one succeeds.
+ */
+export const COOLOFF_MS = 3_600_000;
+export const COOLOFF_CAP_MS = 24 * 3_600_000;
+
+export function coolOffMs(consecutiveFailures: number): number {
+  return Math.min(COOLOFF_CAP_MS, COOLOFF_MS * 2 ** Math.max(0, consecutiveFailures - 1));
+}
+
+/**
  * Judge every repository's unscreened rules once.
  *
  * Returns rather than throws, and never rejects: the caller is a timer, and an unhandled
@@ -50,6 +78,17 @@ export async function screeningPass(
   const ask = reviewer.askFor?.bind(reviewer);
   if (tier === undefined || ask === undefined) return;
 
+  // NOT EVEN INITIATED (D-90). A tier known to be down is not asked, and this is the
+  // whole point: a deadline bounds a wasted call, and not making it costs nothing. With
+  // an exhausted plan the alternative was one 45-minute hang per hour, holding a quarter
+  // of the provider gate, to re-learn a fact already written down.
+  const down = store.tierUnavailable(tier.id);
+  if (down !== undefined && down.until > new Date().toISOString()) {
+    // Silent. This is the expected state for as long as the cool-off lasts, and an hourly
+    // line saying so is how a log stops being read. `make status` shows it standing.
+    return;
+  }
+
   for (const repo of store.repos()) {
     // A tier is billed the same whoever asked it, so a background screen lands in `usage`
     // under `screen:<tier>` exactly as the inline one did — with no review id, because
@@ -61,13 +100,33 @@ export async function screeningPass(
     const screen = screenFor(ask, tier, "", { spent });
     try {
       const r = await rescreen(store, repo.id, screen);
-      // Silent when it did nothing, which is almost every hour. A log line per repo per
-      // hour saying "0" is how a log stops being read.
-      if (r.documents > 0 || r.deferred > 0) {
+
+      // WHAT THE PASS LEARNED ABOUT THE TIER, written down so the next one need not
+      // re-learn it at the cost of a hang (D-90).
+      //
+      // `deferred > 0` is exactly the signal: `screenFor` stops asking after a fault that
+      // belongs to the TIER rather than to the document (D-87), so a deferral means the
+      // provider did not answer — not that a document was awkward.
+      if (r.deferred > 0) {
+        const failures = (store.tierUnavailable(tier.id)?.failures ?? 0) + 1;
+        const until = new Date(Date.now() + coolOffMs(failures)).toISOString();
+        store.markTierUnavailable(tier.id, until, `${String(failures)} consecutive screen call(s) went unanswered`, failures);
+        // SAID ONCE, when the decision is made rather than every hour it holds. This is
+        // the line that tells an operator a provider is down, which the service has never
+        // been able to say from the inside (`spec/operations.md` §2.4.2).
+        log(
+          `lore: ${tier.id} (${tier.model ?? "?"}) did not answer — not asking it again before ${until} ` +
+            `(failure ${String(failures)}). ${String(r.deferred)} document(s) of ${repo.name} keep waiting; ` +
+            "their rules stay live and in use.",
+        );
+      } else if (r.documents > 0) {
+        // IT ANSWERED, so whatever we believed about it being down is stale. Kept in the
+        // same branch as the counting, because a mark left behind after recovery means a
+        // tier we stop using for nothing — the opposite failure, and the quieter one.
+        store.clearTierUnavailable(tier.id);
         log(
           `lore: screened ${String(r.documents)} document(s) of ${repo.name} — ` +
-            `${String(r.kept)} rules kept, ${String(r.refused)} refused` +
-            (r.deferred > 0 ? `, ${String(r.deferred)} document(s) deferred: the tier stopped answering` : ""),
+            `${String(r.kept)} rules kept, ${String(r.refused)} refused`,
         );
       }
     } catch (e) {

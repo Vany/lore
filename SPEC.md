@@ -184,6 +184,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-87** | The knowledge screen stops for the pass on a fault that belongs to the TIER, not to the document | built 2026-08-09 |
 | **D-88** | **A tier skipped BELOW one that passed does not weaken the verdict.** The ladder is a gate; its work was done again above it | built 2026-08-09 |
 | **D-89** | **The knowledge screen runs in the background.** No review waits for a model call that only decides what its prompt looks like | built 2026-08-09 |
+| **D-90** | **A tier that stopped answering is not asked again** until a doubling cool-off expires — service-wide, learned, and visible | built 2026-08-09 |
 | **D-49** | A single-vendor ladder reaches `passed_partial`, never `passed` | confirmed |
 | **D-50** | Exploration is **counted per review before it is capped**; no cap yet | `[OPEN]` |
 | **D-51** | An accepted justification is **repo knowledge**, carried across reviews | confirmed |
@@ -1484,6 +1485,45 @@ Three things this changes in kind:
   cannot starve a review.
 - **A background screen has no review**, so `review_cancel` cannot reach it, exactly as
   for `propose` and provisioning. It stops with the process.
+
+**D-90 — a tier that stopped answering is not asked again.**
+
+Vany: *"if t1 is skipped, it must not even initiate screen."*
+
+D-89 took the screen off the review's critical path, which stopped it delaying anything —
+and left it hanging for 45 minutes an hour against an exhausted plan, holding a quarter of
+the provider gate to re-learn a fact already written down. A deadline bounds a wasted
+call; **not making it costs nothing.**
+
+The missing piece was that *this tier is dead* was known only inside one review's ladder.
+`LadderState.unavailable` is per-review by construction, so every review and every pass
+started ignorant. It is now a service-wide record in `meta`, surviving restarts, because a
+process that forgot would go straight back to hanging.
+
+**Learned, never inferred.** The mark is written when a call actually fails with a fault
+belonging to the tier rather than the request (D-87's distinction), and deleted the moment
+one succeeds. That is the only evidence available: opencode swallows the provider's
+refusal (D-84), so there is no status code to read and no limit to retrieve — which is
+what makes probing the wrong shape and a failed call the right one.
+
+**The wait doubles, capped at a day.** A blip and an exhausted subscription want opposite
+answers and are indistinguishable at the moment of failure. Doubling converges on either:
+a blip costs one wasted hour, and a four-day outage costs 1+2+4+8+16+24+24… ≈ **seven**
+wasted calls instead of ninety-six. The cap exists so a tier that recovered is noticed
+within a day; the backlog it screens has no deadline at all.
+
+**And it is visible, which it never was.** `spec/operations.md` §2.4.2 has listed "a
+provider at its limit is invisible from inside the service" as a gap since it was written.
+`make status` now says it above the reviews — because every slow review below is slow for
+that one reason — and `/status` carries `tiers_not_being_asked`, present and empty when
+healthy, since a key that vanishes when things are fine teaches a monitor to ignore its
+absence.
+
+**Scope, deliberately.** This governs the background screen. The review ladder still
+learns per review, because a review's own evidence is what its verdict rests on and
+`skip_if_quota` (D-85) already spends only one attempt on it. Extending the cool-off to
+the ladder would let one review's failure decide another's coverage, which is a bigger
+claim than anything measured so far supports.
 
 **D-82 — a defect found is fixed now; recording it is the exception.**
 

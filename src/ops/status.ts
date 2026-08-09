@@ -147,6 +147,35 @@ export function renderStatus(db: DatabaseSync, reviewId?: string, dataDir = "/va
     return [dim("no reviews in the last day. `lore` is idle."), "", ...mirrorLines(db, dataDir)].join("\n") + "\n";
   }
 
+  // A PROVIDER THAT IS DOWN, SAID FROM THE INSIDE (D-90). Until the cool-off existed this
+  // was invisible here — `spec/operations.md` §2.4.2 has listed it as a gap since it was
+  // written — and an operator's only clue was reviews taking three quarters of an hour to
+  // reach their second tier. It goes at the TOP, above the reviews, because it explains
+  // them: every slow review below is slow for this one reason.
+  const downRows = db
+    .prepare("SELECT key, value FROM meta WHERE key LIKE 'tier-unavailable:%'")
+    .all() as Row[];
+  const nowIso = new Date().toISOString();
+  for (const d of downRows) {
+    let until = "";
+    let why = "";
+    try {
+      const v = JSON.parse(String(d["value"] ?? "{}")) as { until?: string; why?: string };
+      until = v.until ?? "";
+      why = v.why ?? "";
+    } catch {
+      // An unparseable mark is treated as absent, exactly as the store treats it.
+    }
+    if (until <= nowIso) continue;
+    const tier = String(d["key"] ?? "").slice("tier-unavailable:".length);
+    out.push(
+      `${red(`✘ ${tier} IS NOT BEING ASKED`)} ${dim(`until ${until.slice(0, 19)}Z — ${why}.`)}`,
+      `  ${dim("it stopped answering, so lore stopped calling it (D-90). Reviews step over it and say so;")}`,
+      `  ${dim("the knowledge screen waits. It is retried automatically, and one success clears this.")}`,
+      "",
+    );
+  }
+
   const depth = Number((db.prepare("SELECT COUNT(*) c FROM job WHERE state = 'queued'").get() as Row)["c"] ?? 0);
   const stuck = Number((db.prepare("SELECT COUNT(*) c FROM job WHERE state = 'running'").get() as Row)["c"] ?? 0);
   out.push(

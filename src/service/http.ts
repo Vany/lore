@@ -194,6 +194,12 @@ async function handle(
           // therefore wrong for one of them — at 12 it killed four reviews in 2.5
           // minutes, and neither the host nor the container could show why.
           ...(cfg.modelGate === undefined ? {} : { model_calls: cfg.modelGate() }),
+          // A PROVIDER LORE HAS STOPPED CALLING (D-90). The one condition that makes
+          // every review below slower and that nothing here could report: a tier stops
+          // answering, lore backs off, and from outside the service just looks sluggish.
+          // Empty is the healthy case and stays in the payload, because a key that
+          // disappears when things are fine teaches a monitor to ignore its absence.
+          tiers_not_being_asked: store.unavailableTiers(new Date().toISOString()),
           uncollected: uncollectedFindings(store),
           active: activeReviews(store),
         },
