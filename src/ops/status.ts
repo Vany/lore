@@ -126,7 +126,12 @@ function phaseNote(runs: readonly Row[], state: string): string | undefined {
   const open = runs.filter((t) => t["finished_at"] === null || t["finished_at"] === undefined);
   if (open.length > 0) return undefined;
   if (runs.length === 0) return "starting — the deterministic sweep has not finished a round yet";
-  return "NO TIER IS WORKING — the round is reading your documents (ingest, then the screen), which spends a model before any tier is asked";
+  // The screen used to live in this window and was the expensive thing in it — one model
+  // call per changed document, before any tier was asked. D-89 moved it to a background
+  // pass, so what remains here is deterministic: the sweep and the document ingest. Three
+  // other places were rewritten for that and this sentence was left behind, still telling
+  // an operator to look for a model call that cannot happen here any more.
+  return "NO TIER IS WORKING — the round is between the deterministic sweep and its first tier (reading the diff and this repo's documents). No model call happens in this window";
 }
 
 export function renderStatus(db: DatabaseSync, reviewId?: string, dataDir = "/var/lib/lore"): string {

@@ -528,9 +528,16 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
               ? {}
               : {
                   checks_skipped: skipped,
+                  // NOT EVERY ENTRY IS A CHECK THAT DID NOT RUN. D-93 puts one here that
+                  // says the opposite — the tier RAN through a metered provider because
+                  // its subscription was out — and `TOOL_DOCS.poll` was rewritten to tell
+                  // the client exactly that. This note was not, so the two texts on one
+                  // payload contradicted each other, on the branch's headline path.
                   checks_skipped_note:
-                    "These checks did NOT run. Anything they would have caught is unexamined — " +
-                    "say so to your user, and weigh a later `passed` accordingly.",
+                    "Most of these are checks that did NOT run: anything they would have caught is unexamined, " +
+                    "so say so to your user and weigh a later `passed` accordingly. A line saying a tier " +
+                    "`was answered by` another provider is the exception — that tier ran and its opinion counts " +
+                    "in full; it is listed because it cost money, not because anything is missing. Read each line.",
                 };
           })(),
           // THE QUESTION ITSELF, not just the fact that there is one.

@@ -1238,37 +1238,52 @@ describe("what a reused t0 tells a reviewer", () => {
  * in the whole review says a check is off.
  */
 describe("what a reused round says about a suppressed check", () => {
-  it("discloses a live suppression even with no findings to filter", async () => {
-    const repo = store.upsertRepo("demo2", "git@x:demo2.git");
+  /**
+   * A REUSED ROUND STILL SAYS WHAT IS SWITCHED OFF (D-83 × D-92).
+   *
+   * `silenced` is built by filtering fresh engine findings, and a reused t0 has none — so
+   * nothing was filtered and nothing was said. That is silent for exactly the case that
+   * matters: an appeal accepted in round N is recorded AFTER round N's filter has run, so
+   * round N's rows do not mention it either. On the ordinary appeal-then-pass path no row
+   * in the whole review would say a check is off.
+   *
+   * DRIVEN THROUGH `runRound`, because the first version of this test asserted only that
+   * `store.liveSuppressions` returned the row it had just seeded — naming the disclosure
+   * and testing the fixture. Deleting the whole block left the suite green.
+   */
+  it("discloses a live suppression on a round that reused t0", async () => {
     const policy = store.addKnowledge({
-      repoId: repo.id, kind: "policy", source: "taught",
+      repoId, kind: "policy", source: "taught",
       statement: "Loopback HTTP in a test is not transport.", why: "no network to encrypt",
       path: undefined, cwe: undefined, provenance: "taught by vany", sourceBlob: undefined, confidence: 1,
     });
-    store.createReview({
-      id: "r-supp", repoId: repo.id, principal: "p", branch: "feat/x", intoRef: "main",
-      ticket: "t", type: "code-arch", state: "running", ladder: initialState(),
-    });
     store.recordSuppression({
-      repoId: repo.id,
+      repoId,
       policyShort: policy.id.slice(0, 8),
       ruleClass: "some.engine.rule",
       path: "src/a.test.ts",
-      reviewId: "r-supp",
+      reviewId: "r1",
       tier: "t1",
     });
+    const reviewer = new ScriptedReviewer([[], [], []]);
+    const type = { ...CODE_ARCH, t0: [] as const };
 
-    // A reused round has NO findings to filter, so everything the disclosure used to be
-    // built from is absent. What it is built from now is this list, which is a standing
-    // fact about the repository rather than an event that happens when a finding fires.
-    const live = store.liveSuppressions(repo.id);
-    expect(live.length, "the fixture must actually suppress something").toBeGreaterThan(0);
-    expect(live[0]?.ruleClass).toBe("some.engine.rule");
-    expect(live[0]?.path).toBe("src/a.test.ts");
-    // The client's text may quote the rule; the reviewer's may not (D-83). Both are
-    // derived from these fields, so the statement has to be here for one and the
-    // rule-class and path for both.
-    expect(live[0]?.statement, "the client's version quotes the rule").toContain("Loopback HTTP");
+    // Two rounds on an unchanged tree: the second reuses t0 and so has no findings to
+    // filter, which is the whole condition under test.
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type });
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type });
+
+    const rows = store.db
+      .prepare("SELECT unavailable, unavailable_for_tier FROM tier_run WHERE review_id='r1' AND tier='t0' ORDER BY id")
+      .all() as { unavailable: string | null; unavailable_for_tier: string | null }[];
+    const reused = rows[rows.length - 1];
+    expect(rows.length, "the second round recorded a t0 row too").toBeGreaterThan(1);
+    expect(reused?.unavailable ?? "", "the client is told a check is off").toContain("was NOT reported at src/a.test.ts");
+    // TWO AUDIENCES. The client's version quotes the rule; the reviewer's must not — a
+    // rule's text reaches a tier only with the appeal that cites it (D-83).
+    expect(reused?.unavailable ?? "").toContain("Loopback HTTP");
+    expect(reused?.unavailable_for_tier ?? "").toContain("was NOT reported at src/a.test.ts");
+    expect(reused?.unavailable_for_tier ?? "", "the rule's own words never travel").not.toContain("Loopback HTTP");
   });
 });
 
