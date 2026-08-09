@@ -184,7 +184,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-87** | The knowledge screen stops for the pass on a fault that belongs to the TIER, not to the document | built 2026-08-09 |
 | **D-88** | **A tier skipped BELOW one that passed does not weaken the verdict.** The ladder is a gate; its work was done again above it | built 2026-08-09 |
 | **D-89** | **The knowledge screen runs in the background.** No review waits for a model call that only decides what its prompt looks like | built 2026-08-09 |
-| **D-90** | **A tier that stopped answering is not asked again** — until the provider's own reset time (D-91), or a doubling cool-off when it named none | built 2026-08-09 |
+| **D-90** | **A tier that stopped answering is not asked again** — until the provider's own reset time (D-91), or a doubling cool-off when it named none. A STATED time also skips it in reviews | built 2026-08-09; widened same day |
 | **D-91** | **Subscribe, never wait.** opencode narrates every call on its event stream; a quota refusal arrives in ~7s, with its reset time | built 2026-08-09 |
 | **D-49** | A single-vendor ladder reaches `passed_partial`, never `passed` | confirmed |
 | **D-50** | Exploration is **counted per review before it is capped**; no cap yet | `[OPEN]` |
@@ -1531,11 +1531,26 @@ that one reason — and `/status` carries `tiers_not_being_asked`, present and e
 healthy, since a key that vanishes when things are fine teaches a monitor to ignore its
 absence.
 
-**Scope, deliberately.** This governs the background screen. The review ladder still
-learns per review, because a review's own evidence is what its verdict rests on and
-`skip_if_quota` (D-85) already spends only one attempt on it. Extending the cool-off to
-the ladder would let one review's failure decide another's coverage, which is a bigger
-claim than anything measured so far supports.
+**Scope — widened the same day, once D-91 made the distinction real.**
+
+A review now also skips a tier in cool-off without calling it, but **only when the wait
+came from a time the provider stated.** D-91 cut a dead tier from 2700s to a measured 41s;
+41 seconds per review is still spent re-confirming a fact Z.ai stated once, with a date,
+and *"wasting time is a crime"*.
+
+The line is between a fact and an inference, and it is the whole of this decision:
+
+- **a stated reset time** is the provider's claim about itself. It is true for every
+  review at once, and re-learning it costs each of them a round's latency. A review may
+  act on it, and may record it for the others.
+- **our doubling backoff** is a guess. It stays local to the screen and to the review that
+  earned it — `skip_if_quota` (D-85) already spends only one attempt — because imposing it
+  across reviews would narrow one review's coverage using evidence it never saw.
+
+A skipped tier is still disclosed: the `tier_run` row closes `unpayable`, `checks_skipped`
+says *"was not asked"* and names when it will be retried, and D-88 decides whether the
+verdict is weakened by where the tier sat. **"Not asked" must never be quieter than "asked
+and failed"**, or the cheaper path becomes the less honest one.
 
 **D-91 — subscribe to what opencode says; never wait out a clock for a fact it has
 already published.**

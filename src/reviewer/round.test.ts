@@ -1044,3 +1044,60 @@ describe("the paths that only happen when something has gone wrong", () => {
 // text (`derive.ts`, `recurrence:<kind>:<key>`), which is the stronger property: it also
 // refuses a second copy when the wording drifts. Nothing was left uncovered by deleting
 // this; the cover was for code that is gone.
+
+/**
+ * A tier the PROVIDER has said is out is not called at all (D-90 widened).
+ *
+ * D-91 cut a dead tier from 2700s to a measured 41s. Forty-one seconds is still spent
+ * re-confirming a fact the provider stated once with a date — per review, until the date
+ * passes. Vany: *"wasting time is a crime."*
+ *
+ * The line these two tests hold is between a fact and an inference. A stated reset time
+ * is the provider's claim about itself and is true for everyone; a backoff we guessed is
+ * not, and acting on it across reviews would narrow one review's coverage using evidence
+ * it never saw.
+ */
+describe("a tier the provider said is out", () => {
+  /** Counts calls per tier, and answers cleanly — so any call at all is visible. */
+  class Counting implements ReviewerLike {
+    readonly seen: string[] = [];
+    async review(tier: Tier): Promise<ReviewerResult> {
+      this.seen.push(tier.id);
+      return { findings: [], discarded: [], raw: "", inputTokens: 0, cachedTokens: 0, outputTokens: 0, costUsd: 0, latencyMs: 1, retried: false, steps: 1 };
+    }
+  }
+
+  it("is not asked, and the round steps over it", async () => {
+    const reviewer = new Counting();
+    store.markTierUnavailable("t1", new Date(Date.now() + 3_600_000).toISOString(), "the provider said its limit resets then", 1);
+    const type = { ...CODE_ARCH, t0: [] as const };
+
+    let last;
+    for (let i = 0; i < 8; i++) {
+      last = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type }).catch(() => undefined);
+      if (last === undefined || !["escalate", "fastClean"].includes(last.decision.kind)) break;
+    }
+
+    expect(reviewer.seen.includes("t1"), "not one call to t1 — that is the whole point").toBe(false);
+    expect(reviewer.seen.length, "the tiers above it did the work").toBeGreaterThan(0);
+    // D-88: t1 sits below tiers that answered, so the verdict is not weakened by it.
+    expect(last?.decision.kind).toBe("passed");
+    // AND THE CLIENT IS TOLD. A tier that never ran is a fact about this review whether
+    // or not it cost the verdict, and "not asked" must not be quieter than "asked and
+    // failed" — that would make the cheaper path the less honest one.
+    expect(store.unavailableChecks("r1").join("\n")).toMatch(/was not asked/);
+  });
+
+  // An EXPIRED mark is not a mark. The window closing is the whole mechanism by which a
+  // recovered provider gets used again; a comparison that ignored it would retire a tier
+  // permanently on one bad afternoon.
+  it("is asked again once the stated time has passed", async () => {
+    const reviewer = new Counting();
+    store.markTierUnavailable("t1", new Date(Date.now() - 1_000).toISOString(), "over", 1);
+    const type = { ...CODE_ARCH, t0: [] as const };
+
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type });
+
+    expect(reviewer.seen, "an expired mark is not a mark").toStrictEqual(["t1"]);
+  });
+});

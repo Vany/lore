@@ -17,7 +17,8 @@ import type { Tier } from "../core/ladder.ts";
 import type { ReviewerLike, SessionResult } from "../reviewer/opencode.ts";
 import { EXTRACTOR_VERSION, UNSCREENED } from "../knowledge/ingest.ts";
 import { Store } from "../store/store.ts";
-import { COOLOFF_CAP_MS, COOLOFF_MS, coolOffMs, screeningPass } from "./screening.ts";
+import { COOLOFF_CAP_MS, COOLOFF_MS, coolOffMs } from "../core/cooloff.ts";
+import { screeningPass } from "./screening.ts";
 
 const TIERS: readonly Tier[] = [
   { id: "t0", kind: "deterministic", stage: "fast" },

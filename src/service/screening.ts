@@ -13,6 +13,7 @@
  * SPEC: SPEC.md D-89, spec/knowledge.md §2.2
  */
 
+import { retryAt } from "../core/cooloff.ts";
 import { rescreen } from "../knowledge/rescreen.ts";
 import { screenFor, screenUsage, type ScreenUsage } from "../knowledge/screen.ts";
 import type { Tier } from "../core/ladder.ts";
@@ -28,34 +29,6 @@ import type { Store } from "../store/store.ts";
  * noticing. Sooner would spend quota to fix something nobody is waiting on.
  */
 export const RESCREEN_INTERVAL_MS = 3_600_000;
-
-/**
- * How long a tier is left alone after it fails, doubling while it keeps failing.
- *
- * Vany: *"if t1 is skipped, it must not even initiate screen."* Not calling at all is the
- * only thing that costs nothing; a deadline merely bounds the waste. But lore cannot ask
- * a provider whether it is available — opencode swallows the refusal (D-84), so the ONLY
- * evidence is a call that failed, and the only question is how long to believe it.
- *
- * Doubling, because the two failure modes want opposite answers and we cannot tell them
- * apart at the moment of failure. A provider blip wants a quick retry; an exhausted
- * subscription wants a very long one — the plan that caused this reset four days later,
- * and the refusal named the date lore never gets to see. Backing off converges on either:
- * a blip costs one wasted hour, and a four-day outage costs 1+2+4+8+16+24+24… ≈ seven
- * wasted calls instead of ninety-six.
- *
- * Capped at a day, because a tier nobody has tried for longer than that is a tier nobody
- * would notice coming back, and the backlog it screens has no deadline at all.
- *
- * NOTHING IS INFERRED FROM THE CLOCK. There is no schedule here and no guess about a
- * provider's window: the mark is written when a call fails and deleted when one succeeds.
- */
-export const COOLOFF_MS = 3_600_000;
-export const COOLOFF_CAP_MS = 24 * 3_600_000;
-
-export function coolOffMs(consecutiveFailures: number): number {
-  return Math.min(COOLOFF_CAP_MS, COOLOFF_MS * 2 ** Math.max(0, consecutiveFailures - 1));
-}
 
 /**
  * Judge every repository's unscreened rules once.
@@ -120,17 +93,10 @@ export async function screeningPass(
         // floor so a bad parse cannot become a busy loop; a week is the ceiling because a
         // tier nobody retries for longer than that is a tier nobody would notice coming
         // back.
-        const said = r.retryAfter === undefined ? undefined : Date.parse(r.retryAfter);
-        const guessed = Date.now() + coolOffMs(failures);
-        const chosen =
-          said === undefined || Number.isNaN(said)
-            ? guessed
-            : Math.min(Date.now() + 7 * 24 * 3_600_000, Math.max(Date.now() + 60_000, said));
-        const until = new Date(chosen).toISOString();
-        const why =
-          said === undefined || Number.isNaN(said)
-            ? `${String(failures)} consecutive screen call(s) went unanswered`
-            : `the provider said its limit resets then`;
+        const { until, stated } = retryAt(Date.now(), failures, r.retryAfter);
+        const why = stated
+          ? "the provider said its limit resets then"
+          : `${String(failures)} consecutive screen call(s) went unanswered`;
         store.markTierUnavailable(tier.id, until, why, failures);
         // SAID ONCE, when the decision is made rather than every hour it holds. This is
         // the line that tells an operator a provider is down, which the service has never

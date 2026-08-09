@@ -29,7 +29,8 @@ import { fingerprint } from "../core/fingerprint.ts";
 import { parseLoreOk } from "../core/lore-ok.ts";
 import { isTerminal, type ReviewState } from "../core/review-state.ts";
 import type { ReviewType } from "../core/review-type.ts";
-import { DidNotRun, TierUnavailable, TooLargeForTier } from "../core/errors.ts";
+import { retryAt } from "../core/cooloff.ts";
+import { DidNotRun, Exhausted, TierUnavailable, TooLargeForTier } from "../core/errors.ts";
 import { hunkAround, hunkStillPresent, makeScope, type Scope } from "../core/scope.ts";
 import { blobSha, computeDiff, renderDiff } from "../git/diff.ts";
 import { treeHash } from "../git/repo.ts";
@@ -479,6 +480,28 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
 
   let result;
   try {
+    // NOT ASKED AT ALL, when the PROVIDER has said it is out (D-90 widened).
+    //
+    // Vany: *"if t1 is skipped, it must not even initiate screen"* — and the same
+    // argument applies here with more force, because a review is what a person is
+    // waiting for. Even after D-91 cut a dead tier from 2700s to a measured 41s, that
+    // is 41 seconds per review spent re-confirming something the provider stated once,
+    // with a date, until 2026-08-10 18:19:09.
+    //
+    // WRITTEN ONLY FROM A STATED RESET TIME, never from our own backoff — see the catch
+    // below. That is the line between a fact and an inference: a review may act on
+    // *"the provider says it is out until Thursday"*, because that is the provider's
+    // claim about itself and it is true for everyone. It may not act on *"a screen pass
+    // guessed four hours"*, because then one review's bad luck would silently narrow
+    // another review's coverage, which is a claim about evidence nobody gathered.
+    const down = store.tierUnavailable(tier.id);
+    if (down !== undefined && down.until > new Date().toISOString()) {
+      throw new Exhausted(
+        `tier ${tier.id} (${tier.model ?? "?"}) was not asked: ${down.why}, so lore is not calling it before ` +
+          `${down.until}. It is retried automatically and one success clears this.`,
+        down.until,
+      );
+    }
     result = await input.reviewer.review(tier, prompt, worktree, reviewId, stillWanted);
     // Closed with what this tier FOUND, in the same words T0 uses (line 99). The
     // column answers one question — what did this tier do — and `answered` did not
@@ -503,6 +526,17 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     // counted every one. Two 45-minute t1 attempts against an exhausted plan left our
     // trailing-5h usage reading ZERO on 2026-08-09 — under-counting exactly when a quota
     // calculation has to be right.
+    // WHAT THE PROVIDER SAID ABOUT ITSELF, recorded so the next review need not ask.
+    //
+    // Only a STATED reset time (D-91) is written service-wide. It is the provider's own
+    // claim, it is true for every review at once, and re-learning it costs a round's
+    // worth of latency each time. A failure that named no time stays local to this
+    // review — `skip_if_quota` already spends only one attempt on it — because a guess
+    // imposed on other reviews would decide their coverage from evidence they never saw.
+    if (e instanceof Exhausted && e.resetAt !== undefined) {
+      const { until } = retryAt(Date.now(), 1, e.resetAt);
+      store.markTierUnavailable(tier.id, until, `the provider said its limit resets then`, 1);
+    }
     const spent = (e as { spent?: { input: number; cached: number; output: number } }).spent;
     if (spent !== undefined) {
       store.recordUsage({
