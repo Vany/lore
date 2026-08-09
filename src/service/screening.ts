@@ -52,18 +52,33 @@ export async function screeningPass(
   const ask = reviewer.askFor?.bind(reviewer);
   if (tier === undefined || ask === undefined) return;
 
+  // INSIDE THE GUARD, both of them. The docstring promises this never rejects — the
+  // caller is a timer and an unhandled rejection from a timer is a dead process — and
+  // `tierUnavailable` and `repos()` are store calls that sat outside every try. A locked
+  // or unreadable database would have taken the process with it, through the one function
+  // that says it cannot.
+  let repos: readonly { readonly id: string; readonly name: string }[];
+  let down;
+  try {
+    down = store.tierUnavailable(tier.id);
+    repos = store.repos();
+  } catch (e) {
+    log(`[lore:log] background screen could not read the database: ${e instanceof Error ? e.message : String(e)}`);
+    return;
+  }
+
   // NOT EVEN INITIATED (D-90). A tier known to be down is not asked, and this is the
   // whole point: a deadline bounds a wasted call, and not making it costs nothing. With
   // an exhausted plan the alternative was one 45-minute hang per hour, holding a quarter
   // of the provider gate, to re-learn a fact already written down.
-  const down = store.tierUnavailable(tier.id);
   if (down !== undefined && down.until > new Date().toISOString()) {
     // Silent. This is the expected state for as long as the cool-off lasts, and an hourly
     // line saying so is how a log stops being read. `make status` shows it standing.
     return;
   }
 
-  for (const repo of store.repos()) {
+  let stopPass = false;
+  for (const repo of repos) {
     // A tier is billed the same whoever asked it, so a background screen lands in `usage`
     // under `screen:<tier>` exactly as the inline one did — with no review id, because
     // there is no review. `ops/spend` therefore still sees every model call lore makes.
@@ -91,6 +106,12 @@ export async function screeningPass(
       // provider did not answer — not that a document was awkward.
       if (r.deferred > 0) {
         const failures = (store.tierUnavailable(tier.id)?.failures ?? 0) + 1;
+        // STOPS FOR THE PASS, which is what D-87 says and what `screenFor` does WITHIN a
+        // repository — but its `stopped` flag is rebuilt per repo, so a pass over R
+        // backlogged repositories made R dead-tier calls and advanced `failures` by R,
+        // running the doubling schedule R times faster than `cooloff.test.ts` pins. One
+        // fault is one fault however many repositories were waiting on it.
+        stopPass = true;
         // THE PROVIDER'S OWN DEADLINE BEATS OUR GUESS (D-91). When Z.ai says *"your limit
         // will reset at 2026-08-10 18:19:09"* there is nothing to infer: waiting exactly
         // that long is both the shortest correct wait and the longest safe one. The
@@ -142,5 +163,6 @@ export async function screeningPass(
       // count as though something were working on it.
       log(`[lore:log] background screen failed for ${repo.name}: ${e instanceof Error ? e.message : String(e)}`);
     }
+    if (stopPass) break;
   }
 }

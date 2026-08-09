@@ -185,3 +185,40 @@ describe("what the operator is told about a rested tier", () => {
     store.close();
   });
 });
+
+/**
+ * ONE FAULT IS ONE FAULT, however many repositories were waiting on it (D-87).
+ *
+ * `screenFor`'s stop is per-repository, so a pass over R backlogged repos made R
+ * dead-tier calls and advanced `failures` by R — running the doubling schedule R times
+ * faster than `cooloff.test.ts` pins, so the third real outage would already be at the
+ * 24-hour cap.
+ */
+describe("a pass over several repositories", () => {
+  it("asks once and counts one failure, not one per repo", async () => {
+    const store = new Store(":memory:");
+    for (const name of ["alpha", "beta", "gamma"]) {
+      const repo = store.upsertRepo(name, `git@x:${name}.git`);
+      store.addKnowledge({
+        repoId: repo.id, kind: "rule", source: "ingested", statement: "unjudged",
+        why: undefined, path: undefined, cwe: undefined, provenance: "SPEC.md",
+        sourceBlob: "b1", extractor: UNSCREENED, confidence: 0.8,
+      });
+    }
+    const reviewer = new Dead();
+
+    await screeningPass(store, reviewer, TIERS, silent);
+
+    expect(reviewer.calls, "the second repo learns nothing the first did not").toBe(1);
+    expect(store.tierUnavailable("t1")?.failures, "and the backoff advances once").toBe(1);
+    store.close();
+  });
+
+  // The docstring promises this never rejects — the caller is a timer, and an unhandled
+  // rejection from a timer is a dead process. Two store calls sat outside every try.
+  it("does not reject when the database cannot be read", async () => {
+    const broken = new Store(":memory:");
+    broken.close();
+    await expect(screeningPass(broken, new Dead(), TIERS, silent)).resolves.toBeUndefined();
+  });
+});

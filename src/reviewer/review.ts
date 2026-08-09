@@ -759,7 +759,11 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     // The recording now happens where the fact arrives — in the fallback's own catch,
     // beside the decision to use the twin — so it is kept whether or not the round that
     // learned it goes on to succeed. Both paths write it; neither depends on the other.
-    if (e instanceof Exhausted && e.resetAt !== undefined) {
+    // NOT WHEN THE TWIN IS THE ONE THAT REFUSED. On a fallback that also runs out, the
+    // error reaching here carries the FALLBACK provider's reset time — and writing it
+    // against `tier-unavailable:<primary>` overwrites the primary's own mark, made moments
+    // earlier, with a different provider's claim under identical wording.
+    if (fellBackTo === undefined && e instanceof Exhausted && e.resetAt !== undefined) {
       const { until } = retryAt(Date.now(), 1, e.resetAt);
       store.markTierUnavailable(tier.id, until, `the provider said its limit resets then`, 1, true);
     }

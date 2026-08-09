@@ -25,7 +25,7 @@ import { statSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { dataDir, dbPath } from "../core/paths.ts";
-import type { LadderState } from "../core/ladder.ts";
+import { loadTiers, type LadderState } from "../core/ladder.ts";
 import { TERMINAL_SQL } from "../core/review-state.ts";
 import { MAX_MIRROR_AGE_MS } from "../git/repo.ts";
 
@@ -174,6 +174,7 @@ export function renderStatus(db: DatabaseSync, reviewId?: string, dataDir = "/va
     }
     if (until <= nowIso) continue;
     const tier = String(d["key"] ?? "").slice("tier-unavailable:".length);
+    const hasFallback = loadTiers().some((t) => t.id === tier && t.fallback !== undefined);
     // TWO MARKS, TWO CONSEQUENCES, and one banner used to claim the stronger one for
     // both. Only a time the PROVIDER STATED stops a review calling the tier (D-90); a
     // backoff the background screen guessed bounds the screen alone, and reviews go on
@@ -184,9 +185,16 @@ export function renderStatus(db: DatabaseSync, reviewId?: string, dataDir = "/va
       stated
         ? `${red(`✘ ${tier} IS NOT BEING ASKED`)} ${dim(`until ${until.slice(0, 19)}Z — ${why}.`)}`
         : `${yellow(`◔ ${tier} is rested by the knowledge screen`)} ${dim(`until ${until.slice(0, 19)}Z — ${why}.`)}`,
-      stated
-        ? `  ${dim("the provider named that time, so reviews step over the tier and say so; the screen waits too.")}`
-        : `  ${dim("this is lore's own guess, not the provider's word — REVIEWS STILL CALL THIS TIER normally.")}`,
+      // THREE CASES, NOT TWO. A stated cool-off degrades coverage only when the tier has
+      // nowhere else to go; with a D-93 fallback configured — which every deployed tiers
+      // file now has — reviews ask the twin, the tier never enters `unavailable`, and
+      // coverage is FULL. Saying "reviews step over it" there reports degradation exactly
+      // when the fallback is preventing it.
+      !stated
+        ? `  ${dim("this is lore's own guess, not the provider's word — REVIEWS STILL CALL THIS TIER normally.")}`
+        : hasFallback
+          ? `  ${dim("reviews ask its fallback instead, so coverage is FULL — this costs metered money, not evidence.")}`
+          : `  ${dim("the provider named that time, so reviews step over the tier and say so; the screen waits too.")}`,
       `  ${dim("It is retried automatically, and one success clears this.")}`,
       "",
     );
