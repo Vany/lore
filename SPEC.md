@@ -185,7 +185,8 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-88** | **A tier skipped BELOW one that passed does not weaken the verdict.** The ladder is a gate; its work was done again above it | built 2026-08-09 |
 | **D-89** | **The knowledge screen runs in the background.** No review waits for a model call that only decides what its prompt looks like | built 2026-08-09 |
 | **D-90** | **A tier that stopped answering is not asked again** — until the provider's own reset time (D-91), or a doubling cool-off when it named none. A STATED time also skips it in reviews | built 2026-08-09; widened same day |
-| **D-91** | **Subscribe, never wait.** opencode narrates every call on its event stream; a quota refusal arrives in ~7s, with its reset time | built 2026-08-09 |
+| **D-91** | **Subscribe, never wait.** opencode narrates every call on its event stream; a quota refusal arrives in seconds, with its reset time | built 2026-08-09 |
+| **D-92** | **t0 is not re-run on a tree it has already read**, and its pattern engines see the branch's files, not the repository | built 2026-08-09 |
 | **D-49** | A single-vendor ladder reaches `passed_partial`, never `passed` | confirmed |
 | **D-50** | Exploration is **counted per review before it is capped**; no cap yet | `[OPEN]` |
 | **D-51** | An accepted justification is **repo knowledge**, carried across reviews | confirmed |
@@ -1599,6 +1600,43 @@ the message separates them, and it is the provider's own words.
 is a Beijing company, so this may be UTC+8 and lore may wait eight hours too long — the
 safe direction, and self-correcting: the tier is retried after it, succeeds, and the mark
 clears. Reading it the other way costs one more hang, which is the thing being removed.
+
+**D-92 — t0 is not re-run on a tree it has already read, and its pattern engines are
+pointed at the branch.**
+
+Vany: *"why did we return to t0 after t1?"*, then *"call t0 only if diff was applied. and
+only on this files."*
+
+t0 runs at the head of every round so a fix that breaks the build is caught. A round that
+follows an **escalation** rather than a submit reads a byte-identical tree, and t0 is
+deterministic — that is the property that makes it t0. Measured across every t0 run ever
+recorded: **18% of t0 time on rigid-monorepo and 26% on lore** went on re-reading a tree
+already read in the same review. Nineteen minutes on one repository, four minutes at a
+time, in front of a person waiting for a verdict.
+
+The findings survive without being re-raised: they are recorded against the review and
+stay open until something settles them (D-56), so re-running only re-raised the same
+fingerprints for the deduplicator to drop. What does **not** survive by itself is
+`unavailable` — an engine that could not run is a check nobody made — so it is carried
+forward explicitly, and a test holds it there.
+
+**The pattern engines see the branch, not the repository.** semgrep and ast-grep match one
+file at a time, so scanning a monorepo to review a ten-file branch is the same answer for
+more money — and it drops the inherited matches in untouched code that D-68 already ranks
+last and a team ends up justifying repeatedly. Beyond 200 paths it scans the tree instead:
+an argv is not unbounded, and the fallback **widens** coverage, which is the only safe
+direction for a bound nobody can see from outside.
+
+**`tsc` and `eslint` are NOT narrowed, and that is a refusal rather than an omission.**
+Type checking is whole-program. Changing one exported signature breaks its callers, and
+checking only the changed file is precisely how that class stops being caught — the class
+a reviewer most wants from a type checker. They also run in the sandbox, where the cost is
+the install and parsing the program, which a subset still pays through its imports. Asked
+for *"only these files"* and this is the part I did not do; the reason is here so the next
+person can overrule it deliberately.
+
+`sbom` and `osv` are unnarrowed for a third reason: they are about the dependency
+manifest, and the lockfile is usually not among a branch's changed files.
 
 **D-82 — a defect found is fixed now; recording it is the exception.**
 

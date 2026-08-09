@@ -209,14 +209,55 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // once rather than relying on each one stamping itself defensively — and it returns
   // `undefined` before a tier begins, which is the honest elapsed-zero the caller wants.
   const t0RunId = store.openTierRun(reviewId, "t0", review.ladder.round + 1, startedAt);
+  // NOT RE-RUN ON A TREE IT HAS ALREADY READ (D-92).
+  //
+  // Vany: *"call t0 only if diff was applied."* t0 runs at the head of every round so a
+  // fix that breaks the build is caught — and a round that follows an ESCALATION rather
+  // than a submit reads a byte-identical tree. t0 is deterministic; that is the property
+  // §1.1 of the ladder spec makes it carry, and a deterministic engine set given the same
+  // bytes cannot say anything different.
+  //
+  // Measured across every t0 run ever recorded: 18% of t0 time on rigid-monorepo and 26%
+  // on lore went on exactly this — nineteen minutes on one repository, four minutes at a
+  // time, in front of a person waiting for a verdict.
+  //
+  // THE FINDINGS SURVIVE WITHOUT BEING RE-RAISED. They are recorded against the review and
+  // stay open until something settles them (D-56); re-running only re-raised the same
+  // fingerprints for the deduplicator to drop. What does NOT survive by itself is
+  // `unavailable` — an engine that could not run is a check nobody made — so it is carried
+  // forward explicitly rather than left to be recomputed by a run that is not happening.
+  const previousT0 = store.lastT0(reviewId);
+  const reuseT0 = previousT0 !== undefined && previousT0.treeHash === roundTree;
   let t0;
   try {
-    t0 = await (input.t0 ?? runT0)(worktree, {
-      engines: type.t0,
-    });
+    t0 = reuseT0
+      ? // EMPTY OUTCOMES, and that is correct rather than convenient. `outcomes` is read
+        // once, to tell a PATTERN-engine finding from a model one so an inherited match in
+        // an untouched file can be ranked below the branch's own (D-68). This round raises
+        // no t0 findings at all — they were raised when the tree was first read and are
+        // still open — so there is nothing here to classify.
+        { findings: [], outcomes: [], skipped: [], unavailable: previousT0.unavailable }
+      : await (input.t0 ?? runT0)(worktree, {
+          engines: type.t0,
+          // SCOPED TO WHAT THE BRANCH TOUCHED (D-92). A pattern engine matches one file at
+          // a time, so pointing semgrep and ast-grep at the branch's own files rather than
+          // at a monorepo is the same answer for less money — and it drops the inherited
+          // matches in untouched code that D-68 already ranks last and that a team ends up
+          // justifying over and over. `tsc` and `eslint` are NOT narrowed and must not be:
+          // type checking is whole-program, and checking only the changed file is exactly
+          // how "this change broke a caller" stops being caught.
+          files: diff.changedFiles,
+        });
   } catch (e) {
     store.closeTierRun(t0RunId, "failed", [], roundTree);
     throw e;
+  }
+  if (reuseT0) {
+    // Said on the operator's channel, not the client's. `checks_skipped` means "this
+    // review covers less than you might assume", and this covers exactly the same — a
+    // notice there would be a false alarm about the one thing that field exists to make
+    // true.
+    console.error(`[lore:log] ${reviewId}: t0 not re-run — the tree is unchanged since the last round (${roundTree.slice(0, 12)})`);
   }
 
   // APPEALS ALREADY ACCEPTED, APPLIED BEFORE T0 REPORTS (D-83).

@@ -53,6 +53,14 @@ third distinct vendor, and independence is the premise of the whole design (D-1)
 
 ### 1.1 T0 is not a model, and that is the point
 
+**And because it is deterministic, it is not re-run on a tree it has already read**
+(D-92). A round following an escalation reads byte-identical bytes; a deterministic engine
+set cannot answer differently. What it could not check is carried forward, because that is
+a coverage statement rather than a result. Its pattern engines — semgrep, ast-grep — are
+pointed at the branch's changed files; `tsc` and `eslint` deliberately are not, because
+type checking is whole-program and narrowing it drops exactly the "this change broke a
+caller" class.
+
 CodeRabbit runs 50+ analyzers alongside its LLM. **An LLM must never be paid to
 decide what a typechecker decides for free, deterministically, in one second.**
 

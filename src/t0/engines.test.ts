@@ -6,7 +6,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { detect, engineRuleClass, parseEslint, parseSemgrep, parseTsc, ruleClaim, runEngine } from "./engines.ts";
+import { scopePaths, detect, engineRuleClass, parseEslint, parseSemgrep, parseTsc, ruleClaim, runEngine } from "./engines.ts";
 import { fingerprint } from "../core/fingerprint.ts";
 import type { Finding } from "../core/finding.ts";
 
@@ -344,5 +344,44 @@ describe("eslint and tsc group only genuinely identical diagnostics", () => {
     expect(f).toHaveLength(1);
     expect(f[0]?.evidence).toBe(one);
     expect(f[0]?.line).toBe(3);
+  });
+});
+
+/**
+ * What a pattern engine is pointed at (D-92).
+ *
+ * Vany: *"call t0 only if diff was applied. and only on this files."* A pattern engine
+ * matches one file at a time, so scanning a monorepo to review a ten-file branch buys
+ * nothing — measured on rigid-monorepo, t0 is 230s at the median and runs at the head of
+ * every round.
+ *
+ * The bound and the fallback are the whole safety story here: too many paths WIDENS the
+ * scan rather than truncating it, because a silently narrowed scan is a gate that reports
+ * clean about code nobody read.
+ */
+describe("which paths an engine is given", () => {
+  it("uses the changed files when there are some", () => {
+    expect(scopePaths(["src/a.ts", "src/b.ts"])).toStrictEqual(["src/a.ts", "src/b.ts"]);
+  });
+
+  // Absent means "no diff was computed", which is every caller that existed before this.
+  // It must keep meaning the whole tree, or adding a parameter would silently narrow
+  // every one of them.
+  it("scans the tree when nothing was given", () => {
+    expect(scopePaths(undefined)).toStrictEqual(["."]);
+  });
+
+  // An EMPTY list is not "scan nothing". A review whose diff computed to no files at all
+  // is a broken measurement, and answering it with an empty argv would make semgrep scan
+  // the working directory anyway on some versions and nothing on others.
+  it("scans the tree when the list is empty", () => {
+    expect(scopePaths([])).toStrictEqual(["."]);
+  });
+
+  // An argv is not unbounded. Falling back widens, which is the safe direction for a
+  // bound nobody can see from outside.
+  it("scans the tree rather than building an argv too long to run", () => {
+    const many = Array.from({ length: 500 }, (_, i) => `src/f${String(i)}.ts`);
+    expect(scopePaths(many)).toStrictEqual(["."]);
   });
 });

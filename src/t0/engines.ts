@@ -226,7 +226,39 @@ export function detect(worktree: string, engine: T0Engine): boolean {
   }
 }
 
-export async function runEngine(worktree: string, engine: T0Engine): Promise<EngineOutcome> {
+/**
+ * The files this review actually changed, or `undefined` for the whole tree (D-92).
+ *
+ * Vany: *"and only on this files."* A pattern engine matches one file at a time, so
+ * pointing it at the branch's own files instead of a monorepo is the same answer for less
+ * money — and it drops the inherited matches in untouched code that D-68 already ranks
+ * last and that a team ends up justifying over and over.
+ *
+ * **`tsc` and `eslint` are deliberately NOT narrowed**, and that is not an oversight.
+ * Type checking is whole-program: changing one exported signature breaks its callers, and
+ * checking only the changed file is precisely how that class of defect stops being caught
+ * — the class a reviewer most wants from a type checker. They also run in the sandbox
+ * (`runner.ts`), where the cost is the install and parsing the program, which a subset
+ * still pays through its imports.
+ */
+export type Scope = readonly string[] | undefined;
+
+/**
+ * Beyond this many paths, scan the tree instead.
+ *
+ * An argv is not unbounded and a 900-file branch would build a command line long enough
+ * to fail in a way that reads as the engine being broken. Falling back WIDENS coverage,
+ * which is the safe direction for a bound nobody can see from outside.
+ */
+const MAX_SCOPED_PATHS = 200;
+
+/** The paths to hand an engine, or `["."]` when there are too many or none. */
+export function scopePaths(scope: Scope): readonly string[] {
+  if (scope === undefined || scope.length === 0 || scope.length > MAX_SCOPED_PATHS) return ["."];
+  return scope;
+}
+
+export async function runEngine(worktree: string, engine: T0Engine, scope?: Scope): Promise<EngineOutcome> {
   // Refused rather than defaulted. These two resolve their binary out of the
   // target's node_modules, so the service must never run them — `runner.ts` drives
   // them inside the sandbox. Falling through to "has no runner" would read as a
@@ -263,9 +295,12 @@ export async function runEngine(worktree: string, engine: T0Engine): Promise<Eng
     // `ast-grep`, `sbom` and `osv` stay: those are lore's own binaries reading
     // files, and they need no install.
     case "semgrep":
-      return semgrep(worktree);
+      return semgrep(worktree, scope);
     case "ast-grep":
-      return astGrep(worktree);
+      return astGrep(worktree, scope);
+    // NOT SCOPED, and for a different reason than tsc: these two are about the dependency
+    // manifest, not about source files. Narrowing them to the branch's changed files would
+    // ask about a lockfile that is usually not among them and get nothing back.
     case "sbom":
       return sbom(worktree);
     case "osv":
@@ -494,11 +529,11 @@ function semgrepUnread(errors: readonly SemgrepError[]): readonly string[] {
   );
 }
 
-async function semgrep(worktree: string): Promise<EngineOutcome> {
+async function semgrep(worktree: string, scope?: Scope): Promise<EngineOutcome> {
   const r = await runTool(
     worktree,
     "semgrep",
-    ["--config", "p/security-audit", "--json", "--quiet", "--metrics", "off", "."],
+    ["--config", "p/security-audit", "--json", "--quiet", "--metrics", "off", ...scopePaths(scope)],
     600_000,
   );
   if (r.unavailable !== undefined) return { engine: "semgrep", findings: [], unavailable: r.unavailable };
@@ -579,8 +614,8 @@ interface SgMatch {
   severity?: string;
 }
 
-async function astGrep(worktree: string): Promise<EngineOutcome> {
-  const r = await runTool(worktree, "ast-grep", ["scan", "--json"], 300_000);
+async function astGrep(worktree: string, scope?: Scope): Promise<EngineOutcome> {
+  const r = await runTool(worktree, "ast-grep", ["scan", "--json", ...scopePaths(scope)], 300_000);
   if (r.unavailable !== undefined) return { engine: "ast-grep", findings: [], unavailable: r.unavailable };
 
   const parsed = parseJson<SgMatch[]>(r.stdout);

@@ -1101,3 +1101,55 @@ describe("a tier the provider said is out", () => {
     expect(reviewer.seen, "an expired mark is not a mark").toStrictEqual(["t1"]);
   });
 });
+
+/**
+ * t0 is not re-run on a tree it has already read (D-92).
+ *
+ * Vany: *"call t0 only if diff was applied."* t0 runs at the head of every round so a fix
+ * that breaks the build is caught — but a round following an ESCALATION reads a
+ * byte-identical tree, and t0 is deterministic by construction. Measured across every t0
+ * run ever recorded: 18% of t0 time on rigid-monorepo and 26% on lore went on exactly
+ * this, four minutes at a time, in front of someone waiting for a verdict.
+ */
+describe("t0 on a tree that has not moved", () => {
+  /** Counts how many times the engines were actually asked to run. */
+  const countingT0 = (calls: { n: number }) => async () => {
+    calls.n++;
+    return { findings: [], outcomes: [], unavailable: ["eslint: no config"], skipped: [] };
+  };
+
+  it("runs once and is reused while the tree is unchanged", async () => {
+    const calls = { n: 0 };
+    const reviewer = new ScriptedReviewer([[], [], []]);
+    const type = { ...CODE_ARCH, t0: [] as const };
+
+    for (let i = 0; i < 3; i++) {
+      const r = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type, t0: countingT0(calls) });
+      if (!["escalate", "fastClean"].includes(r.decision.kind)) break;
+    }
+
+    expect(calls.n, "the ladder escalated; nothing changed under it").toBe(1);
+  });
+
+  /**
+   * `unavailable` MUST survive the reuse. It is a real coverage statement — an engine
+   * that could not run is a check nobody made — and it reaches the model prompt and the
+   * client verbatim. Dropping it would make a reused round quietly claim more coverage
+   * than the round it reused.
+   */
+  it("carries forward what the first run could not check", async () => {
+    const calls = { n: 0 };
+    const reviewer = new ScriptedReviewer([[], [], []]);
+    const type = { ...CODE_ARCH, t0: [] as const };
+    for (let i = 0; i < 3; i++) {
+      const r = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type, t0: countingT0(calls) });
+      if (!["escalate", "fastClean"].includes(r.decision.kind)) break;
+    }
+
+    const rows = store.db
+      .prepare("SELECT unavailable FROM tier_run WHERE review_id = 'r1' AND tier = 't0' ORDER BY id")
+      .all() as { unavailable: string | null }[];
+    expect(rows.length, "every round still records that t0 was accounted for").toBeGreaterThan(1);
+    for (const row of rows) expect(row.unavailable ?? "").toContain("eslint: no config");
+  });
+});

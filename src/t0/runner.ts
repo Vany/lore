@@ -40,6 +40,13 @@ export interface T0Result {
 
 export interface T0Options {
   readonly engines: readonly T0Engine[];
+  /**
+   * The files this review changed, for the engines that match one file at a time (D-92).
+   *
+   * Absent means the whole tree, which is what every caller did before this existed and
+   * what a caller that cannot compute a diff should keep doing.
+   */
+  readonly files?: readonly string[];
   readonly sandbox?: SandboxConfig;
 }
 
@@ -79,7 +86,7 @@ export async function runT0(worktree: string, opts: T0Options): Promise<T0Result
   // Host-safe engines only: lore's own binaries, reading files.
   for (const engine of opts.engines) {
     if (engine === "tsc" || engine === "eslint") continue;
-    outcomes.push(await runEngine(worktree, engine));
+    outcomes.push(await runEngine(worktree, engine, opts.files));
   }
 
   // Everything that needs the target's node_modules runs in the sandbox, together,

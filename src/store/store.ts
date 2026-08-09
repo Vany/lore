@@ -767,6 +767,35 @@ export class Store {
     return Number(row?.["c"] ?? 0);
   }
 
+  /**
+   * The last completed t0 run of this review: which tree it read, and what it could not
+   * check (D-92).
+   *
+   * t0 runs at the head of every round so a fix that breaks the build is caught. But a
+   * round that follows an ESCALATION rather than a submit reads a byte-identical tree,
+   * and t0 is deterministic — that is the property `spec/review-ladder.md` §1.1 makes it
+   * carry. Measured across every t0 run ever recorded: **18% of t0 time on
+   * rigid-monorepo, 26% on lore, spent re-reading a tree it had already read in the same
+   * review.** Nineteen minutes on one repository.
+   *
+   * `unavailable` comes back with it because that list is a real coverage statement — an
+   * engine that could not run is a check nobody made — and it must survive into the round
+   * that reuses the result, or reusing would quietly drop it.
+   */
+  lastT0(reviewId: string): { readonly treeHash: string; readonly unavailable: readonly string[] } | undefined {
+    const row = this.db
+      .prepare(
+        `SELECT tree_hash, unavailable FROM tier_run
+         WHERE review_id = ? AND tier = 't0' AND finished_at IS NOT NULL AND tree_hash IS NOT NULL
+         ORDER BY id DESC LIMIT 1`,
+      )
+      .get(reviewId) as Record<string, string | null> | undefined;
+    const treeHash = row?.["tree_hash"];
+    if (treeHash === undefined || treeHash === null) return undefined;
+    const raw = row?.["unavailable"] ?? "";
+    return { treeHash, unavailable: raw.split("\n").filter((l) => l.length > 0) };
+  }
+
   unavailableChecks(reviewId: string): readonly string[] {
     const rows = this.db
       .prepare("SELECT unavailable FROM tier_run WHERE review_id = ? AND unavailable IS NOT NULL ORDER BY id")
