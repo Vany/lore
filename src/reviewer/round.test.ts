@@ -1197,7 +1197,7 @@ describe("what a reused t0 tells a reviewer", () => {
 
     expect(back?.unavailable, "the audit trail keeps the whole reason").toStrictEqual([CLIENT]);
     expect(back?.unavailableForTier, "the prompt gets the fact without the rule").toStrictEqual([TIER]);
-    expect(back?.unavailableForTier.join(" "), "the rule's own words never travel").not.toContain("never do Y");
+    expect((back?.unavailableForTier ?? []).join(" "), "the rule's own words never travel").not.toContain("never do Y");
   });
 
   /**
@@ -1206,10 +1206,18 @@ describe("what a reused t0 tells a reviewer", () => {
    * them to a model. An EMPTY tier list is a real answer and must not be confused with an
    * absent one, or every reused round would silently fall back to the client's text.
    */
-  it("tells an absent column from an empty one", async () => {
+  /**
+   * A row from before the split says UNKNOWN, never "the same as the client's".
+   *
+   * Falling back to the client's list was the first fix and it re-opened the very hole it
+   * closed: this query reads only t0 rows, so the only NULL it can see is a pre-split row
+   * — exactly the rows whose client text can quote a rule. The caller re-runs the engines
+   * instead, which costs one t0 on a review open across a deploy.
+   */
+  it("says UNKNOWN for a row written before the split, never the client's list", async () => {
     const old = store.openTierRun("r1", "t0", 1, new Date().toISOString());
     store.closeTierRun(old, "clean", ["eslint: no config"], "tree-old");
-    expect(store.lastT0("r1")?.unavailableForTier).toStrictEqual(["eslint: no config"]);
+    expect(store.lastT0("r1")?.unavailableForTier).toBeUndefined();
 
     const fresh = store.openTierRun("r1", "t0", 2, new Date().toISOString());
     store.closeTierRun(fresh, "clean", ["eslint: no config"], "tree-new", []);

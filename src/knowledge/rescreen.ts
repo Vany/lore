@@ -93,11 +93,21 @@ export async function rescreen(store: Store, repoId: string, screen: Screen): Pr
 
     // MATCHED BY STATEMENT, because that is the only thing the screen echoes back. The
     // refusal carries an index into the list we sent and `partition` has already resolved
-    // it to the candidate, so the statement is exact rather than fuzzy — but a document
-    // that repeats a statement verbatim would collapse two rows onto one verdict, and the
-    // conservative direction there is to KEEP: a rule wrongly kept costs a line in a
-    // prompt, a rule wrongly dropped is invisible for ever (D-81).
-    const refusedText = new Set(out.refused.map((r) => r.statement));
+    // it to the candidate, so the statement is exact rather than fuzzy.
+    //
+    // A DOCUMENT THAT REPEATS A STATEMENT VERBATIM IS AMBIGUOUS, and the comment here used
+    // to claim the conservative direction was taken while the code did the opposite: a Set
+    // membership test matches EVERY row carrying that text, so one refusal retired all of
+    // them. D-81's asymmetry is the whole argument — a rule wrongly kept costs a line in a
+    // prompt, a rule wrongly dropped is invisible to everyone for ever — so where the
+    // verdict cannot be attributed to one row, every row with that text is kept.
+    const seenOnce = new Set<string>();
+    const duplicated = new Set<string>();
+    for (const r of group) {
+      if (seenOnce.has(r.statement)) duplicated.add(r.statement);
+      seenOnce.add(r.statement);
+    }
+    const refusedText = new Set(out.refused.map((r) => r.statement).filter((t) => !duplicated.has(t)));
     const because = new Map(out.refused.map((r) => [r.statement, r.because]));
     const keptIds: string[] = [];
     const refusedRows: { id: string; because: string }[] = [];

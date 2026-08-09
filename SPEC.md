@@ -1636,8 +1636,13 @@ harmless while every round recomputed both — and became a **standing prompt in
 the moment a round could reuse a stored t0, because the reused text feeds `renderT0` and
 `renderT0` is in every model prompt for every later round. One accepted appeal would have
 put its rule into that repository's reviews for ever. `tier_run.unavailable_for_tier`
-holds the reviewer's version; NULL there means *nobody recorded one* and falls back to the
-client's, while an empty string means *nothing to tell the reviewer* and does not.
+holds the reviewer's version. NULL there means **unknown**, and the round then re-runs the
+engines rather than guessing — falling back to the client's list was the first attempt and
+re-opened the hole it closed, because `lastT0` reads only t0 rows, so the only NULL it can
+ever see is a pre-split row, which is exactly the kind whose client text can quote a rule.
+An empty string is a recorded *nothing to tell the reviewer* and is used as it stands.
+Not knowing what a reviewer was told is a reason to derive it again; the price is one t0
+run on a review left open across a deploy.
 
 **The pattern engines see the branch, not the repository.** semgrep and ast-grep match one
 file at a time, so scanning a monorepo to review a ten-file branch is the same answer for

@@ -227,7 +227,13 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // `unavailable` — an engine that could not run is a check nobody made — so it is carried
   // forward explicitly rather than left to be recomputed by a run that is not happening.
   const previousT0 = store.lastT0(reviewId);
-  const reuseT0 = previousT0 !== undefined && previousT0.treeHash === roundTree;
+  // AND ONLY IF WE KNOW WHAT THE REVIEWER WAS TOLD. A row from before the audience split
+  // records the client's list alone, and that list can quote a development rule (D-83) —
+  // so reusing it would feed the rule into `renderT0` and the reusing round would then
+  // re-store it, making the injection permanent for this review. Not knowing is a reason
+  // to run the engines again, which costs one t0 on a review open across a deploy.
+  const reuseT0 =
+    previousT0 !== undefined && previousT0.treeHash === roundTree && previousT0.unavailableForTier !== undefined;
   let t0;
   try {
     t0 = reuseT0
@@ -321,6 +327,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // which is the exact failure the split exists to prevent, reintroduced by an
   // optimisation that never looked at what it was copying.
   const carriedForTier = reuseT0 ? previousT0?.unavailableForTier ?? [] : t0.unavailable;
+
   const t0ForTier = { ...t0, findings: t0Findings, unavailable: [...carriedForTier, ...new Set(silencedForTier)] };
   t0 = { ...t0, findings: t0Findings, unavailable: [...t0.unavailable, ...new Set(silenced)] };
 

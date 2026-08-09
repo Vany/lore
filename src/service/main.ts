@@ -268,10 +268,24 @@ export async function serve(cfg: ServiceConfig): Promise<() => void> {
   // Same hour as the sweep, and nothing waits on either. `DEFAULT_TIERS` is not used: the
   // deployment's own ladder decides which tier is cheapest, and asking a model the
   // configuration does not name would spend quota nobody approved.
-  const screening = setInterval(() => {
-    void screeningPass(store, reviewer, loadTiers());
-  }, RESCREEN_INTERVAL_MS);
-  screening.unref?.();
+  // SINGLE-FLIGHT, not an interval — the same shape `startHeartbeat` uses and for a
+  // sharper reason. A pass works the backlog serially, one cheap-tier model call per
+  // document version, queued behind reviews at the shared provider gate, so it can
+  // outlast the hour. `setInterval` would then start a second pass over the SAME
+  // `UNSCREENED` rows: double the quota to ask identical questions, and if the two
+  // disagree about a statement the retire always wins by write ordering — so whether a
+  // rule survives would be decided by timer interleaving. Scheduling the next pass from
+  // the last one's completion makes the hour a floor rather than a promise.
+  let screening: ReturnType<typeof setTimeout> | undefined;
+  let screeningStopped = false;
+  const scheduleScreening = (): void => {
+    if (screeningStopped) return;
+    screening = setTimeout(() => {
+      void screeningPass(store, reviewer, loadTiers()).finally(scheduleScreening);
+    }, RESCREEN_INTERVAL_MS);
+    screening.unref?.();
+  };
+  scheduleScreening();
 
   const http = startHttp(
     store,
@@ -327,7 +341,8 @@ export async function serve(cfg: ServiceConfig): Promise<() => void> {
   return () => {
     http.close();
     clearInterval(sweep);
-    clearInterval(screening);
+    screeningStopped = true;
+    if (screening !== undefined) clearTimeout(screening);
     // The event subscription (D-91) holds a socket open and reconnects on its own, so a
     // stop that did not say so would keep the process alive after every test and every
     // shutdown. `screening` likewise: it was added with the timer and not the teardown.

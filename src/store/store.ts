@@ -819,7 +819,20 @@ export class Store {
   lastT0(reviewId: string): {
     readonly treeHash: string;
     readonly unavailable: readonly string[];
-    readonly unavailableForTier: readonly string[];
+    /**
+     * `undefined` when nobody recorded a reviewer-facing list for this row.
+     *
+     * NOT the client's list as a fallback, which is what the first version did. This
+     * query reads ONLY `tier = 't0'` rows, so the "a tier where both audiences agree"
+     * case it was reasoning about cannot occur here — the only NULL it can ever see is a
+     * row written before the split, and those are exactly the rows whose client text can
+     * quote a development rule. The fallback therefore fed the one thing it existed to
+     * withhold, and the reusing round re-stored it, making it permanent for that review.
+     *
+     * The caller declines to reuse instead: not knowing what the reviewer was told is a
+     * reason to re-derive it, at the price of one t0 run on reviews open across a deploy.
+     */
+    readonly unavailableForTier: readonly string[] | undefined;
   } | undefined {
     const row = this.db
       .prepare(
@@ -832,14 +845,11 @@ export class Store {
     if (treeHash === undefined || treeHash === null) return undefined;
     const lines = (v: string | null | undefined): readonly string[] => (v ?? "").split("\n").filter((l) => l.length > 0);
     const client = lines(row?.["unavailable"]);
-    // NULL FALLS BACK, EMPTY DOES NOT. Null is a row nobody recorded a reviewer-facing
-    // list for — written before the split, or by a tier where the two audiences are the
-    // same — and the client's list is then the honest answer. An empty string is a
-    // recorded "nothing to tell the reviewer", and falling back there would put a client
-    // list that may quote a development rule into a model prompt, which is the whole
-    // defect this split exists to close.
+    // NULL IS "UNKNOWN", NEVER "THE SAME AS THE CLIENT'S". An empty string is a recorded
+    // answer meaning nothing to tell the reviewer; NULL is a row from before the split,
+    // and the caller must re-derive rather than guess — see the field's own note.
     const stored = row?.["unavailable_for_tier"] ?? null;
-    const forTier = stored === null ? client : lines(stored);
+    const forTier = stored === null ? undefined : lines(stored);
     return { treeHash, unavailable: client, unavailableForTier: forTier };
   }
 

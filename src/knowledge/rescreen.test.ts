@@ -139,6 +139,31 @@ describe("screening the base after the fact", () => {
     store.close();
   });
 
+  /**
+   * A DOCUMENT THAT REPEATS A STATEMENT IS AMBIGUOUS, AND AMBIGUITY KEEPS.
+   *
+   * The screen echoes back an index, which `partition` resolves to a candidate — but two
+   * rows carrying identical text cannot be told apart afterwards, so one refusal used to
+   * retire both. D-81's asymmetry decides it: a rule wrongly kept costs a line in a
+   * prompt, a rule wrongly dropped is invisible to everyone for ever.
+   */
+  it("keeps every copy when a repeated statement is refused", async () => {
+    const { store, repoId } = seed();
+    const a = rule(store, repoId, "Cost. Something must happen", "SPEC.md", "b1", UNSCREENED);
+    const b = rule(store, repoId, "Cost. Something must happen", "SPEC.md", "b1", UNSCREENED);
+    const c = rule(store, repoId, "A rule that is only here once", "SPEC.md", "b1", UNSCREENED);
+
+    await rescreen(store, repoId, refusing("Cost. Something must happen", "A rule that is only here once"));
+
+    const reason = (id: string) =>
+      (store.db.prepare("SELECT retired_reason FROM knowledge WHERE id = ?").get(id) as Record<string, string | null>)["retired_reason"];
+    expect(reason(a.id), "ambiguous, so kept").toBeNull();
+    expect(reason(b.id), "ambiguous, so kept").toBeNull();
+    // The unambiguous one is still refused: this must not become "never retire anything".
+    expect(reason(c.id)).toBe("screened out: a topic label");
+    store.close();
+  });
+
   // One prompt per document, because the screen's question is about a document's
   // candidates as a set — "which of THESE are not rules?" — and a prompt mixing two files
   // asks something nobody meant.
