@@ -211,7 +211,7 @@ export async function serve(cfg: ServiceConfig): Promise<() => void> {
 
   const worker = new Worker(
     store,
-    { ...DEFAULT_WORKER, reposRoot, concurrency: cfg.concurrency },
+    { ...DEFAULT_WORKER, reposRoot, concurrency: cfg.concurrency, dailyCeilingUsd: cfg.dailyCeilingUsd },
     alerter,
     reviewer,
   );

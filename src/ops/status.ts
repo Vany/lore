@@ -65,6 +65,10 @@ const STATE_STYLE: Readonly<Record<string, { paint: (s: string) => string; mark:
   // ordinary case; see there for the 45 minutes this cost.
   running: { paint: blue, mark: "▸", note: "a tier is working" },
   queued: { paint: dim, mark: "·", note: "accepted, not started" },
+  // A state the board displayed for weeks as "? unrecognised state", because this table
+  // was never told about it. Terminal, deliberate, and NOT a pass — somebody stopped it,
+  // which is the opposite of `expired`'s "nobody came back".
+  cancelled: { paint: yellow, mark: "⊘", note: "YOU stopped it — terminal, and not 'found nothing'" },
   failed: { paint: red, mark: "✘", note: "DID NOT COMPLETE — not 'found nothing'" },
   expired: { paint: red, mark: "✘", note: "abandoned or timed out — not 'found nothing'" },
   stopped: { paint: red, mark: "✘", note: "hit a bound — the code it never reached is unreviewed" },

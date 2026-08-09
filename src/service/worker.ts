@@ -32,6 +32,11 @@ export interface WorkerConfig {
   /** How many rounds may run concurrently. CPU-bound on the deployment host. */
   readonly concurrency: number;
   readonly pollMs: number;
+  /**
+   * The day's spend ceiling, passed to every round so it is checked at round boundaries
+   * and not only at enqueue (D-93). Absent means unbounded, which is what a CLI wants.
+   */
+  readonly dailyCeilingUsd?: number;
 }
 
 export const DEFAULT_WORKER: WorkerConfig = {
@@ -234,6 +239,7 @@ export class Worker {
       principal,
       worktree,
       type,
+      ...(this.cfg.dailyCeilingUsd === undefined ? {} : { dailyCeilingUsd: this.cfg.dailyCeilingUsd }),
     });
 
     switch (result.decision.kind) {

@@ -19,6 +19,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { initialState } from "../core/ladder.ts";
+import { REVIEW_STATES } from "../core/review-state.ts";
 import { MAX_MIRROR_AGE_MS } from "../git/repo.ts";
 import { Store } from "../store/store.ts";
 import { renderStatus } from "./status.ts";
@@ -228,5 +229,31 @@ describe("what a running review is actually doing", () => {
     running("rev_fresh");
     const out = render();
     expect(out).toMatch(/starting/);
+  });
+});
+
+/**
+ * Every state the review machine can reach has to have a colour and a sentence.
+ *
+ * `cancelled` did not, for weeks, so the operator board rendered a deliberate stop as
+ * `? unrecognised state` — the one place a person goes to find out what happened,
+ * answering that it does not know. Checked against the state list rather than spot-tested,
+ * because the next state added will have the same gap and nobody will notice again.
+ */
+describe("the operator board knows every state", () => {
+  it("has a style for each, and none of them reads as unrecognised", () => {
+    const store2 = new Store(join(dir, "lore.db"));
+    const repo = store2.upsertRepo("demo", "git@x:demo.git");
+    REVIEW_STATES.forEach((state, i) => {
+      store2.createReview({
+        id: `rev_state_${String(i)}`, repoId: repo.id, principal: "alice", branch: "feat/x",
+        intoRef: "main", ticket: "t", type: "code-arch", state, ladder: initialState(),
+      });
+    });
+    store2.close();
+
+    const out = render();
+    expect(out, "a state the board cannot name is a state a person cannot act on").not.toContain("unrecognised state");
+    for (const state of REVIEW_STATES) expect(out).toContain(state.toUpperCase());
   });
 });

@@ -30,6 +30,7 @@ import { parseLoreOk } from "../core/lore-ok.ts";
 import { isTerminal, type ReviewState } from "../core/review-state.ts";
 import type { ReviewType } from "../core/review-type.ts";
 import { retryAt } from "../core/cooloff.ts";
+import { startOfDayIso } from "../ops/spend.ts";
 import { DidNotRun, Exhausted, TierUnavailable, TooLargeForTier } from "../core/errors.ts";
 import { hunkAround, hunkStillPresent, makeScope, type Scope } from "../core/scope.ts";
 import { blobSha, computeDiff, renderDiff } from "../git/diff.ts";
@@ -63,6 +64,25 @@ export interface RoundInput {
    * are treated differently, so both have to be fakeable.
    */
   readonly t0?: typeof runT0;
+  /**
+   * The day's spend ceiling in USD, checked at every ROUND BOUNDARY (D-93).
+   *
+   * `mayStart` checks this once, at enqueue, and deliberately never again: killing a
+   * review halfway leaves it neither passed nor honestly failed and wastes what was
+   * already spent. That reasoning was free while every provider was a flat subscription
+   * reporting `cost_usd: 0` — the ceiling could not fire at all, so where it was checked
+   * did not matter.
+   *
+   * D-93 made one path metered. A single agentic review can then exceed the ceiling by
+   * any amount before anything looks again, which is exactly the unbounded shape a
+   * ceiling exists to refuse. Checked BETWEEN rounds rather than mid-round, so the
+   * objection still holds: a round is never abandoned half-spent, and the review stops in
+   * a state that has a name.
+   *
+   * Absent means unbounded, which is what the CLI and the tests want — and what every
+   * caller did before this existed.
+   */
+  readonly dailyCeilingUsd?: number;
 }
 
 export interface RoundResult {
@@ -200,6 +220,28 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // is not re-run after a fix (D-6, revised), "tiers that ran" and "tiers that read the
   // signed tree" are different sets, and only the second is what an attestation may
   // claim (`spec/review-ladder.md` §5).
+  // THE CEILING, AT A ROUND BOUNDARY (D-93). Nothing has been spent on this round yet,
+  // so stopping here leaves the review in a state with a name rather than half-paid-for
+  // — which is the objection that kept this check at enqueue and nowhere else. That
+  // objection was free while every provider billed a flat subscription and the ceiling
+  // could not fire; D-93 made one path metered, and an unbounded spend between enqueues
+  // is exactly the shape a ceiling exists to refuse.
+  //
+  // Inert under subscriptions, deliberately: every `usage` row carries `cost_usd: 0`, so
+  // the sum is zero and this never fires. It becomes real the moment a fallback does.
+  if (input.dailyCeilingUsd !== undefined) {
+    const spent = store.spendSince(startOfDayIso());
+    if (spent >= input.dailyCeilingUsd) {
+      const why =
+        `the day's spend ceiling is reached — $${spent.toFixed(2)} of $${input.dailyCeilingUsd.toFixed(2)}. ` +
+        "This review stopped between rounds, so nothing was abandoned half-finished, and the tiers that had " +
+        "already run kept what they found. It is NOT a pass: the rounds that did not happen looked at nothing.";
+      store.setFailureReason(reviewId, why);
+      store.updateReview(reviewId, { state: "failed" });
+      throw new DidNotRun(`review ${reviewId} stopped: ${why}`);
+    }
+  }
+
   const roundTree = await treeHash(worktree);
   // lore-ok[bb2c32f5]: the reasoning is right and the fix belongs one layer down, so
   // this line is deliberately unchanged. T0's row IS stamped at entry, and that is
