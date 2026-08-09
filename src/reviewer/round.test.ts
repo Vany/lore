@@ -1113,7 +1113,10 @@ describe("a tier the provider said is out", () => {
   // permanently on one bad afternoon.
   it("is asked again once the stated time has passed", async () => {
     const reviewer = new Counting();
-    store.markTierUnavailable("t1", new Date(Date.now() - 1_000).toISOString(), "over", 1);
+    // `stated: true`, because that is the half being tested. Four arguments left `stated`
+    // defaulting to FALSE, so the read-side condition never got as far as comparing the
+    // time — the test passed for the wrong reason and asserted nothing about expiry.
+    store.markTierUnavailable("t1", new Date(Date.now() - 1_000).toISOString(), "over", 1, true);
     const type = { ...CODE_ARCH, t0: [] as const };
 
     await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type });
@@ -1419,5 +1422,67 @@ describe("a cool-off and a fallback together", () => {
     const mark = store.tierUnavailable("t1");
     expect(mark?.until, "the next review skips straight to the twin").toBe("2026-08-10T18:19:09.000Z");
     expect(mark?.stated).toBe(true);
+  });
+});
+
+/**
+ * The ceiling that bounds the only metered path in lore (D-93).
+ *
+ * `mayStart` is checked at enqueue and never again, on the reasoning that killing a review
+ * halfway leaves it neither passed nor honestly failed. That was free while every provider
+ * billed a flat subscription reporting `cost_usd: 0` — the ceiling could not fire, so where
+ * it was checked did not matter. D-93 made one path metered and turned it into the only
+ * thing between a runaway agentic review and real money.
+ *
+ * Untested until now, which for the headline guard of its own commit is the shape this
+ * project exists to refuse.
+ */
+describe("the day's spend ceiling", () => {
+  const spend = (usd: number) => {
+    const repo = store.upsertRepo("demo", "git@x:demo.git");
+    store.recordUsage({
+      repoId: repo.id, reviewId: "r1", tier: "t2", model: "openrouter/twin",
+      inputTokens: 0, cachedTokens: 0, outputTokens: 0, costUsd: usd, outcome: "ok",
+    });
+  };
+
+  it("stops the review with a named reason once the day's spend reaches it", async () => {
+    spend(12);
+    const reviewer = new ScriptedReviewer([[]]);
+
+    await expect(
+      runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: { ...CODE_ARCH, t0: [] as const }, dailyCeilingUsd: 10 }),
+    ).rejects.toThrow(/spend ceiling/);
+
+    // TERMINAL AND NAMED. `failed` is not a pass and not "found nothing", and the reason
+    // is what a client reads instead of guessing why its review stopped.
+    expect(store.getReview("r1", "p")?.state).toBe("failed");
+    expect(store.failureReason("r1")).toMatch(/\$12\.00 of \$10\.00/);
+    expect(store.failureReason("r1"), "and it must not read as a verdict").toMatch(/NOT a pass/);
+  });
+
+  // BETWEEN rounds, never inside one. The whole reason this check was at enqueue and
+  // nowhere else is that a round abandoned half-spent is worse than one that overran.
+  it("stops before spending on the round, so nothing is abandoned half-paid-for", async () => {
+    spend(12);
+    let asked = 0;
+    const reviewer: ReviewerLike = {
+      async review(): Promise<ReviewerResult> {
+        asked++;
+        return { findings: [], discarded: [], raw: "", inputTokens: 0, cachedTokens: 0, outputTokens: 0, costUsd: 0, latencyMs: 1, retried: false, steps: 1 };
+      },
+    };
+
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: { ...CODE_ARCH, t0: [] as const }, dailyCeilingUsd: 10 }).catch(() => undefined);
+
+    expect(asked, "no tier was asked, so no round was half-paid-for").toBe(0);
+  });
+
+  // Inert under subscriptions, which is every deployment today: the sum is structurally
+  // zero, so this must never fire and never change existing behaviour.
+  it("does not fire when nothing is metered", async () => {
+    const reviewer = new ScriptedReviewer([[]]);
+    const r = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: { ...CODE_ARCH, t0: [] as const }, dailyCeilingUsd: 10 });
+    expect(r.decision.kind).not.toBe("stopped");
   });
 });

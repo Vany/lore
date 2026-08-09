@@ -50,7 +50,8 @@ export interface SpendVerdict {
 /**
  * May a new review start?
  *
- * Checked before starting, never mid-review: killing a review halfway leaves it in
+ * Checked before starting, at enqueue — and `runRound` asks again at every ROUND
+ * BOUNDARY (D-93), which is not the same as mid-review: killing a review halfway leaves it in
  * a state that is neither passed nor honestly failed, and wastes everything already
  * spent on it.
  */

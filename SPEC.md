@@ -1696,13 +1696,14 @@ because a chain of retries is how a bounded cost becomes an unbounded one.
 OpenRouter's published rates: **$3.80** for the lot — t2's 6.9M cached-read tokens are
 $3.63 of it. Against a $100 daily ceiling that is 25× headroom.
 
-**The ceiling it leans on has never been able to fire, and that is now load-bearing.**
-Every `usage` row carries `cost_usd: 0` because subscriptions report nothing, and
-`/status` says so outright. `mayStart` is checked at ENQUEUE and never mid-review, which
-was free while nothing was metered — so a single agentic review can exceed the ceiling by
-any amount before anything looks again. Bounded in practice by what one review can burn,
-which measured at $3.63 today; not bounded in principle. **[OPEN]**: a live spend bound
-belongs with this decision and is not built.
+**The ceiling it leans on is checked at ROUND BOUNDARIES, and that is new.** Every
+`usage` row carries `cost_usd: 0` because subscriptions report nothing, so the ceiling has
+never been able to fire; `mayStart` was checked at enqueue and never again, which was free
+while nothing was metered. A single agentic review could then exceed it by any amount
+before anything looked. `runRound` now asks before each round, which keeps the original
+objection intact — nothing has been spent on that round yet, so no round is abandoned
+half-paid-for and the review stops in a state with a name (`failed`, with the reason). It
+remains inert under subscriptions, because the sum is structurally zero.
 
 **The fallback is verified at startup**, because a fallback is a promise about what happens
 when a subscription runs out, and the moment it is configured nobody worries about that
