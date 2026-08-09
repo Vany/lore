@@ -187,6 +187,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-90** | **A tier that stopped answering is not asked again** — until the provider's own reset time (D-91), or a doubling cool-off when it named none. A STATED time also skips it in reviews | built 2026-08-09; widened same day |
 | **D-91** | **Subscribe, never wait.** opencode narrates every call on its event stream; a quota refusal arrives in seconds, with its reset time | built 2026-08-09 |
 | **D-92** | **t0 is not re-run on a tree it has already read**, and its pattern engines see the branch's files, not the repository | built 2026-08-09 |
+| **D-93** | **An exhausted subscription asks the same model through OpenRouter**, once, and the fallback is verified at startup | built 2026-08-09 |
 | **D-49** | A single-vendor ladder reaches `passed_partial`, never `passed` | confirmed |
 | **D-50** | Exploration is **counted per review before it is capped**; no cap yet | `[OPEN]` |
 | **D-51** | An accepted justification is **repo knowledge**, carried across reviews | confirmed |
@@ -1668,6 +1669,47 @@ person can overrule it deliberately.
 
 `sbom` and `osv` are unnarrowed for a third reason: they are about the dependency
 manifest, and the lockfile is usually not among a branch's changed files.
+
+**D-93 — an exhausted subscription asks the same model somewhere with credit.**
+
+Vany: *"we have some openrouter credits… if there is no quota on the subscription fallback
+to openrouter."*
+
+An exhausted plan used to cost the review that tier entirely: its work promoted to a
+dearer one (D-48), the verdict labelled `passed_partial`, an independent vendor lost. But
+the model is not gone — only that route to it — and opencode has OpenRouter configured
+with a twin of every model in the deployed ladder:
+
+| tier | subscription | fallback |
+|---|---|---|
+| t1 | `zai-coding-plan/glm-5-turbo` | `openrouter/z-ai/glm-5-turbo` |
+| t2 | `kimi-for-coding/k3` | `openrouter/moonshotai/kimi-k3` |
+| t3 | `openai/gpt-5.6-terra` | `openrouter/openai/gpt-5.6-terra` |
+
+**This is the only path in lore that spends metered money**, so both bounds are narrow and
+both are tested. It fires on `Exhausted` **alone** — a tier that returned garbage, or whose
+window could not hold the diff, will do the same through any provider, and retrying those
+buys the same failure for real money. And it fires **once**: no fallback for the fallback,
+because a chain of retries is how a bounded cost becomes an unbounded one.
+
+**Priced before it was built, against a real day.** Nine reviews of this repository, at
+OpenRouter's published rates: **$3.80** for the lot — t2's 6.9M cached-read tokens are
+$3.63 of it. Against a $100 daily ceiling that is 25× headroom.
+
+**The ceiling it leans on has never been able to fire, and that is now load-bearing.**
+Every `usage` row carries `cost_usd: 0` because subscriptions report nothing, and
+`/status` says so outright. `mayStart` is checked at ENQUEUE and never mid-review, which
+was free while nothing was metered — so a single agentic review can exceed the ceiling by
+any amount before anything looks again. Bounded in practice by what one review can burn,
+which measured at $3.63 today; not bounded in principle. **[OPEN]**: a live spend bound
+belongs with this decision and is not built.
+
+**The fallback is verified at startup**, because a fallback is a promise about what happens
+when a subscription runs out, and the moment it is configured nobody worries about that
+case again. A promise that cannot be kept is worse than none: it fails at the worst moment,
+looks like the provider being down, and gets diagnosed as anything but a typo in a tiers
+file. Not fatal — a ladder without a fallback is the one lore ran for its whole life — so
+it tickets, names the model, and starts.
 
 **D-82 — a defect found is fixed now; recording it is the exception.**
 

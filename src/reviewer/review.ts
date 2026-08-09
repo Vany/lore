@@ -328,6 +328,35 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // optimisation that never looked at what it was copying.
   const carriedForTier = reuseT0 ? previousT0?.unavailableForTier ?? [] : t0.unavailable;
 
+  // A REUSED ROUND STILL DISCLOSES WHAT IS SWITCHED OFF (D-83 × D-92).
+  //
+  // `silenced` is built by FILTERING fresh engine findings, and a reused round has none —
+  // so nothing was filtered and nothing was said. That is silent for the case that
+  // matters most: an appeal accepted in round N is recorded AFTER round N's filter ran,
+  // so round N's rows never mention it either. On the ordinary appeal-then-pass path — a
+  // tier accepts, comes back clean, the ladder escalates, the tree has not moved — no row
+  // in the whole review says a check is off, and `checks_skipped` stays quiet about it.
+  //
+  // Derived from the LIVE SUPPRESSIONS instead of from findings, which is the honest
+  // source: a suppression is a standing fact about this repository, not an event that
+  // happens when a finding is filtered. It is deliberately unconditional — a check that
+  // is off is worth saying whether or not it would have fired this round, and tying the
+  // disclosure to a chance match is what made it intermittent.
+  if (reuseT0 && suppressed.length > 0) {
+    for (const s of suppressed) {
+      silenced.push(
+        `${s.ruleClass} was NOT reported at ${s.path} — ${s.tier} accepted an appeal to this project's ` +
+          `development rule ${s.policyShort} ("${s.statement}") on ${s.acceptedAt.slice(0, 10)}. Anything that ` +
+          "rule would have caught here is unexamined; retire the rule to switch it back on.",
+      );
+      silencedForTier.push(
+        `${s.ruleClass} was NOT reported at ${s.path} — a tier accepted an appeal to one of this project's ` +
+          "development rules. Nothing checked that rule's subject here; you are free to raise the underlying " +
+          "problem yourself if you see it, and a finding you raise cannot be silenced this way.",
+      );
+    }
+  }
+
   const t0ForTier = { ...t0, findings: t0Findings, unavailable: [...carriedForTier, ...new Set(silencedForTier)] };
   t0 = { ...t0, findings: t0Findings, unavailable: [...t0.unavailable, ...new Set(silenced)] };
 
@@ -544,6 +573,8 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   const tierRunId = store.openTierRun(reviewId, tier.id, review.ladder.round + 1, new Date().toISOString());
 
   let result;
+  /** Set when the subscription was out and the metered twin answered instead (D-93). */
+  let fellBackTo: string | undefined;
   try {
     // NOT ASKED AT ALL, when the PROVIDER has said it is out (D-90 widened).
     //
@@ -572,7 +603,45 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
         down.until,
       );
     }
-    result = await input.reviewer.review(tier, prompt, worktree, reviewId, stillWanted);
+    try {
+      result = await input.reviewer.review(tier, prompt, worktree, reviewId, stillWanted);
+    } catch (e) {
+      // THE SAME MODEL, SOMEWHERE THAT IS NOT OUT (D-93).
+      //
+      // An exhausted subscription used to cost the review this tier entirely: its work
+      // promoted to a dearer one (D-48) and the verdict labelled accordingly. But the
+      // model is not gone — only this route to it — and OpenRouter carries a twin of
+      // every model in the deployed ladder. Asking the same model through a provider
+      // with credit is a better answer than losing an independent opinion.
+      //
+      // ONLY ON `Exhausted`, and that is the narrow reading on purpose. A tier that
+      // returned garbage, or whose window could not hold the diff, will do the same
+      // through any provider — retrying those would spend metered money to buy the same
+      // failure. Quota is the one fault that is about the ROUTE rather than the model.
+      //
+      // ONCE. No fallback for the fallback: if the metered provider refuses too, the
+      // ladder's own answer (skip, promote, say so) is the right one, and a chain of
+      // retries is how a bounded cost becomes an unbounded one.
+      if (!(e instanceof Exhausted) || tier.fallback === undefined) throw e;
+      console.error(
+        `[lore:log] ${reviewId}: ${tier.id} (${tier.model ?? "?"}) is out of quota — asking ${tier.fallback} instead`,
+      );
+      // HELD, not written yet. `closeTierRun` OVERWRITES `unavailable`, so a note
+      // recorded here would be erased by the success path a few lines below — which is
+      // exactly what happened, and the test caught it. It travels with the close instead.
+      //
+      // The tier RAN, so this is not `checks_skipped`'s usual "you got less than you
+      // think" — but which provider answered is a fact about the review, and this one
+      // costs money.
+      fellBackTo = tier.fallback;
+      result = await input.reviewer.review(
+        { ...tier, model: tier.fallback },
+        prompt,
+        worktree,
+        reviewId,
+        stillWanted,
+      );
+    }
     // Closed with what this tier FOUND, in the same words T0 uses (line 99). The
     // column answers one question — what did this tier do — and `answered` did not
     // answer it: a tier that replied with nothing and one that replied with six
@@ -586,7 +655,16 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     store.closeTierRun(
       tierRunId,
       result.findings.length > 0 ? "findings" : "clean",
-      result.discarded.map((d) => `${tier.id} produced a finding this review does NOT contain — ${d}`),
+      [
+        ...result.discarded.map((d) => `${tier.id} produced a finding this review does NOT contain — ${d}`),
+        ...(fellBackTo === undefined
+          ? []
+          : [
+              `${tier.id} was answered by ${fellBackTo} rather than ${tier.model ?? "?"} — the subscription is ` +
+                "out of quota, so the same model was asked through a metered provider. The tier ran and its " +
+                "opinion counts; this notice is here because it was not free.",
+            ]),
+      ],
       roundTree,
     );
   } catch (e) {

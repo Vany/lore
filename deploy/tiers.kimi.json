@@ -10,6 +10,7 @@
     "model": "kimi-for-coding/k3",
     "effort": "high",
     "stage": "fast",
-    "skip_if_quota": true
+    "skip_if_quota": true,
+    "fallback": "openrouter/moonshotai/kimi-k3"
   }
 ]

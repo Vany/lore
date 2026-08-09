@@ -1224,3 +1224,138 @@ describe("what a reused t0 tells a reviewer", () => {
     expect(store.lastT0("r1")?.unavailableForTier, "nothing to tell the reviewer is an answer").toStrictEqual([]);
   });
 });
+
+/**
+ * A REUSED ROUND STILL SAYS WHAT IS SWITCHED OFF (D-83 × D-92).
+ *
+ * `silenced` is built by filtering fresh engine findings, and a reused t0 has none — so
+ * nothing was filtered and nothing was said. That is silent for exactly the case that
+ * matters: an appeal accepted in round N is recorded AFTER round N's filter has run, so
+ * round N's rows do not mention it either. On the ordinary appeal-then-pass path no row
+ * in the whole review says a check is off.
+ */
+describe("what a reused round says about a suppressed check", () => {
+  it("discloses a live suppression even with no findings to filter", async () => {
+    const repo = store.upsertRepo("demo2", "git@x:demo2.git");
+    const policy = store.addKnowledge({
+      repoId: repo.id, kind: "policy", source: "taught",
+      statement: "Loopback HTTP in a test is not transport.", why: "no network to encrypt",
+      path: undefined, cwe: undefined, provenance: "taught by vany", sourceBlob: undefined, confidence: 1,
+    });
+    store.createReview({
+      id: "r-supp", repoId: repo.id, principal: "p", branch: "feat/x", intoRef: "main",
+      ticket: "t", type: "code-arch", state: "running", ladder: initialState(),
+    });
+    store.recordSuppression({
+      repoId: repo.id,
+      policyShort: policy.id.slice(0, 8),
+      ruleClass: "some.engine.rule",
+      path: "src/a.test.ts",
+      reviewId: "r-supp",
+      tier: "t1",
+    });
+
+    // A reused round has NO findings to filter, so everything the disclosure used to be
+    // built from is absent. What it is built from now is this list, which is a standing
+    // fact about the repository rather than an event that happens when a finding fires.
+    const live = store.liveSuppressions(repo.id);
+    expect(live.length, "the fixture must actually suppress something").toBeGreaterThan(0);
+    expect(live[0]?.ruleClass).toBe("some.engine.rule");
+    expect(live[0]?.path).toBe("src/a.test.ts");
+    // The client's text may quote the rule; the reviewer's may not (D-83). Both are
+    // derived from these fields, so the statement has to be here for one and the
+    // rule-class and path for both.
+    expect(live[0]?.statement, "the client's version quotes the rule").toContain("Loopback HTTP");
+  });
+});
+
+/**
+ * An exhausted subscription asks the same model somewhere with credit (D-93).
+ *
+ * Vany: *"we have some openrouter credits… if there is no quota on the subscription
+ * fallback to openrouter."* An exhausted plan used to cost the review this tier entirely
+ * — its work promoted to a dearer one (D-48) and the verdict labelled accordingly. The
+ * model is not gone, only this route to it.
+ *
+ * This is the ONLY path in lore that spends metered money, so both bounds are pinned
+ * here: it fires on quota alone, and it fires once.
+ */
+describe("falling back to a metered twin", () => {
+  /** Refuses the primary on quota, answers as the fallback. */
+  class OutOfQuota implements ReviewerLike {
+    readonly asked: string[] = [];
+    // Declared rather than a parameter property: `erasableSyntaxOnly` forbids those,
+    // because node strips types rather than compiling them (D-3).
+    private readonly refuse: string;
+    constructor(refuse: string) {
+      this.refuse = refuse;
+    }
+    async review(tier: Tier): Promise<ReviewerResult> {
+      this.asked.push(tier.model ?? "?");
+      if (tier.model === this.refuse) throw new Exhausted(`tier ${tier.id} refused on quota`);
+      return { findings: [], discarded: [], raw: "", inputTokens: 0, cachedTokens: 0, outputTokens: 0, costUsd: 0, latencyMs: 1, retried: false, steps: 1 };
+    }
+  }
+
+  const withFallback = (fallback: string) => ({
+    ...CODE_ARCH,
+    t0: [] as const,
+    tiers: CODE_ARCH.tiers.map((t) => (t.id === "t1" ? { ...t, fallback } : t)),
+  });
+
+  it("asks the twin, and the tier still counts", async () => {
+    const type = withFallback("openrouter/twin");
+    const primary = type.tiers.find((t) => t.id === "t1")?.model ?? "";
+    const reviewer = new OutOfQuota(primary);
+
+    const r = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type });
+
+    expect(reviewer.asked).toStrictEqual([primary, "openrouter/twin"]);
+    // NOT skipped and NOT promoted: the tier ran, so the ladder advances normally.
+    expect(["escalate", "fastClean"]).toContain(r.decision.kind);
+    expect(store.getReview("r1", "p")?.ladder.unavailable ?? []).toStrictEqual([]);
+    // AND THE CLIENT IS TOLD IT WAS NOT FREE. The tier ran, so this is not the usual
+    // "you got less than you think" — but which provider answered is a fact about the
+    // review, and this one costs money.
+    expect(store.unavailableChecks("r1").join("\n")).toMatch(/answered by openrouter\/twin/);
+  });
+
+  /**
+   * QUOTA ONLY. A tier that returned garbage, or whose window could not hold the diff,
+   * will do the same through any provider — retrying those buys the same failure for
+   * real money.
+   */
+  it("does not spend money on a fault the twin would repeat", async () => {
+    const type = withFallback("openrouter/twin");
+    class Broken implements ReviewerLike {
+      readonly asked: string[] = [];
+      async review(tier: Tier): Promise<ReviewerResult> {
+        this.asked.push(tier.model ?? "?");
+        throw new Error("did not return a usable reply after a retry");
+      }
+    }
+    const reviewer = new Broken();
+
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type }).catch(() => undefined);
+
+    expect(reviewer.asked, "one call: the twin would fail the same way").toHaveLength(1);
+  });
+
+  // No fallback for the fallback. If the metered provider refuses too, the ladder's own
+  // answer is the right one — a chain of retries is how a bounded cost becomes unbounded.
+  it("gives up when the twin is out too, rather than chaining", async () => {
+    const type = withFallback("openrouter/twin");
+    class BothOut implements ReviewerLike {
+      readonly asked: string[] = [];
+      async review(tier: Tier): Promise<ReviewerResult> {
+        this.asked.push(tier.model ?? "?");
+        throw new Exhausted(`tier ${tier.id} refused on quota`);
+      }
+    }
+    const reviewer = new BothOut();
+
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type }).catch(() => undefined);
+
+    expect(reviewer.asked, "primary, then twin, then stop").toHaveLength(2);
+  });
+});

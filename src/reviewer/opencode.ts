@@ -568,6 +568,32 @@ export class Reviewer implements ReviewerLike {
     return (await this.limits).get(model);
   }
 
+  /**
+   * Which of these model ids opencode can actually reach, asked once at startup (D-93).
+   *
+   * A fallback is a promise about what happens when a subscription runs out, and the
+   * moment it is configured an operator stops worrying about that case. A promise that
+   * cannot be kept is worse than none: the failure arrives at the worst possible time,
+   * looks like the provider being down, and the plan that was made around it was made for
+   * nothing. So it is checked when someone is watching rather than when it is needed.
+   *
+   * Returns what is MISSING, not a boolean, because the caller has to name them — "a
+   * fallback is unavailable" sends nobody anywhere.
+   *
+   * A provider list that cannot be fetched returns `[]` rather than "everything is
+   * missing": opencode being unreachable at startup is its own condition with its own
+   * message, and reporting it as a ladder misconfiguration would send an operator to edit
+   * a tiers file that is perfectly correct.
+   */
+  async missingModels(ids: readonly string[]): Promise<readonly string[]> {
+    const res = await this.client.config.providers().catch(() => undefined);
+    const providers = res?.data?.providers ?? [];
+    if (providers.length === 0) return [];
+    const known = new Set<string>();
+    for (const p of providers) for (const id of Object.keys(p.models ?? {})) known.add(`${p.id}/${id}`);
+    return ids.filter((id) => !known.has(id));
+  }
+
   /** What `review` does once it holds a slot. */
   private async conductSession<T>(
     tier: Tier,

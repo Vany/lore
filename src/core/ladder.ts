@@ -43,6 +43,25 @@ export interface Tier {
    * review does not depend on.
    */
   readonly skip_if_quota?: boolean;
+  /**
+   * The same model somewhere else, for when this tier's plan is out (D-93).
+   *
+   * Vany: *"we have some openrouter credits… if there is no quota on the subscription
+   * fallback to openrouter."* Three of lore's tiers are flat subscriptions, and an
+   * exhausted one used to cost the review that tier entirely — its work promoted to a
+   * dearer one and the verdict labelled accordingly. OpenRouter carries a twin of every
+   * model in the deployed ladder, so the honest answer to "this plan is out" is to ask
+   * the same model through a provider that is not.
+   *
+   * **This is the one path in lore that spends metered money.** Everything else is a flat
+   * subscription reporting `cost_usd: 0`, which is why the daily ceiling has never been
+   * able to fire (D-50). Priced against a real day — nine reviews of this repository —
+   * the whole load would have been $3.80.
+   *
+   * Absent means the old behaviour: an exhausted tier is skipped and its work promoted
+   * (D-48), which is right for a deployment with no metered credit to fall back on.
+   */
+  readonly fallback?: string;
 }
 
 /**
@@ -68,6 +87,7 @@ const TierSchema = z
     effort: absent(z.enum(["low", "medium", "high", "max"])),
     stage: z.enum(["fast", "deep"]),
     skip_if_quota: absent(z.boolean()),
+    fallback: absent(z.string().min(1)),
   })
   .strict()
   .refine((t) => t.kind !== "model" || t.model !== undefined, {

@@ -287,6 +287,29 @@ export async function serve(cfg: ServiceConfig): Promise<() => void> {
   };
   scheduleScreening();
 
+  // EVERY CONFIGURED FALLBACK, CHECKED WHILE SOMEONE IS WATCHING (D-93).
+  //
+  // A fallback is a promise about what happens when a subscription runs out, and once it
+  // is configured nobody worries about that case again. A promise that cannot be kept is
+  // worse than none: it fails at the worst moment, looks like the provider being down,
+  // and the plan made around it was made for nothing. Startup is the one time a person is
+  // looking, so the question is asked here rather than when it is needed.
+  //
+  // NOT FATAL. The ladder without a fallback is the ladder lore ran for its whole life —
+  // an exhausted tier is skipped and its work promoted (D-48) — so refusing to start
+  // would turn a degraded configuration into an outage. Loud, and it names the model, so
+  // the fix is a one-line edit rather than an investigation.
+  void (async () => {
+    const wanted = [...new Set(loadTiers().flatMap((t) => (t.fallback === undefined ? [] : [t.fallback])))];
+    if (wanted.length === 0) return;
+    const missing = await reviewer.missingModels(wanted).catch(() => [] as readonly string[]);
+    if (missing.length === 0) {
+      console.error(`lore: quota fallback ready — ${wanted.join(", ")}`);
+      return;
+    }
+    void alerter.send(CONDITIONS.fallbackUnavailable(missing));
+  })();
+
   const http = startHttp(
     store,
     {

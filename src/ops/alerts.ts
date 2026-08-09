@@ -124,6 +124,24 @@ export const CONDITIONS = {
       "rather than left waiting, so the client's next poll says so — but a review that cannot be queued at " +
       "all usually means the database is refusing writes, and the next one will fail the same way.",
   }),
+  /**
+   * A configured quota fallback that opencode cannot reach (D-93).
+   *
+   * `ticket`, not `page`: nothing is broken yet, and the ladder without a fallback is the
+   * one lore ran for its whole life — an exhausted tier is skipped and its work promoted
+   * (D-48). What is broken is a PLAN. Somebody configured this so an exhausted
+   * subscription would not cost a tier, and it will not do that; the discovery would
+   * otherwise happen at the moment the subscription runs out, look like the provider
+   * being down, and be diagnosed as anything but a typo in a tiers file.
+   */
+  fallbackUnavailable: (missing: readonly string[]): Alert => ({
+    severity: "ticket",
+    condition: "a configured quota fallback is not available",
+    detail:
+      `opencode cannot reach ${missing.join(", ")}. The ladder still works — an exhausted tier is skipped and ` +
+      "its work promoted — but the fallback that was configured to prevent that will not happen. Check the " +
+      "model id against `/config/providers`, and that the provider has credentials.",
+  }),
   /** No replica at all is worse than a late one: there is nothing to restore from. */
   backupAbsent: (): Alert => ({
     severity: "page",
