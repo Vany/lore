@@ -269,8 +269,17 @@ const MAX_SCOPED_PATHS = 200;
  * paths are too many for an argv.
  */
 export function scopePaths(scope: Scope): readonly string[] {
-  if (scope === undefined || scope.length === 0 || scope.length > MAX_SCOPED_PATHS) return ["."];
-  return scope;
+  if (scope === undefined || scope.length === 0 || scope.length > MAX_SCOPED_PATHS) return ["--", "."];
+  // `--` AND `./`, because these paths come from the BRANCH UNDER REVIEW and a filename
+  // is not a value we choose. Before D-92 the only positional was the constant `"."`;
+  // splicing repo-relative names onto the argv made a root file called `--config` parse
+  // as an option — and eat the NEXT path as its value, which a second file in the same
+  // branch could supply as a crafted ruleset. `git add --` will commit such a name
+  // happily.
+  //
+  // Both guards, not one: `--` is the standard terminator and every CLI here honours it,
+  // and `./` makes the path unmistakably a path even if some future engine does not.
+  return ["--", ...scope.map((p) => (p.startsWith("./") || p.startsWith("/") ? p : `./${p}`))];
 }
 
 export async function runEngine(worktree: string, engine: T0Engine, scope?: Scope): Promise<EngineOutcome> {

@@ -847,17 +847,39 @@ export class Reviewer implements ReviewerLike {
     // opencode and latency is meant to describe the review, not the bookkeeping.
     const latencyMs = Date.now() - started;
 
+    // THE WHOLE SESSION, not the last message of it.
+    //
+    // `session.prompt` returns ONE `AssistantMessage`, so reading its usage reported a
+    // single turn of an agentic run that may have taken eighty. The failure path already
+    // summed the session (`usageFromMessages`), which made success and failure count
+    // different quantities — recorded as a known inconsistency while every provider was a
+    // flat subscription and the numbers were decorative. D-93 made one path metered: a
+    // COMPLETED review then reported a fraction of what it spent, and both `mayStart` and
+    // the round-boundary ceiling sum that fraction.
+    //
+    // Falls back to the single message when the session cannot be read, which is the
+    // conservative direction available: an under-count is what we had, and inventing a
+    // number would be worse.
+    // ONE FETCH, TWO ANSWERS. The step count and the session's usage are both derived
+    // from the same message list, and asking twice is a round trip nobody needs — the
+    // first version did, which a test caught by counting the GETs.
+    const messages = await this.client.session
+      .messages({ path: { id: sessionId } })
+      .then((r) => ({ status: r.response?.status ?? 200, data: r.data, error: r.error }))
+      .catch((e: unknown) => ({ status: undefined, data: undefined, error: e }));
+    const whole = await usageFromMessages({ data: messages.data }).catch(() => undefined);
+    const usage = whole ?? first.usage;
     return {
       items: extracted.items,
       raw: first.text,
-      inputTokens: first.usage.input,
-      cachedTokens: first.usage.cached,
-      outputTokens: first.usage.output,
-      costUsd: first.usage.cost,
+      inputTokens: usage.input,
+      cachedTokens: usage.cached,
+      outputTokens: usage.output,
+      costUsd: usage.cost,
       latencyMs,
       retried,
       rejected: extracted.rejected,
-      steps: await this.countSteps(sessionId),
+      steps: this.stepsFrom(sessionId, messages),
     };
   }
 
@@ -891,16 +913,21 @@ export class Reviewer implements ReviewerLike {
    * of magnitude, not as a budget. `GET /session/:id` returns the same aggregates in
    * ~713 bytes and is the obvious replacement if this ever hurts.
    */
-  private async countSteps(sessionId: string): Promise<number | undefined> {
+  /**
+   * How far the agent explored, from a message list the caller already has.
+   *
+   * It used to fetch its own. The session's USAGE is derived from the same list (D-93
+   * made a completed session's total matter), so asking twice was a round trip nobody
+   * needed — caught by a test that counts the GETs rather than trusting the shape.
+   */
+  private stepsFrom(
+    sessionId: string,
+    seen: { status: number | undefined; data: unknown; error: unknown },
+  ): number | undefined {
     // Three outcomes, three sentences, because the first draft of this reported an
     // unreachable server as "opencode answered 200" — caught by pointing it at a
     // dead port and reading what it actually printed. A diagnostic that invents a
     // status is the same defect as the one `createSession` above exists to fix.
-    const seen = await this.client.session
-      .messages({ path: { id: sessionId } })
-      .then((r) => ({ status: r.response?.status ?? 200, data: r.data, error: r.error }))
-      .catch((e: unknown) => ({ status: undefined, data: undefined, error: e }));
-
     const steps = seen.status !== undefined && seen.status < 400 ? countStepParts(seen.data) : undefined;
 
     // What it reached for, and how often. Logged rather than stored: this is a

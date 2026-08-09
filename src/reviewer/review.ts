@@ -844,7 +844,11 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
         repoId: review.repoId,
         reviewId,
         tier: tier.id,
-        ...(tier.model !== undefined ? { model: tier.model } : {}),
+        // THE MODEL THAT ACTUALLY BURNED IT. On the cancel-during-fallback path the twin
+        // is what ran, and `throw twin` fires before the twin-attributed recording below —
+        // so this row was the only one written, naming a flat-subscription model that
+        // never ran while the dollars were the twin's.
+        ...((fellBackTo ?? tier.model) !== undefined ? { model: (fellBackTo ?? tier.model) as string } : {}),
         inputTokens: spent.input,
         cachedTokens: spent.cached,
         outputTokens: spent.output,

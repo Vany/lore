@@ -361,27 +361,47 @@ describe("eslint and tsc group only genuinely identical diagnostics", () => {
  */
 describe("which paths an engine is given", () => {
   it("uses the changed files when there are some", () => {
-    expect(scopePaths(["src/a.ts", "src/b.ts"])).toStrictEqual(["src/a.ts", "src/b.ts"]);
+    expect(scopePaths(["src/a.ts", "src/b.ts"])).toStrictEqual(["--", "./src/a.ts", "./src/b.ts"]);
+  });
+
+  /**
+   * A FILENAME FROM THE BRANCH IS NOT A VALUE WE CHOSE.
+   *
+   * Before D-92 the only positional was the constant `"."`. Splicing repo-relative names
+   * onto the argv made a root file called `--config` parse as an OPTION — and eat the next
+   * path as its value, which a second file in the same branch could supply as a crafted
+   * ruleset. `git add --` commits such a name happily, and lore reviews branches it does
+   * not trust.
+   */
+  it("cannot be talked into reading a filename as an option", () => {
+    const out = scopePaths(["--config", "evil.yml"]);
+    expect(out[0], "the terminator comes first").toBe("--");
+    expect(out).not.toContain("--config");
+    expect(out, "and each path is unmistakably a path").toStrictEqual(["--", "./--config", "./evil.yml"]);
+  });
+
+  it("leaves an already-anchored path alone", () => {
+    expect(scopePaths(["./a.ts", "/tmp/b.ts"])).toStrictEqual(["--", "./a.ts", "/tmp/b.ts"]);
   });
 
   // Absent means "no diff was computed", which is every caller that existed before this.
   // It must keep meaning the whole tree, or adding a parameter would silently narrow
   // every one of them.
   it("scans the tree when nothing was given", () => {
-    expect(scopePaths(undefined)).toStrictEqual(["."]);
+    expect(scopePaths(undefined)).toStrictEqual(["--", "."]);
   });
 
   // An EMPTY list is not "scan nothing". A review whose diff computed to no files at all
   // is a broken measurement, and answering it with an empty argv would make semgrep scan
   // the working directory anyway on some versions and nothing on others.
   it("scans the tree when the list is empty", () => {
-    expect(scopePaths([])).toStrictEqual(["."]);
+    expect(scopePaths([])).toStrictEqual(["--", "."]);
   });
 
   // An argv is not unbounded. Falling back widens, which is the safe direction for a
   // bound nobody can see from outside.
   it("scans the tree rather than building an argv too long to run", () => {
     const many = Array.from({ length: 500 }, (_, i) => `src/f${String(i)}.ts`);
-    expect(scopePaths(many)).toStrictEqual(["."]);
+    expect(scopePaths(many)).toStrictEqual(["--", "."]);
   });
 });
