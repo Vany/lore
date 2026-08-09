@@ -115,6 +115,16 @@ export async function screeningPass(
             `(${why}; failure ${String(failures)}). ${String(r.deferred)} document(s) of ${repo.name} keep ` +
             "waiting; their rules stay live and in use.",
         );
+      } else if (r.documents === 0 && r.deferred === 0) {
+        // NOTHING TO ASK, so nothing was learned — and an old mark left standing is not
+        // neutral: its `failures` count only ever grows, so a tier that recovered weeks
+        // ago would meet the next single blip with a 24-hour skip instead of an hour.
+        //
+        // Cleared only once the cool-off has EXPIRED, so a live one still holds. The cost
+        // of being wrong is one cheap probe — since D-91 a dead tier answers in about
+        // twelve seconds — against a working tier sitting unused for a day.
+        const stale = store.tierUnavailable(tier.id);
+        if (stale !== undefined && stale.until <= new Date().toISOString()) store.clearTierUnavailable(tier.id);
       } else if (r.documents > 0) {
         // IT ANSWERED, so whatever we believed about it being down is stale. Kept in the
         // same branch as the counting, because a mark left behind after recovery means a

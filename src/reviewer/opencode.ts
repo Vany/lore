@@ -329,6 +329,15 @@ export class Reviewer implements ReviewerLike {
   /** The subscription, started on first use and never restarted twice at once. */
   private listening?: Promise<void>;
   private closed = false;
+  /**
+   * Aborts the event subscription itself, because a flag cannot.
+   *
+   * `closed` is only observed when an event ARRIVES or the stream errors — and an idle
+   * stream yields neither, so `for await` blocks for ever, the socket stays open, and the
+   * process is held past its work. That is the exact thing `main.ts` says calling `close`
+   * prevents, which it did not.
+   */
+  private listener?: AbortController;
 
   constructor(cfg: ReviewerConfig = DEFAULT_REVIEWER) {
     this.cfg = cfg;
@@ -393,7 +402,8 @@ export class Reviewer implements ReviewerLike {
       // there as the backstop for everything this loop is not awake for.
       while (!this.closed) {
         try {
-          const res = await this.client.event.subscribe();
+          this.listener = new AbortController();
+          const res = await this.client.event.subscribe({ signal: this.listener.signal });
           for await (const ev of res.stream) {
             if (this.closed) break;
             const e = ev as { type?: string; properties?: { sessionID?: string; status?: OpencodeStatus } };
@@ -427,6 +437,9 @@ export class Reviewer implements ReviewerLike {
   /** Stop listening. Idempotent; the CLI and the tests both end without a service. */
   close(): void {
     this.closed = true;
+    // The flag alone leaves an idle stream blocked in `for await` with its socket open.
+    // Aborting is what actually ends it; the flag is what stops the loop reconnecting.
+    this.listener?.abort(new Error("reviewer closed"));
   }
 
   async cancel(reviewId: string): Promise<boolean> {

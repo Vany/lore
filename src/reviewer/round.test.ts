@@ -1359,3 +1359,65 @@ describe("falling back to a metered twin", () => {
     expect(reviewer.asked, "primary, then twin, then stop").toHaveLength(2);
   });
 });
+
+/**
+ * A COOL-OFF MUST REACH THE FALLBACK, or the two features cancel each other.
+ *
+ * D-90 skips a tier the provider said is out; D-93 asks the same model somewhere with
+ * credit. Thrown one line too far out, the cool-off's synthetic `Exhausted` bypassed the
+ * fallback entirely — so for the whole stated window, which is DAYS, the twin was never
+ * asked once. Each feature looked correct alone, and together they did nothing.
+ */
+describe("a cool-off and a fallback together", () => {
+  class Answers implements ReviewerLike {
+    readonly asked: string[] = [];
+    async review(tier: Tier): Promise<ReviewerResult> {
+      this.asked.push(tier.model ?? "?");
+      return { findings: [], discarded: [], raw: "", inputTokens: 7, cachedTokens: 0, outputTokens: 3, costUsd: 0, latencyMs: 1, retried: false, steps: 1 };
+    }
+  }
+
+  it("asks the twin instead of skipping the tier", async () => {
+    const type = {
+      ...CODE_ARCH,
+      t0: [] as const,
+      tiers: CODE_ARCH.tiers.map((t) => (t.id === "t1" ? { ...t, fallback: "openrouter/twin" } : t)),
+    };
+    store.markTierUnavailable("t1", new Date(Date.now() + 86_400_000).toISOString(), "the provider said so", 1, true);
+    const reviewer = new Answers();
+
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type });
+
+    expect(reviewer.asked, "the primary is never called; the twin is").toStrictEqual(["openrouter/twin"]);
+    // AND THE SPEND IS ATTRIBUTED TO WHAT ANSWERED. This is the one table that says what
+    // money went where, and naming a flat-subscription model that never ran would make it
+    // useless exactly when it starts mattering.
+    const u = store.db
+      .prepare("SELECT model FROM usage WHERE review_id = 'r1' AND tier = 't1'")
+      .get() as Record<string, string> | undefined;
+    expect(u?.["model"]).toBe("openrouter/twin");
+  });
+
+  // A fallback that succeeds still LEARNED the reset time, and dropping it made every
+  // later review re-pay the rediscovery.
+  it("records the provider's reset time even though the round succeeded", async () => {
+    const type = {
+      ...CODE_ARCH,
+      t0: [] as const,
+      tiers: CODE_ARCH.tiers.map((t) => (t.id === "t1" ? { ...t, fallback: "openrouter/twin" } : t)),
+    };
+    const primary = type.tiers.find((t) => t.id === "t1")?.model ?? "";
+    class OutWithTime implements ReviewerLike {
+      async review(tier: Tier): Promise<ReviewerResult> {
+        if (tier.model === primary) throw new Exhausted("out", "2026-08-10T18:19:09.000Z");
+        return { findings: [], discarded: [], raw: "", inputTokens: 0, cachedTokens: 0, outputTokens: 0, costUsd: 0, latencyMs: 1, retried: false, steps: 1 };
+      }
+    }
+
+    await runRound({ store, reviewer: new OutWithTime(), reviewId: "r1", principal: "p", worktree: dir, type });
+
+    const mark = store.tierUnavailable("t1");
+    expect(mark?.until, "the next review skips straight to the twin").toBe("2026-08-10T18:19:09.000Z");
+    expect(mark?.stated).toBe(true);
+  });
+});

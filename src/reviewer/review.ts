@@ -638,14 +638,22 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     // pass would silently decide a review's coverage, which is the exact thing the comment
     // above and SPEC D-90 both promise does not happen. The promise was kept on the write
     // side and broken on the read side.
-    if (down !== undefined && down.stated && down.until > new Date().toISOString()) {
-      throw new Exhausted(
-        `tier ${tier.id} (${tier.model ?? "?"}) was not asked: ${down.why}, so lore is not calling it before ` +
-          `${down.until}. It is retried automatically and one success clears this.`,
-        down.until,
-      );
-    }
+    const inCoolOff = down !== undefined && down.stated && down.until > new Date().toISOString();
     try {
+      // INSIDE THIS TRY, so a cool-off reaches the fallback below.
+      //
+      // Thrown one line further out, it did not — and that made D-93 dead code for
+      // exactly the case it was built and priced for. A stated cool-off lasts as long as
+      // the provider says its plan is out, which is days; through the whole of it the
+      // tier was skipped and its OpenRouter twin never asked once. The two features
+      // cancelled each other, and each looked correct alone.
+      if (inCoolOff) {
+        throw new Exhausted(
+          `tier ${tier.id} (${tier.model ?? "?"}) was not asked: ${down?.why ?? ""}, so lore is not calling it ` +
+            `before ${down?.until ?? ""}. It is retried automatically and one success clears this.`,
+          down?.until,
+        );
+      }
       result = await input.reviewer.review(tier, prompt, worktree, reviewId, stillWanted);
     } catch (e) {
       // THE SAME MODEL, SOMEWHERE THAT IS NOT OUT (D-93).
@@ -676,6 +684,17 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       // think" — but which provider answered is a fact about the review, and this one
       // costs money.
       fellBackTo = tier.fallback;
+      // WHAT THE PROVIDER SAID, RECORDED EVEN THOUGH THIS ROUND SUCCEEDS.
+      //
+      // The `markTierUnavailable` write lives in the OUTER catch, which a successful
+      // fallback never reaches — so the reset time the provider just handed us was
+      // dropped, D-90's skip never engaged, and every later review re-paid the
+      // rediscovery. A fact learned is a fact worth keeping whether or not the round that
+      // learned it went on to succeed.
+      if (e.resetAt !== undefined) {
+        const { until } = retryAt(Date.now(), 1, e.resetAt);
+        store.markTierUnavailable(tier.id, until, `the provider said its limit resets then`, 1, true);
+      }
       result = await input.reviewer.review(
         { ...tier, model: tier.fallback },
         prompt,
@@ -867,7 +886,11 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     repoId: review.repoId,
     reviewId,
     tier: tier.id,
-    ...(tier.model !== undefined ? { model: tier.model } : {}),
+    // THE MODEL THAT ACTUALLY ANSWERED, which on a fallback is not the tier's own. This
+    // is the one table that says what was spent, and attributing metered OpenRouter spend
+    // to a flat-subscription model that never ran would make the only record of real
+    // money name the wrong provider.
+    ...(fellBackTo ?? tier.model) !== undefined ? { model: (fellBackTo ?? tier.model) as string } : {},
     inputTokens: result.inputTokens,
     cachedTokens: result.cachedTokens,
     outputTokens: result.outputTokens,
