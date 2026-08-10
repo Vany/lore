@@ -717,10 +717,12 @@ export class Reviewer implements ReviewerLike {
   /**
    * Tokens a session consumed, summed over its assistant messages.
    *
-   * Read AFTER a failure, from the session opencode leaves behind. `cost` is deliberately
-   * not summed: these are subscriptions, every message reports 0, and a dollar figure that
-   * is structurally zero is the inert ceiling `/status` already warns about. Credits and
-   * tokens are the units that mean anything here.
+   * Read on BOTH paths: from the session opencode leaves behind after a failure, and from
+   * the completed session, because `session.prompt` returns one assistant message and an
+   * agentic run is many. `cost` is summed with the tokens — it was hard-zeroed while every
+   * provider billed a flat subscription and reported nothing, which stopped being true
+   * when D-93 put a metered provider on the fallback path and made this the number the
+   * daily ceiling adds up.
    */
   private async usageOf(sessionId: string): Promise<Usage | undefined> {
     return usageFromMessages(await this.client.session.messages({ path: { id: sessionId } }));
@@ -1159,11 +1161,13 @@ export function isTooLong(message: string): boolean {
 /**
  * Tokens a session consumed, summed over its assistant messages.
  *
- * Exported so it can be aimed at: it is the input to any quota accounting, it runs only
- * on the failure path where nothing else observes it, and getting it wrong under-counts
- * silently. `cost` is deliberately not summed — these are subscriptions, every message
- * reports 0, and a dollar figure that is structurally zero is the inert ceiling
- * `/status` already warns about.
+ * Exported so it can be aimed at: it is the input to any quota accounting on BOTH the
+ * success and failure paths — success reads it because `session.prompt` returns a single
+ * assistant message and an agentic run is many — and getting it wrong under-counts
+ * silently. `cost` is summed rather than zeroed: it was hard-zeroed while every provider
+ * billed a flat subscription and reported nothing, and D-93 put a metered one on the
+ * fallback path — where this is the number the daily ceiling adds up. A provider that
+ * genuinely reports nothing still sums to zero, so the subscription case is unchanged.
  */
 export async function usageFromMessages(res: unknown): Promise<Usage | undefined> {
   const rows = ((res as { data?: unknown[] } | undefined)?.data ?? []) as {
