@@ -55,6 +55,39 @@ export function coolOffMs(consecutiveFailures: number): number {
  * mis-parsed time cannot turn into a retry loop, a ceiling so one bad string cannot retire
  * a tier for a year.
  */
+/**
+ * How long a review will honour a cool-off before trying the primary once anyway.
+ *
+ * THE COST ASYMMETRY THAT JUSTIFIED "DO NOT EVEN INITIATE" HAS INVERTED. When D-90 was
+ * written, asking a dead tier cost the full 2700s deadline, so skipping was obviously
+ * right. D-91 made that same question cost about twelve seconds — and D-93 made the
+ * alternative a metered call that has cost as much as $4.94. Twelve seconds to maybe save
+ * a dollar is a trade worth taking every time.
+ *
+ * It also closes the only way lore could not learn something: it hears a tier DIE, on the
+ * event stream, and had no way at all to hear one RECOVER. A subscription that came back
+ * 81 minutes before its stated reset went on being skipped for all 81 of them, paying
+ * OpenRouter throughout, and nothing in the system could notice.
+ *
+ * Fifteen minutes, so a recovery is found within fifteen rather than within however long
+ * the provider guessed — and so a genuinely dead tier costs at most twelve seconds per
+ * quarter hour rather than per review.
+ */
+export const PROBE_INTERVAL_MS = 15 * 60_000;
+
+/**
+ * Is it time to ask a cooled-off tier whether it is back?
+ *
+ * `probedAt` absent means the mark predates probing, and the honest reading is "never
+ * probed" — so the first review after a deploy asks once, which is the same twelve
+ * seconds and immediately correct if the tier recovered while lore was down.
+ */
+export function shouldProbe(mark: { readonly probedAt?: string } | undefined, now: number): boolean {
+  if (mark === undefined) return false;
+  const last = mark.probedAt === undefined ? Number.NaN : Date.parse(mark.probedAt);
+  return Number.isNaN(last) || now - last >= PROBE_INTERVAL_MS;
+}
+
 export function retryAt(
   now: number,
   consecutiveFailures: number,

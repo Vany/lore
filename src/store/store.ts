@@ -2439,7 +2439,15 @@ export class Store {
    * by whatever is about to spend, and it must survive a restart — a process that forgot
    * would go straight back to hanging.
    */
-  markTierUnavailable(tierId: string, untilIso: string, why: string, failures: number, stated = false): void {
+  markTierUnavailable(
+    tierId: string,
+    untilIso: string,
+    why: string,
+    failures: number,
+    stated = false,
+    /** When a review last asked this tier whether it was back (D-94). */
+    probedAt?: string,
+  ): void {
     // `stated` IS LOAD-BEARING, not bookkeeping. A time the PROVIDER named is a fact about
     // itself and true for every review at once; our doubling backoff is a guess, and a
     // review acting on someone else's guess narrows its own coverage from evidence it
@@ -2447,7 +2455,7 @@ export class Store {
     // side did not, because nothing in the row distinguished the two.
     this.db
       .prepare("INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
-      .run(`tier-unavailable:${tierId}`, JSON.stringify({ until: untilIso, why, failures, stated }));
+      .run(`tier-unavailable:${tierId}`, JSON.stringify({ until: untilIso, why, failures, stated, probedAt }));
   }
 
   /** Forgotten the moment the tier answers — a stale mark is a tier we stop using for nothing. */
@@ -2463,16 +2471,31 @@ export class Store {
    * and because an operator reading this wants to know a tier failed at all, not only
    * that it is currently in a cool-off.
    */
-  tierUnavailable(tierId: string): { readonly until: string; readonly why: string; readonly failures: number; readonly stated: boolean } | undefined {
+  tierUnavailable(tierId: string): {
+    readonly until: string;
+    readonly why: string;
+    readonly failures: number;
+    readonly stated: boolean;
+    /** When a review last probed it, absent if never (D-94). */
+    readonly probedAt?: string;
+  } | undefined {
     const row = this.db.prepare("SELECT value FROM meta WHERE key = ?").get(`tier-unavailable:${tierId}`) as
       | Record<string, string>
       | undefined;
     if (row?.["value"] === undefined) return undefined;
     try {
-      const v = JSON.parse(row["value"]) as { until?: string; why?: string; failures?: number; stated?: boolean };
+      const v = JSON.parse(row["value"]) as {
+        until?: string; why?: string; failures?: number; stated?: boolean; probedAt?: string;
+      };
       // Defaults to FALSE, which is the conservative reading: a row written before this
       // field existed is treated as a guess, so it bounds the screen and never a review.
-      return { until: v.until ?? "", why: v.why ?? "", failures: v.failures ?? 1, stated: v.stated === true };
+      return {
+        until: v.until ?? "",
+        why: v.why ?? "",
+        failures: v.failures ?? 1,
+        stated: v.stated === true,
+        ...(v.probedAt === undefined ? {} : { probedAt: v.probedAt }),
+      };
     } catch {
       // A meta row we cannot parse is a row we wrote wrong; treating it as "no record"
       // costs one hang and self-heals, where throwing would take down whatever read it.

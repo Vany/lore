@@ -188,6 +188,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-91** | **Subscribe, never wait.** opencode narrates every call on its event stream; a quota refusal arrives in seconds, with its reset time | built 2026-08-09 |
 | **D-92** | **t0 is not re-run on a tree it has already read**, and its pattern engines see the branch's files, not the repository | built 2026-08-09 |
 | **D-93** | **An exhausted subscription asks the same model through OpenRouter**, once, and the fallback is verified at startup | built 2026-08-09 |
+| **D-94** | **A cooled-off tier is asked again every 15 minutes.** lore could hear a tier die and not hear it recover | built 2026-08-10 |
 | **D-49** | A single-vendor ladder reaches `passed_partial`, never `passed` | confirmed |
 | **D-50** | Exploration is **counted per review before it is capped**; no cap yet | `[OPEN]` |
 | **D-51** | An accepted justification is **repo knowledge**, carried across reviews | confirmed |
@@ -1712,7 +1713,36 @@ looks like the provider being down, and gets diagnosed as anything but a typo in
 file. Not fatal — a ladder without a fallback is the one lore ran for its whole life — so
 it tickets, names the model, and starts.
 
-**D-82 — a defect found is fixed now; recording it is the exception.**
+**D-94 — a cooled-off tier is asked again every fifteen minutes.**
+
+Vany: *"our z.ai subscription is unfrozen, did lore realize this?"* It had not, and could
+not: the mark said *until 18:19:09* and it was 16:58.
+
+**lore could hear a tier DIE and had no way to hear one RECOVER.** The refusal arrives on
+the event stream within seconds (D-91); nothing carried the opposite news. A subscription
+that came back **81 minutes early** went on being skipped for all 81, paying a metered
+provider throughout — measured: $1.45 in the eight minutes before it was cleared by hand.
+
+**The trade that justified "do not even initiate" has inverted.** When D-90 was written,
+asking a dead tier cost the full 2700s deadline, so skipping was obviously right. D-91
+made that same question cost about **twelve seconds**, and D-93 made the alternative a
+metered call that has cost as much as **$4.94**. Twelve seconds to maybe save a dollar is
+worth taking.
+
+So a review honours a cool-off, but asks once per `PROBE_INTERVAL_MS` (15 minutes)
+regardless. The probe is **not special-cased** — it is the ordinary call, so a live tier
+simply works and a dead one falls through the existing fallback path unchanged. The stamp
+is written BEFORE the call, so a tier that hangs is not probed again by every review that
+starts while it hangs.
+
+**And one success now clears the mark**, which the operator banner has promised since D-90
+shipped while only the background screen delivered it: a review could prove a tier alive
+and the mark stood until its clock ran out.
+
+**The background screen still never probes.** It has no urgency and no deadline — its
+backlog can wait — so the strict reading of *"if t1 is skipped, it must not even initiate"*
+stays exactly where it was asked for. Only the path a person is waiting on, and that spends
+metered money, buys information with twelve seconds.
 
 Vany, after a day of it: *"we fix bugs in this project immediately."*
 

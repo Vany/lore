@@ -20,6 +20,7 @@ import { DidNotRun, Exhausted } from "../core/errors.ts";
 import type { Tier } from "../core/ladder.ts";
 import { fingerprint } from "../core/fingerprint.ts";
 import { initialState, ladderFingerprint } from "../core/ladder.ts";
+import { PROBE_INTERVAL_MS } from "../core/cooloff.ts";
 import { CODE_ARCH } from "../core/review-type.ts";
 import { Store } from "../store/store.ts";
 import type { Finding } from "../core/finding.ts";
@@ -1071,7 +1072,12 @@ describe("a tier the provider said is out", () => {
     const reviewer = new Counting();
     // `stated: true` — the provider named this time. Only a stated time may skip a tier
     // in a REVIEW; the test below holds the other half.
-    store.markTierUnavailable("t1", new Date(Date.now() + 3_600_000).toISOString(), "the provider said its limit resets then", 1, true);
+    // Probed a moment ago, so the cool-off is honoured: D-94 asks once per interval, not
+    // once per review, or a dead tier would cost twelve seconds on every one.
+    store.markTierUnavailable(
+      "t1", new Date(Date.now() + 3_600_000).toISOString(), "the provider said its limit resets then",
+      1, true, new Date().toISOString(),
+    );
     const type = { ...CODE_ARCH, t0: [] as const };
 
     let last;
@@ -1088,6 +1094,33 @@ describe("a tier the provider said is out", () => {
     // or not it cost the verdict, and "not asked" must not be quieter than "asked and
     // failed" — that would make the cheaper path the less honest one.
     expect(store.unavailableChecks("r1").join("\n")).toMatch(/was not asked/);
+  });
+
+  /**
+   * lore HEARS A TIER DIE AND COULD NOT HEAR ONE RECOVER (D-94).
+   *
+   * The refusal arrives on the event stream in seconds; nothing carried the opposite news.
+   * A subscription that came back 81 minutes before its stated reset went on being skipped
+   * for all 81, paying a metered provider throughout, and no check anywhere could notice.
+   *
+   * The trade that justified never asking has inverted: asking cost 2700s when D-90 was
+   * written, about twelve seconds since D-91, against a fallback that has cost $4.94.
+   */
+  it("asks a cooled-off tier again once the probe interval has passed", async () => {
+    const reviewer = new Counting();
+    // Marked as down for another hour, but last probed long ago.
+    store.markTierUnavailable(
+      "t1", new Date(Date.now() + 3_600_000).toISOString(), "the provider said its limit resets then",
+      1, true, new Date(Date.now() - PROBE_INTERVAL_MS - 1_000).toISOString(),
+    );
+    const type = { ...CODE_ARCH, t0: [] as const };
+
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type });
+
+    expect(reviewer.seen, "twelve seconds to maybe save a dollar").toStrictEqual(["t1"]);
+    // AND ONE SUCCESS CLEARS IT — which the operator banner has promised since D-90
+    // shipped, while only the background screen ever delivered it.
+    expect(store.tierUnavailable("t1"), "it answered, so it is not down any more").toBeUndefined();
   });
 
   /**
@@ -1553,7 +1586,12 @@ describe("a cool-off and a fallback together", () => {
       t0: [] as const,
       tiers: CODE_ARCH.tiers.map((t) => (t.id === "t1" ? { ...t, fallback: "openrouter/twin" } : t)),
     };
-    store.markTierUnavailable("t1", new Date(Date.now() + 86_400_000).toISOString(), "the provider said so", 1, true);
+    // Probed a moment ago, so this round honours the cool-off and goes straight to the
+    // twin — the D-94 probe is once per interval, not once per review.
+    store.markTierUnavailable(
+      "t1", new Date(Date.now() + 86_400_000).toISOString(), "the provider said so", 1, true,
+      new Date().toISOString(),
+    );
     const reviewer = new Answers();
 
     await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type });

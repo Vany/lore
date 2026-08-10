@@ -29,7 +29,7 @@ import { fingerprint } from "../core/fingerprint.ts";
 import { parseLoreOk } from "../core/lore-ok.ts";
 import { isTerminal, type ReviewState } from "../core/review-state.ts";
 import type { ReviewType } from "../core/review-type.ts";
-import { retryAt } from "../core/cooloff.ts";
+import { retryAt, shouldProbe } from "../core/cooloff.ts";
 import { startOfDayIso } from "../ops/spend.ts";
 import { DidNotRun, Exhausted, TierUnavailable, TooLargeForTier } from "../core/errors.ts";
 import { hunkAround, hunkStillPresent, makeScope, type Scope } from "../core/scope.ts";
@@ -672,7 +672,25 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     // pass would silently decide a review's coverage, which is the exact thing the comment
     // above and SPEC D-90 both promise does not happen. The promise was kept on the write
     // side and broken on the read side.
-    const inCoolOff = down !== undefined && down.stated && down.until > new Date().toISOString();
+    // A COOL-OFF IS HONOURED, BUT ASKED AGAIN EVERY SO OFTEN (D-94).
+    //
+    // lore hears a tier DIE — the refusal arrives on the event stream in seconds — and had
+    // no way at all to hear one RECOVER. A subscription that came back 81 minutes before
+    // its stated reset went on being skipped for all 81, paying a metered provider
+    // throughout, and nothing in the system could notice.
+    //
+    // The trade that justified never asking has inverted. Asking cost 2700s when D-90 was
+    // written; D-91 made it about twelve seconds, and D-93 made the alternative a metered
+    // call that has cost $4.94. So a review asks once per `PROBE_INTERVAL_MS` — and the
+    // probe is not special-cased: it is simply the ordinary call, so a live tier just
+    // works and a dead one falls through the existing fallback path.
+    const probing = shouldProbe(down, Date.now());
+    const inCoolOff = down !== undefined && down.stated && down.until > new Date().toISOString() && !probing;
+    if (probing && down !== undefined) {
+      // Stamped BEFORE the call, so a tier that hangs cannot be probed again by every
+      // review that starts while it hangs.
+      store.markTierUnavailable(tier.id, down.until, down.why, down.failures, down.stated, new Date().toISOString());
+    }
     try {
       // INSIDE THIS TRY, so a cool-off reaches the fallback below.
       //
@@ -689,6 +707,11 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
         );
       }
       result = await input.reviewer.review(tier, prompt, worktree, reviewId, stillWanted);
+      // IT ANSWERED, so whatever we believed about it being down is over. The operator
+      // banner has promised "one success clears this" since D-90 shipped, and only the
+      // background screen ever delivered it — a review could prove a tier alive and the
+      // mark stood until its clock ran out.
+      if (down !== undefined) store.clearTierUnavailable(tier.id);
     } catch (e) {
       // THE SAME MODEL, SOMEWHERE THAT IS NOT OUT (D-93).
       //
