@@ -480,13 +480,22 @@ function movedAt(updatedAt: string, runs: readonly BoardTierRun[], store: Store,
  */
 function stepNote(state: ReviewState, runs: readonly BoardTierRun[]): string | undefined {
   // WHAT `queued` IS WAITING FOR, because "accepted, not started" answers nothing and the
-  // question got asked out loud. A worker loop has to claim the job first, and a loop is
-  // free only when it is not already holding a round — including a round parked on the
-  // model gate, which is where the wait usually is. `modelCalls` in the header is the
-  // other half of this sentence.
+  // question got asked out loud.
+  //
+  // THIS SENTENCE WAS WRITTEN BEFORE D-98 AND OUTLIVED WHAT IT DESCRIBED. It said rounds
+  // wait for a model slot and pointed at the gate — which D-98 removed in the same branch,
+  // so the board would have told an operator a review was waiting on a slot while the
+  // header beside it read `model calls 0`. Two facts on one page contradicting each other
+  // is worse than either alone: it does not merely fail to explain, it builds the wrong
+  // intuition about why work is stuck. Raised by lore's own t1 against this commit.
+  //
+  // What is true now: every worker loop is busy, and a loop is held for the WHOLE round —
+  // the deterministic sweep and the document ingest as well as the model call. So zero
+  // model calls in flight is entirely consistent with nothing being claimed.
   if (state === "queued") {
-    return "queued — no worker has claimed it yet, so NOTHING has run. Rounds hold a worker " +
-      "while they wait for a model slot; see the model-call gate above";
+    return "queued — no worker has claimed it yet, so NOTHING has run. Every worker loop is " +
+      "busy with a round, and a round holds its loop through the deterministic sweep as well " +
+      "as its model call — so zero model calls above does not mean nothing is happening";
   }
   if (state !== "running") return undefined;
   if (runs.some((t) => t.finishedAt === undefined)) return undefined;

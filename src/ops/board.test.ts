@@ -70,6 +70,27 @@ describe("what a review is doing right now", () => {
     expect(find("r1")?.stepNote).toMatch(/starting/);
   });
 
+  /**
+   * A QUEUED REVIEW SAYS WHAT IT IS WAITING FOR, and it must not name a thing that no
+   * longer exists.
+   *
+   * The first version pointed at the model-call gate and said rounds wait for a slot —
+   * written before D-98 removed that gate in the same branch, so the board would have
+   * blamed a slot while the header beside it read `model calls 0`. Two facts on one page
+   * contradicting each other build the wrong intuition about why work is stuck, which is
+   * worse than explaining nothing. There was no test; there is now.
+   */
+  it("explains a queued review without blaming a gate that no longer exists", () => {
+    review("r1", "queued");
+    const note = find("r1")?.stepNote ?? "";
+    expect(note, "the honest fact: nothing has run").toMatch(/no worker has claimed it/i);
+    // The removed semaphore, by any of its names.
+    expect(note).not.toMatch(/model[- ]call gate|wait(ing)? for a model slot/i);
+    // And it heads off the contradiction directly, since zero calls is the normal case
+    // while every loop is busy with a deterministic sweep.
+    expect(note).toMatch(/zero model calls/i);
+  });
+
   // A finished review explains nothing about tiers; the note would be noise on every row.
   it("says nothing about phases for a review that has ended", () => {
     review("r1", "passed");
