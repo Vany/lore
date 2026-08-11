@@ -5,6 +5,69 @@ surprised me.
 
 ---
 
+## 2026-08-11 — session 52: the gate caught my own gate, and the inbox was blind
+
+Vany: *"let's deploy everything and restart, noone use us now."* Deployed `dfc04ec`, drain
+cleared, and the **eight rigid reviews that had been stuck since 21:13 the night before**
+went straight to running. The drain flag was mine: a `make deploy` that timed out on
+2026-08-10 set it and never cleared it, so the service answered `ok: true` for thirteen
+hours while claiming no work. `make up` clears the flag on start, which is exactly why
+that path exists — I just never got to it.
+
+**Three defects, and I found none of them by looking for them.**
+
+*The suite went red overnight with nobody touching it.* A fixture pinned Z.ai's literal
+answer — `2026-08-10 18:19:09` — against a round that reads the real clock. In the future
+when written, in the past by morning, at which point `retryAt`'s floor clamp correctly
+returned now+60s and the assertion silently began comparing something else. It announced
+itself only because I happened to run the suite on the far side of midnight. Same class as
+a review that did not run.
+
+*My own t1 found a real bug in D-94, the commit I was pushing.* The probe stamps the mark
+before it calls; the primary refuses; the fallback's catch rewrites the mark with five
+arguments and no stamp. `shouldProbe` then reads *never probed*, so the next review probes
+immediately — the once-per-review cost D-94 exists to bound, restored in full, with every
+test passing. Fixed in the store (a write that does not name a `probedAt` keeps the stored
+one) and NOT at the two call sites, because one of them is reached by the cool-off's own
+synthetic `Exhausted` where no provider was asked at all; stamping `now` there would push
+the probe forward for a call that never happened and D-94 would never probe under load.
+The same failure wearing the opposite mask.
+
+*`review_inbox` could not see the review its own documentation is about* (D-95). Filter was
+*has undelivered findings, or is needs\_human*. So a session that polls, starts fixing, and
+ends leaves a review parked in `findings_ready` with its deltas consumed — and the next
+session, making the one call whose stated purpose is *what is waiting for me*, is told
+nothing is. Found from the operator side: `/status` listed `rev_uFMG9` in `findings_ready`
+for two days while `review_inbox` returned `{"reviews":[]}` to the same principal. Two
+views of one database disagreeing about whether anything was waiting.
+
+**A drift guard that defended its own stale copy.** `docs.test.ts` checked that the docs
+name only registered tools — against ten names typed into the test file. The server
+registers twelve. So the first doc to tell a client about `review_cancel`, a tool that has
+existed for weeks, was failed for naming something that does not exist. The check now runs
+against a live `tools/list`, in `http.test.ts` where a server already exists. **A guard
+holding its own copy of the truth eventually defends the copy** — and the failure direction
+is the worst available, because it blocks the fix and blesses the stale text.
+
+**What I got wrong on the way.** I wrote a second assertion — *every registered tool is
+mentioned in some doc* — and it failed on four tools. It was not a rule this codebase
+holds: every tool ships its own description and the client learns the name from the
+protocol. Replaced with the version that is actually load-bearing: every registered tool
+arrives with a description long enough to use.
+
+**And I mis-ordered the submit.** `will_not_settle` warned that the finding names code the
+diff had not moved, because the cause was fixed in the store; the `lore-ok` belonged in the
+*same* submit, not the next one. A round was already reading by then, so the answer waits
+for the round to end and the finding will be re-raised once for nothing.
+
+**`rev_uFMG9` could not be cancelled.** D-78 binds every call to the token that STARTED the
+review, and that token was from an earlier session. Same principal, so the inbox will list
+it once D-95 ships; `review_cancel` still answers NOT FOUND. Documented behaviour, not a
+defect — but D-95 makes previously invisible unactionable rows visible, and this is the
+first one. It self-resolves when the sweep takes it.
+
+---
+
 ## 2026-08-09 — session 50: I argued the ladder was a panel, and lost
 
 Vany: *"quota on t1 must allow to skip it and start t2. passing of t2 must make t1 not

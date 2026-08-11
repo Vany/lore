@@ -1635,6 +1635,58 @@ describe("a cool-off and a fallback together", () => {
     expect(mark?.until, "the next review skips straight to the twin").toBe(reset);
     expect(mark?.stated).toBe(true);
   });
+
+  /**
+   * THE PROBE SURVIVES THE REFUSAL IT DISCOVERED — which it did not, and D-94's whole
+   * rate limit was void wherever a fallback was configured, which is every deployed tier.
+   *
+   * Raised by lore's own t1 against the D-94 commit. The probe stamps the mark before it
+   * calls; the primary refuses; the fallback's catch rewrites the mark with five
+   * arguments and no stamp. `shouldProbe` then reads "never probed" and the NEXT review
+   * probes immediately — so a dead primary was asked once per review again, restored to
+   * exactly the cost D-94 was written to bound while every test still passed.
+   */
+  it("does not let the refusal erase the probe that found it", async () => {
+    const type = {
+      ...CODE_ARCH,
+      t0: [] as const,
+      tiers: CODE_ARCH.tiers.map((t) => (t.id === "t1" ? { ...t, fallback: "openrouter/twin" } : t)),
+    };
+    const primary = type.tiers.find((t) => t.id === "t1")?.model ?? "";
+    class OutWithTime implements ReviewerLike {
+      readonly asked: string[] = [];
+      async review(tier: Tier): Promise<ReviewerResult> {
+        this.asked.push(tier.model ?? "?");
+        if (tier.model === primary) throw new Exhausted("out", new Date(Date.now() + 86_400_000).toISOString());
+        return { findings: [], discarded: [], raw: "", inputTokens: 0, cachedTokens: 0, outputTokens: 0, costUsd: 0, latencyMs: 1, retried: false, steps: 1 };
+      }
+    }
+    const reviewer = new OutWithTime();
+
+    // Down, stated, and last probed 16 minutes ago — so this round is due one probe.
+    store.markTierUnavailable(
+      "t1", new Date(Date.now() + 86_400_000).toISOString(), "the provider said so", 1, true,
+      new Date(Date.now() - 16 * 60_000).toISOString(),
+    );
+
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type });
+    expect(reviewer.asked, "the probe happens, is refused, and the twin answers")
+      .toStrictEqual([primary, "openrouter/twin"]);
+    const after = store.tierUnavailable("t1");
+    expect(after?.probedAt, "the stamp the probe wrote is still there").toBeDefined();
+
+    // A SECOND REVIEW, not a second round: one round of r1 has already put t1 behind it,
+    // and the mark is service-wide, so only a fresh ladder asks t1 again. That is also
+    // the finding's own scenario — "Review B starts one minute later".
+    store.createReview({
+      id: "r2", repoId, principal: "p", branch: "feat/holds", intoRef: "main",
+      ticket: "a second review, moments later", type: CODE_ARCH.id, state: "running",
+      ladder: initialState(CODE_ARCH.tiers),
+    });
+    await runRound({ store, reviewer, reviewId: "r2", principal: "p", worktree: dir, type });
+    expect(reviewer.asked, "which does NOT pay to ask the dead primary again")
+      .toStrictEqual([primary, "openrouter/twin", "openrouter/twin"]);
+  });
 });
 
 /**

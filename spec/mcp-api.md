@@ -64,7 +64,7 @@ nothing.
 | `review_submit` | `review_id*`, `diff*`, `tree_hash*` | `{review_id, state, tree_hash}` |
 | `review_cancel` | `review_id*`, `reason` | `{state: "cancelled", stopped_in_flight, findings[], note}` — §2.5 |
 | `review_attest` | `review_id*` | the signed line, with its tree hash |
-| `review_inbox` | — | `{reviews[], needs_human, note}` across all the caller's reviews |
+| `review_inbox` | — | `{reviews[], needs_human, note}` — every OPEN review of the caller's, each with `waiting_on` and `expires_at` — §2.4.1 |
 | `review_vex` | `review_id*` | `{summary, untriaged, document}` — CycloneDX VEX |
 | `knowledge_query` | `path`, `contains` | `{count, items[]}` |
 | `knowledge_teach` | `statement*`, `why*`, `path`, `kind` | `{id, recorded}`, plus `cite_as` for a `policy` |
@@ -435,12 +435,36 @@ never read as "the branch is clean".
 With deep findings arriving asynchronously across dozens of open reviews, polling
 each one individually does not scale.
 
-`review_inbox()` returns deep findings across all the caller's reviews **in this
-token's repository** since they last collected — the batch view the workflow actually
-needs. Per-review `review_poll` remains for driving a single review to completion.
+`review_inbox()` returns **every review of the caller's that is still open** in this
+token's repository, together with any deep findings that have arrived since they last
+collected — the batch view the workflow actually needs. Per-review `review_poll`
+remains for driving a single review to completion.
 
 Without this, a developer with 30 open reviews either polls 30 ids or loses
 findings. Both are failures.
+
+Each entry says **whose move it is** in `waiting_on`, and when the review will be taken
+away in `expires_at`:
+
+| `waiting_on` | states | what the client does |
+|---|---|---|
+| `you` | `findings_ready`, `awaiting_diff`, `needs_human`, or anything with uncollected findings | collect, answer with `review_submit`, or get a person |
+| `lore` | `queued`, `running`, `fast_clean` | nothing — and specifically **not** a second `review_start` for that branch (§2.4.2) |
+
+`expires_at` is `updated_at` + the retention sweep's `staleHours`, read from one
+constant so the deadline stated and the deadline enforced cannot differ. It is absent
+on a terminal review, which the sweep never touches.
+
+**An open review appears here even when it has nothing new to collect**, and for most
+of this service's life it did not: the filter was "has undelivered findings, or is
+`needs_human`". A session that polled, began fixing and then ended left a review parked
+in `findings_ready` with its deltas consumed — and the next session, making the call
+whose entire stated purpose is *what is waiting for me*, was told nothing was. The
+review then held a pinned worktree until the sweep called it `expired`, which by INV-1
+never means "found nothing". Measured on lore's own repository: `rev_uFMG9` sat exactly
+so for two days. A terminal review still appears while it holds undelivered findings —
+a cancelled review hands its findings over and they are real — and drops out once they
+are taken, because then there is nothing to come back to.
 
 Each entry carries `highest`, the worst severity among its new findings, so a client
 can triage 30 reviews without reading 30 lists. It is **computed over the whole set**,

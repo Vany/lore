@@ -1735,6 +1735,19 @@ simply works and a dead one falls through the existing fallback path unchanged. 
 is written BEFORE the call, so a tier that hangs is not probed again by every review that
 starts while it hangs.
 
+**The stamp survives a rewrite of the mark, and the interval is nothing without that.**
+A probe that is refused writes the refusal — and the write is `markTierUnavailable`,
+which erased the stamp it had made seconds earlier, so `shouldProbe` read *never probed*
+and the next review probed at once. The rate limit was void wherever a fallback was
+configured, which is every deployed tier, while every test still passed. An update that
+does not name a `probedAt` therefore keeps the one already stored; only a real call names
+a new time, and `clearTierUnavailable` is what forgets. Deliberately in the store rather
+than at the call sites: one of them is reached by the cool-off's own synthetic
+`Exhausted`, where no provider was asked at all, and a site stamping `now` there would
+push the probe forward for a call that never happened — never probing at all under steady
+load, which is the same failure wearing the opposite mask. Raised against the D-94 commit
+by lore's own t1.
+
 **And one success now clears the mark**, which the operator banner has promised since D-90
 shipped while only the background screen delivered it: a review could prove a tier alive
 and the mark stood until its clock ran out.
@@ -1808,6 +1821,79 @@ That is what turns "too big" from a wall into a degradation.
 D-77 still holds and nothing skips the ladder. What changes is that batching is the
 DEFAULT rather than a compromise: fix everything found, review it together, push it
 together.
+
+**D-96 — a board at `/`, because "what is running?" was being answered with SQL.**
+
+Vany asked *"what is running right now?"* four times in one week. Every time the answer
+needed a shell into the container and three queries, and twice the thing I found that way
+was a review that had been wedged for the better part of an hour.
+
+`/status` already holds these facts and is the wrong shape for them: it answers *is it
+healthy* to something that will page. So `GET /` serves one self-contained page — no
+build step, no CDN, because a board about a wedged service must not need to fetch
+anything to render — pushed over SSE, with `/board.json` for `curl`.
+
+**Collapsed by default, and collapsed says: state, step, time used, time since anything
+moved.** The last is the number the page exists for, so its definition is load-bearing —
+the newest of `updated_at`, any tier boundary, and any finding's first sighting.
+`updated_at` alone moves on STATE changes, and a deep tier can read for twenty minutes
+without one; a board that called that stalled would train its reader to ignore the only
+signal that matters.
+
+Two things are promoted out of the detail because they are alarms, not data: **`no tier`**
+in the collapsed row when a `running` review has every tier row closed — the four-and-a-
+half-hour stall's exact shape, which the first version hid behind a click — and a stall
+clock that goes yellow at twenty minutes and red at forty-five.
+
+**A finished review's clock stops.** Counting to now for ever would say a review that
+passed on Monday is still spending time, which is this project's own failure mode drawn
+in a table.
+
+Pushed on change only, from a timer that runs solely while somebody is watching: an idle
+board transfers nothing, and an unattended service does no work for it. Deliberately a
+poll rather than new operator events on `store.events`, whose state-change-only semantics
+are argued for elsewhere and whose extension would fail by going quietly stale.
+
+Unauthenticated on the MCP interface, **Vany's call**, made knowing `LORE_BIND` is
+`0.0.0.0` — `/status` already exposes the same names to the same audience. Finding TEXT is
+deliberately excluded: a claim describes a defect in somebody's unmerged branch.
+
+Detail in `spec/operations.md` §2.4.3.
+
+**D-95 — the inbox lists every OPEN review, not only the ones with something fresh.**
+
+`review_inbox` filtered on *has undelivered findings, or is `needs_human`*. So the review
+it hid was precisely the one its own documentation is about: **parked in
+`findings_ready`, its findings already collected, waiting on a `review_submit` that never
+came.** That is not an exotic path. It is what happens every time a session polls, starts
+fixing, and ends — the deltas are consumed by the session that dies, and the next one,
+making the call whose stated purpose is *what is waiting for me*, is told nothing is.
+
+The review then holds a pinned worktree until the sweep calls it `expired`, and by INV-1
+`expired` never means "found nothing" — it means a review was paid for and concluded
+nothing at all. Abandonment was measured as the dominant cause of wasted reviews here,
+and the mechanism built to prevent it could not see the commonest case.
+
+Found on lore's own repository, from the operator side rather than the client side:
+`/status` listed `rev_uFMG9` in `findings_ready` for two days while `review_inbox`
+returned `{"reviews":[]}` to the same principal. Two views of one database disagreeing
+about whether anything was waiting.
+
+So the filter is now *open, or holding undelivered findings*, and each entry says whose
+move it is:
+
+- **`waiting_on: "you"`** — `findings_ready`, `awaiting_diff`, `needs_human`, or any
+  review with uncollected findings. Nothing happens until the client acts.
+- **`waiting_on: "lore"`** — `queued`, `running`, `fast_clean`. Listed deliberately even
+  though there is nothing to do, because a resumed session that cannot see its own
+  running review starts a second one, and `review_start` discards every justification the
+  first has ratified (§2.4.2).
+- **`expires_at`** — `updated_at` plus the sweep's own `staleHours`, from one constant, so
+  the deadline stated and the deadline enforced cannot drift apart. Absent on a terminal
+  review, which the sweep never touches; a deadline there would be fiction.
+
+A terminal review still appears while it holds undelivered findings — cancelling hands
+its findings over and they are real — and drops out once they are taken.
 
 **D-81 — extraction stays deterministic, and a model may only VETO what it mined.**
 

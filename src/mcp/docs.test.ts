@@ -23,14 +23,17 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { REVIEW_STATES, isAttestable, isTerminal } from "../core/review-state.ts";
-import { RESOURCE_DOCS, REVIEW_PROMPT_TEXT, TOOL_DOCS } from "./docs.ts";
+import { everyClientDocument, RESOURCE_DOCS, REVIEW_PROMPT_TEXT, TOOL_DOCS } from "./docs.ts";
 
-/** Every string a client is ever shown, so no document can be quietly excluded. */
-const ALL_DOCS: readonly [string, string][] = [
-  ...Object.entries(TOOL_DOCS).map(([k, v]) => [`TOOL_DOCS.${k}`, v] as [string, string]),
-  ...Object.entries(RESOURCE_DOCS).map(([k, v]) => [`RESOURCE_DOCS[${k}]`, v.text] as [string, string]),
-  ["REVIEW_PROMPT_TEXT", REVIEW_PROMPT_TEXT("b", "i", "t")],
-];
+/**
+ * Every string a client is ever shown, from the module that owns them.
+ *
+ * It was assembled here, and then a second copy was assembled in `http.test.ts` when one
+ * of these guards moved — except that copy was `TOOL_DOCS` alone, so `REVIEW_PROMPT_TEXT`
+ * and every resource doc silently left the corpus while a comment said the guard had only
+ * moved. One list, beside the documents, is the fix.
+ */
+const ALL_DOCS: readonly (readonly [string, string])[] = everyClientDocument();
 
 // THE MOST EXPENSIVE INSTRUCTION THIS SERVICE EVER SHIPPED, and it was in seven
 // strings. "Poll again in 10s, backing off to 60s" against a measured t1 median of 323s
@@ -98,14 +101,6 @@ describe("the loop starts by asking what is already waiting", () => {
 });
 
 describe("the docs name tools that exist", () => {
-  // The registered names, which is the only thing a client can call. Kept here
-  // rather than imported because buildServer needs a Principal and a Store, and the
-  // point is to compare against the literal wire names.
-  const TOOLS = [
-    "review_start", "review_poll", "review_submit", "review_attest", "review_inbox",
-    "review_vex", "knowledge_query", "knowledge_teach", "knowledge_resolve", "knowledge_escalate",
-  ];
-
   it.each(ALL_DOCS)("%s uses no dotted tool name", (_name, text) => {
     // `review.poll` is what SPEC calls it in prose and is not callable. Matching the
     // stem lets a doc say "a review's poll" while catching the tool-shaped form.
@@ -113,15 +108,20 @@ describe("the docs name tools that exist", () => {
     expect(dotted).toStrictEqual([]);
   });
 
-  // Parameter names share the prefix and are not tools. Listed rather than pattern-
-  // matched, so a genuinely wrong tool name cannot hide behind a loose rule.
-  const NOT_TOOLS = ["review_id"];
-
-  it.each(ALL_DOCS)("%s only names tools that are registered", (_name, text) => {
-    const named = new Set(text.match(/\b(?:review|knowledge)_[a-z_]+/g) ?? []);
-    const unknown = [...named].filter((n) => !TOOLS.includes(n) && !NOT_TOOLS.includes(n));
-    expect(unknown).toStrictEqual([]);
-  });
+  // THE "ONLY NAMES REGISTERED TOOLS" CHECK MOVED to `http.test.ts`, where a live
+  // `tools/list` can feed it — over EVERY document, via `everyClientDocument()`.
+  //
+  // Here it compared against ten names typed out by hand, because this file has no
+  // server to ask. The server registers twelve. So it aged into the opposite of a
+  // drift guard: `review_cancel` had existed for weeks, and the first doc to tell a
+  // client to call it was failed for naming a tool that does not exist. A guard
+  // holding its own stale copy of the truth defends the copy.
+  //
+  // AND THE FIRST VERSION OF THAT MOVE NARROWED IT, which is why the corpus is now a
+  // function beside the documents rather than a list beside a test: the moved check
+  // scanned `TOOL_DOCS` alone, so `REVIEW_PROMPT_TEXT` and every resource doc left the
+  // guard silently while this comment said it had only moved. A sentence claiming
+  // coverage is exactly as dangerous as a test claiming it.
 });
 
 describe("the docs describe every state the code can produce", () => {

@@ -8,11 +8,14 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { initialState } from "../core/ladder.ts";
+import type { ReviewState } from "../core/review-state.ts";
+import { STALE_HOURS } from "../ops/retention.ts";
 import { DEFAULT_SPEND } from "../ops/spend.ts";
+import { BOARD_PAGE } from "./board-page.ts";
 import { DEFAULT_HEARTBEAT } from "../ops/heartbeat.ts";
 import { grantToken, hashToken, revokeByPrefix } from "../mcp/auth.ts";
 import { Store } from "../store/store.ts";
-import { TOOL_DOCS } from "../mcp/docs.ts";
+import { everyClientDocument, TOOL_DOCS } from "../mcp/docs.ts";
 import { startHttp } from "./http.ts";
 
 let store: Store;
@@ -174,11 +177,136 @@ describe("authentication", () => {
   });
 });
 
-describe("MCP surface", () => {
-  it("lists the tools an agent needs to drive a review", async () => {
-    const res = await mcp({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }, token);
-    const text = await res.text();
+/**
+ * The operator board (D-96), through the real server.
+ *
+ * `/status` answers the same question for a monitor; this answers it for a person, and
+ * the fact worth testing is that it answers WITHOUT a token — deliberately, and stated in
+ * the route's own comment, because a board you have to authenticate to is one you do not
+ * open at 3am when the thing is on fire.
+ */
+describe("the operator board", () => {
+  const review = (id: string, state: string, branch: string) =>
+    store.createReview({
+      id, repoId, principal: "alice", branch, intoRef: "main",
+      ticket: "t", type: "code-arch", state: state as never, ladder: initialState(),
+    });
 
+  it("serves the page at / with no credential", async () => {
+    const res = await fetch(`${base}/`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/html");
+    const html = await res.text();
+    expect(html).toContain("<title>lore — board</title>");
+    // Self-contained on purpose: a board about a wedged service must not need to fetch
+    // anything from anywhere to render.
+    expect(html, "no external script or stylesheet").not.toMatch(/src="http|href="http/);
+  });
+
+  it("serves the same snapshot as JSON, for curl and for scripts", async () => {
+    review("revBoard", "running", "feat/board");
+    const res = await fetch(`${base}/board.json`);
+    const body = (await res.json()) as { reviews: { id: string }[] };
+    expect(body.reviews.map((r) => r.id)).toContain("revBoard");
+  });
+
+  /**
+   * THE PAGE IS AN UNTYPED CLIENT OF THIS PAYLOAD, so a renamed field breaks it silently
+   * — the board would render `undefined` where a branch name goes and nothing would fail.
+   * TypeScript cannot see inside a template string; this is the substitute for that.
+   */
+  it("emits no field the page does not read", async () => {
+    review("revBoard", "running", "feat/board");
+    store.openTierRun("revBoard", "t1", 1, new Date().toISOString());
+    const body = (await (await fetch(`${base}/board.json`)).json()) as Record<string, unknown>;
+
+    const missing = Object.keys(body).filter((k) => !BOARD_PAGE.includes(k));
+    expect(missing, "board.json fields the page never mentions").toStrictEqual([]);
+
+    const first = (body["reviews"] as Record<string, unknown>[])[0] ?? {};
+    const missingRev = Object.keys(first).filter((k) => !BOARD_PAGE.includes(k));
+    expect(missingRev, "per-review fields the page never mentions").toStrictEqual([]);
+  });
+
+  /**
+   * A STREAM CARRIES NO HISTORY — the same lesson the MCP subscription docs lead with.
+   * A watcher that attached one tick after something happened would otherwise sit in
+   * front of a blank board until the next change, which on a quiet service is for ever.
+   */
+  it("pushes the current picture the moment a watcher attaches", async () => {
+    review("revBoard", "running", "feat/board");
+
+    const ctl = new AbortController();
+    try {
+      const res = await fetch(`${base}/board/events`, { signal: ctl.signal });
+      expect(res.headers.get("content-type")).toContain("text/event-stream");
+      const frame = await firstFrame(res);
+      expect(frame.reviews.map((r) => r.id)).toContain("revBoard");
+    } finally {
+      ctl.abort();
+    }
+  });
+
+  it("pushes again when something changes", async () => {
+    review("revBoard", "running", "feat/board");
+
+    const ctl = new AbortController();
+    try {
+      const res = await fetch(`${base}/board/events`, { signal: ctl.signal });
+      const reader = frames(res);
+      const before = await reader();
+      expect(before.reviews.find((r) => r.id === "revBoard")?.state).toBe("running");
+
+      store.updateReview("revBoard", { state: "findings_ready" });
+
+      const after = await reader();
+      expect(after.reviews.find((r) => r.id === "revBoard")?.state).toBe("findings_ready");
+    } finally {
+      ctl.abort();
+    }
+  }, 15_000);
+});
+
+/** Read SSE `data:` frames off a response, one call per frame. */
+function frames(res: Response): () => Promise<{ reviews: { id: string; state: string }[] }> {
+  const reader = (res.body as ReadableStream<Uint8Array>).getReader();
+  const decoder = new TextDecoder();
+  let buffered = "";
+  return async () => {
+    for (;;) {
+      const nl = buffered.indexOf("\n\n");
+      if (nl >= 0) {
+        const chunk = buffered.slice(0, nl);
+        buffered = buffered.slice(nl + 2);
+        const line = chunk.split("\n").find((l) => l.startsWith("data:"));
+        // A comment frame (`: still here`) is not news; keep reading.
+        if (line !== undefined) return JSON.parse(line.slice("data:".length)) as never;
+        continue;
+      }
+      const { value, done } = await reader.read();
+      if (done) throw new Error("the board stream ended before a frame arrived");
+      buffered += decoder.decode(value, { stream: true });
+    }
+  };
+}
+
+const firstFrame = async (res: Response) => await frames(res)();
+
+describe("MCP surface", () => {
+  /** What the wire actually offers — the only list that cannot be stale. */
+  const registered = async (): Promise<string[]> => {
+    const res = await mcp({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }, token);
+    // An SSE frame wrapping the JSON-RPC reply, exactly as `callTool` unwraps it.
+    const line = (await res.text()).split("\n").find((l) => l.startsWith("data:"));
+    expect(line, "tools/list returned no SSE data frame").toBeDefined();
+    const rpc = JSON.parse((line ?? "").slice("data:".length)) as { result?: { tools?: { name: string }[] } };
+    const names = (rpc.result?.tools ?? []).map((t) => t.name).sort();
+    // A parse that yields nothing would make every assertion below vacuously true.
+    expect(names.length, "no tools came back at all").toBeGreaterThan(0);
+    return names;
+  };
+
+  it("lists the tools an agent needs to drive a review", async () => {
     for (const name of [
       "review_start",
       "review_poll",
@@ -191,8 +319,63 @@ describe("MCP surface", () => {
       "knowledge_resolve",
       "knowledge_escalate",
     ]) {
-      expect(text).toContain(name);
+      expect(await registered()).toContain(name);
     }
+  });
+
+  /**
+   * A DOC MAY ONLY NAME A TOOL THAT EXISTS — checked against `tools/list`, never
+   * against a list written out by hand.
+   *
+   * This check lived in `docs.test.ts` against ten names typed into the test file. The
+   * server registers twelve. So it aged into the opposite of a drift guard: a doc telling
+   * a client to call `review_cancel`, a tool that has existed for weeks, was failed for
+   * naming something that does not exist. A guard holding its own copy of the truth ends
+   * up defending the copy — and the direction of that failure is the worst available,
+   * because it blocks the fix and blesses the stale text.
+   *
+   * EVERY DOCUMENT, from `everyClientDocument()`. The first version of this move scanned
+   * `TOOL_DOCS` alone, which quietly dropped `REVIEW_PROMPT_TEXT` — the text that drives
+   * the whole review loop, naming seven tools — and every resource doc, while the comment
+   * left behind in `docs.test.ts` assured the next maintainer the guard had merely moved.
+   * Raised by lore's own t2 against this change.
+   */
+  it("names no tool the server does not register, in any document", async () => {
+    const tools = await registered();
+    // Parameter names share the prefix and are not tools.
+    const NOT_TOOLS = new Set(["review_id"]);
+    const corpus = everyClientDocument();
+    // The corpus itself is asserted, because a guard over an empty list passes loudest.
+    expect(corpus.length, "no documents to check").toBeGreaterThan(5);
+    const offenders = corpus.flatMap(([name, text]) =>
+      [...new Set(text.match(/\b(?:review|knowledge)_[a-z_]+/g) ?? [])]
+        .filter((n) => !NOT_TOOLS.has(n) && !tools.includes(n))
+        .map((n) => `${name}: ${n}`),
+    );
+    expect(offenders, "documentation names tools the server does not register").toStrictEqual([]);
+  });
+
+  /**
+   * ...AND EVERY TOOL THAT EXISTS ARRIVES WITH ITS DOCUMENTATION ATTACHED.
+   *
+   * The other direction, and the one worth having: a client learns a tool's name from
+   * the protocol, so the question is never "is it mentioned elsewhere" — it is whether
+   * the description came with it. An empty one is a tool an agent can see and cannot
+   * use, which for this service is the same as not shipping it (spec/agent-docs.md §1).
+   *
+   * Length rather than mere presence, because `description: ""` and a typo'd
+   * `TOOL_DOCS.<key>` both yield something technically present.
+   */
+  it("ships every registered tool with real documentation attached", async () => {
+    const res = await mcp({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }, token);
+    const line = (await res.text()).split("\n").find((l) => l.startsWith("data:"));
+    const rpc = JSON.parse((line ?? "").slice("data:".length)) as {
+      result?: { tools?: { name: string; description?: string }[] };
+    };
+    const thin = (rpc.result?.tools ?? [])
+      .filter((t) => (t.description ?? "").length < 200)
+      .map((t) => `${t.name}(${(t.description ?? "").length})`);
+    expect(thin, "tools an agent can see but cannot learn to use").toStrictEqual([]);
   });
 
   it("exposes the live-data resource templates, not just the static docs", async () => {
@@ -471,6 +654,115 @@ describe("findings are ranked worst first", () => {
 
     // The aggregate and the per-finding label now agree — which is the whole point.
     expect(out["open_count"]).toBe(2);
+  });
+});
+
+/**
+ * THE INBOX MUST LIST A REVIEW THAT IS WAITING ON THE CLIENT AND HAS NOTHING FRESH.
+ *
+ * Its filter was `new_findings > 0 || needs_human`, so a review in `findings_ready`
+ * whose findings had already been collected vanished from the one call whose stated job
+ * is "what is waiting for me". That is not an exotic path — it is what happens every
+ * time a session polls, starts fixing, and ends: the deltas are consumed, the review is
+ * parked, and the next session is told it has nothing.
+ *
+ * Found on lore's own repository. rev_uFMG9 sat in `findings_ready` for two days,
+ * absent from the inbox, holding a pinned worktree, hours from being swept as
+ * `expired` — which by INV-1 never means "found nothing" and here would have meant
+ * nothing at all.
+ */
+describe("the inbox lists what is waiting, not only what is fresh", () => {
+  const open = (id: string, state: ReviewState, branch: string) =>
+    store.createReview({
+      id, repoId, principal: "alice", branch, intoRef: "main",
+      ticket: "t", type: "code-arch", state, ladder: initialState(),
+    });
+
+  it("lists a parked review whose findings were already collected", async () => {
+    open("revP", "findings_ready", "feat/parked");
+    store.recordFinding("revP", {
+      fingerprint: "p1", file: "a.ts", line: 1, symbol: "s", severity: "high",
+      claim: "c", evidence: "e", failureScenario: "f", origin: "t1", round: 1,
+      firstSeen: "2026-08-03T00:00:00.000Z",
+    });
+    // The session that consumed them, and then ended.
+    await callTool("review_poll", { review_id: "revP" });
+
+    const out = await callTool("review_inbox", {});
+    const rows = out["reviews"] as Record<string, unknown>[];
+    const p = rows.find((r) => r["review_id"] === "revP");
+
+    expect(p, "a parked review must not vanish because its findings were collected").toBeDefined();
+    expect(p?.["new_findings"], "and it is honest that there is nothing new to collect").toBe(0);
+    expect(p?.["waiting_on"]).toBe("you");
+  });
+
+  // The other half of the triage, and the reason to list a review with nothing to do:
+  // a resumed session that cannot see its own running review starts a second one, and
+  // `review_start` throws away every justification the first has already ratified.
+  it("lists a running review as lore's move, not the client's", async () => {
+    open("revR", "running", "feat/running");
+
+    const out = await callTool("review_inbox", {});
+    const r = (out["reviews"] as Record<string, unknown>[]).find((x) => x["review_id"] === "revR");
+
+    expect(r, "a running review is still one of mine").toBeDefined();
+    expect(r?.["waiting_on"]).toBe("lore");
+    expect(r?.["new_findings"]).toBe(0);
+  });
+
+  // A deadline is what makes "waiting on you" actionable. It has to be the SAME 48
+  // hours the sweep uses, so both read one constant.
+  it("says when the sweep will take it, counted from when it last moved", async () => {
+    open("revX", "findings_ready", "feat/expiring");
+    const row = store.getReview("revX", "alice");
+
+    const out = await callTool("review_inbox", {});
+    const x = (out["reviews"] as Record<string, unknown>[]).find((r) => r["review_id"] === "revX");
+
+    expect(x?.["expires_at"]).toBe(
+      new Date(Date.parse(row?.updatedAt ?? "") + STALE_HOURS * 3_600_000).toISOString(),
+    );
+  });
+
+  // A finished review is not waiting for anybody, and a deadline on one would be
+  // fiction: `expireStaleReviews` does not touch terminal states.
+  it("drops a finished review once its findings have been taken", async () => {
+    open("revD", "cancelled", "feat/done");
+    store.recordFinding("revD", {
+      fingerprint: "d1", file: "a.ts", line: 1, symbol: "s", severity: "low",
+      claim: "c", evidence: "e", failureScenario: "f", origin: "t1", round: 1,
+      firstSeen: "2026-08-03T00:00:00.000Z",
+    });
+
+    // While it still holds findings it is listed — cancelling hands them over and they
+    // are real, so losing them here would be a regression of its own.
+    const before = await callTool("review_inbox", {});
+    const d = (before["reviews"] as Record<string, unknown>[]).find((r) => r["review_id"] === "revD");
+    expect(d, "a cancelled review's undelivered findings are still waiting").toBeDefined();
+    expect(d, "but nothing will expire, so there is no deadline to state").not.toHaveProperty("expires_at");
+    expect(d?.["waiting_on"]).toBe("you");
+
+    await callTool("review_poll", { review_id: "revD" });
+    const after = await callTool("review_inbox", {});
+    expect(
+      (after["reviews"] as Record<string, unknown>[]).find((r) => r["review_id"] === "revD"),
+      "once collected there is nothing to come back to",
+    ).toBeUndefined();
+  });
+
+  // The docs ARE the interface, so a field the inbox emits and TOOL_DOCS.inbox never
+  // mentions is a client acting on a contract it cannot read (spec/agent-docs.md §1).
+  it("emits no inbox field the docs do not name", async () => {
+    open("revF", "findings_ready", "feat/fields");
+    const out = await callTool("review_inbox", {});
+    const emitted = new Set(
+      (out["reviews"] as Record<string, unknown>[]).flatMap((r) => Object.keys(r)),
+    );
+    // Named by the protocol or by every other tool, not by this text.
+    const ELSEWHERE = new Set(["review_id", "branch", "state", "clean", "findings", "highest"]);
+    const undocumented = [...emitted].filter((k) => !ELSEWHERE.has(k) && !TOOL_DOCS.inbox.includes(k));
+    expect(undocumented, "the inbox emits fields its own docs never mention").toStrictEqual([]);
   });
 });
 

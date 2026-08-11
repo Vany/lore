@@ -49,6 +49,13 @@ export interface ReviewRow {
   readonly state: ReviewState;
   readonly treeHash: string | undefined;
   readonly ladder: LadderState;
+  /**
+   * When this review last moved — and therefore when the stale sweep will take it.
+   *
+   * Read by `review_inbox` to tell a client how long it has left to answer, which is the
+   * only number that makes "waiting on you" actionable rather than merely true.
+   */
+  readonly updatedAt: string;
 }
 
 export interface RecordedFinding extends Finding {
@@ -287,7 +294,10 @@ export class Store {
 
   // ---------------------------------------------------------------- review
 
-  createReview(r: Omit<ReviewRow, "treeHash"> & { treeHash?: string }): void {
+  // `updatedAt` is not a caller's to supply — it is written here and moved by
+  // `updateReview`, and a review that could be created claiming it last moved yesterday
+  // would be swept the moment it was born.
+  createReview(r: Omit<ReviewRow, "treeHash" | "updatedAt"> & { treeHash?: string }): void {
     const t = now();
     this.db
       .prepare(
@@ -381,6 +391,7 @@ export class Store {
       tokenHash: un(row["token_hash"] ?? null),
       tiers: un(row["tiers"] ?? null),
       ladder: JSON.parse(row["ladder"] ?? "{}") as LadderState,
+      updatedAt: row["updated_at"] ?? "",
     };
   }
 
@@ -2453,9 +2464,23 @@ export class Store {
     // review acting on someone else's guess narrows its own coverage from evidence it
     // never saw. SPEC D-90 says exactly that and the write side honoured it — the READ
     // side did not, because nothing in the row distinguished the two.
+    //
+    // AN UPDATE THAT DOES NOT NAME `probedAt` KEEPS THE ONE ALREADY THERE, and this is the
+    // whole of D-94's rate limit. The probe stamps the mark before it calls, then the call
+    // refuses and the catch rewrites the mark — with five arguments, no stamp — so the
+    // probe was erased by the very refusal that discovered it. `shouldProbe` then read
+    // "never probed" and every review asked the dead tier again, which is the once-per-
+    // review cost D-94 exists to bound, restored in full while looking fixed.
+    //
+    // Preserved HERE and not at the two call sites, because one of them is reached by the
+    // cool-off's own synthetic `Exhausted` — no provider was asked on that path, so a site
+    // that stamped `now` would push the next probe forward for a call that never happened
+    // and D-94 would never probe at all under steady load. The store keeps what it knows;
+    // only a real call names a new time. `clearTierUnavailable` is what forgets.
+    const kept = probedAt ?? this.tierUnavailable(tierId)?.probedAt;
     this.db
       .prepare("INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
-      .run(`tier-unavailable:${tierId}`, JSON.stringify({ until: untilIso, why, failures, stated, probedAt }));
+      .run(`tier-unavailable:${tierId}`, JSON.stringify({ until: untilIso, why, failures, stated, probedAt: kept }));
   }
 
   /** Forgotten the moment the tier answers — a stale mark is a tier we stop using for nothing. */
@@ -2648,6 +2673,96 @@ export class Store {
       | Record<string, number | bigint>
       | undefined;
     return Number(row?.["c"] ?? 0);
+  }
+
+  /** Jobs holding a worker right now. `queueDepth`'s counterpart: waiting versus working. */
+  jobsRunning(): number {
+    const row = this.db.prepare("SELECT COUNT(*) AS c FROM job WHERE state = 'running'").get() as
+      | Record<string, number | bigint>
+      | undefined;
+    return Number(row?.["c"] ?? 0);
+  }
+
+  // ------------------------------------------------------- the operator board (D-96)
+  //
+  // Five reads, named here rather than written at the call site, because `board.ts` is a
+  // second consumer of shapes `review`, `tier_run` and `finding` already have opinions
+  // about — and a query at the call site is one this class cannot maintain when a column
+  // moves. The board polls while anybody is watching, so each of these is indexed and
+  // none of them is per-review except where the definition it needs already lives here.
+
+  /**
+   * What belongs on the board: everything unfinished, plus whatever ended recently.
+   *
+   * Unfinished first regardless of recency — a verdict that just landed is interesting,
+   * but it is never more interesting than the eight things still running.
+   */
+  boardReviews(finishedSinceIso: string, limit = 60): readonly Record<string, string | null>[] {
+    return this.db
+      .prepare(
+        `SELECT id, branch, into_ref, type, state, ladder, created_at, updated_at FROM review
+         WHERE state NOT IN (${TERMINAL_SQL}) OR updated_at > ?
+         ORDER BY (state IN (${TERMINAL_SQL})), updated_at DESC
+         LIMIT ?`,
+      )
+      .all(finishedSinceIso, limit) as Record<string, string | null>[];
+  }
+
+  /**
+   * Every tier attempt across MANY reviews, oldest first, open runs included.
+   *
+   * Deliberately not named `tierRunsFor`: that already exists one screen up, takes a
+   * single id and returns every column. Two overloads of one name is how this file
+   * briefly had two — TypeScript called it a duplicate implementation, the later one won
+   * at runtime, and a subscription test failed somewhere unrelated.
+   */
+  tierRunsAcross(reviewIds: readonly string[]): readonly Record<string, string | number | null>[] {
+    if (reviewIds.length === 0) return [];
+    return this.db
+      .prepare(
+        `SELECT review_id, tier, round, outcome, started_at, finished_at FROM tier_run
+         WHERE review_id IN (${reviewIds.map(() => "?").join(",")}) ORDER BY id`,
+      )
+      .all(...reviewIds) as Record<string, string | number | null>[];
+  }
+
+  /** Findings per review per severity — raw counts; `openFindings` is what is still work. */
+  findingCountsFor(reviewIds: readonly string[]): readonly Record<string, string | number | null>[] {
+    if (reviewIds.length === 0) return [];
+    return this.db
+      .prepare(
+        `SELECT review_id, severity, COUNT(*) c FROM finding
+         WHERE review_id IN (${reviewIds.map(() => "?").join(",")}) GROUP BY review_id, severity`,
+      )
+      .all(...reviewIds) as Record<string, string | number | null>[];
+  }
+
+  /** The newline-separated "did not run" notes from every round of one review (INV-1). */
+  checksSkippedFor(reviewId: string): readonly string[] {
+    const rows = this.db
+      .prepare("SELECT unavailable FROM tier_run WHERE review_id = ? AND unavailable IS NOT NULL")
+      .all(reviewId) as Record<string, string | null>[];
+    const seen = new Set<string>();
+    for (const r of rows) {
+      for (const line of String(r["unavailable"] ?? "").split("\n")) {
+        if (line.trim() !== "") seen.add(line.trim());
+      }
+    }
+    return [...seen];
+  }
+
+  /**
+   * When this review last had a finding raised against it, or `undefined` if never.
+   *
+   * Evidence of life that touches no other table: a tier can raise findings for twenty
+   * minutes without the review row moving at all.
+   */
+  lastFindingAt(reviewId: string): string | undefined {
+    const row = this.db
+      .prepare("SELECT MAX(first_seen) AS m FROM finding WHERE review_id = ?")
+      .get(reviewId) as Record<string, string | null> | undefined;
+    const m = row?.["m"];
+    return m === null || m === undefined ? undefined : String(m);
   }
 
   /**

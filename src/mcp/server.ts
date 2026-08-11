@@ -15,8 +15,9 @@ import * as z from "zod";
 import { absent } from "../core/optional.ts";
 import { worstSeverity } from "../core/finding.ts";
 import { initialState, ladderFingerprint, type LadderState } from "../core/ladder.ts";
-import { isAttestable, isClean, isTerminal, type ReviewState } from "../core/review-state.ts";
+import { isAttestable, isClean, isTerminal, needsClient, type ReviewState } from "../core/review-state.ts";
 import { DEFAULT_TYPE, reviewType, reviewTypeIds } from "../core/review-type.ts";
+import { STALE_HOURS } from "../ops/retention.ts";
 import { applyPatch, restoreTree, treeHash } from "../git/repo.ts";
 import { enrich, renderEnrichment } from "../knowledge/enrich.ts";
 import { paceFor, paceNote } from "../ops/pace.ts";
@@ -951,11 +952,23 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       const reviews = store.listReviews(who.principal, who.repoId);
       const items = reviews.map((r) => {
         const fresh = store.undelivered(r.id);
+        // WHOSE MOVE IT IS, which is the question this call is for and the one it could
+        // not answer. A review in `running` needs nothing from anyone; a review in
+        // `findings_ready` is stopped dead and dies in 48 hours.
+        const yours = fresh.length > 0 || needsClient(r.state);
         return {
           review_id: r.id,
           branch: r.branch,
           state: r.state,
           clean: isClean(r.state),
+          waiting_on: yours ? "you" : "lore",
+          // WHEN IT WILL BE TAKEN AWAY. "Waiting on you" is true of a review with three
+          // hours left and of one with two days, and a client that cannot tell them
+          // apart cannot triage. Only for reviews the sweep can still reach: a terminal
+          // review is never expired, so a deadline on one would be fiction.
+          ...(isTerminal(r.state)
+            ? {}
+            : { expires_at: new Date(Date.parse(r.updatedAt) + STALE_HOURS * 3_600_000).toISOString() }),
           new_findings: fresh.length,
           // This is the field a client triages on, so it is computed, not read off
           // the front of the list. It used to be `fresh[0].severity` with "high"
@@ -989,7 +1002,20 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
 
       return text(
         JSON.stringify({
-          reviews: items.filter((i) => i.new_findings > 0 || i.state === "needs_human"),
+          // EVERY OPEN REVIEW, not only the ones with something fresh to collect.
+          //
+          // The filter used to be `new_findings > 0 || needs_human`, which hid the exact
+          // review this call's own documentation is about: one in `findings_ready` whose
+          // findings were collected by a session that then ended mid-fix. Measured on
+          // lore's own repository — rev_uFMG9 sat there for two days, invisible to the
+          // inbox, holding a pinned worktree, and would have been swept as `expired`
+          // having concluded nothing. `review_poll` had consumed the deltas, so the one
+          // call whose stated job is "what is waiting for me" answered with nothing.
+          //
+          // Terminal reviews still appear WHILE they hold undelivered findings, because
+          // a cancelled review hands its findings over and they are real; they drop out
+          // once collected, which is correct — there is nothing left to come back to.
+          reviews: items.filter((i) => i.new_findings > 0 || !isTerminal(i.state)),
           needs_human: needsHuman.length,
           ...(needsHuman.length > 0 ? { open_questions: questions } : {}),
           note:

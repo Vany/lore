@@ -713,6 +713,31 @@ are what that session's own numbers say is in the way, not what reading suggeste
       DOWN — and `one-definition.test.ts` fails if the two disagree. Both move together
       or neither does.
 
+### 2026-08-11 — found while deploying, not yet fixed
+
+Both are defects, so under D-82 the default is to fix them in the change that found
+them. Both are here instead, with the argument for waiting written out, because each
+needs something this session cannot supply.
+
+- [ ] **`review_start` accepts a branch identical to its base, and calls it `passed`.**
+      Three tiers agreed that nothing contains no defects, which is INV-1's exact
+      inverse: a review that read an empty tree reporting the strongest verdict this
+      service can issue. It happened once, to me, by pushing `main` to the same commit
+      as the review ref. **Waiting on:** nothing but a decision about the refusal's
+      shape — refuse at `review_start` beside the stale-mirror and missing-ticket
+      refusals, or let it run and end as its own state. The first is a one-line guard
+      and the honest reading of *"a review that did not run is not a review that found
+      nothing"*; the second says more but adds a state. Small either way; deliberately
+      not bundled into a diff that was already ten files and answering a live finding.
+
+- [ ] **`drain.test.ts > leaves a cancelled review cancelled when the round refuses
+      mid-flight` fails intermittently.** Twice in one evening, never on demand, 3/3
+      when run alone. **Waiting on evidence** — a test that sometimes does not run is
+      the same shape as a review that did not, so this is not a nuisance to retry
+      away, and guessing at the race would produce a fix nothing can confirm. Next
+      step is to run that file in a loop under load and capture a failure with its
+      timing, not to change code.
+
 - [ ] **Three people hold tokens on `rigid-monorepo` and the perimeter changed.**
       Provisioned 2026-08-07 for `koray` and `max`; `LORE_BIND` moved from `127.0.0.1`
       to `0.0.0.0` on Vany's call, so the service answers on every interface this laptop

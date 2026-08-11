@@ -136,6 +136,55 @@ Not built. Recorded here rather than covered by a check that measures something 
 which is the failure §2.5 is about — and named so that a reader of this table does not
 read its absence as coverage.
 
+### 2.4.3 The board — the same facts, for a person rather than a monitor (D-96)
+
+`/status` answers *is it healthy* in JSON, for something that will page. It is a poor
+answer to the question actually asked out loud four times in one week — **"what is
+running right now, and why has that one been going forty minutes?"** — which needed a
+shell into the container and three SQL queries every time.
+
+`GET /` is that answer. One page, pushed over SSE at `/board/events`, with `/board.json`
+for anything that would rather read once than hold a stream.
+
+**Every review is collapsed, and collapsed carries four things**: its state, which step
+it is on, how long it has been going in total, and **how long since anything moved**.
+The last is the whole point, and its definition is load-bearing: the newest of the
+review's own `updated_at`, any tier run's start or finish, and any finding's first
+sighting. `updated_at` alone moves only on STATE changes, and a tier can read a
+repository for twenty minutes without one — so a board built on it would report every
+healthy deep round as stalled, and an operator who learned to ignore that would have
+nothing left to notice a real hang with.
+
+Two facts are pulled out of the detail into the collapsed row because they are alarms
+rather than data:
+
+- **`no tier`** — a `running` review with every tier row closed. That is the shape of the
+  stall that once cost four and a half hours, and it was behind a click in the first
+  version, which is one click more than an alarm may cost.
+- **the stall clock turns yellow past twenty minutes and red past forty-five**, the
+  latter being the hang this whole line of work started from.
+
+A finished review's total **stops** — carried as `endedAt` rather than counted to now,
+because a number that grows while nothing happens is this project's own failure mode
+rendered in a table. Finished reviews stay for two hours: a verdict that vanishes at the
+moment it arrives is the one you were watching for.
+
+**It is pushed, and only when something changed.** A timer recomputes the snapshot every
+two seconds while at least one board is open and writes nothing if the payload is
+identical, so an idle board transfers nothing and every message means the picture really
+moved. Elapsed times animate in the browser from absolute timestamps. The timer starts
+with the first watcher and stops with the last — an unattended service does no work for a
+board nobody has open. A poll rather than the event bus deliberately: `store.events`
+fires on state changes only, by design, and this board is about what happens BETWEEN
+them; wiring operator events into every write path is a change whose failure mode is a
+silently stale board, and a poll cannot miss anything.
+
+**Unauthenticated, on the MCP interface, on Vany's explicit call** knowing `LORE_BIND` is
+`0.0.0.0`. `/status` has always exposed the same branch names and counts to the same
+audience. What the board deliberately does NOT carry is finding **text**: a claim names a
+defect in somebody's unmerged branch, and that is theirs to hand out rather than ours to
+publish.
+
 ### 2.5 Disk is not lore's to alert on
 
 **Removed 2026-08-06.** There were two disk conditions — page above 90%, ticket above

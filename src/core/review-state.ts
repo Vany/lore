@@ -59,6 +59,24 @@ export function isTerminal(state: ReviewState): boolean {
 }
 
 /**
+ * States where lore will do nothing further until the CLIENT acts.
+ *
+ * The distinction the inbox exists to make. A review in `running` is lore's move and
+ * needs nothing from anyone; a review in `findings_ready` is stopped, holding a pinned
+ * worktree, and will be swept as `expired` — "nobody was ever going to come back" — 48
+ * hours after the client last touched it.
+ *
+ * `needs_human` is here because the client's move is real even though it is not a code
+ * change: get a person. Nothing else in the system can do that, and lore cannot notify
+ * anyone.
+ */
+const CLIENT_MOVE = new Set<ReviewState>(["findings_ready", "awaiting_diff", "needs_human"]);
+
+export function needsClient(state: ReviewState): boolean {
+  return CLIENT_MOVE.has(state);
+}
+
+/**
  * The only predicate any caller should use to decide whether a branch is clean.
  *
  * Written as a function rather than a comparison so there is one place to be wrong,

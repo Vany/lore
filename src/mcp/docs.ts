@@ -475,8 +475,8 @@ the attestation does not describe what is there now.
 `.trim(),
 
   inbox: `
-THE FIRST CALL OF EVERY SESSION. Deep findings across ALL your open reviews, since you
-last collected.
+THE FIRST CALL OF EVERY SESSION. EVERY review of yours that is still open, plus any
+deep findings waiting since you last collected.
 
 A review outlives the session that started it. You end; your subscription ends with
 you; the review does not — it sits in findings_ready holding a worktree until it is
@@ -487,6 +487,25 @@ notification can reach one that has gone.
 So the thing that actually closes the loop is the next session asking what is waiting.
 That is this call. Make it before you start a new review — not instead of polling one
 you are already driving.
+
+READ \`waiting_on\` FIRST. It is "you" or "lore", and it is the whole triage:
+
+  * "you" — nothing will happen until you act. Either findings are queued for you
+    (\`new_findings\` > 0, collect them with review_poll), or the review is stopped at
+    findings_ready / awaiting_diff / needs_human with everything already handed over,
+    which means it is waiting on a review_submit or on a person. THIS IS THE STATE THAT
+    ROTS. It listed nothing to collect and so used to be omitted here entirely — the
+    common way to reach it is to poll, start fixing, and end the session.
+  * "lore" — queued, running, or fast_clean with the deep tiers still going. Nothing to
+    do. Do NOT start a second review of the same branch: review_start abandons every
+    justification the open one has already ratified and re-runs the cheap tiers from
+    scratch.
+
+\`expires_at\` is when the sweep will take it — an unanswered review is called
+\`expired\` 48h after it last moved, and \`expired\` never means "found nothing". It is
+absent on a review that has already ended. If a deadline is close and you cannot answer
+the findings now, review_cancel says "somebody decided" instead, which is the honest
+ending and the one that frees the worktree.
 
 Surface \`needs_human\` and high-severity findings to your user through whatever
 alerting you have. Do not merely log them. lore cannot notify anyone — it returns
@@ -816,3 +835,25 @@ When the state is \`passed\` — or \`passed_partial\` — call review_attest an
 user that line. On a partial one, say which tiers were skipped and that the evidence
 is weaker than a pass; the decision to merge on it is theirs, not yours.
 `.trim();
+
+/**
+ * EVERY STRING A CLIENT IS EVER SHOWN, named once so no document can be quietly left out.
+ *
+ * It exists because a document WAS quietly left out. The "docs may only name tools that
+ * exist" guard was moved to where a live `tools/list` could feed it — a real improvement
+ * — and in the move its corpus narrowed from all three surfaces to `TOOL_DOCS` alone.
+ * `REVIEW_PROMPT_TEXT`, which drives the entire review loop and names seven tools, went
+ * unchecked, while the comment left behind said the guard had merely moved. Two test
+ * files each assembling "all the docs" is how that happens; there is one list now, and it
+ * lives beside the documents rather than beside a test.
+ *
+ * The prompt is a function of the review it describes, so it is sampled with placeholder
+ * arguments — every sentence a guard cares about is in the invariant part.
+ */
+export function everyClientDocument(): readonly (readonly [string, string])[] {
+  return [
+    ...Object.entries(TOOL_DOCS).map(([k, v]) => [`TOOL_DOCS.${k}`, v] as const),
+    ...Object.entries(RESOURCE_DOCS).map(([k, v]) => [`RESOURCE_DOCS[${k}]`, v.text] as const),
+    ["REVIEW_PROMPT_TEXT", REVIEW_PROMPT_TEXT("b", "i", "t")] as const,
+  ];
+}

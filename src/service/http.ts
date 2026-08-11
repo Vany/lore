@@ -24,10 +24,13 @@ import { type AuthInfo, createMcpHandler, type McpRequestContext } from "@modelc
 import { authenticate, type Principal } from "../mcp/auth.ts";
 import { asSubscriber, eventsFor, NO_EVENTS, ScopedEventBus } from "../mcp/events.ts";
 import { buildServer, type ServerDeps } from "../mcp/server.ts";
+import { board } from "../ops/board.ts";
 import { type SpendConfig, spendByTier, startOfDayIso } from "../ops/spend.ts";
 import { checkHealth, type HeartbeatConfig } from "../ops/heartbeat.ts";
 import type { GateState } from "../reviewer/gate.ts";
 import type { Store } from "../store/store.ts";
+import { BOARD_PAGE } from "./board-page.ts";
+import { type BoardStream, startBoardStream } from "./board-stream.ts";
 
 export interface HttpConfig {
   readonly port: number;
@@ -81,8 +84,12 @@ export function startHttp(store: Store, deps: ServerDeps, cfg: HttpConfig): { cl
 
   store.events = eventsFor(mcp.notify);
 
+  // Built once and owned here, for the same reason the MCP handler is: it holds open
+  // response streams, so it cannot be per-request, and its timer must die with the server.
+  const boardStream = startBoardStream(store);
+
   const server = createServer((req, res) => {
-    void handle(store, cfg, serveMcp, req, res).catch((e: unknown) => {
+    void handle(store, cfg, serveMcp, boardStream, req, res).catch((e: unknown) => {
       const message = e instanceof Error ? e.message : String(e);
       if (!res.headersSent) res.writeHead(500, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: message }));
@@ -95,6 +102,9 @@ export function startHttp(store: Store, deps: ServerDeps, cfg: HttpConfig): { cl
       // Aborts in-flight exchanges, including every open subscription stream. A
       // client blocked on one learns the service went away instead of hanging.
       void mcp.close();
+      // Same argument, for the other kind of held-open stream: a board watcher is told
+      // the service went away rather than left holding a socket that will never speak.
+      boardStream.close();
       // Nothing is listening once the handler is shut; publishing into a closed
       // handler is a no-op either way, but a store that outlives its server should
       // not keep a reference to it.
@@ -143,10 +153,40 @@ async function handle(
   store: Store,
   cfg: HttpConfig,
   serveMcp: NodeMcpRequestHandler,
+  boardStream: BoardStream,
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<void> {
   const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+
+  // THE OPERATOR BOARD (D-96): the same question `/status` answers, for a person rather
+  // than a monitor — what is running, how long it has been running, and how long since it
+  // last moved.
+  //
+  // UNAUTHENTICATED, ON THE SAME INTERFACE AS MCP, ON PURPOSE — Vany's call, made knowing
+  // that `LORE_BIND` is `0.0.0.0` and this therefore answers to everyone on the tailnet.
+  // `/status` has always exposed the same branch names and counts to the same audience, so
+  // this widens who can see it comfortably rather than who can see it at all. What it
+  // deliberately does NOT carry is finding TEXT: a claim names a defect in somebody's
+  // unmerged branch, and that is theirs to hand out, not ours to publish.
+  if (url.pathname === "/" || url.pathname === "/board") {
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    res.end(BOARD_PAGE);
+    return;
+  }
+
+  if (url.pathname === "/board/events") {
+    boardStream.add(res);
+    return;
+  }
+
+  // The same snapshot the page renders, for anything that would rather read JSON once
+  // than hold a stream open — `curl`, a script, or me at a prompt.
+  if (url.pathname === "/board.json") {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify(board(store), null, 2));
+    return;
+  }
 
   // The operator view (D-26). Answers one question: is parallelism actually
   // running, or silently queueing? Those look identical from outside, and only one

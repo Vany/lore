@@ -55,10 +55,19 @@ export interface RetentionConfig {
   readonly scratchRoot?: string | undefined;
 }
 
+/**
+ * How long an unanswered review survives — named, because two places now say it.
+ *
+ * The sweep enforces it; `review_inbox` QUOTES it, telling a client when the review it
+ * is looking at will be taken away. Two literals would drift, and the direction of the
+ * drift is a client told it has longer than it has.
+ */
+export const STALE_HOURS = 48;
+
 export const DEFAULT_RETENTION: RetentionConfig = {
   worktreeDays: 0,
   reviewDays: 90,
-  staleHours: 48,
+  staleHours: STALE_HOURS,
   cacheDays: 14,
   reposRoot: join(dataDir(), "repos"),
   cacheRoot: join(dataDir(), "npm-cache"),

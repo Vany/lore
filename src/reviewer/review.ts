@@ -750,6 +750,14 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       // learned it went on to succeed.
       if (e.resetAt !== undefined) {
         const { until } = retryAt(Date.now(), 1, e.resetAt);
+        // lore-ok[b08d7cc0]: the finding is real and is fixed in the store, not here.
+        // Five arguments erased the `probedAt` stamp the probe wrote moments earlier, so
+        // `shouldProbe` read "never probed" and D-94's interval was void. A write that
+        // does not name a stamp now KEEPS the stored one (store.markTierUnavailable).
+        // Deliberately not fixed at this call site: the outer catch below is also reached
+        // by the cool-off's own synthetic `Exhausted`, where no provider was asked at all,
+        // and stamping `now` there would push the probe forward for a call that never
+        // happened — never probing under steady load, the same failure inverted.
         store.markTierUnavailable(tier.id, until, `the provider said its limit resets then`, 1, true);
       }
       // A FALLBACK MAY ONLY IMPROVE THE OUTCOME, NEVER WORSEN IT.
