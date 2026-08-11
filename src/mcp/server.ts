@@ -514,6 +514,15 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           // Carried on every poll from then on rather than once: a review is polled by
           // whichever session happens to be alive, and a fact delivered exactly once is a
           // fact the next session does not have (the same reasoning as `review_inbox`).
+          //
+          // lore-ok[1b172d0a]: the finding is real and is fixed at the other end. Read
+          // unconditionally here, and CLEARED when a round parks the review on a person
+          // again (`settleState` in reviewer/review.ts, `clearHumanDecision` in the store),
+          // so what survives to be read can only be the answer to the question that is
+          // actually blocking this review. Fixed there rather than here because the
+          // condition is "the review parked again", which this call cannot observe — it
+          // sees a state, not a transition — and a reader that tried to infer it would be
+          // guessing at exactly the moment the client is told not to ask its user.
           ...(() => {
             const decision = store.humanDecision(review_id);
             return decision === undefined ? {} : { human_decision: decision };
