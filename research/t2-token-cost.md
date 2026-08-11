@@ -91,3 +91,73 @@ to justify the cap and not enough to predict exactly what the cap will save.
 The finding counts are matched on `(review_id, origin, round)` — exact — while steps come
 from the nearest `usage` row by timestamp, which is a join lore does not currently make
 directly. A `round` column on `usage` would remove that fuzziness and is cheap.
+
+---
+
+## The session is thrown away between rounds
+
+**Measured 2026-08-11, prompted by Vany:** *"the diff is applied to the worktree and the
+process is restarted — but the diff must be applied to the worktree and delivered to the
+model when the model becomes free. So it is a discussion, maybe at the moment when the
+model finds the next problem."*
+
+He is right about the mechanism. `Reviewer.review()` calls `createSession()` on entry and
+drops the session on exit, so **every round is a cold start**: a new session, the full
+prompt rebuilt, and the model re-orienting itself in a worktree it examined minutes ago.
+
+### How often that happens
+
+Since the ladder became monotonic (2026-08-08), of **218 model rounds**:
+
+| | runs of 2+ | repeat rounds | longest run |
+|---|---:|---:|---:|
+| t1 | 6 | 9 | 3 |
+| t2 | 18 | **36** | 4 |
+| t3 | 10 | 18 | 5 |
+
+**63 rounds — 29% of all model rounds — were a tier re-orienting on a review it had
+already read.** At t2's $0.69 a round, its 36 repeats are about $25 of the $97 t2 has ever
+cost.
+
+`settledBlock` in the prompt is the workaround for this and names the problem out loud: it
+exists to re-tell a fresh session what the previous one already decided.
+
+### Whether a conversation is actually cheaper is NOT settled
+
+SPEC D-80 §6 marks this `[OPEN]` and asks for measurement rather than argument. The
+measurement now available cuts both ways.
+
+A cold round costs 31.6 steps against an average context of ~31K tokens — 972K cached
+reads, 95K fresh. A continued session skips the re-orientation but **carries its context
+forever**, and every turn re-sends all of it.
+
+Break-even, from our own numbers: a continued round beats a cold one only if it needs
+**fewer than about 6 turns** once the conversation's context reaches ~150K. That is
+plausible for *"here is the fix, is it right?"* — and it gets worse every round, because
+the context only grows. By the fifth round the budget is 2–3 turns, and eventually the
+window itself is the limit.
+
+So the shape is: **conversation wins early and loses late**, where cold rounds are flat.
+Nothing here justifies replacing one with the other; it justifies a trial.
+
+### The stronger argument is not cost
+
+D-10 says the tier that raised a finding should judge the answer, and the ladder already
+enforces it (D-6 revised). A conversation makes that literal — the same session, with the
+reasoning that produced the finding still in context — instead of a new session
+reconstructing its own past opinion from a prompt block. That is better review, and it is
+the argument that does not depend on which way the token arithmetic falls.
+
+### What would settle it
+
+One tier, one repository, conversation mode behind a flag, measured against the cold
+baseline recorded here: $/round, rounds-to-verdict, and findings per round. Everything
+needed to compare is already in `usage` and `tier_run`.
+
+Two things to decide before building, both from D-80 §6 and neither answerable from data:
+
+- **When does the conversation end?** Context growth makes "never" wrong. A threshold, a
+  round count, or falling back to cold when the window fills.
+- **How does the next tier enter?** It cannot inherit another model's conversation, so an
+  escalation is a cold start by construction — which is fine, and means this only ever
+  helps *within* a tier's run.
