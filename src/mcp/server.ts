@@ -267,12 +267,30 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           .min(1)
           .describe("the task text, pasted verbatim — not summarised, not your own description"),
         type: absent(z.enum(reviewTypeIds() as [string, ...string[]])).describe(`default: ${DEFAULT_TYPE}`),
+        // OPTIONAL, AND IT HAD TO BE. Required would have failed every `review_start`
+        // from every client already working — three people on one repository — the
+        // moment this deployed, and lore's own reviews are cut from scratch
+        // `review/<sha>` refs that have no pull request in the first place. The docs
+        // ask for it in the strongest terms available to a document; the schema does
+        // not turn "you forgot a link" into "your review did not run" (INV-1).
+        //
+        // `http(s)` ONLY, checked here rather than trusted. This string is rendered as
+        // a link on a page that needs no credential, so `javascript:` in it would be a
+        // script somebody else chose, running in the operator's browser, on the one
+        // page they open when something is wrong.
+        pull_request: absent(
+          z
+            .string()
+            .min(1)
+            .max(2048)
+            .refine((u) => /^https?:\/\//i.test(u), "pull_request must be an http(s) URL"),
+        ).describe("link to the pull request this branch is proposed in"),
         restart: absent(z.boolean()).describe(
           "abandon an open review of this branch and start over — only after a rebase or force-push",
         ),
       }),
     },
-    async ({ branch, into, ticket, type, restart }) => {
+    async ({ branch, into, ticket, type, restart, pull_request }) => {
       // AN OPEN REVIEW OF THIS BRANCH IS THE ONE TO CONTINUE, NOT TO DUPLICATE.
       //
       // Measured 2026-08-05, the first day a real client drove this: six reviews of
@@ -335,6 +353,7 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
         // its cursor to a different model half way through.
         tiers: ladderFingerprint(rt.tiers),
         branch,
+        ...(pull_request === undefined ? {} : { pullRequest: pull_request }),
         intoRef: into,
         ticket,
         type: rt.id,

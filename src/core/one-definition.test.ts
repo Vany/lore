@@ -37,6 +37,32 @@ function sources(dir = SRC, out: string[] = []): string[] {
 
 const FILES = sources().map((path) => ({ path: path.slice(SRC.length), text: readFileSync(path, "utf8") }));
 
+/**
+ * A file that is ONE template literal may not contain a stray backtick.
+ *
+ * `board-page.ts` is the whole operator page in a single template string, and a backtick
+ * inside a comment in it ENDS that string. The compiler then reports the wreckage thirty
+ * lines later as a missing comma, which names neither the file's real problem nor the
+ * habit that caused it. I did it three times in one afternoon quoting identifiers the
+ * ordinary way, and a note in the file saying "no backticks here" did not stop the third.
+ *
+ * So: exactly two, the ones that open and close the page. This runs even when the file no
+ * longer parses, because it reads the source as TEXT — which is the whole point, since a
+ * test that imports a broken file cannot report on it.
+ */
+describe("a page held in a template literal has no stray backtick", () => {
+  it("has exactly the two that delimit it", () => {
+    const page = FILES.find((f) => f.path === "service/board-page.ts");
+    expect(page, "board-page.ts is not where this test thinks it is").toBeDefined();
+    const ticks = (page?.text.match(/`/g) ?? []).length;
+    expect(
+      ticks,
+      "a backtick inside board-page.ts ends the page string; the compiler reports it far " +
+        "from the cause, as a missing comma. Quote identifiers without backticks in this file.",
+    ).toBe(2);
+  });
+});
+
 describe("review states have one definition", () => {
   // A SQL membership test naming states as literals. Every one of these that existed
   // was missing `passed_partial`, because the list was written from memory each time.

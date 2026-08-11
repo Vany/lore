@@ -62,6 +62,10 @@ export const BOARD_PAGE = `<!doctype html>
   details[open] .caret { transform: rotate(90deg); display: inline-block; }
   .state { font-weight: 700; font-size: 11px; letter-spacing: .4px; }
   .branch { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Underlined only on hover: every branch that HAS a pull request would otherwise be a
+     wall of underlines, and the ones without would read as broken rather than as absent. */
+  .branch a { color: inherit; text-decoration: none; }
+  .branch a:hover { text-decoration: underline; color: var(--blue); }
   .step { color: var(--blue); }
   /* The stall this board exists to catch, said in the COLLAPSED row. It used to be
      visible only after a click, which is one click more than an alarm may cost. */
@@ -120,6 +124,7 @@ export const BOARD_PAGE = `<!doctype html>
   <span><span class="k">build</span><span id="build" class="dim">—</span></span>
   <span><span class="k">queued</span><span id="queued">—</span></span>
   <span><span class="k">in flight</span><span id="inflight">—</span></span>
+  <span><span class="k">model calls</span><span id="calls">—</span></span>
   <span><span class="k">spend today</span><span id="spend">—</span></span>
   <span class="dim" id="live">connecting…</span>
 </header>
@@ -177,6 +182,14 @@ function render(b) {
   document.getElementById("queued").textContent = b.queued;
   document.getElementById("inflight").textContent = b.inFlight;
   document.getElementById("spend").textContent = "$" + b.spendTodayUsd.toFixed(2);
+  // WHAT EVERY QUEUED REVIEW IS WAITING FOR. Rounds hold a worker while they wait here,
+  // so a saturated gate is why nothing else starts — and without this line the board said
+  // "queued 3" and left the reader to guess. A dash for a build with no gate: absent is
+  // not zero.
+  const c = b.modelCalls;
+  const calls = document.getElementById("calls");
+  calls.textContent = c ? c.inFlight + "/" + c.limit + (c.waiting > 0 ? " · " + c.waiting + " waiting" : "") : "—";
+  calls.className = c && c.inFlight >= c.limit ? "s-findings_ready" : "";
 
   const banners = [];
   // Drained reads as idle from outside and means the opposite: work arrives and nothing
@@ -202,7 +215,14 @@ function render(b) {
     main.innerHTML = '<div class="empty">no reviews in the last two hours — lore is idle.</div>';
     return;
   }
-  main.innerHTML = b.reviews.map(row).join("");
+  main.innerHTML = b.reviews.map(row).join("") +
+    // Never a silent cap. Someone hunting a wedged review must not be shown a partial
+    // list that looks complete.
+    (b.reviewsNotShown > 0
+      ? '<div class="banner down">' + b.reviewsNotShown +
+        " more review(s) exist and are NOT listed here — this board shows the most recent " +
+        b.reviews.length + ", unfinished work first.</div>"
+      : "");
   for (const d of main.querySelectorAll("details")) {
     d.open = open.has(d.dataset.id);
     d.addEventListener("toggle", () => {
@@ -232,7 +252,7 @@ function row(r) {
     '<summary class="grid">' +
       '<span class="caret">›</span>' +
       '<span class="state s-' + esc(r.state) + '">' + esc(r.state.toUpperCase()) + "</span>" +
-      '<span class="branch" title="' + esc(r.branch) + '">' + esc(r.branch) + "</span>" +
+      '<span class="branch" title="' + esc(r.branch) + '">' + branchLink(r) + "</span>" +
       '<span class="step-cell">' + step + '<span class="dim"> r' + r.round + "</span></span>" +
       used +
       '<span class="clock" data-stall="' + esc(r.movedAt) + '" data-terminal="' + terminal + '">—</span>' +
@@ -277,6 +297,27 @@ function detail(r) {
   // A check that did not run must never read as a check that found nothing (INV-1).
   for (const s of r.checksSkipped) out.push('<div class="skip">did not run: ' + esc(s) + "</div>");
   return out.join("");
+}
+
+/**
+ * The branch, linked to its pull request when the client named one.
+ *
+ * The whole point of asking for the URL: a branch name is not clickable and does not say
+ * which forge it lives on. Plain text when there is none, never a dead link.
+ *
+ * THE SCHEME IS CHECKED AGAIN HERE. review_start already refuses anything but http(s),
+ * and this page is the reason that check exists — a stored javascript: URL would be
+ * somebody else's script running in the operator's browser, on the one page they open
+ * when something is wrong. Two checks because the rows predate the validation, and
+ * because the cost of the second one is a regex.
+ *
+ * stopPropagation, or clicking the link also toggles the row open underneath it.
+ */
+function branchLink(r) {
+  const name = esc(r.branch);
+  if (!r.pullRequest || !/^https?:\\/\\//i.test(r.pullRequest)) return name;
+  return '<a href="' + esc(r.pullRequest) + '" target="_blank" rel="noreferrer noopener"' +
+    ' onclick="event.stopPropagation()">' + name + "</a>";
 }
 
 /** One tier attempt, with the findings it raised nested underneath. */

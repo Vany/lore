@@ -340,6 +340,26 @@ describe("the service facts above the list", () => {
     expect(down[0]?.stated).toBe(true);
   });
 
+  /**
+   * A CAP THAT DOES NOT ANNOUNCE ITSELF TELLS AN OPERATOR THEY HAVE SEEN EVERYTHING.
+   *
+   * The ordering drops finished work first, so what falls off is the least interesting —
+   * but that is a property of the ordering, not a promise about the sixty-first row, and
+   * the whole reason to open this page is to hunt a review nobody has touched in an hour.
+   * Raised by lore's own t2.
+   */
+  it("says how many reviews the row cap left out", () => {
+    for (let i = 0; i < 63; i++) review(`r${String(i).padStart(3, "0")}`, "running", `feat/${i}`);
+    const b = board(store);
+    expect(b.reviews.length).toBe(60);
+    expect(b.reviewsNotShown).toBe(3);
+  });
+
+  it("says nothing was left out when nothing was", () => {
+    review("r1", "running");
+    expect(board(store).reviewsNotShown).toBe(0);
+  });
+
   it("is empty and honest when nothing is happening", () => {
     const b = board(store);
     expect(b.reviews).toStrictEqual([]);

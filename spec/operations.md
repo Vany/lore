@@ -179,6 +179,13 @@ fires on state changes only, by design, and this board is about what happens BET
 them; wiring operator events into every write path is a change whose failure mode is a
 silently stale board, and a poll cannot miss anything.
 
+**The branch links to its pull request** when the client supplied one at `review_start`
+(`spec/mcp-api.md` §2.4.1.1). A branch name alone is not clickable and does not say which
+forge it lives on, so the board was a place you read about a change and then went
+searching for it by hand. Plain text when there is no URL — a dead link would be worse —
+and the scheme is re-checked before rendering, because an `href` on a page that needs no
+credential is somewhere `javascript:` must never reach.
+
 **Each step carries its findings, collapsed.** Three levels: review → tier attempt →
 finding. A finding opens to everything the tier said about it — claim, evidence, failure
 scenario, CWE, the symbol, and the verdict that settled it where one exists. Grouping is

@@ -23,6 +23,7 @@
 
 import type { ServerResponse } from "node:http";
 import { board } from "../ops/board.ts";
+import type { GateState } from "../reviewer/gate.ts";
 import type { Store } from "../store/store.ts";
 
 /** How often the snapshot is recomputed while at least one board is open. */
@@ -38,6 +39,26 @@ export const BOARD_POLL_MS = 2_000;
  */
 export const BOARD_HEARTBEAT_MS = 15_000;
 
+/**
+ * Two snapshots that differ only in when they were taken are the same picture.
+ *
+ * `board()` stamps `at` on every call, so a plain string comparison NEVER matched and the
+ * stream pushed a full snapshot every two seconds for ever — while the docblock above it
+ * promised that an idle board transfers nothing, and the page rebuilt its DOM each time,
+ * destroying any selection the reader had. Raised by lore's own t2 against the change that
+ * wrote that promise.
+ *
+ * `at` is still sent: it is what tells a reader how old the picture is. It is only
+ * excluded from the question "did anything happen".
+ */
+function unchanged(a: string, b: string): boolean {
+  return withoutAt(a) === withoutAt(b);
+}
+
+// Anchored to the very start, where `board()` puts it. An unanchored match could in
+// principle find the same four characters inside a finding's evidence text.
+const withoutAt = (s: string): string => s.replace(/^\{"at":"[^"]*",/, "{");
+
 export interface BoardStream {
   /** Attach a watcher. The response is left open until the client goes away. */
   add: (res: ServerResponse) => void;
@@ -50,7 +71,10 @@ export function startBoardStream(
   store: Store,
   pollMs = BOARD_POLL_MS,
   heartbeatMs = BOARD_HEARTBEAT_MS,
+  /** The model gate, so the board can say what a `queued` review is actually waiting for. */
+  modelGate?: () => GateState,
 ): BoardStream {
+  const snapshot = () => JSON.stringify(board(store, Date.now(), modelGate));
   const watchers = new Set<ServerResponse>();
   let timer: NodeJS.Timeout | undefined;
   let last = "";
@@ -73,9 +97,9 @@ export function startBoardStream(
   };
 
   const tick = (): void => {
-    const payload = JSON.stringify(board(store));
+    const payload = snapshot();
     sinceHeartbeat += pollMs;
-    if (payload === last) {
+    if (unchanged(payload, last)) {
       if (sinceHeartbeat < heartbeatMs) return;
       sinceHeartbeat = 0;
       // A comment frame: legal SSE, ignored by the client, and enough to prove the socket
@@ -124,7 +148,7 @@ export function startBoardStream(
       // subscriptions: a watcher that attached one tick after something happened would
       // otherwise sit in front of a blank board until the next change, however long that
       // takes — and on a quiet service that is for ever.
-      const payload = JSON.stringify(board(store));
+      const payload = snapshot();
       last = payload;
       sinceHeartbeat = 0;
       write(res, `data: ${payload}\n\n`);

@@ -38,6 +38,21 @@ own description of what you built: an agent describing its own work describes wh
 made, not what was asked, which destroys the only independent statement of intent the
 reviewers get.
 
+PASS \`pull_request\` IF THIS BRANCH HAS ONE. The URL of the PR, MR or change this branch
+is proposed in — an http(s) link, whatever your forge calls it.
+
+It is optional because a missing link must never fail a review, and because some branches
+genuinely have no pull request. But it is asked for every time, and the reason is not
+bookkeeping: the people watching this service see a BRANCH NAME, which is not clickable
+and does not say which repository or forge it lives on. With the link, the operator board
+takes a person from "what is this review doing" to the change itself in one click; without
+it, they go and search for it by hand, or do not look at all.
+
+You almost certainly know it. You are usually the agent that opened the PR, or you were
+handed its URL in the task. If you genuinely do not have one, leave it out — do not
+invent, guess or construct a URL from a pattern, because a link that goes to the wrong
+change is worse than no link.
+
 Returns a review_id IMMEDIATELY. The review takes minutes — this does not mean it
 finished.
 

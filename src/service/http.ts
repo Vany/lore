@@ -86,7 +86,7 @@ export function startHttp(store: Store, deps: ServerDeps, cfg: HttpConfig): { cl
 
   // Built once and owned here, for the same reason the MCP handler is: it holds open
   // response streams, so it cannot be per-request, and its timer must die with the server.
-  const boardStream = startBoardStream(store);
+  const boardStream = startBoardStream(store, undefined, undefined, cfg.modelGate);
 
   const server = createServer((req, res) => {
     void handle(store, cfg, serveMcp, boardStream, req, res).catch((e: unknown) => {
@@ -184,7 +184,7 @@ async function handle(
   // than hold a stream open — `curl`, a script, or me at a prompt.
   if (url.pathname === "/board.json") {
     res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify(board(store), null, 2));
+    res.end(JSON.stringify(board(store, Date.now(), cfg.modelGate), null, 2));
     return;
   }
 

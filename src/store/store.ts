@@ -43,6 +43,16 @@ export interface ReviewRow {
   /** The ladder this review started on, `<id>:<model>` per tier. See `schema.ts`. */
   readonly tiers?: string | undefined;
   readonly branch: string;
+  /**
+   * The pull request this branch is proposed in, if the client named one.
+   *
+   * `undefined` is ordinary and always will be: lore reviews its own commits from scratch
+   * `review/<sha>` refs, which have no pull request, and no client is forced to supply one
+   * (see `review_start` — making it required would have failed every call from every
+   * client already mid-flight). It exists so a person reading the board can get from a
+   * branch name to the thing they actually want to look at.
+   */
+  readonly pullRequest?: string | undefined;
   readonly intoRef: string;
   readonly ticket: string;
   readonly type: string;
@@ -301,8 +311,8 @@ export class Store {
     const t = now();
     this.db
       .prepare(
-        `INSERT INTO review(id, repo_id, principal, token_hash, tiers, branch, into_ref, ticket, type, state, tree_hash, ladder, created_at, updated_at)
-         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO review(id, repo_id, principal, token_hash, tiers, branch, pull_request, into_ref, ticket, type, state, tree_hash, ladder, created_at, updated_at)
+         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         r.id,
@@ -311,6 +321,7 @@ export class Store {
         n(r.tokenHash),
         n(r.tiers),
         r.branch,
+        n(r.pullRequest),
         r.intoRef,
         r.ticket,
         r.type,
@@ -390,6 +401,7 @@ export class Store {
       treeHash: un(row["tree_hash"] ?? null),
       tokenHash: un(row["token_hash"] ?? null),
       tiers: un(row["tiers"] ?? null),
+      pullRequest: un(row["pull_request"] ?? null),
       ladder: JSON.parse(row["ladder"] ?? "{}") as LadderState,
       updatedAt: row["updated_at"] ?? "",
     };
@@ -654,8 +666,17 @@ export class Store {
   listReviews(principal: string, repoId: string | undefined, limit = 50): readonly ReviewRow[] {
     const rows = this.db
       .prepare(
+        // UNFINISHED FIRST, then by recency — and the ordering is what makes the LIMIT
+        // safe rather than merely tidy.
+        //
+        // `review_inbox` filters this list down to what is still open, and it filters
+        // AFTER the query. Ordered by recency alone, fifty freshly-finished reviews fill
+        // the whole result and an older review parked in `findings_ready` never reaches
+        // the filter — invisible until it expires, which is precisely the abandonment
+        // D-95 exists to end, reintroduced by a row cap. Raised by lore's own t2 against
+        // the change that added the filter.
         `SELECT id FROM review WHERE principal = ? AND (? IS NULL OR repo_id = ?)
-         ORDER BY updated_at DESC LIMIT ?`,
+         ORDER BY (state IN (${TERMINAL_SQL})), updated_at DESC LIMIT ?`,
       )
       .all(principal, repoId ?? null, repoId ?? null, limit) as Record<string, string>[];
     return rows
@@ -2700,12 +2721,29 @@ export class Store {
   boardReviews(finishedSinceIso: string, limit = 60): readonly Record<string, string | null>[] {
     return this.db
       .prepare(
-        `SELECT id, branch, into_ref, type, state, ladder, created_at, updated_at FROM review
+        `SELECT id, branch, pull_request, into_ref, type, state, ladder, created_at, updated_at FROM review
          WHERE state NOT IN (${TERMINAL_SQL}) OR updated_at > ?
          ORDER BY (state IN (${TERMINAL_SQL})), updated_at DESC
          LIMIT ?`,
       )
       .all(finishedSinceIso, limit) as Record<string, string | null>[];
+  }
+
+  /**
+   * How many reviews `boardReviews` would return if it had no limit.
+   *
+   * So the board can say what its cap left out. Ordering means the rows dropped are the
+   * least interesting ones — finished, then oldest — but "least interesting" is a
+   * property of the ordering, not a promise about the sixty-first, and a board that shows
+   * an incomplete list without saying so is telling an operator they have seen everything.
+   */
+  boardReviewCount(finishedSinceIso: string): number {
+    const row = this.db
+      .prepare(
+        `SELECT COUNT(*) AS c FROM review WHERE state NOT IN (${TERMINAL_SQL}) OR updated_at > ?`,
+      )
+      .get(finishedSinceIso) as Record<string, number | bigint> | undefined;
+    return Number(row?.["c"] ?? 0);
   }
 
   /**

@@ -17,6 +17,7 @@
  */
 
 import { isTerminal, type ReviewState } from "../core/review-state.ts";
+import type { GateState } from "../reviewer/gate.ts";
 import { spendByTier, startOfDayIso } from "./spend.ts";
 import type { Store } from "../store/store.ts";
 
@@ -77,6 +78,14 @@ export interface BoardTierRun {
 export interface BoardReview {
   readonly id: string;
   readonly branch: string;
+  /**
+   * The pull request, when the client named one — what the branch links to.
+   *
+   * Absent is ordinary: it is optional at `review_start`, and lore's own reviews run on
+   * scratch refs that have none. The page renders plain text when it is missing rather
+   * than a dead link.
+   */
+  readonly pullRequest: string | undefined;
   readonly into: string;
   readonly type: string;
   readonly state: ReviewState;
@@ -142,10 +151,33 @@ export interface Board {
   readonly draining: boolean;
   readonly queued: number;
   readonly inFlight: number;
+  /**
+   * The model gate: how many calls are talking to a provider, and how many rounds hold a
+   * worker while they wait for a slot.
+   *
+   * WHAT "QUEUED" IS ACTUALLY WAITING FOR, which the board could not say. Twelve worker
+   * loops claim jobs and four calls may be in flight, so eight rounds can be holding a
+   * loop and waiting here — and everything behind them stays `queued` with nothing on the
+   * page explaining why. "Accepted and not started" is true and answers nothing.
+   *
+   * Absent when this process was built without a gate, which is the CLI and the tests. A
+   * missing number is not zero.
+   */
+  readonly modelCalls: { readonly inFlight: number; readonly waiting: number; readonly limit: number } | undefined;
   readonly spendTodayUsd: number;
   /** Tiers lore has stopped asking, with whether the PROVIDER said so or lore guessed. */
   readonly tiersDown: readonly { readonly tier: string; readonly until: string; readonly why: string; readonly stated: boolean }[];
   readonly reviews: readonly BoardReview[];
+  /**
+   * Reviews the row cap left out, and said out loud.
+   *
+   * The ordering puts finished work last, so what gets dropped is the least interesting —
+   * but that is a property of the ordering rather than a promise about the sixty-first
+   * row, and the review this board exists to catch is a wedged one that nobody has
+   * touched for an hour. An operator hunting a wedge must not be shown a partial list
+   * that looks complete.
+   */
+  readonly reviewsNotShown: number;
 }
 
 /**
@@ -166,8 +198,9 @@ const KEEP_FINISHED_MS = 2 * 3_600_000;
  */
 const MAX_FINDINGS_PER_REVIEW = 40;
 
-export function board(store: Store, now = Date.now()): Board {
-  const reviews = store.boardReviews(new Date(now - KEEP_FINISHED_MS).toISOString()) as Row[];
+export function board(store: Store, now = Date.now(), modelGate?: () => GateState): Board {
+  const since = new Date(now - KEEP_FINISHED_MS).toISOString();
+  const reviews = store.boardReviews(since) as Row[];
 
   // Three grouped queries rather than three per review: this runs on a timer for as long
   // as a browser is open, and a per-review loop would turn one idle tab into 60 queries a
@@ -186,6 +219,8 @@ export function board(store: Store, now = Date.now()): Board {
     draining: store.isDraining(),
     queued: store.queueDepth(),
     inFlight: store.jobsRunning(),
+    modelCalls: modelGate === undefined ? undefined : modelGate(),
+    reviewsNotShown: Math.max(0, store.boardReviewCount(since) - reviews.length),
     spendTodayUsd: spendByTier(store, startOfDayIso()).reduce((a, t) => a + t.usd, 0),
     tiersDown: store.unavailableTiers(new Date(now).toISOString()).map((t) => ({
       tier: t.tier,
@@ -203,6 +238,9 @@ export function board(store: Store, now = Date.now()): Board {
       return {
         id,
         branch: String(r["branch"] ?? ""),
+        pullRequest: r["pull_request"] === null || r["pull_request"] === undefined
+          ? undefined
+          : String(r["pull_request"]),
         into: String(r["into_ref"] ?? ""),
         type: String(r["type"] ?? ""),
         state,
@@ -372,6 +410,15 @@ function movedAt(updatedAt: string, runs: readonly BoardTierRun[], store: Store,
  * this is normal" and "something is wedged, go and look".
  */
 function stepNote(state: ReviewState, runs: readonly BoardTierRun[]): string | undefined {
+  // WHAT `queued` IS WAITING FOR, because "accepted, not started" answers nothing and the
+  // question got asked out loud. A worker loop has to claim the job first, and a loop is
+  // free only when it is not already holding a round — including a round parked on the
+  // model gate, which is where the wait usually is. `modelCalls` in the header is the
+  // other half of this sentence.
+  if (state === "queued") {
+    return "queued — no worker has claimed it yet, so NOTHING has run. Rounds hold a worker " +
+      "while they wait for a model slot; see the model-call gate above";
+  }
   if (state !== "running") return undefined;
   if (runs.some((t) => t.finishedAt === undefined)) return undefined;
   if (runs.length === 0) return "starting — the deterministic sweep has not finished a round yet";

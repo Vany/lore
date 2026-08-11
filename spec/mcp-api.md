@@ -59,7 +59,7 @@ nothing.
 
 | tool | arguments (`*` required) | returns |
 |---|---|---|
-| `review_start` | `branch*`, `into*`, `ticket*`, `type` | `{review_id, state: "queued", note}` — returns immediately |
+| `review_start` | `branch*`, `into*`, `ticket*`, `pull_request`, `type` | `{review_id, state: "queued", note}` — returns immediately |
 | `review_poll` | `review_id*` | `{state, clean, note, new_findings[], open_count}` — §2.1.1 |
 | `review_submit` | `review_id*`, `diff*`, `tree_hash*` | `{review_id, state, tree_hash}` |
 | `review_cancel` | `review_id*`, `reason` | `{state: "cancelled", stopped_in_flight, findings[], note}` — §2.5 |
@@ -483,6 +483,30 @@ shipped saying only that there was something to decide, and a client said plainl
 it could not surface a question it was never given. Being told to escalate something
 unnamed leaves only inventing it or dropping it, and inventing it is what this service
 forbids everywhere else.
+
+### 2.4.1.1 `pull_request` — asked for every time, required never
+
+`review_start` takes an optional `pull_request`: the http(s) URL of the change this
+branch is proposed in.
+
+**Optional, and it had to be.** Required would have failed every `review_start` from
+every client already working the moment it deployed — three people on one repository —
+and lore's own reviews are cut from scratch `review/<sha>` refs that have no pull request
+at all. A missing link must never turn into a review that did not run (INV-1). So the
+docs ask for it in the strongest terms a document has, and the schema does not punish its
+absence.
+
+The reason it is worth asking for is not bookkeeping. The operator board shows a **branch
+name**, which is not clickable and does not say which repository or forge it belongs to;
+with the URL, a person goes from *what is this review doing* to the change itself in one
+click. The tool text also tells a client not to construct one from a pattern: a link to
+the wrong change is worse than no link.
+
+**`http(s)` only, checked at the boundary.** The value is rendered as an `href` on a page
+that needs no credential, so a `javascript:` URL would be a script chosen by whoever
+started the review, running in the operator's browser, on the exact page they open when
+something is wrong. The page re-checks the scheme before linking, because rows written
+before the validation existed are still rows.
 
 ### 2.4.2 One review per branch
 

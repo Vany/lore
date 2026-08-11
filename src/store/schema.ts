@@ -100,6 +100,11 @@ CREATE TABLE IF NOT EXISTS review (
   -- really ran. Not a crash — a corrupted audit trail, which is worse.
   tiers       TEXT,
   branch      TEXT NOT NULL,
+  -- WHERE A HUMAN GOES TO LOOK, when the client named it. A branch name is not
+  -- clickable; the operator board links this. NULL is ordinary and permanent for
+  -- lore's own reviews, which are cut from scratch review/<sha> refs.
+  -- (No backticks in this string: the whole DDL is one template literal.)
+  pull_request TEXT,
   into_ref    TEXT NOT NULL,
   ticket      TEXT NOT NULL,
   type        TEXT NOT NULL,
@@ -396,6 +401,11 @@ export const MIGRATIONS: readonly { readonly table: string; readonly column: str
   // acceptance (D-83). NULL means an ordinary justification, which is what every row
   // written before this column was.
   { table: "verdict", column: "via_rule", sql: "ALTER TABLE verdict ADD COLUMN via_rule TEXT" },
+  // WHERE A HUMAN GOES TO LOOK. A branch name is not clickable and not everyone knows
+  // which forge it lives on; the operator board links to this. NULL is the ordinary
+  // case for every row written before it existed, and for lore's own reviews, which are
+  // cut from scratch `review/<sha>` refs that have no pull request at all.
+  { table: "review", column: "pull_request", sql: "ALTER TABLE review ADD COLUMN pull_request TEXT" },
 ];
 
 /**

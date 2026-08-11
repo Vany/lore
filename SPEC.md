@@ -1854,6 +1854,15 @@ board transfers nothing, and an unattended service does no work for it. Delibera
 poll rather than new operator events on `store.events`, whose state-change-only semantics
 are argued for elsewhere and whose extension would fail by going quietly stale.
 
+**The branch links to its pull request.** `review_start` takes an optional
+`pull_request` — optional because required would have failed every call from every client
+already working, and because lore's own reviews run on scratch `review/<sha>` refs that
+have none; a missing link must not become a review that did not run. The docs ask for it
+every time, since a branch name is not clickable and does not name its forge. `http(s)`
+only, checked at the boundary and again before rendering: this is an `href` on a page that
+needs no credential, so `javascript:` there would be a script chosen by whoever started
+the review, running in the operator's browser.
+
 **Findings hang under the tier attempt that raised them**, collapsed, and open to their
 full text — claim, evidence, failure scenario, CWE, and the verdict that settled them if
 one did. The nesting is what makes "which tier said this" need no label. It is a join and
