@@ -1615,9 +1615,16 @@ describe("a cool-off and a fallback together", () => {
       tiers: CODE_ARCH.tiers.map((t) => (t.id === "t1" ? { ...t, fallback: "openrouter/twin" } : t)),
     };
     const primary = type.tiers.find((t) => t.id === "t1")?.model ?? "";
+    // RELATIVE TO THE CLOCK THIS TEST ACTUALLY RUNS ON, because `runRound` reads the real
+    // one. The first version pinned Z.ai's literal answer — "2026-08-10 18:19:09" — which
+    // was in the future the day it was written and in the past the next morning. Once past,
+    // `retryAt`'s floor clamp correctly returned now+60s and the assertion started failing:
+    // a test that quietly changes what it asserts as the wall clock moves is the same
+    // defect as a review that did not run, and it announced itself only by luck of timing.
+    const reset = new Date(Date.now() + 86_400_000).toISOString();
     class OutWithTime implements ReviewerLike {
       async review(tier: Tier): Promise<ReviewerResult> {
-        if (tier.model === primary) throw new Exhausted("out", "2026-08-10T18:19:09.000Z");
+        if (tier.model === primary) throw new Exhausted("out", reset);
         return { findings: [], discarded: [], raw: "", inputTokens: 0, cachedTokens: 0, outputTokens: 0, costUsd: 0, latencyMs: 1, retried: false, steps: 1 };
       }
     }
@@ -1625,7 +1632,7 @@ describe("a cool-off and a fallback together", () => {
     await runRound({ store, reviewer: new OutWithTime(), reviewId: "r1", principal: "p", worktree: dir, type });
 
     const mark = store.tierUnavailable("t1");
-    expect(mark?.until, "the next review skips straight to the twin").toBe("2026-08-10T18:19:09.000Z");
+    expect(mark?.until, "the next review skips straight to the twin").toBe(reset);
     expect(mark?.stated).toBe(true);
   });
 });
@@ -1689,5 +1696,75 @@ describe("the day's spend ceiling", () => {
     const reviewer = new ScriptedReviewer([[]]);
     const r = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: { ...CODE_ARCH, t0: [] as const }, dailyCeilingUsd: 10 });
     expect(r.decision.kind).not.toBe("stopped");
+  });
+});
+
+/**
+ * WHEN A TIER HAS BOTH `skip_if_quota` AND a `fallback`, the fallback wins.
+ *
+ * Vany: *"if we have both, fallback must win, and if it has no quota even in fallback —
+ * it must be skipped."* Both flags answer the same question — what to do when this plan
+ * is out — and the order between them is the whole of their meaning: skipping first would
+ * mean a paid twin sitting configured and never asked, which is D-93 bought and not used.
+ *
+ * Every deployed tiers file sets both on t1, so this is the live arrangement rather than
+ * a hypothetical one.
+ */
+describe("skip_if_quota together with a fallback", () => {
+  const bothSet = (fallback: string) => ({
+    ...CODE_ARCH,
+    t0: [] as const,
+    tiers: CODE_ARCH.tiers.map((t) => (t.id === "t1" ? { ...t, skip_if_quota: true, fallback } : t)),
+  });
+
+  it("asks the twin rather than skipping, when the twin can answer", async () => {
+    const type = bothSet("openrouter/twin");
+    const primary = type.tiers.find((t) => t.id === "t1")?.model ?? "";
+    class PrimaryOut implements ReviewerLike {
+      readonly asked: string[] = [];
+      async review(tier: Tier): Promise<ReviewerResult> {
+        this.asked.push(tier.model ?? "?");
+        if (tier.model === primary) throw new Exhausted("plan is out");
+        return { findings: [], discarded: [], raw: "", inputTokens: 0, cachedTokens: 0, outputTokens: 0, costUsd: 0, latencyMs: 1, retried: false, steps: 1 };
+      }
+    }
+    const reviewer = new PrimaryOut();
+
+    const r = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type });
+
+    expect(reviewer.asked).toStrictEqual([primary, "openrouter/twin"]);
+    // NOT skipped: the tier ran, so it never enters `unavailable` and the verdict is not
+    // weakened by it.
+    expect(store.getReview("r1", "p")?.ladder.unavailable ?? []).toStrictEqual([]);
+    expect(["escalate", "fastClean"]).toContain(r.decision.kind);
+  });
+
+  it("skips the tier when the twin is out of quota too", async () => {
+    const type = bothSet("openrouter/twin");
+    const primary = type.tiers.find((t) => t.id === "t1")?.model ?? "";
+    class BothOut implements ReviewerLike {
+      readonly asked: string[] = [];
+      async review(tier: Tier): Promise<ReviewerResult> {
+        this.asked.push(tier.model ?? "?");
+        // ONLY t1's PAIR is out. An earlier version of this fixture exhausted every tier,
+        // so the review died of having nothing left to run rather than of the thing under
+        // test — a fixture broader than its claim proves the wrong statement.
+        if (tier.model === primary || tier.model === "openrouter/twin") throw new Exhausted("plan is out");
+        return { findings: [], discarded: [], raw: "", inputTokens: 0, cachedTokens: 0, outputTokens: 0, costUsd: 0, latencyMs: 1, retried: false, steps: 1 };
+      }
+    }
+    const reviewer = new BothOut();
+
+    let last;
+    for (let i = 0; i < 8; i++) {
+      last = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type }).catch(() => undefined);
+      if (last === undefined || !["escalate", "fastClean"].includes(last.decision.kind)) break;
+    }
+
+    // Both asked once — `skip_if_quota` spends no second attempt on the primary — and then
+    // the tier is stepped over rather than failing the review.
+    expect(reviewer.asked.slice(0, 2)).toStrictEqual([primary, "openrouter/twin"]);
+    expect(store.getReview("r1", "p")?.ladder.unavailable ?? [], "t1 is skipped").toContain("t1");
+    expect(last?.decision.kind, "and the review still reaches a verdict").toBe("passed");
   });
 });
