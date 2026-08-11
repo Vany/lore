@@ -161,3 +161,67 @@ Two things to decide before building, both from D-80 §6 and neither answerable 
 - **How does the next tier enter?** It cannot inherit another model's conversation, so an
   escalation is a cold start by construction — which is fine, and means this only ever
   helps *within* a tier's run.
+
+---
+
+## The design Vany specified, 2026-08-11
+
+> *"The main idea is to stop restarting it and continue the session in opencode. And manage
+> it, so each model will be started and initialised only once per review."*
+> *"Let's compact if the session is 2/3 of context."*
+> *"A tier enters from an empty prompt but on a fixed tree."*
+
+**One session per (review, tier), initialised once, alive for the whole review.**
+
+- t1 opens a session when it first runs and keeps it for every round it holds.
+- Reaching t2 opens a NEW session, empty of t1's reasoning, on the tree as it now stands.
+- Each session is **compacted at 2/3 of that tier's window**, never restarted.
+- A cold start remains the fallback, so the floor is today's behaviour.
+
+### Why compaction rather than restart, in Vany's correction
+
+I proposed dropping the session and starting cold on the current tree, on the argument that
+"the worktree is the memory". **That is wrong in the part that matters**: the worktree
+remembers the CODE, not the REASONING — why the model looked where it looked, what it ruled
+out, what it was suspicious of and decided to let go. `settledBlock` exists to reconstruct a
+fraction of that for a fresh session, badly. Compaction keeps it, compressed.
+
+### It is supported
+
+`client.session.summarize({ id, body: { providerID, modelID } })`, and `CompactionPart`
+carries `auto: boolean` — opencode already compacts on its own, so the 2/3 rule is choosing
+a threshold deliberately rather than inheriting one.
+
+### What it changes about the arithmetic
+
+The objection recorded above — *conversation wins early and loses late* — was against an
+UNBOUNDED conversation. A 2/3 ceiling removes it. What is left is the saving that matters:
+
+| | turns per round | context | reads per round |
+|---|---:|---:|---:|
+| cold (today) | 31.6 | ~31K avg | ~972K |
+| continued | ~6 (est.) | bounded by compaction | far less |
+
+The saving is in TURNS, and turns are what the evidence above shows to be both the cost
+driver and *inversely* related to findings. Compaction costs one model call against the
+thirty turns of re-orientation it removes.
+
+### Three things to get right, none of them blockers
+
+- **Sessions must be released when a review ends.** They currently die with each round; kept
+  alive they accumulate — 128 admitted reviews × 3 tiers is 384 live sessions if nothing
+  closes them.
+- **A lore restart loses the map.** `sessions` is in memory, so a requeued round finds no
+  session and must fall back to a cold start rather than failing. That is today's path, so
+  the fallback is already proven.
+- **The one review-quality risk worth measuring:** a long-lived session might defend its
+  earlier findings rather than re-read the code. Independence in this ladder is ACROSS
+  tiers — D-1, D-49 — and D-10 explicitly wants the tier that raised a finding to judge the
+  answer, so the design is consistent. But "fresh eyes each round" is a property being given
+  up, and whether it mattered is measurable: findings per round, and how often a finding is
+  withdrawn after a fix.
+
+### Not built
+
+It changes how much quota burns, so it is the operator's call. Everything needed to compare
+against the cold baseline is already recorded in `usage` and `tier_run`.

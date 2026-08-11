@@ -1504,3 +1504,24 @@ Ticked because it is **running and observed**, not because it was written.
       `~/c`. That comparison was overtaken by the subscriptions being bought.
 - [x] **Toolchain, landscape, MCP and security research.** `research/*`, each dated.
 - [x] **Plan.** `PLAN.md`.
+
+### 2026-08-11 — one session per review per tier (D-80 §6, designed)
+
+- [ ] **Stop restarting the model between rounds.** *(Vany's design, stated in full; his
+      call on when it ships, because it changes quota.)*
+
+      One session per (review, tier), initialised once and kept for the whole review;
+      compacted at 2/3 of that tier's context window rather than restarted; a new tier
+      enters empty of the previous tier's reasoning but on the fixed tree. Cold start stays
+      as the fallback, so the floor is today's behaviour.
+
+      **Measured opportunity:** 63 of 218 model rounds (29%) are a tier re-orienting on a
+      review it has already read — t2's 36 repeats alone are ~$25 of the $97 it has cost.
+      The saving is in TURNS: 31.6 per cold round against an estimated ~6 for a continued
+      one, and turns are both the cost driver and inversely correlated with findings.
+
+      **Supported by opencode:** `session.summarize`, and `CompactionPart.auto` shows it
+      already compacts by itself — so the 2/3 rule replaces an inherited threshold with a
+      chosen one.
+
+      Design, evidence and the three risks: `research/t2-token-cost.md`.
