@@ -431,9 +431,16 @@ function describeApplyFailure(stderr: string): string {
   }
   if (/does not (apply|exist)|No such file/i.test(detail)) {
     return (
-      "the diff does not apply to the tree under review. It was probably generated against a different " +
-      "base — the review is pinned to the tree it started with plus what you have already submitted " +
-      `(D-40), not to your branch as it stands now. ${nothing} (git: ${detail})`
+      "the diff does not apply to the tree under review. The review's tree is the one it started with " +
+      "plus every patch already submitted to it (D-40) — not your branch as it stands now.\n\n" +
+      "IF AN EARLIER SESSION SUBMITTED TO THIS REVIEW, RESENDING CANNOT HELP AND YOU HAVE NOT DONE " +
+      "ANYTHING WRONG. That tree exists only inside lore: you cannot check it out, so you cannot build a " +
+      "diff against it, and the tree hash you compute from your own branch will not match it either. The " +
+      "recovery is `review_start` with `restart: true`, which costs the cheap tiers again and every " +
+      "justification this review has ratified — say that to your user rather than retrying, because the " +
+      "retry loop is what turns one review of a branch into thirteen.\n\n" +
+      "If YOUR session made the last submit, diff from the `tree_hash` that call returned, not from your " +
+      `latest commit. ${nothing} (git: ${detail})`
     );
   }
   return `the diff could not be applied. ${nothing} (git: ${detail})`;

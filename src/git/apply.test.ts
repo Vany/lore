@@ -91,7 +91,9 @@ describe("what a failed apply tells the client", () => {
       (e: unknown) => e as Error,
     );
     expect(err?.message).toMatch(/line count does not match|does not apply/i);
-    expect(err?.message).toMatch(/trailing whitespace|different base/i);
+    // The CAUSE, whichever of the two this turned out to be — a lost trailing context
+    // line, or a base that has moved. "does not apply" alone names neither.
+    expect(err?.message).toMatch(/trailing whitespace|plus every patch already submitted/i);
   });
 
   // Whatever the fault, the client must know whether to resend everything or the
