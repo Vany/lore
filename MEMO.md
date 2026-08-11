@@ -5,6 +5,74 @@ surprised me.
 
 ---
 
+## 2026-08-11 — session 53: a board, and what looking at it found
+
+Vany asked for a web view — *"on the / of some port over http on localhost, draw
+interactive push updates there, all current reviews and collapsible details"* — and then
+kept reading it. Almost everything below was found by him or by lore looking at the board,
+not by me looking at the code.
+
+**The board (D-96).** One self-contained page at `/`, SSE-pushed, collapsed by default.
+Three levels: review → tier attempt → finding. The number it exists for is *time since
+anything moved*, and its definition is the load-bearing part — the newest of `updated_at`,
+any tier boundary and any finding's first sighting. `updated_at` alone moves on STATE
+changes and a deep tier reads for twenty minutes without one, so the naive version would
+have called every healthy t2 round stalled and trained its reader to ignore the only
+signal that matters.
+
+**What only LOOKING found.** I built it, asserted it, and then took a screenshot — and the
+screenshot was where the real defects were. `NO TIER IS WORKING`, the four-and-a-half-hour
+stall's own shape, was behind a click. The two clocks had no labels. A finished review's
+total kept climbing for ever, saying a review that passed on Monday was still spending
+time. Later, `no tier` started firing on QUEUED rows, where having no tier is ordinary —
+an alarm on the normal case is one nobody reads twice. **A UI verified only by assertions
+is a UI whose layout nobody has checked.**
+
+**Vany asked why nobody claimed a job, and my answer was wrong** (D-97). I said worker
+loops were held at the model gate; the board's own numbers said one call in flight and
+none waiting. The three queued jobs belonged to CANCELLED reviews — `claimJob` refuses
+them, correctly, and nothing ever closed the rows. Nineteen hours old, uncounted by
+nobody: `queueDepth` counted them, so an idle service reported a growing backlog to
+`/status`, to the board and to a ticket condition. **I should have read the rows before
+answering.** Reasoning from code I had just read produced a confident wrong answer about
+live data, which is the exact thing this service exists to prevent in other people.
+
+**Then he refused the gate itself** (D-98): *"there may be no situation where a job waits
+for the session in opencode."* The semaphore was real protection with real evidence
+behind it — twelve concurrent calls killed four reviews in 2.5 minutes — but what it
+produced daily was a round in `queued` with a clock running and nothing able to say
+whether it was waiting or wedged. The bound moved to admission: refuse at 128 open
+reviews, launch everything else immediately. Concurrent calls are now bounded by
+`LORE_CONCURRENCY` alone, which is *the same twelve*. Recorded as a deliberate trade, not
+an oversight: waiting is invisible, a provider refusing is loud and names itself.
+
+**The gate caught me four times.** t1 found that D-94's probe stamp was erased by the very
+refusal that discovered it — the interval was void on every deployed tier with all tests
+green. t2 found that my fix to a stale drift guard had NARROWED it, dropping
+`REVIEW_PROMPT_TEXT` while my comment claimed it had only moved. t2 found `board()` stamps
+`at` on every call, so the stream's change-detection never matched and it pushed every two
+seconds while the docblock above it promised an idle board transfers nothing. And it found
+`review_inbox`'s 50-row cap could bury the parked review the D-95 filter exists to surface.
+**Four for four, all real.** Best argument for the gate I have had.
+
+**Three mistakes I made repeatedly.** A backtick in a comment inside `board-page.ts` ends
+the template literal the whole page lives in — three times, until I made it a test, which
+caught the fourth within a minute and named the cause instead of a missing comma thirty
+lines away. A NUL byte in a composite key made `grep` treat the file as binary; I hit the
+silence, failed to recognise it, and `one-definition.test.ts` told me what it was. And I
+mis-ordered a `review_submit` twice: the `lore-ok` for a finding fixed elsewhere belongs in
+the SAME submit, not the next one.
+
+**A client hit a structural hole.** A resumed session cannot answer a review that has taken
+a submit: the review's tree is the pinned one plus applied patches, it exists only inside
+lore, so no later session can diff against it or match its hash. The only exit is a restart
+that re-pays the cheap tiers and discards every ratified justification. The numbers say
+what that costs — **16 passed out of 128 reviews**, one branch reviewed thirteen times. The
+message now tells the truth; the fix needs a way to submit a tree both sides can name, and
+that is a contract change waiting on Vany.
+
+---
+
 ## 2026-08-11 — session 52: the gate caught my own gate, and the inbox was blind
 
 Vany: *"let's deploy everything and restart, noone use us now."* Deployed `dfc04ec`, drain

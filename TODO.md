@@ -713,6 +713,42 @@ are what that session's own numbers say is in the way, not what reading suggeste
       DOWN — and `one-definition.test.ts` fails if the two disagree. Both move together
       or neither does.
 
+### 2026-08-11 — a resumed session cannot answer a review, and it is expensive
+
+- [ ] **`review_submit` needs a tree both sides can name.** *(Vany's to weigh — it is a
+      change to the MCP contract three clients depend on.)*
+
+      A review's tree is the pinned one plus every patch already applied, and it exists
+      only inside lore. So a session that did not make the earlier submit cannot check it
+      out, cannot diff against it, and cannot compute a matching tree hash from its own
+      branch. **A review that has taken one submit is unanswerable by every later
+      session**, and the only exit is `restart: true`, which re-pays the cheap tiers and
+      discards every justification the review has ratified.
+
+      Measured on this deployment, and it is not an edge case: **16 reviews passed out of
+      128**, against 58 `failed`, 28 `cancelled` and 18 `expired` — with one branch
+      reviewed **thirteen** times and four others four or more. The docs cite "six reviews
+      of one branch in two hours" as a past incident; it is the standing pattern.
+
+      A real client hit it today, did exactly what the error told it to, and restarted:
+      *"the review is pinned to its own tree plus a previous session's submissions, which
+      have drifted from the pushed branch, so my diff did not apply. Taking the sanctioned
+      route instead: land them on the branch and restart."*
+
+      **The proposal:** `review_submit` accepts a pushed `commit` as an alternative to a
+      `diff`. lore already mirrors the remote, so it restores the review's worktree to
+      that tree and carries on with the SAME review — same findings, same ratified
+      justifications, same ladder position. The tree hash check survives intact, because
+      both sides can name that tree. It also fixes the rebase case, where a diff is
+      hopeless by construction, and it SAVES quota: every restart it prevents is a t0
+      sweep plus a full climb from t1.
+
+      Additive and breaks nothing. Waiting only on the decision.
+
+      The symptom is fixed: the failure message no longer tells a resumed session to
+      "resend the whole diff", which for it was impossible, and tells it to report rather
+      than retry — the retry loop is what turns one review into thirteen.
+
 ### 2026-08-11 — found while deploying, not yet fixed
 
 Both are defects, so under D-82 the default is to fix them in the change that found
