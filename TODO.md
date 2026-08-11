@@ -776,6 +776,48 @@ needs something this session cannot supply.
       normal case and correct in the slow one. The two that remain assert something did
       NOT happen, where elapsed time is the point.
 
+### 2026-08-12 — found while building D-80's session continuity
+
+Both are pre-existing, in code this change does not touch, and both are recorded rather
+than fixed because each is a different subsystem from the one under change — a diff that
+grows sideways is the one nobody can review.
+
+- [x] **`apply.test.ts` copied a live `.git` with `cp -R` and raced.** Fixed 2026-08-12,
+      same run as the drain timeout and for the same reason — it surfaced while gating this
+      change. `cp -R` on a repository git is still writing to fails when a lock file or an
+      auto-gc temporary disappears between readdir and open, and the error lands on an
+      assertion about patch arithmetic that has nothing to do with it. Cloned now. Both
+      flakes appeared only under this branch's suite, which adds nine HTTP-server tests:
+      **added load did not create these races, it exposed them.** Worth stating because
+      "it only started failing after my change" is a claim that usually means the opposite.
+
+- [ ] **A round finishing after the store closes throws an unhandled rejection.**
+      `Worker.round` → `Store.finishJob` → `database is not open` (`ERR_INVALID_STATE`),
+      surfaced by vitest as an unhandled rejection out of `drain.test.ts`. **This is a
+      drain-window defect, not a test artefact:** shutdown closes the store while a round
+      is still in flight, and the round then writes its own completion into a closed
+      handle. In the suite it is noise; in production it is an unhandled rejection during
+      exactly the window three deploys have already gone wrong in. **Waiting on:** the
+      right shape — a store that answers "closed" instead of throwing, or a round that
+      checks before writing. Not bundled here because it belongs to the drain path.
+
+- [x] **`drain.test.ts` times out roughly one full-suite run in eight.** Fixed the same
+      day, because it was blocking this change's own review gate — a flaky suite in front
+      of a push is not a deferrable defect. The cause was NOT the DNS message it prints
+      (that string is fabricated by a stub; there is no lookup): these tests drive a real
+      worker over a real bare clone, and the retried one does `git worktree add` + ingest +
+      t0 twice inside vitest's 5s default. The report was the worse half — vitest killed
+      the test at 5s while `until` still had 10s to run, so the error said "test timed out"
+      and never named the condition. Every `until`-waiting test now has a 20s budget, so
+      `until` always expires first and says what it waited for. Original text below. *"survives the
+      interruption and finishes on the next attempt"* exceeded its 5s budget once in
+      eight runs; the stderr names the cause — `getaddrinfo ENOTFOUND`, a REAL DNS lookup
+      for the unreachable opencode the test points at. Fast when the resolver is idle,
+      not fast under a suite running fifty files. This is the same file and the same
+      shape as the 400ms-sleep race fixed on 2026-08-11: an assumption about timing that
+      holds alone and fails under load. Verified not caused by this change: `promptBudgetChars`
+      memoises its provider lookup, so building two prompts costs one HTTP call, not two.
+
 - [ ] **Three people hold tokens on `rigid-monorepo` and the perimeter changed.**
       Provisioned 2026-08-07 for `koray` and `max`; `LORE_BIND` moved from `127.0.0.1`
       to `0.0.0.0` on Vany's call, so the service answers on every interface this laptop
@@ -1505,10 +1547,20 @@ Ticked because it is **running and observed**, not because it was written.
 - [x] **Toolchain, landscape, MCP and security research.** `research/*`, each dated.
 - [x] **Plan.** `PLAN.md`.
 
-### 2026-08-11 — one session per review per tier (D-80 §6, designed)
+### 2026-08-11 — one session per review per tier (D-80 §6, designed); built 2026-08-12
 
-- [ ] **Stop restarting the model between rounds.** *(Vany's design, stated in full; his
-      call on when it ships, because it changes quota.)*
+- [x] **Stop restarting the model between rounds.** Built 2026-08-12: `Tier.conversation`,
+      `src/reviewer/continuity.ts`, `Reviewer.release`, and the continued prompt. On in
+      both deploy ladders for every model tier — **which is the quota-changing half, so it
+      takes effect on the next deploy and that is Vany's call, not this commit's.**
+      What is NOT built: handing a mid-round submit to the live session. D-55 still
+      refuses a submit while a round runs; a live session makes that possible, not done.
+      The saving is unmeasured until it has run a day — the baseline to measure against is
+      `research/t2-token-cost.md`, and the numbers to compare are already in `usage` and
+      `tier_run`.
+
+      *(Vany's design, stated in full; his call on when it ships, because it changes
+      quota.)*
 
       One session per (review, tier), initialised once and kept for the whole review;
       compacted at 2/3 of that tier's context window rather than restarted; a new tier

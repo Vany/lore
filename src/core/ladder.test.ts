@@ -1,3 +1,4 @@
+import { readdirSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   ladderChanged, DEFAULT_TIERS, anyTierRan, initialState, loadTiers, markUnavailable, settle, soleVendorOf, step, vendorOf, type Decision, type LadderState, type Tier, ladderFingerprint } from "./ladder.ts";
@@ -453,4 +454,65 @@ describe("skip_if_quota in the tier config", () => {
     const without = loadTiers(tier(""));
     expect(ladderFingerprint([...withFlag])).toBe(ladderFingerprint([...without]));
   });
+});
+
+describe("the conversation flag", () => {
+  const tier = (extra: string) => `[{"id":"t0","kind":"deterministic","stage":"fast"},
+    {"id":"t1","kind":"model","model":"m","stage":"fast"${extra}}]`;
+
+  it("is carried through, and absent when unset", () => {
+    expect(loadTiers(tier(`,"conversation":true`))[1]?.conversation).toBe(true);
+    expect(loadTiers(tier(""))[1]?.conversation).toBeUndefined();
+  });
+
+  it("is refused when it is not a boolean", () => {
+    expect(() => loadTiers(tier(`,"conversation":"yes"`))).toThrow(/malformed/i);
+  });
+
+  /**
+   * NOT IN THE PIN, for the same reason `skip_if_quota` is not: it changes neither which
+   * model is called nor what it is asked, only whether that model keeps its session
+   * between rounds. Pinning it would refuse every open review the moment the flag was
+   * flipped — and a review that loses its session map falls back to a cold start anyway,
+   * which is the behaviour the pin would be protecting.
+   */
+  it("does not change the ladder pin", () => {
+    expect(ladderFingerprint([...loadTiers(tier(`,"conversation":true`))]))
+      .toBe(ladderFingerprint([...loadTiers(tier(""))]));
+  });
+});
+
+/**
+ * THE LADDERS WE ACTUALLY DEPLOY, PARSED BY THE PARSER THAT WILL PARSE THEM.
+ *
+ * `loadTiers` throws on a malformed ladder rather than falling back to the default, which
+ * is right — reviewing with a different set of models than the operator configured is the
+ * divergence nobody notices until the bill looks wrong. The consequence is that a typo in
+ * a deploy file is a boot failure, and the suite never read those files, so the whole
+ * class was invisible until the container was already restarting.
+ *
+ * Caught here in the act: adding `conversation` to the deploy configs before the schema
+ * knew the key would have crash-looped the service on the next deploy — `.strict()` calls
+ * an unknown key malformed. That is the same shape as the LORE_CONCURRENCY loop earlier
+ * the same day, which took the service down for twenty minutes.
+ *
+ * Every file, by directory listing rather than by name: a config nobody remembered to add
+ * here is exactly the one that breaks.
+ */
+describe("the shipped ladders", () => {
+  const files = readdirSync("deploy").filter((f) => f.startsWith("tiers.") && f.endsWith(".json"));
+
+  it("finds some to check", () => {
+    expect(files.length, "a rename that empties this list would make every test below vacuous").toBeGreaterThan(0);
+  });
+
+  for (const f of files) {
+    it(`${f} loads, and every model tier is complete`, () => {
+      const tiers = loadTiers(`deploy/${f}`);
+      expect(tiers.length).toBeGreaterThan(0);
+      for (const t of tiers) {
+        if (t.kind === "model") expect(t.model, `${t.id} names no model`).toBeTruthy();
+      }
+    });
+  }
 });

@@ -29,13 +29,25 @@ import { alreadyAnswered, filesInDiff, runRound } from "./review.ts";
 
 /** A model tier that says exactly what the test scripts, and keeps every prompt it saw. */
 class ScriptedReviewer implements ReviewerLike {
+  /**
+   * A PAIR NOW, NOT A STRING (D-80). `review()` takes either one prompt or the
+   * initial/continued pair a kept session needs, and a fixture that recorded the object
+   * would assert against "[object Object]" — passing or failing for reasons unrelated to
+   * what it is testing. The INITIAL is what these tests are about: what a tier is told
+   * when it first looks.
+   */
+  static text(p: unknown): string {
+    return typeof p === "string" ? p : String((p as { initial?: string }).initial ?? "");
+  }
+
+
   readonly prompts: string[] = [];
   private readonly script: (readonly Finding[])[];
   constructor(script: (readonly Finding[])[]) {
     this.script = script;
   }
-  async review(_tier: unknown, prompt: string): Promise<ReviewerResult> {
-    this.prompts.push(prompt);
+  async review(_tier: unknown, prompt: unknown): Promise<ReviewerResult> {
+    this.prompts.push(ScriptedReviewer.text(prompt));
     return {
       findings: this.script.shift() ?? [],
       raw: "",

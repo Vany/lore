@@ -29,6 +29,7 @@ import { createOpencodeClient } from "@opencode-ai/sdk";
 import { DidNotRun, Exhausted, ProviderAuthFailed, ServiceUnreachable, TierUnavailable, TooLargeForTier } from "../core/errors.ts";
 import { FindingSchema, type Finding } from "../core/finding.ts";
 import type { Tier } from "../core/ladder.ts";
+import { sessionKey, shouldCompact } from "./continuity.ts";
 import { Gate, type GateState } from "./gate.ts";
 import { DEFAULT_TIMEOUT_MS, longFetch } from "./long-fetch.ts";
 import { OUTPUT_CONTRACT } from "./prompts.ts";
@@ -145,7 +146,8 @@ export const DEFAULT_REVIEWER: ReviewerConfig = {
 export interface ReviewerLike {
   review(
     tier: Tier,
-    prompt: string,
+    /** One prompt, or the initial/continued pair a kept session needs (D-80). */
+    prompt: Prompt,
     worktree: string,
     reviewId?: string,
     /** Asked once a provider slot is won: `false` means do not spend it. */
@@ -159,6 +161,14 @@ export interface ReviewerLike {
    * is the failure this project refuses, and the caller says which happened.
    */
   cancel?(reviewId: string): Promise<boolean>;
+  /**
+   * End every session this review was holding, whatever its ending was (D-80).
+   *
+   * Optional so a fake reviewer need not model it. Not optional in production: a kept
+   * session is deliberately never cleared per round, so this is the only thing that closes
+   * one, and 128 admitted reviews across three tiers is 384 sessions if nothing does.
+   */
+  release?(reviewId: string): Promise<void>;
   /**
    * Ask a tier for something that is not findings — a knowledge screen, a proposal.
    *
@@ -300,6 +310,16 @@ export class Reviewer implements ReviewerLike {
   private limits?: Promise<Map<string, number>>;
   /** review id -> the opencode session currently reading for it, so `cancel` can stop it. */
   private readonly sessions = new Map<string, string>();
+  /**
+   * Sessions KEPT ACROSS ROUNDS, one per (review, tier), for tiers with `conversation` on
+   * (D-80). Separate from `sessions` above, which is the per-round handle a cancel uses
+   * and is cleared every round by design.
+   *
+   * In memory only, and deliberately: a lore restart loses it, the next round finds
+   * nothing and starts cold, which is exactly the behaviour before this existed. Nothing
+   * is lost but the saving.
+   */
+  private readonly kept = new Map<string, string>();
   /**
    * session id -> the controller for OUR request to it.
    *
@@ -466,7 +486,7 @@ export class Reviewer implements ReviewerLike {
 
   async review(
     tier: Tier,
-    prompt: string,
+    prompt: Prompt,
     worktree: string,
     reviewId?: string,
     stillWanted?: () => boolean,
@@ -608,7 +628,7 @@ export class Reviewer implements ReviewerLike {
   /** What `review` does once it holds a slot. */
   private async conductSession<T>(
     tier: Tier,
-    prompt: string,
+    prompt: Prompt,
     worktree: string,
     reviewId: string | undefined,
     extract: (text: string) => Listed<T>,
@@ -620,7 +640,15 @@ export class Reviewer implements ReviewerLike {
     // Opening it first buys the whole of `createSession` as head start and costs nothing:
     // the subscription is per-process and idempotent, so this is a no-op after the first.
     this.listen();
-    const sessionId = await this.createSession(tier);
+    // THE TIER IS INITIALISED ONCE PER REVIEW (D-80). A kept session is continued with the
+    // round's message; anything else — no reviewId, the flag off, a lore restart that lost
+    // the map — falls through to a cold start, which is the behaviour this replaced.
+    const keptKey = reviewId !== undefined && tier.conversation === true
+      ? sessionKey(reviewId, tier.id)
+      : undefined;
+    const continuing = keptKey === undefined ? undefined : this.kept.get(keptKey);
+    const sessionId = continuing ?? (await this.createSession(tier));
+    if (keptKey !== undefined && continuing === undefined) this.kept.set(keptKey, sessionId);
     // Registered so `cancel` can reach it. Cleared in `finally` whatever happens —
     // a stale entry would have a later cancel abort a session that had already ended,
     // or worse, one belonging to a different round of the same review.
@@ -664,7 +692,20 @@ export class Reviewer implements ReviewerLike {
     });
 
     try {
-      return await this.conduct(sessionId, tier, prompt, worktree, started, extract, contract);
+      // WHICH PROMPT: the full one for a session being initialised, the round's message
+      // for one being continued. A caller that passes a bare string gets it either way,
+      // which is every caller that is not the review loop.
+      const text = typeof prompt === "string"
+        ? prompt
+        : continuing === undefined
+          ? prompt.initial
+          : prompt.continued;
+      // COMPACT BEFORE SPENDING, at two thirds of the window (D-80). Measured on the LAST
+      // turn's context rather than the session's cumulative reads: the two differ by a
+      // factor of thirty on a long round, and the sum would compact almost at once and
+      // then on every turn after.
+      if (continuing !== undefined) await this.compactIfFull(continuing, tier);
+      return await this.conduct(sessionId, tier, text, worktree, started, extract, contract);
     } catch (e) {
       // ABANDONING THE REQUEST DOES NOT STOP THE MODEL.
       //
@@ -695,6 +736,8 @@ export class Reviewer implements ReviewerLike {
       }
       throw e;
     } finally {
+      // The per-round handle always goes; the KEPT session does not — it is the whole
+      // point, and `release` is what ends it when the review does.
       if (reviewId !== undefined && this.sessions.get(reviewId) === sessionId) {
         this.sessions.delete(reviewId);
       }
@@ -704,6 +747,70 @@ export class Reviewer implements ReviewerLike {
       // longer fuse — the stream outlives every call on it.
       this.aborters.delete(sessionId);
       this.watchers.delete(sessionId);
+    }
+  }
+
+  /**
+   * Compact this session if its last turn carried two thirds of the window (D-80).
+   *
+   * Best-effort by construction. A summarise that fails leaves the conversation exactly as
+   * it was — longer than we would like and still correct — where throwing would end a
+   * review over a housekeeping call. What must NOT happen is silence: a session that keeps
+   * failing to compact will eventually overflow, and the log line is the only warning.
+   */
+  private async compactIfFull(sessionId: string, tier: Tier): Promise<void> {
+    const window = await this.contextLimit(tier.model ?? "").catch(() => undefined);
+    const used = await this.lastTurnTokens(sessionId).catch(() => undefined);
+    if (!shouldCompact(used, window)) return;
+
+    const failure = await this.client.session
+      .summarize({ path: { id: sessionId }, body: splitModel(tier.model ?? "") })
+      .then((r) => ((r.response?.status ?? 200) >= 400 ? `opencode answered ${r.response?.status}` : undefined))
+      .catch((e: unknown) => detail(e));
+    console.error(
+      failure === undefined
+        ? `[lore:log] compacted ${tier.id}'s session at ${String(used)} of ${String(window)} tokens`
+        : `[lore:log] could NOT compact ${tier.id}'s session at ${String(used)} of ${String(window)} tokens: ${failure}`,
+    );
+  }
+
+  /**
+   * The context the last turn actually carried — input plus cache reads on the most
+   * recent assistant message.
+   *
+   * NOT `usageOf`, which sums the whole session. That is the right number for spend and
+   * the wrong one for "how full is the window": on a thirty-turn round the sum is thirty
+   * times the context, so compacting against it would fire immediately and for ever.
+   */
+  private async lastTurnTokens(sessionId: string): Promise<number | undefined> {
+    const res = await this.client.session.messages({ path: { id: sessionId } });
+    const rows = ((res as { data?: unknown[] } | undefined)?.data ?? []) as {
+      info?: { role?: string; tokens?: Record<string, unknown> };
+    }[];
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const info = rows[i]?.info;
+      if (info?.role !== "assistant") continue;
+      const t = info.tokens ?? {};
+      const cache = (t["cache"] ?? {}) as Record<string, unknown>;
+      const used = Number(t["input"] ?? 0) + Number(cache["read"] ?? 0) + Number(cache["write"] ?? 0);
+      return used > 0 ? used : undefined;
+    }
+    return undefined;
+  }
+
+  /**
+   * End every session this review was holding. Called when the review ends, whatever the
+   * ending was.
+   *
+   * WITHOUT THIS THEY ACCUMULATE. A kept session is deliberately not cleared per round, so
+   * nothing else would ever close it — and admission allows 128 open reviews, which across
+   * three tiers is 384 sessions opencode would hold for reviews that finished hours ago.
+   */
+  async release(reviewId: string): Promise<void> {
+    for (const [key, sessionId] of [...this.kept]) {
+      if (!key.startsWith(`${reviewId}:`)) continue;
+      this.kept.delete(key);
+      await this.client.session.delete({ path: { id: sessionId } }).catch(() => undefined);
     }
   }
 
@@ -1532,6 +1639,16 @@ const parseFindingItem: ItemParser<Finding> = (raw, i, n) => {
     ? res.data
     : { rejected: `finding ${i + 1} of ${n}: ${firstIssue(res.error)} — ${excerpt(JSON.stringify(raw), 300)}` };
 };
+
+/**
+ * What a tier is asked, in the two shapes a continued session needs (D-80).
+ *
+ * A bare string is every caller that does not keep a session — the knowledge screen, the
+ * proposer, and any tier with `conversation` off. The pair is the review loop: `initial`
+ * orients a session being created, `continued` is the next message to one already holding
+ * the repository.
+ */
+export type Prompt = string | { readonly initial: string; readonly continued: string };
 
 /** Findings in the generic shape, for `review()`. */
 export const findingsOf = (text: string): Listed<Finding> => extractList<Finding>(text, "findings", parseFindingItem);

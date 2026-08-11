@@ -44,6 +44,27 @@ export interface Tier {
    */
   readonly skip_if_quota?: boolean;
   /**
+   * Keep ONE session for this tier for the whole review, instead of a cold start per
+   * round (D-80).
+   *
+   * The tier is initialised once — full prompt, orientation, exploration — and every later
+   * round arrives as the next message in the same conversation: *"this is the change that
+   * answers your finding; does it?"* Compacted at two thirds of the model's context window
+   * rather than restarted, because restarting keeps the code and discards the reasoning.
+   *
+   * Measured before it was built: a cold round spends 31.6 turns re-orienting in a
+   * worktree it read minutes ago, and 29% of all model rounds are a tier re-reading a
+   * review it already knows.
+   *
+   * Opt-in per tier so it can be tried on one tier against the recorded cold baseline
+   * (`research/t2-token-cost.md`) rather than switched on everywhere at once.
+   *
+   * NOT part of `ladderFingerprint`, for the same reason as `skip_if_quota`: it changes
+   * neither which model is called nor what it is asked, so flipping it mid-review is safe
+   * and pinning it would refuse every open review at the next config change.
+   */
+  readonly conversation?: boolean;
+  /**
    * The same model somewhere else, for when this tier's plan is out (D-93).
    *
    * Vany: *"we have some openrouter credits… if there is no quota on the subscription
@@ -87,6 +108,7 @@ const TierSchema = z
     effort: absent(z.enum(["low", "medium", "high", "max"])),
     stage: z.enum(["fast", "deep"]),
     skip_if_quota: absent(z.boolean()),
+    conversation: absent(z.boolean()),
     fallback: absent(z.string().min(1)),
   })
   .strict()

@@ -43,7 +43,7 @@ import { runT0, renderT0 } from "../t0/runner.ts";
 import { engineRuleClass } from "../t0/engines.ts";
 import type { RecordedFinding, Store } from "../store/store.ts";
 import type { ReviewerLike } from "./opencode.ts";
-import { reviewPrompt } from "./prompts.ts";
+import { continuedPrompt, reviewPrompt } from "./prompts.ts";
 
 export interface RoundInput {
   readonly store: Store;
@@ -608,7 +608,34 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // Skipping the tier was the first fix and it was worse: on any large branch it
   // would drop an independent opinion permanently and make `passed` unreachable,
   // trading away the premise of the whole design (D-1) to avoid an error.
-  const prompt = await compactToFit(input.reviewer, tier, renderDiff(diff), build);
+  const initial = await compactToFit(input.reviewer, tier, renderDiff(diff), build);
+
+  // TWO PROMPTS FOR A TIER THAT KEEPS ITS SESSION, one for a tier that does not (D-80).
+  // `initial` orients a session being created; `continued` is the next message to one that
+  // already holds this repository — it names the open findings rather than restating them,
+  // because the session that raised them still has the reasoning that produced them.
+  //
+  // ONLY WHEN THE FLAG IS ON, so a tier without it is sent the same bare string it was
+  // sent before this existed — not a pair whose second half nothing will ever read. The
+  // blast radius of D-80 is then exactly the tiers that opted in, which is what makes the
+  // cold path still the proven fallback rather than a differently-shaped new one.
+  const prompt = tier.conversation !== true ? initial : {
+    initial,
+    continued: await compactToFit(input.reviewer, tier, renderDiff(diff), (diffText) =>
+      continuedPrompt({
+        diff: diffText,
+        t0: renderT0(t0ForTier),
+        // THIS TIER'S OWN open findings, not the review's. D-10 says the tier that raised a
+        // finding judges the answer to it, so handing t2 the findings t1 is still waiting
+        // on would have it rule on questions that are not its to close.
+        open: store
+          .openFindings(reviewId)
+          .filter((f) => f.origin === tier.id)
+          .map((f) => `${f.fingerprint.slice(0, 8)} ${f.file}:${f.line} — ${f.claim}`),
+      }),
+    ),
+  };
+
 
   // Opened BEFORE the model is asked, so the row exists no matter how this ends.
   // `finished_at` stays NULL until it does, which is what lets a reader tell a tier

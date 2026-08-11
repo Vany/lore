@@ -348,6 +348,59 @@ function settledBlock(settled: PromptInput["settled"]): string {
   ].join("\n");
 }
 
+/**
+ * The next message to a tier that already holds this review (D-80).
+ *
+ * Everything the initial prompt spends its length on — who you are, the bar, the ticket,
+ * what this codebase knows, where the worktree is — this session already has. Repeating it
+ * would be the cold start we are removing, wearing a different name.
+ *
+ * So this says only what CHANGED, and asks the one question a continued round is for. The
+ * findings are named rather than restated: the session raised them and still holds why.
+ *
+ * **Its own input type, naming exactly the three things it uses.** Taking `PromptInput`
+ * forced the caller to invent values for fields this never reads — `tierIndex: 0`,
+ * `modelTierCount: 1` — and the moment anyone rendered `position(i)` here, a t2 round
+ * would have introduced itself as "tier 1 of 1" with nothing failing. A prompt that lies
+ * quietly is the worst kind of defect this project has.
+ */
+export interface ContinuedInput {
+  /** The deterministic engines re-run against the tree as it now stands. */
+  readonly t0: string;
+  /** What changed since this session last looked. */
+  readonly diff: string;
+  /** This tier's own still-open findings, one line each, for it to rule on (D-10). */
+  readonly open: readonly string[];
+}
+
+export function continuedPrompt(i: ContinuedInput): string {
+  return [
+    "The author has answered. Their diff is applied to the worktree you are already in —",
+    "same path, same branch — so re-read the files you care about rather than assuming.",
+    "",
+    i.open.length === 0
+      ? "You raised nothing outstanding last round. This is new work on the same branch: review it as you did before."
+      : [
+          "YOU RAISED THESE, and they are still open:",
+          ...i.open.map((c) => `  - ${c}`),
+          "",
+          "For each one: is it actually fixed? A change near the code is not a fix, and a",
+          "justification you do not accept is not a fix either. Say which are settled and",
+          "which are not — you asked the question, so you are the one who judges the answer.",
+        ].join("\n"),
+    "",
+    "DETERMINISTIC RESULTS FOR THE NEW TREE",
+    i.t0,
+    "",
+    "WHAT CHANGED SINCE YOU LAST LOOKED",
+    i.diff,
+    "",
+    "Then review the change itself as you would any other: it is new code, and a fix can",
+    "break something that was working. Same bar as before — consequence you can state, and",
+    "something the author would still have missed.",
+  ].join("\n");
+}
+
 export function reviewPrompt(i: PromptInput): string {
   return [
     `You are an independent reviewer of branch ${i.branch}. You did not write this code.`,

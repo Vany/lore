@@ -51,6 +51,22 @@ afterEach(() => store.close());
  * The sleeps that remain in this file are the other kind — asserting that something did
  * NOT happen, where elapsed time is the whole point and there is nothing to wait for.
  */
+/**
+ * A BUDGET LARGER THAN `until`'s, on every test that waits on one.
+ *
+ * These tests drive a real worker over a real bare clone: each round is a `git worktree
+ * add`, an ingest and a t0 sweep, and the retried one does all of that twice. Comfortably
+ * inside vitest's 5s default alone, not inside it when the suite is running fifty files —
+ * measured, about one full-suite run in eight timed out here.
+ *
+ * The failure that mattered was not the slowness but the REPORT: vitest killed the test at
+ * 5s while `until` was still waiting on its own 10s deadline, so the error said "test timed
+ * out" and never said what it was waiting for. Same signature as the fixed-400ms-sleep race
+ * in this file on 2026-08-11 — an assumption about timing that holds alone and fails under
+ * load. Now `until` always expires first and names the condition.
+ */
+const WAITING = 20_000;
+
 const until = async (what: string, ok: () => boolean, timeoutMs = 10_000): Promise<void> => {
   const deadline = Date.now() + timeoutMs;
   while (!ok()) {
@@ -94,7 +110,7 @@ describe("a draining worker takes nothing new", () => {
     } finally {
       stop();
     }
-  });
+  }, WAITING);
 
   it("is off unless it has been turned on", () => {
     expect(store.isDraining()).toBe(false);
@@ -218,7 +234,7 @@ describe("a worker does not overwrite an ending somebody chose", () => {
 
     expect(store.stateOf("rev1")).toBe("cancelled");
     expect(store.failureReason("rev1")).toContain("superseded by a rebase");
-  });
+  }, WAITING);
 
   it("still fails a review that was still wanted", async () => {
     queuedReview("rev2");
@@ -230,7 +246,7 @@ describe("a worker does not overwrite an ending somebody chose", () => {
       stop();
     }
     expect(store.stateOf("rev2")).toBe("failed");
-  });
+  }, WAITING);
 });
 
 // A SERVICE THAT HAS STOPPED WORKING AND SAYS IT IS FINE.
@@ -268,7 +284,7 @@ describe("a store fault does not silently cost the service its capacity", () => 
     // It threw twice and carried on: the loop is still claiming afterwards.
     expect(thrown).toBeGreaterThan(2);
     expect(sent.some((a) => a.severity === "page" && a.condition.includes("stopped claiming work"))).toBe(true);
-  });
+  }, WAITING);
 
   it("says how much capacity is left, because zero is the number that matters", () => {
     const { alerter, sent } = recorder();
@@ -360,14 +376,20 @@ describe("a round interrupted by lore itself is requeued, not failed", () => {
       },
     }).start();
     try {
-      await until("the round to be retried after the interruption", () => calls >= 2);
+      // A LONGER WAIT THAN THE OTHERS, because this one waits for TWO full rounds: the
+      // interrupted one and the retry, each a `git worktree add` off a bare clone plus an
+      // ingest and a t0 sweep. Measured across full-suite runs, the machine's own load
+      // moves the suite between 21s and 60s, and this test with it — 10s was inside that
+      // spread. Fifteen sits under the 20s test budget, so `until` still expires first and
+      // names what it was waiting for instead of vitest reporting a bare timeout.
+      await until("the round to be retried after the interruption", () => calls >= 2, 15_000);
     } finally {
       stop();
     }
 
     // Nothing was learned about the code when lore went away, so nothing is concluded.
     expect(store.stateOf("rev1"), "a restart is not a verdict").not.toBe("failed");
-  });
+  }, WAITING);
 
   /**
    * BOUNDED. A sidecar that is genuinely down rather than restarting would otherwise
@@ -396,5 +418,5 @@ describe("a round interrupted by lore itself is requeued, not failed", () => {
       stop();
     }
     expect(store.stateOf("rev3")).toBe("failed");
-  });
+  }, WAITING);
 });

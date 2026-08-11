@@ -69,7 +69,16 @@ describe("applyPatch", () => {
   it("produces exactly the tree the well-formed diff would have", async () => {
     const other = mkdtempSync(join(tmpdir(), "lore-apply2-"));
     try {
-      execFileSync("cp", ["-R", `${dir}/.`, other]);
+      // CLONED, NOT `cp -R`. Copying a live `.git` raced under a loaded suite — a lock
+      // file or an auto-gc temporary can vanish between cp's readdir and its open, and
+      // then the copy fails with `No such file or directory` and takes an unrelated
+      // assertion down with it. Measured: one full-suite run in ten. git knows how to
+      // duplicate its own directory; nothing here needs the uncommitted state that `cp`
+      // was preserving, because the fixture commits everything.
+      execFileSync("git", ["clone", "-q", dir, other]);
+      const g = (...a: string[]) => execFileSync("git", a, { cwd: other, stdio: "ignore" });
+      g("config", "user.email", "t@e.com");
+      g("config", "user.name", "t");
       await applyPatch(dir, DAMAGED);
       await applyPatch(other, WELL_FORMED);
       const tree = (d: string) =>

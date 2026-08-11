@@ -19,7 +19,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DidNotRun, Exhausted } from "../core/errors.ts";
 import type { Tier } from "../core/ladder.ts";
 import { fingerprint } from "../core/fingerprint.ts";
-import { initialState, ladderFingerprint } from "../core/ladder.ts";
+import { DEFAULT_TIERS, initialState, ladderFingerprint } from "../core/ladder.ts";
 import { PROBE_INTERVAL_MS } from "../core/cooloff.ts";
 import { CODE_ARCH } from "../core/review-type.ts";
 import { Store } from "../store/store.ts";
@@ -29,7 +29,25 @@ import { CARRIED_TIER, originalJustification, runRound } from "./review.ts";
 
 /** A reviewer that says exactly what a test tells it to, and records what it saw. */
 class ScriptedReviewer implements ReviewerLike {
+  /**
+   * A PAIR NOW, NOT A STRING (D-80). `review()` takes either one prompt or the
+   * initial/continued pair a kept session needs, and a fixture that recorded the object
+   * would assert against "[object Object]" — passing or failing for reasons unrelated to
+   * what it is testing. The INITIAL is what these tests are about: what a tier is told
+   * when it first looks.
+   */
+  static text(p: unknown): string {
+    return typeof p === "string" ? p : String((p as { initial?: string }).initial ?? "");
+  }
+
+
   readonly prompts: string[] = [];
+  /**
+   * The CONTINUED half of each pair, which only a kept session is ever sent (D-80).
+   * Recorded separately because it is a different question — what a tier is told when it
+   * comes BACK — and because it is where the D-10 filter is observable.
+   */
+  readonly continued: string[] = [];
   /**
    * Agentic turns to report back.
    *
@@ -46,8 +64,11 @@ class ScriptedReviewer implements ReviewerLike {
     this.script = script;
   }
 
-  async review(_tier: unknown, prompt: string, _worktree: string): Promise<ReviewerResult> {
-    this.prompts.push(prompt);
+  async review(_tier: unknown, prompt: unknown, _worktree: string): Promise<ReviewerResult> {
+    this.prompts.push(ScriptedReviewer.text(prompt));
+    if (typeof prompt === "object" && prompt !== null) {
+      this.continued.push(String((prompt as { continued?: string }).continued ?? ""));
+    }
     const findings = this.script.shift() ?? [];
     return {
       findings,
@@ -614,6 +635,34 @@ describe("runRound", () => {
 
       expect(after.fixed).toStrictEqual([]);
       expect(store.openFindings("r1").map((f) => f.fingerprint)).toContain(fingerprint(HOLD_BUG));
+    });
+
+    /**
+     * THE SAME RULE, ON THE PROMPT SIDE (D-80 × D-10).
+     *
+     * A continued round hands the tier its own open findings and asks it to rule on them.
+     * Handing it ANOTHER tier's would ask t1 to close what t3 raised — which is what the
+     * test above refuses to let happen in the verdict, and it would be no better for
+     * arriving as a question. The tier that raised a finding is the one that judges it.
+     */
+    it("puts only this tier's own open findings back to it", async () => {
+      // Only a tier that KEEPS its session is ever sent a continued prompt (D-80), and the
+      // flag is deliberately outside `ladderFingerprint`, so this resumes the same review.
+      const KEEPS = {
+        ...TYPE,
+        tiers: DEFAULT_TIERS.map((t) => (t.kind === "model" ? { ...t, conversation: true } : t)),
+      };
+      const reviewer = new ScriptedReviewer([[HOLD_BUG], []]);
+      await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: KEEPS });
+      expect(store.openFindings("r1")).toHaveLength(1);
+
+      await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: KEEPS });
+      expect(reviewer.continued[1], "its own finding is named").toContain(HOLD_BUG.claim);
+
+      // Now it belongs to t3, and t1 must not be asked about it.
+      store.db.prepare("UPDATE finding SET origin = 't3' WHERE review_id = 'r1'").run();
+      await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: KEEPS });
+      expect(reviewer.continued[2], "another tier's is not").not.toContain(HOLD_BUG.claim);
     });
   });
 

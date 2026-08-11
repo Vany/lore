@@ -53,6 +53,8 @@ let messagesStatus = 200;
 let messages: unknown = undefined;
 /** `POST /session/:id/abort`: the call that is supposed to stop the spending. */
 let abortStatus = 200;
+/** `POST /session/:id/summarize`: compaction, which must never be able to end a review. */
+let summarizeStatus = 200;
 /** Accept the prompt and never answer it, so a cancel has something real to interrupt. */
 let hangPrompt = false;
 /** Events the fake opencode will publish on `/event`, in order. */
@@ -157,6 +159,20 @@ function start(): Promise<void> {
           });
           return;
         }
+        // THE ADVERTISED CONTEXT WINDOW, which the 2/3 compaction rule is a fraction OF
+        // (D-80). Without a route here the catch-all answers `{id:"ses_test"}`, the window
+        // reads as unknown, and `shouldCompact` correctly refuses — so a compaction test
+        // would pass by never compacting.
+        if (path === "/config/providers") {
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify({ providers: [{ id: "openrouter", models: { "z-ai/glm-5.2": { limit: { context: 1000 } } } }] }));
+          return;
+        }
+        if (path.endsWith("/summarize")) {
+          res.writeHead(summarizeStatus, { "content-type": "application/json" });
+          res.end(summarizeStatus === 200 ? "true" : JSON.stringify({ error: "context overflow" }));
+          return;
+        }
         if (path.endsWith("/abort")) {
           res.writeHead(abortStatus, { "content-type": "application/json" });
           res.end(abortStatus >= 400 ? "" : "true");
@@ -200,6 +216,7 @@ beforeEach(async () => {
   messagesStatus = 200;
   messages = undefined;
   abortStatus = 200;
+  summarizeStatus = 200;
   hangPrompt = false;
   pending = [];
   await start();
@@ -369,6 +386,165 @@ describe("Reviewer.review", () => {
       { parts: [{ type: "text", text: FINDING_JSON }] },
     ];
     await expect(reviewer().review(TIER, "review this", "/tmp/wt")).rejects.toThrow(/invalid api key/);
+  });
+});
+
+/**
+ * ONE SESSION PER (REVIEW, TIER), INITIALISED ONCE (D-80).
+ *
+ * Vany: *"the main idea is to stop restarting it and continue the session in opencode, and
+ * manage it so each model will be started and initialised only once per review."*
+ *
+ * Every round used to be a cold start — new session, whole prompt rebuilt, the model
+ * re-orienting in a worktree it read minutes ago. Measured before it was built: 31.6 turns
+ * a round, and 29% of all model rounds were a tier re-reading a review it already knew.
+ */
+describe("a tier that keeps its session", () => {
+  const KEEPS = { ...TIER, conversation: true };
+  const reply = () => ({ parts: [{ type: "text", text: FINDING_JSON }] });
+  const creates = () => captured.filter((c) => (c.path.split("?")[0] ?? "") === "/session" && c.method === "POST");
+  const prompts = () =>
+    captured.filter((c) => (c.path.split("?")[0] ?? "").endsWith("/message") && c.method === "POST");
+
+  it("creates the session once and continues it on the next round", async () => {
+    replies = [reply(), reply()];
+    const r = reviewer();
+    const prompt = { initial: "FULL ORIENTATION", continued: "THE AUTHOR ANSWERED" };
+
+    await r.review(KEEPS, prompt, "/tmp/wt", "rev1");
+    await r.review(KEEPS, prompt, "/tmp/wt", "rev1");
+
+    expect(creates(), "initialised once, not once per round").toHaveLength(1);
+    // And the second round says only what changed — repeating the orientation would be
+    // the cold start this replaces, wearing a different name.
+    const sent = prompts().map((c) => JSON.stringify((c.body as { parts?: unknown[] }).parts ?? []));
+    expect(sent[0]).toContain("FULL ORIENTATION");
+    expect(sent[1]).toContain("THE AUTHOR ANSWERED");
+    expect(sent[1], "the orientation is not repeated").not.toContain("FULL ORIENTATION");
+  });
+
+  /**
+   * CONTINUITY IS WITHIN ONE TIER'S RUN, NEVER ACROSS TIERS. A tier that inherited the
+   * previous model's conclusions would make three tiers into one opinion asked three
+   * times, which is what D-1 and D-49 exist to prevent.
+   */
+  it("gives a different tier its own session, on the same review", async () => {
+    replies = [reply(), reply()];
+    const r = reviewer();
+    const prompt = { initial: "FULL", continued: "NEXT" };
+
+    await r.review(KEEPS, prompt, "/tmp/wt", "rev1");
+    await r.review({ ...KEEPS, id: "t2" }, prompt, "/tmp/wt", "rev1");
+
+    expect(creates(), "t2 starts empty of t1's reasoning").toHaveLength(2);
+    expect(JSON.stringify((prompts()[1]?.body as { parts?: unknown[] }).parts ?? [])).toContain("FULL");
+  });
+
+  it("gives a different review its own session, on the same tier", async () => {
+    replies = [reply(), reply()];
+    const r = reviewer();
+    await r.review(KEEPS, { initial: "A", continued: "n/a" }, "/tmp/wt", "rev1");
+    await r.review(KEEPS, { initial: "B", continued: "n/a" }, "/tmp/wt", "rev2");
+    expect(creates()).toHaveLength(2);
+  });
+
+  // The behaviour every other caller has, and the fallback when a lore restart has lost
+  // the map: no reviewId, or the flag off, is a cold start exactly as before.
+  it("starts cold when the tier has not opted in", async () => {
+    replies = [reply(), reply()];
+    const r = reviewer();
+    await r.review(TIER, { initial: "A", continued: "B" }, "/tmp/wt", "rev1");
+    await r.review(TIER, { initial: "A", continued: "B" }, "/tmp/wt", "rev1");
+
+    expect(creates(), "no flag, no continuity").toHaveLength(2);
+    const sent = prompts().map((c) => JSON.stringify((c.body as { parts?: unknown[] }).parts ?? []));
+    expect(sent[1], "and a cold round is always told everything").toContain("A");
+  });
+
+  /**
+   * WITHOUT THIS THEY ACCUMULATE. A kept session is deliberately never cleared per round,
+   * so `release` is the only thing that ends one — and admission allows 128 open reviews,
+   * which across three tiers is 384 sessions opencode would hold for finished work.
+   */
+  it("ends its sessions when the review does, and starts fresh after", async () => {
+    replies = [reply(), reply()];
+    const r = reviewer();
+    await r.review(KEEPS, { initial: "A", continued: "B" }, "/tmp/wt", "rev1");
+
+    await r.release("rev1");
+    expect(captured.some((c) => c.method === "DELETE"), "the session is deleted, not leaked").toBe(true);
+
+    await r.review(KEEPS, { initial: "A", continued: "B" }, "/tmp/wt", "rev1");
+    expect(creates(), "a released review starts over").toHaveLength(2);
+  });
+
+  it("releases only the review it was asked about", async () => {
+    replies = [reply(), reply(), reply()];
+    const r = reviewer();
+    await r.review(KEEPS, { initial: "A", continued: "B" }, "/tmp/wt", "rev1");
+    await r.review(KEEPS, { initial: "A", continued: "B" }, "/tmp/wt", "rev2");
+
+    await r.release("rev1");
+    await r.review(KEEPS, { initial: "A", continued: "B" }, "/tmp/wt", "rev2");
+
+    // rev2 was untouched, so its second round continues rather than creating a third.
+    expect(creates()).toHaveLength(2);
+  });
+});
+
+/**
+ * COMPACT AT TWO THIRDS, never restart (D-80).
+ *
+ * Vany: *"let's compact if the session is 2/3 of context"*, and then, when I proposed
+ * dropping the session and starting cold on the fixed tree instead: *"I said compact, who
+ * said restart?"* The worktree remembers the CODE; it does not remember why the model
+ * looked where it looked or what it ruled out.
+ */
+describe("compacting a kept session", () => {
+  const KEEPS = { ...TIER, conversation: true };
+  const reply = () => ({ parts: [{ type: "text", text: FINDING_JSON }] });
+  const summarised = () => captured.filter((c) => c.path.split("?")[0]?.endsWith("/summarize"));
+
+  /** A session whose last turn carried `used` tokens against the fixture's 1000 window. */
+  const lastTurnAt = (used: number) => {
+    messages = [
+      { info: { id: "u", role: "user" }, parts: [] },
+      { info: { id: "a", role: "assistant", tokens: { input: used, output: 10, cache: { read: 0, write: 0 } } }, parts: [] },
+    ];
+  };
+
+  it("compacts before the next turn once the last one crossed 2/3", async () => {
+    replies = [reply(), reply()];
+    lastTurnAt(700);
+    const r = reviewer();
+    await r.review(KEEPS, { initial: "A", continued: "B" }, "/tmp/wt", "rev1");
+    expect(summarised(), "nothing to compact on the first round").toHaveLength(0);
+
+    await r.review(KEEPS, { initial: "A", continued: "B" }, "/tmp/wt", "rev1");
+    expect(summarised(), "the second round finds the session two thirds full").toHaveLength(1);
+  });
+
+  it("leaves a session alone below the threshold", async () => {
+    replies = [reply(), reply()];
+    lastTurnAt(400);
+    const r = reviewer();
+    await r.review(KEEPS, { initial: "A", continued: "B" }, "/tmp/wt", "rev1");
+    await r.review(KEEPS, { initial: "A", continued: "B" }, "/tmp/wt", "rev1");
+    expect(summarised()).toHaveLength(0);
+  });
+
+  /**
+   * A summarise that fails leaves the conversation as it was — longer than we would like
+   * and still correct. Throwing would end a review over a housekeeping call.
+   */
+  it("carries on when the compaction itself fails", async () => {
+    replies = [reply(), reply()];
+    lastTurnAt(900);
+    summarizeStatus = 500;
+    const r = reviewer();
+    await r.review(KEEPS, { initial: "A", continued: "B" }, "/tmp/wt", "rev1");
+    const out = await r.review(KEEPS, { initial: "A", continued: "B" }, "/tmp/wt", "rev1");
+    expect(out.findings, "the round still produced its answer").toHaveLength(1);
   });
 });
 

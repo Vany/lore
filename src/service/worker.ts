@@ -331,6 +331,21 @@ export class Worker {
     const at = this.store.repoAndStateOf(reviewId);
     if (at === undefined || !isTerminal(at.state)) return;
 
+    // THE MODEL SESSIONS TOO, and they are new (D-80). A tier with `conversation` on keeps
+    // one session for the whole review and nothing clears it per round — that is the
+    // point. So this is the only thing that ends them, and without it admission's 128 open
+    // reviews become up to 384 sessions opencode holds for work that finished hours ago.
+    //
+    // Beside the worktree rather than anywhere else, because it is the same fact: this
+    // review is over, and everything it was holding goes back.
+    await this.reviewer.release?.(reviewId).catch((e: unknown) => {
+      void this.alerter.send({
+        severity: "log",
+        condition: "model session not released",
+        detail: `${reviewId}: ${e instanceof Error ? e.message : String(e)}`,
+      });
+    });
+
     const paths = repoPaths(this.cfg.reposRoot, at.repoId);
     await removeWorktree(paths, reviewId).catch((e: unknown) => {
       void this.alerter.send({

@@ -14,7 +14,7 @@
 import { describe, expect, it } from "vitest";
 import { CODE_ARCH, SECURITY } from "../core/review-type.ts";
 import type { Tier } from "../core/ladder.ts";
-import { OUTPUT_CONTRACT, proseShare, reviewPrompt } from "./prompts.ts";
+import { OUTPUT_CONTRACT, continuedPrompt, proseShare, reviewPrompt } from "./prompts.ts";
 
 const TIER: Tier = { id: "t1", kind: "model", model: "v/m", stage: "fast" };
 
@@ -215,5 +215,56 @@ describe("proseShare", () => {
   it("does not count the file header as an added line", () => {
     const d = ["diff --git a/x b/x", "--- a/x", "+++ b/src/a.ts", "+const a = 1;"].join("\n");
     expect(proseShare(d)).toStrictEqual({ added: 1, prose: 0 });
+  });
+});
+
+/**
+ * THE NEXT MESSAGE TO A SESSION THAT ALREADY HOLDS THIS REVIEW (D-80).
+ *
+ * The measurement that motivated it: 31.6 turns a round, and 29% of all model rounds
+ * were a tier re-orienting on a review it had already read. These pin the two properties
+ * that make the continued round worth having — it does not repeat the orientation, and it
+ * puts the tier's own open findings back to it — rather than the wording.
+ */
+describe("the continued prompt", () => {
+  const base = { t0: "no engine findings", diff: "diff --git a/x b/x\n+const a = 1;" };
+
+  it("asks about the tier's own open findings, by name", () => {
+    const out = continuedPrompt({ ...base, open: ["ab12cd34 src/pay.ts:12 — the hold is never released"] });
+    expect(out).toContain("ab12cd34");
+    expect(out).toContain("the hold is never released");
+    // The judge is the tier that raised it (D-10), and the prompt has to say so —
+    // otherwise a continued round reads as "here is a list" and closes them by silence.
+    expect(out).toMatch(/is it actually fixed|which are settled/i);
+  });
+
+  /**
+   * REPEATING THE ORIENTATION WOULD BE THE COLD START THIS REPLACES, wearing a different
+   * name. Cheap to assert and the whole point of the change: the session already holds
+   * who it is, the bar, the ticket and the worktree path.
+   */
+  it("does not re-send what the session already has", () => {
+    const out = continuedPrompt({ ...base, open: ["ab12cd34 src/pay.ts:12 — x"] });
+    expect(out).not.toContain("You are an independent reviewer");
+    expect(out).not.toContain("FIRST: cd into the worktree");
+    expect(out.length, "shorter than the orientation it replaces, by a lot")
+      .toBeLessThan(promptAt(1).length / 2);
+  });
+
+  it("still carries the new tree and what changed", () => {
+    const out = continuedPrompt({ ...base, open: [] });
+    expect(out).toContain("no engine findings");
+    expect(out).toContain("+const a = 1;");
+  });
+
+  /**
+   * NOTHING OPEN IS NOT NOTHING TO DO. A later round with no outstanding findings is new
+   * work on the same branch — an empty list must not read as "you are done here", which
+   * would turn a fix that broke something into a clean round.
+   */
+  it("asks for a real review when nothing is outstanding", () => {
+    const out = continuedPrompt({ ...base, open: [] });
+    expect(out).toMatch(/new work on the same branch/i);
+    expect(out).toContain("+const a = 1;");
   });
 });

@@ -5,6 +5,65 @@ surprised me.
 
 ---
 
+## 2026-08-12 — session 54: the model stops being restarted between rounds
+
+D-80's session half, built to Vany's design after the research session priced it: *"the
+main idea is to stop restarting it and continue the session in opencode, and manage it so
+each model will be started and initialised only once per review."*
+
+**What it is.** `Tier.conversation` opts a tier in. The reviewer keeps a session per
+`(review, tier)`, sends the full orientation once and a short continued message every round
+after, compacts at 2/3 of the window instead of restarting, and `release(reviewId)` deletes
+the sessions when the review reaches a terminal state. Everything is in
+`src/reviewer/continuity.ts` with the reasoning; the mechanism is spread over
+`opencode.ts`, `prompts.ts`, `review.ts` and `worker.ts`.
+
+**The correction that shaped it.** I proposed dropping the session and starting cold on the
+fixed tree, arguing the worktree is the memory. *"I said compact, who said restart?"* He is
+right and the distinction is the whole feature: the worktree remembers the CODE, never why
+the model looked where it looked or what it ruled out. `settledBlock` exists to reconstruct
+a fraction of that for a fresh session, badly.
+
+**A design decision I got wrong and the type caught late.** `continuedPrompt` first took
+`PromptInput`, so the caller invented `tierIndex: 0, modelTierCount: 1` for fields it never
+reads — and the day anyone rendered `position(i)` there, a t2 round would have introduced
+itself as *"tier 1 of 1"* with nothing failing. It has its own three-field type now. A
+prompt that lies quietly is the worst defect shape this project has.
+
+**Then the same class again, on the other side.** The continued prompt handed the tier
+every open finding on the review. D-10 says the tier that raised a finding judges the
+answer to it — so t1 would have been asked to rule on what t3 raised. `round.test.ts`
+already refuses to let a weaker tier CLOSE a stronger tier's finding; nothing stopped it
+being ASKED. Filtered on `origin`, with a test.
+
+**The config would have crash-looped the service, and the suite could not see it.**
+`TierSchema` is `.strict()`, so adding `"conversation": true` to the deploy ladders made
+them malformed — and `loadTiers` throws rather than falling back, which is right. The
+suite had never parsed a single file in `deploy/`. One probe test proved the boot failure
+before it could happen; the permanent guard reads the directory and loads every
+`tiers.*.json`, because a config nobody remembered to add to a list is the one that breaks.
+**This is the same shape as the LORE_CONCURRENCY crash loop the day before**, which took
+the service down for twenty minutes: a value the container passes, that the code refuses,
+found only by deploying it.
+
+**Three mutations to prove the tests could fail**, after the board-page stub that returned
+`[]` and made six assertions vacuous earlier this week. Two of my first mutations were
+absorbed silently — a `throw` inside `.then` lands in the `.catch` chained after it — so
+the compaction-failure test looked covered while proving nothing. The mutation that
+escapes the promise chain is the one that counts.
+
+**Found on the way, both pre-existing, both recorded rather than bundled:** a round
+finishing after the store closes writes into a closed handle (`ERR_INVALID_STATE`,
+unhandled rejection, in the drain window three deploys have already gone wrong in), and
+`drain.test.ts` times out about one full-suite run in eight on a REAL DNS lookup.
+
+**Not built, and the spec now says so in the same place:** handing a mid-round submit to
+the live session. D-55 still refuses a submit while a round runs. A live session makes that
+possible; it does not make it done. The saving is unmeasured until it runs for a day —
+baseline in `research/t2-token-cost.md`, comparison data already in `usage` and `tier_run`.
+
+---
+
 ## 2026-08-11 — session 53: a board, and what looking at it found
 
 Vany asked for a web view — *"on the / of some port over http on localhost, draw

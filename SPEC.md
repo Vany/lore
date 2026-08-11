@@ -220,7 +220,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-77** | **Commit, review to a verdict, amend, push.** Nothing reaches origin unreviewed | `[OPEN]` |
 | **D-78** | A review answers to **the token that started it**, not to its repository | built |
 | **D-79** | A finding is **what the author missed and would be hurt by** — asked, not filed | confirmed |
-| **D-80** | A review is **one conversation per tier**, not a series of audits. Fully async | subscription live; conversation DECIDED 2026-08-11, not built |
+| **D-80** | A review is **one conversation per tier**, not a series of audits. Fully async | subscription live; session continuity built 2026-08-12; mid-round submit still refused (D-55) |
 | **D-81** | Extraction stays deterministic; a **model may only VETO** what it mined | built; screen unmeasured |
 | **D-82** | **A defect found is fixed now**, and the batch is reviewed whole — one big diff, not many | confirmed |
 | **D-83** | A project's **development rules are appealable**: cite one, the tier rules on it | built |
@@ -1143,8 +1143,14 @@ The subscription surface stays exactly as built: correct, tested, free to keep, 
 ready the day a harness wires notifications to turns. What it no longer does is open
 the tool descriptions with an instruction the only real client cannot execute.
 
-**Both questions are now answered, 2026-08-11. The shape below is decided; the code is
-not written.**
+**Both questions were answered 2026-08-11, and the session half was built 2026-08-12.**
+
+**Which half.** *A tier keeps one session for the life of a review* is built and on by
+default for every model tier (`src/reviewer/continuity.ts`, `Tier.conversation`). *A submit
+is handed to that live session mid-round* is NOT built, and **D-55 still refuses a submit
+while a round is running** — a live session makes it possible, it does not make it done.
+The saving claimed below is the one now collected: repeat rounds enter a session that
+already holds the repository, instead of re-orienting from nothing.
 
 **How a deep tier enters.** It does not inherit anything. Vany: *"a tier enters from an
 empty prompt but on a fixed tree."* Reaching t2 opens a NEW session, empty of t1's
@@ -1180,18 +1186,36 @@ fresh session, badly.
 compacted at 2/3, with a cold start as the fallback — which is today's behaviour, so the
 floor is no worse than now.**
 
-Three things the implementation must get right, none of them reopening the decision:
+Three things the implementation had to get right, none of them reopening the decision, and
+all three are how it is built:
 
-- **Sessions are released when the review ends.** They currently die with each round; kept
-  alive and never closed, 128 admitted reviews × 3 tiers is 384 live sessions.
-- **A lore restart loses the session map**, which is in memory. A requeued round finds
-  nothing and falls back to a cold start rather than failing.
+- **Sessions are released when the review ends** — `Reviewer.release(reviewId)` deletes
+  every session that review opened, called from the worker the moment the review reaches a
+  terminal state. Kept alive and never closed, 128 admitted reviews × 3 tiers is 384 live
+  sessions, so this is not housekeeping.
+- **A lore restart loses the session map**, which is in memory by choice. A requeued round
+  finds nothing and starts cold — today's behaviour, already proven, so a restart costs
+  re-orientation and never a failure.
 - **One property is given up: fresh eyes each round.** A long-lived session may defend its
   earlier findings rather than re-read. The design is consistent with D-10 — the tier that
   raised a finding should judge the answer — but whether it costs anything is measurable:
-  findings per round, and how often a finding is withdrawn after a fix.
+  findings per round, and how often a finding is withdrawn after a fix. **Not yet
+  measured**, and the baseline to measure against is `research/t2-token-cost.md`.
 
-Until it ships D-55 stands: a submit during a running round is still refused.
+**What the continued round is told, and why it is short.** The initial prompt orients: the
+bar, the guidance, the tree, the whole of `settledBlock`. The continued prompt does not
+repeat any of it, because the session still holds it — it names what changed and which of
+its own findings are still open, and asks about those. Re-sending the orientation would be
+the cold start this replaces wearing a different name.
+
+**Compaction is measured on the LAST turn, not the session total.** The number that matters
+is the context the next turn will carry — input plus cache reads on the most recent
+assistant message. The cumulative sum across a round is ~30× larger, and using it would
+compact almost immediately and then on every turn after, which is the failure mode that
+throws away exactly the reasoning this exists to keep. An unreadable window compacts
+nothing: a tier whose context we cannot measure keeps the behaviour it had before this
+existed, and a compaction that fails is logged and stepped over, never fatal — a review
+must not end over housekeeping.
 
 **D-83 — a project's development rules are appealable, and an appeal is argued to the
 tier rather than granted.**
