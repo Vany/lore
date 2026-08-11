@@ -185,6 +185,114 @@ describe("what the expanded detail carries", () => {
   });
 });
 
+/**
+ * Findings hang under the ATTEMPT that raised them, which is what makes the detail
+ * readable without a "raised by" label on every line — the nesting is the answer.
+ *
+ * `finding.origin` is the tier id and `finding.round` the round, exactly the pair a
+ * `tier_run` is identified by, so this is a join and not a heuristic. Verified against
+ * the live database before it was written: zero findings fail to match.
+ */
+describe("findings under the step that raised them", () => {
+  const raise = (id: string, fp: string, origin: string, round: number, sev = "medium") =>
+    store.recordFinding(id, {
+      fingerprint: fp, file: "src/a.ts", line: 12, symbol: "fn",
+      severity: sev as "high" | "medium" | "low", claim: `claim ${fp}`, evidence: "the proof",
+      failureScenario: "given x, y happens", origin, round, firstSeen: new Date().toISOString(),
+    });
+
+  it("puts each finding under its own tier attempt", () => {
+    review("r1", "findings_ready");
+    const a = store.openTierRun("r1", "t1", 1, ago(600_000));
+    store.closeTierRun(a, "findings", []);
+    const b = store.openTierRun("r1", "t2", 2, ago(300_000));
+    store.closeTierRun(b, "findings", []);
+    raise("r1", "f1", "t1", 1);
+    raise("r1", "f2", "t2", 2);
+    raise("r1", "f3", "t2", 2);
+
+    const tiers = find("r1")?.tiers ?? [];
+    expect(tiers.map((t) => t.findings.map((f) => f.fingerprint))).toStrictEqual([["f1"], ["f2", "f3"]]);
+    // The same tier in a LATER round is a different attempt, and its findings are not
+    // retrospectively attributed to the earlier one.
+    expect(tiers[0]?.tier).toBe("t1");
+  });
+
+  it("carries the whole finding, because the point is to read it here", () => {
+    review("r1", "findings_ready");
+    const a = store.openTierRun("r1", "t1", 1, ago(600_000));
+    store.closeTierRun(a, "findings", []);
+    raise("r1", "f1", "t1", 1, "high");
+
+    const f = find("r1")?.tiers[0]?.findings[0];
+    expect(f?.claim).toBe("claim f1");
+    expect(f?.evidence).toBe("the proof");
+    expect(f?.failureScenario).toBe("given x, y happens");
+    expect(f?.severity).toBe("high");
+    expect(f?.file).toBe("src/a.ts");
+    expect(f?.line).toBe(12);
+  });
+
+  /**
+   * A SETTLED FINDING MUST NOT LOOK LIKE AN OPEN ONE. A board where answered work reads
+   * as outstanding work is a board whose reader learns to discount it.
+   */
+  it("says which findings have been answered, and how", () => {
+    review("r1", "findings_ready");
+    const a = store.openTierRun("r1", "t1", 1, ago(600_000));
+    store.closeTierRun(a, "findings", []);
+    raise("r1", "f1", "t1", 1);
+    raise("r1", "f2", "t1", 1);
+    store.recordVerdict("r1", {
+      fingerprint: "f1", verdict: "justified-accepted", rationale: "bounded upstream",
+      scope: undefined, tier: "t1", round: 2,
+    });
+
+    const byFp = Object.fromEntries((find("r1")?.tiers[0]?.findings ?? []).map((f) => [f.fingerprint, f]));
+    expect(byFp["f1"]?.settled).toBe("justified-accepted");
+    expect(byFp["f1"]?.settledBecause).toContain("bounded upstream");
+    expect(byFp["f2"]?.settled, "still work").toBeUndefined();
+  });
+
+  /**
+   * WHERE A FINDING IS FILED MUST NEVER DECIDE WHETHER IT IS SEEN. The grouping is a
+   * presentation choice; a presentation choice that can swallow a finding is a defect of
+   * the same shape as a review that did not run.
+   */
+  it("surfaces a finding that matches no tier attempt instead of dropping it", () => {
+    review("r1", "findings_ready");
+    const a = store.openTierRun("r1", "t1", 1, ago(600_000));
+    store.closeTierRun(a, "findings", []);
+    raise("r1", "f1", "t1", 1);
+    raise("r1", "ghost", "t9", 7);
+
+    const r = find("r1");
+    expect(r?.tiers[0]?.findings.map((f) => f.fingerprint)).toStrictEqual(["f1"]);
+    expect(r?.orphanFindings.map((f) => f.fingerprint)).toStrictEqual(["ghost"]);
+  });
+
+  // A cap that does not say what it dropped turns a partial list into a complete-looking
+  // one — the same silence this whole service exists to refuse.
+  it("counts what the cap left out rather than trimming quietly", () => {
+    review("r1", "findings_ready");
+    const a = store.openTierRun("r1", "t1", 1, ago(600_000));
+    store.closeTierRun(a, "findings", []);
+    for (let i = 0; i < 45; i++) raise("r1", `f${String(i).padStart(3, "0")}`, "t1", 1);
+
+    const r = find("r1");
+    expect(r?.tiers[0]?.findings.length).toBe(40);
+    expect(r?.findingsNotShown, "and it says so").toBe(5);
+  });
+
+  it("says nothing was raised only when nothing was", () => {
+    review("r1", "running");
+    const a = store.openTierRun("r1", "t1", 1, ago(600_000));
+    store.closeTierRun(a, "clean", []);
+    expect(find("r1")?.tiers[0]?.findings).toStrictEqual([]);
+    expect(find("r1")?.findingsNotShown).toBe(0);
+  });
+});
+
 describe("which reviews are on the board at all", () => {
   it("keeps a finished review for a couple of hours, then drops it", () => {
     review("fresh", "passed", "feat/just-passed");

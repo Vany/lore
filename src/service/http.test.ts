@@ -215,17 +215,33 @@ describe("the operator board", () => {
    * — the board would render `undefined` where a branch name goes and nothing would fail.
    * TypeScript cannot see inside a template string; this is the substitute for that.
    */
-  it("emits no field the page does not read", async () => {
+  it("emits no field the page does not read, at any level", async () => {
     review("revBoard", "running", "feat/board");
-    store.openTierRun("revBoard", "t1", 1, new Date().toISOString());
+    const run = store.openTierRun("revBoard", "t1", 1, new Date().toISOString());
+    store.closeTierRun(run, "findings", []);
+    store.recordFinding("revBoard", {
+      fingerprint: "bf1", file: "a.ts", line: 3, symbol: "s", severity: "high",
+      claim: "c", evidence: "e", failureScenario: "f", cwe: "CWE-89",
+      origin: "t1", round: 1, firstSeen: new Date().toISOString(),
+    });
     const body = (await (await fetch(`${base}/board.json`)).json()) as Record<string, unknown>;
 
-    const missing = Object.keys(body).filter((k) => !BOARD_PAGE.includes(k));
-    expect(missing, "board.json fields the page never mentions").toStrictEqual([]);
+    const unread = (o: Record<string, unknown>) => Object.keys(o).filter((k) => !BOARD_PAGE.includes(k));
 
-    const first = (body["reviews"] as Record<string, unknown>[])[0] ?? {};
-    const missingRev = Object.keys(first).filter((k) => !BOARD_PAGE.includes(k));
-    expect(missingRev, "per-review fields the page never mentions").toStrictEqual([]);
+    expect(unread(body), "board.json fields the page never mentions").toStrictEqual([]);
+
+    const rev = (body["reviews"] as Record<string, unknown>[])[0] ?? {};
+    expect(unread(rev), "per-review fields the page never mentions").toStrictEqual([]);
+
+    // Three levels deep, and each one had to actually be populated above — a drift check
+    // over an absent object is a check that passes because there was nothing to compare.
+    const tier = ((rev["tiers"] as Record<string, unknown>[]) ?? [])[0] ?? {};
+    expect(Object.keys(tier).length, "no tier run to check").toBeGreaterThan(0);
+    expect(unread(tier), "per-tier fields the page never mentions").toStrictEqual([]);
+
+    const f = ((tier["findings"] as Record<string, unknown>[]) ?? [])[0] ?? {};
+    expect(Object.keys(f).length, "no finding to check").toBeGreaterThan(0);
+    expect(unread(f), "per-finding fields the page never mentions").toStrictEqual([]);
   });
 
   /**

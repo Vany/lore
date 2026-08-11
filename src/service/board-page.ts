@@ -74,8 +74,29 @@ export const BOARD_PAGE = `<!doctype html>
   .stall-bad  { color: var(--red); font-weight: 700; }
 
   .body { padding: 4px 4px 14px 27px; }
-  table.tiers { border-collapse: collapse; margin: 4px 0 8px; }
-  table.tiers td { padding: 1px 14px 1px 0; white-space: nowrap; }
+  .run { margin: 6px 0; }
+  .run-head { display: flex; gap: 14px; align-items: baseline; }
+  .run-head > span { white-space: nowrap; }
+
+  /* One finding, collapsed to a line. Indented under the attempt that raised it, so
+     "which tier said this" needs no label — the nesting is the answer. */
+  .fs { margin: 2px 0 0 18px; }
+  .f { border-left: 2px solid var(--line); }
+  .f > summary {
+    list-style: none; cursor: pointer; padding: 2px 0 2px 8px;
+    display: flex; gap: 10px; align-items: baseline;
+  }
+  .f > summary::-webkit-details-marker { display: none; }
+  .f > summary:hover { background: #151b23; }
+  .f[open] { border-left-color: var(--dim); }
+  .f .where { color: var(--fg); white-space: nowrap; }
+  .f .claim { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dim); }
+  .f[open] .claim { white-space: normal; color: var(--fg); }
+  .fbody { padding: 4px 0 8px 26px; max-width: 110ch; }
+  .fbody .label { color: var(--dim); }
+  .fbody p { margin: 3px 0; white-space: pre-wrap; }
+  .settled { color: var(--green); }
+  .pre { color: var(--mag); }
   .sev-high { color: var(--red); }
   .sev-medium { color: var(--yellow); }
   .sev-low { color: var(--dim); }
@@ -227,20 +248,18 @@ function detail(r) {
     " · started " + esc(r.createdAt.slice(0, 19).replace("T", " ")) + "Z</div>");
 
   if (r.tiers.length > 0) {
-    out.push('<table class="tiers">' + r.tiers.map((t) => {
-      const running = !t.finishedAt;
-      const mark = running ? '<span class="s-running">▸</span>'
-        : t.outcome === "findings" ? '<span class="sev-medium">✓</span>'
-        : t.outcome === "clean" ? '<span class="s-passed">✓</span>'
-        : '<span class="s-failed">✘</span>';
-      const took = running
-        ? '<span class="clock s-running" data-used="' + esc(t.startedAt) + '">—</span>'
-        : '<span class="dim">' + dur(Date.parse(t.finishedAt) - Date.parse(t.startedAt)) + "</span>";
-      return "<tr><td>" + mark + "</td><td>" + esc(t.tier) + '</td><td class="dim">round ' + t.round +
-        "</td><td>" + took + '</td><td class="dim">' + esc(t.outcome ?? "running") + "</td></tr>";
-    }).join("") + "</table>");
+    out.push(r.tiers.map((t) => run(r, t)).join(""));
   } else {
     out.push('<div class="dim">no tier has been asked yet.</div>');
+  }
+
+  // Findings the (tier, round) grouping could not place. Normally none — and shown
+  // rather than dropped, because where a finding is filed must never decide whether it
+  // is seen.
+  if (r.orphanFindings.length > 0) {
+    out.push('<div class="run"><div class="run-head"><span class="skip">' +
+      "not attributable to any tier attempt</span></div>" +
+      '<div class="fs">' + r.orphanFindings.map((f) => finding(r, f)).join("") + "</div></div>");
   }
 
   const f = r.findings;
@@ -250,10 +269,78 @@ function detail(r) {
     '<span class="sev-low">' + f.low + " low</span>" +
     '<span class="dim"> · </span>' + f.open + " open" +
   "</div>");
+  // Never a silent cap: a list that stops at forty reads as a complete list of forty.
+  if (r.findingsNotShown > 0) {
+    out.push('<div class="skip">' + r.findingsNotShown + " more finding(s) not shown here</div>");
+  }
 
   // A check that did not run must never read as a check that found nothing (INV-1).
   for (const s of r.checksSkipped) out.push('<div class="skip">did not run: ' + esc(s) + "</div>");
   return out.join("");
+}
+
+/** One tier attempt, with the findings it raised nested underneath. */
+function run(r, t) {
+  const running = !t.finishedAt;
+  const mark = running ? '<span class="s-running">▸</span>'
+    : t.outcome === "findings" ? '<span class="sev-medium">✓</span>'
+    : t.outcome === "clean" ? '<span class="s-passed">✓</span>'
+    : '<span class="s-failed">✘</span>';
+  const took = running
+    ? '<span class="clock s-running" data-used="' + esc(t.startedAt) + '">—</span>'
+    : '<span class="dim">' + dur(Date.parse(t.finishedAt) - Date.parse(t.startedAt)) + "</span>";
+  // "raised nothing" rather than an empty space: a tier that ran and found nothing and a
+  // tier whose findings are not being shown must not look the same (INV-1, again).
+  const count = t.findings.length > 0
+    ? '<span class="dim">' + t.findings.length + " finding(s)</span>"
+    : running ? "" : '<span class="dim">raised nothing</span>';
+  return '<div class="run"><div class="run-head">' +
+      "<span>" + mark + " " + esc(t.tier) + "</span>" +
+      '<span class="dim">round ' + t.round + "</span>" +
+      "<span>" + took + "</span>" +
+      '<span class="dim">' + esc(t.outcome ?? "running") + "</span>" +
+      count +
+    "</div>" +
+    (t.findings.length === 0 ? "" :
+      '<div class="fs">' + t.findings.map((f) => finding(r, f)).join("") + "</div>") +
+  "</div>";
+}
+
+/**
+ * One finding: a line collapsed, everything the tier said when opened.
+ *
+ * The id is review + fingerprint, so the open-set restores it across a push exactly as it
+ * does for a review — reading a finding while the board updates must not close it.
+ *
+ * NO BACKTICKS ANYWHERE IN THIS FILE'S PAGE SOURCE. The whole page is one TS template
+ * literal, so a backtick in a comment ENDS the string, and the compiler then reports the
+ * confusion thirty lines later as a missing comma. Quoting an identifier the usual way
+ * costs a syntax error that does not name its own cause.
+ */
+function finding(r, f) {
+  const where = esc(f.file) + (f.line ? ":" + f.line : "");
+  const tags =
+    (f.settled ? '<span class="settled">' + esc(f.settled) + "</span> " : "") +
+    (f.preexisting ? '<span class="pre">pre-existing</span> ' : "");
+  return '<details class="f" data-id="' + esc(r.id + ":" + f.fingerprint) + '">' +
+    "<summary>" +
+      '<span class="sev-' + esc(f.severity) + '">●</span>' +
+      '<span class="sev-' + esc(f.severity) + '">' + esc(f.severity) + "</span>" +
+      '<span class="where">' + where + "</span>" +
+      tags +
+      '<span class="claim">' + esc(f.claim) + "</span>" +
+    "</summary>" +
+    '<div class="fbody">' +
+      '<p><span class="label">evidence </span>' + esc(f.evidence) + "</p>" +
+      '<p><span class="label">fails when </span>' + esc(f.failureScenario) + "</p>" +
+      (f.settledBecause ? '<p><span class="label">settled </span>' + esc(f.settledBecause) + "</p>" : "") +
+      '<p class="dim">' + esc(f.fingerprint.slice(0, 8)) +
+        (f.symbol ? " · " + esc(f.symbol) : "") +
+        (f.cwe ? " · " + esc(f.cwe) : "") +
+        (f.preexisting ? " · the branch did not touch this file" : "") +
+      "</p>" +
+    "</div>" +
+  "</details>";
 }
 
 /** Every clock on the page, recomputed from absolute timestamps the server sent. */

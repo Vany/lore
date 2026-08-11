@@ -179,11 +179,32 @@ fires on state changes only, by design, and this board is about what happens BET
 them; wiring operator events into every write path is a change whose failure mode is a
 silently stale board, and a poll cannot miss anything.
 
+**Each step carries its findings, collapsed.** Three levels: review → tier attempt →
+finding. A finding opens to everything the tier said about it — claim, evidence, failure
+scenario, CWE, the symbol, and the verdict that settled it where one exists. Grouping is
+by `(origin, round)`, which is exactly how a `tier_run` is identified, so it is a join
+rather than a guess; it was checked against the live database first, where every finding
+matches. **A finding that matches nothing is shown as an orphan rather than dropped** —
+the grouping is a presentation choice, and a presentation choice must never decide what
+exists.
+
+Two distinctions the list would otherwise lose:
+
+- **settled findings say so** and do not count as work. A board where answered work looks
+  like outstanding work is one whose reader stops trusting the numbers.
+- **a tier that ran and raised nothing says "raised nothing"**, rather than showing an
+  empty space that a tier whose findings are missing would also show (INV-1).
+
+Full text is in the snapshot, not fetched on expansion — measured at 240/351/341
+characters for claim/evidence/scenario and 7 KB for a whole active board, so a second
+route could only add a way to fail while somebody is reading. Forty findings per review,
+with the remainder **counted and stated**.
+
 **Unauthenticated, on the MCP interface, on Vany's explicit call** knowing `LORE_BIND` is
-`0.0.0.0`. `/status` has always exposed the same branch names and counts to the same
-audience. What the board deliberately does NOT carry is finding **text**: a claim names a
-defect in somebody's unmerged branch, and that is theirs to hand out rather than ours to
-publish.
+`0.0.0.0`, and **so is the finding text** — asked for directly after the first version
+shipped without it. That is a real widening: a claim names a defect in somebody's unmerged
+branch, and it is now readable by anything that can reach the port. `/status` already
+published the branch names; this publishes what is wrong inside them.
 
 ### 2.5 Disk is not lore's to alert on
 

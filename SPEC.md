@@ -1854,9 +1854,28 @@ board transfers nothing, and an unattended service does no work for it. Delibera
 poll rather than new operator events on `store.events`, whose state-change-only semantics
 are argued for elsewhere and whose extension would fail by going quietly stale.
 
+**Findings hang under the tier attempt that raised them**, collapsed, and open to their
+full text — claim, evidence, failure scenario, CWE, and the verdict that settled them if
+one did. The nesting is what makes "which tier said this" need no label. It is a join and
+not a heuristic: `finding.origin` is the tier id and `finding.round` the round, exactly
+the pair a `tier_run` is identified by, verified against the live database as matching
+every finding it holds. Anything that fails to match is still shown, as an orphan — where
+a finding is filed must never decide whether it is seen.
+
+A settled finding says so and is not counted as work, because a board where answered work
+reads as outstanding work is one whose reader learns to discount it.
+
 Unauthenticated on the MCP interface, **Vany's call**, made knowing `LORE_BIND` is
-`0.0.0.0` — `/status` already exposes the same names to the same audience. Finding TEXT is
-deliberately excluded: a claim describes a defect in somebody's unmerged branch.
+`0.0.0.0`. **So is showing finding text**, asked for directly after the first version
+shipped without it — which means a claim describing a defect in somebody's unmerged branch
+is readable by anything that can reach the port. `/status` already exposed the branch
+names; this goes further, deliberately.
+
+Full text travels in the snapshot rather than being fetched on expansion. Measured first:
+240 characters of claim, 351 of evidence, 341 of scenario on average, and a whole active
+board at 7 KB — so the extra route could only add a way to fail while somebody is reading.
+Capped at forty findings per review with the remainder **counted and stated**, because a
+list that silently stops at forty reads as a complete list of forty.
 
 Detail in `spec/operations.md` §2.4.3.
 

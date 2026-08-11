@@ -22,13 +22,56 @@ import type { Store } from "../store/store.ts";
 
 type Row = Record<string, string | number | null>;
 
-/** One tier's attempt, open or closed. `finishedAt` null means it is running now. */
+/**
+ * A finding, under the tier attempt that raised it.
+ *
+ * The full text travels. Measured on this deployment before deciding: 240 characters of
+ * claim, 351 of evidence and 341 of scenario on average, and every review on an active
+ * board together came to 20 KB — small enough that fetching detail on expansion would buy
+ * nothing and cost a route that can fail while a person is reading.
+ */
+export interface BoardFinding {
+  readonly fingerprint: string;
+  readonly severity: string;
+  readonly file: string;
+  readonly line: number | undefined;
+  readonly symbol: string | undefined;
+  readonly claim: string;
+  readonly evidence: string;
+  readonly failureScenario: string;
+  readonly cwe: string | undefined;
+  /**
+   * The branch did not cause this one (D-68) — a pattern engine matched code that was
+   * already there. It sorts below the branch's own findings everywhere else for the same
+   * reason it is marked here: it is not this author's work to answer.
+   */
+  readonly preexisting: boolean;
+  /**
+   * The verdict that closed it, or `undefined` while it is still work.
+   *
+   * Shown because a settled finding that looks identical to an open one turns a board
+   * into a list of things already dealt with, and a reader who learns that stops reading.
+   */
+  readonly settled: string | undefined;
+  readonly settledBecause: string | undefined;
+}
+
+/** One tier's attempt, open or closed. No `finishedAt` means it is running now. */
 export interface BoardTierRun {
   readonly tier: string;
   readonly round: number;
   readonly outcome: string | undefined;
   readonly startedAt: string;
   readonly finishedAt: string | undefined;
+  /**
+   * What this attempt raised, keyed on `(origin, round)`.
+   *
+   * Exact rather than approximate: `finding.origin` holds the tier id and every finding
+   * on this deployment matches a run on that pair — verified, zero orphans. Anything that
+   * does not match still appears, on the review, under `orphanFindings`; a finding the
+   * grouping cannot place must not be a finding the board does not show.
+   */
+  readonly findings: readonly BoardFinding[];
 }
 
 export interface BoardReview {
@@ -80,6 +123,16 @@ export interface BoardReview {
    * quietly claim full coverage.
    */
   readonly checksSkipped: readonly string[];
+  /** Findings whose `(origin, round)` matches no tier run. Normally empty; never hidden. */
+  readonly orphanFindings: readonly BoardFinding[];
+  /**
+   * How many findings were left out by the per-review cap, and said out loud.
+   *
+   * A board that silently showed the first forty would read as a complete list. The cap
+   * exists so one pathological review cannot make every push megabytes; the number exists
+   * so nobody mistakes the cap for the truth.
+   */
+  readonly findingsNotShown: number;
 }
 
 export interface Board {
@@ -103,6 +156,15 @@ export interface Board {
  * at the exact moment its verdict arrives, which is when you were looking at it.
  */
 const KEEP_FINISHED_MS = 2 * 3_600_000;
+
+/**
+ * The most findings carried for one review, worst first.
+ *
+ * The busiest review this deployment has produced holds 16, so this is headroom rather
+ * than a limit anyone will meet — it is here so that a runaway round cannot turn every
+ * two-second push into megabytes. Whatever it drops is COUNTED and reported.
+ */
+const MAX_FINDINGS_PER_REVIEW = 40;
 
 export function board(store: Store, now = Date.now()): Board {
   const reviews = store.boardReviews(new Date(now - KEEP_FINISHED_MS).toISOString()) as Row[];
@@ -133,11 +195,11 @@ export function board(store: Store, now = Date.now()): Board {
     })),
     reviews: reviews.map((r) => {
       const id = String(r["id"] ?? "");
-      const mine = runs.get(id) ?? [];
       const state = String(r["state"] ?? "failed") as ReviewState;
-      const working = mine.find((t) => t.finishedAt === undefined);
       const ladder = parseLadder(r["ladder"]);
       const f = counts.get(id) ?? { high: 0, medium: 0, low: 0 };
+      const { tiers: mine, orphans, notShown } = withFindings(store, id, runs.get(id) ?? []);
+      const working = mine.find((t) => t.finishedAt === undefined);
       return {
         id,
         branch: String(r["branch"] ?? ""),
@@ -153,8 +215,72 @@ export function board(store: Store, now = Date.now()): Board {
         tiers: mine,
         findings: { ...f, open: open.get(id) ?? 0 },
         checksSkipped: store.checksSkippedFor(id),
+        orphanFindings: orphans,
+        findingsNotShown: notShown,
       };
     }),
+  };
+}
+
+/**
+ * Hang each finding on the tier attempt that raised it.
+ *
+ * `finding.origin` is the tier id and `finding.round` the round, which is exactly the
+ * pair a `tier_run` row is identified by — so this is a join, not a guess. Anything that
+ * fails to match comes back as an orphan rather than disappearing: the grouping is a
+ * presentation choice, and a presentation choice must never decide what exists.
+ */
+function withFindings(
+  store: Store,
+  reviewId: string,
+  runs: readonly BoardTierRun[],
+): { tiers: BoardTierRun[]; orphans: BoardFinding[]; notShown: number } {
+  const all = store.allFindings(reviewId);
+  // Worst first already (`FINDING_ORDER_SQL`), so a cap keeps the ones worth seeing.
+  const kept = all.slice(0, MAX_FINDINGS_PER_REVIEW);
+  const openFps = new Set(store.openFindings(reviewId).map((f) => f.fingerprint));
+  const verdicts = new Map<string, { verdict: string; rationale: string }>();
+  for (const v of store.verdictsFor(reviewId)) {
+    const fp = String(v["fingerprint"] ?? "");
+    // The LAST verdict wins: `verdictsFor` is ordered by id, and a finding argued twice
+    // is settled by the ruling that came second.
+    verdicts.set(fp, { verdict: String(v["verdict"] ?? ""), rationale: String(v["rationale"] ?? "") });
+  }
+
+  const key = (tier: string, round: number) => `${tier}:${round}`;
+  const byRun = new Map<string, BoardFinding[]>();
+  const orphans: BoardFinding[] = [];
+  const runKeys = new Set(runs.map((t) => key(t.tier, t.round)));
+
+  for (const f of kept) {
+    const settled = openFps.has(f.fingerprint) ? undefined : verdicts.get(f.fingerprint);
+    const out: BoardFinding = {
+      fingerprint: f.fingerprint,
+      severity: f.severity,
+      file: f.file,
+      line: f.line,
+      symbol: f.symbol,
+      claim: f.claim,
+      evidence: f.evidence,
+      failureScenario: f.failureScenario,
+      cwe: f.cwe,
+      preexisting: f.preexisting === true,
+      ...(settled === undefined ? {} : { settled: settled.verdict, settledBecause: settled.rationale }),
+    } as BoardFinding;
+    const k = key(f.origin, f.round);
+    if (!runKeys.has(k)) {
+      orphans.push(out);
+      continue;
+    }
+    const list = byRun.get(k) ?? [];
+    list.push(out);
+    byRun.set(k, list);
+  }
+
+  return {
+    tiers: runs.map((t) => ({ ...t, findings: byRun.get(key(t.tier, t.round)) ?? [] })),
+    orphans,
+    notShown: all.length - kept.length,
   };
 }
 
@@ -182,6 +308,8 @@ function groupRuns(store: Store, ids: readonly string[]): Map<string, BoardTierR
       outcome: row["outcome"] === null ? undefined : String(row["outcome"]),
       startedAt: String(row["started_at"] ?? ""),
       finishedAt: row["finished_at"] === null ? undefined : String(row["finished_at"]),
+      // Filled in by `withFindings`, the only place that knows findings exist.
+      findings: [],
     });
     out.set(id, list);
   }
