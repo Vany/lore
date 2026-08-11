@@ -8,9 +8,15 @@ Two halves, at different stages:
 - **Subscription — built.** `subscriptions/listen` against `lore://review/{review_id}`,
   woken by every state change and by nothing else (§2). Proved end to end against a
   real MCP client in `src/service/subscribe.test.ts`.
-- **Conversation per tier — `[OPEN]`, not started.** §3 and §6 describe the design; the
-  reviewer still runs cold rounds, and `review_submit` still refuses mid-round per D-55.
-  Nothing in §3 is deployed.
+- **Conversation per tier — DESIGNED 2026-08-11, not built.** §3 and §6 describe it, and
+  §6's two open questions are now answered (SPEC D-80): a deep tier enters from an EMPTY
+  prompt on the fixed tree — inheriting would make three tiers one opinion asked three
+  times — and the cost question is measured in `research/t2-token-cost.md`. The shape is
+  one session per (review, tier), initialised once, **compacted at 2/3 of that tier's
+  context window rather than restarted**.
+  The reviewer still runs cold rounds, `review_submit` still refuses mid-round per D-55,
+  and nothing in §3 is deployed. It changes how much quota burns, so it ships on the
+  operator's word.
 
 ---
 
@@ -147,12 +153,35 @@ today and the one we are leaving.
 - Findings are still records, and still questions (D-79).
 - `passed` still means every tier agreed, and nothing else means clean.
 
-## 6. Open before this ships
+## 6. Answered before it ships
 
-1. **Cost.** A conversation re-sends its accumulated context every turn (D-50); a cold
-   round re-reads the repository but hits 97–99% cache. Which is cheaper is genuinely
-   unknown and must be measured, not argued.
-2. **The deep tiers.** Whether they join the existing conversation, start their own, or
-   read a transcript.
-3. ~~**What Claude Code negotiates.**~~ Answered 2026-08-06 and the answer made the
-   question moot: it exposes no verb for `subscriptions/listen` on either era (§4).
+Both questions that held this open are settled. **The decision is made; the code is not
+written.** Full reasoning and the measurement are in SPEC D-80 and
+`research/t2-token-cost.md`.
+
+**Is a long conversation cheaper than repeated cold rounds?** Measured across 128 completed
+t2 rounds: a cold round spends **31.6 turns** re-orienting in a worktree it read minutes
+ago — 972K cached reads, 95K fresh, $0.69 — and **29% of all model rounds are a tier
+re-reading a review it already knows**. The objection that kept this open, that a
+conversation re-sends its whole context every turn and so loses as it lengthens, was an
+argument against an unbounded one. **Compaction at 2/3 of the tier's window** bounds it;
+opencode provides `session.summarize`, and `CompactionPart.auto` shows it already compacts
+by itself, so this chooses the threshold rather than inventing the mechanism.
+
+**How does a deep tier enter a conversation the cheap tier has been having?** It does not.
+It opens a new session, empty of the previous tier's reasoning, on the tree as it now
+stands. Independence in this ladder is ACROSS tiers (D-1, D-49) — a tier that read the
+previous model's conclusions would make three opinions into one asked three times. What
+travels is the record, not the reasoning: `settledBlock`, so the new tier does not re-raise
+what the author has already answered to somebody else.
+
+**Compaction, never restart.** The distinction is the point: the worktree remembers the
+CODE, not why the model looked where it looked or what it ruled out. Restarting on the
+fixed tree keeps the former and throws away the latter, which is the thing `settledBlock`
+already tries to reconstruct and cannot.
+
+Three implementation obligations, none of which reopen the decision: sessions are released
+when the review ends (128 admitted reviews × 3 tiers is 384 live sessions if nothing closes
+them); a lore restart loses the in-memory session map, so a requeued round falls back to a
+cold start rather than failing; and the property being given up — fresh eyes each round — is
+measurable as findings per round and how often a finding is withdrawn after a fix.

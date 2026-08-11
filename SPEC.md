@@ -190,7 +190,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-93** | **An exhausted subscription asks the same model through OpenRouter**, once, and the fallback is verified at startup | built 2026-08-09 |
 | **D-94** | **A cooled-off tier is asked again every 15 minutes.** lore could hear a tier die and not hear it recover | built 2026-08-10 |
 | **D-49** | A single-vendor ladder reaches `passed_partial`, never `passed` | confirmed |
-| **D-50** | Exploration is **counted per review before it is capped**; no cap yet | `[OPEN]` |
+| **D-50** | Exploration is **counted per review before it is capped**. Distribution measured 2026-08-11: longer rounds find LESS | cap `[OPEN]` |
 | **D-51** | An accepted justification is **repo knowledge**, carried across reviews | confirmed |
 | **D-52** | The per-tier cap bounds *iteration*, so a clean tier escalates past it | confirmed |
 | **D-53** | One round at a time **per review**; reviews still run in parallel | confirmed |
@@ -220,7 +220,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-77** | **Commit, review to a verdict, amend, push.** Nothing reaches origin unreviewed | `[OPEN]` |
 | **D-78** | A review answers to **the token that started it**, not to its repository | built |
 | **D-79** | A finding is **what the author missed and would be hurt by** — asked, not filed | confirmed |
-| **D-80** | A review is **one conversation per tier**, not a series of audits. Fully async | subscription live; conversation `[OPEN]` |
+| **D-80** | A review is **one conversation per tier**, not a series of audits. Fully async | subscription live; conversation DECIDED 2026-08-11, not built |
 | **D-81** | Extraction stays deterministic; a **model may only VETO** what it mined | built; screen unmeasured |
 | **D-82** | **A defect found is fixed now**, and the batch is reviewed whole — one big diff, not many | confirmed |
 | **D-83** | A project's **development rules are appealable**: cite one, the tier rules on it | built |
@@ -531,8 +531,36 @@ run, so the session total is the review's). `NULL` when it could not be taken �
 never `0`, which would be a claim that the tier explored nothing, and would bias the
 distribution downwards exactly when the measurement broke.
 
-`[OPEN]` — set the cap from that column once there is a distribution, and note what it
-does and does not contain. `bootstrap()`'s model call records no usage row at all.
+**The distribution arrived, 2026-08-11** (`research/t2-token-cost.md`), and it says the
+opposite of what a cap usually has to argue against. Across 128 completed t2 rounds,
+matched to the findings each raised on `(review_id, origin, round)`:
+
+| t2 rounds | count | findings/round | high found | $/round | $/high |
+|---|---:|---:|---:|---:|---:|
+| under 25 steps | 50 | **2.12** | **5** | **$0.19** | **$1.85** |
+| 25–39 steps | 45 | 1.53 | 4 | $0.81 | $9.13 |
+| 40+ steps | 33 | 0.97 | **1** | $1.31 | **$43.14** |
+
+**Longer exploration finds LESS, in absolute terms.** Thirty-three rounds of 40+ steps
+produced one high-severity finding between them; fifty short rounds produced five. And it
+is not about how much code was given: a **7 KB diff cost $0.95** while an **803 KB diff
+cost less, in eight steps**. The dearest band is 20–80 KB — big enough to look worth
+investigating, small enough not to fill the budget.
+
+Both readings of that correlation argue the same way. Either long exploration is
+unproductive, or the agent explores long BECAUSE it is finding nothing; on each, a cap
+saves money and loses nothing. The only reading that argues against — *it would have found
+it on step 45* — is measured at one high finding across thirty-three such rounds.
+
+`[OPEN]` — **the cap itself, which is Vany's to set**, because it changes how much quota
+burns. Capping t2 at ~25 steps is worth roughly **$60 of $89**. Two things it must do when
+it fires: report itself in `checks_skipped` with the step count, because a round that
+stopped early did not finish and `clean` would be INV-1 exactly inverted; and be read
+alongside D-80's session continuity, which attacks the same number from the other side — a
+continued session needs ~6 turns where a cold one needs 31.6, so the two together are not
+additive.
+
+`bootstrap()`'s model call still records no usage row at all, so it is in none of the above.
 
 **A failed call now DOES leave a row** (D-85), read back from the session opencode leaves
 behind and written with `outcome: 'failed'`. Before 2026-08-09 it left none, so two
@@ -1115,10 +1143,55 @@ The subscription surface stays exactly as built: correct, tested, free to keep, 
 ready the day a harness wires notifications to turns. What it no longer does is open
 the tool descriptions with an instruction the only real client cannot execute.
 
-`[OPEN]` — the conversation half. Two questions before it ships: whether a long
-conversation is cheaper or dearer than repeated cold rounds, measured rather than
-argued; and how the deep tiers enter a conversation the cheap tier has been having.
-Until then D-55 stands: a submit during a running round is still refused.
+**Both questions are now answered, 2026-08-11. The shape below is decided; the code is
+not written.**
+
+**How a deep tier enters.** It does not inherit anything. Vany: *"a tier enters from an
+empty prompt but on a fixed tree."* Reaching t2 opens a NEW session, empty of t1's
+reasoning, on the tree as it now stands. That is not a compromise — it is the ladder's
+value: a tier that read the previous model's conclusions would make three tiers into one
+opinion asked three times, which is what D-1 and D-49 exist to prevent. What still travels
+is the RECORD, not the reasoning — `settledBlock`, so the new tier does not re-raise
+questions the author has already answered to somebody else.
+
+**Whether it is cheaper, measured** (`research/t2-token-cost.md`). Against 128 completed t2
+rounds: a cold round spends **31.6 turns** against a context averaging ~31K tokens — 972K
+cached reads, 95K fresh, $0.69. Almost all of those turns are re-orientation in a worktree
+the model examined minutes earlier. **63 of 218 model rounds (29%) are a tier re-reading a
+review it already knows**; t2's 36 repeats alone are ~$25 of the $97 it has ever cost.
+
+The objection that kept this open — that a conversation re-sends its whole context every
+turn, so it wins early and loses late — was an argument against an UNBOUNDED conversation.
+Vany's rule removes it: **compact at 2/3 of that tier's context window**, never restart.
+opencode supports it directly (`session.summarize`; `CompactionPart.auto` shows it already
+compacts on its own, so this chooses a threshold rather than inventing a mechanism). What
+remains is the saving that matters, and it is in TURNS — which the same measurement shows
+to be both the cost driver and INVERSELY related to findings: rounds under 25 steps average
+2.12 findings at $0.19, rounds over 40 average 0.97 at $1.31.
+
+**Compaction, not restart, and the distinction is the whole point.** I proposed dropping
+the session and starting cold on the current tree, arguing that the worktree is the memory.
+Vany: *"I said compact, who said restart?"* He is right. The worktree remembers the CODE;
+it does not remember why the model looked where it looked, what it ruled out, or what it
+was suspicious of and let go. `settledBlock` exists to reconstruct a fraction of that for a
+fresh session, badly.
+
+**So: one session per (review, tier), started and initialised exactly once per review,
+compacted at 2/3, with a cold start as the fallback — which is today's behaviour, so the
+floor is no worse than now.**
+
+Three things the implementation must get right, none of them reopening the decision:
+
+- **Sessions are released when the review ends.** They currently die with each round; kept
+  alive and never closed, 128 admitted reviews × 3 tiers is 384 live sessions.
+- **A lore restart loses the session map**, which is in memory. A requeued round finds
+  nothing and falls back to a cold start rather than failing.
+- **One property is given up: fresh eyes each round.** A long-lived session may defend its
+  earlier findings rather than re-read. The design is consistent with D-10 — the tier that
+  raised a finding should judge the answer — but whether it costs anything is measurable:
+  findings per round, and how often a finding is withdrawn after a fix.
+
+Until it ships D-55 stands: a submit during a running round is still refused.
 
 **D-83 — a project's development rules are appealable, and an appeal is argued to the
 tier rather than granted.**
