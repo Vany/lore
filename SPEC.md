@@ -1822,6 +1822,54 @@ D-77 still holds and nothing skips the ladder. What changes is that batching is 
 DEFAULT rather than a compromise: fix everything found, review it together, push it
 together.
 
+**D-102 — a reused t0 is recorded as reused, never as clean.**
+
+Vany, reading the board: *"why is there a round 2 on t0?"*
+
+D-92 skips t0 when the tree hash AND the engine set are unchanged — a deterministic engine
+set given the same bytes cannot answer differently, and it saves 18% of t0 time on
+rigid-monorepo. The skip is right. What it recorded was not: the reuse produces zero
+findings, so the row closed as `clean`, and the operator board rendered
+`t0 · round 2 · 0s · clean · raised nothing`.
+
+**A check that did not run, written into the audit trail as a check that found nothing.**
+That is INV-1, in the one table whose purpose is to say whether a review really ran, and
+the board's wording claimed more than the database did. The only trace of the truth was a
+log line no client and no board ever sees.
+
+`reused` is its own outcome now, rendered as `↺` rather than a tick, saying the tree was
+unchanged so the earlier sweep still stands. It stays OUT of the did-not-look set —
+deliberately: the reuse requires the same tree, so that run read these exact bytes, and
+counting it as a miss would weaken every verdict resting on it for nothing. It is the one
+outcome that looked without working.
+
+**D-101 — there is no worker pool; a claimed job starts at once.**
+
+Vany: *"a job must be picked immediately"*, and then, of the knob that sized the pool,
+*"there is no such thing as LORE_CONCURRENCY."*
+
+There was: a default of 12 loops, each claiming one job and AWAITING the entire round
+before claiming another. So the thirteenth review sat in `queued` however idle the machine
+was — an invisible queue, which is exactly what D-98 removed at the provider and left in
+place here. Worse, the board explained a queued review by blaming that pool while eleven of
+the twelve loops were idle and the real cause was a stale drain flag.
+
+One dispatcher now claims as fast as jobs exist and starts each round WITHOUT awaiting it,
+so `queued` is a state a review passes through rather than one it sits in. `LORE_CONCURRENCY`
+is deleted, and the service refuses to start if it is still set — a knob wired to nothing is
+decoration a reader believes, which this repository has now been bitten by three times.
+
+**What bounds the service is admission and the machine, in that order.** 128 open reviews,
+refused at the door where a client can see it (D-98); below that, sixteen cores against a
+t0 whose p90 is 537 seconds of sandboxed install. The second is a real ceiling and it is no
+longer a number anybody picked — it is the host, and the board shows rounds in flight so it
+is visible rather than inferred.
+
+**The dispatcher dying is now a page, and that is a real loss.** A pool degraded — N loops
+to N-1 to zero, with `/healthz` still green. One thread of control stops ALL claiming at
+once. Its body catches everything it can and the outer catch alerts; the trade was taken
+knowingly, because an invisible queue is worse than a loud stop.
+
 **D-100 — a missing branch asks the host to fetch before it is an error.**
 
 Vany: *"branch missing → refresh mirror. Mirror refreshed and no branch → error."*

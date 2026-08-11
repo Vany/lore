@@ -62,7 +62,7 @@ const until = async (what: string, ok: () => boolean, timeoutMs = 10_000): Promi
 describe("a draining worker takes nothing new", () => {
   // The behaviour, not the flag. Set AFTER start, because start clears it.
   it("leaves queued work alone for the next process", async () => {
-    const worker = new Worker(store, { ...DEFAULT_WORKER, concurrency: 2, pollMs: 5 }, new Alerter({ timeoutMs: 10 }));
+    const worker = new Worker(store, { ...DEFAULT_WORKER, pollMs: 5 }, new Alerter({ timeoutMs: 10 }));
     const stop = worker.start();
     try {
       store.setDraining(true);
@@ -79,7 +79,7 @@ describe("a draining worker takes nothing new", () => {
   // And the same worker takes it the moment draining stops — otherwise "drained"
   // would be indistinguishable from "wedged", which is the whole hazard.
   it("resumes claiming when the drain is lifted", async () => {
-    const worker = new Worker(store, { ...DEFAULT_WORKER, concurrency: 2, pollMs: 5 }, new Alerter({ timeoutMs: 10 }));
+    const worker = new Worker(store, { ...DEFAULT_WORKER, pollMs: 5 }, new Alerter({ timeoutMs: 10 }));
     const stop = worker.start();
     try {
       store.setDraining(true);
@@ -114,7 +114,7 @@ describe("a drain does not survive the restart it was for", () => {
   it("is cleared by the process that starts after it", () => {
     store.setDraining(true);
 
-    const worker = new Worker(store, { ...DEFAULT_WORKER, concurrency: 1, pollMs: 10 }, new Alerter({ timeoutMs: 10 }));
+    const worker = new Worker(store, { ...DEFAULT_WORKER, pollMs: 10 }, new Alerter({ timeoutMs: 10 }));
     const stop = worker.start();
     try {
       expect(store.isDraining()).toBe(false);
@@ -124,7 +124,7 @@ describe("a drain does not survive the restart it was for", () => {
   });
 
   it("leaves a clean start alone", () => {
-    const worker = new Worker(store, { ...DEFAULT_WORKER, concurrency: 1, pollMs: 10 }, new Alerter({ timeoutMs: 10 }));
+    const worker = new Worker(store, { ...DEFAULT_WORKER, pollMs: 10 }, new Alerter({ timeoutMs: 10 }));
     const stop = worker.start();
     try {
       expect(store.isDraining()).toBe(false);
@@ -203,7 +203,7 @@ describe("a worker does not overwrite an ending somebody chose", () => {
 
     const worker = new Worker(
       store,
-      { ...DEFAULT_WORKER, concurrency: 1, pollMs: 5, reposRoot: join(root, "repos") },
+      { ...DEFAULT_WORKER, pollMs: 5, reposRoot: join(root, "repos") },
       new Alerter({ timeoutMs: 10 }),
       cancelsThenRefuses("rev1"),
     );
@@ -222,7 +222,7 @@ describe("a worker does not overwrite an ending somebody chose", () => {
 
   it("still fails a review that was still wanted", async () => {
     queuedReview("rev2");
-    const worker = new Worker(store, { ...DEFAULT_WORKER, concurrency: 1, pollMs: 5 }, new Alerter({ timeoutMs: 10 }));
+    const worker = new Worker(store, { ...DEFAULT_WORKER, pollMs: 5 }, new Alerter({ timeoutMs: 10 }));
     const stop = worker.start();
     try {
       await until("the round to run and fail", () => store.stateOf("rev2") === "failed");
@@ -260,7 +260,7 @@ describe("a store fault does not silently cost the service its capacity", () => 
       return original();
     };
 
-    const worker = new Worker(store, { ...DEFAULT_WORKER, concurrency: 1, pollMs: 1 }, alerter);
+    const worker = new Worker(store, { ...DEFAULT_WORKER, pollMs: 1 }, alerter);
     const stop = worker.start();
     await until("the loop to survive both throws and claim again", () => thrown > 2);
     stop();

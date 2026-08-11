@@ -29,8 +29,6 @@ import { runRound } from "../reviewer/review.ts";
 
 export interface WorkerConfig {
   readonly reposRoot: string;
-  /** How many rounds may run concurrently. CPU-bound on the deployment host. */
-  readonly concurrency: number;
   readonly pollMs: number;
   /**
    * The day's spend ceiling, passed to every round so it is checked at round boundaries
@@ -41,9 +39,6 @@ export interface WorkerConfig {
 
 export const DEFAULT_WORKER: WorkerConfig = {
   reposRoot: "/var/lib/lore/repos",
-  // T0 is the throughput bottleneck on an ARM SBC (D-37), and it is CPU-bound —
-  // so this is set by cores, not by memory.
-  concurrency: 2,
   pollMs: 2_000,
 };
 
@@ -53,6 +48,8 @@ export class Worker {
   private readonly alerter: Alerter;
   private readonly reviewer: ReviewerLike;
   private running = false;
+  /** Rounds started and not yet finished. There is no ceiling on it but admission (D-101). */
+  private active = 0;
   private recent: boolean[] = [];
 
   constructor(store: Store, cfg: WorkerConfig, alerter: Alerter, reviewer: ReviewerLike = new Reviewer()) {
@@ -87,25 +84,40 @@ export class Worker {
       console.error("[lore:log] startup: cleared a drain flag — this process is the one it was waiting for");
     }
     this.running = true;
-    // NOT `void Promise.allSettled(loops)`. That collected every rejection and threw
-    // it away, so a loop dying took the service's capacity with it in silence —
-    // concurrency N to N-1 to zero, with `/healthz` still answering ok. Each loop now
-    // reports its own ending, and an ending while `running` is true is a page.
-    let alive = this.cfg.concurrency;
-    for (const loop of Array.from({ length: this.cfg.concurrency }, () => this.loop())) {
-      void loop.catch((e: unknown) => {
-        alive--;
-        const detail = e instanceof Error ? (e.stack ?? e.message) : String(e);
-        console.error(`[lore:log] a worker loop stopped: ${detail}`);
-        if (this.running) void this.alerter.send(CONDITIONS.workerLoopDied(alive, detail));
-      });
-    }
+    // ONE DISPATCHER, AND EVERY CLAIMED JOB STARTS AT ONCE (D-101).
+    //
+    // There used to be a fixed pool of loops, each claiming one job and AWAITING the
+    // whole round before claiming another — so the Nth+1 review sat in `queued` until
+    // somebody finished, however idle the machine was. Vany, twice: *"a job must be
+    // picked immediately"*, and then, of the knob that set the pool size, *"there is no
+    // such thing as LORE_CONCURRENCY"*.
+    //
+    // So there is no pool. The dispatcher claims as fast as jobs exist and starts each
+    // round without waiting for it, which is what makes `queued` a state a review passes
+    // THROUGH rather than one it sits in. The only bound left is admission: 128 open
+    // reviews, refused at the door where a client can see it (D-98).
+    //
+    // ITS DEATH IS A PAGE, and that matters more now than it did with a pool. A pool
+    // degraded — N loops to N-1 to zero, with `/healthz` still answering ok. This is
+    // one thread of control, so losing it stops ALL claiming at once; the body below
+    // therefore catches everything it can, and this catch is the last resort rather
+    // than the expected path.
+    void this.dispatch().catch((e: unknown) => {
+      const detail = e instanceof Error ? (e.stack ?? e.message) : String(e);
+      console.error(`[lore:log] the dispatcher stopped: ${detail}`);
+      if (this.running) void this.alerter.send(CONDITIONS.workerLoopDied(0, detail));
+    });
     return () => {
       this.running = false;
     };
   }
 
-  private async loop(): Promise<void> {
+  /** Rounds running right now — for `/status`, and for knowing the dispatcher is alive. */
+  inFlight(): number {
+    return this.active;
+  }
+
+  private async dispatch(): Promise<void> {
     while (this.running) {
       // THE CLAIM ITSELF CAN THROW, and it used to take the loop with it. The guard
       // below covers everything a round does; `isDraining()` and `claimJob()` are store
@@ -126,7 +138,7 @@ export class Worker {
       } catch (e) {
         const detail = e instanceof Error ? e.message : String(e);
         console.error(`[lore:log] could not claim work: ${detail}`);
-        await this.alerter.send(CONDITIONS.workerLoopDied(this.cfg.concurrency, detail));
+        await this.alerter.send(CONDITIONS.workerLoopDied(0, detail));
         await sleep(this.cfg.pollMs);
         continue;
       }
@@ -134,6 +146,26 @@ export class Worker {
         await sleep(this.cfg.pollMs);
         continue;
       }
+      // NOT AWAITED — that is the whole change. Awaiting here is what made a queue.
+      // The loop goes straight back to claiming, so a burst of ten reviews starts ten
+      // rounds rather than one and nine waits.
+      this.active += 1;
+      void this.round(job).finally(() => {
+        this.active -= 1;
+      });
+    }
+  }
+
+  /**
+   * One round, start to finish, with nothing allowed to escape.
+   *
+   * Everything here used to run inline in the loop, where a throw would have been caught
+   * by the loop's own guard. Detached, an escaping rejection is an unhandled one — it
+   * would take the process down, or worse be swallowed by a handler that logs and
+   * continues while this review is left `running` for ever.
+   */
+  private async round(job: { id: number; reviewId: string }): Promise<void> {
+    {
       try {
         await this.runJob(job.reviewId);
         this.store.finishJob(job.id, "done");

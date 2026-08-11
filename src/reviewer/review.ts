@@ -437,7 +437,18 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
 
   store.closeTierRun(
     t0RunId,
-    t0.findings.length > 0 ? "findings" : "clean",
+    // `reused` IS ITS OWN OUTCOME, and it has to be (D-102).
+    //
+    // The reuse produces zero findings, so this said `clean` — a check that did not run,
+    // recorded as a check that found nothing, which is INV-1 in the audit trail itself.
+    // The only trace was a log line no client and no board ever sees, and the operator
+    // board then rendered it as `t0 · round 2 · 0s · clean · raised nothing`: a stronger
+    // claim than the database was making, on the page built to refuse exactly this.
+    // Vany asked why there was a t0 round 2 at all, which is how it surfaced.
+    //
+    // It still counts as having LOOKED — the reuse requires the same tree and the same
+    // engine set — so it stays out of `DID_NOT_LOOK_SQL` and weakens no verdict.
+    reuseT0 ? "reused" : t0.findings.length > 0 ? "findings" : "clean",
     t0.unavailable,
     roundTree,
     t0ForTier.unavailable,

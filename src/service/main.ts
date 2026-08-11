@@ -51,7 +51,6 @@ export interface ServiceConfig {
    * anything green — the check cannot run, which is not the same as passing.
    */
   readonly backupDir?: string;
-  readonly concurrency: number;
   readonly dailyCeilingUsd: number;
 }
 
@@ -65,10 +64,11 @@ export interface ServiceConfig {
  *   * `fetch("")` on every alert, which throws and logs a failure that looks like a
  *     broken webhook rather than an absent one;
  *   * the heartbeat posting to nowhere while the operator believes it is off;
- *   * and the one that matters — `Number("")` is **0**, so `LORE_CONCURRENCY=`
- *     starts ZERO worker loops. The service binds, answers `/status` with
- *     `ok: true`, accepts reviews, queues them, and runs none of them, for ever.
- *     Healthy and doing nothing is the failure this project exists to refuse.
+ *   * and the one that matters — `Number("")` is **0**. When a blank
+ *     `LORE_CONCURRENCY` meant zero worker loops, the service bound, answered
+ *     `/status` with `ok: true`, accepted reviews, queued them and ran none, for
+ *     ever. That knob is gone (D-101) and the hazard is not: any numeric setting
+ *     read this way turns "unconfigured" into a working value of zero.
  */
 function env(name: string): string | undefined {
   const v = process.env[name];
@@ -99,15 +99,22 @@ export function configFromEnv(): ServiceConfig {
   // `LORE_MODEL_CONCURRENCY` capped model calls in flight and queued the rest until D-98
   // moved the bound to admission. Reading it and ignoring it would leave an operator
   // holding a knob wired to nothing — believing they had tuned provider load while the
-  // real lever, `LORE_CONCURRENCY`, sat untouched. This repository has been bitten by the
+  // real bound, admission, sat where they were not looking. This repo has been bitten by the
   // decorative-constant shape twice (`RULE_DIRS`, `SCHEMA_VERSION`), so it refuses at
   // startup instead: the fix is deleting one line and the message says so.
+  if (env("LORE_CONCURRENCY") !== undefined) {
+    throw new Error(
+      "LORE_CONCURRENCY is set but no longer does anything (D-101): there is no worker pool. " +
+        "A claimed job starts its round immediately, so nothing sits in `queued` waiting for a " +
+        "loop to free up, and the only bound is admission — a new review is refused at 128 open. " +
+        "Remove the variable.",
+    );
+  }
   if (env("LORE_MODEL_CONCURRENCY") !== undefined) {
     throw new Error(
       "LORE_MODEL_CONCURRENCY is set but no longer does anything (D-98): model calls are " +
         "no longer queued behind a semaphore — a round launches its session immediately, and the " +
-        "bound is admission control, which refuses a new review at 128 open. Remove the variable. " +
-        "If you were using it to limit load on a provider, LORE_CONCURRENCY is the lever now.",
+        "bound is admission control, which refuses a new review at 128 open. Remove the variable.",
     );
   }
   const webhookUrl = env("LORE_WEBHOOK_URL");
@@ -127,12 +134,6 @@ export function configFromEnv(): ServiceConfig {
     ...(webhookUrl !== undefined ? { webhookUrl } : {}),
     ...(heartbeatUrl !== undefined ? { heartbeatUrl } : {}),
     ...(backupDir !== undefined ? { backupDir } : {}),
-    // At least one: zero workers is a service that queues for ever in silence.
-    concurrency: envNumber("LORE_CONCURRENCY", DEFAULT_WORKER.concurrency, 1),
-    // A SECOND knob, because the first one governs the wrong resource for this.
-    // `LORE_CONCURRENCY` is sized by cores for the local sandbox; this is sized for
-    // the provider, which is what actually broke — four reviews dead in 2.5 minutes
-    // at 12 (`reviewer/gate.ts`). Also at least one, for the same reason.
     dailyCeilingUsd: envNumber("LORE_DAILY_CEILING_USD", DEFAULT_SPEND.dailyCeilingUsd),
   };
 }
@@ -224,7 +225,7 @@ export async function serve(cfg: ServiceConfig): Promise<() => void> {
 
   const worker = new Worker(
     store,
-    { ...DEFAULT_WORKER, reposRoot, concurrency: cfg.concurrency, dailyCeilingUsd: cfg.dailyCeilingUsd },
+    { ...DEFAULT_WORKER, reposRoot, dailyCeilingUsd: cfg.dailyCeilingUsd },
     alerter,
     reviewer,
   );

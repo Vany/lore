@@ -134,10 +134,18 @@ export function isSettled(v: VerdictKind): boolean {
  * answering which question it was for; `one-definition.test.ts` bans review states spelled
  * out in SQL partly because of that collision.
  */
-export const TIER_OUTCOMES = ["clean", "findings", "failed", "unpayable"] as const;
+export const TIER_OUTCOMES = ["clean", "findings", "failed", "unpayable", "reused"] as const;
 export type TierOutcome = (typeof TIER_OUTCOMES)[number];
 
-/** The outcomes that mean the tier did NOT read the code, as a SQL list. Derived, never spelled out. */
+/**
+ * The outcomes that mean the tier did NOT read the code, as a SQL list. Derived, never
+ * spelled out.
+ *
+ * `reused` is deliberately NOT here. D-92 reuses t0 only when the tree hash and the engine
+ * set both match, so that run DID read these exact bytes — in an earlier round. It is the
+ * one outcome that looked without working, and treating it as a miss would weaken every
+ * verdict built on it for no reason.
+ */
 const DID_NOT_LOOK_SQL = TIER_OUTCOMES.filter((o) => o === "failed" || o === "unpayable")
   .map((o) => `'${o}'`)
   .join(", ");

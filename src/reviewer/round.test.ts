@@ -1762,6 +1762,47 @@ describe("the day's spend ceiling", () => {
  * Every deployed tiers file sets both on t1, so this is the live arrangement rather than
  * a hypothetical one.
  */
+/**
+ * A REUSED t0 IS RECORDED AS REUSED, NEVER AS CLEAN (D-102).
+ *
+ * D-92 skips t0 when the tree and the engine set are unchanged — right, and it produces
+ * zero findings, so the row was closed as `clean`. That is a check which did not run,
+ * written into the audit trail as a check that found nothing: INV-1, in the one table that
+ * exists to say whether a review really ran. The board then rendered it as
+ * `t0 · round 2 · 0s · clean · raised nothing`, a stronger claim than the database made.
+ *
+ * Vany asked why there was a t0 round 2 at all, which is how it surfaced.
+ */
+describe("a reused t0 says so", () => {
+  it("records `reused` rather than `clean` when it did not run", async () => {
+    const type = { ...CODE_ARCH, t0: ["tsc"] as const };
+    const reviewer = new ScriptedReviewer([[], []]);
+
+    // Round 1 runs t0 for real; round 2 follows an escalation, so the tree is identical.
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type });
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type });
+
+    const t0s = store.tierRunsFor("r1").filter((t) => t["tier"] === "t0");
+    expect(t0s.length, "t0 opens a row every round").toBeGreaterThan(1);
+    // Whatever the sweep FOUND is not this test's business — only that it swept, and
+    // that the second round did not pretend to.
+    expect(t0s[0]?.["outcome"], "the round that actually swept").not.toBe("reused");
+    expect(t0s[1]?.["outcome"], "the round that did not").toBe("reused");
+  });
+
+  // It LOOKED, in an earlier round, at these exact bytes — so it must not be counted
+  // among the tiers that missed the code, or every verdict resting on it weakens for
+  // nothing.
+  it("still counts as having read the tree", async () => {
+    const type = { ...CODE_ARCH, t0: ["tsc"] as const };
+    const reviewer = new ScriptedReviewer([[], []]);
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type });
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type });
+
+    expect(store.tierFailureCount("r1", "t0"), "a reuse is not a miss").toBe(0);
+  });
+});
+
 describe("skip_if_quota together with a fallback", () => {
   const bothSet = (fallback: string) => ({
     ...CODE_ARCH,

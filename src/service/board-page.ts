@@ -431,15 +431,23 @@ function run(r, t) {
   const mark = running ? '<span class="s-running">▸</span>'
     : t.outcome === "findings" ? '<span class="sev-medium">✓</span>'
     : t.outcome === "clean" ? '<span class="s-passed">✓</span>'
+    // NOT a tick. A reused run did no work, and a tick beside "0s" invited exactly the
+    // question that found this: it read as a full sweep that finished instantly.
+    : t.outcome === "reused" ? '<span class="dim">↺</span>'
     : '<span class="s-failed">✘</span>';
   const took = running
     ? '<span class="clock s-running" data-used="' + esc(t.startedAt) + '">—</span>'
     : '<span class="dim">' + dur(Date.parse(t.finishedAt) - Date.parse(t.startedAt)) + "</span>";
   // "raised nothing" rather than an empty space: a tier that ran and found nothing and a
   // tier whose findings are not being shown must not look the same (INV-1, again).
-  const count = t.findings.length > 0
-    ? '<span class="dim">' + t.findings.length + " finding(s)</span>"
-    : running ? "" : '<span class="dim">raised nothing</span>';
+  // WHAT THIS ROW IS CLAIMING, and the reused case is the one that must not overclaim.
+  // "raised nothing" about a run that did not happen is a check that did not run reported
+  // as a check that found nothing — INV-1, in the page written to refuse it.
+  const count = t.outcome === "reused"
+    ? '<span class="dim">not re-run — the tree was unchanged, so the earlier sweep still stands</span>'
+    : t.findings.length > 0
+      ? '<span class="dim">' + t.findings.length + " finding(s)</span>"
+      : running ? "" : '<span class="dim">raised nothing</span>';
   return '<div class="run"><div class="run-head">' +
       "<span>" + mark + " " + esc(t.tier) + "</span>" +
       '<span class="dim">round ' + t.round + "</span>" +

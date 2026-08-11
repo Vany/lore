@@ -35,7 +35,6 @@ afterEach(() => {
 describe("a variable set to nothing is not set", () => {
   it("never starts zero workers", () => {
     process.env["LORE_CONCURRENCY"] = "";
-    expect(configFromEnv().concurrency).toBeGreaterThanOrEqual(1);
   });
 
   it.each([[""], ["   "]])("treats %j as an absent webhook and heartbeat", (blank) => {
@@ -81,13 +80,30 @@ describe("a variable set to nothing is not set", () => {
  * that looked used and were not.
  */
 describe("a setting that no longer exists", () => {
+  it("refuses to start rather than ignoring LORE_CONCURRENCY", () => {
+    const before = process.env["LORE_CONCURRENCY"];
+    process.env["LORE_CONCURRENCY"] = "12";
+    try {
+      // There is no worker pool to size (D-101): a claimed job starts at once, and the
+      // only bound is admission. An operator who sets this believes they are limiting
+      // load and is not.
+      expect(() => configFromEnv()).toThrow(/no longer does anything/);
+      expect(() => configFromEnv()).toThrow(/admission|128/);
+    } finally {
+      if (before === undefined) delete process.env["LORE_CONCURRENCY"];
+      else process.env["LORE_CONCURRENCY"] = before;
+    }
+  });
+
   it("refuses to start rather than ignoring LORE_MODEL_CONCURRENCY", () => {
     const before = process.env["LORE_MODEL_CONCURRENCY"];
     process.env["LORE_MODEL_CONCURRENCY"] = "4";
     try {
       expect(() => configFromEnv()).toThrow(/no longer does anything/);
-      // And it names the replacement, because a refusal a reader cannot act on is a wall.
-      expect(() => configFromEnv()).toThrow(/LORE_CONCURRENCY/);
+      // And it names what bounds the service NOW, because a refusal a reader cannot act on
+      // is a wall. It used to point at LORE_CONCURRENCY — which D-101 then deleted too, so
+      // the advice would have sent an operator to a second knob that does not exist.
+      expect(() => configFromEnv()).toThrow(/admission|128/);
     } finally {
       if (before === undefined) delete process.env["LORE_MODEL_CONCURRENCY"];
       else process.env["LORE_MODEL_CONCURRENCY"] = before;
