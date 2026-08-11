@@ -86,9 +86,29 @@ describe("what a review is doing right now", () => {
     expect(note, "the honest fact: nothing has run").toMatch(/no worker has claimed it/i);
     // The removed semaphore, by any of its names.
     expect(note).not.toMatch(/model[- ]call gate|wait(ing)? for a model slot/i);
-    // And it heads off the contradiction directly, since zero calls is the normal case
-    // while every loop is busy with a deterministic sweep.
-    expect(note).toMatch(/zero model calls/i);
+    // And it does not invent congestion either — see the drain test below for why.
+    expect(note).not.toMatch(/every worker loop is busy/i);
+    expect(note, "queued at all is the anomaly now").toMatch(/under a second|should take/i);
+  });
+
+  /**
+   * THE NOTE REPORTS A FACT THE BOARD HOLDS, RATHER THAN GUESSING ONE.
+   *
+   * It has been wrong twice. It blamed the model-slot gate that the same branch deleted;
+   * then it blamed worker-loop congestion, and Vany found a review queued while ELEVEN OF
+   * TWELVE LOOPS WERE IDLE — the real cause, `draining`, sitting in the very payload that
+   * rendered the row. An operator reading that goes hunting for capacity they do not need
+   * while the flag that stopped their work is in the banner above.
+   */
+  it("names DRAINING as the reason when that is the reason", () => {
+    review("r1", "queued");
+    store.setDraining(true);
+
+    const note = find("r1")?.stepNote ?? "";
+    expect(note).toMatch(/DRAINING/);
+    expect(note, "and what to do about it").toMatch(/drain-off/);
+    // Never the guess, when the fact is available.
+    expect(note).not.toMatch(/worker loop is busy/i);
   });
 
   // A finished review explains nothing about tiers; the note would be noise on every row.

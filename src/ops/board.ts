@@ -244,6 +244,9 @@ export function board(store: Store, now = Date.now(), modelGate?: () => GateStat
   // as a browser is open, and a per-review loop would turn one idle tab into 60 queries a
   // second against the same database the reviews are writing to.
   const ids = reviews.map((r) => String(r["id"] ?? ""));
+  // Read once and shared with the per-review notes: a queued review's explanation depends
+  // on it, and asking twice could report a drain in the banner and not in the row.
+  const draining = store.isDraining();
   /** One lookup per repository per pass, not per parked review. */
   const byRepo = new Map<string, BoardReview["openQuestions"]>();
   const runs = groupRuns(store, ids);
@@ -256,7 +259,7 @@ export function board(store: Store, now = Date.now(), modelGate?: () => GateStat
       commit: process.env["LORE_COMMIT"] ?? "unknown",
       builtAt: process.env["LORE_BUILT_AT"] ?? "unknown",
     },
-    draining: store.isDraining(),
+    draining,
     queued: store.queueDepth(),
     inFlight: store.jobsRunning(),
     modelCalls: modelGate === undefined ? undefined : modelGate(),
@@ -290,7 +293,7 @@ export function board(store: Store, now = Date.now(), modelGate?: () => GateStat
         endedAt: isTerminal(state) ? String(r["updated_at"] ?? "") : undefined,
         movedAt: movedAt(String(r["updated_at"] ?? ""), mine, store, id),
         step: working === undefined ? undefined : working.tier,
-        stepNote: stepNote(state, mine),
+        stepNote: stepNote(state, mine, draining),
         tiers: mine,
         findings: { ...f, open: open.get(id) ?? 0 },
         checksSkipped: store.checksSkippedFor(id),
@@ -488,24 +491,30 @@ function movedAt(updatedAt: string, runs: readonly BoardTierRun[], store: Store,
  * two entirely different reasons for that. Saying which is the difference between "wait,
  * this is normal" and "something is wedged, go and look".
  */
-function stepNote(state: ReviewState, runs: readonly BoardTierRun[]): string | undefined {
-  // WHAT `queued` IS WAITING FOR, because "accepted, not started" answers nothing and the
-  // question got asked out loud.
+function stepNote(state: ReviewState, runs: readonly BoardTierRun[], draining: boolean): string | undefined {
+  // WHAT `queued` IS WAITING FOR — REPORTED, NEVER GUESSED.
   //
-  // THIS SENTENCE WAS WRITTEN BEFORE D-98 AND OUTLIVED WHAT IT DESCRIBED. It said rounds
-  // wait for a model slot and pointed at the gate — which D-98 removed in the same branch,
-  // so the board would have told an operator a review was waiting on a slot while the
-  // header beside it read `model calls 0`. Two facts on one page contradicting each other
-  // is worse than either alone: it does not merely fail to explain, it builds the wrong
-  // intuition about why work is stuck. Raised by lore's own t1 against this commit.
+  // This sentence has now been wrong twice, both times because it asserted a cause instead
+  // of reading one. First it blamed the model-slot gate, which the same branch had deleted.
+  // Then it blamed worker-loop congestion — and Vany found a review sitting queued while
+  // ELEVEN OF TWELVE LOOPS WERE IDLE and the real reason, `draining`, was in the very
+  // payload that rendered the row.
   //
-  // What is true now: every worker loop is busy, and a loop is held for the WHOLE round —
-  // the deterministic sweep and the document ingest as well as the model call. So zero
-  // model calls in flight is entirely consistent with nothing being claimed.
+  // A confident explanation nobody checked is the exact failure this service exists to
+  // refuse, and the second one was worse than the first: an operator reading it goes
+  // looking for capacity they do not need, while the flag that actually stopped their work
+  // sits in the banner above. So this now branches on a fact the board HOLDS, and where it
+  // holds none it says the honest thing — that being queued at all is the anomaly, since
+  // D-98 means a job should be claimed within a second.
   if (state === "queued") {
-    return "queued — no worker has claimed it yet, so NOTHING has run. Every worker loop is " +
-      "busy with a round, and a round holds its loop through the deterministic sweep as well " +
-      "as its model call — so zero model calls above does not mean nothing is happening";
+    return draining
+      ? "NOTHING IS BEING CLAIMED — the service is DRAINING, so no worker will pick this up. " +
+        "A deploy is in progress, or a drain was left set by one that did not finish. " +
+        "Until it is cleared this review will not start: `make drain-off` on the lore host"
+      : "queued — no worker has claimed it yet, so NOTHING has run. This should take under a " +
+        "second: nothing waits for a model slot (D-98), and the only bound is admission. " +
+        "If it persists, work is not being claimed at all — check the workers rather than " +
+        "assuming capacity";
   }
   if (state !== "running") return undefined;
   if (runs.some((t) => t.finishedAt === undefined)) return undefined;
