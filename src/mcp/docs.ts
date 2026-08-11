@@ -456,8 +456,8 @@ the attestation does not describe what is there now.
 THE FIRST CALL OF EVERY SESSION. EVERY review of yours that is still open, plus any
 deep findings waiting since you last collected.
 
-A review outlives the session that started it. You end; your subscription ends with
-you; the review does not — it sits in findings_ready holding a worktree until it is
+A review outlives the session that started it. You end; nothing you leave behind is
+watching for you; the review does not — it sits in findings_ready holding a worktree until it is
 abandoned after 48h, having concluded NOTHING about the code. That is the dominant
 cause of wasted reviews here, measured: nothing obliges a client to come back, and no
 notification can reach one that has gone.

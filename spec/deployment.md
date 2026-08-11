@@ -7,7 +7,7 @@ Desktop, bound to `0.0.0.0` and reached over tailscale by three token holders.
 laptop had been serving real reviews for four days and two colleagues were provisioned
 against it. The design constraints it imposed are kept because they were right for
 reasons that outlived it: the images are **arm64**, so a single-board host stays
-available rather than becoming a port; nothing assumes a big machine; and `LORE_CONCURRENCY`
+available rather than becoming a port; nothing assumes a big machine; and concurrency
 is sized from cores at runtime rather than written down, which is why moving hosts has
 never required a config change. `PLAN.md` §4.1 keeps the measurements taken on RK3588 —
 they were real, and they are history rather than a target.
@@ -104,86 +104,47 @@ and does not remove it.
 
 ### 3.1 What actually bounds concurrency
 
-`LORE_CONCURRENCY` governs both halves of a round, and they have opposite constraints.
-The model call is remote and merely waits — t1 averages 304s, t2 915s. T0 runs a
-sandbox container locally and is CPU- and memory-bound. Raising the number buys real
-throughput on the waiting half and oversubscribes the local one.
+**Nothing throttles below admission any more** (D-98, D-101). A review is refused at the
+door when 128 are already open; everything admitted is claimed and started at once. There
+is no model-call semaphore and no worker pool, and the two variables that used to set them
+— `LORE_MODEL_CONCURRENCY` and `LORE_CONCURRENCY` — are **deleted**. The service refuses to
+start if either is still set, because a knob wired to nothing is decoration a reader
+believes.
 
-Measured on 2026-08-05 at 12, on a host with 16 cores and 48 GB behind a Docker VM of
-14 cores and **7.7 GB**:
+**Read the measurement below as history, not as a setting to change.** It is why both
+bounds existed and what removing them costs.
 
-- **Memory held.** Six concurrent sandboxes against 6 GB limits each used 1–3 GB
-  apiece, peaking near 84% of the VM. Limits are ceilings, not reservations. When it
-  is wrong it is wrong loudly: an OOM-killed sandbox exits 137 and is reported as *did
-  not finish*, never as a clean check.
-- **The npm cache did not, and had to be fixed.** It is keyed by lockfile hash, so
-  every branch of a repository that has not changed its lockfile shares one
-  `node_modules` mounted read-write into each sandbox. Installs sharing a cache
-  directory are serialised now — a warm install measures ~200ms, and the cold one
-  happens once — because a half-written `node_modules` makes `tsc` and `eslint` report
-  errors that are not real.
-- **The provider was the real ceiling.** Four reviews died within 2.5 minutes of the
-  change: two `socket hang up` in the same second, two empty replies inside a 200.
-  That is the upstream refusing the load, and the one constraint neither the host nor
-  the container could show. They failed honestly — `this review DID NOT RUN` — but the
-  quota was spent.
+Measured on 2026-08-05 at 12 concurrent rounds, on a host with 16 cores and 48 GB behind a
+Docker VM of 14 cores and **7.7 GB**:
 
-The lesson is the shape rather than the number: **one knob governing two resources
-with different limits will always be wrong for one of them.**
+- **Memory held.** Six concurrent sandboxes against 6 GB limits each used 1–3 GB apiece,
+  peaking near 84% of the VM. Limits are ceilings, not reservations. When it is wrong it is
+  wrong loudly: an OOM-killed sandbox exits 137 and is reported as *did not finish*, never
+  as a clean check.
+- **The npm cache did not, and had to be fixed.** It is keyed by lockfile hash, so every
+  branch of a repository that has not changed its lockfile shares one `node_modules`
+  mounted read-write into each sandbox. Installs sharing a cache directory are serialised
+  now — a warm install measures ~200ms, and the cold one happens once — because a
+  half-written `node_modules` makes `tsc` and `eslint` report errors that are not real.
+- **The provider was the real ceiling.** Four reviews died within 2.5 minutes: two `socket
+  hang up` in the same second, two empty replies inside a 200. That is the upstream
+  refusing the load, and the one constraint neither the host nor the container could show.
+  They failed honestly — `this review DID NOT RUN` — but the quota was spent.
 
-**Built, 2026-08-06.** `LORE_MODEL_CONCURRENCY` (default 4) bounds model calls in
-flight across every review, separately from `LORE_CONCURRENCY`, which stays sized for
-T0 by cores. Work above the limit **queues rather than failing** — the same argument
-as backpressure in `spec/mcp-api.md` §5, since a review that dies on a 429 is a review
-that did not run.
+The lesson that survives is the shape: **one knob governing two resources with different
+limits will always be wrong for one of them.** The answer is no longer a second knob. It is
+that queueing invisibly is worse than either — a drain flag left set cost thirteen hours of
+eight people's reviews, and a round waiting for a model slot was indistinguishable from a
+round that was wedged.
 
-The bound is held for the whole **session**, not per request: what loads a provider is
-the agentic exploration between the prompt and the reply, and an agent re-sends its
-accumulated context on every turn (D-50), so gating individual HTTP calls would bound
-nothing. One `Reviewer` is shared by every worker loop for the same reason — one per
-loop would give each its own gate and the limit would silently multiply by the worker
-count, reading as 4 and behaving as 48 at `LORE_CONCURRENCY=12`.
+**So the ceiling is now the machine, and it is visible rather than configured.** The board
+reports rounds in flight and model calls in flight; t0's p90 is 537 seconds of sandboxed
+install on sixteen cores. If provider faults return, the levers are the tier configuration
+and the admission limit — that is a consequence taken deliberately, and it is recorded in
+D-98 and D-101 rather than left for someone to discover.
 
-Four is sized from the failure rather than guessed: 12 killed four reviews, and the
-deployment has been healthy at 2. `/status` reports `model_calls` — in flight, waiting,
-limit — because queueing and running look identical from outside, which is the whole of
-D-26, and until this existed the remote half could not queue at all. It just died.
-
-
-### 3.2 The tier files, and one that is not a ladder
-
-`LORE_TIERS` points at a tiers file that overrides the default ladder entirely
-(`spec/review-ladder.md` §1).
-
-| file | what it is |
-|---|---|
-| `tiers.zai-kimi-openai.json` | **the deployment's ladder** — Z.ai, Moonshot, OpenAI, one vendor per tier (D-74) |
-| `tiers.zai-openai.json` | the previous two-vendor ladder, kept for reference |
-| `tiers.kimi.json` | **not a ladder.** T0 plus Kimi alone, to exercise one tier deliberately |
-
-**`skip_if_quota` (optional, per tier).** A tier on a metered subscription: if it cannot
-answer, skip it rather than spending a second attempt. Set on **t1** in every tiers file,
-because t1 is the Z.ai Coding Plan seat and Z.ai's answer to an exhausted plan is *"Weekly/
-Monthly Limit Exhausted. Your limit will reset at …"* — which does not become untrue by
-asking again. Each attempt costs the full 45-minute deadline, so the retry was 45 minutes
-of wall-clock spent to re-learn a fact with a published expiry date.
-
-Absent means the previous behaviour — one retry, then promote (D-48 widened) — because for
-a metered API a blip really is worth asking twice. It is deliberately NOT part of
-`ladderFingerprint`: it changes neither which model is called nor how it is asked, and
-pinning it would refuse every open review at the next config change, which is exactly what
-adding `effort` to the pin did on 2026-08-08.
-
-`tiers.kimi.json` exists because Kimi is T2 and every review either settled at t1 or
-failed before escalating, so a tier that was configured had never executed — and a
-tier that has never executed is not a working tier. Putting it first is the only way
-to make it run.
-
-**It cannot reach `passed`, by construction**: every model tier in it is Moonshot, so
-D-49 applies and `passed_partial` is the ceiling. That is correct and it is why this
-must never be the deployment's ladder. It is written here rather than in the file
-because the tier schema is `.strict()` and JSON has no comments — the same problem
-D-57 solved for justifications, and the reason a reader has to be told somewhere.
+`/status` reports `model_calls` as `{ inFlight }` — a measurement, with no limit and
+nothing waiting, because nothing queues there any more.
 
 ## 4. Resources
 

@@ -206,9 +206,20 @@ serve_requests() {
   waited=0
   while [ "$waited" -lt "$INTERVAL" ]; do
     if [ -f "$REQUEST" ]; then
+      # THE REQUEST THIS PASS IS ANSWERING, moved aside BEFORE the fetch starts.
+      #
+      # One shared filename and a delete-after would acknowledge requests that arrived
+      # DURING the fetch — including one written after this pass had already read the
+      # requester's repository. lore trusts the deletion as "a real fetch answered me",
+      # so it would then report a missing branch as "not a timing problem" when it was
+      # exactly one, and fail a review over a branch that exists. Raised by lore's own t2.
+      #
+      # Renaming is atomic on one filesystem: a request that lands a microsecond later
+      # gets its own file and its own pass.
+      mv -f "$REQUEST" "$REQUEST.serving" 2>/dev/null || true
       log "refresh requested by lore"
       one_pass
-      rm -f "$REQUEST"
+      rm -f "$REQUEST.serving"
     fi
     beat
     sleep "$POLL"

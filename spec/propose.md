@@ -207,8 +207,9 @@ So:
   Reviews are the product; this is inspiration.
 - `--budget` is required and counted in sessions, so the spend is chosen rather than
   discovered.
-- It runs through the same model gate as reviews (`LORE_MODEL_CONCURRENCY`), so it
-  cannot burst past the provider ceiling that killed four reviews in 2.5 minutes.
+- Its calls are counted like a review's, and — since D-98 — **not throttled**: nothing
+  stops it bursting past the provider ceiling that killed four reviews in 2.5 minutes.
+  `--budget` is what bounds it, and is required for that reason.
 - Usage is recorded per session like any other model call, so what it cost is
   answerable afterwards rather than estimated.
 

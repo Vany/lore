@@ -984,7 +984,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       if (why2 !== undefined) store.setFailureReason(reviewId, why2);
       store.updateReview(reviewId, {
         ladder: stepped2.state,
-        state: toReviewState(stepped2.decision),
+        state: settleState(store, reviewId, stepped2.decision),
         treeHash: await treeHash(worktree),
       });
       return {
@@ -1017,7 +1017,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     if (skippedWhy !== undefined) store.setFailureReason(reviewId, skippedWhy);
     store.updateReview(reviewId, {
       ladder: skipped.state,
-      state: toReviewState(skipped.decision),
+      state: settleState(store, reviewId, skipped.decision),
       treeHash: await treeHash(worktree),
     });
     return {
@@ -1384,7 +1384,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   if (why !== undefined) store.setFailureReason(reviewId, why);
   store.updateReview(reviewId, {
     ladder: stepped.state,
-    state: toReviewState(stepped.decision),
+    state: settleState(store, reviewId, stepped.decision),
     treeHash: await treeHash(worktree),
   });
 
@@ -1852,6 +1852,21 @@ function stoppedBecause(d: Decision, state: LadderState): string | undefined {
         "reviewed. It means each answer produced fresh findings about the answer, which is nearly unbounded " +
         "for documentation and wording: answer MINIMALLY — change the code, or one short lore-ok line — and " +
         "start a fresh review of the final tree.";
+}
+
+/**
+ * The state this round leaves the review in — and one thing that must be forgotten with it.
+ *
+ * `human_decision` says "somebody already decided; do not ask your user". It answers ONE
+ * question. A review that parks on `needs_human` again is parked on a different one, and
+ * carrying the old answer across tells a client not to escalate a contradiction nobody has
+ * seen — after which nothing can move the review and the sweep expires it having concluded
+ * nothing. Raised by lore's own t2 against the commit that added the field.
+ */
+function settleState(store: Store, reviewId: string, decision: Decision): ReviewState {
+  const state = toReviewState(decision);
+  if (state === "needs_human") store.clearHumanDecision(reviewId);
+  return state;
 }
 
 function toReviewState(d: Decision): ReviewState {

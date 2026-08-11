@@ -249,6 +249,18 @@ describe("the docs ask a client to poll, and mention nothing it cannot do", () =
     expect(text).not.toContain("subscriptions/listen");
     expect(text, "an SDK helper a polling client has no use for").not.toContain("listen()");
     expect(text).not.toContain("subscribe_filter");
+
+    // THE CONCEPT, NOT FOUR LITERAL STRINGS. The first version of this guard checked the
+    // wire names only, and `TOOL_DOCS.inbox` sailed past it saying "your subscription ends
+    // with you" — naming the hidden mechanism to a client with no way to create one, in
+    // the first document it is told to read. Raised by lore's own t2.
+    //
+    // The provider sense is a different word doing a different job: a flat-rate plan with
+    // a quota, which clients are legitimately told about when a tier falls back to a
+    // metered route. So it is the VERB and the client-side noun that are banned here.
+    const flat = text.replace(/\s+/g, " ");
+    expect(flat, "tells a client to subscribe").not.toMatch(/\bsubscribe\b|\bsubscribing\b|\bsubscriber\b/i);
+    expect(flat, "implies the client holds one").not.toMatch(/your subscription|a subscription (to|carries|has)/i);
   });
 
   // The replacement has to be PRESENT, not merely the old text absent: a doc that removed

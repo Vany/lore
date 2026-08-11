@@ -250,14 +250,27 @@ export function renderStatus(db: DatabaseSync, reviewId?: string, dataDir = "/va
         // file them next to `clean`.
         //
         // `TierOutcome` is the live vocabulary — clean | findings | failed |
-        // unpayable. `stopped` and `passed` are LADDER decision kinds that reached
+        // unpayable | reused. `stopped` and `passed` are LADDER decision kinds that reached
         // this column only while `runRound` closed each row a second time; that write
         // is gone. They stay in the two lists on purpose, because rows written before
         // the fix are still in the database and a historical `stopped` must keep
         // rendering red rather than falling through to yellow. Reading them as live
         // values is what was wrong, not testing for them.
         const didNotRun = o === "unpayable" || o === "failed" || o === "stopped";
-        const paint = didNotRun ? red : o === "clean" || o === "passed" ? green : o.startsWith("findings") ? cyan : yellow;
+        // `reused` IS DIM, NOT YELLOW (D-102). Yellow here is the none-of-the-above warning
+        // colour, and D-92 reuses t0 on roughly a fifth of all rounds — so the routine
+        // healthy case would have worn the alarm on every review with a second round. That
+        // is the same defect this branch fixed on the web board for queued rows, left
+        // standing on the older operator surface until lore's own t2 pointed at it.
+        const paint = didNotRun
+          ? red
+          : o === "reused"
+            ? dim
+            : o === "clean" || o === "passed"
+              ? green
+              : o.startsWith("findings")
+                ? cyan
+                : yellow;
         return `${paint(`${label} ${didNotRun ? `✘ ${o}` : o}`)} ${dim(took)}`;
       });
       out.push(`    ${cells.join(dim("  →  "))}`);

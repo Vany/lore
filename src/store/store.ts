@@ -2960,6 +2960,20 @@ export class Store {
   }
 
   /** What a person decided about the question that blocked this review, if one did. */
+  /**
+   * Forget a person's answer when the review parks on a NEW question.
+   *
+   * `human_decision` tells a client "somebody already decided; do not ask your user". Left
+   * standing, it says that about a contradiction that has nothing to do with the one now
+   * blocking the review — so a client obeying the docs never escalates the second question,
+   * nothing else can move `needs_human`, and the review is swept as `expired` having
+   * concluded nothing. Exactly the abandonment D-95 and D-99 were built to end, reached by
+   * a different road. Raised by lore's own t2.
+   */
+  clearHumanDecision(reviewId: string): void {
+    this.db.prepare("UPDATE review SET human_decision = NULL WHERE id = ?").run(reviewId);
+  }
+
   humanDecision(reviewId: string): string | undefined {
     const row = this.db.prepare("SELECT human_decision FROM review WHERE id = ?").get(reviewId) as
       | Record<string, string | null>

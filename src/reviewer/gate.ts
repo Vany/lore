@@ -8,21 +8,22 @@
  * the middle, where a review sits in a queue nobody can see and every clock keeps running.
  *
  * That is the shape now: admission control in `core/admission.ts` refuses a new review
- * when the service is already full, and everything admitted runs as soon as a worker loop
- * picks it up. The number of concurrent model calls is therefore bounded by
- * `LORE_CONCURRENCY` — the worker loops — and by nothing else.
+ * when the service is already full, and everything admitted STARTS AT ONCE — there is no
+ * worker pool either (D-101). So the number of concurrent model calls is bounded by
+ * admission and by the machine, and by nothing else.
  *
  * **WHAT THIS GAVE UP, stated because the evidence is real.** This file used to hold a
  * semaphore, and it held one for a reason: on 2026-08-05 at twelve concurrent calls, four
  * reviews died within 2.5 minutes — two `socket hang up` in the same second, two empty
  * replies inside a 200 — while the host was fine. The provider was the ceiling, and it is
- * the one constraint neither the container nor the host can show. Twelve is also the
- * current worker-loop count, so that ceiling is now reachable again.
+ * the one constraint neither the container nor the host can show. Twelve was also the
+ * worker-pool size that replaced it as the effective ceiling, and D-101 removed that too.
  *
  * The trade was made deliberately: waiting is invisible and unbounded, while a provider
  * refusing is loud, lands as `this review DID NOT RUN`, and names itself. If those faults
- * return, the lever is `LORE_CONCURRENCY` — and unlike the old semaphore, turning it down
- * is a decision somebody makes rather than a queue that silently absorbs the problem.
+ * return there is no concurrency knob left to turn — the levers are the tier configuration
+ * and the admission limit. That is a consequence taken deliberately rather than an
+ * oversight: a queue that silently absorbs the problem is what both decisions removed.
  *
  * The counter stays, because "how many calls are out right now" is the first thing an
  * operator asks and the board reports it. It just never blocks.

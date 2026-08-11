@@ -1333,7 +1333,7 @@ a completed review, and anything averaging latency or counting rounds can exclud
 Two details that are load-bearing rather than incidental:
 
 - **Attached to the error, not stored on the Reviewer.** An instance field is shared by
-  every concurrent round, so at `LORE_MODEL_CONCURRENCY 4` one review's spend would be
+  every concurrent round, so with four calls in flight one review's spend would be
   recorded against another's — worse than not recording it at all.
 - **Nothing spent reports absent, never a row of zeroes.** A zero row is indistinguishable
   from a call that ran and used nothing. And no dollar total is written: these are
@@ -2033,13 +2033,20 @@ a state name and a clock.
 - **Nothing is created when a review is refused.** Unlike the spend ceiling, which fires at
   enqueue and therefore has a row to mark `failed`, this fires before anything is promised.
 
-**What this gives up, stated plainly.** Concurrent model calls are now bounded only by
-`LORE_CONCURRENCY` — twelve — which is exactly the number with a measured failure. The
-trade is deliberate: waiting is invisible and unbounded, while a provider refusing is loud,
-lands as *this review DID NOT RUN*, and names itself. If those faults return the lever is
-`LORE_CONCURRENCY`, turned down by somebody deciding rather than by a queue quietly
-absorbing it. `LORE_MODEL_CONCURRENCY` is **deleted**, not defaulted — a setting that no
-longer does anything is decoration a reader believes.
+**What this gives up, stated plainly.** Concurrent model calls were then bounded by the
+worker pool — twelve, which is exactly the number with a measured failure — and D-101 has
+since removed that too. The trade is deliberate: waiting is invisible and unbounded, while
+a provider refusing is loud, lands as *this review DID NOT RUN*, and names itself.
+`LORE_MODEL_CONCURRENCY` is **deleted**, not defaulted — a setting that no longer does
+anything is decoration a reader believes.
+
+**AND THE REMEDY THIS PARAGRAPH ORIGINALLY NAMED NO LONGER EXISTS.** It said *"the lever is
+`LORE_CONCURRENCY`"* — a variable D-101 deleted one decision later, and which now makes the
+service refuse to start. An operator hitting exactly the fault this decision is about would
+have read the spec, set it, and crash-looped the deployment; that already happened once,
+from the compose file alone. If provider faults return, the levers are the tier
+configuration and admission, and the honest answer is that nothing throttles concurrency
+below that any more. Raised by lore's own t2, which read D-98 and D-101 together.
 
 **D-97 — a review that has ended leaves no work behind it, and the queue counts only what
 can be claimed.**

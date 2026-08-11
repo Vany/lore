@@ -92,20 +92,27 @@ export abstract class TierUnavailable extends LoreError {}
 export class ServiceUnreachable extends DidNotRun {}
 
 /**
- * Does this look like our sidecar disappearing rather than a review failing?
+ * `looksUnreachable` IS GONE, and the reason is worth more than the function was.
  *
- * Pattern-matched on the message, which is unpleasant and is the only signal there is:
- * these arrive as `TypeError: fetch failed` and bare socket errors with nothing structured
- * to test. Kept narrow deliberately — connection-level faults only, never a status code,
- * never a timeout, never anything a provider could say.
+ * It matched `socket hang up`, `ECONNRESET`, `fetch failed` in the message text, under a
+ * comment claiming those were "never anything a provider could say". lore's own t2 showed
+ * that they are: opencode relays a provider's error with its message intact, and this
+ * repository's own incident record attributes *"two socket hang up in the same second"* to
+ * the UPSTREAM refusing load. `MEMO.md` goes further — socket-hang-up is not retried, and
+ * that is recorded as a quota decision and Vany's.
+ *
+ * So the classifier would have requeued a provider outage up to three times per review,
+ * spending subscription quota to prove somebody else's service is down, and then failed
+ * the review naming lore's own opencode as the culprit. It reversed a decision that was
+ * not mine to make, by guessing from a string.
+ *
+ * `ServiceUnreachable` survives, raised only where the origin is UNAMBIGUOUS: the session
+ * could not be created at all, which happens before any provider is involved and can only
+ * mean our own sidecar is unreachable. Mid-call faults stay ordinary tier failures, as
+ * they were.
  */
-export function looksUnreachable(message: string): boolean {
-  return /ECONNREFUSED|ECONNRESET|EPIPE|getaddrinfo|socket hang up|fetch failed|network socket disconnected/i.test(
-    message,
-  );
-}
 
-/** A tier's provider is out of budget or rate limit. Never a reason to skip it. */
+/** A tier's provider is out of budget or rate limit. Never a reason to skip it. *//** A tier's provider is out of budget or rate limit. Never a reason to skip it. */
 export class Exhausted extends TierUnavailable {
   /**
    * When the provider says the limit lifts, ISO, if it said so.

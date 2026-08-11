@@ -26,8 +26,8 @@
  * 128 is Vany's number and it is deliberately far above normal traffic — the busiest day
  * this service has had held about a dozen open reviews. It is not a throughput knob; it
  * is the point at which something has gone wrong and accepting more would make the
- * wrongness harder to see. `LORE_CONCURRENCY` is the knob that governs how fast the
- * admitted work actually moves.
+ * wrongness harder to see. Nothing below it throttles: admitted work starts at once
+ * (D-101), and the host is what bounds how fast it moves.
  */
 export const MAX_OPEN_REVIEWS = 128;
 

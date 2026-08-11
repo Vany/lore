@@ -26,7 +26,7 @@
 
 import type * as z from "zod";
 import { createOpencodeClient } from "@opencode-ai/sdk";
-import { DidNotRun, Exhausted, looksUnreachable, ProviderAuthFailed, ServiceUnreachable, TierUnavailable, TooLargeForTier } from "../core/errors.ts";
+import { DidNotRun, Exhausted, ProviderAuthFailed, ServiceUnreachable, TierUnavailable, TooLargeForTier } from "../core/errors.ts";
 import { FindingSchema, type Finding } from "../core/finding.ts";
 import type { Tier } from "../core/ladder.ts";
 import { Gate, type GateState } from "./gate.ts";
@@ -116,11 +116,11 @@ export const DEFAULT_REVIEWER: ReviewerConfig = {
   //
   // Sized from the failure rather than from a guess: 12 concurrent calls killed four
   // reviews in 2.5 minutes, and the deployment has been healthy at the 2 that
-  // `LORE_CONCURRENCY` used to imply. Four leaves room above the known-good figure
+  // the old shared knob used to imply. Four left room above the known-good figure
   // while staying well under the known-bad one, and work above it queues rather than
   // failing, so being wrong low costs latency and being wrong high costs quota.
   //
-  // Raise it with `LORE_MODEL_CONCURRENCY` once there is evidence, not before — the
+  // Both knobs are gone (D-98, D-101); this is kept as the record of what was measured — the
   // number that matters is the provider's and we cannot see it.
   // opencode protects its server with basic auth when OPENCODE_SERVER_PASSWORD is
   // set, and returns a bare 401 with no hint when it is missing. Reading the same
@@ -687,7 +687,7 @@ export class Reviewer implements ReviewerLike {
       // mask the error that caused it, and an unreadable session simply records nothing
       // — which is what happens today for every failure.
       // ATTACHED TO THE ERROR, not stored on `this`. An instance field would be shared
-      // by every concurrent round — at LORE_MODEL_CONCURRENCY 4 one review's spend would
+      // by every concurrent round — with four calls in flight one review's spend would
       // be recorded against another's, which is worse than not recording it.
       const spent = await this.usageOf(sessionId).catch(() => undefined);
       if (spent !== undefined && e instanceof Error) {
@@ -1127,17 +1127,19 @@ export class Reviewer implements ReviewerLike {
       if (this.aborters.get(sessionId)?.signal.aborted === true || /aborted by lore/.test(message)) {
         throw new DidNotRun(`tier ${tier.id} (${tier.model}) was stopped by lore, not by the provider: ${message}`, e);
       }
-      // OUR SIDECAR, NOT THE PROVIDER (D-104). A connection-level fault against the
-      // opencode we run ourselves is a restart the round was in the way of, and the worker
-      // requeues it instead of ending the review. A provider hanging up is a real tier
-      // failure and stays one — `looksUnreachable` is deliberately narrow for that reason.
-      if (looksUnreachable(message)) {
-        throw new ServiceUnreachable(
-          `tier ${tier.id} (${tier.model}) lost its connection to lore's own opencode at ` +
-            `${this.cfg.baseUrl}: ${message}. Nothing about the code was learned; the round is requeued.`,
-          e,
-        );
-      }
+      // AN ORDINARY TIER FAILURE, INCLUDING A CONNECTION THAT DROPPED MID-CALL.
+      //
+      // This briefly classified `socket hang up` / `ECONNRESET` here as `ServiceUnreachable`
+      // so a deploy would requeue rather than fail the review. lore's own t2 refused it, and
+      // was right: opencode relays a provider's error with its message intact, so those
+      // strings are exactly how an upstream reset presents — this repository's own incident
+      // record attributes "two socket hang up in the same second" to the provider refusing
+      // load, and MEMO records not retrying them as a quota decision, and Vany's.
+      //
+      // Requeuing here would have spent subscription quota proving somebody else's outage,
+      // three times per review, and then blamed our own opencode in the audit trail. The
+      // unambiguous case — the session could not be created at all, before any provider is
+      // involved — is handled where it happens and is the only place that claim is safe.
       throw new DidNotRun(`tier ${tier.id} (${tier.model}) failed: ${message}`, e);
     }
   }
