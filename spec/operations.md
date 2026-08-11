@@ -199,6 +199,21 @@ reports them. So a parked review with **no** open conflict is a real state — t
 was settled and nothing re-queued the review — and the board says that in words instead of
 rendering an empty box.
 
+**And the reader can answer it** (D-99). Each statement carries a button that says what
+choosing means — *this one is right, and retire the other* — confirmed first, quoting what
+is being kept, because a second click cannot undo it. `POST /board/decide` runs the same
+`decide` as `knowledge_resolve`, so a decision made here and one relayed by an agent are
+indistinguishable afterwards. The outcome is reported **outside the review list**: deciding
+changes a review's state, which pushes a snapshot and rebuilds every row, so a message
+written into the row is erased by its own success — and the case that most needs reading is
+the one that survives least, *"decided, and NOTHING resumed, because another contradiction
+still blocks these reviews"*.
+
+The decision is unattributed and says so: the page holds no credential. Loopback-only was
+written and removed — inside a container a browser's request arrives from the docker
+gateway, so it would have refused every real use while looking like security. `knowledge_resolve`
+is the attributed path.
+
 **The branch links to its pull request** when the client supplied one at `review_start`
 (`spec/mcp-api.md` §2.4.1.1). A branch name alone is not clickable and does not say which
 forge it lives on, so the board was a place you read about a change and then went

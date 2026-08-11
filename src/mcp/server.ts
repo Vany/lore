@@ -20,6 +20,7 @@ import { isAttestable, isClean, isTerminal, needsClient, type ReviewState } from
 import { DEFAULT_TYPE, reviewType, reviewTypeIds } from "../core/review-type.ts";
 import { STALE_HOURS } from "../ops/retention.ts";
 import { applyPatch, restoreTree, treeHash } from "../git/repo.ts";
+import { decide } from "../knowledge/decide.ts";
 import { enrich, renderEnrichment } from "../knowledge/enrich.ts";
 import { paceFor, paceNote } from "../ops/pace.ts";
 import { alreadyAnswered, codeMoved, filesInDiff } from "../reviewer/review.ts";
@@ -532,6 +533,21 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
                     "fork point, but nothing here was checked against the base as it now stands — so a `passed` " +
                     "does not mean this merges cleanly or still works. Rebase and review again before landing.",
                 };
+          })(),
+          // A PERSON ANSWERED THE QUESTION WHILE YOU WERE AWAY (D-99).
+          //
+          // A contradiction can now be settled with a button on the operator board, which
+          // resumes every review parked on it. From here that is indistinguishable from an
+          // ordinary requeue — and the client's standing instruction for `needs_human` is
+          // to take the question to its user, so without this it would go and ask somebody
+          // who has already answered, and quite possibly get a second, different answer.
+          //
+          // Carried on every poll from then on rather than once: a review is polled by
+          // whichever session happens to be alive, and a fact delivered exactly once is a
+          // fact the next session does not have (the same reasoning as `review_inbox`).
+          ...(() => {
+            const decision = store.humanDecision(review_id);
+            return decision === undefined ? {} : { human_decision: decision };
           })(),
           // WHY it did not run, not merely that it did not. A bare `failed` is the
           // shape INV-1 refuses: indistinguishable from "found nothing" to anyone
@@ -1274,33 +1290,26 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       }),
     },
     async ({ keep, retire, reason }) => {
-      const settled = store.resolveConflict(who.repoId, keep, retire, reason);
-      if (!settled) {
+      // THROUGH THE SAME FUNCTION THE BOARD'S BUTTON USES (D-99), so a review resumed by
+      // an agent relaying its user's decision and one resumed by a person clicking are
+      // not distinguishable afterwards — same retirement, same resume rule, same record
+      // that a HUMAN decided. Two implementations of one decision is how they come to
+      // disagree, and this one ends with a statement retired from the shared memory.
+      const outcome = decide(store, { repoId: who.repoId, keep, retire, reason, by: who.principal });
+      if (!outcome.resolved) {
         throw new Error(
           `no open conflict between ${keep} and ${retire} — check knowledge_query, or it may already be settled`,
         );
       }
-      // RESUME THE REVIEWS THIS WAS BLOCKING. Without it the exit is not an exit.
-      //
-      // `spec/knowledge.md` §7.3 promises that a block has a way out and that the
-      // ladder "recomputes needsHuman from currently-open conflicts on every round
-      // rather than latching it forever". The recomputation is correct and was
-      // unreachable: nothing enqueued a round after a conflict was settled, so a
-      // client that did exactly what it was told — resolve, then wait for the ladder
-      // to continue — waited for something that was never scheduled. `needs_human` is
-      // not a terminal state, so `expireStale` then swept the review to `expired`
-      // after 48 hours, and D-77 reads `expired` as "the ladder did not read the
-      // code". A trap with an exit sign on it.
-      //
-      // BUT ONLY WHEN NOTHING ELSE IS STILL OPEN. `needsHuman` is recomputed from
-      // `openConflicts(repoId)`, which is repo-wide: a parked review is blocked by
-      // EVERY open conflict in the repository, not by one it could name. So resuming
-      // while another conflict is unsettled buys each review one paid round and parks
-      // it again at the end of it, while `resumed_reviews` reports progress that is
-      // not happening. Raised on the commit that added the resume — the exit sign
-      // fixed, and pointing at a second wall.
-      const blocking = store.openConflicts(who.repoId).length;
-      const resumed = blocking === 0 ? store.resumeNeedsHuman(who.repoId) : 0;
+      // THE RESUME AND ITS ONE CONDITION NOW LIVE IN `decide` — see there. Both were
+      // written here first: that a settled conflict must ENQUEUE a round, because
+      // `spec/knowledge.md` §7.3 promised an exit that nothing scheduled and reviews were
+      // swept to `expired` waiting for it; and that it must resume only when NOTHING else
+      // in the repository is open, because a parked review is blocked by every conflict
+      // rather than one it could name, so resuming early buys a paid round and parks
+      // again while reporting progress that is not happening.
+      const blocking = outcome.stillBlocking;
+      const resumed = outcome.resumed;
       const kept = "The losing rule is retired, not deleted: the decision stays reconstructable.";
       return text(
         JSON.stringify({

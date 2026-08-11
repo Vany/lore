@@ -153,6 +153,15 @@ export interface BoardReview {
   readonly openQuestions: readonly {
     readonly left: { readonly id: string; readonly statement: string; readonly source: string | undefined };
     readonly right: { readonly id: string; readonly statement: string; readonly source: string | undefined };
+    /**
+     * The repository the decision belongs to — the button posts it back.
+     *
+     * A conflict is repo-wide, not review-wide, so the thing being decided is not "this
+     * review's question": it is the repository's, and settling it resumes every review
+     * parked on it. Carrying the id makes that explicit rather than leaving the page to
+     * infer it from whichever row happened to be open.
+     */
+    readonly repoId: string;
   }[];
   /** Findings whose `(origin, round)` matches no tier run. Normally empty; never hidden. */
   readonly orphanFindings: readonly BoardFinding[];
@@ -376,6 +385,7 @@ function questionsFor(
   if (cached !== undefined) return cached;
   const byId = new Map(store.knowledgeFor(repoId, undefined, 1000).map((k) => [k.id, k]));
   const out = store.openConflicts(repoId).map((c) => ({
+    repoId,
     left: {
       id: c.left,
       statement: byId.get(c.left)?.statement ?? "(retired)",

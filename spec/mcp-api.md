@@ -60,7 +60,7 @@ nothing.
 | tool | arguments (`*` required) | returns |
 |---|---|---|
 | `review_start` | `branch*`, `into*`, `ticket*`, `pull_request`, `type` | `{review_id, state: "queued", note}` — returns immediately |
-| `review_poll` | `review_id*` | `{state, clean, note, new_findings[], open_count}` — §2.1.1 |
+| `review_poll` | `review_id*` | `{state, clean, note, new_findings[], open_count, human_decision?}` — §2.1.1 |
 | `review_submit` | `review_id*`, `diff*`, `tree_hash*` | `{review_id, state, tree_hash}` |
 | `review_cancel` | `review_id*`, `reason` | `{state: "cancelled", stopped_in_flight, findings[], note}` — §2.5 |
 | `review_attest` | `review_id*` | the signed line, with its tree hash |
@@ -475,6 +475,15 @@ findings the branch did not cause sort **below** the ones it did, whatever their
 severity (D-68). Ordering is what a reader acts on, and severity alone put two
 inherited pattern matches in untouched test fixtures above three spec contradictions
 in files the author had written.
+
+**`human_decision` means a person already answered, and the client must not ask again**
+(D-99). A contradiction can be settled directly on the operator board, which resumes every
+review it blocked — and from the client's side that is indistinguishable from an ordinary
+requeue. Its standing instruction for `needs_human` is to take the question to its user, so
+without this field it would ask somebody who has already decided and might get a second,
+different answer. It names what was decided and by whom, and it is returned on EVERY later
+poll rather than once: whichever session is alive when the review next moves needs the same
+fact, which is the same argument `review_inbox` rests on.
 
 When a review is parked at `needs_human`, the inbox and `review_poll` both carry
 `open_questions` — **the question itself**: both contradicting statements in full and

@@ -224,6 +224,19 @@ ONLY \`passed\` means the branch is clean.
   has decided, call knowledge_resolve with the id to keep — or knowledge_escalate if
   they cannot decide either.
 
+\`human_decision\` MEANS SOMEBODY ALREADY ANSWERED, AND YOU MUST NOT ASK AGAIN. A person
+can settle the contradiction directly, on lore's operator board, without going through
+you — and then every review it blocked resumes. From here that looks exactly like an
+ordinary requeue, so this field is how you tell the difference. It names what was
+decided and who by.
+
+When you see it: do NOT take the question to your user. It has an answer, and asking a
+second time invites a second, different one — which is how a repository ends up believing
+two things again. Say what was decided if it is relevant, and carry on from where the
+review stopped. The field stays on every later poll, deliberately: whichever session is
+alive when the review next moves needs the same fact, and a thing delivered once is a
+thing the next session does not have.
+
 While queued or running, wait and poll again ONCE at the interval \`check_back_note\`
 gives. It is not a constant and it is not the tier's average: it answers HOW MUCH LONGER
 FROM HERE, measured across this repository's completed rounds, so it SHRINKS every time

@@ -24,6 +24,7 @@ import { type AuthInfo, createMcpHandler, type McpRequestContext } from "@modelc
 import { authenticate, type Principal } from "../mcp/auth.ts";
 import { asSubscriber, eventsFor, NO_EVENTS, ScopedEventBus } from "../mcp/events.ts";
 import { buildServer, type ServerDeps } from "../mcp/server.ts";
+import { decide } from "../knowledge/decide.ts";
 import { board } from "../ops/board.ts";
 import { type SpendConfig, spendByTier, startOfDayIso } from "../ops/spend.ts";
 import { checkHealth, type HeartbeatConfig } from "../ops/heartbeat.ts";
@@ -180,6 +181,62 @@ async function handle(
     return;
   }
 
+  // THE ONE THING THE BOARD CAN CHANGE (D-99): a person settling the contradiction that
+  // has a review parked on `needs_human`.
+  //
+  // REACHABLE WHEREVER THE PAGE IS, which is the tailnet, and that is a deliberate choice
+  // rather than an oversight. D-33 makes WireGuard the perimeter and bearer tokens the
+  // SCOPING mechanism; `/status` has always answered to the same audience. The obvious
+  // tightening — loopback only — was written first and then removed, because inside a
+  // container a browser's request arrives from the docker gateway rather than `127.0.0.1`:
+  // it would have refused every real use of the button while looking like security.
+  //
+  // WHAT IT COSTS IS THE NAME. This endpoint carries no credential, so the decision is
+  // recorded as taken on the board by somebody unnamed. `knowledge_resolve` over MCP
+  // records WHO, and a teammate who wants their decision attributed should use it. The
+  // reason string says which of the two happened, because the knowledge base outlives
+  // everyone who edits it and "resolved" with no author is a fact nobody can weigh later.
+  if (url.pathname === "/board/decide") {
+    if (req.method !== "POST") {
+      res.writeHead(405, { "content-type": "application/json", allow: "POST" });
+      res.end(JSON.stringify({ error: "use POST" }));
+      return;
+    }
+    const body = JSON.parse(await readBody(req)) as {
+      repo_id?: string;
+      keep?: string;
+      retire?: string;
+      reason?: string;
+    };
+    if (!body.repo_id || !body.keep || !body.retire) {
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "repo_id, keep and retire are all required" }));
+      return;
+    }
+    const outcome = decide(store, {
+      repoId: body.repo_id,
+      keep: body.keep,
+      retire: body.retire,
+      // The button's own words when the operator adds nothing. Recorded verbatim and
+      // outlives both of us, so it says what happened rather than "resolved".
+      reason: body.reason?.trim() || "chosen on the operator board",
+      // HONEST ABOUT WHAT IS AND IS NOT KNOWN. A person pressed it; the page holds no
+      // credential, so which person is not recoverable. Saying "a person" and naming the
+      // route lets a later reader weigh the decision — and tells them where to look for
+      // an attributed one.
+      by: "a person on the operator board (no credential, so no name recorded)",
+    });
+    res.writeHead(outcome.resolved ? 200 : 409, { "content-type": "application/json" });
+    res.end(
+      JSON.stringify(
+        outcome.resolved
+          ? outcome
+          : { ...outcome, error: "no open conflict between those two statements — it may already be settled" },
+      ),
+    );
+    return;
+  }
+
   // The same snapshot the page renders, for anything that would rather read JSON once
   // than hold a stream open — `curl`, a script, or me at a prompt.
   if (url.pathname === "/board.json") {
@@ -295,6 +352,20 @@ async function handle(
   // stream registers itself from inside this call, and this is the only moment where
   // the stream and the principal that opened it are in the same async context.
   await asSubscriber(who, () => serveMcp(carrier, res));
+}
+
+/** The whole request body, bounded — a decision is three short ids. */
+async function readBody(req: IncomingMessage, limit = 64 * 1024): Promise<string> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of req) {
+    const buf = chunk as Buffer;
+    size += buf.length;
+    // A body that keeps coming is not a decision; refusing beats buffering it.
+    if (size > limit) throw new Error("request body too large");
+    chunks.push(buf);
+  }
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 /**

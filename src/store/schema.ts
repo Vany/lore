@@ -406,6 +406,12 @@ export const MIGRATIONS: readonly { readonly table: string; readonly column: str
   // case for every row written before it existed, and for lore's own reviews, which are
   // cut from scratch `review/<sha>` refs that have no pull request at all.
   { table: "review", column: "pull_request", sql: "ALTER TABLE review ADD COLUMN pull_request TEXT" },
+  // A PERSON ANSWERED THE QUESTION THAT BLOCKED THIS REVIEW, and the client has to be
+  // told (D-99). The board can settle a contradiction with a button, which resumes every
+  // review parked on it — and to the client that looks like the state simply changing,
+  // with no way to learn that a human already decided or what they decided. NULL is every
+  // review that was never blocked, which is almost all of them.
+  { table: "review", column: "human_decision", sql: "ALTER TABLE review ADD COLUMN human_decision TEXT" },
 ];
 
 /**

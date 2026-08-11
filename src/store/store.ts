@@ -2907,18 +2907,38 @@ export class Store {
    *
    * Returns how many were resumed, so the caller can say so rather than implying it.
    */
-  resumeNeedsHuman(repoId: string): number {
+  resumeNeedsHuman(repoId: string, decision?: string): number {
     const rows = this.db
       .prepare("SELECT id FROM review WHERE repo_id = ? AND state = 'needs_human'")
       .all(repoId) as Record<string, string>[];
     for (const r of rows) {
       const id = r["id"] ?? "";
+      // WHAT THE PERSON DECIDED, written BEFORE the state changes (D-99).
+      //
+      // The state change is what wakes a subscribed client, and a client woken before
+      // this row is written re-reads the review and finds the decision missing — the same
+      // ordering bug `updateReview`'s own comment records, which had the wake published
+      // ahead of the write. To the client the wake would look like an ordinary requeue,
+      // which is precisely the thing it must not look like: a person acted, and the
+      // client is about to redo work they have already settled.
+      if (decision !== undefined) {
+        this.db.prepare("UPDATE review SET human_decision = ? WHERE id = ?").run(decision, id);
+      }
       // `enqueue` collapses an identical queued round (D-53), so resolving two
       // conflicts in a row cannot buy the same review two workers.
       this.enqueue(id, "fast");
       this.updateReview(id, { state: "queued" });
     }
     return rows.length;
+  }
+
+  /** What a person decided about the question that blocked this review, if one did. */
+  humanDecision(reviewId: string): string | undefined {
+    const row = this.db.prepare("SELECT human_decision FROM review WHERE id = ?").get(reviewId) as
+      | Record<string, string | null>
+      | undefined;
+    const v = row?.["human_decision"];
+    return v === null || v === undefined ? undefined : String(v);
   }
 
   /**

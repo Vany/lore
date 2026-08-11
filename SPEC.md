@@ -1822,6 +1822,51 @@ D-77 still holds and nothing skips the ladder. What changes is that batching is 
 DEFAULT rather than a compromise: fix everything found, review it together, push it
 together.
 
+**D-99 — the person reading the board can answer the question, and the client is told they
+did.**
+
+Vany: *"in the place where a human is needed, let's add a button for each variant — but the
+variants must be human-understandable, with the context of the problem. If one of the
+variants is pressed, it means the human made their decision and we use that variant.
+Otherwise we need to receive a diff from the client with this decision. If the human chose
+a variant via the web, we need to notify the client that a human has already made a
+choice."*
+
+`needs_human` is the one state where a person IS the mechanism — no tier, retry or sweep
+can move it. The board already showed the question in full (D-96); until now the only way
+to ANSWER it was for an agent to relay the decision through `knowledge_resolve`, so the
+person who was already looking at the contradiction had to go and tell a machine to tell
+lore.
+
+**The button says what choosing MEANS, not "left" or "right".** Whoever arrives at this
+page has not read the ADR, the code or the conversation behind either statement — that is
+why a judgement is needed at all — so the control carries its own consequence: *this one is
+right, and retire the other*. It is confirmed before it fires, quoting what is being kept,
+because a second click cannot undo it.
+
+**Both paths run the same function.** `knowledge_resolve` over MCP and the button both call
+`decide`, so a review resumed by an agent relaying its user and one resumed by a person
+clicking are indistinguishable afterwards: same retirement, same resume rule — only when
+NOTHING else in the repository is still open — and the same record that a human decided.
+Two implementations of one decision is how they come to disagree, and this one ends with a
+statement retired from the shared memory.
+
+**The client is told, and this is the half that would otherwise rot.** From a client's side
+a resume looks exactly like an ordinary requeue, and its standing instruction for
+`needs_human` is to take the question to its user. So it would ask somebody who has already
+answered, and quite possibly get a second, different answer — which is how a repository
+comes to believe two things again. The decision is written onto every resumed review and
+`review_poll` returns it as `human_decision` on every later poll, not once: whichever
+session is alive when the review next moves needs the same fact.
+
+**Unattributed, deliberately and visibly.** The page carries no credential, so a decision
+made there is recorded as *"a person on the operator board (no credential, so no name
+recorded)"*. The obvious tightening — loopback only — was written and then removed: inside
+a container a browser's request arrives from the docker gateway, so it would have refused
+every real use of the button while looking like security. D-33 already makes the tailnet
+the perimeter. A teammate who wants their name on a decision uses `knowledge_resolve`,
+which records it.
+
 **D-98 — a round never waits for a model slot; the service refuses at the door instead.**
 
 Vany: *"there may be no situation where a job waits for the session in opencode — launch

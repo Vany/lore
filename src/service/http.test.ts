@@ -239,6 +239,104 @@ describe("the service refuses work rather than queueing it invisibly", () => {
 });
 
 /**
+ * A PERSON DECIDING FROM THE BOARD (D-99) — the one thing this page can change.
+ *
+ * `needs_human` is the state where nothing in the system can proceed, so the reader of
+ * the page IS the mechanism. Until now the only way to act was for an agent to relay the
+ * decision over MCP; the button lets the person who is already looking at the question
+ * answer it, and the client is told a person answered so it does not go and ask again.
+ */
+describe("deciding a contradiction from the board", () => {
+  const teach = (statement: string, provenance: string) =>
+    store.addKnowledge({
+      repoId, kind: "rule", source: "taught", statement, why: "w",
+      path: "src", cwe: undefined, provenance, sourceBlob: undefined, confidence: undefined,
+    });
+
+  const parked = (id: string) => {
+    store.createReview({
+      id, repoId, principal: "alice", branch: `feat/${id}`, intoRef: "main",
+      ticket: "t", type: "code-arch", state: "needs_human", ladder: initialState(),
+    });
+  };
+
+  const post = (body: unknown) =>
+    fetch(`${base}/board/decide`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+  it("retires the losing statement, resumes the reviews, and tells their clients", async () => {
+    const left = teach("Holds are released by capture()", "t2 on feat/x");
+    const right = teach("Holds are released only by settlement", "koray");
+    store.recordConflict(repoId, left.id, right.id);
+    parked("revA");
+    parked("revB");
+
+    const res = await post({ repo_id: repoId, keep: left.id, retire: right.id });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ resolved: true, resumed: 2, stillBlocking: 0 });
+
+    // The reviews are moving again...
+    expect(store.getReview("revA", "alice")?.state).toBe("queued");
+    // ...and the losing statement is retired rather than deleted, so the decision stays
+    // reconstructable.
+    expect(store.knowledgeFor(repoId).map((k) => k.id)).not.toContain(right.id);
+    expect(store.openConflicts(repoId)).toStrictEqual([]);
+
+    // THE HALF THAT MATTERS TO THE CLIENT. Without it a resume is indistinguishable from
+    // an ordinary requeue, and the client's standing instruction for needs_human is to go
+    // and ask its user — who has already answered.
+    const poll = await callTool("review_poll", { review_id: "revA" });
+    expect(String(poll["human_decision"])).toMatch(/A person answered/);
+    expect(String(poll["human_decision"]), "and what they decided").toContain(left.id);
+    expect(String(poll["human_decision"]), "so it does not ask again").toMatch(/do not need to raise it/i);
+  });
+
+  /**
+   * A parked review is blocked by EVERY open conflict in its repository, not by one it
+   * could name. Resuming while another stands buys a paid round and parks it again —
+   * while reporting progress that is not happening.
+   */
+  it("resumes nothing while another contradiction is still open, and says so", async () => {
+    const a1 = teach("A", "x");
+    const a2 = teach("not A", "y");
+    const b1 = teach("B", "x");
+    const b2 = teach("not B", "y");
+    store.recordConflict(repoId, a1.id, a2.id);
+    store.recordConflict(repoId, b1.id, b2.id);
+    parked("revC");
+
+    const out = (await (await post({ repo_id: repoId, keep: a1.id, retire: a2.id })).json()) as {
+      resumed: number;
+      stillBlocking: number;
+    };
+    expect(out).toMatchObject({ resumed: 0, stillBlocking: 1 });
+    expect(store.getReview("revC", "alice")?.state, "still parked, honestly").toBe("needs_human");
+  });
+
+  it("refuses a decision about a conflict that is not open", async () => {
+    const a = teach("A", "x");
+    const b = teach("B", "y");
+    const res = await post({ repo_id: repoId, keep: a.id, retire: b.id });
+    expect(res.status).toBe(409);
+    expect(JSON.stringify(await res.json())).toContain("no open conflict");
+  });
+
+  it("requires all three ids rather than guessing", async () => {
+    expect((await post({ repo_id: repoId, keep: "only-one" })).status).toBe(400);
+  });
+
+  // GET would let a decision be made by anything that follows a link — a prefetch, a
+  // crawler, a chat client unfurling a URL. Retiring a statement is not a safe method.
+  it("is POST only", async () => {
+    const res = await fetch(`${base}/board/decide`);
+    expect(res.status).toBe(405);
+  });
+});
+
+/**
  * The operator board (D-96), through the real server.
  *
  * `/status` answers the same question for a monitor; this answers it for a person, and

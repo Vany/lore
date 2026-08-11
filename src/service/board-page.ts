@@ -118,6 +118,16 @@ export const BOARD_PAGE = `<!doctype html>
   .side { padding: 3px 0 3px 10px; border-left: 2px solid var(--line); }
   .qid { color: var(--dim); }
   .versus { color: var(--mag); padding: 2px 0 2px 10px; font-size: 11px; letter-spacing: .5px; }
+  .choose { padding: 4px 0 2px 10px; }
+  /* Deliberately not styled as a primary action. Both choices are equally available and
+     the page must not nudge: it does not know which statement is true. */
+  button.pick {
+    font: inherit; cursor: pointer; padding: 3px 10px;
+    background: #1b2029; color: var(--fg); border: 1px solid var(--mag); border-radius: 2px;
+  }
+  button.pick:hover:not(:disabled) { background: var(--mag); color: #12151a; }
+  button.pick:disabled { opacity: .5; cursor: default; }
+  .banner.ok { background: #16301f; color: #7fd6a0; }
 
   .s-running, .s-queued { color: var(--blue); }
   .s-findings_ready, .s-awaiting_diff { color: var(--yellow); }
@@ -142,6 +152,11 @@ export const BOARD_PAGE = `<!doctype html>
   <span class="dim" id="live">connecting…</span>
 </header>
 <div id="banners"></div>
+<!-- What a decision did, OUTSIDE the list. Deciding changes a review's state, which
+     pushes a new snapshot and rebuilds every row — so a message written into the row is
+     erased by its own success. The case that most needs reading survives least: "decided,
+     and NOTHING resumed, because another contradiction still blocks these reviews". -->
+<div id="told"></div>
 <main>
   <div class="grid head" id="head" hidden>
     <span></span><span>state</span><span>branch</span>
@@ -207,9 +222,13 @@ function render(b) {
   // so this is the number that says whether a client is about to be turned away, and it
   // goes red BEFORE that happens rather than after somebody is refused.
   const o = b.openReviews;
-  const open = document.getElementById("open");
-  open.textContent = o.open + "/" + o.limit;
-  open.className = o.open >= o.limit ? "s-failed" : o.open >= o.limit * 0.75 ? "s-findings_ready" : "";
+  // NOT named "open". That shadowed the module-level Set of expanded rows, so open.has
+  // was called on a DOM element and threw — killing the rest of render() from that line
+  // down, which included wiring up the decision buttons. Every row silently lost its
+  // expanded state and no button did anything. Found by clicking one.
+  const openEl = document.getElementById("open");
+  openEl.textContent = o.open + "/" + o.limit;
+  openEl.className = o.open >= o.limit ? "s-failed" : o.open >= o.limit * 0.75 ? "s-findings_ready" : "";
 
   const banners = [];
   // Drained reads as idle from outside and means the opposite: work arrives and nothing
@@ -249,6 +268,7 @@ function render(b) {
       if (d.open) open.add(d.dataset.id); else open.delete(d.dataset.id);
     });
   }
+  for (const btn of main.querySelectorAll("button.pick")) btn.addEventListener("click", pick);
   tick();
 }
 
@@ -370,21 +390,38 @@ function question(r) {
   return '<div class="human"><b>A PERSON MUST DECIDE THIS.</b> ' +
     "lore holds two statements about this repository that cannot both be true. It will not " +
     "guess between them, and no tier, retry or sweep can end this state." +
-    r.openQuestions.map((q) =>
-      '<div class="q">' +
-        '<div class="side"><span class="qid">' + esc(q.left.id.slice(0, 8)) + "</span> " +
-          esc(q.left.statement) +
-          (q.left.source ? '<span class="dim"> — from ' + esc(q.left.source) + "</span>" : "") +
-        "</div>" +
-        '<div class="versus">cannot both be true as</div>' +
-        '<div class="side"><span class="qid">' + esc(q.right.id.slice(0, 8)) + "</span> " +
-          esc(q.right.statement) +
-          (q.right.source ? '<span class="dim"> — from ' + esc(q.right.source) + "</span>" : "") +
-        "</div>" +
-      "</div>",
-    ).join("") +
-    '<div class="dim">Whoever decides: keep one and retire the other with knowledge_resolve, ' +
-    "or raise it with knowledge_escalate. Resolving it re-queues every review parked on it.</div>" +
+    r.openQuestions.map((q) => side(q, "left") + '<div class="versus">cannot both be true as</div>' + side(q, "right")).join("") +
+    '<div class="dim">Choosing here IS the decision: the other statement is retired — kept in ' +
+    "the database, never deleted — and every review parked on this question resumes, with its " +
+    "client told that a person has already answered so it does not go and ask again. " +
+    "knowledge_resolve does the same thing over MCP and records WHO decided, which a button on " +
+    "a page with no login cannot.</div>" +
+  "</div>";
+}
+
+/**
+ * One statement, with the button that chooses it.
+ *
+ * THE BUTTON SAYS WHAT CHOOSING MEANS, not "left" or "right". A person arriving at this
+ * page has not read the code, the ADR or the conversation that produced either statement —
+ * the whole reason the state exists is that a judgement is needed — so the control has to
+ * carry its own consequence: this one is right, the other is retired.
+ */
+function side(q, which) {
+  const s = q[which];
+  const other = q[which === "left" ? "right" : "left"];
+  return '<div class="q">' +
+    '<div class="side"><span class="qid">' + esc(s.id.slice(0, 8)) + "</span> " +
+      esc(s.statement) +
+      (s.source ? '<span class="dim"> — from ' + esc(s.source) + "</span>" : "") +
+    "</div>" +
+    '<div class="choose">' +
+      '<button class="pick" data-repo="' + esc(q.repoId) + '" data-keep="' + esc(s.id) + '"' +
+        ' data-retire="' + esc(other.id) + '" data-what="' + esc(s.statement) + '">' +
+        "THIS one is right" +
+      "</button>" +
+      '<span class="dim"> — and retire the other</span>' +
+    "</div>" +
   "</div>";
 }
 
@@ -450,6 +487,63 @@ function finding(r, f) {
       "</p>" +
     "</div>" +
   "</details>";
+}
+
+/**
+ * A person choosing one statement over the other.
+ *
+ * CONFIRMED FIRST, because this is the one control on the page that changes anything and
+ * a second click cannot undo it: the losing statement is retired and every review parked
+ * on the question resumes. The confirmation quotes what is being kept, so a misclick is
+ * caught by reading rather than by regret.
+ *
+ * The buttons are disabled while the request is out. Two clicks would send two decisions,
+ * and the second arrives to find no open conflict — an error message about something the
+ * operator did successfully a moment ago.
+ */
+async function pick(e) {
+  const btn = e.currentTarget;
+  const box = btn.closest(".human");
+  const keeping = btn.dataset.what;
+  if (!confirm("Keep this statement and RETIRE the other?\\n\\n" + keeping +
+      "\\n\\nEvery review waiting on this question resumes, and their clients are told a person decided.")) {
+    return;
+  }
+  for (const b of box.querySelectorAll("button.pick")) b.disabled = true;
+  // Written outside the list, which the next push rebuilds. See #told.
+  const note = document.getElementById("told");
+  try {
+    const res = await fetch("/board/decide", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        repo_id: btn.dataset.repo,
+        keep: btn.dataset.keep,
+        retire: btn.dataset.retire,
+      }),
+    });
+    const out = await res.json();
+    if (!res.ok) {
+      note.className = "banner down";
+      note.textContent = "NOT decided: " + (out.error || res.status) +
+        " — nothing was retired and every review is still parked.";
+      for (const b of box.querySelectorAll("button.pick")) b.disabled = false;
+      return;
+    }
+    note.className = "banner ok";
+    // The COUNT, because "resolved" alone does not say whether anything moved — and it
+    // legitimately may not have: another contradiction in the same repository keeps every
+    // review parked, and reporting progress that is not happening is the thing this whole
+    // page exists to refuse.
+    note.textContent = out.resumed > 0
+      ? "Decided. " + out.resumed + " review(s) resumed; their clients will be told a person answered."
+      : "Decided, and NOTHING RESUMED: " + out.stillBlocking +
+        " other contradiction(s) in this repository still block every review parked here.";
+  } catch (err) {
+    note.className = "banner down";
+    note.textContent = "NOT decided: " + err + " — nothing was retired.";
+    for (const b of box.querySelectorAll("button.pick")) b.disabled = false;
+  }
 }
 
 /** Every clock on the page, recomputed from absolute timestamps the server sent. */
