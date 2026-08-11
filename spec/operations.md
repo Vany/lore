@@ -72,6 +72,13 @@ lore itself cannot detect);
 queue depth sustained high enough that reviews are waiting on CPU
 (`spec/deployment.md` §3); `needs_human` findings ageing without resolution.
 
+**Queue depth counts jobs a worker could actually claim** (D-97), which is narrower than
+"rows in state `queued`" and has to be. `claimJob` refuses a job whose review has ended,
+and nothing used to close those rows — so they accumulated, unclaimable, and the depth
+reported a backlog on an idle service. Measured: three such rows, the oldest nineteen
+hours, while eleven workers sat idle and three model slots were free. This ticket would
+eventually have fired on work that did not exist.
+
 The `plane` MCP server is already configured in this workgroup, so filing these as
 tickets is natural. Not a dependency — a webhook is the transport and Plane is one
 consumer.

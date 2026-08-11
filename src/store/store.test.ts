@@ -388,6 +388,81 @@ describe("verdicts", () => {
   });
 });
 
+/**
+ * A REVIEW THAT HAS ENDED LEAVES NO WORK BEHIND IT.
+ *
+ * `claimJob` refuses a job whose review is terminal — right, since a cancelled review
+ * must not go on being paid for — but nothing closed those rows, so they sat in `queued`
+ * for ever, unclaimable, and `queueDepth` counted them.
+ *
+ * Found by Vany asking the question the operator view invited: *"a job must be picked
+ * immediately. Why has nobody claimed it?"* Three jobs, up to nineteen hours old, against
+ * eleven idle workers and three free model slots. They were not waiting for anything.
+ * The number said a backlog was building on a service that was doing nothing — the same
+ * false reassurance as a drain flag reporting `ok: true`, pointing the other way.
+ */
+describe("jobs of a review that has ended", () => {
+  beforeEach(() => newReview("rev1"));
+
+  it("closes the queued job when the review is cancelled, and stops counting it", () => {
+    store.enqueue("rev1", "fast");
+    expect(store.queueDepth()).toBe(1);
+
+    store.updateReview("rev1", { state: "cancelled" });
+
+    expect(store.queueDepth(), "nothing is waiting — that job can never be claimed").toBe(0);
+    expect(store.claimJob(), "and indeed nobody can claim it").toBeUndefined();
+  });
+
+  // Kept as a row, not deleted: the job table is the record of what the scheduler did,
+  // and `last_error` is where a reader finds out the round never ran.
+  it("says why the job ended rather than deleting the evidence", () => {
+    store.enqueue("rev1", "fast");
+    store.updateReview("rev1", { state: "passed" });
+
+    const row = store.db.prepare("SELECT state, last_error FROM job WHERE review_id = 'rev1'").get() as
+      { state: string; last_error: string };
+    expect(row.state).toBe("failed");
+    expect(row.last_error).toContain("passed");
+  });
+
+  // A running job belongs to the worker that claimed it. Taking it away here would race
+  // the code that reports what the abort cost.
+  it("leaves a running job to the worker that holds it", () => {
+    store.enqueue("rev1", "fast");
+    store.claimJob();
+    store.updateReview("rev1", { state: "cancelled" });
+
+    const row = store.db.prepare("SELECT state FROM job WHERE review_id = 'rev1'").get() as { state: string };
+    expect(row.state).toBe("running");
+  });
+
+  // The expiry sweep writes state in SQL rather than through `updateReview`, and that
+  // split has already cost one bug — it was the one state change that woke no subscriber.
+  it("closes them when the staleness sweep expires a review too", () => {
+    store.enqueue("rev1", "fast");
+    store.expireStaleReviews(new Date(Date.now() + 60_000).toISOString());
+
+    expect(store.getReview("rev1", PRINCIPAL)?.state).toBe("expired");
+    expect(store.queueDepth()).toBe(0);
+  });
+
+  /**
+   * The backstop, for rows that leaked before the cause was fixed — which is how this
+   * was found, so the fix has to be able to clean up after itself.
+   */
+  it("sweeps rows that leaked before any of this existed", () => {
+    store.enqueue("rev1", "fast");
+    // Exactly the shape found in production: the review ended without its job closing.
+    store.db.prepare("UPDATE review SET state = 'cancelled' WHERE id = 'rev1'").run();
+    expect(store.queueDepth(), "already excluded from the count").toBe(0);
+
+    expect(store.closeJobsOfEndedReviews()).toBe(1);
+    // Idempotent: a second pass finds nothing, so a non-zero number is always news.
+    expect(store.closeJobsOfEndedReviews()).toBe(0);
+  });
+});
+
 // A worker that dies between claiming a job and finishing it leaves the row
 // `running` for ever. Nothing reclaimed it, nothing said so, and `queueDepth` counts
 // only `queued` — so the operator view showed an idle service with work stranded

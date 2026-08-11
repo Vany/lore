@@ -16,7 +16,7 @@ import { DatabaseSync } from "node:sqlite";
 import { AmbiguousFingerprint } from "../core/errors.ts";
 import type { Finding, Severity } from "../core/finding.ts";
 import type { LadderState } from "../core/ladder.ts";
-import { TERMINAL_SQL, type ReviewState } from "../core/review-state.ts";
+import { isTerminal, TERMINAL_SQL, type ReviewState } from "../core/review-state.ts";
 import type { Scope } from "../core/scope.ts";
 import { DDL, FINDING_ORDER_SQL, PRAGMAS, SCHEMA_VERSION, applyMigrations, assertNotDowngrade } from "./schema.ts";
 import { NO_EVENTS, type ReviewEvents } from "../mcp/events.ts";
@@ -444,6 +444,20 @@ export class Store {
     }
     args.push(id);
     this.db.prepare(`UPDATE review SET ${sets.join(", ")} WHERE id = ?`).run(...args);
+    // A REVIEW THAT HAS ENDED LEAVES NO WORK BEHIND IT.
+    //
+    // `claimJob` refuses a job whose review is terminal — correctly, since a cancelled
+    // review must not go on being paid for. But nothing ever CLOSED those rows, so they
+    // sat in `queued` for ever, unclaimable, and `queueDepth` counted them as a backlog.
+    //
+    // Found by Vany asking the right question about the operator view: *"a job must be
+    // picked immediately. Why has nobody claimed it?"* Three jobs had been queued for up
+    // to nineteen hours with eleven idle workers and three free model slots, and the
+    // honest answer was that they were not waiting for anything — they were dead. The
+    // number said work was piling up while the service was idle, which is the same false
+    // reassurance in the opposite direction as the drain flag that answered `ok: true`
+    // for thirteen hours.
+    if (patch.state !== undefined && isTerminal(patch.state)) this.discardQueuedJobs(id);
     // THE ONLY PLACE A SUBSCRIBED CLIENT IS WOKEN. `recordFinding` deliberately does
     // not — see the note there.
     //
@@ -488,6 +502,12 @@ export class Store {
              WHERE updated_at < ? AND state NOT IN (${TERMINAL_SQL})`,
           )
           .run(now(), cutoff);
+        // The same reason `updateReview` does it, and this path has to be told
+        // separately BECAUSE it writes state in SQL rather than going through there.
+        // That split has already cost one bug — this was the single review-state
+        // mutation that published no event — and leaving unclaimable jobs behind would
+        // have been the second instance of the identical mistake.
+        for (const r of rows) this.discardQueuedJobs(r["id"] ?? "");
       }
       return rows.map((r) => r["id"] ?? "");
     });
@@ -2688,12 +2708,66 @@ export class Store {
       .run(state, n(error), now(), id);
   }
 
+  /**
+   * Queued jobs a worker COULD actually claim.
+   *
+   * The predicate is `claimJob`'s, minus the one-round-per-review clause: a job whose
+   * review has ended can never be claimed, so counting it reports a backlog that does not
+   * exist. It did — three unclaimable rows, one of them nineteen hours old, on a service
+   * with eleven idle workers — and this number is what `/status`, the operator board and
+   * the `queueBacked` ticket all read. `discardQueuedJobs` closes those rows now; this
+   * stays narrow anyway, because a review can go terminal between an enqueue and a claim
+   * and the count must never overstate in that window either.
+   */
   queueDepth(): number {
     // COUNT() comes back as bigint from node:sqlite for large values.
-    const row = this.db.prepare("SELECT COUNT(*) AS c FROM job WHERE state = 'queued'").get() as
-      | Record<string, number | bigint>
-      | undefined;
+    const row = this.db
+      .prepare(
+        `SELECT COUNT(*) AS c FROM job j JOIN review rv ON rv.id = j.review_id
+         WHERE j.state = 'queued' AND rv.state NOT IN (${TERMINAL_SQL})`,
+      )
+      .get() as Record<string, number | bigint> | undefined;
     return Number(row?.["c"] ?? 0);
+  }
+
+  /**
+   * Close the queued jobs of a review that has ended. Returns how many.
+   *
+   * `failed` rather than deleted: the job table is the record of what the scheduler did,
+   * and a row that vanishes cannot be asked about afterwards. `last_error` says which
+   * ending it was, so a reader is never left guessing whether the round ran.
+   *
+   * Only `queued`. A `running` job on a terminal review is a round being aborted right
+   * now, and its worker is the one that writes its outcome — taking it from underneath
+   * would race the very code that reports what the abort cost.
+   */
+  /**
+   * The same thing for every review at once — the sweep's backstop. Returns how many.
+   *
+   * `discardQueuedJobs` fires on the transition, which covers everything from now on.
+   * This exists for rows that leaked before it did, and for any path that ends a review
+   * without going through either place. In a healthy service it returns zero for ever,
+   * which is exactly why the number is reported rather than swallowed.
+   */
+  closeJobsOfEndedReviews(): number {
+    const res = this.db
+      .prepare(
+        `UPDATE job SET state = 'failed', last_error = ?, updated_at = ?
+         WHERE state = 'queued'
+           AND review_id IN (SELECT id FROM review WHERE state IN (${TERMINAL_SQL}))`,
+      )
+      .run("the review had already ended when this round was swept", now());
+    return Number(res.changes);
+  }
+
+  discardQueuedJobs(reviewId: string): number {
+    const state = this.stateOf(reviewId) ?? "cancelled";
+    const res = this.db
+      .prepare(
+        "UPDATE job SET state = 'failed', last_error = ?, updated_at = ? WHERE review_id = ? AND state = 'queued'",
+      )
+      .run(`the review ended as '${state}' before this round was claimed`, now(), reviewId);
+    return Number(res.changes);
   }
 
   /** Jobs holding a worker right now. `queueDepth`'s counterpart: waiting versus working. */

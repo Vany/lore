@@ -81,6 +81,8 @@ export interface RetentionResult {
   /** Sandbox cache and scratch directories collected, and roughly what they held. */
   readonly cacheDirsRemoved: number;
   readonly cacheBytesFreed: number;
+  /** Queued jobs closed because the review they belonged to had already ended. */
+  readonly deadJobsClosed: number;
 }
 
 /**
@@ -198,6 +200,16 @@ export async function collect(store: Store, cfg: RetentionConfig = DEFAULT_RETEN
   // foreign key to a review precisely so that it outlives one.
   const reviewsDeleted = store.deleteReviewsBefore(daysAgo(cfg.reviewDays));
 
+  // QUEUED JOBS BELONGING TO REVIEWS THAT HAVE ALREADY ENDED.
+  //
+  // The cause is fixed where reviews become terminal, so in a healthy service this finds
+  // nothing. It is here for the rows that leaked before that fix — three of them, one
+  // nineteen hours old — and because this class of leak announces itself as the opposite
+  // of what it is: a growing queue depth on an idle service, which reads as "we are
+  // behind" and is really "these will never run". Counted rather than silent, so a
+  // non-zero number after the cause is fixed is a question rather than housekeeping.
+  const deadJobsClosed = store.closeJobsOfEndedReviews();
+
   const sandbox = await collectSandbox(cfg);
   return {
     worktreesRemoved,
@@ -205,5 +217,6 @@ export async function collect(store: Store, cfg: RetentionConfig = DEFAULT_RETEN
     reviewsExpired,
     cacheDirsRemoved: sandbox.dirs,
     cacheBytesFreed: sandbox.bytes,
+    deadJobsClosed,
   };
 }

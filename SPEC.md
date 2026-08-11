@@ -1822,6 +1822,43 @@ D-77 still holds and nothing skips the ladder. What changes is that batching is 
 DEFAULT rather than a compromise: fix everything found, review it together, push it
 together.
 
+**D-97 — a review that has ended leaves no work behind it, and the queue counts only what
+can be claimed.**
+
+Vany, reading the board: *"a job must be picked immediately. Why has nobody claimed it?"*
+Three jobs had been `queued` for up to nineteen hours against eleven idle worker loops and
+three free model slots. My first answer — that loops were held by rounds waiting at the
+model gate — was wrong, and the numbers on the page said so: one call in flight, none
+waiting.
+
+**They were not waiting for anything. They were dead.** All three belonged to `cancelled`
+reviews. `claimJob` refuses a job whose review is terminal, which is correct — a cancelled
+review must not go on being paid for, and that check was itself added after cancelled
+reviews were found still being claimed. But nothing ever CLOSED those rows, so they sat in
+`queued` for ever and `queueDepth` counted them.
+
+That number is read by `/status`, by the operator board, and by the `queueBacked` ticket.
+So an idle service reported a growing backlog — and the failure is the familiar one
+pointing the other way: not *healthy while broken*, but *busy while idle*. Left alone it
+would have filed a ticket about work that did not exist.
+
+Three changes, because the cause, the count and the leak are three different things:
+
+- **The cause.** Reaching a terminal state closes that review's `queued` jobs. In
+  `updateReview`, so no future caller can forget — and separately in `expireStaleReviews`,
+  which writes state in SQL rather than going through there. That split has already cost
+  one bug: it was the single review-state mutation that woke no subscriber.
+- **The count.** `queueDepth` joins to the review and excludes terminal ones. Narrow even
+  with the cause fixed, because a review can end between an enqueue and a claim, and the
+  number must never overstate in that window either.
+- **The leak.** The hourly sweep closes any that remain and **reports how many**, so a
+  non-zero number after this is a question rather than housekeeping.
+
+Jobs are marked `failed` with a reason, never deleted: the job table is the record of what
+the scheduler did, and `last_error` is where a reader learns the round never ran. A
+`running` job is left alone — it belongs to the worker aborting it, which is the code that
+reports what the abort cost.
+
 **D-96 — a board at `/`, because "what is running?" was being answered with SQL.**
 
 Vany asked *"what is running right now?"* four times in one week. Every time the answer
