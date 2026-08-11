@@ -179,6 +179,50 @@ describe("authentication", () => {
 });
 
 /**
+ * NO REPLY MENTIONS A SUBSCRIPTION, IN A FIELD OR IN ITS PROSE (D-103).
+ *
+ * `docs.test.ts` guards the documented texts, and this slipped straight past it: the
+ * `note` strings are built in `server.ts`, not in `TOOL_DOCS`, so removing the subscribe
+ * fields left `review_start` answering "SEND THE `subscribe` CALL BELOW" with no such
+ * field in the reply. A response telling a client to do something the same response makes
+ * impossible — shipped, and caught only by reading lore's own `review_start` output.
+ *
+ * So the check is at the wire, over what a client actually receives.
+ */
+describe("replies ask a client to poll and nothing else", () => {
+  it("carries no subscription field, and no prose pointing at one", async () => {
+    store.upsertRepo("demo2", "git@x:demo2.git");
+    const started = await callTool("review_start", {
+      branch: "feat/reply-shape",
+      into: "main",
+      ticket: "t",
+    });
+
+    // Not a key...
+    expect(Object.keys(started).filter((k) => /subscri/i.test(k))).toStrictEqual([]);
+    // ...and not a sentence. The note is the string a client is guaranteed to read.
+    expect(JSON.stringify(started)).not.toMatch(/subscri/i);
+
+    // And it still says the thing it must: how long to wait. The NUMBER is conditional —
+    // a repository with too few completed rounds gets no median rather than an invented
+    // one — but the sentence is not, and whenever a number IS offered it is bounded.
+    expect(String(started["check_back_note"]), "always says when to come back").toMatch(/ONE call|come back/i);
+    if (started["check_back_after_ms"] !== undefined) {
+      expect(Number(started["check_back_after_ms"]), "never two minutes or more").toBeLessThan(120_000);
+    }
+  });
+
+  it("says the same for a poll that is still waiting", async () => {
+    store.createReview({
+      id: "revWaiting", repoId, principal: "alice", branch: "feat/waiting", intoRef: "main",
+      ticket: "t", type: "code-arch", state: "running", ladder: initialState(),
+    });
+    const polled = await callTool("review_poll", { review_id: "revWaiting" });
+    expect(JSON.stringify(polled)).not.toMatch(/subscri/i);
+  });
+});
+
+/**
  * ADMISSION CONTROL: refused at the door, never queued in the middle (D-98).
  *
  * Vany: *"there may be no situation where a job waits for the session in opencode — launch

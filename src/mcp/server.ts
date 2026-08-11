@@ -359,14 +359,18 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           // subscribe-first. A tool description may or may not be in the model's
           // context by the time this returns; the response note always is.
           ...pacing(store, { id, repoId: who.repoId, state: "queued", type: rt.id, ladder: initialState(rt.tiers) }),
-          // THE CALL ITSELF, not a description of it. See `subscribeTo`.
+          // Where the subscription hint used to go. See `subscribeTo` (D-103).
           ...subscribeTo(id),
+          // THE STRING A CLIENT IS GUARANTEED TO READ, and it pointed at a field that is
+          // no longer here. D-103 stopped handing out the subscribe frame; this sentence
+          // went on saying "SEND THE `subscribe` CALL BELOW" for exactly one deploy, which
+          // is a reply telling a client to do something the same reply makes impossible.
+          // Caught by reading the response to lore's own review_start.
           note:
-            "Started. This does NOT mean it finished, and NOTHING can have happened yet. SEND THE " +
-            "`subscribe` CALL BELOW, then poll ONCE, then leave — you will be woken. If your host cannot " +
-            "subscribe, read `check_back_note` instead, re-read it on every reply because it shrinks as " +
-            "the round ages, and make ONE call when it says. Either way, go and do something else: a " +
-            "sleep-poll loop is the most expensive thing a client can do here.",
+            "Started. This does NOT mean it finished, and NOTHING can have happened yet. Poll it with " +
+            "review_poll: ONE call when `check_back_after_ms` says, never a sleep loop. RE-READ that " +
+            "number on every reply — it shrinks as the round ages, and reusing the first one doubles " +
+            "your wait. It is never more than two minutes. Between calls, go and do something else.",
         }),
       );
     },

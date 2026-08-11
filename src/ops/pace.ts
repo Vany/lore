@@ -168,8 +168,8 @@ export function paceNote(pace: Pace | undefined): string {
   if (pace === undefined) {
     return (
       "There is no measured interval for the tier now running — too few completed rounds to have an honest " +
-      "median, so none is offered rather than one invented. Wait MINUTES, not seconds, and make one call when " +
-      "you come back."
+      "median, so none is offered rather than one invented. COME BACK IN ABOUT A MINUTE and make ONE call. " +
+      "Not seconds: a round takes minutes, and a tight loop spends a turn per attempt to learn nothing."
     );
   }
   const secs = Math.round(pace.ms / 1000);

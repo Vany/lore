@@ -230,7 +230,12 @@ describe("paceNote", () => {
   it("admits there is no number rather than inventing a default", () => {
     const note = paceNote(undefined);
     expect(note).toMatch(/no measured interval/i);
-    expect(note).toMatch(/MINUTES, not seconds/);
-    expect(note).not.toMatch(/\d+s/);
+    // BOUNDED EVEN WITHOUT DATA (D-103). It used to say "wait MINUTES, not seconds",
+    // which is honest about having no median and unbounded about the wait — and a client
+    // that can only poll reads that as licence to come back in five. It still refuses to
+    // invent a median; it just names a ceiling instead of a vague direction.
+    expect(note).toMatch(/about a minute/i);
+    expect(note).toMatch(/not seconds/i);
+    expect(note, "still no invented median").not.toMatch(/\d+s/);
   });
 });
