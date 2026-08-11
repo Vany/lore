@@ -35,6 +35,30 @@ beforeEach(() => {
 });
 afterEach(() => store.close());
 
+/**
+ * Wait for something to become true, rather than for a number of milliseconds.
+ *
+ * A FIXED SLEEP IS A RACE WHENEVER IT IS WAITING FOR WORK TO HAPPEN, and this file had
+ * four. The worst was 400ms for a worker to poll, claim a job, and `git worktree add` off
+ * a bare clone before its reviewer is even reached — comfortably under 400ms alone, and
+ * not under a full suite running fifty files at once. It failed three times over two days
+ * and never once when run by itself, which is exactly the signature.
+ *
+ * A test that sometimes does not exercise its subject is the same defect as a review that
+ * did not run: it reports success for work nobody did. Waiting for the CONDITION is both
+ * faster in the normal case and correct in the slow one.
+ *
+ * The sleeps that remain in this file are the other kind — asserting that something did
+ * NOT happen, where elapsed time is the whole point and there is nothing to wait for.
+ */
+const until = async (what: string, ok: () => boolean, timeoutMs = 10_000): Promise<void> => {
+  const deadline = Date.now() + timeoutMs;
+  while (!ok()) {
+    if (Date.now() > deadline) throw new Error(`timed out after ${timeoutMs}ms waiting for: ${what}`);
+    await new Promise((r) => setTimeout(r, 5));
+  }
+};
+
 describe("a draining worker takes nothing new", () => {
   // The behaviour, not the flag. Set AFTER start, because start clears it.
   it("leaves queued work alone for the next process", async () => {
@@ -64,8 +88,9 @@ describe("a draining worker takes nothing new", () => {
       expect((store.db.prepare("SELECT state FROM job WHERE review_id = 'rev2'").get() as { state: string }).state).toBe("queued");
 
       store.setDraining(false);
-      await new Promise((r) => setTimeout(r, 80));
-      expect((store.db.prepare("SELECT state FROM job WHERE review_id = 'rev2'").get() as { state: string }).state).not.toBe("queued");
+      const claimed = () =>
+        (store.db.prepare("SELECT state FROM job WHERE review_id = 'rev2'").get() as { state: string }).state !== "queued";
+      await until("the job to be claimed once draining stops", claimed);
     } finally {
       stop();
     }
@@ -184,7 +209,9 @@ describe("a worker does not overwrite an ending somebody chose", () => {
     );
     const stop = worker.start();
     try {
-      await new Promise((r) => setTimeout(r, 400));
+      // The worker has to poll, claim, and cut a worktree from a bare clone before its
+      // reviewer is reached. That is fast alone and not fast under a loaded suite.
+      await until("the round to reach the reviewer and be cancelled", () => store.stateOf("rev1") === "cancelled");
     } finally {
       stop();
     }
@@ -198,7 +225,7 @@ describe("a worker does not overwrite an ending somebody chose", () => {
     const worker = new Worker(store, { ...DEFAULT_WORKER, concurrency: 1, pollMs: 5 }, new Alerter({ timeoutMs: 10 }));
     const stop = worker.start();
     try {
-      await new Promise((r) => setTimeout(r, 150));
+      await until("the round to run and fail", () => store.stateOf("rev2") === "failed");
     } finally {
       stop();
     }
@@ -235,7 +262,7 @@ describe("a store fault does not silently cost the service its capacity", () => 
 
     const worker = new Worker(store, { ...DEFAULT_WORKER, concurrency: 1, pollMs: 1 }, alerter);
     const stop = worker.start();
-    await new Promise((r) => setTimeout(r, 60));
+    await until("the loop to survive both throws and claim again", () => thrown > 2);
     stop();
 
     // It threw twice and carried on: the loop is still claiming afterwards.

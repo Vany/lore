@@ -766,13 +766,15 @@ needs something this session cannot supply.
       nothing"*; the second says more but adds a state. Small either way; deliberately
       not bundled into a diff that was already ten files and answering a live finding.
 
-- [ ] **`drain.test.ts > leaves a cancelled review cancelled when the round refuses
-      mid-flight` fails intermittently.** Twice in one evening, never on demand, 3/3
-      when run alone. **Waiting on evidence** — a test that sometimes does not run is
-      the same shape as a review that did not, so this is not a nuisance to retry
-      away, and guessing at the race would produce a fix nothing can confirm. Next
-      step is to run that file in a loop under load and capture a failure with its
-      timing, not to change code.
+- [x] **`drain.test.ts` fails intermittently.** Fixed 2026-08-11, third occurrence, and
+      **found by reading rather than by reproducing** — 8 isolated runs and 3 full-suite
+      runs all passed. The test slept a fixed 400ms and then asserted, but in that window
+      the worker has to poll, claim a job and `git worktree add` off a bare clone before
+      its reviewer is reached: comfortably under 400ms alone, not under a suite running
+      fifty files at once. Exactly the signature it had. Three more sleeps in the file
+      were the same latent race; they wait for the CONDITION now, which is faster in the
+      normal case and correct in the slow one. The two that remain assert something did
+      NOT happen, where elapsed time is the point.
 
 - [ ] **Three people hold tokens on `rigid-monorepo` and the perimeter changed.**
       Provisioned 2026-08-07 for `koray` and `max`; `LORE_BIND` moved from `127.0.0.1`
