@@ -968,6 +968,14 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       // a handover. `store.undelivered` READS; only `markDelivered` hands over, and it is
       // simply not called here — so the numbers are unchanged and the client still calls
       // `review_poll` to collect, which is what every doc already tells it to do.
+      // lore-ok[7b430181]: the finding is real and is fixed in `listReviews`, not here.
+      // Its 50-row cap ordered by recency alone could bury a parked review behind fifty
+      // freshly-finished ones, so the filter below never saw the review it exists to
+      // surface — D-95's own failure, reintroduced by a LIMIT. The query orders unfinished
+      // first now, so the rows the cap drops are terminal ones, which this filter would
+      // have dropped anyway. Fixed there rather than here because the ordering is what
+      // makes the cap safe, and a caller compensating for its query's ordering is a
+      // second place to get it wrong.
       const reviews = store.listReviews(who.principal, who.repoId);
       const items = reviews.map((r) => {
         const fresh = store.undelivered(r.id);
