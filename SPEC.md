@@ -1822,6 +1822,42 @@ D-77 still holds and nothing skips the ladder. What changes is that batching is 
 DEFAULT rather than a compromise: fix everything found, review it together, push it
 together.
 
+**D-100 — a missing branch asks the host to fetch before it is an error.**
+
+Vany: *"branch missing → refresh mirror. Mirror refreshed and no branch → error."*
+
+A client pushed at 19:43:11 and called `review_start` at 19:44:28 — seventy-seven seconds
+later, which is exactly what `TOOL_DOCS.start` tells it to do, including *"you do not have
+to refresh anything"*. The host refresher runs on a five-minute timer, so the branch was
+not in the mirror yet and the review died as `failed`: by INV-1 the ladder did not read the
+code, and the merge is blocked. The client could not have avoided it, and the message it
+got — *push it and run `make mirror`* — named a shell it does not have, about a push it had
+already made.
+
+**lore still does not fetch.** D-65 stands: no key, no agent socket, and deliberately no
+business having either, on repositories the operator may not own. It ASKS. The channel is
+the data directory, bind-mounted at the same absolute path on both sides — the only thing
+container and host already agree on, so there is no port to open and no secret to
+distribute. lore writes a request; the host's refresher fetches and DELETES it, and the
+deletion is the whole protocol because a deletion cannot be half-written.
+
+Three properties make the failure honest rather than merely delayed:
+
+- **The heartbeat separates "fetching" from "nobody listening".** The loop stamps one every
+  pass. A missing or stale heartbeat is refused immediately, naming `make mirror-daemon` —
+  without it a review would wait its full timeout for a daemon that is not running, turning
+  a fast correct refusal into a slow one on every review.
+- **The request is deleted after the fetch, never before.** Deleting first would tell lore
+  the mirror was current mid-fetch, and it would report a branch missing that was seconds
+  from arriving — precisely the failure this ends.
+- **The error now says what was already tried.** A branch still absent after a real fetch is
+  not a timing problem, and the message says so instead of advising a push that happened.
+
+The daemon is therefore **resident** rather than a timer, since a request would otherwise
+wait up to five minutes for the next tick. Measured end to end on this host: noticed in
+under a second, both repositories fetched, answered in seven. Upgrading needs
+`make mirror-daemon` re-run; an older agent never sees a request, and lore says so.
+
 **D-99 — the person reading the board can answer the question, and the client is told they
 did.**
 

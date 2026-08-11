@@ -178,12 +178,61 @@ one_pass() {
   return "$failed"
 }
 
+# ON DEMAND, NOT ONLY ON A TIMER (D-100).
+#
+# lore cannot fetch — no key, no agent, and deliberately no business having either — so
+# when a review names a branch the mirror does not have, it asks HERE and waits. The
+# channel is the shared data directory, bind-mounted at the same absolute path on both
+# sides: the only thing the container and this host already agree on. No port, no secret.
+#
+# THE REQUEST IS ANSWERED BY DELETING IT. That is the entire protocol, and it is the
+# deletion rather than a status file because a deletion cannot be half-written.
+#
+# THE HEARTBEAT IS WHY A DEAD LOOP IS NOT A SLOW ONE. Without it a request nobody consumes
+# looks exactly like a fetch in progress, and lore would wait its whole timeout for a
+# daemon that is not running. Stamped every pass; lore refuses immediately when it is
+# stale, and says to reinstall this.
+REQUEST="$DATA/mirror-request"
+HEARTBEAT="$DATA/mirror-heartbeat"
+
+beat() { mkdir -p "$DATA" 2>/dev/null; : > "$HEARTBEAT"; }
+
+# What the loop does between full passes: answer requests promptly, and prove it is alive.
+#
+# The request is deleted AFTER the fetch, never before: deleting first would tell lore the
+# mirror was current while the fetch was still running, and it would then report a branch
+# missing that was seconds from arriving — the precise failure this exists to end.
+serve_requests() {
+  waited=0
+  while [ "$waited" -lt "$INTERVAL" ]; do
+    if [ -f "$REQUEST" ]; then
+      log "refresh requested by lore"
+      one_pass
+      rm -f "$REQUEST"
+    fi
+    beat
+    sleep "$POLL"
+    waited=$((waited + POLL))
+  done
+}
+
+# Short enough that a client pushing and immediately asking for a review does not notice,
+# long enough that this is not a busy loop. The cost of a tick is one `test -f`.
+POLL=${LORE_MIRROR_POLL:-2}
+
 if [ "${1:-}" = "--loop" ]; then
-  log "mirror refresh: every ${INTERVAL}s, data $DATA"
+  log "mirror refresh: full pass every ${INTERVAL}s, on-demand within ${POLL}s, data $DATA"
   while :; do
     one_pass
-    sleep "$INTERVAL"
+    beat
+    serve_requests
   done
+elif [ "${1:-}" = "--once-and-serve" ]; then
+  # For a supervisor that restarts on exit rather than one that keeps a process alive.
+  one_pass
+  beat
+  serve_requests
 else
   one_pass
+  beat
 fi

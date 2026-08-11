@@ -300,9 +300,29 @@ checkout, not a key, not an agent socket. `deploy/mirror-refresh.sh` runs on the
 as the operator, and clones or fetches every registered repo into
 `data/repos/<id>/bare.git`, which lore already reads.
 
-    make mirror-daemon        every five minutes, launchd or systemd --user
+    make mirror-daemon        resident: a full pass every five minutes, and on demand
     make mirror-daemon-log    what it last did
     make mirror REPO=<name>   one repository, by hand
+
+**And lore can ASK for a fetch** (D-100). A client that pushes and immediately starts a
+review is doing exactly what the docs tell it to, and used to lose: a branch pushed 77
+seconds before `review_start` was not in the mirror yet, so the review died as `failed` —
+which by INV-1 means the ladder did not read the code. lore still holds no credentials, so
+it does not fetch; it drops a request in the shared data directory, and this process — the
+one that has the credentials — does the fetch and deletes the request to say it is done.
+The channel is the data bind, mounted at the same absolute path on both sides, which is the
+only thing the two already agree on: no port, no secret.
+
+That is why the daemon is now **resident** rather than a five-minute one-shot: a request
+dropped by a review would otherwise wait for the next tick, which is the delay it exists to
+remove. Between full passes it answers requests within two seconds and stamps a heartbeat.
+**The heartbeat is what makes a dead daemon fast instead of slow** — without it, a request
+nobody consumes is indistinguishable from a fetch in progress, and every review would wait
+its whole timeout before failing. Measured end to end on this host: request noticed in
+under a second, both repositories fetched, answered in seven.
+
+Upgrading requires re-running `make mirror-daemon`: an older agent still on a timer never
+sees a request. lore says so rather than hanging.
 
 **The reviewer container sees the repositories and nothing else.** It runs
 third-party models with file-reading tools, as the same uid as `lore` — it must, since

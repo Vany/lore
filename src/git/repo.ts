@@ -11,6 +11,8 @@ import { existsSync } from "node:fs";
 import { mkdir, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { DidNotRun } from "../core/errors.ts";
+import { dataDir } from "../core/paths.ts";
+import { requestMirrorRefresh, type RefreshOutcome } from "./mirror-request.ts";
 import { git, gitMaybe } from "./exec.ts";
 
 export interface RepoPaths {
@@ -178,8 +180,29 @@ export async function addWorktree(
 ): Promise<string> {
   const dir = join(paths.worktrees, reviewId);
   await mkdir(paths.worktrees, { recursive: true });
-  const ref = (await gitMaybe(paths.bare, ["rev-parse", "--verify", "--quiet", `origin/${branch}^{commit}`]))
+  const resolve = async (): Promise<string | undefined> =>
+    (await gitMaybe(paths.bare, ["rev-parse", "--verify", "--quiet", `origin/${branch}^{commit}`]))
     ?? (await gitMaybe(paths.bare, ["rev-parse", "--verify", "--quiet", `${branch}^{commit}`]));
+
+  let ref = await resolve();
+
+  // BRANCH MISSING → REFRESH THE MIRROR. MISSING AFTER THAT → error (D-100).
+  //
+  // A client that pushes and immediately asks for a review is doing exactly what the
+  // docs tell it to, and it used to lose: the host refresher runs on a timer, so a branch
+  // pushed 77 seconds before `review_start` was not in the mirror yet and the review died
+  // as `failed` — which by INV-1 means the ladder did not read the code, and blocks the
+  // merge. Measured, on a real client's branch, on 2026-08-11.
+  //
+  // lore cannot fetch (D-65: no key, no agent, and deliberately no business having one),
+  // so it ASKS the host, whose credentials these are, and waits. Only a branch that is
+  // still absent after a real fetch is an error — and then it is a true one.
+  let refreshed: RefreshOutcome | undefined;
+  if (ref === undefined) {
+    refreshed = await requestMirrorRefresh(dataDir());
+    if (refreshed.fetched) ref = await resolve();
+  }
+
   if (ref === undefined) {
     // Naming the repository, because the message that omitted it sent someone
     // hunting for a missing branch when the branch existed and the TOKEN was scoped
@@ -199,7 +222,14 @@ export async function addWorktree(
       `branch '${branch}' is not in the mirror of ${gitUrl || paths.bare}. ` +
         `Your token is scoped to that repository — if the branch belongs to a different one, ` +
         `you are holding the wrong token, and the branch existing elsewhere will not help. ` +
-        `Otherwise push it and run \`make mirror REPO=${repoHint(gitUrl)}\` on the host.` +
+        // WHAT ALREADY HAPPENED, so the client does not repeat it. The old text said
+        // "push it and run make mirror" — advice for a shell the client does not have,
+        // about a push it had already made. lore has now fetched on its behalf, so the
+        // only remaining honest readings are a wrong name, a wrong token, or a push that
+        // never landed.
+        (refreshed?.fetched === true
+          ? " lore asked the host to fetch before saying this, and the branch is still not there — so it is not a timing problem: check the name, check you pushed to this repository, and check the branch reached the remote."
+          : ` lore could not confirm a fresh fetch first (${refreshed?.why ?? "no refresh was attempted"}), so this may be a mirror that has not caught up — report that rather than assuming the branch is wrong.`) +
         (nearby.length > 0 ? ` Most recent branches there: ${nearby.join(", ")}.` : " The mirror has no branches at all."),
     );
   }

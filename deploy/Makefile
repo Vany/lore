@@ -510,6 +510,20 @@ revoke:
 ## available — a passphrase-protected key works here and would NOT in a system-wide
 ## daemon. Linux: a systemd --user timer, which needs `loginctl enable-linger $(USER)`
 ## to run while you are logged out, and a key the agent does not have to unlock.
+## RESIDENT, NOT A TIMER (D-100).
+##
+## It used to be a `StartInterval` one-shot: one pass every 300s, then exit. That was
+## enough while the only job was keeping mirrors fresh, and it is not enough now that lore
+## ASKS for a fetch — a request dropped by a review would have waited up to five minutes
+## for the next tick, which is the delay the request exists to remove.
+##
+## So the loop stays resident: a full pass every INTERVAL, and between passes it answers
+## requests within two seconds and stamps a heartbeat. The heartbeat is what lets lore tell
+## "fetching" from "nobody is listening" — without it, a review waits its whole timeout for
+## a daemon that is not running.
+##
+## REINSTALL AFTER UPGRADING: an older agent still on a timer never sees a request, and
+## lore will say so rather than hanging — but it says it once per review until this is run.
 mirror-daemon:
 	@here="$$(cd $$(dirname $(firstword $(MAKEFILE_LIST))) && pwd)"; \
 	if [ "$$(uname)" = "Darwin" ]; then \
@@ -521,11 +535,11 @@ mirror-daemon:
 		  '<plist version="1.0"><dict>' \
 		  '  <key>Label</key><string>org.lore.mirror</string>' \
 		  '  <key>ProgramArguments</key><array>' \
-		  "    <string>/bin/sh</string><string>$$here/mirror-refresh.sh</string>" \
+		  "    <string>/bin/sh</string><string>$$here/mirror-refresh.sh</string><string>--loop</string>" \
 		  '  </array>' \
 		  "  <key>WorkingDirectory</key><string>$$here</string>" \
-		  '  <key>StartInterval</key><integer>$(or $(INTERVAL),300)</integer>' \
 		  '  <key>RunAtLoad</key><true/>' \
+		  '  <key>KeepAlive</key><true/>' \
 		  "  <key>StandardOutPath</key><string>$$here/mirror.log</string>" \
 		  "  <key>StandardErrorPath</key><string>$$here/mirror.log</string>" \
 		  '</dict></plist>' > "$$plist"; \
@@ -534,14 +548,13 @@ mirror-daemon:
 	else \
 		mkdir -p "$$HOME/.config/systemd/user"; \
 		printf '%s\n' '[Unit]' 'Description=lore mirror refresh' \
-		  '[Service]' 'Type=oneshot' "WorkingDirectory=$$here" \
-		  "ExecStart=/bin/sh $$here/mirror-refresh.sh" \
+		  '[Service]' 'Type=simple' "WorkingDirectory=$$here" 'Restart=always' 'RestartSec=10' \
+		  "ExecStart=/bin/sh $$here/mirror-refresh.sh --loop" \
+		  '[Install]' 'WantedBy=default.target' \
 		  > "$$HOME/.config/systemd/user/lore-mirror.service"; \
-		printf '%s\n' '[Unit]' 'Description=lore mirror refresh' \
-		  '[Timer]' 'OnBootSec=1min' 'OnUnitActiveSec=$(or $(INTERVAL),300)' \
-		  '[Install]' 'WantedBy=timers.target' \
-		  > "$$HOME/.config/systemd/user/lore-mirror.timer"; \
-		systemctl --user daemon-reload && systemctl --user enable --now lore-mirror.timer \
+		rm -f "$$HOME/.config/systemd/user/lore-mirror.timer"; \
+		systemctl --user disable --now lore-mirror.timer 2>/dev/null || true; \
+		systemctl --user daemon-reload && systemctl --user enable --now lore-mirror.service \
 		  && echo "installed. For it to run while logged out:  loginctl enable-linger $$USER"; \
 	fi
 	@echo "checking it actually works, rather than assuming:"
