@@ -1571,6 +1571,41 @@ describe("falling back to a metered twin", () => {
  * fallback entirely — so for the whole stated window, which is DAYS, the twin was never
  * asked once. Each feature looked correct alone, and together they did nothing.
  */
+/**
+ * WHEN BOTH HALVES ARE OUT, THE NOTICE MUST SAY BOTH (D-105).
+ *
+ * A tier is `unpayable` only when its primary AND its fallback have failed, and the record
+ * named the primary alone. So a reader saw *"tier t2 (kimi-for-coding/k3) refused on
+ * quota"* with a fallback configured and running, and reasonably concluded it had never
+ * been tried. Vany did: *"but there is a fallback to openrouter!"* It had been tried, and
+ * the OpenRouter account had run to zero — $5165.00 granted against $5165.04 used — and
+ * nothing anywhere said so.
+ */
+describe("a tier whose fallback also failed", () => {
+  it("names the twin and its reason, not just the primary", async () => {
+    const type = {
+      ...CODE_ARCH,
+      t0: [] as const,
+      tiers: CODE_ARCH.tiers.map((t) => (t.id === "t1" ? { ...t, fallback: "openrouter/twin" } : t)),
+    };
+    const primary = type.tiers.find((t) => t.id === "t1")?.model ?? "";
+    class BothOut implements ReviewerLike {
+      async review(tier: Tier): Promise<ReviewerResult> {
+        if (tier.model === primary) throw new Exhausted("the subscription is out for this billing cycle");
+        if (tier.model === "openrouter/twin") throw new Exhausted("402: insufficient credit");
+        return { findings: [], discarded: [], raw: "", inputTokens: 0, cachedTokens: 0, outputTokens: 0, costUsd: 0, latencyMs: 1, retried: false, steps: 1 };
+      }
+    }
+
+    await runRound({ store, reviewer: new BothOut(), reviewId: "r1", principal: "p", worktree: dir, type });
+
+    const notice = (store.tierRunsFor("r1").find((t) => t["tier"] === "t1")?.["unavailable"] ?? "") as string;
+    expect(notice, "the primary's reason, as before").toContain("billing cycle");
+    expect(notice, "AND the fallback was tried").toContain("openrouter/twin");
+    expect(notice, "AND why it could not run either").toContain("insufficient credit");
+  });
+});
+
 describe("a cool-off and a fallback together", () => {
   class Answers implements ReviewerLike {
     readonly asked: string[] = [];

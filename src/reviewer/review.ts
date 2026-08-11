@@ -830,7 +830,23 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
           });
         }
         fellBackTo = undefined;
-        throw e;
+        // NAME THE TWIN'S FAILURE TOO (D-105).
+        //
+        // This rethrew the PRIMARY's error alone, so the notice a reader gets says
+        // "tier t2 (kimi-for-coding/k3) refused on quota" and stops — with a fallback
+        // configured, running, and having just failed for its own reason. Vany read
+        // exactly that and asked the obvious question: *"but there is a fallback to
+        // openrouter!"* There was, it was tried, and the OpenRouter account had run to
+        // zero — $5165.00 granted against $5165.04 used. Nothing in the record said so.
+        //
+        // A tier is `unpayable` only when BOTH are, so the notice must say both. The
+        // primary's message stays first because it is the ordinary case; the twin's is
+        // appended because when it is present it is the one nobody expects.
+        throw new Exhausted(
+          `${e.message} — and its fallback ${tier.fallback} could not run either: ` +
+            `${twin instanceof Error ? twin.message : String(twin)}`,
+          e.resetAt,
+        );
       }
     }
     // Closed with what this tier FOUND, in the same words T0 uses (line 99). The
