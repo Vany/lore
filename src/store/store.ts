@@ -2770,6 +2770,20 @@ export class Store {
     return Number(res.changes);
   }
 
+  /**
+   * Reviews that have not finished, service-wide — what admission control counts (D-98).
+   *
+   * Across every repository on purpose: the resources it protects are shared, and a
+   * per-repository limit would let four repositories put four times the load on the one
+   * provider that matters.
+   */
+  openReviewCount(): number {
+    const row = this.db
+      .prepare(`SELECT COUNT(*) AS c FROM review WHERE state NOT IN (${TERMINAL_SQL})`)
+      .get() as Record<string, number | bigint> | undefined;
+    return Number(row?.["c"] ?? 0);
+  }
+
   /** Jobs holding a worker right now. `queueDepth`'s counterpart: waiting versus working. */
   jobsRunning(): number {
     const row = this.db.prepare("SELECT COUNT(*) AS c FROM job WHERE state = 'running'").get() as
@@ -2795,7 +2809,7 @@ export class Store {
   boardReviews(finishedSinceIso: string, limit = 60): readonly Record<string, string | null>[] {
     return this.db
       .prepare(
-        `SELECT id, branch, pull_request, into_ref, type, state, ladder, created_at, updated_at FROM review
+        `SELECT id, repo_id, branch, pull_request, into_ref, type, state, ladder, created_at, updated_at FROM review
          WHERE state NOT IN (${TERMINAL_SQL}) OR updated_at > ?
          ORDER BY (state IN (${TERMINAL_SQL})), updated_at DESC
          LIMIT ?`,

@@ -1,77 +1,59 @@
 /**
- * A bound on how many model calls are in flight at once, separate from how many
- * rounds are.
+ * How many model calls are in flight — counted, never queued behind.
  *
- * **One knob governing two resources with different limits will always be wrong for
- * one of them.** `LORE_CONCURRENCY` governs both halves of a round, and they are
- * nothing alike: the model call is remote and merely waits — t1 averages 304s, t2
- * 915s — while T0 runs a sandbox container locally and is CPU- and memory-bound.
- * Raising the number buys real throughput on the waiting half and oversubscribes the
- * local one, so it was always set for T0 and the provider inherited whatever fell out.
+ * **A ROUND STARTS ITS SESSION IMMEDIATELY.** Vany: *"there may be no situation where a
+ * job is waiting for the session in opencode — launch immediately. If you need limits,
+ * okay: do not accept a request if there are already 128 reviews going."* Backpressure
+ * belongs at the door, where a client is told plainly that the service is full, not in
+ * the middle, where a review sits in a queue nobody can see and every clock keeps running.
  *
- * Measured on 2026-08-05 at `LORE_CONCURRENCY=12`: **four reviews died within 2.5
- * minutes** — two `socket hang up` in the same second, two empty replies inside a 200.
- * The host was fine. Memory held, the npm cache held. The provider was the ceiling,
- * and it is the one constraint neither the container nor the host could show. Those
- * reviews failed honestly — `this review DID NOT RUN` — but the quota was spent.
+ * That is the shape now: admission control in `core/admission.ts` refuses a new review
+ * when the service is already full, and everything admitted runs as soon as a worker loop
+ * picks it up. The number of concurrent model calls is therefore bounded by
+ * `LORE_CONCURRENCY` — the worker loops — and by nothing else.
  *
- * So the local knob stays sized for cores and this one is sized for the upstream.
- * Work above the limit **queues rather than failing**, which is the same argument as
- * backpressure in `spec/mcp-api.md` §5: a review that dies on a 429 is a review that
- * did not run, so waiting is strictly better than being refused.
+ * **WHAT THIS GAVE UP, stated because the evidence is real.** This file used to hold a
+ * semaphore, and it held one for a reason: on 2026-08-05 at twelve concurrent calls, four
+ * reviews died within 2.5 minutes — two `socket hang up` in the same second, two empty
+ * replies inside a 200 — while the host was fine. The provider was the ceiling, and it is
+ * the one constraint neither the container nor the host can show. Twelve is also the
+ * current worker-loop count, so that ceiling is now reachable again.
  *
- * Held for the WHOLE session, not per request. The load a reviewer puts on a provider
- * is its agentic exploration — an agent re-sends its accumulated context on every turn
- * (D-50), so one `review()` is one continuous demand from the first prompt to the last
- * tool call, and gating the individual HTTP calls would bound nothing.
+ * The trade was made deliberately: waiting is invisible and unbounded, while a provider
+ * refusing is loud, lands as `this review DID NOT RUN`, and names itself. If those faults
+ * return, the lever is `LORE_CONCURRENCY` — and unlike the old semaphore, turning it down
+ * is a decision somebody makes rather than a queue that silently absorbs the problem.
+ *
+ * The counter stays, because "how many calls are out right now" is the first thing an
+ * operator asks and the board reports it. It just never blocks.
  */
 
 export interface GateState {
   readonly inFlight: number;
-  readonly waiting: number;
-  readonly limit: number;
 }
 
 export class Gate {
-  private readonly limit: number;
   private active = 0;
-  private readonly queue: (() => void)[] = [];
-
-  constructor(limit: number) {
-    // Zero would deadlock every review in silence, which is the failure this project
-    // refuses above all others — the same shape as `LORE_CONCURRENCY=` starting zero
-    // worker loops and answering `ok: true` for ever.
-    if (!Number.isInteger(limit) || limit < 1) {
-      throw new Error(`model concurrency must be an integer >= 1, got ${limit}`);
-    }
-    this.limit = limit;
-  }
 
   state(): GateState {
-    return { inFlight: this.active, waiting: this.queue.length, limit: this.limit };
+    return { inFlight: this.active };
   }
 
   /**
-   * Run `fn` once a slot is free.
+   * Run `fn` now, counting it while it runs.
    *
-   * The slot is released in `finally`, so a throwing call cannot leak one. A gate that
-   * leaks a slot per failure degrades to a deadlock exactly when the upstream is
-   * already failing — the worst possible moment to stop reviewing — and it would look
-   * like the provider being slow rather than like a bug here.
+   * Released in `finally`, so a throwing call cannot leak a count. The old semaphore had
+   * the same guarantee for a sharper reason — a leaked SLOT degraded to a deadlock
+   * exactly when the upstream was already failing. Here a leak would only make the
+   * operator view wrong, which is still the kind of wrong this project cares about: a
+   * number nobody can trust is worse than no number.
    */
   async run<T>(fn: () => Promise<T>): Promise<T> {
-    if (this.active >= this.limit) {
-      await new Promise<void>((resolve) => this.queue.push(resolve));
-    }
     this.active += 1;
     try {
       return await fn();
     } finally {
       this.active -= 1;
-      // FIFO: the round that has waited longest goes next. LIFO would let a busy
-      // service starve one review indefinitely while newer ones overtake it, and a
-      // review nobody finishes holds a worktree and a pinned snapshot (D-70).
-      this.queue.shift()?.();
     }
   }
 }

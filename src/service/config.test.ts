@@ -70,3 +70,40 @@ describe("a variable set to nothing is not set", () => {
     },
   );
 });
+
+/**
+ * A REMOVED SETTING MUST NOT BE SILENTLY IGNORED.
+ *
+ * `LORE_MODEL_CONCURRENCY` was the semaphore's limit until D-98 moved the bound to
+ * admission. Reading it and doing nothing would leave an operator holding a knob wired to
+ * nothing — believing they had tuned provider load while `LORE_CONCURRENCY`, the lever
+ * that now governs it, sat untouched. This repository has been bitten twice by constants
+ * that looked used and were not.
+ */
+describe("a setting that no longer exists", () => {
+  it("refuses to start rather than ignoring LORE_MODEL_CONCURRENCY", () => {
+    const before = process.env["LORE_MODEL_CONCURRENCY"];
+    process.env["LORE_MODEL_CONCURRENCY"] = "4";
+    try {
+      expect(() => configFromEnv()).toThrow(/no longer does anything/);
+      // And it names the replacement, because a refusal a reader cannot act on is a wall.
+      expect(() => configFromEnv()).toThrow(/LORE_CONCURRENCY/);
+    } finally {
+      if (before === undefined) delete process.env["LORE_MODEL_CONCURRENCY"];
+      else process.env["LORE_MODEL_CONCURRENCY"] = before;
+    }
+  });
+
+  // Blank is how a .env spells "unset", and it must not be a refusal — `env()` already
+  // treats an empty value as absent everywhere else for exactly this reason.
+  it("treats an empty value as absent, as every other variable is", () => {
+    const before = process.env["LORE_MODEL_CONCURRENCY"];
+    process.env["LORE_MODEL_CONCURRENCY"] = "";
+    try {
+      expect(() => configFromEnv()).not.toThrow();
+    } finally {
+      if (before === undefined) delete process.env["LORE_MODEL_CONCURRENCY"];
+      else process.env["LORE_MODEL_CONCURRENCY"] = before;
+    }
+  });
+});

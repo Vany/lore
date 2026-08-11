@@ -595,9 +595,16 @@ reviewing the wrong tree produces confident findings about code no one has.
 ## 5. Concurrency
 
 - One worktree per active review, off a shared bare clone per repo.
-- Reviews are queued when a provider's concurrency cap is reached. **A review that
-  dies on a 429 is a review that did not run**, so backpressure queues rather than
-  fails.
+- **Nothing waits for a model slot.** A round launches its opencode session as soon as a
+  worker loop claims it; there is no internal semaphore and no in-flight cap (D-98). What
+  bounds the service is admission: `review_start` **refuses** when 128 reviews are already
+  open, naming the count, the limit and `review_cancel` as the way to make room.
+  Backpressure at the door rather than in the middle — a refused client can act, while a
+  client whose review is silently queued sees a state name and a clock and cannot tell
+  that from a service that is stuck.
+- A review that dies on a 429 is still a review that did not run, and that is now visible
+  rather than absorbed: the provider refusing is loud and names itself, where waiting was
+  neither.
 - A client going away cancels nothing — neither stopping its polling nor closing a
   `subscriptions/listen` stream. Cancellation is explicit (`review_cancel`). A dropped
   connection is far more often a client crash or a network blip than an intention, and

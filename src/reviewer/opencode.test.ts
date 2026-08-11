@@ -209,7 +209,7 @@ afterEach(() => {
   server.close();
 });
 
-const reviewer = () => new Reviewer({ baseUrl, agent: "readonly", timeoutMs: 10_000, modelConcurrency: 4 });
+const reviewer = () => new Reviewer({ baseUrl, agent: "readonly", timeoutMs: 10_000});
 
 /**
  * Found BY PATH, never by position.
@@ -406,7 +406,7 @@ describe("opening a session", () => {
   // `longFetch`) naming neither the tier nor the address it failed to reach.
   it("names the address it could not reach, instead of a bare fetch failure", async () => {
     const dead = await closedPort();
-    const offline = new Reviewer({ baseUrl: `http://127.0.0.1:${dead}`, agent: "readonly", timeoutMs: 2_000, modelConcurrency: 4 });
+    const offline = new Reviewer({ baseUrl: `http://127.0.0.1:${dead}`, agent: "readonly", timeoutMs: 2_000});
     const err = await offline
       .review(TIER, "review this", "/tmp/wt")
       .then(() => undefined, (e: unknown) => e as Error);

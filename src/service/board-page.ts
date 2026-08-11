@@ -107,6 +107,18 @@ export const BOARD_PAGE = `<!doctype html>
   .skip { color: var(--yellow); }
   .note { color: var(--yellow); }
 
+  /* needs_human is the only state a person is the mechanism for, so it is the only thing
+     in a detail pane that gets a box of its own. */
+  .human {
+    border: 1px solid var(--mag); border-left-width: 3px; border-radius: 2px;
+    padding: 8px 10px; margin: 6px 0 10px; max-width: 110ch; color: var(--fg);
+  }
+  .human b { color: var(--mag); }
+  .q { margin: 8px 0; }
+  .side { padding: 3px 0 3px 10px; border-left: 2px solid var(--line); }
+  .qid { color: var(--dim); }
+  .versus { color: var(--mag); padding: 2px 0 2px 10px; font-size: 11px; letter-spacing: .5px; }
+
   .s-running, .s-queued { color: var(--blue); }
   .s-findings_ready, .s-awaiting_diff { color: var(--yellow); }
   .s-needs_human { color: var(--mag); }
@@ -125,6 +137,7 @@ export const BOARD_PAGE = `<!doctype html>
   <span><span class="k">queued</span><span id="queued">—</span></span>
   <span><span class="k">in flight</span><span id="inflight">—</span></span>
   <span><span class="k">model calls</span><span id="calls">—</span></span>
+  <span><span class="k">open</span><span id="open">—</span></span>
   <span><span class="k">spend today</span><span id="spend">—</span></span>
   <span class="dim" id="live">connecting…</span>
 </header>
@@ -186,10 +199,17 @@ function render(b) {
   // so a saturated gate is why nothing else starts — and without this line the board said
   // "queued 3" and left the reader to guess. A dash for a build with no gate: absent is
   // not zero.
+  // Nothing queues behind this any more, so it is a measurement rather than a bound: how
+  // many rounds are actually talking to a provider right now.
   const c = b.modelCalls;
-  const calls = document.getElementById("calls");
-  calls.textContent = c ? c.inFlight + "/" + c.limit + (c.waiting > 0 ? " · " + c.waiting + " waiting" : "") : "—";
-  calls.className = c && c.inFlight >= c.limit ? "s-findings_ready" : "";
+  document.getElementById("calls").textContent = c ? String(c.inFlight) : "—";
+  // THE ONLY QUEUE LORE HAS IS THE ONE AT THE DOOR. At the limit, review_start refuses —
+  // so this is the number that says whether a client is about to be turned away, and it
+  // goes red BEFORE that happens rather than after somebody is refused.
+  const o = b.openReviews;
+  const open = document.getElementById("open");
+  open.textContent = o.open + "/" + o.limit;
+  open.className = o.open >= o.limit ? "s-failed" : o.open >= o.limit * 0.75 ? "s-findings_ready" : "";
 
   const banners = [];
   // Drained reads as idle from outside and means the opposite: work arrives and nothing
@@ -238,9 +258,13 @@ function row(r) {
   // actually working, how long in total, and how long since anything moved. Everything
   // else is a click away — but NOT the stall, which was behind a click and should never
   // have been: a board is read at a glance or it is not read.
+  // "no tier" IS AN ALARM AND ONLY APPLIES TO A RUNNING REVIEW: nothing is working when
+  // something should be. A queued review has no tier because it has not started, which is
+  // ordinary — giving it the same yellow marker was the first thing that looked wrong on
+  // the page, and an alarm that fires on the normal case is one nobody reads twice.
   const step = r.step
     ? '<span class="step">' + esc(r.step) + "</span>"
-    : r.stepNote
+    : r.state === "running" && r.stepNote
       ? '<span class="nostep" title="' + esc(r.stepNote) + '">no tier</span>'
       : (terminal ? "" : '<span class="dim">—</span>');
   // A finished review's total time is FIXED. Ticking it up for days would say the review
@@ -264,6 +288,12 @@ function row(r) {
 function detail(r) {
   const out = [];
   if (r.stepNote) out.push('<div class="note">' + esc(r.stepNote) + "</div>");
+  // WHY A PERSON IS NEEDED, first and in full. needs_human is the one state where
+  // nothing in the system can proceed — not a tier, not a retry, not a sweep — so the
+  // reader of this page is the mechanism. A label without the argument would leave them
+  // to invent the question or drop it, which is what the MCP surface once did until a
+  // client said it could not surface a question it was never given.
+  if (r.state === "needs_human") out.push(question(r));
   out.push('<div class="dim">' + esc(r.id) + " · " + esc(r.type) + " · into " + esc(r.into) +
     " · started " + esc(r.createdAt.slice(0, 19).replace("T", " ")) + "Z</div>");
 
@@ -318,6 +348,44 @@ function branchLink(r) {
   if (!r.pullRequest || !/^https?:\\/\\//i.test(r.pullRequest)) return name;
   return '<a href="' + esc(r.pullRequest) + '" target="_blank" rel="noreferrer noopener"' +
     ' onclick="event.stopPropagation()">' + name + "</a>";
+}
+
+/**
+ * The whole reason a review is parked on a person, spelled out.
+ *
+ * Two statements this repository believes that cannot both be true, each with where it
+ * came from, and the two actions that end the block. Nothing here is summarised: a
+ * paraphrase of one of these is a third statement, and the point of the state is that
+ * only a human may choose between the two that exist.
+ */
+function question(r) {
+  if (!r.openQuestions || r.openQuestions.length === 0) {
+    // A REAL STATE AND A CONFUSING ONE: parked, with nothing left to decide. It means
+    // the contradiction was resolved and nothing re-queued the review. Saying so beats
+    // rendering an empty box, which reads as "the page is broken".
+    return '<div class="human"><b>A PERSON IS NEEDED — but no contradiction is open any more.</b>' +
+      " The question behind this block has been settled and nothing re-queued the review." +
+      " It will sit here until somebody moves it or the sweep expires it.</div>";
+  }
+  return '<div class="human"><b>A PERSON MUST DECIDE THIS.</b> ' +
+    "lore holds two statements about this repository that cannot both be true. It will not " +
+    "guess between them, and no tier, retry or sweep can end this state." +
+    r.openQuestions.map((q) =>
+      '<div class="q">' +
+        '<div class="side"><span class="qid">' + esc(q.left.id.slice(0, 8)) + "</span> " +
+          esc(q.left.statement) +
+          (q.left.source ? '<span class="dim"> — from ' + esc(q.left.source) + "</span>" : "") +
+        "</div>" +
+        '<div class="versus">cannot both be true as</div>' +
+        '<div class="side"><span class="qid">' + esc(q.right.id.slice(0, 8)) + "</span> " +
+          esc(q.right.statement) +
+          (q.right.source ? '<span class="dim"> — from ' + esc(q.right.source) + "</span>" : "") +
+        "</div>" +
+      "</div>",
+    ).join("") +
+    '<div class="dim">Whoever decides: keep one and retire the other with knowledge_resolve, ' +
+    "or raise it with knowledge_escalate. Resolving it re-queues every review parked on it.</div>" +
+  "</div>";
 }
 
 /** One tier attempt, with the findings it raised nested underneath. */

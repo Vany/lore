@@ -52,8 +52,6 @@ export interface ServiceConfig {
    */
   readonly backupDir?: string;
   readonly concurrency: number;
-  /** In-flight model calls, sized for the provider rather than for the host. */
-  readonly modelConcurrency: number;
   readonly dailyCeilingUsd: number;
 }
 
@@ -96,6 +94,22 @@ function envNumber(name: string, fallback: number, min = 0): number {
 }
 
 export function configFromEnv(): ServiceConfig {
+  // A SETTING THAT NO LONGER DOES ANYTHING IS DECORATION A READER BELIEVES.
+  //
+  // `LORE_MODEL_CONCURRENCY` capped model calls in flight and queued the rest until D-98
+  // moved the bound to admission. Reading it and ignoring it would leave an operator
+  // holding a knob wired to nothing — believing they had tuned provider load while the
+  // real lever, `LORE_CONCURRENCY`, sat untouched. This repository has been bitten by the
+  // decorative-constant shape twice (`RULE_DIRS`, `SCHEMA_VERSION`), so it refuses at
+  // startup instead: the fix is deleting one line and the message says so.
+  if (env("LORE_MODEL_CONCURRENCY") !== undefined) {
+    throw new Error(
+      "LORE_MODEL_CONCURRENCY is set but no longer does anything (D-98): model calls are " +
+        "no longer queued behind a semaphore — a round launches its session immediately, and the " +
+        "bound is admission control, which refuses a new review at 128 open. Remove the variable. " +
+        "If you were using it to limit load on a provider, LORE_CONCURRENCY is the lever now.",
+    );
+  }
   const webhookUrl = env("LORE_WEBHOOK_URL");
   const heartbeatUrl = env("LORE_HEARTBEAT_URL");
   const backupDir = env("LORE_BACKUP_DIR");
@@ -119,7 +133,6 @@ export function configFromEnv(): ServiceConfig {
     // `LORE_CONCURRENCY` is sized by cores for the local sandbox; this is sized for
     // the provider, which is what actually broke — four reviews dead in 2.5 minutes
     // at 12 (`reviewer/gate.ts`). Also at least one, for the same reason.
-    modelConcurrency: envNumber("LORE_MODEL_CONCURRENCY", DEFAULT_REVIEWER.modelConcurrency, 1),
     dailyCeilingUsd: envNumber("LORE_DAILY_CEILING_USD", DEFAULT_SPEND.dailyCeilingUsd),
   };
 }
@@ -207,7 +220,7 @@ export async function serve(cfg: ServiceConfig): Promise<() => void> {
   // the limit would silently multiply by the worker count — the bound would read as 4
   // and behave as 48 at LORE_CONCURRENCY=12, which is the number that killed four
   // reviews in the first place.
-  const reviewer = new Reviewer({ ...DEFAULT_REVIEWER, modelConcurrency: cfg.modelConcurrency });
+  const reviewer = new Reviewer({ ...DEFAULT_REVIEWER });
 
   const worker = new Worker(
     store,

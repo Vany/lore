@@ -321,6 +321,60 @@ describe("which reviews are on the board at all", () => {
   });
 });
 
+/**
+ * `needs_human` is the one state where a person IS the mechanism — no tier, retry or
+ * sweep can end it. So the board owes them the argument, not the label.
+ *
+ * The MCP surface learned this the hard way: it shipped saying only that there was
+ * something to decide, and a client answered that it could not surface a question it was
+ * never given, and that guessing is what lore's own doctrine forbids everywhere else.
+ */
+describe("why a person is needed", () => {
+  const teach = (statement: string, provenance: string) =>
+    store.addKnowledge({
+      repoId, kind: "rule", source: "taught", statement, why: "read from the code",
+      path: "src/ledger", cwe: undefined, provenance, sourceBlob: undefined, confidence: undefined,
+    });
+
+  const conflict = () => {
+    const left = teach("Holds are released by capture()", "t2 on feat/x");
+    const right = teach("Holds are released only by the settlement job", "koray, 2026-08-09");
+    store.recordConflict(repoId, left.id, right.id);
+    return { left: left.id, right: right.id };
+  };
+
+  it("carries both statements in full, with where each came from", () => {
+    const ids = conflict();
+    review("r1", "needs_human");
+
+    const q = find("r1")?.openQuestions ?? [];
+    expect(q).toHaveLength(1);
+    const statements = [q[0]?.left.statement, q[0]?.right.statement];
+    expect(statements).toContain("Holds are released by capture()");
+    expect(statements).toContain("Holds are released only by the settlement job");
+    // The provenance is what makes it decidable: one of these came from a person.
+    expect([q[0]?.left.source, q[0]?.right.source]).toContain("koray, 2026-08-09");
+    expect([q[0]?.left.id, q[0]?.right.id].sort()).toStrictEqual([ids.left, ids.right].sort());
+  });
+
+  // The question costs two queries, and a board of ordinary reviews should not pay them.
+  it("asks only for the state that needs it", () => {
+    conflict();
+    review("r1", "running");
+    expect(find("r1")?.openQuestions).toStrictEqual([]);
+  });
+
+  /**
+   * A REAL AND CONFUSING STATE: parked, with nothing left to decide. It means the
+   * contradiction was settled and nothing re-queued the review. An empty list here is
+   * what the page turns into a sentence rather than a blank box.
+   */
+  it("is empty when the review is parked but the question has been settled", () => {
+    review("r1", "needs_human");
+    expect(find("r1")?.openQuestions).toStrictEqual([]);
+  });
+});
+
 describe("the service facts above the list", () => {
   // Drained looks idle from outside and means the opposite: work arrives and nothing
   // claims it. Thirteen hours of exactly that is why the board leads with it.

@@ -12,6 +12,7 @@
 import { randomBytes } from "node:crypto";
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/server";
 import * as z from "zod";
+import { mayAdmit } from "../core/admission.ts";
 import { absent } from "../core/optional.ts";
 import { worstSeverity } from "../core/finding.ts";
 import { initialState, ladderFingerprint, type LadderState } from "../core/ladder.ts";
@@ -338,6 +339,27 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
                 `nobody is merging, and there is nothing worth carrying forward. Pass restart: true.`
               : `If the branch was rebased or force-pushed the old snapshot is genuinely meaningless — ` +
                 `pass restart: true, deliberately.`),
+        );
+      }
+
+      // THE SERVICE IS FULL — refused at the door, never queued in the middle (D-98).
+      //
+      // The alternative was a semaphore that made a round wait for a model slot, and
+      // what that produced was a review sitting in `queued` with a clock running and
+      // nothing on any surface able to say whether it was waiting or wedged. A client
+      // that is REFUSED knows: it can come back, tell its user, or cancel something.
+      //
+      // Checked before the row is written, so a refusal leaves nothing behind — unlike
+      // the spend ceiling, which fires at enqueue and therefore has a review to mark
+      // `failed`. Nothing here has been promised to anyone yet.
+      const admission = mayAdmit(store.openReviewCount());
+      if (!admission.allowed) {
+        throw new Error(
+          `lore is full: ${admission.open} reviews are already open, and the limit is ${admission.limit}. ` +
+            "NOTHING WAS STARTED — this branch is unreviewed and no review id exists for it. Try again once " +
+            "something finishes. If reviews of yours are sitting in findings_ready with nobody answering " +
+            "them, review_inbox lists them and review_cancel on one frees a slot immediately: an abandoned " +
+            "review holds its place here until it is swept as expired 48 hours later.",
         );
       }
 

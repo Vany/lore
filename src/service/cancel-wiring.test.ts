@@ -101,7 +101,6 @@ describe("the deployed service's review_cancel", () => {
       port: PORT,
       host: "127.0.0.1",
       concurrency: 1,
-      modelConcurrency: 1,
       dailyCeilingUsd: 10,
     });
 
@@ -129,7 +128,7 @@ describe("verifying the quota fallback at startup", () => {
   it("says UNKNOWN when opencode does not answer with a provider list", async () => {
     // A port nothing is listening on, so the provider fetch cannot succeed.
     const { Reviewer } = await import("../reviewer/opencode.ts");
-    const r = new Reviewer({ baseUrl: "http://127.0.0.1:1", agent: "readonly", timeoutMs: 500, modelConcurrency: 1 });
+    const r = new Reviewer({ baseUrl: "http://127.0.0.1:1", agent: "readonly", timeoutMs: 500});
 
     const answer = await r.missingModels(["openrouter/z-ai/glm-5-turbo"]);
 

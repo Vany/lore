@@ -186,6 +186,19 @@ fires on state changes only, by design, and this board is about what happens BET
 them; wiring operator events into every write path is a change whose failure mode is a
 silently stale board, and a poll cannot miss anything.
 
+**A `needs_human` review carries the whole question, not the word.** Both statements that
+cannot both be true, each with where it came from, and the two calls that end the block —
+`knowledge_resolve` or `knowledge_escalate`. This is the one state where a person is the
+mechanism: no tier, retry or sweep can move it, so the reader of this page is what the
+state is waiting for. Printing the label alone is what the MCP surface did until a client
+answered that it could not surface a question it was never given, and that guessing is
+what lore forbids everywhere else.
+
+Conflicts belong to the repository rather than the review, exactly as `review_inbox`
+reports them. So a parked review with **no** open conflict is a real state — the question
+was settled and nothing re-queued the review — and the board says that in words instead of
+rendering an empty box.
+
 **The branch links to its pull request** when the client supplied one at `review_start`
 (`spec/mcp-api.md` §2.4.1.1). A branch name alone is not clickable and does not say which
 forge it lives on, so the board was a place you read about a change and then went

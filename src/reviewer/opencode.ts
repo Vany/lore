@@ -98,14 +98,6 @@ export interface ReviewerConfig {
   /** HTTP basic credentials, when the opencode server is password-protected. */
   readonly username?: string;
   readonly password?: string;
-  /**
-   * How many model calls may be in flight at once, across every review.
-   *
-   * Deliberately NOT `LORE_CONCURRENCY`, which sizes the local sandbox by cores. See
-   * `gate.ts`: the two resources have opposite constraints, and the provider was what
-   * broke first — four reviews dead in 2.5 minutes when the local knob went to 12.
-   */
-  readonly modelConcurrency: number;
 }
 
 export const DEFAULT_REVIEWER: ReviewerConfig = {
@@ -130,7 +122,6 @@ export const DEFAULT_REVIEWER: ReviewerConfig = {
   //
   // Raise it with `LORE_MODEL_CONCURRENCY` once there is evidence, not before — the
   // number that matters is the provider's and we cannot see it.
-  modelConcurrency: 4,
   // opencode protects its server with basic auth when OPENCODE_SERVER_PASSWORD is
   // set, and returns a bare 401 with no hint when it is missing. Reading the same
   // variables opencode itself reads means a protected server works without any
@@ -341,7 +332,9 @@ export class Reviewer implements ReviewerLike {
 
   constructor(cfg: ReviewerConfig = DEFAULT_REVIEWER) {
     this.cfg = cfg;
-    this.gate = new Gate(cfg.modelConcurrency);
+    // No limit to pass any more: a round launches its session immediately and this only
+    // counts what is out (D-98). The bound that remains is admission, at review_start.
+    this.gate = new Gate();
     const basic =
       cfg.password === undefined
         ? undefined

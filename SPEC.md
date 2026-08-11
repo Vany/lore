@@ -1822,6 +1822,44 @@ D-77 still holds and nothing skips the ladder. What changes is that batching is 
 DEFAULT rather than a compromise: fix everything found, review it together, push it
 together.
 
+**D-98 — a round never waits for a model slot; the service refuses at the door instead.**
+
+Vany: *"there may be no situation where a job waits for the session in opencode — launch
+immediately. If you need limits, okay: do not accept a request if there are already 128
+reviews going."*
+
+`reviewer/gate.ts` held a semaphore: N model calls in flight, the rest queued FIFO. It was
+real protection, bought with real evidence — on 2026-08-05 at twelve concurrent calls four
+reviews died within 2.5 minutes, two `socket hang up` in the same second and two empty
+replies inside a 200, with the host fine throughout. **What it produced day to day was a
+review sitting in `queued` with a clock running and no surface able to say whether it was
+waiting or wedged**, which is the confusion that started this whole line of work.
+
+So the bound moved to admission. `review_start` refuses when 128 reviews are already open,
+and everything admitted launches as soon as a worker loop reaches it. **A refused client
+knows**: it can cancel something abandoned, tell its user, or come back. A queued one sees
+a state name and a clock.
+
+- **128 is far above normal traffic** — the busiest day here held about a dozen. It is not
+  a throughput knob. Reaching it means something has gone wrong, and accepting more would
+  make the wrongness harder to see.
+- **Open means not finished**, including reviews waiting on their client: a parked review
+  holds a pinned worktree and can become work again on the next submit. The refusal names
+  `review_cancel` because that is the remedy in the client's own hands.
+- **Counted service-wide**, not per repository. The resources it protects — one opencode
+  process, one host, one set of worker loops — are shared, and four repositories with
+  their own allowance would put four times the load on the one provider that matters.
+- **Nothing is created when a review is refused.** Unlike the spend ceiling, which fires at
+  enqueue and therefore has a row to mark `failed`, this fires before anything is promised.
+
+**What this gives up, stated plainly.** Concurrent model calls are now bounded only by
+`LORE_CONCURRENCY` — twelve — which is exactly the number with a measured failure. The
+trade is deliberate: waiting is invisible and unbounded, while a provider refusing is loud,
+lands as *this review DID NOT RUN*, and names itself. If those faults return the lever is
+`LORE_CONCURRENCY`, turned down by somebody deciding rather than by a queue quietly
+absorbing it. `LORE_MODEL_CONCURRENCY` is **deleted**, not defaulted — a setting that no
+longer does anything is decoration a reader believes.
+
 **D-97 — a review that has ended leaves no work behind it, and the queue counts only what
 can be claimed.**
 

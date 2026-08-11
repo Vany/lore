@@ -7,6 +7,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { MAX_OPEN_REVIEWS } from "../core/admission.ts";
 import { initialState } from "../core/ladder.ts";
 import type { ReviewState } from "../core/review-state.ts";
 import { STALE_HOURS } from "../ops/retention.ts";
@@ -174,6 +175,66 @@ describe("authentication", () => {
     const mine = store.db.prepare("SELECT repo_id FROM token WHERE principal = 'alice'").get() as Record<string, string>;
     const theirs = store.db.prepare("SELECT repo_id FROM token WHERE principal = 'bob'").get() as Record<string, string>;
     expect(mine["repo_id"]).not.toBe(theirs["repo_id"]);
+  });
+});
+
+/**
+ * ADMISSION CONTROL: refused at the door, never queued in the middle (D-98).
+ *
+ * Vany: *"there may be no situation where a job waits for the session in opencode — launch
+ * immediately. If you need limits, okay: do not accept a request if there are already 128
+ * reviews going."* The semaphore that used to make a round wait for a model slot is gone,
+ * and this is what replaced it. The difference that matters is not the number: a client
+ * that is REFUSED knows, and can cancel something or come back; a client whose review is
+ * silently waiting sees `queued` and a clock and cannot tell that from a wedged service.
+ */
+describe("the service refuses work rather than queueing it invisibly", () => {
+  const start = (branch: string) =>
+    mcp(
+      {
+        jsonrpc: "2.0", id: 1, method: "tools/call",
+        params: { name: "review_start", arguments: { branch, into: "main", ticket: "t" } },
+      },
+      token,
+    ).then((r) => r.text());
+
+  it("accepts while there is room", async () => {
+    expect(await start("feat/room")).toContain("review_id");
+  });
+
+  it("refuses once the service is full, and says how to make room", async () => {
+    // One under the limit, so the next call is the first that must be refused.
+    for (let i = 0; i < MAX_OPEN_REVIEWS; i++) {
+      store.createReview({
+        id: `full${i}`, repoId, principal: "alice", branch: `feat/full-${i}`, intoRef: "main",
+        ticket: "t", type: "code-arch", state: "findings_ready", ladder: initialState(),
+      });
+    }
+
+    const body = await start("feat/one-too-many");
+    expect(body).toContain("lore is full");
+    expect(body, "the count and the limit, not just a refusal").toContain(String(MAX_OPEN_REVIEWS));
+    // THE REMEDY, because a client that cannot act on a refusal will simply retry it.
+    expect(body).toContain("review_cancel");
+    // NOTHING WAS STARTED — no half-created review, no id promised to anyone.
+    const row = store.db
+      .prepare("SELECT COUNT(*) c FROM review WHERE branch = 'feat/one-too-many'")
+      .get() as { c: number };
+    expect(Number(row.c), "a refusal must leave nothing behind").toBe(0);
+  });
+
+  /**
+   * Finished reviews do not hold the door. Otherwise the limit would be reached once and
+   * never released, and a service that has done 128 reviews would stop for ever.
+   */
+  it("counts only reviews that have not finished", async () => {
+    for (let i = 0; i < MAX_OPEN_REVIEWS + 10; i++) {
+      store.createReview({
+        id: `done${i}`, repoId, principal: "alice", branch: `feat/done-${i}`, intoRef: "main",
+        ticket: "t", type: "code-arch", state: "passed", ladder: initialState(),
+      });
+    }
+    expect(await start("feat/after-many")).toContain("review_id");
   });
 });
 

@@ -16,6 +16,7 @@
  * SPEC: spec/operations.md §2.4, SPEC.md D-26
  */
 
+import { mayAdmit } from "../core/admission.ts";
 import { isTerminal, type ReviewState } from "../core/review-state.ts";
 import type { GateState } from "../reviewer/gate.ts";
 import { spendByTier, startOfDayIso } from "./spend.ts";
@@ -132,6 +133,27 @@ export interface BoardReview {
    * quietly claim full coverage.
    */
   readonly checksSkipped: readonly string[];
+  /**
+   * WHY A PERSON IS NEEDED, in full — the two statements that cannot both be true.
+   *
+   * Only for `needs_human`, and it is the whole content of that state. A board that
+   * printed the word and not the question would be doing exactly what the MCP surface
+   * did until a client said so plainly: *I cannot surface a question I was never given,
+   * and guessing is what lore's own doctrine forbids.* `needs_human` is the one state
+   * where nothing in the system can proceed — not a tier, not a retry, not a sweep — so
+   * the reader of this page IS the mechanism, and they need the argument rather than a
+   * label.
+   *
+   * Conflicts belong to the REPOSITORY, not the review, which is also how the inbox
+   * reports them: a review is parked because its repo holds a contradiction. An empty
+   * list on a parked review is therefore a real and confusing state — the question was
+   * resolved and nothing re-queued the review — and the page says so rather than
+   * rendering blank.
+   */
+  readonly openQuestions: readonly {
+    readonly left: { readonly id: string; readonly statement: string; readonly source: string | undefined };
+    readonly right: { readonly id: string; readonly statement: string; readonly source: string | undefined };
+  }[];
   /** Findings whose `(origin, round)` matches no tier run. Normally empty; never hidden. */
   readonly orphanFindings: readonly BoardFinding[];
   /**
@@ -152,18 +174,25 @@ export interface Board {
   readonly queued: number;
   readonly inFlight: number;
   /**
-   * The model gate: how many calls are talking to a provider, and how many rounds hold a
-   * worker while they wait for a slot.
+   * How many model calls are out right now.
    *
-   * WHAT "QUEUED" IS ACTUALLY WAITING FOR, which the board could not say. Twelve worker
-   * loops claim jobs and four calls may be in flight, so eight rounds can be holding a
-   * loop and waiting here — and everything behind them stays `queued` with nothing on the
-   * page explaining why. "Accepted and not started" is true and answers nothing.
+   * No limit and nothing waiting: a round launches its session immediately (D-98), so
+   * this is a measurement rather than a bound. It is the first question an operator asks
+   * — is anything actually talking to a provider — and until the board existed the answer
+   * needed a shell.
    *
-   * Absent when this process was built without a gate, which is the CLI and the tests. A
-   * missing number is not zero.
+   * Absent when this process has no reviewer, which is the CLI and the tests. A missing
+   * number is not zero.
    */
-  readonly modelCalls: { readonly inFlight: number; readonly waiting: number; readonly limit: number } | undefined;
+  readonly modelCalls: { readonly inFlight: number } | undefined;
+  /**
+   * How full the service is against the point where it stops accepting reviews (D-98).
+   *
+   * The only queue lore has now is the one at the door, so this is the number that says
+   * how close it is to shutting. Far from it in normal traffic, and that is the point:
+   * reaching it means something is wrong, not that the service is busy.
+   */
+  readonly openReviews: { readonly open: number; readonly limit: number };
   readonly spendTodayUsd: number;
   /** Tiers lore has stopped asking, with whether the PROVIDER said so or lore guessed. */
   readonly tiersDown: readonly { readonly tier: string; readonly until: string; readonly why: string; readonly stated: boolean }[];
@@ -206,6 +235,8 @@ export function board(store: Store, now = Date.now(), modelGate?: () => GateStat
   // as a browser is open, and a per-review loop would turn one idle tab into 60 queries a
   // second against the same database the reviews are writing to.
   const ids = reviews.map((r) => String(r["id"] ?? ""));
+  /** One lookup per repository per pass, not per parked review. */
+  const byRepo = new Map<string, BoardReview["openQuestions"]>();
   const runs = groupRuns(store, ids);
   const counts = groupFindings(store, ids);
   const open = groupOpen(store, ids);
@@ -220,6 +251,7 @@ export function board(store: Store, now = Date.now(), modelGate?: () => GateStat
     queued: store.queueDepth(),
     inFlight: store.jobsRunning(),
     modelCalls: modelGate === undefined ? undefined : modelGate(),
+    openReviews: (() => { const a = mayAdmit(store.openReviewCount()); return { open: a.open, limit: a.limit }; })(),
     reviewsNotShown: Math.max(0, store.boardReviewCount(since) - reviews.length),
     spendTodayUsd: spendByTier(store, startOfDayIso()).reduce((a, t) => a + t.usd, 0),
     tiersDown: store.unavailableTiers(new Date(now).toISOString()).map((t) => ({
@@ -253,6 +285,10 @@ export function board(store: Store, now = Date.now(), modelGate?: () => GateStat
         tiers: mine,
         findings: { ...f, open: open.get(id) ?? 0 },
         checksSkipped: store.checksSkippedFor(id),
+        // Only for the state it explains. Two queries per parked review, and a parked
+        // review is rare — but they are per-repo, so a board full of them would repeat
+        // the same lookup; `questionsFor` memoises on the repository for this pass.
+        openQuestions: state === "needs_human" ? questionsFor(store, String(r["repo_id"] ?? ""), byRepo) : [],
         orphanFindings: orphans,
         findingsNotShown: notShown,
       };
@@ -320,6 +356,39 @@ function withFindings(
     orphans,
     notShown: all.length - kept.length,
   };
+}
+
+/**
+ * The contradictions blocking a repository, with both statements in full.
+ *
+ * The same shape the MCP inbox hands a client, from the same two sources — because a
+ * person reading the board and an agent reading the inbox must not be told different
+ * things about why the same review is stuck. A retired statement renders as `(retired)`
+ * rather than vanishing: a conflict whose half has been withdrawn is exactly the case
+ * where a reader needs to see that something is inconsistent.
+ */
+function questionsFor(
+  store: Store,
+  repoId: string,
+  memo: Map<string, BoardReview["openQuestions"]>,
+): BoardReview["openQuestions"] {
+  const cached = memo.get(repoId);
+  if (cached !== undefined) return cached;
+  const byId = new Map(store.knowledgeFor(repoId, undefined, 1000).map((k) => [k.id, k]));
+  const out = store.openConflicts(repoId).map((c) => ({
+    left: {
+      id: c.left,
+      statement: byId.get(c.left)?.statement ?? "(retired)",
+      source: byId.get(c.left)?.provenance,
+    },
+    right: {
+      id: c.right,
+      statement: byId.get(c.right)?.statement ?? "(retired)",
+      source: byId.get(c.right)?.provenance,
+    },
+  }));
+  memo.set(repoId, out);
+  return out;
 }
 
 function parseLadder(raw: unknown): number {
