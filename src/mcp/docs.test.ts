@@ -226,20 +226,45 @@ describe("every behaviour a client must know about reaches the texts", () => {
  * malformed call is worse than one carrying none, since a client that copies it verbatim
  * gets a silent stream and concludes lore is quiet.
  */
-describe("the subscribe call handed to a client", () => {
-  it("is the real method and the real resource template", () => {
-    // `subscriptions/listen` and `resourceSubscriptions` are the protocol's spelling, and
-    // `lore://review/{id}` is what `RESOURCE_DOCS` and the template registration use.
-    const src = readFileSync(new URL("./server.ts", import.meta.url), "utf8");
-    expect(src).toContain('method: "subscriptions/listen"');
-    expect(src).toContain("resourceSubscriptions: [`lore://review/${reviewId}`]");
+/**
+ * NOTHING SUBSCRIPTION-SHAPED REACHES A CLIENT (D-103).
+ *
+ * These tests once asserted the opposite: that every reply carried a ready-made
+ * `subscribe` frame and a `subscribe_filter`, and that the prose pointed at them. The
+ * mechanism is still there — the server declares the capability, honours
+ * `subscriptions/listen`, and wakes subscribers on state changes — but no client we serve
+ * can use it yet, and advertising it made every reply lead with an instruction the reader
+ * must fail at before finding the interval it actually needed.
+ *
+ * Vany: *"we are keeping our subscription mechanism, but it is not yet ready in the
+ * client — the client can only poll. So we ask the client to poll, and keep the
+ * subscribing model hidden."*
+ *
+ * So the property is now the absence, and it is worth a test because the words are easy to
+ * put back one paragraph at a time.
+ */
+describe("the docs ask a client to poll, and mention nothing it cannot do", () => {
+  it.each(ALL_DOCS)("%s offers no subscription a client cannot use", (_name, text) => {
+    expect(text).not.toContain("resourceSubscriptions");
+    expect(text).not.toContain("subscriptions/listen");
+    expect(text, "an SDK helper a polling client has no use for").not.toContain("listen()");
+    expect(text).not.toContain("subscribe_filter");
   });
 
-  // The prose must not carry a second copy of the shape: one of them would be wrong
-  // eventually, and the doc is the one nobody executes.
-  it("is not also spelled out in the docs it replaced", () => {
-    expect(TOOL_DOCS.start).not.toContain("resourceSubscriptions");
-    expect(TOOL_DOCS.start, "the docs point at the field instead").toContain("`subscribe`");
+  // The replacement has to be PRESENT, not merely the old text absent: a doc that removed
+  // the subscribe advice and said nothing instead would leave a client with no interval
+  // and the sleep-poll loop this whole surface exists to prevent.
+  it("tells a client how long to wait instead", () => {
+    expect(TOOL_DOCS.start).toContain("check_back_after_ms");
+    expect(TOOL_DOCS.poll).toContain("check_back_after_ms");
+    expect(TOOL_DOCS.start, "and that it is bounded").toMatch(/never more than two minutes/);
+  });
+
+  // The capability itself is untouched, and that is the point of hiding rather than
+  // deleting: a client that gains support gets woken with no server change.
+  it("keeps the mechanism the server still serves", () => {
+    const src = readFileSync(new URL("./server.ts", import.meta.url), "utf8");
+    expect(src, "still declared").toContain("resources: { subscribe: true }");
   });
 });
 

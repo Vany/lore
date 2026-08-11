@@ -411,7 +411,10 @@ describe("opening a session", () => {
       .review(TIER, "review this", "/tmp/wt")
       .then(() => undefined, (e: unknown) => e as Error);
 
-    expect(err?.name).toBe("DidNotRun");
+    // `ServiceUnreachable` — a DidNotRun that also says WHO is at fault: lore's own
+    // sidecar rather than the provider or the branch, so the worker requeues the round
+    // instead of ending the review (D-104).
+    expect(err?.name).toBe("ServiceUnreachable");
     expect(err?.message).toContain(`127.0.0.1:${dead}`);
     expect(err?.message).toContain("t1");
   });

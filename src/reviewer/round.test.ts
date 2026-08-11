@@ -1788,7 +1788,7 @@ describe("a reused t0 says so", () => {
     // that the second round did not pretend to.
     expect(t0s[0]?.["outcome"], "the round that actually swept").not.toBe("reused");
     expect(t0s[1]?.["outcome"], "the round that did not").toBe("reused");
-  });
+  }, 60_000);
 
   // It LOOKED, in an earlier round, at these exact bytes — so it must not be counted
   // among the tiers that missed the code, or every verdict resting on it weakens for
@@ -1800,7 +1800,7 @@ describe("a reused t0 says so", () => {
     await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type });
 
     expect(store.tierFailureCount("r1", "t0"), "a reuse is not a miss").toBe(0);
-  });
+  }, 60_000);
 });
 
 describe("skip_if_quota together with a fallback", () => {

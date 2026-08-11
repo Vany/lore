@@ -172,44 +172,38 @@ const FINDING = {
 
 describe("subscriptions/listen", () => {
   /**
-   * THE FILTER WE HAND OUT IS THE ONE `listen()` TAKES.
+   * THE CAPABILITY STILL WORKS; WE JUST NO LONGER HAND IT OUT (D-103).
    *
-   * `review_start` and every waiting `review_poll` carry two shapes: `subscribe`, the raw
-   * JSON-RPC frame, and `subscribe_filter`, the same thing unwrapped. An SDK's listen()
-   * helper takes the second — give it the first and it sends a filter with no recognised
-   * keys, so the server honours nothing, acknowledges cheerfully, and the stream is
-   * silent for ever.
+   * This test used to take the ready-made `subscribe_filter` out of a `review_start`
+   * reply and feed it straight to `listen()`. There is no such field any more — no client
+   * we serve can subscribe yet, and advertising it made every reply lead with an
+   * instruction the reader must fail at before finding the interval it actually needed.
    *
-   * The field is fed straight into `listen()` here, with no re-shaping, because a test
-   * that reshapes proves the reshaping rather than the field.
+   * The mechanism is deliberately kept, so the test is too: it now builds the filter the
+   * way a client that CAN subscribe would, and proves the server still honours it. The day
+   * a host gains support, this is the evidence that nothing server-side has rotted while
+   * it was hidden.
    *
-   * THIS TEST CANNOT TELL THE TWO SHAPES APART, and that is stated rather than left for
-   * somebody to discover. In-process both are honoured; over the wire only the unwrapped
-   * one is, and the wrapped one yields an empty honoured filter and a stream that never
-   * delivers. So the `toStrictEqual` on the two fields is the assertion that
-   * discriminates — it fails the moment what we hand out stops agreeing with itself — and
-   * the `listen()` call below is live confirmation, not a guard.
-   *
-   * Recorded because I got the cause wrong twice: first claiming the shape WAS the
-   * problem before checking, then claiming it was NOT after this test honoured both.
-   * Neither was measured. The wire was.
+   * IN-PROCESS THIS CANNOT TELL THE TWO SHAPES APART — over the wire only the unwrapped
+   * one is honoured. Stated rather than left for somebody to rediscover; the wire is what
+   * settled it, twice, after I guessed wrong in both directions.
    */
-  it("hands out a filter that listen() honours, as-is", async () => {
-    // The very object `review_start` and a waiting `review_poll` put in their replies.
-    const handed = subscribeTo("revS") as {
-      subscribe: { method: string; params: { notifications: unknown } };
-      subscribe_filter: { resourceSubscriptions: string[] };
-    };
-    expect(handed.subscribe_filter, "an SDK helper needs the unwrapped shape").toBeDefined();
-    expect(handed.subscribe.params.notifications, "and the raw frame still carries the wrapped one")
-      .toStrictEqual(handed.subscribe_filter);
-
-    const sub = await alice.client.listen(handed.subscribe_filter);
+  it("still honours a subscription a client builds for itself", async () => {
+    const sub = await alice.client.listen({ resourceSubscriptions: [reviewUri("revS")] });
     expect(
       sub.honoredFilter.resourceSubscriptions ?? [],
-      "honoured nothing — the client would wait for ever on an accepted stream",
+      "honoured nothing — a client would wait for ever on an accepted stream",
     ).toContain(reviewUri("revS"));
     await sub.close();
+  });
+
+  /**
+   * AND NOTHING IN A REPLY POINTS AT IT. The hiding is the behaviour under test: the
+   * fields are easy to put back one at a time, and a client that cannot subscribe should
+   * never be told to.
+   */
+  it("offers no subscription hint in a reply", () => {
+    expect(subscribeTo("revS")).toStrictEqual({});
   });
 
   it("negotiates the modern protocol revision at all", () => {

@@ -25,6 +25,7 @@ import { bootstrap } from "../knowledge/bootstrap.ts";
 import type { Store } from "../store/store.ts";
 import { Alerter, CONDITIONS } from "../ops/alerts.ts";
 import { Reviewer, type ReviewerLike } from "../reviewer/opencode.ts";
+import { ServiceUnreachable } from "../core/errors.ts";
 import { runRound } from "../reviewer/review.ts";
 
 export interface WorkerConfig {
@@ -173,6 +174,23 @@ export class Worker {
         this.note(true);
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
+
+        // LORE WENT AWAY MID-ROUND — requeue, do not end the review (D-104).
+        //
+        // "Drop the sessions and restore after restart" only restored half of them. A
+        // round whose job was left `running` is requeued at startup by
+        // `reclaimOrphanedJobs`; a round far enough along to CATCH the error wrote
+        // `failed` and stayed there. A deploy — and then my own crash loop — ended two of
+        // the team's reviews that way, with `socket hang up` and `could not reach
+        // opencode`, and both had to be revived by hand.
+        //
+        // Bounded, because a sidecar that is genuinely down rather than restarting would
+        // otherwise loop for ever. Past the bound it fails like anything else, saying why.
+        if (e instanceof ServiceUnreachable && this.store.requeueJob(job.id, message)) {
+          console.error(`[lore:log] ${job.reviewId}: requeued — lore's own opencode went away mid-round: ${message}`);
+          return;
+        }
+
         this.store.finishJob(job.id, "failed", message);
         // A review that did not run is not a review that found nothing. The state
         // says so, and the client is told so.

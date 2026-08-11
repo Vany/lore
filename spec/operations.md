@@ -354,22 +354,31 @@ Reclamation is therefore a routine duty rather than an error path. What must nev
 happen is an expired review reading as a clean one: `expired` is its own state, never
 `passed`, because a review somebody walked away from told us nothing about the code.
 
-## 6. Deploying without throwing work away (D-72)
+## 6. Deploying drops the rounds in flight and restores them (D-72, revised by D-104)
 
-    make deploy      drain, wait, rebuild, start
-    make drain       drain and wait, nothing else
-    make drain-off   change your mind
+`make deploy` is `make up`. It does NOT drain.
 
-The worker stops **claiming**; everything else keeps working. In-flight rounds run to
-completion, MCP serves normally, and new reviews queue for the next container.
+Draining — stop claiming, wait for every in-flight round, then swap — protected model time:
+an interrupted round is requeued and paid for twice, and one morning that cost 109 minutes
+of t2 work. That cost is real and it is the smaller one. What draining produced in practice
+was a flag that outlived the deploy that set it, three times in one day: a timed-out
+deploy, a backgrounded one that was interrupted, and one nobody watched finish. Each left
+`draining=1` and the service answering `ok: true` while claiming nothing — once for
+thirteen hours, with eight of the team's reviews behind it.
 
-A restart loses no state — it is all in SQLite — but an interrupted round is requeued
-and re-run from scratch, so the cost is model time paid twice. `make drain` names what
-it is waiting for and times out loudly rather than hanging.
+**A queue nobody can see is worse than work that has to run again.**
 
-The drain flag is cleared by the process that starts after it, so a forgotten drain
-cannot leave a service that reports healthy while claiming nothing. `/status` carries
-`draining`, because from outside a drained service and an idle one look the same.
+What restores the dropped rounds:
+
+- `reclaimOrphanedJobs` at startup requeues any job left `running`, and says how many. Its
+  attempts bound stops a round that reliably kills the worker from looping for ever.
+- A round that CATCHES the interruption — `socket hang up`, `could not reach opencode` —
+  is requeued rather than failed (D-104). That half was missing and ended two reviews on
+  the first restart after the policy changed.
+
+`make drain` still exists for a deliberate pause. It is off the deploy path, so a deploy
+that does not finish cannot leave it set.
+
 
 ## 7. Transport
 

@@ -54,6 +54,22 @@ const MAX_SPREAD = 6;
  */
 const FLOOR_MS = 30_000;
 
+/**
+ * The LONGEST interval this will ever suggest.
+ *
+ * Vany: *"if we want to provide a time of polling — it must always be less than 120
+ * seconds."* The measured conditional median is honest about when an ANSWER is likely,
+ * and it is the wrong number to hand a client that can only poll: it told one to come
+ * back in twelve minutes, during which a review can reach `findings_ready`, be answered
+ * by nobody, and sit. A client that returns too early learns nothing and costs a turn; a
+ * client that returns too late leaves the review parked, which is the dominant way
+ * reviews are wasted here.
+ *
+ * So the median is capped rather than replaced: below two minutes the client still gets
+ * the measured number, and above it the wait is bounded whatever the distribution says.
+ */
+const CEILING_MS = 119_000;
+
 export interface Pace {
   /** Milliseconds before anything can plausibly have changed. */
   readonly ms: number;
@@ -131,7 +147,9 @@ export function paceFor(store: Store, tier: string, repoId: string, elapsedMs = 
   // from. Reporting the full sample here was a quiet overstatement: it grew more
   // confident-looking the longer a round ran, while the evidence behind it shrank.
   return {
-    ms: Math.max(FLOOR_MS, at(remaining, 0.5)),
+    // Bounded at both ends: never a busy loop, never a wait long enough to lose the
+    // review. `CEILING_MS` is the harder of the two — see there.
+    ms: Math.min(CEILING_MS, Math.max(FLOOR_MS, at(remaining, 0.5))),
     tier,
     runs: remaining.length,
     sample: all.length,

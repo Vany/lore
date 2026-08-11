@@ -2792,6 +2792,25 @@ export class Store {
     return Number(row?.["c"] ?? 0);
   }
 
+  /**
+   * Put a job back on the queue because LORE went away, not because the round failed.
+   *
+   * Returns false once it has been tried too often: a sidecar that is genuinely down —
+   * rather than restarting — would otherwise requeue for ever, and a review looping
+   * silently is the shape this project refuses above all others. `attempts` is already
+   * incremented on every claim, so the bound is read from evidence rather than tracked.
+   */
+  requeueJob(id: number, why: string, maxAttempts = 3): boolean {
+    const row = this.db.prepare("SELECT attempts FROM job WHERE id = ?").get(id) as
+      | Record<string, number>
+      | undefined;
+    if (Number(row?.["attempts"] ?? 0) >= maxAttempts) return false;
+    this.db
+      .prepare("UPDATE job SET state = 'queued', last_error = ?, updated_at = ? WHERE id = ?")
+      .run(why, now(), id);
+    return true;
+  }
+
   /** Jobs holding a worker right now. `queueDepth`'s counterpart: waiting versus working. */
   jobsRunning(): number {
     const row = this.db.prepare("SELECT COUNT(*) AS c FROM job WHERE state = 'running'").get() as

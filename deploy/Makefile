@@ -185,8 +185,28 @@ drain-off:
 	d.prepare(\"INSERT INTO meta(key,value) VALUES('draining','0') ON CONFLICT(key) DO UPDATE SET value='0'\").run();"
 	@echo "draining off — claiming resumed."
 
-## The deploy you actually want: nothing in flight is thrown away.
-deploy: drain up
+## RESTART NOW; THE ROUNDS IN FLIGHT ARE DROPPED AND RE-RUN.
+##
+## Vany: *"do not queue — just drop sessions and restore after restart."*
+##
+## This used to drain first: stop claiming, wait for every in-flight round to finish, then
+## swap. The argument was model time — an interrupted round is requeued and paid for twice,
+## and one morning that cost 109 minutes of t2 work. It is a real cost and it is the
+## smaller one.
+##
+## What draining actually produced, three times in one day: a flag that outlived the deploy
+## that set it. A timed-out `make deploy`, a backgrounded one that was interrupted, and one
+## I never watched finish — each left `draining=1`, and each time the service answered
+## `ok: true` while claiming nothing. Once for thirteen hours, with eight of the team's
+## reviews stuck behind it. A queue nobody can see is worse than work that has to run again.
+##
+## So: restart, and let `reclaimOrphanedJobs` put the interrupted rounds back on the queue
+## at startup — it already does, it says how many, and the attempts bound stops a round
+## that reliably kills the worker from looping for ever.
+##
+## `make drain` is still here for a deliberate pause. It is no longer on the path of an
+## ordinary deploy, so it can no longer be left set by one that did not finish.
+deploy: up
 
 build: preflight
 	@$(STAMP) $(COMPOSE) --profile build-only build

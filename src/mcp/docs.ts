@@ -56,71 +56,21 @@ change is worse than no link.
 Returns a review_id IMMEDIATELY. The review takes minutes — this does not mean it
 finished.
 
-DO NOT SIT IN A POLLING LOOP. Subscribe instead, and go and do something else.
+POLL IT, ONE CALL AT A TIME, AT THE INTERVAL THE REPLY GIVES YOU.
 
-THE REPLY CARRIES THE CALL, in a \`subscribe\` field, with this review's id already in it
-— send that rather than assembling one from this description. It is repeated on every
-poll that is still waiting, and it is absent once the next move is yours.
+Every reply carries \`check_back_after_ms\` and \`check_back_note\`. That number is measured
+from this repository's own completed rounds and is never more than two minutes, so coming
+back when it says costs you one call and finds the review either finished or genuinely
+still working.
 
-TWO SHAPES, AND THE WRONG ONE FAILS SILENTLY. \`subscribe\` is the raw JSON-RPC frame;
-\`subscribe_filter\` is the same thing unwrapped, and an SDK's listen() helper takes THAT.
-Measured against this service: give listen() the raw params and the acknowledgement comes
-back with an empty honoured filter and no event ever arrives — an open, healthy, useless
-stream. Give it \`subscribe_filter\` and the wake arrives.
-
-You will be woken by \`notifications/resources/updated\` whenever the review's STATE
-changes — and only then. That is the moment there is something for you to do; findings
-being recorded mid-round is not, because you cannot submit until the round ends. Read
-\`lore://review/<review_id>\` to see what changed; it carries the whole audit trail.
-The notification tells you WHEN, that resource tells you WHAT.
-
-THEN POLL ONCE, IMMEDIATELY. A subscription delivers what happens NEXT; there is no
-replay of what already happened. If findings landed in the moment before your stream
-opened — or you subscribed to a review you found in review_inbox, which is already
-sitting in findings_ready — nothing further will ever happen, because the next move is
-yours. Subscribe, poll once, then wait.
-
-If subscriptions/listen is unavailable or errors, THAT IS NORMAL AND NOT A FAULT IN
-LORE: the method needs a 2026-07-28 connection, and SDK clients default to the 2025 one.
-Two failures here look like lore being broken and are not, and both cost real time on
-this repository's own reviews:
-
-  * *"not supported by the negotiated protocol version"* — you have to OPT IN to the
-    newer era, and can usually just do it. On the TypeScript SDK that is
-    \`versionNegotiation: { mode: 'auto' }\` in the client options.
-  * *"request timed out"* a minute or two after a SUCCESSFUL acknowledgement — you sent it
-    as an ordinary request, so your own client's request timeout applies to the whole
-    stream and then cancels the subscription you just opened. Raising the timeout only
-    moves the moment. Use your SDK's subscription call, which resolves on the
-    acknowledgement and holds the stream: on the TypeScript SDK that is
-    \`client.listen(subscribe_filter)\` — the UNWRAPPED shape, see below — and it hands
-    back a handle whose \`closed\`
-    promise tells you WHY a stream ended — \`remote\` means re-listen.
-
-If neither helps, use review_poll — but do not report it as a fault.
-Use review_poll instead — but ONE call at a time, at the interval its own
-\`check_back_note\` gives you. That interval is measured from this repository's actual
-round times; a tight retry loop is the most expensive thing a client can do here.
+DO NOT SLEEP-POLL. One call, then go and do something else, then one more call. A tight
+retry loop is the most expensive thing a client can do here: each attempt is an LLM turn
+spent learning nothing, and the round takes as long as it takes either way.
 
 RE-READ THE INTERVAL EVERY TIME. NEVER REUSE THE LAST ONE. It answers "how much longer
 FROM HERE", so it shrinks as a round ages — a round that has already outlived the
 typical one is not another typical one away from finishing, it is nearly done. Caching
 the first number is how a client waits twice as long as it needed to.
-
-Check the acknowledgement, do not assume. The ack echoes the subscriptions the server
-agreed to serve; if yours is not in it, you are not subscribed and nothing will ever
-arrive on that stream.
-
-AN EMPTY HONOURED FILTER MEANS NOTHING WAS HONOURED — it is never a healthy subscription.
-The commonest cause is passing the raw params to an SDK helper: listen() takes
-subscribe_filter, and a filter whose only key is 'notifications' validates against a
-schema whose fields are all optional, so it is accepted and matches nothing. Compare what
-came back against what you sent.
-
-Subscribe only to review ids YOU started. A subscription to somebody else's is
-accepted and then silent forever — deliberately, because refusing would confirm the id
-is real (D-23). If a stream you expected events on stays quiet, check the id is one of
-yours before concluding anything about lore.
 
 PUSH YOUR BRANCH FIRST. lore reads its own mirror of the remote, not your working
 copy, so a commit that exists only on your disk is not in the review.
@@ -170,14 +120,14 @@ review. A review you did not start is NOT FOUND here, even on a repository you h
 token for, because polling it would take findings its owner has never seen and nothing
 anywhere would say so. review_inbox is how you find what is yours.
 
-USE THIS TO READ, NOT TO WAIT. Subscribe to \`lore://review/<review_id>\` with
-subscriptions/listen and you will be woken when something changes; then call this to
-collect it. CALL IT ONCE RIGHT AFTER SUBSCRIBING TOO — a subscription carries no
-history, so anything that happened before your stream opened is waiting here and
-nothing will announce it. The notification says WHEN, this says WHAT. Calling it in a sleep loop is
-the fallback for a host that cannot subscribe — it works, and it spends your turn
-waiting for something that could have woken you. A host that cannot subscribe is
-common, not broken: the method needs a 2026-07-28 connection.
+USE THIS TO READ AND TO WAIT — one call at a time. \`check_back_after_ms\` says how long
+before anything can plausibly have changed, measured from this repository's completed
+rounds and never more than two minutes. RE-READ IT EVERY TIME: it answers "how much longer
+FROM HERE", so it shrinks as a round ages, and reusing the first number is how a client
+waits twice as long as it needed to.
+
+A tight retry loop is the most expensive thing a client can do here — every attempt is an
+LLM turn that learns nothing, and the round finishes when it finishes.
 
 States: queued, running, findings_ready, awaiting_diff, fast_clean, needs_human,
 passed, passed_partial, failed, expired.
@@ -666,30 +616,21 @@ export const RESOURCE_DOCS: Readonly<Record<string, { title: string; priority: n
     text: `
 0. review_inbox() — FIRST, before starting anything. A review you started in an
    earlier session is still open and still yours; nothing else will finish it, and
-   nobody is going to tell you. A session ends and takes its subscription with it, so
-   asking is the only thing that survives you.
-1. review_start(branch, into, ticket) → review_id
-2. If your host can subscribe, do:
-   subscriptions/listen { notifications: { resourceSubscriptions: ["lore://review/<id>"] } }
-   ^ the RAW JSON-RPC frame. An SDK's listen() helper takes subscribe_filter instead —
-     the same thing unwrapped. Passing it these params yields an empty honoured filter
-     and a stream that never delivers.
-   You are woken by notifications/resources/updated when the review's STATE changes —
-   that is the moment there is something to do, and nothing else wakes you. Check the
-   ack: if your URI is not in the filter the server echoes back, you are NOT subscribed.
-   Most hosts cannot subscribe — the method needs a 2026-07-28 connection — and that is
-   normal, not a fault to report. Without it, step 3 is the whole loop.
-3. review_poll(review_id) ONCE, straight after subscribing — a subscription has no
-   replay, so whatever happened before the stream opened arrives no other way. Then on
-   each wake, review_poll again; it returns only what is new.
-   Not subscribed? Then step 3 is the whole loop: leave, come back when
-   \`check_back_note\` says, and RE-READ IT on every reply — never reuse the last
-   number. It shrinks as the round ages, and caching it doubles your wait.
+   nobody is going to tell you. A session ends and nothing outlives it to finish the
+   job, so asking is the only thing that survives you.
+1. review_start(branch, into, ticket, pull_request) → review_id
+2. review_poll(review_id) — ONE call, then leave. Come back when \`check_back_note\`
+   says: it is measured from this repository's completed rounds and is never more than
+   two minutes.
+   RE-READ IT ON EVERY REPLY. Never reuse the last number — it answers "how much longer
+   FROM HERE", so it shrinks as the round ages, and caching it doubles your wait.
+   Each poll returns only what is NEW. A tight retry loop is the most expensive thing
+   you can do here: every attempt is a turn that learns nothing.
 4. For each finding: fix it, or justify it with // lore-ok[fp]: <reason>
 5. review_submit(review_id, diff, tree_hash) — ONLY while the state is findings_ready
    or awaiting_diff. fast_clean is NOT one of them: the deep round is already queued
    against that worktree, and a submit is refused while a tier is reading it.
-6. Return to 3. Repeat until the state is TERMINAL — \`passed\`, \`passed_partial\`,
+6. Return to 2. Repeat until the state is TERMINAL — \`passed\`, \`passed_partial\`,
    \`needs_human\`, \`failed\`, \`expired\` or \`cancelled\`.
 
 Rules that decide whether this works:
@@ -818,27 +759,18 @@ The loop:
 0. review_inbox() — FIRST. A review from an earlier session is still open and still
    yours, and nothing but this call will tell you.
 1. review_start(branch: "${branch}", into: "${into}", ticket: <paste the ticket, do not summarise>)
-2. If your host can subscribe, do:
-   subscriptions/listen { notifications: { resourceSubscriptions: ["lore://review/<id>"] } }
-   ^ the RAW JSON-RPC frame. An SDK's listen() helper takes subscribe_filter instead —
-     the same thing unwrapped. Passing it these params yields an empty honoured filter
-     and a stream that never delivers.
-   You are woken by notifications/resources/updated when the review's STATE changes —
-   that is the moment there is something to do, and nothing else wakes you. Check the
-   ack: if your URI is not in the filter the server echoes back, you are NOT subscribed.
-   Most hosts cannot subscribe — the method needs a 2026-07-28 connection — and that is
-   normal, not a fault to report. Without it, step 3 is the whole loop.
-3. review_poll(review_id) ONCE, straight after subscribing — a subscription has no
-   replay, so whatever happened before the stream opened arrives no other way. Then on
-   each wake, review_poll again; it returns only what is new.
-   Not subscribed? Then step 3 is the whole loop: leave, come back when
-   \`check_back_note\` says, and RE-READ IT on every reply — never reuse the last
-   number. It shrinks as the round ages, and caching it doubles your wait.
+2. review_poll(review_id) — ONE call, then leave and do something else. Come back when
+   \`check_back_note\` says: measured from this repository's own completed rounds, and
+   never more than two minutes.
+   RE-READ IT ON EVERY REPLY — never reuse the last number. It answers "how much longer
+   FROM HERE", so it shrinks as the round ages, and caching it doubles your wait.
+   Each poll returns only what is NEW. A tight retry loop is the most expensive thing
+   you can do here: every attempt is a turn that learns nothing.
 4. For each finding: fix it, or justify it with // lore-ok[fp]: <reason>
 5. review_submit(review_id, diff, tree_hash) — ONLY while the state is findings_ready
    or awaiting_diff. fast_clean is NOT one of them: the deep round is already queued
    against that worktree, and a submit is refused while a tier is reading it.
-6. Return to 3. Repeat until the state is TERMINAL — \`passed\`, \`passed_partial\`,
+6. Return to 2. Repeat until the state is TERMINAL — \`passed\`, \`passed_partial\`,
    \`needs_human\`, \`failed\`, \`expired\` or \`cancelled\`.
    Only \`passed\` and \`passed_partial\` are worth attesting, and only \`passed\` is clean.
 

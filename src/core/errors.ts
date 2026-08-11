@@ -72,6 +72,39 @@ export class DidNotRun extends LoreError {
  */
 export abstract class TierUnavailable extends LoreError {}
 
+/**
+ * LORE'S OWN SIDECAR WENT AWAY MID-ROUND — not the provider, and not the branch.
+ *
+ * A `DidNotRun`, because nothing read the code. What separates it is who is at fault and
+ * therefore what should happen next: an ordinary failure is the review's ending, and this
+ * one is a restart that the round happened to be in the way of.
+ *
+ * It exists because "drop the sessions and restore after restart" (D-104) only restored
+ * half of them. A round whose job was left `running` is requeued at startup, correctly.
+ * A round far enough along to CATCH the error wrote `failed` instead — so a deploy, or my
+ * own crash loop, ended two of the team's reviews with `socket hang up` and
+ * `could not reach opencode (getaddrinfo)`. Both had to be revived by hand.
+ *
+ * Only for OUR OWN opencode at its configured address. A provider refusing, hanging up, or
+ * timing out is a real failure of that tier and must stay one — mistaking it for
+ * infrastructure would retry somebody else's outage for ever on our quota.
+ */
+export class ServiceUnreachable extends DidNotRun {}
+
+/**
+ * Does this look like our sidecar disappearing rather than a review failing?
+ *
+ * Pattern-matched on the message, which is unpleasant and is the only signal there is:
+ * these arrive as `TypeError: fetch failed` and bare socket errors with nothing structured
+ * to test. Kept narrow deliberately — connection-level faults only, never a status code,
+ * never a timeout, never anything a provider could say.
+ */
+export function looksUnreachable(message: string): boolean {
+  return /ECONNREFUSED|ECONNRESET|EPIPE|getaddrinfo|socket hang up|fetch failed|network socket disconnected/i.test(
+    message,
+  );
+}
+
 /** A tier's provider is out of budget or rate limit. Never a reason to skip it. */
 export class Exhausted extends TierUnavailable {
   /**

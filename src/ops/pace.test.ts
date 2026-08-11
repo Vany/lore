@@ -39,7 +39,10 @@ describe("paceFor", () => {
     const pace = paceFor(store, "t1", REPO);
     expect(pace?.tier).toBe("t1");
     expect(pace?.runs).toBe(40);
-    expect(Math.round((pace?.ms ?? 0) / 1000)).toBeGreaterThan(280);
+    // CAPPED. The measured median here is ~300s; a client that can only poll is never
+    // told to wait more than two minutes (D-103), so this asserts the ceiling rather
+    // than the distribution — the distribution is what `runs` and `sample` report.
+    expect(Math.round((pace?.ms ?? 0) / 1000)).toBe(119);
     expect(Math.round((pace?.ms ?? 0) / 1000)).toBeLessThan(320);
   });
 
@@ -134,7 +137,9 @@ describe("paceFor", () => {
     runs("t1", 30, 1, 3, "failed");
     const pace = paceFor(store, "t1", REPO);
     expect(pace?.runs).toBe(30);
-    expect((pace?.ms ?? 0) / 1000).toBeGreaterThan(280);
+    // Still capped; what this test is about is WHICH runs fed the median, and `runs`
+    // says so — 30, the real ones, not the 30 quota refusals that returned in a second.
+    expect(Math.round((pace?.ms ?? 0) / 1000)).toBe(119);
   });
 
   it("says nothing about a tier that has never run", () => {
@@ -147,15 +152,44 @@ describe("paceFor", () => {
   // same tier wildly different times and were averaged into one answer given to both.
   // `usage.repo_id` was written the whole time; only the read ignored it.
   it("measures the repository it is answering about, not the database", () => {
-    runs("t1", 40, 200, 400);
-    runs("t1", 40, 1500, 1700, "clean", "some-other-repo");
+    // Both distributions kept UNDER the two-minute ceiling, so the two medians are still
+    // telling apart — capped at 119 they would be identical and this test would pass
+    // while measuring nothing.
+    runs("t1", 40, 35, 45);
+    runs("t1", 40, 100, 110, "clean", "some-other-repo");
 
     const mine = paceFor(store, "t1", REPO);
     expect(mine?.runs).toBe(40);
-    expect((mine?.ms ?? 0) / 1000).toBeLessThan(320);
+    expect((mine?.ms ?? 0) / 1000).toBeLessThan(60);
 
     const theirs = paceFor(store, "t1", "some-other-repo");
-    expect((theirs?.ms ?? 0) / 1000).toBeGreaterThan(1500);
+    expect((theirs?.ms ?? 0) / 1000).toBeGreaterThan(90);
+  });
+
+  /**
+   * NEVER MORE THAN TWO MINUTES, whatever the distribution says (D-103).
+   *
+   * Vany: *"if we want to provide a time of polling — it must always be less than 120
+   * seconds."* The measured median is honest about when an ANSWER is likely and is the
+   * wrong number to hand a client that can only poll: t2's is over twelve minutes, and a
+   * client told to come back then leaves a review sitting in `findings_ready` for most of
+   * it. Too early costs one wasted call; too late is how reviews are abandoned.
+   */
+  it("never suggests waiting two minutes or more, however slow the tier is", () => {
+    // A tier that genuinely takes twenty minutes a round.
+    runs("t3", 40, 1100, 1300);
+    const pace = paceFor(store, "t3", REPO);
+    expect(pace?.ms).toBeLessThan(120_000);
+    // And it is still the honest sample size, so the note can say what it rests on.
+    expect(pace?.sample).toBe(40);
+  });
+
+  // The floor is unchanged and still the other half of the bound: a client told to come
+  // back in two seconds is the busy loop the interval replaced.
+  it("still never suggests a busy loop", () => {
+    runs("t1", 40, 200, 400);
+    const pace = paceFor(store, "t1", REPO, 399_000);
+    expect(pace?.ms).toBeGreaterThanOrEqual(30_000);
   });
 
   // A repository below the floor gets NO number rather than another repository's, which

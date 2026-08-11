@@ -26,7 +26,7 @@
 
 import type * as z from "zod";
 import { createOpencodeClient } from "@opencode-ai/sdk";
-import { DidNotRun, Exhausted, ProviderAuthFailed, TierUnavailable, TooLargeForTier } from "../core/errors.ts";
+import { DidNotRun, Exhausted, looksUnreachable, ProviderAuthFailed, ServiceUnreachable, TierUnavailable, TooLargeForTier } from "../core/errors.ts";
 import { FindingSchema, type Finding } from "../core/finding.ts";
 import type { Tier } from "../core/ladder.ts";
 import { Gate, type GateState } from "./gate.ts";
@@ -966,9 +966,9 @@ export class Reviewer implements ReviewerLike {
     const res = await this.client.session
       .create({ body: { title: `lore-${tier.id}-${Date.now()}` } })
       .catch((e: unknown): never => {
-        throw new DidNotRun(
+        throw new ServiceUnreachable(
           `tier ${tier.id} could not reach opencode at ${this.cfg.baseUrl} (${detail(e)})` +
-            " — is a server running there?",
+            " — is a server running there? Nothing about the code was learned; the round is requeued.",
           e,
         );
       });
@@ -1126,6 +1126,17 @@ export class Reviewer implements ReviewerLike {
       // and would leave a failure in the record naming the wrong culprit.
       if (this.aborters.get(sessionId)?.signal.aborted === true || /aborted by lore/.test(message)) {
         throw new DidNotRun(`tier ${tier.id} (${tier.model}) was stopped by lore, not by the provider: ${message}`, e);
+      }
+      // OUR SIDECAR, NOT THE PROVIDER (D-104). A connection-level fault against the
+      // opencode we run ourselves is a restart the round was in the way of, and the worker
+      // requeues it instead of ending the review. A provider hanging up is a real tier
+      // failure and stays one — `looksUnreachable` is deliberately narrow for that reason.
+      if (looksUnreachable(message)) {
+        throw new ServiceUnreachable(
+          `tier ${tier.id} (${tier.model}) lost its connection to lore's own opencode at ` +
+            `${this.cfg.baseUrl}: ${message}. Nothing about the code was learned; the round is requeued.`,
+          e,
+        );
       }
       throw new DidNotRun(`tier ${tier.id} (${tier.model}) failed: ${message}`, e);
     }

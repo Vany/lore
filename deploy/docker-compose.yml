@@ -83,14 +83,21 @@ services:
       # reported as `did not finish`, never as a clean check. Watch for that in
       # `checks_skipped`; if it appears, give Docker Desktop more memory (24 GB makes
       # four concurrent cold installs comfortable) rather than guessing here.
-      LORE_CONCURRENCY: "${LORE_CONCURRENCY:-12}"
+      # LORE_CONCURRENCY IS GONE (D-101). There is no worker pool: a claimed job starts its
+      # round immediately, so nothing sits in `queued` waiting for a loop to free up, and
+      # the only bound is admission — a new review is refused at 128 open.
+      #
+      # The service REFUSES TO START if it is still set, which is how this line was found:
+      # I deleted the variable from the code, left it here, and the container crash-looped
+      # with the service down. A guard that fails loud is only as good as the deployment
+      # it was checked against.
       # LORE_MODEL_CONCURRENCY IS GONE (D-98). It capped model calls in flight and queued
       # the rest, which is real protection — twelve concurrent calls killed four reviews
       # in 2.5 minutes on 2026-08-05 — but what it produced day to day was a round sitting
       # in `queued` with a clock running and nothing able to say whether it was waiting or
       # wedged. A round now launches immediately, and the bound is admission: review_start
       # refuses at 128 open reviews. Concurrent calls are therefore bounded by
-      # LORE_CONCURRENCY above, which is the lever if provider faults return.
+      # the machine itself: rounds start at once and the host is what bounds them.
       #
       # The service REFUSES TO START if this variable is still set, rather than ignoring
       # it: a setting that silently does nothing is decoration a reader believes.

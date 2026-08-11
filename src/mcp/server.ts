@@ -137,64 +137,29 @@ function nextStep(state: ReviewState): string {
 }
 
 /**
- * The subscribe call, ready to send, with the id already in it.
+ * NOTHING ABOUT SUBSCRIPTIONS TRAVELS TO A CLIENT — deliberately, and it is not gone.
  *
- * The docs described the shape with a `<review_id>` placeholder and left the client to
- * assemble it. That is a small tax charged at exactly the wrong moment — the reply that
- * says "go away and wait" is the one a client acts on immediately — and the observed
- * behaviour is that clients skip it and fall into a sleep-poll loop, which is the most
- * expensive thing they can do here. I did it myself, all evening, against this service.
+ * Vany: *"we are keeping our subscription mechanism, but it is not yet ready in the
+ * client — the client can only poll. So we ask the client to poll, and keep the
+ * subscribing model hidden."*
  *
- * So the concrete call travels in the reply, beside the interval. A client that copies
- * one field gets it right; one that reads none of them still has `check_back_after_ms`.
+ * The server still declares `resources: { subscribe: true }`, still honours
+ * `subscriptions/listen`, and still wakes a subscriber on every state change (D-80). What
+ * stopped is ADVERTISING it. Every reply used to carry a ready-made `subscribe` frame, a
+ * `subscribe_filter`, and eight hundred words on why an SDK helper needs the second shape
+ * — advice a client that cannot subscribe must read, fail at, and then work past to find
+ * the interval it actually needed.
+ *
+ * That is worse than silence for a client that polls: the reply's most prominent
+ * instruction is one it cannot follow, and the fallback reads as a consolation. So the
+ * replies now say one thing — poll, at this interval — and the capability waits for a
+ * client that can use it.
+ *
+ * Kept as a function returning nothing so the call sites stay honest: they say WHERE the
+ * subscription hint used to go, and restoring it is one edit rather than an archaeology.
  */
-export function subscribeTo(reviewId: string): object {
-  const filter = { resourceSubscriptions: [`lore://review/${reviewId}`] };
-  return {
-    // The wire-accurate JSON-RPC call, for a client sending raw frames.
-    subscribe: { method: "subscriptions/listen", params: { notifications: filter } },
-    // AND THE FILTER ON ITS OWN, because an SDK helper takes a `SubscriptionFilter` while
-    // the frame above nests it under `notifications`. This is not a convenience: handing
-    // out only the frame is what made every subscription against this service silent for
-    // an evening.
-    //
-    // MEASURED, over the wire, after two wrong guesses about it:
-    //
-    //   * WRONG — `listen()` given the raw frame's params, `{ notifications: { ... } }`:
-    //     the acknowledgement arrives with an EMPTY honoured filter and no event ever
-    //     comes. The stream is open, healthy and useless.
-    //   * RIGHT — `listen()` given `subscribe_filter`, `{ resourceSubscriptions: [...] }`:
-    //     honoured filter echoes the review, and the wake arrives (377s later, on the
-    //     round boundary).
-    //
-    // In-process, `subscribe.test.ts` honours BOTH, so the suite cannot tell them apart
-    // and did not catch this. That is stated there rather than papered over: the test
-    // asserts the two fields agree in SHAPE, which does discriminate, and calls `listen()`
-    // for live confirmation, which does not.
-    subscribe_filter: filter,
-    subscribe_note:
-      "Send this ONCE and stop polling on a timer: you are woken on every STATE change, which is the " +
-      "only moment there is anything for you to do. Then call review_poll ONCE straight away — a " +
-      "subscription carries no history, so anything that happened before your stream opened is waiting " +
-      "and nothing will announce it. CHECK THE ACKNOWLEDGEMENT: if your subscription is not echoed in it, " +
-      "you are not subscribed and nothing will ever arrive. An EMPTY honoured filter is never healthy: " +
-      "the usual cause is giving an SDK's listen() the raw params instead of `subscribe_filter`, which " +
-      "validates against an all-optional schema and matches nothing. Compare what came back with what you " +
-      "sent. " +
-      // The two walls I hit driving this service as a client, neither of which the old
-      // text mentioned. Both produce an error that reads like a fault in lore.
-      "TWO THINGS THAT LOOK LIKE LORE FAILING AND ARE NOT. (1) `subscriptions/listen` needs a 2026-07-28 " +
-      "connection, and SDK clients default to the 2025 one — you usually have to opt in rather than being " +
-      "unable to: on the TypeScript SDK that is `versionNegotiation: { mode: 'auto' }` in the client " +
-      "options, and without it the method is refused as unsupported by the negotiated version. (2) Send it " +
-      "with your SDK's SUBSCRIPTION call, not as an ordinary request: an ordinary request applies your " +
-      "client's request timeout to the whole stream, so the subscription is acknowledged and then cancelled " +
-      "by your own client a minute later, and raising the timeout only moves the moment. On the TypeScript " +
-      "SDK that is `client.listen(...)`, and it takes `subscribe_filter` — `subscribe.params` nests the " +
-      "same thing under `notifications` for a raw frame. The handle's `closed` promise says WHY a stream " +
-      "ended. " +
-      "If it still cannot be established, that is normal — fall back to `check_back_after_ms`.",
-  };
+export function subscribeTo(_reviewId: string): object {
+  return {};
 }
 
 function newReviewId(): string {

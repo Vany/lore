@@ -1822,6 +1822,58 @@ D-77 still holds and nothing skips the ladder. What changes is that batching is 
 DEFAULT rather than a compromise: fix everything found, review it together, push it
 together.
 
+**D-104 — a deploy drops the rounds in flight and restores them; it does not drain.**
+
+Vany: *"do not queue — just drop sessions and restore after restart."*
+
+`make deploy` used to drain: stop claiming, wait for every in-flight round, then swap. The
+argument was model time — an interrupted round is requeued and paid for twice, and one
+morning that cost 109 minutes of t2 work. It is a real cost and it is the smaller one.
+
+**What draining actually produced, three times in one day, was a flag that outlived the
+deploy that set it.** A timed-out `make deploy`, a backgrounded one that was interrupted,
+and one nobody watched finish — each left `draining=1`, and each time the service answered
+`ok: true` while claiming nothing. Once for thirteen hours, with eight of the team's
+reviews stuck behind it. **A queue nobody can see is worse than work that has to run
+again.** `make drain` remains for a deliberate pause; it is off the deploy path, so a
+deploy that does not finish can no longer leave it set.
+
+**And "restore" had a hole that the first restart found.** `reclaimOrphanedJobs` requeues a
+round whose job was left `running` — but a round far enough along to CATCH the error wrote
+`failed` and stayed there. Two of the team's reviews ended that way with `socket hang up`
+and `could not reach opencode (getaddrinfo)`, and both had to be revived by hand.
+
+So a connection-level fault against **lore's own opencode** is now `ServiceUnreachable`,
+and the worker requeues the round instead of ending the review: nothing was learned about
+the code, so nothing is concluded about it. Narrow on purpose — a provider hanging up is a
+real failure of that tier and stays one, because retrying somebody else's outage would
+spend our quota proving it. Bounded on attempts, because a sidecar that is genuinely down
+rather than restarting would otherwise loop in silence.
+
+**D-103 — the client is asked to poll; the subscription is kept and no longer advertised.**
+
+Vany: *"we are keeping our subscription mechanism, but it is not yet ready in the client —
+the client can only poll. So we ask the client to poll, and keep the subscribing model
+hidden."*
+
+The server still declares `resources: { subscribe: true }`, still honours
+`subscriptions/listen`, and still wakes a subscriber on every state change (D-80). What
+stopped is ADVERTISING it. Every reply carried a ready-made `subscribe` frame, a
+`subscribe_filter`, and several hundred words on why an SDK helper needs the second shape —
+so a client that cannot subscribe had to read an instruction it would fail at before
+reaching the interval it actually needed, and the polling advice read as a consolation.
+
+**A suggested interval is now always under two minutes.** The measured conditional median
+is honest about when an ANSWER is likely and is the wrong number to hand a client that can
+only poll: t2's is over twelve minutes, and a client told to come back then leaves a review
+sitting in `findings_ready` for most of it. Coming back early costs one call; coming back
+late is how reviews are abandoned, which is the dominant way they are wasted here. The
+median is capped rather than replaced — under two minutes the client still gets the
+measured number.
+
+`subscribeTo` is kept as a function that returns nothing, so the call sites still say where
+the hint used to go and restoring it is one edit rather than an excavation.
+
 **D-102 — a reused t0 is recorded as reused, never as clean.**
 
 Vany, reading the board: *"why is there a round 2 on t0?"*

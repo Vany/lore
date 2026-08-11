@@ -12,7 +12,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { DidNotRun } from "../core/errors.ts";
+import { DidNotRun, ServiceUnreachable } from "../core/errors.ts";
 import type { ReviewerLike } from "../reviewer/opencode.ts";
 import { Alerter, CONDITIONS, type Alert } from "../ops/alerts.ts";
 import { initialState } from "../core/ladder.ts";
@@ -279,5 +279,122 @@ describe("a store fault does not silently cost the service its capacity", () => 
     expect(a.severity).toBe("page");
     expect(a.detail).toContain("0 loop(s)");
     expect(a.detail).toContain("queue for ever");
+  });
+});
+
+/**
+ * A RESTART IS NOT A VERDICT ABOUT THE CODE (D-104).
+ *
+ * `make deploy` no longer drains — it restarts, and the rounds in flight are dropped and
+ * restored. That restored only half of them. A round whose job was left `running` is
+ * requeued at startup by `reclaimOrphanedJobs`; a round far enough along to CATCH the
+ * error wrote `failed` and stayed there. A deploy, and then a crash loop of my own making,
+ * ended two of the team's reviews that way — `socket hang up` and `could not reach
+ * opencode (getaddrinfo)` — and both had to be revived by hand.
+ *
+ * THE SETUP IS REAL GIT, for the same reason the cancel tests above need it: without a
+ * mirror the round dies in `worktreeFor` and the reviewer is never called at all. The
+ * first version of these tests had no mirror, so one timed out and the other passed on
+ * the wrong error entirely — proving nothing about the branch it was written for.
+ */
+describe("a round interrupted by lore itself is requeued, not failed", () => {
+  let root: string;
+
+  const makeRepo = (dir: string) => {
+    mkdirSync(dir, { recursive: true });
+    const g = (...a: string[]) => execFileSync("git", a, { cwd: dir, stdio: "ignore" });
+    g("init", "-q", "-b", "main");
+    g("config", "user.email", "t@e.com");
+    g("config", "user.name", "t");
+    writeFileSync(join(dir, "a.txt"), "a\n");
+    g("add", "-A");
+    g("commit", "-qm", "x");
+  };
+
+  const mirrored = (id: string) => {
+    const repoId = store.upsertRepo("r", join(root, "src")).id;
+    const src = join(root, "src");
+    makeRepo(src);
+    const bare = join(root, "repos", repoId, "bare.git");
+    mkdirSync(join(bare, ".."), { recursive: true });
+    execFileSync("git", ["clone", "--bare", src, bare], { stdio: "ignore" });
+    writeFileSync(join(bare, "FETCH_HEAD"), "");
+    store.createReview({
+      id, repoId, principal: "p", branch: "main", intoRef: "main",
+      ticket: "t", type: "code-arch", state: "queued", ladder: initialState(),
+    });
+    store.enqueue(id, "fast");
+  };
+
+  const worker = (reviewer: ReviewerLike) =>
+    new Worker(
+      store,
+      { ...DEFAULT_WORKER, pollMs: 5, reposRoot: join(root, "repos") },
+      new Alerter({ timeoutMs: 10 }),
+      reviewer,
+    );
+
+  const ok = () =>
+    Promise.resolve({
+      findings: [], discarded: [], raw: "", inputTokens: 0, cachedTokens: 0,
+      outputTokens: 0, costUsd: 0, latencyMs: 1, retried: false, steps: 1,
+    });
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "lore-restart-"));
+  });
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  it("survives the interruption and finishes on the next attempt", async () => {
+    mirrored("rev1");
+    // The shape of a real restart: the round in flight dies, and the service is back for
+    // the next one. A reviewer that ALWAYS throws would requeue and re-claim within
+    // milliseconds until the bound, which observes nothing about the property.
+    let calls = 0;
+    const stop = worker({
+      review: () => {
+        calls += 1;
+        return calls === 1
+          ? Promise.reject(new ServiceUnreachable("tier t1 could not reach opencode (getaddrinfo ENOTFOUND)"))
+          : ok();
+      },
+    }).start();
+    try {
+      await until("the round to be retried after the interruption", () => calls >= 2);
+    } finally {
+      stop();
+    }
+
+    // Nothing was learned about the code when lore went away, so nothing is concluded.
+    expect(store.stateOf("rev1"), "a restart is not a verdict").not.toBe("failed");
+  });
+
+  /**
+   * BOUNDED. A sidecar that is genuinely down rather than restarting would otherwise
+   * requeue for ever, and a review looping in silence is the shape this project refuses
+   * above all others.
+   */
+  it("gives up after enough attempts and fails honestly", () => {
+    mirrored("rev2");
+    const job = store.claimJob();
+    expect(job).toBeDefined();
+    store.db.prepare("UPDATE job SET attempts = 3 WHERE id = ?").run(job?.id ?? 0);
+
+    expect(store.requeueJob(job?.id ?? 0, "opencode is gone"), "past the bound").toBe(false);
+  });
+
+  // A PROVIDER hanging up is a real failure of that tier and must stay one — retrying
+  // somebody else's outage for ever would spend our quota proving it.
+  it("does not requeue an ordinary tier failure", async () => {
+    mirrored("rev3");
+    const stop = worker({
+      review: () => Promise.reject(new DidNotRun("tier t1 (glm-5) failed: the provider returned 500")),
+    }).start();
+    try {
+      await until("the review to fail", () => store.stateOf("rev3") === "failed");
+    } finally {
+      stop();
+    }
+    expect(store.stateOf("rev3")).toBe("failed");
   });
 });
