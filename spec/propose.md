@@ -195,18 +195,23 @@ records why it did **not** do things stops re-arguing them.
 
 ## 7. Bounds
 
-**It must never starve the gate.** Measured: the largest t2 review sent 203,904 cached
-tokens and hit the 30-minute ceiling, and a whole-repo question has no diff to anchor
-exploration — so a proposer run costs at least that. A `--budget 8` run is eight deep
-sessions, which is enough to empty a rolling subscription window; D-7's argument about
-T1 applies unchanged, since exhausting the window stalls **every review in the system**.
+**It runs beside the gate, bounded by its budget — revised 2026-08-13.** It REFUSED to
+start while any review was queued or running from the day it shipped until Vany, waiting
+on exactly that refusal, overruled it. The rule rested on a measured fear — the largest
+t2 review sent 203,904 cached tokens, a whole-repo question has no diff to anchor
+exploration, and eight such sessions could empty a rolling subscription window, stalling
+**every review in the system**. Two things changed under it. A tier's quota is no longer
+one window: it is a POOL of subscriptions with a fallback chain behind it (D-93), so a
+burst here degrades a review to its next route rather than to nothing. And D-98 removed
+every other queue of this kind on the argument that backpressure belongs at the door,
+where it is visible — a propose run silently waiting for an idle system is exactly the
+invisible wait that decision refused, and on a busy day it would simply never run.
 
 So:
 
-- `propose` **refuses to start while any review is queued or running**, and says which.
-  Reviews are the product; this is inspiration.
 - `--budget` is required and counted in sessions, so the spend is chosen rather than
-  discovered.
+  discovered. It is the ONLY bound on this path, and that is now the whole design: what
+  protects the gate is not a queue but the pools and chains every tier already has.
 - Its calls are counted like a review's, and — since D-98 — **not throttled**: nothing
   stops it bursting past the provider ceiling that killed four reviews in 2.5 minutes.
   `--budget` is what bounds it, and is required for that reason.

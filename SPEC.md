@@ -3045,13 +3045,16 @@ review path.** That separation is exactly what makes it safe to be reckless insi
 The moment an unconstrained idea can reach a `passed`, the one output whose entire
 value is that it can be trusted is contaminated.
 
-And it **must never starve the gate.** Measured before building: our largest t2 review
-sent 203,904 cached tokens and hit the 30-minute ceiling, and a whole-repo question has
-no diff to anchor exploration, so a proposer run is at least that expensive. Four
-proposers and four critics is eight deep sessions — enough to empty a rolling
-subscription window, and D-7's argument about T1 applies unchanged: exhausting the
-window stalls *every review in the system*. So `propose` refuses to start while reviews
-are queued or running, and takes a budget as an argument rather than discovering one.
+And it **runs beside the gate, bounded by its required budget — revised 2026-08-13.**
+It refused to start while any review was queued or running from the day it shipped,
+on a measured fear: our largest t2 review sent 203,904 cached tokens, a whole-repo
+question has no diff to anchor exploration, and eight such sessions could empty a
+rolling subscription window — stalling every review in the system. Vany overruled the
+refusal while waiting on it, and the ground had moved under the fear: a tier's quota is
+a pool of subscriptions with a fallback chain behind it (D-93), so a burst degrades a
+review to its next route rather than to nothing — and D-98 had already removed every
+other invisible wait on the argument that backpressure belongs at the door. On a busy
+day the refusal did not protect the gate; it meant propose simply never ran.
 
 **CLI, not MCP** (D-16). It is run by the maintainer, rarely, and its output is read by
 a person — so it needs no tool description, no client contract and no place in the

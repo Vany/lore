@@ -87,27 +87,21 @@ beforeEach(() => {
   asked = [];
 });
 
-describe("propose refuses to compete with the product", () => {
-  // A proposer session costs what a deep review costs and has no diff to anchor it.
-  // Eight of them empties a rolling window, and an exhausted window stalls EVERY review
-  // in the system. Reviews are the product; this is inspiration.
-  it("will not start while a review is running, and names it", async () => {
+describe("propose runs beside the product", () => {
+  /**
+   * IT USED TO REFUSE while any review was in flight, and does not since 2026-08-13 —
+   * Vany's call, made while waiting on exactly that refusal. The starvation argument the
+   * refusal rested on predates pools and fallback chains (D-93): a burst here now
+   * degrades a review to its next route, not to nothing, and D-98 removed every other
+   * invisible wait on the same reasoning. `--budget` is the bound, and it is required.
+   */
+  it("starts while a review is running", async () => {
     store.createReview({
       id: "rev1", repoId, principal: "alice", branch: "feat/x", intoRef: "main",
       ticket: "t", type: "code-arch", state: "running", ladder: initialState(),
     });
-    await expect(propose({ store, repoId, ask: scripted([[IDEA]]) }, input())).rejects.toThrow(/feat\/x/);
-    expect(asked).toStrictEqual([]);
-  });
-
-  // `fast_clean` looks idle and is not: the deep round is already queued against that
-  // worktree, which is the same trap review_submit's refusal names.
-  it("counts fast_clean as running", async () => {
-    store.createReview({
-      id: "rev1", repoId, principal: "alice", branch: "feat/y", intoRef: "main",
-      ticket: "t", type: "code-arch", state: "fast_clean", ladder: initialState(),
-    });
-    await expect(propose({ store, repoId, ask: scripted([[IDEA]]) }, input())).rejects.toThrow(/refusing to start/);
+    const r = await propose({ store, repoId, ask: scripted([[IDEA], [IDEA]]) }, input());
+    expect(r.sessionsSpent).toBe(2);
   });
 
   it("starts when every review has concluded", async () => {

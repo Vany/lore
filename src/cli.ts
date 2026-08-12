@@ -61,8 +61,8 @@ idea taken goes through the ladder like any other change.
   --lens <a,b,c>     data | failure | seams | greenfield (default: all four)
   --out <dir>        where to write the document (default: proposals/)
 
-It refuses to start while any review is queued or running: reviews are the product and
-this is inspiration.
+It runs even while reviews are in flight — --budget is the only bound, which is why
+the flag is required.
 
 Exit codes: 0 passed · 1 findings · 2 usage · 3 partial (some tiers unpayable)
             70 did not run · 75 no tier could run at all

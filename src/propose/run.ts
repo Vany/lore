@@ -106,18 +106,14 @@ export function criticFor(tiers: readonly Tier[], proposer: Tier, pools: ModelPo
 }
 
 export async function propose(deps: ProposeDeps, input: ProposeInput): Promise<ProposeResult> {
-  // BEFORE ANYTHING IS SPENT. A review already queued is work someone is waiting on;
-  // this is not.
-  const busy = deps.store.reviewsInFlight();
-  if (busy.length > 0) {
-    throw new DidNotRun(
-      `refusing to start: ${String(busy.length)} review(s) are still running — ` +
-        `${busy.map((r) => `${r.id} (${r.branch})`).join(", ")}. ` +
-        "Reviews are the product and this is inspiration; a proposer session costs what a deep review costs " +
-        "and would compete for the same provider window. Wait for them, then run this again.",
-    );
-  }
-
+  // THIS USED TO REFUSE WHILE ANY REVIEW WAS IN FLIGHT, and does not since 2026-08-13 —
+  // Vany's call, made while waiting on exactly that refusal. The rule was written when
+  // one exhausted window stalled every review in the system; since then a tier's quota
+  // is a POOL of subscriptions with a fallback chain behind it (D-93), so a burst here
+  // degrades a review to its next route rather than to nothing — and D-98 already
+  // removed every other queue of this kind on the same argument: backpressure belongs
+  // at the door, not in an invisible wait. What bounds this run is `--budget`, which is
+  // required so the spend is chosen rather than discovered.
   const models = input.tiers.filter((t) => t.kind === "model" && t.model !== undefined);
   const namedProposer = models[models.length - 1];
   if (namedProposer === undefined) throw new DidNotRun("no model tier is configured, so there is nothing to ask");
