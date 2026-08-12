@@ -458,7 +458,37 @@ describe("the service facts above the list", () => {
   it("is empty and honest when nothing is happening", () => {
     const b = board(store);
     expect(b.reviews).toStrictEqual([]);
-    expect(b.queued).toBe(0);
-    expect(b.inFlight).toBe(0);
+  });
+
+  /**
+   * THE STATUS LINE'S ROUTES (D-93): every route the ladder can spend, its parking
+   * state read from the store — hours-to-reset being the only quota fact lore has,
+   * since no provider publishes a percentage (D-84).
+   */
+  it("reports each route the ladder can reach, with its parking", () => {
+    const saved = process.env["LORE_TIERS"];
+    process.env["LORE_TIERS"] = JSON.stringify({
+      models: { "GLM5.2": ["zp1/glm-5.2", "zp2/glm-5.2"] },
+      tiers: [
+        { id: "t0", kind: "deterministic", stage: "fast" },
+        { id: "t1", kind: "model", model: "GLM5.2", stage: "fast", fallback: ["openrouter/z-ai/glm-5.2"] },
+      ],
+    });
+    try {
+      store.markRouteUnavailable("zp2/glm-5.2", "2126-01-01T00:00:00.000Z", "out", 2, false);
+      const b = board(store);
+      const byRoute = new Map(b.providers.map((p) => [p.route, p]));
+      expect([...byRoute.keys()].sort()).toStrictEqual([
+        "openrouter/z-ai/glm-5.2",
+        "zp1/glm-5.2",
+        "zp2/glm-5.2",
+      ]);
+      expect(byRoute.get("zp1/glm-5.2")?.until, "no refusal on record reads as payable").toBeUndefined();
+      expect(byRoute.get("zp2/glm-5.2")?.until).toBe("2126-01-01T00:00:00.000Z");
+      expect(byRoute.get("zp2/glm-5.2")?.stated, "lore's guess is marked as a guess").toBe(false);
+    } finally {
+      if (saved === undefined) delete process.env["LORE_TIERS"];
+      else process.env["LORE_TIERS"] = saved;
+    }
   });
 });

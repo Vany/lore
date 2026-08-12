@@ -17,6 +17,7 @@
  */
 
 import { mayAdmit } from "../core/admission.ts";
+import { fallbackRoutes, loadPools, loadTiers, routesFor } from "../core/ladder.ts";
 import { isTerminal, type ReviewState } from "../core/review-state.ts";
 import type { GateState } from "../reviewer/gate.ts";
 import { spendByTier, startOfDayIso } from "./spend.ts";
@@ -180,8 +181,28 @@ export interface Board {
   readonly build: { readonly commit: string; readonly builtAt: string };
   /** A drained service looks idle from outside, and idle is the opposite fact. */
   readonly draining: boolean;
-  readonly queued: number;
-  readonly inFlight: number;
+  /**
+   * What each route the ladder can spend is believed to cost right now (D-93).
+   *
+   * `queued` and `inFlight` stood here until 2026-08-13 and Vany removed them from the
+   * status line: since D-98 and D-101 nothing queues and nothing pools, so both numbers
+   * were near-constant zero — dead weight in the one line an operator actually reads.
+   * What replaced them is the question that has mattered every day this week: WHICH
+   * SUBSCRIPTION IS OUT, AND WHEN IS IT BACK.
+   *
+   * `until` absent means the route is believed payable — the optimistic default, absent
+   * until a refusal writes otherwise. A quota PERCENTAGE is not knowable from here: no
+   * provider publishes one (D-84), and inventing a number for the dashboard would be the
+   * board's queued-note mistake again — a guess dressed as a reading. Hours-to-reset is
+   * what lore actually knows, so it is what the board shows.
+   */
+  readonly providers: readonly {
+    readonly route: string;
+    /** When the route comes back, absent when it is believed fine. */
+    readonly until?: string;
+    /** True when the PROVIDER named that time; false when it is lore's doubling guess. */
+    readonly stated?: boolean;
+  }[];
   /**
    * How many model calls are out right now.
    *
@@ -260,8 +281,26 @@ export function board(store: Store, now = Date.now(), modelGate?: () => GateStat
       builtAt: process.env["LORE_BUILT_AT"] ?? "unknown",
     },
     draining,
-    queued: store.queueDepth(),
-    inFlight: store.jobsRunning(),
+    providers: (() => {
+      const pools = loadPools();
+      const tiers = loadTiers();
+      // Every concrete route the deployed ladder can reach for: primaries expanded
+      // through their pools, then every fallback entry the same way. Deduped, in config
+      // order, so the line reads stably instead of reshuffling per snapshot.
+      const routes = [
+        ...new Set([
+          ...tiers.flatMap((t) => (t.kind === "model" ? routesFor(t, pools) : [])),
+          ...fallbackRoutes(tiers, pools),
+        ]),
+      ];
+      const nowIso = new Date(now).toISOString();
+      return routes.map((route) => {
+        const mark = store.routeUnavailable(route);
+        return mark !== undefined && mark.until > nowIso
+          ? { route, until: mark.until, stated: mark.stated }
+          : { route };
+      });
+    })(),
     modelCalls: modelGate === undefined ? undefined : modelGate(),
     openReviews: (() => { const a = mayAdmit(store.openReviewCount()); return { open: a.open, limit: a.limit }; })(),
     reviewsNotShown: Math.max(0, store.boardReviewCount(since) - reviews.length),

@@ -130,6 +130,9 @@ export const BOARD_PAGE = `<!doctype html>
   .banner.ok { background: #16301f; color: #7fd6a0; }
 
   .s-running, .s-queued { color: var(--blue); }
+  .prov { margin-right: 10px; white-space: nowrap; }
+  .prov.p-ok b { color: var(--green); font-weight: 600; }
+  .prov.p-out b { color: var(--yellow); font-weight: 600; }
   .s-findings_ready, .s-awaiting_diff { color: var(--yellow); }
   .s-needs_human { color: var(--mag); }
   .s-passed { color: var(--green); }
@@ -144,8 +147,7 @@ export const BOARD_PAGE = `<!doctype html>
 <header>
   <h1>lore</h1>
   <span><span class="k">build</span><span id="build" class="dim">—</span></span>
-  <span><span class="k">queued</span><span id="queued">—</span></span>
-  <span><span class="k">in flight</span><span id="inflight">—</span></span>
+  <span id="providers"></span>
   <span><span class="k">model calls</span><span id="calls">—</span></span>
   <span><span class="k">open</span><span id="open">—</span></span>
   <span><span class="k">spend today</span><span id="spend">—</span></span>
@@ -207,9 +209,30 @@ function esc(s) {
 
 function render(b) {
   document.getElementById("build").textContent = b.build.commit;
-  document.getElementById("queued").textContent = b.queued;
-  document.getElementById("inflight").textContent = b.inFlight;
   document.getElementById("spend").textContent = "$" + b.spendTodayUsd.toFixed(2);
+  // ONE CHIP PER ROUTE THE LADDER CAN SPEND. "ok" is the optimistic default and means
+  // only "no refusal is on record" - a quota PERCENTAGE is not knowable from here, no
+  // provider publishes one (D-84), so hours-to-reset is shown instead of a made-up
+  // gauge. A tilde marks lore's own doubling guess; its absence marks a time the
+  // provider itself named. Routes sharing a provider get the model appended so two
+  // z.ai plans and three openrouter twins stay tellable apart.
+  const provs = b.providers || [];
+  const perProvider = {};
+  provs.forEach((p) => { const k = p.route.split("/")[0]; perProvider[k] = (perProvider[k] || 0) + 1; });
+  document.getElementById("providers").innerHTML = provs.map((p) => {
+    const provider = p.route.split("/")[0];
+    const label = perProvider[provider] > 1 ? provider + "\u00b7" + p.route.split("/").pop() : provider;
+    let state = "ok";
+    let cls = "p-ok";
+    if (p.until) {
+      const ms = Date.parse(p.until) - Date.now();
+      const disp = ms <= 0 ? "now" : ms < 3600000 ? Math.ceil(ms / 60000) + "m" : Math.round(ms / 3600000) + "h";
+      state = (p.stated ? "" : "~") + disp;
+      cls = "p-out";
+    }
+    return '<span class="prov ' + cls + '" title="' + esc(p.route) + (p.until ? " \u2014 back " + esc(p.until) : "") + '">'
+      + esc(label) + ' <b>' + esc(state) + "</b></span>";
+  }).join("");
   // WHAT EVERY QUEUED REVIEW IS WAITING FOR. Rounds hold a worker while they wait here,
   // so a saturated gate is why nothing else starts — and without this line the board said
   // "queued 3" and left the reader to guess. A dash for a build with no gate: absent is

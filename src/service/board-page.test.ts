@@ -100,8 +100,7 @@ const snapshot = (over: Record<string, unknown> = {}) => ({
   at: new Date().toISOString(),
   build: { commit: "abc1234", builtAt: new Date().toISOString() },
   draining: false,
-  queued: 0,
-  inFlight: 0,
+  providers: [{ route: "zai-coding-plan/glm-5.2" }],
   modelCalls: { inFlight: 2 },
   openReviews: { open: 3, limit: 128 },
   spendTodayUsd: 1.5,
@@ -171,8 +170,8 @@ describe("the board's own script runs", () => {
   it("renders repeatedly, as a live board does", () => {
     const { render } = loadPage();
     render(snapshot());
-    render(snapshot({ queued: 4 }));
-    expect(() => render(snapshot({ queued: 9 }))).not.toThrow();
+    render(snapshot({ spendTodayUsd: 4 }));
+    expect(() => render(snapshot({ spendTodayUsd: 9 }))).not.toThrow();
   });
 
   it("renders the states that have their own shapes", () => {
@@ -236,10 +235,55 @@ describe("the board's own script runs", () => {
 
   it("puts the numbers it was given into the header", () => {
     const { render, byId } = loadPage();
-    render(snapshot({ queued: 6, inFlight: 2, spendTodayUsd: 12.5 }));
-    expect(byId.get("queued")?.["textContent"]).toBe(6);
+    render(snapshot({ spendTodayUsd: 12.5 }));
     expect(byId.get("spend")?.["textContent"]).toBe("$12.50");
     expect(byId.get("open")?.["textContent"]).toBe("3/128");
     expect(byId.get("build")?.["textContent"]).toBe("abc1234");
+  });
+
+  /**
+   * THE STATUS LINE ANSWERS "WHICH SUBSCRIPTION IS OUT, AND WHEN IS IT BACK" (D-93).
+   *
+   * Vany removed `queued` and `in flight` — near-constant zeros since D-98/D-101 — and
+   * asked for per-provider quota instead. A PERCENTAGE is not knowable (no provider
+   * publishes one, D-84), so the chips show hours-to-reset, tilde-marked when the time
+   * is lore's own doubling guess rather than the provider's word.
+   */
+  it("shows a chip per route: ok when believed payable, hours when parked", () => {
+    const { render, byId } = loadPage();
+    const in5h = new Date(Date.now() + 5 * 3600000).toISOString();
+    render(
+      snapshot({
+        providers: [
+          { route: "zai-coding-plan/glm-5.2" },
+          { route: "kimi-for-coding/k3", until: in5h, stated: false },
+        ],
+      }),
+    );
+    const html = String(byId.get("providers")?.["innerHTML"] ?? "");
+    expect(html).toContain("zai-coding-plan");
+    expect(html).toContain(">ok<");
+    expect(html, "a guessed reset carries the tilde").toContain(">~5h<");
+    expect(html).toContain("kimi-for-coding");
+  });
+
+  it("tells two plans of one provider apart, and the header survives no providers at all", () => {
+    const { render, byId } = loadPage();
+    render(
+      snapshot({
+        providers: [
+          { route: "zai-coding-plan/glm-5.2" },
+          { route: "zai-coding-plan2/glm-5.2" },
+          { route: "openrouter/z-ai/glm-5.2" },
+          { route: "openrouter/moonshotai/kimi-k3" },
+        ],
+      }),
+    );
+    const html = String(byId.get("providers")?.["innerHTML"] ?? "");
+    // openrouter carries two twins here, so each chip names its model too.
+    expect(html).toContain("openrouter\u00b7glm-5.2".replace("\\u00b7", "\u00b7"));
+    expect(html).toContain("openrouter\u00b7kimi-k3".replace("\\u00b7", "\u00b7"));
+
+    expect(() => render(snapshot({ providers: undefined }))).not.toThrow();
   });
 });
