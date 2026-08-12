@@ -42,7 +42,7 @@ import { ingestDocs } from "../knowledge/ingest.ts";
 import { runT0, renderT0 } from "../t0/runner.ts";
 import { engineRuleClass } from "../t0/engines.ts";
 import type { RecordedFinding, Store } from "../store/store.ts";
-import type { ReviewerLike } from "./opencode.ts";
+import type { ReviewerLike, ReviewerResult } from "./opencode.ts";
 import { continuedPrompt, reviewPrompt } from "./prompts.ts";
 
 export interface RoundInput {
@@ -764,13 +764,18 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       // through any provider — retrying those would spend metered money to buy the same
       // failure. Quota is the one fault that is about the ROUTE rather than the model.
       //
-      // ONCE. No fallback for the fallback: if the metered provider refuses too, the
-      // ladder's own answer (skip, promote, say so) is the right one, and a chain of
-      // retries is how a bounded cost becomes an unbounded one.
-      if (!(e instanceof Exhausted) || tier.fallback === undefined) throw e;
-      console.error(
-        `[lore:log] ${reviewId}: ${tier.id} (${tier.model ?? "?"}) is out of quota — asking ${tier.fallback} instead`,
-      );
+      // IN ORDER, AND ONLY EVER ADVANCED BY QUOTA. This was a single fallback with the
+      // note "no fallback for the fallback… a chain of retries is how a bounded cost
+      // becomes an unbounded one". That objection is about retrying the same route; it
+      // does not reach a SECOND route named in the config. On 2026-08-11 the difference
+      // stopped being theoretical: OpenRouter ran to zero — $5165.00 granted against
+      // $5165.04 used — so the one twin every deep tier had was as out as the plan it was
+      // covering for, and t2 went `unpayable` with a fallback configured and tried.
+      //
+      // Bounded by the list, which is short, explicit, and only stepped along when a
+      // provider says QUOTA. Any other failure stops the walk, for the reason below.
+      const chain = tier.fallback ?? [];
+      if (!(e instanceof Exhausted) || chain.length === 0) throw e;
       // HELD, not written yet. `closeTierRun` OVERWRITES `unavailable`, so a note
       // recorded here would be erased by the success path a few lines below — which is
       // exactly what happened, and the test caught it. It travels with the close instead.
@@ -778,7 +783,8 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       // The tier RAN, so this is not `checks_skipped`'s usual "you got less than you
       // think" — but which provider answered is a fact about the review, and this one
       // costs money.
-      fellBackTo = tier.fallback;
+      // SET ON SUCCESS, below — with a chain there is no single answer to "which provider
+      // answered" until one has.
       // WHAT THE PROVIDER SAID, RECORDED EVEN THOUGH THIS ROUND SUCCEEDS.
       //
       // The `markTierUnavailable` write lives in the OUTER catch, which a successful
@@ -800,81 +806,108 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       }
       // A FALLBACK MAY ONLY IMPROVE THE OUTCOME, NEVER WORSEN IT.
       //
-      // Unguarded, this call's own failure escaped as itself — and a twin that HANGS, or
+      // Unguarded, a twin's own failure escaped as itself — and a twin that HANGS, or
       // returns an unusable reply after its retry, throws `DidNotRun`, which the outer
       // catch rethrows and which fails the whole review. Without a fallback configured the
       // primary's `Exhausted` alone would have been stepped over with the verdict intact
       // (D-48, D-88). So configuring one made things strictly worse in precisely the
       // outage window it was bought for.
       //
-      // Whatever the twin does, the fact the ladder has to act on is unchanged: this
+      // Whatever the twins do, the fact the ladder has to act on is unchanged: this
       // tier's own provider is out. So the ORIGINAL `Exhausted` is what leaves here, and
       // the ladder does exactly what it would have done had no fallback existed.
-      try {
-        result = await input.reviewer.review(
-          { ...tier, model: tier.fallback },
-          prompt,
-          worktree,
-          reviewId,
-          stillWanted,
-        );
-      } catch (twin) {
-        // A CANCEL IS NOT A PROVIDER FAULT, and must not be laundered into one.
-        //
-        // "Never worse than no fallback" is a rule about the PROVIDER failing. When a
-        // cancel lands while the twin is in flight — or queued at the gate — the twin
-        // throws because the review ended, and rethrowing the primary's `Exhausted`
-        // instead sent that through D-48's step-over, which writes the ladder's state
-        // over the `cancelled` the client was just told it got. The review came back to
-        // life and the worker enqueued its next round.
-        if (!stillWanted()) throw twin;
+      const refused: string[] = [];
+      // The answer AND the route that gave it, in one binding: the two are a single fact,
+      // and holding them apart is what left the compiler unable to prove that a chain
+      // which did not throw had produced a result.
+      let answered: { readonly model: string; readonly result: ReviewerResult } | undefined;
+      for (const twinModel of chain) {
         console.error(
-          `[lore:log] ${reviewId}: the fallback ${tier.fallback} failed too — ` +
-            `${twin instanceof Error ? twin.message : String(twin)}`,
+          `[lore:log] ${reviewId}: ${tier.id} (${tier.model ?? "?"}) is out of quota — asking ${twinModel} instead`,
         );
-        // WHAT THE TWIN SPENT BEFORE IT DIED, recorded against the twin.
-        //
-        // The outer catch recovers spend from the error it receives — and this path
-        // rethrows the PRIMARY's `Exhausted`, whose session spent nothing, so the twin's
-        // tokens were dropped entirely. The twin is the metered one: a failed fallback
-        // burned real money that no `usage` row recorded, which left the round-boundary
-        // ceiling blind to exactly the runaway shape it is the only guard against.
-        const twinSpent = (twin as { spent?: { input: number; cached: number; output: number; cost: number } }).spent;
-        if (twinSpent !== undefined) {
-          store.recordUsage({
-            repoId: review.repoId,
-            reviewId,
-            tier: tier.id,
-            model: tier.fallback,
-            inputTokens: twinSpent.input,
-            cachedTokens: twinSpent.cached,
-            outputTokens: twinSpent.output,
-            // WHAT THE PROVIDER SAID IT COST. Recorded as a hard zero, this row could not
-            // move the ceiling that sums `cost_usd` — so the guard stayed blind to the
-            // metered spend the row exists to expose.
-            costUsd: twinSpent.cost,
-            outcome: "failed",
-          });
+        try {
+          answered = {
+            model: twinModel,
+            result: await input.reviewer.review({ ...tier, model: twinModel }, prompt, worktree, reviewId, stillWanted),
+          };
+          break;
+        } catch (twin) {
+          // A CANCEL IS NOT A PROVIDER FAULT, and must not be laundered into one.
+          //
+          // "Never worse than no fallback" is a rule about the PROVIDER failing. When a
+          // cancel lands while a twin is in flight — or queued at the gate — the twin
+          // throws because the review ended, and rethrowing the primary's `Exhausted`
+          // instead sent that through D-48's step-over, which writes the ladder's state
+          // over the `cancelled` the client was just told it got. The review came back to
+          // life and the worker enqueued its next round.
+          if (!stillWanted()) throw twin;
+          const why = twin instanceof Error ? twin.message : String(twin);
+          console.error(`[lore:log] ${reviewId}: the fallback ${twinModel} failed too — ${why}`);
+          refused.push(`${twinModel}: ${why}`);
+
+          // WHAT THIS TWIN SPENT BEFORE IT DIED, recorded against the model that spent it.
+          //
+          // The outer catch recovers spend from the error it receives — and this path
+          // rethrows the PRIMARY's `Exhausted`, whose session spent nothing, so a twin's
+          // tokens were dropped entirely. The twins are the metered ones: a failed
+          // fallback burned real money that no `usage` row recorded, which left the
+          // round-boundary ceiling blind to exactly the runaway shape it is the only
+          // guard against.
+          const twinSpent = (twin as { spent?: { input: number; cached: number; output: number; cost: number } }).spent;
+          if (twinSpent !== undefined) {
+            store.recordUsage({
+              repoId: review.repoId,
+              reviewId,
+              tier: tier.id,
+              model: twinModel,
+              inputTokens: twinSpent.input,
+              cachedTokens: twinSpent.cached,
+              outputTokens: twinSpent.output,
+              // WHAT THE PROVIDER SAID IT COST. Recorded as a hard zero, this row could
+              // not move the ceiling that sums `cost_usd` — so the guard stayed blind to
+              // the metered spend the row exists to expose.
+              costUsd: twinSpent.cost,
+              outcome: "failed",
+            });
+          }
+
+          // ONWARD ONLY ON QUOTA. The next entry is a different subscription, so "this
+          // route is out of money" is a reason to try it and nothing else is: a bad reply
+          // or a diff too large for the window will repeat wherever the model is asked,
+          // and walking the chain for those would spend a second provider's money buying
+          // the same failure. Same narrow reading that governs the first hop.
+          if (!(twin instanceof Exhausted)) break;
         }
-        fellBackTo = undefined;
-        // NAME THE TWIN'S FAILURE TOO (D-105).
+      }
+
+      if (answered === undefined) {
+        // NAME EVERY ROUTE THAT REFUSED (D-105).
         //
-        // This rethrew the PRIMARY's error alone, so the notice a reader gets says
-        // "tier t2 (kimi-for-coding/k3) refused on quota" and stops — with a fallback
+        // This rethrew the PRIMARY's error alone, so the notice a reader gets said
+        // "tier t2 (kimi-for-coding/k3) refused on quota" and stopped — with a fallback
         // configured, running, and having just failed for its own reason. Vany read
         // exactly that and asked the obvious question: *"but there is a fallback to
         // openrouter!"* There was, it was tried, and the OpenRouter account had run to
         // zero — $5165.00 granted against $5165.04 used. Nothing in the record said so.
         //
-        // A tier is `unpayable` only when BOTH are, so the notice must say both. The
-        // primary's message stays first because it is the ordinary case; the twin's is
-        // appended because when it is present it is the one nobody expects.
+        // A tier is `unpayable` only when EVERY route is, so the notice must account for
+        // every one. The primary's message stays first because it is the ordinary case;
+        // the rest follow because when they are present they are what nobody expects.
         throw new Exhausted(
-          `${e.message} — and its fallback ${tier.fallback} could not run either: ` +
-            `${twin instanceof Error ? twin.message : String(twin)}`,
+          `${e.message} — and ${refused.length === 1 ? "its fallback" : `all ${String(refused.length)} of its fallbacks`} ` +
+            `could not run either: ${refused.join("; ")}`,
           e.resetAt,
         );
       }
+      result = answered.result;
+      // HELD, not written yet. `closeTierRun` OVERWRITES `unavailable`, so a note recorded
+      // here would be erased by the success path below — which is exactly what happened,
+      // and the test caught it. It travels with the close instead.
+      //
+      // The tier RAN, so this is not `checks_skipped`'s usual "you got less than you
+      // think" — but which provider answered is a fact about the review, and on this path
+      // it is the one that costs money.
+      fellBackTo = answered.model;
     }
     // Closed with what this tier FOUND, in the same words T0 uses (line 99). The
     // column answers one question — what did this tier do — and `answered` did not

@@ -478,6 +478,38 @@ describe("a tier that keeps its session", () => {
     expect(creates(), "a released review starts over").toHaveLength(2);
   });
 
+  /**
+   * THE PATH THAT LEAKS IF NOBODY SAYS SO. `review_cancel` on a review sitting in
+   * `findings_ready` runs with NO job in flight, so the worker's release never fires —
+   * and `cancel` used to return early in exactly that case, which is the one that leaks.
+   */
+  it("ends its sessions on a cancel, even with nothing in flight", async () => {
+    replies = [reply(), reply()];
+    const r = reviewer();
+    await r.review(KEEPS, { initial: "A", continued: "B" }, "/tmp/wt", "rev1");
+
+    // Nothing is running now — the round finished — so this is the leaking shape.
+    expect(await r.cancel("rev1"), "nothing was in flight to abort").toBe(false);
+    expect(captured.some((c) => c.method === "DELETE"), "and the session still went").toBe(true);
+
+    await r.review(KEEPS, { initial: "A", continued: "B" }, "/tmp/wt", "rev1");
+    expect(creates(), "a cancelled review starts over").toHaveLength(2);
+  });
+
+  it("reports which reviews still hold one, for the worker's reconcile", async () => {
+    replies = [reply(), reply()];
+    const r = reviewer();
+    expect(r.keptReviews()).toStrictEqual([]);
+
+    await r.review(KEEPS, { initial: "A", continued: "B" }, "/tmp/wt", "rev1");
+    await r.review({ ...KEEPS, id: "t2" }, { initial: "A", continued: "B" }, "/tmp/wt", "rev1");
+    // Two sessions, ONE review: the reconcile asks about reviews, not sessions.
+    expect(r.keptReviews()).toStrictEqual(["rev1"]);
+
+    await r.release("rev1");
+    expect(r.keptReviews()).toStrictEqual([]);
+  });
+
   it("releases only the review it was asked about", async () => {
     replies = [reply(), reply(), reply()];
     const r = reviewer();

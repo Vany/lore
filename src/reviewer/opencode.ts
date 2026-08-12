@@ -169,6 +169,8 @@ export interface ReviewerLike {
    * one, and 128 admitted reviews across three tiers is 384 sessions if nothing does.
    */
   release?(reviewId: string): Promise<void>;
+  /** Reviews still holding a kept session, so the worker can end the orphans (D-80). */
+  keptReviews?(): readonly string[];
   /**
    * Ask a tier for something that is not findings — a knowledge screen, a proposal.
    *
@@ -370,14 +372,6 @@ export class Reviewer implements ReviewerLike {
   }
 
   /**
-   * Run one tier against one prompt.
-   *
-   * A fresh session per tier run, not a pool. opencode sessions are single-flight,
-   * and the predecessor's pool existed to work around a global lock that no longer
-   * exists (INV-5, INV-6) — reviews are already parallel because each has its own
-   * worktree, so sharing sessions would only reintroduce contention.
-   */
-  /**
    * Stop whatever this review has in flight, and stop paying for it.
    *
    * ABANDONING A CALL DOES NOT STOP THE MODEL. Measured on this deployment: three t2
@@ -456,6 +450,18 @@ export class Reviewer implements ReviewerLike {
   }
 
   async cancel(reviewId: string): Promise<boolean> {
+    // KEPT SESSIONS GO TOO, and this is the path that would otherwise leak them (D-80).
+    //
+    // `review_cancel` is terminal, but it does not come through the worker unless a round
+    // happened to be in flight — a review sitting in `findings_ready` is cancelled with no
+    // job running, so `releaseIfFinished` never fires and the sessions this review opened
+    // would live in opencode until opencode itself restarted. The early `return false`
+    // below made it worse: the one case that leaks is exactly the one that returned first.
+    //
+    // Before the abort, because the release is what must not be skipped: the abort below
+    // can find nothing and return, and this still has to have happened.
+    await this.release(reviewId);
+
     const sessionId = this.sessions.get(reviewId);
     if (sessionId === undefined) return false;
     await this.abort(sessionId);
@@ -484,6 +490,24 @@ export class Reviewer implements ReviewerLike {
     });
   }
 
+  /**
+   * Run one tier against one prompt.
+   *
+   * **One session per tier RUN, or per (review, tier) when the tier keeps it (D-80).**
+   * It was a fresh session every round until 2026-08-12, and the sentence that used to
+   * stand here — "a fresh session per tier run, not a pool" — was the load-bearing claim:
+   * never a pool. That part is unchanged and is what matters. opencode sessions are
+   * single-flight, and the predecessor's pool existed to work around a global lock that no
+   * longer exists (INV-5, INV-6) — reviews are already parallel because each has its own
+   * worktree, so SHARING a session between reviews would only reintroduce contention.
+   *
+   * What `conversation` adds is continuity along one review's own rounds, and those are
+   * sequential by CONSTRUCTION rather than by convention: `claimJob` will not claim a job
+   * whose review already has one running — `NOT EXISTS (… r.review_id = j.review_id AND
+   * r.state = 'running')`, inside the claiming transaction. So a kept session is only ever
+   * spoken to by one round at a time, which is the property opencode's single-flight
+   * sessions need and the reason this is not a pool by another name.
+   */
   async review(
     tier: Tier,
     prompt: Prompt,
@@ -796,6 +820,16 @@ export class Reviewer implements ReviewerLike {
       return used > 0 ? used : undefined;
     }
     return undefined;
+  }
+
+  /**
+   * Which reviews still hold a kept session, for the reconcile that ends the orphans.
+   *
+   * The map is keyed `<reviewId>:<tierId>` and split on the LAST colon, matching what
+   * `release` prefixes on, so the two cannot disagree about where the id ends.
+   */
+  keptReviews(): readonly string[] {
+    return [...new Set([...this.kept.keys()].map((k) => k.slice(0, k.lastIndexOf(":"))))];
   }
 
   /**

@@ -5,6 +5,54 @@ surprised me.
 
 ---
 
+## 2026-08-12 — session 54b: disk stops being lore's business, and a fallback becomes a list
+
+**Disk watching is gone entirely.** The host-percentage alerts went on 2026-08-06 (D-71);
+what replaced them was a budget on lore's OWN footprint, and Vany removed that too: *"it
+is not lore's responsibility."* He is right in the place I would have argued: lore's
+growth being lore's fault does not make the alert lore's to raise. Sizing this machine and
+acting on it belong to whoever owns it, and what the check actually produced was a ticket
+on every beat for a threshold nobody had agreed to — in the channel that is supposed to
+carry real faults. What bounds the growth is the retention sweep, which is not an alert.
+
+Two things worth keeping from the removal. The measurement had already caused an outage —
+one `readdir` plus a `stat` per file over 374,457 files across a Docker Desktop bind mount,
+inside `checkHealth`, so the thing that watches was blocked by the size of the thing it
+watched. And two heartbeat tests used the footprint ticket as a BARRIER: proof the beat had
+actually run, so that "no page arrived" was a claim about behaviour rather than about the
+clock. That pattern had to survive the deletion, and it did — the barrier is now a queue
+ticket forced with `queueWarnDepth: 0`.
+
+**A fallback is now a list, tried in order.** Vany: *"let's use an array for fallback in
+config; let's fall back on t2 and t3 to openrouter, and then, if there is no quota, to
+zai-coding-plan/glm."* The reason is the day it was asked: OpenRouter had run to zero —
+$5165.00 granted against $5165.04 used — so every deep tier's single twin was as out as
+the subscription it covered for, and t2 was `unpayable` with a fallback configured and
+tried. One metered account is a single point of failure for every tier at once.
+
+**The second entry changes what a fallback means.** The first is still the same model by
+another route; the last resort is a DIFFERENT model on a plan that is still paying. That is
+a weaker substitute and the right one — a different model still reads the code, where a
+tier that cannot run reads nothing. What it costs is vendor accounting: `soleVendorOf`
+reads the CONFIGURED model, so a t2 answered by z.ai while t1 runs on z.ai is two vendors
+wearing three names. Recorded as `[OPEN]` in D-93 rather than fixed, because it belongs to
+attestation.
+
+**I made the exact mistake the guard now refuses**, within minutes of adding the feature: a
+tier whose primary is the z.ai plan got a last resort on the z.ai plan. The chain is only
+ever walked because a provider said QUOTA, so that entry could only refuse again — a real
+call spent buying a certainty, in the outage the list was written for. `loadTiers` refuses
+it now rather than filtering it, because silently dropping an entry leaves an operator
+believing in spare capacity lore has quietly decided not to use.
+
+**Model ids were read from `/config/providers` on the running opencode, not from memory** —
+which needed the basic-auth credentials from the container's own environment. `zai-coding-plan`
+carries `glm-5.2`, `glm-5.2-highspeed`, `glm-4.7`, `glm-5-turbo`; the flagship is the last
+resort, not `glm-5-turbo`, because that is t1's model and a deep tier answered by the fast
+tier's model is one opinion asked twice.
+
+---
+
 ## 2026-08-12 — session 54: the model stops being restarted between rounds
 
 D-80's session half, built to Vany's design after the research session priced it: *"the
@@ -51,6 +99,26 @@ found only by deploying it.
 absorbed silently — a `throw` inside `.then` lands in the `.catch` chained after it — so
 the compaction-failure test looked covered while proving nothing. The mutation that
 escapes the promise chain is the one that counts.
+
+**Two session leaks, found by asking who else ends a review.** The design note put
+"sessions are released when the review ends" first among the things to get right, and I
+wired it to the worker — which only runs when a JOB finishes. `review_cancel` on a review
+sitting in `findings_ready` has no job in flight, and `Reviewer.cancel` returned early in
+exactly that case: the one path that leaks was the one that returned first. The retention
+sweep marks abandoned reviews `expired` in SQL and nothing there could know about a model
+session. Fixed as one immediate release in `cancel` and a RECONCILE on the worker's idle
+ticks — written as a reconcile on purpose, because every existing way a review can end
+predates the session map and the next one nobody thinks of gets collected too.
+
+**And I got the submit ORDER wrong again — fourth time.** The fix for the leak went in one
+submit and the `lore-ok` explaining that the cause was fixed ELSEWHERE went in the next.
+`will_not_settle` told me immediately: the finding names `releaseIfFinished`, that method
+is correct and did not move, so a tier that stops raising it has changed its mind rather
+than been satisfied. By then the round had already started and D-55 refused the second
+submit — so the acknowledgement waits for `findings_ready` and the deep tier pays for a
+round it did not need to run. **The rule, stated plainly because remembering it has not
+worked: when a finding is fixed somewhere other than where it was raised, the `lore-ok`
+goes in the SAME submit as the fix.** It is not a follow-up; it is half the answer.
 
 **Found on the way, both pre-existing, both recorded rather than bundled:** a round
 finishing after the store closes writes into a closed handle (`ERR_INVALID_STATE`,

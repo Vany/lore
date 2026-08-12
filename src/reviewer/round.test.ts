@@ -1417,10 +1417,98 @@ describe("falling back to a metered twin", () => {
     }
   }
 
-  const withFallback = (fallback: string) => ({
+  const withFallback = (...fallback: string[]) => ({
     ...CODE_ARCH,
     t0: [] as const,
     tiers: CODE_ARCH.tiers.map((t) => (t.id === "t1" ? { ...t, fallback } : t)),
+  });
+
+  /**
+   * THE CHAIN, WALKED IN ORDER (D-93, extended 2026-08-12).
+   *
+   * Vany: *"let's fall back on t2 and t3 to openrouter, and then, if there is no quota, to
+   * zai-coding-plan/glm."* One fallback stopped being enough the day OpenRouter ran to
+   * zero — $5165.00 granted against $5165.04 used — and every deep tier's only twin was
+   * as out as the subscription it was covering for.
+   */
+  describe("a chain of fallbacks", () => {
+    /** Refuses everything named, in the order they are asked. */
+    class AllOut implements ReviewerLike {
+      readonly asked: string[] = [];
+      private readonly refuse: Set<string>;
+      constructor(refuse: readonly string[]) {
+        this.refuse = new Set(refuse);
+      }
+      async review(tier: Tier): Promise<ReviewerResult> {
+        this.asked.push(tier.model ?? "?");
+        if (this.refuse.has(tier.model ?? "")) throw new Exhausted(`tier ${tier.id} refused on quota`);
+        return { findings: [], discarded: [], raw: "", inputTokens: 0, cachedTokens: 0, outputTokens: 0, costUsd: 0, latencyMs: 1, retried: false, steps: 1 };
+      }
+    }
+
+    it("moves to the second route when the first is out of quota too", async () => {
+      const type = withFallback("openrouter/twin", "zai/last-resort");
+      const primary = type.tiers.find((t) => t.id === "t1")?.model ?? "";
+      const reviewer = new AllOut([primary, "openrouter/twin"]);
+
+      const r = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type });
+
+      expect(reviewer.asked).toStrictEqual([primary, "openrouter/twin", "zai/last-resort"]);
+      expect(r.decision.kind, "the tier ran, so the ladder carries on").not.toBe("stopped");
+    });
+
+    it("stops at the first route that answers", async () => {
+      const type = withFallback("openrouter/twin", "zai/last-resort");
+      const primary = type.tiers.find((t) => t.id === "t1")?.model ?? "";
+      const reviewer = new AllOut([primary]);
+
+      await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type });
+
+      expect(reviewer.asked, "the last resort costs money and was not needed").toStrictEqual([
+        primary,
+        "openrouter/twin",
+      ]);
+    });
+
+    /**
+     * EVERY ROUTE THAT REFUSED IS NAMED (D-105). A notice that stops at the primary is
+     * what sent Vany looking for a fallback that had in fact been tried and had failed
+     * for its own reason — with nothing anywhere saying so.
+     */
+    it("names every route when they are all out", async () => {
+      const type = withFallback("openrouter/twin", "zai/last-resort");
+      const primary = type.tiers.find((t) => t.id === "t1")?.model ?? "";
+      const reviewer = new AllOut([primary, "openrouter/twin", "zai/last-resort"]);
+
+      const r = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type });
+
+      const said = JSON.stringify(r);
+      expect(said).toContain("openrouter/twin");
+      expect(said).toContain("zai/last-resort");
+    });
+
+    /**
+     * ONWARD ONLY ON QUOTA. Quota is a fault about the ROUTE; a bad reply or a diff too
+     * large is a fault about the MODEL and repeats wherever it is asked. Walking on for
+     * those would spend the next subscription buying the same failure.
+     */
+    it("does not walk on past a failure that is not about quota", async () => {
+      const type = withFallback("openrouter/twin", "zai/last-resort");
+      const primary = type.tiers.find((t) => t.id === "t1")?.model ?? "";
+      class TwinBroken implements ReviewerLike {
+        readonly asked: string[] = [];
+        async review(tier: Tier): Promise<ReviewerResult> {
+          this.asked.push(tier.model ?? "?");
+          if (tier.model === primary) throw new Exhausted(`tier ${tier.id} refused on quota`);
+          throw new DidNotRun(`tier ${tier.id} returned nothing usable`);
+        }
+      }
+      const reviewer = new TwinBroken();
+
+      await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type });
+
+      expect(reviewer.asked).toStrictEqual([primary, "openrouter/twin"]);
+    });
   });
 
   it("asks the twin, and the tier still counts", async () => {
@@ -1635,7 +1723,7 @@ describe("a tier whose fallback also failed", () => {
     const type = {
       ...CODE_ARCH,
       t0: [] as const,
-      tiers: CODE_ARCH.tiers.map((t) => (t.id === "t1" ? { ...t, fallback: "openrouter/twin" } : t)),
+      tiers: CODE_ARCH.tiers.map((t) => (t.id === "t1" ? { ...t, fallback: ["openrouter/twin"] } : t)),
     };
     const primary = type.tiers.find((t) => t.id === "t1")?.model ?? "";
     class BothOut implements ReviewerLike {
@@ -1668,7 +1756,7 @@ describe("a cool-off and a fallback together", () => {
     const type = {
       ...CODE_ARCH,
       t0: [] as const,
-      tiers: CODE_ARCH.tiers.map((t) => (t.id === "t1" ? { ...t, fallback: "openrouter/twin" } : t)),
+      tiers: CODE_ARCH.tiers.map((t) => (t.id === "t1" ? { ...t, fallback: ["openrouter/twin"] } : t)),
     };
     // Probed a moment ago, so this round honours the cool-off and goes straight to the
     // twin — the D-94 probe is once per interval, not once per review.
@@ -1696,7 +1784,7 @@ describe("a cool-off and a fallback together", () => {
     const type = {
       ...CODE_ARCH,
       t0: [] as const,
-      tiers: CODE_ARCH.tiers.map((t) => (t.id === "t1" ? { ...t, fallback: "openrouter/twin" } : t)),
+      tiers: CODE_ARCH.tiers.map((t) => (t.id === "t1" ? { ...t, fallback: ["openrouter/twin"] } : t)),
     };
     const primary = type.tiers.find((t) => t.id === "t1")?.model ?? "";
     // RELATIVE TO THE CLOCK THIS TEST ACTUALLY RUNS ON, because `runRound` reads the real
@@ -1734,7 +1822,7 @@ describe("a cool-off and a fallback together", () => {
     const type = {
       ...CODE_ARCH,
       t0: [] as const,
-      tiers: CODE_ARCH.tiers.map((t) => (t.id === "t1" ? { ...t, fallback: "openrouter/twin" } : t)),
+      tiers: CODE_ARCH.tiers.map((t) => (t.id === "t1" ? { ...t, fallback: ["openrouter/twin"] } : t)),
     };
     const primary = type.tiers.find((t) => t.id === "t1")?.model ?? "";
     class OutWithTime implements ReviewerLike {
@@ -1888,7 +1976,7 @@ describe("a reused t0 says so", () => {
 });
 
 describe("skip_if_quota together with a fallback", () => {
-  const bothSet = (fallback: string) => ({
+  const bothSet = (...fallback: string[]) => ({
     ...CODE_ARCH,
     t0: [] as const,
     tiers: CODE_ARCH.tiers.map((t) => (t.id === "t1" ? { ...t, skip_if_quota: true, fallback } : t)),

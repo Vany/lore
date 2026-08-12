@@ -11,7 +11,9 @@
     "effort": "medium",
     "stage": "fast",
     "skip_if_quota": true,
-    "fallback": "openrouter/z-ai/glm-5-turbo",
+    "fallback": [
+      "openrouter/z-ai/glm-5-turbo"
+    ],
     "conversation": true
   },
   {
@@ -20,7 +22,9 @@
     "model": "zai-coding-plan/glm-5.2",
     "effort": "medium",
     "stage": "deep",
-    "fallback": "openrouter/z-ai/glm-5.2",
+    "fallback": [
+      "openrouter/z-ai/glm-5.2"
+    ],
     "conversation": true
   },
   {
@@ -29,7 +33,10 @@
     "model": "openai/gpt-5.6-terra",
     "effort": "high",
     "stage": "deep",
-    "fallback": "openrouter/openai/gpt-5.6-terra",
+    "fallback": [
+      "openrouter/openai/gpt-5.6-terra",
+      "zai-coding-plan/glm-5.2"
+    ],
     "conversation": true
   }
 ]

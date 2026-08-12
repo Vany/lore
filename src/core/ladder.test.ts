@@ -516,3 +516,52 @@ describe("the shipped ladders", () => {
     });
   }
 });
+
+/**
+ * A CHAIN OF FALLBACKS, and the two ways to write one wrong.
+ *
+ * The list arrived on 2026-08-12 because a single twin stopped being enough: OpenRouter
+ * ran to zero and every deep tier's only spare route was as out as the plan it covered.
+ */
+describe("the fallback list", () => {
+  const tier = (fallback: string) => `[{"id":"t0","kind":"deterministic","stage":"fast"},
+    {"id":"t1","kind":"model","model":"a/one","stage":"fast","fallback":${fallback}}]`;
+
+  it("keeps the order it was written in", () => {
+    expect(loadTiers(tier(`["b/two","c/three"]`))[1]?.fallback).toStrictEqual(["b/two", "c/three"]);
+  });
+
+  /**
+   * THE OLD SHAPE STILL LOADS. `loadTiers` throws on anything malformed, so refusing a
+   * bare string outright would turn a stale `LORE_TIERS` into a boot crash-loop — which
+   * this repository did to itself once already this week over exactly this kind of key.
+   * Normalised at load, so nothing downstream ever sees two shapes.
+   */
+  it("accepts the single string it used to be, as a one-entry list", () => {
+    expect(loadTiers(tier(`"b/two"`))[1]?.fallback).toStrictEqual(["b/two"]);
+  });
+
+  it("is absent when it is not configured", () => {
+    const plain = `[{"id":"t0","kind":"deterministic","stage":"fast"},
+      {"id":"t1","kind":"model","model":"a/one","stage":"fast"}]`;
+    expect(loadTiers(plain)[1]?.fallback).toBeUndefined();
+  });
+
+  /**
+   * A ROUTE CANNOT COVER FOR ITSELF. The chain is only walked because a provider said
+   * QUOTA, so the tier's own model can only refuse again — a real call spent buying a
+   * certainty, in the outage the list was written for. I wrote exactly this into a deploy
+   * ladder while adding the feature, which is why it is refused rather than filtered.
+   */
+  it("refuses a tier that lists its own model", () => {
+    expect(() => loadTiers(tier(`["a/one"]`))).toThrow(/fallback for itself|twice over/i);
+  });
+
+  it("refuses the same route named twice", () => {
+    expect(() => loadTiers(tier(`["b/two","b/two"]`))).toThrow(/twice over|fallback for itself/i);
+  });
+
+  it("refuses an empty list, which is a configuration that means nothing", () => {
+    expect(() => loadTiers(tier(`[]`))).toThrow(/malformed/i);
+  });
+});

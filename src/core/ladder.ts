@@ -65,7 +65,7 @@ export interface Tier {
    */
   readonly conversation?: boolean;
   /**
-   * The same model somewhere else, for when this tier's plan is out (D-93).
+   * The same model somewhere else, for when this tier's plan is out — IN ORDER (D-93).
    *
    * Vany: *"we have some openrouter credits… if there is no quota on the subscription
    * fallback to openrouter."* Three of lore's tiers are flat subscriptions, and an
@@ -79,10 +79,24 @@ export interface Tier {
    * able to fire (D-50). Priced against a real day — nine reviews of this repository —
    * the whole load would have been $3.80.
    *
-   * Absent means the old behaviour: an exhausted tier is skipped and its work promoted
-   * (D-48), which is right for a deployment with no metered credit to fall back on.
+   * **A LIST, TRIED IN ORDER, and only ever advanced by quota.** Vany, 2026-08-12:
+   * *"let's fall back on t2 and t3 to openrouter, and then, if there is no quota, to
+   * zai-coding-plan/glm."* OpenRouter ran to zero on 2026-08-11 — $5165.00 granted
+   * against $5165.04 used — and on that day a single fallback was the same as none: both
+   * routes to the model were out and the tier was `unpayable`. A second entry is a
+   * different SUBSCRIPTION, which is the only kind of spare capacity that survives a
+   * metered account hitting zero.
+   *
+   * The chain advances on `Exhausted` and on nothing else, which is the same narrow
+   * reading that governs the first hop: quota is a fault about the ROUTE, while a bad
+   * reply or an oversized diff will repeat through any provider. It is bounded by the
+   * list, which is short and written down — the "chain of retries becomes an unbounded
+   * cost" objection is about retrying the same route, not about naming a second one.
+   *
+   * Absent or empty means the old behaviour: an exhausted tier is skipped and its work
+   * promoted (D-48), which is right for a deployment with no spare capacity to reach for.
    */
-  readonly fallback?: string;
+  readonly fallback?: readonly string[];
 }
 
 /**
@@ -109,7 +123,12 @@ const TierSchema = z
     stage: z.enum(["fast", "deep"]),
     skip_if_quota: absent(z.boolean()),
     conversation: absent(z.boolean()),
-    fallback: absent(z.string().min(1)),
+    // A BARE STRING IS STILL ACCEPTED and normalised to a one-entry list. The array is
+    // the shape we write; the string is the shape deployed configs had until 2026-08-12,
+    // and `loadTiers` THROWS on anything malformed — so refusing it outright would turn
+    // a stale `LORE_TIERS` into a boot crash-loop, which this repository has already
+    // done to itself once this week over exactly this kind of key.
+    fallback: absent(z.union([z.string().min(1), z.array(z.string().min(1)).min(1)])),
   })
   .strict()
   .refine((t) => t.kind !== "model" || t.model !== undefined, {
@@ -143,9 +162,36 @@ export function loadTiers(source = process.env["LORE_TIERS"]): readonly Tier[] {
     throw new UsageError(`LORE_TIERS is malformed: ${parsed.error.issues.map((i) => i.message).join("; ")}`);
   }
 
-  const tiers = parsed.data as Tier[];
+  // ONE SHAPE PAST THIS POINT. The schema accepts a bare string for `fallback` so a
+  // stale config cannot crash-loop the service at boot; everything downstream reads a
+  // list, because two shapes for one field is how the copies come to disagree.
+  const tiers = parsed.data.map((t) => ({
+    ...t,
+    ...(typeof t.fallback === "string" ? { fallback: [t.fallback] } : {}),
+  })) as Tier[];
   if (!tiers.some((t) => t.kind === "model")) {
     throw new UsageError("LORE_TIERS has no model tier — deterministic tooling alone is not a review");
+  }
+
+  // A FALLBACK THAT REPEATS THE ROUTE IT IS COVERING FOR IS NOT A FALLBACK.
+  //
+  // The chain is only ever walked because a provider said QUOTA, so naming the tier's own
+  // model — or the same entry twice — buys a guaranteed second refusal, at the cost of a
+  // real call, in the outage the list was written for. I did exactly this while adding
+  // the list: gave a tier whose primary is the z.ai plan a last resort on the z.ai plan.
+  // Refused rather than filtered, because silently dropping an entry would leave an
+  // operator believing in spare capacity that lore had quietly decided not to use.
+  for (const t of tiers) {
+    const seen = new Set<string>(t.model === undefined ? [] : [t.model]);
+    for (const f of t.fallback ?? []) {
+      if (seen.has(f)) {
+        throw new UsageError(
+          `LORE_TIERS: tier ${t.id} lists ${f} as a fallback for itself or twice over. A fallback is only ` +
+            `tried when a provider refuses on quota, so the same route can only refuse again.`,
+        );
+      }
+      seen.add(f);
+    }
   }
 
   // Loud AND consequential. Not fatal, because a deployment funded for one provider

@@ -43,6 +43,19 @@ export const DEFAULT_WORKER: WorkerConfig = {
   pollMs: 2_000,
 };
 
+/**
+ * How often kept model sessions are reconciled against review state (D-80).
+ *
+ * A minute is chosen against what it is cleaning up: a session that outlives its review by
+ * up to sixty seconds costs nothing, and the sweep it backstops runs hourly. Making it
+ * tighter would mean a store query per kept review per tick for no benefit; making it
+ * looser would let a burst of expiries sit.
+ *
+ * Zero at construction, deliberately, so the FIRST tick after a start reconciles — a
+ * restart is exactly when the map and reality can disagree.
+ */
+const RECONCILE_EVERY_MS = 60_000;
+
 export class Worker {
   private readonly store: Store;
   private readonly cfg: WorkerConfig;
@@ -52,6 +65,9 @@ export class Worker {
   /** Rounds started and not yet finished. There is no ceiling on it but admission (D-101). */
   private active = 0;
   private recent: boolean[] = [];
+  /** When the session reconcile last finished, and whether one is in flight (D-80). */
+  private reconciledAt = 0;
+  private reconciling = false;
 
   constructor(store: Store, cfg: WorkerConfig, alerter: Alerter, reviewer: ReviewerLike = new Reviewer()) {
     this.store = store;
@@ -126,6 +142,18 @@ export class Worker {
       // — and the capacity it represented — without stopping the process. A fault here
       // is reported and slept through, because the alternative is a service that
       // quietly runs at reduced concurrency and eventually at none.
+      // ON A CLOCK, NOT ON IDLENESS (D-80). The first version of this ran only in the
+      // branch `claimJob` takes when it finds NOTHING — and a busy service never finds
+      // nothing, which is exactly when sessions pile up: reviews expire while other
+      // reviews keep the queue full, the idle branch is never reached, and the backstop
+      // built for the retention sweep silently never runs. A backstop that only works
+      // when nothing is happening is not a backstop.
+      //
+      // NOT AWAITED, for the same reason a round is not: this loop's job is to claim work,
+      // and it must never wait on network I/O to do it. `reconcileSessions` guards against
+      // overlapping itself.
+      void this.maybeReconcile();
+
       let job;
       try {
         // Draining: finish what is in flight, take nothing new. Checked before claiming
@@ -311,6 +339,58 @@ export class Worker {
   }
 
   /**
+   * Run the reconcile if it is due, and never more than one at a time (D-80).
+   *
+   * The interval is the whole reason this is separate from the loop: the reconcile is a
+   * store query per kept review plus a network DELETE for each orphan, and the claim loop
+   * runs every couple of seconds.
+   */
+  private async maybeReconcile(): Promise<void> {
+    if (this.reconciling || Date.now() - this.reconciledAt < RECONCILE_EVERY_MS) return;
+    this.reconciling = true;
+    try {
+      await this.reconcileSessions();
+    } finally {
+      // STAMPED AFTER, not before: a reconcile that took longer than the interval would
+      // otherwise be eligible again the moment it finished, and under a slow opencode
+      // this loop would do nothing else.
+      this.reconciledAt = Date.now();
+      this.reconciling = false;
+    }
+  }
+
+  /**
+   * End kept sessions belonging to reviews that are no longer open (D-80).
+   *
+   * **A BACKSTOP FOR THE PATHS THAT DO NOT COME THROUGH HERE.** `releaseIfFinished` runs
+   * when a JOB finishes, and `cancel` releases its own — but a review can go terminal with
+   * no job running at all, and the 48-hour retention sweep is exactly that: it marks
+   * abandoned reviews `expired` in SQL, and nothing in that path has ever heard of a model
+   * session. A review left in `findings_ready` therefore held its sessions until opencode
+   * restarted.
+   *
+   * Written as a reconcile rather than a call added to the expiry path because the next
+   * terminal path nobody thinks of gets collected too. That is not hypothetical here: the
+   * session map is new, and every existing way a review can end predates it.
+   *
+   * A review that has VANISHED — deleted by retention — releases as well: `repoAndStateOf`
+   * returns undefined, which is not "still open".
+   */
+  private async reconcileSessions(): Promise<void> {
+    for (const reviewId of this.reviewer.keptReviews?.() ?? []) {
+      const at = this.store.repoAndStateOf(reviewId);
+      if (at !== undefined && !isTerminal(at.state)) continue;
+      await this.reviewer.release?.(reviewId).catch((e: unknown) => {
+        void this.alerter.send({
+          severity: "log",
+          condition: "orphaned model session not released",
+          detail: `${reviewId}: ${e instanceof Error ? e.message : String(e)}`,
+        });
+      });
+    }
+  }
+
+  /**
    * Give back a finished review's worktree, now rather than in a week (D-70).
    *
    * A terminal review's worktree serves nothing: the tree hash is already recorded,
@@ -327,6 +407,17 @@ export class Worker {
    * Never fatal. A worktree that cannot be removed is a disk problem to report, not a
    * reason to fail a review that has already finished.
    */
+  // lore-ok[b6e3f0e8]: the finding is real and is fixed, but not here — this method is
+  // only ONE of the three things that release a session, and the other two are where the
+  // gap was. `Reviewer.cancel` now releases before it aborts, which covers `review_cancel`
+  // on a review with no job in flight (the case its early `return false` used to skip);
+  // and `reconcileSessions` above runs on a timer in the claim loop, which covers the
+  // retention sweep marking a review `expired` in SQL and anything else that ends a review
+  // without a job. On a TIMER rather than on the loop's idle branch, because a service
+  // with a full queue never goes idle and that is exactly when expiries pile up.
+  // Deliberately NOT fixed at this call site: this one is correct as it stands — it
+  // releases when a job reaches a terminal state — and widening it could not have reached
+  // either path, because neither runs a job at all.
   private async releaseIfFinished(reviewId: string): Promise<void> {
     const at = this.store.repoAndStateOf(reviewId);
     if (at === undefined || !isTerminal(at.state)) return;

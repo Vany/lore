@@ -314,7 +314,10 @@ export async function serve(cfg: ServiceConfig): Promise<() => void> {
   // would turn a degraded configuration into an outage. Loud, and it names the model, so
   // the fix is a one-line edit rather than an investigation.
   void (async () => {
-    const wanted = [...new Set(loadTiers().flatMap((t) => (t.fallback === undefined ? [] : [t.fallback])))];
+    // EVERY entry of every chain, not just the first: a second fallback nobody can reach
+    // is the same broken promise as a first one, and it is the one that gets checked
+    // least because it only runs when the account before it is already empty.
+    const wanted = [...new Set(loadTiers().flatMap((t) => [...(t.fallback ?? [])]))];
     if (wanted.length === 0) return;
     const missing = await reviewer.missingModels(wanted).catch(() => undefined);
     if (missing === undefined) {

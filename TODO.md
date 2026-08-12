@@ -791,6 +791,17 @@ grows sideways is the one nobody can review.
       **added load did not create these races, it exposed them.** Worth stating because
       "it only started failing after my change" is a claim that usually means the opposite.
 
+- [ ] **Twenty-four orphaned docblocks, found mechanically 2026-08-12.** A docblock that
+      ends where another begins describes nothing: whichever declaration follows takes the
+      SECOND block, and the first is stranded. `one-definition.test.ts` now counts them and
+      holds a per-file baseline that may only go DOWN, so new ones fail — which is what the
+      check was written for, after I made the mistake three times in one afternoon and one
+      of the stranded blocks ended up asserting the opposite of the code beneath it.
+      **Waiting on:** the judgement each one needs. Fixing them is mechanical but not
+      automatic — you have to read what the stranded block was written about before you
+      know where it goes — and two dozen of those would have swamped the diff a reviewer
+      was already reading. Counts by file are in the baseline; `store.ts` has ten.
+
 - [ ] **A round finishing after the store closes throws an unhandled rejection.**
       `Worker.round` → `Store.finishJob` → `database is not open` (`ERR_INVALID_STATE`),
       surfaced by vitest as an unhandled rejection out of `drain.test.ts`. **This is a

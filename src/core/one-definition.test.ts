@@ -440,3 +440,86 @@ describe("the replica threshold agrees with the shell that reimplements it", () 
     );
   });
 });
+
+/**
+ * A DOCBLOCK BELONGS TO WHAT COMES AFTER IT, and two in a row means one is orphaned.
+ *
+ * Inserting a method just under an existing docblock silently rededicates that block to
+ * the new method and leaves the old one describing nothing. It reads fine in a diff — the
+ * new code has a comment above it, the old comment is still there — which is why I did it
+ * THREE TIMES in one afternoon, twice in the same change. Once the displaced block said
+ * *"a fresh session per tier run"* directly above the method that had just stopped doing
+ * that: a comment stating the opposite of the code it appears to describe, which is the
+ * worst failure this repository has, in the place a reader goes to learn the behaviour.
+ *
+ * **A BASELINE, NOT A CLEAN BILL.** The check found 24 of these already here across ten
+ * files, all genuine. They are not fixed in the change that added this test: each needs a
+ * judgement about which declaration the stranded block was written for, and two dozen of
+ * those would swamp the diff a reviewer was already reading. So this asserts NO GROWTH per
+ * file, and `TODO.md` carries the cleanup. A number that may only go down is worth having
+ * even while it is not yet zero — the alternative is a fourth occurrence.
+ *
+ * The FILE-LEVEL block is exempt: a module docblock followed by the first declaration's
+ * docblock is the normal shape, not an orphan.
+ */
+const ORPHAN_BASELINE: Readonly<Record<string, number>> = {
+  "core/cooloff.ts": 1,
+  "core/errors.ts": 1,
+  "git/diff.ts": 1,
+  "git/repo.ts": 1,
+  "mcp/server.ts": 1,
+  "reviewer/opencode.ts": 3,
+  "reviewer/review.ts": 5,
+  "store/store.ts": 10,
+  "t0/sandbox.ts": 1,
+};
+
+function orphanedDocblocks(text: string): number {
+  const lines = text.split("\n");
+  // Where the file-level block ends, if the file opens with one.
+  let lead = -1;
+  let k = 0;
+  while (k < lines.length && (lines[k] ?? "").trim() === "") k++;
+  if ((lines[k] ?? "").trim().startsWith("/**")) {
+    for (let m = k; m < lines.length; m++) {
+      if (/^\s*\*\/\s*$/.test(lines[m] ?? "")) {
+        lead = m;
+        break;
+      }
+    }
+  }
+
+  let found = 0;
+  for (let i = 0; i < lines.length; i++) {
+    if (i === lead || !/^\s*\*\/\s*$/.test(lines[i] ?? "")) continue;
+    let j = i + 1;
+    while (j < lines.length && (lines[j] ?? "").trim() === "") j++;
+    if (/^\s*\/\*\*/.test(lines[j] ?? "")) found++;
+  }
+  return found;
+}
+
+describe("no docblock is orphaned by the next one", () => {
+  for (const f of FILES) {
+    const allowed = ORPHAN_BASELINE[f.path] ?? 0;
+    it(`${f.path} has no more than ${String(allowed)}`, () => {
+      expect(
+        orphanedDocblocks(f.text),
+        `${f.path}: a docblock ends and another begins with no code between them, so the ` +
+          "first now describes the second one's subject and whatever it was written about " +
+          "has no comment left. Move the new member above the block it displaced. " +
+          "(This file's baseline may go down, never up.)",
+      ).toBeLessThanOrEqual(allowed);
+    });
+  }
+
+  // The baseline may only shrink, and a file that leaves it must leave this list too —
+  // otherwise a stale allowance quietly re-permits the thing it was recording.
+  it("has no entry for a file that no longer needs one", () => {
+    const stale = Object.keys(ORPHAN_BASELINE).filter((path) => {
+      const f = FILES.find((x) => x.path === path);
+      return f === undefined || orphanedDocblocks(f.text) === 0;
+    });
+    expect(stale, "these are clean now; delete their baseline entries").toStrictEqual([]);
+  });
+});

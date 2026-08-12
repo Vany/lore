@@ -8,15 +8,21 @@ Two halves, at different stages:
 - **Subscription — built.** `subscriptions/listen` against `lore://review/{review_id}`,
   woken by every state change and by nothing else (§2). Proved end to end against a
   real MCP client in `src/service/subscribe.test.ts`.
-- **Conversation per tier — DESIGNED 2026-08-11, not built.** §3 and §6 describe it, and
-  §6's two open questions are now answered (SPEC D-80): a deep tier enters from an EMPTY
+- **Conversation per tier — BUILT 2026-08-12, in the code; live on the next deploy.**
+  One session per (review, tier), initialised once, **compacted at 2/3 of that tier's
+  context window rather than restarted**, released when the review ends by any path.
+  §6's two questions were answered first (SPEC D-80): a deep tier enters from an EMPTY
   prompt on the fixed tree — inheriting would make three tiers one opinion asked three
-  times — and the cost question is measured in `research/t2-token-cost.md`. The shape is
-  one session per (review, tier), initialised once, **compacted at 2/3 of that tier's
-  context window rather than restarted**.
-  The reviewer still runs cold rounds, `review_submit` still refuses mid-round per D-55,
-  and nothing in §3 is deployed. It changes how much quota burns, so it ships on the
-  operator's word.
+  times — and the cost question is measured in `research/t2-token-cost.md`.
+  `Tier.conversation` is on for every model tier in both deploy ladders, so it takes
+  effect when a new image is built. It changes how much quota burns, so **whether to
+  deploy is the operator's word**, and until then the running service still runs cold
+  rounds.
+- **Submitting into a running round — still not built, and §3 is where it is described.**
+  `review_submit` refuses mid-round per D-55, exactly as before. A kept session is what
+  makes that possible one day — the diff would be the next thing said to a model that
+  already holds the repository — but possible is not done, and this is the half of D-80
+  that is still a design.
 
 ---
 
@@ -73,7 +79,13 @@ move is the client's; a client that subscribes to a review already in one of the
 waits, waits until the sweep expires it. That is D-70 rebuilt inside its own cure, and
 the one poll is what prevents it.
 
-## 3. Submitting
+## 3. Submitting — THE HALF THAT IS STILL A DESIGN
+
+Everything in this section describes what a mid-round submit WOULD be. It is not built and
+D-55 still refuses one; the section is written in the present tense because it is a
+specification, and this line is here so nobody reads it as a description of the running
+service. The session it would speak to now exists (§6, built 2026-08-12) — that was the
+missing piece, and it is no longer what stands in the way.
 
 `review_submit` **applies the patch immediately and returns**. It does not wait for a
 verdict and does not refuse because a tier is busy.
@@ -180,8 +192,27 @@ CODE, not why the model looked where it looked or what it ruled out. Restarting 
 fixed tree keeps the former and throws away the latter, which is the thing `settledBlock`
 already tries to reconstruct and cannot.
 
-Three implementation obligations, none of which reopen the decision: sessions are released
-when the review ends (128 admitted reviews × 3 tiers is 384 live sessions if nothing closes
-them); a lore restart loses the in-memory session map, so a requeued round falls back to a
-cold start rather than failing; and the property being given up — fresh eyes each round — is
-measurable as findings per round and how often a finding is withdrawn after a fix.
+Three implementation obligations, none of which reopened the decision, and all three are how
+it is built:
+
+**Sessions are released when the review ends — by whichever path it ends** (128 admitted
+reviews × 3 tiers is 384 live sessions if nothing closes them). Three mechanisms, because
+one was not enough, and the two that were missing were found by the ladder reading the
+change that added the first: the worker releases when a job reaches a terminal state;
+`cancel` releases its own, since `review_cancel` on a review sitting in `findings_ready`
+has NO job in flight; and the worker reconciles on a one-minute timer inside its claim
+loop, which is what catches the 48-hour retention sweep marking a review `expired` in SQL.
+The timer is load-bearing: put on the loop's idle branch instead, it never runs on a busy
+service, which is when reviews expire fastest. And the reconcile is deliberately a
+reconcile rather than a call added to the expiry path: every existing way a review can end
+predates the session map.
+
+**A lore restart loses the in-memory session map**, so a requeued round starts cold rather
+than failing. What it does not recover is the sessions the previous process opened — nobody
+holds their ids any more, and they live until opencode restarts. Accepted, because
+persisting the map would let a stale id survive and be spoken to as though it still held a
+conversation, which is worse than an idle session.
+
+**The property being given up — fresh eyes each round — is measurable** as findings per
+round and how often a finding is withdrawn after a fix. Not yet measured; the cold baseline
+is in `research/t2-token-cost.md`.
