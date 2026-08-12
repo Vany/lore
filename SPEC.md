@@ -1805,6 +1805,38 @@ dearer one (D-48), the verdict labelled `passed_partial`, an independent vendor 
 the model is not gone — only that route to it — and opencode has OpenRouter configured
 with a twin of every model in the deployed ladder:
 
+**A POOL IS NOT A CHAIN — added 2026-08-12.** Vany: *"we have model definitions in a
+configuration file like `{"GLM5.2": ["zai-coding-plan/glm-5.2", "zai-coding-plan2/glm-5.2"]}`,
+and in tiers we use these identifiers. If there is more than one model under a nickname we
+use a random one with quota; if all are empty we return that we have no model for this.
+But `openrouter/...` is a dedicated fallback."*
+
+A nickname is the MODEL; its list is the ROUTES that reach it. Two subscriptions to one
+company are one reviewer available twice — the same opinion, twice the quota — and the
+config could not say that before: `fallback` had to carry both *"the same model somewhere
+else"* and *"something else entirely"*, with an entry's position the only hint which was
+meant. The pool answers *"these are interchangeable, take one"*; the chain answers *"that
+failed, try something worse"*. Both are walked the same way and only ever advanced by
+quota; only the chain is reported as a concession, because a second plan is the model the
+tier was always going to use.
+
+**Random, and the reason outranks the choice.** Nothing publishes how much of a
+subscription is left, so any policy cleverer than a coin toss would be guessing dressed as
+arithmetic. **Chosen once and then kept** — Vany: *"if a model is chosen, use it; this rule
+is only for the initial choosing."* Re-rolling every round would hand a kept session (D-80)
+a different model to continue, which is a cold start wearing the configuration of a warm
+one. The record IS `answeredBy`, so stickiness and the vendor count read the same fact.
+
+**Sticky is a preference, not a blindfold.** The first version collapsed the pool to the
+chosen route alone, which threw the feature away exactly when it was needed: once that
+plan ran dry the review jumped to the metered fallback with the second subscription
+untouched. The kept route goes first and the rest stay behind it.
+
+**And `unpayable` now names every route, including the first.** The failure listed only
+the fallbacks and leaned on the primary's own error text to identify the primary — which
+works while that text comes from opencode and names the model, and stops working the
+moment a pool chooses the route, because then nobody can tell which plan refused first.
+
 **A LIST, TRIED IN ORDER — revised 2026-08-12.** Vany: *"let's use an array for fallback
 in config; let's fall back on t2 and t3 to openrouter, and then, if there is no quota, to
 zai-coding-plan/glm."*

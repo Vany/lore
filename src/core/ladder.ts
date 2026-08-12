@@ -136,6 +136,80 @@ const TierSchema = z
   });
 
 /**
+ * NICKNAMES FOR A MODEL, and the routes that can serve it.
+ *
+ * Vany, 2026-08-12: *"we have model definitions in a configuration file like
+ * `{ "GLM5.2": ["zai-coding-plan/glm-5.2", "zai-coding-plan2/glm-5.2"] }`, and in tiers we
+ * use these identifiers. If there is more than one model under a nickname we use a random
+ * one with quota; if all are empty we return that we have no model for this."*
+ *
+ * **A nickname is the MODEL; the list is the ROUTES to it.** Two subscriptions to one
+ * company are one reviewer reachable two ways — the same opinion, twice the quota. That
+ * distinction is what the config could not express before: `fallback` had to carry both
+ * "the same model somewhere else" and "something else entirely", and an entry's position
+ * was the only thing saying which.
+ *
+ * **A pool is not a chain, and they answer different questions.** The pool is "these are
+ * interchangeable, take one"; the chain is "that failed, try something worse". Keeping
+ * them apart is what stops the ordering from quietly meaning nothing.
+ */
+export type ModelPools = Readonly<Record<string, readonly string[]>>;
+
+const PoolsSchema = z.record(z.string().min(1), z.array(z.string().min(1)).min(1));
+
+/**
+ * The two shapes a ladder file may have.
+ *
+ * A bare array is the shape every deployed config had before nicknames, and it still
+ * loads — `loadTiers` throws on anything malformed, so refusing it would turn a stale
+ * `LORE_TIERS` into a boot crash-loop, which this repository has already done to itself
+ * once this week over exactly this kind of key.
+ */
+const LadderFileSchema = z.union([
+  z.array(TierSchema).min(1),
+  z.object({ models: absent(PoolsSchema), tiers: z.array(TierSchema).min(1) }).strict(),
+]);
+
+let cached: { source: string; tiers: readonly Tier[]; pools: ModelPools } | undefined;
+
+/**
+ * Which concrete routes serve a tier's model.
+ *
+ * A plain model id is its own single route, so a config without nicknames behaves exactly
+ * as it did. An id that names a pool expands to it.
+ */
+export function routesFor(tier: Tier, pools: ModelPools): readonly string[] {
+  const named = tier.model ?? "";
+  return pools[named] ?? (named === "" ? [] : [named]);
+}
+
+/**
+ * The order to try a pool's routes in, chosen once and then kept (D-93).
+ *
+ * **Random, and the reason matters more than the choice.** Nothing publishes how much of a
+ * subscription is left — z.ai does not, and neither does anyone else here — so any policy
+ * cleverer than a coin toss would be guessing dressed as arithmetic. Random spreads load
+ * across equivalent plans without pretending to know which has more room.
+ *
+ * Chosen ONCE per (review, tier) and then kept: Vany, *"if a model is chosen, use it —
+ * this rule is only for the initial choosing."* Re-rolling every round would give a kept
+ * session (D-80) a different model to continue, which is a cold start wearing the config
+ * of a warm one.
+ */
+export function poolOrder(routes: readonly string[], rand: () => number = Math.random): readonly string[] {
+  const out = [...routes];
+  // Fisher-Yates, so every order is equally likely. Sorting by a random key is the
+  // version people write from memory and it is subtly biased.
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1));
+    const a = out[i] as string;
+    out[i] = out[j] as string;
+    out[j] = a;
+  }
+  return out;
+}
+
+/**
  * Load the ladder from configuration.
  *
  * `LORE_TIERS` is either inline JSON or a path to a JSON file. SPEC has always
@@ -146,8 +220,6 @@ const TierSchema = z
  * reviewing with a different set of models than the operator configured is the
  * kind of divergence nobody notices until the bill or the findings look wrong.
  */
-let cached: { source: string; tiers: readonly Tier[] } | undefined;
-
 export function loadTiers(source = process.env["LORE_TIERS"]): readonly Tier[] {
   if (source === undefined || source.trim().length === 0) return DEFAULT_TIERS;
 
@@ -156,16 +228,18 @@ export function loadTiers(source = process.env["LORE_TIERS"]): readonly Tier[] {
   // reads as noise, and noise is what people learn to scroll past.
   if (cached?.source === source) return cached.tiers;
 
-  const raw = source.trim().startsWith("[") ? source : readFileSync(source, "utf8");
-  const parsed = z.array(TierSchema).min(1).safeParse(JSON.parse(raw));
+  const raw = source.trim().startsWith("[") || source.trim().startsWith("{") ? source : readFileSync(source, "utf8");
+  const parsed = LadderFileSchema.safeParse(JSON.parse(raw));
   if (!parsed.success) {
     throw new UsageError(`LORE_TIERS is malformed: ${parsed.error.issues.map((i) => i.message).join("; ")}`);
   }
+  const file = Array.isArray(parsed.data) ? { tiers: parsed.data } : parsed.data;
+  const pools: ModelPools = file.models ?? {};
 
   // ONE SHAPE PAST THIS POINT. The schema accepts a bare string for `fallback` so a
   // stale config cannot crash-loop the service at boot; everything downstream reads a
   // list, because two shapes for one field is how the copies come to disagree.
-  const tiers = parsed.data.map((t) => ({
+  const tiers = file.tiers.map((t) => ({
     ...t,
     ...(typeof t.fallback === "string" ? { fallback: [t.fallback] } : {}),
   })) as Tier[];
@@ -206,8 +280,52 @@ export function loadTiers(source = process.env["LORE_TIERS"]): readonly Tier[] {
     );
   }
 
-  cached = { source, tiers };
+  // EVERY NICKNAME A TIER USES MUST EXIST, checked here rather than at the moment a
+  // review needs it. A typo would otherwise read as an ordinary model id, be handed
+  // straight to opencode, and come back as a provider error in the middle of somebody's
+  // review — the same fault the startup fallback check exists to pull forward.
+  // ONLY WHERE NICKNAMES EXIST. A ladder that defines no pools has no nickname to
+  // mistype, and its model ids are whatever they have always been — tightening that at
+  // the same time would refuse configs this change has no quarrel with.
+  if (Object.keys(pools).length > 0) {
+    for (const t of tiers) {
+      if (t.kind !== "model") continue;
+      const named = t.model ?? "";
+      if (named.includes("/") || pools[named] !== undefined) continue;
+      throw new UsageError(
+        `LORE_TIERS: tier ${t.id} names the model '${named}', which is neither a provider/model id nor one of ` +
+          `the defined pools (${Object.keys(pools).join(", ")}). A mistyped nickname would otherwise be handed ` +
+          `to opencode as a model id and come back as a provider error in the middle of a review.`,
+      );
+    }
+  }
+  // A ROUTE MAY NOT APPEAR TWICE IN ONE POOL. Two identical entries do not double the
+  // quota; they double the chance of picking the exhausted one.
+  for (const [name, routes] of Object.entries(pools)) {
+    if (new Set(routes).size !== routes.length) {
+      throw new UsageError(`LORE_TIERS: pool '${name}' lists the same route twice — that is not more capacity.`);
+    }
+    for (const r of routes) {
+      if (!r.includes("/")) {
+        throw new UsageError(`LORE_TIERS: pool '${name}' contains '${r}', which is not a provider/model id.`);
+      }
+    }
+  }
+
+  cached = { source, tiers, pools };
   return tiers;
+}
+
+/**
+ * The pools that came with the ladder last loaded.
+ *
+ * Read from the same cache as `loadTiers` so the two can never describe different files;
+ * a caller that wants both calls `loadTiers` first, exactly as it already does.
+ */
+export function loadPools(source = process.env["LORE_TIERS"]): ModelPools {
+  loadTiers(source);
+  const c = cached;
+  return c !== undefined && c.source === source ? c.pools : {};
 }
 
 /**

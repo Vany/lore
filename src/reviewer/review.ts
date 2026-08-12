@@ -18,7 +18,10 @@ import {
   markUnavailable,
   ladderChanged,
   ladderFingerprint,
+  loadPools,
   markAnsweredBy,
+  poolOrder,
+  routesFor,
   settle,
   step,
   type Decision,
@@ -690,6 +693,8 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   let result;
   /** Set when the subscription was out and the metered twin answered instead (D-93). */
   let fellBackTo: string | undefined;
+  /** The concrete route this tier ran on, when its `model` named a pool rather than one. */
+  let chosenRoute: string | undefined;
   try {
     // NOT ASKED AT ALL, when the PROVIDER has said it is out (D-90 widened).
     //
@@ -730,6 +735,35 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       // review that starts while it hangs.
       store.markTierUnavailable(tier.id, down.until, down.why, down.failures, down.stated, new Date().toISOString());
     }
+    // WHICH ROUTE SERVES THIS TIER'S MODEL, decided once and then kept.
+    //
+    // A tier's `model` may name a POOL — several subscriptions that reach the same model,
+    // which is twice the quota and one opinion. The pool is tried in a random order, so
+    // load spreads across equivalent plans; nothing publishes how much of a subscription
+    // is left, so anything cleverer would be guessing dressed as arithmetic.
+    //
+    // STICKY, because the choice outlives the round: `answeredBy` already records which
+    // concrete model a tier ran on, and re-rolling each round would hand a kept session
+    // (D-80) a different model to continue — a cold start wearing the configuration of a
+    // warm one. Vany: *"if a model is chosen, use it — this rule is only for the initial
+    // choosing."*
+    const routes = routesFor(tier, loadPools());
+    const stuck = review.ladder.answeredBy?.[tier.id];
+    // THE KEPT ROUTE FIRST, AND THE REST STILL BEHIND IT. Collapsing the pool to the
+    // chosen route alone was the first version, and it threw the feature away at the
+    // moment it was needed: once that subscription ran dry the review jumped straight to
+    // the metered fallback, with the second plan sitting there untouched. Sticky means a
+    // preference, not a blindfold.
+    const pool =
+      routes.length <= 1
+        ? routes
+        : stuck !== undefined && routes.includes(stuck)
+          ? [stuck, ...poolOrder(routes.filter((r) => r !== stuck))]
+          : poolOrder(routes);
+    // `tier.model` when the tier has no pool — the ordinary single-route case, unchanged.
+    const primaryRoute = pool[0] ?? tier.model ?? "";
+    if (primaryRoute !== tier.model) chosenRoute = primaryRoute;
+
     try {
       // INSIDE THIS TRY, so a cool-off reaches the fallback below.
       //
@@ -745,7 +779,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
           down?.until,
         );
       }
-      result = await input.reviewer.review(tier, prompt, worktree, reviewId, stillWanted);
+      result = await input.reviewer.review({ ...tier, model: primaryRoute }, prompt, worktree, reviewId, stillWanted);
       // IT ANSWERED, so whatever we believed about it being down is over. The operator
       // banner has promised "one success clears this" since D-90 shipped, and only the
       // background screen ever delivered it — a review could prove a tier alive and the
@@ -775,7 +809,13 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       //
       // Bounded by the list, which is short, explicit, and only stepped along when a
       // provider says QUOTA. Any other failure stops the walk, for the reason below.
-      const chain = tier.fallback ?? [];
+      // THE REST OF THE POOL FIRST, THEN THE FALLBACKS. Both are walked the same way and
+      // for the same reason — this route said quota, try the next — but they mean
+      // different things, and the boundary is what tells them apart. A pool route is the
+      // SAME model on another plan and costs the review nothing; a fallback is a
+      // concession, which is why only it is reported as one.
+      const spare = pool.slice(1);
+      const chain = [...spare, ...(tier.fallback ?? [])];
       if (!(e instanceof Exhausted) || chain.length === 0) throw e;
       // HELD, not written yet. `closeTierRun` OVERWRITES `unavailable`, so a note
       // recorded here would be erased by the success path a few lines below — which is
@@ -894,13 +934,21 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
         // A tier is `unpayable` only when EVERY route is, so the notice must account for
         // every one. The primary's message stays first because it is the ordinary case;
         // the rest follow because when they are present they are what nobody expects.
-        throw new Exhausted(
-          `${e.message} — and ${refused.length === 1 ? "its fallback" : `all ${String(refused.length)} of its fallbacks`} ` +
-            `could not run either: ${refused.join("; ")}`,
-          e.resetAt,
-        );
+        // EVERY ROUTE, INCLUDING THE FIRST ONE. This listed only the fallbacks and leaned
+        // on the primary's own error text to identify the primary — which works while
+        // that text comes from opencode and names the model, and stops working the moment
+        // a pool picks the route, because then the reader cannot tell WHICH plan refused
+        // first. `unpayable` is a claim about every route, so every route is named.
+        const tried = [`${primaryRoute}: ${e.message}`, ...refused];
+        throw new Exhausted(`no route for tier ${tier.id} could run: ${tried.join("; ")}`, e.resetAt);
       }
       result = answered.result;
+      // A POOL ROUTE ANSWERING IS NOT A FALLBACK. `fellBackTo` reaches `checks_skipped`
+      // as "this tier was answered by somebody else, and it cost money" — true of the
+      // configured fallbacks, false of a second subscription to the same plan, which is
+      // the model the tier was always going to use.
+      const fromPool = spare.includes(answered.model);
+      if (fromPool) chosenRoute = answered.model;
       // HELD, not written yet. `closeTierRun` OVERWRITES `unavailable`, so a note recorded
       // here would be erased by the success path below — which is exactly what happened,
       // and the test caught it. It travels with the close instead.
@@ -908,7 +956,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       // The tier RAN, so this is not `checks_skipped`'s usual "you got less than you
       // think" — but which provider answered is a fact about the review, and on this path
       // it is the one that costs money.
-      fellBackTo = answered.model;
+      if (!fromPool) fellBackTo = answered.model;
     }
     // Closed with what this tier FOUND, in the same words T0 uses (line 99). The
     // column answers one question — what did this tier do — and `answered` did not
@@ -1423,7 +1471,14 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // them differ — and with the deep tiers' last resort being the model t1 already runs, a
   // fully degraded ladder is one model asked three times while the config still reads as
   // three vendors. `passed` in that state would be the product's central claim, false.
-  const answered = fellBackTo === undefined ? withSettled : markAnsweredBy(withSettled, tier.id, fellBackTo);
+  // THE CONCRETE ROUTE THAT RAN, whether it was a pool pick or a fallback.
+  //
+  // Two things read this. `soleVendorOf` asks who actually looked at the code, and a
+  // nickname answers nothing about a vendor. And the next round asks which route this
+  // tier settled on, so a pool is chosen once rather than re-rolled — the stickiness is
+  // this record, not a separate one.
+  const ranOn = fellBackTo ?? chosenRoute;
+  const answered = ranOn === undefined ? withSettled : markAnsweredBy(withSettled, tier.id, ranOn);
   const stepped = step({
     state: answered,
     raised: [...raisedFingerprints],

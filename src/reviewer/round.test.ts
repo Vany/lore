@@ -1975,6 +1975,167 @@ describe("a reused t0 says so", () => {
   }, 60_000);
 });
 
+/**
+ * A TIER'S MODEL MAY NAME A POOL — several subscriptions reaching one model (D-93).
+ *
+ * Twice the quota and one opinion. The pool is tried in a random order because nothing
+ * publishes how much of a subscription is left, and the choice is then KEPT: re-rolling
+ * each round would hand a kept session (D-80) a different model to continue.
+ */
+describe("a pool of routes to one model", () => {
+  const POOL = JSON.stringify({
+    models: { "GLM5.2": ["zai-coding-plan/glm-5.2", "zai-coding-plan2/glm-5.2"] },
+    tiers: [{ id: "t0", kind: "deterministic", stage: "fast" }, { id: "t1", kind: "model", model: "GLM5.2", stage: "fast" }],
+  });
+
+  let saved: string | undefined;
+  beforeEach(() => {
+    saved = process.env["LORE_TIERS"];
+    process.env["LORE_TIERS"] = POOL;
+  });
+  afterEach(() => {
+    if (saved === undefined) delete process.env["LORE_TIERS"];
+    else process.env["LORE_TIERS"] = saved;
+  });
+
+  const nicknamed = (fallback: string[] = []) => ({
+    ...CODE_ARCH,
+    t0: [] as const,
+    tiers: CODE_ARCH.tiers.map((t) => (t.id === "t1" ? { ...t, model: "GLM5.2", fallback } : t)),
+  });
+
+  /** Answers on anything, recording which route it was asked as. */
+  class Answers implements ReviewerLike {
+    readonly asked: string[] = [];
+    private readonly refuse: Set<string>;
+    constructor(refuse: readonly string[] = []) {
+      this.refuse = new Set(refuse);
+    }
+    async review(tier: Tier): Promise<ReviewerResult> {
+      this.asked.push(tier.model ?? "?");
+      if (this.refuse.has(tier.model ?? "")) throw new Exhausted(`tier ${tier.id} refused on quota`);
+      return { findings: [], discarded: [], raw: "", inputTokens: 0, cachedTokens: 0, outputTokens: 0, costUsd: 0, latencyMs: 1, retried: false, steps: 1 };
+    }
+  }
+
+  it("asks one of the pool's routes, not the nickname", async () => {
+    const reviewer = new Answers();
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: nicknamed() });
+
+    expect(reviewer.asked).toHaveLength(1);
+    expect(
+      ["zai-coding-plan/glm-5.2", "zai-coding-plan2/glm-5.2"],
+      "a nickname is not a model id and must never reach opencode",
+    ).toContain(reviewer.asked[0]);
+  });
+
+  /**
+   * THE CHOICE IS KEPT. Whichever route the first round rolled, the second uses THAT one
+   * — which is the property a kept session depends on, and it holds however the coin
+   * lands, so this test does not need to control the randomness.
+   */
+  it("keeps the route it chose for the next round", async () => {
+    // RAISING SOMETHING KEEPS THE LADDER ON t1. A clean round escalates, and the second
+    // round would then be a different tier entirely — which is what this test asked
+    // about the first time it was written, and it was measuring the wrong thing.
+    class Raises extends Answers {
+      private n = 0;
+      override async review(tier: Tier): Promise<ReviewerResult> {
+        const out = await super.review(tier);
+        this.n += 1;
+        return this.n === 1 ? { ...out, findings: [HOLD_BUG] } : out;
+      }
+    }
+    const reviewer = new Raises();
+    const type = nicknamed();
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type });
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type });
+
+    expect(reviewer.asked).toHaveLength(2);
+    expect(reviewer.asked[1], "re-rolling would give a kept session a different model").toBe(reviewer.asked[0]);
+  });
+
+  it("tries the rest of the pool when the first route is out of quota", async () => {
+    const reviewer = new Answers(["zai-coding-plan/glm-5.2"]);
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: nicknamed() });
+
+    // Whatever order was rolled, the survivor answered and both were asked if needed.
+    expect(reviewer.asked).toContain("zai-coding-plan2/glm-5.2");
+    expect(reviewer.asked.at(-1)).toBe("zai-coding-plan2/glm-5.2");
+  });
+
+  /**
+   * A POOL ROUTE IS NOT A FALLBACK. `fell_back_to` reaches the client as "this tier was
+   * answered by somebody else, and it cost money" — true of a configured fallback, false
+   * of a second subscription to the same plan, which is the model the tier was always
+   * going to use.
+   */
+  it("does not report a pool pick as having fallen back", async () => {
+    // PINNED, NOT ROLLED. Seeding the kept choice with the route that will refuse forces
+    // the spare to answer through the walk — the path where a pool pick could be
+    // mislabelled. Left to the coin, this test exercised that path half the time and
+    // passed either way, which is a test that reports success for work it did not do.
+    const ladder = { ...initialState(CODE_ARCH.tiers), answeredBy: { t1: "zai-coding-plan/glm-5.2" } };
+    store.db.prepare("UPDATE review SET ladder = ? WHERE id = 'r1'").run(JSON.stringify(ladder));
+
+    const reviewer = new Answers(["zai-coding-plan/glm-5.2"]);
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: nicknamed() });
+
+    expect(reviewer.asked, "the kept route first, then the rest of the pool").toStrictEqual([
+      "zai-coding-plan/glm-5.2",
+      "zai-coding-plan2/glm-5.2",
+    ]);
+    const note = String(
+      (store.db.prepare("SELECT unavailable FROM tier_run WHERE review_id='r1' AND tier='t1' ORDER BY id DESC LIMIT 1").get() as
+        | Record<string, string>
+        | undefined)?.["unavailable"] ?? "",
+    );
+    expect(note, "a second subscription to the same plan is not a concession").not.toContain("was answered by");
+  });
+
+  it("falls to the configured fallback only once the whole pool is out", async () => {
+    const reviewer = new Answers(["zai-coding-plan/glm-5.2", "zai-coding-plan2/glm-5.2"]);
+    await runRound({
+      store, reviewer, reviewId: "r1", principal: "p", worktree: dir,
+      type: nicknamed(["openrouter/z-ai/glm-5.2"]),
+    });
+
+    expect(reviewer.asked, "both plans first, the metered twin last").toStrictEqual([
+      ...reviewer.asked.slice(0, 2),
+      "openrouter/z-ai/glm-5.2",
+    ]);
+    expect(reviewer.asked.slice(0, 2).sort()).toStrictEqual([
+      "zai-coding-plan/glm-5.2",
+      "zai-coding-plan2/glm-5.2",
+    ]);
+  });
+
+  /** WHEN NOTHING IS LEFT, SAY SO, and name every route that refused (D-105, INV-1). */
+  it("names every route when the pool and the fallbacks are all out", async () => {
+    const reviewer = new Answers([
+      "zai-coding-plan/glm-5.2",
+      "zai-coding-plan2/glm-5.2",
+      "openrouter/z-ai/glm-5.2",
+    ]);
+    const r = await runRound({
+      store, reviewer, reviewId: "r1", principal: "p", worktree: dir,
+      type: nicknamed(["openrouter/z-ai/glm-5.2"]),
+    });
+
+    // The tier was stepped over (D-48), so the account of WHY is on its run rather than in
+    // the decision — and that account has to name every route, or a reader concludes the
+    // fallback was never tried.
+    expect(r.decision.kind, "an unpayable tier does not fail the review").not.toBe("stopped");
+    const note = String(
+      (store.db.prepare("SELECT unavailable FROM tier_run WHERE review_id='r1' AND tier='t1' ORDER BY id DESC LIMIT 1").get() as
+        | Record<string, string>
+        | undefined)?.["unavailable"] ?? "",
+    );
+    expect(note).toContain("zai-coding-plan2/glm-5.2");
+    expect(note).toContain("openrouter/z-ai/glm-5.2");
+  });
+});
+
 describe("skip_if_quota together with a fallback", () => {
   const bothSet = (...fallback: string[]) => ({
     ...CODE_ARCH,

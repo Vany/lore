@@ -1,7 +1,7 @@
 import { readdirSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
-  ladderChanged, DEFAULT_TIERS, anyTierRan, initialState, loadTiers, markAnsweredBy, markUnavailable, settle, soleVendorOf, step, vendorOf, type Decision, type LadderState, type Tier, ladderFingerprint } from "./ladder.ts";
+  ladderChanged, DEFAULT_TIERS, anyTierRan, initialState, loadTiers, loadPools, markAnsweredBy, markUnavailable, poolOrder, routesFor, settle, soleVendorOf, step, vendorOf, type Decision, type LadderState, type Tier, ladderFingerprint } from "./ladder.ts";
 
 const clean = (state: LadderState) => step({ state, raised: [] });
 
@@ -680,5 +680,86 @@ describe("the vendor behind a review is the one that answered", () => {
       t2: "zai-coding-plan/glm-5.2",
       t3: "zai-coding-plan/glm-5.2",
     });
+  });
+});
+
+/**
+ * A NICKNAME IS THE MODEL; THE LIST IS THE ROUTES TO IT.
+ *
+ * Two subscriptions to one company are one reviewer reachable two ways — the same
+ * opinion, twice the quota. `fallback` could not express that: it had to carry both "the
+ * same model somewhere else" and "something else entirely", with position as the only
+ * hint which was meant.
+ */
+describe("model pools", () => {
+  const file = (models: string, tierModel: string) => `{
+    "models": ${models},
+    "tiers": [{"id":"t0","kind":"deterministic","stage":"fast"},
+              {"id":"t1","kind":"model","model":"${tierModel}","stage":"fast"}]
+  }`;
+  const POOL = `{"GLM5.2": ["zai-coding-plan/glm-5.2", "zai-coding-plan2/glm-5.2"]}`;
+
+  it("loads a ladder that defines pools, and one that does not", () => {
+    expect(loadPools(file(POOL, "GLM5.2"))["GLM5.2"]).toStrictEqual([
+      "zai-coding-plan/glm-5.2",
+      "zai-coding-plan2/glm-5.2",
+    ]);
+    // The bare-array shape every deployed config had before nicknames still loads, and
+    // brings no pools. Refusing it would turn a stale LORE_TIERS into a boot crash-loop.
+    expect(loadPools(`[{"id":"t0","kind":"deterministic","stage":"fast"},
+      {"id":"t1","kind":"model","model":"a/one","stage":"fast"}]`)).toStrictEqual({});
+  });
+
+  it("expands a tier's nickname to its routes, and a plain id to itself", () => {
+    const pools = { GLM5: ["p1/glm", "p2/glm"] };
+    const tier = (model: string): Tier => ({ id: "t1", kind: "model", model, stage: "fast" });
+    expect(routesFor(tier("GLM5"), pools)).toStrictEqual(["p1/glm", "p2/glm"]);
+    expect(routesFor(tier("openrouter/z-ai/glm-5.2"), pools)).toStrictEqual(["openrouter/z-ai/glm-5.2"]);
+  });
+
+  /**
+   * A MISTYPED NICKNAME WOULD OTHERWISE BE HANDED TO OPENCODE as a model id and come back
+   * as a provider error in the middle of somebody's review — the same fault the startup
+   * fallback check exists to pull forward to a moment when someone is watching.
+   */
+  it("refuses a tier that names a pool which does not exist", () => {
+    expect(() => loadTiers(file(POOL, "GLM52"))).toThrow(/neither a provider\/model id nor one of the defined pools/);
+  });
+
+  // Only where nicknames exist: a ladder with no pools has none to mistype, and its model
+  // ids are whatever they have always been.
+  it("leaves a pool-less ladder's model ids alone", () => {
+    expect(() => loadTiers(`[{"id":"t0","kind":"deterministic","stage":"fast"},
+      {"id":"t1","kind":"model","model":"m","stage":"fast"}]`)).not.toThrow();
+  });
+
+  it("refuses a route listed twice in one pool", () => {
+    expect(() => loadTiers(file(`{"GLM5.2": ["p/glm", "p/glm"]}`, "GLM5.2"))).toThrow(/same route twice/);
+  });
+
+  it("refuses a pool entry that is not a provider/model id", () => {
+    expect(() => loadTiers(file(`{"GLM5.2": ["glm"]}`, "GLM5.2"))).toThrow(/not a provider\/model id/);
+  });
+
+  /**
+   * EVERY ORDER, AND NO ROUTE LOST. Random is the honest policy because nothing publishes
+   * how much of a subscription is left; what must not happen is a shuffle that drops or
+   * duplicates a route, which is how a "random" pick quietly becomes a fixed one.
+   */
+  it("shuffles without losing or duplicating a route", () => {
+    const routes = ["a/1", "b/2", "c/3", "d/4"];
+    const seen = new Set<string>();
+    for (let i = 0; i < 200; i++) {
+      const out = poolOrder(routes);
+      expect([...out].sort()).toStrictEqual([...routes].sort());
+      seen.add(out.join(","));
+    }
+    expect(seen.size, "200 shuffles of four routes should not all agree").toBeGreaterThan(1);
+  });
+
+  it("is deterministic when the randomness is", () => {
+    expect(poolOrder(["a/1", "b/2", "c/3"], () => 0)).toStrictEqual(poolOrder(["a/1", "b/2", "c/3"], () => 0));
+    expect(poolOrder(["a/1"], () => 0.99)).toStrictEqual(["a/1"]);
+    expect(poolOrder([], () => 0.5)).toStrictEqual([]);
   });
 });

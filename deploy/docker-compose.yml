@@ -189,6 +189,13 @@ services:
       # Z.AI Coding Plan. opencode reads this straight from the environment, so a
       # headless host needs no interactive login.
       ZHIPU_API_KEY: ${ZHIPU_API_KEY:-}
+      # THE SECOND Z.AI PLAN, reached as the custom provider `zai-coding-plan2` in
+      # opencode.json. A subscription that is out of quota is out for every tier at once,
+      # so a second one is the only spare capacity that survives the first running dry —
+      # and opencode's `auth login` cannot reach a custom provider id at all, because its
+      # picker lists the built-in catalogue and nothing else. The key comes in by name,
+      # exactly as the first one does, so the config file stays safe to copy.
+      ZAI2_API_KEY: ${ZAI2_API_KEY:-}
       # The plane MCP config references these by name rather than embedding the
       # key, so the config file is safe to copy and the secret stays in .env.
       PLANE_API_KEY: ${PLANE_API_KEY:-}
