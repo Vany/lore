@@ -2532,6 +2532,58 @@ export class Store {
       .run(`tier-unavailable:${tierId}`, JSON.stringify({ until: untilIso, why, failures, stated, probedAt: kept }));
   }
 
+  /**
+   * The same fact, about ONE ROUTE rather than one tier (D-93).
+   *
+   * A tier whose model names a pool has several subscriptions behind it, and their quotas
+   * are independent: `zai-coding-plan` can be dry while `zai-coding-plan2` is untouched,
+   * and both are `t2`. A per-tier mark cannot say that — it would either strike out a
+   * plan that is fine or keep asking one that is empty.
+   *
+   * **Optimistic to begin with.** Vany: *"let's at the start assume all connections have
+   * quota, and clarify if it is; and if it is not, what time of release when it rejects to
+   * work."* Absence of a record means the route is believed good, so a fresh service asks
+   * rather than assumes, and only a refusal writes anything down. Nothing here is inferred
+   * from a plan's name or from the calendar.
+   *
+   * `stated` carries the same weight it does for a tier and for the same reason: a time
+   * the PROVIDER named is a fact about itself, true for every review at once, while our
+   * doubling backoff is a guess — and a review must not narrow its own coverage on
+   * somebody else's guess (D-90).
+   */
+  markRouteUnavailable(model: string, untilIso: string, why: string, failures: number, stated = false): void {
+    this.db
+      .prepare("INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+      .run(`route-unavailable:${model}`, JSON.stringify({ until: untilIso, why, failures, stated }));
+  }
+
+  /** Forgotten the moment the route answers, exactly as for a tier. */
+  clearRouteUnavailable(model: string): void {
+    this.db.prepare("DELETE FROM meta WHERE key = ?").run(`route-unavailable:${model}`);
+  }
+
+  /**
+   * What is known about one route being out of quota, or `undefined` if nothing is.
+   *
+   * Returned even when `until` has passed, like its per-tier twin: the failure count is
+   * what the next backoff is computed from, and an operator wants to know a route failed
+   * at all rather than only that it is failing now.
+   */
+  routeUnavailable(model: string): { readonly until: string; readonly why: string; readonly failures: number; readonly stated: boolean } | undefined {
+    const row = this.db.prepare("SELECT value FROM meta WHERE key = ?").get(`route-unavailable:${model}`) as
+      | Record<string, string>
+      | undefined;
+    if (row?.["value"] === undefined) return undefined;
+    try {
+      const v = JSON.parse(row["value"]) as { until?: string; why?: string; failures?: number; stated?: boolean };
+      return { until: v.until ?? "", why: v.why ?? "", failures: v.failures ?? 1, stated: v.stated === true };
+    } catch {
+      // Unreadable is not "out of quota". A row we cannot parse must not silently strike
+      // a paid-for route out of every ladder that names it.
+      return undefined;
+    }
+  }
+
   /** Forgotten the moment the tier answers — a stale mark is a tier we stop using for nothing. */
   clearTierUnavailable(tierId: string): void {
     this.db.prepare("DELETE FROM meta WHERE key = ?").run(`tier-unavailable:${tierId}`);

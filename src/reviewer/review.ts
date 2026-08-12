@@ -22,6 +22,7 @@ import {
   markAnsweredBy,
   poolOrder,
   routesFor,
+  withQuota,
   settle,
   step,
   type Decision,
@@ -747,7 +748,17 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     // (D-80) a different model to continue — a cold start wearing the configuration of a
     // warm one. Vany: *"if a model is chosen, use it — this rule is only for the initial
     // choosing."*
-    const routes = routesFor(tier, loadPools());
+    const all = routesFor(tier, loadPools());
+    // WHAT WE BELIEVE STILL HAS QUOTA. Nothing is assumed out until a provider has said so
+    // and named a time; a route we have never seen refuse is asked, not guessed about.
+    //
+    // ONLY WHERE THERE IS A CHOICE. A tier with one route has nothing to choose between,
+    // and skipping it here would silence D-94's probe — the fifteen-minute question that
+    // asks a cooled-off tier whether it is back, which is the only way lore ever finds
+    // out. Per-route memory exists to pick among a pool; the per-tier cool-off already
+    // governs whether a lone route is asked at all.
+    const believed = all.length > 1 ? withQuota(all, (m) => store.routeUnavailable(m)) : { usable: all };
+    const routes = believed.usable;
     const stuck = review.ladder.answeredBy?.[tier.id];
     // THE KEPT ROUTE FIRST, AND THE REST STILL BEHIND IT. Collapsing the pool to the
     // chosen route alone was the first version, and it threw the feature away at the
@@ -760,6 +771,17 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
         : stuck !== undefined && routes.includes(stuck)
           ? [stuck, ...poolOrder(routes.filter((r) => r !== stuck))]
           : poolOrder(routes);
+    // EVERY ROUTE IS OUT, AND THE PROVIDERS SAID SO. Asking anyway would spend a call to
+    // be told again what we were already told, and D-90 settled that for tiers: a stated
+    // cool-off skips the call. The refusal names the time the first one comes back, which
+    // is the whole of what a reader can act on.
+    if ("until" in believed && believed.until !== undefined) {
+      throw new Exhausted(
+        `no route for tier ${tier.id} has quota: ${all.join(", ")} — each refused and named its own reset. ` +
+          `The earliest comes back at ${believed.until}.`,
+        believed.until,
+      );
+    }
     // `tier.model` when the tier has no pool — the ordinary single-route case, unchanged.
     const primaryRoute = pool[0] ?? tier.model ?? "";
     if (primaryRoute !== tier.model) chosenRoute = primaryRoute;
@@ -785,6 +807,10 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       // background screen ever delivered it — a review could prove a tier alive and the
       // mark stood until its clock ran out.
       if (down !== undefined) store.clearTierUnavailable(tier.id);
+      // ONE SUCCESS CLEARS THE ROUTE TOO. A stale mark is a subscription lore has stopped
+      // using for nothing, and the promise "one success clears this" has to hold at both
+      // levels or the pool shrinks permanently on a bad afternoon.
+      store.clearRouteUnavailable(primaryRoute);
     } catch (e) {
       // THE SAME MODEL, SOMEWHERE THAT IS NOT OUT (D-93).
       //
@@ -814,6 +840,16 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       // different things, and the boundary is what tells them apart. A pool route is the
       // SAME model on another plan and costs the review nothing; a fallback is a
       // concession, which is why only it is reported as one.
+      // WHAT THIS ROUTE SAID, kept against the route rather than the tier. Two plans behind
+      // one tier have independent quota, so a per-tier mark would either strike out a plan
+      // that is fine or keep asking one that is empty. The provider's own reset time is
+      // used when it named one; otherwise `retryAt` supplies the doubling guess, and the
+      // difference is recorded so a guess can never skip a call (D-90).
+      if (e instanceof Exhausted) {
+        const seen = store.routeUnavailable(primaryRoute)?.failures ?? 0;
+        const { until, stated } = retryAt(Date.now(), seen + 1, e.resetAt);
+        store.markRouteUnavailable(primaryRoute, until, e.message, seen + 1, stated);
+      }
       const spare = pool.slice(1);
       const chain = [...spare, ...(tier.fallback ?? [])];
       if (!(e instanceof Exhausted) || chain.length === 0) throw e;
@@ -871,6 +907,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
             model: twinModel,
             result: await input.reviewer.review({ ...tier, model: twinModel }, prompt, worktree, reviewId, stillWanted),
           };
+          store.clearRouteUnavailable(twinModel);
           break;
         } catch (twin) {
           // A CANCEL IS NOT A PROVIDER FAULT, and must not be laundered into one.
@@ -883,6 +920,11 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
           // life and the worker enqueued its next round.
           if (!stillWanted()) throw twin;
           const why = twin instanceof Error ? twin.message : String(twin);
+          if (twin instanceof Exhausted) {
+            const seen = store.routeUnavailable(twinModel)?.failures ?? 0;
+            const at = retryAt(Date.now(), seen + 1, twin.resetAt);
+            store.markRouteUnavailable(twinModel, at.until, why, seen + 1, at.stated);
+          }
           console.error(`[lore:log] ${reviewId}: the fallback ${twinModel} failed too — ${why}`);
           refused.push(`${twinModel}: ${why}`);
 

@@ -183,6 +183,45 @@ export function routesFor(tier: Tier, pools: ModelPools): readonly string[] {
   return pools[named] ?? (named === "" ? [] : [named]);
 }
 
+/** What is known about a route's quota, as `routeUnavailable` returns it. */
+export interface RouteState {
+  readonly until: string;
+  readonly stated: boolean;
+}
+
+/**
+ * Which of these routes we believe can be paid for, and when the rest come back.
+ *
+ * **Optimistic by default** — Vany: *"at the start assume all connections have quota, and
+ * clarify if it is; and if it is not, what time of release when it rejects to work."* A
+ * route nobody has seen refuse is believed good, so a fresh service asks rather than
+ * assumes and learns from the answer.
+ *
+ * **Only a PROVIDER-STATED reset removes a route from the list**, which is D-90's rule
+ * about tiers applied to routes, and it is the difference between evidence and a guess.
+ * A time the provider named is a fact about itself; our doubling backoff is a guess, and
+ * skipping a paid-for route on a guess narrows the review's coverage on nothing.
+ *
+ * When every route is stated-out, `usable` is empty and `until` is the EARLIEST release —
+ * "we have no model for this, and here is when we will". Reporting that beats spending a
+ * call to be told again what the provider has already said.
+ */
+export function withQuota(
+  routes: readonly string[],
+  known: (model: string) => RouteState | undefined,
+  now = new Date().toISOString(),
+): { readonly usable: readonly string[]; readonly until?: string } {
+  const out: string[] = [];
+  const waits: string[] = [];
+  for (const r of routes) {
+    const k = known(r);
+    if (k !== undefined && k.stated && k.until > now) waits.push(k.until);
+    else out.push(r);
+  }
+  const soonest = [...waits].sort()[0];
+  return out.length > 0 || soonest === undefined ? { usable: out } : { usable: out, until: soonest };
+}
+
 /**
  * The order to try a pool's routes in, chosen once and then kept (D-93).
  *

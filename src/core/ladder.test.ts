@@ -1,7 +1,7 @@
 import { readdirSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
-  ladderChanged, DEFAULT_TIERS, anyTierRan, initialState, loadTiers, loadPools, markAnsweredBy, markUnavailable, poolOrder, routesFor, settle, soleVendorOf, step, vendorOf, type Decision, type LadderState, type Tier, ladderFingerprint } from "./ladder.ts";
+  ladderChanged, DEFAULT_TIERS, anyTierRan, initialState, loadTiers, loadPools, markAnsweredBy, markUnavailable, poolOrder, routesFor, settle, withQuota, soleVendorOf, step, vendorOf, type Decision, type LadderState, type Tier, ladderFingerprint } from "./ladder.ts";
 
 const clean = (state: LadderState) => step({ state, raised: [] });
 
@@ -761,5 +761,60 @@ describe("model pools", () => {
     expect(poolOrder(["a/1", "b/2", "c/3"], () => 0)).toStrictEqual(poolOrder(["a/1", "b/2", "c/3"], () => 0));
     expect(poolOrder(["a/1"], () => 0.99)).toStrictEqual(["a/1"]);
     expect(poolOrder([], () => 0.5)).toStrictEqual([]);
+  });
+});
+
+/**
+ * OPTIMISTIC UNTIL A PROVIDER SAYS OTHERWISE.
+ *
+ * Vany: *"at the start assume all connections have quota, and clarify if it is; and if it
+ * is not, what time of release when it rejects to work."* Nothing here is inferred from a
+ * plan's name or the calendar — a route is believed good until a call to it refuses, and
+ * the refusal carries the time it comes back.
+ */
+describe("which routes are believed to have quota", () => {
+  const R = ["p1/glm", "p2/glm", "p3/glm"];
+  const NOW = "2026-08-12T12:00:00.000Z";
+  const LATER = "2026-08-12T18:00:00.000Z";
+  const EARLIER = "2026-08-12T13:00:00.000Z";
+  const PAST = "2026-08-12T09:00:00.000Z";
+
+  it("believes every route nobody has seen refuse", () => {
+    expect(withQuota(R, () => undefined, NOW)).toStrictEqual({ usable: R });
+  });
+
+  it("drops a route a provider said is out until later", () => {
+    const known = (m: string) => (m === "p2/glm" ? { until: LATER, stated: true } : undefined);
+    expect(withQuota(R, known, NOW).usable).toStrictEqual(["p1/glm", "p3/glm"]);
+  });
+
+  it("takes a route back once its stated reset has passed", () => {
+    const known = (m: string) => (m === "p2/glm" ? { until: PAST, stated: true } : undefined);
+    expect(withQuota(R, known, NOW).usable).toStrictEqual(R);
+  });
+
+  /**
+   * A GUESS MAY NOT SKIP A CALL (D-90). A time the provider NAMED is a fact about itself,
+   * true for every review at once; lore's doubling backoff is a guess, and a review that
+   * skips a paid-for route on somebody else's guess narrows its own coverage on nothing.
+   */
+  it("still asks a route whose cool-off we only guessed at", () => {
+    const known = (m: string) => (m === "p2/glm" ? { until: LATER, stated: false } : undefined);
+    expect(withQuota(R, known, NOW).usable).toStrictEqual(R);
+  });
+
+  /**
+   * WHEN NOTHING IS LEFT, SAY WHEN IT COMES BACK. That is the answer to "we have no model
+   * for this" that a reader can act on, and it is the EARLIEST of them — the first moment
+   * the tier can run again, not the last.
+   */
+  it("reports the soonest release when every route is out", () => {
+    const known = (m: string) => ({ until: m === "p2/glm" ? EARLIER : LATER, stated: true });
+    expect(withQuota(R, known, NOW)).toStrictEqual({ usable: [], until: EARLIER });
+  });
+
+  it("offers no time while any route can still be asked", () => {
+    const known = (m: string) => (m === "p1/glm" ? { until: LATER, stated: true } : undefined);
+    expect(withQuota(R, known, NOW).until).toBeUndefined();
   });
 });

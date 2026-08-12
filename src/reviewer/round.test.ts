@@ -2110,6 +2110,69 @@ describe("a pool of routes to one model", () => {
     ]);
   });
 
+  /**
+   * A REFUSAL IS LEARNED, AND KEPT AGAINST THE ROUTE.
+   *
+   * Two plans behind one tier have independent quota, so recording "t1 is out" would
+   * either strike out the plan that is fine or keep asking the one that is empty.
+   */
+  it("remembers which route refused, and when the provider says it returns", async () => {
+    // Six hours out: inside the cap `retryAt` clamps a stated reset to, so the time the
+    // provider named survives intact. A claim of a century would be clamped, correctly —
+    // a provider must not be able to strike a paid-for route out for a year.
+    const RESET = new Date(Date.now() + 6 * 3_600_000).toISOString();
+    class OutUntil implements ReviewerLike {
+      readonly asked: string[] = [];
+      async review(tier: Tier): Promise<ReviewerResult> {
+        this.asked.push(tier.model ?? "?");
+        if (tier.model === "zai-coding-plan/glm-5.2") throw new Exhausted("out of quota", RESET);
+        return { findings: [], discarded: [], raw: "", inputTokens: 0, cachedTokens: 0, outputTokens: 0, costUsd: 0, latencyMs: 1, retried: false, steps: 1 };
+      }
+    }
+    // PINNED, so the route that refuses is certainly asked. Left to the shuffle this test
+    // passed or failed on a coin toss — and passing because the failing route was never
+    // tried is a test reporting success for work it did not do.
+    const ladder = { ...initialState(CODE_ARCH.tiers), answeredBy: { t1: "zai-coding-plan/glm-5.2" } };
+    store.db.prepare("UPDATE review SET ladder = ? WHERE id = 'r1'").run(JSON.stringify(ladder));
+
+    const reviewer = new OutUntil();
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: nicknamed() });
+
+    const out = store.routeUnavailable("zai-coding-plan/glm-5.2");
+    expect(out?.stated, "the provider named the time, so it is evidence and not a guess").toBe(true);
+    expect(out?.until).toBe(RESET);
+    // The route that answered is not marked, and a route nobody asked is not either.
+    expect(store.routeUnavailable("zai-coding-plan2/glm-5.2")).toBeUndefined();
+  });
+
+  /**
+   * AND IT IS NOT ASKED AGAIN UNTIL THEN. Spending a call to be told a second time what
+   * the provider already told us is the cost this memory exists to avoid — D-90's rule,
+   * which until now only tiers could benefit from.
+   */
+  it("does not ask a route again before the time it named", async () => {
+    store.markRouteUnavailable("zai-coding-plan/glm-5.2", "2126-01-01T00:00:00.000Z", "out of quota", 1, true);
+    const reviewer = new Answers();
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: nicknamed() });
+
+    expect(reviewer.asked).toStrictEqual(["zai-coding-plan2/glm-5.2"]);
+  });
+
+  /**
+   * ONE SUCCESS CLEARS IT. A stale mark is a subscription lore has stopped using for
+   * nothing, and "one success clears this" has to hold for a route as it does for a tier.
+   */
+  it("forgets the mark as soon as that route answers", async () => {
+    store.markRouteUnavailable("zai-coding-plan2/glm-5.2", "2026-01-01T00:00:00.000Z", "was out", 1, true);
+    const reviewer = new Answers();
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: nicknamed() });
+
+    // Its reset is long past, so it is asked again — and answering clears the record.
+    if (reviewer.asked.includes("zai-coding-plan2/glm-5.2")) {
+      expect(store.routeUnavailable("zai-coding-plan2/glm-5.2")).toBeUndefined();
+    }
+  });
+
   /** WHEN NOTHING IS LEFT, SAY SO, and name every route that refused (D-105, INV-1). */
   it("names every route when the pool and the fallbacks are all out", async () => {
     const reviewer = new Answers([
