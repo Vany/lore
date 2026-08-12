@@ -1862,6 +1862,21 @@ only, reasoning that a lone route was the per-tier cool-off's business; that lef
 lone-primary case (t2's kimi, exactly) re-confirming its refusal on every round, which is
 the case the whole feature was asked about.
 
+**A nickname must work everywhere a model id does, and every place it did not was found
+by shipping it.** Six defects in the day after pools went live, all one family: some
+consumer of `tier.model` received the pool's NAME. The background screen died every hour
+(`model id 'GLM5.2' is not provider/model` — loud, bounded, four documents waiting); the
+prompt budget read "no such model" as "no measurable window" and silently disabled the
+fit-check; the proposer and its critic would have done the same, and the critic's vendor
+comparison read the nickname as its own vendor — one company criticising itself wearing
+two names. The fixes: one-shot callers resolve through `concreteRoute` (and say "no model
+for this" out loud when every route is parked); the budget fits the SMALLEST twin in the
+pool, because the prompt is built before the roll; the critic compares vendors of
+resolved routes. Two guards came with them: a pool that mixes models is refused at load —
+its routes are interchangeable by definition or the tier's identity means nothing — and a
+synthetic "all routes parked" refusal never writes a tier cool-off, because *"the
+provider said its limit resets then"* must not be written when no provider said anything.
+
 **Random, and the reason outranks the choice.** Nothing publishes how much of a
 subscription is left, so any policy cleverer than a coin toss would be guessing dressed as
 arithmetic. **Chosen once and then kept** — Vany: *"if a model is chosen, use it; this rule

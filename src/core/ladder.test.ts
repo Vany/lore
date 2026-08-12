@@ -1,7 +1,7 @@
 import { readdirSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
-  ladderChanged, DEFAULT_TIERS, anyTierRan, initialState, loadTiers, loadPools, markAnsweredBy, markUnavailable, fallbackRoutes, poolOrder, routesFor, settle, withQuota, soleVendorOf, step, vendorOf, type Decision, type LadderState, type Tier, ladderFingerprint } from "./ladder.ts";
+  ladderChanged, DEFAULT_TIERS, anyTierRan, initialState, loadTiers, loadPools, markAnsweredBy, markUnavailable, concreteRoute, fallbackRoutes, poolOrder, routesFor, settle, withQuota, soleVendorOf, step, vendorOf, type Decision, type LadderState, type Tier, ladderFingerprint } from "./ladder.ts";
 
 const clean = (state: LadderState) => step({ state, raised: [] });
 
@@ -852,5 +852,52 @@ describe("the routes a ladder's fallbacks can reach", () => {
 
   it("is empty for a ladder that configures no fallback", () => {
     expect(fallbackRoutes([{ id: "t1", kind: "model", model: "a/one", stage: "fast" }], {})).toStrictEqual([]);
+  });
+});
+
+/**
+ * ONE ROUTE FOR THE CALLERS THAT ARE NOT A ROUND — the screen, the bootstrap survey, the
+ * proposer. Each of them hands one model id to opencode, and a pool NAME is not one.
+ */
+describe("resolving a tier to one concrete route", () => {
+  const pools = { "GLM5.2": ["zp1/glm-5.2", "zp2/glm-5.2"] };
+  const tier = (model: string): Tier => ({ id: "t1", kind: "model", model, stage: "fast" });
+
+  it("hands a concrete model through untouched", () => {
+    expect(concreteRoute(tier("a/one"), pools, () => undefined)).toBe("a/one");
+  });
+
+  it("resolves a nickname to one of its routes", () => {
+    const out = concreteRoute(tier("GLM5.2"), pools, () => undefined);
+    expect(["zp1/glm-5.2", "zp2/glm-5.2"]).toContain(out);
+  });
+
+  it("avoids a parked route, and answers undefined when everything is", () => {
+    const parked = (m: string) => (m === "zp1/glm-5.2" ? { until: "2126-01-01T00:00:00.000Z", stated: false } : undefined);
+    expect(concreteRoute(tier("GLM5.2"), pools, parked)).toBe("zp2/glm-5.2");
+    const all = () => ({ until: "2126-01-01T00:00:00.000Z", stated: false });
+    expect(concreteRoute(tier("GLM5.2"), pools, all), "no model for this, said as undefined").toBeUndefined();
+  });
+});
+
+describe("a pool may not mix models", () => {
+  const file = (models: string) => `{
+    "models": ${models},
+    "tiers": [{"id":"t0","kind":"deterministic","stage":"fast"},
+              {"id":"t1","kind":"model","model":"GLM5.2","stage":"fast"}]
+  }`;
+
+  /**
+   * A pool's routes are interchangeable BY DEFINITION — the session key treats a re-pick
+   * as the same conversation partner, and "twice the quota, one opinion" is the sentence
+   * the feature was sold on. A pool mixing glm-5.2 with kimi-k3 makes tier identity mean
+   * nothing, so it is refused at load, where somebody is watching.
+   */
+  it("refuses a pool whose routes name different models", () => {
+    expect(() => loadTiers(file(`{"GLM5.2": ["zp1/glm-5.2", "kimi/k3"]}`))).toThrow(/mixes different models/);
+  });
+
+  it("accepts the same model reached through a gateway path", () => {
+    expect(() => loadTiers(file(`{"GLM5.2": ["zai-coding-plan/glm-5.2", "openrouter/z-ai/glm-5.2"]}`))).not.toThrow();
   });
 });

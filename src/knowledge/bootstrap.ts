@@ -13,6 +13,7 @@
  */
 
 import { CLAIM_MAX } from "../core/finding.ts";
+import { concreteRoute, loadPools } from "../core/ladder.ts";
 import { DEFAULT_TIERS, type Tier } from "../core/ladder.ts";
 import type { ReviewerLike } from "../reviewer/opencode.ts";
 import type { Store } from "../store/store.ts";
@@ -68,7 +69,13 @@ export async function bootstrap(opts: {
   // The cheap tier. This is a survey, not a judgement — paying the top tier to
   // describe a directory structure would be the same mistake as paying a model
   // to run a typechecker. Resolved before the ingest because the screen wants it too.
-  const tier = opts.tier ?? DEFAULT_TIERS.find((t) => t.kind === "model") ?? DEFAULT_TIERS[1];
+  const named = opts.tier ?? DEFAULT_TIERS.find((t) => t.kind === "model") ?? DEFAULT_TIERS[1];
+  // A nickname resolved to a route that can pay, for the same reason the screen does it:
+  // `tier.model` may name a pool, and opencode refuses a pool name as a model id. An
+  // unresolvable tier bootstraps without a model — survey skipped, ingest still runs —
+  // which is the behaviour a missing tier always had here.
+  const route = named === undefined ? undefined : concreteRoute(named, loadPools(), () => undefined);
+  const tier = named === undefined || route === undefined ? undefined : { ...named, model: route };
   const ask = opts.reviewer?.askFor?.bind(opts.reviewer);
 
   // Screened HERE too, rather than left for the next review to redo. This is the first

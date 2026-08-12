@@ -14,6 +14,7 @@
  */
 
 import { retryAt } from "../core/cooloff.ts";
+import { concreteRoute, loadPools } from "../core/ladder.ts";
 import { dataDir } from "../core/paths.ts";
 import { rescreen } from "../knowledge/rescreen.ts";
 import { screenFor, screenUsage, type ScreenUsage } from "../knowledge/screen.ts";
@@ -48,9 +49,9 @@ export async function screeningPass(
   // The CHEAPEST model tier, exactly as the inline screen used: this is a classification
   // with its evidence already in the prompt, and spending a deep tier on it would take
   // quota from the thing that reads branches.
-  const tier = tiers.find((t) => t.kind === "model" && t.model !== undefined);
+  const named = tiers.find((t) => t.kind === "model" && t.model !== undefined);
   const ask = reviewer.askFor?.bind(reviewer);
-  if (tier === undefined || ask === undefined) return;
+  if (named === undefined || ask === undefined) return;
 
   // INSIDE THE GUARD, both of them. The docstring promises this never rejects — the
   // caller is a timer and an unhandled rejection from a timer is a dead process — and
@@ -59,13 +60,27 @@ export async function screeningPass(
   // that says it cannot.
   let repos: readonly { readonly id: string; readonly name: string }[];
   let down;
+  let route: string | undefined;
   try {
-    down = store.tierUnavailable(tier.id);
+    down = store.tierUnavailable(named.id);
     repos = store.repos();
+    // THE NICKNAME RESOLVED TO A ROUTE THAT CAN PAY, before anything is asked. `t1.model`
+    // may be a pool name, and handing that to opencode is how the screen died every hour
+    // after pools shipped — `model id 'GLM5.2' is not provider/model`, loudly, four
+    // documents waiting. Inside this guard because it reads the store, and the docstring
+    // promises a closed database returns rather than rejects.
+    route = concreteRoute(named, loadPools(), (m) => store.routeUnavailable(m));
   } catch (e) {
     log(`[lore:log] background screen could not read the database: ${e instanceof Error ? e.message : String(e)}`);
     return;
   }
+  // No usable route means no pass this hour, said out loud: the rules stay live exactly
+  // as they do through a tier cool-off.
+  if (route === undefined) {
+    log(`[lore:log] background screen skipped — every route to ${named.model ?? "?"} is out of quota`);
+    return;
+  }
+  const tier = { ...named, model: route };
 
   // NOT EVEN INITIATED (D-90). A tier known to be down is not asked, and this is the
   // whole point: a deadline bounds a wasted call, and not making it costs nothing. With

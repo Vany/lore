@@ -189,6 +189,21 @@ describe("the critic is a different vendor", () => {
     expect(criticFor(sameVendor, ZAI)).toBeUndefined();
   });
 
+  /**
+   * AND A NICKNAME DOES NOT HIDE THE VENDOR. `vendorOf` on a pool NAME compares the name
+   * itself — "GLM5.2" is in no alias table — so a pooled proposer read as its own vendor
+   * and could be handed a critic from the same company: one model criticising itself,
+   * wearing two names. Resolved through the pools before comparing.
+   */
+  it("sees through a pool name to the vendor behind it", () => {
+    const pools = { "GLM5.2": ["zai-coding-plan/glm-5.2", "zai-coding-plan2/glm-5.2"] };
+    const pooled = { ...ZAI, id: "t1", model: "GLM5.2" };
+    const zaiConcrete = { ...ZAI, id: "t2", model: "zai-coding-plan/glm-5.2" };
+    // Without the pools, the concrete z.ai tier reads as a different vendor than "GLM5.2".
+    expect(criticFor([pooled, zaiConcrete], pooled, pools), "same company is not a critic").toBeUndefined();
+    expect(criticFor([pooled, KIMI], pooled, pools)?.id).toBe(KIMI.id);
+  });
+
   it("marks a proposal uncriticised when no second vendor exists", async () => {
     const r = await propose(
       { store, repoId, ask: scripted([[IDEA]]) },

@@ -696,6 +696,8 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   let fellBackTo: string | undefined;
   /** The concrete route this tier ran on, when its `model` named a pool rather than one. */
   let chosenRoute: string | undefined;
+  /** Whether the primary was actually CALLED — a synthetic refusal must not mark anything. */
+  let primaryAsked = false;
   try {
     // NOT ASKED AT ALL, when the PROVIDER has said it is out (D-90 widened).
     //
@@ -777,8 +779,6 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     // `tier.model` when the tier has no pool — the ordinary single-route case, unchanged.
     const primaryRoute = pool[0] ?? tier.model ?? "";
     if (primaryRoute !== tier.model && pool.length > 0) chosenRoute = primaryRoute;
-    /** Whether the primary was actually CALLED — a synthetic refusal must not mark it. */
-    let primaryAsked = false;
 
     try {
       // INSIDE THIS TRY, so a cool-off reaches the fallback below.
@@ -866,13 +866,29 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       // refusal we already have; re-asking it each round is the regular check Vany
       // refused. The probe exception does not apply here — a probing round proves the
       // PRIMARY, and learning a fallback recovered can wait for its backoff.
+      //
+      // AND THE KEPT ROUTE FIRST, exactly as in the primary pool. The first version
+      // shuffled fresh each round on the theory that a fallback is exceptional — and for
+      // a tier living on its super fallback the "exception" is every round: observed on
+      // rev_zbFO, t2 answered by plan1 in r2 and plan2 in r3, so the session that raised
+      // r2's findings was abandoned and a cold session judged the fixes. Vany's rule does
+      // not have an exception: *"if a model is chosen, use it."*
+      // AND NEVER THE PRIMARY AGAIN, NOR THE SAME ROUTE TWICE. The load-time guard
+      // refuses a fallback that literally repeats the tier's model, but a fallback POOL
+      // can contain the route the primary just ran on — walking to it buys a guaranteed
+      // second refusal with a real call, in the outage the chain exists for.
       const chain = [
-        ...spare,
-        ...(tier.fallback ?? []).flatMap((f) => {
-          const fanned = withQuota(routesFor({ ...tier, model: f }, pools), (m) => store.routeUnavailable(m)).usable;
-          return fanned.length > 1 ? poolOrder(fanned) : fanned;
-        }),
-      ];
+        ...new Set([
+          ...spare,
+          ...(tier.fallback ?? []).flatMap((f) => {
+            const fanned = withQuota(routesFor({ ...tier, model: f }, pools), (m) => store.routeUnavailable(m)).usable;
+            if (fanned.length <= 1) return fanned;
+            return stuck !== undefined && fanned.includes(stuck)
+              ? [stuck, ...poolOrder(fanned.filter((r) => r !== stuck))]
+              : poolOrder(fanned);
+          }),
+        ]),
+      ].filter((r) => r !== primaryRoute);
       if (!(e instanceof Exhausted) || chain.length === 0) throw e;
       // HELD, not written yet. `closeTierRun` OVERWRITES `unavailable`, so a note
       // recorded here would be erased by the success path a few lines below — which is
@@ -890,7 +906,13 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       // dropped, D-90's skip never engaged, and every later review re-paid the
       // rediscovery. A fact learned is a fact worth keeping whether or not the round that
       // learned it went on to succeed.
-      if (e.resetAt !== undefined) {
+      // ONLY WHAT A PROVIDER ACTUALLY SAID. The all-parked refusal above is synthetic and
+      // carries the earliest backoff expiry as its resetAt — writing THAT here would
+      // launder a guessed route backoff into a stated tier cool-off ("the provider said
+      // its limit resets then", said by nobody), which D-94 then probes next round,
+      // un-parking the route for exactly the call the parking exists to avoid. Caught by
+      // the stickiness test, whose second round asked the parked primary.
+      if (primaryAsked && e.resetAt !== undefined) {
         const { until } = retryAt(Date.now(), 1, e.resetAt);
         // lore-ok[b08d7cc0]: the finding is real and is fixed in the store, not here.
         // Five arguments erased the `probedAt` stamp the probe wrote moments earlier, so
@@ -1074,7 +1096,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     // error reaching here carries the FALLBACK provider's reset time — and writing it
     // against `tier-unavailable:<primary>` overwrites the primary's own mark, made moments
     // earlier, with a different provider's claim under identical wording.
-    if (fellBackTo === undefined && e instanceof Exhausted && e.resetAt !== undefined) {
+    if (fellBackTo === undefined && e instanceof Exhausted && e.resetAt !== undefined && primaryAsked) {
       const { until } = retryAt(Date.now(), 1, e.resetAt);
       store.markTierUnavailable(tier.id, until, `the provider said its limit resets then`, 1, true);
     }
@@ -1088,7 +1110,9 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
         // is what ran, and `throw twin` fires before the twin-attributed recording below —
         // so this row was the only one written, naming a flat-subscription model that
         // never ran while the dollars were the twin's.
-        ...((fellBackTo ?? tier.model) !== undefined ? { model: (fellBackTo ?? tier.model) as string } : {}),
+        ...((fellBackTo ?? chosenRoute ?? tier.model) !== undefined
+          ? { model: (fellBackTo ?? chosenRoute ?? tier.model) as string }
+          : {}),
         inputTokens: spent.input,
         cachedTokens: spent.cached,
         outputTokens: spent.output,
@@ -1228,7 +1252,10 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     // is the one table that says what was spent, and attributing metered OpenRouter spend
     // to a flat-subscription model that never ran would make the only record of real
     // money name the wrong provider.
-    ...(fellBackTo ?? tier.model) !== undefined ? { model: (fellBackTo ?? tier.model) as string } : {},
+    // THE ROUTE THAT RAN, never the nickname. `usage.model` said `GLM5.2` for a pool
+        // pick, which makes spend per subscription untraceable exactly when two
+        // subscriptions is the point.
+        ...(fellBackTo ?? chosenRoute ?? tier.model) !== undefined ? { model: (fellBackTo ?? chosenRoute ?? tier.model) as string } : {},
     inputTokens: result.inputTokens,
     cachedTokens: result.cachedTokens,
     outputTokens: result.outputTokens,

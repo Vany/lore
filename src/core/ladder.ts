@@ -201,6 +201,29 @@ export function fallbackRoutes(tiers: readonly Tier[], pools: ModelPools): reado
   ];
 }
 
+/**
+ * One concrete, believed-payable route for this tier — or `undefined` when every route is
+ * parked, which the caller reports as "no model for this" rather than discovering it as a
+ * provider error mid-call.
+ *
+ * FOR THE CALLERS THAT ARE NOT A REVIEW ROUND: the screen, the bootstrap survey, the
+ * proposer. Each of them picked a tier from the config and handed `tier.model` straight
+ * to opencode — which was fine for as long as a model id was a model id, and broke the
+ * hour nicknames shipped: the background screen died every hour with `model id 'GLM5.2'
+ * is not provider/model`, four documents waiting, until this existed. The round itself
+ * does NOT use this — it needs stickiness and the D-94 probe bypass, which one-shot
+ * callers have no use for.
+ */
+export function concreteRoute(
+  tier: Tier,
+  pools: ModelPools,
+  known: (model: string) => RouteState | undefined,
+  rand: () => number = Math.random,
+): string | undefined {
+  const usable = withQuota(routesFor(tier, pools), known).usable;
+  return usable.length > 1 ? poolOrder(usable, rand)[0] : usable[0];
+}
+
 /** What is known about a route's quota, as `routeUnavailable` returns it. */
 export interface RouteState {
   readonly until: string;
@@ -374,6 +397,19 @@ export function loadTiers(source = process.env["LORE_TIERS"]): readonly Tier[] {
       if (!r.includes("/")) {
         throw new UsageError(`LORE_TIERS: pool '${name}' contains '${r}', which is not a provider/model id.`);
       }
+    }
+    // ONE POOL, ONE MODEL. The whole premise of a pool is that its routes are
+    // interchangeable — the same reviewer reachable several ways — and every consumer
+    // leans on it: the session key treats a re-pick as the same conversation partner,
+    // `answeredBy` treats the pick as an accounting detail, and "twice the quota, one
+    // opinion" is the sentence the feature was sold on. A pool mixing glm-5.2 with
+    // kimi-k3 would be a ladder whose tier identity means nothing, enforced by nobody.
+    const names = new Set(routes.map((r) => r.split("/").pop() ?? r));
+    if (names.size > 1) {
+      throw new UsageError(
+        `LORE_TIERS: pool '${name}' mixes different models (${[...names].join(", ")}) — a pool is several ` +
+          `routes to ONE model; a different model belongs in \`fallback\`.`,
+      );
     }
   }
 

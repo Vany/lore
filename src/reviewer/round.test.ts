@@ -2238,6 +2238,62 @@ describe("a pool of routes to one model", () => {
   });
 
   /**
+   * THE CHOSEN FALLBACK ROUTE IS KEPT TOO — Vany's rule has no exception clause: *"if a
+   * model is chosen, use it."* The first version shuffled the fallback pool fresh every
+   * round, and for a tier living on its super fallback that is a new model instance per
+   * round: observed on rev_zbFO, t2's findings were raised by plan1's session and the
+   * fixes judged by a cold plan2 session.
+   */
+  it("keeps the fallback route it chose, on the next round", async () => {
+    // FOUR ROUTES AND TWO ROUNDS, so a shuffle cannot pass this by luck. The first
+    // version used the two-route pool and one round: with stickiness deleted it still
+    // passed every second run, which is a test reporting success for work it did not do.
+    process.env["LORE_TIERS"] = JSON.stringify({
+      models: { "GLM5.2": ["zp1/glm-5.2", "zp2/glm-5.2", "zp3/glm-5.2", "zp4/glm-5.2"] },
+      tiers: [{ id: "t0", kind: "deterministic", stage: "fast" }, { id: "t1", kind: "model", model: "GLM5.2", stage: "fast" }],
+    });
+    const type = {
+      ...CODE_ARCH,
+      t0: [] as const,
+      tiers: CODE_ARCH.tiers.map((t) => (t.id === "t1" ? { ...t, model: "kimi/k3", fallback: ["GLM5.2"] } : t)),
+    };
+    store.markRouteUnavailable("kimi/k3", "2126-01-01T00:00:00.000Z", "out", 3, false);
+    // The previous round settled on zp3 — the roll must not happen again, this round or next.
+    const ladder = { ...initialState(CODE_ARCH.tiers), answeredBy: { t1: "zp3/glm-5.2" } };
+    store.db.prepare("UPDATE review SET ladder = ? WHERE id = 'r1'").run(JSON.stringify(ladder));
+
+    // Raising on the first round keeps the ladder on t1, so the second round is the same
+    // tier walking the same chain — the case stickiness exists for.
+    class Raises extends Answers {
+      private n = 0;
+      override async review(tier: Tier): Promise<ReviewerResult> {
+        const out = await super.review(tier);
+        this.n += 1;
+        return this.n === 1 ? { ...out, findings: [HOLD_BUG] } : out;
+      }
+    }
+    const reviewer = new Raises();
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type });
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type });
+
+    expect(reviewer.asked, "the kept route both rounds, never a re-roll").toStrictEqual([
+      "zp3/glm-5.2",
+      "zp3/glm-5.2",
+    ]);
+  });
+
+  /** `usage.model` names the route that ran — the nickname makes per-plan spend untraceable. */
+  it("records the concrete route in usage, never the nickname", async () => {
+    const reviewer = new Answers();
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: nicknamed() });
+
+    const row = store.db.prepare("SELECT model FROM usage WHERE review_id='r1' ORDER BY id DESC LIMIT 1").get() as
+      | Record<string, string>
+      | undefined;
+    expect(String(row?.["model"])).toMatch(/^zai-coding-plan2?\/glm-5\.2$/);
+  });
+
+  /**
    * THE PROBE OUTRANKS THE PARKING (D-94 over the route filter). A probing round exists
    * to reach a provider we believe is down — filtered by that same belief, lore could
    * never again learn that anything recovered before its backoff ran out.

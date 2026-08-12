@@ -23,6 +23,7 @@
  */
 
 import type { Tier } from "../core/ladder.ts";
+import { concreteRoute, loadPools, routesFor, type ModelPools } from "../core/ladder.ts";
 import { DidNotRun } from "../core/errors.ts";
 import { vendorOf } from "../core/ladder.ts";
 import type { Listed, SessionResult } from "../reviewer/opencode.ts";
@@ -94,9 +95,14 @@ function knowledgeBlock(items: readonly KnowledgeItem[]): string {
  * and says so, rather than being graded by a sibling and presented as though it had been
  * challenged.
  */
-export function criticFor(tiers: readonly Tier[], proposer: Tier): Tier | undefined {
-  const mine = vendorOf(proposer.model ?? "");
-  return tiers.find((t) => t.kind === "model" && t.model !== undefined && vendorOf(t.model) !== mine);
+export function criticFor(tiers: readonly Tier[], proposer: Tier, pools: ModelPools = {}): Tier | undefined {
+  // THROUGH THE POOLS, because `vendorOf` on a nickname compares the nickname itself —
+  // "GLM5.2" is not in the alias table, so a pooled t1 would count as its own vendor and
+  // could be handed a critic from the same company. Any route of a pool carries the
+  // pool's vendor: the config refuses a pool that mixes models.
+  const vend = (t: Tier): string => vendorOf(routesFor(t, pools)[0] ?? t.model ?? "");
+  const mine = vend(proposer);
+  return tiers.find((t) => t.kind === "model" && t.model !== undefined && vend(t) !== mine);
 }
 
 export async function propose(deps: ProposeDeps, input: ProposeInput): Promise<ProposeResult> {
@@ -113,8 +119,15 @@ export async function propose(deps: ProposeDeps, input: ProposeInput): Promise<P
   }
 
   const models = input.tiers.filter((t) => t.kind === "model" && t.model !== undefined);
-  const proposer = models[models.length - 1];
-  if (proposer === undefined) throw new DidNotRun("no model tier is configured, so there is nothing to ask");
+  const namedProposer = models[models.length - 1];
+  if (namedProposer === undefined) throw new DidNotRun("no model tier is configured, so there is nothing to ask");
+  // Resolved for the same reason the screen resolves: a pool name is not a model id, and
+  // this path fails LOUD when nothing can pay — a proposal is somebody waiting at a CLI.
+  const proposerRoute = concreteRoute(namedProposer, loadPools(), () => undefined);
+  if (proposerRoute === undefined) {
+    throw new DidNotRun(`every route to ${namedProposer.model ?? "?"} is out of quota — nothing can propose`);
+  }
+  const proposer = { ...namedProposer, model: proposerRoute };
 
   const screenedAll: Proposal[] = [];
   const silent: string[] = [];
@@ -180,7 +193,10 @@ export async function propose(deps: ProposeDeps, input: ProposeInput): Promise<P
       continue;
     }
 
-    const critic = criticFor(models, proposer);
+    const namedCritic = criticFor(models, namedProposer, loadPools());
+    // Resolved exactly as the proposer was — a pool name is not a model id.
+    const criticRoute = namedCritic === undefined ? undefined : concreteRoute(namedCritic, loadPools(), () => undefined);
+    const critic = namedCritic === undefined || criticRoute === undefined ? undefined : { ...namedCritic, model: criticRoute };
     if (critic === undefined || attempted + 1 > input.budget) {
       // UNCRITICISED, and it says so on the proposal rather than in a footnote. A
       // reader who believes a second vendor challenged this when none did is exactly

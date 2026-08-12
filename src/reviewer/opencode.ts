@@ -29,6 +29,7 @@ import { createOpencodeClient } from "@opencode-ai/sdk";
 import { DidNotRun, Exhausted, ProviderAuthFailed, ServiceUnreachable, TierUnavailable, TooLargeForTier } from "../core/errors.ts";
 import { FindingSchema, type Finding } from "../core/finding.ts";
 import type { Tier } from "../core/ladder.ts";
+import { loadPools, routesFor } from "../core/ladder.ts";
 import { sessionKey, shouldCompact } from "./continuity.ts";
 import { Gate, type GateState } from "./gate.ts";
 import { DEFAULT_TIMEOUT_MS, longFetch } from "./long-fetch.ts";
@@ -596,7 +597,18 @@ export class Reviewer implements ReviewerLike {
    * is the failure this whole path exists to remove.
    */
   async promptBudgetChars(tier: Tier): Promise<number | undefined> {
-    const limit = await this.contextLimit(tier.model ?? "");
+    // A NICKNAME BUDGETS TO THE SMALLEST WINDOW IN ITS POOL. The prompt is built before
+    // the round picks a route, so it must fit WHICHEVER route the roll lands on —
+    // budgeting to the largest would overflow the smaller twin on a bad roll, and
+    // budgeting to none (what a nickname resolved to before this: `contextLimit` found
+    // no such model and returned undefined) silently disabled the fit-check for exactly
+    // the tiers pools were built for.
+    const model = tier.model ?? "";
+    const routes = model.includes("/") ? [model] : routesFor(tier, loadPools());
+    const limits = (await Promise.all(routes.map((r) => this.contextLimit(r)))).filter(
+      (l): l is number => l !== undefined,
+    );
+    const limit = limits.length === 0 ? undefined : Math.min(...limits);
     return limit === undefined ? undefined : Math.floor(limit * Reviewer.PROMPT_SHARE * Reviewer.CHARS_PER_TOKEN);
   }
 

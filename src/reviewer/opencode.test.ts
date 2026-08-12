@@ -165,7 +165,14 @@ function start(): Promise<void> {
         // would pass by never compacting.
         if (path === "/config/providers") {
           res.writeHead(200, { "content-type": "application/json" });
-          res.end(JSON.stringify({ providers: [{ id: "openrouter", models: { "z-ai/glm-5.2": { limit: { context: 1000 } } } }] }));
+          // Two pool twins with DIFFERENT windows, so the budget test can prove the
+          // prompt is fitted to the smaller one — an accidental max would pass a test
+          // whose twins agree.
+          res.end(JSON.stringify({ providers: [
+            { id: "openrouter", models: { "z-ai/glm-5.2": { limit: { context: 1000 } } } },
+            { id: "zp1", models: { "glm-5.2": { limit: { context: 2000 } } } },
+            { id: "zp2", models: { "glm-5.2": { limit: { context: 500 } } } },
+          ] }));
           return;
         }
         if (path.endsWith("/summarize")) {
@@ -632,6 +639,43 @@ describe("compacting a kept session", () => {
     await r.review(KEEPS, { initial: "A", continued: "B" }, "/tmp/wt", "rev1");
     const out = await r.review(KEEPS, { initial: "A", continued: "B" }, "/tmp/wt", "rev1");
     expect(out.findings, "the round still produced its answer").toHaveLength(1);
+  });
+});
+
+/**
+ * A NICKNAME BUDGETS TO THE SMALLEST WINDOW IN ITS POOL.
+ *
+ * The prompt is built before the round rolls a route, so it must fit whichever twin the
+ * roll lands on. Before this, `contextLimit` found no model called "GLM5.2" and returned
+ * undefined — which reads as "no measurable window, send everything", silently disabling
+ * the fit-check for exactly the tiers pools were built for.
+ */
+describe("the prompt budget of a pooled tier", () => {
+  const POOLED = JSON.stringify({
+    models: { "GLM5.2": ["zp1/glm-5.2", "zp2/glm-5.2"] },
+    tiers: [{ id: "t0", kind: "deterministic", stage: "fast" }, { id: "t1", kind: "model", model: "GLM5.2", stage: "fast" }],
+  });
+  let saved: string | undefined;
+  beforeEach(() => {
+    saved = process.env["LORE_TIERS"];
+    process.env["LORE_TIERS"] = POOLED;
+  });
+  afterEach(() => {
+    if (saved === undefined) delete process.env["LORE_TIERS"];
+    else process.env["LORE_TIERS"] = saved;
+  });
+
+  it("fits the prompt to the smallest twin, not the largest", async () => {
+    const r = reviewer();
+    const single = await r.promptBudgetChars({ id: "t1", kind: "model", model: "zp2/glm-5.2", stage: "fast" });
+    const pooled = await r.promptBudgetChars({ id: "t1", kind: "model", model: "GLM5.2", stage: "fast" });
+    expect(single).toBeDefined();
+    expect(pooled, "the 500-token twin bounds the pool, not the 2000-token one").toBe(single);
+  });
+
+  it("still answers undefined for a model nobody advertises", async () => {
+    const r = reviewer();
+    expect(await r.promptBudgetChars({ id: "t1", kind: "model", model: "nobody/knows", stage: "fast" })).toBeUndefined();
   });
 });
 

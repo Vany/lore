@@ -5,6 +5,48 @@ surprised me.
 
 ---
 
+## 2026-08-13 — session 55: the pool ships, and six defects surface in a day
+
+Vany asked one diagnostic question — *"look what happens with rev_zbFO, why t2 never
+run?"* — and the answer was "it ran twice", but pulling that thread found six defects in
+the pool feature I had shipped hours earlier. All one family: **every consumer of
+`tier.model` was a latent caller of the nickname**, and I had fixed only the round's
+primary call.
+
+1. **The fallback route re-rolled every round** — t2 on plan1 in r2, plan2 in r3, so the
+   session that raised the findings was abandoned and a cold one judged the fixes. Vany's
+   rule has no exception clause: *"if a model is chosen, use it."*
+2. **`usage.model` recorded the nickname**, making per-subscription spend untraceable
+   exactly when two subscriptions is the point.
+3. **A synthetic all-parked refusal was laundered into a stated tier cool-off** — my own
+   error object's `resetAt` flowed into "the provider said its limit resets then", which
+   no provider said, and D-94 then probed the fake mark and un-parked the route. Caught by
+   the stickiness test's second round asking a parked primary.
+4. **The hourly knowledge screen died every hour after the deploy** — `model id 'GLM5.2'
+   is not provider/model`, loud and bounded (rules stay live, documents wait), found by
+   greping the live log while hunting. The screen now resolves through `concreteRoute`
+   and skips the hour out loud when every route is parked.
+5. **The prompt budget silently died for pooled tiers** — `contextLimit("GLM5.2")` found
+   nothing, and "no measurable window" means "send everything", so the fit-check was off
+   for exactly the tiers pools serve. Budgets now fit the SMALLEST twin, because the
+   prompt is built before the roll.
+6. **The critic's vendor comparison read the nickname as its own vendor** — a pooled
+   proposer could be handed a critic from the same company, one model criticising itself
+   wearing two names.
+
+Plus two guards: a pool mixing models is refused at load, and the chain never re-asks the
+primary route (a fallback POOL can contain it even though a literal repeat is refused).
+
+**Method note, because it is the whole story:** four of the six were found by mutation —
+break the behaviour, watch which test fails, and when none does, the test was theatre.
+The stickiness test itself was caught passing on a coin toss (two routes, one round) and
+rebuilt as four routes across two rounds. The screen breakage was found by *reading the
+production log*, not the code: the code looked right and the log said otherwise. And the
+laundered cool-off was found by a test failing for what looked like a test bug and was
+the third real defect.
+
+---
+
 ## 2026-08-12 — session 54b: disk stops being lore's business, and a fallback becomes a list
 
 **Disk watching is gone entirely.** The host-percentage alerts went on 2026-08-06 (D-71);

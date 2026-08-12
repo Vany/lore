@@ -12,7 +12,7 @@
  * broken.
  */
 
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Tier } from "../core/ladder.ts";
 import type { ReviewerLike, SessionResult } from "../reviewer/opencode.ts";
 import { EXTRACTOR_VERSION, UNSCREENED } from "../knowledge/ingest.ts";
@@ -220,5 +220,71 @@ describe("a pass over several repositories", () => {
     const broken = new Store(":memory:");
     broken.close();
     await expect(screeningPass(broken, new Dead(), TIERS, silent)).resolves.toBeUndefined();
+  });
+});
+
+/**
+ * THE SCREEN RESOLVES A NICKNAME BEFORE ASKING (D-93 pools).
+ *
+ * `t1.model` may name a pool, and handing the pool's NAME to opencode is how the screen
+ * died every hour after pools shipped: `model id 'GLM5.2' is not provider/model`, said
+ * loudly once an hour while four documents waited. The pass now resolves to a route that
+ * can pay, and skips the hour — out loud — when nothing can.
+ */
+describe("a screen over a pooled tier", () => {
+  const POOLED = JSON.stringify({
+    models: { "GLM5.2": ["zp1/glm-5.2", "zp2/glm-5.2"] },
+    tiers: [
+      { id: "t0", kind: "deterministic", stage: "fast" },
+      { id: "t1", kind: "model", model: "GLM5.2", stage: "fast" },
+    ],
+  });
+  let saved: string | undefined;
+  beforeEach(() => {
+    saved = process.env["LORE_TIERS"];
+    process.env["LORE_TIERS"] = POOLED;
+  });
+  afterEach(() => {
+    if (saved === undefined) delete process.env["LORE_TIERS"];
+    else process.env["LORE_TIERS"] = saved;
+  });
+
+  /** Records the model each ask arrived with. */
+  class Notes implements ReviewerLike {
+    readonly asked: string[] = [];
+    async review(): Promise<never> {
+      throw new Error("not used");
+    }
+    askFor<T>(t: Tier, _p: string, _w: string, extract: (text: string) => { ok: boolean; items: readonly T[]; rejected: readonly string[]; why: string }): Promise<SessionResult<T>> {
+      this.asked.push(t.model ?? "?");
+      const listed = extract('```json\n{"not_rules":[]}\n```');
+      return Promise.resolve({ ...SPENT, items: listed.items } as SessionResult<T>);
+    }
+  }
+
+  const NICKNAMED: readonly Tier[] = [
+    { id: "t0", kind: "deterministic", stage: "fast" },
+    { id: "t1", kind: "model", model: "GLM5.2", stage: "fast" },
+  ];
+
+  it("asks a concrete route, never the nickname", async () => {
+    const { store } = seeded();
+    const reviewer = new Notes();
+    await screeningPass(store, reviewer, NICKNAMED, silent);
+
+    expect(reviewer.asked.length).toBeGreaterThan(0);
+    for (const m of reviewer.asked) expect(m, "a pool name is not a model id").toMatch(/^zp[12]\/glm-5\.2$/);
+  });
+
+  it("skips the hour, out loud, when every route is parked", async () => {
+    const { store } = seeded();
+    store.markRouteUnavailable("zp1/glm-5.2", "2126-01-01T00:00:00.000Z", "out", 3, false);
+    store.markRouteUnavailable("zp2/glm-5.2", "2126-01-01T00:00:00.000Z", "out", 3, false);
+    const said: string[] = [];
+    const reviewer = new Notes();
+    await screeningPass(store, reviewer, NICKNAMED, (l) => said.push(l));
+
+    expect(reviewer.asked, "nothing was spent re-confirming a parked pool").toStrictEqual([]);
+    expect(said.join(" "), "and the skip is stated, not silent").toMatch(/out of quota/);
   });
 });
