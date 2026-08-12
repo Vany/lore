@@ -187,7 +187,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-90** | **A tier that stopped answering is not asked again** — until the provider's own reset time (D-91), or a doubling cool-off when it named none. A STATED time also skips it in reviews | built 2026-08-09; widened same day |
 | **D-91** | **Subscribe, never wait.** opencode narrates every call on its event stream; a quota refusal arrives in seconds, with its reset time | built 2026-08-09 |
 | **D-92** | **t0 is not re-run on a tree it has already read**, and its pattern engines see the branch's files, not the repository | built 2026-08-09 |
-| **D-93** | **An exhausted subscription asks the same model through OpenRouter**, once, and the fallback is verified at startup | built 2026-08-09 |
+| **D-93** | **An exhausted subscription asks elsewhere** — a list of routes, tried in order, verified at startup | built 2026-08-09; list 2026-08-12 |
 | **D-94** | **A cooled-off tier is asked again every 15 minutes.** lore could hear a tier die and not hear it recover | built 2026-08-10 |
 | **D-49** | A single-vendor ladder reaches `passed_partial`, never `passed` | confirmed |
 | **D-50** | Exploration is **counted per review before it is capped**. Distribution measured 2026-08-11: longer rounds find LESS | cap `[OPEN]` |
@@ -1189,13 +1189,28 @@ floor is no worse than now.**
 Three things the implementation had to get right, none of them reopening the decision, and
 all three are how it is built:
 
-- **Sessions are released when the review ends** — `Reviewer.release(reviewId)` deletes
-  every session that review opened, called from the worker the moment the review reaches a
-  terminal state. Kept alive and never closed, 128 admitted reviews × 3 tiers is 384 live
-  sessions, so this is not housekeeping.
+- **Sessions are released when the review ends, by whichever path it ends.**
+  `Reviewer.release(reviewId)` deletes every session that review opened. Kept alive and
+  never closed, 128 admitted reviews × 3 tiers is 384 live sessions, so this is not
+  housekeeping — and the worker alone was not enough, because **two terminal paths never
+  reach it**. `review_cancel` on a review sitting in `findings_ready` runs with no job in
+  flight, so `cancel` releases its own; and the retention sweep marks abandoned reviews
+  `expired` in SQL, which nothing in that path could have known to release. The third
+  mechanism is therefore a RECONCILE in the worker's claim loop, on a one-minute timer —
+  kept sessions whose review is terminal, or gone, are released — written that way
+  deliberately so the next terminal path nobody thinks of is collected too. **On a timer
+  and not on the loop's idle branch**, which is where it was first put: a service with a
+  full queue never goes idle, and a queue is full exactly when expiries accumulate. Every
+  existing way a review can end predates the session map, which is the argument for not
+  enumerating them.
 - **A lore restart loses the session map**, which is in memory by choice. A requeued round
   finds nothing and starts cold — today's behaviour, already proven, so a restart costs
-  re-orientation and never a failure.
+  re-orientation and never a failure. What it does NOT recover is the sessions the previous
+  process left in opencode: nothing knows their ids any more, so they live until opencode
+  restarts. Accepted rather than solved — persisting the map would make a stale id
+  survive a restart and be spoken to as though it held a conversation it no longer has,
+  which is a worse failure than an idle session — but it is the reason a deploy is not free
+  here.
 - **One property is given up: fresh eyes each round.** A long-lived session may defend its
   earlier findings rather than re-read. The design is consistent with D-10 — the tier that
   raised a finding should judge the answer — but whether it costs anything is measurable:
@@ -1778,17 +1793,49 @@ dearer one (D-48), the verdict labelled `passed_partial`, an independent vendor 
 the model is not gone — only that route to it — and opencode has OpenRouter configured
 with a twin of every model in the deployed ladder:
 
-| tier | subscription | fallback |
+**A LIST, TRIED IN ORDER — revised 2026-08-12.** Vany: *"let's use an array for fallback
+in config; let's fall back on t2 and t3 to openrouter, and then, if there is no quota, to
+zai-coding-plan/glm."*
+
+| tier | subscription | fallbacks, in order |
 |---|---|---|
 | t1 | `zai-coding-plan/glm-5-turbo` | `openrouter/z-ai/glm-5-turbo` |
-| t2 | `kimi-for-coding/k3` | `openrouter/moonshotai/kimi-k3` |
-| t3 | `openai/gpt-5.6-terra` | `openrouter/openai/gpt-5.6-terra` |
+| t2 | `kimi-for-coding/k3` | `openrouter/moonshotai/kimi-k3`, then `zai-coding-plan/glm-5.2` |
+| t3 | `openai/gpt-5.6-terra` | `openrouter/openai/gpt-5.6-terra`, then `zai-coding-plan/glm-5.2` |
 
-**This is the only path in lore that spends metered money**, so both bounds are narrow and
-both are tested. It fires on `Exhausted` **alone** — a tier that returned garbage, or whose
-window could not hold the diff, will do the same through any provider, and retrying those
-buys the same failure for real money. And it fires **once**: no fallback for the fallback,
-because a chain of retries is how a bounded cost becomes an unbounded one.
+**Why one was not enough.** On 2026-08-11 OpenRouter ran to zero — $5165.00 granted
+against $5165.04 used — and every deep tier's single twin was as out as the subscription
+it was covering for. t2 went `unpayable` with a fallback configured, present and tried.
+One metered account is a single point of failure for every tier at once, which is the one
+shape a fallback list can fix and a single fallback cannot.
+
+**The second entry changes what a fallback MEANS, and that is deliberate.** The first is
+still the same model by another route. The last resort is a different model on a plan that
+is still paying — spare capacity, not a twin. That is a weaker substitute and the right
+one: a tier answered by a different model is still an independent read of the code, where
+a tier that cannot run at all is nothing. What it costs is vendor accounting, and that is
+`[OPEN]` below.
+
+**This is the only path in lore that spends metered money**, so the bounds stay narrow and
+tested. It fires on `Exhausted` **alone** — a tier that returned garbage, or whose window
+could not hold the diff, will do the same through any provider, and retrying those buys the
+same failure for real money. The chain steps forward on quota and stops on everything else.
+Bounded by the list, which is short and written down: the old note said "no fallback for
+the fallback, because a chain of retries is how a bounded cost becomes an unbounded one",
+and that objection is about retrying the SAME route — it does not reach a second one named
+in the config. A route may not appear twice, and may not name its own tier's model;
+`loadTiers` refuses both, because the chain is only ever walked when a provider has said
+quota and the same route can only say it again.
+
+**`[OPEN]` — the vendor count follows the CONFIGURED model, not the one that answered.**
+`soleVendorOf` reads `tier.model` at load, so a review whose t2 was answered by
+`zai-coding-plan/glm-5.2` while t1 ran on `zai-coding-plan/glm-5-turbo` is two vendors
+wearing three names, and D-49's single-vendor rule does not see it. Before this change
+every fallback was the same model at a different provider, so the configured vendor was
+always right about independence; a cross-model last resort is what makes it wrong. The
+fact is recorded per round — `fell_back_to` reaches `checks_skipped` — so the evidence is
+in the review; what is missing is the verdict reading it. Flagged rather than fixed
+because it belongs to attestation, not to the fallback path.
 
 **Priced before it was built, against a real day.** Nine reviews of this repository, at
 OpenRouter's published rates: **$3.80** for the lot — t2's 6.9M cached-read tokens are
@@ -1868,6 +1915,11 @@ then the world moves and the note stays still.
 - *"lore's whole footprint is under 5 GB"* was written into a comment as a settled fact
   while deleting the check that measured it. It was 6.8 GB two days later, and nothing
   noticed, because the only thing watching had gone with the thing it was wrong about.
+  The lesson is about the SENTENCE, not the check: a measured number written down as a
+  standing fact rots from the moment it is written. The check that was built in answer to
+  it is itself gone now (2026-08-12) on a different argument — that disk here is not
+  lore's to alert on at all — and this entry survives it, because "do not record a
+  measurement as a permanent property" is true whether or not anything is watching.
 - Twenty-eight SQL sites sat behind *"should not be done in code that has no ladder
   verdict"* — reasonable, and it meant the client-facing shape of `lore://review/{id}`
   stayed a function of the schema while `review.token_hash` was added one join away.
@@ -3175,13 +3227,17 @@ Separately, `lore` alerts **devops about itself**: replication behind, provider 
 dead, spend ceiling hit, reviews failing as a class, `needs_human` ageing. One review
 failing is a log line.
 
-**Disk is not on that list, deliberately.** It was, and was removed on 2026-08-06: a
-full disk belongs to whoever owns the machine, exactly as a failing test suite belongs
-to whoever owns the repository (D-71). lore's whole footprint is under 5 GB against a
-host at 826 GB used, so it alerted in red about a condition it neither caused nor could
-fix. The one disk fact that IS lore's — the sandbox cache growing without bound, 4.4 GB
-of that 4.7 — has no monitor, and `spec/operations.md` §2.5 says so rather than leaving
-a host percentage standing in for it.
+**Disk is not on that list, deliberately, and no part of it is.** The host conditions
+went on 2026-08-06: a full disk belongs to whoever owns the machine, exactly as a failing
+test suite belongs to whoever owns the repository (D-71) — lore alerted in red about a
+condition it neither caused nor could fix. A budget on lore's OWN footprint replaced them
+and was removed on 2026-08-12, Vany's call: *"it is not lore's responsibility."* That the
+sandbox cache grows without bound is true and remains true; what does not follow is that
+lore should raise a ticket about it. Sizing this machine and acting on it are the
+operator's, they have better tools for both, and a ticket on every beat for a threshold
+nobody agreed to only teaches the reader to skip the channel. **What actually bounds the
+growth is the retention sweep, which is not an alert.** `spec/operations.md` §2.5 carries
+the whole argument, including the outage that measuring it once caused.
 
 **The heartbeat is the part that matters.** A monitoring system that fails silently
 is INV-1 at a different layer — if the alerting path breaks, "no alerts" and

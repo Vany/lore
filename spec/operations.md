@@ -130,8 +130,8 @@ and restarting only overwrites the evidence in the logs.
 
 ### 2.4.2 A provider at its limit is invisible from in here
 
-`/status` and the heartbeat know about the queue, the replica, the database, the footprint
-and — since 2026-08-08 — stale mirrors. They know nothing about a PROVIDER that has
+`/status` and the heartbeat know about the queue, the replica, the database and — since
+2026-08-08 — stale mirrors. They know nothing about a PROVIDER that has
 stopped answering, which is the condition that stops the gate every review must clear.
 
 It is the same class of fact as the stale mirror, and that one reported `ok: true` for
@@ -248,43 +248,44 @@ shipped without it. That is a real widening: a claim names a defect in somebody'
 branch, and it is now readable by anything that can reach the port. `/status` already
 published the branch names; this publishes what is wrong inside them.
 
-### 2.5 Disk is not lore's to alert on
+### 2.5 Disk is not lore's to alert on — none of it
 
-**Removed 2026-08-06.** There were two disk conditions — page above 90%, ticket above
-75% — reading the host filesystem through `statfs` and feeding `ok`.
+**Removed in two steps, on one argument.** The host conditions went 2026-08-06: page
+above 90%, ticket above 75%, read through `statfs` and fed into `ok`. **A full disk
+belongs to whoever owns the machine, exactly as a failing test suite belongs to whoever
+owns the repository (D-71).** lore was alerting in red, repeatedly, about a condition it
+neither caused nor could fix, and whose owner already has better tools for it. Every
+alert it emitted that day was noise, and an alert channel is only worth having while
+every entry in it is worth reading. It also made `ok` a claim about the machine rather
+than the service, and reached into tests: the heartbeat suite asserted `ok: true` and
+passed all afternoon at 89%, then failed the moment the host crossed 90% with nothing in
+the code having changed.
 
-**A full disk belongs to whoever owns the machine, exactly as a failing test suite
-belongs to whoever owns the repository (D-71).** lore's entire footprint is under 5 GB
-against a host at 826 GB used, so it was alerting in red, repeatedly, about a condition
-it neither caused nor could fix — and one whose owner already has better tools for it.
-Every alert it emitted that day was noise, and an alert channel is only worth having
-while every entry in it is worth reading.
+**The self-footprint budget replaced it, and went the same way 2026-08-12** — Vany's
+call: *"it is not lore's responsibility."* It measured lore's own data directory against
+a 10 GB budget it set for itself and raised a ticket over it. The argument that had kept
+it — that lore's own growth is lore's to watch — is true about the growth and false about
+the alert: disk on this machine is the operator's to size and the operator's to act on,
+and lore knowing a number does not make it the one who acts. What it produced in practice
+was a ticket on every beat, for a threshold nobody had agreed to, in the channel that is
+supposed to carry real faults.
 
-It also made `ok` a claim about the machine rather than about the service, and reached
-into tests: the heartbeat suite asserted `ok: true` and passed all afternoon at 89%,
-then failed the moment the host crossed 90% with nothing in the code having changed.
+**What bounds the growth is the retention sweep, and it is not an alert.** The sandbox's
+`node_modules` cache is keyed by lockfile and is the largest thing lore writes; the sweep
+collects what is unused on a schedule. If it stops keeping up, that shows as disk on a
+machine somebody owns, and that person has a monitor for it.
 
-**The measurement is cached and never taken inside a request.** It was, and it took the
-service down within a minute of deploying on 2026-08-08: one `readdir` plus one `stat`
-per file, against 374,457 files in 7.1 GB, across a Docker Desktop bind mount where every
-call crosses the VM boundary. `/status` stopped answering; `/healthz` kept saying `ok`, so
-from outside the service looked alive while the endpoint that reports its health hung.
-
-Worse than slow — `checkHealth` awaited it *before* reporting anything, so the integrity
-and replica checks were queued behind it. **The thing that watches was blocked by the size
-of the thing it watches**, and it degrades exactly as the cache grows, which is exactly
-when the number begins to matter. A reader now gets the last measurement or `undefined`,
-and a stale one schedules a walk it does not wait for; one walk at a time, hourly. A disk
-budget is a slow-moving number and `undefined` was already the honest answer for "not
-measured".
-
-**What is genuinely ours is unmonitored, and that is stated rather than implied.** The
-sandbox's `node_modules` cache grows without bound and is the largest thing lore
-writes — 5.6 GB of its 7.1 GB total. That is a real growth curve with no ceiling and
-nothing watching it. The right measure is lore's own footprint, not the host's
-percentage, and it is not built; it is an open item in `TODO.md` rather than a gap
-covered by a number that was measuring something else.
-
+**What the removal also takes with it is a whole outage class**, worth recording because
+the code is gone and the lesson is not. Measuring it once took the service down within a
+minute of deploying, 2026-08-08: one `readdir` plus one `stat` per file over 374,457
+files in 7.1 GB, across a Docker Desktop bind mount where every call crosses the VM
+boundary. `/status` stopped answering while `/healthz` kept saying `ok`, so from outside
+the service looked alive while the endpoint that reports its health hung. And
+`checkHealth` awaited it *before* reporting anything, so the integrity and replica checks
+queued behind it — **the thing that watches was blocked by the size of the thing it
+watched**, degrading exactly as the cache grew. The cache-and-refresh fix that followed
+was correct, and it is also gone: the cheapest version of a measurement nobody acts on is
+not taking it.
 
 ## 3. The deadman: absence of signal must alert
 

@@ -179,7 +179,7 @@ export function renderStatus(db: DatabaseSync, reviewId?: string, dataDir = "/va
     }
     if (until <= nowIso) continue;
     const tier = String(d["key"] ?? "").slice("tier-unavailable:".length);
-    const hasFallback = loadTiers().some((t) => t.id === tier && t.fallback !== undefined);
+    const hasFallback = loadTiers().some((t) => t.id === tier && (t.fallback ?? []).length > 0);
     // TWO MARKS, TWO CONSEQUENCES, and one banner used to claim the stronger one for
     // both. Only a time the PROVIDER STATED stops a review calling the tier (D-90); a
     // backoff the background screen guessed bounds the screen alone, and reviews go on

@@ -21,10 +21,7 @@ import {
   DEFAULT_HEARTBEAT,
   REPLICA_BEHIND_SEC,
   checkHealth,
-  resetFootprintCache,
   startHeartbeat,
-  type Health,
-  type HeartbeatConfig,
 } from "./heartbeat.ts";
 
 let store: Store;
@@ -434,9 +431,12 @@ describe("the beat sends the conditions that had no caller", () => {
   it("does not page for a missing replica during the startup grace", async () => {
     const backupDir = join(dir, "empty-backup");
     mkdirSync(backupDir, { recursive: true });
-    writeFileSync(join(dir, "big"), "x".repeat(4096)); // fires the footprint ticket
-    const stop = startHeartbeat(store, cfg({ backupDir, intervalMs: 3_600_000, footprintBudgetBytes: 1024 }), alerter);
-    await until(() => sent.some((x) => x.condition === "lore's own footprint is over its budget"));
+    // THE BARRIER — `queueWarnDepth: 0` makes the same beat emit a queue ticket whatever
+    // the queue holds. It used to be the footprint ticket, which was removed with the rest
+    // of the disk watching on 2026-08-12; the barrier is the part that had to survive,
+    // because without it this test passes against a heartbeat that never ran.
+    const stop = startHeartbeat(store, cfg({ backupDir, intervalMs: 3_600_000, queueWarnDepth: 0 }), alerter);
+    await until(() => sent.some((x) => x.condition === "queue depth sustained"));
     stop();
     expect(sent.filter((x) => x.condition === "backup replica missing")).toStrictEqual([]);
   });
@@ -462,9 +462,8 @@ describe("the beat sends the conditions that had no caller", () => {
   });
 
   it("stays quiet about a replica it was never given", async () => {
-    writeFileSync(join(dir, "big"), "x".repeat(4096)); // the barrier — see above
-    const stop = startHeartbeat(store, cfg({ intervalMs: 3_600_000, footprintBudgetBytes: 1024 }), alerter);
-    await until(() => sent.some((x) => x.condition === "lore's own footprint is over its budget"));
+    const stop = startHeartbeat(store, cfg({ intervalMs: 3_600_000, queueWarnDepth: 0 }), alerter);
+    await until(() => sent.some((x) => x.condition === "queue depth sustained")); // the barrier — see above
     stop();
     expect(sent.filter((x) => x.condition.startsWith("backup"))).toStrictEqual([]);
   });
@@ -532,112 +531,3 @@ describe("a mirror too stale to review is not a healthy service", () => {
   });
 });
 
-describe("lore watches its own footprint, not the host's disk", () => {
-  /**
-   * The walk is a BACKGROUND job now, so a test has to let it land.
-   *
-   * That asymmetry is the feature, not an inconvenience: the first `checkHealth` after a
-   * cold start reports no footprint, deliberately, because the alternative is what took
-   * the service down on 2026-08-08 — 374,457 `stat` calls across a Docker bind mount,
-   * inside a request, with the integrity and replica checks queued behind them.
-   */
-  const measured = async (c: HeartbeatConfig): Promise<Health> => {
-    resetFootprintCache();
-    await checkHealth(store, c); // starts the walk, waits for nothing
-    let h = await checkHealth(store, c);
-    for (let i = 0; i < 200 && h.footprintBytes === undefined; i++) {
-      await new Promise((r) => setTimeout(r, 5));
-      h = await checkHealth(store, c);
-    }
-    return h;
-  };
-
-  it("says when it is over the budget it set for itself", async () => {
-    writeFileSync(join(dir, "big"), "x".repeat(4096));
-    const h = await measured(cfg({ footprintBudgetBytes: 1024 }));
-    expect(h.footprintOverBudget).toBe(true);
-    expect(h.footprintBytes ?? 0).toBeGreaterThan(1024);
-  });
-
-  it("says nothing while it is inside it", async () => {
-    const h = await measured(cfg({ footprintBudgetBytes: 1e9 }));
-    expect(h.footprintOverBudget).toBe(false);
-  });
-
-  /**
-   * THE OUTAGE, AS A TEST.
-   *
-   * Deployed at 01:35 on 2026-08-08, and `/status` stopped answering within a minute:
-   * `footprintBytes` walked the data directory inside the request, one `stat` per file,
-   * over a Docker Desktop bind mount where each crosses the VM boundary. 374,457 files.
-   * `/healthz` kept returning `ok`, so the service looked alive from outside while the
-   * one endpoint that reports its health hung for minutes.
-   *
-   * And it was not merely slow. `checkHealth` awaited the walk BEFORE reporting anything,
-   * so the integrity check and the replica check were stuck behind it — the thing that
-   * watches, blocked by the size of the thing it watches, degrading exactly as the cache
-   * grows, which is to say exactly when the number starts to matter.
-   *
-   * A directory big enough to be slow is not something a test can conjure, so the claim
-   * under test is the one that generalises: **health does not wait for the walk.** A
-   * cold cache answers at once and reports no footprint.
-   */
-  it("answers before the walk finishes, reporting no footprint rather than blocking", async () => {
-    resetFootprintCache();
-    for (let i = 0; i < 300; i++) writeFileSync(join(dir, `f${String(i)}`), "x".repeat(64));
-
-    const h = await checkHealth(store, cfg({ footprintBudgetBytes: 1024 }));
-    // Not measured YET — and `undefined` is already the honest answer for that
-    // everywhere downstream, so nothing reads it as a footprint of zero.
-    expect(h.footprintBytes).toBeUndefined();
-    expect(h.footprintOverBudget).toBe(false);
-    // The checks that matter were NOT queued behind it.
-    expect(h.replica).toBeDefined();
-    expect(h.at).toBeDefined();
-  });
-
-  // One walk at a time. A walk of this size outlives many beats, and without the guard
-  // every beat during the first one starts another against the same mount.
-  it("does not start a second walk while one is running", async () => {
-    resetFootprintCache();
-    const c = cfg({ footprintBudgetBytes: 1e9 });
-    await Promise.all([checkHealth(store, c), checkHealth(store, c), checkHealth(store, c)]);
-    let h = await checkHealth(store, c);
-    for (let i = 0; i < 200 && h.footprintBytes === undefined; i++) {
-      await new Promise((r) => setTimeout(r, 5));
-      h = await checkHealth(store, c);
-    }
-    expect(h.footprintBytes).toBeDefined();
-  });
-
-  // A TICKET, NOT A PAGE, and never a refusal. Growing past a self-set budget is
-  // something to go and look at; the sweep collects, so this fires when collection is
-  // losing rather than when anything has broken. Refusing a review over it would stop
-  // work for a problem only the operator can act on.
-  it("raises a ticket rather than waking anybody", async () => {
-    writeFileSync(join(dir, "big"), "x".repeat(4096));
-    resetFootprintCache();
-    // A short interval, because the first beat starts the walk and a LATER one is the
-    // first that can see its result.
-    const stop = startHeartbeat(store, cfg({ footprintBudgetBytes: 1024, intervalMs: 20 }), alerter);
-    await until(() => sent.some((x) => x.condition === "lore's own footprint is over its budget"));
-    stop();
-    const a = sent.find((x) => x.condition === "lore's own footprint is over its budget");
-    expect(a?.severity).toBe("ticket");
-    expect(a?.detail).toMatch(/budget it sets for itself/);
-  });
-
-  // An unreadable footprint must not read as a footprint of zero — which is how the
-  // previous disk check managed to be both noisy and blind.
-  it("reports nothing rather than zero when it cannot measure", async () => {
-    resetFootprintCache();
-    const c = cfg({ dataDir: join(dir, "not-there") });
-    await checkHealth(store, c);
-    // Long enough for the failed walk to have been recorded, so this is not passing on
-    // the not-measured-yet answer.
-    await new Promise((r) => setTimeout(r, 60));
-    const h = await checkHealth(store, c);
-    expect(h.footprintBytes).toBeUndefined();
-    expect(h.footprintOverBudget).toBe(false);
-  });
-});

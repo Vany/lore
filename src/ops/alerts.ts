@@ -148,29 +148,23 @@ export const CONDITIONS = {
     condition: "backup replica missing",
     detail: "replication has never written anything — a restore is impossible right now",
   }),
-  // `diskCritical` and `diskWarning` lived here and are gone. A full disk belongs to
-  // whoever owns the machine, exactly as a failing test suite belongs to whoever owns
-  // the repository (D-71). lore's whole footprint is under 5 GB against a host at
-  // 826 GB used — so it was alerting, repeatedly and in red, about somebody else's
-  // problem that it could neither cause nor fix.
+  // `diskCritical`, `diskWarning` and `footprintOverBudget` all lived here and are all
+  // gone. The host's disk went first, on the argument in D-71: a full disk belongs to
+  // whoever owns the machine, exactly as a failing test suite belongs to whoever owns the
+  // repository — lore was alerting, repeatedly and in red, about somebody else's problem
+  // that it could neither cause nor fix.
   //
-  // WHAT REPLACES THEM IS THE HALF THAT IS OURS. "under 5 GB" was measured once and
-  // written down; it was 6.8 GB two days later, and nothing had noticed because the
-  // only thing watching had been deleted along with the thing that was wrong about it.
-  // A budget lore sets for itself is a claim it can be held to; the host's percentage
-  // never was.
-  footprintOverBudget: (bytes: number, budget: number): Alert => ({
-    // `ticket`, not `page`: growing past a self-set budget is something to go and look
-    // at, not something to wake anybody for. The sweep collects, so this fires when
-    // collection is losing rather than when anything has broken.
-    severity: "ticket",
-    condition: "lore's own footprint is over its budget",
-    detail:
-      `lore is using ${(bytes / 1e9).toFixed(1)} GB against a ${(budget / 1e9).toFixed(1)} GB budget it sets for ` +
-      "itself. The sandbox npm cache is keyed by lockfile so it grows with every distinct one; the retention " +
-      "sweep collects what is unused, and this fires when collection is not keeping up. Not the host's disk — " +
-      "that belongs to whoever owns the machine.",
-  }),
+  // The self-footprint budget replaced it and was removed for the same reason on
+  // 2026-08-12, on Vany's call: *"it is not lore's responsibility."* The argument that
+  // kept it — that lore's own growth IS lore's to watch — is true about the growth and
+  // false about the alert. Disk on this machine is the operator's to size and the
+  // operator's to act on, and lore knowing a number does not make it the one who acts.
+  // What it produced instead was a ticket firing on every beat for a threshold nobody
+  // had agreed to, which is how a channel that should carry real faults gets ignored.
+  //
+  // What ACTUALLY bounds the growth stays, and it is not an alert: the retention sweep
+  // collects unused worktrees and caches on a schedule. A number that nobody is going to
+  // act on is not monitoring.
   providerAuthFailed: (provider: string): Alert => ({
     severity: "page",
     condition: "provider auth failed",
