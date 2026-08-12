@@ -283,7 +283,7 @@ describe("single-vendor ladders cannot pass (D-49)", () => {
     expect(runClean(ONE_VENDOR)).toStrictEqual({
       kind: "passedPartial",
       skipped: [],
-      soleVendor: "zai-coding-plan",
+      soleVendor: "z-ai",
     });
   });
 
@@ -305,12 +305,12 @@ describe("single-vendor ladders cannot pass (D-49)", () => {
     expect(step({ state: s, raised: [], tiers: ONE_VENDOR }).decision).toStrictEqual({
       kind: "passedPartial",
       skipped: ["t3"],
-      soleVendor: "zai-coding-plan",
+      soleVendor: "z-ai",
     });
   });
 
   it("carries the vendor in the state, so the attestation can name it", () => {
-    expect(initialState(ONE_VENDOR).soleVendor).toBe("zai-coding-plan");
+    expect(initialState(ONE_VENDOR).soleVendor).toBe("z-ai");
     expect(initialState(DEFAULT_TIERS).soleVendor).toBeUndefined();
   });
 });
@@ -324,9 +324,44 @@ describe("vendorOf", () => {
     expect(vendorOf("openrouter/moonshotai/kimi-k3")).toBe("moonshotai");
   });
 
+  // The POSITION rule, pinned on an id no alias touches, so this keeps testing the parse
+  // rather than the alias table.
   it("reads the vendor from a direct id", () => {
-    expect(vendorOf("zai/glm-5.2")).toBe("zai");
-    expect(vendorOf("zai/glm-4.7")).toBe("zai");
+    expect(vendorOf("acme/model-1")).toBe("acme");
+    expect(vendorOf("gateway/acme/model-1")).toBe("acme");
+  });
+
+  /**
+   * ONE VENDOR REACHED UNDER SEVERAL NAMES IS STILL ONE VENDOR.
+   *
+   * A subscription and the same company's OpenRouter listing are different strings for
+   * one trainer, and two subscriptions to that company are the same again — a second plan
+   * buys quota, not a second opinion.
+   *
+   * Harmless while only CONFIGURED models were compared, because those names are stable.
+   * The moment fallbacks fed into the count (`answeredBy`), a tier falling back to its own
+   * OpenRouter twin changed the string it contributed — so an all-Z.AI ladder could count
+   * two vendors and allow `passed`. That is this function's own failure, reached through
+   * the door the fallback list opened.
+   */
+  it("folds a vendor's several names onto one", () => {
+    expect(vendorOf("zai-coding-plan/glm-5.2")).toBe("z-ai");
+    expect(vendorOf("openrouter/z-ai/glm-5.2")).toBe("z-ai");
+    expect(vendorOf("zai/glm-5.2")).toBe("z-ai");
+    expect(vendorOf("kimi-for-coding/k3")).toBe("moonshotai");
+    expect(vendorOf("openrouter/moonshotai/kimi-k3")).toBe("moonshotai");
+    // A SECOND SUBSCRIPTION to the same company is not a second vendor.
+    expect(vendorOf("zai-coding-plan2/glm-5.2")).toBe("z-ai");
+  });
+
+  /**
+   * AN UNKNOWN ID STANDS FOR ITSELF, which over-counts vendors rather than under-counting
+   * them. Guessing that two ids are one company because they look alike is how a rule
+   * that has to be exactly right becomes approximately right; the safe direction for a
+   * rule that gates `passed` is the one that says "not independent".
+   */
+  it("leaves an id it does not know alone", () => {
+    expect(vendorOf("some-new-plan/some-model")).toBe("some-new-plan");
   });
 
   it("sees two GLM models from one vendor as one vendor", () => {
@@ -612,6 +647,26 @@ describe("the vendor behind a review is the one that answered", () => {
    */
   it("still reads three when a tier used its own model's twin", () => {
     expect(soleVendorOf(THREE, [], { t2: "openrouter/moonshotai/kimi-k3" })).toBeUndefined();
+  });
+
+  /**
+   * THE HOLE THE FALLBACK LIST OPENED, closed by folding a vendor's names together.
+   *
+   * Every tier here is Z.AI, so this ladder is one opinion however it runs. With t2
+   * answered through OpenRouter its string became `z-ai` while t1's stayed
+   * `zai-coding-plan` — two names, one company, and `soleVendorOf` would have reported
+   * "independent enough" and allowed `passed`.
+   */
+  it("is not fooled by one vendor reached through two routes", () => {
+    const ALL_ZAI: readonly Tier[] = [
+      { id: "t1", kind: "model", model: "zai-coding-plan/glm-5-turbo", stage: "fast" },
+      { id: "t2", kind: "model", model: "zai-coding-plan/glm-5.2", stage: "deep" },
+    ];
+    expect(soleVendorOf(ALL_ZAI), "configured, it was always one vendor").toBe("z-ai");
+    expect(
+      soleVendorOf(ALL_ZAI, [], { t2: "openrouter/z-ai/glm-5.2" }),
+      "and falling back to the same company's gateway does not make it two",
+    ).toBe("z-ai");
   });
 
   it("records the answering model without disturbing the rest of the state", () => {

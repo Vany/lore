@@ -1838,6 +1838,23 @@ not the configured one, and `soleVendorOf` prefers it. A tier that ran on its ow
 records nothing, so an ordinary review stores nothing and states written before this read
 exactly as they did. This closes the `[OPEN]` raised above when the list was introduced.
 
+**And it needed a second half, which the first half made necessary.** `vendorOf` read the
+provider id, so ONE company reached under two names counted as two vendors:
+`zai-coding-plan` and `z-ai` are both Z.AI, `kimi-for-coding` and `moonshotai` are both
+Moonshot. That was harmless while only configured models were compared, because those names
+never move. Feeding fallbacks in moved them — a tier falling back to its own OpenRouter twin
+changes the string it contributes, so an all-Z.AI ladder whose t2 went through OpenRouter
+would count two vendors and allow `passed`. `vendorOf` now folds a vendor's names onto one
+through an explicit table.
+
+**A table, not a heuristic**, and an unknown id stands for itself. Stripping a trailing
+digit to match `zai-coding-plan2` would also fold `glm-5` into `glm`; inferring that two ids
+are one company because they look alike is how a rule that must be exactly right becomes
+approximately right. Standing for itself over-counts vendors, which is the safe direction
+for a rule that gates `passed`. **A second subscription to the same company is the same
+vendor** — `zai-coding-plan2` is in the table for that reason: it buys quota, not a second
+opinion.
+
 **Why one was not enough.** On 2026-08-11 OpenRouter ran to zero — $5165.00 granted
 against $5165.04 used — and every deep tier's single twin was as out as the subscription
 it was covering for. t2 went `unpayable` with a fallback configured, present and tried.

@@ -211,6 +211,34 @@ export function loadTiers(source = process.env["LORE_TIERS"]): readonly Tier[] {
 }
 
 /**
+ * ONE VENDOR CAN BE REACHED UNDER SEVERAL NAMES, and they all share its blind spots.
+ *
+ * A subscription provider and the same company's OpenRouter listing are different
+ * strings for one trainer: `zai-coding-plan` and `z-ai` are Z.AI, `kimi-for-coding` and
+ * `moonshotai` are Moonshot. Two SUBSCRIPTIONS to one company are the same again —
+ * `zai-coding-plan2` buys quota, not a second opinion.
+ *
+ * **This became load-bearing the moment fallbacks fed into the count** (`answeredBy`,
+ * D-49). While only CONFIGURED models were compared the names were stable and the
+ * aliasing was harmless. Now a tier that falls back to its own OpenRouter twin changes
+ * the string it contributes — so an all-Z.AI ladder whose t2 fell back through OpenRouter
+ * would count `zai-coding-plan` and `z-ai` as two vendors and allow `passed`. That is
+ * precisely the failure this function exists to prevent, reached through the door the
+ * fallback list opened.
+ *
+ * Names, not heuristics. Stripping a trailing digit would fold `glm-5` into `glm`, and
+ * guessing that two ids are one company because they look alike is how a rule that must
+ * be exactly right becomes approximately right. An unknown id stands for itself, which
+ * over-counts vendors — the safe direction is the one that says "not independent".
+ */
+const VENDOR_ALIASES: Readonly<Record<string, string>> = {
+  "zai-coding-plan": "z-ai",
+  "zai-coding-plan2": "z-ai",
+  zai: "z-ai",
+  "kimi-for-coding": "moonshotai",
+};
+
+/**
  * Who actually trained the model, which is what shares blind spots.
  *
  * Ids come in two shapes and the vendor sits in a different place in each:
@@ -221,7 +249,8 @@ export function loadTiers(source = process.env["LORE_TIERS"]): readonly Tier[] {
  */
 export function vendorOf(modelId: string): string {
   const parts = modelId.split("/");
-  return (parts.length >= 3 ? parts[1] : parts[0]) ?? "";
+  const named = (parts.length >= 3 ? parts[1] : parts[0]) ?? "";
+  return VENDOR_ALIASES[named] ?? named;
 }
 
 /**
