@@ -13,7 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       git ca-certificates ripgrep \
  && rm -rf /var/lib/apt/lists/*
 
-ARG OPENCODE_VERSION=1.18.11
+ARG OPENCODE_VERSION=1.18.16
 RUN npm i -g "opencode-ai@${OPENCODE_VERSION}"
 
 # Runs as a non-root user with THE SAME UID AS THE HOST OWNER of the staged files,

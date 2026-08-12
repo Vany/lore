@@ -2173,6 +2173,36 @@ describe("a pool of routes to one model", () => {
     }
   });
 
+  /**
+   * A NICKNAME IN THE FALLBACK LIST EXPANDS TOO.
+   *
+   * The deployed ladder names `GLM5.2` as the last resort for both deep tiers, which is
+   * the pool — so unexpanded it would reach opencode as a model id and be refused for not
+   * being `provider/model`: a configuration error found in the middle of a review.
+   */
+  it("expands a pool named as a fallback into its routes", async () => {
+    const bothOut = ["kimi/k3"];
+    class KimiOut implements ReviewerLike {
+      readonly asked: string[] = [];
+      async review(tier: Tier): Promise<ReviewerResult> {
+        this.asked.push(tier.model ?? "?");
+        if (bothOut.includes(tier.model ?? "")) throw new Exhausted("out of quota");
+        return { findings: [], discarded: [], raw: "", inputTokens: 0, cachedTokens: 0, outputTokens: 0, costUsd: 0, latencyMs: 1, retried: false, steps: 1 };
+      }
+    }
+    const type = {
+      ...CODE_ARCH,
+      t0: [] as const,
+      tiers: CODE_ARCH.tiers.map((t) => (t.id === "t1" ? { ...t, model: "kimi/k3", fallback: ["GLM5.2"] } : t)),
+    };
+    const reviewer = new KimiOut();
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type });
+
+    expect(reviewer.asked[0]).toBe("kimi/k3");
+    expect(reviewer.asked[1], "the nickname resolved to a real route").toMatch(/^zai-coding-plan2?\/glm-5\.2$/);
+    expect(reviewer.asked, "never the nickname itself").not.toContain("GLM5.2");
+  });
+
   /** WHEN NOTHING IS LEFT, SAY SO, and name every route that refused (D-105, INV-1). */
   it("names every route when the pool and the fallbacks are all out", async () => {
     const reviewer = new Answers([

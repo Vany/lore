@@ -748,7 +748,8 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     // (D-80) a different model to continue — a cold start wearing the configuration of a
     // warm one. Vany: *"if a model is chosen, use it — this rule is only for the initial
     // choosing."*
-    const all = routesFor(tier, loadPools());
+    const pools = loadPools();
+    const all = routesFor(tier, pools);
     // WHAT WE BELIEVE STILL HAS QUOTA. Nothing is assumed out until a provider has said so
     // and named a time; a route we have never seen refuse is asked, not guessed about.
     //
@@ -851,7 +852,18 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
         store.markRouteUnavailable(primaryRoute, until, e.message, seen + 1, stated);
       }
       const spare = pool.slice(1);
-      const chain = [...spare, ...(tier.fallback ?? [])];
+      // A NICKNAME WORKS WHEREVER A MODEL ID DOES, including here. A fallback entry naming
+      // a pool expands to its routes — shuffled, because they are interchangeable, and
+      // filtered by what we believe still has quota. Left unexpanded it would reach
+      // opencode as a model id and be refused for not being `provider/model`, which is a
+      // configuration error discovered in the middle of somebody's review.
+      const chain = [
+        ...spare,
+        ...(tier.fallback ?? []).flatMap((f) => {
+          const fanned = routesFor({ ...tier, model: f }, pools);
+          return fanned.length > 1 ? poolOrder(withQuota(fanned, (m) => store.routeUnavailable(m)).usable) : fanned;
+        }),
+      ];
       if (!(e instanceof Exhausted) || chain.length === 0) throw e;
       // HELD, not written yet. `closeTierRun` OVERWRITES `unavailable`, so a note
       // recorded here would be erased by the success path a few lines below — which is
