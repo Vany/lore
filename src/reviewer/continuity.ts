@@ -40,14 +40,27 @@
 export const COMPACT_AT = 2 / 3;
 
 /**
- * One session per REVIEW and TIER, which is the whole of the addressing.
+ * One session per REVIEW, TIER and MODEL, which is the whole of the addressing.
  *
  * Not per review: t1's conversation and t2's are different models with different
  * judgement, and merging them is the failure the ladder exists to avoid. Not per tier:
  * two reviews of different branches share nothing.
+ *
+ * **And not per (review, tier) either, which is what this was until it met a fallback.**
+ * A tier that runs on its twin keeps its ID and changes its MODEL — so the primary's
+ * session was handed to the fallback, and two things went wrong at once. The fallback
+ * model received the CONTINUED prompt on its first ever contact with the review, which
+ * says "the author has answered" to a reviewer that has never read the code. And opencode
+ * ties a session to the model that opened it, so a call lore addressed to
+ * `zai-coding-plan` came back with OpenRouter's `402 Insufficient credits` — the route
+ * lore reported as tried was not the route that answered. Observed on rev_8ZM1XT7 with
+ * both of t2's fallbacks.
+ *
+ * That last part is why this is not a tidiness fix: `unpayable` means EVERY route refused,
+ * and it was being written after a route nobody had actually asked.
  */
-export function sessionKey(reviewId: string, tierId: string): string {
-  return `${reviewId}:${tierId}`;
+export function sessionKey(reviewId: string, tierId: string, model: string): string {
+  return `${reviewId}:${tierId}:${model}`;
 }
 
 /**

@@ -510,6 +510,61 @@ describe("a tier that keeps its session", () => {
     expect(r.keptReviews()).toStrictEqual([]);
   });
 
+  /**
+   * A FALLBACK IS A DIFFERENT REVIEWER AND GETS ITS OWN SESSION.
+   *
+   * A tier running on its twin keeps its id and changes its model, so keying the kept
+   * session on (review, tier) alone handed the primary's session to the fallback. Two
+   * things went wrong at once, and both were observed live on rev_8ZM1XT7:
+   *
+   *  - the fallback model was sent the CONTINUED prompt on its first ever contact with
+   *    the review — "the author has answered" to a reviewer that had never read the code;
+   *  - opencode ties a session to the model that opened it, so a call lore addressed to
+   *    `zai-coding-plan` came back carrying OpenRouter's `402 Insufficient credits`. The
+   *    route lore then reported as tried was not the route that answered, which makes
+   *    `unpayable` — every route refused — a claim about a call nobody made.
+   */
+  const TWIN = { ...KEEPS, model: "zai-coding-plan/glm-5.2" };
+
+  it("does not hand a tier's session to the model standing in for it", async () => {
+    replies = [reply(), reply()];
+    const r = reviewer();
+    const prompt = { initial: "FULL ORIENTATION", continued: "THE AUTHOR ANSWERED" };
+
+    await r.review(KEEPS, prompt, "/tmp/wt", "rev1");
+    await r.review(TWIN, prompt, "/tmp/wt", "rev1");
+
+    expect(creates(), "the stand-in starts its own session").toHaveLength(2);
+    const sent = prompts().map((c) => JSON.stringify((c.body as { parts?: unknown[] }).parts ?? []));
+    expect(sent[1], "and is oriented, not continued").toContain("FULL ORIENTATION");
+    expect(sent[1]).not.toContain("THE AUTHOR ANSWERED");
+  });
+
+  it("still keeps each of them across rounds, separately", async () => {
+    replies = [reply(), reply(), reply(), reply()];
+    const r = reviewer();
+    const prompt = { initial: "FULL", continued: "NEXT" };
+
+    await r.review(KEEPS, prompt, "/tmp/wt", "rev1");
+    await r.review(TWIN, prompt, "/tmp/wt", "rev1");
+    await r.review(KEEPS, prompt, "/tmp/wt", "rev1");
+    await r.review(TWIN, prompt, "/tmp/wt", "rev1");
+
+    expect(creates(), "two models, two sessions, and no more").toHaveLength(2);
+  });
+
+  it("releases every model a review ran on, under the one review id", async () => {
+    replies = [reply(), reply()];
+    const r = reviewer();
+    await r.review(KEEPS, { initial: "A", continued: "B" }, "/tmp/wt", "rev1");
+    await r.review(TWIN, { initial: "A", continued: "B" }, "/tmp/wt", "rev1");
+    expect(r.keptReviews(), "one review, however many models it ran on").toStrictEqual(["rev1"]);
+
+    await r.release("rev1");
+    expect(captured.filter((c) => c.method === "DELETE"), "both sessions go").toHaveLength(2);
+    expect(r.keptReviews()).toStrictEqual([]);
+  });
+
   it("releases only the review it was asked about", async () => {
     replies = [reply(), reply(), reply()];
     const r = reviewer();

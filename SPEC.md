@@ -1223,6 +1223,18 @@ repeat any of it, because the session still holds it — it names what changed a
 its own findings are still open, and asks about those. Re-sending the orientation would be
 the cold start this replaces wearing a different name.
 
+**A session belongs to a (review, tier, MODEL), and the model is not decoration.** It was
+keyed on (review, tier) until 2026-08-12, which held for exactly as long as a tier only ever
+ran on one model. A tier standing in on its twin keeps its ID and changes its MODEL, so the
+primary's session was handed to the fallback — and two things went wrong at once. The
+fallback model was sent the CONTINUED prompt on its first contact with the review, which
+says *"the author has answered"* to a reviewer that has never read the code. And opencode
+ties a session to the model that opened it, so a call lore addressed to `zai-coding-plan`
+came back carrying OpenRouter's `402 Insufficient credits`: **the route lore reported as
+tried was not the route that answered.** That is the serious half — `unpayable` means every
+route refused, and it was being written after a call nobody had made. Observed live on
+rev_8ZM1XT7, in the first review that ran with a fallback chain configured.
+
 **Compaction is measured on the LAST turn, not the session total.** The number that matters
 is the context the next turn will carry — input plus cache reads on the most recent
 assistant message. The cumulative sum across a round is ~30× larger, and using it would

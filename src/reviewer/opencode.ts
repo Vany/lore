@@ -668,7 +668,7 @@ export class Reviewer implements ReviewerLike {
     // round's message; anything else — no reviewId, the flag off, a lore restart that lost
     // the map — falls through to a cold start, which is the behaviour this replaced.
     const keptKey = reviewId !== undefined && tier.conversation === true
-      ? sessionKey(reviewId, tier.id)
+      ? sessionKey(reviewId, tier.id, tier.model ?? "")
       : undefined;
     const continuing = keptKey === undefined ? undefined : this.kept.get(keptKey);
     const sessionId = continuing ?? (await this.createSession(tier));
@@ -829,7 +829,10 @@ export class Reviewer implements ReviewerLike {
    * `release` prefixes on, so the two cannot disagree about where the id ends.
    */
   keptReviews(): readonly string[] {
-    return [...new Set([...this.kept.keys()].map((k) => k.slice(0, k.lastIndexOf(":"))))];
+    // The FIRST colon, not the last: the key is `<reviewId>:<tierId>:<model>` and a model
+    // id carries slashes rather than colons, so the review id is everything before the
+    // first one. Splitting on the last returned `rev:t2` and released nothing.
+    return [...new Set([...this.kept.keys()].map((k) => k.slice(0, k.indexOf(":"))))];
   }
 
   /**
