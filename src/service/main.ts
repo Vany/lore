@@ -6,7 +6,7 @@
  */
 
 import { join } from "node:path";
-import { loadTiers } from "../core/ladder.ts";
+import { fallbackRoutes, loadPools, loadTiers } from "../core/ladder.ts";
 import { dataDir, dbDir, dbFileIn } from "../core/paths.ts";
 import { mkdir } from "node:fs/promises";
 import { Alerter, CONDITIONS } from "../ops/alerts.ts";
@@ -317,7 +317,13 @@ export async function serve(cfg: ServiceConfig): Promise<() => void> {
     // EVERY entry of every chain, not just the first: a second fallback nobody can reach
     // is the same broken promise as a first one, and it is the one that gets checked
     // least because it only runs when the account before it is already empty.
-    const wanted = [...new Set(loadTiers().flatMap((t) => [...(t.fallback ?? [])]))];
+    //
+    // EXPANDED THROUGH THE POOLS, because a fallback may name one. Unexpanded, this asked
+    // opencode whether it could reach `GLM5.2` — a nickname, which is not a model id and
+    // never will be — and ticketed that it could not. A check that cries wolf about a
+    // healthy fallback is worse than no check: the one time it means something, nobody
+    // reads it.
+    const wanted = fallbackRoutes(loadTiers(), loadPools());
     if (wanted.length === 0) return;
     const missing = await reviewer.missingModels(wanted).catch(() => undefined);
     if (missing === undefined) {

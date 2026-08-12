@@ -183,6 +183,24 @@ export function routesFor(tier: Tier, pools: ModelPools): readonly string[] {
   return pools[named] ?? (named === "" ? [] : [named]);
 }
 
+/**
+ * Every concrete route the configured fallbacks can reach, nicknames expanded.
+ *
+ * The startup check (D-93) asks opencode whether each of these exists, and it asked with
+ * the raw config entries until a fallback named a POOL — then it asked after `GLM5.2`,
+ * which is not a model id and never will be, and ticketed that opencode could not reach
+ * it. A check that cries wolf about a healthy fallback is worse than none: the one time it
+ * means something, nobody reads it.
+ *
+ * Here rather than at the call site because this is the second place a nickname had to be
+ * expanded and the third would have been found the same way — by shipping it.
+ */
+export function fallbackRoutes(tiers: readonly Tier[], pools: ModelPools): readonly string[] {
+  return [
+    ...new Set(tiers.flatMap((t) => (t.fallback ?? []).flatMap((f) => routesFor({ ...t, model: f }, pools)))),
+  ];
+}
+
 /** What is known about a route's quota, as `routeUnavailable` returns it. */
 export interface RouteState {
   readonly until: string;

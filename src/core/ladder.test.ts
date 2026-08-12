@@ -1,7 +1,7 @@
 import { readdirSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
-  ladderChanged, DEFAULT_TIERS, anyTierRan, initialState, loadTiers, loadPools, markAnsweredBy, markUnavailable, poolOrder, routesFor, settle, withQuota, soleVendorOf, step, vendorOf, type Decision, type LadderState, type Tier, ladderFingerprint } from "./ladder.ts";
+  ladderChanged, DEFAULT_TIERS, anyTierRan, initialState, loadTiers, loadPools, markAnsweredBy, markUnavailable, fallbackRoutes, poolOrder, routesFor, settle, withQuota, soleVendorOf, step, vendorOf, type Decision, type LadderState, type Tier, ladderFingerprint } from "./ladder.ts";
 
 const clean = (state: LadderState) => step({ state, raised: [] });
 
@@ -816,5 +816,36 @@ describe("which routes are believed to have quota", () => {
   it("offers no time while any route can still be asked", () => {
     const known = (m: string) => (m === "p1/glm" ? { until: LATER, stated: true } : undefined);
     expect(withQuota(R, known, NOW).until).toBeUndefined();
+  });
+});
+
+/**
+ * WHAT THE STARTUP CHECK ASKS OPENCODE ABOUT (D-93).
+ *
+ * It asked with the raw config entries until a fallback named a pool — then it asked
+ * after `GLM5.2`, which is not a model id, and ticketed that opencode could not reach it.
+ * A check that cries wolf about a healthy fallback is worse than no check at all.
+ */
+describe("the routes a ladder's fallbacks can reach", () => {
+  const pools = { "GLM5.2": ["zai-coding-plan/glm-5.2", "zai-coding-plan2/glm-5.2"] };
+  const tiers: readonly Tier[] = [
+    { id: "t0", kind: "deterministic", stage: "fast" },
+    { id: "t1", kind: "model", model: "GLM5.2", stage: "fast", fallback: ["openrouter/z-ai/glm-5.2"] },
+    { id: "t2", kind: "model", model: "kimi-for-coding/k3", stage: "deep", fallback: ["openrouter/moonshotai/kimi-k3", "GLM5.2"] },
+  ];
+
+  it("expands a nickname and never reports the nickname itself", () => {
+    const out = fallbackRoutes(tiers, pools);
+    expect(out).toContain("zai-coding-plan2/glm-5.2");
+    expect(out, "a nickname is not something opencode can be asked about").not.toContain("GLM5.2");
+    expect(out).toContain("openrouter/moonshotai/kimi-k3");
+  });
+
+  it("names each route once, however many tiers reach for it", () => {
+    expect(new Set(fallbackRoutes(tiers, pools)).size).toBe(fallbackRoutes(tiers, pools).length);
+  });
+
+  it("is empty for a ladder that configures no fallback", () => {
+    expect(fallbackRoutes([{ id: "t1", kind: "model", model: "a/one", stage: "fast" }], {})).toStrictEqual([]);
   });
 });
