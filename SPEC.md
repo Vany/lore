@@ -1799,9 +1799,26 @@ zai-coding-plan/glm."*
 
 | tier | subscription | fallbacks, in order |
 |---|---|---|
-| t1 | `zai-coding-plan/glm-5-turbo` | `openrouter/z-ai/glm-5-turbo` |
-| t2 | `kimi-for-coding/k3` | `openrouter/moonshotai/kimi-k3`, then `zai-coding-plan/glm-5.2` |
-| t3 | `openai/gpt-5.6-terra` | `openrouter/openai/gpt-5.6-terra`, then `zai-coding-plan/glm-5.2` |
+| t1 | `zai-coding-plan/glm-5.2` | `openrouter/z-ai/glm-5.2` |
+| t2 | `kimi-for-coding/k3` | `openrouter/moonshotai/kimi-k3`, then `zai-coding-plan/glm-4.7` |
+| t3 | `openai/gpt-5.6-terra` | `openrouter/openai/gpt-5.6-terra`, then `zai-coding-plan/glm-4.7` |
+
+**t1 moved off `glm-5-turbo` on 2026-08-12, and the reason is the window, not the price.**
+Turbo advertises 200K of context, which `promptBudgetChars` turns into 280K characters of
+prompt — and measured over 161 t1 rounds in the preceding week, **32 of them (20%) carried
+a diff too large for it** and were compacted, which means one t1 round in five reviewed part
+of the branch and was told so. Against `glm-5.2`'s 1M window, not one of those 161 would
+have been cut. Both are the same flat subscription, so this buys nothing and costs nothing
+in money; what it buys is t1 seeing the whole change. (The metered twin gets cheaper as a
+side effect: `z-ai/glm-5.2` reads cache at $0.10/M against turbo's $0.24/M.)
+
+**The last resort is `glm-4.7`, deliberately not `glm-5.2`.** With t1 on `glm-5.2`, a last
+resort of `glm-5.2` would make a fully degraded ladder — kimi out, OpenRouter out, openai
+out — into three tiers running the identical model, which is D-1 and D-49's failure exactly:
+one opinion asked three times, wearing three names. `glm-4.7` is a different model on the
+same paying plan. It costs a 205K window, so a round that reaches it may be compacted; that
+is stated in `checks_skipped` when it happens, where a silent loss of independence would not
+be. A truncated review that says so beats a full review that is secretly the same reviewer.
 
 **Why one was not enough.** On 2026-08-11 OpenRouter ran to zero — $5165.00 granted
 against $5165.04 used — and every deep tier's single twin was as out as the subscription
