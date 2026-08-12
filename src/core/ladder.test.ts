@@ -1,7 +1,7 @@
 import { readdirSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
-  ladderChanged, DEFAULT_TIERS, anyTierRan, initialState, loadTiers, markUnavailable, settle, soleVendorOf, step, vendorOf, type Decision, type LadderState, type Tier, ladderFingerprint } from "./ladder.ts";
+  ladderChanged, DEFAULT_TIERS, anyTierRan, initialState, loadTiers, markAnsweredBy, markUnavailable, settle, soleVendorOf, step, vendorOf, type Decision, type LadderState, type Tier, ladderFingerprint } from "./ladder.ts";
 
 const clean = (state: LadderState) => step({ state, raised: [] });
 
@@ -563,5 +563,67 @@ describe("the fallback list", () => {
 
   it("refuses an empty list, which is a configuration that means nothing", () => {
     expect(() => loadTiers(tier(`[]`))).toThrow(/malformed/i);
+  });
+});
+
+/**
+ * INDEPENDENCE IS ABOUT WHO READ THE CODE, not about who the config named.
+ *
+ * The two agreed for as long as every fallback was the same model by another route: a
+ * kimi tier answered by kimi-through-OpenRouter is still kimi's opinion. They stopped
+ * agreeing on 2026-08-12, when a fallback chain was allowed to end at a DIFFERENT model on
+ * a plan that is still paying — and the deployed ladder now has both deep tiers ending at
+ * `zai-coding-plan/glm-5.2`, which is the model t1 already runs.
+ *
+ * So a fully degraded ladder is one model asked three times, while the tier list still
+ * reads as three vendors. `passed` in that state is this product's central claim, false.
+ */
+describe("the vendor behind a review is the one that answered", () => {
+  const THREE: readonly Tier[] = [
+    { id: "t0", kind: "deterministic", stage: "fast" },
+    { id: "t1", kind: "model", model: "zai-coding-plan/glm-5.2", stage: "fast" },
+    { id: "t2", kind: "model", model: "kimi-for-coding/k3", stage: "deep" },
+    { id: "t3", kind: "model", model: "openai/gpt-5.6-terra", stage: "deep" },
+  ];
+
+  it("reads three vendors when each tier ran on its own model", () => {
+    expect(soleVendorOf(THREE)).toBeUndefined();
+  });
+
+  it("sees ONE vendor when every deep tier fell back to the model t1 runs", () => {
+    const answeredBy = { t2: "zai-coding-plan/glm-5.2", t3: "zai-coding-plan/glm-5.2" };
+    expect(
+      soleVendorOf(THREE, [], answeredBy),
+      "three tiers, one model, and the config still says three vendors",
+    ).toBe(vendorOf("zai-coding-plan/glm-5.2"));
+  });
+
+  // The ordinary day: a tier that answered on its own model records nothing, so an
+  // absent map has to mean exactly what it meant before this existed.
+  it("is unchanged by an empty map, and by a state that predates it", () => {
+    expect(soleVendorOf(THREE, [], {})).toBeUndefined();
+    expect(soleVendorOf(THREE)).toBeUndefined();
+  });
+
+  /**
+   * A tier answered by the SAME vendor through another route does not change the count —
+   * which is the case the original check was right about, and the reason it stood for as
+   * long as it did.
+   */
+  it("still reads three when a tier used its own model's twin", () => {
+    expect(soleVendorOf(THREE, [], { t2: "openrouter/moonshotai/kimi-k3" })).toBeUndefined();
+  });
+
+  it("records the answering model without disturbing the rest of the state", () => {
+    const before = initialState(THREE);
+    const after = markAnsweredBy(before, "t2", "zai-coding-plan/glm-5.2");
+    expect(after.answeredBy).toStrictEqual({ t2: "zai-coding-plan/glm-5.2" });
+    expect(after.cursor).toBe(before.cursor);
+    expect(after.settled).toStrictEqual(before.settled);
+    // Two tiers falling back accumulate rather than replace.
+    expect(markAnsweredBy(after, "t3", "zai-coding-plan/glm-5.2").answeredBy).toStrictEqual({
+      t2: "zai-coding-plan/glm-5.2",
+      t3: "zai-coding-plan/glm-5.2",
+    });
   });
 });

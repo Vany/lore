@@ -24,7 +24,7 @@
     "stage": "deep",
     "fallback": [
       "openrouter/moonshotai/kimi-k3",
-      "zai-coding-plan/glm-4.7"
+      "zai-coding-plan/glm-5.2"
     ],
     "conversation": true
   },
@@ -36,7 +36,7 @@
     "stage": "deep",
     "fallback": [
       "openrouter/openai/gpt-5.6-terra",
-      "zai-coding-plan/glm-4.7"
+      "zai-coding-plan/glm-5.2"
     ],
     "conversation": true
   }

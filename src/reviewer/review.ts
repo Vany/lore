@@ -18,6 +18,7 @@ import {
   markUnavailable,
   ladderChanged,
   ladderFingerprint,
+  markAnsweredBy,
   settle,
   step,
   type Decision,
@@ -1414,8 +1415,17 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // `openFindings` excludes it and `undelivered` has already delivered it. The client
   // is told `findings_ready` and handed nothing, for ever, until a bound stops it.
   const withSettled = settle(review.ladder, [...accepted, ...fixed]);
+  // WHO ACTUALLY ANSWERED THIS TIER, carried into the verdict (D-49, D-93).
+  //
+  // Independence is checked against the model that READ the code, not the one the config
+  // names. The two were always the same while every fallback was the same model by
+  // another route; a chain that ends at a different model on a paying plan is what makes
+  // them differ — and with the deep tiers' last resort being the model t1 already runs, a
+  // fully degraded ladder is one model asked three times while the config still reads as
+  // three vendors. `passed` in that state would be the product's central claim, false.
+  const answered = fellBackTo === undefined ? withSettled : markAnsweredBy(withSettled, tier.id, fellBackTo);
   const stepped = step({
-    state: withSettled,
+    state: answered,
     raised: [...raisedFingerprints],
     tiers,
     needsHuman: store.openConflicts(review.repoId).length > 0,

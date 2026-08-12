@@ -236,9 +236,19 @@ export function vendorOf(modelId: string): string {
  * one vendor's opinion, and reporting otherwise would be a claim about work nobody
  * did — the same error as counting a tier that never ran (INV-1).
  */
-export function soleVendorOf(tiers: readonly Tier[], unavailable: readonly string[] = []): string | undefined {
+export function soleVendorOf(
+  tiers: readonly Tier[],
+  unavailable: readonly string[] = [],
+  answeredBy: Readonly<Record<string, string>> = {},
+): string | undefined {
   const vendors = new Set(
-    tiers.filter((t) => t.kind === "model" && !unavailable.includes(t.id)).map((t) => vendorOf(t.model ?? "")),
+    tiers
+      .filter((t) => t.kind === "model" && !unavailable.includes(t.id))
+      // WHO ANSWERED, falling back to who was ASKED. A tier that ran on its fallback was
+      // read by that model's vendor, whatever the config says — and since a chain may now
+      // end at a different model on a paying plan, the two can disagree about the only
+      // thing this function exists to decide.
+      .map((t) => vendorOf(answeredBy[t.id] ?? t.model ?? "")),
   );
   const [only] = [...vendors];
   return vendors.size === 1 ? only : undefined;
@@ -277,6 +287,32 @@ export interface LadderState {
    * Recomputed each round because `unavailable` grows as providers refuse.
    */
   readonly soleVendor?: string;
+  /**
+   * The model that ACTUALLY ANSWERED each tier, where it was not the configured one.
+   *
+   * Independence is the product's whole claim, and until 2026-08-12 it was checked
+   * against `tier.model` — the model the config NAMES. That was sound while every
+   * fallback was the same model by another route, because the vendor was then the same
+   * whichever route answered. It stopped being sound the day a fallback chain was allowed
+   * to end at a DIFFERENT model on a plan that is still paying: with t1 on
+   * `zai-coding-plan/glm-5.2` and both deep tiers falling back to it, a fully degraded
+   * ladder is one model asked three times while the config still reads as three vendors.
+   *
+   * So the answer is recorded per tier as it happens, and `soleVendorOf` prefers it. Keyed
+   * by tier id, absent for tiers that ran on their own model — which is every tier on an
+   * ordinary day, so the common case stores nothing and old states read exactly as before.
+   */
+  readonly answeredBy?: Readonly<Record<string, string>>;
+}
+
+/**
+ * Record which model answered a tier, when it was not the tier's own (D-49, D-93).
+ *
+ * Only ever called on the fallback path. A tier that answers on its configured model
+ * leaves no entry, so `answeredBy` stays empty on every review where nothing ran out.
+ */
+export function markAnsweredBy(state: LadderState, tierId: string, model: string): LadderState {
+  return { ...state, answeredBy: { ...(state.answeredBy ?? {}), [tierId]: model } };
 }
 
 export function initialState(tiers: readonly Tier[] = DEFAULT_TIERS): LadderState {
@@ -475,7 +511,7 @@ export function step(input: StepInput): { readonly state: LadderState; readonly 
     // warn-instead-of-enforce shape as INV-8's missing agent file. A rule with no
     // consequence is a comment.
     const skipped = base.unavailable;
-    const sole = soleVendorOf(tiers, skipped);
+    const sole = soleVendorOf(tiers, skipped, base.answeredBy ?? {});
     // A TIER SKIPPED BELOW ONE THAT PASSED DOES NOT WEAKEN THE VERDICT (D-88).
     //
     // Vany: *"quota on t1 must allow to skip it and start t2. passing of t2 must make t1

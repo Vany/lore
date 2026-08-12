@@ -1812,13 +1812,31 @@ have been cut. Both are the same flat subscription, so this buys nothing and cos
 in money; what it buys is t1 seeing the whole change. (The metered twin gets cheaper as a
 side effect: `z-ai/glm-5.2` reads cache at $0.10/M against turbo's $0.24/M.)
 
-**The last resort is `glm-4.7`, deliberately not `glm-5.2`.** With t1 on `glm-5.2`, a last
-resort of `glm-5.2` would make a fully degraded ladder — kimi out, OpenRouter out, openai
-out — into three tiers running the identical model, which is D-1 and D-49's failure exactly:
-one opinion asked three times, wearing three names. `glm-4.7` is a different model on the
-same paying plan. It costs a 205K window, so a round that reaches it may be compacted; that
-is stated in `checks_skipped` when it happens, where a silent loss of independence would not
-be. A truncated review that says so beats a full review that is secretly the same reviewer.
+**The last resort is `glm-5.2`, because it is the SUPER FALLBACK — Vany's word for what it
+is for.** It is reached only when every other route to that tier is gone, so its job is to
+be the best reader still available, not to add diversity to a ladder that has already lost
+it. I argued for `glm-4.7` there, to keep a degraded ladder from becoming three tiers of
+what t1 runs, and that was the wrong trade: it pays a CERTAIN cost — a 205K window, which
+truncated 20% of t1's rounds when t1 lived on a window that size — against a RARE risk, in
+the one situation where the alternative is no review of that tier at all.
+
+**And it is not rare that it fires.** Measured the day it was configured: 36 of t2's 65
+runs in 24 hours ended `unpayable` — kimi's plan out of quota and OpenRouter at $-0.04 —
+so on more than half of t2's work the super fallback is the difference between a deep read
+and nothing. What IS rare is the state that costs independence, which needs the openai plan
+to go too.
+
+**What that makes load-bearing is the check, not the choice.** Independence was decided
+against `tier.model` — the model the CONFIG NAMES — which was sound for as long as every
+fallback was the same model by another route: a kimi tier answered by kimi-through-OpenRouter
+is still kimi's opinion. A chain ending at a different model breaks that equivalence, and
+with this ladder a degraded review is one model asked three times while the tier list still
+reads as three vendors. `passed` in that state is this product's central claim, false.
+
+So `LadderState.answeredBy` records the model that actually answered a tier whenever it was
+not the configured one, and `soleVendorOf` prefers it. A tier that ran on its own model
+records nothing, so an ordinary review stores nothing and states written before this read
+exactly as they did. This closes the `[OPEN]` raised above when the list was introduced.
 
 **Why one was not enough.** On 2026-08-11 OpenRouter ran to zero — $5165.00 granted
 against $5165.04 used — and every deep tier's single twin was as out as the subscription
@@ -1844,15 +1862,15 @@ in the config. A route may not appear twice, and may not name its own tier's mod
 `loadTiers` refuses both, because the chain is only ever walked when a provider has said
 quota and the same route can only say it again.
 
-**`[OPEN]` — the vendor count follows the CONFIGURED model, not the one that answered.**
-`soleVendorOf` reads `tier.model` at load, so a review whose t2 was answered by
-`zai-coding-plan/glm-5.2` while t1 ran on `zai-coding-plan/glm-5-turbo` is two vendors
-wearing three names, and D-49's single-vendor rule does not see it. Before this change
-every fallback was the same model at a different provider, so the configured vendor was
-always right about independence; a cross-model last resort is what makes it wrong. The
-fact is recorded per round — `fell_back_to` reaches `checks_skipped` — so the evidence is
-in the review; what is missing is the verdict reading it. Flagged rather than fixed
-because it belongs to attestation, not to the fallback path.
+**The vendor count follows the model that ANSWERED — closed 2026-08-12, same day it was
+raised.** `soleVendorOf` read `tier.model` at load, so a review whose t2 was answered by
+`zai-coding-plan/glm-5.2` while t1 ran on the same plan was two vendors wearing three names,
+and D-49's rule could not see it. Before the list, every fallback was the same model at a
+different provider and the configured vendor was always right about independence; a
+cross-model last resort is what made it wrong. It stayed open for as long as it was
+theoretical — about an hour, until the deployed ladder's last resort became the model t1
+runs, at which point the degraded path was the normal one. `LadderState.answeredBy` now
+carries it into the verdict.
 
 **Priced before it was built, against a real day.** Nine reviews of this repository, at
 OpenRouter's published rates: **$3.80** for the lot — t2's 6.9M cached-read tokens are
