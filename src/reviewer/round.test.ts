@@ -2174,6 +2174,91 @@ describe("a pool of routes to one model", () => {
   });
 
   /**
+   * A PARKED ROUTE IS NOT ASKED AT ALL — Vany: *"I do not want a regular check for quota
+   * if nothing happens."* The day he said it, both kimi routes were marked out with
+   * `stated: false`, and every t2 round still burned two refused calls before landing on
+   * the super fallback, because a guessed mark could not skip anything.
+   */
+  it("goes straight past a lone primary inside its backoff, without calling it", async () => {
+    const type = {
+      ...CODE_ARCH,
+      t0: [] as const,
+      tiers: CODE_ARCH.tiers.map((t) => (t.id === "t1" ? { ...t, model: "kimi/k3", fallback: ["GLM5.2"] } : t)),
+    };
+    store.markRouteUnavailable("kimi/k3", "2126-01-01T00:00:00.000Z", "out of quota", 3, false);
+    const reviewer = new Answers();
+    const r = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type });
+
+    expect(reviewer.asked, "the refused route is not re-confirmed").not.toContain("kimi/k3");
+    expect(reviewer.asked[0], "the fallback still runs").toMatch(/^zai-coding-plan2?\/glm-5\.2$/);
+    expect(r.decision.kind).not.toBe("stopped");
+  });
+
+  it("does not re-ask a marked fallback route either", async () => {
+    const type = {
+      ...CODE_ARCH,
+      t0: [] as const,
+      tiers: CODE_ARCH.tiers.map((t) =>
+        t.id === "t1" ? { ...t, model: "kimi/k3", fallback: ["openrouter/moonshotai/kimi-k3", "GLM5.2"] } : t,
+      ),
+    };
+    store.markRouteUnavailable("kimi/k3", "2126-01-01T00:00:00.000Z", "out", 3, false);
+    store.markRouteUnavailable("openrouter/moonshotai/kimi-k3", "2126-01-01T00:00:00.000Z", "out", 3, false);
+    const reviewer = new Answers();
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type });
+
+    expect(reviewer.asked, "both marked routes stay unasked").toStrictEqual([reviewer.asked[0]]);
+    expect(reviewer.asked[0]).toMatch(/^zai-coding-plan2?\/glm-5\.2$/);
+  });
+
+  /**
+   * WHEN EVERYTHING IS PARKED, THE TIER IS SKIPPED WITH A TIME — the same outcome as
+   * calling every route and being refused by every route, minus the calls (INV-1: the
+   * record still says the tier did not look).
+   */
+  it("skips the tier without one call when every route is inside its backoff", async () => {
+    const type = {
+      ...CODE_ARCH,
+      t0: [] as const,
+      tiers: CODE_ARCH.tiers.map((t) => (t.id === "t1" ? { ...t, model: "GLM5.2", fallback: [] } : t)),
+    };
+    store.markRouteUnavailable("zai-coding-plan/glm-5.2", "2126-01-01T00:00:00.000Z", "out", 3, false);
+    store.markRouteUnavailable("zai-coding-plan2/glm-5.2", "2126-01-01T00:00:00.000Z", "out", 3, false);
+    const reviewer = new Answers();
+    const r = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type });
+
+    expect(reviewer.asked, "no call spent re-confirming a parked route").toStrictEqual([]);
+    expect(r.decision.kind, "skipped and promoted, not failed").not.toBe("stopped");
+    const note = String(
+      (store.db.prepare("SELECT unavailable FROM tier_run WHERE review_id='r1' AND tier='t1' ORDER BY id DESC LIMIT 1").get() as
+        | Record<string, string>
+        | undefined)?.["unavailable"] ?? "",
+    );
+    expect(note, "and the record names when it comes back").toContain("2126-01-01");
+  });
+
+  /**
+   * THE PROBE OUTRANKS THE PARKING (D-94 over the route filter). A probing round exists
+   * to reach a provider we believe is down — filtered by that same belief, lore could
+   * never again learn that anything recovered before its backoff ran out.
+   */
+  it("still probes a parked route when the tier's probe interval has passed", async () => {
+    const type = {
+      ...CODE_ARCH,
+      t0: [] as const,
+      tiers: CODE_ARCH.tiers.map((t) => (t.id === "t1" ? { ...t, model: "kimi/k3", fallback: ["GLM5.2"] } : t)),
+    };
+    // The tier is in a stated cool-off whose last probe is ancient, so this round IS the
+    // probe — and the route's own mark must not veto it.
+    store.markTierUnavailable("t1", "2126-01-01T00:00:00.000Z", "provider said out", 1, true, "2020-01-01T00:00:00.000Z");
+    store.markRouteUnavailable("kimi/k3", "2126-01-01T00:00:00.000Z", "out", 3, false);
+    const reviewer = new Answers();
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type });
+
+    expect(reviewer.asked[0], "the probe reached the provider").toBe("kimi/k3");
+  });
+
+  /**
    * A NICKNAME IN THE FALLBACK LIST EXPANDS TOO.
    *
    * The deployed ladder names `GLM5.2` as the last resort for both deep tiers, which is

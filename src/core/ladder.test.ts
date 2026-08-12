@@ -794,13 +794,18 @@ describe("which routes are believed to have quota", () => {
   });
 
   /**
-   * A GUESS MAY NOT SKIP A CALL (D-90). A time the provider NAMED is a fact about itself,
-   * true for every review at once; lore's doubling backoff is a guess, and a review that
-   * skips a paid-for route on somebody else's guess narrows its own coverage on nothing.
+   * A GUESSED BACKOFF PARKS THE ROUTE TOO — Vany: *"I do not want a regular check for
+   * quota if nothing happens."* The first version held D-90's tier rule here (a guess may
+   * not skip a call), and the measured price was two refused kimi calls per t2 round,
+   * every round, to learn nothing. Skipping a ROUTE loses no coverage while a twin or a
+   * fallback answers; the recheck is the backoff expiring, not a schedule.
    */
-  it("still asks a route whose cool-off we only guessed at", () => {
-    const known = (m: string) => (m === "p2/glm" ? { until: LATER, stated: false } : undefined);
-    expect(withQuota(R, known, NOW).usable).toStrictEqual(R);
+  it("parks a route whose refusal named no reset, until the backoff passes", () => {
+    const guessed = (m: string) => (m === "p2/glm" ? { until: LATER, stated: false } : undefined);
+    expect(withQuota(R, guessed, NOW).usable).toStrictEqual(["p1/glm", "p3/glm"]);
+    // And hands it back the moment the backoff has run out — that IS the recheck.
+    const expired = (m: string) => (m === "p2/glm" ? { until: PAST, stated: false } : undefined);
+    expect(withQuota(R, expired, NOW).usable).toStrictEqual(R);
   });
 
   /**

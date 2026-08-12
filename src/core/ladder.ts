@@ -215,14 +215,22 @@ export interface RouteState {
  * route nobody has seen refuse is believed good, so a fresh service asks rather than
  * assumes and learns from the answer.
  *
- * **Only a PROVIDER-STATED reset removes a route from the list**, which is D-90's rule
- * about tiers applied to routes, and it is the difference between evidence and a guess.
- * A time the provider named is a fact about itself; our doubling backoff is a guess, and
- * skipping a paid-for route on a guess narrows the review's coverage on nothing.
+ * **Any refusal parks the route until its `until` passes** — the provider's own date when
+ * it named one, lore's doubling backoff (1h, capped at 24h) when it did not. Vany, when
+ * the first version re-asked an unstated refusal on every round: *"I do not want a regular
+ * check for quota if nothing happens."* The recheck is not a schedule, it is the backoff
+ * expiring: the next round after `until` asks the route again, a success clears the mark,
+ * and another refusal doubles the wait.
  *
- * When every route is stated-out, `usable` is empty and `until` is the EARLIEST release —
- * "we have no model for this, and here is when we will". Reporting that beats spending a
- * call to be told again what the provider has already said.
+ * This deliberately parts from D-90's tier rule, and the difference is what is lost by
+ * being wrong. Skipping a TIER on a guess narrows a review's coverage — a whole opinion
+ * gone. Skipping a ROUTE loses nothing while any pool twin or fallback answers, and when
+ * nothing does, the tier is skipped with a named comeback time — the same outcome as
+ * calling everything and being refused by everything, minus the calls. The tier-level
+ * probe (D-94) is unaffected: a probing round bypasses this filter entirely.
+ *
+ * When every route is parked, `usable` is empty and `until` is the EARLIEST release —
+ * "we have no model for this, and here is when we will".
  */
 export function withQuota(
   routes: readonly string[],
@@ -233,7 +241,7 @@ export function withQuota(
   const waits: string[] = [];
   for (const r of routes) {
     const k = known(r);
-    if (k !== undefined && k.stated && k.until > now) waits.push(k.until);
+    if (k !== undefined && k.until > now) waits.push(k.until);
     else out.push(r);
   }
   const soonest = [...waits].sort()[0];

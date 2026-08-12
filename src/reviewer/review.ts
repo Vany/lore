@@ -750,15 +750,17 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     // choosing."*
     const pools = loadPools();
     const all = routesFor(tier, pools);
-    // WHAT WE BELIEVE STILL HAS QUOTA. Nothing is assumed out until a provider has said so
-    // and named a time; a route we have never seen refuse is asked, not guessed about.
+    // WHAT WE BELIEVE STILL HAS QUOTA. Nothing is assumed out until a call has refused;
+    // after one, the route is parked until its backoff passes. Vany, when the first
+    // version re-asked an unstated refusal on every round: *"I do not want a regular
+    // check for quota if nothing happens."* Measured on the day he said it: t2 was
+    // burning two refused kimi calls per round to learn nothing — the marks were there,
+    // and D-90's tier rule kept them from being honoured.
     //
-    // ONLY WHERE THERE IS A CHOICE. A tier with one route has nothing to choose between,
-    // and skipping it here would silence D-94's probe — the fifteen-minute question that
-    // asks a cooled-off tier whether it is back, which is the only way lore ever finds
-    // out. Per-route memory exists to pick among a pool; the per-tier cool-off already
-    // governs whether a lone route is asked at all.
-    const believed = all.length > 1 ? withQuota(all, (m) => store.routeUnavailable(m)) : { usable: all };
+    // EXCEPT WHEN PROBING (D-94). The probe is the one call whose whole purpose is to
+    // reach a provider we believe is down, so it must not be filtered by that belief —
+    // filtered, lore could never again learn that anything recovered early.
+    const believed = probing ? { usable: all } : withQuota(all, (m) => store.routeUnavailable(m));
     const routes = believed.usable;
     const stuck = review.ladder.answeredBy?.[tier.id];
     // THE KEPT ROUTE FIRST, AND THE REST STILL BEHIND IT. Collapsing the pool to the
@@ -772,20 +774,11 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
         : stuck !== undefined && routes.includes(stuck)
           ? [stuck, ...poolOrder(routes.filter((r) => r !== stuck))]
           : poolOrder(routes);
-    // EVERY ROUTE IS OUT, AND THE PROVIDERS SAID SO. Asking anyway would spend a call to
-    // be told again what we were already told, and D-90 settled that for tiers: a stated
-    // cool-off skips the call. The refusal names the time the first one comes back, which
-    // is the whole of what a reader can act on.
-    if ("until" in believed && believed.until !== undefined) {
-      throw new Exhausted(
-        `no route for tier ${tier.id} has quota: ${all.join(", ")} — each refused and named its own reset. ` +
-          `The earliest comes back at ${believed.until}.`,
-        believed.until,
-      );
-    }
     // `tier.model` when the tier has no pool — the ordinary single-route case, unchanged.
     const primaryRoute = pool[0] ?? tier.model ?? "";
-    if (primaryRoute !== tier.model) chosenRoute = primaryRoute;
+    if (primaryRoute !== tier.model && pool.length > 0) chosenRoute = primaryRoute;
+    /** Whether the primary was actually CALLED — a synthetic refusal must not mark it. */
+    let primaryAsked = false;
 
     try {
       // INSIDE THIS TRY, so a cool-off reaches the fallback below.
@@ -802,6 +795,18 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
           down?.until,
         );
       }
+      // EVERY ROUTE OF THE MODEL IS PARKED — the review does not re-confirm that. Thrown
+      // INSIDE this try, exactly as the tier cool-off is, so the fallback chain below is
+      // still walked: the model's own routes being out says nothing about the metered
+      // twin. Synthetic, so it must not write a route mark — no call was made.
+      if (pool.length === 0) {
+        throw new Exhausted(
+          `no route for tier ${tier.id} has quota: ${all.join(", ")} — each refused recently and is not asked ` +
+            `again until its backoff passes. The earliest comes back at ${believed.until ?? "unknown"}.`,
+          believed.until,
+        );
+      }
+      primaryAsked = true;
       result = await input.reviewer.review({ ...tier, model: primaryRoute }, prompt, worktree, reviewId, stillWanted);
       // IT ANSWERED, so whatever we believed about it being down is over. The operator
       // banner has promised "one success clears this" since D-90 shipped, and only the
@@ -846,7 +851,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       // that is fine or keep asking one that is empty. The provider's own reset time is
       // used when it named one; otherwise `retryAt` supplies the doubling guess, and the
       // difference is recorded so a guess can never skip a call (D-90).
-      if (e instanceof Exhausted) {
+      if (e instanceof Exhausted && primaryAsked) {
         const seen = store.routeUnavailable(primaryRoute)?.failures ?? 0;
         const { until, stated } = retryAt(Date.now(), seen + 1, e.resetAt);
         store.markRouteUnavailable(primaryRoute, until, e.message, seen + 1, stated);
@@ -857,11 +862,15 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       // filtered by what we believe still has quota. Left unexpanded it would reach
       // opencode as a model id and be refused for not being `provider/model`, which is a
       // configuration error discovered in the middle of somebody's review.
+      // EVERY ENTRY THROUGH THE SAME FILTER, plain or pool. A marked fallback route is a
+      // refusal we already have; re-asking it each round is the regular check Vany
+      // refused. The probe exception does not apply here — a probing round proves the
+      // PRIMARY, and learning a fallback recovered can wait for its backoff.
       const chain = [
         ...spare,
         ...(tier.fallback ?? []).flatMap((f) => {
-          const fanned = routesFor({ ...tier, model: f }, pools);
-          return fanned.length > 1 ? poolOrder(withQuota(fanned, (m) => store.routeUnavailable(m)).usable) : fanned;
+          const fanned = withQuota(routesFor({ ...tier, model: f }, pools), (m) => store.routeUnavailable(m)).usable;
+          return fanned.length > 1 ? poolOrder(fanned) : fanned;
         }),
       ];
       if (!(e instanceof Exhausted) || chain.length === 0) throw e;
@@ -993,7 +1002,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
         // that text comes from opencode and names the model, and stops working the moment
         // a pool picks the route, because then the reader cannot tell WHICH plan refused
         // first. `unpayable` is a claim about every route, so every route is named.
-        const tried = [`${primaryRoute}: ${e.message}`, ...refused];
+        const tried = [primaryAsked ? `${primaryRoute}: ${e.message}` : e.message, ...refused];
         throw new Exhausted(`no route for tier ${tier.id} could run: ${tried.join("; ")}`, e.resetAt);
       }
       result = answered.result;

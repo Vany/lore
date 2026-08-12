@@ -1831,21 +1831,36 @@ have independent quota: `zai-coding-plan` can be dry while `zai-coding-plan2` is
 and both are `t2`. Marking the tier would either strike out the plan that is fine or keep
 asking the one that is empty.
 
-**Only a provider-STATED reset skips a call**, which is D-90's rule about tiers applied to
-routes: a time the provider named is a fact about itself, true for every review at once,
-while lore's doubling backoff is a guess — and skipping a paid-for route on a guess narrows
-the review's coverage on nothing. A stated time is still clamped (`RESET_CAP_MS`), so a
-provider cannot strike a route out for a year.
+**Any refusal parks the route until its `until` passes — revised the same day it shipped,
+on Vany's correction.** The first version held D-90's tier rule at route level too: only a
+provider-STATED reset could skip a call, a guessed backoff could not. The measured price
+was two refused kimi calls per t2 round, every round, to learn nothing — the marks were
+in the store and forbidden to act. Vany: *"I do not want a regular check for quota if
+nothing happens."* So a route that refused is not asked again until its mark expires: the
+provider's own date when it named one (clamped by `RESET_CAP_MS`), lore's doubling backoff
+(1h → 24h cap) when it did not. **The recheck is the backoff expiring, not a schedule** —
+the first round after `until` asks again, a success clears the mark, another refusal
+doubles the wait.
 
-**And when every route is stated-out, the refusal names the earliest release.** That is what
+**Why this may part from D-90, in one sentence:** skipping a TIER on a guess costs a whole
+opinion, while skipping a ROUTE costs nothing while any twin or fallback answers — and
+when nothing answers, the tier is skipped with a named comeback time, which is the same
+outcome as calling every route and being refused by every route, minus the calls. D-90
+stands unchanged at tier level, and D-94's probe outranks the parking: a probing round
+exists to reach a provider we believe is down, so it is never filtered by that belief.
+
+**And when every route is parked, the refusal names the earliest release.** That is what
 *"we have no model for this"* should say to be worth reading: not only that nothing can run,
 but when something can. Asking anyway would spend a call to be told again what we were
 already told.
 
-**The filter applies only where there is a choice.** A tier with one route has nothing to
-choose between, and filtering it there would silence D-94's fifteen-minute probe — the only
-way lore ever discovers a cooled-off tier has come back. Per-route memory picks among a
-pool; the per-tier cool-off still governs whether a lone route is asked at all.
+**The filter applies everywhere a route is about to be asked** — the primary (lone or
+pooled), every pool twin, and every fallback entry — with one exception: a D-94 probing
+round bypasses it entirely, because the probe is the mechanism by which lore learns a
+provider recovered before its mark ran out. An earlier version scoped the filter to pools
+only, reasoning that a lone route was the per-tier cool-off's business; that left the
+lone-primary case (t2's kimi, exactly) re-confirming its refusal on every round, which is
+the case the whole feature was asked about.
 
 **Random, and the reason outranks the choice.** Nothing publishes how much of a
 subscription is left, so any policy cleverer than a coin toss would be guessing dressed as
