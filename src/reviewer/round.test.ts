@@ -2473,6 +2473,10 @@ describe("a streamed tier-run", () => {
     const fixPrompt = reviewer.asked[1] ?? "";
     expect(fixPrompt, "the fix goes to the session, findings named").toContain("The author has answered");
     expect(fixPrompt).toContain(HOLD_BUG.claim);
+    // t0 arrives as the DELTA against what the session already saw, never the repeat —
+    // with nothing on either side, that is one line, not the full orientation render.
+    expect(fixPrompt).toContain("still nothing");
+    expect(fixPrompt).not.toContain("Deterministic tooling found nothing");
   });
 
   /**

@@ -44,7 +44,7 @@ import { detectAndRecord, renderConflicts } from "../knowledge/conflict.ts";
 import { promoteRecurring } from "../knowledge/derive.ts";
 import { relevantTo } from "../knowledge/enrich.ts";
 import { ingestDocs } from "../knowledge/ingest.ts";
-import { runT0, renderT0 } from "../t0/runner.ts";
+import { runT0, renderT0, renderT0Delta } from "../t0/runner.ts";
 import { engineRuleClass } from "../t0/engines.ts";
 import type { RecordedFinding, Store } from "../store/store.ts";
 import { emissionOf, type Listed, type ReviewerLike, type ReviewerResult } from "./opencode.ts";
@@ -747,6 +747,23 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     if (ask === undefined) throw new DidNotRun(`tier ${route.id} is set to stream but this reviewer cannot converse`);
     // The orientation, with the one instruction that overrides the batch habit. The
     // session sees this ONCE; every later iteration is a short continued message.
+    // The orientation's own t0 render happened when the prompt pair was built; what
+    // matters here is RECORDING it as seen, so the first fix message diffs against it
+    // rather than re-rendering everything. Only when this run will actually open a
+    // session cold — a kept session never reads the orientation.
+    if (store.sessionT0Of(reviewId, tier.id) === undefined) {
+      store.setSessionT0(
+        reviewId,
+        tier.id,
+        t0ForTier.findings.map((f) => ({
+          fingerprint: fingerprint(f),
+          file: f.file,
+          ...(f.line === undefined ? {} : { line: f.line }),
+          severity: f.severity,
+          claim: f.claim,
+        })),
+      );
+    }
     const opening =
       (typeof prompt === "string" ? prompt : prompt.initial) +
       "\n\nSTREAMING MODE: ignore any earlier instruction to reply with one final report. Report each finding" +
@@ -768,12 +785,30 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     // the full orientation — so the record can be stale across a lore restart without
     // harm. Without this, a kept session's post-submit round opened with "continue from
     // where you were" and the model was never told the tree had changed at all.
+    // t0 AS THE SESSION SHOULD SEE IT (D-108): the full render once, the DELTA ever
+    // after. The session's memory holds the unchanged findings; re-sending them on every
+    // boundary was the cold-start tax paid again in miniature. What was shown is
+    // recorded, so the next message diffs against it.
+    const t0Seen = (cur: { findings: readonly Finding[]; unavailable: readonly string[] }): string => {
+      const prev = store.sessionT0Of(reviewId, tier.id);
+      const shown = cur.findings.map((f) => ({
+        fingerprint: fingerprint(f),
+        file: f.file,
+        ...(f.line === undefined ? {} : { line: f.line }),
+        severity: f.severity,
+        claim: f.claim,
+      }));
+      store.setSessionT0(reviewId, tier.id, shown);
+      return prev === undefined
+        ? renderT0(cur as Parameters<typeof renderT0>[0])
+        : renderT0Delta(prev, cur as Parameters<typeof renderT0Delta>[1], fingerprint);
+    };
     const sessionSaw = store.sessionTreeOf(reviewId, tier.id);
     let continued = streamContinue();
     if (sessionSaw !== undefined && sessionSaw !== roundTree) {
       continued = streamFix({
         diff: await treeDelta(worktree, sessionSaw, roundTree),
-        t0: renderT0(t0ForTier),
+        t0: t0Seen(t0ForTier),
         open: store
           .openFindings(reviewId)
           .filter((x) => x.origin === tier.id)
@@ -827,7 +862,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
         });
         continued = streamFix({
           diff: consumed.diffs.join("\n"),
-          t0: renderT0(t0Fix),
+          t0: t0Seen(t0Fix),
           open: store
             .openFindings(reviewId)
             .filter((x) => x.origin === tier.id)

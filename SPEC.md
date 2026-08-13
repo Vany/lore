@@ -2169,6 +2169,16 @@ from where you were" and the model was never told the tree had moved at all. A f
 session is unaffected — the prompt pair routes it to the full orientation — so the record
 survives lore restarts harmlessly.
 
+**t0 reaches a kept session as a DELTA, never a repeat — extended 2026-08-14.** The
+orientation carries the full deterministic render once; every later message (a fix at the
+boundary, a re-pinned round's opener) carries only what MOVED: findings the new tree
+resolved (named), findings it introduced (listed, worst first), and the count that stands.
+What each session was shown is recorded beside its seen-tree; the NOT-RUN section is
+never delta'd, because "nothing checked this" is the one fact repetition cannot cheapen.
+The full list still reaches the CLIENT untrimmed — recorded ≠ told is the standing
+distinction, and the trim is on the model's side only, where the session's own memory
+holds the unchanged findings.
+
 **D-107 — findings stream out as they are found; a submitted fix streams back in at the
 next emission, into the same session. BUILT 2026-08-14.**
 

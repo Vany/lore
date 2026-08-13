@@ -10,7 +10,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { Finding } from "../core/finding.ts";
-import { renderT0 } from "./runner.ts";
+import { renderT0, renderT0Delta } from "./runner.ts";
 import { CODE_ARCH } from "../core/review-type.ts";
 import { runEngine } from "./engines.ts";
 import type { T0Engine } from "../core/review-type.ts";
@@ -89,5 +89,53 @@ describe("nothing the target controls runs in the service", () => {
   it("still runs its own scanners here", async () => {
     const out = await runEngine(process.cwd(), "ast-grep");
     expect(out.unavailable ?? "").not.toMatch(/runs in the sandbox/);
+  });
+});
+
+/**
+ * THE SESSION GETS THE DELTA, NOT THE REPEAT (D-108). A kept session's fix message used
+ * to re-render every still-present t0 finding — the cold-start tax paid again in
+ * miniature. What moved is what it needs; its memory holds the rest.
+ */
+describe("renderT0Delta", () => {
+  const fp = (f: { file: string; line?: number; claim: string }) => `${f.file}:${String(f.line ?? 0)}:${f.claim}`;
+  const F = (file: string, line: number, claim: string, severity = "medium") =>
+    ({ file, line, claim, severity, evidence: "e", failureScenario: "x" }) as never;
+  const seen = (file: string, line: number, claim: string, severity = "medium") => ({
+    fingerprint: `${file}:${String(line)}:${claim}`, file, line, severity, claim,
+  });
+
+  it("names what resolved, what is new, and how much stands", () => {
+    const out = renderT0Delta(
+      [seen("a.ts", 1, "old bug"), seen("b.ts", 2, "still here")],
+      { findings: [F("b.ts", 2, "still here"), F("c.ts", 3, "brand new", "high")], outcomes: [], skipped: [], unavailable: [] },
+      fp as never,
+    );
+    expect(out).toContain("1 resolved, 1 new, 1 unchanged");
+    expect(out).toContain("resolved: a.ts:1 — old bug");
+    expect(out).toContain("[high] NEW c.ts:3 — brand new");
+    expect(out, "the unchanged one is a count, not a repeat").not.toContain("still here");
+  });
+
+  it("says still-nothing in one line when both sides are empty", () => {
+    const out = renderT0Delta([], { findings: [], outcomes: [], skipped: [], unavailable: [] }, fp as never);
+    expect(out).toContain("still nothing");
+  });
+
+  it("says unchanged in one line when nothing moved", () => {
+    const out = renderT0Delta(
+      [seen("a.ts", 1, "x")],
+      { findings: [F("a.ts", 1, "x")], outcomes: [], skipped: [], unavailable: [] },
+      fp as never,
+    );
+    expect(out).toContain("unchanged — the 1 issue(s) you already know still stand");
+  });
+
+  // NOT-RUN is never delta'd: "nothing checked this" is the one fact repetition cannot
+  // cheapen (INV-1).
+  it("repeats the not-run section every time, whatever moved", () => {
+    const out = renderT0Delta([], { findings: [], outcomes: [], skipped: [], unavailable: ["eslint: no config"] }, fp as never);
+    expect(out).toContain("NOT RUN");
+    expect(out).toContain("eslint: no config");
   });
 });

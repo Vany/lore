@@ -2415,9 +2415,32 @@ export class Store {
       .run(`session-tree:${reviewId}:${tierId}`, tree);
   }
 
+  /**
+   * What a tier's kept session was last SHOWN of t0 (D-108), so a fix message can carry
+   * the delta instead of the repeat. Same lifecycle as the session-tree record.
+   */
+  sessionT0Of(reviewId: string, tierId: string): readonly { fingerprint: string; file: string; line?: number; severity: string; claim: string }[] | undefined {
+    const row = this.db.prepare("SELECT value FROM meta WHERE key = ?").get(`session-t0:${reviewId}:${tierId}`) as
+      | { value?: string }
+      | undefined;
+    if (row?.value === undefined) return undefined;
+    try {
+      return JSON.parse(row.value) as { fingerprint: string; file: string; line?: number; severity: string; claim: string }[];
+    } catch {
+      return undefined;
+    }
+  }
+
+  setSessionT0(reviewId: string, tierId: string, seen: readonly { fingerprint: string; file: string; line?: number | undefined; severity: string; claim: string }[]): void {
+    this.db
+      .prepare("INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+      .run(`session-t0:${reviewId}:${tierId}`, JSON.stringify(seen));
+  }
+
   /** Housekeeping for a review that ended — the records are meaningless without it. */
   clearSessionTrees(reviewId: string): void {
     this.db.prepare("DELETE FROM meta WHERE key LIKE ?").run(`session-tree:${reviewId}:%`);
+    this.db.prepare("DELETE FROM meta WHERE key LIKE ?").run(`session-t0:${reviewId}:%`);
   }
 
   /** Accept a diff while a round runs; it is applied at the reviewer's next emission (D-107). */

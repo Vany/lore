@@ -341,6 +341,65 @@ async function checkLint(
 const LISTED = 200;
 
 /** Render T0's result for a model prompt. */
+/** What a session was last SHOWN of t0, compact enough for a meta row (D-108). */
+export interface SeenT0 {
+  readonly fingerprint: string;
+  readonly file: string;
+  readonly line?: number | undefined;
+  readonly severity: string;
+  readonly claim: string;
+}
+
+/**
+ * t0 for a session that has already seen a full render: the DELTA, not the repeat.
+ *
+ * A kept session's fix message used to re-render every still-present finding — dozens of
+ * lines the session already holds, on every boundary and every re-pinned round, which is
+ * the cold-start tax D-80 removed, paid again in miniature. The session's memory carries
+ * the unchanged ones; what it needs is what MOVED: findings the new tree resolved,
+ * findings the new tree introduced, and the count that stayed.
+ *
+ * The NOT-RUN section is never delta'd: an engine that could not run must be said every
+ * time, because "nothing checked this" is the one fact repetition cannot cheapen (INV-1).
+ */
+export function renderT0Delta(prev: readonly SeenT0[], cur: T0Result, fp: (f: Finding) => string): string {
+  const parts: string[] = [];
+  const prevBy = new Map(prev.map((p) => [p.fingerprint, p]));
+  const curBy = new Map(cur.findings.map((f) => [fp(f), f]));
+  const fresh = [...curBy.entries()].filter(([k]) => !prevBy.has(k)).map(([, f]) => f);
+  const resolved = [...prevBy.values()].filter((p) => !curBy.has(p.fingerprint));
+  const unchanged = cur.findings.length - fresh.length;
+
+  if (fresh.length === 0 && resolved.length === 0) {
+    parts.push(
+      cur.findings.length === 0
+        ? "Deterministic tooling: still nothing."
+        : `Deterministic tooling: unchanged — the ${String(unchanged)} issue(s) you already know still stand.`,
+    );
+  } else {
+    parts.push(
+      `Deterministic tooling on the new tree: ${String(resolved.length)} resolved, ${String(fresh.length)} new, ` +
+        `${String(unchanged)} unchanged.`,
+    );
+    for (const p of resolved) {
+      parts.push(`  resolved: ${p.file}${p.line !== undefined ? `:${String(p.line)}` : ""} — ${p.claim}`);
+    }
+    const ordered = [...fresh].sort(compareFindings);
+    for (const f of ordered.slice(0, LISTED)) {
+      parts.push(`  [${f.severity}] NEW ${f.file}${f.line !== undefined ? `:${String(f.line)}` : ""} — ${f.claim}`);
+    }
+    if (ordered.length > LISTED) {
+      parts.push(`  … and ${String(ordered.length - LISTED)} more new, none more severe than the last line above`);
+    }
+  }
+
+  if (cur.unavailable.length > 0) {
+    parts.push("", "NOT RUN — do not treat these as clean; nothing checked them:", ...cur.unavailable.map((u) => `  ${u}`));
+  }
+  parts.push("", "Do not re-report anything above. It is already known.");
+  return parts.join("\n");
+}
+
 export function renderT0(r: T0Result): string {
   const parts: string[] = [];
 
