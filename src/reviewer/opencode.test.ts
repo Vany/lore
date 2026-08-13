@@ -1279,6 +1279,21 @@ describe("reading what opencode says about a call in flight", () => {
     expect(r?.resetAt, "the fact lore spent three days believing was unreachable").toBe("2026-08-10T18:19:09.000Z");
   });
 
+  /**
+   * OPENAI'S PHRASING, measured live 2026-08-13 after it cost three reviews and a whole
+   * propose run 45 minutes each. The narration carried "The usage limit has been
+   * reached" on every attempt — the watcher saw it and did not know the words, so
+   * opencode retried for ever and the deadline was the only thing that ended the call.
+   * No reset time: openai names none, and the event's `next` is the next RETRY attempt
+   * seconds away — parsing it as a reset would park the tier for five seconds and call
+   * that a cool-off.
+   */
+  it("recognises openai's usage-limit phrasing, with no reset time", () => {
+    const r = quotaRefusal({ type: "retry", attempt: 2, message: "The usage limit has been reached" });
+    expect(r?.message).toBe("The usage limit has been reached");
+    expect(r?.resetAt).toBeUndefined();
+  });
+
   // A retry is opencode saying it will ask again, which is CORRECT behaviour for a 500.
   // Failing the call on every retry would turn a recoverable blip into a dead tier, and
   // the ladder would step over a provider that was about to answer.

@@ -46,6 +46,11 @@ import { OUTPUT_CONTRACT } from "./prompts.ts";
  *      "message":"Weekly/Monthly Limit Exhausted. Your limit will reset at 2026-08-10 18:19:09",
  *      "next":1786237732180}}}
  *
+ * OpenAI's variant, measured live on 1.18.16: the same event with
+ * message "The usage limit has been reached" — no reset time, and `next` is the next
+ * RETRY attempt (seconds away), never the quota reset; parsing it as one would park the
+ * tier for five seconds and call that a cool-off.
+ *
  * Only the fields lore reads are named. Everything else on that stream is somebody
  * else's business, and a wider type would invite depending on it.
  */
@@ -69,7 +74,12 @@ export interface OpencodeStatus {
 export function quotaRefusal(status: OpencodeStatus): { readonly message: string; readonly resetAt?: string } | undefined {
   const message = status.message ?? "";
   if (status.type !== "retry" || message === "") return undefined;
-  if (!/limit exhausted|rate.?limit|quota|insufficient|out of credit/i.test(message)) return undefined;
+  // "usage limit" is OpenAI's phrasing — "The usage limit has been reached" — measured
+  // live 2026-08-13 after it cost three reviews and a whole propose run 45 minutes each:
+  // opencode retries it forever (attempt 1, 2, 3… every few seconds), so the session
+  // never finishes and the deadline is the only thing that ends it. The narration carried
+  // the refusal the entire time; this line just did not know the words.
+  if (!/limit exhausted|rate.?limit|quota|insufficient|out of credit|usage limit/i.test(message)) return undefined;
   const at = /reset(?:s)?(?: at)?\s+(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2})/i.exec(message);
   // TREATED AS UTC, and the provider does not say. Z.ai is a Beijing company and this may
   // well be UTC+8, in which case lore waits eight hours longer than it must — the safe
