@@ -65,7 +65,7 @@ function element(tag = "div") {
 /** Run the page's script against a stub DOM and hand back what it defined. */
 function loadPage(): {
   render: (b: unknown) => void;
-  branchLink: (r: unknown) => string;
+  prLink: (r: unknown) => string;
   byId: Map<string, ReturnType<typeof element>>;
 } {
   const script = BOARD_PAGE.slice(BOARD_PAGE.indexOf("<script>") + 8, BOARD_PAGE.lastIndexOf("</script>"));
@@ -99,7 +99,7 @@ function loadPage(): {
   runInNewContext(script, sandbox);
   return {
     render: sandbox["render"] as (b: unknown) => void,
-    branchLink: sandbox["branchLink"] as (r: unknown) => string,
+    prLink: sandbox["prLink"] as (r: unknown) => string,
     byId,
   };
 }
@@ -297,35 +297,37 @@ describe("the board's own script runs", () => {
 });
 
 /**
- * THE PR IS A VISIBLE NUMBER, NOT A SECRET HYPERLINK. The whole branch name used to be
- * the anchor, indistinguishable from an unlinked row without hovering — so the URL the
- * author was asked to provide went unseen. Vany: *"draw #<pr_number> link to pr in the
- * lines with reviews."*
+ * THE PR IS A VISIBLE NUMBER IN ITS OWN COLUMN, between state and branch — Vany's
+ * correction after one deploy of it riding inside the branch cell: a number trailing a
+ * variable-length name is in a different place on every row; a column is the thing an
+ * eye can sweep.
  */
-describe("the PR link on a review row", () => {
-  it("shows #number linking to the PR, beside the plain branch name", () => {
-    const { branchLink } = loadPage();
-    const html = branchLink({ branch: "feat/x", pullRequest: "https://github.com/o/r/pull/395" });
+describe("the PR column on a review row", () => {
+  it("shows #number linking to the PR", () => {
+    const { prLink } = loadPage();
+    const html = prLink({ branch: "feat/x", pullRequest: "https://github.com/o/r/pull/395" });
     expect(html).toContain(">#395</a>");
     expect(html).toContain('href="https://github.com/o/r/pull/395"');
-    expect(html, "the branch itself is text again, not the anchor").toMatch(/^feat\/x </);
+    expect(html, "the branch name does not live in this cell").not.toContain("feat/x");
   });
 
-  it("renders plain text when there is no PR, never a dead link", () => {
-    const { branchLink } = loadPage();
-    expect(branchLink({ branch: "feat/x" })).toBe("feat/x");
+  // Empty, not a dash: a dash implies a value this row is missing, and most rows
+  // legitimately have no PR at all.
+  it("is empty when there is no PR, never a dead link", () => {
+    const { prLink } = loadPage();
+    expect(prLink({ branch: "feat/x" })).toBe("");
   });
 
   // The second scheme check is this page's whole reason: a stored javascript: URL would
   // be somebody else's script on the page an operator opens when something is wrong.
   it("refuses a non-http scheme outright", () => {
-    const { branchLink } = loadPage();
-    expect(branchLink({ branch: "b", pullRequest: "javascript:alert(1)" })).toBe("b");
+    const { prLink } = loadPage();
+    expect(prLink({ branch: "b", pullRequest: "javascript:alert(1)" })).toBe("");
   });
 
   it("marks a URL with no trailing number as a PR without inventing one", () => {
-    const { branchLink } = loadPage();
-    const html = branchLink({ branch: "b", pullRequest: "https://forge.example/x/changes/abc" });
+    const { prLink } = loadPage();
+    const html = prLink({ branch: "b", pullRequest: "https://forge.example/x/changes/abc" });
     expect(html).toContain("<a");
     expect(html).not.toContain("#");
   });

@@ -48,7 +48,7 @@ export const BOARD_PAGE = `<!doctype html>
 
   /* One template, two users: the label row and every summary must not drift apart. */
   .grid {
-    display: grid; grid-template-columns: 15px 96px 1fr 150px 90px 90px;
+    display: grid; grid-template-columns: 15px 96px 52px 1fr 150px 90px 90px;
     gap: 12px; align-items: baseline;
   }
   .head { padding: 6px 4px 4px; color: var(--dim); font-size: 11px; letter-spacing: .5px; }
@@ -131,6 +131,7 @@ export const BOARD_PAGE = `<!doctype html>
 
   .s-running, .s-queued { color: var(--blue); }
   .prov { margin-right: 10px; white-space: nowrap; }
+  .pr-cell { overflow: hidden; }
   a.pr { color: var(--blue); text-decoration: none; }
   a.pr:hover { text-decoration: underline; }
   .prov.p-ok b { color: var(--green); font-weight: 600; }
@@ -323,7 +324,8 @@ function row(r) {
     '<summary class="grid">' +
       '<span class="caret">›</span>' +
       '<span class="state s-' + esc(r.state) + '">' + esc(r.state.toUpperCase()) + "</span>" +
-      '<span class="branch" title="' + esc(r.branch) + '">' + branchLink(r) + "</span>" +
+      '<span class="pr-cell">' + prLink(r) + "</span>" +
+      '<span class="branch" title="' + esc(r.branch) + '">' + esc(r.branch) + "</span>" +
       '<span class="step-cell">' + step + '<span class="dim"> r' + r.round + "</span></span>" +
       used +
       '<span class="clock" data-stall="' + esc(r.movedAt) + '" data-terminal="' + terminal + '">—</span>' +
@@ -390,18 +392,19 @@ function detail(r) {
  *
  * stopPropagation, or clicking the link also toggles the row open underneath it.
  */
-function branchLink(r) {
-  const name = esc(r.branch);
-  if (!r.pullRequest || !/^https?:\\/\\//i.test(r.pullRequest)) return name;
-  // THE NUMBER, VISIBLY, next to the plain branch name. The whole branch used to be the
-  // anchor, which looked identical to an unlinked row - the one visual difference was
-  // discoverable only by hovering, so the link the author was asked to provide went
-  // unseen. A trailing path segment of digits is the PR number on GitHub, GitLab and
-  // Gitea alike; a URL that ends some other way gets a generic marker rather than a
-  // number invented from it.
+function prLink(r) {
+  // ITS OWN COLUMN, between state and branch. The number rode inside the branch cell
+  // for one deploy and the column was Vany's correction: a number that trails a
+  // variable-length name is in a different place on every row, and a column is the
+  // thing an eye can sweep. Empty when there is no PR - a dash would imply a value
+  // this row is missing, and most rows legitimately have none.
+  if (!r.pullRequest || !/^https?:\\/\\//i.test(r.pullRequest)) return "";
+  // A trailing path segment of digits is the PR number on GitHub, GitLab and Gitea
+  // alike; a URL that ends some other way gets a generic marker rather than a number
+  // invented from it.
   const m = /\\/(\\d+)(?:[/?#].*)?$/.exec(r.pullRequest);
   const label = m ? "#" + m[1] : "PR\\u2197";
-  return name + ' <a class="pr" href="' + esc(r.pullRequest) + '" target="_blank" rel="noreferrer noopener"' +
+  return '<a class="pr" href="' + esc(r.pullRequest) + '" target="_blank" rel="noreferrer noopener"' +
     ' onclick="event.stopPropagation()">' + label + "</a>";
 }
 
