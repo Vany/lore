@@ -1568,4 +1568,32 @@ describe("emissionOf", () => {
     const r = emissionOf('```json\n{"done": "yes"}\n```');
     expect(r.ok).toBe(false);
   });
+
+  /**
+   * BOTH IN ONE BLOCK: the model's last emission may carry its final findings AND the
+   * declaration. The first version returned on the done marker before reading the
+   * findings — every one of them lost silently, and the run could end `passed` on code
+   * the model had flagged. Raised by lore's own review of this change.
+   */
+  it("keeps the findings when they arrive in the same block as done", () => {
+    const r = emissionOf(
+      '```json\n' +
+        JSON.stringify({ findings: JSON.parse(FINDING_JSON).findings, done: true, examined: "everything" }) +
+        '\n```',
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.items, "the final findings survive the declaration").toHaveLength(1);
+      expect(r.done).toBe(true);
+    }
+  });
+
+  it("keeps the findings when done arrives as its own second block", () => {
+    const r = emissionOf('```json\n' + FINDING_JSON + '\n```\n```json\n{"done": true}\n```');
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.items).toHaveLength(1);
+      expect(r.done).toBe(true);
+    }
+  });
 });

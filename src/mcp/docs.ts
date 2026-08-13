@@ -631,11 +631,9 @@ export const RESOURCE_DOCS: Readonly<Record<string, { title: string; priority: n
    Each poll returns only what is NEW. A tight retry loop is the most expensive thing
    you can do here: every attempt is a turn that learns nothing.
 4. For each finding: fix it, or justify it with // lore-ok[fp]: <reason>
-5. review_submit(review_id, diff, tree_hash) — any time once findings exist. If a reviewer is
-   mid-read your diff is HELD and handed to it at its next emission; you never resubmit
-   or awaiting_diff. fast_clean is NOT one of them: the deep round is already queued
-   against the review's pinned copy; one submitted while a tier is reading is held
-   and delivered at its next emission.
+5. review_submit(review_id, diff, tree_hash) — any time once findings exist, in ANY
+   state including fast_clean. If a reviewer is mid-read your diff is HELD and handed
+   to it at its next emission; you never wait for a state and never resubmit.
 6. Return to 2. Repeat until the state is TERMINAL — \`passed\`, \`passed_partial\`,
    \`needs_human\`, \`failed\`, \`expired\` or \`cancelled\`.
 
@@ -774,11 +772,9 @@ The loop:
    Each poll returns only what is NEW. A tight retry loop is the most expensive thing
    you can do here: every attempt is a turn that learns nothing.
 4. For each finding: fix it, or justify it with // lore-ok[fp]: <reason>
-5. review_submit(review_id, diff, tree_hash) — any time once findings exist. If a reviewer is
-   mid-read your diff is HELD and handed to it at its next emission; you never resubmit
-   or awaiting_diff. fast_clean is NOT one of them: the deep round is already queued
-   against the review's pinned copy; one submitted while a tier is reading is held
-   and delivered at its next emission.
+5. review_submit(review_id, diff, tree_hash) — any time once findings exist, in ANY
+   state including fast_clean. If a reviewer is mid-read your diff is HELD and handed
+   to it at its next emission; you never wait for a state and never resubmit.
 6. Return to 2. Repeat until the state is TERMINAL — \`passed\`, \`passed_partial\`,
    \`needs_human\`, \`failed\`, \`expired\` or \`cancelled\`.
    Only \`passed\` and \`passed_partial\` are worth attesting, and only \`passed\` is clean.

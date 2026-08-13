@@ -1787,26 +1787,34 @@ export interface Emission {
 }
 
 export function emissionOf(text: string): Listed<Finding> & { readonly done?: boolean } {
-  // The done declaration first: it is the rarer shape and unambiguous.
+  // FINDINGS FIRST, DONE SECOND, AND BOTH MAY BE IN ONE BLOCK. The first version
+  // checked the done marker first and RETURNED on it — so a model wrapping up with
+  // {"findings":[...],"done":true} lost every finding in that block, silently: no
+  // error, no retry, no log, and a run that could reach `passed` on code the model
+  // had explicitly flagged. Raised by lore's own review of this change. The two are
+  // independent facts about one message and are read independently.
+  let done = false;
   const fence = /```(?:json)?\s*([\s\S]*?)```/g;
   for (const m of text.matchAll(fence)) {
     try {
       const parsed = JSON.parse((m[1] ?? "").trim()) as { done?: unknown };
-      if (parsed !== null && typeof parsed === "object" && parsed.done === true) {
-        return { ok: true, items: [], rejected: [], done: true };
-      }
+      if (parsed !== null && typeof parsed === "object" && parsed.done === true) done = true;
     } catch {
       // Not JSON, or not the marker — the findings path below owns the error wording.
     }
   }
   const r = findingsOf(text);
-  if (!r.ok) return r;
-  if (r.items.length === 0 && r.rejected.length === 0) {
+  if (!r.ok) {
+    // A pure done declaration has no findings list at all, and that is its ordinary
+    // shape — not a contract failure.
+    return done ? { ok: true, items: [], rejected: [], done: true } : r;
+  }
+  if (r.items.length === 0 && r.rejected.length === 0 && !done) {
     // See the docblock: [] is not clean here. Refused with the instruction the retry
     // needs, because the fix is to SAY done, not to send an emptier list.
     return { ok: false, why: 'an empty "findings" list is not a streamed emission — report a finding, or declare {"done": true}' };
   }
-  return { ...r, done: false };
+  return { ...r, done };
 }
 
 export function extractFindings(text: string): Extraction {

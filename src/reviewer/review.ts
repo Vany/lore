@@ -714,6 +714,18 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // ends when the model DECLARES the tree examined — never by silence (INV-1).
   const streamed: RecordedFinding[] = [];
   let heldMismatch: string | undefined;
+  /**
+   * Findings whose LAST emission came before the last applied fix, for the settle pass.
+   *
+   * Raised by lore's own review of this change: a finding emitted at iteration N and
+   * fixed by the held diff at that same boundary is in NEITHER set the settle pass
+   * reads — not in `open` (it did not exist when the round began) and present in
+   * `raised` (from the pre-fix emission) — so the model's qualified silence after the
+   * fix could never settle it this round, and the client re-fixed what it had fixed.
+   * These are handed to the settle pass as open-and-unraised; every other guard there
+   * (qualification, code moved) still applies.
+   */
+  const fixCandidates: RecordedFinding[] = [];
   const recordStreamed = async (f: Finding): Promise<void> => {
     const fp = fingerprint(f);
     const scope = await scopeOf(worktree, f.file, f.line);
@@ -750,6 +762,8 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     };
     let continued = streamContinue();
     let done = false;
+    const lastEmittedAt = new Map<string, number>();
+    let lastApplyAt = -1;
     for (let i = 0; i < MAX_EMISSIONS; i++) {
       if (!stillWanted()) throw new DidNotRun(`review ${reviewId} ended while ${route.id} was mid-stream`);
       const flag = { done: false };
@@ -775,6 +789,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       for (const f of res.items) {
         agg.findings.push(f);
         await recordStreamed(f);
+        lastEmittedAt.set(fingerprint(f), i);
       }
       if (flag.done) { done = true; break; }
 
@@ -783,6 +798,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       const consumed = await consumeHeldDiffs(store, reviewId, worktree);
       if (consumed.mismatch !== undefined) { heldMismatch = consumed.mismatch; break; }
       if (consumed.applied > 0) {
+        lastApplyAt = i;
         const touched = consumed.diffs.flatMap((d) =>
           [...d.matchAll(/^\+\+\+ b\/(.+)$/gm)].map((m) => m[1] ?? "").filter((x) => x !== ""),
         );
@@ -813,6 +829,15 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
         `stream capped at ${String(MAX_EMISSIONS)} emissions before the model declared done — the findings ` +
           `above are real, and the tree is NOT fully examined`,
       );
+    }
+    if (lastApplyAt >= 0) {
+      for (const rec of streamed) {
+        const at = lastEmittedAt.get(rec.fingerprint);
+        // Emitted at or before the boundary where the last fix landed, and never again
+        // after it: the model saw the fix and stayed silent, which is the qualified
+        // silence D-56 settles on — once the settle pass is allowed to see it.
+        if (at !== undefined && at <= lastApplyAt) fixCandidates.push(rec);
+      }
     }
     return {
       findings: agg.findings, discarded: agg.discarded, raw: agg.raw,
@@ -1729,8 +1754,13 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // with two guards: only a tier qualified to see it may close it, and the code must
   // actually have moved (D-56).
   const answeredOtherwise = new Set<string>([...pending.map((p) => p.finding.fingerprint), ...expired]);
+  // The stream's fix-candidates enter as open-and-unraised (see `fixCandidates`): the
+  // pre-fix emission must not count as this round's re-raise, or the model's silence
+  // after seeing the fix can never settle what the fix fixed.
+  const settleRaised = new Set(raisedFingerprints);
+  for (const c of fixCandidates) settleRaised.delete(c.fingerprint);
   const fixed = await settleFixed(
-    store, reviewId, worktree, tiers, tier, open, raisedFingerprints, answeredOtherwise, round,
+    store, reviewId, worktree, tiers, tier, [...open, ...fixCandidates], settleRaised, answeredOtherwise, round,
   );
 
   // 7. A defect that keeps recurring is a missing rule, not N unrelated bugs.

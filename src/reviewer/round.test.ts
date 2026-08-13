@@ -2475,6 +2475,35 @@ describe("a streamed tier-run", () => {
     expect(fixPrompt).toContain(HOLD_BUG.claim);
   });
 
+  /**
+   * POST-FIX SILENCE SETTLES A MID-STREAM FINDING. Raised by lore's own review of this
+   * change: a finding emitted before the boundary and fixed by the held diff was in
+   * NEITHER set the settle pass read — not in `open` (born mid-round) and present in
+   * `raised` (the pre-fix emission) — so the client was shown, still open, the very
+   * thing its held fix had fixed, and paid another round to close it.
+   */
+  it("settles a finding the held diff fixed, on the model's silence after seeing it", async () => {
+    // Emission 1 raises HOLD_BUG about src/hold.ts; the held diff rewrites that file;
+    // emission 2 stays silent about it (a different file entirely) and declares done.
+    const other: Finding = { ...HOLD_BUG, file: "src.txt", line: 1, claim: "an unrelated remark" };
+    const reviewer = new Streaming([emission([HOLD_BUG]), emission([other]), DONE]);
+
+    const file = join(dir, "src/hold.ts");
+    const original = readFileSync(file, "utf8");
+    writeFileSync(file, original.replace("return 1;", "return release();"));
+    const claimed = await treeHash(dir);
+    const diffText = execFileSync("git", ["diff", "HEAD"], { cwd: dir }).toString();
+    writeFileSync(file, original);
+    await treeHash(dir);
+    store.holdDiff("r1", diffText, claimed);
+
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: STREAM_TYPE });
+
+    const stillOpen = store.openFindings("r1").map((f) => f.claim);
+    expect(stillOpen, "the fixed finding closed in THIS round").not.toContain(HOLD_BUG.claim);
+    expect(stillOpen, "silence settles only what the fix touched").toContain("an unrelated remark");
+  });
+
   it("surfaces a held diff that cannot land as awaiting_diff, never silently", async () => {
     const reviewer = new Streaming([emission([HOLD_BUG]), DONE]);
     store.holdDiff("r1", "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-nope\n+never", "0".repeat(40));
