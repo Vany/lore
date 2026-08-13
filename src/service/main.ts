@@ -325,14 +325,25 @@ export async function serve(cfg: ServiceConfig): Promise<() => void> {
     // reads it.
     const wanted = fallbackRoutes(loadTiers(), loadPools());
     if (wanted.length === 0) return;
-    const missing = await reviewer.missingModels(wanted).catch(() => undefined);
+    // WAIT FOR OPENCODE, because a deploy restarts both containers together and this
+    // check used to ask exactly once, at the one moment its counterpart could not yet
+    // answer. It printed "could not verify … UNKNOWN" on every deploy this service has
+    // ever had — a verification that can never succeed when it runs — and the operator,
+    // watching the logs, rightly called it out. Two minutes of patience covers every
+    // startup this deployment has seen; only after that is UNKNOWN an honest answer.
+    let missing: readonly string[] | undefined;
+    for (let attempt = 0; attempt < 24; attempt++) {
+      missing = await reviewer.missingModels(wanted).catch(() => undefined);
+      if (missing !== undefined) break;
+      await new Promise((r) => setTimeout(r, 5_000));
+    }
     if (missing === undefined) {
-      // NOT "ready". opencode was unreachable or answered a shape we do not know, so
-      // nothing was verified — and saying "ready" here would be the one claim this check
-      // exists to make trustworthy, made without evidence.
+      // NOT "ready". opencode stayed unreachable for two minutes, so nothing was
+      // verified — and saying "ready" here would be the one claim this check exists to
+      // make trustworthy, made without evidence.
       console.error(
         `lore: could not verify the quota fallback (${wanted.join(", ")}) — opencode did not answer with a ` +
-          "provider list. The ladder is unaffected; whether the fallback would work is UNKNOWN, not confirmed.",
+          "provider list for two minutes. The ladder is unaffected; whether the fallback would work is UNKNOWN, not confirmed.",
       );
       return;
     }
