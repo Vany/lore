@@ -36,7 +36,7 @@ import { isTerminal, type ReviewState } from "../core/review-state.ts";
 import type { ReviewType } from "../core/review-type.ts";
 import { retryAt, shouldProbe } from "../core/cooloff.ts";
 import { startOfDayIso } from "../ops/spend.ts";
-import { DidNotRun, Exhausted, TierUnavailable, TooLargeForTier } from "../core/errors.ts";
+import { CancelledByLore, DidNotRun, Exhausted, TierUnavailable, TooLargeForTier } from "../core/errors.ts";
 import { hunkAround, hunkStillPresent, makeScope, type Scope } from "../core/scope.ts";
 import { blobSha, computeDiff, renderDiff } from "../git/diff.ts";
 import { applyPatch, restoreTree, treeHash } from "../git/repo.ts";
@@ -1392,6 +1392,13 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     // metered API a blip really is worth asking twice.
     const attemptsSpent = tier.skip_if_quota === true ? 0 : 1;
     const alreadyFailed = store.tierFailureCount(reviewId, tier.id) > attemptsSpent;
+    // A STOP LORE CAUSED IS NOT EVIDENCE ABOUT THE TIER. The abort classifier says so in
+    // words — "stopped by lore, not by the provider" — and this path used to read only
+    // the type, booking a cancel-caused abort as "could not answer … one fewer
+    // independent vendor" on a green board. Rethrown untouched: on an ended review the
+    // worker discards it quietly; on a live one it is requeued, because nothing about
+    // the code was learned.
+    if (e instanceof CancelledByLore) throw e;
     if (!(e instanceof TierUnavailable) && alreadyFailed && anyTierRan(tiers, [...review.ladder.unavailable, tier.id])) {
       // Said in the channel a client repeats to its user. A promoted tier means the
       // review covers LESS than a reader would assume, which is what this channel is for.

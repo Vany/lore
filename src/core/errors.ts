@@ -57,6 +57,21 @@ export class DidNotRun extends LoreError {
 }
 
 /**
+ * lore stopped its own call — a cancel, a restart superseding the review, a shutdown.
+ *
+ * Its own class because the DISTINCTION is the point and it kept being lost: the abort
+ * classifier said "stopped by lore, not by the provider" in words, and everything
+ * downstream — skip_if_quota, the failure count, the promote path — read the words'
+ * TYPE and booked a self-inflicted stop as a tier shortfall. A cancelled rigid review
+ * was recorded as "t1 could not answer … one fewer independent vendor" while every
+ * provider chip on the board was green, and the operator rightly called it a lie.
+ *
+ * A lore-caused stop is never evidence about a tier. On a review that has ended it is
+ * nothing at all; on a live one it means the round learned nothing and is requeued.
+ */
+export class CancelledByLore extends DidNotRun {}
+
+/**
  * This tier could not look at this code — for a reason that is about the TIER, not
  * about the branch.
  *

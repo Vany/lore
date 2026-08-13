@@ -25,7 +25,7 @@ import { bootstrap } from "../knowledge/bootstrap.ts";
 import type { Store } from "../store/store.ts";
 import { Alerter, CONDITIONS } from "../ops/alerts.ts";
 import { Reviewer, type ReviewerLike } from "../reviewer/opencode.ts";
-import { ServiceUnreachable } from "../core/errors.ts";
+import { CancelledByLore, ServiceUnreachable } from "../core/errors.ts";
 import { consumeHeldDiffs, runRound } from "../reviewer/review.ts";
 
 export interface WorkerConfig {
@@ -216,6 +216,25 @@ export class Worker {
         // otherwise loop for ever. Past the bound it fails like anything else, saying why.
         if (e instanceof ServiceUnreachable && this.store.requeueJob(job.id, message)) {
           console.error(`[lore:log] ${job.reviewId}: requeued — lore's own opencode went away mid-round: ${message}`);
+          return;
+        }
+
+        // A STOP LORE CAUSED IS NOT A ROUND OUTCOME. A cancel or a superseding restart
+        // aborts the session mid-read; the review that ends that way already has its
+        // ending (cancelled — somebody decided), and writing "failed" over it — or
+        // booking the abort as the tier's shortfall — manufactures evidence about a
+        // provider that did nothing. Ended review: the job closes quietly. Live review
+        // (a shutdown window, a release that overshot): requeued, nothing was learned.
+        if (e instanceof CancelledByLore) {
+          const st = this.store.repoAndStateOf(job.reviewId);
+          if (st === undefined || isTerminal(st.state)) {
+            this.store.finishJob(job.id, "done", `stopped by lore because the review ended: ${message}`);
+            console.error(`[lore:log] ${job.reviewId}: round stopped with the review — not a failure`);
+          } else if (this.store.requeueJob(job.id, message)) {
+            console.error(`[lore:log] ${job.reviewId}: requeued — lore stopped its own call on a live review`);
+          } else {
+            this.store.finishJob(job.id, "failed", message);
+          }
           return;
         }
 

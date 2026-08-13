@@ -16,7 +16,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { DidNotRun, Exhausted } from "../core/errors.ts";
+import { CancelledByLore, DidNotRun, Exhausted } from "../core/errors.ts";
 import type { Tier } from "../core/ladder.ts";
 import { fingerprint } from "../core/fingerprint.ts";
 import { DEFAULT_TIERS, initialState, ladderFingerprint } from "../core/ladder.ts";
@@ -2528,6 +2528,43 @@ describe("a streamed tier-run", () => {
     await expect(
       runRound({ store, reviewer: dead, reviewId: "r1", principal: "p", worktree: dir, type: STREAM_TYPE }),
     ).rejects.toThrow(/failed: the provider returned 500/);
+  });
+});
+
+/**
+ * A STOP LORE CAUSED IS NOT EVIDENCE ABOUT THE TIER. A rigid client restarted its
+ * review; the predecessor's in-flight session was aborted (as designed); the abort
+ * classifier said "stopped by lore, not by the provider" — and skip_if_quota read only
+ * the type and recorded "t1 could not answer … one fewer independent vendor" on a board
+ * where every provider chip was green. The operator called it a lie, and it was.
+ */
+describe("a round lore itself stopped", () => {
+  it("is rethrown untouched — never booked as a tier skip", async () => {
+    const KEEPS = {
+      ...CODE_ARCH,
+      t0: [] as const,
+      tiers: CODE_ARCH.tiers.map((t) => (t.id === "t1" ? { ...t, skip_if_quota: true } : t)),
+    };
+    class Stopped implements ReviewerLike {
+      async review(tier: Tier): Promise<ReviewerResult> {
+        throw new CancelledByLore(`tier ${tier.id} (${tier.model ?? "?"}) was stopped by lore, not by the provider: aborted`);
+      }
+    }
+    // A prior failure on record — the exact precondition that used to trip the skip.
+    store.db
+      .prepare("INSERT INTO tier_run(review_id, tier, round, outcome, started_at) VALUES('r1','t1',0,'failed','2026-01-01')")
+      .run();
+
+    await expect(
+      runRound({ store, reviewer: new Stopped(), reviewId: "r1", principal: "p", worktree: dir, type: KEEPS }),
+    ).rejects.toThrow(CancelledByLore);
+
+    const note = store.db
+      .prepare("SELECT unavailable_for_tier FROM tier_run WHERE review_id='r1' ORDER BY id DESC LIMIT 1")
+      .get() as Record<string, string> | undefined;
+    expect(String(note?.["unavailable_for_tier"] ?? ""), "no shortfall was invented").not.toContain("SKIPPED");
+    const ladder = JSON.parse(String(store.db.prepare("SELECT ladder FROM review WHERE id='r1'").get()?.["ladder"] ?? "{}")) as { unavailable?: string[] };
+    expect(ladder.unavailable ?? [], "the tier was not marked unpayable").not.toContain("t1");
   });
 });
 

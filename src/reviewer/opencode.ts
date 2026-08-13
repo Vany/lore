@@ -26,7 +26,7 @@
 
 import type * as z from "zod";
 import { createOpencodeClient } from "@opencode-ai/sdk";
-import { DidNotRun, Exhausted, ProviderAuthFailed, ServiceUnreachable, TierUnavailable, TooLargeForTier } from "../core/errors.ts";
+import { CancelledByLore, DidNotRun, Exhausted, ProviderAuthFailed, ServiceUnreachable, TierUnavailable, TooLargeForTier } from "../core/errors.ts";
 import { FindingSchema, type Finding } from "../core/finding.ts";
 import type { Tier } from "../core/ladder.ts";
 import { loadPools, routesFor } from "../core/ladder.ts";
@@ -1335,7 +1335,7 @@ export class Reviewer implements ReviewerLike {
       // spend somebody else's quota answering for a review a person deliberately ended,
       // and would leave a failure in the record naming the wrong culprit.
       if (this.aborters.get(sessionId)?.signal.aborted === true || /aborted by lore/.test(message)) {
-        throw new DidNotRun(`tier ${tier.id} (${tier.model}) was stopped by lore, not by the provider: ${message}`, e);
+        throw new CancelledByLore(`tier ${tier.id} (${tier.model}) was stopped by lore, not by the provider: ${message}`, e);
       }
       // A CONNECTION THAT DROPPED MID-CALL IS AMBIGUOUS, AND THE ANSWER IS A PROBE, NOT
       // A STRING. This briefly classified `socket hang up` / `ECONNRESET` as
