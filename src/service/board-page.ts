@@ -134,6 +134,8 @@ export const BOARD_PAGE = `<!doctype html>
   .prov.p-ok b { color: var(--green); font-weight: 600; }
   .prov.p-out b { color: var(--yellow); font-weight: 600; }
   .s-findings_ready, .s-awaiting_diff { color: var(--yellow); }
+  /* findings_ready wearing gray (D-106): same protocol, less time. */
+  .s-findings_stale { color: var(--dim); }
   .s-needs_human { color: var(--mag); }
   .s-passed { color: var(--green); }
   .s-passed_partial { color: var(--yellow); }

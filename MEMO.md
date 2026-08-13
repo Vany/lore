@@ -5,6 +5,29 @@ surprised me.
 
 ---
 
+## 2026-08-13 — session 55 (continued): the day after the pool
+
+**t3's three days of 45-minute hangs were four words the watcher did not know.** The
+openai plan is out of quota; opencode retries "The usage limit has been reached" for
+ever, so the session never ends and the deadline is all that ends it. The D-91 narration
+carried the refusal the whole time — quotaRefusal's regex knew five phrasings and not
+openai's. Measured live with a 40-second event-stream probe before fixing; one
+alternation, and the parking/chain machinery catches everything downstream. The lesson
+sits beside D-91's original one: the answer was on the stream, and the cost of not
+recognising it was three failed reviews and a propose run.
+
+**Vany removed propose's idle-system refusal** — it waited for a quiet system and a busy
+system is never quiet; pools and chains have dissolved the starvation argument it rested
+on. And the board's status line now answers the week's real question — which route is
+out, and when is it back — instead of counting queues that no longer exist.
+
+**D-106, findings_stale:** 48 hours bright, seven days gray, then expired. The graying
+write restarts the clock; the submit gate never looked at the state, so gray accepts an
+answer unchanged. The sweep's order (expire first, gray second) keeps the reasoning
+checkable: what dies today was gray a whole week.
+
+---
+
 ## 2026-08-13 — session 55: the pool ships, and six defects surface in a day
 
 Vany asked one diagnostic question — *"look what happens with rev_zbFO, why t2 never

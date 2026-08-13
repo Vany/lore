@@ -13,6 +13,16 @@ export const REVIEW_STATES = [
   "queued",
   "running",
   "findings_ready",
+  /**
+   * `findings_ready` that has sat unanswered for `STALE_HOURS` (D-106).
+   *
+   * Everything about it still works — the findings are collectable, a submit is
+   * accepted, the worktree is held — it is the same state wearing gray: a visual and
+   * temporal grace between "waiting on you" and "nobody came back". It lasts
+   * `STALE_GRACE_DAYS`; only then does the sweep call it `expired`. Vany: *"happens
+   * after ready STALE_HOURS, lasts a week, and the same as ready, but gray."*
+   */
+  "findings_stale",
   "awaiting_diff",
   /** Fast tiers clean; the deep tiers are still running. NOT a pass. */
   "fast_clean",
@@ -59,6 +69,16 @@ export function isTerminal(state: ReviewState): boolean {
 }
 
 /**
+ * The two findings states — bright and gray — for SQL that must treat them alike.
+ *
+ * Derived here for the same reason `TERMINAL_SQL` is: spelled out at a call site, one
+ * copy eventually goes wrong, and `one-definition.test.ts` refuses the spelling outright.
+ */
+export const FINDINGS_SQL: string = (["findings_ready", "findings_stale"] as const satisfies readonly ReviewState[])
+  .map((s) => `'${s}'`)
+  .join(", ");
+
+/**
  * States where lore will do nothing further until the CLIENT acts.
  *
  * The distinction the inbox exists to make. A review in `running` is lore's move and
@@ -70,7 +90,7 @@ export function isTerminal(state: ReviewState): boolean {
  * change: get a person. Nothing else in the system can do that, and lore cannot notify
  * anyone.
  */
-const CLIENT_MOVE = new Set<ReviewState>(["findings_ready", "awaiting_diff", "needs_human"]);
+const CLIENT_MOVE = new Set<ReviewState>(["findings_ready", "findings_stale", "awaiting_diff", "needs_human"]);
 
 export function needsClient(state: ReviewState): boolean {
   return CLIENT_MOVE.has(state);

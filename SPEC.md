@@ -2124,6 +2124,27 @@ D-77 still holds and nothing skips the ladder. What changes is that batching is 
 DEFAULT rather than a compromise: fix everything found, review it together, push it
 together.
 
+**D-106 — findings dim before they die.**
+
+Vany: *"let's add state findings_stale — happens after ready STALE_HOURS, lasts a week,
+and the same as ready, but gray."*
+
+`findings_ready` used to be taken by the sweep at 48 hours, straight to `expired` — and
+`expired` concludes NOTHING, so two days of quiet threw away a review whose findings were
+delivered, real, and still answerable. Now it dims instead: after `STALE_HOURS` the state
+becomes `findings_stale`, which is `findings_ready` wearing gray — findings collectable, a
+submit accepted (the gate is `hasPendingRound`, which never looked at the state), the
+worktree held, `waiting_on: "you"` in the inbox. It lasts `STALE_GRACE_DAYS` (7), counted
+from the DIMMING — the graying write restarts the clock — and only then does the sweep
+call it `expired`, which still means *nobody came back*.
+
+The whole life of an unanswered review is therefore 48 hours bright, seven days gray,
+then gone. `expires_at` in the inbox names the real deadline — the moment the review
+stops accepting an answer — so a bright review shows both clocks summed and a gray one
+its remainder. The board paints the state with the dim gray it means; the client texts
+say "still answerable, at most a week left" rather than teaching gray as a different
+protocol, because it is the same protocol with less time.
+
 **D-104 — a deploy drops the rounds in flight and restores them; it does not drain.**
 
 Vany: *"do not queue — just drop sessions and restore after restart."*

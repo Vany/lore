@@ -58,6 +58,7 @@ const STATE_STYLE: Readonly<Record<string, { paint: (s: string) => string; mark:
   passed_partial: { paint: yellow, mark: "◑", note: "NOT a pass — a tier ABOVE the one that passed never ran, or one vendor reviewed it all" },
   fast_clean: { paint: yellow, mark: "◔", note: "NOT a pass — only the cheap tiers are done" },
   findings_ready: { paint: cyan, mark: "●", note: "findings are waiting for you" },
+  findings_stale: { paint: dim, mark: "●", note: "findings unanswered for 48h — at most a week left" },
   awaiting_diff: { paint: cyan, mark: "○", note: "waiting for your fixes" },
   needs_human: { paint: magenta, mark: "?", note: "a question you must not answer yourself" },
   // "a tier is working" is only true SOMETIMES, and `phaseNote` below replaces it when

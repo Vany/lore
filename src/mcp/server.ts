@@ -18,7 +18,7 @@ import { worstSeverity } from "../core/finding.ts";
 import { initialState, ladderFingerprint, type LadderState } from "../core/ladder.ts";
 import { isAttestable, isClean, isTerminal, needsClient, type ReviewState } from "../core/review-state.ts";
 import { DEFAULT_TYPE, reviewType, reviewTypeIds } from "../core/review-type.ts";
-import { STALE_HOURS } from "../ops/retention.ts";
+import { STALE_GRACE_DAYS, STALE_HOURS } from "../ops/retention.ts";
 import { applyPatch, restoreTree, treeHash } from "../git/repo.ts";
 import { decide } from "../knowledge/decide.ts";
 import { enrich, renderEnrichment } from "../knowledge/enrich.ts";
@@ -118,7 +118,12 @@ function nextStep(state: ReviewState): string {
       return "Still working — this is NOT a result. Read `check_back_note` THIS TIME (it shrinks as the round ages — never reuse the last one), leave, and make ONE call when it says. Do not merge, and do not report anything about the branch yet.";
     case "findings_ready":
     case "awaiting_diff":
-      return "ACT NOW: answer every finding below — fix it, or write the `justify_with` line at the site — then call review_submit with your diff and tree hash. THE REVIEW DIES IF YOU STOP HERE: it is abandoned after 48h and concludes nothing, and this branch stays unreviewed.";
+      return "ACT NOW: answer every finding below — fix it, or write the `justify_with` line at the site — then call review_submit with your diff and tree hash. THE REVIEW DIMS IF YOU STOP HERE: after 48h quiet it turns findings_stale — still answerable, for one more week — and then it is abandoned, concluding nothing, and this branch stays unreviewed.";
+    case "findings_stale":
+      // The same instruction as findings_ready ON PURPOSE (D-106): nothing about the
+      // review has changed but its clock. A different instruction would teach a client
+      // that gray means "different protocol", when it means "same protocol, less time".
+      return "STILL ANSWERABLE, BUT DIMMED: this review sat unanswered for 48h and has at most a week left. Everything works as in findings_ready — answer the findings and call review_submit with your diff and tree hash — or call review_cancel if somebody decided not to. Doing nothing abandons it, and an abandoned review concludes NOTHING about this branch.";
     case "fast_clean":
       return "The CHEAP tiers found nothing; the deep tiers are still running. This is NOT a pass and you must not merge on it. Keep polling.";
     case "needs_human":
@@ -709,8 +714,9 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       if (store.hasPendingRound(review_id)) {
         throw new Error(
           `a review round is pending for ${review_id}; a reviewer is reading — or is about to read — the ` +
-            `worktree this patch would rewrite. Call review_poll until the state is 'findings_ready' or ` +
-            `'awaiting_diff' — those are the states that accept a diff — then submit the same diff again. ` +
+            `worktree this patch would rewrite. Call review_poll until the state is 'findings_ready', ` +
+            `'findings_stale' or 'awaiting_diff' — those are the states that accept a diff — then submit the same ` +
+            `diff again. ` +
             `Note that 'fast_clean' is NOT one of them: the deep tiers are still queued against this worktree. ` +
             `Nothing was applied.`,
         );
@@ -1009,9 +1015,22 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           // hours left and of one with two days, and a client that cannot tell them
           // apart cannot triage. Only for reviews the sweep can still reach: a terminal
           // review is never expired, so a deadline on one would be fiction.
+          // A `findings_ready` review is not TAKEN at 48h any more — it dims to
+          // `findings_stale` and lives a further week (D-106); the stale clock counts
+          // from the dimming. The deadline shown is the one a client can plan around:
+          // the moment the review actually stops accepting an answer.
           ...(isTerminal(r.state)
             ? {}
-            : { expires_at: new Date(Date.parse(r.updatedAt) + STALE_HOURS * 3_600_000).toISOString() }),
+            : {
+                expires_at: new Date(
+                  Date.parse(r.updatedAt) +
+                    (r.state === "findings_stale"
+                      ? STALE_GRACE_DAYS * 86_400_000
+                      : r.state === "findings_ready"
+                        ? STALE_HOURS * 3_600_000 + STALE_GRACE_DAYS * 86_400_000
+                        : STALE_HOURS * 3_600_000),
+                ).toISOString(),
+              }),
           new_findings: fresh.length,
           // This is the field a client triages on, so it is computed, not read off
           // the front of the list. It used to be `fresh[0].severity` with "high"

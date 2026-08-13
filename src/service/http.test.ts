@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { MAX_OPEN_REVIEWS } from "../core/admission.ts";
 import { initialState } from "../core/ladder.ts";
 import type { ReviewState } from "../core/review-state.ts";
-import { STALE_HOURS } from "../ops/retention.ts";
+import { STALE_HOURS, STALE_GRACE_DAYS } from "../ops/retention.ts";
 import { DEFAULT_SPEND } from "../ops/spend.ts";
 import { BOARD_PAGE } from "./board-page.ts";
 import { DEFAULT_HEARTBEAT } from "../ops/heartbeat.ts";
@@ -1001,15 +1001,33 @@ describe("the inbox lists what is waiting, not only what is fresh", () => {
 
   // A deadline is what makes "waiting on you" actionable. It has to be the SAME 48
   // hours the sweep uses, so both read one constant.
-  it("says when the sweep will take it, counted from when it last moved", async () => {
+  it("says when the review actually stops accepting an answer, counted from when it last moved", async () => {
     open("revX", "findings_ready", "feat/expiring");
     const row = store.getReview("revX", "alice");
 
     const out = await callTool("review_inbox", {});
     const x = (out["reviews"] as Record<string, unknown>[]).find((r) => r["review_id"] === "revX");
 
+    // A findings_ready review is not TAKEN at 48h any more — it dims to findings_stale
+    // and lives a further week (D-106). The deadline a client can plan around is the
+    // moment the review stops accepting a submit, which is the sum of both clocks.
     expect(x?.["expires_at"]).toBe(
-      new Date(Date.parse(row?.updatedAt ?? "") + STALE_HOURS * 3_600_000).toISOString(),
+      new Date(
+        Date.parse(row?.updatedAt ?? "") + STALE_HOURS * 3_600_000 + STALE_GRACE_DAYS * 86_400_000,
+      ).toISOString(),
+    );
+  });
+
+  it("gives a dimmed review the week it has left, not the 48h it already spent", async () => {
+    open("revG", "findings_stale", "feat/gray");
+    const row = store.getReview("revG", "alice");
+
+    const out = await callTool("review_inbox", {});
+    const g = (out["reviews"] as Record<string, unknown>[]).find((r) => r["review_id"] === "revG");
+
+    expect(g?.["waiting_on"], "gray still waits on the client").toBe("you");
+    expect(g?.["expires_at"]).toBe(
+      new Date(Date.parse(row?.updatedAt ?? "") + STALE_GRACE_DAYS * 86_400_000).toISOString(),
     );
   });
 

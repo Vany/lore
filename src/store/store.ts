@@ -16,7 +16,7 @@ import { DatabaseSync } from "node:sqlite";
 import { AmbiguousFingerprint } from "../core/errors.ts";
 import type { Finding, Severity } from "../core/finding.ts";
 import type { LadderState } from "../core/ladder.ts";
-import { isTerminal, TERMINAL_SQL, type ReviewState } from "../core/review-state.ts";
+import { isTerminal, TERMINAL_SQL, type ReviewState, FINDINGS_SQL } from "../core/review-state.ts";
 import type { Scope } from "../core/scope.ts";
 import { DDL, FINDING_ORDER_SQL, PRAGMAS, SCHEMA_VERSION, applyMigrations, assertNotDowngrade } from "./schema.ts";
 import { NO_EVENTS, type ReviewEvents } from "../mcp/events.ts";
@@ -498,24 +498,62 @@ export class Store {
    * Ids are read inside the transaction and published after it commits: woken before,
    * a client re-reads and sees a review that is still open.
    */
-  expireStaleReviews(cutoff: string): readonly string[] {
+  expireStaleReviews(cutoff: string, staleCutoff?: string): readonly string[] {
     const ids = this.tx(() => {
+      // TWO CLOCKS SINCE D-106. `findings_ready` does not die at `cutoff` — it turns
+      // `findings_stale` and gets `staleCutoff`'s longer grace; everything else
+      // non-terminal expires at `cutoff` exactly as before. The stale rows expire on
+      // THEIR clock, which restarts when the graying writes `updated_at` — so the week
+      // counts from going gray, not from the last submit.
       const rows = this.db
-        .prepare(`SELECT id FROM review WHERE updated_at < ? AND state NOT IN (${TERMINAL_SQL})`)
-        .all(cutoff) as Record<string, string>[];
+        .prepare(
+          `SELECT id FROM review WHERE state NOT IN (${TERMINAL_SQL}) AND (
+             (state NOT IN (${FINDINGS_SQL}) AND updated_at < ?)
+             OR (state = 'findings_stale' AND updated_at < ?))`,
+        )
+        .all(cutoff, staleCutoff ?? cutoff) as Record<string, string>[];
       if (rows.length > 0) {
         this.db
           .prepare(
             `UPDATE review SET state = 'expired', updated_at = ?
-             WHERE updated_at < ? AND state NOT IN (${TERMINAL_SQL})`,
+             WHERE state NOT IN (${TERMINAL_SQL}) AND (
+               (state NOT IN (${FINDINGS_SQL}) AND updated_at < ?)
+               OR (state = 'findings_stale' AND updated_at < ?))`,
           )
-          .run(now(), cutoff);
+          .run(now(), cutoff, staleCutoff ?? cutoff);
         // The same reason `updateReview` does it, and this path has to be told
         // separately BECAUSE it writes state in SQL rather than going through there.
         // That split has already cost one bug — this was the single review-state
         // mutation that published no event — and leaving unclaimable jobs behind would
         // have been the second instance of the identical mistake.
         for (const r of rows) this.discardQueuedJobs(r["id"] ?? "");
+      }
+      return rows.map((r) => r["id"] ?? "");
+    });
+    for (const id of ids) this.events.changed(id);
+    return ids;
+  }
+
+  /**
+   * Gray the reviews that sat in `findings_ready` past the cutoff (D-106).
+   *
+   * The state is `findings_stale`: everything about it still works — findings
+   * collectable, a submit accepted, the worktree held — it is `findings_ready` wearing
+   * gray, a visible grace between "waiting on you" and "nobody came back". Writing
+   * `updated_at` here is what starts the week: the stale clock counts from going gray.
+   *
+   * Published like every state change, for the same reason `expireStaleReviews` was
+   * taught to: a subscriber watching this review deserves to hear it dim.
+   */
+  grayStaleFindings(cutoff: string): readonly string[] {
+    const ids = this.tx(() => {
+      const rows = this.db
+        .prepare(`SELECT id FROM review WHERE state = 'findings_ready' AND updated_at < ?`)
+        .all(cutoff) as Record<string, string>[];
+      if (rows.length > 0) {
+        this.db
+          .prepare(`UPDATE review SET state = 'findings_stale', updated_at = ? WHERE state = 'findings_ready' AND updated_at < ?`)
+          .run(now(), cutoff);
       }
       return rows.map((r) => r["id"] ?? "");
     });

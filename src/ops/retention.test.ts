@@ -46,6 +46,59 @@ describe("expireStale", () => {
     expect(expireStale(store, cfg)).toBe(0);
     expect(store.getReview("r1", "p")?.state).toBe("passed");
   });
+
+  /**
+   * FINDINGS DIM BEFORE THEY DIE (D-106). Vany: *"happens after ready STALE_HOURS,
+   * lasts a week, and the same as ready, but gray."* 48 hours bright, seven days gray,
+   * then gone — and the week counts from the DIMMING, whose write restarts the clock.
+   */
+  describe("findings_ready dims instead of dying", () => {
+    it("turns gray at the cutoff rather than expiring", () => {
+      review("r1", "findings_ready", 3);
+      expect(expireStale(store, cfg), "graying is not an expiry").toBe(0);
+      expect(store.getReview("r1", "p")?.state).toBe("findings_stale");
+    });
+
+    it("leaves bright findings bright before the cutoff", () => {
+      review("r1", "findings_ready", 1);
+      expect(expireStale(store, cfg)).toBe(0);
+      expect(store.getReview("r1", "p")?.state).toBe("findings_ready");
+    });
+
+    it("keeps a gray review alive inside its week", () => {
+      review("r1", "findings_stale", 5);
+      expect(expireStale(store, cfg)).toBe(0);
+      expect(store.getReview("r1", "p")?.state).toBe("findings_stale");
+    });
+
+    it("expires a gray review after its week is spent", () => {
+      review("r1", "findings_stale", 8);
+      expect(expireStale(store, cfg)).toBe(1);
+      expect(store.getReview("r1", "p")?.state).toBe("expired");
+    });
+
+    // The full life, end to end: bright, gray, gone — with the week counted from the
+    // graying, not from the last answer.
+    it("lives 48 hours bright and seven days gray", () => {
+      review("r1", "findings_ready", 3);
+      expireStale(store, cfg);
+      expect(store.getReview("r1", "p")?.state).toBe("findings_stale");
+
+      // Six days after the graying: still answerable.
+      const grayedAt = store.getReview("r1", "p")?.updatedAt ?? "";
+      store.db
+        .prepare("UPDATE review SET updated_at = ? WHERE id = 'r1'")
+        .run(new Date(Date.parse(grayedAt) - 6 * 86_400_000).toISOString());
+      expect(expireStale(store, cfg)).toBe(0);
+
+      // Past the week: gone, and gone as `expired` — nobody came back.
+      store.db
+        .prepare("UPDATE review SET updated_at = ? WHERE id = 'r1'")
+        .run(new Date(Date.parse(grayedAt) - 8 * 86_400_000).toISOString());
+      expect(expireStale(store, cfg)).toBe(1);
+      expect(store.getReview("r1", "p")?.state).toBe("expired");
+    });
+  });
 });
 
 describe("collect", () => {

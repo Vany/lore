@@ -448,7 +448,7 @@ away in `expires_at`:
 
 | `waiting_on` | states | what the client does |
 |---|---|---|
-| `you` | `findings_ready`, `awaiting_diff`, `needs_human`, or anything with uncollected findings | collect, answer with `review_submit`, or get a person |
+| `you` | `findings_ready`, `findings_stale`, `awaiting_diff`, `needs_human`, or anything with uncollected findings | collect, answer with `review_submit`, or get a person |
 | `lore` | `queued`, `running`, `fast_clean` | nothing — and specifically **not** a second `review_start` for that branch (§2.4.2) |
 
 `expires_at` is `updated_at` + the retention sweep's `staleHours`, read from one
@@ -570,9 +570,10 @@ down to *no*. A deployed lore never answers `null`; the CLI and the tests can, a
     │
     ▼
   running(Tn) ──┬──► findings_ready ──► awaiting_diff ──┐
-                │                                        │ review_submit
-                │                                        ▼
-                │                                   running(T1)   ← reset, not resume
+                │         │                              │ review_submit
+                │         │ 48h quiet (D-106)            ▼
+                │         ▼                         running(T1)   ← reset, not resume
+                │    findings_stale ── review_submit works here too; 7 days, then expired
                 │
                 ├──► tier_clean ──► escalate ──► running(Tn+1)
                 │
@@ -580,6 +581,13 @@ down to *no*. A deployed lore never answers `null`; the CLI and the tests can, a
 
   any state ──► failed | expired
 ```
+
+**`findings_stale` is `findings_ready` wearing gray** (D-106). After `STALE_HOURS` of
+silence the review dims instead of dying: everything still works — findings collectable,
+`review_submit` accepted, the worktree held — for `STALE_GRACE_DAYS` more, counted from
+the dimming. Then the sweep calls it `expired`, which still means *nobody came back*. The
+board paints it gray; `review_inbox` keeps it under `waiting_on: "you"` with the real
+deadline in `expires_at`.
 
 **A closed tier stays closed** (D-6, revised 2026-08-07). A diff is re-read by the tier
 that raised the finding, not by the cheapest one: the reviewer rules on the answer

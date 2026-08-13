@@ -129,7 +129,7 @@ waits twice as long as it needed to.
 A tight retry loop is the most expensive thing a client can do here — every attempt is an
 LLM turn that learns nothing, and the round finishes when it finishes.
 
-States: queued, running, findings_ready, awaiting_diff, fast_clean, needs_human,
+States: queued, running, findings_ready, findings_stale, awaiting_diff, fast_clean, needs_human,
 passed, passed_partial, failed, expired.
 
 ONLY \`passed\` means the branch is clean.
@@ -457,8 +457,8 @@ THE FIRST CALL OF EVERY SESSION. EVERY review of yours that is still open, plus 
 deep findings waiting since you last collected.
 
 A review outlives the session that started it. You end; nothing you leave behind is
-watching for you; the review does not — it sits in findings_ready holding a worktree until it is
-abandoned after 48h, having concluded NOTHING about the code. That is the dominant
+watching for you; the review does not — it sits in findings_ready holding a worktree, dims to
+findings_stale after 48h, and is abandoned a week later, having concluded NOTHING about the code. That is the dominant
 cause of wasted reviews here, measured: nothing obliges a client to come back, and no
 notification can reach one that has gone.
 
@@ -470,7 +470,8 @@ READ \`waiting_on\` FIRST. It is "you" or "lore", and it is the whole triage:
 
   * "you" — nothing will happen until you act. Either findings are queued for you
     (\`new_findings\` > 0, collect them with review_poll), or the review is stopped at
-    findings_ready / awaiting_diff / needs_human with everything already handed over,
+    findings_ready / findings_stale / awaiting_diff / needs_human with everything already
+    handed over,
     which means it is waiting on a review_submit or on a person. THIS IS THE STATE THAT
     ROTS. It listed nothing to collect and so used to be omitted here entirely — the
     common way to reach it is to poll, start fixing, and end the session.
@@ -627,7 +628,7 @@ export const RESOURCE_DOCS: Readonly<Record<string, { title: string; priority: n
    Each poll returns only what is NEW. A tight retry loop is the most expensive thing
    you can do here: every attempt is a turn that learns nothing.
 4. For each finding: fix it, or justify it with // lore-ok[fp]: <reason>
-5. review_submit(review_id, diff, tree_hash) — ONLY while the state is findings_ready
+5. review_submit(review_id, diff, tree_hash) — ONLY while the state is findings_ready, findings_stale
    or awaiting_diff. fast_clean is NOT one of them: the deep round is already queued
    against that worktree, and a submit is refused while a tier is reading it.
 6. Return to 2. Repeat until the state is TERMINAL — \`passed\`, \`passed_partial\`,
@@ -701,6 +702,7 @@ queued          accepted, not started
 running         the round is working — that is the deterministic sweep, reading your
                 repository's documents, or a model tier. Not necessarily a tier yet
 findings_ready  new findings are waiting for you
+findings_stale  the same, gray: unanswered for 48h, at most a week left before it is abandoned
 awaiting_diff   waiting for your fixes
 fast_clean      cheap tiers clean, deep tiers still running — NOT a pass
 needs_human     a question you must not answer yourself — NOT a pass
@@ -767,7 +769,7 @@ The loop:
    Each poll returns only what is NEW. A tight retry loop is the most expensive thing
    you can do here: every attempt is a turn that learns nothing.
 4. For each finding: fix it, or justify it with // lore-ok[fp]: <reason>
-5. review_submit(review_id, diff, tree_hash) — ONLY while the state is findings_ready
+5. review_submit(review_id, diff, tree_hash) — ONLY while the state is findings_ready, findings_stale
    or awaiting_diff. fast_clean is NOT one of them: the deep round is already queued
    against that worktree, and a submit is refused while a tier is reading it.
 6. Return to 2. Repeat until the state is TERMINAL — \`passed\`, \`passed_partial\`,

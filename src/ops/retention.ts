@@ -63,6 +63,14 @@ export interface RetentionConfig {
  * drift is a client told it has longer than it has.
  */
 export const STALE_HOURS = 48;
+/**
+ * How long `findings_stale` lasts before the sweep calls it `expired` (D-106).
+ *
+ * Vany: *"happens after ready STALE_HOURS, lasts a week, and the same as ready, but
+ * gray."* The week counts from GRAYING — the transition writes `updated_at` — so the
+ * whole life of an unanswered review is 48 hours bright, seven days gray, then gone.
+ */
+export const STALE_GRACE_DAYS = 7;
 
 export const DEFAULT_RETENTION: RetentionConfig = {
   worktreeDays: 0,
@@ -146,13 +154,21 @@ function daysAgo(n: number): string {
  */
 export function expireStale(store: Store, cfg: RetentionConfig): number {
   const cutoff = new Date(Date.now() - cfg.staleHours * 3_600_000).toISOString();
+  const staleCutoff = new Date(Date.now() - STALE_GRACE_DAYS * 86_400_000).toISOString();
   // The SQL lives in the store, not here. It used to be written inline — the terminal
   // set spelled out (it omitted `passed_partial`, and a partial pass was overwritten
   // with `expired` two days later, a verdict destroyed by a sweep), and the state
   // column written directly, which made this the one review-state change that woke no
   // subscriber. Both faults are the same fault: a mutation that knows the schema
   // better than the invariants.
-  return store.expireStaleReviews(cutoff).length;
+  //
+  // EXPIRE FIRST, GRAY SECOND (D-106). Run the other way, a review graying in this
+  // sweep would carry a fresh `updated_at` into the expiry query and could never be
+  // taken in the same pass — harmless, but the order makes the reasoning checkable:
+  // what dies today was gray for the whole week, not gray since this morning.
+  const expired = store.expireStaleReviews(cutoff, staleCutoff).length;
+  store.grayStaleFindings(cutoff);
+  return expired;
 }
 
 export async function collect(store: Store, cfg: RetentionConfig = DEFAULT_RETENTION): Promise<RetentionResult> {
