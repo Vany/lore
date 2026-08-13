@@ -195,7 +195,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-52** | The per-tier cap bounds *iteration*, so a clean tier escalates past it | confirmed |
 | **D-53** | One round at a time **per review**; reviews still run in parallel | confirmed |
 | **D-54** | t1 is `glm-5-turbo`: glm-4.7 answers 200 with an empty body | confirmed |
-| **D-55** | A submit is **refused** while a round is reading the worktree | revised by D-107: held, not refused — decided 2026-08-14, not built |
+| **D-55** | A submit is **refused** while a round is reading the worktree | revised by D-107: held, delivered at the next finding — decided 2026-08-14, not built |
 | **D-56** | A **fix** is settled by qualified silence over code that moved | confirmed |
 | **D-57** | `.lore-ok.md` justifies findings in files that cannot hold a comment | confirmed |
 | **D-58** | An oversized diff is announced against the tier's **own** demonstrated ceiling | confirmed |
@@ -2139,8 +2139,8 @@ D-77 still holds and nothing skips the ladder. What changes is that batching is 
 DEFAULT rather than a compromise: fix everything found, review it together, push it
 together.
 
-**D-107 — a mid-round submit is held and delivered at the round boundary, to the same
-session. DECIDED 2026-08-14, not built.**
+**D-107 — findings stream out as they are found; a submitted fix streams back in at the
+next emission, into the same session. DECIDED 2026-08-14, not built.**
 
 Vany: *"when the diff is pushed, it must be delivered to the model next message. We have
 a new diff; the model must review it and respond whether it satisfies the finding, and
@@ -2162,12 +2162,47 @@ waits at the boundary; the round in flight finishes against the tree it started 
 is removed is only the part the client paid for — being told to come back and perform
 the retry themselves.
 
-**The granularity is the prompt boundary, and that is a fact about opencode, not a
-choice.** `session.prompt` is one long request; there is no API to inject a message into
-a running agentic turn. "Delivered to the model next message" is therefore literal: a
-model thirty turns into an exploration finishes that exploration first, bounded by the
-deadline and D-50's caps. Nothing can interrupt a turn mid-read — which is the same
-property D-55 wanted, restated as a mechanism instead of a refusal.
+**Findings are emitted IMMEDIATELY, and the emission is the insertion point — extended
+2026-08-14.** Vany: *"the model must emit a finding immediately, not at the end of the
+session — so emitting a finding is the perfect time to insert the data about the fix; and
+when the model reacts to the fix, it continues checking and searching for new ones, or
+finishes if everything was examined."*
+
+This dissolves the granularity problem rather than working around it. The constraint is
+real and unchanged — `session.prompt` is one long request, and nothing can inject into a
+running agentic turn — but the tier-run stops being ONE long prompt with a report at the
+end. It becomes a LOOP of short prompts over the same kept session:
+
+1. *"Review. When you find your next finding, report it and STOP."* The model explores,
+   emits one finding (a batch is accepted if it has several ready), and its message ends.
+2. lore records the finding and the client can collect it AT ONCE — delta findings flow
+   while the tier is still reading, instead of arriving in one burst at the end.
+3. If a held diff is waiting, this boundary is where it lands: worktree patched, hash
+   verified, t0 re-run (D-92), and the next prompt says *"here is the author's fix for
+   your findings — does it satisfy them? Then continue searching."* Otherwise the next
+   prompt is just *"continue."*
+4. The model rules on the fix, keeps searching, and the run ends when it DECLARES the
+   tree examined — an explicit done marker, never an empty reply.
+
+So the prompt boundary — the only place opencode allows an insertion — now occurs
+exactly where Vany wants it: at every finding. A fix submitted while the model chases
+finding N is in front of the same model, with its reasoning still in context, one
+finding later.
+
+Three more things this half must get right:
+
+- **The done marker is load-bearing (INV-1).** A run ends when the model SAYS it has
+  examined everything, in the contract's own shape. A session that dies mid-search must
+  be indistinguishable from nothing — never from "finished clean". Absence of findings
+  is not completion; only the declaration is.
+- **Emit-and-stop is a model discipline the prompt must enforce and the harness must
+  survive.** A model that dumps three findings in one message is fine — take the batch.
+  One that explores forever without stopping is bounded by what already exists: the
+  deadline, D-50's caps, and 2/3 compaction on the session it is filling.
+- **"Round" changes meaning and the ledgers must follow.** A tier-run becomes the whole
+  loop-to-done; submits no longer open rounds — they are absorbed at the next emission.
+  The D-50 bounds re-anchor on turns and findings within the run; `tier_run` spans the
+  loop; the board's row shows the loop's progress, not one prompt's.
 
 Four things the implementation must get right, none reopening the decision:
 
