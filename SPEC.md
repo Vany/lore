@@ -2138,6 +2138,37 @@ D-77 still holds and nothing skips the ladder. What changes is that batching is 
 DEFAULT rather than a compromise: fix everything found, review it together, push it
 together.
 
+**D-108 — the pin advances, the review does not reset: `pull_fresh`, and every advance
+looks the same to the model. BUILT 2026-08-14.**
+
+Vany, watching client models answer findings by restarting: *"the client's model does not
+want to use our diff update and always does this restart — tell it restart is for explicit
+cases. Introduce a pull-fresh argument: it must tell us to pull the new branch for review
+and recut the worktree — but continue the same review, not create a new one."* And the
+constraint that shaped the mechanism: *"for the model, everything must look like a new
+diff arrived — never some restart."*
+
+**Three ways to continue, now ranked in every text a client reads:** `review_submit` (you
+fixed things — send the diff), `pull_fresh: true` on `review_start` (you pushed commits —
+the SAME review re-pins to origin's new tip: sync first and explicitly, because the branch
+still resolves at its old tip and the missing-branch sync would never fire; worktree
+removed and recut at the same review id; findings, ratified justifications and the ladder
+all carried; same review_id returned), and `restart: true` — demoted in its own schema
+text to *"ALMOST NEVER WHAT YOU WANT"*, reserved for a person deciding to discard the
+review's history. A re-pin is refused while a round runs: a held DIFF waits safely at the
+emission boundary, but replacing the whole tree under a reading tier is exactly what the
+hold exists to prevent.
+
+**And the model cannot tell the ways apart, by construction.** Each streamed run records
+the tree its session last saw (`session-tree:` per review and tier); the next round, on a
+kept session over a different tree, OPENS with the author-answered prompt carrying exactly
+the unseen delta — `git diff` between the two pinned tree objects, which the gc pin keeps
+resolvable. Submit, held diff, re-pin: one presentation. This also closed a real gap the
+constraint exposed: before it, a kept session's post-submit round opened with "continue
+from where you were" and the model was never told the tree had moved at all. A fresh
+session is unaffected — the prompt pair routes it to the full orientation — so the record
+survives lore restarts harmlessly.
+
 **D-107 — findings stream out as they are found; a submitted fix streams back in at the
 next emission, into the same session. BUILT 2026-08-14.**
 

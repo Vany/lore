@@ -1387,6 +1387,40 @@ describe("one review per branch", () => {
 
   // A rebase or force-push genuinely invalidates the pinned snapshot, so there has to
   // be a way through — an explicit one, never a default.
+  /**
+   * PULL_FRESH CONTINUES; IT NEVER CREATES (D-108). The client models kept answering
+   * findings by restarting — abandoning everything a review had learned to avoid
+   * composing a diff — so the middle path re-pins the SAME review to origin's new tip.
+   * These are the three refusals that keep it honest; the recut itself is repin.test.ts.
+   */
+  describe("pull_fresh", () => {
+    it("refuses to be combined with restart, naming the contradiction", async () => {
+      await start();
+      const out = await start({ restart: true, pull_fresh: true });
+      expect(out.result?.isError).toBe(true);
+      expect(message(out)).toContain("contradict");
+    });
+
+    it("refuses when there is nothing to continue", async () => {
+      const out = await start({ pull_fresh: true });
+      expect(out.result?.isError).toBe(true);
+      expect(message(out)).toContain("has none");
+    });
+
+    it("waits out a running round rather than re-pinning under a reading tier", async () => {
+      const first = await start();
+      const id = JSON.parse(first.result?.content?.[0]?.text ?? "{}").review_id as string;
+      store.enqueue(id, "fast");
+
+      const out = await start({ pull_fresh: true });
+      expect(out.result?.isError).toBe(true);
+      expect(message(out)).toContain("when it parks");
+      // The throw is before any mutation, so the review keeps the exact state the
+      // fixture created it in — "queued" from review_start itself.
+      expect(store.getReview(id, "alice")?.state).toBe("queued");
+    });
+  });
+
   it("allows a restart when asked for deliberately", async () => {
     const first = await start();
     const firstId = JSON.parse(first.result?.content?.[0]?.text ?? "{}").review_id as string;

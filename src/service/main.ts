@@ -6,6 +6,7 @@
  */
 
 import { join } from "node:path";
+import { repinReview } from "./repin.ts";
 import { fallbackRoutes, loadPools, loadTiers } from "../core/ladder.ts";
 import { dataDir, dbDir, dbFileIn } from "../core/paths.ts";
 import { mkdir } from "node:fs/promises";
@@ -390,6 +391,7 @@ export async function serve(cfg: ServiceConfig): Promise<() => void> {
       enqueue: (reviewId, stage) => {
         void enqueueOrFail(store, { ...DEFAULT_SPEND, dailyCeilingUsd: cfg.dailyCeilingUsd }, alerter, reviewId, stage);
       },
+      repin: (reviewId) => repinReview(store, reposRoot, dataDir(), reviewId),
       attest: async (reviewId) => {
         return render(await attest(store, reviewId, store.principalOf(reviewId) ?? "", keyPath));
       },

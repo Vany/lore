@@ -324,6 +324,20 @@ export async function removeWorktree(paths: RepoPaths, reviewId: string): Promis
 }
 
 /**
+ * What changed between two pinned trees, as a unified diff (D-108).
+ *
+ * Both arguments are write-tree objects the submits and re-pins recorded, so this is
+ * computable long after the fact — it is how a kept session is told "the author has
+ * answered" with exactly the delta it has not seen, whether the tree moved by a
+ * submitted diff, a held one, or a pull_fresh re-pin. The gc pin (45 days) is what
+ * keeps both ends resolvable for the life of a review.
+ */
+export async function treeDelta(worktree: string, fromTree: string, toTree: string): Promise<string> {
+  const { stdout } = await git(worktree, ["diff", fromTree, toTree], 120_000);
+  return stdout;
+}
+
+/**
  * A content hash of the worktree as it stands, including uncommitted and untracked
  * work.
  *

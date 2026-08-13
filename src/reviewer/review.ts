@@ -39,7 +39,7 @@ import { startOfDayIso } from "../ops/spend.ts";
 import { CancelledByLore, DidNotRun, Exhausted, TierUnavailable, TooLargeForTier } from "../core/errors.ts";
 import { hunkAround, hunkStillPresent, makeScope, type Scope } from "../core/scope.ts";
 import { blobSha, computeDiff, renderDiff } from "../git/diff.ts";
-import { applyPatch, restoreTree, treeHash } from "../git/repo.ts";
+import { applyPatch, restoreTree, treeDelta, treeHash } from "../git/repo.ts";
 import { detectAndRecord, renderConflicts } from "../knowledge/conflict.ts";
 import { promoteRecurring } from "../knowledge/derive.ts";
 import { relevantTo } from "../knowledge/enrich.ts";
@@ -760,7 +760,26 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       retried: false,
       steps: undefined as number | undefined,
     };
+    // WHAT THE SESSION HAS NOT SEEN OPENS THE ROUND (D-108). If a kept session's last
+    // run ended on a different tree than this round starts on — a submit landed, or a
+    // pull_fresh re-pinned — the first message is the author-answered prompt carrying
+    // exactly that delta. To the model, every way the tree advances looks the same: a
+    // new diff arrived. A FRESH session never sees this — the prompt pair routes it to
+    // the full orientation — so the record can be stale across a lore restart without
+    // harm. Without this, a kept session's post-submit round opened with "continue from
+    // where you were" and the model was never told the tree had changed at all.
+    const sessionSaw = store.sessionTreeOf(reviewId, tier.id);
     let continued = streamContinue();
+    if (sessionSaw !== undefined && sessionSaw !== roundTree) {
+      continued = streamFix({
+        diff: await treeDelta(worktree, sessionSaw, roundTree),
+        t0: renderT0(t0ForTier),
+        open: store
+          .openFindings(reviewId)
+          .filter((x) => x.origin === tier.id)
+          .map((x) => `${x.fingerprint.slice(0, 8)} ${x.file}:${String(x.line ?? "?")} — ${x.claim}`),
+      });
+    }
     let done = false;
     const lastEmittedAt = new Map<string, number>();
     let lastApplyAt = -1;
@@ -830,6 +849,9 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
           `above are real, and the tree is NOT fully examined`,
       );
     }
+    // The tree as the run leaves it — holds may have advanced it mid-loop — is what the
+    // session has now seen, and what the next round diffs against.
+    store.setSessionTree(reviewId, tier.id, await treeHash(worktree));
     if (lastApplyAt >= 0) {
       for (const rec of streamed) {
         const at = lastEmittedAt.get(rec.fingerprint);

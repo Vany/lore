@@ -2393,6 +2393,33 @@ export class Store {
    * described. Counting queued closes it by leaving nothing for a worker to claim,
    * rather than by making the window smaller and hoping.
    */
+  /**
+   * The tree a tier's kept session last SAW (D-108) — written at the end of each
+   * streamed run, read at the start of the next. When the review's tree has moved in
+   * between (a submit, a held diff, a pull_fresh re-pin), the difference between this
+   * and the round's tree is exactly the diff the session has not seen — and the next
+   * message opens with it, so to the model every advance looks the same: the author
+   * answered. Absent means no streamed run has finished, and the session (if any)
+   * is told nothing extra.
+   */
+  sessionTreeOf(reviewId: string, tierId: string): string | undefined {
+    const row = this.db.prepare("SELECT value FROM meta WHERE key = ?").get(`session-tree:${reviewId}:${tierId}`) as
+      | { value?: string }
+      | undefined;
+    return row?.value;
+  }
+
+  setSessionTree(reviewId: string, tierId: string, tree: string): void {
+    this.db
+      .prepare("INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+      .run(`session-tree:${reviewId}:${tierId}`, tree);
+  }
+
+  /** Housekeeping for a review that ended — the records are meaningless without it. */
+  clearSessionTrees(reviewId: string): void {
+    this.db.prepare("DELETE FROM meta WHERE key LIKE ?").run(`session-tree:${reviewId}:%`);
+  }
+
   /** Accept a diff while a round runs; it is applied at the reviewer's next emission (D-107). */
   holdDiff(reviewId: string, diff: string, treeHash: string): void {
     this.db

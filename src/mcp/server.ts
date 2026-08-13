@@ -46,6 +46,12 @@ export interface ServerDeps {
    * stopped.
    */
   readonly reviewer?: { cancel?(reviewId: string): Promise<boolean> };
+  /**
+   * Advance an open review's pin to the branch as origin now has it (D-108): sync,
+   * remove the worktree, recut at the same review id. Optional because the CLI and the
+   * tests build servers that cannot cut worktrees; `pull_fresh` says so plainly then.
+   */
+  readonly repin?: (reviewId: string) => Promise<{ worktree: string; treeHash: string; synced: boolean }>;
 }
 
 const text = (s: string) => ({ content: [{ type: "text" as const, text: s }] });
@@ -269,15 +275,24 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
             .max(2048)
             .refine((u) => /^https?:\/\//i.test(u), "pull_request must be an http(s) URL"),
         ).describe("link to the pull request this branch is proposed in"),
-        // The describe below is CLIENT-FACING: it is the whole contract of the flag.
+        // The describes below are CLIENT-FACING: they are the whole contract of the flags.
         restart: absent(z.boolean()).describe(
-          "CANCELS the open review of this branch and starts over — the old review ends as " +
-            "'cancelled' with its findings handed over, exactly as review_cancel would end it. " +
-            "Use only after a rebase, force-push, or when the branch has moved past the old snapshot.",
+          "ALMOST NEVER WHAT YOU WANT. Cancels the open review and abandons everything it " +
+            "learned — every finding, every justification already ratified — then starts from " +
+            "round 1. If you pushed more commits, use pull_fresh instead: same review, new tree. " +
+            "If you have fixes, review_submit them. restart is for a deliberate human decision " +
+            "to discard the review's history, and for nothing else.",
+        ),
+        pull_fresh: absent(z.boolean()).describe(
+          "CONTINUE the open review of this branch on the branch as origin now has it: lore " +
+            "syncs, re-pins the same review to the new tip, and the tier that raised the open " +
+            "findings judges the new tree. Findings, justifications and the ladder all carry. " +
+            "This is the ordinary way to hand over new commits without composing a diff — push, " +
+            "then call review_start with pull_fresh: true. Returns the SAME review_id.",
         ),
       }),
     },
-    async ({ branch, into, ticket, type, restart, pull_request }) => {
+    async ({ branch, into, ticket, type, restart, pull_request, pull_fresh }) => {
       // AN OPEN REVIEW OF THIS BRANCH IS THE ONE TO CONTINUE, NOT TO DUPLICATE.
       //
       // Measured 2026-08-05, the first day a real client drove this: six reviews of
@@ -294,6 +309,62 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       // review_id" that is not the one just asked for is exactly the kind of quiet
       // substitution this project refuses.
       const open = store.openReviewFor(who.repoId, branch);
+      // CONTINUE, RE-PINNED (D-108). The middle path between "answer with a diff" and
+      // "abandon everything": the client pushed more commits, so the SAME review moves
+      // its pin to origin's new tip. Nothing resets — the tier that raised the open
+      // findings judges the new tree, exactly as it judges a submitted diff.
+      if (pull_fresh === true) {
+        if (restart === true) {
+          throw new Error(
+            "pull_fresh and restart contradict each other: pull_fresh continues the review, restart abandons " +
+              "it. Pick the one you mean — pull_fresh if you pushed more commits, restart only if a person " +
+              "decided to discard the review's history.",
+          );
+        }
+        if (open === undefined) {
+          throw new Error(
+            `pull_fresh continues an open review, and ${branch} has none — call review_start without it to ` +
+              `begin one.`,
+          );
+        }
+        if (store.hasPendingRound(open.id)) {
+          throw new Error(
+            `a round is running for ${open.id} right now — poll it, and call pull_fresh again when it parks. ` +
+              `(A diff submitted mid-round is held for the reviewer; a whole-tree re-pin is not, because ` +
+              `replacing the tree under a reading tier is exactly what the hold exists to prevent.)`,
+          );
+        }
+        if (deps.repin === undefined) {
+          throw new Error("this build cannot re-pin a review; start over or submit a diff.");
+        }
+        const before = store.getReview(open.id, store.principalOf(open.id) ?? who.principal)?.treeHash;
+        const pinned = await deps.repin(open.id);
+        if (before !== undefined && pinned.treeHash === before) {
+          return text(
+            JSON.stringify({
+              review_id: open.id,
+              status: "unchanged",
+              note:
+                "origin has nothing newer than this review already reviewed" +
+                (pinned.synced ? "" : " (and lore could not confirm a fresh sync first)") +
+                " — push your commits, then call again.",
+            }),
+          );
+        }
+        store.updateReview(open.id, { state: "queued", treeHash: pinned.treeHash });
+        deps.enqueue(open.id, "fast");
+        return text(
+          JSON.stringify({
+            review_id: open.id,
+            status: "continued",
+            note:
+              "Same review, new tree: the branch as origin now has it. Findings, ratified justifications and " +
+              "the ladder all carried; the tier that raised the open findings will judge the new tree. Poll as " +
+              "usual.",
+          }),
+        );
+      }
+
       if (open !== undefined && restart !== true) {
         // THE AGE IS PART OF THE ADVICE, not decoration.
         //
@@ -316,7 +387,8 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
         throw new Error(
           `${branch} already has an open review: ${open.id} (state ${open.state}, round ${open.round}, ` +
             `last advanced ${age} ago). Continue it — poll it, then answer its findings with ` +
-            `review_submit, which applies your fixes to the SAME review and advances the ladder. Starting ` +
+            `review_submit; or, if you pushed more commits, call review_start with pull_fresh: true, which ` +
+            `re-pins the SAME review to origin's new tip with everything carried. Starting ` +
             `again would re-run the cheap tiers from round 1 and abandon every justification this review ` +
             `has already ratified, which is why the deep tiers are rarely reached. ` +
             (stale

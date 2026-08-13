@@ -2504,6 +2504,43 @@ describe("a streamed tier-run", () => {
     expect(stillOpen, "silence settles only what the fix touched").toContain("an unrelated remark");
   });
 
+  /**
+   * TO THE MODEL, EVERY TREE ADVANCE IS A NEW DIFF ARRIVING (D-108). Vany: *"for the
+   * model everything must look like a new diff arrived, not some restart."* Before this,
+   * a kept session's post-submit round opened with "continue from where you were" — the
+   * model was never told the tree had changed. Now the round opens with the
+   * author-answered prompt carrying exactly the delta the session has not seen, whether
+   * it arrived by submit, held diff, or pull_fresh re-pin.
+   */
+  it("opens a kept session's next round with the unseen delta, as an author's answer", async () => {
+    const reviewer = new Streaming([emission([HOLD_BUG]), DONE, emission([{ ...HOLD_BUG, claim: "second look" }]), DONE]);
+    const type = STREAM_TYPE;
+
+    // Round 1 streams and ends; the run records the tree its session saw.
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type });
+    expect(reviewer.asked, "orientation, then done").toHaveLength(2);
+
+    // The author's fix lands the ordinary way: applied to the tree between rounds,
+    // exactly as review_submit or pull_fresh leaves things.
+    writeFileSync(join(dir, "src/hold.ts"), "export function capture() {\n  return release();\n}\n");
+    await treeHash(dir);
+
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type });
+
+    const opener = reviewer.asked[2] ?? "";
+    expect(opener, "the author answered — never a bare continue").toContain("The author has answered");
+    expect(opener, "carrying the exact unseen delta").toContain("return release();");
+    expect(opener, "and naming the session's own open findings").toContain(HOLD_BUG.claim);
+  });
+
+  it("opens with a plain continue when the tree did not move between rounds", async () => {
+    const reviewer = new Streaming([emission([HOLD_BUG]), DONE, emission([{ ...HOLD_BUG, claim: "again" }]), DONE]);
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: STREAM_TYPE });
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: STREAM_TYPE });
+
+    expect(reviewer.asked[2] ?? "", "nothing changed, nothing claimed").toMatch(/Continue the review/);
+  });
+
   it("surfaces a held diff that cannot land as awaiting_diff, never silently", async () => {
     const reviewer = new Streaming([emission([HOLD_BUG]), DONE]);
     store.holdDiff("r1", "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-nope\n+never", "0".repeat(40));

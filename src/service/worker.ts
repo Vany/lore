@@ -417,7 +417,8 @@ export class Worker {
     for (const reviewId of this.reviewer.keptReviews?.() ?? []) {
       const at = this.store.repoAndStateOf(reviewId);
       if (at !== undefined && !isTerminal(at.state)) continue;
-      await this.reviewer.release?.(reviewId).catch((e: unknown) => {
+      this.store.clearSessionTrees(reviewId);
+    await this.reviewer.release?.(reviewId).catch((e: unknown) => {
         void this.alerter.send({
           severity: "log",
           condition: "orphaned model session not released",

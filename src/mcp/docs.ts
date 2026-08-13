@@ -100,9 +100,17 @@ one to continue.
 
 That matters more than it looks. The ladder only reaches its deeper, independent
 tiers by ADVANCING: findings carry forward, justifications you ratified stay ratified,
-and severity escalates where an answer did not hold. A restart throws all of that away
-and re-runs the cheap tiers from round 1, so a branch reviewed all day can produce no
-verdict at all — which is exactly what happened before this was refused.
+and severity escalates where an answer did not hold.
+
+THREE WAYS TO CONTINUE, IN ORDER:
+1. review_submit — you fixed things; send the diff. The same tier judges your answers.
+2. pull_fresh: true on review_start — you pushed more commits; the SAME review re-pins
+   to origin's new tip with everything carried. No diff to compose, nothing reset.
+3. restart: true — a person decided to discard this review's history. Everything is
+   abandoned and the cheap tiers run again from round 1. This is almost never the
+   right call, and reaching for it because a diff feels like work is how a branch gets
+   reviewed all day and produces no verdict at all — which is exactly what happened
+   before the one-review rule was enforced.
 
 Expect several rounds of findings. That is the process working, not failing.
 `.trim(),
