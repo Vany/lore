@@ -12,7 +12,7 @@
 
 import { createServer, type Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { Exhausted, TooLargeForTier } from "../core/errors.ts";
+import { Exhausted, ServiceUnreachable, TooLargeForTier } from "../core/errors.ts";
 import { CLAIM_MAX } from "../core/finding.ts";
 import type { Tier } from "../core/ladder.ts";
 import { Reviewer, countStepParts, extractFindings, quotaRefusal, splitModel, toolsUsed, isTooLong, usageFromMessages } from "./opencode.ts";
@@ -55,6 +55,10 @@ let messages: unknown = undefined;
 let abortStatus = 200;
 /** `POST /session/:id/summarize`: compaction, which must never be able to end a review. */
 let summarizeStatus = 200;
+/** Destroy the prompt's socket mid-call — the shape of a container dying under a round. */
+let destroyPrompt = false;
+/** And whether `/config/providers` still answers — the probe that tells the two apart. */
+let providersDown = false;
 /** Accept the prompt and never answer it, so a cancel has something real to interrupt. */
 let hangPrompt = false;
 /** Events the fake opencode will publish on `/event`, in order. */
@@ -119,6 +123,10 @@ function start(): Promise<void> {
           res.end(JSON.stringify(messages ?? sessionMessages(3)));
           return;
         }
+        if (path.endsWith("/message") && destroyPrompt) {
+          req.socket.destroy();
+          return;
+        }
         if (path.endsWith("/message")) {
           // A PROMPT THAT NEVER COMES BACK — an exhausted Z.ai plan through opencode,
           // which accepts the session and answers nothing at all (D-84). Every other
@@ -163,6 +171,10 @@ function start(): Promise<void> {
         // (D-80). Without a route here the catch-all answers `{id:"ses_test"}`, the window
         // reads as unknown, and `shouldCompact` correctly refuses — so a compaction test
         // would pass by never compacting.
+        if (path === "/config/providers" && providersDown) {
+          req.socket.destroy();
+          return;
+        }
         if (path === "/config/providers") {
           res.writeHead(200, { "content-type": "application/json" });
           // Two pool twins with DIFFERENT windows, so the budget test can prove the
@@ -224,6 +236,8 @@ beforeEach(async () => {
   messages = undefined;
   abortStatus = 200;
   summarizeStatus = 200;
+  destroyPrompt = false;
+  providersDown = false;
   hangPrompt = false;
   pending = [];
   await start();
@@ -859,6 +873,39 @@ describe("a prompt the provider refuses as too long", () => {
   it("still reads an exhausted plan as quota, not as size", async () => {
     replies = [{ info: { error: { name: "APIError", data: { message: "quota exceeded for this plan", statusCode: 429 } } } }];
     await expect(reviewer().review(TIER, "review this", "/tmp/wt")).rejects.toThrow(Exhausted);
+  });
+});
+
+/**
+ * A DROPPED CONNECTION IS AMBIGUOUS, AND A PROBE SETTLES IT. "socket hang up" is both
+ * how a provider reset presents THROUGH a healthy opencode and what a round sees when
+ * the opencode container is recreated under it. On 2026-08-13 the second case skipped t1
+ * as "could not answer" while both z.ai plans were fine — Vany read the record and
+ * called it a lie. The classifier now asks the one question that tells them apart:
+ * is opencode itself answering right now?
+ */
+describe("a connection that drops mid-call", () => {
+  it("requeues when opencode itself has stopped answering", async () => {
+    replies = [];
+    destroyPrompt = true;
+    providersDown = true;
+    const err = await reviewer().review(TIER, "review this", "/tmp/wt").then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(ServiceUnreachable);
+    expect(String((err as Error).message)).toContain("opencode itself is not answering");
+  });
+
+  it("still blames the tier when opencode is healthy, because then the reset was the provider's", async () => {
+    replies = [];
+    destroyPrompt = true;
+    const err = await reviewer().review(TIER, "review this", "/tmp/wt").then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(err).not.toBeInstanceOf(ServiceUnreachable);
+    expect(String((err as Error).message)).toMatch(/failed: .*(socket hang up|other side closed|fetch failed)/i);
   });
 });
 

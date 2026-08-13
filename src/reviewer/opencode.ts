@@ -1336,19 +1336,35 @@ export class Reviewer implements ReviewerLike {
       if (this.aborters.get(sessionId)?.signal.aborted === true || /aborted by lore/.test(message)) {
         throw new DidNotRun(`tier ${tier.id} (${tier.model}) was stopped by lore, not by the provider: ${message}`, e);
       }
-      // AN ORDINARY TIER FAILURE, INCLUDING A CONNECTION THAT DROPPED MID-CALL.
+      // A CONNECTION THAT DROPPED MID-CALL IS AMBIGUOUS, AND THE ANSWER IS A PROBE, NOT
+      // A STRING. This briefly classified `socket hang up` / `ECONNRESET` as
+      // `ServiceUnreachable` by pattern alone; lore's own t2 refused it and was right —
+      // opencode relays provider errors verbatim, so those strings are exactly how an
+      // upstream reset presents, and requeuing them would spend subscription quota
+      // proving somebody else's outage while blaming our own opencode in the audit trail.
       //
-      // This briefly classified `socket hang up` / `ECONNRESET` here as `ServiceUnreachable`
-      // so a deploy would requeue rather than fail the review. lore's own t2 refused it, and
-      // was right: opencode relays a provider's error with its message intact, so those
-      // strings are exactly how an upstream reset presents — this repository's own incident
-      // record attributes "two socket hang up in the same second" to the provider refusing
-      // load, and MEMO records not retrying them as a quota decision, and Vany's.
-      //
-      // Requeuing here would have spent subscription quota proving somebody else's outage,
-      // three times per review, and then blamed our own opencode in the audit trail. The
-      // unambiguous case — the session could not be created at all, before any provider is
-      // involved — is handled where it happens and is the only place that claim is safe.
+      // But the SAME string is also what a round sees when the opencode container is
+      // recreated under it — and on 2026-08-13 that window skipped t1 as "could not
+      // answer" while both z.ai plans were fine, which Vany read and called a lie. It
+      // was. The two cases are distinguishable by one cheap question nobody was asking:
+      // is opencode itself answering RIGHT NOW? A healthy server means the hang-up came
+      // through it from the provider — a tier failure, exactly as before. A dead server
+      // means the sidecar is gone and the provider was never reached — requeue, because
+      // nothing about the code was learned (INV-1).
+      if (/socket hang up|ECONNRESET|ENOTFOUND|ECONNREFUSED|fetch failed|other side closed/i.test(message)) {
+        const alive = await this.client.config
+          .providers()
+          .then((r) => (r.response?.status ?? 200) < 500)
+          .catch(() => false);
+        if (!alive) {
+          throw new ServiceUnreachable(
+            `tier ${tier.id} could not reach opencode at ${this.cfg.baseUrl} — the connection dropped mid-call ` +
+              `(${message}) and opencode itself is not answering. Nothing about the code was learned; the round ` +
+              `is requeued.`,
+            e,
+          );
+        }
+      }
       throw new DidNotRun(`tier ${tier.id} (${tier.model}) failed: ${message}`, e);
     }
   }
