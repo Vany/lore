@@ -151,7 +151,8 @@ export const BOARD_PAGE = `<!doctype html>
 <body>
 <header>
   <h1>lore</h1>
-  <span><span class="k">build</span><span id="build" class="dim">—</span></span>
+  <span id="build" class="dim">—</span>
+  <span id="la" class="dim" title="load average 1/5/15m, container VM">—</span>
   <span id="providers"></span>
   <span><span class="k">model calls</span><span id="calls">—</span></span>
   <span><span class="k">open</span><span id="open">—</span></span>
@@ -214,6 +215,13 @@ function esc(s) {
 
 function render(b) {
   document.getElementById("build").textContent = b.build.commit;
+  // The 1-minute figure, with the triple on hover. Read where lore runs, so it is the
+  // VM the sandboxes and t0 actually burn - the Mac's own load is not visible from here.
+  const la = document.getElementById("la");
+  la.textContent = b.load && b.load.length > 0 ? b.load[0].toFixed(1) : "\u2014";
+  if (b.load && b.load.length > 2) {
+    la.title = "load average " + b.load.map((x) => x.toFixed(2)).join(" ") + " (1/5/15m, container VM)";
+  }
   document.getElementById("spend").textContent = "$" + b.spendTodayUsd.toFixed(2);
   // ONE CHIP PER ROUTE THE LADDER CAN SPEND. "ok" is the optimistic default and means
   // only "no refusal is on record" - a quota PERCENTAGE is not knowable from here, no

@@ -458,6 +458,9 @@ describe("the service facts above the list", () => {
   it("is empty and honest when nothing is happening", () => {
     const b = board(store);
     expect(b.reviews).toStrictEqual([]);
+    // Three kernel-maintained numbers, present on every snapshot.
+    expect(b.load).toHaveLength(3);
+    expect(b.load.every((x) => typeof x === "number" && x >= 0)).toBe(true);
   });
 
   /**

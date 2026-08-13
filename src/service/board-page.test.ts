@@ -109,6 +109,7 @@ const snapshot = (over: Record<string, unknown> = {}) => ({
   build: { commit: "abc1234", builtAt: new Date().toISOString() },
   draining: false,
   providers: [{ route: "zai-coding-plan/glm-5.2" }],
+  load: [1.25, 2.5, 3.75],
   modelCalls: { inFlight: 2 },
   openReviews: { open: 3, limit: 128 },
   spendTodayUsd: 1.5,
@@ -247,6 +248,15 @@ describe("the board's own script runs", () => {
     expect(byId.get("spend")?.["textContent"]).toBe("$12.50");
     expect(byId.get("open")?.["textContent"]).toBe("3/128");
     expect(byId.get("build")?.["textContent"]).toBe("abc1234");
+    // The 1-minute figure beside the hash; the triple lives in the hover title.
+    expect(byId.get("la")?.["textContent"]).toBe("1.3");
+    expect(String(byId.get("la")?.["title"])).toContain("1.25 2.50 3.75");
+  });
+
+  it("survives a snapshot with no load reading", () => {
+    const { render, byId } = loadPage();
+    render(snapshot({ load: undefined }));
+    expect(byId.get("la")?.["textContent"]).toBe("\u2014");
   });
 
   /**

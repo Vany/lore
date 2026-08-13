@@ -17,6 +17,7 @@
  */
 
 import { mayAdmit } from "../core/admission.ts";
+import { loadavg } from "node:os";
 import { fallbackRoutes, loadPools, loadTiers, routesFor } from "../core/ladder.ts";
 import { isTerminal, type ReviewState } from "../core/review-state.ts";
 import type { GateState } from "../reviewer/gate.ts";
@@ -182,6 +183,16 @@ export interface Board {
   /** A drained service looks idle from outside, and idle is the opposite fact. */
   readonly draining: boolean;
   /**
+   * 1/5/15-minute load average, read where lore runs — the container VM, not the Mac.
+   *
+   * That scoping is the honest one twice over: it is the only load visible from here,
+   * and it is the load lore itself generates and suffers — t0 is CPU-bound and the
+   * sandboxes burn in the same VM. Measured before adding: ~1.3µs a read, a kernel-
+   * maintained value copied out, nothing like the footprint walk that once took the
+   * service down from inside a health check.
+   */
+  readonly load: readonly number[];
+  /**
    * What each route the ladder can spend is believed to cost right now (D-93).
    *
    * `queued` and `inFlight` stood here until 2026-08-13 and Vany removed them from the
@@ -281,6 +292,7 @@ export function board(store: Store, now = Date.now(), modelGate?: () => GateStat
       builtAt: process.env["LORE_BUILT_AT"] ?? "unknown",
     },
     draining,
+    load: loadavg(),
     providers: (() => {
       const pools = loadPools();
       const tiers = loadTiers();
