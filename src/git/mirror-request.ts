@@ -27,6 +27,16 @@ import { join } from "node:path";
 /** Where the two sides meet. Both names live here so they cannot drift apart. */
 export const REQUEST_FILE = "mirror-request";
 export const HEARTBEAT_FILE = "mirror-heartbeat";
+/**
+ * The request MID-FETCH: the host renames the request here before it fetches, and
+ * removes it after (`mirror-refresh.sh`). The rename exists so a request arriving DURING
+ * a fetch gets its own pass; this constant exists because lore read only the original
+ * name and treated the rename as completion — reproduced live on 2026-08-14: a
+ * just-pushed branch failed its review with "lore asked the host to fetch … not a timing
+ * problem" while the fetch was mid-flight, and the branch was in the mirror seconds
+ * later. Raised by lore's own t2 against the rename fix, and it was right.
+ */
+export const SERVING_FILE = `${REQUEST_FILE}.serving`;
 
 /**
  * How stale a heartbeat may be before we call the watcher dead.
@@ -94,13 +104,22 @@ export async function requestMirrorRefresh(
     return { fetched: false, why: `lore could not write a mirror refresh request: ${String(e)}` };
   }
 
+  const serving = join(dataDir, SERVING_FILE);
   const deadline = now() + timeoutMs;
   for (;;) {
-    const gone = await stat(request).then(
+    // COMPLETION IS BOTH FILES GONE, not one. The request disappearing is only PICKUP —
+    // the host renames it aside before fetching — and returning on pickup is how lore
+    // re-resolved the branch while the fetch was still running and called the result
+    // "not a timing problem".
+    const requestGone = await stat(request).then(
       () => false,
       () => true,
     );
-    if (gone) return { fetched: true };
+    const servingGone = await stat(serving).then(
+      () => false,
+      () => true,
+    );
+    if (requestGone && servingGone) return { fetched: true };
     if (now() >= deadline) {
       return {
         fetched: false,

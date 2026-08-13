@@ -8,7 +8,7 @@
  * missing branch that was seconds from arriving.
  */
 
-import { mkdtempSync, rmSync, writeFileSync, existsSync, utimesSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, existsSync, utimesSync, renameSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -18,6 +18,7 @@ import {
   REQUEST_FILE,
   mirrorRefresherAge,
   requestMirrorRefresh,
+  SERVING_FILE,
 } from "./mirror-request.ts";
 
 let dir: string;
@@ -40,6 +41,43 @@ describe("asking the host to fetch", () => {
   /** Stand in for the host loop: notice the request, then answer by deleting it. */
   const hostAnswers = (afterMs: number) =>
     setTimeout(() => rmSync(join(dir, REQUEST_FILE), { force: true }), afterMs);
+
+  /**
+   * PICKUP IS NOT COMPLETION — raised by lore's own t2 and reproduced live 2026-08-14. The host renames
+   * the request aside BEFORE it fetches; lore watched only the original name, returned
+   * "fetched" at the rename, re-resolved the branch mid-fetch, and failed a freshly
+   * pushed branch with "not a timing problem" — the branch was in the mirror seconds
+   * later. Completion is BOTH files gone.
+   */
+  it("keeps waiting while the request is being served", async () => {
+    beat();
+    // The host's real sequence: rename aside, fetch (300ms of it), then remove.
+    const pickedUp = setTimeout(() => {
+      renameSync(join(dir, REQUEST_FILE), join(dir, SERVING_FILE));
+    }, 80);
+    const finished = setTimeout(() => rmSync(join(dir, SERVING_FILE), { force: true }), 380);
+
+    const before = Date.now();
+    const out = await requestMirrorRefresh(dir);
+    clearTimeout(pickedUp);
+    clearTimeout(finished);
+
+    expect(out.fetched).toBe(true);
+    expect(Date.now() - before, "returned at completion, not at pickup").toBeGreaterThanOrEqual(350);
+  });
+
+  it("does not claim a fetch whose serving never ends", async () => {
+    beat();
+    const pickedUp = setTimeout(() => {
+      renameSync(join(dir, REQUEST_FILE), join(dir, SERVING_FILE));
+    }, 50);
+    const out = await requestMirrorRefresh(dir, Date.now, 400);
+    clearTimeout(pickedUp);
+
+    expect(out.fetched).toBe(false);
+    expect(String(out.why)).toContain("had not finished");
+    rmSync(join(dir, SERVING_FILE), { force: true });
+  });
 
   it("waits for the fetch and reports that it happened", async () => {
     beat();

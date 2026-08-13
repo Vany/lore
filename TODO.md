@@ -836,6 +836,17 @@ grows sideways is the one nobody can review.
       yesterday: D-78 below is now live rather than hypothetical, and nothing yet has
       ever driven this service except sessions I primed — see Phase 3's done-criterion.
 
+### 2026-08-14 — D-107 built, awaiting its own review
+
+- [x] **The streamed conversation (D-107).** Emit-and-stop contract, held diffs landing
+      at emission boundaries, mid-run delivery, the done declaration, gc pinning. Built
+      and mutation-tested; driving through its own review gate now. NOT deployed —
+      Vany's explicit scope: implement, fix, review, no deploy.
+- [ ] **Deploy D-107** — Vany's call, after the review verdict.
+- [ ] **Measure the loop against the batch baseline** once deployed: emissions per run,
+      time-to-first-finding (the new number that matters), and whether MAX_EMISSIONS=32
+      is ever hit in anger. Baseline: `research/t2-token-cost.md`.
+
 ## Later
 
 - [x] **Exercise the three paths that have never happened.** Done 2026-08-05:
