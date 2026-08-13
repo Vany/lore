@@ -2364,6 +2364,17 @@ to N-1 to zero, with `/healthz` still green. One thread of control stops ALL cla
 once. Its body catches everything it can and the outer catch alerts; the trade was taken
 knowingly, because an invisible queue is worse than a loud stop.
 
+**The mirror is never a word on the wire — D-65 revised, 2026-08-14.** Vany: *"remove
+all mentions of the mirror; the code must be in the origin — it is the only
+requirement."* Every client-facing text — tool docs, refusals, the branch-missing
+message — now speaks only of ORIGIN: what reached it, whether lore could sync with it,
+when lore last did. The mirror, the request files, the daemon and the bare paths are
+lore's mechanism; a client can act on none of them, and naming them taught clients to
+reason about machinery instead of about the one thing that is theirs — pushing. The
+operator-facing halves of refusals keep their command names (`make mirror`,
+`make mirror-daemon`) because those are the fix, carried verbatim through the client to
+a person.
+
 **D-100 — a missing branch asks the host to fetch before it is an error.**
 
 Vany: *"branch missing → refresh mirror. Mirror refreshed and no branch → error."*

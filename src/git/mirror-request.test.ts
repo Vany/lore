@@ -114,7 +114,7 @@ describe("asking the host to fetch", () => {
     const out = await requestMirrorRefresh(dir, Date.now, 10_000);
 
     expect(out.fetched).toBe(false);
-    expect(out.why).toMatch(/no refresher running at all/);
+    expect(out.why).toMatch(/no sync process running at all/);
     expect(out.why, "and names the fix, since the client cannot apply it").toMatch(/make mirror-daemon/);
     expect(Date.now() - started, "immediately, not after the timeout").toBeLessThan(1_000);
   });

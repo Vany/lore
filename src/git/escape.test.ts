@@ -53,7 +53,7 @@ describe("git cannot climb out of the directory it was aimed at (D-61)", () => {
     const paths = { bare: join(outer, "data/repos/r1/bare.git"), worktrees: join(outer, "data/repos/r1/wt") };
     mkdirSync(paths.bare, { recursive: true });
 
-    await expect(ensureBare(paths, "git@example.com:o/r.git")).rejects.toThrow(/no clone of/);
+    await expect(ensureBare(paths, "git@example.com:o/r.git")).rejects.toThrow(/has no copy of/);
     // And the enclosing repository is untouched.
     expect(execFileSync("git", ["-C", outer, "tag"], { encoding: "utf8" })).toContain("precious-tag");
   });
@@ -103,7 +103,7 @@ describe("the clone has to be there, and recent (D-63)", () => {
       execFileSync("git", ["-C", paths.bare, "config", "--get", "remote.origin.url"]).toString().trim(),
     ).toBe(src);
 
-    await expect(ensureBare(paths, src)).rejects.toThrow(/never been fetched/);
+    await expect(ensureBare(paths, src)).rejects.toThrow(/never completed a sync/);
     await expect(ensureBare(paths, src)).rejects.toThrow(/make mirror/);
   });
 
@@ -127,7 +127,7 @@ describe("the clone has to be there, and recent (D-63)", () => {
     utimesSync(fetchHead, stale, stale);
 
     // The submit path is the one that used to skip this entirely.
-    await expect(worktreeFor(paths, "rev_x", "main", src)).rejects.toThrow(/last fetched/);
+    await expect(worktreeFor(paths, "rev_x", "main", src)).rejects.toThrow(/last synced/);
     // ...and it must not have left a worktree behind for the worker to mistake for
     // a pinned one, which is the whole mechanism of the finding.
     expect(existsSync(join(paths.worktrees, "rev_x"))).toBe(false);
@@ -166,7 +166,7 @@ describe("the clone has to be there, and recent (D-63)", () => {
     const old = new Date(Date.now() - 2 * 60 * 60_000);
     utimesSync(fetchHead, old, old);
 
-    await expect(ensureBare(paths, src)).rejects.toThrow(/last fetched \d+ minutes ago/);
+    await expect(ensureBare(paths, src)).rejects.toThrow(/last synced .* \d+ minutes ago/);
 
     // ...but only while the base is being chosen. A review already holding a
     // worktree is pinned to it (D-40) and never reads the mirror again, so the

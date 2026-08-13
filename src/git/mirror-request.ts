@@ -80,7 +80,7 @@ export async function requestMirrorRefresh(
     return {
       fetched: false,
       why:
-        "lore asked the host to refresh its mirror and found no refresher running at all " +
+        "lore asked its host to sync with origin and found no sync process running at all " +
         "(no heartbeat). On the lore host: `make mirror-daemon`.",
     };
   }
@@ -89,7 +89,7 @@ export async function requestMirrorRefresh(
     return {
       fetched: false,
       why:
-        `lore asked the host to refresh its mirror, but the refresher last reported ` +
+        `lore asked its host to sync with origin, but the sync process last reported ` +
         `${Math.round(age / 1000)}s ago and is not answering. On the lore host: check ` +
         "`mirror.log`, then `make mirror-daemon`.",
     };
@@ -101,7 +101,7 @@ export async function requestMirrorRefresh(
     // deletes it to say "done", and the deletion is the whole signal.
     await writeFile(request, `${new Date(now()).toISOString()}\n`, "utf8");
   } catch (e) {
-    return { fetched: false, why: `lore could not write a mirror refresh request: ${String(e)}` };
+    return { fetched: false, why: `lore could not write a sync request: ${String(e)}` };
   }
 
   const serving = join(dataDir, SERVING_FILE);
@@ -124,7 +124,7 @@ export async function requestMirrorRefresh(
       return {
         fetched: false,
         why:
-          `lore asked the host to refresh its mirror and it had not finished after ` +
+          `lore asked its host to sync with origin and it had not finished after ` +
           `${Math.round(timeoutMs / 1000)}s. The fetch may still be running; try again shortly.`,
       };
     }

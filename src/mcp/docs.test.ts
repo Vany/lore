@@ -188,7 +188,11 @@ describe("every behaviour a client must know about reaches the texts", () => {
     ["start", "a branch gets one review, continued", "ONE REVIEW PER BRANCH"],
     ["start", "lore reads its mirror, not your disk", "PUSH YOUR BRANCH FIRST"],
     ["start", "an abandoned review concludes nothing", "FINISH WHAT YOU START"],
-    ["start", "the host refreshes the mirror, not you", "You do not have to refresh anything"],
+    // WAS: "the host refreshes the mirror, not you". Vany, 2026-08-14: the mirror is
+    // lore's mechanism and the client's only requirement is that the code reached
+    // ORIGIN — so the texts stopped mentioning it at all, and this pin now guards the
+    // replacement sentence rather than the leak.
+    ["start", "origin is the only requirement (D-65 revised)", "your code has reached ORIGIN"],
     ["poll", "needs_human carries the question (D-39)", "open_questions"],
     ["poll", "inherited findings are marked (D-68)", "preexisting"],
     ["poll", "a rejected finding is disclosed (D-66)", "a tier produced a finding the schema refused"],

@@ -72,22 +72,20 @@ FROM HERE", so it shrinks as a round ages — a round that has already outlived 
 typical one is not another typical one away from finishing, it is nearly done. Caching
 the first number is how a client waits twice as long as it needed to.
 
-PUSH YOUR BRANCH FIRST. lore reads its own mirror of the remote, not your working
-copy, so a commit that exists only on your disk is not in the review.
+PUSH YOUR BRANCH FIRST. The one requirement is that your code has reached ORIGIN:
+lore reviews what origin has, never your working copy, so a commit that exists only
+on your disk is not in the review. How lore stays current with origin is lore's own
+business — nothing about it is asked of you, ever.
 
-You do not have to refresh anything. A process on the lore host keeps every mirror
-current, and nothing is asked of you — an earlier version told clients to run
-\`make mirror\` on the deployment host, which is not somewhere a client can reach.
-
-If that process has stopped, a review is REFUSED rather than run against a stale tree.
-You cannot fix that from where you are: report the message to your user verbatim. It
-names what a person must check on the lore host.
+If lore cannot confirm origin's current state, a review is REFUSED rather than run
+against an old tree. You cannot fix that from where you are: report the message to
+your user verbatim — it names what a person must check on the lore host.
 
 The review pins the branch when its first round begins, which is shortly after this
 returns — not at the instant it returns. A commit pushed in that window may or may
 not be included, and nothing will tell you which. Push first, then start; for
-anything after that, start a new review. Once a review is pinned the mirror is never
-re-read, so a later push cannot move the ground under findings already reported.
+anything after that, start a new review. Once pinned, a later push cannot move the
+ground under findings already reported.
 
 FINISH WHAT YOU START. A review left in \`findings_ready\` never ends by itself: it
 holds a pinned worktree until it is expired as abandoned, and the branch stays

@@ -142,9 +142,9 @@ export async function ensureBare(
   const isRepo = await gitMaybe(paths.bare, ["rev-parse", "--resolve-git-dir", "."]);
   if (isRepo === undefined) {
     throw new DidNotRun(
-      `no clone of ${gitUrl} at ${paths.bare}. lore does not clone — it holds no credentials for any ` +
-        `remote, by design. The host refresher populates this; it has not, so either it is not installed ` +
-        `or it has never succeeded for this repository. REPORT THIS — you cannot fix it from here. On the ` +
+      `lore has no copy of ${gitUrl} yet — its host-side sync has never populated one, so either that ` +
+        `sync is not installed or it has never succeeded for this repository. lore itself holds no ` +
+        `credentials for any remote, by design. REPORT THIS — you cannot fix it from here. On the ` +
         `lore host: \`make mirror REPO=${repoHint(gitUrl)}\` once, and \`make mirror-daemon\` so it stays current.`,
     );
   }
@@ -157,22 +157,20 @@ export async function ensureBare(
   // `addWorktree` would silently review the clone-time commit instead.
   if (freshness.kind === "never-fetched") {
     throw new DidNotRun(
-      `the clone of ${gitUrl} at ${paths.bare} has a remote but has never been fetched — no FETCH_HEAD. ` +
-        `A clone that succeeded with a failed fetch looks exactly like this, and it is the dangerous shape: ` +
-        `refs/remotes/origin/* does not exist either, so reviewing it would review the commit it was cloned ` +
-        `at rather than the branch you are merging. REPORT THIS — on the lore host, ` +
-        `\`make mirror REPO=${repoHint(gitUrl)}\` and \`make mirror-daemon-log\` say why it is failing.`,
+      `lore's copy of ${gitUrl} has never completed a sync from origin, so reviewing it would review ` +
+        `the commit it was first copied at rather than the branch you are merging. REPORT THIS — on the ` +
+        `lore host, \`make mirror REPO=${repoHint(gitUrl)}\` and \`make mirror-daemon-log\` say why it is failing.`,
     );
   }
 
   const age = Date.now() - freshness.at.getTime();
   if (age > MAX_MIRROR_AGE_MS) {
     throw new DidNotRun(
-      `the clone of ${gitUrl} was last fetched ${Math.round(age / 60_000)} minutes ago, and lore holds no ` +
-        `credentials to fetch it itself. The host refresher should keep this under ` +
+      `lore last synced ${gitUrl} from origin ${Math.round(age / 60_000)} minutes ago, and it holds no ` +
+        `credentials to sync it itself. The host-side sync should keep this under ` +
         `${Math.round(MAX_MIRROR_AGE_MS / 60_000)} minutes, so it is not running or cannot reach the remote. ` +
-        `REPORT THIS — you cannot fix it from here. On the lore host: \`make status\` shows every mirror's age, ` +
-        `\`make mirror-daemon-log\` says what the refresher last did. Reviewing this as it stands would ` +
+        `REPORT THIS — you cannot fix it from here. On the lore host: \`make status\` shows every repository's ` +
+        `sync age, \`make mirror-daemon-log\` says what the sync last did. Reviewing this as it stands would ` +
         `describe a tree that is not what you are merging.`,
     );
   }
@@ -226,18 +224,18 @@ export async function addWorktree(
     ])) ?? "";
     const nearby = known.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
     throw new DidNotRun(
-      `branch '${branch}' is not in the mirror of ${gitUrl || paths.bare}. ` +
+      // ORIGIN IS THE ONLY WORD THE CLIENT GETS (D-65 revised, 2026-08-14). Vany: *"code
+      // must be in the origin — it is the only requirement."* The mirror is lore's
+      // mechanism, and every earlier version of this message leaked it as the client's
+      // problem to reason about. What the client can act on: the branch name, the push,
+      // the token's repository. Nothing else.
+      `branch '${branch}' has not reached ${gitUrl || "origin"}, as far as lore can see. ` +
         `Your token is scoped to that repository — if the branch belongs to a different one, ` +
         `you are holding the wrong token, and the branch existing elsewhere will not help. ` +
-        // WHAT ALREADY HAPPENED, so the client does not repeat it. The old text said
-        // "push it and run make mirror" — advice for a shell the client does not have,
-        // about a push it had already made. lore has now fetched on its behalf, so the
-        // only remaining honest readings are a wrong name, a wrong token, or a push that
-        // never landed.
         (refreshed?.fetched === true
-          ? " lore asked the host to fetch before saying this, and the branch is still not there — so it is not a timing problem: check the name, check you pushed to this repository, and check the branch reached the remote."
-          : ` lore could not confirm a fresh fetch first (${refreshed?.why ?? "no refresh was attempted"}), so this may be a mirror that has not caught up — report that rather than assuming the branch is wrong.`) +
-        (nearby.length > 0 ? ` Most recent branches there: ${nearby.join(", ")}.` : " The mirror has no branches at all."),
+          ? " lore re-synced from origin before saying this, and the branch is still not there — so it is not a timing problem: check the name, check you pushed to this repository, and check the push reached the remote."
+          : ` lore could not confirm a fresh sync first (${refreshed?.why ?? "no sync was attempted"}), so its view of origin may be behind — report that rather than assuming the branch is wrong.`) +
+        (nearby.length > 0 ? ` Most recent branches lore can see there: ${nearby.join(", ")}.` : " lore can see no branches there at all."),
     );
   }
   await git(paths.bare, ["worktree", "add", "--detach", dir, ref], 300_000);

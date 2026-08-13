@@ -697,7 +697,7 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       if (isTerminal(review.state)) {
         throw new Error(
           `review ${review_id} is '${review.state}' and takes no more submissions. Its base is gone and cannot ` +
-            `be recreated — a new worktree would be cut from the mirror as it stands NOW, which is not the tree ` +
+            `be recreated — a new worktree would be cut from origin as lore now sees it, which is not the tree ` +
             `this review looked at. Start a fresh review for further work on this branch.`,
         );
       }
