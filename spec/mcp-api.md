@@ -530,6 +530,17 @@ Refused rather than silently returning the open review: handing back an id that 
 the one asked for is a quiet substitution. `restart: true` is the deliberate way
 through when a rebase or force-push has made the pinned snapshot meaningless.
 
+**And a restart CANCELS the review it replaces — fixed 2026-08-14, found by Vany as a
+"clash between cancelled reviews".** The flag used to fall straight through to creating
+the new review and touched nothing, so the old one stayed open: two live reviews of one
+branch, racing rounds against two pinned trees, burning double quota and raising two
+sets of findings for one PR. Measured: `feat/RIGID-129` accumulated seven overlapping
+generations this way, ended only by the operator mass-cancelling from the board. Now the
+predecessor ends exactly as `review_cancel` would end it — `cancelled`, findings handed
+over, the reason recorded as *superseded by a restart* — in the same call, state first,
+so a round claimed in that instant finds a terminal review before spending. One branch,
+one live review, is now an invariant of `review_start` rather than an etiquette.
+
 ### 2.5 `review_cancel` stops both ends, and says when it could not
 
 `cancelled` is its own terminal state, not `expired`: expired means nobody came back,

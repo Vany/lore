@@ -1344,6 +1344,29 @@ describe("one review per branch", () => {
     expect(secondId).not.toBe(firstId);
   });
 
+  /**
+   * AND A RESTART CANCELS WHAT IT REPLACES. It used to fall straight through to
+   * createReview and touch nothing, so the old review stayed OPEN: two live reviews of
+   * one branch racing rounds against two pinned trees. Measured before fixing:
+   * feat/RIGID-129 accumulated SEVEN overlapping generations this way, each restart
+   * stacking a new live review on the last, until the operator mass-cancelled them by
+   * hand from the board.
+   */
+  it("cancels the review it is restarting, so one branch has one live review", async () => {
+    const first = await start();
+    const firstId = JSON.parse(first.result?.content?.[0]?.text ?? "{}").review_id as string;
+
+    await start({ restart: true });
+
+    expect(store.getReview(firstId, "alice")?.state, "the predecessor ends as somebody-decided").toBe("cancelled");
+    const open = store.db
+      .prepare("SELECT COUNT(*) c FROM review WHERE branch = 'feat/x' AND state NOT IN ('passed','passed_partial','failed','expired','cancelled')")
+      .get() as { c: number };
+    expect(open.c, "exactly one live review per branch").toBe(1);
+    // The account of WHY survives on the old review, as for any cancel.
+    expect(String(store.failureReason(firstId, false) ?? "")).toContain("superseded by a restart");
+  });
+
   it("lets a finished branch be reviewed again without ceremony", async () => {
     const first = await start();
     const id = JSON.parse(first.result?.content?.[0]?.text ?? "{}").review_id as string;

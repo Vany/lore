@@ -257,8 +257,11 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
             .max(2048)
             .refine((u) => /^https?:\/\//i.test(u), "pull_request must be an http(s) URL"),
         ).describe("link to the pull request this branch is proposed in"),
+        // The describe below is CLIENT-FACING: it is the whole contract of the flag.
         restart: absent(z.boolean()).describe(
-          "abandon an open review of this branch and start over — only after a rebase or force-push",
+          "CANCELS the open review of this branch and starts over — the old review ends as " +
+            "'cancelled' with its findings handed over, exactly as review_cancel would end it. " +
+            "Use only after a rebase, force-push, or when the branch has moved past the old snapshot.",
         ),
       }),
     },
@@ -311,6 +314,25 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
               : `If the branch was rebased or force-pushed the old snapshot is genuinely meaningless — ` +
                 `pass restart: true, deliberately.`),
         );
+      }
+
+      // RESTART CANCELS ITS PREDECESSOR, in the same breath (D-107 shape, found live).
+      //
+      // `restart: true` used to fall straight through to createReview and touch nothing —
+      // so the old review stayed OPEN: two live reviews of one branch, racing rounds
+      // against two pinned trees, burning two reviews' quota and raising two sets of
+      // findings for one PR. Measured before fixing: feat/RIGID-129 accumulated SEVEN
+      // overlapping generations this way, each restart stacking a new live review on the
+      // last, until the operator mass-cancelled them from the board. The directories
+      // never clashed — the reviews did.
+      //
+      // The same order the cancel tool uses, for the same reason: state first, so a round
+      // claimed in this instant finds a terminal review and stops before spending; the
+      // in-flight model call aborted after, best-effort exactly as there.
+      if (open !== undefined && restart === true) {
+        store.setFailureReason(open.id, `cancelled by ${who.principal}: superseded by a restart of ${branch}`);
+        store.updateReview(open.id, { state: "cancelled" });
+        await deps.reviewer?.cancel?.(open.id).catch(() => false);
       }
 
       // THE SERVICE IS FULL — refused at the door, never queued in the middle (D-98).
