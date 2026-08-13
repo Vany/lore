@@ -110,11 +110,27 @@ export interface ReviewerConfig {
   /** HTTP basic credentials, when the opencode server is password-protected. */
   readonly username?: string;
   readonly password?: string;
+  /**
+   * How long a session may sit in a RETRY STORM before the route is treated as down.
+   *
+   * Vany: *"monitor the logs of opencode — if it starts retrying a lot, do not allow it
+   * to wait more than 5 minutes; treat openai as down and go to the fallback."*
+   *
+   * `quotaRefusal` kills a refusal it RECOGNISES in seconds; this is the backstop for
+   * the phrasings it does not know yet — the openai wording cost three reviews and a
+   * whole propose run 45 minutes each before the classifier learned it, and the next
+   * provider will phrase it a third way. A storm that is still producing retries past
+   * this bound aborts as `Exhausted`, which is what sends the round down the fallback
+   * chain; a storm that STOPS is left alone, because recovery publishes a different
+   * status and silence is what the deadline is for.
+   */
+  readonly retryStormMs?: number;
 }
 
 export const DEFAULT_REVIEWER: ReviewerConfig = {
   baseUrl: process.env["OPENCODE_SERVER"] ?? "http://127.0.0.1:4096",
   agent: "readonly",
+  retryStormMs: 5 * 60_000,
   // ONE timeout, not two. This was 20 minutes while `longFetch`'s own default was
   // 30, and the shorter silently won — an invisible default nobody chose, which is
   // the shape of nearly every bug this project has found in itself.
@@ -725,16 +741,43 @@ export class Reviewer implements ReviewerLike {
     // round catches is this exact object, carrying the provider's words and its reset
     // time. Everything downstream — D-48's step-over, `skip_if_quota`, D-90's cool-off —
     // already knows what to do with an `Exhausted`; none of it had to change.
+    // AND A CLOCK ON RETRIES THE CLASSIFIER DOES NOT RECOGNISE. A refusal it knows is
+    // killed in seconds below; an unknown one is a storm — opencode retrying every few
+    // seconds, no error ever surfacing, the deadline the only thing that would end it.
+    // The clock starts at the first retry, is CLEARED by any non-retry status (recovery
+    // publishes one), and kills only when a retry is still arriving past the bound — a
+    // storm that merely stops is left to the deadline, which is the honest owner of
+    // silence. Aborting as `Exhausted` with no reset time is deliberate twice: the chain
+    // advances on exactly that type, and an unstated time becomes the doubling backoff
+    // rather than a fact nobody stated.
+    let stormStart: number | undefined;
     this.watchers.set(sessionId, (status) => {
       const refusal = quotaRefusal(status);
-      if (refusal === undefined) return;
-      aborter.abort(
-        new Exhausted(
-          `tier ${tier.id} (${tier.model ?? "?"}) refused on quota: ${refusal.message}` +
-            (refusal.resetAt === undefined ? "" : ` (opencode reported this on attempt ${String(status.attempt ?? 1)})`),
-          refusal.resetAt,
-        ),
-      );
+      if (refusal !== undefined) {
+        aborter.abort(
+          new Exhausted(
+            `tier ${tier.id} (${tier.model ?? "?"}) refused on quota: ${refusal.message}` +
+              (refusal.resetAt === undefined ? "" : ` (opencode reported this on attempt ${String(status.attempt ?? 1)})`),
+            refusal.resetAt,
+          ),
+        );
+        return;
+      }
+      if (status.type !== "retry") {
+        stormStart = undefined;
+        return;
+      }
+      stormStart ??= Date.now();
+      const stormMs = this.cfg.retryStormMs ?? 5 * 60_000;
+      if (Date.now() - stormStart >= stormMs) {
+        aborter.abort(
+          new Exhausted(
+            `tier ${tier.id} (${tier.model ?? "?"}) was retried by opencode for over ${String(Math.round(stormMs / 60_000))} ` +
+              `minute(s) without recovering — treating the route as down and moving on. ` +
+              `The last retry said: ${status.message ?? "(no message)"}`,
+          ),
+        );
+      }
     });
 
     try {

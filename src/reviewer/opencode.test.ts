@@ -1396,6 +1396,68 @@ describe("a quota refusal on the event stream", () => {
 });
 
 /**
+ * A RETRY STORM IS A DOWN PROVIDER WEARING A RETRY LOOP (the 5-minute bound).
+ *
+ * Vany: *"if it starts retrying a lot, do not allow it to wait more than 5 minutes —
+ * treat openai as down and go to the fallback."* The classifier kills refusals it
+ * recognises in seconds; openai's phrasing was unknown for three days and cost every t3
+ * round 45 minutes at the deadline. This bound is the backstop for the NEXT unknown
+ * phrasing: retries still arriving past the limit end the call as Exhausted — the type
+ * the fallback chain advances on.
+ */
+describe("a retry storm on the event stream", () => {
+  const retryEvent = (msg: string) => ({
+    type: "session.status",
+    properties: { sessionID: "ses_test", status: { type: "retry", attempt: 1, message: msg } },
+  });
+
+  it("treats a storm older than the bound as a down route, and moves on", async () => {
+    hangPrompt = true;
+    const r = new Reviewer({ baseUrl, agent: "readonly", timeoutMs: 10_000, retryStormMs: 200 });
+    const started = Date.now();
+    const inFlight = r.review(TIER, "review this", "/tmp/wt", "rev_storm");
+    await new Promise((res) => setTimeout(res, 250));
+    // A message the classifier does NOT know — the whole point of the bound.
+    pending.push(retryEvent("some entirely new provider unhappiness"));
+    await new Promise((res) => setTimeout(res, 300));
+    pending.push(retryEvent("some entirely new provider unhappiness"));
+
+    const err = await inFlight.then(() => undefined, (e: unknown) => e);
+    expect(err).toBeInstanceOf(Exhausted);
+    expect(String((err as Error).message)).toMatch(/retried by opencode .* without recovering/);
+    expect((err as Exhausted).resetAt, "no provider named a time, so none is invented").toBeUndefined();
+    expect(Date.now() - started, "minutes in production, never the 2700s deadline").toBeLessThan(5_000);
+    r.close();
+  });
+
+  it("clears the clock when the session recovers between retries", async () => {
+    hangPrompt = true;
+    const r = new Reviewer({ baseUrl, agent: "readonly", timeoutMs: 10_000, retryStormMs: 300 });
+    const inFlight = r.review(TIER, "review this", "/tmp/wt", "rev_recover");
+    await new Promise((res) => setTimeout(res, 250));
+    pending.push(retryEvent("blip"));
+    // WELL past the bound in TOTAL, well inside it per storm — the margins are wide on
+    // both sides of the 300ms bound so this cannot pass or fail on delivery jitter.
+    await new Promise((res) => setTimeout(res, 200));
+    // Recovery: any non-retry status. The storm that follows starts a NEW clock.
+    pending.push({ type: "session.status", properties: { sessionID: "ses_test", status: { type: "busy" } } });
+    await new Promise((res) => setTimeout(res, 200));
+    pending.push(retryEvent("blip again"));
+    await new Promise((res) => setTimeout(res, 150));
+
+    // Total retry-span exceeds the bound, but no single storm did — still open.
+    const settled = await Promise.race([
+      inFlight.then(() => "settled", () => "settled"),
+      new Promise((res) => setTimeout(() => res("open"), 100)),
+    ]);
+    expect(settled, "two short storms are not one long one").toBe("open");
+    await r.cancel("rev_recover");
+    await inFlight.catch(() => undefined);
+    r.close();
+  });
+});
+
+/**
  * A DATE SHAPE IS NOT A DATE, and this one runs inside the event watcher.
  *
  * `\d{4}-\d{2}-\d{2}` matches `2026-13-45 99:99:99`, and `toISOString()` on an invalid

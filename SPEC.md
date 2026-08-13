@@ -1694,6 +1694,19 @@ already published.**
 Vany: *"flat cost is stupid, can we subscribe for finish or fail?"* and then *"wasting
 time is a crime."*
 
+**Extended 2026-08-13 with a bound on retries the classifier does not recognise.** Vany:
+*"monitor the logs of opencode — if it starts retrying a lot, do not allow it to wait
+more than 5 minutes; treat openai as down and go to the fallback."* `quotaRefusal` kills
+a refusal it KNOWS in seconds — and openai's phrasing was unknown for three days, so
+every t3 round rode a silent retry loop to the 2700s deadline while the narration
+carried the refusal the whole time. The classifier learned those words the same day; the
+5-minute storm bound is the backstop for the NEXT phrasing nobody has met. A session
+whose retries are still arriving five minutes after they began is aborted as `Exhausted`
+with no reset time — the type the fallback chain advances on, and an unstated time
+becomes the doubling backoff rather than a fact nobody stated. The clock is cleared by
+any non-retry status, and a storm that merely STOPS is left to the deadline: recovery
+announces itself, silence is the deadline's to own.
+
 **D-84 was wrong, and three days of work rested on it.** It said Z.ai names its limit and
 its reset time and opencode swallows both. opencode swallows them **in the message body**
 — which is where lore was looking — and publishes them verbatim on `/event`, keyed by
