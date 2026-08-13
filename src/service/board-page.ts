@@ -131,6 +131,8 @@ export const BOARD_PAGE = `<!doctype html>
 
   .s-running, .s-queued { color: var(--blue); }
   .prov { margin-right: 10px; white-space: nowrap; }
+  a.pr { color: var(--blue); text-decoration: none; }
+  a.pr:hover { text-decoration: underline; }
   .prov.p-ok b { color: var(--green); font-weight: 600; }
   .prov.p-out b { color: var(--yellow); font-weight: 600; }
   .s-findings_ready, .s-awaiting_diff { color: var(--yellow); }
@@ -391,8 +393,16 @@ function detail(r) {
 function branchLink(r) {
   const name = esc(r.branch);
   if (!r.pullRequest || !/^https?:\\/\\//i.test(r.pullRequest)) return name;
-  return '<a href="' + esc(r.pullRequest) + '" target="_blank" rel="noreferrer noopener"' +
-    ' onclick="event.stopPropagation()">' + name + "</a>";
+  // THE NUMBER, VISIBLY, next to the plain branch name. The whole branch used to be the
+  // anchor, which looked identical to an unlinked row - the one visual difference was
+  // discoverable only by hovering, so the link the author was asked to provide went
+  // unseen. A trailing path segment of digits is the PR number on GitHub, GitLab and
+  // Gitea alike; a URL that ends some other way gets a generic marker rather than a
+  // number invented from it.
+  const m = /\\/(\\d+)(?:[/?#].*)?$/.exec(r.pullRequest);
+  const label = m ? "#" + m[1] : "PR\\u2197";
+  return name + ' <a class="pr" href="' + esc(r.pullRequest) + '" target="_blank" rel="noreferrer noopener"' +
+    ' onclick="event.stopPropagation()">' + label + "</a>";
 }
 
 /**
