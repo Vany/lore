@@ -106,7 +106,18 @@ function pacing(
  * So each state names the next call. A client that reads only this field should still
  * do the right thing, because that is the client we actually have.
  */
-function nextStep(state: ReviewState): string {
+function nextStep(state: ReviewState, freshFindings = 0): string {
+  // STREAMED FINDINGS ARRIVE WHILE THE TIER IS STILL READING (D-107), so "running" with
+  // findings in hand is not "nothing yet" — it is "start fixing now". A submit made now
+  // is HELD and delivered at the reviewer's next emission; nothing needs resubmitting.
+  if ((state === "running" || state === "queued") && freshFindings > 0) {
+    return (
+      "The reviewer is STILL READING and has already raised the findings below — start fixing now. " +
+      "Submit whenever ready: your diff is held and handed to the same reviewer at its next emission, " +
+      "and its ruling arrives as ordinary findings. It may still report things your fix already answers; " +
+      "that is expected — do not double-fix, the next emission settles them."
+    );
+  }
   switch (state) {
     case "queued":
     case "running":
@@ -430,7 +441,7 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           // told it not to: polling once and stopping, retrying a review that could
           // never succeed, walking away from `findings_ready` (the single largest
           // cause of abandoned reviews). A state name is not an instruction.
-          note: nextStep(review.state),
+          note: nextStep(review.state, fresh.length),
           // The branch's own defects FIRST, inherited ones after.
           //
           // Ordering is what a reader actually acts on, and severity alone put two
@@ -733,15 +744,38 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       // The prerequisite landed today — D-6 revised, so a submit no longer resets the
       // ladder, which is what made an interactive submit incoherent. This is the next
       // commit, not a patch to one already ten rounds deep.
+      // HELD, NOT REFUSED (D-107). A reviewer is reading — or about to read — the tree
+      // this patch would rewrite, so the diff cannot land NOW; but making the client
+      // wait, poll and resubmit was the part IT paid for. The diff waits in the store
+      // and lands at the reviewer's next emission boundary, hash-verified there; a
+      // mismatch at that point surfaces on poll as awaiting_diff, never as a silently
+      // dropped diff. The double-check below closes the race where the round finished
+      // between the check and the hold — then nothing would ever consume it.
       if (store.hasPendingRound(review_id)) {
-        throw new Error(
-          `a review round is pending for ${review_id}; a reviewer is reading — or is about to read — the ` +
-            `worktree this patch would rewrite. Call review_poll until the state is 'findings_ready', ` +
-            `'findings_stale' or 'awaiting_diff' — those are the states that accept a diff — then submit the same ` +
-            `diff again. ` +
-            `Note that 'fast_clean' is NOT one of them: the deep tiers are still queued against this worktree. ` +
-            `Nothing was applied.`,
-        );
+        store.holdDiff(review_id, diff, tree_hash);
+        if (store.hasPendingRound(review_id)) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  review_id,
+                  status: "held",
+                  note:
+                    "A reviewer is mid-read, so your diff is HELD and will be applied and put to it at its " +
+                    "next emission — you do not need to resubmit. Keep polling: the reviewer's ruling on this " +
+                    "fix arrives as ordinary findings (fixed things are not re-raised; still-broken things " +
+                    "return at higher severity). Findings it reports before seeing your fix may already be " +
+                    "fixed by it — expected, do not double-fix. If the tree hash cannot be verified when it " +
+                    "is applied, the review lands in awaiting_diff with the reason.",
+                }),
+              },
+            ],
+          };
+        }
+        // The round ended in the race window: nothing will consume the hold, so take it
+        // back and fall through to the synchronous path below.
+        store.clearHeldDiff(review_id);
       }
 
       // Recorded BEFORE the patch, because the refusal below has to be able to undo it.

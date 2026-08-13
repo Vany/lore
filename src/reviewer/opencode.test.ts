@@ -15,7 +15,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Exhausted, ServiceUnreachable, TooLargeForTier } from "../core/errors.ts";
 import { CLAIM_MAX } from "../core/finding.ts";
 import type { Tier } from "../core/ladder.ts";
-import { Reviewer, countStepParts, extractFindings, quotaRefusal, splitModel, toolsUsed, isTooLong, usageFromMessages } from "./opencode.ts";
+import { Reviewer, countStepParts, emissionOf, extractFindings, quotaRefusal, splitModel, toolsUsed, isTooLong, usageFromMessages } from "./opencode.ts";
 
 const TIER: Tier = { id: "t1", kind: "model", model: "openrouter/z-ai/glm-5.2", stage: "fast" };
 
@@ -1524,5 +1524,48 @@ describe("a refusal whose reset time is malformed", () => {
     for (const t of ["0000-00-00 00:00:00", "9999-99-99 99:99:99", "2026-02-30 12:00:00"]) {
       expect(() => quotaRefusal({ type: "retry", message: `quota exceeded, resets at ${t}` })).not.toThrow();
     }
+  });
+});
+
+/**
+ * ONE STREAMED EMISSION (D-107): findings the model has in hand, or the done declaration
+ * — and nothing in between. The empty list is refused ON PURPOSE: under emit-and-stop,
+ * having nothing more to say IS the done declaration, and `[]` is a model that has
+ * confused the two in exactly the way the retry should surface.
+ */
+describe("emissionOf", () => {
+  it("parses a findings batch, not done", () => {
+    const r = emissionOf('```json\n' + FINDING_JSON + '\n```');
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.items).toHaveLength(1);
+      expect(r.done).toBe(false);
+    }
+  });
+
+  it("parses the done declaration, with no findings", () => {
+    const r = emissionOf('```json\n{"done": true, "examined": "all of src/core"}\n```');
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.done).toBe(true);
+      expect(r.items).toHaveLength(0);
+    }
+  });
+
+  // INV-1's corner: an empty list must never read as "clean" mid-stream.
+  it("refuses an empty findings list, naming the two real options", () => {
+    const r = emissionOf('```json\n{"findings": []}\n```');
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.why).toMatch(/report a finding, or declare/);
+  });
+
+  it("refuses prose, exactly as the batch contract does", () => {
+    expect(emissionOf("looks fine to me").ok).toBe(false);
+  });
+
+  // done:false or done-shaped garbage is not a declaration.
+  it("does not accept a done that is not literally true", () => {
+    const r = emissionOf('```json\n{"done": "yes"}\n```');
+    expect(r.ok).toBe(false);
   });
 });

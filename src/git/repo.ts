@@ -132,6 +132,13 @@ export async function ensureBare(
    */
   requireFresh = true,
 ): Promise<void> {
+  // THE PINNED TREES MUST OUTLIVE A REVIEW BY CONTRACT, NOT BY LUCK (D-107, obligation
+  // five). Every submit writes its state as a tree object via write-tree, and no ref
+  // points at those trees — so git's gc would prune them after its default two-week
+  // grace, while a review now lives ~nine days (48h bright, 7 gray). Inside the window,
+  // but by two defaults nobody chose. Set explicitly, idempotent and cheap.
+  await gitMaybe(paths.bare, ["config", "gc.pruneExpire", "45.days.ago"]);
+
   const isRepo = await gitMaybe(paths.bare, ["rev-parse", "--resolve-git-dir", "."]);
   if (isRepo === undefined) {
     throw new DidNotRun(

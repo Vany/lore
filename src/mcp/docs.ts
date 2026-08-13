@@ -320,6 +320,15 @@ Applied to the review's private worktree. Nothing is committed or pushed — you
 history stays yours. The tree_hash is verified after applying; a mismatch fails
 loudly rather than reviewing code that exists nowhere.
 
+SUBMIT WHENEVER YOU ARE READY, including while a reviewer is still reading. A submit
+that lands mid-round is HELD — accepted, kept, and handed to the same reviewer at its
+next emission, with its ruling arriving as ordinary findings on your next polls. You
+never wait for an idle moment and never resubmit the same diff. Two consequences to
+expect: findings the reviewer reports before seeing your fix may already be answered by
+it (do not double-fix — the next emission settles them), and if the held diff cannot be
+verified when it is applied, the review lands in awaiting_diff with the reason, which
+means: diff against the tree as it stands and send again.
+
 SEND THE DIFF EXACTLY AS \`git diff\` PRODUCED IT. Do not trim trailing whitespace,
 drop blank lines, or reformat it — a unified diff is whitespace-significant, and a
 context line for a blank source line is a space followed by that line's own content.
@@ -628,7 +637,8 @@ export const RESOURCE_DOCS: Readonly<Record<string, { title: string; priority: n
    Each poll returns only what is NEW. A tight retry loop is the most expensive thing
    you can do here: every attempt is a turn that learns nothing.
 4. For each finding: fix it, or justify it with // lore-ok[fp]: <reason>
-5. review_submit(review_id, diff, tree_hash) — ONLY while the state is findings_ready, findings_stale
+5. review_submit(review_id, diff, tree_hash) — any time once findings exist. If a reviewer is
+   mid-read your diff is HELD and handed to it at its next emission; you never resubmit
    or awaiting_diff. fast_clean is NOT one of them: the deep round is already queued
    against that worktree, and a submit is refused while a tier is reading it.
 6. Return to 2. Repeat until the state is TERMINAL — \`passed\`, \`passed_partial\`,
@@ -769,7 +779,8 @@ The loop:
    Each poll returns only what is NEW. A tight retry loop is the most expensive thing
    you can do here: every attempt is a turn that learns nothing.
 4. For each finding: fix it, or justify it with // lore-ok[fp]: <reason>
-5. review_submit(review_id, diff, tree_hash) — ONLY while the state is findings_ready, findings_stale
+5. review_submit(review_id, diff, tree_hash) — any time once findings exist. If a reviewer is
+   mid-read your diff is HELD and handed to it at its next emission; you never resubmit
    or awaiting_diff. fast_clean is NOT one of them: the deep round is already queued
    against that worktree, and a submit is refused while a tier is reading it.
 6. Return to 2. Repeat until the state is TERMINAL — \`passed\`, \`passed_partial\`,

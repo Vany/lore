@@ -21,7 +21,7 @@ import { SEVERITIES } from "../core/finding.ts";
 // adds the columns, because this number is what `assertNotDowngrade` compares — left
 // behind, it says a database written by this build is identical to one written before
 // the columns existed.
-export const SCHEMA_VERSION = 16;
+export const SCHEMA_VERSION = 17;
 
 /**
  * How findings are ordered wherever the service hands them out: worst first.
@@ -324,6 +324,18 @@ CREATE TABLE IF NOT EXISTS usage (
   at            TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS usage_by_day ON usage(at);
+
+-- A diff accepted while a round is running, waiting for the reviewer's next emission
+-- (D-107). The tree_hash is the CLIENT'S claim, verified at APPLY time — a mismatch then
+-- must surface on poll, never drop the diff silently. Rows apply in id order: each held
+-- diff was built by the client on top of the one before it.
+CREATE TABLE IF NOT EXISTS held_diff (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  review_id  TEXT NOT NULL REFERENCES review(id),
+  diff       TEXT NOT NULL,
+  tree_hash  TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS job (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,

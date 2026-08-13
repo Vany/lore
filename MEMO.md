@@ -5,6 +5,32 @@ surprised me.
 
 ---
 
+## 2026-08-14 — session 56: the review becomes the conversation it was specified to be
+
+D-107 built, on Vany's design, in his order: *"the model must emit a finding immediately
+… emitting a finding is the perfect time to insert the data about the fix … continue
+checking, or finish if everything was examined."* The tier-run is now a loop of short
+prompts over the kept session: STREAM_CONTRACT makes the model emit-and-stop; emissions
+are recorded and collectable WHILE the tier reads; a submit that lands mid-round is HELD
+(never refused) and applied at the next emission with the model asked to rule; the run
+ends only on the model's done declaration. The empty findings list is refused by the
+extractor — under emit-and-stop, nothing-more-to-say IS done, and `[]` is confusion.
+
+What the mutations caught this time: my "records each emission as it arrives" test
+passed with mid-run recording deleted — it never checked WHEN. The probe hook (assert
+the store between emissions, from inside the fake) is the pattern that pins timing
+claims; final-state assertions cannot.
+
+The one deliberate override: a held diff that cannot land outranks the ladder's ending —
+`awaiting_diff` with the reason — because the client was told "you do not need to
+resubmit", and a quiet findings_ready would be a silently dropped diff (INV-1).
+
+Also: all reviews dropped by operator instruction before the build (219 reviews, 528
+findings, history cleared; knowledge and usage kept), and gc.pruneExpire pinned to 45
+days on every bare — the write-tree states must outlive a review by contract, not luck.
+
+---
+
 ## 2026-08-13 — session 55 (continued): the day after the pool
 
 **t3's three days of 45-minute hangs were four words the watcher did not know.** The

@@ -208,7 +208,8 @@ export interface ReviewerLike {
    */
   askFor?<T>(
     tier: Tier,
-    prompt: string,
+    /** One prompt, or the initial/continued pair a kept session picks from (D-80). */
+    prompt: Prompt,
     worktree: string,
     extract: (text: string) => Listed<T>,
     contract: string,
@@ -563,7 +564,7 @@ export class Reviewer implements ReviewerLike {
    */
   async askFor<T>(
     tier: Tier,
-    prompt: string,
+    prompt: Prompt,
     worktree: string,
     extract: (text: string) => Listed<T>,
     contract: string,
@@ -1770,6 +1771,43 @@ export type Prompt = string | { readonly initial: string; readonly continued: st
 
 /** Findings in the generic shape, for `review()`. */
 export const findingsOf = (text: string): Listed<Finding> => extractList<Finding>(text, "findings", parseFindingItem);
+
+/**
+ * One STREAMED emission (D-107): findings the model has in hand, or the done declaration.
+ *
+ * `done` and `findings` are distinguishable ON PURPOSE: an empty findings list is a
+ * contract failure here, never "clean" — under emit-and-stop, having nothing more to say
+ * IS the done declaration, and a model that sends `[]` is confused in a way the retry
+ * should surface. The done marker is INV-1's corner of the whole design: only the
+ * declaration ends a run; silence and death never do.
+ */
+export interface Emission {
+  readonly findings: readonly Finding[];
+  readonly done: boolean;
+}
+
+export function emissionOf(text: string): Listed<Finding> & { readonly done?: boolean } {
+  // The done declaration first: it is the rarer shape and unambiguous.
+  const fence = /```(?:json)?\s*([\s\S]*?)```/g;
+  for (const m of text.matchAll(fence)) {
+    try {
+      const parsed = JSON.parse((m[1] ?? "").trim()) as { done?: unknown };
+      if (parsed !== null && typeof parsed === "object" && parsed.done === true) {
+        return { ok: true, items: [], rejected: [], done: true };
+      }
+    } catch {
+      // Not JSON, or not the marker — the findings path below owns the error wording.
+    }
+  }
+  const r = findingsOf(text);
+  if (!r.ok) return r;
+  if (r.items.length === 0 && r.rejected.length === 0) {
+    // See the docblock: [] is not clean here. Refused with the instruction the retry
+    // needs, because the fix is to SAY done, not to send an emptier list.
+    return { ok: false, why: 'an empty "findings" list is not a streamed emission — report a finding, or declare {"done": true}' };
+  }
+  return { ...r, done: false };
+}
 
 export function extractFindings(text: string): Extraction {
   const r = findingsOf(text);

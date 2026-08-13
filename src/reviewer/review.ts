@@ -39,7 +39,7 @@ import { startOfDayIso } from "../ops/spend.ts";
 import { DidNotRun, Exhausted, TierUnavailable, TooLargeForTier } from "../core/errors.ts";
 import { hunkAround, hunkStillPresent, makeScope, type Scope } from "../core/scope.ts";
 import { blobSha, computeDiff, renderDiff } from "../git/diff.ts";
-import { treeHash } from "../git/repo.ts";
+import { applyPatch, restoreTree, treeHash } from "../git/repo.ts";
 import { detectAndRecord, renderConflicts } from "../knowledge/conflict.ts";
 import { promoteRecurring } from "../knowledge/derive.ts";
 import { relevantTo } from "../knowledge/enrich.ts";
@@ -47,8 +47,8 @@ import { ingestDocs } from "../knowledge/ingest.ts";
 import { runT0, renderT0 } from "../t0/runner.ts";
 import { engineRuleClass } from "../t0/engines.ts";
 import type { RecordedFinding, Store } from "../store/store.ts";
-import type { ReviewerLike, ReviewerResult } from "./opencode.ts";
-import { continuedPrompt, reviewPrompt } from "./prompts.ts";
+import { emissionOf, type Listed, type ReviewerLike, type ReviewerResult } from "./opencode.ts";
+import { continuedPrompt, reviewPrompt, streamContinue, streamFix, STREAM_CONTRACT } from "./prompts.ts";
 
 export interface RoundInput {
   readonly store: Store;
@@ -151,6 +151,68 @@ export async function compactToFit(
       `window. YOU HAVE NOT SEEN THE WHOLE CHANGE — read the remainder from the worktree before concluding ` +
       `anything is absent, and say so if you could not. A smaller review scope is the real fix.]`,
   );
+}
+
+/**
+ * The most emissions one streamed tier-run may make before it is stopped (D-107).
+ *
+ * A backstop, not a target: the run is supposed to end with the model's done
+ * declaration. Hitting this bound with findings in hand ends the run loudly as a
+ * findings outcome; hitting it with NOTHING raised fails the run — thirty-two turns of
+ * silence is not a review that found nothing (INV-1).
+ */
+export const MAX_EMISSIONS = 32;
+
+/**
+ * Apply every held diff in arrival order (D-107). Each was built by the client on top
+ * of the one before, and the worktree only moves when lore applies — so verification is
+ * deterministic. A mismatch restores the last good tree, drops the whole remaining
+ * chain, and returns the reason: the caller surfaces it as `awaiting_diff`, because a
+ * silently dropped diff is this feature's INV-1 violation.
+ */
+export async function consumeHeldDiffs(
+  store: Store,
+  reviewId: string,
+  worktree: string,
+): Promise<{ readonly applied: number; readonly diffs: readonly string[]; readonly mismatch?: string }> {
+  const held = store.heldDiffs(reviewId);
+  const diffs: string[] = [];
+  let applied = 0;
+  for (const h of held) {
+    const before = await treeHash(worktree);
+    try {
+      await applyPatch(worktree, h.diff);
+    } catch (e) {
+      await restoreTree(worktree, before);
+      store.clearHeldDiff(reviewId);
+      return {
+        applied,
+        diffs,
+        mismatch:
+          `held diff ${String(h.id)} did not apply: ${e instanceof Error ? e.message : String(e)}. ` +
+          `It and everything queued after it were dropped; the worktree stands at the last verified tree. ` +
+          `Diff against that tree and submit again.`,
+      };
+    }
+    const after = await treeHash(worktree);
+    if (after !== h.treeHash) {
+      await restoreTree(worktree, before);
+      store.clearHeldDiff(reviewId);
+      return {
+        applied,
+        diffs,
+        mismatch:
+          `held diff ${String(h.id)} produced tree ${after.slice(0, 12)} where its submitter claimed ` +
+          `${h.treeHash.slice(0, 12)} — a fuzzy or partial apply, so it and everything queued after it were ` +
+          `dropped and the worktree stands at the last verified tree. Diff against that tree and submit again.`,
+      };
+    }
+    store.clearHeldDiff(reviewId, h.id);
+    store.updateReview(reviewId, { treeHash: after });
+    diffs.push(h.diff);
+    applied += 1;
+  }
+  return { applied, diffs };
 }
 
 export async function runRound(input: RoundInput): Promise<RoundResult> {
@@ -642,6 +704,129 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   };
 
 
+  // THE STREAMED TIER-RUN (D-107): emit-and-stop, fix-at-the-boundary, done-to-finish.
+  //
+  // Vany: *"the model must emit a finding immediately, not at the end of the session —
+  // so emitting a finding is the perfect time to insert the data about the fix."* Each
+  // iteration is one short prompt on the KEPT session: the model reports what it has and
+  // stops; lore records it (the client can collect it mid-run), lands any held diff at
+  // exactly that boundary, and tells the model to rule on the fix and continue. The run
+  // ends when the model DECLARES the tree examined — never by silence (INV-1).
+  const streamed: RecordedFinding[] = [];
+  let heldMismatch: string | undefined;
+  const recordStreamed = async (f: Finding): Promise<void> => {
+    const fp = fingerprint(f);
+    const scope = await scopeOf(worktree, f.file, f.line);
+    const rec: RecordedFinding = {
+      ...f,
+      fingerprint: fp,
+      origin: tier.id,
+      round: review.ladder.round + 1,
+      firstSeen: new Date().toISOString(),
+      preexisting: false,
+      ...(scope === undefined ? {} : { scope }),
+    };
+    if (store.recordFinding(reviewId, rec)) streamed.push(rec);
+    else store.refreshFinding(reviewId, fp, scope, undefined);
+  };
+
+  const streamRun = async (route: Tier): Promise<ReviewerResult> => {
+    const ask = input.reviewer.askFor?.bind(input.reviewer);
+    if (ask === undefined) throw new DidNotRun(`tier ${route.id} is set to stream but this reviewer cannot converse`);
+    // The orientation, with the one instruction that overrides the batch habit. The
+    // session sees this ONCE; every later iteration is a short continued message.
+    const opening =
+      (typeof prompt === "string" ? prompt : prompt.initial) +
+      "\n\nSTREAMING MODE: ignore any earlier instruction to reply with one final report. Report each finding" +
+      "\nthe moment you are sure of it and STOP; you will be told to continue. Declare done only when the tree" +
+      "\nis examined.";
+    const agg = {
+      findings: [] as Finding[],
+      discarded: [] as string[],
+      raw: "",
+      inputTokens: 0, cachedTokens: 0, outputTokens: 0, costUsd: 0, latencyMs: 0,
+      retried: false,
+      steps: undefined as number | undefined,
+    };
+    let continued = streamContinue();
+    let done = false;
+    for (let i = 0; i < MAX_EMISSIONS; i++) {
+      if (!stillWanted()) throw new DidNotRun(`review ${reviewId} ended while ${route.id} was mid-stream`);
+      const flag = { done: false };
+      const res = await ask<Finding>(
+        route,
+        { initial: opening, continued },
+        worktree,
+        (text: string): Listed<Finding> => {
+          const r = emissionOf(text);
+          if (r.ok) flag.done = r.done === true;
+          return r;
+        },
+        STREAM_CONTRACT,
+        reviewId,
+        stillWanted,
+      );
+      agg.raw = res.raw;
+      agg.retried = agg.retried || res.retried;
+      agg.inputTokens += res.inputTokens; agg.cachedTokens += res.cachedTokens;
+      agg.outputTokens += res.outputTokens; agg.costUsd += res.costUsd; agg.latencyMs += res.latencyMs;
+      if (res.steps !== undefined) agg.steps = (agg.steps ?? 0) + res.steps;
+      agg.discarded.push(...res.rejected);
+      for (const f of res.items) {
+        agg.findings.push(f);
+        await recordStreamed(f);
+      }
+      if (flag.done) { done = true; break; }
+
+      // THE BOUNDARY: the only place opencode lets anything in, occurring exactly where
+      // the fix wants to land — at the emission.
+      const consumed = await consumeHeldDiffs(store, reviewId, worktree);
+      if (consumed.mismatch !== undefined) { heldMismatch = consumed.mismatch; break; }
+      if (consumed.applied > 0) {
+        const touched = consumed.diffs.flatMap((d) =>
+          [...d.matchAll(/^\+\+\+ b\/(.+)$/gm)].map((m) => m[1] ?? "").filter((x) => x !== ""),
+        );
+        const t0Fix = await (input.t0 ?? runT0)(worktree, {
+          engines: type.t0,
+          files: [...new Set([...diff.changedFiles, ...touched])],
+        });
+        continued = streamFix({
+          diff: consumed.diffs.join("\n"),
+          t0: renderT0(t0Fix),
+          open: store
+            .openFindings(reviewId)
+            .filter((x) => x.origin === tier.id)
+            .map((x) => `${x.fingerprint.slice(0, 8)} ${x.file}:${String(x.line ?? "?")} — ${x.claim}`),
+        });
+      } else {
+        continued = streamContinue();
+      }
+    }
+    if (!done && heldMismatch === undefined && agg.findings.length === 0) {
+      throw new DidNotRun(
+        `tier ${route.id} (${route.model ?? "?"}) emitted nothing across ${String(MAX_EMISSIONS)} turns and ` +
+          `never declared done — that is not a review that found nothing`,
+      );
+    }
+    if (!done && heldMismatch === undefined) {
+      agg.discarded.push(
+        `stream capped at ${String(MAX_EMISSIONS)} emissions before the model declared done — the findings ` +
+          `above are real, and the tree is NOT fully examined`,
+      );
+    }
+    return {
+      findings: agg.findings, discarded: agg.discarded, raw: agg.raw,
+      inputTokens: agg.inputTokens, cachedTokens: agg.cachedTokens, outputTokens: agg.outputTokens,
+      costUsd: agg.costUsd, latencyMs: agg.latencyMs, retried: agg.retried,
+      steps: agg.steps,
+    };
+  };
+  const canStream = tier.conversation === true && input.reviewer.askFor !== undefined;
+  const callRoute = (route: string): Promise<ReviewerResult> => {
+    const t = { ...tier, model: route };
+    return canStream ? streamRun(t) : input.reviewer.review(t, prompt, worktree, reviewId, stillWanted);
+  };
+
   // Opened BEFORE the model is asked, so the row exists no matter how this ends.
   // `finished_at` stays NULL until it does, which is what lets a reader tell a tier
   // that is working from one that stopped without saying so.
@@ -807,7 +992,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
         );
       }
       primaryAsked = true;
-      result = await input.reviewer.review({ ...tier, model: primaryRoute }, prompt, worktree, reviewId, stillWanted);
+      result = await callRoute(primaryRoute);
       // IT ANSWERED, so whatever we believed about it being down is over. The operator
       // banner has promised "one success clears this" since D-90 shipped, and only the
       // background screen ever delivered it — a review could prove a tier alive and the
@@ -948,7 +1133,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
         try {
           answered = {
             model: twinModel,
-            result: await input.reviewer.review({ ...tier, model: twinModel }, prompt, worktree, reviewId, stillWanted),
+            result: await callRoute(twinModel),
           };
           store.clearRouteUnavailable(twinModel);
           break;
@@ -1350,6 +1535,12 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     }
   }
 
+  // The streamed findings were recorded — and delivered — as they were emitted, so the
+  // pass above saw them as re-raises. They are still THIS round's news.
+  for (const r of streamed) {
+    if (!newFindings.some((n) => n.fingerprint === r.fingerprint)) newFindings.push(r);
+  }
+
   // 5b. Carry forward justifications this repo already ratified.
   //
   // THE PRODUCT PREMISE, and it was missing. A fingerprint belongs to the review that
@@ -1618,6 +1809,15 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     state: settleState(store, reviewId, stepped.decision),
     treeHash: await treeHash(worktree),
   });
+  // A HELD DIFF THAT COULD NOT LAND OUTRANKS THE ORDINARY ENDING (D-107). The client was
+  // told "held — you do not need to resubmit", so a quiet findings_ready here would be a
+  // silently dropped diff, which is this feature's INV-1 violation. `awaiting_diff` with
+  // the reason is the state that says: your last submit did not land; diff against the
+  // tree as it stands and send it again.
+  if (heldMismatch !== undefined && !isTerminal(store.getReview(reviewId, principal)?.state ?? "failed")) {
+    store.setFailureReason(reviewId, heldMismatch);
+    store.updateReview(reviewId, { state: "awaiting_diff" });
+  }
 
   return {
     decision: stepped.decision,

@@ -26,7 +26,7 @@ import type { Store } from "../store/store.ts";
 import { Alerter, CONDITIONS } from "../ops/alerts.ts";
 import { Reviewer, type ReviewerLike } from "../reviewer/opencode.ts";
 import { ServiceUnreachable } from "../core/errors.ts";
-import { runRound } from "../reviewer/review.ts";
+import { consumeHeldDiffs, runRound } from "../reviewer/review.ts";
 
 export interface WorkerConfig {
   readonly reposRoot: string;
@@ -319,6 +319,24 @@ export class Worker {
       type,
       ...(this.cfg.dailyCeilingUsd === undefined ? {} : { dailyCeilingUsd: this.cfg.dailyCeilingUsd }),
     });
+
+    // A DIFF HELD DURING THE ROUND'S LAST TURN (D-107). The stream consumes holds at
+    // every emission boundary, but one can land after the final boundary — the model
+    // declared done while the client was still typing. Left alone it would sit for ever
+    // behind a "held — you do not need to resubmit" promise. It becomes the next round.
+    {
+      const st = this.store.repoAndStateOf(reviewId);
+      if (st !== undefined && !isTerminal(st.state) && this.store.heldDiffs(reviewId).length > 0) {
+        const consumed = await consumeHeldDiffs(this.store, reviewId, worktree);
+        if (consumed.mismatch !== undefined) {
+          this.store.setFailureReason(reviewId, consumed.mismatch);
+          this.store.updateReview(reviewId, { state: "awaiting_diff" });
+        } else if (consumed.applied > 0) {
+          this.store.updateReview(reviewId, { state: "queued" });
+          this.store.enqueue(reviewId, "fast");
+        }
+      }
+    }
 
     switch (result.decision.kind) {
       case "fastClean":

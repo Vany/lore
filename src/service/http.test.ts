@@ -947,6 +947,45 @@ describe("the inbox lists what is waiting, not only what is fresh", () => {
       ticket: "t", type: "code-arch", state, ladder: initialState(),
     });
 
+  /**
+   * A SUBMIT DURING A RUNNING ROUND IS HELD, NOT REFUSED (D-107). The client is told
+   * plainly, nothing is applied yet, and the diff waits in the store for the reviewer's
+   * next emission — the refusal-and-resubmit choreography this replaces was the part
+   * the client paid for.
+   */
+  it("holds a submit that lands while a round is running", async () => {
+    open("revHold", "running", "feat/mid-round");
+    store.enqueue("revHold", "fast");
+
+    const out = await callTool("review_submit", {
+      review_id: "revHold",
+      diff: "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b",
+      tree_hash: "a".repeat(40),
+    });
+
+    expect(String(out["status"])).toBe("held");
+    expect(String(out["note"])).toContain("do not need to resubmit");
+    expect(store.heldDiffs("revHold")).toHaveLength(1);
+    expect(store.getReview("revHold", "alice")?.state, "nothing applied, nothing changed").toBe("running");
+  });
+
+  /** Streamed findings are collectable mid-run, and the note says to start fixing (D-107). */
+  it("delivers findings and says start-fixing while the tier still reads", async () => {
+    open("revLive", "running", "feat/streaming");
+    store.enqueue("revLive", "fast");
+    store.recordFinding("revLive", {
+      fingerprint: "s1", file: "a.ts", line: 3, symbol: "f", severity: "high",
+      claim: "streamed mid-run", evidence: "e", failureScenario: "x", origin: "t1", round: 1,
+      firstSeen: new Date().toISOString(),
+    });
+
+    const out = await callTool("review_poll", { review_id: "revLive" });
+    expect(out["state"]).toBe("running");
+    const got = (out["new_findings"] as unknown[]) ?? [];
+    expect(got.length, "the finding is handed over before the round ends").toBe(1);
+    expect(String(out["note"])).toContain("start fixing now");
+  });
+
   it("lists a parked review whose findings were already collected", async () => {
     open("revP", "findings_ready", "feat/parked");
     store.recordFinding("revP", {

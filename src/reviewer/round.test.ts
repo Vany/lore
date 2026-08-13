@@ -12,7 +12,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -24,8 +24,9 @@ import { PROBE_INTERVAL_MS } from "../core/cooloff.ts";
 import { CODE_ARCH } from "../core/review-type.ts";
 import { Store } from "../store/store.ts";
 import type { Finding } from "../core/finding.ts";
-import type { ReviewerLike, ReviewerResult } from "./opencode.ts";
+import type { Listed, ReviewerLike, ReviewerResult, SessionResult } from "./opencode.ts";
 import { CARRIED_TIER, originalJustification, runRound } from "./review.ts";
+import { treeHash } from "../git/repo.ts";
 
 /** A reviewer that says exactly what a test tells it to, and records what it saw. */
 class ScriptedReviewer implements ReviewerLike {
@@ -2367,6 +2368,137 @@ describe("a pool of routes to one model", () => {
     );
     expect(note).toContain("zai-coding-plan2/glm-5.2");
     expect(note).toContain("openrouter/z-ai/glm-5.2");
+  });
+});
+
+/**
+ * THE STREAMED TIER-RUN, END TO END (D-107).
+ *
+ * Emit-and-stop, the fix landing at the emission boundary, and the done declaration —
+ * driven through runRound with a scripted conversation partner, because the loop's
+ * whole claim is about WHAT HAPPENS BETWEEN emissions: findings visible before the run
+ * ends, held diffs applied exactly at the boundary, and a run that only silence would
+ * otherwise end failing loudly instead.
+ */
+describe("a streamed tier-run", () => {
+  /** Answers askFor from a script of emissions; records every prompt it was sent. */
+  class Streaming implements ReviewerLike {
+    readonly asked: string[] = [];
+    readonly opened: string[] = [];
+    private script: string[];
+    /** Runs before each answer — how a test observes the store BETWEEN emissions. */
+    onAsk?: (index: number) => void;
+    constructor(script: string[]) {
+      this.script = script;
+    }
+    async review(): Promise<ReviewerResult> {
+      throw new Error("a conversation tier must stream, not run a batch round");
+    }
+    async askFor<T>(
+      _tier: Tier,
+      prompt: unknown,
+      _worktree: string,
+      extract: (text: string) => Listed<T>,
+      _contract: string,
+    ): Promise<SessionResult<T>> {
+      const p = prompt as { initial: string; continued: string };
+      // The first call opens the session; later calls continue it — mirror the real
+      // reviewer's kept-session choice so the test sees the prompts a session would.
+      this.onAsk?.(this.asked.length);
+      this.asked.push(this.asked.length === 0 ? p.initial : p.continued);
+      const text = this.script.shift();
+      if (text === undefined) throw new Error("the script ran out — the loop asked more than the test expected");
+      const r = extract(text);
+      if (!r.ok) throw new Error(`the fixture's own emission was refused: ${r.why}`);
+      return {
+        items: r.items, raw: text, inputTokens: 10, cachedTokens: 5, outputTokens: 5,
+        costUsd: 0, latencyMs: 1, retried: false, steps: 1, rejected: r.rejected,
+      };
+    }
+  }
+
+  const emission = (findings: readonly Finding[]) => "```json\n" + JSON.stringify({ findings }) + "\n```";
+  const DONE = '```json\n{"done": true, "examined": "everything"}\n```';
+  const STREAM_TYPE = {
+    ...CODE_ARCH,
+    t0: [] as const,
+    tiers: CODE_ARCH.tiers.map((t) => (t.kind === "model" ? { ...t, conversation: true } : t)),
+  };
+
+  it("records each emission as it arrives, and ends on the done declaration", async () => {
+    const second: Finding = { ...HOLD_BUG, file: "src/other.ts", claim: "a second defect entirely" };
+    const reviewer = new Streaming([emission([HOLD_BUG]), emission([second]), DONE]);
+
+    // THE CLAIM IS THE TIMING: before the run's second turn is even asked, the first
+    // emission must already be collectable — that is what "immediately" means, and it is
+    // what an end-of-run recorder cannot fake.
+    reviewer.onAsk = (i) => {
+      if (i >= 1) {
+        expect(
+          store.undelivered("r1").map((f) => f.claim),
+          "the first finding is deliverable while the tier still reads",
+        ).toContain(HOLD_BUG.claim);
+      }
+    };
+    const r = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: STREAM_TYPE });
+
+    expect(r.newFindings.map((f) => f.claim).sort()).toStrictEqual([HOLD_BUG.claim, "a second defect entirely"].sort());
+    expect(reviewer.asked, "orientation, then two continues").toHaveLength(3);
+    expect(reviewer.asked[0]).toContain("STREAMING MODE");
+    expect(reviewer.asked[1]).toMatch(/Continue the review/);
+    expect(store.getReview("r1", "p")?.state).toBe("findings_ready");
+  });
+
+  it("lands a held diff at the emission boundary and puts it to the same session", async () => {
+    const reviewer = new Streaming([
+      emission([HOLD_BUG]),
+      emission([{ ...HOLD_BUG, claim: "the fix broke the retry path" }]),
+      DONE,
+    ]);
+    // Build the held diff exactly as a client would: edit, hash, git-diff — then put the
+    // tree back so the hold is applied from the original state at the boundary.
+    const file = join(dir, "src/hold.ts");
+    const original = readFileSync(file, "utf8");
+    writeFileSync(file, original.replace("return 1;", "return release();"));
+    const claimed = await treeHash(dir);
+    const diffText = execFileSync("git", ["diff", "HEAD"], { cwd: dir }).toString();
+    writeFileSync(file, original);
+    await treeHash(dir);
+    store.holdDiff("r1", diffText, claimed);
+
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: STREAM_TYPE });
+
+    expect(store.heldDiffs("r1"), "consumed at the boundary").toHaveLength(0);
+    expect(readFileSync(file, "utf8")).toContain("return release();");
+    const fixPrompt = reviewer.asked[1] ?? "";
+    expect(fixPrompt, "the fix goes to the session, findings named").toContain("The author has answered");
+    expect(fixPrompt).toContain(HOLD_BUG.claim);
+  });
+
+  it("surfaces a held diff that cannot land as awaiting_diff, never silently", async () => {
+    const reviewer = new Streaming([emission([HOLD_BUG]), DONE]);
+    store.holdDiff("r1", "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-nope\n+never", "0".repeat(40));
+
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: STREAM_TYPE });
+
+    expect(store.getReview("r1", "p")?.state).toBe("awaiting_diff");
+    expect(String(store.failureReason("r1", false))).toMatch(/dropped|did not apply|claimed/);
+    expect(store.heldDiffs("r1"), "the dead chain does not linger").toHaveLength(0);
+  });
+
+  /** INV-1: a session that dies mid-search must never read as finished-clean. */
+  it("fails loudly when the stream dies instead of declaring done", async () => {
+    const dead = new (class extends Streaming {
+      override async askFor<T>(): Promise<SessionResult<T>> {
+        throw new DidNotRun("tier t1 (m) failed: the provider returned 500");
+      }
+    })([]);
+
+    // The round REJECTS — the worker is what records `failed` — and the rejection names
+    // the tier fault. What must never happen is a clean return from a dead stream.
+    await expect(
+      runRound({ store, reviewer: dead, reviewId: "r1", principal: "p", worktree: dir, type: STREAM_TYPE }),
+    ).rejects.toThrow(/failed: the provider returned 500/);
   });
 });
 

@@ -500,3 +500,97 @@ Rules:
   key or send null — both mean "does not apply" and neither is an error.
 - No other keys. Extra keys are rejected and the review is re-run.
 `.trim();
+
+/**
+ * THE STREAMING CONTRACT (D-107): one message, one emission — findings now, or done.
+ *
+ * Vany: *"the model must emit a finding immediately, not at the end of the session — so
+ * emitting a finding is the perfect time to insert the data about the fix."* The
+ * emit-and-stop discipline is what makes the prompt boundary — the only insertion point
+ * opencode allows — land exactly at every finding, which is where a held fix wants in.
+ *
+ * The DONE marker is load-bearing (INV-1): a run ends when the model SAYS the tree is
+ * examined, in this shape. A session that dies mid-search must never read as finished —
+ * absence of findings is not completion, only the declaration is.
+ */
+export const STREAM_CONTRACT = `
+Reply with ONE fenced json block and nothing else — no preamble, no commentary after.
+
+When you have found a problem, report it NOW and STOP — do not keep it while you search
+for more. One finding per message is ideal; a small batch is acceptable if several are
+already in hand:
+
+\`\`\`json
+{"findings": [
+  {
+    "file": "src/pay/hold.ts",
+    "line": 142,
+    "symbol": "capturePayment",
+    "severity": "high",
+    "claim": "one sentence, max ${CLAIM_MAX} characters",
+    "evidence": "where the proof is, with file:line",
+    "failureScenario": "concrete inputs or state, then the wrong outcome",
+    "cwe": "CWE-459"
+  }
+]}
+\`\`\`
+
+Only when you have examined everything this review covers and have nothing further:
+
+\`\`\`json
+{"done": true, "examined": "one sentence on what you covered"}
+\`\`\`
+
+Rules:
+- Report a finding the moment you are sure of it. You will be told to continue after each report.
+- {"done": true} is a DECLARATION that the review is complete. Never send it because you are unsure
+  what to do next; never send an empty findings list — if you found nothing new and have examined
+  everything, that IS done.
+- "failureScenario" IS THE TEST: concrete inputs or state, then the wrong outcome. Drop what has none.
+- Same bar as ever: consequence you can state, and something the author would still have missed.
+`;
+
+/**
+ * The next instruction of the streaming loop, when no fix is waiting: keep going.
+ * The session holds everything else — repeating any of it would be the cold start D-80
+ * removed, wearing a message.
+ */
+export function streamContinue(): string {
+  return [
+    "Recorded and delivered to the author. Continue the review from where you were:",
+    "report your next finding the moment you have it, or declare done if the tree is examined.",
+  ].join("\n");
+}
+
+/**
+ * A held fix, delivered at the emission boundary (D-107).
+ *
+ * The diff is already APPLIED to the worktree the session is standing in, so the model
+ * re-reads files rather than imagining the patch's effect. Its own open findings are
+ * named, not restated — the session still holds why it raised them (D-10: the tier that
+ * asked judges the answer).
+ */
+export function streamFix(i: {
+  readonly diff: string;
+  readonly t0: string;
+  readonly open: readonly string[];
+}): string {
+  return [
+    "The author has answered. Their diff is APPLIED to the worktree you are in — re-read the",
+    "files you care about rather than assuming.",
+    "",
+    i.open.length === 0
+      ? "You have nothing outstanding; treat this as new work on the same branch."
+      : ["YOUR OPEN FINDINGS — for each, say in your next emission whether it is settled:", ...i.open.map((c) => `  - ${c}`)].join("\n"),
+    "",
+    "DETERMINISTIC RESULTS FOR THE NEW TREE",
+    i.t0,
+    "",
+    "WHAT CHANGED",
+    i.diff,
+    "",
+    "A finding that is actually fixed: do not re-raise it. Still broken, or broken differently:",
+    "re-raise with the same claim wording and RAISED severity. The fix itself is new code —",
+    "review it too. Then continue: next finding, or done.",
+  ].join("\n");
+}

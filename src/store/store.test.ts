@@ -1071,3 +1071,30 @@ describe("opening a database that already exists", () => {
     reopened.close();
   });
 });
+
+/**
+ * A DIFF ACCEPTED WHILE A ROUND RUNS, waiting for the reviewer's next emission (D-107).
+ * Arrival order is the contract: each held diff was built by the client on top of the
+ * one before it, so consuming out of order can never verify.
+ */
+describe("held diffs", () => {
+  it("keeps them in arrival order and consumes one at a time", () => {
+    const repoId = store.upsertRepo("d", "git@x:d.git").id;
+    store.createReview({
+      id: "rh", repoId, principal: "p", branch: "b", intoRef: "main",
+      ticket: "t", type: "code-arch", state: "running", ladder: initialState(),
+    });
+    store.holdDiff("rh", "diff-1", "hash-1");
+    store.holdDiff("rh", "diff-2", "hash-2");
+
+    const held = store.heldDiffs("rh");
+    expect(held.map((h) => h.diff)).toStrictEqual(["diff-1", "diff-2"]);
+
+    store.clearHeldDiff("rh", held[0]?.id);
+    expect(store.heldDiffs("rh").map((h) => h.diff)).toStrictEqual(["diff-2"]);
+
+    // The mismatch path drops the whole remaining chain at once.
+    store.clearHeldDiff("rh");
+    expect(store.heldDiffs("rh")).toStrictEqual([]);
+  });
+});

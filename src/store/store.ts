@@ -2393,6 +2393,27 @@ export class Store {
    * described. Counting queued closes it by leaving nothing for a worker to claim,
    * rather than by making the window smaller and hoping.
    */
+  /** Accept a diff while a round runs; it is applied at the reviewer's next emission (D-107). */
+  holdDiff(reviewId: string, diff: string, treeHash: string): void {
+    this.db
+      .prepare("INSERT INTO held_diff(review_id, diff, tree_hash, created_at) VALUES(?, ?, ?, ?)")
+      .run(reviewId, diff, treeHash, now());
+  }
+
+  /** In arrival order — each was built by the client on top of the one before. */
+  heldDiffs(reviewId: string): readonly { readonly id: number; readonly diff: string; readonly treeHash: string }[] {
+    const rows = this.db
+      .prepare("SELECT id, diff, tree_hash FROM held_diff WHERE review_id = ? ORDER BY id")
+      .all(reviewId) as Record<string, unknown>[];
+    return rows.map((r) => ({ id: Number(r["id"]), diff: String(r["diff"]), treeHash: String(r["tree_hash"]) }));
+  }
+
+  /** One consumed row, or — on a mid-chain mismatch — everything still queued. */
+  clearHeldDiff(reviewId: string, id?: number): void {
+    if (id === undefined) this.db.prepare("DELETE FROM held_diff WHERE review_id = ?").run(reviewId);
+    else this.db.prepare("DELETE FROM held_diff WHERE review_id = ? AND id = ?").run(reviewId, id);
+  }
+
   hasPendingRound(reviewId: string): boolean {
     const row = this.db
       .prepare("SELECT 1 AS x FROM job WHERE review_id = ? AND state IN ('queued', 'running') LIMIT 1")
@@ -2829,18 +2850,15 @@ export class Store {
   }
 
   /**
-   * Close the queued jobs of a review that has ended. Returns how many.
+   * Close the queued jobs of every ENDED review at once — the sweep's backstop for
+   * `discardQueuedJobs`, which fires on the transition. Returns how many.
    *
    * `failed` rather than deleted: the job table is the record of what the scheduler did,
    * and a row that vanishes cannot be asked about afterwards. `last_error` says which
-   * ending it was, so a reader is never left guessing whether the round ran.
-   *
-   * Only `queued`. A `running` job on a terminal review is a round being aborted right
-   * now, and its worker is the one that writes its outcome — taking it from underneath
-   * would race the very code that reports what the abort cost.
-   */
-  /**
-   * The same thing for every review at once — the sweep's backstop. Returns how many.
+   * ending it was, so a reader is never left guessing whether the round ran. Only
+   * `queued`: a `running` job on a terminal review is a round being aborted right now,
+   * and its worker is the one that writes its outcome — taking it from underneath would
+   * race the very code that reports what the abort cost.
    *
    * `discardQueuedJobs` fires on the transition, which covers everything from now on.
    * This exists for rows that leaked before it did, and for any path that ends a review

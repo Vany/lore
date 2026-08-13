@@ -195,7 +195,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-52** | The per-tier cap bounds *iteration*, so a clean tier escalates past it | confirmed |
 | **D-53** | One round at a time **per review**; reviews still run in parallel | confirmed |
 | **D-54** | t1 is `glm-5-turbo`: glm-4.7 answers 200 with an empty body | confirmed |
-| **D-55** | A submit is **refused** while a round is reading the worktree | revised by D-107: held, delivered at the next finding — decided 2026-08-14, not built |
+| **D-55** | A submit is **refused** while a round is reading the worktree | revised by D-107: held, delivered at the next emission — built 2026-08-14 |
 | **D-56** | A **fix** is settled by qualified silence over code that moved | confirmed |
 | **D-57** | `.lore-ok.md` justifies findings in files that cannot hold a comment | confirmed |
 | **D-58** | An oversized diff is announced against the tier's **own** demonstrated ceiling | confirmed |
@@ -220,7 +220,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-77** | **Commit, review to a verdict, amend, push.** Nothing reaches origin unreviewed | `[OPEN]` |
 | **D-78** | A review answers to **the token that started it**, not to its repository | built |
 | **D-79** | A finding is **what the author missed and would be hurt by** — asked, not filed | confirmed |
-| **D-80** | A review is **one conversation per tier**, not a series of audits. Fully async | subscription live; session continuity built 2026-08-12; mid-round submit decided (D-107), not built |
+| **D-80** | A review is **one conversation per tier**, not a series of audits. Fully async | subscription live; continuity built 2026-08-12; streamed conversation built 2026-08-14 (D-107) |
 | **D-81** | Extraction stays deterministic; a **model may only VETO** what it mined | built; screen unmeasured |
 | **D-82** | **A defect found is fixed now**, and the batch is reviewed whole — one big diff, not many | confirmed |
 | **D-83** | A project's **development rules are appealable**: cite one, the tier rules on it | built |
@@ -1147,10 +1147,9 @@ the tool descriptions with an instruction the only real client cannot execute.
 
 **Which half.** *A tier keeps one session for the life of a review* is built and on by
 default for every model tier (`src/reviewer/continuity.ts`, `Tier.conversation`). *A submit
-is handed to that live session mid-round* is NOT built — the shape it will take is
-decided and recorded as D-107 (2026-08-14): held at submit, applied and delivered at the
-round boundary. Until that ships, **D-55 still refuses a submit while a round is
-running** — a live session makes it possible, it does not make it done.
+is handed to that live session mid-round* shipped as D-107 (built 2026-08-14): held at
+submit, applied and delivered at the next emission of the streaming loop. D-55's refusal
+is retired — its protection survives as the hold.
 The saving claimed below is the one now collected: repeat rounds enter a session that
 already holds the repository, instead of re-orienting from nothing.
 
@@ -2140,7 +2139,7 @@ DEFAULT rather than a compromise: fix everything found, review it together, push
 together.
 
 **D-107 — findings stream out as they are found; a submitted fix streams back in at the
-next emission, into the same session. DECIDED 2026-08-14, not built.**
+next emission, into the same session. BUILT 2026-08-14.**
 
 Vany: *"when the diff is pushed, it must be delivered to the model next message. We have
 a new diff; the model must review it and respond whether it satisfies the finding, and
