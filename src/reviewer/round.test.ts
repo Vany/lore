@@ -16,7 +16,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { CancelledByLore, DidNotRun, Exhausted } from "../core/errors.ts";
+import { CancelledByLore, DidNotRun, Exhausted, ServiceUnreachable } from "../core/errors.ts";
 import type { Tier } from "../core/ladder.ts";
 import { fingerprint } from "../core/fingerprint.ts";
 import { DEFAULT_TIERS, initialState, ladderFingerprint } from "../core/ladder.ts";
@@ -2606,6 +2606,39 @@ describe("a round lore itself stopped", () => {
     expect(String(note?.["unavailable_for_tier"] ?? ""), "no shortfall was invented").not.toContain("SKIPPED");
     const ladder = JSON.parse(String(store.db.prepare("SELECT ladder FROM review WHERE id='r1'").get()?.["ladder"] ?? "{}")) as { unavailable?: string[] };
     expect(ladder.unavailable ?? [], "the tier was not marked unpayable").not.toContain("t1");
+  });
+});
+
+/**
+ * AN UNREACHABLE OPENCODE IS THE WORKER'S TO REQUEUE, NEVER A TIER'S SHORTFALL. The
+ * probe said it honestly — "opencode itself is not answering … the round is requeued" —
+ * and skip_if_quota consumed that exact error as the tier's second strike: t1 SKIPPED,
+ * one fewer independent vendor, on a fault that was lore's own deploy window.
+ */
+describe("a round that lost opencode", () => {
+  it("rethrows ServiceUnreachable untouched, past the skip machinery", async () => {
+    const KEEPS = {
+      ...CODE_ARCH,
+      t0: [] as const,
+      tiers: CODE_ARCH.tiers.map((t) => (t.id === "t1" ? { ...t, skip_if_quota: true } : t)),
+    };
+    class Gone implements ReviewerLike {
+      async review(tier: Tier): Promise<ReviewerResult> {
+        throw new ServiceUnreachable(`tier ${tier.id} could not reach opencode — the connection dropped mid-call`);
+      }
+    }
+    store.db
+      .prepare("INSERT INTO tier_run(review_id, tier, round, outcome, started_at) VALUES('r1','t1',0,'failed','2026-01-01')")
+      .run();
+
+    await expect(
+      runRound({ store, reviewer: new Gone(), reviewId: "r1", principal: "p", worktree: dir, type: KEEPS }),
+    ).rejects.toThrow(ServiceUnreachable);
+
+    const note = store.db
+      .prepare("SELECT unavailable_for_tier FROM tier_run WHERE review_id='r1' ORDER BY id DESC LIMIT 1")
+      .get() as Record<string, string> | undefined;
+    expect(String(note?.["unavailable_for_tier"] ?? ""), "no vendor was declared lost").not.toContain("SKIPPED");
   });
 });
 

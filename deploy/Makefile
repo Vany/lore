@@ -206,7 +206,23 @@ drain-off:
 ##
 ## `make drain` is still here for a deliberate pause. It is no longer on the path of an
 ## ordinary deploy, so it can no longer be left set by one that did not finish.
-deploy: up
+## REFUSES OVER LIVE ROUNDS. Four reviews died in one day to deploys landing while a
+## tier was mid-read — each time recorded as somebody else's fault ("socket hang up",
+## "opencode is not answering") until the classifier learned better. The operator kept
+## having to remember to check the board first; a guard that must be remembered is not a
+## guard. FORCE=1 deploys anyway, deliberately, for the case where killing the round is
+## the point.
+deploy: guard-idle up
+
+guard-idle:
+	$(wrong-directory)
+	@test -n "$(FORCE)" && exit 0; \
+	n=$$($(COMPOSE) exec -T lore node -e 'const {DatabaseSync}=require("node:sqlite");try{const d=new DatabaseSync(process.env.LORE_DB_DIR+"/lore.db",{readOnly:true});console.log(d.prepare("SELECT COUNT(*) c FROM job WHERE state = ?").get("running").c)}catch(e){console.log(0)}' 2>/dev/null || echo 0); \
+	if [ "$$n" != "0" ]; then \
+		echo "REFUSING to deploy: $$n round(s) are mid-read right now, and a deploy kills them."; \
+		echo "  Wait for the board to go quiet, or deploy anyway with:  make deploy FORCE=1"; \
+		exit 1; \
+	fi
 
 build: preflight
 	@$(STAMP) $(COMPOSE) --profile build-only build

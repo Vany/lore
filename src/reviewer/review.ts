@@ -36,7 +36,7 @@ import { isTerminal, type ReviewState } from "../core/review-state.ts";
 import type { ReviewType } from "../core/review-type.ts";
 import { retryAt, shouldProbe } from "../core/cooloff.ts";
 import { startOfDayIso } from "../ops/spend.ts";
-import { CancelledByLore, DidNotRun, Exhausted, TierUnavailable, TooLargeForTier } from "../core/errors.ts";
+import { ServiceUnreachable, CancelledByLore, DidNotRun, Exhausted, TierUnavailable, TooLargeForTier } from "../core/errors.ts";
 import { hunkAround, hunkStillPresent, makeScope, type Scope } from "../core/scope.ts";
 import { blobSha, computeDiff, renderDiff } from "../git/diff.ts";
 import { applyPatch, restoreTree, treeDelta, treeHash } from "../git/repo.ts";
@@ -1456,6 +1456,13 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     // worker discards it quietly; on a live one it is requeued, because nothing about
     // the code was learned.
     if (e instanceof CancelledByLore) throw e;
+    // AND NEITHER IS AN UNREACHABLE OPENCODE. The probe classifies a dropped connection
+    // honestly — "opencode itself is not answering … the round is requeued" — and this
+    // path then consumed that very error as the tier's second strike and SKIPPED it:
+    // one fewer independent vendor, on a fault that was lore's own deploy window.
+    // Observed live on a rigid review whose t1 died under a deploy at 22:45. The worker
+    // owns this error; it requeues, because nothing about the code was learned.
+    if (e instanceof ServiceUnreachable) throw e;
     if (!(e instanceof TierUnavailable) && alreadyFailed && anyTierRan(tiers, [...review.ladder.unavailable, tier.id])) {
       // Said in the channel a client repeats to its user. A promoted tier means the
       // review covers LESS than a reader would assume, which is what this channel is for.
