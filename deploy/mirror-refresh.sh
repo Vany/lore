@@ -206,19 +206,31 @@ serve_requests() {
   waited=0
   while [ "$waited" -lt "$INTERVAL" ]; do
     if [ -f "$REQUEST" ]; then
-      # THE REQUEST THIS PASS IS ANSWERING, moved aside BEFORE the fetch starts.
+      # THE REQUEST OUTLIVES THE FETCH, and is deleted only if nobody renewed it.
       #
-      # One shared filename and a delete-after would acknowledge requests that arrived
-      # DURING the fetch — including one written after this pass had already read the
-      # requester's repository. lore trusts the deletion as "a real fetch answered me",
-      # so it would then report a missing branch as "not a timing problem" when it was
-      # exactly one, and fail a review over a branch that exists. Raised by lore's own t2.
+      # Two races meet here, and each earlier protocol closed one by opening the other.
+      # Delete-after with one shared filename acknowledged requests that arrived DURING
+      # the fetch — a review whose repository was read before its push landed. The
+      # rename-aside that fixed it (raised by lore's own t2) made the request vanish at
+      # PICKUP, and lore reads the deletion as "a real fetch answered me" — so it
+      # re-resolved branches mid-fetch and failed two freshly pushed reviews in one
+      # night with "not a timing problem", which was exactly a timing problem.
       #
-      # Renaming is atomic on one filesystem: a request that lands a microsecond later
-      # gets its own file and its own pass.
-      mv -f "$REQUEST" "$REQUEST.serving" 2>/dev/null || true
+      # So: copy aside for the record, fetch, then delete the request ONLY IF its mtime
+      # is unchanged — a request renewed mid-fetch survives to get its own pass. The
+      # original file stays put for the whole fetch, so a waiter that watches either
+      # the request or its .serving twin sees completion, never pickup. Compatible with
+      # both sides deployed today and both sides after D-107's fix.
+      cp -f "$REQUEST" "$REQUEST.serving" 2>/dev/null || true
+      req_mtime="$(stat -f %m "$REQUEST" 2>/dev/null || echo 0)"
       log "refresh requested by lore"
       one_pass
+      now_mtime="$(stat -f %m "$REQUEST" 2>/dev/null || echo -1)"
+      if [ "$req_mtime" = "$now_mtime" ]; then
+        rm -f "$REQUEST"
+      else
+        log "request renewed mid-fetch — left for the next pass"
+      fi
       rm -f "$REQUEST.serving"
     fi
     beat
