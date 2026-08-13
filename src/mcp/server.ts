@@ -10,6 +10,7 @@
  */
 
 import { randomBytes } from "node:crypto";
+import { forClient } from "./plain.ts";
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/server";
 import * as z from "zod";
 import { mayAdmit } from "../core/admission.ts";
@@ -589,7 +590,7 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
                       ? "cancelled with no reason recorded — say that, and do not infer why"
                       : "no reason was recorded, which is itself a defect — report it rather than inferring a cause",
                 }
-              : { failed_because: why };
+              : { failed_because: forClient(why) };
           })(),
           // A check that did not run is not a check that found nothing (INV-1). The
           // deterministic engines are the ones that go missing silently — no
@@ -597,7 +598,7 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           // narrows what any later `passed` is evidence OF. The model tiers are told
           // in their prompt; the client has no other way to find out.
           ...(() => {
-            const skipped = store.unavailableChecks(review_id);
+            const skipped = store.unavailableChecks(review_id).map(forClient);
             return skipped.length === 0
               ? {}
               : {

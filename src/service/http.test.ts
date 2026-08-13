@@ -986,6 +986,20 @@ describe("the inbox lists what is waiting, not only what is fresh", () => {
     expect(String(out["note"])).toContain("start fixing now");
   });
 
+  /** The kitchen stays in the kitchen AT THE WIRE, not only in the helper (D-65 revised). */
+  it("translates a recorded failure into contract language on poll", async () => {
+    open("revKitchen", "failed", "feat/kitchen");
+    store.setFailureReason(
+      "revKitchen",
+      "tier t3 (openai/gpt-5.6-terra) failed: opencode ran past 2700s without finishing",
+    );
+
+    const out = await callTool("review_poll", { review_id: "revKitchen" });
+    expect(String(out["failed_because"])).toBe(
+      "tier t3 failed: the reviewing model did not finish within its 2700s limit",
+    );
+  });
+
   it("lists a parked review whose findings were already collected", async () => {
     open("revP", "findings_ready", "feat/parked");
     store.recordFinding("revP", {

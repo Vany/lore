@@ -2364,6 +2364,19 @@ to N-1 to zero, with `/healthz` still green. One thread of control stops ALL cla
 once. Its body catches everything it can and the outer catch alerts; the trade was taken
 knowingly, because an invisible queue is worse than a loud stop.
 
+**No kitchen on the wire at all — the same revision, generalised the same day.** Vany:
+*"remove all internal kitchen from MCP."* The boundary now TRANSLATES (`src/mcp/plain.ts`):
+`failed_because` and `checks_skipped` render for the client — opencode becomes "lore's
+model runtime", a quota refusal becomes "out of capacity" with the provider's sentence
+kept and its billing upsell dropped, model routes and plans vanish behind the tier id,
+and a stand-in is called a stand-in. The RAW string stays in the store, the logs and the
+board, where an operator debugging wants the exact words. Translation, never
+summarisation: a reason no rule matches passes through untouched, because hiding an
+unknown reason would be worse than leaking its vocabulary. The tool docs went through
+the same sweep — worktrees became "the review's pinned copy of your branch", context
+windows became "more than that tier can take in" — and the docs field test pins the
+contract sentences so the vocabulary cannot quietly return.
+
 **The mirror is never a word on the wire — D-65 revised, 2026-08-14.** Vany: *"remove
 all mentions of the mirror; the code must be in the origin — it is the only
 requirement."* Every client-facing text — tool docs, refusals, the branch-missing

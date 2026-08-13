@@ -88,7 +88,7 @@ anything after that, start a new review. Once pinned, a later push cannot move t
 ground under findings already reported.
 
 FINISH WHAT YOU START. A review left in \`findings_ready\` never ends by itself: it
-holds a pinned worktree until it is expired as abandoned, and the branch stays
+holds its pinned copy of your branch until it is expired as abandoned, and the branch stays
 unreviewed. Either answer its findings with review_submit, or leave it knowing the
 result is \`expired\` — which means NOTHING was concluded about the code, not that it
 was clean.
@@ -154,7 +154,7 @@ ONLY \`passed\` means the branch is clean.
   to say "an identical retry frequently succeeds" with no limit, and a client followed
   it exactly: five attempts on one branch across two days, then a report to its user
   that lore's reviewing tier was broken. It was not — the branch was too large for that
-  tier's context window, which nothing in the message said. The client did everything
+  tier to take in, which nothing in the message said. The client did everything
   right and the instruction was wrong.
 
   So after ONE failed retry, report to your user: the branch name, \`failed_because\`
@@ -268,21 +268,19 @@ difference is stated on each line rather than left for you to guess:
     The line says which tier and what was wrong with it. The tier looked at the code
     and saw something; you are not being shown it;
   * **a tier could not hold your whole diff and was given part of it.** Your branch is
-    larger than that model's context window, so the diff was cut to fit and the tier
-    was told so. It reviewed what it was given and may have read the rest from the
-    worktree — but it did not read all of it as a diff. **A \`passed\` on a compacted
-    review covers the part that was shown.** The fix is a smaller review: review a
-    narrower commit range, or merge in stages. Say this to your user; they are the only
-    one who can change the scope.
-  * **a tier was not asked at all**, because its provider told lore its plan is out and
-    when it resets. The line names the tier and the time. That tier read nothing, so the
-    review is evidence from one fewer independent vendor — but it is not broken, and
-    retrying will not help until the time passes.
-  * **a tier was answered by a different provider** — "was answered by … because it was
-    not free". This one is NOT a narrowing. The tier RAN and its opinion counts in full;
-    the same model was simply reached through a metered route because the subscription
-    was out. It is here because it cost money, which is a fact about the review worth
-    passing on, not a gap in it.
+    larger than that reviewer can take in at once, so the diff was cut to fit and the
+    tier was told so. It reviewed what it was given and may have read the rest from the
+    branch itself — but it did not read all of it as a diff. **A \`passed\` on a
+    compacted review covers the part that was shown.** The fix is a smaller review:
+    review a narrower commit range, or merge in stages. Say this to your user; they are
+    the only one who can change the scope.
+  * **a tier was not asked at all** — it was out of capacity, and the line names the
+    tier and when it comes back. That tier read nothing, so the review is evidence from
+    one fewer independent vendor — but it is not broken, and retrying will not help
+    until the time passes.
+  * **a tier was answered by a stand-in** — "was answered by an equivalent…". This one
+    is NOT a narrowing: the tier RAN and its opinion counts in full. It is listed as a
+    fact about the review worth passing on, not a gap in it.
 
 It is never a finding and never a failure. Every line but the last narrows what the
 review is evidence OF; the last one narrows nothing and reports a cost. Typecheck and
@@ -314,7 +312,7 @@ deeper tier when it should. This — not review_start — is the loop. Starting 
 review instead abandons every justification already ratified and re-runs the cheap
 tiers from the beginning.
 
-Applied to the review's private worktree. Nothing is committed or pushed — your
+Applied to the review's private copy of your branch. Nothing is committed or pushed — your
 history stays yours. The tree_hash is verified after applying; a mismatch fails
 loudly rather than reviewing code that exists nowhere.
 
@@ -407,7 +405,7 @@ Stop a review you started, and take what it has already found.
 
 Use it when the branch has changed under you, the work is abandoned, or you simply do
 not want to spend more on it. Stopping deliberately is a legitimate ending and a much
-better one than walking away: a review nobody answers holds a pinned worktree until it
+better one than walking away: a review nobody answers holds its pinned copy of your branch until it
 is swept as \`expired\` two days later, and \`expired\` is indistinguishable from
 "nobody was ever going to come back".
 
@@ -418,11 +416,9 @@ WHAT IT DOES, all of it:
     came back, cancelled is somebody decided;
   * the ladder stops. No further round is claimed, and a round claimed in the same
     instant finds the review terminal and stops before spending anything;
-  * a model call in flight is ABORTED, at BOTH ends: opencode is told to stop the
-    model, and lore stops waiting for it. Abandoning a call does not stop a model — an
-    agent kept reading a repository for millions of tokens after lore stopped listening
-    once — and telling the server to stop does not free lore either, which left a
-    cancelled review holding a provider slot for another 45 minutes;
+  * a reviewer mid-read is STOPPED, not merely abandoned — a reviewer left running
+    would keep reading and keep spending long after anyone stopped listening, so the
+    cancel reaches the model itself;
   * \`stopped_in_flight\` has THREE values and they are three different claims.
     \`true\`: a call was running and has been stopped. \`false\`: nothing was running.
     \`null\`: THIS SERVER COULD NOT LOOK — it was built without a reviewer, so if a call
@@ -464,7 +460,7 @@ THE FIRST CALL OF EVERY SESSION. EVERY review of yours that is still open, plus 
 deep findings waiting since you last collected.
 
 A review outlives the session that started it. You end; nothing you leave behind is
-watching for you; the review does not — it sits in findings_ready holding a worktree, dims to
+watching for you; the review does not — it sits in findings_ready holding your branch's pinned copy, dims to
 findings_stale after 48h, and is abandoned a week later, having concluded NOTHING about the code. That is the dominant
 cause of wasted reviews here, measured: nothing obliges a client to come back, and no
 notification can reach one that has gone.
@@ -491,7 +487,7 @@ READ \`waiting_on\` FIRST. It is "you" or "lore", and it is the whole triage:
 \`expired\` 48h after it last moved, and \`expired\` never means "found nothing". It is
 absent on a review that has already ended. If a deadline is close and you cannot answer
 the findings now, review_cancel says "somebody decided" instead, which is the honest
-ending and the one that frees the worktree.
+ending and the one that frees everything the review was holding.
 
 Surface \`needs_human\` and high-severity findings to your user through whatever
 alerting you have. Do not merely log them. lore cannot notify anyone — it returns
@@ -638,7 +634,8 @@ export const RESOURCE_DOCS: Readonly<Record<string, { title: string; priority: n
 5. review_submit(review_id, diff, tree_hash) — any time once findings exist. If a reviewer is
    mid-read your diff is HELD and handed to it at its next emission; you never resubmit
    or awaiting_diff. fast_clean is NOT one of them: the deep round is already queued
-   against that worktree, and a submit is refused while a tier is reading it.
+   against the review's pinned copy; one submitted while a tier is reading is held
+   and delivered at its next emission.
 6. Return to 2. Repeat until the state is TERMINAL — \`passed\`, \`passed_partial\`,
    \`needs_human\`, \`failed\`, \`expired\` or \`cancelled\`.
 
@@ -780,7 +777,8 @@ The loop:
 5. review_submit(review_id, diff, tree_hash) — any time once findings exist. If a reviewer is
    mid-read your diff is HELD and handed to it at its next emission; you never resubmit
    or awaiting_diff. fast_clean is NOT one of them: the deep round is already queued
-   against that worktree, and a submit is refused while a tier is reading it.
+   against the review's pinned copy; one submitted while a tier is reading is held
+   and delivered at its next emission.
 6. Return to 2. Repeat until the state is TERMINAL — \`passed\`, \`passed_partial\`,
    \`needs_human\`, \`failed\`, \`expired\` or \`cancelled\`.
    Only \`passed\` and \`passed_partial\` are worth attesting, and only \`passed\` is clean.
