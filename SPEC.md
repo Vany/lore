@@ -2186,6 +2186,24 @@ Four things the implementation must get right, none reopening the decision:
   bounds, the same board row. A held diff is not a side channel — it is the next round,
   queued inside lore instead of inside the client.
 
+**The worktree is a checkout; the STATE is a git hash, and already was.** Vany: *"we are
+not committing anything — everything is in this folder; it can't clash."* Half confirmed,
+in the good direction: `treeHash` is `git write-tree`, so every submitted state is a tree
+object in the shared odb with its hash pinned on the review row, and `restoreTree` can
+rebuild the folder from any recorded hash — the folder is reconstructible, not precious.
+The FOLDER stays named by review id: it is the mutable checkout, its content stops being
+the named hash at the next submit, and two reviews can legitimately share a base commit
+(two branches on one commit; a restart with no new commits) while their diff chains
+diverge — hash-named folders would collide exactly there; hashes themselves cannot.
+
+- **Fifth obligation: the odb's gc horizon must outlive a review.** The pinned trees are
+  UNREACHABLE objects — no ref points at them — so git gc may prune them after its grace
+  period (14 days by default). A review now lives up to ~9 days (48h bright, 7 gray),
+  inside that window by luck, not contract. The implementation pins it: a
+  `refs/lore/<review>` ref on the trees it must be able to restore, or `gc.pruneExpire`
+  set explicitly on the bare — otherwise a long-gray review's restore path dies silently,
+  which is INV-1 in a place nobody would look.
+
 **Why the cost points the right way:** each delivery is one turn into a session that
 already holds the repository — the exact case D-80's continuity made cheap — and the 2/3
 compaction already bounds the growth. The expensive alternative is what exists today:
