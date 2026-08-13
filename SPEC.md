@@ -195,7 +195,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-52** | The per-tier cap bounds *iteration*, so a clean tier escalates past it | confirmed |
 | **D-53** | One round at a time **per review**; reviews still run in parallel | confirmed |
 | **D-54** | t1 is `glm-5-turbo`: glm-4.7 answers 200 with an empty body | confirmed |
-| **D-55** | A submit is **refused** while a round is reading the worktree | confirmed |
+| **D-55** | A submit is **refused** while a round is reading the worktree | revised by D-107: held, not refused — decided 2026-08-14, not built |
 | **D-56** | A **fix** is settled by qualified silence over code that moved | confirmed |
 | **D-57** | `.lore-ok.md` justifies findings in files that cannot hold a comment | confirmed |
 | **D-58** | An oversized diff is announced against the tier's **own** demonstrated ceiling | confirmed |
@@ -220,7 +220,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-77** | **Commit, review to a verdict, amend, push.** Nothing reaches origin unreviewed | `[OPEN]` |
 | **D-78** | A review answers to **the token that started it**, not to its repository | built |
 | **D-79** | A finding is **what the author missed and would be hurt by** — asked, not filed | confirmed |
-| **D-80** | A review is **one conversation per tier**, not a series of audits. Fully async | subscription live; session continuity built 2026-08-12; mid-round submit still refused (D-55) |
+| **D-80** | A review is **one conversation per tier**, not a series of audits. Fully async | subscription live; session continuity built 2026-08-12; mid-round submit decided (D-107), not built |
 | **D-81** | Extraction stays deterministic; a **model may only VETO** what it mined | built; screen unmeasured |
 | **D-82** | **A defect found is fixed now**, and the batch is reviewed whole — one big diff, not many | confirmed |
 | **D-83** | A project's **development rules are appealable**: cite one, the tier rules on it | built |
@@ -1147,8 +1147,10 @@ the tool descriptions with an instruction the only real client cannot execute.
 
 **Which half.** *A tier keeps one session for the life of a review* is built and on by
 default for every model tier (`src/reviewer/continuity.ts`, `Tier.conversation`). *A submit
-is handed to that live session mid-round* is NOT built, and **D-55 still refuses a submit
-while a round is running** — a live session makes it possible, it does not make it done.
+is handed to that live session mid-round* is NOT built — the shape it will take is
+decided and recorded as D-107 (2026-08-14): held at submit, applied and delivered at the
+round boundary. Until that ships, **D-55 still refuses a submit while a round is
+running** — a live session makes it possible, it does not make it done.
 The saving claimed below is the one now collected: repeat rounds enter a session that
 already holds the repository, instead of re-orienting from nothing.
 
@@ -2136,6 +2138,58 @@ That is what turns "too big" from a wall into a degradation.
 D-77 still holds and nothing skips the ladder. What changes is that batching is the
 DEFAULT rather than a compromise: fix everything found, review it together, push it
 together.
+
+**D-107 — a mid-round submit is held and delivered at the round boundary, to the same
+session. DECIDED 2026-08-14, not built.**
+
+Vany: *"when the diff is pushed, it must be delivered to the model next message. We have
+a new diff; the model must review it and respond whether it satisfies the finding, and
+continue on the same ladder. The model answers 'I have a finding', it is delivered to the
+client, the client fixes, sends the diff, we apply it to the tree, hand it off to the
+model, and wait until it emits its view of this input."*
+
+**What changes: `review_submit` during a running round is ACCEPTED AND HELD instead of
+refused.** The held diff lives in the store — a deploy must not lose it (D-104) — and is
+applied when the running round returns: worktree patched, tree hash verified, t0 re-run
+(D-92 reuses an unchanged tree), and the diff handed to the SAME session as its next
+message, exactly as a between-rounds submit already is since D-80's continuity shipped.
+The ladder continues from where it stood; nothing resets. The client's loop collapses to
+poll → fix → submit → poll, with no "wait and resubmit the same diff" choreography.
+
+**What D-55 was protecting is kept, not repealed.** The refusal existed so a reviewer
+never has files rewritten under it mid-read. The hold preserves exactly that: the diff
+waits at the boundary; the round in flight finishes against the tree it started on. What
+is removed is only the part the client paid for — being told to come back and perform
+the retry themselves.
+
+**The granularity is the prompt boundary, and that is a fact about opencode, not a
+choice.** `session.prompt` is one long request; there is no API to inject a message into
+a running agentic turn. "Delivered to the model next message" is therefore literal: a
+model thirty turns into an exploration finishes that exploration first, bounded by the
+deadline and D-50's caps. Nothing can interrupt a turn mid-read — which is the same
+property D-55 wanted, restated as a mechanism instead of a refusal.
+
+Four things the implementation must get right, none reopening the decision:
+
+- **A failed apply surfaces loudly, later.** The tree-hash check moves from submit time
+  (synchronous refusal) to apply time (asynchronous) — so a mismatch must land the
+  review in `awaiting_diff` with the reason on the next poll, never be a silently
+  dropped diff. This is INV-1's corner of the feature.
+- **Held diffs chain deterministically.** A second submit while one is held was built by
+  the client on top of the first, and lore's worktree moves only when lore applies — the
+  review agent is read-only — so verify in arrival order; a mid-chain mismatch drops the
+  tail with a loud note.
+- **Crossing findings are stated in the client texts.** The round in flight will report
+  findings the held diff may already fix; the next delivery settles them. An agent not
+  told this will double-fix.
+- **The accounting is unchanged.** Each delivery is a round: a `tier_run` row, the D-50
+  bounds, the same board row. A held diff is not a side channel — it is the next round,
+  queued inside lore instead of inside the client.
+
+**Why the cost points the right way:** each delivery is one turn into a session that
+already holds the repository — the exact case D-80's continuity made cheap — and the 2/3
+compaction already bounds the growth. The expensive alternative is what exists today:
+the client polls, is refused, waits, and resubmits into a fresh round.
 
 **D-106 — findings dim before they die.**
 
