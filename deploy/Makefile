@@ -214,10 +214,22 @@ drain-off:
 ## the point.
 deploy: guard-idle up
 
+## FAILS CLOSED, not open. `catch(e){console.log(0)}` inside the node script and the
+## outer `|| echo 0` used to both answer "0 running" for EVERY failure mode — the
+## service mid-restart, the db path wrong, node:sqlite unavailable — indistinguishable
+## from "checked, and it is genuinely idle". A guard whose failure mode is silent
+## permission is not a guard (the 2026-08-06 backup-check incident this team already
+## learned from, reproduced here). `-1` is a count no real query can return, so it
+## carries "could not look" all the way to the one branch that must never read it as safe.
 guard-idle:
 	$(wrong-directory)
 	@test -n "$(FORCE)" && exit 0; \
-	n=$$($(COMPOSE) exec -T lore node -e 'const {DatabaseSync}=require("node:sqlite");try{const d=new DatabaseSync(process.env.LORE_DB_DIR+"/lore.db",{readOnly:true});console.log(d.prepare("SELECT COUNT(*) c FROM job WHERE state = ?").get("running").c)}catch(e){console.log(0)}' 2>/dev/null || echo 0); \
+	n=$$($(COMPOSE) exec -T lore node -e 'const {DatabaseSync}=require("node:sqlite");try{const d=new DatabaseSync(process.env.LORE_DB_DIR+"/lore.db",{readOnly:true});console.log(d.prepare("SELECT COUNT(*) c FROM job WHERE state = ?").get("running").c)}catch(e){console.log(-1)}' 2>/dev/null || echo -1); \
+	if [ "$$n" = "-1" ]; then \
+		echo "REFUSING to deploy: could not check whether any round is mid-read — the guard itself could not run."; \
+		echo "  See if the lore container is up; if you are certain nothing is running, deploy anyway with:  make deploy FORCE=1"; \
+		exit 1; \
+	fi; \
 	if [ "$$n" != "0" ]; then \
 		echo "REFUSING to deploy: $$n round(s) are mid-read right now, and a deploy kills them."; \
 		echo "  Wait for the board to go quiet, or deploy anyway with:  make deploy FORCE=1"; \

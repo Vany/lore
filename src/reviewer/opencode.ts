@@ -338,8 +338,18 @@ export class Reviewer implements ReviewerLike {
   private readonly gate: Gate;
   /** Lazily fetched, cached for the process: model id -> advertised context window. */
   private limits?: Promise<Map<string, number>>;
-  /** review id -> the opencode session currently reading for it, so `cancel` can stop it. */
-  private readonly sessions = new Map<string, string>();
+  /**
+   * review id -> every opencode session CURRENTLY reading for it, so `cancel` can stop
+   * all of them.
+   *
+   * A SET, not a single id, since D-109: a rung runs several members concurrently on one
+   * review id, and a plain `Map<string, string>` had the second member's `set` silently
+   * overwrite the first's entry — so `cancel` aborted whichever session registered last
+   * and the other kept exploring, unaborted, until its own deadline (the exact
+   * ~3.7M-cached-token leak the comment below this map already measures, made the normal
+   * shape of every mid-deep-phase cancel rather than a rare race).
+   */
+  private readonly sessions = new Map<string, Set<string>>();
   /**
    * Sessions KEPT ACROSS ROUNDS, one per (review, tier), for tiers with `conversation` on
    * (D-80). Separate from `sessions` above, which is the per-round handle a cancel uses
@@ -490,9 +500,14 @@ export class Reviewer implements ReviewerLike {
     // can find nothing and return, and this still has to have happened.
     await this.release(reviewId);
 
-    const sessionId = this.sessions.get(reviewId);
-    if (sessionId === undefined) return false;
-    await this.abort(sessionId);
+    const live = this.sessions.get(reviewId);
+    if (live === undefined || live.size === 0) return false;
+    // EVERY LIVE SESSION, not the first or the last — a rung can hold several at once
+    // (D-109), and each is a real model call spending real quota until it is told to
+    // stop. `Promise.allSettled` so one session's abort failing (`abort` is already
+    // best-effort and never throws, but nothing upstream should depend on that staying
+    // true) cannot skip the rest.
+    await Promise.allSettled([...live].map((id) => this.abort(id)));
     this.sessions.delete(reviewId);
     return true;
   }
@@ -712,10 +727,16 @@ export class Reviewer implements ReviewerLike {
     const continuing = keptKey === undefined ? undefined : this.kept.get(keptKey);
     const sessionId = continuing ?? (await this.createSession(tier));
     if (keptKey !== undefined && continuing === undefined) this.kept.set(keptKey, sessionId);
-    // Registered so `cancel` can reach it. Cleared in `finally` whatever happens —
-    // a stale entry would have a later cancel abort a session that had already ended,
-    // or worse, one belonging to a different round of the same review.
-    if (reviewId !== undefined) this.sessions.set(reviewId, sessionId);
+    // ADDED to the review's live set, never OVERWRITING it — a rung's members register
+    // concurrently under the same reviewId (D-109), and a plain overwrite here is
+    // exactly what let one member's registration erase another's. Cleared in `finally`
+    // whatever happens — a stale entry would have a later cancel abort a session that
+    // had already ended, or worse, one belonging to a different round of the same review.
+    if (reviewId !== undefined) {
+      const live = this.sessions.get(reviewId) ?? new Set<string>();
+      live.add(sessionId);
+      this.sessions.set(reviewId, live);
+    }
     // AND OUR OWN END OF THE WIRE, because telling opencode to stop does not free us.
     //
     // Measured 2026-08-08: three sessions aborted through opencode's API all answered
@@ -827,9 +848,15 @@ export class Reviewer implements ReviewerLike {
       throw e;
     } finally {
       // The per-round handle always goes; the KEPT session does not — it is the whole
-      // point, and `release` is what ends it when the review does.
-      if (reviewId !== undefined && this.sessions.get(reviewId) === sessionId) {
-        this.sessions.delete(reviewId);
+      // point, and `release` is what ends it when the review does. Only THIS session
+      // leaves the set — a rung's sibling may still be live, and clearing the whole
+      // entry here would let `cancel` believe nothing was left to abort (D-109).
+      if (reviewId !== undefined) {
+        const live = this.sessions.get(reviewId);
+        if (live !== undefined) {
+          live.delete(sessionId);
+          if (live.size === 0) this.sessions.delete(reviewId);
+        }
       }
       // Same reason the session entry goes: a controller left behind would let a later
       // cancel abort a request that has already finished, and would leak one entry per
@@ -1036,7 +1063,20 @@ export class Reviewer implements ReviewerLike {
             "The full replies are on [lore:log].",
         );
       }
-      extracted = retry;
+      // THE FIRST REPLY'S LOSSES SURVIVE THE RETRY THAT REPLACED IT.
+      //
+      // `extracted = retry` dropped them, and `extractList` attaches them to a FAILURE
+      // for exactly this purpose — a garbled fence, or a block whose every item the
+      // schema refused. It cost nothing while the retry was another findings batch,
+      // because the model simply said it all again. Under D-107's streamed contract it
+      // does not: a first emission whose findings fence the transport mangled, retried,
+      // comes back as the model's `{"done": true}` — it had already said what it found —
+      // and the run ends `ok` with empty items and empty `discarded`. The finding the
+      // model explicitly tried to report then exists NOWHERE: no D-66 note, no
+      // checks_skipped line, and a rung that may conclude clean over code it flagged.
+      // This is `emissionOf`'s done-laundering fix again, across two messages instead of
+      // one block.
+      extracted = { ...retry, rejected: [...(extracted.rejected ?? []), ...retry.rejected] };
       first.usage = second.usage;
     }
 
@@ -1293,7 +1333,16 @@ export class Reviewer implements ReviewerLike {
       // Reached here through `providerError`, i.e. the status nested inside a 200 —
       // the transport's own 401 is opencode refusing us, which `createSession` names
       // separately and which points at OPENCODE_SERVER_PASSWORD, not at a provider.
-      if (status === 401 || status === 403 || /unauthori[sz]ed|invalid api key|authentication/i.test(message)) {
+      //
+      // "TOKEN REFRESH FAILED" IS IN THE LIST BECAUSE IT ARRIVED WEARING A 500. An
+      // OAuth-backed subscription (openai, 2026-08-14) died with `opencode returned
+      // 500: UnknownError: Token refresh failed: 401` — the 401 is INSIDE the message,
+      // the transport said 500, and none of the patterns here matched. The failure
+      // then classified as a plain DidNotRun: no page, no route mark for the status
+      // line, and the configured same-model fallback never walked, so a review that
+      // had cleared t1 and t2 died 0.4 seconds into t3 with a healthy OpenRouter twin
+      // sitting unasked in its config.
+      if (status === 401 || status === 403 || /unauthori[sz]ed|invalid api key|authentication|token refresh failed/i.test(message)) {
         throw new ProviderAuthFailed(tier.model ?? tier.id, `tier ${tier.id}: ${message}`);
       }
       // TOO LONG IS A TIER THAT CANNOT LOOK, NOT A REVIEW THAT FAILED (D-48).
@@ -1642,7 +1691,13 @@ export type Extraction =
  */
 export type Listed<T> =
   | { readonly ok: true; readonly items: readonly T[]; readonly rejected: readonly string[] }
-  | { readonly ok: false; readonly why: string };
+  // `rejected` on the FAILURE arm exists for exactly one consumer: a streamed done
+  // declaration sharing its message with a findings block whose every item the schema
+  // refused. The batch path retries such a reply; the done path cannot (done ends the
+  // run), so without carrying the rejections through, they vanished — no discarded
+  // note, no checks_skipped line, a D-66 loss inside a message that LOOKED complete.
+  // Raised by lore's own t2 against the D-109 change.
+  | { readonly ok: false; readonly why: string; readonly rejected?: readonly string[] };
 
 /** One item, or why this one was refused while its siblings survive (D-66). */
 export type ItemParser<T> = (raw: unknown, index: number, total: number) => T | { readonly rejected: string };
@@ -1670,11 +1725,16 @@ function firstIssue(error: z.ZodError): string {
  */
 export function extractList<T>(text: string, key: string, parseOne: ItemParser<T>): Listed<T> {
   const block = /```(?:json)?\s*([\s\S]*?)```/g;
-  const candidates: string[] = [];
-  for (const m of text.matchAll(block)) candidates.push(m[1] ?? "");
-  // A bare object, for models that ignore the fence.
+  // Fenced candidates are the model SPEAKING THE CONTRACT; the bare-brace candidate is
+  // synthetic, for models that ignore the fence — and the difference decides what a
+  // parse failure MEANS. A fenced block that does not parse is an attempt the
+  // transport mangled and must be reportable as a loss; the synthetic tail of a
+  // perfectly good fenced message fails to parse on every reply (it drags the
+  // trailing fence along) and means nothing.
+  const candidates: { readonly text: string; readonly fenced: boolean }[] = [];
+  for (const m of text.matchAll(block)) candidates.push({ text: m[1] ?? "", fenced: true });
   const brace = text.indexOf("{");
-  if (brace >= 0) candidates.push(text.slice(brace));
+  if (brace >= 0) candidates.push({ text: text.slice(brace), fenced: false });
 
   // The reason comes from the candidate that got FURTHEST, which needs a rank —
   // the comment claimed this before the code did it, and simply overwrote `why`
@@ -1687,18 +1747,44 @@ export function extractList<T>(text: string, key: string, parseOne: ItemParser<T
   const NO_LIST = 2;
   let got = NO_JSON;
   let why = `no JSON object containing a \`${key}\` array`;
+  /** The all-rejected candidate's losses, carried on the failure — see `Listed`. */
+  let allRejected: string[] | undefined;
+  /** A FENCED block that would not parse — an attempt the transport mangled. */
+  let fencedGarbled: string | undefined;
   const note = (rank: number, reason: string) => {
     if (rank < got) return;
     got = rank;
     why = reason;
   };
 
+  // EVERY CANDIDATE THAT PARSES AND YIELDS A LIST CONTRIBUTES — not only the first.
+  //
+  // This used to `return` inside the loop on the first candidate that produced any
+  // valid item, so a message carrying TWO fenced findings blocks — a natural reading of
+  // "report each finding the moment you are sure of it; a small batch is acceptable" —
+  // silently lost every finding after the first: nothing recorded, nothing in
+  // `discarded`, no retry, and the model — told "recorded and delivered" — believed
+  // both had been filed.
+  //
+  // Merging is safe against the SYNTHETIC brace candidate double-counting a fenced one:
+  // that candidate spans from the first `{` in the WHOLE text to its end, so for any
+  // reply that has more than one JSON object in it — fenced or not — parsing it lands
+  // on trailing content after the first balanced object and throws (the docstring above
+  // already establishes this: "the synthetic tail of a perfectly good fenced message
+  // fails to parse on every reply … and means nothing"). It only ever reaches a
+  // successful merge when it is the SOLE candidate — a model that skipped the fence
+  // entirely — where there is nothing for it to duplicate.
+  const merged: T[] = [];
+  const mergedRejected: string[] = [];
+  let sawSuccess = false;
+
   for (const candidate of candidates) {
     let parsed: unknown;
     try {
-      parsed = JSON.parse(candidate.trim());
+      parsed = JSON.parse(candidate.text.trim());
     } catch (e) {
       note(UNPARSEABLE, `JSON did not parse: ${detail(e)}`);
+      if (candidate.fenced) fencedGarbled = `a fenced JSON block did not parse: ${detail(e)}`;
       continue;
     }
     const list = (parsed as Record<string, unknown> | null)?.[key];
@@ -1737,13 +1823,48 @@ export function extractList<T>(text: string, key: string, parseOne: ItemParser<T
       }
       out.push(res as T);
     }
+    // lore-ok[ad5927ae]: upheld, and fixed at the success arm's return rather than here.
+    // This branch is the ALL-REJECTED shape and already merges its losses; the one that
+    // was missing is the UNPARSEABLE sibling, which never reaches this branch at all —
+    // it fails at `JSON.parse` above and lands in `fencedGarbled`. So the fix belongs
+    // where the success arm builds its result, and that is where it now is: `fencedGarbled`
+    // rides out with `rejected` on `ok: true` too.
     if (out.length === 0 && rejected.length > 0) {
       note(NO_LIST, `all ${rejected.length} ${key.replace(/s$/, "")}(s) were rejected — ${rejected[0] ?? ""}`);
+      allRejected = rejected;
+      // MERGED TOO, once a sibling candidate has succeeded — a block that came back
+      // entirely rejected must not have its own diagnosable losses vanish only because
+      // it happened to sit beside one that produced survivors (D-66, extended across
+      // candidates rather than within one).
+      mergedRejected.push(...rejected);
       continue;
     }
-    return { ok: true, items: out, rejected };
+    sawSuccess = true;
+    merged.push(...out);
+    mergedRejected.push(...rejected);
   }
-  return { ok: false, why };
+  if (sawSuccess) {
+    // A GARBLED SIBLING IS A LOSS ON THE SUCCESS ARM TOO. The merge above carries
+    // schema-REJECTED siblings, and stopped there — so a second fenced block the
+    // transport truncated, sitting beside a valid first one, vanished with no
+    // `discarded` note at all: the model tried to report something and nothing anywhere
+    // says so. That is precisely the hole the done-laundering fix closed on the FAILURE
+    // arm, reopened on the arm that looks healthy.
+    return {
+      ok: true,
+      items: merged,
+      rejected: fencedGarbled === undefined ? mergedRejected : [...mergedRejected, fencedGarbled],
+    };
+  }
+  // The losses ride the failure DIRECTLY, never inferred from `why`: the rank above
+  // exists to surface the best DIAGNOSIS, so a later candidate's wording lawfully
+  // overwrites an earlier one's — a done block's "no findings array" outranking a
+  // mangled block's parse error — and any consumer sniffing `why` for the loss reads
+  // the survivor, not the casualty. Exactly that hole shipped once and lore's own t2
+  // caught it: a truncated findings fence beside a valid done fence vanished without a
+  // note, behind a comment claiming it could not.
+  const lost = allRejected ?? (fencedGarbled === undefined ? undefined : [fencedGarbled]);
+  return { ok: false, why, ...(lost === undefined ? {} : { rejected: lost }) };
 }
 
 /**
@@ -1805,9 +1926,16 @@ export function emissionOf(text: string): Listed<Finding> & { readonly done?: bo
   }
   const r = findingsOf(text);
   if (!r.ok) {
+    if (!done) return r;
     // A pure done declaration has no findings list at all, and that is its ordinary
-    // shape — not a contract failure.
-    return done ? { ok: true, items: [], rejected: [], done: true } : r;
+    // shape — not a contract failure. But what the model TRIED to report beside its
+    // done marker must still reach D-66's channel: the batch path would have retried
+    // this reply, and done forecloses the retry. The failure CARRIES its own losses
+    // (`rejected` — schema-refused items, or a fenced block that would not parse);
+    // they are read directly, never inferred from `why`, whose ranked wording a
+    // healthy done block lawfully overwrites — the sniffing version of this line
+    // shipped and lore's own t2 refuted it with exactly that shape.
+    return { ok: true, items: [], rejected: r.rejected ?? [], done: true };
   }
   if (r.items.length === 0 && r.rejected.length === 0 && !done) {
     // See the docblock: [] is not clean here. Refused with the instruction the retry

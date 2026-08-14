@@ -16,7 +16,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { CancelledByLore, DidNotRun, Exhausted, ServiceUnreachable } from "../core/errors.ts";
+import { CancelledByLore, DidNotRun, Exhausted, ProviderAuthFailed, ServiceUnreachable } from "../core/errors.ts";
 import type { Tier } from "../core/ladder.ts";
 import { fingerprint } from "../core/fingerprint.ts";
 import { DEFAULT_TIERS, initialState, ladderFingerprint } from "../core/ladder.ts";
@@ -2509,6 +2509,40 @@ describe("a streamed tier-run", () => {
   });
 
   /**
+   * A PRE-FIX RE-RAISE MUST NOT BLOCK THE SETTLE (raised by lore's own t2). A finding
+   * open from an earlier round, re-raised in the very turn whose boundary applies the
+   * fix, was counted as this round's fresh objection — so the model's qualified
+   * post-fix silence could never settle the thing the fix fixed, and the client was
+   * nagged about a finding it had answered.
+   */
+  it("settles an open finding re-raised just before the fix that answers it", async () => {
+    // Round 1 raises HOLD_BUG and it stays open. Round 2: the model re-raises it,
+    // the held fix lands at that boundary, the model sees it and goes silent.
+    const reviewer = new Streaming([
+      emission([HOLD_BUG]), DONE,
+      emission([HOLD_BUG]), DONE,
+    ]);
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: STREAM_TYPE });
+    expect(store.openFindings("r1").map((f) => f.claim)).toContain(HOLD_BUG.claim);
+
+    const file = join(dir, "src/hold.ts");
+    const original = readFileSync(file, "utf8");
+    writeFileSync(file, original.replace("return 1;", "return release();"));
+    const claimed = await treeHash(dir);
+    const diffText = execFileSync("git", ["diff", "HEAD"], { cwd: dir }).toString();
+    writeFileSync(file, original);
+    await treeHash(dir);
+    store.holdDiff("r1", diffText, claimed);
+
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: STREAM_TYPE });
+
+    expect(
+      store.openFindings("r1").map((f) => f.claim),
+      "silence after seeing the fix settles the re-raised finding",
+    ).not.toContain(HOLD_BUG.claim);
+  });
+
+  /**
    * TO THE MODEL, EVERY TREE ADVANCE IS A NEW DIFF ARRIVING (D-108). Vany: *"for the
    * model everything must look like a new diff arrived, not some restart."* Before this,
    * a kept session's post-submit round opened with "continue from where you were" — the
@@ -2698,5 +2732,244 @@ describe("skip_if_quota together with a fallback", () => {
     expect(reviewer.asked.slice(0, 2)).toStrictEqual([primary, "openrouter/twin"]);
     expect(store.getReview("r1", "p")?.ladder.unavailable ?? [], "t1 is skipped").toContain("t1");
     expect(last?.decision.kind, "and the review still reaches a verdict").toBe("passed");
+  });
+});
+
+/**
+ * A DEAD CREDENTIAL IS A ROUTE FAULT, NOT A VERDICT (2026-08-14). rev_gOhsCu cleared
+ * t1 and t2, then died 0.4 seconds into t3 on `Token refresh failed: 401` — with a
+ * healthy OpenRouter twin configured and never asked, because the chain advanced on
+ * `Exhausted` alone. Auth walks the same chain now; what it does NOT inherit is
+ * quota's quiet step-over when nothing rescues, because a credential heals only by a
+ * person and the worker must page one.
+ */
+describe("a tier whose credentials died", () => {
+  const withTwin = {
+    ...CODE_ARCH,
+    t0: [] as const,
+    tiers: CODE_ARCH.tiers.map((t) => (t.id === "t1" ? { ...t, fallback: ["openrouter/twin"] } : t)),
+  };
+  const primary = withTwin.tiers.find((t) => t.id === "t1")?.model ?? "";
+
+  class AuthDead implements ReviewerLike {
+    readonly asked: string[] = [];
+    async review(tier: Tier): Promise<ReviewerResult> {
+      this.asked.push(tier.model ?? "?");
+      if (tier.model === primary) throw new ProviderAuthFailed(primary, "tier t1: opencode returned 500: UnknownError: Token refresh failed: 401");
+      return { findings: [], discarded: [], raw: "", inputTokens: 0, cachedTokens: 0, outputTokens: 0, costUsd: 0, latencyMs: 1, retried: false, steps: 1 };
+    }
+  }
+
+  it("asks the same model through the twin, and parks the dead route for the status line", async () => {
+    const reviewer = new AuthDead();
+    const r = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: withTwin });
+
+    expect(reviewer.asked).toStrictEqual([primary, "openrouter/twin"]);
+    expect(store.getReview("r1", "p")?.ladder.unavailable ?? [], "the tier ran — nothing is skipped").toStrictEqual([]);
+    expect(["escalate", "fastClean"]).toContain(r.decision.kind);
+    // The mark is what the status line reads; without it the board showed the dead
+    // provider green while every round refused (the exact complaint that shaped this).
+    const parked = store.routeUnavailable(primary);
+    expect(parked, "the route is parked with the auth reason").toBeDefined();
+    expect(parked?.why).toContain("Token refresh failed");
+  });
+
+  it("keeps its own type when nothing rescues, so the worker pages a person", async () => {
+    const noTwin = { ...CODE_ARCH, t0: [] as const };
+    class NothingLeft implements ReviewerLike {
+      async review(tier: Tier): Promise<ReviewerResult> {
+        throw new ProviderAuthFailed(tier.model ?? "?", "tier t1: Token refresh failed: 401");
+      }
+    }
+    // Quota in this shape steps the tier over (D-48); auth must NOT take that quiet
+    // exit — the review fails carrying ProviderAuthFailed, which is what pages.
+    await expect(
+      runRound({ store, reviewer: new NothingLeft(), reviewId: "r1", principal: "p", worktree: dir, type: noTwin }),
+    ).rejects.toThrow(ProviderAuthFailed);
+  });
+});
+
+/**
+ * A RUNG'S MEMBERS RUN TOGETHER (D-109): one round, two sessions, one worktree.
+ *
+ * The interleaving is pinned by GATES rather than left to the scheduler — the property
+ * under test is "what one member is told about the other", and a test that only
+ * sometimes produces the crossing proves nothing about it (the coin-toss-test lesson,
+ * again). Each fixture blocks one member until the other has demonstrably passed the
+ * point the assertion depends on.
+ */
+describe("a rung of two members", () => {
+  /** Per-tier scripts and per-tier transcripts — two sessions, one fake. */
+  class RungStreaming implements ReviewerLike {
+    readonly asked = new Map<string, string[]>();
+    /** Runs before each answer, ASYNC so a test can hold one member at a gate. */
+    onAsk?: (tierId: string, index: number) => void | Promise<void>;
+    /** A member that must die instead of answering, and how. */
+    fail: Record<string, Error> = {};
+    private readonly scripts: Record<string, string[]>;
+    constructor(scripts: Record<string, string[]>) {
+      this.scripts = scripts;
+    }
+    async review(): Promise<ReviewerResult> {
+      throw new Error("a conversation tier must stream, not run a batch round");
+    }
+    async askFor<T>(
+      tier: Tier,
+      prompt: unknown,
+      _worktree: string,
+      extract: (text: string) => Listed<T>,
+    ): Promise<SessionResult<T>> {
+      const dead = this.fail[tier.id];
+      if (dead !== undefined) throw dead;
+      const list = this.asked.get(tier.id) ?? [];
+      this.asked.set(tier.id, list);
+      const p = prompt as { initial: string; continued: string };
+      await this.onAsk?.(tier.id, list.length);
+      list.push(list.length === 0 ? p.initial : p.continued);
+      const text = this.scripts[tier.id]?.shift();
+      if (text === undefined) throw new Error(`the script for ${tier.id} ran out`);
+      const r = extract(text);
+      if (!r.ok) throw new Error(`the fixture's own emission was refused: ${r.why}`);
+      return {
+        items: r.items, raw: text, inputTokens: 10, cachedTokens: 5, outputTokens: 5,
+        costUsd: 0, latencyMs: 1, retried: false, steps: 1, rejected: r.rejected,
+      };
+    }
+  }
+
+  const emission = (findings: readonly Finding[]) => "```json\n" + JSON.stringify({ findings }) + "\n```";
+  const DONE = '```json\n{"done": true, "examined": "everything"}\n```';
+
+  // The rung, hand-stamped exactly as `loadTiers` stamps a nested array: both members
+  // carry the flat index of the rung's first member.
+  const RUNG_TIERS: readonly Tier[] = [
+    { id: "t0", kind: "deterministic", stage: "fast" },
+    { id: "t2", kind: "model", model: "vendor-a/m", effort: "high", stage: "deep", conversation: true, rung: 1 },
+    { id: "t3", kind: "model", model: "vendor-b/m", effort: "high", stage: "deep", conversation: true, rung: 1 },
+  ];
+  const RUNG_TYPE = { ...CODE_ARCH, t0: [] as const, tiers: RUNG_TIERS };
+
+  const A: Finding = { ...HOLD_BUG, claim: "found by the second tier" };
+  const B: Finding = { ...HOLD_BUG, file: "src.txt", line: 1, claim: "found by the third tier" };
+
+  beforeEach(() => {
+    store.createReview({
+      id: "rung1", repoId, principal: "p", branch: "feat/holds", intoRef: "main",
+      ticket: "t", type: CODE_ARCH.id, state: "running", ladder: initialState(RUNG_TIERS),
+    });
+  });
+
+  it("crosses one member's finding into the other's next boundary, and only that way", async () => {
+    const reviewer = new RungStreaming({ t2: [emission([A]), DONE], t3: [emission([B]), DONE] });
+    // t3 is held at its FIRST ask until t2 is provably past recording A — t2 asking for
+    // its second prompt is that proof, because the boundary runs before the ask.
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    reviewer.onAsk = async (tierId, i) => {
+      if (tierId === "t2" && i === 1) release();
+      if (tierId === "t3" && i === 0) await gate;
+    };
+
+    const r = await runRound({ store, reviewer, reviewId: "rung1", principal: "p", worktree: dir, type: RUNG_TYPE });
+
+    const t3Second = reviewer.asked.get("t3")?.[1] ?? "";
+    expect(t3Second, "the peer's finding crosses at the boundary").toContain("co-reviewer");
+    expect(t3Second).toContain(A.claim);
+    expect(t3Second, "never the member's own finding, echoed back").not.toContain(B.claim);
+    // t2 reached its boundary before t3 had recorded anything, so it was told to continue.
+    expect(reviewer.asked.get("t2")?.[1] ?? "").toMatch(/Continue the review/);
+
+    expect(r.newFindings.map((f) => [f.origin, f.claim]).sort()).toStrictEqual(
+      [["t2", A.claim], ["t3", B.claim]].sort(),
+    );
+    const ladder = store.getReview("rung1", "p")?.ladder;
+    expect(ladder?.tierRounds, "every member that ran is billed the round").toStrictEqual({ t2: 1, t3: 1 });
+    expect(store.getReview("rung1", "p")?.state).toBe("findings_ready");
+  });
+
+  it("applies a held diff once and tells each member at its own boundary", async () => {
+    const reviewer = new RungStreaming({ t2: [emission([A]), DONE], t3: [emission([B]), DONE] });
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    reviewer.onAsk = async (tierId, i) => {
+      // t2's second ask means its boundary ran: the diff is applied and in the chain.
+      if (tierId === "t2" && i === 1) release();
+      if (tierId === "t3" && i === 0) await gate;
+    };
+
+    const file = join(dir, "src/hold.ts");
+    const original = readFileSync(file, "utf8");
+    writeFileSync(file, original.replace("return 1;", "return release();"));
+    const claimed = await treeHash(dir);
+    const diffText = execFileSync("git", ["diff", "HEAD"], { cwd: dir }).toString();
+    writeFileSync(file, original);
+    await treeHash(dir);
+    store.holdDiff("rung1", diffText, claimed);
+
+    await runRound({ store, reviewer, reviewId: "rung1", principal: "p", worktree: dir, type: RUNG_TYPE });
+
+    expect(store.heldDiffs("rung1"), "consumed exactly once").toHaveLength(0);
+    expect(readFileSync(file, "utf8"), "applied to the one shared tree").toContain("return release();");
+    // EACH member hears of the fix — the applier at the boundary that applied it, the
+    // sibling at its own next boundary, reading the chain's unseen tail.
+    for (const id of ["t2", "t3"]) {
+      const second = reviewer.asked.get(id)?.[1] ?? "";
+      expect(second, `${id} was told the author answered`).toContain("The author has answered");
+      expect(second, `${id} was shown the same diff`).toContain("return release();");
+    }
+  });
+
+  /**
+   * NO MEMBER LEAVES THE ROUND BEHIND THE TREE — t2's highest finding on this change.
+   * A member that declares done early has no boundary left, so a fix a sibling
+   * applies afterwards was never delivered to it, and the rung could conclude clean
+   * over a tree that member never read. The catch-up pass re-runs it, pinned to its
+   * route, opening with exactly the unseen delta.
+   */
+  it("re-runs a member that finished before the fix landed, until it has seen the final tree", async () => {
+    // t3 declares done at its FIRST ask (no boundary); its catch-up answers done again.
+    const reviewer = new RungStreaming({ t2: [emission([A]), DONE], t3: [DONE, DONE] });
+    reviewer.onAsk = async (tierId, i) => {
+      // Hold t2's first ask until t3's first run has ENDED — its session tree being
+      // recorded is the observable end — so the fix provably lands after t3 is gone.
+      if (tierId === "t2" && i === 0) {
+        for (let w = 0; w < 400 && store.sessionTreeOf("rung1", "t3", "vendor-b/m") === undefined; w++) {
+          await new Promise((r) => setTimeout(r, 5));
+        }
+      }
+    };
+
+    const file = join(dir, "src/hold.ts");
+    const original = readFileSync(file, "utf8");
+    writeFileSync(file, original.replace("return 1;", "return release();"));
+    const claimed = await treeHash(dir);
+    const diffText = execFileSync("git", ["diff", "HEAD"], { cwd: dir }).toString();
+    writeFileSync(file, original);
+    await treeHash(dir);
+    store.holdDiff("rung1", diffText, claimed);
+
+    await runRound({ store, reviewer, reviewId: "rung1", principal: "p", worktree: dir, type: RUNG_TYPE });
+
+    const t3Asked = reviewer.asked.get("t3") ?? [];
+    expect(t3Asked, "t3 was brought back for the fix").toHaveLength(2);
+    expect(t3Asked[1], "its catch-up opens as the author's answer").toContain("The author has answered");
+    expect(t3Asked[1]).toContain("return release();");
+    const finalTree = await treeHash(dir);
+    expect(store.sessionTreeOf("rung1", "t3", "vendor-b/m"), "and it has now seen the final tree").toBe(finalTree);
+    expect(store.sessionTreeOf("rung1", "t2", "vendor-a/m")).toBe(finalTree);
+  });
+
+  it("continues with the survivor when one member cannot be paid for", async () => {
+    const reviewer = new RungStreaming({ t3: [emission([B]), DONE] });
+    reviewer.fail["t2"] = new Exhausted("plan is out");
+
+    const r = await runRound({ store, reviewer, reviewId: "rung1", principal: "p", worktree: dir, type: RUNG_TYPE });
+
+    expect(r.decision.kind, "the survivor's findings still arrive").toBe("findings");
+    expect(r.newFindings.map((f) => f.claim)).toStrictEqual([B.claim]);
+    const ladder = store.getReview("rung1", "p")?.ladder;
+    expect(ladder?.unavailable, "the dead member is marked, alone").toStrictEqual(["t2"]);
+    expect(ladder?.tierRounds, "and not billed for a round it never saw").toStrictEqual({ t3: 1 });
+    expect(r.t0Unavailable.join(" "), "the client is told which member could not look").toContain("t2");
   });
 });

@@ -32,6 +32,17 @@ export interface PromptInput {
    */
   readonly tierIndex: number;
   readonly modelTierCount: number;
+  /**
+   * The rung-mates reading BESIDE this tier, by id (D-109). Absent or empty for every
+   * tier that runs alone — which was every tier before rungs existed.
+   *
+   * Load-bearing for the same reason `tierIndex` is: the last-line narration counted
+   * every reviewer below it as finished, and a rung-mate is below by index while still
+   * mid-read. Telling t3 "your co-reviewers found nothing left" about a t2 that is
+   * three files into the same tree is the D-31 lie in a new costume — and a model told
+   * the ground is covered deliberately looks past what its peer is about to raise.
+   */
+  readonly peers?: readonly string[];
   readonly type: ReviewType;
   readonly worktree: string;
   readonly branch: string;
@@ -168,9 +179,23 @@ function position(i: PromptInput): string {
       "before anyone spends a dearer tier on it.",
     ].join("\n");
   }
+  const peers = i.peers ?? [];
+  // Rung-mates are BESIDE this tier, not below it (D-109): they read the same tree
+  // right now, so they are subtracted from "reviewers who found nothing left" and named
+  // instead — with the one instruction that makes parallel reading pay for itself.
+  const together =
+    peers.length === 0
+      ? []
+      : [
+          "",
+          `You are reading TOGETHER with ${peers.join(", ")} — another reviewer, on this same tree, right now.`,
+          "What it raises will reach you as you read: do not re-derive or re-report it, and do not treat its",
+          "silence as clearance. Your value is what it misses.",
+        ];
   if (i.tierIndex === i.modelTierCount - 1) {
+    const below = Math.max(0, i.tierIndex - peers.length);
     return [
-      `You are the LAST line. ${i.tierIndex} independent reviewers, from different vendors, found nothing left,`,
+      `You are the LAST line. ${below} independent reviewer${below === 1 ? "" : "s"}, from different vendors, found nothing left,`,
       "and deterministic tooling is clean. The code is close to correct.",
       "",
       "So do NOT re-report style, formatting, or anything a typechecker or linter would catch — that work is done,",
@@ -180,11 +205,13 @@ function position(i: PromptInput): string {
       "needs two things to happen at once; an error path that leaves state behind; a test that would pass without",
       "its fix; a fake kinder than production; absence asserted with toEqual, which ignores undefined-valued",
       "properties, where toStrictEqual is the one that means it.",
+      ...together,
     ].join("\n");
   }
   return [
     `You are reviewer ${i.tierIndex + 1} of ${i.modelTierCount}. Cheaper tiers and deterministic tooling found nothing new.`,
     "The easy defects are gone. Look at design, seams, and what the tests claim but do not exercise.",
+    ...together,
   ].join("\n");
 }
 
@@ -559,6 +586,26 @@ export function streamContinue(): string {
   return [
     "Recorded and delivered to the author. Continue the review from where you were:",
     "report your next finding the moment you have it, or declare done if the tree is examined.",
+  ].join("\n");
+}
+
+/**
+ * A rung-mate's findings, delivered at the emission boundary (D-109).
+ *
+ * The other model on this same tree found something. Forwarded so the receiver STOPS
+ * hunting for it — duplicate derivation is the one cost parallel review adds, and this
+ * crossing is what removes it. Framed as a co-reviewer's work, not as truth: a member
+ * with evidence against it says so, which is a free adversarial check, and re-raising
+ * it in its own words CONFIRMS it (the recorded origin rises, as re-raises always have).
+ */
+export function streamPeer(findings: readonly string[]): string {
+  return [
+    "While you were reading, a co-reviewer working on this SAME tree raised:",
+    ...findings.map((f) => `  - ${f}`),
+    "",
+    "These are recorded and with the author already — do NOT spend your budget re-deriving or",
+    "re-reporting them. If you have evidence one is wrong, or worse than stated, say so in your",
+    "next emission. Otherwise continue your own search elsewhere: next finding, or done.",
   ].join("\n");
 }
 

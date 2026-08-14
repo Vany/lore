@@ -3,6 +3,38 @@
 Newest first. Updated at the end of each task: what changed, what I learned, what
 surprised me.
 
+## 2026-08-14 — D-109: the deep tiers run together, and a dead credential walks the chain
+
+**What changed.** The ladder walks RUNGS — a nested array in the tiers file is a set of
+tiers that run concurrently on one worktree, each in its own kept session. Peer findings
+cross at emission boundaries (`streamPeer`); a held diff applies ONCE at the first
+boundary any member reaches and every member hears of it at its own, reading the shared
+chain's unseen tail under a rung lock. The deployed config groups t2+t3, so the deep
+phase costs max(t2, t3) wall-clock instead of the sum. `runRound` restructured around
+`runMember` + `Promise.allSettled` merge; skip/promote paths return outcomes instead of
+stepping the ladder from inside one member's catch. Same day, from a live failure:
+`ProviderAuthFailed` joined `Exhausted` as a route fault — auth walks the same-model
+fallback, parks the route (status line goes red), and keeps its own type when nothing
+rescues so the worker pages.
+
+**What I learned.** The D-107/D-108 machinery made parallelism almost free — sessions,
+tree-tracking and t0 deltas were already per-tier; the whole change is topology plus
+three shared-state disciplines (one lock, two watermarks). The delicate parts were all
+in the merge: whose silence settles (strongest member), who stamps a rejection (the
+member that re-raised, at the highest rank), and stepping from `ladderNow` rather than
+the stale `review.ladder` so a skipped sibling stays skipped.
+
+**Surprised me.** rev_gOhsCu died 0.4s into t3 — after clearing t1 and t2 through two
+fix cycles — because an OAuth refresh token expired and the 401 arrived dressed as a
+500 UnknownError. Three independent guards (fallback chain, page, status mark) all sat
+behind the same one-line classifier miss. When one string not matching disables three
+defenses, the classifier IS the defense.
+
+**Also fixed in passing.** `stopAndDrain` in drain.test.ts — the suite's teardown
+closed the store under in-flight rounds, theoretical for months, every-run once the
+round gained awaits. And the position narration no longer counts a rung-mate mid-read
+as a reviewer who "found nothing left".
+
 ---
 
 ## 2026-08-14 — session 56: the review becomes the conversation it was specified to be

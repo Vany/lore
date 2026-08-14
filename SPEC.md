@@ -1830,9 +1830,22 @@ company are one reviewer available twice — the same opinion, twice the quota �
 config could not say that before: `fallback` had to carry both *"the same model somewhere
 else"* and *"something else entirely"*, with an entry's position the only hint which was
 meant. The pool answers *"these are interchangeable, take one"*; the chain answers *"that
-failed, try something worse"*. Both are walked the same way and only ever advanced by
-quota; only the chain is reported as a concession, because a second plan is the model the
-tier was always going to use.
+failed, try something worse"*. Both are walked the same way and only ever advanced by a
+ROUTE fault; only the chain is reported as a concession, because a second plan is the
+model the tier was always going to use.
+
+**A route fault is quota — or a rejected credential (widened 2026-08-14, Vany: "okay,
+dead, why not fall back?").** The OpenAI subscription's OAuth died mid-ladder: `opencode
+returned 500: UnknownError: Token refresh failed: 401`, unmatched by every classifier
+pattern, so a review that had cleared t1 and t2 failed 0.4 seconds into t3 with a healthy
+OpenRouter twin configured and never asked — and the status line showed the provider
+green, because only a classified refusal writes the mark it reads. Auth now classifies
+(`ProviderAuthFailed`, the token-refresh shape included), parks the route under the
+doubling backoff (no provider states when a credential heals; the D-94 probe discovers
+the re-login), and walks the same chain quota walks. The one asymmetry is deliberate:
+when NOTHING rescues the tier, quota takes D-48's quiet step-over, while auth keeps its
+own type all the way to the worker — which pages, because quota heals on the provider's
+clock and a credential heals only by a person.
 
 **Optimistic to begin with, and it learns.** Vany: *"at the start assume all connections
 have quota, and clarify if it is; and if it is not, what time of release when it rejects to
@@ -2137,6 +2150,77 @@ That is what turns "too big" from a wall into a degradation.
 D-77 still holds and nothing skips the ladder. What changes is that batching is the
 DEFAULT rather than a compromise: fix everything found, review it together, push it
 together.
+
+**D-109 — the deep tiers run together: a ladder of RUNGS, findings crossing between the
+models as they are found. BUILT 2026-08-14.**
+
+Vany: *"run t2 and t3 in parallel — if one of the models finds something, deliver it to
+all parallel models; if fixes arrive, deliver the fixes to all models in parallel. Fix
+everything on an available t1 first."*
+
+**The ladder walks RUNGS, and a rung is a set of tiers that run together.** In the tiers
+file a rung is written as a nested array — `[ {t0}, {t1}, [ {t2}, {t3} ] ]` — and a bare
+tier is a rung of one, so every existing config means exactly what it meant. Nothing
+about tier IDENTITY changes: `tier_run` rows, findings' origins, `answeredBy`, quota
+marks and sessions all stay per tier. What changes is only WHEN: the members of a rung
+run concurrently, on the same pinned worktree, each in its own kept session.
+
+Within a running rung, two kinds of message cross at the emission boundary — the only
+insertion point D-107 established:
+
+- **A peer's finding.** Each member's next boundary carries what its siblings raised
+  since its last one, marked as a co-reviewer's: *do not spend your budget re-deriving
+  it; contradict or extend it if you have evidence; otherwise keep searching elsewhere.*
+  Duplicate hunting stops, and a standing adversarial check falls out free — a member
+  that re-raises a peer's finding CONFIRMS it (the recorded origin rises to the stronger
+  tier, exactly as re-raises always have).
+- **The author's fix.** A held diff is applied to the shared worktree ONCE, at the first
+  boundary any member reaches; every member then receives it at its own next boundary as
+  the same author-answered message D-107/D-108 defined — each session diffs against what
+  IT has seen, so to every model it is simply a new diff arriving. This is the honest
+  price of one tree with two readers: between the apply and a sibling's next boundary,
+  that sibling can read post-fix bytes it has not been told about. The window is one
+  emission wide (D-107 messages are short), the fixes message re-orients, and the
+  alternative — a worktree per member — doubles the pin and lets the copies drift apart.
+
+**The round is the RUNG's round.** Every live member runs each round (a fix is delivered
+to all, which is the point), each member's `tier_run` row records its own outcome, and
+the ladder's bookkeeping generalises member-wise: fresh findings from ANY member hold the
+rung (the next round re-runs it, sessions kept); the rung is clean only when every member
+that could run is; escalation steps past the whole rung. A member that cannot be paid for
+goes to `unavailable` alone and the rung continues with the survivors — all the D-48/D-88
+accounting is already per tier and does not change. If a member dies on a fault that
+requeues (a deploy window, an unreachable runtime), the whole round requeues and the rung
+re-runs: finished siblings resume kept sessions on an unchanged tree, which costs a
+"continue → done" exchange, and that price was chosen over cross-attempt bookkeeping of
+half-finished rungs.
+
+**Silence still settles rank-wise, member-wise.** A finding settles on the silence of
+the strongest member that ran and was qualified to see it (D-56's rule, unchanged —
+the rung just supplies the strongest present member); a justification is rejected if ANY
+member re-raised the finding, because a second model confirming a defect is more
+evidence, not a tie to break.
+
+**What this buys and what it spends.** The deep phase's wall-clock drops from t2+t3 to
+max(t2, t3); both subscriptions burn simultaneously instead of in sequence, and the
+total is roughly what the sequential ladder already spent — every member was going to
+run anyway. Cross-delivery adds a few prompt tokens per peer finding and saves whole
+duplicate hunts. What is genuinely given up: t3 no longer reads only code t2 has already
+passed — the gate property (§1 of the ladder spec) now holds between rungs, not inside
+one. That is the decision: within a rung the members are PEERS, and their independence
+is spent on breadth at the same tree instead of depth behind a gate.
+
+**The grouping is pinned — for every review pinned after this ships.** Rung membership
+joins `ladderFingerprint` (spelled so that every singleton-rung config — which is every
+config that existed before this — fingerprints exactly as before), and a regroup
+mid-review refuses resumption with the same words a repointed model does. A review
+whose pin PREDATES the field is the standing exception, the same one every field the
+pin has ever gained lives under: an old pin has no opinion about fields it never
+recorded, so the one generation of reviews open across this deploy resumes onto the
+rung rather than refusing — t2 re-runs beside t3 and is billed a round nobody chose,
+which was judged cheaper than refusing every open review at the deploy (the exact
+incident the shared-field comparison exists to prevent). Raised by lore's own t2, which
+read the earlier absolute wording against the tolerance test and was right.
 
 **D-108 — the pin advances, the review does not reset: `pull_fresh`, and every advance
 looks the same to the model. BUILT 2026-08-14.**

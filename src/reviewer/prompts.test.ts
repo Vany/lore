@@ -170,6 +170,21 @@ describe("what the ladder still guarantees", () => {
     expect(promptAt(2)).toMatch(/LAST line/);
   });
 
+  // A rung-mate is BESIDE the tier, not below it (D-109). Counting it as a finished
+  // reviewer is the D-31 lie in a new costume: t3 told "2 reviewers found nothing
+  // left" while t2 is three files into the same tree deliberately looks past what its
+  // peer is about to raise.
+  it("subtracts a rung-mate from the reviewers who finished, and names it as a co-reader", () => {
+    const p = flat(promptAt(2, 3, CODE_ARCH, { peers: ["t2"] }));
+    expect(p).toMatch(/1 independent reviewer, from different vendors, found nothing left/);
+    expect(p).toMatch(/reading TOGETHER with t2/);
+    expect(p).toMatch(/do not treat its silence as clearance/i);
+  });
+
+  it("says nothing about co-readers to a tier that runs alone", () => {
+    expect(promptAt(2)).not.toMatch(/TOGETHER/);
+  });
+
   it("still tells the first tier it is first", () => {
     expect(promptAt(0)).toMatch(/FIRST model/);
   });

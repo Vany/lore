@@ -65,6 +65,23 @@ export interface Tier {
    */
   readonly conversation?: boolean;
   /**
+   * The RUNG this tier runs on, when it shares one (D-109).
+   *
+   * A ladder is a list of rungs and a rung is a set of tiers that run TOGETHER —
+   * concurrently, on the same worktree, findings crossing between them at emission
+   * boundaries. In the tiers file a rung is a nested array; the loader flattens it and
+   * stamps each member with the flat index of the rung's first member, which is unique
+   * by construction (no other tier's own index can equal a position occupied by a rung
+   * member).
+   *
+   * ABSENT ON EVERY TIER THAT RUNS ALONE, deliberately — not zero, not its own index.
+   * Absent means the flat index itself is the rung key (`rungKey`), so every config
+   * written before rungs existed carries exactly the state it always carried, and
+   * `ladderFingerprint` spells it as `r-`: old pins keep matching, and only a genuine
+   * regroup reads as a different ladder.
+   */
+  readonly rung?: number;
+  /**
    * The same model somewhere else, for when this tier's plan is out — IN ORDER (D-93).
    *
    * Vany: *"we have some openrouter credits… if there is no quota on the subscription
@@ -79,19 +96,22 @@ export interface Tier {
    * able to fire (D-50). Priced against a real day — nine reviews of this repository —
    * the whole load would have been $3.80.
    *
-   * **A LIST, TRIED IN ORDER, and only ever advanced by quota.** Vany, 2026-08-12:
-   * *"let's fall back on t2 and t3 to openrouter, and then, if there is no quota, to
-   * zai-coding-plan/glm."* OpenRouter ran to zero on 2026-08-11 — $5165.00 granted
-   * against $5165.04 used — and on that day a single fallback was the same as none: both
-   * routes to the model were out and the tier was `unpayable`. A second entry is a
-   * different SUBSCRIPTION, which is the only kind of spare capacity that survives a
-   * metered account hitting zero.
+   * **A LIST, TRIED IN ORDER, and only ever advanced by a ROUTE fault.** Vany,
+   * 2026-08-12: *"let's fall back on t2 and t3 to openrouter, and then, if there is no
+   * quota, to zai-coding-plan/glm."* OpenRouter ran to zero on 2026-08-11 — $5165.00
+   * granted against $5165.04 used — and on that day a single fallback was the same as
+   * none: both routes to the model were out and the tier was `unpayable`. A second entry
+   * is a different SUBSCRIPTION, which is the only kind of spare capacity that survives
+   * a metered account hitting zero.
    *
-   * The chain advances on `Exhausted` and on nothing else, which is the same narrow
-   * reading that governs the first hop: quota is a fault about the ROUTE, while a bad
-   * reply or an oversized diff will repeat through any provider. It is bounded by the
-   * list, which is short and written down — the "chain of retries becomes an unbounded
-   * cost" objection is about retrying the same route, not about naming a second one.
+   * The chain advances on `Exhausted` and on `ProviderAuthFailed`, and on nothing else —
+   * the same narrow reading that governs the first hop: quota and a rejected credential
+   * are faults about the ROUTE, while a bad reply or an oversized diff will repeat
+   * through any provider. Auth joined on 2026-08-14, when an OAuth-backed t3 died on
+   * `Token refresh failed: 401` with a healthy OpenRouter twin configured and never
+   * asked. It is bounded by the list, which is short and written down — the "chain of
+   * retries becomes an unbounded cost" objection is about retrying the same route, not
+   * about naming a second one.
    *
    * Absent or empty means the old behaviour: an exhausted tier is skipped and its work
    * promoted (D-48), which is right for a deployment with no spare capacity to reach for.
@@ -158,6 +178,15 @@ export type ModelPools = Readonly<Record<string, readonly string[]>>;
 const PoolsSchema = z.record(z.string().min(1), z.array(z.string().min(1)).min(1));
 
 /**
+ * A ladder entry: one tier, or a RUNG — several tiers that run together (D-109).
+ *
+ * The nesting is the whole syntax. `rung` is never written in the file; the loader
+ * stamps it from the structure, because a hand-assigned rung number could collide with
+ * a flat index and silently group tiers nobody grouped.
+ */
+const EntrySchema = z.union([TierSchema, z.array(TierSchema).min(1)]);
+
+/**
  * The two shapes a ladder file may have.
  *
  * A bare array is the shape every deployed config had before nicknames, and it still
@@ -166,8 +195,8 @@ const PoolsSchema = z.record(z.string().min(1), z.array(z.string().min(1)).min(1
  * once this week over exactly this kind of key.
  */
 const LadderFileSchema = z.union([
-  z.array(TierSchema).min(1),
-  z.object({ models: absent(PoolsSchema), tiers: z.array(TierSchema).min(1) }).strict(),
+  z.array(EntrySchema).min(1),
+  z.object({ models: absent(PoolsSchema), tiers: z.array(EntrySchema).min(1) }).strict(),
 ]);
 
 let cached: { source: string; tiers: readonly Tier[]; pools: ModelPools } | undefined;
@@ -327,12 +356,57 @@ export function loadTiers(source = process.env["LORE_TIERS"]): readonly Tier[] {
   // ONE SHAPE PAST THIS POINT. The schema accepts a bare string for `fallback` so a
   // stale config cannot crash-loop the service at boot; everything downstream reads a
   // list, because two shapes for one field is how the copies come to disagree.
-  const tiers = file.tiers.map((t) => ({
-    ...t,
-    ...(typeof t.fallback === "string" ? { fallback: [t.fallback] } : {}),
-  })) as Tier[];
+  // AND ONE STRUCTURE: rungs are flattened here, each member stamped with the flat
+  // index of its rung's first member (D-109). That key is unique without a registry —
+  // no singleton's own index can equal a position a rung member occupies — and a
+  // one-member array is just a tier, so it is NOT stamped and fingerprints as itself.
+  const tiers: Tier[] = [];
+  for (const entry of file.tiers) {
+    const group = Array.isArray(entry) ? entry : [entry];
+    const at = tiers.length;
+    for (const t of group) {
+      tiers.push({
+        ...t,
+        ...(typeof t.fallback === "string" ? { fallback: [t.fallback] } : {}),
+        ...(Array.isArray(entry) && group.length > 1 ? { rung: at } : {}),
+      } as Tier);
+    }
+  }
   if (!tiers.some((t) => t.kind === "model")) {
     throw new UsageError("LORE_TIERS has no model tier — deterministic tooling alone is not a review");
+  }
+
+  // A TIER ID NAMES A COUNTER, A SESSION AND AN AUDIT ROW, so two tiers sharing one
+  // would write over each other's rounds — quietly corrupt before rungs, loudly
+  // impossible with them, and refused for both.
+  const ids = new Set<string>();
+  for (const t of tiers) {
+    if (ids.has(t.id)) throw new UsageError(`LORE_TIERS: two tiers are both called '${t.id}' — every id must be unique`);
+    ids.add(t.id);
+  }
+
+  // WHAT A RUNG'S MEMBERS MUST SHARE, refused at load rather than discovered mid-round.
+  //
+  // One STAGE, because the ladder crosses fast→deep between rungs and a rung half in
+  // each would answer a client inline and asynchronously at once. All MODEL tiers,
+  // because t0 already runs unconditionally at the head of every round — a
+  // deterministic member would be a second spelling of that with nothing to run in
+  // parallel WITH. And every member CONVERSATIONAL, because the emission boundary is
+  // the only safe point to apply a fix or cross a peer finding: a batch member has no
+  // boundaries, so a sibling's mid-round apply would rewrite files under it mid-read —
+  // exactly what D-55 exists to prevent.
+  for (const t of tiers) {
+    if (t.rung === undefined) continue;
+    const mates = tiers.filter((m) => m.rung === t.rung);
+    if (mates.some((m) => m.stage !== t.stage)) {
+      throw new UsageError(`LORE_TIERS: the rung holding ${mates.map((m) => m.id).join(", ")} mixes fast and deep tiers — a rung's members answer together, so they must share a stage`);
+    }
+    if (t.kind !== "model") {
+      throw new UsageError(`LORE_TIERS: tier ${t.id} is deterministic and cannot share a rung — t0's engines already run at the head of every round`);
+    }
+    if (t.conversation !== true) {
+      throw new UsageError(`LORE_TIERS: tier ${t.id} shares a rung but is not \`conversation: true\` — the emission boundary is the only safe point to deliver a sibling's finding or the author's fix, and a tier without one would have files rewritten under it mid-read`);
+    }
   }
 
   // A FALLBACK THAT REPEATS THE ROUTE IT IS COVERING FOR IS NOT A FALLBACK.
@@ -592,6 +666,34 @@ function firstModelTier(tiers: readonly Tier[], unavailable: readonly string[] =
 }
 
 /**
+ * The key that says which rung a position belongs to (D-109).
+ *
+ * A stamped tier answers with its rung; an unstamped one answers with its own index,
+ * which makes every pre-rung ladder a ladder of one-tier rungs without a migration.
+ */
+export function rungKey(tiers: readonly Tier[], index: number): number {
+  return tiers[index]?.rung ?? index;
+}
+
+/**
+ * The model tiers that run together with the one at `cursor`, in ladder order.
+ *
+ * `unavailable` members are excluded because the question is always "who runs this
+ * round", and a tier marked unpayable does not — the rung continues with survivors
+ * (D-48 per member, unchanged).
+ */
+export function rungMembers(
+  tiers: readonly Tier[],
+  cursor: number,
+  unavailable: readonly string[] = [],
+): readonly Tier[] {
+  const key = rungKey(tiers, cursor);
+  return tiers.filter(
+    (t, i) => rungKey(tiers, i) === key && t.kind === "model" && !unavailable.includes(t.id),
+  );
+}
+
+/**
  * Did any tier actually look at this code?
  *
  * If every model tier was unpayable there is no review at all, and calling that a
@@ -650,6 +752,13 @@ export interface StepInput {
   readonly needsHuman?: boolean;
   readonly tiers?: readonly Tier[];
   readonly limits?: Limits;
+  /**
+   * The tier ids that actually RAN this round (D-109). Absent means the cursor's tier
+   * alone — every caller that predates rungs. A rung round names its live members, so
+   * each one's counter moves and a member sitting in `unavailable` is not billed for a
+   * round it never saw.
+   */
+  readonly ran?: readonly string[];
 }
 
 /**
@@ -668,7 +777,12 @@ export function step(input: StepInput): { readonly state: LadderState; readonly 
   if (tier === undefined) throw new Error(`ladder cursor ${prev.cursor} is out of range`);
 
   const round = prev.round + 1;
-  const tierRounds = { ...prev.tierRounds, [tier.id]: (prev.tierRounds[tier.id] ?? 0) + 1 };
+  // EVERY MEMBER THAT RAN IS BILLED, not only the cursor's (D-109). A rung round runs
+  // all its live members at once, and a counter that moved for one of them alone would
+  // let the per-tier cap read half the iteration that actually happened.
+  const ran = input.ran ?? [tier.id];
+  const tierRounds = { ...prev.tierRounds };
+  for (const id of ran) tierRounds[id] = (tierRounds[id] ?? 0) + 1;
 
   // Derived from the caller's CURRENT view, never accumulated.
   //
@@ -710,7 +824,11 @@ export function step(input: StepInput): { readonly state: LadderState; readonly 
     // here and by the global budget above — or is clean, and clean is terminal:
     // it passes, asks a human, or escalates. Escalation only ever moves the cursor
     // FORWARD through a finite tier list, so no path loops.
-    if ((tierRounds[tier.id] ?? 0) > limits.perTierRounds) {
+    //
+    // ANY member that ran, on a rung (D-109): the members run every round together,
+    // so their counters move together and this is the rung's own iteration count —
+    // the same bound it has always been, worn by however many tiers share the round.
+    if (ran.some((id) => (tierRounds[id] ?? 0) > limits.perTierRounds)) {
       return { state: base, decision: { kind: "stopped", bound: "perTier" } };
     }
 
@@ -814,8 +932,13 @@ function nextModelTier(
   from: number,
   unavailable: readonly string[] = [],
 ): number | undefined {
+  // PAST THE WHOLE RUNG, not merely past the cursor (D-109). A clean rung means every
+  // member was clean — `raised` is their union — so the cursor's own rung-mates are
+  // already answered, and stepping "up" onto one would run half the rung again alone.
+  const key = rungKey(tiers, from);
   for (let i = from + 1; i < tiers.length; i++) {
     const t = tiers[i];
+    if (rungKey(tiers, i) === key) continue;
     if (t?.kind === "model" && !unavailable.includes(t.id)) return i;
   }
   return undefined;
@@ -850,9 +973,18 @@ export function settle(state: LadderState, fingerprints: readonly string[]): Lad
  * Built from a literal list rather than `Object.values`, so adding a field to `Tier` does
  * not silently join the pin — a pin that changes for a field nobody meant to pin on would
  * refuse every open review at the next deploy.
+ *
+ * `rung` joins the pin (D-109), because a regrouped ladder runs the same tiers with a
+ * different meaning: inside a rung the members are peers on one tree, not gates for each
+ * other, and a review must finish under the discipline it started under. Spelled `r-`
+ * for a tier that runs alone — which is every tier in every config that predates rungs —
+ * so existing pins keep matching field-for-field, and old shorter pins have no opinion
+ * (`ladderChanged` compares only shared fields, by design).
  */
 export function ladderFingerprint(tiers: readonly Tier[]): string {
-  return tiers.map((t) => `${t.id}:${t.model ?? t.kind}:${t.effort ?? "-"}:${t.stage}`).join(",");
+  return tiers
+    .map((t) => `${t.id}:${t.model ?? t.kind}:${t.effort ?? "-"}:${t.stage}:${t.rung === undefined ? "r-" : `r${String(t.rung)}`}`)
+    .join(",");
 }
 
 /**

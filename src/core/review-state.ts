@@ -69,6 +69,29 @@ export function isTerminal(state: ReviewState): boolean {
 }
 
 /**
+ * A terminal state a person or the clock decided, never the round's own conclusion.
+ *
+ * Used wherever a diff arrives LATE — after the round that would ordinarily consume it
+ * has already written its verdict — to decide whether that verdict should still stand.
+ * `cancelled` is somebody's decision and a late diff is simply too late for it; `expired`
+ * is nobody coming back, and reviving it from a stray leftover diff would be inventing
+ * activity nobody asked for. `passed`, `passed_partial` and `failed` are none of that —
+ * they are the round's OWN conclusion, reached the instant before the late diff was
+ * noticed, and a diff genuinely sitting in the store at that moment means the conclusion
+ * is stale, not that the client's accepted submit silently vanished (INV-1).
+ *
+ * Three call sites used to gate on plain `isTerminal`, which treats `passed` exactly
+ * like `cancelled` — on the one state a client reads as the whole answer and never
+ * rechecks, orphaning a diff that landed in the gap after a round's last boundary
+ * behind a "held — you do not need to resubmit" promise, silently.
+ */
+const PERSON_OR_CLOCK_DECIDED = new Set<ReviewState>(["cancelled", "expired"]);
+
+export function decidedByPersonOrClock(state: ReviewState): boolean {
+  return PERSON_OR_CLOCK_DECIDED.has(state);
+}
+
+/**
  * The two findings states — bright and gray — for SQL that must treat them alike.
  *
  * Derived here for the same reason `TERMINAL_SQL` is: spelled out at a call site, one

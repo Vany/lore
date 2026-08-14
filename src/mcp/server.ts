@@ -51,7 +51,11 @@ export interface ServerDeps {
    * remove the worktree, recut at the same review id. Optional because the CLI and the
    * tests build servers that cannot cut worktrees; `pull_fresh` says so plainly then.
    */
-  readonly repin?: (reviewId: string) => Promise<{ worktree: string; treeHash: string; synced: boolean }>;
+  readonly repin?: (
+    reviewId: string,
+    /** Origin's tree as this review last pinned it — repin leaves the worktree alone if origin still points there. */
+    expectTree?: string,
+  ) => Promise<{ worktree: string; treeHash: string; synced: boolean }>;
 }
 
 const text = (s: string) => ({ content: [{ type: "text" as const, text: s }] });
@@ -337,8 +341,31 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
         if (deps.repin === undefined) {
           throw new Error("this build cannot re-pin a review; start over or submit a diff.");
         }
-        const before = store.getReview(open.id, store.principalOf(open.id) ?? who.principal)?.treeHash;
-        const pinned = await deps.repin(open.id);
+        // lore-ok[49451a88]: right, and fixed one layer in rather than here. The column
+        // really was NULL for the reviews this guard protects — `review_start` writes the
+        // row before any worktree exists, so `createReview` had no tree to record — which
+        // made `before !== undefined` dead. It is now written where the tree first EXISTS:
+        // `runRound` stamps `origin_tree_hash` from the round-0 tree. This line is correct
+        // as it stands and is the reader of that value, not its writer.
+        // lore-ok[d9ec8874]: the same finding, reported twice. Same answer.
+        // THE LAST ORIGIN PIN, never the fixes-applied tree. `treeHash` is advanced by
+        // review_submit, a held diff landing, and every round's own end — so comparing
+        // against it meant this check could only ever fire on a review that had NEVER
+        // been fixed, and a no-op pull_fresh after any submit silently rewound the review
+        // to the pre-fix tip. `originTreeHash` is the one field ordinary fixes never move.
+        const before = store.getReview(open.id, store.principalOf(open.id) ?? who.principal)?.originTreeHash;
+        // lore-ok[a204d46d]: both halves upheld, and both fixed in `repinReview` rather
+        // than here. The destroy-then-compare ORDER is gone — `expectTree` goes in, and
+        // the recut happens only once origin is known to have moved — and the ref
+        // NAMESPACE is fixed with it: `originTree` now resolves `origin/<branch>` first
+        // and falls back to `refs/heads/<branch>`, which is `addWorktree`'s own order and
+        // the only one that survives a mirror fetching `+refs/heads/*:refs/remotes/origin/*`
+        // with its local heads frozen at clone time. The fixture that could not see this
+        // was fetching into `refs/heads/*`; it now uses the production refspec.
+        // `before` goes IN, so the decision is made before anything is destroyed rather
+        // than compared after — see `repinReview`. Passing it is what makes the
+        // "unchanged" reply below safe to give.
+        const pinned = await deps.repin(open.id, before);
         if (before !== undefined && pinned.treeHash === before) {
           return text(
             JSON.stringify({
@@ -351,7 +378,7 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
             }),
           );
         }
-        store.updateReview(open.id, { state: "queued", treeHash: pinned.treeHash });
+        store.updateReview(open.id, { state: "queued", treeHash: pinned.treeHash, originTreeHash: pinned.treeHash });
         deps.enqueue(open.id, "fast");
         return text(
           JSON.stringify({
@@ -413,12 +440,6 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       // The same order the cancel tool uses, for the same reason: state first, so a round
       // claimed in this instant finds a terminal review and stops before spending; the
       // in-flight model call aborted after, best-effort exactly as there.
-      if (open !== undefined && restart === true) {
-        store.setFailureReason(open.id, `cancelled by ${who.principal}: superseded by a restart of ${branch}`);
-        store.updateReview(open.id, { state: "cancelled" });
-        await deps.reviewer?.cancel?.(open.id).catch(() => false);
-      }
-
       // THE SERVICE IS FULL — refused at the door, never queued in the middle (D-98).
       //
       // The alternative was a semaphore that made a round wait for a model slot, and
@@ -429,15 +450,34 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       // Checked before the row is written, so a refusal leaves nothing behind — unlike
       // the spend ceiling, which fires at enqueue and therefore has a review to mark
       // `failed`. Nothing here has been promised to anyone yet.
-      const admission = mayAdmit(store.openReviewCount());
+      //
+      // AND BEFORE THE RESTART CANCEL BELOW, which is what makes that promise true. The
+      // cancel ran first, so at the limit a restart DESTROYED the client's predecessor —
+      // every justification it had ratified with it — and was then refused by this
+      // check, whose own message says "NOTHING WAS STARTED". The client ended the call
+      // with no review at all, worse off than before it asked, told nothing had happened.
+      //
+      // A RESTART DOES NOT NEED A FREE SLOT: it cancels one review and starts one, so it
+      // is slot-neutral, and counting its own predecessor against it would refuse the one
+      // operation that cannot make the service any fuller.
+      const restarting = open !== undefined && restart === true;
+      const admission = mayAdmit(store.openReviewCount() - (restarting ? 1 : 0));
       if (!admission.allowed) {
         throw new Error(
           `lore is full: ${admission.open} reviews are already open, and the limit is ${admission.limit}. ` +
             "NOTHING WAS STARTED — this branch is unreviewed and no review id exists for it. Try again once " +
             "something finishes. If reviews of yours are sitting in findings_ready with nobody answering " +
             "them, review_inbox lists them and review_cancel on one frees a slot immediately: an abandoned " +
-            "review holds its place here until it is swept as expired 48 hours later.",
+            "review holds its place here until the sweep takes it, which is 48h of grace and then a further " +
+            "week — so cancelling what you are not going to answer is far faster than waiting it out.",
         );
+      }
+
+      if (restarting && open !== undefined) {
+        store.setFailureReason(open.id, `cancelled by ${who.principal}: superseded by a restart of ${branch}`);
+        store.updateReview(open.id, { state: "cancelled" });
+        await deps.reviewer?.cancel?.(open.id).catch(() => false);
+        store.clearSessionTrees(open.id);
       }
 
       const rt = reviewType(type ?? DEFAULT_TYPE);
@@ -1045,6 +1085,13 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       // thing to SAY, not a thing to round down to "no".
       const canAbort = deps.reviewer?.cancel !== undefined;
       const aborted = canAbort && ((await deps.reviewer?.cancel?.(review_id).catch(() => false)) ?? false);
+
+      // AND THE SESSION-TREE RECORDS THOSE SESSIONS LEFT BEHIND (D-108). `cancel` above
+      // empties the kept-session map, so the worker's reconcile — which sweeps these by
+      // iterating exactly that map — can never see this review again. Cleared here, on
+      // the ending that owns it, rather than left to a backstop that has already been
+      // made blind to it.
+      store.clearSessionTrees(review_id);
 
       // EVERYTHING RAISED SO FAR, delivered or not. A cancelled review still found
       // what it found, and those findings are the only thing of value it produced;

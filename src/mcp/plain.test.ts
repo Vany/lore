@@ -19,6 +19,20 @@ describe("forClient", () => {
     expect(out).not.toMatch(/opencode|APIError|kimi-for-coding|https?:/);
   });
 
+  // The string that crossed the boundary on 2026-08-14, verbatim: an OAuth token died
+  // and the client read five words of kitchen before the fact started. Any error CLASS
+  // is framing, not only APIError — and the route that owns the credential is
+  // procurement, so it goes too.
+  it("strips the error class and the route from a dead-credential reason", () => {
+    const raw =
+      "openai/gpt-5.6-terra rejected our credentials — tier t3 (openai/gpt-5.6-terra): opencode returned 500: " +
+      "UnknownError: Token refresh failed: 401";
+    const out = forClient(raw);
+    expect(out).toContain("credentials for this tier's provider were rejected");
+    expect(out).toContain("tier t3");
+    expect(out).not.toMatch(/opencode|UnknownError|gpt-5\.6/);
+  });
+
   it("turns the deadline overrun into a sentence about time, not about opencode", () => {
     const out = forClient("tier t3 (openai/gpt-5.6-terra) failed: opencode ran past 2700s without finishing");
     expect(out).toBe("tier t3 failed: the reviewing model did not finish within its 2700s limit");
@@ -32,6 +46,37 @@ describe("forClient", () => {
     expect(out).toContain("lore's model runtime was unreachable");
     expect(out).toContain("Nothing about the code was learned");
     expect(out).not.toMatch(/opencode|getaddrinfo|4096/);
+  });
+
+  // Found by lore's own review of the D-109 rung: this exact note is what a mixed rung
+  // produces (one member skipped, one still running) and it embedded the D-105
+  // route-by-route breakdown — including every vendor and route tried — as `e.message`,
+  // via a note that had also lost its own "tier " prefix so the paren-strip rule could
+  // not fire either.
+  it("strips both the missing tier prefix and the raw route breakdown from a SKIPPED note", () => {
+    const raw =
+      "tier t2 (kimi-for-coding/k3) could not answer on either attempt and was SKIPPED — its work passed to " +
+      "the next tier. Anything only t2 would have caught is unexamined, and this review is evidence from one " +
+      "fewer independent vendor. Last error: no route for tier t2 could run: kimi-for-coding/k3: Weekly/Monthly " +
+      "Limit Exhausted; openrouter/moonshotai/kimi-k3: Insufficient credits";
+    const out = forClient(raw);
+    expect(out).toContain("tier t2 could not answer");
+    expect(out).toContain("tier t2 had no working route");
+    expect(out).not.toMatch(/kimi-for-coding|openrouter|moonshotai/);
+  });
+
+  // The synthetic pre-call refusal, thrown when every route's own backoff has not yet
+  // passed — no call was even made. The comeback time is worth keeping; the route list
+  // it is choosing between is not.
+  it("keeps the comeback time and drops the route list from an all-parked refusal", () => {
+    const raw =
+      "tier t2 did not look at this code — no route for tier t2 has quota: kimi-for-coding/k3, " +
+      "openrouter/moonshotai/kimi-k3 — each refused recently and is not asked again until its backoff passes. " +
+      "The earliest comes back at 2026-08-14T18:00:00.000Z.";
+    const out = forClient(raw);
+    expect(out).toContain("tier t2 has no route with quota");
+    expect(out).toContain("2026-08-14T18:00:00.000Z");
+    expect(out).not.toMatch(/kimi-for-coding|openrouter|moonshotai/);
   });
 
   it("calls a stand-in a stand-in, not a procurement event", () => {

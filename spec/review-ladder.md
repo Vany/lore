@@ -8,7 +8,11 @@ How a single review escalates. Model choice rationale:
 ## 1. Tiers
 
 Cheapest → dearest. Each is a *gate*: dearer tiers only see code the cheaper ones
-already passed.
+already passed. Since D-109 the gate holds between **rungs** rather than between
+individual tiers — a rung is a set of tiers that run together (§5.0), and within one
+its members are peers reading the same tree, not gates for each other. Every ladder
+before D-109 is the degenerate case: one tier per rung, and it behaves exactly as it
+always did.
 
 | Tier | Purpose | Engine | Int. | $/M in | $/M out | vendor |
 |---|---|---|---|---|---|---|
@@ -23,9 +27,12 @@ what is deployed today is `deploy/tiers.zai-kimi-openai.json`:
 
 | Tier | Model | Effort | Vendor | Paid by |
 |---|---|---|---|---|
-| **T1** | `zai-coding-plan/glm-5-turbo` | medium | Z.ai | subscription |
+| **T1** | `GLM5.2` pool (two z.ai plans) | medium | Z.ai | subscription |
 | **T2** | `kimi-for-coding/k3` | high | Moonshot | subscription |
 | **T3** | `openai/gpt-5.6-terra` | high | OpenAI | subscription |
+
+T2 and T3 are ONE RUNG in the deployed file — a nested array — so the deep phase runs
+them together (§5.0, D-109).
 
 **Three vendors, one per tier**, which is what D-32 and D-49 have always asked for and
 the deployment did not have until 2026-08-06: T1 and T2 were both Z.ai, so two thirds of
@@ -499,6 +506,50 @@ provenance buries it.
 - Tier produced **new** findings → report; the next pass runs **the same tier**, so the
   author's answer is judged by whoever asked the question (D-10).
 - Tier produced **nothing new** → advance one tier. Top tier clean → **passed**.
+
+### 5.0 Rungs: tiers that run together (D-109)
+
+A ladder is a list of **rungs**; a bare tier in the config is a rung of one, and a
+nested array — `[ {t0}, {t1}, [ {t2}, {t3} ] ]` — is a rung whose members run
+**concurrently**, on the same pinned worktree, each in its own kept session. The
+deployed ladder runs its two deep tiers this way: the deep phase costs max(t2, t3)
+wall-clock instead of their sum, both subscriptions burning at once.
+
+Everything in this section then reads member-wise:
+
+- **"The same tier" means the same RUNG.** Fresh findings from any member hold the
+  rung; the next round re-runs every live member (a fix is delivered to all — that is
+  the point), and the rung is clean only when every member that could run is.
+- **Escalation steps past the whole rung**, and `fast_clean` fires on crossing from a
+  fast rung to a deep one. A rung's members must share one `stage`; the loader refuses
+  a rung that mixes them.
+- **Peer findings cross at the emission boundary** (D-107's insertion point): each
+  member's next boundary carries what its siblings raised since its last one, marked as
+  a co-reviewer's — *don't re-derive it; contradict or extend it with evidence, or keep
+  searching elsewhere*. A member re-raising a peer's finding confirms it; the recorded
+  origin rises to the stronger tier, exactly as re-raises always have.
+- **A fix applies once, and every member hears of it at its own boundary.** The held
+  diff lands on the shared worktree at the first boundary any member reaches; each
+  session then gets the author-answered message diffed against what IT last saw. One
+  tree with two readers has an honest window — a sibling can read post-fix bytes one
+  emission before being told — and that price was taken over a worktree per member,
+  which doubles the pin and lets the copies drift.
+- **Skips stay per member** (D-48, D-88 unchanged): an unpayable member goes to
+  `unavailable` alone and the rung continues with the survivors. A member that dies on
+  a requeueing fault requeues the whole round; finished siblings re-run "continue →
+  done" on kept sessions, chosen over cross-attempt bookkeeping of half-finished rungs.
+- **Silence settles at the strongest present member** (D-56's rank rule, with the rung
+  supplying the strongest member that ran); a justification is rejected if ANY member
+  re-raised the finding.
+- **What is traded away**: within a rung, the dearer member no longer reads only code
+  the cheaper one passed. The gate property (§1) holds between rungs. Members of a rung
+  are peers, and their independence buys breadth at the same tree rather than depth
+  behind a gate.
+
+The per-tier round cap (bound 2 below) is checked against the members that raised fresh
+findings; the global budget counts a rung's round as ONE round. Termination is
+unaffected: a round either raises something fresh (bounded per member and globally) or
+every member is clean, and clean is terminal for the rung exactly as it was for a tier.
 
 "New" means a fingerprint not already settled, not a raw count. A tier that
 re-raises three closed findings and nothing else is clean.

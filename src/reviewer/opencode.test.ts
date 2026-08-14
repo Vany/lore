@@ -12,7 +12,7 @@
 
 import { createServer, type Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { Exhausted, ServiceUnreachable, TooLargeForTier } from "../core/errors.ts";
+import { Exhausted, ProviderAuthFailed, ServiceUnreachable, TooLargeForTier } from "../core/errors.ts";
 import { CLAIM_MAX } from "../core/finding.ts";
 import type { Tier } from "../core/ladder.ts";
 import { Reviewer, countStepParts, emissionOf, extractFindings, quotaRefusal, splitModel, toolsUsed, isTooLong, usageFromMessages } from "./opencode.ts";
@@ -397,6 +397,17 @@ describe("Reviewer.review", () => {
       },
     ];
     await expect(reviewer().review(TIER, "review this", "/tmp/wt")).rejects.toThrow(Exhausted);
+  });
+
+  // The shape that killed rev_gOhsCu's t3 on 2026-08-14: an OAuth-backed subscription
+  // whose refresh token died answers through opencode as a 500 with the 401 INSIDE the
+  // message — "UnknownError: Token refresh failed: 401" — matching neither the status
+  // checks nor the old auth patterns. Unclassified, it was a plain failure: no page, no
+  // route mark for the status line, and the same-model fallback never walked.
+  it("classifies a failed token refresh as rejected credentials, not as a generic failure", async () => {
+    status = 500;
+    replies = [{ error: "UnknownError: Token refresh failed: 401" }];
+    await expect(reviewer().review(TIER, "review this", "/tmp/wt")).rejects.toThrow(ProviderAuthFailed);
   });
 
   it("does not retry a provider failure as though it were bad formatting", async () => {
@@ -1585,6 +1596,76 @@ describe("emissionOf", () => {
     if (r.ok) {
       expect(r.items, "the final findings survive the declaration").toHaveLength(1);
       expect(r.done).toBe(true);
+    }
+  });
+
+  /**
+   * TWO FINDINGS BLOCKS, ONE MESSAGE. "Report each finding the moment you are sure of
+   * it; a small batch is acceptable" reads naturally as one fence per finding when
+   * several are ready at once. The first version returned on the FIRST candidate that
+   * parsed with any valid item, so the second block's findings were never even looked
+   * at — not recorded, not in `discarded`, and the model, told "recorded and
+   * delivered", believed both had been filed.
+   */
+  it("keeps findings from every fenced block, not only the first", () => {
+    const second = {
+      findings: [
+        {
+          file: "src/other.ts",
+          line: 40,
+          severity: "medium",
+          claim: "a second defect entirely",
+          evidence: "elsewhere in the same message",
+          failureScenario: "a different input, a different wrong outcome",
+        },
+      ],
+    };
+    const r = emissionOf('```json\n' + FINDING_JSON + '\n```\n```json\n' + JSON.stringify(second) + '\n```');
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.items.map((f) => f.claim).sort()).toStrictEqual(
+        ["decline path leaves the hold active", "a second defect entirely"].sort(),
+      );
+    }
+  });
+
+  /**
+   * DONE MUST NOT LAUNDER THE LOSSES (raised by lore's own t2 against D-109). The
+   * batch path retries a reply whose every finding the schema refused; done forecloses
+   * the retry, so without carrying the rejections through, they vanished — no
+   * discarded note, no checks_skipped line, and the run ended looking complete over
+   * findings the model explicitly tried to report.
+   */
+  it("carries schema-rejected findings through a done declaration", () => {
+    const bad = { file: "a.ts", line: 1, severity: "catastrophic", claim: "c", evidence: "e", failureScenario: "f" };
+    const r = emissionOf(
+      '```json\n' + JSON.stringify({ findings: [bad] }) + '\n```\n```json\n{"done": true}\n```',
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.done).toBe(true);
+      expect(r.items).toHaveLength(0);
+      expect(r.rejected.length, "the refused finding is a recorded loss, not a silence").toBeGreaterThan(0);
+    }
+  });
+
+  it("says nothing about losses on a pure done declaration", () => {
+    const r = emissionOf('```json\n{"done": true, "examined": "everything"}\n```');
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.rejected).toHaveLength(0);
+  });
+
+  // The refutation of the first fix, from lore's own t2: the loss was inferred from
+  // `why`, and the ranking lawfully lets a healthy done block's "no findings array"
+  // overwrite the mangled block's parse error — so a truncated findings fence beside a
+  // valid done fence vanished without a note. The loss now rides the failure directly.
+  it("carries a garbled findings block through a done declaration as a loss", () => {
+    const r = emissionOf('```json\n{"findings": [{"file": "a.ts",\n```\n```json\n{"done": true}\n```');
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.done).toBe(true);
+      expect(r.rejected.length, "the mangled attempt is a recorded loss").toBeGreaterThan(0);
+      expect(r.rejected[0]).toMatch(/did not parse/);
     }
   });
 

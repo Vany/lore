@@ -22,8 +22,14 @@
 
 const RULES: readonly { readonly find: RegExp; readonly replace: string }[] = [
   // The runtime's name and its error framing. "opencode returned 403: APIError: ..."
-  // carries three layers of kitchen before the provider's sentence starts.
-  { find: /opencode returned \d+: APIError: /g, replace: "" },
+  // carries three layers of kitchen before the provider's sentence starts. Any error
+  // CLASS, not APIError alone: a dead OAuth token crossed the boundary as "opencode
+  // returned 500: UnknownError: Token refresh failed: 401", read by a client that can
+  // act on none of those five words before the colon.
+  { find: /opencode returned \d+: \w*Error: /g, replace: "" },
+  // A credential is procurement, and so is the route it belongs to. The client-side
+  // fact is only that the tier's usual door was shut and whether anything answered.
+  { find: /\S+\/\S+ rejected our credentials — /g, replace: "lore's credentials for this tier's provider were rejected — an operator must renew them. " },
   { find: /opencode returned (\d+)/g, replace: "lore's model runtime answered $1" },
   { find: /opencode ran past (\d+)s without finishing/g, replace: "the reviewing model did not finish within its $1s limit" },
   { find: /could not reach opencode at \S+/g, replace: "lore's model runtime was unreachable" },
@@ -36,6 +42,18 @@ const RULES: readonly { readonly find: RegExp; readonly replace: string }[] = [
   // Routes and subscriptions. The tier id is the unit of evidence a client knows from
   // the attestation contract; the model and plan behind it are procurement.
   { find: /tier (t\d+) \([^)]*\)/g, replace: "tier $1" },
+  // D-105's route-by-route breakdown ("no route for tier tN could run: route1: msg1;
+  // route2: msg2…") is deliberately full detail — but for the OPERATOR record, so a
+  // person reading a failure can see which of several configured fallbacks refused and
+  // why. It reached the client raw wherever it was embedded as an error's own `.message`
+  // (the SKIPPED note's "Last error: …", the unpayable note's trailing clause), naming
+  // every vendor and route it tried. Collapsed to what a client can act on: nothing —
+  // every route was tried and every one refused.
+  { find: /no route for tier (t\d+) could run: .+/g, replace: "tier $1 had no working route — everything configured for it refused or was unreachable" },
+  // The synthetic all-parked refusal, thrown before any call is made when every route's
+  // own backoff has not yet passed. The comeback time is genuinely useful to a client
+  // deciding whether to wait; the route list it is choosing between is not.
+  { find: /no route for tier (t\d+) has quota: [^—]*— /g, replace: "tier $1 has no route with quota — " },
   { find: /\bwas answered by \S+ rather than \S+/g, replace: "was answered by an equivalent stand-in for its usual model" },
   { find: /the subscription is out of quota, so the same model was asked through a metered provider/g, replace: "its usual capacity was exhausted, so an equivalent answered — its opinion counts in full" },
   { find: /refused on quota:/g, replace: "was out of capacity:" },

@@ -18,7 +18,7 @@
 
 
 import { LoreError, ProviderAuthFailed } from "../core/errors.ts";
-import { isTerminal } from "../core/review-state.ts";
+import { decidedByPersonOrClock, isTerminal } from "../core/review-state.ts";
 import { reviewType } from "../core/review-type.ts";
 import { removeWorktree, repoPaths, worktreeFor } from "../git/repo.ts";
 import { bootstrap } from "../knowledge/bootstrap.ts";
@@ -198,6 +198,31 @@ export class Worker {
       try {
         await this.runJob(job.reviewId);
         this.store.finishJob(job.id, "done");
+        // A SUBMIT CAN DECIDE TO HOLD AT ANY INSTANT UP TO THE LINE ABOVE — it sees
+        // this job still `running` right until finishJob commits — so a diff can land
+        // in the gap after runJob's own sweep and sit orphaned for ever behind a
+        // "held — you do not need to resubmit" promise. Checked after the row closes,
+        // because SQLite gives the ordering for free: a hold written before that
+        // commit is visible to this read; one written after takes the synchronous
+        // path and needs nothing from us. NOT CONSUMED HERE — the job row was the
+        // one-writer mutex over the worktree and it is gone, so a claimed next round
+        // or a sync-path submit may already be writing (raised by lore's own t2, with
+        // history: the second time this file has grown that exact race). A ROUND is
+        // the consumer: enqueue one and its first boundary applies the diff under its
+        // own job. Skipped when a job is already queued or running — that round will
+        // do the consuming itself.
+        {
+          const st = this.store.repoAndStateOf(job.reviewId);
+          if (
+            st !== undefined &&
+            !decidedByPersonOrClock(st.state) &&
+            this.store.heldDiffs(job.reviewId).length > 0 &&
+            !this.store.hasOpenJob(job.reviewId)
+          ) {
+            this.store.updateReview(job.reviewId, { state: "queued" });
+            this.store.enqueue(job.reviewId, "fast");
+          }
+        }
         await this.releaseIfFinished(job.reviewId);
         this.note(true);
       } catch (e) {
@@ -341,11 +366,14 @@ export class Worker {
 
     // A DIFF HELD DURING THE ROUND'S LAST TURN (D-107). The stream consumes holds at
     // every emission boundary, but one can land after the final boundary — the model
-    // declared done while the client was still typing. Left alone it would sit for ever
-    // behind a "held — you do not need to resubmit" promise. It becomes the next round.
+    // declared done while the client was still typing. Consumed HERE, while this job
+    // still holds the review: the `running` row is the one-writer mutex over the
+    // worktree, and consuming after finishJob raced the very round the decision
+    // switch below enqueues — claimable the instant the row closes, reading a tree
+    // mid-patch (raised by lore's own t2, twice, against two versions of this).
     {
       const st = this.store.repoAndStateOf(reviewId);
-      if (st !== undefined && !isTerminal(st.state) && this.store.heldDiffs(reviewId).length > 0) {
+      if (st !== undefined && !decidedByPersonOrClock(st.state) && this.store.heldDiffs(reviewId).length > 0) {
         const consumed = await consumeHeldDiffs(this.store, reviewId, worktree);
         if (consumed.mismatch !== undefined) {
           this.store.setFailureReason(reviewId, consumed.mismatch);
@@ -353,6 +381,14 @@ export class Worker {
         } else if (consumed.applied > 0) {
           this.store.updateReview(reviewId, { state: "queued" });
           this.store.enqueue(reviewId, "fast");
+          // AND NOTHING ELSE ENQUEUES THIS ROUND. The decision switch below would add a
+          // SECOND job for the same review — `fastClean` a deep one, `escalate` the next
+          // tier's — so a late-landing diff bought two queued rounds where the client
+          // asked for one: both claimable, both spending, and the ladder advanced by
+          // whichever finished last. The diff just applied is the newer truth and the
+          // round it enqueues reads it; the decision computed against the PRE-diff tree
+          // is stale by construction.
+          return;
         }
       }
     }
@@ -417,6 +453,13 @@ export class Worker {
     for (const reviewId of this.reviewer.keptReviews?.() ?? []) {
       const at = this.store.repoAndStateOf(reviewId);
       if (at !== undefined && !isTerminal(at.state)) continue;
+      // lore-ok[63846152]: right that this was the ONLY caller, and fixed at the two
+      // endings it could never see rather than here. `releaseIfFinished` now clears
+      // before it releases, and `review_cancel` clears after it aborts — so the common
+      // paths sweep themselves. This call stays as the backstop it was always meant to
+      // be: the ending with no job and no cancel, which is the retention sweep marking a
+      // findings_ready review `expired` in SQL, and which neither of those two reaches.
+      // lore-ok[7b5a314a]: the same finding at a lower severity. Same answer.
       this.store.clearSessionTrees(reviewId);
     await this.reviewer.release?.(reviewId).catch((e: unknown) => {
         void this.alerter.send({
@@ -459,6 +502,17 @@ export class Worker {
   private async releaseIfFinished(reviewId: string): Promise<void> {
     const at = this.store.repoAndStateOf(reviewId);
     if (at === undefined || !isTerminal(at.state)) return;
+
+    // THE SESSION-TREE RECORDS GO WITH THE SESSIONS THEY DESCRIBE (D-108). They were
+    // cleared only by `reconcileSessions`, which iterates the sessions opencode still
+    // holds — but `release` below empties that map, and `Reviewer.cancel` empties it
+    // too, so the reconcile 60s later sees nothing and the meta rows are never swept
+    // for the two endings that account for almost every review. One row-set per
+    // (review, tier) left behind for the life of the database, by the function whose
+    // whole job is housekeeping for a review that ended. Cleared HERE, where the
+    // review's ending is already known, and left in the reconcile as the backstop for
+    // endings that never reach a job at all.
+    this.store.clearSessionTrees(reviewId);
 
     // THE MODEL SESSIONS TOO, and they are new (D-80). A tier with `conversation` on keeps
     // one session for the whole review and nothing clears it per round — that is the

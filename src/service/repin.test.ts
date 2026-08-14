@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { initialState } from "../core/ladder.ts";
-import { worktreeFor, repoPaths } from "../git/repo.ts";
+import { worktreeFor, repoPaths, treeHash } from "../git/repo.ts";
 import { Store } from "../store/store.ts";
 import { repinReview } from "./repin.ts";
 
@@ -66,7 +66,13 @@ describe("repinReview", () => {
     writeFileSync(join(src, "a.txt"), "two\n");
     g(src, "add", "-A");
     g(src, "commit", "-qm", "two");
-    g(paths.bare, "fetch", "-q", "origin", "+refs/heads/*:refs/heads/*");
+    // THE PRODUCTION REFSPEC, and the difference is the point: `mirror-refresh.sh`
+    // configures `+refs/heads/*:refs/remotes/origin/*`, so a real mirror advances only
+    // `refs/remotes/origin/*` and its local `refs/heads/*` stay frozen at clone time.
+    // This fixture used to fetch into `refs/heads/*`, keeping local heads current in a
+    // way no deployed mirror ever is — which is exactly why it could not see a guard
+    // reading the wrong namespace.
+    g(paths.bare, "fetch", "-q", "origin", "+refs/heads/*:refs/remotes/origin/*");
     writeFileSync(join(paths.bare, "FETCH_HEAD"), "");
 
     const out = await repinReview(store, reposRoot, reposRoot, "rev1");
@@ -84,5 +90,47 @@ describe("repinReview", () => {
     await expect(repinReview(store, join(root, "repos"), join(root, "repos"), "rev_ghost")).rejects.toThrow(
       /no repository on record/,
     );
+  });
+
+  // ORIGIN HAS NOTHING NEWER — so nothing may be destroyed. The recut used to run
+  // unconditionally and the caller compared afterwards, which meant the ordinary answer
+  // to a mistaken pull_fresh ("push your commits, then call again") was handed back over
+  // a worktree that had just been thrown away and cut fresh from origin — taking every
+  // fix the client had submitted, since a submit is applied there and never committed.
+  it("leaves the worktree — and the fixes in it — untouched when origin has not moved", async () => {
+    const reposRoot = join(root, "repos");
+    const paths = repoPaths(reposRoot, repoId);
+    const cut = await worktreeFor(paths, "rev1", "main", join(root, "src"));
+    const atOrigin = await treeHash(cut);
+    // What review_submit leaves behind: applied to the worktree, committed nowhere.
+    writeFileSync(join(cut, "a.txt"), "the client's fix\n");
+
+    const out = await repinReview(store, reposRoot, reposRoot, "rev1", atOrigin);
+
+    expect(out.treeHash, "reports origin's tree, so the caller answers 'unchanged'").toBe(atOrigin);
+    expect(readFileSync(join(cut, "a.txt"), "utf8"), "the fix survives").toBe("the client's fix\n");
+  });
+
+  // The caller's upfront `hasPendingRound` check and the sync it then awaits are two
+  // different moments, and a submit landing in between used to sail through unchecked —
+  // repin went on to destroy the worktree that submit had just applied its diff to.
+  // This pins the re-check INSIDE repinReview, right before the destructive step,
+  // rather than relying on timing a real race.
+  it("refuses to destroy the worktree if a round became pending during the sync", async () => {
+    const reposRoot = join(root, "repos");
+    const paths = repoPaths(reposRoot, repoId);
+    const cut = await worktreeFor(paths, "rev1", "main", join(root, "src"));
+    // The diff a `review_submit` landing mid-sync would have applied — stands in for
+    // the write repin must not clobber.
+    writeFileSync(join(cut, "a.txt"), "submitted mid-sync\n");
+    // Simulates exactly what that submit leaves behind: a job the caller's own upfront
+    // `hasPendingRound` check could not have seen yet, since it ran BEFORE the sync.
+    store.enqueue("rev1", "fast");
+
+    await expect(repinReview(store, reposRoot, reposRoot, "rev1")).rejects.toThrow(/a round started for rev1/);
+    // The worktree from before the refused repin is untouched — this is the whole point
+    // of catching it before `removeWorktree`, not after.
+    expect(existsSync(cut)).toBe(true);
+    expect(readFileSync(join(cut, "a.txt"), "utf8")).toBe("submitted mid-sync\n");
   });
 });

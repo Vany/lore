@@ -60,6 +60,27 @@ FETCH_TIMEOUT=${LORE_MIRROR_TIMEOUT:-240}
 
 log() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"; }
 
+# GNU FORM FIRST, and the order is the whole point — it is NOT interchangeable.
+#
+# `stat -f %m` is BSD for "modification time". On GNU coreutils `-f` means
+# `--file-system` and `%m` there is the MOUNT POINT — so the BSD spelling does not fail
+# on Linux, it SUCCEEDS and returns something like `/`. Both calls below then return the
+# same string on every pass, the equality test always passes, and a request renewed
+# mid-fetch is deleted anyway: silently the exact race the renewal protocol exists to
+# close, on every non-macOS host. (An earlier version of this fix put BSD first on the
+# theory that the GNU call would fail; it does not, which is worse than the bug it was
+# fixing — a wrong answer instead of a missing one.)
+#
+# `stat -c %Y` is GNU for mtime and is not accepted by BSD stat at all, so it fails
+# cleanly on macOS and falls through. One order works on both; the other is wrong on one.
+#
+# THE FALLBACK IS A PARAMETER, kept asymmetric between the two call sites below exactly
+# as it was: if stat itself is unavailable in BOTH forms — genuinely pathological, and
+# worse than anything this fix is for — req_mtime and now_mtime must still come out
+# UNEQUAL, so the safe branch (leave the request for the next pass) fires rather than
+# the delete. Losing that would trade one silent-wrong-default failure for another.
+mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || echo "$2"; }
+
 # `timeout` is GNU coreutils and is NOT on macOS, where this first ran and reported
 # every repository as failing with "timeout: command not found" — a wrapper turning a
 # working fetch into a fake failure. Homebrew's coreutils installs it as `gtimeout`.
@@ -222,10 +243,10 @@ serve_requests() {
       # the request or its .serving twin sees completion, never pickup. Compatible with
       # both sides deployed today and both sides after D-107's fix.
       cp -f "$REQUEST" "$REQUEST.serving" 2>/dev/null || true
-      req_mtime="$(stat -f %m "$REQUEST" 2>/dev/null || echo 0)"
+      req_mtime="$(mtime "$REQUEST" 0)"
       log "refresh requested by lore"
       one_pass
-      now_mtime="$(stat -f %m "$REQUEST" 2>/dev/null || echo -1)"
+      now_mtime="$(mtime "$REQUEST" -1)"
       if [ "$req_mtime" = "$now_mtime" ]; then
         rm -f "$REQUEST"
       else

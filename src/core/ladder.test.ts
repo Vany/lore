@@ -1,7 +1,7 @@
 import { readdirSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
-  ladderChanged, DEFAULT_TIERS, anyTierRan, initialState, loadTiers, loadPools, markAnsweredBy, markUnavailable, concreteRoute, fallbackRoutes, poolOrder, routesFor, settle, withQuota, soleVendorOf, step, vendorOf, type Decision, type LadderState, type Tier, ladderFingerprint } from "./ladder.ts";
+  ladderChanged, DEFAULT_TIERS, anyTierRan, initialState, loadTiers, loadPools, markAnsweredBy, markUnavailable, concreteRoute, fallbackRoutes, poolOrder, routesFor, rungKey, rungMembers, settle, withQuota, soleVendorOf, step, vendorOf, type Decision, type LadderState, type Tier, ladderFingerprint } from "./ladder.ts";
 
 const clean = (state: LadderState) => step({ state, raised: [] });
 
@@ -899,5 +899,133 @@ describe("a pool may not mix models", () => {
 
   it("accepts the same model reached through a gateway path", () => {
     expect(() => loadTiers(file(`{"GLM5.2": ["zai-coding-plan/glm-5.2", "openrouter/z-ai/glm-5.2"]}`))).not.toThrow();
+  });
+});
+
+/**
+ * RUNGS (D-109): tiers that run together, written as a nested array in the file.
+ *
+ * The syntax is the nesting alone — `rung` is loader-stamped, never hand-written —
+ * because a hand-assigned number could collide with a flat index and silently group
+ * tiers nobody grouped.
+ */
+describe("a rung in the ladder file", () => {
+  const RUNG_FILE = `[
+    {"id":"t0","kind":"deterministic","stage":"fast"},
+    {"id":"t1","kind":"model","model":"zai/glm-5.2","stage":"fast"},
+    [{"id":"t2","kind":"model","model":"kimi/k3","stage":"deep","conversation":true},
+     {"id":"t3","kind":"model","model":"openai/terra","stage":"deep","conversation":true}]
+  ]`;
+
+  it("flattens the nesting and stamps each member with the rung's first flat index", () => {
+    const tiers = loadTiers(RUNG_FILE);
+    expect(tiers.map((t) => t.id)).toStrictEqual(["t0", "t1", "t2", "t3"]);
+    expect(tiers[2]?.rung, "the deep rung starts at flat index 2").toBe(2);
+    expect(tiers[3]?.rung).toBe(2);
+    expect(tiers[1]?.rung, "a tier that runs alone is not stamped").toBeUndefined();
+  });
+
+  it("treats a one-member array as a tier that runs alone", () => {
+    const tiers = loadTiers(`[
+      {"id":"t0","kind":"deterministic","stage":"fast"},
+      [{"id":"t1","kind":"model","model":"zai/glm-5.2","stage":"fast"}]
+    ]`);
+    expect(tiers[1]?.rung).toBeUndefined();
+  });
+
+  it("refuses a rung that mixes fast and deep members", () => {
+    expect(() =>
+      loadTiers(`[
+        {"id":"t0","kind":"deterministic","stage":"fast"},
+        [{"id":"t1","kind":"model","model":"a/m","stage":"fast","conversation":true},
+         {"id":"t2","kind":"model","model":"b/m","stage":"deep","conversation":true}]
+      ]`),
+    ).toThrow(/mixes fast and deep/);
+  });
+
+  it("refuses a deterministic member — t0 already runs at the head of every round", () => {
+    expect(() =>
+      loadTiers(`[
+        [{"id":"t0","kind":"deterministic","stage":"deep"},
+         {"id":"t2","kind":"model","model":"b/m","stage":"deep","conversation":true}]
+      ]`),
+    ).toThrow(/deterministic and cannot share a rung/);
+  });
+
+  it("refuses a member without conversation — no boundary, nowhere safe to deliver", () => {
+    expect(() =>
+      loadTiers(`[
+        [{"id":"t2","kind":"model","model":"a/m","stage":"deep","conversation":true},
+         {"id":"t3","kind":"model","model":"b/m","stage":"deep"}]
+      ]`),
+    ).toThrow(/not `conversation: true`/);
+  });
+
+  it("refuses two tiers wearing one id, grouped or not", () => {
+    expect(() =>
+      loadTiers(`[
+        {"id":"t1","kind":"model","model":"a/m","stage":"fast"},
+        {"id":"t1","kind":"model","model":"b/m","stage":"fast"}
+      ]`),
+    ).toThrow(/both called 't1'/);
+  });
+
+  it("pins the grouping, spelled so a solo tier fingerprints as it always did", () => {
+    const grouped = ladderFingerprint([...loadTiers(RUNG_FILE)]);
+    expect(grouped).toContain("t2:kimi/k3:-:deep:r2");
+    expect(grouped).toContain("t3:openai/terra:-:deep:r2");
+    expect(grouped).toContain("t1:zai/glm-5.2:-:fast:r-");
+    // A regroup IS a ladder change once both pins record grouping; an old four-field
+    // pin has no opinion, exactly like every other field the pin has ever gained.
+    const solo = ladderFingerprint([...loadTiers(RUNG_FILE)].map(({ rung: _r, ...t }) => t as Tier));
+    expect(ladderChanged(grouped, solo)).toBe(true);
+    expect(ladderChanged("t0:deterministic:-:fast,t1:zai/glm-5.2:-:fast,t2:kimi/k3:-:deep,t3:openai/terra:-:deep", grouped)).toBe(false);
+  });
+});
+
+describe("the ladder walks rungs (D-109)", () => {
+  const T: readonly Tier[] = [
+    { id: "t0", kind: "deterministic", stage: "fast" },
+    { id: "t1", kind: "model", model: "a/m", stage: "fast" },
+    { id: "t2", kind: "model", model: "b/m", stage: "deep", conversation: true, rung: 2 },
+    { id: "t3", kind: "model", model: "c/m", stage: "deep", conversation: true, rung: 2 },
+  ];
+
+  it("bills every member that ran, and only them", () => {
+    const r = step({ state: initialState(T), raised: ["f1"], tiers: T, ran: ["t2", "t3"] });
+    expect(r.state.tierRounds).toStrictEqual({ t2: 1, t3: 1 });
+    expect(r.decision.kind).toBe("findings");
+  });
+
+  it("escalates past the WHOLE rung when it is clean, and passes at the top", () => {
+    // t1 clean → the next stop is the rung; the rung clean → nothing above → passed.
+    const atRung = step({ state: initialState(T), raised: [], tiers: T });
+    expect(atRung.decision.kind).toBe("fastClean");
+    expect(atRung.state.cursor, "the cursor lands on the rung's first member").toBe(2);
+
+    const done = step({ state: atRung.state, raised: [], tiers: T, ran: ["t2", "t3"] });
+    expect(done.decision.kind).toBe("passed");
+  });
+
+  it("keeps the per-tier cap as the rung's iteration bound", () => {
+    let state = step({ state: initialState(T), raised: [], tiers: T }).state; // to the rung
+    let last: Decision | undefined;
+    for (let i = 0; i < 5; i++) {
+      const r = step({ state, raised: [`fresh-${String(i)}`], tiers: T, ran: ["t2", "t3"] });
+      state = r.state;
+      last = r.decision;
+      if (last.kind === "stopped") break;
+    }
+    expect(last).toStrictEqual({ kind: "stopped", bound: "perTier" });
+  });
+
+  it("answers rung membership from the stamp, and from the index for everyone else", () => {
+    expect(rungKey(T, 2)).toBe(2);
+    expect(rungKey(T, 3)).toBe(2);
+    expect(rungKey(T, 1)).toBe(1);
+    expect(rungMembers(T, 2).map((t) => t.id)).toStrictEqual(["t2", "t3"]);
+    expect(rungMembers(T, 3).map((t) => t.id), "from either member's seat").toStrictEqual(["t2", "t3"]);
+    expect(rungMembers(T, 2, ["t2"]).map((t) => t.id), "an unpayable member is not a runner").toStrictEqual(["t3"]);
+    expect(rungMembers(T, 1).map((t) => t.id)).toStrictEqual(["t1"]);
   });
 });

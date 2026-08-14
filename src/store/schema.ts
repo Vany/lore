@@ -21,7 +21,7 @@ import { SEVERITIES } from "../core/finding.ts";
 // adds the columns, because this number is what `assertNotDowngrade` compares — left
 // behind, it says a database written by this build is identical to one written before
 // the columns existed.
-export const SCHEMA_VERSION = 17;
+export const SCHEMA_VERSION = 18;
 
 /**
  * How findings are ordered wherever the service hands them out: worst first.
@@ -329,9 +329,15 @@ CREATE INDEX IF NOT EXISTS usage_by_day ON usage(at);
 -- (D-107). The tree_hash is the CLIENT'S claim, verified at APPLY time — a mismatch then
 -- must surface on poll, never drop the diff silently. Rows apply in id order: each held
 -- diff was built by the client on top of the one before it.
+-- ON DELETE CASCADE like every other review-child table. Without it the retention
+-- sweep's DELETE FROM review hits a foreign-key error on the first terminal review
+-- still holding an unconsumed diff (submit-then-cancel leaves exactly that) and aborts
+-- the whole sweep, hourly, for ever. CREATE TABLE IF NOT EXISTS cannot retrofit this
+-- onto a database that already has the table, so deleteReviewsBefore clears the rows
+-- explicitly as well — this line is what makes a FRESH database right.
 CREATE TABLE IF NOT EXISTS held_diff (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
-  review_id  TEXT NOT NULL REFERENCES review(id),
+  review_id  TEXT NOT NULL REFERENCES review(id) ON DELETE CASCADE,
   diff       TEXT NOT NULL,
   tree_hash  TEXT NOT NULL,
   created_at TEXT NOT NULL
@@ -424,6 +430,15 @@ export const MIGRATIONS: readonly { readonly table: string; readonly column: str
   // with no way to learn that a human already decided or what they decided. NULL is every
   // review that was never blocked, which is almost all of them.
   { table: "review", column: "human_decision", sql: "ALTER TABLE review ADD COLUMN human_decision TEXT" },
+  // THE TREE ORIGIN WAS LAST PINNED AT — never moved by a submit, a held diff, or a
+  // round's fixes, which is what `tree_hash` tracks and why `pull_fresh`'s "origin has
+  // nothing newer" check could never fire once any fix had landed (it compared against
+  // the fixes-applied tree, not the last origin pin, so a no-op pull_fresh silently
+  // rewound the review to the pre-fix tip). Set once at `review_start` and again on
+  // every successful `pull_fresh`; NULL predates the column, and a NULL is read as "no
+  // opinion" — the unchanged check simply cannot fire for a review that old, same as
+  // before this existed.
+  { table: "review", column: "origin_tree_hash", sql: "ALTER TABLE review ADD COLUMN origin_tree_hash TEXT" },
 ];
 
 /**

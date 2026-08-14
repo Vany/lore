@@ -167,7 +167,7 @@ export const BOARD_PAGE = `<!doctype html>
 <div id="told"></div>
 <main>
   <div class="grid head" id="head" hidden>
-    <span></span><span>state</span><span>branch</span>
+    <span></span><span>state</span><span>PR</span><span>branch</span>
     <span class="r">step</span><span class="r">used</span><span class="r">stalled</span>
   </div>
   <div id="board"><div class="empty">loading…</div></div>

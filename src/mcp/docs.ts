@@ -170,7 +170,9 @@ ONLY \`passed\` means the branch is clean.
   Diagnosing lore is not your job and you do not have the information to do it — say
   what happened, not why you think it happened.
 - \`fast_clean\` means only the cheap tiers have finished; the deep tiers are still
-  running. It is NOT a pass.
+  running. It is NOT a pass. The deep reviewers read the same tree TOGETHER, so
+  successive polls may bring findings from more than one of them, interleaved — answer
+  them as they arrive, exactly as you would one reviewer's.
 - \`needs_human\` means a question was found that you must not answer yourself.
   **\`open_questions\` is the question** — both statements, in full, and where each
   came from; \`needs_human_because\` says why a review cannot settle it. Take them to
@@ -325,13 +327,14 @@ history stays yours. The tree_hash is verified after applying; a mismatch fails
 loudly rather than reviewing code that exists nowhere.
 
 SUBMIT WHENEVER YOU ARE READY, including while a reviewer is still reading. A submit
-that lands mid-round is HELD — accepted, kept, and handed to the same reviewer at its
-next emission, with its ruling arriving as ordinary findings on your next polls. You
-never wait for an idle moment and never resubmit the same diff. Two consequences to
-expect: findings the reviewer reports before seeing your fix may already be answered by
-it (do not double-fix — the next emission settles them), and if the held diff cannot be
-verified when it is applied, the review lands in awaiting_diff with the reason, which
-means: diff against the tree as it stands and send again.
+that lands mid-round is HELD — accepted, kept, and handed to EVERY reviewer that is
+reading (the deep phase runs two together), each at its own next emission, with rulings
+arriving as ordinary findings on your next polls. You never wait for an idle moment and
+never resubmit the same diff. Two consequences to expect: findings a reviewer reports
+before seeing your fix may already be answered by it (do not double-fix — the next
+emission settles them), and if the held diff cannot be verified when it is applied, the
+review lands in awaiting_diff with the reason, which means: diff against the tree as it
+stands and send again.
 
 SEND THE DIFF EXACTLY AS \`git diff\` PRODUCED IT. Do not trim trailing whitespace,
 drop blank lines, or reformat it — a unified diff is whitespace-significant, and a
@@ -491,11 +494,14 @@ READ \`waiting_on\` FIRST. It is "you" or "lore", and it is the whole triage:
     justification the open one has already ratified and re-runs the cheap tiers from
     scratch.
 
-\`expires_at\` is when the sweep will take it — an unanswered review is called
-\`expired\` 48h after it last moved, and \`expired\` never means "found nothing". It is
-absent on a review that has already ended. If a deadline is close and you cannot answer
-the findings now, review_cancel says "somebody decided" instead, which is the honest
-ending and the one that frees everything the review was holding.
+\`expires_at\` is when the sweep will take it, and \`expired\` never means "found
+nothing". An unanswered review does not die at 48h — it DIMS: \`findings_ready\` becomes
+\`findings_stale\` after 48h, still fully answerable, and only about a week after that is
+it swept as \`expired\`. Read the field rather than counting from when you last touched
+it. It is absent on a review that has already ended. If a deadline is close and you
+cannot answer the findings now, review_cancel says "somebody decided" instead, which is
+the honest ending and the one that frees everything the review was holding — including
+its slot, immediately, which waiting out the sweep would not do for another nine days.
 
 Surface \`needs_human\` and high-severity findings to your user through whatever
 alerting you have. Do not merely log them. lore cannot notify anyone — it returns
@@ -640,8 +646,9 @@ export const RESOURCE_DOCS: Readonly<Record<string, { title: string; priority: n
    you can do here: every attempt is a turn that learns nothing.
 4. For each finding: fix it, or justify it with // lore-ok[fp]: <reason>
 5. review_submit(review_id, diff, tree_hash) — any time once findings exist, in ANY
-   state including fast_clean. If a reviewer is mid-read your diff is HELD and handed
-   to it at its next emission; you never wait for a state and never resubmit.
+   state including fast_clean. If reviewers are mid-read your diff is HELD and handed
+   to each of them at its own next emission; you never wait for a state and never
+   resubmit.
 6. Return to 2. Repeat until the state is TERMINAL — \`passed\`, \`passed_partial\`,
    \`needs_human\`, \`failed\`, \`expired\` or \`cancelled\`.
 
@@ -750,9 +757,11 @@ T1  a cheap, fast model — the gate.
 T2  a stronger model, different vendor.
 T3  the strongest, different vendor again. The last line.
 
-Each tier only sees code the previous one passed, so the expensive ones are never
-spent on defects a typechecker would have caught. Three vendors, because two tiers
-from one model family are not two independent opinions.
+Each stage only sees code the previous one passed, so the expensive models are never
+spent on defects a typechecker would have caught. The two deep reviewers read the SAME
+tree together, as peers — each hears what the other found and hunts elsewhere, your
+fixes reach both, and their findings interleave on your polls. Three vendors, because
+two tiers from one model family are not two independent opinions.
 
 Every reviewer is a model that did NOT write the code. That is a hard constraint: a
 model reviewing its own output confirms the design it already had in mind.
@@ -781,8 +790,9 @@ The loop:
    you can do here: every attempt is a turn that learns nothing.
 4. For each finding: fix it, or justify it with // lore-ok[fp]: <reason>
 5. review_submit(review_id, diff, tree_hash) — any time once findings exist, in ANY
-   state including fast_clean. If a reviewer is mid-read your diff is HELD and handed
-   to it at its next emission; you never wait for a state and never resubmit.
+   state including fast_clean. If reviewers are mid-read your diff is HELD and handed
+   to each of them at its own next emission; you never wait for a state and never
+   resubmit.
 6. Return to 2. Repeat until the state is TERMINAL — \`passed\`, \`passed_partial\`,
    \`needs_human\`, \`failed\`, \`expired\` or \`cancelled\`.
    Only \`passed\` and \`passed_partial\` are worth attesting, and only \`passed\` is clean.

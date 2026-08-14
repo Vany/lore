@@ -58,6 +58,16 @@ export interface ReviewRow {
   readonly type: string;
   readonly state: ReviewState;
   readonly treeHash: string | undefined;
+  /**
+   * The tree ORIGIN was last pinned at — set once at `review_start` and again on every
+   * successful `pull_fresh`, and never moved by a submit, a held diff, or a round's own
+   * fixes (`treeHash` is that one). `pull_fresh`'s "origin has nothing newer" check reads
+   * this, not `treeHash`, because comparing against the fixes-applied tree meant the
+   * check could never fire again once any fix had landed — a no-op pull_fresh silently
+   * rewound the review to the pre-fix tip. `undefined` on a row written before
+   * the column existed, which the check reads as "no opinion" rather than a guess.
+   */
+  readonly originTreeHash?: string | undefined;
   readonly ladder: LadderState;
   /**
    * When this review last moved — and therefore when the stale sweep will take it.
@@ -134,7 +144,14 @@ export function isSettled(v: VerdictKind): boolean {
  * answering which question it was for; `one-definition.test.ts` bans review states spelled
  * out in SQL partly because of that collision.
  */
-export const TIER_OUTCOMES = ["clean", "findings", "failed", "unpayable", "reused"] as const;
+// `stopped` is a lore-caused end — a cancel, a superseding restart, a shutdown — and it
+// is its own outcome precisely so it stays OUT of `DID_NOT_LOOK_SQL` below. The tier did
+// not look, which is why it is not `clean`; but it is not EVIDENCE ABOUT THE TIER, which
+// is why it must not feed `tierFailureCount` and from there the skip that costs a review
+// an independent vendor. `CancelledByLore` exists for the same distinction one layer up,
+// and the rethrow that carries it was landing after this row had already been written
+// `failed`.
+export const TIER_OUTCOMES = ["clean", "findings", "failed", "unpayable", "reused", "stopped"] as const;
 export type TierOutcome = (typeof TIER_OUTCOMES)[number];
 
 /**
@@ -319,8 +336,8 @@ export class Store {
     const t = now();
     this.db
       .prepare(
-        `INSERT INTO review(id, repo_id, principal, token_hash, tiers, branch, pull_request, into_ref, ticket, type, state, tree_hash, ladder, created_at, updated_at)
-         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO review(id, repo_id, principal, token_hash, tiers, branch, pull_request, into_ref, ticket, type, state, tree_hash, origin_tree_hash, ladder, created_at, updated_at)
+         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         r.id,
@@ -334,6 +351,11 @@ export class Store {
         r.ticket,
         r.type,
         r.state,
+        n(r.treeHash),
+        // THE INITIAL PIN, recorded as origin's tree from the moment the review begins —
+        // `review_start` cuts the worktree from origin before this is called, so
+        // `r.treeHash` at creation time already IS the origin pin; pull_fresh is what
+        // later needs a value that ordinary fixes do not move.
         n(r.treeHash),
         JSON.stringify(r.ladder),
         t,
@@ -407,6 +429,7 @@ export class Store {
       type: row["type"] ?? "",
       state: (row["state"] ?? "failed") as ReviewState,
       treeHash: un(row["tree_hash"] ?? null),
+      originTreeHash: un(row["origin_tree_hash"] ?? null),
       tokenHash: un(row["token_hash"] ?? null),
       tiers: un(row["tiers"] ?? null),
       pullRequest: un(row["pull_request"] ?? null),
@@ -431,7 +454,10 @@ export class Store {
     return row?.["state"] as ReviewState | undefined;
   }
 
-  updateReview(id: string, patch: { state?: ReviewState; ladder?: LadderState; treeHash?: string }): void {
+  updateReview(
+    id: string,
+    patch: { state?: ReviewState; ladder?: LadderState; treeHash?: string; originTreeHash?: string },
+  ): void {
     // Read first, so the wake below can be about a CHANGE rather than about a write.
     const before = this.db.prepare("SELECT state FROM review WHERE id = ?").get(id) as
       | Record<string, string>
@@ -449,6 +475,13 @@ export class Store {
     if (patch.treeHash !== undefined) {
       sets.push("tree_hash = ?");
       args.push(patch.treeHash);
+    }
+    // WRITTEN ONLY WHEN A CALLER MEANS IT — `pull_fresh` is currently the only one that
+    // ever passes this. Every ordinary round writes `treeHash` alone, which is exactly
+    // right: applying a fix must not move the reader's idea of "what origin last had".
+    if (patch.originTreeHash !== undefined) {
+      sets.push("origin_tree_hash = ?");
+      args.push(patch.originTreeHash);
     }
     args.push(id);
     this.db.prepare(`UPDATE review SET ${sets.join(", ")} WHERE id = ?`).run(...args);
@@ -1388,12 +1421,35 @@ export class Store {
       .all(iso) as Record<string, string>[];
   }
 
-  /** Delete finished reviews older than a cutoff. Returns how many rows went. */
+  /**
+   * Delete finished reviews older than a cutoff. Returns how many rows went.
+   *
+   * HELD DIFFS GO FIRST, EXPLICITLY, and this is not belt-and-braces. Every other
+   * review-child table cascades; `held_diff` was created without `ON DELETE CASCADE`,
+   * and `PRAGMA foreign_keys` is ON — so with `CREATE TABLE IF NOT EXISTS` unable to
+   * retrofit the constraint, an existing database still has the un-cascading version
+   * however the DDL now reads. A hold outliving its review is ordinary rather than
+   * exotic: a client submits mid-round (told "held — you do not need to resubmit"),
+   * then cancels, and nothing on any terminal path clears it. The first such review to
+   * age past retention would fail this DELETE, abort the whole hourly sweep before it
+   * closed jobs or collected sandboxes, ticket, and then do it again every hour for
+   * ever — while no old review was deleted at all, since the statement rolls back whole.
+   *
+   * In one transaction, so the two deletes cannot half-happen.
+   */
   deleteReviewsBefore(iso: string): number {
-    const res = this.db
-      .prepare(`DELETE FROM review WHERE state IN (${TERMINAL_SQL}) AND updated_at < ?`)
-      .run(iso);
-    return Number(res.changes);
+    return this.tx(() => {
+      this.db
+        .prepare(
+          `DELETE FROM held_diff WHERE review_id IN
+             (SELECT id FROM review WHERE state IN (${TERMINAL_SQL}) AND updated_at < ?)`,
+        )
+        .run(iso);
+      const res = this.db
+        .prepare(`DELETE FROM review WHERE state IN (${TERMINAL_SQL}) AND updated_at < ?`)
+        .run(iso);
+      return Number(res.changes);
+    });
   }
 
   /** A review's repository and state, for deciding whether its worktree may be released. */
@@ -2401,26 +2457,39 @@ export class Store {
    * message opens with it, so to the model every advance looks the same: the author
    * answered. Absent means no streamed run has finished, and the session (if any)
    * is told nothing extra.
+   *
+   * KEYED BY ROUTE AS WELL AS TIER, because that is how the sessions themselves are
+   * keyed. A tier's kept session lives per (review, tier, MODEL) — `sessionKey` in
+   * opencode.ts — so with a pool or a fallback, one tier can hold several sessions,
+   * each having seen a different tree. Keyed per tier alone, a route flip handed the
+   * primary's kept session a delta computed from the TWIN's tree: everything between
+   * the primary's last look and the twin's was never delivered, breaking D-108's
+   * "exactly the unseen delta" precisely during quota flapping. Raised by lore's own
+   * t2 against the D-109 change. A record written under the old tier-only key is
+   * simply never read again: the session opens with the full orientation once, exactly
+   * the documented lore-restart behaviour, and the stale row dies with the review in
+   * `clearSessionTrees`.
    */
-  sessionTreeOf(reviewId: string, tierId: string): string | undefined {
-    const row = this.db.prepare("SELECT value FROM meta WHERE key = ?").get(`session-tree:${reviewId}:${tierId}`) as
+  sessionTreeOf(reviewId: string, tierId: string, route: string): string | undefined {
+    const row = this.db.prepare("SELECT value FROM meta WHERE key = ?").get(`session-tree:${reviewId}:${tierId}:${route}`) as
       | { value?: string }
       | undefined;
     return row?.value;
   }
 
-  setSessionTree(reviewId: string, tierId: string, tree: string): void {
+  setSessionTree(reviewId: string, tierId: string, route: string, tree: string): void {
     this.db
       .prepare("INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
-      .run(`session-tree:${reviewId}:${tierId}`, tree);
+      .run(`session-tree:${reviewId}:${tierId}:${route}`, tree);
   }
 
   /**
    * What a tier's kept session was last SHOWN of t0 (D-108), so a fix message can carry
-   * the delta instead of the repeat. Same lifecycle as the session-tree record.
+   * the delta instead of the repeat. Same lifecycle — and same per-route key — as the
+   * session-tree record.
    */
-  sessionT0Of(reviewId: string, tierId: string): readonly { fingerprint: string; file: string; line?: number; severity: string; claim: string }[] | undefined {
-    const row = this.db.prepare("SELECT value FROM meta WHERE key = ?").get(`session-t0:${reviewId}:${tierId}`) as
+  sessionT0Of(reviewId: string, tierId: string, route: string): readonly { fingerprint: string; file: string; line?: number; severity: string; claim: string }[] | undefined {
+    const row = this.db.prepare("SELECT value FROM meta WHERE key = ?").get(`session-t0:${reviewId}:${tierId}:${route}`) as
       | { value?: string }
       | undefined;
     if (row?.value === undefined) return undefined;
@@ -2431,10 +2500,10 @@ export class Store {
     }
   }
 
-  setSessionT0(reviewId: string, tierId: string, seen: readonly { fingerprint: string; file: string; line?: number | undefined; severity: string; claim: string }[]): void {
+  setSessionT0(reviewId: string, tierId: string, route: string, seen: readonly { fingerprint: string; file: string; line?: number | undefined; severity: string; claim: string }[]): void {
     this.db
       .prepare("INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
-      .run(`session-t0:${reviewId}:${tierId}`, JSON.stringify(seen));
+      .run(`session-t0:${reviewId}:${tierId}:${route}`, JSON.stringify(seen));
   }
 
   /** Housekeeping for a review that ended — the records are meaningless without it. */
@@ -2875,6 +2944,20 @@ export class Store {
     this.db
       .prepare("UPDATE job SET state = ?, last_error = ?, updated_at = ? WHERE id = ?")
       .run(state, n(error), now(), id);
+  }
+
+  /**
+   * Is any job for this review queued or running right now?
+   *
+   * For the worker's post-close look at late-held diffs: an open job means a round
+   * exists that will consume them itself, and enqueueing another would only make the
+   * ladder walk an empty extra round.
+   */
+  hasOpenJob(reviewId: string): boolean {
+    const row = this.db
+      .prepare("SELECT 1 AS one FROM job WHERE review_id = ? AND state IN ('queued', 'running') LIMIT 1")
+      .get(reviewId) as { one?: number } | undefined;
+    return row !== undefined;
   }
 
   /**

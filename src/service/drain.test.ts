@@ -75,6 +75,21 @@ const until = async (what: string, ok: () => boolean, timeoutMs = 10_000): Promi
   }
 };
 
+/**
+ * Stop claiming AND wait out the round in flight, before `afterEach` closes the store.
+ *
+ * `stop()` alone only stops the dispatcher; a round already claimed keeps running, and
+ * closing the store under it turns the round's own bookkeeping into an unhandled
+ * "database is not open" rejection. That window was theoretical for months and became a
+ * every-run failure the day the round gained awaits (D-109's allSettled merge) — the
+ * signature of a test waiting for the FIRST observable effect of a round rather than
+ * for the round.
+ */
+const stopAndDrain = async (w: Worker, stop: () => void): Promise<void> => {
+  stop();
+  await until("in-flight rounds to finish", () => w.inFlight() === 0);
+};
+
 describe("a draining worker takes nothing new", () => {
   // The behaviour, not the flag. Set AFTER start, because start clears it.
   it("leaves queued work alone for the next process", async () => {
@@ -108,7 +123,7 @@ describe("a draining worker takes nothing new", () => {
         (store.db.prepare("SELECT state FROM job WHERE review_id = 'rev2'").get() as { state: string }).state !== "queued";
       await until("the job to be claimed once draining stops", claimed);
     } finally {
-      stop();
+      await stopAndDrain(worker, stop);
     }
   }, WAITING);
 
@@ -229,7 +244,7 @@ describe("a worker does not overwrite an ending somebody chose", () => {
       // reviewer is reached. That is fast alone and not fast under a loaded suite.
       await until("the round to reach the reviewer and be cancelled", () => store.stateOf("rev1") === "cancelled");
     } finally {
-      stop();
+      await stopAndDrain(worker, stop);
     }
 
     expect(store.stateOf("rev1")).toBe("cancelled");
@@ -243,7 +258,7 @@ describe("a worker does not overwrite an ending somebody chose", () => {
     try {
       await until("the round to run and fail", () => store.stateOf("rev2") === "failed");
     } finally {
-      stop();
+      await stopAndDrain(worker, stop);
     }
     expect(store.stateOf("rev2")).toBe("failed");
   }, WAITING);
@@ -367,14 +382,15 @@ describe("a round interrupted by lore itself is requeued, not failed", () => {
     // the next one. A reviewer that ALWAYS throws would requeue and re-claim within
     // milliseconds until the bound, which observes nothing about the property.
     let calls = 0;
-    const stop = worker({
+    const w = worker({
       review: () => {
         calls += 1;
         return calls === 1
           ? Promise.reject(new ServiceUnreachable("tier t1 could not reach opencode (getaddrinfo ENOTFOUND)"))
           : ok();
       },
-    }).start();
+    });
+    const stop = w.start();
     try {
       // A LONGER WAIT THAN THE OTHERS, because this one waits for TWO full rounds: the
       // interrupted one and the retry, each a `git worktree add` off a bare clone plus an
@@ -384,7 +400,7 @@ describe("a round interrupted by lore itself is requeued, not failed", () => {
       // names what it was waiting for instead of vitest reporting a bare timeout.
       await until("the round to be retried after the interruption", () => calls >= 2, 15_000);
     } finally {
-      stop();
+      await stopAndDrain(w, stop);
     }
 
     // Nothing was learned about the code when lore went away, so nothing is concluded.
@@ -409,13 +425,14 @@ describe("a round interrupted by lore itself is requeued, not failed", () => {
   // somebody else's outage for ever would spend our quota proving it.
   it("does not requeue an ordinary tier failure", async () => {
     mirrored("rev3");
-    const stop = worker({
+    const w = worker({
       review: () => Promise.reject(new DidNotRun("tier t1 (glm-5) failed: the provider returned 500")),
-    }).start();
+    });
+    const stop = w.start();
     try {
       await until("the review to fail", () => store.stateOf("rev3") === "failed");
     } finally {
-      stop();
+      await stopAndDrain(w, stop);
     }
     expect(store.stateOf("rev3")).toBe("failed");
   }, WAITING);

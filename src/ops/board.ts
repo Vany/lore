@@ -329,7 +329,9 @@ export function board(store: Store, now = Date.now(), modelGate?: () => GateStat
       const ladder = parseLadder(r["ladder"]);
       const f = counts.get(id) ?? { high: 0, medium: 0, low: 0 };
       const { tiers: mine, orphans, notShown } = withFindings(store, id, runs.get(id) ?? []);
-      const working = mine.find((t) => t.finishedAt === undefined);
+      // ALL open rows, not the first: a rung runs two tiers at once (D-109), and a chip
+      // naming one of them would show half of what the review is spending.
+      const working = mine.filter((t) => t.finishedAt === undefined);
       return {
         id,
         branch: String(r["branch"] ?? ""),
@@ -343,7 +345,7 @@ export function board(store: Store, now = Date.now(), modelGate?: () => GateStat
         createdAt: String(r["created_at"] ?? ""),
         endedAt: isTerminal(state) ? String(r["updated_at"] ?? "") : undefined,
         movedAt: movedAt(String(r["updated_at"] ?? ""), mine, store, id),
-        step: working === undefined ? undefined : working.tier,
+        step: working.length === 0 ? undefined : working.map((t) => t.tier).join("+"),
         stepNote: stepNote(state, mine, draining),
         tiers: mine,
         findings: { ...f, open: open.get(id) ?? 0 },

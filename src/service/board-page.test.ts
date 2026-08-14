@@ -342,3 +342,27 @@ describe("the PR column on a review row", () => {
     expect(html).not.toContain("#");
   });
 });
+
+/**
+ * THE HEADER ROW MUST NAME AS MANY COLUMNS AS THE GRID HAS.
+ *
+ * The PR column was added to `.grid`'s CSS template and to every data row in `row()`,
+ * but not to the static header markup — six labels over a seven-track grid, so every
+ * label after `state` sat one column left of the data it actually named. Both counts
+ * live in the STATIC template string, so a string-level check is enough to pin them
+ * without executing the page's own JS — and catches the next column added to one but
+ * not the other.
+ */
+describe("the board header matches the grid it labels", () => {
+  it("names one <span> per grid-template-columns track", () => {
+    const cols = /grid-template-columns:\s*([^;]+);/.exec(BOARD_PAGE);
+    expect(cols, "the grid's own column list must be findable").not.toBeNull();
+    const trackCount = (cols?.[1] ?? "").trim().split(/\s+/).length;
+
+    const head = /<div class="grid head" id="head" hidden>([\s\S]*?)<\/div>/.exec(BOARD_PAGE);
+    expect(head, "the header row must be findable").not.toBeNull();
+    const headerCells = (head?.[1] ?? "").match(/<span/g)?.length ?? 0;
+
+    expect(headerCells).toBe(trackCount);
+  });
+});
