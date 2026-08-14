@@ -57,6 +57,17 @@ const RULES: readonly { readonly find: RegExp; readonly replace: string }[] = [
   { find: /\bwas answered by \S+ rather than \S+/g, replace: "was answered by an equivalent stand-in for its usual model" },
   { find: /the subscription is out of quota, so the same model was asked through a metered provider/g, replace: "its usual capacity was exhausted, so an equivalent answered — its opinion counts in full" },
   { find: /refused on quota:/g, replace: "was out of capacity:" },
+  // lore's OWN DISK. A crashed round's reason is raw operator text, and git puts the
+  // failing directory in it — `… failed in /var/lib/lore/repos/<uuid>/wt/rev_…: fatal:`
+  // — so an absolute path to a machine the client has never seen crossed the boundary
+  // the moment crashes started being reported at all. The path is the one part of that
+  // sentence a client can do nothing with, and it names lore's layout to anyone holding
+  // a token. Collapsed to the only thing true and useful: it happened in this review's
+  // own copy of the branch.
+  { find: /(?: in| at)? \/(?:[\w.@-]+\/)*[\w.@-]*(?:wt|worktrees|repos)\/[\w./@-]*/g, replace: " in the review's copy of your branch" },
+  // Raw git plumbing, which reads as a command the client could run and cannot.
+  { find: /git diff [^:]*: fatal: /g, replace: "" },
+  { find: /\bfatal: /g, replace: "" },
 ];
 
 /** One reason, rendered for the client. See the module doc for what may survive. */

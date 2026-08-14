@@ -102,6 +102,35 @@ export async function computeDiff(worktree: string, base: string): Promise<Revie
   const resolved = (await gitMaybe(worktree, ["rev-parse", "--verify", "--quiet", `origin/${base}^{commit}`]))
     ?? base;
 
+  // THE BASE MUST EXIST, and saying so here is the difference between an answer and a
+  // riddle. `resolved` falls back to the raw name above, and `mergeBase` falls back to
+  // `resolved` — so an `into` naming a branch this repository does not have travelled
+  // all the way to `git diff <name>`, which failed with `fatal: ambiguous argument
+  // 'main': unknown revision or path not in the working tree` and a host filesystem
+  // path. That reached a client as a `failed` review with no reason at all, and reached
+  // the operator log as raw git vocabulary about a directory nobody can see.
+  //
+  // Measured: a review of `teammater` (whose only branch is `master`) started with
+  // `into: main` died in 1.4 seconds, before any tier was asked anything, and the one
+  // fact needed to fix it — this repo has `master`, not `main` — was nowhere in the
+  // output. The branch list is included because "does not exist" invites a second
+  // guess, and the right one is usually visible from here.
+  if ((await gitMaybe(worktree, ["rev-parse", "--verify", "--quiet", `${resolved}^{commit}`])) === undefined) {
+    const branches = await gitLines(worktree, [
+      "for-each-ref",
+      "--format=%(refname:strip=3)",
+      "refs/remotes/origin/",
+    ]);
+    const known = branches.filter((b) => b !== "" && b !== "HEAD");
+    throw new Error(
+      `the base branch '${base}' does not exist in this repository, so there is nothing to diff against — ` +
+        `nothing was reviewed. ` +
+        (known.length === 0
+          ? "lore's copy has no branches yet, which usually means its sync has never populated one."
+          : `Branches lore can see: ${known.slice(0, 20).join(", ")}. Start the review again with the right one.`),
+    );
+  }
+
   const mergeBase =
     (await gitMaybe(worktree, ["merge-base", resolved, "HEAD"])) ??
     (await gitMaybe(worktree, ["rev-parse", resolved])) ??

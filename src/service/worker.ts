@@ -284,6 +284,20 @@ export class Worker {
         // ended. `failed` is for a review that was still wanted.
         const current = this.store.stateOf(job.reviewId);
         if (current === undefined || !isTerminal(current)) {
+          // AND WHY, on the channel the client actually reads.
+          //
+          // This wrote `failed` and nothing else: the reason went to `job.last_error`,
+          // a column no client can reach, so `failed_because` stayed NULL and a poll
+          // returned a dead review with no account of itself. Every LADDER stop is
+          // explained (`stoppedBecause` writes one) while every CRASH — the case a
+          // client can least guess at — was silent, which is backwards. Found when a
+          // review died on a base branch that did not exist and the only way to learn
+          // that was a SQL query against the job table.
+          //
+          // Written BEFORE the state, so a subscriber woken by the change can already
+          // read it; translated at the MCP boundary by `forClient`, which is where the
+          // raw operator text is turned into something a client can act on.
+          this.store.setFailureReason(job.reviewId, message);
           this.store.updateReview(job.reviewId, { state: "failed" });
         }
         await this.releaseIfFinished(job.reviewId);

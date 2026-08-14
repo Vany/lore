@@ -416,3 +416,36 @@ describe("the base's own work on the files that overlap", () => {
     expect(renderDiff(d)).toContain("NO test file changed");
   });
 });
+
+/**
+ * A BASE THAT DOES NOT EXIST IS A REFUSAL, NOT A RIDDLE.
+ *
+ * `resolved` falls back to the raw name and `mergeBase` falls back to `resolved`, so an
+ * `into` naming a branch the repository lacks travelled all the way to `git diff <name>`
+ * and died there — leaking git plumbing and a host path, and reaching the client as a
+ * `failed` review with no reason at all. Measured on `teammater`, whose only branch is
+ * `master`: a review started with `into: main` died in 1.4s before any tier ran, and the
+ * one fact needed to fix it was in no output anywhere.
+ */
+describe("an into-ref this repository does not have", () => {
+  it("names the branches that do exist instead of failing as raw git", async () => {
+    const src = join(root, "src-nobase");
+    const g = makeRepo(src);
+    const paths = { bare: join(root, "repos/rH/bare.git"), worktrees: join(root, "repos/rH/wt") };
+    mirror(src, paths.bare);
+    execFileSync("git", ["-C", paths.bare, "config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"]);
+    execFileSync("git", ["-C", paths.bare, "fetch", "-q", "origin"]);
+
+    g("checkout", "-qb", "feat/work");
+    writeFileSync(join(src, "a.ts"), "export const a = 1\n");
+    g("add", "-A");
+    g("commit", "-qm", "work");
+    execFileSync("git", ["-C", paths.bare, "fetch", "-q", "origin"]);
+
+    const wt = await worktreeFor(paths, "rev_nobase", "feat/work", src);
+    // `master` is the name this fixture does NOT have — the teammater shape, inverted.
+    await expect(computeDiff(wt, "master")).rejects.toThrow(/base branch 'master' does not exist/);
+    // And it points at the way out rather than stopping at the complaint.
+    await expect(computeDiff(wt, "master")).rejects.toThrow(/main/);
+  });
+});

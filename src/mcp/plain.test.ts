@@ -89,6 +89,22 @@ describe("forClient", () => {
     expect(out).not.toMatch(/zai-coding-plan|kimi-for-coding|metered/);
   });
 
+  // THE VERBATIM STRING that crashed rev_WNGAGhU5 — a review started against a base
+  // branch the repository does not have. Before crashes were reported at all this went
+  // only to a job column; the moment it reached the client it brought lore's own disk
+  // layout and git plumbing with it.
+  it("keeps the fact and drops lore's disk and git's plumbing from a crashed round", () => {
+    const raw =
+      "git diff --submodule=diff --no-color main failed in " +
+      "/Users/vany/l/rev/lore/data/repos/b0411f5a-7481-44d0-9efd-3d1e8d2c6ae1/wt/rev_WNGAGhU5YO49xGVutoz7c1wz: " +
+      "fatal: ambiguous argument 'main': unknown revision or path not in the working tree.";
+    const out = forClient(raw);
+    expect(out, "the actionable fact survives").toContain("unknown revision");
+    expect(out, "and which ref it was about").toContain("main");
+    expect(out, "the host's filesystem does not").not.toMatch(/\/Users|\/var\/lib|repos\/|wt\//);
+    expect(out).not.toContain("fatal:");
+  });
+
   // A reason no rule matches passes through untouched: hiding an unknown reason would
   // be worse than leaking its vocabulary (INV-1 prefers ugly truth to tidy silence).
   it("leaves an unrecognised reason exactly as it was", () => {

@@ -255,7 +255,14 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       description: TOOL_DOCS.start,
       inputSchema: z.object({
         branch: z.string().min(1).describe("branch under review"),
-        into: z.string().min(1).describe("branch it will merge into"),
+        into: z
+          .string()
+          .min(1)
+          .describe(
+            "branch it will merge into — it must EXIST in this repository, and it is not " +
+              "assumed to be `main`: a repository whose trunk is `master` needs `master` here. " +
+              "A name lore cannot find fails the review naming the branches it can see.",
+          ),
         ticket: z
           .string()
           .min(1)
