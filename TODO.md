@@ -39,6 +39,32 @@ that part is pulled out into its own open item rather than hidden inside a tick.
 
 ## Now — nothing here is about writing more features
 
+### 2026-08-14 — the blocker, and it is not code
+
+- [ ] **The OpenAI plan's OAuth is dead, and it stops every review at t3.** opencode's
+      `auth.json` holds `openai` as an oauth grant whose refresh is rejected:
+      `Token refresh failed: 401`, surfaced as a 500 `UnknownError`. Two reviews died on
+      it within one window (`rev_n8sYlOP…` at round 8, after clearing t1 and t2; also
+      `rev_whTzvU…`), and every review will keep dying there.
+
+      **Only a person can fix it:** `opencode auth login` on the master machine, pick
+      OpenAI, then copy `auth.json` into the container as we did for the second z.ai
+      plan. lore holds no credentials for a remote by design (D-63), so there is no
+      version of this it can do for itself.
+
+      **The repair is already written and cannot deploy itself.** D-109 makes an auth
+      failure a ROUTE fault — it walks the same-model fallback to
+      `openrouter/openai/gpt-5.6-terra`, parks the dead route on the status line, and
+      pages — but the deployed build predates that commit, so the branch that fixes the
+      fallback is the branch the broken fallback refuses to certify. Re-auth first;
+      then the review can reach a real verdict and the deploy is an ordinary one.
+
+- [ ] **D-109 is committed, reviewed to t2-clean, and NOT pushed** (`e2e0e81`). t1 and
+      t2 both came back clean over six submit rounds and 34 answered findings; t3 never
+      read it. Per D-77 that is `failed`, not `passed`, so it waits — a tier that could
+      not run is not a tier that found nothing. Once t3 is alive: fresh review of the
+      same tree, then amend, push, deploy on Vany's word.
+
 ### Measured 2026-08-05: the first day a client drove it
 
 Until today every review was driven by me, by hand, with shell scripts. Today a

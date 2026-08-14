@@ -35,6 +35,40 @@ closed the store under in-flight rounds, theoretical for months, every-run once 
 round gained awaits. And the position narration no longer counts a rung-mate mid-read
 as a reviewer who "found nothing left".
 
+**Then the gate read it, six submit rounds, and this is the part worth keeping.** 34
+findings, answered to zero: t1 clean, t2 clean, five findings argued rather than changed
+and accepted as `justified-accepted`. Twice it caught a defect *in the fix for the
+previous defect*, which is the loop doing the one thing no amount of care replaces:
+
+- `pull_fresh` compared against the fixes-applied tree, so a no-op re-pin rewound a
+  review past every submitted fix. Fixed with an `origin_tree_hash` column — and the
+  reviewer found the fix was DEAD CODE, because `review_start` writes the row before any
+  worktree exists, so the column was NULL exactly when the guard needed it. Fixed again
+  at round 0. Then it found the guard still DESTROYED the worktree before deciding
+  nothing had moved. Fixed again. Then it found the destroy-first fix read
+  `refs/heads/<branch>` while a production mirror only advances
+  `refs/remotes/origin/*` — local heads frozen at clone time — so the guard was wrong in
+  both directions, *and* that the test fixture was hiding it by fetching with the
+  non-production refspec. Four rounds on one seam, each one a real defect.
+- Streamed usage summed per-emission figures that are each the session's CUMULATIVE
+  total: ~n²/2 inflation on the exact number the daily spend ceiling reads.
+- `held_diff` had no `ON DELETE CASCADE`; one submit-then-cancel review aging past
+  retention would have wedged the hourly sweep for ever, hourly, silently.
+
+**What that says about writing fixes.** Every one of those was a fix that looked right,
+tested green, and was wrong about something one layer out — the writer that never ran,
+the namespace the mirror actually uses, the arithmetic of a cumulative counter. The
+common shape is a correct local edit resting on an assumption about a DIFFERENT file,
+never checked. That is precisely what an independent reader is for, and precisely what
+"I verified it" cannot cover.
+
+**And it ended `failed`, not `passed`.** t3 threw `Token refresh failed: 401` on round 8
+— the OpenAI plan's refresh token is rejected — so the third vendor never read this code
+and the verdict says so. The fix for that failure is IN this commit and cannot help,
+because the deployed build predates it: the branch that repairs the fallback cannot be
+validated by the ladder it repairs. Nothing pushed, nothing deployed; it waits on a
+person re-authenticating that plan.
+
 ---
 
 ## 2026-08-14 — session 56: the review becomes the conversation it was specified to be
