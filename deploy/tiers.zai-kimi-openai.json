@@ -1,10 +1,5 @@
 {
-  "models": {
-    "GLM5.2": [
-      "zai-coding-plan/glm-5.2",
-      "zai-coding-plan2/glm-5.2"
-    ]
-  },
+  "helper": "zai-coding-plan2/glm-5.2",
   "tiers": [
     {
       "id": "t0",
@@ -14,11 +9,12 @@
     {
       "id": "t1",
       "kind": "model",
-      "model": "GLM5.2",
+      "model": "zai-coding-plan/glm-5.3",
       "effort": "medium",
       "stage": "fast",
       "skip_if_quota": true,
       "fallback": [
+        "zai-coding-plan2/glm-5.2",
         "openrouter/z-ai/glm-5.2"
       ],
       "conversation": true
@@ -32,7 +28,7 @@
         "stage": "deep",
         "fallback": [
           "openrouter/moonshotai/kimi-k3",
-          "GLM5.2"
+          "zai-coding-plan2/glm-5.2"
         ],
         "conversation": true
       },
@@ -44,7 +40,7 @@
         "stage": "deep",
         "fallback": [
           "openrouter/openai/gpt-5.6-terra",
-          "GLM5.2"
+          "zai-coding-plan2/glm-5.2"
         ],
         "conversation": true
       }

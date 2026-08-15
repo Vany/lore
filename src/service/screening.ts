@@ -14,7 +14,7 @@
  */
 
 import { retryAt } from "../core/cooloff.ts";
-import { concreteRoute, loadPools } from "../core/ladder.ts";
+import { concreteRoute, loadHelper, loadPools } from "../core/ladder.ts";
 import { dataDir } from "../core/paths.ts";
 import { rescreen } from "../knowledge/rescreen.ts";
 import { screenFor, screenUsage, type ScreenUsage } from "../knowledge/screen.ts";
@@ -49,7 +49,16 @@ export async function screeningPass(
   // The CHEAPEST model tier, exactly as the inline screen used: this is a classification
   // with its evidence already in the prompt, and spending a deep tier on it would take
   // quota from the thing that reads branches.
-  const named = tiers.find((t) => t.kind === "model" && t.model !== undefined);
+  // THE HELPER MODEL WHERE ONE IS NAMED. Judging whether an extracted candidate is a
+  // rule is not reviewing anything, and this ran HOURLY against whatever the first model
+  // tier was — so every screening pass competed for the gate tier's subscription, the
+  // one seat every review's first round needs. Vany: *"if we need just GLM, to
+  // understand something, not for review, use 5.2 from the small subscription."*
+  // Absent, it borrows the first model tier exactly as before.
+  const helperModel = loadHelper();
+  const named = helperModel !== undefined
+    ? { id: "helper", kind: "model" as const, model: helperModel, stage: "fast" as const }
+    : tiers.find((t) => t.kind === "model" && t.model !== undefined);
   const ask = reviewer.askFor?.bind(reviewer);
   if (named === undefined || ask === undefined) return;
 

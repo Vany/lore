@@ -13,7 +13,7 @@
  */
 
 import { CLAIM_MAX } from "../core/finding.ts";
-import { concreteRoute, loadPools } from "../core/ladder.ts";
+import { concreteRoute, loadHelper, loadPools } from "../core/ladder.ts";
 import { DEFAULT_TIERS, type Tier } from "../core/ladder.ts";
 import type { ReviewerLike } from "../reviewer/opencode.ts";
 import type { Store } from "../store/store.ts";
@@ -69,7 +69,14 @@ export async function bootstrap(opts: {
   // The cheap tier. This is a survey, not a judgement — paying the top tier to
   // describe a directory structure would be the same mistake as paying a model
   // to run a typechecker. Resolved before the ingest because the screen wants it too.
-  const named = opts.tier ?? DEFAULT_TIERS.find((t) => t.kind === "model") ?? DEFAULT_TIERS[1];
+  // THE HELPER MODEL, when the deployment names one. Surveying a repository is not
+  // reviewing it, and borrowing the first model TIER put this work in front of the gate
+  // tier's own subscription — the seat every review's first round runs on. Absent, this
+  // borrows t1 exactly as it always did.
+  const helper = loadHelper();
+  const named = opts.tier
+    ?? (helper === undefined ? undefined : { id: "helper", kind: "model" as const, model: helper, stage: "fast" as const })
+    ?? DEFAULT_TIERS.find((t) => t.kind === "model") ?? DEFAULT_TIERS[1];
   // A nickname resolved to a route that can pay, for the same reason the screen does it:
   // `tier.model` may name a pool, and opencode refuses a pool name as a model id. An
   // unresolvable tier bootstraps without a model — survey skipped, ingest still runs —

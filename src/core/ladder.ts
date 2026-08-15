@@ -196,10 +196,33 @@ const EntrySchema = z.union([TierSchema, z.array(TierSchema).min(1)]);
  */
 const LadderFileSchema = z.union([
   z.array(EntrySchema).min(1),
-  z.object({ models: absent(PoolsSchema), tiers: z.array(EntrySchema).min(1) }).strict(),
+  z
+    .object({
+      models: absent(PoolsSchema),
+      /**
+       * THE MODEL FOR WORK THAT IS NOT A REVIEW.
+       *
+       * Vany: *"if we need just GLM, to understand something, not for review, use 5.2
+       * from the small subscription for this."* The background screen, the bootstrap
+       * survey and the proposer all need a model, and none of them is reviewing
+       * anything — but each of them BORROWED the first model tier, so every document
+       * screened competed for the quota the gate tier runs on. With the big plan now
+       * carrying t1 and the small one carrying the fallback, that borrowing would put
+       * housekeeping directly in front of reviews on the seat that matters most.
+       *
+       * A concrete `provider/model` or a pool nickname, exactly like a tier's `model`.
+       * ABSENT means the old behaviour — borrow the first model tier — so every config
+       * written before this key keeps working unchanged.
+       */
+      helper: absent(z.string().min(1)),
+      tiers: z.array(EntrySchema).min(1),
+    })
+    .strict(),
 ]);
 
-let cached: { source: string; tiers: readonly Tier[]; pools: ModelPools } | undefined;
+let cached:
+  | { source: string; tiers: readonly Tier[]; pools: ModelPools; helper: string | undefined }
+  | undefined;
 
 /**
  * Which concrete routes serve a tier's model.
@@ -487,7 +510,7 @@ export function loadTiers(source = process.env["LORE_TIERS"]): readonly Tier[] {
     }
   }
 
-  cached = { source, tiers, pools };
+  cached = { source, tiers, pools, helper: file.helper };
   return tiers;
 }
 
@@ -501,6 +524,17 @@ export function loadPools(source = process.env["LORE_TIERS"]): ModelPools {
   loadTiers(source);
   const c = cached;
   return c !== undefined && c.source === source ? c.pools : {};
+}
+
+/**
+ * The model for work that is not a review, or `undefined` to borrow the first model tier.
+ *
+ * Read from the same cache as `loadTiers`, so the two can never describe different files.
+ */
+export function loadHelper(source = process.env["LORE_TIERS"]): string | undefined {
+  loadTiers(source);
+  const c = cached;
+  return c !== undefined && c.source === source ? c.helper : undefined;
 }
 
 /**

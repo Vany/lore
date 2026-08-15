@@ -1,7 +1,7 @@
 import { readdirSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
-  ladderChanged, DEFAULT_TIERS, anyTierRan, initialState, loadTiers, loadPools, markAnsweredBy, markUnavailable, concreteRoute, fallbackRoutes, poolOrder, routesFor, rungKey, rungMembers, settle, withQuota, soleVendorOf, step, vendorOf, type Decision, type LadderState, type Tier, ladderFingerprint } from "./ladder.ts";
+  ladderChanged, DEFAULT_TIERS, anyTierRan, initialState, loadTiers, loadPools, loadHelper, markAnsweredBy, markUnavailable, concreteRoute, fallbackRoutes, poolOrder, routesFor, rungKey, rungMembers, settle, withQuota, soleVendorOf, step, vendorOf, type Decision, type LadderState, type Tier, ladderFingerprint } from "./ladder.ts";
 
 const clean = (state: LadderState) => step({ state, raised: [] });
 
@@ -1027,5 +1027,40 @@ describe("the ladder walks rungs (D-109)", () => {
     expect(rungMembers(T, 3).map((t) => t.id), "from either member's seat").toStrictEqual(["t2", "t3"]);
     expect(rungMembers(T, 2, ["t2"]).map((t) => t.id), "an unpayable member is not a runner").toStrictEqual(["t3"]);
     expect(rungMembers(T, 1).map((t) => t.id)).toStrictEqual(["t1"]);
+  });
+});
+
+/**
+ * THE HELPER MODEL: work that needs a GLM but is not a review.
+ *
+ * Vany: *"if we need just GLM, to understand something, not for review, use 5.2 from the
+ * small subscription for this."* The screen, the bootstrap survey and the proposer all
+ * borrowed the first model TIER, so housekeeping competed for the gate tier's seat — the
+ * one every review's first round runs on.
+ */
+describe("the helper model", () => {
+  const file = (extra: string) => `{
+    ${extra}
+    "tiers": [{"id":"t0","kind":"deterministic","stage":"fast"},
+              {"id":"t1","kind":"model","model":"zai-coding-plan/glm-5.3","stage":"fast"}]
+  }`;
+
+  it("is read from the ladder file when named", () => {
+    expect(loadHelper(file(`"helper": "zai-coding-plan2/glm-5.2",`))).toBe("zai-coding-plan2/glm-5.2");
+  });
+
+  // Absent means the old behaviour — borrow the first model tier — so every config
+  // written before this key keeps working unchanged.
+  it("is undefined when the file does not name one", () => {
+    expect(loadHelper(file(""))).toBeUndefined();
+  });
+
+  // It is NOT a tier: naming it must not add a reviewer, move a cursor, or change what
+  // the pin covers, or a config gains an opinion nobody asked it for.
+  it("does not become a tier or change the ladder's pin", () => {
+    const withHelper = loadTiers(file(`"helper": "zai-coding-plan2/glm-5.2",`));
+    const without = loadTiers(file(""));
+    expect(withHelper.map((t) => t.id)).toStrictEqual(["t0", "t1"]);
+    expect(ladderFingerprint([...withHelper])).toBe(ladderFingerprint([...without]));
   });
 });
