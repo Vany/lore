@@ -2188,7 +2188,29 @@ That is not a fallback in the apologetic sense: it is the only surface that cann
 taken away by a harness limitation, and INV-1's reasoning applies — a delivery mechanism
 that silently does not work is indistinguishable from a review that found nothing.
 
-**Two things to settle before building the Tasks half**, both of which decide whether it
+**BOTH GATING QUESTIONS ARE NOW ANSWERED, by reading the installed SDK rather than the
+announcement — and the answer narrows what this is worth.**
+
+`@modelcontextprotocol/server@2.0.0`, which lore already depends on, defines the surface
+as `tasks/get`, `tasks/result`, `tasks/list`, `tasks/cancel`. Note what is NOT there:
+there is no `tasks/update`. So Tasks is **poll-shaped, not push-shaped** — create, ask
+for status, fetch the result when it is ready. It is not a third way to be TOLD
+something; it is a standard spelling of the thing `review_poll` already does.
+
+That kills the framing this started from ("use it instead of subscriptions") and leaves a
+narrower, real benefit: **a generic harness could drive a review without knowing lore's
+bespoke tools at all.** `tasks/get` for state, `tasks/result` for findings, `tasks/cancel`
+for `review_cancel`. Worth having for reach; worth nothing for latency, which is what
+`subscriptions/listen` already gives clients that can hold a stream.
+
+So the value is INTEROP, not delivery, and it should be judged that way: build it when a
+client we actually have cannot use `review_poll`, not before. Adding a second spelling of
+a surface that works, for no client that exists, buys a second thing to keep correct —
+and `review_poll` carries semantics (deltas, `check_back_after_ms` measured from this
+repository's own rounds, the settle/justify vocabulary) that a generic `tasks/result`
+would have to either duplicate or discard.
+
+**One thing to settle before building the Tasks half**, both of which decide whether it
 is worth anything: whether the deployed clients' harnesses actually implement the
 extension (an unimplemented surface is worse than none, because it looks supported), and
 whether `tasks/update` can carry a FINDING rather than only progress — if it cannot, it

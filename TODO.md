@@ -52,11 +52,24 @@ that part is pulled out into its own open item rather than hidden inside a tick.
       first standard shape that fits the problem rather than one we bent `review_poll`
       into.
 
-      **Settle these two BEFORE building, because they decide whether it is worth
-      anything:** (a) do the deployed clients' harnesses actually implement it — an
-      unimplemented surface is worse than none, since it looks supported; (b) can
-      `tasks/update` carry a FINDING rather than only progress — if not, it duplicates the
-      state channel we already have.
+      **ANSWERED 2026-08-15 by reading the installed SDK, and the answer narrows it.**
+      `@modelcontextprotocol/server@2.0.0` — which lore already depends on — defines
+      `tasks/get`, `tasks/result`, `tasks/list`, `tasks/cancel`. There is NO
+      `tasks/update`. So Tasks is POLL-shaped, not push-shaped: it is a standard spelling
+      of what `review_poll` already does, not a third way to be told something.
+
+      That kills "use it instead of subscriptions" and leaves a narrower real benefit:
+      **interop** — a generic harness could drive a review knowing no lore-specific tools
+      (`tasks/get` for state, `tasks/result` for findings, `tasks/cancel` for cancel).
+      Worth having for reach, worth nothing for latency, which `subscriptions/listen`
+      already provides.
+
+      **So: build it when a client we actually have cannot use `review_poll`, and not
+      before.** A second spelling of a working surface, for no client that exists, is a
+      second thing to keep correct — and `review_poll` carries semantics a generic
+      `tasks/result` would have to duplicate or discard: deltas, `check_back_after_ms`
+      measured from this repository's own completed rounds, and the settle/justify
+      vocabulary.
 
       Polling stays the FLOOR whatever happens. A client whose harness supports nothing
       must still be able to complete a review, and a delivery mechanism that silently does
