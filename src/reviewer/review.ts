@@ -165,6 +165,29 @@ export async function compactToFit(
 export const MAX_EMISSIONS = 32;
 
 /**
+ * The wall clock one streamed tier-run may burn, however many emissions it takes.
+ *
+ * MEASURED, NOT GUESSED: a t3 run on rigid-monorepo took 137.4 minutes against a
+ * per-call deadline of 2700s, on a tier whose normal range on that repository is 1–3
+ * minutes. It was not hung — it was emitting, and every single call finished inside its
+ * own deadline. That is the hole: D-107 turned a tier-run from ONE call into a LOOP of
+ * up to `MAX_EMISSIONS` calls, and the deadline bounds a call. Thirty-two turns each
+ * finishing just inside 45 minutes is over twenty-four hours, and nothing anywhere would
+ * have stopped it or said so.
+ *
+ * `MAX_EMISSIONS` was doing the bounding alone and cannot: it counts TURNS, and a turn
+ * has no fixed cost. This is the same shape as the hang deadline before D-91 — a bound
+ * that reads as protection and measures the wrong quantity.
+ *
+ * Ninety minutes, chosen against evidence rather than taste: the longest HEALTHY deep
+ * run recorded here is 27.3 minutes, so this is over 3× the worst legitimate case and
+ * still less than a quarter of what the emission cap alone permits. A run that ends on
+ * it keeps its findings and says loudly that the tree is NOT fully examined — never a
+ * clean result (INV-1), exactly as the emission cap already does.
+ */
+export const MAX_RUN_MS = 90 * 60_000;
+
+/**
  * A fault about the ROUTE, not about the model or the code — the only kind that
  * justifies asking the same model somewhere else (D-93, widened 2026-08-14).
  *
@@ -964,7 +987,16 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     // worktree, pinned to its route, opening with exactly the unseen delta — so a
     // member that declared done before a sibling's boundary applied a fix reads the
     // final tree before the ladder is allowed to move.
+    const runDeadline = Date.now() + MAX_RUN_MS;
+    /** Set when the wall clock, not the model, ended the run — see `MAX_RUN_MS`. */
+    let outOfTime = false;
     for (let i = 0; i < MAX_EMISSIONS; i++) {
+      // THE RUN'S OWN CLOCK, checked at the boundary rather than inside a call, so a
+      // turn is never abandoned half-spent — the same discipline the round-boundary
+      // spend ceiling uses. Breaking here rather than throwing keeps everything the
+      // model already emitted: those findings are real and were delivered as they
+      // arrived; what is lost is the REST of the tree, which the note below says.
+      if (Date.now() > runDeadline) { outOfTime = true; break; }
       // CancelledByLore, NOT plain DidNotRun. A stop lore causes is not evidence about
       // the tier — the class exists precisely so the skip machinery below rethrows it
       // untouched instead of booking it as a shortfall. This check runs BETWEEN
@@ -1074,16 +1106,21 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
         continued = streamContinue();
       }
     }
+    // WHICH BOUND ENDED IT, in the sentence itself. "Capped at 32 emissions" said about
+    // a run the CLOCK stopped would send a reader to count turns that were never taken.
+    const cappedBy = outOfTime
+      ? `ran for its whole ${String(Math.round(MAX_RUN_MS / 60_000))}-minute budget`
+      : `was capped at ${String(MAX_EMISSIONS)} emissions`;
     if (!done && heldMismatch === undefined && agg.findings.length === 0) {
       throw new DidNotRun(
-        `tier ${route.id} (${route.model ?? "?"}) emitted nothing across ${String(MAX_EMISSIONS)} turns and ` +
-          `never declared done — that is not a review that found nothing`,
+        `tier ${route.id} (${route.model ?? "?"}) emitted nothing, ${cappedBy}, and never declared done — ` +
+          `that is not a review that found nothing`,
       );
     }
     if (!done && heldMismatch === undefined) {
       agg.discarded.push(
-        `stream capped at ${String(MAX_EMISSIONS)} emissions before the model declared done — the findings ` +
-          `above are real, and the tree is NOT fully examined`,
+        `the stream ${cappedBy} before the model declared done — the findings above are real, and the tree ` +
+          `is NOT fully examined`,
       );
     }
     // The tree as the run leaves it — holds may have advanced it mid-loop — is what the

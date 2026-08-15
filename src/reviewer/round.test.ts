@@ -2579,6 +2579,30 @@ describe("a streamed tier-run", () => {
     expect(reviewer.asked[2] ?? "", "nothing changed, nothing claimed").toMatch(/Continue the review/);
   });
 
+  /**
+   * THE RUN'S OWN CLOCK, not just its turn count. Measured: a t3 run took 137.4 minutes
+   * against a 2700s per-CALL deadline, because D-107 made a tier-run a LOOP of calls and
+   * the deadline bounds one call. 32 turns each finishing just inside 45 minutes is over
+   * a day, and nothing would have stopped it. The fake below never sleeps — it moves the
+   * clock, so the test proves the BOUND rather than waiting for it.
+   */
+  it("stops a streamed run that outlives its wall-clock budget, keeping what it found", async () => {
+    const many = Array.from({ length: 40 }, (_, i) => emission([{ ...HOLD_BUG, line: 200 + i, claim: `finding ${String(i)}` }]));
+    const reviewer = new Streaming(many);
+    const real = Date.now;
+    let t = real();
+    // Each ask jumps the clock 20 minutes: the run must die on time, not on turn 32.
+    reviewer.onAsk = () => { t += 20 * 60_000; };
+    Date.now = () => t;
+    try {
+      const r = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: STREAM_TYPE });
+      expect(reviewer.asked.length, "stopped by the clock, well before the 32-emission cap").toBeLessThan(10);
+      expect(r.newFindings.length, "everything it did emit is kept").toBeGreaterThan(0);
+    } finally {
+      Date.now = real;
+    }
+  });
+
   it("surfaces a held diff that cannot land as awaiting_diff, never silently", async () => {
     const reviewer = new Streaming([emission([HOLD_BUG]), DONE]);
     store.holdDiff("r1", "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-nope\n+never", "0".repeat(40));
