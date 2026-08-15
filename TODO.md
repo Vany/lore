@@ -39,6 +39,56 @@ that part is pulled out into its own open item rather than hidden inside a tick.
 
 ## Now — nothing here is about writing more features
 
+### 2026-08-15 — delivery surfaces, and three fixes to today's fixes
+
+- [ ] **Weigh the MCP Tasks extension as a way to deliver findings** (D-110, `[OPEN]`).
+      Researched today, NOT built. The premise moved on contact: "channels" is not an MCP
+      primitive, the push surface is `subscriptions/listen`, and lore ALREADY implements
+      it — so there is nothing to adopt instead of subscriptions.
+
+      What is genuinely new is the **Tasks extension** (`io.modelcontextprotocol/tasks`,
+      SEP-2663, poll-based `tasks/get` + `tasks/update`), promoted out of the experimental
+      core for long-running asynchronous work — which is exactly what a review is, and the
+      first standard shape that fits the problem rather than one we bent `review_poll`
+      into.
+
+      **Settle these two BEFORE building, because they decide whether it is worth
+      anything:** (a) do the deployed clients' harnesses actually implement it — an
+      unimplemented surface is worse than none, since it looks supported; (b) can
+      `tasks/update` carry a FINDING rather than only progress — if not, it duplicates the
+      state channel we already have.
+
+      Polling stays the FLOOR whatever happens. A client whose harness supports nothing
+      must still be able to complete a review, and a delivery mechanism that silently does
+      not work is indistinguishable from a review that found nothing (INV-1).
+
+- [ ] **On a clock, not broken yet:** the same release makes the transport stateless and
+      drops `Mcp-Session-Id`, and deprecates the legacy HTTP+SSE transport with a
+      year-long offramp. Neither affects lore today. Both need a look before the offramp
+      closes.
+
+- [x] **Three fixes to fixes shipped the same day** (`884cdf8`). DONE. lore's own review of
+      `main` found all three, and was right about each:
+
+      `88ca976` did not fix what it claimed — it guarded three store WRITES and left every
+      READ on the same path unguarded, and on the failure path the throw comes from inside
+      `round()`'s own catch, escaping a promise detached with no `unhandledRejection`
+      handler. The process still crashed in the window the commit said it had closed. The
+      guard is now on the ROUND, which is the honest unit.
+
+      `6130a65`'s wall-clock bound was granted fresh per `streamRun` invocation, and the
+      catch-up pass re-invokes it up to 8× per member — "bounded at 90 minutes" could run
+      ~13.5 hours. It is the round's budget now.
+
+      `6130a65` also checked the deadline ABOVE `stillWanted()`, so a run crossing its
+      budget could write `findings_ready` over a `cancelled` review — the resurrection this
+      same loop had already fixed once for the sibling path.
+
+      **The pattern, worth more than the three fixes:** each was correct about the defect
+      and wrong about its BOUNDARY — the write but not the read, the call but not the loop,
+      the check but not its order. All three passed tests and looked right. This is the
+      case for the gate, made by the gate, against my own work.
+
 ### 2026-08-14 — the blocker, and it is not code
 
 - [x] **The OpenAI plan's OAuth is dead, and it stops every review at t3.** DONE

@@ -2151,6 +2151,55 @@ D-77 still holds and nothing skips the ladder. What changes is that batching is 
 DEFAULT rather than a compromise: fix everything found, review it together, push it
 together.
 
+**D-110 — how a client LEARNS a review moved: three surfaces, and the client picks.
+`[OPEN]` — researched 2026-08-15, not built.**
+
+Vany: *"let's investigate how these Anthropic channels work, can we use them instead of
+subscriptions? if yes, let's add this into methods of receiving findings and review
+state… so we will have resource subscriptions, channels, and polling if there is no
+working async method. The model has to choose what the harness is supporting."*
+
+**Checked rather than assumed, and the premise moved.** "Channels" is not an MCP
+primitive. In the current specification (2026-07-28) the server-to-client push surface is
+`subscriptions/listen` — a single stream a client opts into per notification type,
+replacing the old HTTP GET/SSE channel — and **lore already implements it** (`resources:
+{ subscribe: true }`, woken on every state change, D-80). So there is nothing to adopt
+INSTEAD of subscriptions: the thing the question was reaching for is the thing we have.
+
+What the same release DOES add that we have never used is the **Tasks extension**
+(`io.modelcontextprotocol/tasks`, SEP-2663): `tasks/get` and `tasks/update`, poll-based,
+promoted out of the experimental core specifically for long-running asynchronous work. A
+review IS long-running asynchronous work — minutes to hours, many rounds, a verdict at
+the end — so this is the first standard surface whose shape actually matches the problem,
+rather than one we bent `review_poll` into.
+
+**So the menu is three, not two, and Vany's rule stands unchanged — the client chooses
+what its harness supports:**
+
+| surface | state | what it is for |
+|---|---|---|
+| `subscriptions/listen` | BUILT (D-80) | a harness that can hold a stream; woken on state change |
+| Tasks extension | `[OPEN]`, not built | the standard shape for long-running async work |
+| `review_poll` | BUILT | the floor — always works, needs nothing from the harness |
+
+**Polling is the FLOOR and must stay that way.** Every other surface is an optimisation
+over it, and a client that supports none of them must still be able to complete a review.
+That is not a fallback in the apologetic sense: it is the only surface that cannot be
+taken away by a harness limitation, and INV-1's reasoning applies — a delivery mechanism
+that silently does not work is indistinguishable from a review that found nothing.
+
+**Two things to settle before building the Tasks half**, both of which decide whether it
+is worth anything: whether the deployed clients' harnesses actually implement the
+extension (an unimplemented surface is worse than none, because it looks supported), and
+whether `tasks/update` can carry a FINDING rather than only progress — if it cannot, it
+duplicates the state channel we already have and buys nothing.
+
+Also relevant and not yet weighed: the same release makes the transport **stateless** and
+removes `Mcp-Session-Id`, and deprecates the legacy HTTP+SSE transport with a year-long
+offramp. Neither breaks lore today; both are on a clock.
+
+Sources: the MCP 2026-07-28 specification and its changelog against 2025-11-25.
+
 **D-109 — the deep tiers run together: a ladder of RUNGS, findings crossing between the
 models as they are found. BUILT 2026-08-14.**
 
