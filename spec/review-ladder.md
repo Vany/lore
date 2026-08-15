@@ -27,9 +27,16 @@ what is deployed today is `deploy/tiers.zai-kimi-openai.json`:
 
 | Tier | Model | Effort | Vendor | Paid by |
 |---|---|---|---|---|
-| **T1** | `GLM5.2` pool (two z.ai plans) | medium | Z.ai | subscription |
+| **T1** | `zai-coding-plan/glm-5.3` | medium | Z.ai | subscription |
 | **T2** | `kimi-for-coding/k3` | high | Moonshot | subscription |
 | **T3** | `openai/gpt-5.6-terra` | high | OpenAI | subscription |
+
+T1's fallback is `zai-coding-plan2/glm-5.2` (the smaller plan), then OpenRouter. The
+`GLM5.2` POOL IS GONE: 5.3 exists on plan 1 and not on plan 2, and a pool is one model
+reachable several ways, so it could not simply be repointed. The deep tiers' last resort
+moved off the pool to the small plan too — the pool spanned BOTH, so a deep tier reaching
+for it could land on the seat T1 runs every round on. Work that is not a review (the
+background screen, the bootstrap survey) runs on the `helper` model, also the small plan.
 
 T2 and T3 are ONE RUNG in the deployed file — a nested array — so the deep phase runs
 them together (§5.0, D-109).

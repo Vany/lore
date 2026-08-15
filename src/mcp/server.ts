@@ -1015,7 +1015,13 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
                 // client can do, on a machine it is not on. `justify_with` carries the
                 // whole line ready to paste, for the same reason `review_poll` does.
                 will_not_settle: unmoved.map((f) => ({
-                  fingerprint: f.fingerprint,
+                  // THE SHORT FORM, because that is what `lore-ok[...]` accepts — the
+                  // parser requires exactly 8 hex before `]`, and `review_poll`'s field
+                  // of the same name is already the short one. Handing back the full
+                  // 64-char hash beside an instruction to paste it produced a marker
+                  // that is silently never read: the exact unfollowable instruction
+                  // D-111 fixed, re-created by the field added to fix it.
+                  fingerprint: f.fingerprint.slice(0, 8),
                   file: f.file,
                   line: f.line,
                   claim: f.claim,

@@ -18,7 +18,7 @@ silent failures in one day are the reason this project exists in this shape.
 
 ## Working agreement
 
-- **Commit, review to `passed`, amend, push** (D-77). lore gates other people's
+- **Commit, review in BATCHES, amend, push** (D-77, revised 2026-08-15). lore gates other people's
   branches; it gates its own the same way. After committing I drive a full review over
   MCP — as a client, not through the CLI (D-76) — answering findings with
   `review_submit` so the ladder re-reads the corrected tree, until it reaches `passed`
@@ -30,7 +30,9 @@ silent failures in one day are the reason this project exists in this shape.
   the gate catches, invisibly to the suite. A test-only diff that deletes tests or cuts
   assertions is reviewed like code. A skipped review is stated in the commit, never
   silent.
-  Nothing reaches `origin/main` that a ladder has not read — `main`, not `origin`,
+  A commit may reach `origin/main` unreviewed; a BATCH may not go unreviewed
+  indefinitely, and every override says so in its own commit. Nothing reaches a VERDICT
+  that a ladder has not read — `main`, not `origin`,
   because a review is cut from the mirror, so getting an unpushed commit reviewed needs
   a scratch `review/<sha>` ref that is by definition unreviewed when it lands. Push and
   delete it in one command; nothing sweeps `review/*`. SPEC D-77 has the shape and the

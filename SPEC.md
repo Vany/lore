@@ -217,7 +217,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-74** | **One vendor per tier** — the deployed ladder is Z.ai, Moonshot, OpenAI | confirmed |
 | **D-75** | `propose` is an **idea generator for the maintainer**, never a gate | built; ideas unmeasured |
 | **D-76** | A change is validated **over MCP**; a CLI run is never evidence the product works | `[OPEN]` |
-| **D-77** | **Commit, review to a verdict, amend, push.** Nothing reaches origin unreviewed | `[OPEN]` |
+| **D-77** | **Commit, review to a verdict, amend, push.** Batches, not commits — revised 2026-08-15, see below | `[OPEN]` |
 | **D-78** | A review answers to **the token that started it**, not to its repository | built |
 | **D-79** | A finding is **what the author missed and would be hurt by** — asked, not filed | confirmed |
 | **D-80** | A review is **one conversation per tier**, not a series of audits. Fully async | subscription live; continuity built 2026-08-12; streamed conversation built 2026-08-14 (D-107) |

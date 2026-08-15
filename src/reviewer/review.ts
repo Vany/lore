@@ -747,7 +747,24 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // through a door added in the same branch. Shared here so a round's total is what is
   // actually bounded, and so a member that spent the budget cannot be handed it again by
   // a later pass.
-  const roundDeadline = Date.now() + MAX_RUN_MS;
+  let roundDeadline = Date.now() + MAX_RUN_MS;
+  /**
+   * WHAT THE CATCH-UP PASS MAY ALWAYS SPEND, however little the round has left.
+   *
+   * Sharing one budget across the round fixed a real multiplication — nine fresh
+   * 90-minute budgets — and created a starvation the ladder cannot survive: a member left
+   * stale by a sibling's last-moment fix is re-invoked, breaks on iteration 0 with the
+   * budget already gone, emits nothing, and is recorded as having given up. The merge can
+   * then settle on its silence and return `passed` — an attestation that a tier read a
+   * tree whose final fix it never saw, which is precisely what SPEC forbids a verdict to
+   * assert. The documented backstop cannot save it either: both late-hold sweeps require
+   * a held diff, and by then the holds are consumed.
+   *
+   * So the catch-up gets its own floor. It is SMALL on purpose — a catch-up pass is a
+   * "here is what changed, still done?" exchange, not a fresh read — and it is granted
+   * per pass rather than once, because the pass cap already bounds how many there can be.
+   */
+  const CATCHUP_FLOOR_MS = 10 * 60_000;
   const runMember = async (member: Tier, pinRoute?: string): Promise<MemberOutcome> => {
   const build = (diffText: string): string =>
     reviewPrompt({
@@ -1871,6 +1888,13 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       return saw !== undefined && saw !== current;
     });
     if (stale.length === 0) break;
+    // THE FLOOR, APPLIED BEFORE THE PASS RUNS. Whatever the round has left — and after a
+    // long first pass it is routinely nothing — a catch-up gets enough to say "here is
+    // what changed, still done?". Without it the pass breaks on iteration 0, the member
+    // is booked as having given up, and the ladder can sign a tree that member never
+    // read. Extending rather than resetting: the round's own budget still governs the
+    // reading, and this only buys the exchange that makes the reading honest.
+    roundDeadline = Math.max(roundDeadline, Date.now() + CATCHUP_FLOOR_MS);
     const again = await settleRung(
       stale.map((o) => {
         const pin = o.fellBackTo ?? o.chosenRoute ?? o.member.model;

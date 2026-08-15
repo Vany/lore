@@ -203,10 +203,18 @@ const LadderFileSchema = z.union([
        * THE MODEL FOR WORK THAT IS NOT A REVIEW.
        *
        * Vany: *"if we need just GLM, to understand something, not for review, use 5.2
-       * from the small subscription for this."* The background screen, the bootstrap
-       * survey and the proposer all need a model, and none of them is reviewing
-       * anything — but each of them BORROWED the first model tier, so every document
-       * screened competed for the quota the gate tier runs on. With the big plan now
+       * from the small subscription for this."*
+       *
+       * TWO CALL SITES READ THIS, not three: the background screen and the bootstrap
+       * survey. The proposer does NOT — it deliberately takes the DEAREST model tier,
+       * because proposing and criticising a design is not the same errand as deciding
+       * whether an extracted sentence is a rule, and moving it here would quietly
+       * downgrade it. An earlier version of this comment claimed all three, which was
+       * false about the code and would have had an operator believe `propose` runs on
+       * the small plan when every lens and critic session burns the t3 subscription.
+       *
+       * The screen borrowed the first model TIER, so every hourly pass competed for the
+       * quota the gate tier runs on. With the big plan now
        * carrying t1 and the small one carrying the fallback, that borrowing would put
        * housekeeping directly in front of reviews on the seat that matters most.
        *
@@ -375,6 +383,7 @@ export function loadTiers(source = process.env["LORE_TIERS"]): readonly Tier[] {
   }
   const file = Array.isArray(parsed.data) ? { tiers: parsed.data } : parsed.data;
   const pools: ModelPools = file.models ?? {};
+  const helper = file.helper;
 
   // ONE SHAPE PAST THIS POINT. The schema accepts a bare string for `fallback` so a
   // stale config cannot crash-loop the service at boot; everything downstream reads a
@@ -472,6 +481,21 @@ export function loadTiers(source = process.env["LORE_TIERS"]): readonly Tier[] {
   // ONLY WHERE NICKNAMES EXIST. A ladder that defines no pools has no nickname to
   // mistype, and its model ids are whatever they have always been — tightening that at
   // the same time would refuse configs this change has no quarrel with.
+  // THE HELPER IS CHECKED LIKE A TIER'S MODEL, because its docstring promises exactly
+  // that ("a concrete `provider/model` or a pool nickname, exactly like a tier's
+  // `model`") and only the tiers were being checked. The failure it lets through is not
+  // hypothetical: this key was introduced in the same change that DELETED the `GLM5.2`
+  // pool, so `"helper": "GLM5.2"` — the nickname an operator has been reading in this
+  // file all along — loads without complaint, is handed to opencode as a model id, and
+  // fails as a provider error on every hourly screening pass and every first-review
+  // bootstrap. Refused at load, where somebody is watching, exactly as a tier is.
+  if (helper !== undefined && !helper.includes("/") && pools[helper] === undefined) {
+    throw new UsageError(
+      `LORE_TIERS: helper names the model '${helper}', which is neither a provider/model id nor one of the ` +
+        `defined pools (${Object.keys(pools).join(", ") || "none"}). It would be handed to opencode as a model ` +
+        `id and come back as a provider error on every background pass.`,
+    );
+  }
   if (Object.keys(pools).length > 0) {
     for (const t of tiers) {
       if (t.kind !== "model") continue;
