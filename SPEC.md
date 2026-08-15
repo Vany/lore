@@ -2151,6 +2151,60 @@ D-77 still holds and nothing skips the ladder. What changes is that batching is 
 DEFAULT rather than a compromise: fix everything found, review it together, push it
 together.
 
+**D-111 — the client loop's own defects, found by DRIVING it. Two built 2026-08-15, two
+`[OPEN]`.**
+
+Vany: *"is it convenient to use our service right now, or do you have good ideas how to
+improve user experience?"* Answered from a day spent as the client rather than reading the
+code, which is the only way most of this is visible. Full list and costs: `BUGS.md`.
+
+**1. A DIFF SHOULD NOT CROSS THE WIRE AT ALL. (documented 2026-08-15; the mechanism
+already existed.)** A unified diff is whitespace-significant — a context line for a blank
+source line is a single space — and a tool-call argument strips it. Verified directly:
+writing `"a\n \nb\n"` through one produced `"a\n\nb\n"`. So an agent composing a diff
+into `review_submit` corrupts it, silently, every time, and cannot tell. `git apply
+--recount` happens to forgive that particular loss, which is luck rather than design.
+
+The deeper cost is that ~40 KB must be RETYPED with no way to verify before sending. The
+answer is not a better encoding: it is that **`pull_fresh` already does this without a
+diff**. The client pushes; lore re-pins the same review to origin's new tip; findings,
+justifications and the ladder all carry. Nothing whitespace-significant crosses the wire
+and the tree hash comes from git rather than from a claim. `TOOL_DOCS.submit` now leads
+with push-then-`pull_fresh` and keeps `review_submit` for clients that genuinely cannot
+push — no remote, no credentials, work not wanted in history yet.
+
+**2. `will_not_settle` WITHHELD THE ID ITS OWN INSTRUCTION NEEDED. (built 2026-08-15.)**
+It said *"say so at the named line with a `lore-ok[<fingerprint>]`"* and returned `file`,
+`line` and `claim` — no fingerprint. The instruction was unfollowable: a poll returns only
+NEW findings, so the ids it names are exactly the ones the client will never be shown
+again. Driving the loop by hand, the only recovery was a SQL query inside the container,
+which no client can run on a machine it is not on. It now carries `fingerprint` and a
+ready-to-paste `justify_with`.
+
+**3. `[OPEN]` — A FIX HAS NO WAY TO SAY WHERE IT WENT.** D-56 settles a finding only when
+the code AT THE NAMED LINE moved, and the right fix is routinely elsewhere: a caller, a
+writer that never existed, a shared predicate. The protocol's answer is a `lore-ok` at the
+original line explaining the fix is elsewhere — which works and costs a full deep round
+each time. The `pull_fresh` seam took FOUR rounds this way, each a genuine defect, each
+correctly raised. A `fixed_elsewhere` field on submit — naming the finding and where it
+went, ruled on like any justification — would collapse that. Not built: it widens what a
+client may assert about its own fix, which is D-10's boundary, and deserves its own
+argument.
+
+**4. `[OPEN]` — THE PARAPHRASE TAX, and §3.1.1's evidence has now arrived.** The same
+defect arrives twice under two fingerprints when a tier rewords its claim between rounds,
+and each needs its own marker: `49451a88`/`d9ec8874` were one defect, and the second's own
+text says *"the same finding, reported twice"*. §3.1.1 deferred a similarity key
+(`file ‖ symbol ‖ cwe`) "for want of evidence that paraphrase-churn actually happens".
+Twice in one review, on 2026-08-15, is that evidence.
+
+**What is NOT wrong, recorded because a defect list read alone is misleading:**
+`check_back_after_ms`, measured from this repository's own completed rounds and shrinking
+as a round ages, was trusted all day and was right. The operator board answers "what is
+happening" at a glance. And the findings themselves were consistently correct — including
+three defects in fixes shipped hours earlier, which is the product working exactly as
+designed.
+
 **D-77 REVISED, 2026-08-15 — the gate is a BATCH gate, and this is written down rather
 than practised silently.**
 

@@ -12,6 +12,12 @@ LOOP — the thing D-77 says we must be able to complete before anything reaches
 
 ## 1. A `git diff` cannot survive a tool-call parameter, and nothing warns you
 
+**ADDRESSED 2026-08-15 (D-111.1) — by removing the need to send one.** `TOOL_DOCS.submit`
+now leads with push-then-`pull_fresh`, which re-pins the same review to origin's new tip
+with everything carried and no diff on the wire at all. `review_submit` stays for clients
+that genuinely cannot push. The mechanism already existed; what was missing was saying so.
+
+
 **2026-08-14. Cost: one refused submit, two full re-transcriptions, ~40 minutes.**
 
 A unified diff is whitespace-significant: a context line for a blank source line is a
@@ -37,6 +43,10 @@ idempotency/echo field so a client can verify what arrived before it counts.
 ---
 
 ## 2. `will_not_settle` tells you to write a marker and withholds the id you need
+
+**FIXED 2026-08-15 (D-111.2).** It now carries `fingerprint` and a ready-to-paste
+`justify_with`.
+
 
 **2026-08-14. Cost: ~7 findings blocked, worked around only with direct database access.**
 

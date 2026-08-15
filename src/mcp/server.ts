@@ -1006,7 +1006,21 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
             : unmoved.length === 0
             ? {}
             : {
-                will_not_settle: unmoved.map((f) => ({ file: f.file, line: f.line, claim: f.claim })),
+                // THE FINGERPRINT, because the note below tells the client to write
+                // `lore-ok[<fingerprint>]` and this list was the only place it could have
+                // come from. Without it the instruction is unfollowable: a poll returns
+                // only NEW findings, so the ids named here are precisely the ones the
+                // client will never be shown again. Driving this loop by hand, the only
+                // way to recover them was a SQL query inside the container — which no
+                // client can do, on a machine it is not on. `justify_with` carries the
+                // whole line ready to paste, for the same reason `review_poll` does.
+                will_not_settle: unmoved.map((f) => ({
+                  fingerprint: f.fingerprint,
+                  file: f.file,
+                  line: f.line,
+                  claim: f.claim,
+                  justify_with: `// lore-ok[${f.fingerprint.slice(0, 8)}]: <why this code is correct, or where it was fixed>`,
+                })),
                 will_not_settle_note:
                   `${String(unmoved.length)} open finding(s) name code that has NOT moved and carry no lore-ok, so ` +
                   "the next " +

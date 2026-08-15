@@ -336,6 +336,27 @@ emission settles them), and if the held diff cannot be verified when it is appli
 review lands in awaiting_diff with the reason, which means: diff against the tree as it
 stands and send again.
 
+PREFER PUSHING TO SENDING A DIFF, IF YOU CAN PUSH AT ALL.
+
+A diff is whitespace-significant — a context line for a blank source line is a single
+space — and many harnesses strip trailing whitespace from a tool argument. When that
+happens, the diff you send is NOT the diff you built, you cannot tell, and lore can only
+report that the patch did not apply. This is the most common way an otherwise correct fix
+fails to reach a review, and it is measured rather than theoretical.
+
+So when your fixes are committed and pushable:
+
+    git push                                  (your branch, as usual)
+    review_start(branch, into, ticket, pull_fresh: true)
+
+That re-pins the SAME review to origin's new tip — findings, ratified justifications and
+the ladder all carry, and the same review_id comes back. Nothing whitespace-significant
+crosses the wire, the tree hash comes from git rather than from a claim you have to get
+exactly right, and there is no diff to compose at all. Same loop, one less way to fail.
+
+Use review_submit when you genuinely cannot push: no remote, no credentials, or work you
+do not want in history yet. It is fully supported, and everything below applies to it.
+
 SEND THE DIFF EXACTLY AS \`git diff\` PRODUCED IT. Do not trim trailing whitespace,
 drop blank lines, or reformat it — a unified diff is whitespace-significant, and a
 context line for a blank source line is a space followed by that line's own content.
