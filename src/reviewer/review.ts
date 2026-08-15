@@ -738,6 +738,16 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // `pinRoute` is the catch-up pass pinning a member to the route it just ran on: the
   // session being caught up lives under that route's key, and letting a pool re-roll
   // here would open a COLD session to deliver a delta meant for a warm one.
+  // ONE BUDGET FOR THE WHOLE ROUND, not one per invocation of the streamed loop.
+  //
+  // `MAX_RUN_MS` was a local inside `streamRun`, so every call got a fresh 90 minutes —
+  // and the catch-up pass re-invokes `streamRun` for each member whose session trails
+  // the worktree, up to its own cap of 8 passes. Nine fresh budgets is thirteen and a
+  // half hours, which is the very multiplication the bound was added to refuse, re-entering
+  // through a door added in the same branch. Shared here so a round's total is what is
+  // actually bounded, and so a member that spent the budget cannot be handed it again by
+  // a later pass.
+  const roundDeadline = Date.now() + MAX_RUN_MS;
   const runMember = async (member: Tier, pinRoute?: string): Promise<MemberOutcome> => {
   const build = (diffText: string): string =>
     reviewPrompt({
@@ -987,7 +997,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     // worktree, pinned to its route, opening with exactly the unseen delta — so a
     // member that declared done before a sibling's boundary applied a fix reads the
     // final tree before the ladder is allowed to move.
-    const runDeadline = Date.now() + MAX_RUN_MS;
+    const runDeadline = roundDeadline;
     /** Set when the wall clock, not the model, ended the run — see `MAX_RUN_MS`. */
     let outOfTime = false;
     for (let i = 0; i < MAX_EMISSIONS; i++) {
@@ -996,8 +1006,18 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       // spend ceiling uses. Breaking here rather than throwing keeps everything the
       // model already emitted: those findings are real and were delivered as they
       // arrived; what is lost is the REST of the tree, which the note below says.
+      // A CANCEL OUTRANKS THE CLOCK, and the order here is the whole of it. With the
+      // deadline checked FIRST, a run that crossed its budget broke out with `outOfTime`
+      // without ever consulting `stillWanted` — so a review cancelled while the last
+      // turn was in flight was stepped over instead of raising `CancelledByLore`, the
+      // merge ran, and the unconditional ladder write put `findings_ready` back over
+      // `cancelled`. The client holds a cancellation reply for a review that is alive
+      // again, holding an admission slot until the sweep. That is the resurrection this
+      // very loop already fixed once for the sibling path; putting a second exit above
+      // the check reopened it.
+      if (!stillWanted()) throw new CancelledByLore(`review ${reviewId} ended while ${route.id} was mid-stream`);
       if (Date.now() > runDeadline) { outOfTime = true; break; }
-      // CancelledByLore, NOT plain DidNotRun. A stop lore causes is not evidence about
+      // The cancel check above is the same one this note has always described. A stop lore causes is not evidence about
       // the tier — the class exists precisely so the skip machinery below rethrows it
       // untouched instead of booking it as a shortfall. This check runs BETWEEN
       // emissions, on every loop iteration, so a cancel landing there (rather than
@@ -1006,7 +1026,6 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       // both stopping here on the same cancel, a review already marked `cancelled`
       // could be found `alreadyFailed` and have its ladder stepped — resurrecting a
       // review someone had just ended (found by lore's own review of this branch).
-      if (!stillWanted()) throw new CancelledByLore(`review ${reviewId} ended while ${route.id} was mid-stream`);
       const flag = { done: false };
       const res = await ask<Finding>(
         route,

@@ -197,6 +197,17 @@ export class Worker {
     {
       try {
         await this.runJob(job.reviewId);
+        // THE STORE IS GONE — STOP, rather than pick through it write by write.
+        //
+        // `88ca976` guarded three WRITES and missed that everything around them READS:
+        // `repoAndStateOf` below, `stateOf` in the catch, `heldDiffs`, `hasOpenJob`. A
+        // closed handle throws on those exactly as it did on the writes, so the crash it
+        // was written to remove survived it — and on the failure path the throw comes
+        // from INSIDE the catch, escaping a promise that is detached by `void this.round`
+        // with no `unhandledRejection` handler anywhere. A guard per call site was the
+        // wrong shape: the honest unit is the ROUND, which has nothing left to do once
+        // the process is going down. The job row stays `running` and startup requeues it.
+        if (this.store.isClosed()) return;
         this.store.finishJob(job.id, "done");
         // A SUBMIT CAN DECIDE TO HOLD AT ANY INSTANT UP TO THE LINE ABOVE — it sees
         // this job still `running` right until finishJob commits — so a diff can land
@@ -227,6 +238,11 @@ export class Worker {
         this.note(true);
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
+        // Same reason as the success path, and this one is sharper: every read below
+        // runs INSIDE a catch, so a throw here escapes `round()` itself rather than
+        // being handled — an unhandled rejection out of a detached promise, in exactly
+        // the deploy window this whole guard exists for.
+        if (this.store.isClosed()) return;
 
         // LORE WENT AWAY MID-ROUND — requeue, do not end the review (D-104).
         //

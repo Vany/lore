@@ -282,6 +282,11 @@ export class Store {
   }
 
   close(): void {
+    // IDEMPOTENT. `node:sqlite` throws `database is not open` on a second close, so any
+    // path where a shutdown hook and an owner both tidy up — or a test that closes the
+    // store its fixture also closes — turned ordinary cleanup into a throw. Closing what
+    // is already closed is the caller getting what it asked for, not an error.
+    if (this.closed) return;
     this.closed = true;
     this.db.close();
   }

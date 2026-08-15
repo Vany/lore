@@ -264,6 +264,73 @@ describe("a worker does not overwrite an ending somebody chose", () => {
   }, WAITING);
 });
 
+/**
+ * THE DEPLOY WINDOW, DRIVEN THROUGH `Worker.round` RATHER THAN THE STORE.
+ *
+ * The first attempt at this guarded three store WRITES and was proven useless by lore's
+ * own review: everything around them READS — `repoAndStateOf`, `stateOf`, `heldDiffs`,
+ * `hasOpenJob` — and a closed handle throws on those exactly as it did on the writes. On
+ * the failure path the throw comes from INSIDE the catch, so it escapes a promise that is
+ * detached by `void this.round(job)` with no `unhandledRejection` handler anywhere: an
+ * unhandled rejection, in exactly the window the guard existed for.
+ *
+ * The test that missed it called the three store methods directly and never drove a
+ * round. This one closes the store UNDER a live round, which is the actual shape.
+ */
+describe("a round whose store closes under it", () => {
+  const makeRepo = (dir: string) => {
+    mkdirSync(dir, { recursive: true });
+    const g = (...a: string[]) => execFileSync("git", a, { cwd: dir, stdio: "ignore" });
+    g("init", "-q", "-b", "main");
+    g("config", "user.email", "t@e.com");
+    g("config", "user.name", "t");
+    writeFileSync(join(dir, "a.txt"), "a\n");
+    g("add", "-A");
+    g("commit", "-qm", "x");
+  };
+
+  let root2: string;
+  beforeEach(() => { root2 = mkdtempSync(join(tmpdir(), "lore-close-")); });
+  afterEach(() => rmSync(root2, { recursive: true, force: true }));
+
+  it("stops quietly instead of throwing out of a detached promise", async () => {
+    const repoId = store.upsertRepo("r", join(root2, "src")).id;
+    const src = join(root2, "src");
+    makeRepo(src);
+    const bare = join(root2, "repos", repoId, "bare.git");
+    mkdirSync(join(bare, ".."), { recursive: true });
+    execFileSync("git", ["clone", "--bare", src, bare], { stdio: "ignore" });
+    writeFileSync(join(bare, "FETCH_HEAD"), "");
+    store.createReview({
+      id: "revX", repoId, principal: "p", branch: "main", intoRef: "main",
+      ticket: "t", type: "code-arch", state: "queued", ladder: initialState(),
+    });
+    store.enqueue("revX", "fast");
+
+    // The reviewer closes the store mid-round — a deploy landing on a live round.
+    const w = new Worker(
+      store,
+      { ...DEFAULT_WORKER, pollMs: 5, reposRoot: join(root2, "repos") },
+      new Alerter({ timeoutMs: 10 }),
+      { review: () => { store.close(); return Promise.reject(new DidNotRun("tier t1 failed: provider 500")); } },
+    );
+
+    const rejections: unknown[] = [];
+    const onRejection = (e: unknown) => rejections.push(e);
+    process.on("unhandledRejection", onRejection);
+    const stop = w.start();
+    try {
+      await until("the round to run against the closed store", () => store.isClosed());
+      // Long enough for a rejection to surface if the round throws past its own catch.
+      await new Promise((r) => setTimeout(r, 300));
+    } finally {
+      stop();
+      process.off("unhandledRejection", onRejection);
+    }
+    expect(rejections, "a closed store must not crash the process").toStrictEqual([]);
+  }, WAITING);
+});
+
 // A SERVICE THAT HAS STOPPED WORKING AND SAYS IT IS FINE.
 //
 // The per-job guard catches everything a round can throw. `isDraining()` and
