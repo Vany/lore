@@ -41,7 +41,12 @@ that part is pulled out into its own open item rather than hidden inside a tick.
 
 ### 2026-08-14 — the blocker, and it is not code
 
-- [ ] **The OpenAI plan's OAuth is dead, and it stops every review at t3.** opencode's
+- [x] **The OpenAI plan's OAuth is dead, and it stops every review at t3.** DONE
+      2026-08-15: Vany re-authenticated; the grant runs to 2026-08-25 and a probe through
+      opencode answered. t3 reads directly again. It expires in ten days and will do this
+      again — the failover now carries it (13 silent deaths became a working stand-in) and
+      it pages, but a calendar note beats rediscovering it.
+      ORIGINALLY: opencode's
       `auth.json` holds `openai` as an oauth grant whose refresh is rejected:
       `Token refresh failed: 401`, surfaced as a 500 `UnknownError`. Two reviews died on
       it within one window (`rev_n8sYlOP…` at round 8, after clearing t1 and t2; also
@@ -59,7 +64,10 @@ that part is pulled out into its own open item rather than hidden inside a tick.
       fallback is the branch the broken fallback refuses to certify. Re-auth first;
       then the review can reach a real verdict and the deploy is an ordinary one.
 
-- [ ] **D-109 is committed, reviewed to t2-clean, and NOT pushed** (`e2e0e81`). t1 and
+- [x] **D-109 is committed, reviewed to t2-clean, and NOT pushed** (`e2e0e81`). DONE
+      2026-08-15: pushed on Vany's word with the review incomplete; `e8db997` is the
+      statement of it. The debt is real and recorded, not waived.
+      ORIGINALLY: t1 and
       t2 both came back clean over six submit rounds and 34 answered findings; t3 never
       read it. Per D-77 that is `failed`, not `passed`, so it waits — a tier that could
       not run is not a tier that found nothing. Once t3 is alive: fresh review of the
@@ -828,7 +836,15 @@ grows sideways is the one nobody can review.
       know where it goes — and two dozen of those would have swamped the diff a reviewer
       was already reading. Counts by file are in the baseline; `store.ts` has ten.
 
-- [ ] **A round finishing after the store closes throws an unhandled rejection.**
+- [x] **A round finishing after the store closes throws an unhandled rejection.** DONE
+      2026-08-15, after three more deploys went through that window in one day. The shape
+      chosen: a store that ANSWERS closed rather than throwing, for the three
+      round-completion writes only (`finishJob`, `updateReview`, `setFailureReason`).
+      Safe because each is recoverable by construction — the job row stays `running` and
+      `reclaimOrphanedJobs` requeues it, which is the same outcome the restart path
+      already produces. Deliberately NOT a general shield: a write to a closed store
+      anywhere else still throws, and a test pins that.
+      ORIGINALLY:
       `Worker.round` → `Store.finishJob` → `database is not open` (`ERR_INVALID_STATE`),
       surfaced by vitest as an unhandled rejection out of `drain.test.ts`. **This is a
       drain-window defect, not a test artefact:** shutdown closes the store while a round

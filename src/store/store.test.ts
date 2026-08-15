@@ -1098,3 +1098,43 @@ describe("held diffs", () => {
     expect(store.heldDiffs("rh")).toStrictEqual([]);
   });
 });
+
+/**
+ * THE DEPLOY WINDOW: a round finishing after the store has closed.
+ *
+ * `Worker.round` writes its own completion, and on shutdown the handle is already shut —
+ * `node:sqlite` throws `ERR_INVALID_STATE: database is not open` out of a detached
+ * promise, which is an unhandled rejection during exactly the window three deploys have
+ * gone wrong in. Refusing the write is safe ONLY because every one of these is
+ * recoverable: the job row stays `running` and `reclaimOrphanedJobs` requeues it at the
+ * next start. That is the same outcome, without the crash.
+ */
+describe("a round completing into a closed store", () => {
+  it("refuses the write instead of throwing, and says so", () => {
+    const s = new Store(":memory:");
+    const repoId = s.upsertRepo("r", "git@x:r.git").id;
+    s.createReview({
+      id: "revC", repoId, principal: "p", branch: "b", intoRef: "main",
+      ticket: "t", type: "code-arch", state: "running", ladder: initialState(),
+    });
+    s.enqueue("revC", "fast");
+    const job = s.claimJob();
+    expect(job).toBeDefined();
+
+    s.close();
+    expect(s.isClosed()).toBe(true);
+
+    // All three of the round's ending writes. Before this, the first one threw.
+    expect(() => s.finishJob(job?.id ?? 0, "done")).not.toThrow();
+    expect(() => s.updateReview("revC", { state: "failed" })).not.toThrow();
+    expect(() => s.setFailureReason("revC", "whatever")).not.toThrow();
+  });
+
+  // The guard is deliberately NOT a general shield: a write to a closed store anywhere
+  // else is still a defect and must still be loud.
+  it("still throws for writes that are not a round's ending", () => {
+    const s = new Store(":memory:");
+    s.close();
+    expect(() => s.upsertRepo("r", "git@x:r2.git")).toThrow();
+  });
+});

@@ -282,7 +282,44 @@ export class Store {
   }
 
   close(): void {
+    this.closed = true;
     this.db.close();
+  }
+
+  /**
+   * THE STORE IS SHUT, AND SAYING SO BEATS THROWING.
+   *
+   * A round in flight when the process goes down writes its own completion — and the
+   * handle is already closed, so `node:sqlite` throws `ERR_INVALID_STATE: database is
+   * not open` out of a detached promise. An unhandled rejection, during exactly the
+   * window three deploys have now gone wrong in, from code whose whole job is to record
+   * what happened.
+   *
+   * Refusing the write is SAFE HERE and nowhere else, and the reason is specific rather
+   * than convenient: everything a round writes at its end is recoverable by design. The
+   * job row stays `running`, and `reclaimOrphanedJobs` requeues exactly those rows at the
+   * next startup — that is what it is for. So the outcome of dropping the write is the
+   * outcome the restart path already produces, while the outcome of throwing is an
+   * unhandled rejection that can take the process with it.
+   *
+   * Said out loud, once per call, because a silent drop is the shape this project
+   * refuses; and NOT used as a general shield — only the three round-completion writes
+   * consult it, so a write to a closed store anywhere else still throws and is still a
+   * defect.
+   */
+  private closed = false;
+
+  isClosed(): boolean {
+    return this.closed;
+  }
+
+  private refusedByClose(what: string): boolean {
+    if (!this.closed) return false;
+    console.error(
+      `[lore:log] ${what} was not written — the store is closed, so this process is going down mid-round. ` +
+        "The job row stays `running` and startup will requeue it; nothing was lost.",
+    );
+    return true;
   }
 
   /**
@@ -458,6 +495,10 @@ export class Store {
     id: string,
     patch: { state?: ReviewState; ladder?: LadderState; treeHash?: string; originTreeHash?: string },
   ): void {
+    // See `refusedByClose`: the deploy window, where a round writes its own ending into
+    // a handle that is already shut. The review keeps the state it had and its `running`
+    // job is requeued at startup — the same place the restart path would have put it.
+    if (this.refusedByClose(`the state of ${id}`)) return;
     // Read first, so the wake below can be about a CHANGE rather than about a write.
     const before = this.db.prepare("SELECT state FROM review WHERE id = ?").get(id) as
       | Record<string, string>
@@ -2628,6 +2669,7 @@ export class Store {
 
   /** Record why a review will not finish, for `failureReason` to hand to the client. */
   setFailureReason(reviewId: string, why: string): void {
+    if (this.refusedByClose(`the failure reason for ${reviewId}`)) return;
     this.db.prepare("UPDATE review SET failed_because = ? WHERE id = ?").run(why, reviewId);
   }
 
@@ -2941,6 +2983,9 @@ export class Store {
   }
 
   finishJob(id: number, state: "done" | "failed", error?: string): void {
+    // See `refusedByClose`: a round completing into a shut store is the deploy window,
+    // and the job row it leaves `running` is exactly what startup requeues.
+    if (this.refusedByClose(`job ${String(id)} finishing as '${state}'`)) return;
     this.db
       .prepare("UPDATE job SET state = ?, last_error = ?, updated_at = ? WHERE id = ?")
       .run(state, n(error), now(), id);
