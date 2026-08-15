@@ -2151,6 +2151,37 @@ D-77 still holds and nothing skips the ladder. What changes is that batching is 
 DEFAULT rather than a compromise: fix everything found, review it together, push it
 together.
 
+**D-77 REVISED, 2026-08-15 — the gate is a BATCH gate, and this is written down rather
+than practised silently.**
+
+D-77 said nothing reaches `origin/main` that a ladder has not read. On 2026-08-15 that was
+overridden five times in one day, each override recorded in its own commit. Vany, asked
+whether to restore the gate or relax it: *"keep overriding, review in batches."*
+
+So the rule changes rather than continuing to be broken. **A commit may reach
+`origin/main` unreviewed; a BATCH may not go unreviewed indefinitely.** The review is
+deferred, not waived, and the deferral is stated in the commit that carries it — as
+`e8db997` does — so the history never claims a verdict it does not have.
+
+**What was traded, stated plainly, because the day produced the evidence both ways.**
+Against: on this same day the ladder read four commits and found three defects in fixes
+shipped hours earlier — a write guarded without its read, a bound granted per call
+instead of per round, a check placed above the one it must follow. Every one passed its
+tests and looked right to me. Batching means defects of that shape live in `main` for
+however long the batch runs. For: the loop costs 25–50 minutes per round and several
+rounds per change, which on a day of small corrections is most of the day, and a gate
+expensive enough to be skipped is not a gate — it is a ritual with an override.
+
+**What does NOT change, and is the whole reason this is a revision rather than a
+repeal:** INV-1 still governs what a review MEANS. A batch review that fails is a failure;
+a tier that could not run is not a tier that found nothing; and `passed` still requires
+that every tier actually read the tree it is signing. Relaxing WHEN the ladder runs does
+not relax what its verdict claims.
+
+`[OPEN]` — what bounds a batch. Nothing yet says how many commits or how many days may
+accumulate before a review is owed, and "in batches" without a bound is "eventually",
+which is how the debt got to five in the first place.
+
 **D-110 — how a client LEARNS a review moved: three surfaces, and the client picks.
 `[OPEN]` — researched 2026-08-15, not built.**
 
