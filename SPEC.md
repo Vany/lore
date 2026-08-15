@@ -2151,6 +2151,76 @@ D-77 still holds and nothing skips the ladder. What changes is that batching is 
 DEFAULT rather than a compromise: fix everything found, review it together, push it
 together.
 
+**D-112 — the review is INCREMENTAL and CHECKPOINTED: it follows the work instead of
+gating a snapshot. Framing built 2026-08-16; checkpoint verdicts `[OPEN]`.**
+
+Vany: *"my idea was incremental reviews. We create an initial review, then the user sends
+us updates and we add them to the review we partially did, then the user fixes findings
+and sends a new update, and then new updates — maybe even while we are in the middle of
+reviewing exactly this piece of code. And the user sends not only findings-fixes, it sends
+its WORK, and we see the full story and review it. Because the review is incremental we do
+not need to spend a lot of effort reading a lot of the code — it is already in cache and
+we know something about it, so incremental review is cheap."*
+
+**MOST OF THIS IS ALREADY BUILT, and saying so is the useful part.** D-80 keeps one
+session per (review, tier) for the whole review, compacted rather than restarted. D-107
+hands a submitted diff to that live session at its next emission boundary — mid-round, no
+waiting, no reset. D-108 makes every way the tree advances look identical to the model: a
+`treeDelta` between what that session last saw and what is there now, plus a t0 delta,
+never a re-read. The expensive thing this idea exists to avoid — a tier re-orienting in a
+worktree it read minutes ago, measured at 31.6 turns and 29% of all model rounds — is
+already gone.
+
+**The cheapness is real and DECAYS, which is the part to design around rather than
+assume.** A kept session re-sends accumulated context every turn against a 97–99% prompt
+cache, so marginal turns are cheap. But the session compacts at 2/3 of the window and
+compaction discards REASONING to keep code. So "it already knows this codebase" holds for
+hours and then quietly stops: a review living for days is not a reviewer with days of
+memory, it is one with the last two thirds of a window and a summary. Nothing measures
+that boundary today.
+
+**WHAT IS ACTUALLY NEW, and what this decision adds:**
+
+*A submit carries WORK, not only answers.* `review_submit` is framed as "your fixes" and
+the settle logic is built around findings being answered. A client pushing ordinary
+development — a feature, a refactor, half-finished thinking — is carried by the machinery
+unchanged and contradicted by every text describing it. That is a framing defect, not an
+engine one, and it is fixed in the texts (D-111's push-then-`pull_fresh` is already the
+cheapest way to send work, since it needs no diff at all).
+
+*The reviewer reads the STORY, not the endpoint.* This is the half worth the most and it
+falls out of D-108 for free: a session that receives deltas sees the sequence — a fix that
+was wrong and then patched, a decision made and reversed, a workaround that outlived its
+cause. Reviewing an evolution is strictly more information than reviewing a tree, and no
+snapshot review can see it.
+
+**THE HARD PART, and it must be settled BEFORE the loop is opened up: what does `passed`
+mean when the tree never stops moving?** D-40 says a signature covers a TREE; INV-1 says a
+review that did not run is not a review that found nothing. A review that accretes for
+ever produces no signed statement about anything — it becomes a companion rather than a
+gate, and the thing a person would merge on does not exist.
+
+**So: CHECKPOINTS.** `[OPEN]`. The review stays open, warm and incremental; on request it
+settles what it has read and signs THAT — *"as of tree X, these tiers read it and
+agreed"* — and then carries on from the same sessions. One conversation, periodic
+verdicts. The alternative considered and rejected is closing and reopening a review per
+checkpoint, which throws away the warm session that is the entire point.
+
+Three things it collides with, all of which need answers first:
+
+- **The per-tier round bound** (default 3) fires on any long-lived review. TODO already
+  carries this as *"doing its job, and it is the wrong instrument"* — an incremental
+  review makes that urgent rather than theoretical.
+- **Admission.** 128 open reviews is a very different number if reviews never end, and a
+  permanent review permanently holds a worktree, a slot, and N kept sessions.
+- **Staleness.** `findings_stale` at 48h and expiry a week later exist to reap abandoned
+  reviews. An incremental review is indistinguishable from an abandoned one by the only
+  signal those use — time since anything moved.
+
+**What must NOT bend:** a checkpoint is a claim about a TREE, made by the tiers that
+actually read that tree. Incremental delivery changes WHEN the ladder runs and what the
+model already knows; it changes nothing about what a verdict may assert.
+
 **D-111 — the client loop's own defects, found by DRIVING it. Two built 2026-08-15, two
 `[OPEN]`.**
 

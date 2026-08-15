@@ -322,6 +322,24 @@ deeper tier when it should. This — not review_start — is the loop. Starting 
 review instead abandons every justification already ratified and re-runs the cheap
 tiers from the beginning.
 
+SEND YOUR WORK, NOT ONLY YOUR ANSWERS. A review is INCREMENTAL: the reviewer keeps one
+conversation per tier for the whole review and is given only what CHANGED since it last
+looked, so it is not re-reading your repository each time. That makes an update cheap,
+and it means you should not save them up.
+
+So send a new feature, a refactor, a half-finished direction you want looked at — not
+just fixes for findings. You do not need to wait for a round to finish, and you do not
+need a reason. The reviewer sees the sequence of your changes rather than a single
+snapshot, which is how it catches what no snapshot can: a fix that was wrong and then
+patched, a decision made and reversed, a workaround that outlived the thing it worked
+around.
+
+Two consequences worth expecting. Findings will arrive about work you are still in the
+middle of — that is the point, not a mistake, and answering "this is unfinished, here is
+where it is going" in a lore-ok is a real answer. And a verdict is always about a TREE:
+a pass means the tiers read the tree you had at that moment, so if you keep sending work
+after it, the pass describes what it read and not what you sent next.
+
 Applied to the review's private copy of your branch. Nothing is committed or pushed — your
 history stays yours. The tree_hash is verified after applying; a mismatch fails
 loudly rather than reviewing code that exists nowhere.

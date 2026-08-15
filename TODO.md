@@ -39,6 +39,43 @@ that part is pulled out into its own open item rather than hidden inside a tick.
 
 ## Now — nothing here is about writing more features
 
+### 2026-08-16 — incremental review (D-112)
+
+- [x] **Say that a submit carries WORK, not only answers.** DONE. The engine already
+      carried it — D-80's kept session, D-107's mid-round delivery, D-108's delta-only
+      opener — and every text describing it said "your fixes". `TOOL_DOCS.submit` now says
+      to send a feature, a refactor, or an unfinished direction, without waiting for a
+      round and without a reason, and warns about the two consequences: findings will
+      arrive about work still in progress (that is the point), and a verdict is always
+      about the TREE the tiers actually read.
+
+- [ ] **CHECKPOINT VERDICTS — the piece that makes incremental safe** (D-112, `[OPEN]`).
+      A review that accretes for ever produces no signed statement about anything: D-40
+      says a signature covers a TREE, so a moving tree has no verdict. The shape: the
+      review stays open and warm, and on request settles what it has read and signs THAT
+      — "as of tree X, these tiers read it and agreed" — then carries on from the same
+      sessions. Rejected alternative: close and reopen per checkpoint, which throws away
+      the warm session that is the whole point.
+
+      **Not built deliberately.** It touches `review_attest`, which today requires a
+      terminal state, and INV-1's rule about what a verdict may assert. Getting that
+      wrong produces a signature over a tree nobody read, which is worse than having no
+      checkpoint at all.
+
+- [ ] **Three things incremental review breaks, all needing answers before the loop opens
+      up.** (a) The per-tier round bound fires on any long-lived review — TODO already
+      calls it "the wrong instrument", and this makes it urgent. (b) Admission: 128 open
+      reviews is a different number if reviews never end, and each holds a worktree, a
+      slot and N kept sessions. (c) Staleness: `findings_stale` at 48h and expiry a week
+      later reap ABANDONED reviews, and their only signal — time since anything moved —
+      cannot tell an incremental review from a dead one.
+
+- [ ] **Measure where the cheapness stops.** A kept session hits 97–99% prompt cache, so
+      marginal turns are cheap — until it compacts at 2/3 of the window, and compaction
+      discards REASONING to keep code. So "it already knows this codebase" holds for hours
+      and then quietly stops. Nothing measures that boundary; the economic case for
+      incremental review rests on it.
+
 ### 2026-08-15 — delivery surfaces, and three fixes to today's fixes
 
 - [ ] **Weigh the MCP Tasks extension as a way to deliver findings** (D-110, `[OPEN]`).
