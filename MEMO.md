@@ -59,6 +59,21 @@ and route cost are different questions and only one was being asked** (D-117, op
 The lesson generalises past this incident: every fallback chain in this service is written
 as "keep going", and none of them asks what continuing costs.
 
+**Where the rule ended up.** Five refusals could cost a whole finding at the start of the
+day; one can now. `severity` maps (D-115), `claim` folds and carries its full text into
+`evidence` (D-116), `evidence`/`failureScenario` clamp with a marked cut, and an impossible
+`line` and a malformed `cwe` are dropped with the repair written into `evidence` — the
+channel turned out to be a field that already existed, following the precedent
+`foldOverlongClaim` set with `Claim in full:`. `checks_skipped` carries losses; `evidence`
+carries repairs, because a repair belongs to the finding rather than to the round.
+
+`.strict()` on unknown keys is the one left, deliberately. My first attempt reversed all
+three and **twelve tests changed sides in one commit** — exactly the shape the reviewer had
+warned me about twice that day — so I narrowed it to the two that are not in doubt and
+wrote the third down as open. An unknown key means the prompt and the contract have parted
+company, which is a bigger fact than any one finding, so reversing it is a decision rather
+than a repair.
+
 **A pattern in three of today's decisions.** D-115 (severity), D-116 (claim), and then
 `evidence`/`failureScenario` are one rule found three times — *validation at the reviewer
 boundary must not be able to lose a finding* — and I fixed it field by field until the
