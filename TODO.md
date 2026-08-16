@@ -41,8 +41,44 @@ that part is pulled out into its own open item rather than hidden inside a tick.
 
 ### 2026-08-16 — the metered fallback, which cost $101.36 in four hours
 
-- [ ] **A subscription falling through to a METERED route must say so at the moment it
-      happens** (D-117, `[OPEN]`). Kimi hit its billing-cycle limit at 05:06 UTC; D-48
+- [ ] **The ceiling PAUSES a review instead of failing it** (D-119). Vany: *"in case of
+      ceiling: compact, do not restart, wait till unfreeze."* Today it wrote `failed` on
+      eight reviews across three people's branches, most at round 0 — the strongest thing
+      lore can say, for a state that is recoverable and bounded.
+
+      Keep the ladder, findings, ratified justifications and pinned worktree. COMPACT the
+      kept sessions (D-80) rather than dropping them, so the resumed round is a cheap
+      continuation and not a cold re-read — that is what makes waiting cheaper than
+      restarting. Tell the client which state it is in and roughly when it lifts; the
+      ceiling is daily, so the wait is knowable.
+
+      **And the staleness sweep must not charge a client for it.** The freeze is lore's
+      doing; time spent frozen cannot count against someone waiting exactly as told.
+
+- [ ] **A CONFIG window on the operator board** (D-118). Vany: *"make config window on web
+      with this checkbox, also put all parameters there. And issue new key for button, also
+      it may create new repo if needed."*
+
+      Every knob in one place, read and write: spend ceiling, tier ladder, the D-117
+      checkbox, sweep intervals, admission limit. Today they are split across a `.env`
+      nobody reads, a JSON file on the host, and `make` targets only I run — an operator
+      cannot see the shape of their own deployment.
+
+      Plus a button that issues a token and CREATES THE REPO when the URL is one lore does
+      not have, replacing `make new NAME=… GIT=…`. **It inherits the one rule that cannot
+      bend: the plaintext is shown once and never stored** — only its hash — so a database
+      backup is not a set of live credentials.
+
+- [x] **A subscription falling through to a METERED route must say so at the moment it
+      happens** — DECIDED 2026-08-16 (D-117), half built. Vany: *"metered is only
+      openrouter. It is human managed."* So metered is a string test on the route that ran
+      (`openrouter/`), answerable BEFORE the call, and whether to allow it is a checkbox in
+      D-118's window rather than something the ladder infers. A deployment that bought
+      metered capacity as a safety net wants the fallback; one on pure subscriptions wants
+      `passed_partial` with the tier in `checks_skipped` — honest, free, already built.
+      The per-call cost is already in the notice (shipped); the toggle waits on D-118.
+
+- [ ] **The original write-up, kept for the evidence** (D-117). Kimi hit its billing-cycle limit at 05:06 UTC; D-48
       parked the route and walked the chain, correctly — onto
       `openrouter/moonshotai/kimi-k3`, the same model by a paid route, at ~$4.83 a call.
       Twenty-one calls, $101.36, every other tier that day costing zero. The route mark

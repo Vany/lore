@@ -419,9 +419,93 @@ unreachable rather than merely unlikely, and any attempt to use it fails loudly.
 
 The staging script refuses to emit an auth file that still contains one.
 
-**D-117 — a subscription exhausting into a METERED route is a different event from a
-route being down, and lore cannot currently tell them apart. `[OPEN]` — measured
-2026-08-16, and it cost $101.36 in four hours.**
+**D-119 — the spend ceiling PAUSES a review; it never fails one. DECIDED 2026-08-16, not
+yet built.**
+
+Vany: *"in case of ceiling: compact, do not restart, wait till unfreeze."*
+
+Today the ceiling wrote `failed` on everything it stopped — eight reviews across three
+colleagues' branches, most at round 0, having read nothing. `failed` is the strongest thing
+lore can say and it means *the ladder did not read the code*, which is true; what is also
+true, and was not said, is that nothing is wrong and the work is recoverable. A client is
+told to report a failure and not merge, when the honest state is *"come back after
+midnight"*.
+
+So the ceiling becomes a PAUSE:
+
+* **Do not restart.** The review keeps its ladder, its findings, its ratified
+  justifications and its pinned worktree. Everything paid for so far stays paid for.
+* **Compact, do not discard.** The kept sessions (D-80) are compacted rather than dropped,
+  so the model keeps what it has learned about the codebase across the freeze and the
+  resumed round is a cheap continuation rather than a cold read. This is the one thing that
+  makes waiting cheaper than restarting.
+* **Wait until it unfreezes.** The ceiling is a daily figure, so the wait is bounded and
+  knowable. The client is told which state it is in and roughly when it lifts — a pause
+  with an ETA is actionable in a way `failed` never is.
+* **`failed` is reserved for what it means.** A review that stopped because the money ran
+  out did not fail; nobody spent anything on the tiers that did not run, and nothing about
+  the code was concluded either way.
+
+This also settles what the staleness sweep must not do to a paused review: the freeze is
+lore's doing, not the client's, so time spent frozen cannot count against a client that is
+waiting exactly as instructed.
+
+**D-118 — the operator board grows a CONFIG window, and it is where the knobs live.
+DECIDED 2026-08-16, not yet built.**
+
+Vany: *"make config window on web with this checkbox, also put all parameters there. And
+issue new key for button, also it may create new repo if needed."*
+
+Everything that is currently an environment variable, a tiers file or a `make` target
+becomes visible and editable in one place, for one reason: the knobs that matter are the
+ones that cost money or decide what runs, and today they are spread across a `.env` nobody
+reads, a JSON file on the host, and commands only I run. An operator cannot see the shape
+of their own deployment.
+
+* **Every parameter, in one window** — the spend ceiling, the tier ladder, the metered
+  toggle below, the sweep intervals, the admission limit. Read AND write.
+* **A button that issues a token**, replacing `make new NAME=… GIT=…`. It creates the
+  repository row when the URL is one lore does not have yet, so provisioning a new person
+  on a new repo is one action rather than a shell session.
+* **The token is shown once and never again**, exactly as `make new` behaves now: the
+  plaintext is not stored, only its hash, so a database backup is not a set of live
+  credentials. The window must not weaken that — it is the one rule the button inherits.
+
+**D-117 — a metered route is one the operator switched on, and that operator is a person.
+DECIDED 2026-08-16 after it cost $101.36 in four hours; not yet built.**
+
+Vany: *"metered is only openrouter. It is human managed."*
+
+Two things follow, and they are what makes this buildable rather than a heuristic.
+
+**Metered means `openrouter/`, and nothing else needs inferring.** Every other provider in
+this deployment is a flat subscription; OpenRouter is the only one that bills per call. So
+"did the fallback chain walk onto the meter" is a string test on the route that ran, not a
+cost model, and it is answerable *before* the call rather than after it.
+
+**Whether to allow it is a human decision, held in config** (D-118's window, as a
+checkbox) rather than inferred by the ladder. A deployment that has deliberately bought
+metered capacity as its safety net wants the fallback; one running purely on subscriptions
+does not, and would rather have `passed_partial` with the tier named in `checks_skipped` —
+honest, free, and already implemented. Neither is right in general, so lore stops guessing
+and asks once.
+
+The incident this decides, kept because it is the evidence: at 05:06 UTC the Kimi
+subscription hit its billing-cycle limit — `403: you have reached your usage limit for this
+billing cycle`. D-48 parked the route and walked the chain exactly as designed, onto
+`openrouter/moonshotai/kimi-k3`: the same model, metered, ~$4.83 a call. Twenty-one calls,
+$101.36, every other tier that day costing zero. The route mark said `stated: false`, the
+fallback is invisible to clients by design, and the only thing that finally spoke was the
+daily ceiling — four hours and a hundred dollars later, to everyone except the person who
+had spent it.
+
+**The fact worth preserving past the fix: route health and route COST are different
+questions, and only one of them was being asked.** Every fallback chain in this service is
+written as "keep going", and none of them asks what continuing costs.
+
+The metered-fallback notice already carries the per-call figure (built 2026-08-16), which
+is the half of this that changes nothing about what runs and so did not wait for a
+decision.
 
 D-48 makes "cannot pay" a route fault: park the route, walk the fallback chain, keep the
 review alive. That is right, and it is silent about the one thing that turns out to matter
