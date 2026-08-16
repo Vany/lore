@@ -44,10 +44,28 @@ which works and no text mentioned. §5's "fixed one layer in costs a round" was 
 For an agent there is no README to stumble across, so an unsaid capability and an absent
 one are the same thing. Check the engine before designing a protocol addition.
 
-**What the day cost.** The $100 daily ceiling was hit at $101.36 and stopped everything,
-including eight of other people's reviews, most at round 0. The ceiling behaved correctly;
-the question it raises is whether one shared ceiling is right now that a batch review can
-run four deep rounds against a twelve-commit diff.
+**What the day cost, and the cause was not volume.** The $100 ceiling fired at $101.36 and
+stopped everything — eight of other people's reviews, most at round 0. Chasing the number
+found the real event: Kimi's subscription hit its billing-cycle limit at 05:06 UTC, D-48
+parked the route and walked the chain exactly as designed, and the next link was
+`openrouter/moonshotai/kimi-k3` — the same model by a METERED route, ~$4.83 a call.
+Twenty-one calls. Every other tier that day cost zero, being on subscriptions.
+
+Nothing said so. The route mark carries `stated: false`, the fallback is invisible to
+clients by design, and the only thing that eventually spoke was the ceiling — four hours
+and a hundred dollars later, to everyone except the person who spent it. **Route health
+and route cost are different questions and only one was being asked** (D-117, open).
+
+The lesson generalises past this incident: every fallback chain in this service is written
+as "keep going", and none of them asks what continuing costs.
+
+**A pattern in three of today's decisions.** D-115 (severity), D-116 (claim), and then
+`evidence`/`failureScenario` are one rule found three times — *validation at the reviewer
+boundary must not be able to lose a finding* — and I fixed it field by field until the
+third, which is exactly how the first two came to exist. The reviewer's own `history`
+lines kept saying it: a defect that recurs is a missing rule, not N unrelated bugs. Worth
+applying to myself faster next time; the fix for instance N should be the fix for the
+class, or the class should be named as still open.
 
 ## 2026-08-16 — D-110, wrong twice: `node_modules` cannot answer a protocol question
 

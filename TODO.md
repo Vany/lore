@@ -39,6 +39,33 @@ that part is pulled out into its own open item rather than hidden inside a tick.
 
 ## Now — nothing here is about writing more features
 
+### 2026-08-16 — the metered fallback, which cost $101.36 in four hours
+
+- [ ] **A subscription falling through to a METERED route must say so at the moment it
+      happens** (D-117, `[OPEN]`). Kimi hit its billing-cycle limit at 05:06 UTC; D-48
+      parked the route and walked the chain, correctly — onto
+      `openrouter/moonshotai/kimi-k3`, the same model by a paid route, at ~$4.83 a call.
+      Twenty-one calls, $101.36, every other tier that day costing zero. The route mark
+      says `stated: false` and nothing else spoke until the $100 ceiling fired four hours
+      later, taking out eight reviews across three colleagues' branches, most at round 0.
+
+      The ceiling worked and is the wrong instrument: by the time it fires the money is
+      gone and the people it stops are not the people who spent it. **Route health and
+      route COST are different questions, and only one was being asked.**
+
+      Three shapes, none chosen — refuse a metered fallback by default (`passed_partial`
+      is honest and free), or keep it and alert the moment it is first taken, or split the
+      ceiling so a gate somebody is waiting on is not starved by a batch being driven.
+      Needs Vany: it decides which models run and what they cost.
+
+- [ ] **A channel for "this arrived malformed and we kept it anyway."** The missing piece
+      behind three refusals that can still cost a finding (D-116's `[OPEN]`): a
+      non-positive `line`, a malformed `cwe`, an unknown key under `.strict()`. Each is a
+      drift detector that fails by DISCARDING a report — the trade D-115 and D-116 have
+      now reversed twice. `discarded` already reaches the client through `checks_skipped`
+      ("t1 produced a finding this review does NOT contain"); this is its mirror, and with
+      it all three can drop the offending field and keep the record.
+
 ### 2026-08-16 — incremental review (D-112)
 
 - [x] **Say that a submit carries WORK, not only answers.** DONE. The engine already

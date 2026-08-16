@@ -419,6 +419,47 @@ unreachable rather than merely unlikely, and any attempt to use it fails loudly.
 
 The staging script refuses to emit an auth file that still contains one.
 
+**D-117 — a subscription exhausting into a METERED route is a different event from a
+route being down, and lore cannot currently tell them apart. `[OPEN]` — measured
+2026-08-16, and it cost $101.36 in four hours.**
+
+D-48 makes "cannot pay" a route fault: park the route, walk the fallback chain, keep the
+review alive. That is right, and it is silent about the one thing that turns out to matter
+most — **whether the chain walked to another free seat or onto the meter.**
+
+What happened, exactly. At 05:06 UTC the Kimi subscription hit its billing-cycle limit:
+`403: You've reached your usage limit for this billing cycle`. `kimi-for-coding/k3` was
+parked, correctly, and every subsequent t2 call fell through to
+`openrouter/moonshotai/kimi-k3` — the same model by a metered route. Twenty-one calls
+later the day's spend was **$101.36, all of it t2, at roughly $4.83 a call**, against a
+$100 ceiling that had been fine every previous day. Every other tier that day cost zero,
+being on subscriptions.
+
+**Nothing said so.** The route mark carries `stated: false`; the fallback is by design
+invisible to the client, which is what D-48 wants; and the only thing that eventually
+spoke was the spend ceiling — four hours and a hundred dollars after the event. It then
+spoke to everyone at once: **eight reviews across three colleagues' branches failed, most
+at round 0**, having read nothing.
+
+The ceiling worked. It is the wrong instrument to find this out from, because by the time
+it fires the money is spent and the people it stops are not the people who spent it.
+
+`[OPEN]`, and the shape of the answer is not obvious, which is why it is not decided here:
+
+* **A metered fallback is a different class of route** and could be refused by default —
+  `passed_partial` with t2 in `checks_skipped` is honest, free, and available today.
+  Against it: a deployment that has deliberately bought metered capacity as its safety net
+  would find its safety net switched off.
+* **Or it stays available and becomes LOUD** — an operator alert at the moment a
+  subscription first falls through to a paid route, naming the per-call cost, rather than
+  a ceiling breach later.
+* **Or the ceiling grows a second dimension**, separating what a gate somebody is waiting
+  on may spend from what a batch review being driven may spend. Today the second starved
+  the first.
+
+Whichever, the fact to preserve is the one the day proved: **route health and route COST
+are different questions, and only one of them was being asked.**
+
 **D-48 — a tier nobody can pay for is a limitation, not a failure.**
 
 Failing the whole review on quota (exit 75) is right when a tier *could* have run and
