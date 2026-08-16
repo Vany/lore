@@ -3,33 +3,50 @@
 Newest first. Updated at the end of each task: what changed, what I learned, what
 surprised me.
 
-## 2026-08-16 — D-110 settled: Tasks is a retired vocabulary, and the era is the fact
+## 2026-08-16 — D-110, wrong twice: `node_modules` cannot answer a protocol question
 
-**What changed.** D-110 closed rather than deferred: the delivery menu is TWO surfaces,
-`subscriptions/listen` (built, D-80/D-103) and `review_poll` (the floor), and there is no
-third one to build. SPEC, `TODO.md` and `research/mcp-subscriptions.md` §3 updated to say
-so; no code moved, because nothing was ever built on the wrong premise.
+**What changed.** D-110 is `[OPEN]` and gated on the SDK, having been "closed" twice today
+on readings that were both wrong. Tasks is ALIVE: 2026-07-28 moved it into the official
+`io.modelcontextprotocol/tasks` extension (SEP-2663) with `tasks/get`, **`tasks/update`
+for client-to-server input**, `tasks/cancel`, a durable `CreateTaskResult` handle, an
+`input_required` state with `inputRequests`, and optional `notifications/tasks` pushes over
+`subscriptions/listen`. What blocks adoption is `@modelcontextprotocol/server@2.0.0`, which
+carries only the superseded 2025 vocabulary. SPEC, `TODO.md` and
+`research/mcp-subscriptions.md` §3 rewritten; no code moved, because nothing had been built
+on any of the wrong premises.
 
-**What I learned — the fact that decides was one lookup away, and I reported a union
-instead.** The installed SDK keeps two wire-era registries. `tasks/get|result|list|cancel`
-and `notifications/tasks/status` live in the **2025-11-25** one; the **2026-07-28** one
-has no `tasks/*` at all, and no `resources/subscribe` either — `subscriptions/listen`
-replaced it. Grepping `node_modules` for method names finds both eras at once and reads
-like one protocol. `research/mcp-subscriptions.md` had said *"the same revision carries a
-task model"* since 08-08, and D-110 inherited it twice on 08-15 without re-checking.
+**What I learned — the error, stated plainly, because it is a method and not a slip.**
+Three times I answered *what does the protocol define* by grepping `node_modules`:
 
-**Surprised me.** Yesterday I parked Tasks with *"there is no `tasks/update`, so it is
-poll-shaped"* — and `notifications/tasks/status` is right there in the 2025 registry, a
-push notification. The conclusion (do not build it) survived on a completely different and
-much stronger reason: every Tasks schema is annotated *"2025-11-25 wire vocabulary with no
-SDK runtime; kept importable for interoperability only"*, and the SDK's result map
-excludes `tasks/*` so the typed request path refuses those methods outright. **A right
-answer resting on a wrong reason is not settled** — it reopens the moment anyone checks,
-which is exactly what happened when Vany asked "what is with channels?".
+1. 08-08 — *"the same revision carries a task model."* Present in the SDK, yes; same
+   revision, no. The grep found both wire eras and returned a union.
+2. 08-15 — *"there is no `tasks/update`, so Tasks is poll-shaped, so it is interop not
+   delivery."* That was the 2025 vocabulary. `tasks/update` is exactly what 2026-07-28
+   ADDED.
+3. 08-16 — *"the 2026 registry has no `tasks/*`, so the protocol dropped it."* That is an
+   SDK which has not implemented the extension, described as a protocol that retired it.
 
-Also worth recording: the transport items parked as "on a clock" cost nothing. Stateless
-transport drops `Mcp-Session-Id`, a string lore's source never mentions, and the
-deprecated legacy HTTP+SSE transport is one we do not use. The look took one grep.
+The SDK says what our dependency supports today. The spec says what is standard. They
+diverge for months, and `node_modules` will not tell you which question you just asked.
+
+**Surprised me — twice, in opposite directions.** First that the SDK annotates its own
+Tasks schemas *"no SDK runtime; kept importable for interoperability only"*, which reads
+exactly like a retired feature and is in fact a library mid-migration. Then how close the
+real extension is to lore: `review_submit` is `tasks/update`, `needs_human` is
+`input_required`, `check_back_after_ms` is `pollIntervalMs`, expiry is `ttlMs`, and the
+extension's own motivating examples are *"CI pipelines, human approvals, review steps"*.
+We built an instance of this shape before it had a name. The one place we differ, lore is
+the weaker side: `tasks/get` returns whole state while `review_poll` consumes deltas, which
+is BUGS.md §3's complaint about our own design.
+
+**What actually found it.** Vany asked *"may it be problems with the library, not with the
+mechanism itself?"* — the one question that separates the two sources. Nothing in my own
+re-check would have found it, because my re-check was a better grep of the same wrong
+place.
+
+Also recorded: the transport items parked as "on a clock" cost nothing. Stateless transport
+drops `Mcp-Session-Id`, a string lore's source never mentions, and the deprecated legacy
+HTTP+SSE transport is one we do not use. That one really was a single grep.
 
 ## 2026-08-14 — D-109: the deep tiers run together, and a dead credential walks the chain
 

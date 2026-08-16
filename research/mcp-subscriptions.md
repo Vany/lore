@@ -3,8 +3,9 @@
 **Wire protocol verified 2026-08-06. §7, the SDK layer, added 2026-08-08** after four
 wrong diagnoses in one evening — read that section before writing any client, because
 every trap in it fails SILENTLY and the wire half below is not enough to avoid them.
-**§3 corrected 2026-08-16**: it had put the Tasks vocabulary in the wrong wire era, which
-is the one fact that decides whether Tasks is worth adopting (it is not).
+**§3 rewritten 2026-08-16** and now separates two questions this file kept conflating:
+what the PROTOCOL defines (read from the spec) versus what the installed SDK IMPLEMENTS
+(read from `node_modules`). Tasks is the right shape and the SDK does not carry it.
 
 Checked against the published spec revision `2026-07-28` and against the INSTALLED
 `@modelcontextprotocol` packages at **2.0.0**, which is what this deployment runs.
@@ -124,34 +125,71 @@ neither. lore declares both (`src/mcp/server.ts`); `listChanged` comes free with
 listen router drops `resourceSubscriptions` from the honoured filter and answers the
 subscription with an empty ack — accepted, and silent forever.
 
-## 3. Tasks is not a candidate — re-checked 2026-08-16, and the earlier note here was wrong
+## 3. Tasks — the right shape, blocked on the SDK. Checked 2026-08-16 against the SPEC
 
-This section used to say *"the same revision carries a task model"*, listing `tasks/get`,
-`tasks/list`, `tasks/status`, `tasks/result`, `tasks/cancel` as present in the installed
-SDK, and called it conceptually the closer fit — a review outlives a request, which is
-what tasks were added for. **"Present in the SDK" was true and "the same revision" was
-not**, and the difference is the whole answer.
+**Read the distinction in this section's title before anything below it.** What the
+PROTOCOL defines and what the installed SDK implements are different questions with
+different sources, and every wrong answer this file has carried came from answering the
+first with the second.
 
-The SDK carries TWO wire-era registries (`server@2.0.0`,
-`dist/src-CX2iR2pK.mjs`: `rev2025RequestMethods` vs `rev2026RequestMethods`):
+### What the protocol says (2026-07-28 changelog, key change 6)
 
-- **2025-11-25** — `tasks/get`, `tasks/result`, `tasks/list`, `tasks/cancel`, plus a push
-  `notifications/tasks/status`.
+> *"Move experimental tasks out of the core protocol and into an official extension
+> (`io.modelcontextprotocol/tasks`). The redesigned extension replaces the blocking
+> `tasks/result` method with polling via `tasks/get` and a new `tasks/update` for
+> client-to-server input, removes `tasks/list`, and allows servers to return task handles
+> unsolicited without per-request opt-in (SEP-2663)."*
+
+So the live surface is `tasks/get`, `tasks/update`, `tasks/cancel`, with
+`CreateTaskResult` (`resultType: "task"`, carrying `taskId`, `ttlMs`, `pollIntervalMs`)
+returned in place of a blocking result. Status is `working | input_required | completed |
+failed | cancelled`; the last three are terminal. A task that needs input moves to
+`input_required` and exposes `inputRequests`, which the client answers with
+`tasks/update`. Servers MAY push `notifications/tasks` carrying the full task state, opted
+into through `subscriptions/listen` — so a streaming client needs no poll at all, and
+polling is the documented default rather than the only way.
+
+`tasks/list` and `tasks/result` are REMOVED, and there is no compatibility shim for the
+2025 experimental API.
+
+### What the installed SDK implements (server@2.0.0, core@2.0.0)
+
+**Not that.** It carries the *superseded* 2025 vocabulary and nothing of the new one. The
+SDK keeps two wire-era registries (`dist/src-CX2iR2pK.mjs`: `rev2025RequestMethods` vs
+`rev2026RequestMethods`):
+
+- **2025-11-25** — `tasks/get`, `tasks/result`, `tasks/list`, `tasks/cancel`, plus
+  `notifications/tasks/status`. Every schema annotated *"2025-11-25 wire vocabulary with
+  no SDK runtime; kept importable for interoperability only"*, and `codecResultValidator`
+  says the result map *"deliberately excludes the `tasks/*` methods, so the spec-method
+  overload refuses them up front"*.
 - **2026-07-28** — `tools/call`, `tools/list`, `prompts/get`, `prompts/list`,
   `resources/list`, `resources/templates/list`, `resources/read`, `completion/complete`,
-  `server/discover`, `subscriptions/listen`. **No `tasks/*`.** Also no
-  `resources/subscribe`: `subscriptions/listen` replaced it.
+  `server/discover`, `subscriptions/listen`. **No `tasks/*`, no `notifications/tasks`.**
+  Also no `resources/subscribe`: `subscriptions/listen` replaced it.
 
-Every Tasks schema in `core@2.0.0` is annotated *"2025-11-25 wire vocabulary with no SDK
-runtime; kept importable for interoperability only"*, and `codecResultValidator`'s own
-comment says the result map *"deliberately excludes the `tasks/*` methods, so the
-spec-method overload refuses them up front"*. So it is not an unimplemented-but-coming
-surface; it is a superseded one, kept importable for talking to 2025-era peers.
+No npm package carries the extension either — `@modelcontextprotocol/ext-tasks`,
+`/tasks` and `/extensions` are all 404 — and `github.com/modelcontextprotocol/ext-tasks`
+describes itself as under development.
 
-**Reading the method names out of `node_modules` was not enough — the grep that found
-them found both eras at once and reported a union.** Which era a method belongs to is the
-fact that decides, and it is one registry lookup away. Cost: a decision recorded twice on
-a wrong premise (D-110), settled only when someone re-checked.
+### The conclusion, and the two ways this file got it wrong
+
+Tasks is the right shape for a review service and cannot be built today; the gate is SDK
+support, not the protocol. See D-110 for the method-by-method mapping onto lore's tools.
+
+Twice a conclusion about the PROTOCOL was drawn from `node_modules`:
+
+1. 08-08 — *"the same revision carries a task model"*. Present in the SDK: true. Same
+   revision: false. A grep for method names finds both eras at once and returns a union.
+2. 08-15/16 — first *"there is no `tasks/update`, so Tasks is poll-shaped"* (that was the
+   2025 vocabulary; `tasks/update` is exactly what 2026-07-28 ADDED), then *"the 2026
+   registry has no `tasks/*`, so the protocol dropped it"* (that is an SDK that has not
+   implemented the extension).
+
+**`node_modules` answers what our dependency supports today. It cannot answer what the
+protocol says, and it will not tell you which question you asked.** Cost: a decision
+recorded three times, twice wrong, corrected only when Vany asked whether the problem was
+the library or the mechanism.
 
 ## 4. The era is opt-in on the client — measured 2026-08-06
 

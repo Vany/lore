@@ -2306,27 +2306,25 @@ not relax what its verdict claims.
 accumulate before a review is owed, and "in batches" without a bound is "eventually",
 which is how the debt got to five in the first place.
 
-**D-110 — how a client LEARNS a review moved: TWO surfaces, both built, and the client
-picks. SETTLED 2026-08-16 — there is no third one to build.**
+**D-110 — how a client LEARNS a review moved: two surfaces built, and a third that is
+the right shape and cannot be built yet. `[OPEN]`, gated on the SDK — 2026-08-16.**
 
 Vany: *"let's investigate how these Anthropic channels work, can we use them instead of
 subscriptions? if yes, let's add this into methods of receiving findings and review
 state… so we will have resource subscriptions, channels, and polling if there is no
 working async method. The model has to choose what the harness is supporting."*
 
-**Checked rather than assumed, and the premise moved twice.** "Channels" is not an MCP
-primitive. In the current wire revision (2026-07-28) the server-to-client push surface is
-`subscriptions/listen` — a single stream a client opts into per notification type,
-replacing both the old HTTP GET/SSE channel and `resources/subscribe`, which the 2026
-registry no longer carries. **lore already implements it**: the server declares
-`resources: { subscribe: true }` (the declared bit is what makes the SDK honour a
-listener's filter at all), and wakes every subscriber with
-`notifications/resources/updated` on each state change (D-80, D-103). So there was never
+**"Channels" is not an MCP primitive, and that part was never in doubt.** In the current
+wire revision (2026-07-28) the server-to-client push surface is `subscriptions/listen` — a
+single long-lived stream a client opts into per notification type, replacing both the HTTP
+GET endpoint and `resources/subscribe`/`resources/unsubscribe`. **lore already implements
+it**: the server declares `resources: { subscribe: true }` (the declared bit is what makes
+the SDK honour a listener's filter at all), and wakes every subscriber with
+`notifications/resources/updated` on each state change (D-80, D-103). There was never
 anything to adopt INSTEAD of subscriptions — the thing the question reached for is the
 thing we have.
 
-**The menu is two, and Vany's rule stands unchanged — the client chooses what its harness
-supports:**
+**What is built, and stays the client's choice:**
 
 | surface | state | what it is for |
 |---|---|---|
@@ -2339,40 +2337,70 @@ That is not a fallback in the apologetic sense: it is the only surface that cann
 taken away by a harness limitation, and INV-1's reasoning applies — a delivery mechanism
 that silently does not work is indistinguishable from a review that found nothing.
 
-**Why there is no third surface: the MCP Tasks extension is a RETIRED vocabulary, not an
-emerging one.** Read out of `@modelcontextprotocol/server@2.0.0` and `core@2.0.0`, which
-lore already depends on, rather than out of an announcement:
+**The MCP Tasks extension is the right shape for what lore is, and the fit is close
+enough to be uncomfortable.** 2026-07-28 moved tasks out of the experimental core into an
+official extension, `io.modelcontextprotocol/tasks` (SEP-2663, specified at
+`github.com/modelcontextprotocol/ext-tasks`). The redesign drops the blocking
+`tasks/result` and `tasks/list`, keeps polling via `tasks/get`, and **adds `tasks/update`
+for client-to-server input into a running task**. Status pushes exist as
+`notifications/tasks`, opted into through `subscriptions/listen` and carrying the whole
+task state, so a client that can hold a stream needs no `tasks/get` round-trip at all.
 
-- The SDK keeps two wire-era registries. The 2025-11-25 one carries `tasks/get`,
-  `tasks/result`, `tasks/list`, `tasks/cancel` and a `notifications/tasks/status` push.
-  **The 2026-07-28 one carries no `tasks/*` at all** — its request set is `tools/*`,
-  `prompts/*`, `resources/{list,templates/list,read}`, `completion/complete`,
-  `server/discover` and `subscriptions/listen`.
-- Every Tasks schema in the SDK is annotated *"2025-11-25 wire vocabulary with no SDK
-  runtime; kept importable for interoperability only"*, and the result map deliberately
-  excludes `tasks/*` so the typed request path refuses those methods up front.
+Every bespoke tool lore has is a spelling of something this extension already names:
 
-So Tasks is not the standard shape for long-running async work that it was pitched as; it
-is the PREVIOUS attempt at one, kept importable for talking to 2025-era peers. Building on
-it would mean hand-implementing a deprecated vocabulary against an SDK engineered to
-refuse it, to reach clients that would have to be a protocol revision behind. That is not
-an interop win, and the question is closed rather than deferred.
+| lore | Tasks extension |
+|---|---|
+| `review_start` returns an id immediately | `CreateTaskResult`, `resultType: "task"`, `taskId` |
+| `review_poll` | `tasks/get` |
+| `check_back_after_ms` | `pollIntervalMs` |
+| review expiry (`findings_stale`, then abandoned) | `ttlMs` |
+| `review_submit` — the client sends WORK into a running review (D-112) | `tasks/update` with `inputResponses` |
+| `needs_human` — the ladder stops and waits for a person | status `input_required` with `inputRequests` |
+| `review_cancel` | `tasks/cancel` (cooperative, same as ours) |
+| `queued`/`running` → `passed`/`failed`/`cancelled` | `working` → `completed`/`failed`/`cancelled` |
+| resource wake on state change (D-80) | `notifications/tasks` over `subscriptions/listen` |
 
-**A live delivery surface is only ever added on evidence of a client that cannot use the
-two we have** — this is the general rule the Tasks detour produced. A second spelling of a
-working surface, built for no client that exists, is a second thing to keep correct, and
-`review_poll` carries semantics a generic transport would have to duplicate or discard:
-deltas, `check_back_after_ms` measured from this repository's own completed rounds, and
-the settle/justify vocabulary.
+The extension's own motivating examples are *"CI pipelines, human approvals, review
+steps"*. lore is not adjacent to this shape; it is an instance of it, built before the
+shape had a name.
 
-**The transport changes in the same revision cost lore nothing.** It makes the transport
-stateless and drops `Mcp-Session-Id` — which lore's source never mentions, so there is
-nothing to migrate — and deprecates the legacy HTTP+SSE transport with a year-long
-offramp we do not use.
+**It cannot be built today, and the blocker is the LIBRARY, not the protocol.**
+`@modelcontextprotocol/server@2.0.0` and `core@2.0.0` carry only the *superseded* 2025
+task vocabulary — `tasks/get`, `tasks/result`, `tasks/list`, `tasks/cancel`,
+`notifications/tasks/status` — every schema annotated *"2025-11-25 wire vocabulary with no
+SDK runtime; kept importable for interoperability only"*, with the result map excluding
+`tasks/*` so the typed request path refuses them outright. The SDK's 2026-07-28 registry
+carries no `tasks/*` and no `notifications/tasks`. No npm package implements the extension
+(`@modelcontextprotocol/ext-tasks` and siblings are 404), and the extension repo describes
+itself as under development.
 
-Verified 2026-08-16 against the installed SDK (`server@2.0.0`, `core@2.0.0`), not against
-release notes; the SDK's own `LATEST_PROTOCOL_VERSION` is `2025-11-25`, while its modern
-wire codec targets `2026-07-28`, so version names alone answer nothing here.
+**So the gate is SDK support, and nothing else.** Adopting it means the delta over what we
+already run is small — the state machine, the durable handle, the mid-flight input and the
+cooperative cancel all exist — and the gain is that a harness which has never heard of
+lore can drive a review. Hand-rolling the wire against an SDK that refuses those methods is
+the one thing not to do. Re-check the SDK, not the announcement; when the methods appear in
+its 2026 registry with a runtime, this becomes work rather than a question.
+
+**One semantic we would have to give up or defend:** `review_poll` returns DELTAS and
+consumes them, while `tasks/get` returns the whole task state every time. BUGS.md §3 is
+already the complaint that a client which loses its notes cannot recover its open findings
+— so on that point the standard shape is better than ours, and the delta model is the part
+to justify rather than the part to preserve.
+
+**The transport changes in the same revision cost lore nothing.** Stateless transport drops
+`Mcp-Session-Id` — a string lore's source never mentions — and the legacy HTTP+SSE
+transport is deprecated with a year-long offramp we do not use.
+
+**How this was got wrong twice, recorded because the method is the lesson.** Both earlier
+readings concluded a PROTOCOL fact from a LIBRARY artifact: first *"there is no
+`tasks/update`, so Tasks is poll-shaped"* (reading the 2025 vocabulary, when `tasks/update`
+is precisely what 2026-07-28 added), then *"the 2026 registry has no `tasks/*`, so the
+protocol dropped it"* (reading an SDK that has not implemented the extension). Grepping
+`node_modules` answers what our dependency supports today; it cannot answer what the
+protocol says, and it silently returns a union of both wire eras. Vany asked the question
+that separates them — *is this the library or the mechanism?* — and the answer flipped.
+Checked 2026-08-16 against the published 2026-07-28 changelog and the Tasks extension
+documentation, with the SDK read only for what the SDK can answer.
 
 **D-109 — the deep tiers run together: a ladder of RUNGS, findings crossing between the
 models as they are found. BUILT 2026-08-14.**

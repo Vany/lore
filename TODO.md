@@ -78,27 +78,37 @@ that part is pulled out into its own open item rather than hidden inside a tick.
 
 ### 2026-08-15 — delivery surfaces, and three fixes to today's fixes
 
-- [x] **Weigh the MCP Tasks extension as a way to deliver findings** (D-110). **CLOSED
-      2026-08-16, nothing to build.** The premise moved twice. First: "channels" is not an
-      MCP primitive — the push surface is `subscriptions/listen`, and lore already
-      implements it, so there was never anything to adopt instead of subscriptions.
+- [ ] **Adopt the MCP Tasks extension when the SDK ships it** (D-110, `[OPEN]`, gated —
+      NOT closed, and NOT a design question any more).
 
-      Second, and the reason this is closed rather than deferred: **Tasks is a RETIRED
-      vocabulary, not an emerging one.** The SDK keeps two wire-era registries, and the
-      2026-07-28 one carries no `tasks/*` at all — only `tools/*`, `prompts/*`,
-      `resources/{list,templates/list,read}`, `completion/complete`, `server/discover` and
-      `subscriptions/listen`. Every Tasks schema is annotated *"2025-11-25 wire vocabulary
-      with no SDK runtime; kept importable for interoperability only"*, and the result map
-      excludes `tasks/*` so the typed request path refuses those methods outright.
+      The protocol answer is settled and favourable: 2026-07-28 moved tasks into the
+      official `io.modelcontextprotocol/tasks` extension (SEP-2663) with `tasks/get`,
+      **`tasks/update` for client-to-server input**, `tasks/cancel`, a `CreateTaskResult`
+      handle carrying `ttlMs`/`pollIntervalMs`, an `input_required` state with
+      `inputRequests`, and optional `notifications/tasks` pushes over
+      `subscriptions/listen`. That is lore's own state machine with standard names —
+      `review_submit` is `tasks/update`, `needs_human` is `input_required`. D-110 has the
+      full mapping.
 
-      Yesterday's reason for parking it — *"there is no `tasks/update`, so it is
-      poll-shaped"* — was wrong on the fact: `notifications/tasks/status` is right there in
-      the 2025 registry. The verdict survived on a better reason, which is the only kind
-      worth keeping, since a wrong reason reopens a settled question the moment someone
-      checks it.
+      **The blocker is the LIBRARY.** `@modelcontextprotocol/server@2.0.0` carries only
+      the superseded 2025 vocabulary (deprecated, no runtime, refused by the typed request
+      path); its 2026 registry has no `tasks/*` and no `notifications/tasks`. No npm
+      package implements the extension. Do not hand-roll the wire against an SDK that
+      refuses those methods.
 
-      Polling stays the FLOOR whatever happens, and a live delivery surface is only ever
-      added on evidence of a client that cannot use the two we have.
+      **The check is on the SDK, not the announcement.** When `tasks/get`/`tasks/update`
+      appear in its 2026 registry with a runtime, this becomes work: adopt, keep
+      `review_poll` as the floor, and decide what happens to the delta semantics
+      (`tasks/get` returns whole state — BUGS.md §3 says that is the better behaviour, so
+      the delta model is the part that needs defending).
+
+- [ ] **Never answer a protocol question from `node_modules` again** (2026-08-16). D-110
+      was recorded three times and twice wrongly, each time by reading the installed SDK
+      and reporting it as the specification — which cannot work, because a grep over
+      `node_modules` returns a union of both wire eras and never says which question it
+      answered. The spec says what is standard; the SDK says what our dependency supports
+      today; the two diverge for months at a time. Both sources, named separately, or the
+      note is not checked.
 
 - [x] **Transport changes in the same revision: NOT on a clock after all** (2026-08-16).
       Stateless transport drops `Mcp-Session-Id` — which lore's source never mentions, so
