@@ -41,26 +41,52 @@ that part is pulled out into its own open item rather than hidden inside a tick.
 
 ### 2026-08-16 — the metered fallback, which cost $101.36 in four hours
 
-- [ ] **The ceiling PAUSES a review instead of failing it** (D-119). Vany: *"in case of
-      ceiling: compact, do not restart, wait till unfreeze."* Today it wrote `failed` on
-      eight reviews across three people's branches, most at round 0 — the strongest thing
-      lore can say, for a state that is recoverable and bounded.
+- [x] **The ceiling is GONE, and price decides nothing** — D-121, built 2026-08-17. Vany:
+      *"we only show the price, there is no decision on the basis of it."* D-119's pause
+      shipped on 2026-08-16 and lasted one day: it was right that `failed` was too strong,
+      and still the wrong instrument. A paused gate is a gate that did not run, so the
+      ceiling traded an invoice for the one outcome this project holds to be worst — and
+      it stopped eight people who had not spent the money.
 
-      Keep the ladder, findings, ratified justifications and pinned worktree. COMPACT the
-      kept sessions (D-80) rather than dropping them, so the resumed round is a cheap
-      continuation and not a cold re-read — that is what makes waiting cheaper than
-      restarting. Tell the client which state it is in and roughly when it lifts; the
-      ceiling is daily, so the wait is knowable.
+      Removed: `mayStart` and the enqueue refusal, `frozenBySpend` and the dispatcher
+      freeze, the round-boundary backstop, the sweep exemption, both spend alerts,
+      `hasMeteredUsage`, and `LORE_DAILY_CEILING_USD` — which now REFUSES TO START if it is
+      still set, because believing a number caps the day when none does is worse than
+      having no answer. `/status` publishes `allow_metered` instead.
 
-      **And the staleness sweep must not charge a client for it.** The freeze is lore's
-      doing; time spent frozen cannot count against someone waiting exactly as told.
+      **What is given up, stated:** nothing bounds the total. Under `LORE_ALLOW_METERED=0`
+      (the default, and this deployment) the bound is structural — no charging route is
+      ever called. Under `=1` a lost subscription bills every call until a person notices,
+      and that is now a purchase somebody made rather than one that happened to them.
+
+- [ ] **eslint has NEVER run on lore's own repository, and cannot yet.** Every review of
+      this repo reports `eslint: no `lint` script and no eslint config` in
+      `checks_skipped` — one of T0's four engines dark on the repo whose whole purpose is
+      catching what people miss, and we had both been reading past the line for weeks.
+      Surfaced 2026-08-17 while driving our own review.
+
+      **Blocked upstream, verified rather than assumed.** `typescript-eslint@8.67.0` (and
+      its canary) peer-requires `typescript >=4.8.4 <6.1.0`; this repo is on 7.0.2. Forced
+      into a scratch project it does not degrade — it THROWS at import: *"typescript-eslint
+      does not support TS 7.0"*, pointing at
+      https://github.com/typescript-eslint/typescript-eslint/issues/10940. The documented
+      side-by-side workaround needs the RESOLVED `typescript` to be 6.x, which would take
+      our own `tsc --noEmit` with it, and TS 7 is load-bearing here (`erasableSyntaxOnly`,
+      no build step, D-33's source-is-the-binary).
+
+      So: not forced, not faked. Options when 10940 lands, or sooner if it is worth the
+      machinery — a separate lint workspace with its own TypeScript, or `oxlint`/`biome`,
+      which parse TS themselves and have no TypeScript peer at all. **The gap stays
+      REPORTED in the meantime**, which is the one part already working: the engine says it
+      could not run rather than passing, exactly as INV-1 requires.
 
 - [ ] **A CONFIG window on the operator board** (D-118). Vany: *"make config window on web
       with this checkbox, also put all parameters there. And issue new key for button, also
       it may create new repo if needed."*
 
-      Every knob in one place, read and write: spend ceiling, tier ladder, the D-117
-      checkbox, sweep intervals, admission limit. Today they are split across a `.env`
+      Every knob in one place, read and write: tier ladder, D-117's metered toggle
+      (`LORE_ALLOW_METERED`, live as an env var since 2026-08-17), sweep intervals,
+      admission limit. Today they are split across a `.env`
       nobody reads, a JSON file on the host, and `make` targets only I run — an operator
       cannot see the shape of their own deployment.
 
@@ -76,9 +102,12 @@ that part is pulled out into its own open item rather than hidden inside a tick.
       D-118's window rather than something the ladder infers. A deployment that bought
       metered capacity as a safety net wants the fallback; one on pure subscriptions wants
       `passed_partial` with the tier in `checks_skipped` — honest, free, already built.
-      The per-call cost is already in the notice (shipped); the toggle waits on D-118.
+      **BUILT 2026-08-17**: `isMeteredRoute` in `src/core/metered.ts` filters the fallback
+      chain, `LORE_ALLOW_METERED` (default `0`) is the toggle, and it moves into D-118's
+      window when that lands rather than waiting for it. The tier's own model is never
+      filtered — configuring `openrouter/x` IS switching it on.
 
-- [ ] **The original write-up, kept for the evidence** (D-117). Kimi hit its billing-cycle limit at 05:06 UTC; D-48
+- [x] **The original write-up, kept for the evidence** (D-117). Kimi hit its billing-cycle limit at 05:06 UTC; D-48
       parked the route and walked the chain, correctly — onto
       `openrouter/moonshotai/kimi-k3`, the same model by a paid route, at ~$4.83 a call.
       Twenty-one calls, $101.36, every other tier that day costing zero. The route mark
@@ -89,10 +118,11 @@ that part is pulled out into its own open item rather than hidden inside a tick.
       gone and the people it stops are not the people who spent it. **Route health and
       route COST are different questions, and only one was being asked.**
 
-      Three shapes, none chosen — refuse a metered fallback by default (`passed_partial`
-      is honest and free), or keep it and alert the moment it is first taken, or split the
-      ceiling so a gate somebody is waiting on is not starved by a batch being driven.
-      Needs Vany: it decides which models run and what they cost.
+      Answered 2026-08-17: the first shape, made switchable. Refused by default, restored
+      by `LORE_ALLOW_METERED=1` for a deployment that deliberately bought the capacity. The
+      second shape shipped too and is not an alternative — the per-call figure already
+      reaches the operator log the moment a chain falls back. The third died with the
+      ceiling (D-121).
 
 - [ ] **A channel for "this arrived malformed and we kept it anyway."** The missing piece
       behind three refusals that can still cost a finding (D-116's `[OPEN]`): a

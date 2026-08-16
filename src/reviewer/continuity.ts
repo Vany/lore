@@ -64,6 +64,46 @@ export function sessionKey(reviewId: string, tierId: string, model: string): str
 }
 
 /**
+ * WHERE KEPT SESSIONS SURVIVE A RESTART.
+ *
+ * A port, not the store, because `Reviewer` talks to opencode and should not also know
+ * what a database is — and because a test needs to prove "a NEW Reviewer continues what
+ * the old one opened", which is a two-instance question that a private Map cannot express
+ * at all.
+ *
+ * It exists because the map was only ever in memory. Everything else D-80 needs was
+ * already durable: the ladder, the findings, the ratified justifications, the pinned
+ * worktree, and opencode's own sessions (a named volume, which survives the container
+ * being recreated). Just the IDS were forgotten, so a deploy silently downgraded every
+ * open review to a cold read of the full diff — the expensive half of a restart, and the
+ * half nothing reported.
+ *
+ * Vany: *"deployment must not kill the full ladder, may be one step."*
+ *
+ * Absent is a supported deployment and means the old behaviour exactly: the CLI keeps no
+ * sessions between processes because it does not outlive one.
+ */
+export interface KeptSessions {
+  get(key: string): string | undefined;
+  set(key: string, sessionId: string): void;
+  /** The session is gone from opencode; never resume this key again. */
+  forget(key: string): void;
+  /**
+   * Every key on record — which the reconcile needs and a lookup cannot give it.
+   *
+   * Durable ids made a leak reachable that the in-memory map could not have. The worker's
+   * reconcile is the designated backstop for the ONE review ending that has no job and no
+   * cancel — the retention sweep marking a `findings_ready` review `expired` in SQL — and
+   * it asks `keptReviews()` what to sweep. Reading only the process-local cache, it sees
+   * nothing after a restart, which is precisely the event these rows exist for: the rows
+   * survive the 90-day review deletion (meta has no foreign key) and the opencode sessions
+   * live until opencode itself restarts, which is the accumulation `release` exists to
+   * prevent.
+   */
+  keys(): readonly string[];
+}
+
+/**
  * Is this session close enough to full to be compacted before the next turn?
  *
  * `used` is the context the LAST turn actually carried — input plus cache reads on the

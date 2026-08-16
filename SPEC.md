@@ -442,7 +442,8 @@ figure, no per-call cost, no "out of quota", no "come back when the budget reset
 
 * `failed_because: "not started: today's spend 101.36 has reached the 100.00 ceiling"` —
   the exact string eight of other people's reviews carried today. It is lore's ledger,
-  printed in their failure.
+  printed in their failure. Removed at the source a day later: nothing refuses a review for
+  money any more (D-121), so the sentence has no way to be written.
 * The metered-fallback notice in `checks_skipped`, which briefly carried `THIS CALL COST
   $4.83`. Fixed the same day it shipped: the client's line names the ROUTE — which is
   genuinely theirs, because D-49's independence claim rests on which models read the code
@@ -455,50 +456,92 @@ confess. It is something to fix. The operator gets everything — the ceiling, t
 per-call cost, the parked route, the pause; the client gets a service that either reviews
 their code or says plainly what it did not examine.
 
-**D-119 — the spend ceiling PAUSES a review; it never fails one. BUILT 2026-08-16.**
+**D-122 — a kept session outlives the process that opened it, so a deploy costs ONE STEP.
+DECIDED and BUILT 2026-08-17.**
 
-Vany: *"in case of ceiling: compact, do not restart, wait till unfreeze."*
+Vany: *"deployment must not kill the full ladder, may be one step."*
 
-Today the ceiling wrote `failed` on everything it stopped — eight reviews across three
-colleagues' branches, most at round 0, having read nothing. `failed` is the strongest thing
-lore can say and it means *the ladder did not read the code*, which is true; what is also
-true, and was not said, is that nothing is wrong and the work is recoverable. A client is
-told to report a failure and not merge, when the honest state is *"come back after
-midnight"*.
+D-80 made a review one conversation per tier instead of a series of cold audits, and that
+is most of this service's cost model. The session ids lived in a `Map` on the `Reviewer`
+instance and nowhere else — so a restart forgot all of them, and every open review started
+its next round cold, re-reading its whole diff at full price.
 
-So the ceiling becomes a PAUSE:
+**opencode had lost nothing.** Its session store is the `opencode-data` named volume, which
+survives the container being recreated; only lore's index of it was gone. So the expensive
+half of every deploy was avoidable bookkeeping, and it was invisible: no alert, no status
+field, nothing in the logs. The `109 minutes of t2 work` one morning attributed to the
+requeue was mostly this.
 
-* **Do not restart.** The review keeps its ladder, its findings, its ratified
-  justifications and its pinned worktree. Everything paid for so far stays paid for.
-* **Compact, do not discard.** The kept sessions (D-80) are compacted rather than dropped,
-  so the model keeps what it has learned about the codebase across the freeze and the
-  resumed round is a cheap continuation rather than a cold read. This is the one thing that
-  makes waiting cheaper than restarting.
-**How it is built: the CLAIM is gated, not the round.** The check moved from inside
-`runRound` to the dispatcher, beside the drain check, and that is the whole trick — a job
-that is never claimed cannot be failed. It stays `queued`, the review stays in whatever
-state it was, and no `attempts` is burned against the give-up bound. The round-level check
-survives as a backstop for the seam (a job claimed a moment before the ceiling tripped)
-and now throws `ServiceUnreachable`, which the worker already requeues on without touching
-the review — from a review's point of view a provider it cannot pay for is one it cannot
-reach. **The retention sweep is skipped whole while frozen**, because `expired` after 48h
-of not moving must never be said about somebody who was not moving *because lore was not
-working*; a freeze is bounded by the day and cannot reap a review alone, but it can push
-one that was already close, and that review would be destroyed for our outage.
+The ids are now rows in `meta`, keyed by the composed `sessionKey` (review, tier, MODEL) so
+there is one definition of that key and it lives beside the sessions in
+`reviewer/continuity.ts`. **Written when the session OPENS, not when the round ends** — a
+round that dies mid-call is precisely the case they exist for, and an end-of-round write
+would not exist for any of them.
 
-* **Wait until it unfreezes, and say NOTHING about why.** Per D-120 the freeze is lore's
-  business, so to the client the review is simply still running — which is true. It polls,
-  `check_back_after_ms` answers, and it waits exactly as it would for a slow deep tier.
-  There is no client-visible difference between "t3 is still reading" and "we are waiting
-  for midnight", and there should not be: both mean *not finished yet*, and only one of
-  them is any of their concern.
-* **`failed` is reserved for what it means.** A review that stopped because the money ran
-  out did not fail; nobody spent anything on the tiers that did not run, and nothing about
-  the code was concluded either way.
+`Reviewer` reaches them through a `KeptSessions` port rather than the store, because it
+talks to opencode and should not also know what a database is — and because the claim worth
+testing is *"a NEW Reviewer continues what the old one opened"*, which is a two-instance
+question a private field cannot express at all.
 
-This also settles what the staleness sweep must not do to a paused review: the freeze is
-lore's doing, not the client's, so time spent frozen cannot count against a client that is
-waiting exactly as instructed.
+**What a deploy costs now:** the member that was mid-call. A sibling of the same rung that
+had already answered keeps its rows and resumes, one `continue → done` exchange. Everything
+else — ladder, findings, ratified justifications, pinned worktree — was always durable.
+
+**And the ordering it makes load-bearing.** `clearSessionTrees` deletes the session-id rows
+too, and after a restart those rows are the ONLY record of what a review holds — so both
+release paths had to be inverted: RELEASE first, reading the ids, then clear. Clearing
+first deleted them and left `release` enumerating nothing, so no delete ever reached
+opencode and the sessions lived until opencode itself restarted. That is the accumulation
+`release` exists to prevent, reintroduced by the change that made the ids durable.
+
+**The failure this makes reachable, and its bound.** A stored id can outlive its session:
+opencode's volume replaced, its data pruned, this database restored from a backup older than
+the session. `session.prompt` answers 404, which gets its own error type rather than a
+status to sniff for — the first version threw it as a generic `HttpStatus`, the classifier
+flattened it to `DidNotRun`, and the recovery silently stopped working. On it, lore forgets
+the row and starts cold ONCE. Left unhandled that row would have failed its tier on every
+future round of the review: permanent, and strictly worse than the cold start it avoided.
+
+**D-121 — a price is REPORTED, never acted on. The daily spend ceiling is gone.
+DECIDED and BUILT 2026-08-17, one day after it cost eight people their reviews.**
+
+Vany: *"we only show the price, there is no decision on the basis of it."*
+
+lore records what opencode says each call cost, sums it per tier and per day, and shows the
+figures on `/status` and the board. Nothing anywhere branches on them. No total refuses a
+review, stops a round, suspends the queue or expires anybody.
+
+**lore never calculated a price and does not start now.** There is no rate card in this
+codebase. `cost_usd` is whatever the provider reported (`usageFromMessages`), summed — so
+what is removed is a *decision*, not any arithmetic.
+
+**What the ceiling actually did, on the one day it fired.** It refused admission at $100,
+and the money was already spent by then; the people it stopped were not the people who
+spent it. Eight reviews across three colleagues' branches, most at round 0, having read
+nothing, because an unrelated batch had walked onto a metered route four hours earlier.
+D-119 softened that from `failed` to a pause the same day — right about `failed`, and
+still the wrong instrument: a paused gate is a gate that did not run, which this project
+holds to be its worst outcome. Converting a money problem into an availability problem is
+a bad trade for a service whose entire product is *the review actually happened*.
+
+**A total is the wrong shape for this question.** It can only speak after the fact, it
+cannot distinguish who spent it, and its remedy is necessarily collective. The question
+worth asking is per call and answerable before the call: *is this route one that charges?*
+That is D-117, it costs nothing when the answer is yes, and it is now the only place money
+enters a decision at all.
+
+**What went, concretely:** `mayStart` and the enqueue refusal, `frozenBySpend` and the
+dispatcher freeze, the round-boundary backstop, the retention-sweep exemption, both spend
+alerts, `hasMeteredUsage` and the `metered` flag that existed only to explain that the
+ceiling could not fire, and `LORE_DAILY_CEILING_USD` — which now REFUSES TO START if it is
+still set, because believing a number caps the day when none does is worse than having no
+answer. `/status` publishes `allow_metered` in its place.
+
+**What this gives up, plainly:** nothing bounds the total. A deployment that sets
+`LORE_ALLOW_METERED=1` and then loses a subscription will bill on every call until a person
+notices, and D-117's route gate is what makes that a decision somebody made rather than one
+that happened to them. Under `LORE_ALLOW_METERED=0`, the default and this deployment's
+setting, the bound is structural: no route that charges is ever called.
 
 **D-118 — the operator board grows a CONFIG window, and it is where the knobs live.
 DECIDED 2026-08-16, not yet built.**
@@ -512,8 +555,9 @@ ones that cost money or decide what runs, and today they are spread across a `.e
 reads, a JSON file on the host, and commands only I run. An operator cannot see the shape
 of their own deployment.
 
-* **Every parameter, in one window** — the spend ceiling, the tier ladder, the metered
-  toggle below, the sweep intervals, the admission limit. Read AND write.
+* **Every parameter, in one window** — the tier ladder, D-117's metered toggle, the sweep
+  intervals, the admission limit. Read AND write. (The spend ceiling was on this list until
+  D-121 deleted it; what remains of money in the config is the one yes/no.)
 * **A button that issues a token**, replacing `make new NAME=… GIT=…`. It creates the
   repository row when the URL is one lore does not have yet, so provisioning a new person
   on a new repo is one action rather than a shell session.
@@ -522,7 +566,7 @@ of their own deployment.
   credentials. The window must not weaken that — it is the one rule the button inherits.
 
 **D-117 — a metered route is one the operator switched on, and that operator is a person.
-DECIDED 2026-08-16 after it cost $101.36 in four hours; not yet built.**
+DECIDED 2026-08-16 after it cost $101.36 in four hours; BUILT 2026-08-17.**
 
 Vany: *"metered is only openrouter. It is human managed."*
 
@@ -578,21 +622,60 @@ at round 0**, having read nothing.
 The ceiling worked. It is the wrong instrument to find this out from, because by the time
 it fires the money is spent and the people it stops are not the people who spent it.
 
-`[OPEN]`, and the shape of the answer is not obvious, which is why it is not decided here:
+**Settled, 2026-08-17: the first branch, made switchable.** A metered fallback is refused
+by default — `passed_partial` with the tier in `checks_skipped`, which is honest, free and
+was already implemented — and `LORE_ALLOW_METERED=1` restores it for a deployment that has
+deliberately bought metered capacity, which was the objection to refusing outright. The
+second branch (stay available, become loud) shipped as well and is not an alternative to
+this one: the per-call figure already reaches the operator log the moment a chain falls
+back. The third — a ceiling with a second dimension — died with the ceiling (D-121).
 
-* **A metered fallback is a different class of route** and could be refused by default —
-  `passed_partial` with t2 in `checks_skipped` is honest, free, and available today.
-  Against it: a deployment that has deliberately bought metered capacity as its safety net
-  would find its safety net switched off.
-* **Or it stays available and becomes LOUD** — an operator alert at the moment a
-  subscription first falls through to a paid route, naming the per-call cost, rather than
-  a ceiling breach later.
-* **Or the ceiling grows a second dimension**, separating what a gate somebody is waiting
-  on may spend from what a batch review being driven may spend. Today the second starved
-  the first.
+**Where it lives:** `isMeteredRoute` in `src/core/metered.ts`, applied to the fallback
+chain AND to a tier's route pool in `runRound`, with the exemption defined once in
+`exemptLiteral` because there are three gate sites and both holes found so far were a site
+that did not have the rule.
 
-Whichever, the fact to preserve is the one the day proved: **route health and route COST
-are different questions, and only one of them was being asked.**
+**The exemption needs TWO conditions, and shipping with one was a hole in the configuration
+this repository distributes.** A literal `openrouter/x` is the operator switching a paid
+route on — but only if the operator wrote the ladder it is in. `DEFAULT_TIERS` is three
+literal `openrouter/` models chosen by nobody, and `deploy/docker-compose.yml` passes
+`LORE_TIERS: ${LORE_TIERS:-}`, where blank means exactly that default. So on a fresh copy
+of the shipped compose, `LORE_ALLOW_METERED=0` gated NOTHING and every call billed, while
+five documents promised no charging route is ever called. Vany, asked which way to resolve
+it: exempt only an operator-written ladder. When the default ladder is in use and metered
+routes are refused, the service starts and says at once that no review can run — because
+the honest state is "running and unable to review anything", which is recoverable by
+either a tiers file or the toggle, and a refusal to boot would break a first `make up`.
+
+Only the LITERAL model id of an operator-written ladder is exempt:
+naming `openrouter/x` as the tier's model is the operator switching it on, since it runs
+every round at a cost that is chosen and immediate. Everything else is conditional — a
+fallback is insurance, invisible until a subscription dies, then billing every call for as
+long as the outage lasts; and a POOL MATE is lore picking between interchangeable routes,
+which is not a choice anybody made per call.
+
+**And it is gated at BOTH places routes are chosen**, not just in the round:
+`concreteRoute` resolves a tier for the callers that are not a review — the hourly
+knowledge screen, the bootstrap survey, and `propose` (proposer and critics) — and it
+shuffles a pool exactly as the round does. Gating only `runRound` left every one of those
+able to hand opencode a paid route, once an hour, indefinitely, under a deployment
+documented as never paying. The check lives inside `concreteRoute` so the next caller is
+gated by existing rather than by somebody remembering.
+
+**The pool was the hole** (findings `ccccf0db` and `08d4834f`, 2026-08-17).
+The gate first covered the chain alone, on the reasoning that a tier's own model is
+explicit. A NICKNAME breaks that: `routesFor` expands it to a pool and `poolOrder` shuffles,
+so a metered pool mate becomes the unfiltered PRIMARY in some fraction of rounds — and in
+every round once the free routes are parked, which is the 2026-08-16 shape exactly. It
+would have falsified D-121's claim that at `LORE_ALLOW_METERED=0` no charging route is ever
+called — twice over, since the same reasoning had left `concreteRoute` open too. The lesson
+is the general one: **an exemption written for a literal value must be re-checked against
+every indirection that can produce that value.** Reachable with a validly-named pool (`zai-coding-plan/glm-5.2` and
+`openrouter/z-ai/glm-5.2` are one model by two routes; the loader rejects a pool whose
+members are different models, which is why the finding's own K3 example would not load).
+
+The fact the day proved, kept: **route health and route COST are different questions, and
+only one of them was being asked.**
 
 **D-48 — a tier nobody can pay for is a limitation, not a failure.**
 
@@ -753,9 +836,9 @@ meaningless.
 That is a defect introduced by fixing the other one, and it is stated rather than left to
 be discovered by whoever first sums the column. Closing it is small — `usageFromMessages`
 already exists and the success path can use it, or `GET /session/:id` returns the true
-totals in ~700 bytes. It changes what the spend ceiling sees, which is why it is written
-here rather than done quietly; the ceiling is inert today (every row carries `cost: 0` on
-these subscriptions), so the practical risk is low and the honesty requirement is not.
+totals in ~700 bytes. Nothing decides on these numbers any more (D-121), so the risk is to
+the operator's reading of their own deployment rather than to what runs — which lowers the
+practical stakes and not the honesty requirement.
 
 **D-51 — an accepted justification outlives the review that accepted it.**
 
@@ -2194,16 +2277,13 @@ carries it into the verdict.
 
 **Priced before it was built, against a real day.** Nine reviews of this repository, at
 OpenRouter's published rates: **$3.80** for the lot — t2's 6.9M cached-read tokens are
-$3.63 of it. Against a $100 daily ceiling that is 25× headroom.
+$3.63 of it — on the metered route, which is the only way this deployment pays anything.
 
-**The ceiling it leans on is checked at ROUND BOUNDARIES, and that is new.** Every
-`usage` row carries `cost_usd: 0` because subscriptions report nothing, so the ceiling has
-never been able to fire; `mayStart` was checked at enqueue and never again, which was free
-while nothing was metered. A single agentic review could then exceed it by any amount
-before anything looked. `runRound` now asks before each round, which keeps the original
-objection intact — nothing has been spent on that round yet, so no round is abandoned
-half-paid-for and the review stops in a state with a name (`failed`, with the reason). It
-remains inert under subscriptions, because the sum is structurally zero.
+**The ceiling this was priced against is gone (D-121), and the estimate above is exactly
+why a total was the wrong guard.** $3.80 for nine reviews is 25× headroom, right up until a
+subscription dies and the same nine reviews are billed on the fallback — which on
+2026-08-16 was $101.36 in three and a half hours. The number that decides is not a total
+against a budget; it is whether the route about to be called charges at all (D-117).
 
 **The fallback is verified at startup**, because a fallback is a promise about what happens
 when a subscription runs out, and the moment it is configured nobody worries about that
@@ -3245,8 +3325,9 @@ a state name and a clock.
 - **Counted service-wide**, not per repository. The resources it protects — one opencode
   process, one host, one set of worker loops — are shared, and four repositories with
   their own allowance would put four times the load on the one provider that matters.
-- **Nothing is created when a review is refused.** Unlike the spend ceiling, which fires at
-  enqueue and therefore has a row to mark `failed`, this fires before anything is promised.
+- **Nothing is created when a review is refused.** This fires before anything is promised,
+  so there is no row to mark `failed` and no client holding an id. (It is now the only
+  thing that refuses a review at all: the spend ceiling that also did died with D-121.)
 
 **What this gives up, stated plainly.** Concurrent model calls were then bounded by the
 worker pool — twelve, which is exactly the number with a measured failure — and D-101 has

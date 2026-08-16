@@ -59,18 +59,25 @@ about monitoring that does not exist.
 | **no replica whatsoever** | worse than a late one — there is nothing to restore from right now. Held back for five minutes after startup: litestream is a sibling container that starts *after* lore and Docker creates the bind path if it is missing, so an empty folder is the normal first seconds of every deploy. `/status` says so immediately regardless; only the unsolicited page waits |
 | **heartbeat missed** (§3) | the service is down, or the monitoring is |
 | provider auth failure | every review stops at once. Its own error type, raised where the provider's status is classified and paged by the worker — not folded into the failing-as-a-class window, which would spend ten more reviews proving the same thing before it fired |
-| **daily spend ceiling hit** | a runaway loop at $500–2,600/month can burn fast — but see §4: under a subscription this cannot fire at all |
 | all reviews failing over a window | systematic breakage, not a bad branch |
+| **high findings nobody has collected** | a ticket, and the last rotting condition with no channel. `make status` has listed these since D-96 and the operator is precisely who CANNOT act — the findings belong to another principal's token, and `review_inbox` is correctly scoped to it. So a review sat holding an unread HIGH for nearly three days, visible the whole time and invisible to everyone who could answer it. Fires at 24h, on the branch's OWN high findings only (D-68): an alert that repeats the same inherited pattern match daily is one nobody reads |
 | **a tier lore has stopped calling** | not an alert but a `/status` field and a `make status` banner (D-90): `tiers_not_being_asked` names any tier in a cool-off, with when it will be retried. Deliberately not a page — a cheap tier being down is degraded service, not an outage, and the ladder steps over it — but it was invisible from inside the service until it existed, and it is the single explanation for every slow review while it stands |
 | **a review accepted but never queued** | `review_start` writes the row, answers `state: "queued"`, and enqueues afterwards — so a throw in between leaves a review with **no job**, and nothing reconciles that: `reclaimOrphanedJobs` frees jobs stuck `running`, not reviews that never got one. It would wait until the sweep called it `expired` two days later, which means *nobody came back*. The review is now marked `failed` with the reason, so the client's next poll says so; the page is because the process stays alive and `/status` still reads `ok: true`, exactly as for a dead worker loop — one missing job is invisible to everything else |
 
 ### 2.2 Ticket — next working day
 
-Elevated review failure rate; spend anomaly against trend; a mirror `make status`
-shows in red (D-65 — the host refresher has stopped or cannot reach the remote, which
-lore itself cannot detect);
+Elevated review failure rate; a mirror `make status` shows in red (D-65 — the host
+refresher has stopped or cannot reach the remote, which lore itself cannot detect);
 queue depth sustained high enough that reviews are waiting on CPU
-(`spec/deployment.md` §3); `needs_human` findings ageing without resolution.
+(`spec/deployment.md` §3); `needs_human` findings ageing without resolution; **high
+findings nobody has collected** for over 24h.
+
+**Spend anomaly against trend is GONE, deliberately** (D-121). It was listed here from the
+day this file was written; the alert behind it was deleted with the ceiling, and leaving
+the row would be exactly what §2.1's preamble forbids — a routing table naming a route
+nobody dispatches. It matters more here than elsewhere: with no ceiling, a phantom
+money ticket is the only backstop the doc would appear to offer, and an operator relying
+on it would be relying on nothing.
 
 **Queue depth counts jobs a worker could actually claim** (D-97), which is narrower than
 "rows in state `queued`" and has to be. `claimJob` refuses a job whose review has ended,
@@ -94,9 +101,10 @@ enough to debug from, quiet enough not to train anyone to ignore alerts.
 critical disk. It is computed from the page-level conditions now, with `problems`
 naming them, because `ok: false` alone is the same ambiguity pointing the other way.
 
-That is the same defect as the spend ceiling and the replica monitor, in the field a
-dashboard reads first: a guard whose answer cannot vary is decoration a reader
-believes.
+That is the same defect as the replica monitor, in the field a dashboard reads first: a
+guard whose answer cannot vary is decoration a reader believes. The daily spend ceiling
+was the other example and is gone (D-121) — it could not fire under a subscription, and
+the one day it could, it stopped eight reviews that had nothing to do with the bill.
 
 ### 2.4.1 An unreadable database is served, not died on
 
@@ -301,30 +309,37 @@ heartbeat should be — instead of the same invisible one.
 Push-only alerting cannot detect its own death. This is the difference between
 monitoring and hoping.
 
-## 4. Spend control
+## 4. Money: reported, never acted on (D-121)
 
-Usage is logged per repo, tier and model (D-13). On top of that:
+Usage is logged per repo, tier and model (D-13). `cost_usd` is whatever opencode reported
+for the call — lore holds no rate card and calculates no price. The figures reach
+`/status` (`spendToday`, `spend_today_by_tier`) and the operator board, **and nothing
+branches on them.** No total refuses a review, stops a round, suspends the queue or
+expires anybody.
 
-- a **daily spend ceiling**, which pages when hit and **stops starting new reviews**
-  rather than continuing quietly,
-- anomaly alerting against the trailing average.
+There was a daily ceiling that did all four. It was removed after the one day it fired: by
+the time a total can speak the money is spent, and the people it stops are not the people
+who spent it — eight reviews across three colleagues' branches, most at round 0, over a
+bill an unrelated batch ran up four hours earlier. A gate that did not run is this
+project's worst outcome, so trading an invoice for a stopped gate is the wrong trade.
 
-A cheap tier looping on a pathological branch is exactly the shape that runs up a
-bill nobody sees until the invoice. Stopping is the correct behaviour; a review not
-started is honest, while a review that runs and cannot be paid for is not.
+**The one place money decides anything is the route (D-117).** A route is metered iff its
+id begins with `openrouter/` — every other provider here is a flat subscription — and
+`LORE_ALLOW_METERED` (default `0`) says whether a fallback chain may walk onto one. Asked
+per call, before the call, from the id alone. When the answer is no the chain steps over
+the metered entries; if none are left the tier is skipped, which is D-48's existing path
+and reaches the client as `passed_partial` with the tier named in `checks_skipped` —
+honest, free, and a weaker claim said out loud. A tier's OWN model is never filtered:
+configuring `openrouter/x` *is* the operator switching it on.
 
-**The ceiling cannot fire under a subscription, and says so.** It sums `cost_usd`,
-and both current providers bill a flat rate, so every usage row carries zero.
+`LORE_DAILY_CEILING_USD` **refuses to start the service** if it is still set. Believing a
+number caps the day when none does is worse than having no answer at all.
 
-**A failed call now leaves a usage row too** (D-85), written with `outcome: 'failed'` and
-read back from the session opencode leaves behind — before 2026-08-09 a call that timed
-out recorded nothing while the provider counted every token. Anything reading this table
-for latency or round counts should exclude that outcome; anything summing tokens across
-both outcomes is currently wrong for a different reason, recorded in SPEC §3.
-`/status` reports `spend_ceiling.metered: false` with a note that a zero means
-*unmeasured*, not *headroom* — because "$0 spent against a $100 ceiling" and "nothing
-here can measure spending" are opposite facts that look identical in a dashboard. A
-guard that cannot fire must say so rather than being mistaken for one that looked.
+**A failed call leaves a usage row too** (D-85), written with `outcome: 'failed'` and read
+back from the session opencode leaves behind — before 2026-08-09 a call that timed out
+recorded nothing while the provider counted every token. Anything reading this table for
+latency or round counts should exclude that outcome; anything summing tokens across both
+outcomes is currently wrong for a different reason, recorded in SPEC §3.
 
 ## 5. Reviews end, or they are ended (D-70)
 
@@ -376,6 +391,22 @@ What restores the dropped rounds:
 - A round that CATCHES the interruption — `socket hang up`, `could not reach opencode` —
   is requeued rather than failed (D-104). That half was missing and ended two reviews on
   the first restart after the policy changed.
+- **The kept sessions survive it** (D-80, made durable 2026-08-17). Vany: *"deployment must
+  not kill the full ladder, may be one step."* The session ids were held in `Reviewer`
+  memory and nowhere else, so a restart forgot every warm conversation lore was holding —
+  while opencode still had all of them, its session store being a named volume that
+  outlives the container. Every open review therefore re-read its whole diff cold on its
+  next round, at full price, and nothing reported it. The ids are rows in `meta` now
+  (`session-id:<review>:<tier>:<model>`), written when the session opens rather than when
+  the round ends, because a round that dies mid-call is the case they exist for.
+
+**So a deploy costs ONE STEP.** The interrupted member is re-asked; a member of the same
+rung that had already answered keeps its rows and resumes its session, which costs one
+`continue → done` exchange rather than a re-read. The ladder, the findings, the ratified
+justifications and the pinned worktree were always in SQLite. A stored id that outlives its
+session — opencode's volume replaced, its data pruned, a database restored from an older
+backup — is forgotten on the 404 and the tier starts cold once, rather than failing that
+tier on every future round.
 
 `make drain` still exists for a deliberate pause. It is off the deploy path, so a deploy
 that does not finish cannot leave it set.

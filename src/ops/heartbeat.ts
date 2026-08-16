@@ -29,6 +29,16 @@ export interface HeartbeatConfig {
   readonly backupDir?: string;
   readonly queueWarnDepth: number;
   readonly needsHumanAgeHours: number;
+  /**
+   * How long a HIGH finding may sit uncollected before somebody is told.
+   *
+   * TWENTY-FOUR, the same as `needsHumanAgeHours`, because the two are the same failure
+   * seen from opposite ends — a review waiting on a person, and a person who stopped
+   * waiting on a review. Shorter would fire over a weekend; much longer and the review
+   * is already dimming toward `findings_stale` at 48h, which is the point of no return
+   * this is meant to come before.
+   */
+  readonly uncollectedAgeHours: number;
   /** Grace before an empty replica folder pages. See `REPLICA_GRACE_MS`. */
   readonly replicaGraceMs: number;
 }
@@ -63,6 +73,7 @@ export const DEFAULT_HEARTBEAT: HeartbeatConfig = {
   dataDir: "/var/lib/lore",
   queueWarnDepth: 50,
   needsHumanAgeHours: 24,
+  uncollectedAgeHours: 24,
   replicaGraceMs: REPLICA_GRACE_MS,
 };
 
@@ -90,6 +101,8 @@ export interface Health {
   /** Seconds the database is ahead of the replica. Absent when there is nothing to compare. */
   readonly replicaBehindSec?: number;
   readonly needsHumanOverAge: number;
+  /** Reviews holding a HIGH finding no client has collected (see `uncollectedAgeHours`). */
+  readonly uncollectedOverAge: number;
   readonly at: string;
 }
 
@@ -145,6 +158,7 @@ export async function checkHealth(store: Store, cfg: HeartbeatConfig): Promise<H
       spendToday: 0,
       replica: "unconfigured",
       needsHumanOverAge: 0,
+      uncollectedOverAge: 0,
       at: new Date().toISOString(),
     };
   }
@@ -152,6 +166,7 @@ export async function checkHealth(store: Store, cfg: HeartbeatConfig): Promise<H
   const midnight = `${new Date().toISOString().slice(0, 10)}T00:00:00.000Z`;
   const replica = await replicaState(store, cfg);
   const needsHumanOverAge = store.needsHumanOlderThan(cfg.needsHumanAgeHours);
+  const uncollectedOverAge = store.uncollectedHighOlderThan(cfg.uncollectedAgeHours);
 
   const problems: string[] = [];
   // A STALE MIRROR REFUSES EVERY REVIEW, and nothing here knew.
@@ -186,6 +201,7 @@ export async function checkHealth(store: Store, cfg: HeartbeatConfig): Promise<H
     replica: replica.state,
     ...(replica.behindSec === undefined ? {} : { replicaBehindSec: replica.behindSec }),
     needsHumanOverAge,
+    uncollectedOverAge,
     at: new Date().toISOString(),
   };
 }
@@ -245,6 +261,18 @@ async function newestMtime(dir: string): Promise<number | undefined> {
 export function startHeartbeat(store: Store, cfg: HeartbeatConfig, alerter: Alerter): () => void {
   /** Latched so the one permanent fault pages once, not on every beat. */
   let pagedUnreadable = false;
+  /**
+   * Latched for the same reason, and it was NOT and that was a defect worth the comment.
+   *
+   * The beat runs every 60s and this condition stands until a person acts, so an unlatched
+   * ticket meant one abandoned review posting to the webhook every minute for as long as it
+   * lasted. A channel that repeats itself 1,400 times a day is a channel nobody reads,
+   * which is the failure mode this whole alerting table is written to avoid.
+   *
+   * Latched on the COUNT, not on a boolean: going from one uncollected review to two is
+   * new information and should speak; the same one for the ninth hour is not.
+   */
+  let toldUncollected = 0;
   let stopped = false;
   const startedAt = Date.now();
 
@@ -303,6 +331,18 @@ export function startHeartbeat(store: Store, cfg: HeartbeatConfig, alerter: Aler
     // ever passing (spec/knowledge.md §7.2).
     if (health.needsHumanOverAge > 0) {
       await alerter.send(CONDITIONS.needsHumanAgeing(health.needsHumanOverAge, cfg.needsHumanAgeHours));
+    }
+
+    // THE SAME FAILURE FROM THE OTHER END. `needs_human` is a review waiting on a person;
+    // this is a person who stopped waiting on a review. Both end with a paid deep tier's
+    // work concluding nothing, and until now only the first had a channel — the second was
+    // on the operator board, which is read by the one party who cannot act on it.
+    if (health.uncollectedOverAge > toldUncollected) {
+      toldUncollected = health.uncollectedOverAge;
+      await alerter.send(CONDITIONS.findingsUncollected(health.uncollectedOverAge, cfg.uncollectedAgeHours));
+    } else if (health.uncollectedOverAge < toldUncollected) {
+      // Somebody collected, or the sweep took it. Re-arm, so the next one speaks.
+      toldUncollected = health.uncollectedOverAge;
     }
 
     if (cfg.url !== undefined) {

@@ -170,16 +170,6 @@ export const CONDITIONS = {
     condition: "provider auth failed",
     detail: `${provider} rejected our credentials — every review stops at once`,
   }),
-  spendCeiling: (spent: number, ceiling: number): Alert => ({
-    severity: "page",
-    condition: "daily spend ceiling hit",
-    detail: `$${spent.toFixed(2)} of $${ceiling.toFixed(2)} — no new reviews will start`,
-  }),
-  spendAnomaly: (spent: number, typical: number): Alert => ({
-    severity: "ticket",
-    condition: "spend anomaly",
-    detail: `$${spent.toFixed(2)} today against a typical $${typical.toFixed(2)}`,
-  }),
   reviewsFailingAsAClass: (failed: number, total: number): Alert => ({
     severity: "page",
     condition: "reviews failing as a class",
@@ -206,6 +196,22 @@ export const CONDITIONS = {
       `${fault}. No review is running and none can start; the worker, heartbeat and sweep are stopped ` +
       "so nothing writes further into a damaged file. Restore it: `make backup-check`, then `make restore`. " +
       "This does not clear by itself and lore will not retry.",
+  }),
+  /**
+   * A FINDING NOBODY HAS READ IS A REVIEW THAT DID NOT RUN, ONE STEP LATER.
+   *
+   * A ticket rather than a page: nothing is broken, and the remedy is a person nudging a
+   * colleague. It exists because this was the one rotting condition with no channel at
+   * all — the operator board has shown it since D-96, and the operator is precisely who
+   * CANNOT act on it, since the findings belong to another principal's token and
+   * `review_inbox` is correctly scoped to that token. So it sat visible and unactionable.
+   */
+  findingsUncollected: (reviews: number, hours: number): Alert => ({
+    severity: "ticket",
+    condition: "high findings nobody has collected",
+    detail:
+      `${reviews} review(s) have held an unread HIGH finding for over ${hours}h — a deep tier was paid to ` +
+      "produce them and no client has come back. Find whose branch they are and tell them.",
   }),
   needsHumanAgeing: (count: number, hours: number): Alert => ({
     severity: "ticket",

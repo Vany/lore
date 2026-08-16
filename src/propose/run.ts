@@ -23,7 +23,7 @@
  */
 
 import type { Tier } from "../core/ladder.ts";
-import { concreteRoute, loadPools, routesFor, type ModelPools } from "../core/ladder.ts";
+import { concreteRoute, loadPools, noRouteBecause, routesFor, type ModelPools } from "../core/ladder.ts";
 import { DidNotRun } from "../core/errors.ts";
 import { vendorOf } from "../core/ladder.ts";
 import type { Listed, SessionResult } from "../reviewer/opencode.ts";
@@ -121,7 +121,9 @@ export async function propose(deps: ProposeDeps, input: ProposeInput): Promise<P
   // this path fails LOUD when nothing can pay — a proposal is somebody waiting at a CLI.
   const proposerRoute = concreteRoute(namedProposer, loadPools(), () => undefined);
   if (proposerRoute === undefined) {
-    throw new DidNotRun(`every route to ${namedProposer.model ?? "?"} is out of quota — nothing can propose`);
+    // The same sentence the screen uses, from the same place: a person at a CLI told
+    // "out of quota" when a toggle is the constraint waits for the wrong thing.
+    throw new DidNotRun(`${noRouteBecause(namedProposer, loadPools(), () => undefined) ?? "no route"} — nothing can propose`);
   }
   const proposer = { ...namedProposer, model: proposerRoute };
 
@@ -197,11 +199,18 @@ export async function propose(deps: ProposeDeps, input: ProposeInput): Promise<P
       // UNCRITICISED, and it says so on the proposal rather than in a footnote. A
       // reader who believes a second vendor challenged this when none did is exactly
       // who §9 is about.
+      //
+      // WHY it is uncriticised, though, must not be guessed: "no second vendor is
+      // configured" is false when one IS configured and the metered gate refused it, and
+      // it sends the reader to edit a tiers file when the remedy is a toggle. The same
+      // wrong-reason class as the proposer path above, one branch over.
       screenedAll.push({
         ...idea,
         contradictedBy: `${idea.contradictedBy} — NOT CRITICISED: ${
           critic === undefined
-            ? "no second vendor is configured, so this is one model's unchallenged opinion"
+            ? namedCritic === undefined
+              ? "no second vendor is configured, so this is one model's unchallenged opinion"
+              : `${noRouteBecause(namedCritic, loadPools(), () => undefined) ?? "its routes are unusable"}, so this is one model's unchallenged opinion`
             : "the budget ran out before a critic could read it"
         }`,
       });

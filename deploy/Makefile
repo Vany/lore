@@ -140,9 +140,12 @@ STAMP = LORE_COMMIT="$$(git -C .. rev-parse --short HEAD 2>/dev/null || echo unk
 ##   make drain                just drain and wait
 ##   make drain-off            change your mind
 ##
-## A restart loses no state — it is all in SQLite — but it throws away MODEL TIME:
-## an interrupted round is requeued and runs again from scratch, paid for twice. One
-## morning that cost 109 minutes of t2 work.
+## A restart loses no state — it is all in SQLite — and since 2026-08-17 it no longer
+## throws away the WARM CONVERSATIONS either: kept session ids are durable, so a tier
+## resumes rather than re-reading its whole diff cold. What a deploy costs is the one
+## member that was mid-call. It used to cost every tier of every open review a full cold
+## read, because the session map was in memory; the 109 minutes of t2 work one morning was
+## that, not the requeue.
 ##
 ## MCP keeps serving throughout. Clients poll, submit and start reviews as normal;
 ## new work simply queues and the next container runs it. Nobody sees an error.

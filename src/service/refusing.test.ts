@@ -72,7 +72,7 @@ const cfg = (dataDir: string, port: number) => ({
   host: "127.0.0.1",
   concurrency: 1,
   modelConcurrency: 1,
-  dailyCeilingUsd: 10,
+  allowMetered: false,
 });
 
 describe("a service whose database is unreadable", () => {

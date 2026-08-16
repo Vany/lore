@@ -66,9 +66,15 @@ code the previous tier already passed.
 
 Three tiers, **three vendors** — two tiers from one model family share blind spots
 and are not two independent opinions. Per-token prices are gone from this table
-because nothing here is metered; what the ladder costs is three subscriptions, and
-`ops/spend.ts` reports `metered: false` rather than implying headroom it cannot
-measure.
+because what the ladder costs is three flat subscriptions.
+
+**One paid route exists and it is off by default.** When a subscription hits its
+billing-cycle limit, the fallback chain can reach the same model through OpenRouter,
+which bills per call — measured at ~$4.83 a call, and $101.36 in one morning the day
+that happened unannounced. `LORE_ALLOW_METERED` (default `0`) decides whether lore may
+walk onto one; at `0` the tier is skipped and named in `checks_skipped` instead, which is
+a weaker review said out loud rather than a bill nobody chose. lore reports what each call
+cost and acts on none of it — no ceiling, no budget, no total that stops anything (D-121).
 
 **Every reviewer is a model that did not write the code.** That rules out the
 strongest model on the board on purpose: a model reviewing its own output confirms
@@ -141,7 +147,7 @@ the whole loop — because **the client is an agent, so the docs are the interfa
 ```
  MCP client ──► lore  ──► opencode ──► GLM-5-turbo · Kimi K3 · GPT-5.6 Terra
                  │                     (three vendors, none of them the author)
-                 ├── scheduler        per-provider concurrency, spend ceiling
+                 ├── scheduler        admission control, quota-aware route fallback
                  ├── repo cache       a worktree per review, off a bare mirror
                  ├── T0 sandbox       tsc + eslint in a container holding NO secrets
                  └── SQLite + Litestream ──► local replica ──► your script ──► off-box

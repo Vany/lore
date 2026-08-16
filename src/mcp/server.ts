@@ -140,7 +140,7 @@ function nextStep(state: ReviewState, freshFindings = 0): string {
       // — and for an agent client each is a turn. `check_back_after_ms` in the same
       // response is the measured answer; this string points at it rather than
       // repeating a number that would then have two sources.
-      return "Still working — this is NOT a result. Read `check_back_note` THIS TIME (it shrinks as the round ages — never reuse the last one), leave, and make ONE call when it says. Do not merge, and do not report anything about the branch yet.";
+      return "Still working — this is NOT a result. Read `check_back_note` THIS TIME and never reuse the last number: below the two-minute cap the interval shrinks as the round ages, and AT the cap it stays put for several calls — the note says which you have been handed. Then leave, and make ONE call when it says. Do not merge, and do not report anything about the branch yet.";
     case "findings_ready":
     case "awaiting_diff":
       return "ACT NOW: answer every finding below — fix it, or write the `justify_with` line at the site — then call review_submit with your diff and tree hash. THE REVIEW DIMS IF YOU STOP HERE: after 48h quiet it turns findings_stale — still answerable, for one more week — and then it is abandoned, concluding nothing, and this branch stays unreviewed.";
@@ -514,9 +514,12 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       // nothing on any surface able to say whether it was waiting or wedged. A client
       // that is REFUSED knows: it can come back, tell its user, or cancel something.
       //
-      // Checked before the row is written, so a refusal leaves nothing behind — unlike
-      // the spend ceiling, which fires at enqueue and therefore has a review to mark
-      // `failed`. Nothing here has been promised to anyone yet.
+      // Checked before the row is written, so a refusal leaves nothing behind, and it is
+      // now the ONLY thing that refuses a review at all: the spend ceiling that also did
+      // fired at enqueue, after the row existed, and therefore had a review to mark
+      // `failed` — which is how eight of other people's reviews came to carry lore's
+      // ledger in their failure on 2026-08-16. It is gone (D-121). Nothing here has been
+      // promised to anyone yet, which is why this refusal costs a client nothing.
       //
       // AND BEFORE THE RESTART CANCEL BELOW, which is what makes that promise true. The
       // cancel ran first, so at the limit a restart DESTROYED the client's predecessor —
@@ -587,8 +590,9 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           note:
             "Started. This does NOT mean it finished, and NOTHING can have happened yet. Poll it with " +
             "review_poll: ONE call when `check_back_after_ms` says, never a sleep loop. RE-READ that " +
-            "number on every reply — it shrinks as the round ages, and reusing the first one doubles " +
-            "your wait. It is never more than two minutes. Between calls, go and do something else.",
+            "number on every reply, together with `check_back_note`: below the two-minute cap it shrinks " +
+            "as the round ages and reusing the first one doubles your wait, while AT the cap it stays put " +
+            "for several calls and the note says so. Between calls, go and do something else.",
         }),
       );
     },
@@ -672,7 +676,21 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
                     // so clients treated findings as verdicts and argued badly or not
                     // at all.
                     asks: "Fix this, or tell me why it is not a problem. Both are real answers, and I may be wrong.",
-                    justify_with: `// lore-ok[${short}]: <why this code is correct>`,
+                    // AND THE THIRD ANSWER, said HERE rather than after a wasted submit.
+                    //
+                    // Fixing the CAUSE somewhere else is often the right repair, and it
+                    // leaves this line untouched — which the next round reads as a finding
+                    // nobody answered, so it cannot settle however it goes. `review_submit`
+                    // already says this in `will_not_settle`, but only once the submit has
+                    // been spent: measured on lore's own review of D-121, where the fix
+                    // landed sixty lines above the named line and the round trip bought
+                    // nothing. A client can only act on it if it is told while it is still
+                    // deciding where to put the fix.
+                    fixed_elsewhere:
+                      "If you repair this by changing OTHER code, the tier will not see this line move and " +
+                      "cannot settle it. Leave the `justify_with` comment here saying where the fix went, and " +
+                      "submit both together.",
+                    justify_with: `// lore-ok[${short}]: <why this code is correct, or where it was fixed>`,
                     // Still open, and worse than open: a justification was offered
                     // and refused. Saying so is the difference between "answer this"
                     // and "your answer was wrong".

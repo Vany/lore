@@ -96,6 +96,15 @@ export interface Pace {
    * other. One field doing both is how a number ends up describing neither.
    */
   readonly sample: number;
+  /**
+   * The interval is the CAP, not the measurement — so it will not shrink yet.
+   *
+   * Vany's rule bounds every suggested wait below two minutes, which is right and is why
+   * the cap exists. It also means a tier whose rounds run long reports the same number on
+   * every poll, while the note promises a shrinking one. Reported so the note can say
+   * which of the two it is handing over.
+   */
+  readonly capped: boolean;
 }
 
 /**
@@ -137,7 +146,7 @@ export function paceFor(store: Store, tier: string, repoId: string, elapsedMs = 
   // anything measured, and the next thing to happen could be the answer or a timeout.
   // Substituting a median here would be inventing data at exactly the moment we ran out.
   if (remaining.length === 0) {
-    return { ms: FLOOR_MS, tier, runs: 0, sample: all.length, overdue: true };
+    return { ms: FLOOR_MS, tier, runs: 0, sample: all.length, overdue: true, capped: false };
   }
 
   // Floored, because the arithmetic tends to zero as a round ages and a client told to
@@ -146,14 +155,25 @@ export function paceFor(store: Store, tier: string, repoId: string, elapsedMs = 
   // `runs` counts the CONDITIONED sample — the runs this median was actually drawn
   // from. Reporting the full sample here was a quiet overstatement: it grew more
   // confident-looking the longer a round ran, while the evidence behind it shrank.
+  const measured = Math.max(FLOOR_MS, at(remaining, 0.5));
   return {
     // Bounded at both ends: never a busy loop, never a wait long enough to lose the
     // review. `CEILING_MS` is the harder of the two — see there.
-    ms: Math.min(CEILING_MS, Math.max(FLOOR_MS, at(remaining, 0.5))),
+    ms: Math.min(CEILING_MS, measured),
     tier,
     runs: remaining.length,
     sample: all.length,
     overdue: false,
+    // SAY WHEN THE NUMBER IS THE CAP AND NOT THE MEASUREMENT.
+    //
+    // The note tells a client the interval SHRINKS as a round ages and to re-read it
+    // every time. On this repository it does not: t1's conditional median is above two
+    // minutes for most of a round, so the cap answers every call and the field reads
+    // 119000 four polls running while only the explanatory text changes. A client
+    // following the instruction spends turns re-reading a constant, and the instruction
+    // is a promise the field cannot keep — which is the drift D-11 calls this
+    // repository's most common defect, in a doc rather than in code.
+    capped: measured > CEILING_MS,
   };
 }
 
@@ -190,8 +210,14 @@ export function paceNote(pace: Pace | undefined): string {
     `run from where this one already is, measured across the ${String(pace.runs)} runs on this repository that ` +
     `had already been going this long (of ${String(pace.sample)} completed) — so polling sooner returns ` +
     "`running` and costs you a turn for nothing.\n" +
-    "READ THIS FIELD AGAIN EVERY TIME; do not reuse the number. It SHRINKS as the round ages, because a round " +
-    "that has already outlived the median is not another median away from finishing — it is most of the way " +
-    "there. Reusing the first interval is how a client waits twice as long as it needed to."
+    (pace.capped
+      ? "THIS IS THE CAP, NOT THE MEASUREMENT. Every suggested wait here is bounded below two minutes, and this " +
+        `tier's rounds typically run longer than that — so expect this number to stay at ~${String(secs)}s on ` +
+        "each of the next several calls rather than shrinking. That is not a stalled review and not a stale " +
+        "field; it is the bound. It starts falling once the round is within about two minutes of the middle of " +
+        "the distribution, and the sentence above changes when it does."
+      : "READ THIS FIELD AGAIN EVERY TIME; do not reuse the number. It SHRINKS as the round ages, because a " +
+        "round that has already outlived the median is not another median away from finishing — it is most of " +
+        "the way there. Reusing the first interval is how a client waits twice as long as it needed to.")
   );
 }

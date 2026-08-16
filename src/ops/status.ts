@@ -25,7 +25,8 @@ import { statSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { dataDir, dbPath } from "../core/paths.ts";
-import { loadTiers, type LadderState } from "../core/ladder.ts";
+import { exemptLiteral, loadPools, loadTiers, routesFor, type LadderState } from "../core/ladder.ts";
+import { allowMeteredFromEnv, isMeteredRoute, withoutMetered } from "../core/metered.ts";
 import { TERMINAL_SQL } from "../core/review-state.ts";
 import { MAX_MIRROR_AGE_MS } from "../git/repo.ts";
 
@@ -180,7 +181,72 @@ export function renderStatus(db: DatabaseSync, reviewId?: string, dataDir = "/va
     }
     if (until <= nowIso) continue;
     const tier = String(d["key"] ?? "").slice("tier-unavailable:".length);
-    const hasFallback = loadTiers().some((t) => t.id === tier && (t.fallback ?? []).length > 0);
+    // A FALLBACK LORE MAY ACTUALLY WALK ONTO, not one merely written in the file.
+    //
+    // lore-ok is not the answer to 9f64c74b — the finding is right and this is the fix.
+    // This read the config alone, so it said "coverage is FULL — this costs metered money"
+    // for any tier with any fallback configured. Under D-117 that is wrong in both
+    // directions at once: with an all-`openrouter/` fallback list and LORE_ALLOW_METERED=0
+    // the chain is EMPTY, the tier is skipped every round and verdicts are `passed_partial`
+    // — while the one view an operator is taught to watch says coverage is full. And with
+    // the deployed config, where the fallback actually asked is a free second plan, the
+    // money half is false whenever it prints.
+    //
+    // So the question is resolved the way the round resolves it: expand nicknames, drop
+    // what this deployment may not pay for, and ask what is left.
+    const allowMetered = allowMeteredFromEnv(process.env["LORE_ALLOW_METERED"]);
+    const pools = loadPools();
+    // A ROUTE MARK OF ITS OWN MAKES A SPARE NO SPARE. Read the same way the tier marks
+    // above are, because a route that is itself parked cannot cover for anything.
+    const parked = (route: string): boolean => {
+      const row = db.prepare("SELECT value FROM meta WHERE key = ?").get(`route-unavailable:${route}`) as
+        | { value?: string }
+        | undefined;
+      if (row?.value === undefined) return false;
+      try {
+        return String((JSON.parse(row.value) as { until?: string }).until ?? "") > nowIso;
+      } catch {
+        return false;
+      }
+    };
+    // THE TIER'S OWN POOL COUNTS, AND THE ROUND WALKS IT FIRST.
+    // `reachable` in `runRound` is
+    // `[...spare, ...fallbacks]`, so a pooled tier with a live sibling route has FULL
+    // coverage and no fallback configured at all. Reading `t.fallback` alone printed "the
+    // provider named that time, so reviews step over the tier" over exactly that — the
+    // false degradation this banner's own comment, four lines up, exists to prevent,
+    // reached through the pool indirection the first fix considered only for fallbacks.
+    // TWO LISTS, NOT ONE SLICED. `slice(1)` assumed the tier's own primary was always at
+    // index 0 and dropped it — so when every one of the tier's own routes was parked or
+    // gated, index 0 was the first FALLBACK and the banner ate the very route keeping
+    // coverage full, reporting degradation exactly when there was none. That is the false
+    // degradation this banner's own header exists to prevent, reached through an
+    // arithmetic shortcut.
+    //
+    // The round's own shape is `reachable = [...pool.slice(1), ...fallbacks]`: the spares
+    // BESIDE the route that refused, plus the fallbacks. So the spares are counted from
+    // the tier's own routes and the primary is dropped from that list only, never from
+    // the fallbacks.
+    //
+    // AND THE EXEMPTION IS THE ROUND'S (`exemptLiteral`): a literal metered model in an
+    // operator-written ladder is one the round WILL call, so removing it here reported a
+    // tier as uncovered that is not.
+    const forTier = loadTiers().filter((t) => t.id === tier);
+    const ownSpares = forTier
+      .flatMap((t) => (exemptLiteral(t, pools) ? routesFor(t, pools) : withoutMetered(routesFor(t, pools), allowMetered)))
+      .filter((r) => !parked(r))
+      .slice(1);
+    const usableFallbacks = [
+      ...ownSpares,
+      ...forTier
+        .flatMap((t) => withoutMetered((t.fallback ?? []).flatMap((f) => routesFor({ ...t, model: f }, pools)), allowMetered))
+        .filter((r) => !parked(r)),
+    ];
+    const hasFallback = usableFallbacks.length > 0;
+    // WHETHER IT COSTS ANYTHING is a separate question from whether it exists, and the
+    // banner used to assert the expensive answer unconditionally. A free second plan
+    // answering for a dead one costs nothing and should not be reported as spending.
+    const fallbackCosts = usableFallbacks.some(isMeteredRoute);
     // TWO MARKS, TWO CONSEQUENCES, and one banner used to claim the stronger one for
     // both. Only a time the PROVIDER STATED stops a review calling the tier (D-90); a
     // backoff the background screen guessed bounds the screen alone, and reviews go on
@@ -199,7 +265,9 @@ export function renderStatus(db: DatabaseSync, reviewId?: string, dataDir = "/va
       !stated
         ? `  ${dim("this is lore's own guess, not the provider's word — REVIEWS STILL CALL THIS TIER normally.")}`
         : hasFallback
-          ? `  ${dim("reviews ask its fallback instead, so coverage is FULL — this costs metered money, not evidence.")}`
+          ? fallbackCosts
+            ? `  ${dim("reviews ask its fallback instead, so coverage is FULL — this costs metered money, not evidence.")}`
+            : `  ${dim("reviews ask its fallback instead, so coverage is FULL — on another subscription, costing nothing.")}`
           : `  ${dim("the provider named that time, so reviews step over the tier and say so; the screen waits too.")}`,
       `  ${dim("It is retried automatically, and one success clears this.")}`,
       "",

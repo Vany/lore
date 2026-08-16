@@ -36,7 +36,8 @@ import { parseLoreOk } from "../core/lore-ok.ts";
 import { decidedByPersonOrClock, isTerminal, type ReviewState } from "../core/review-state.ts";
 import type { ReviewType } from "../core/review-type.ts";
 import { retryAt, shouldProbe } from "../core/cooloff.ts";
-import { frozenBySpend } from "../ops/frozen.ts";
+import { withoutMetered } from "../core/metered.ts";
+import { exemptLiteral } from "../core/ladder.ts";
 import { ServiceUnreachable, CancelledByLore, DidNotRun, Exhausted, ProviderAuthFailed, TierUnavailable, TooLargeForTier } from "../core/errors.ts";
 import { hunkAround, hunkStillPresent, makeScope, type Scope } from "../core/scope.ts";
 import { baseCommitFor, blobSha, computeDiff, renderDiff } from "../git/diff.ts";
@@ -71,24 +72,18 @@ export interface RoundInput {
    */
   readonly t0?: typeof runT0;
   /**
-   * The day's spend ceiling in USD, checked at every ROUND BOUNDARY (D-93).
+   * Whether a fallback chain may walk onto a route that bills per call (D-117).
    *
-   * `mayStart` checks this once, at enqueue, and deliberately never again: killing a
-   * review halfway leaves it neither passed nor honestly failed and wastes what was
-   * already spent. That reasoning was free while every provider was a flat subscription
-   * reporting `cost_usd: 0` — the ceiling could not fire at all, so where it was checked
-   * did not matter.
+   * The operator's answer, held in config and set by a person, because neither answer is
+   * right in general: a deployment that has deliberately bought metered capacity as its
+   * safety net wants the fallback, and one running purely on subscriptions would rather
+   * have `passed_partial` with the tier named in `checks_skipped` — honest, free, and
+   * already implemented. lore stops guessing and asks once.
    *
-   * D-93 made one path metered. A single agentic review can then exceed the ceiling by
-   * any amount before anything looks again, which is exactly the unbounded shape a
-   * ceiling exists to refuse. Checked BETWEEN rounds rather than mid-round, so the
-   * objection still holds: a round is never abandoned half-spent, and the review stops in
-   * a state that has a name.
-   *
-   * Absent means unbounded, which is what the CLI and the tests want — and what every
-   * caller did before this existed.
+   * Absent means NO. A deployment that has not said yes to spending money does not spend
+   * money, which is the safe direction and the one the CLI and the tests want.
    */
-  readonly dailyCeilingUsd?: number;
+  readonly allowMetered?: boolean;
 }
 
 export interface RoundResult {
@@ -429,42 +424,10 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // is not re-run after a fix (D-6, revised), "tiers that ran" and "tiers that read the
   // signed tree" are different sets, and only the second is what an attestation may
   // claim (`spec/review-ladder.md` §5).
-  // THE CEILING, AT A ROUND BOUNDARY (D-93). Nothing has been spent on this round yet,
-  // so stopping here leaves the review in a state with a name rather than half-paid-for
-  // — which is the objection that kept this check at enqueue and nowhere else. That
-  // objection was free while every provider billed a flat subscription and the ceiling
-  // could not fire; D-93 made one path metered, and an unbounded spend between enqueues
-  // is exactly the shape a ceiling exists to refuse.
-  //
-  // Inert under subscriptions, deliberately: every `usage` row carries `cost_usd: 0`, so
-  // the sum is zero and this never fires. It becomes real the moment a fallback does.
-  if (input.dailyCeilingUsd !== undefined && frozenBySpend(store, input.dailyCeilingUsd)) {
-    // A BACKSTOP THAT REQUEUES, NEVER ONE THAT FAILS (D-119).
-    //
-    // The dispatcher gates CLAIMING while frozen, so ordinarily nothing reaches here. This
-    // covers the seam: a job claimed a moment before the ceiling tripped, or a round that
-    // began under a ceiling raised and then lowered again.
-    //
-    // It used to write `failed` and a reason naming the spend — and on 2026-08-16 that
-    // destroyed eight reviews across three people's branches at round 0, having read
-    // nothing, because lore was out of money for a few hours. `failed` is the strongest
-    // thing this service can say; a bounded, recoverable, entirely internal condition is
-    // not what it is for.
-    //
-    // `ServiceUnreachable` is the right error and not a borrowed one: from the review's
-    // point of view a provider it cannot pay for is a provider it cannot reach. The worker
-    // already requeues on it (`requeueJob`) without burning an attempt or touching the
-    // review, which is precisely "do not restart, wait till unfreeze" — the ladder,
-    // findings, ratified justifications, pinned worktree and kept sessions all stand.
-    //
-    // Nothing is written to `failure_reason`, so the client is told nothing (D-120). To
-    // them the review is still running, which is true.
-    console.error(
-      `[lore:log] round for ${reviewId} not started: the day's spend ceiling is reached. Requeued, not failed; ` +
-        "the review is untouched and no client is told.",
-    );
-    throw new ServiceUnreachable("lore is not taking work at the moment; this round will run when it is");
-  }
+  // NO ROUND IS REFUSED FOR MONEY (D-121). A spend ceiling stood here, and one stood at
+  // enqueue, and between them they turned a bill run up by one batch into a stopped gate
+  // for everybody. What a metered route may do is asked per call now, from the route id,
+  // before the call — `core/metered.ts`, walked at the fallback chain below.
 
   const roundTree = await treeHash(worktree);
   // THE INITIAL ORIGIN PIN IS RECORDED HERE, because this is the first moment it EXISTS.
@@ -1410,7 +1373,59 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     // warm one. Vany: *"if a model is chosen, use it — this rule is only for the initial
     // choosing."*
     const pools = loadPools();
-    const all = routesFor(member, pools);
+    // THE POOL IS GATED TOO, AND ONLY THE LITERAL MODEL IS EXEMPT (D-117).
+    //
+    // lore-ok[ccccf0db] is NOT the answer here — the finding is right and this is the fix.
+    // The gate was applied to the fallback chain alone, on the reasoning that a tier's own
+    // model is the operator's explicit choice. A NICKNAME is not that choice: `routesFor`
+    // expands it to a pool of interchangeable routes and `poolOrder` shuffles them, so a
+    // metered pool mate becomes `pool[0]` — the unfiltered PRIMARY — in some fraction of
+    // rounds, and in EVERY round once the free routes are parked. That is precisely the
+    // 2026-08-16 shape (a dead subscription leaving only the paid twin) reached by the one
+    // path the gate did not cover, and it would have falsified the claim written into SPEC,
+    // TODO, MEMO and the compose file: that at `LORE_ALLOW_METERED=0` no charging route is
+    // ever called.
+    //
+    // The exemption is therefore the literal id and nothing else. `member.model` being
+    // `openrouter/x` is a person typing a metered route into the tier: it runs every round
+    // at a cost that is chosen and immediate. A pool mate is neither chosen nor immediate —
+    // it is lore picking between routes, which is the conditional case the gate exists for.
+    const named = member.model ?? "";
+    // EXEMPT ONLY WHAT A PERSON CHOSE — `exemptLiteral`, which is also the rule
+    // `concreteRoute` and `noRouteBecause` apply, so the three cannot drift apart.
+    //
+    // This tested `pools[named] === undefined` alone, i.e. "is it a literal id", and that
+    // waved through the BUILT-IN ladder: `DEFAULT_TIERS` is three literal `openrouter/`
+    // models, `deploy/docker-compose.yml` passes a blank `LORE_TIERS`, and blank means the
+    // default — so on the configuration this repository ships, the gate filtered nothing
+    // and every call billed while five documents promised no charging route is ever
+    // called. A literal id is the operator's decision only when the operator wrote the
+    // file it is in.
+    const gated = !exemptLiteral(member, pools);
+    const allRoutes = routesFor(member, pools);
+    const all = gated ? withoutMetered(allRoutes, input.allowMetered ?? false) : allRoutes;
+    // A POOL EMPTIED BY THE GATE IS NOT A POOL OUT OF QUOTA, and the two must not share a
+    // sentence: one is answered by paying, the other by waiting. Reported here because the
+    // `pool.length === 0` throw below reads the filtered list and would otherwise tell an
+    // operator its routes had refused when none of them was ever asked.
+    // THE POOL SHAPE OF THE INCIDENT MUST SPEAK TOO, and it did not.
+    //
+    // This fired only when the gate emptied the pool COMPLETELY (`all.length === 0`), and
+    // the chain's own notice further down fires only when something reachable remains. In
+    // between sits the exact shape ccccf0db was raised about — a free route parked on a
+    // billing-cycle limit and a metered twin refused — where `all` is the parked free
+    // route and the chain is empty, so NEITHER line printed. The operator saw only "no
+    // route has quota … until its backoff passes" and waited on a backoff that cannot fix
+    // a billing cycle, never learning a paid twin sat behind a toggle. `noRouteBecause`
+    // already distinguishes the two causes; this is that answer, on the round's own path.
+    const gatedOut = gated ? allRoutes.filter((r) => !all.includes(r)) : [];
+    if (gatedOut.length > 0 && withQuota(all, (m) => store.routeUnavailable(m)).usable.length === 0) {
+      console.error(
+        `[lore:log] ${reviewId}: ${member.id} cannot run — ${gatedOut.join(", ")} bill per call and are refused, ` +
+          `and what remains of ${named} (${all.join(", ") || "nothing"}) has no quota. ` +
+          "Set LORE_ALLOW_METERED=1 to buy this tier rather than skipping it.",
+      );
+    }
     // WHAT WE BELIEVE STILL HAS QUOTA. Nothing is assumed out until a call has refused;
     // after one, the route is parked until its backoff passes. Vany, when the first
     // version re-asked an unstated refusal on every round: *"I do not want a regular
@@ -1436,6 +1451,25 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
           ? [stuck, ...poolOrder(routes.filter((r) => r !== stuck))]
           : poolOrder(routes);
     // `member.model` when the tier has no pool — the ordinary single-route case, unchanged.
+    // lore-ok[ccccf0db]: the finding is real and is FIXED UPSTREAM, at `all` (~60 lines
+    // above), not here. It is right that this line runs `pool[0]` with no metered check and
+    // that a nickname's pool can put a paid route there — in some rounds by shuffle, in
+    // every round once the free routes are parked, which is the 2026-08-16 shape reached by
+    // the one path the first version of the gate did not cover.
+    //
+    // Filtering at the SELECTION would be the wrong locus and would leave the same hole one
+    // step over: `pool` is also read by `spare` for the fallback walk and by the
+    // `pool.length === 0` refusal, so a check here would have to be repeated at each, and
+    // the third reader added later would be found the way this one was. Gating the ROUTE
+    // LIST means every consumer of it is gated once, including consumers not yet written.
+    //
+    // What stays exempt is the LITERAL `member.model` in the tail of this expression — a
+    // person typing `openrouter/x` as the tier's model, which runs every round at a cost
+    // that is chosen and immediate. `pinRoute` is a route already chosen earlier in this
+    // same review and therefore already gated when it was.
+    //
+    // Covered by "a pool with a metered route in it" in round.test.ts, which draws the
+    // shuffle twenty times over fresh reviews rather than once.
     const primaryRoute = pinRoute ?? pool[0] ?? member.model ?? "";
     if (primaryRoute !== member.model && (pool.length > 0 || pinRoute !== undefined)) chosenRoute = primaryRoute;
 
@@ -1459,6 +1493,17 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       // still walked: the model's own routes being out says nothing about the metered
       // twin. Synthetic, so it must not write a route mark — no call was made.
       if (pool.length === 0) {
+        // TWO REASONS A POOL CAN BE EMPTY, AND THEY ARE NOT THE SAME FACT. Every route
+        // parked on quota comes back by itself at a time we can name; every route gated as
+        // metered comes back when a person decides, and never on its own. Saying "refused
+        // recently, retried after its backoff" about the second would promise a recovery
+        // that cannot happen, and send an operator to wait for a clock instead of a switch.
+        if (all.length === 0) {
+          throw new Exhausted(
+            `no route for tier ${member.id} may be used: every route of ${named} bills per call and this ` +
+              "deployment does not allow metered routes. Nothing will change until an operator allows them.",
+          );
+        }
         throw new Exhausted(
           `no route for tier ${member.id} has quota: ${all.join(", ")} — each refused recently and is not asked ` +
             `again until its backoff passes. The earliest comes back at ${believed.until ?? "unknown"}.`,
@@ -1541,7 +1586,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       // refuses a fallback that literally repeats the tier's model, but a fallback POOL
       // can contain the route the primary just ran on — walking to it buys a guaranteed
       // second refusal with a real call, in the outage the chain exists for.
-      const chain = [
+      const reachable = [
         ...new Set([
           ...spare,
           ...(member.fallback ?? []).flatMap((f) => {
@@ -1553,6 +1598,44 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
           }),
         ]),
       ].filter((r) => r !== primaryRoute);
+      // AND ONLY THE ONES SOMEBODY SAID WE MAY PAY FOR (D-117).
+      //
+      // This is the exact line the 2026-08-16 incident walked through. `kimi-for-coding/k3`
+      // answered `403: you have reached your usage limit for this billing cycle`, D-48
+      // parked it, and the chain stepped onto `openrouter/moonshotai/kimi-k3` — the same
+      // model, ~$4.83 a call, twenty-one calls, $101.36. Every step was correct by its own
+      // rule. Nothing anywhere asked whether the next route was one that charges.
+      //
+      // THE PRIMARY IS DELIBERATELY NOT FILTERED. Naming a metered route as a tier's model
+      // IS the operator switching it on: it runs every round, its cost is chosen and
+      // immediate. A fallback is CONDITIONAL — written as insurance, invisible until a
+      // subscription dies, and then billing on every call for as long as the outage lasts.
+      // Identical config, and only one of them can surprise somebody. That difference is
+      // the whole of what this flag guards.
+      //
+      // An emptied chain is not an error: `throw e` below rethrows the primary's
+      // `Exhausted`, D-48 steps over the tier, and the client gets `passed_partial` with it
+      // named in `checks_skipped`. A weaker review, said out loud, for free.
+      const chain = withoutMetered(reachable, input.allowMetered ?? false);
+      // ONLY WHEN THE MONEY IS ACTUALLY WHY (lore-ok is not the answer to fd0f65d5 —
+      // the finding is right). `routeFault(e)` guards this because the very next line uses
+      // it to decide whether the chain is walked AT ALL: on a hang, a malformed reply or a
+      // cancel, `throw e` fails the review and no fallback was ever going to run. Without
+      // this guard the log said "is out of quota … skipping the tier rather than paying"
+      // over a hang — naming a cause that did not happen and a consequence that did not
+      // follow, in the one channel an operator trusts for money, where the plausible next
+      // move is to flip LORE_ALLOW_METERED=1 and buy nothing.
+      if (routeFault(e) && chain.length === 0 && reachable.length > 0) {
+        // WHY THE TIER IS ABOUT TO BE SKIPPED, TO THE OPERATOR (D-120). The client's copy
+        // says the tier did not run and what that costs the verdict, which is theirs; that
+        // it was a MONEY decision is ours, and it is the line that tells somebody a toggle
+        // is the only thing between them and a full review.
+        console.error(
+          `[lore:log] ${reviewId}: ${member.id} (${member.model ?? "?"}) is out of quota and every remaining route ` +
+            `is metered (${reachable.join(", ")}) — skipping the tier rather than paying. ` +
+            "Set LORE_ALLOW_METERED=1 to buy the coverage instead.",
+        );
+      }
       if (!routeFault(e) || chain.length === 0) throw e;
       // HELD, not written yet. `closeTierRun` OVERWRITES `unavailable`, so a note
       // recorded here would be erased by the success path a few lines below — which is

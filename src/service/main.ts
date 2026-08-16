@@ -7,14 +7,12 @@
 
 import { join } from "node:path";
 import { repinReview } from "./repin.ts";
-import { fallbackRoutes, loadPools, loadTiers } from "../core/ladder.ts";
+import { fallbackRoutes, ladderIsOperatorWritten, loadPools, loadTiers } from "../core/ladder.ts";
 import { dataDir, dbDir, dbFileIn } from "../core/paths.ts";
 import { mkdir } from "node:fs/promises";
 import { Alerter, CONDITIONS } from "../ops/alerts.ts";
 import { DEFAULT_HEARTBEAT, startHeartbeat, type HeartbeatConfig } from "../ops/heartbeat.ts";
 import { DEFAULT_RETENTION, collect } from "../ops/retention.ts";
-import { frozenBySpend } from "../ops/frozen.ts";
-import { DEFAULT_SPEND } from "../ops/spend.ts";
 import { repoPaths, worktreeFor } from "../git/repo.ts";
 import { DEFAULT_REVIEWER, Reviewer } from "../reviewer/opencode.ts";
 import { Store } from "../store/store.ts";
@@ -23,6 +21,7 @@ import { enqueueOrFail } from "./enqueue.ts";
 import { RESCREEN_INTERVAL_MS, screeningPass } from "./screening.ts";
 import { startHttp } from "./http.ts";
 import { serveRefusing } from "./refusing.ts";
+import { METERED_YES } from "../core/metered.ts";
 import { DEFAULT_WORKER, Worker } from "./worker.ts";
 
 export interface ServiceConfig {
@@ -53,7 +52,15 @@ export interface ServiceConfig {
    * anything green — the check cannot run, which is not the same as passing.
    */
   readonly backupDir?: string;
-  readonly dailyCeilingUsd: number;
+  /**
+   * May a fallback chain walk onto a route that bills per call (D-117)?
+   *
+   * DEFAULTS TO NO, and that is the decision rather than a timid default. A deployment
+   * running on flat subscriptions has never agreed to an invoice, and the failure of
+   * defaulting the other way is measured: 2026-08-16, $101.36 in three and a half hours,
+   * discovered from a total four hours after the first paid call.
+   */
+  readonly allowMetered: boolean;
 }
 
 /**
@@ -82,7 +89,7 @@ function env(name: string): string | undefined {
  *
  * Blank means "use the default" and is normal. GARBAGE means the deployment is
  * misconfigured, and silently substituting a default there would hide it until
- * someone wondered why the ceiling never fired. It throws at startup, which is the
+ * someone wondered why a knob had no effect. It throws at startup, which is the
  * one moment a person is watching.
  */
 function envNumber(name: string, fallback: number, min = 0): number {
@@ -93,6 +100,26 @@ function envNumber(name: string, fallback: number, min = 0): number {
     throw new Error(`${name} is "${raw}", which is not a number >= ${min}. Fix it or leave it empty for ${fallback}.`);
   }
   return n;
+}
+
+/**
+ * A yes/no the operator wrote, and nothing else.
+ *
+ * Same rule as `envNumber` and it matters more here, because this one spends money: an
+ * unrecognised value must never be read as either answer. `LORE_ALLOW_METERED=maybe`
+ * silently meaning "no" would strip tiers out of every review during an outage; silently
+ * meaning "yes" would buy them. It throws, at the one moment somebody is watching.
+ */
+function envBool(name: string, fallback: boolean): boolean {
+  const raw = env(name);
+  if (raw === undefined) return fallback;
+  const v = raw.trim().toLowerCase();
+  // THE YES LIST IS SHARED with `make status`, which reads the same variable to say what a
+  // tier cool-off costs. Two private copies disagreed once — status tested `=== "1"` — so
+  // `LORE_ALLOW_METERED=true` paid for fallbacks while the operator view said it did not.
+  if (METERED_YES.includes(v as (typeof METERED_YES)[number])) return true;
+  if (["0", "false", "no", "off"].includes(v)) return false;
+  throw new Error(`${name} is "${raw}", which is not a yes or a no. Use 1/0, true/false, yes/no, or leave it empty.`);
 }
 
 export function configFromEnv(): ServiceConfig {
@@ -119,6 +146,21 @@ export function configFromEnv(): ServiceConfig {
         "bound is admission control, which refuses a new review at 128 open. Remove the variable.",
     );
   }
+  // AND THE LOUDEST ONE, because believing this knob still works is believing lore has a
+  // spending limit when it has none (D-121). An operator who left `LORE_DAILY_CEILING_USD`
+  // in place has every reason to think a number caps the day. Nothing does; what bounds
+  // the money now is whether metered routes may be used at all, which is a different
+  // question with a different answer, so the message names the replacement rather than
+  // just refusing.
+  if (env("LORE_DAILY_CEILING_USD") !== undefined) {
+    throw new Error(
+      "LORE_DAILY_CEILING_USD is set but no longer does anything (D-121): price is reported, " +
+        "never acted on, so no total stops a review — the ceiling used to suspend the gate for " +
+        "everybody over a bill one batch ran up. What bounds spending now is LORE_ALLOW_METERED " +
+        "(default 0), which decides whether a fallback may walk onto a per-call route at all " +
+        "(D-117). Remove the variable, and set LORE_ALLOW_METERED=1 if you want paid fallbacks.",
+    );
+  }
   const webhookUrl = env("LORE_WEBHOOK_URL");
   const heartbeatUrl = env("LORE_HEARTBEAT_URL");
   const backupDir = env("LORE_BACKUP_DIR");
@@ -136,7 +178,7 @@ export function configFromEnv(): ServiceConfig {
     ...(webhookUrl !== undefined ? { webhookUrl } : {}),
     ...(heartbeatUrl !== undefined ? { heartbeatUrl } : {}),
     ...(backupDir !== undefined ? { backupDir } : {}),
-    dailyCeilingUsd: envNumber("LORE_DAILY_CEILING_USD", DEFAULT_SPEND.dailyCeilingUsd),
+    allowMetered: envBool("LORE_ALLOW_METERED", false),
   };
 }
 
@@ -223,11 +265,48 @@ export async function serve(cfg: ServiceConfig): Promise<() => void> {
   // the limit would silently multiply by the worker count — the bound would read as 4
   // and behave as 48 at LORE_CONCURRENCY=12, which is the number that killed four
   // reviews in the first place.
-  const reviewer = new Reviewer({ ...DEFAULT_REVIEWER });
+  // KEPT SESSIONS OUTLIVE THIS PROCESS (D-80). Without this port the reviewer holds them
+  // in memory alone, so a deploy silently downgraded every open review to a cold re-read
+  // of its whole diff — the expensive half of a restart, and the half nothing reported.
+  // Vany: *"deployment must not kill the full ladder, may be one step."*
+  const reviewer = new Reviewer({
+    ...DEFAULT_REVIEWER,
+    keptSessions: {
+      get: (key) => store.keptSessionOf(key),
+      set: (key, sessionId) => {
+        store.setKeptSession(key, sessionId);
+      },
+      forget: (key) => {
+        store.forgetKeptSession(key);
+      },
+      keys: () => store.keptSessionKeys(),
+    },
+  });
+
+  // THE DEFAULT LADDER IS ENTIRELY METERED, AND NOBODY CHOSE IT (D-117).
+  //
+  // `DEFAULT_TIERS` is three literal `openrouter/` models. With no `LORE_TIERS` and no
+  // metered permission, every tier is gated and no review can reach a model at all — so
+  // the service would run, accept work, and return `passed_partial` with everything in
+  // `checks_skipped`, for ever, looking like a configured deployment. That is the shape
+  // this project refuses: it says so, once, at the one moment somebody is watching.
+  //
+  // A LOG AND NOT A THROW, deliberately. Refusing to boot would make a fresh `make up`
+  // fail for anyone who has not written a tiers file yet, and the honest state here is
+  // "running, and unable to review anything" — which is recoverable by either of the two
+  // things this line names.
+  if (!ladderIsOperatorWritten() && !cfg.allowMetered) {
+    console.error(
+      "lore: NO REVIEW CAN RUN. LORE_TIERS is unset, so the built-in ladder is in use — and every one of its " +
+        "tiers is an `openrouter/` route, which bills per call. LORE_ALLOW_METERED=0 refuses those, so every " +
+        "tier will be skipped and every verdict will be `passed_partial` having read nothing. Fix it by " +
+        "setting LORE_TIERS to a ladder on your own subscriptions, or LORE_ALLOW_METERED=1 to pay per call.",
+    );
+  }
 
   const worker = new Worker(
     store,
-    { ...DEFAULT_WORKER, reposRoot, dailyCeilingUsd: cfg.dailyCeilingUsd },
+    { ...DEFAULT_WORKER, reposRoot, allowMetered: cfg.allowMetered },
     alerter,
     reviewer,
   );
@@ -258,20 +337,11 @@ export async function serve(cfg: ServiceConfig): Promise<() => void> {
   // — a deleted review costs one re-run, deleted knowledge costs everything the
   // workgroup ever taught the service.
   const sweep = setInterval(() => {
-    // NOBODY IS EXPIRED WHILE LORE IS FROZEN (D-119).
-    //
-    // The sweep turns a non-terminal review `expired` after 48h of not moving — and a
-    // review waiting on the spend ceiling is not moving BECAUSE LORE IS NOT WORKING. A
-    // freeze is bounded by the day, so it cannot reap a review on its own; it can push one
-    // that was already close over the edge, and that review would be destroyed for our
-    // outage. `expired` never means "found nothing" (INV-1), which is exactly why it must
-    // not be said about somebody who was waiting as instructed.
-    //
-    // Skipped whole rather than adjusted by the frozen duration: the worktree and
-    // old-review collection it also does are not urgent, an hour of not sweeping costs
-    // disk and nothing else, and a cutoff arithmetic that has to track freeze windows is a
-    // second thing to keep correct for a saving nobody asked for.
-    if (frozenBySpend(store, cfg.dailyCeilingUsd)) return;
+    // NOTHING SUSPENDS THIS ANY MORE (D-121). The sweep used to be skipped whole while a
+    // spend ceiling was reached, because `expired` after 48h of not moving must never be
+    // said about somebody who was not moving BECAUSE LORE WAS NOT WORKING. With the
+    // ceiling gone lore is never deliberately not working, so the exemption has nothing
+    // left to protect against and its absence cannot reap anybody for our outage.
     void collect(store, { ...DEFAULT_RETENTION, reposRoot }).then(
       (r) => {
         if (r.worktreesRemoved + r.reviewsDeleted + r.reviewsExpired > 0) {
@@ -404,7 +474,7 @@ export async function serve(cfg: ServiceConfig): Promise<() => void> {
       // reviewer) survived its whole life inside one. It is the only path by which a
       // review the client was told is `queued` can silently never run; see there.
       enqueue: (reviewId, stage) => {
-        void enqueueOrFail(store, { ...DEFAULT_SPEND, dailyCeilingUsd: cfg.dailyCeilingUsd }, alerter, reviewId, stage);
+        void enqueueOrFail(store, alerter, reviewId, stage);
       },
       repin: (reviewId, expectTree, intoRef) =>
         repinReview(store, reposRoot, dataDir(), reviewId, expectTree, intoRef),
@@ -416,7 +486,7 @@ export async function serve(cfg: ServiceConfig): Promise<() => void> {
       port: cfg.port,
       host: cfg.host,
       heartbeat,
-      spend: { ...DEFAULT_SPEND, dailyCeilingUsd: cfg.dailyCeilingUsd },
+      allowMetered: cfg.allowMetered,
       modelGate: () => reviewer.gateState(),
     },
   );

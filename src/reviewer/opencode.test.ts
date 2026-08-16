@@ -456,6 +456,76 @@ describe("a tier that keeps its session", () => {
   });
 
   /**
+   * THE SAME SESSION ACROSS A RESTART — the half of D-80 that used to die with the process.
+   *
+   * Two Reviewer instances, one durable port: exactly what a deploy is. The map was the
+   * only copy and was in memory, so a restart forgot every warm conversation while opencode
+   * still held them all in a named volume — and every open review paid for a cold re-read
+   * of its whole diff on its next round, which nothing reported.
+   *
+   * Vany: *"deployment must not kill the full ladder, may be one step."*
+   *
+   * TWO INSTANCES IS THE POINT, and it is why the port exists rather than a private field:
+   * a single Reviewer cannot express the question at all, so no test of one could have
+   * caught this.
+   */
+  it("continues a session the previous process opened", async () => {
+    replies = [reply(), reply()];
+    const rows = new Map<string, string>();
+    const port = {
+      get: (k: string) => rows.get(k),
+      set: (k: string, v: string) => void rows.set(k, v),
+      forget: (k: string) => void rows.delete(k),
+      keys: () => [...rows.keys()],
+    };
+    const prompt = { initial: "FULL ORIENTATION", continued: "THE AUTHOR ANSWERED" };
+
+    const before = new Reviewer({ baseUrl, agent: "readonly", timeoutMs: 10_000, keptSessions: port });
+    await before.review(KEEPS, prompt, "/tmp/wt", "rev1");
+
+    // The deploy. Nothing of `before` survives except what it wrote down.
+    const after = new Reviewer({ baseUrl, agent: "readonly", timeoutMs: 10_000, keptSessions: port });
+    await after.review(KEEPS, prompt, "/tmp/wt", "rev1");
+
+    expect(creates(), "one session across the restart, not one per process").toHaveLength(1);
+    const sent = prompts().map((c) => JSON.stringify((c.body as { parts?: unknown[] }).parts ?? []));
+    expect(sent[1], "the second process says only what changed").toContain("THE AUTHOR ANSWERED");
+    expect(sent[1], "and does NOT re-read the whole diff").not.toContain("FULL ORIENTATION");
+  });
+
+  /**
+   * A DURABLE ID CAN OUTLIVE ITS SESSION, and that failure is new — a private Map could
+   * not produce it. opencode's volume replaced, its data pruned, or this database restored
+   * from a backup older than the session, and the row names something gone. Left alone it
+   * would fail its tier on EVERY future round of the review: permanent, and strictly worse
+   * than the cold start it was avoiding.
+   */
+  it("forgets a session opencode no longer has, and starts cold exactly once", async () => {
+    replies = [reply(), reply()];
+    const rows = new Map<string, string>([["rev1:t1:openrouter/z-ai/glm-5.2", "ses_vanished"]]);
+    const port = {
+      get: (k: string) => rows.get(k),
+      set: (k: string, v: string) => void rows.set(k, v),
+      forget: (k: string) => void rows.delete(k),
+      keys: () => [...rows.keys()],
+    };
+    status = 404;
+
+    const r = new Reviewer({ baseUrl, agent: "readonly", timeoutMs: 10_000, keptSessions: port });
+    await expect(r.review(KEEPS, { initial: "A", continued: "B" }, "/tmp/wt", "rev1")).rejects.toThrow();
+
+    // THE DEAD ID IS GONE — not the row. The cold restart opens a fresh session and
+    // records THAT, which is the whole point: the next round resumes normally. Asserting
+    // the key was absent tested the intermediate state and would have failed the correct
+    // implementation.
+    expect(rows.get("rev1:t1:openrouter/z-ai/glm-5.2"), "never ses_vanished again").not.toBe("ses_vanished");
+    // ONE create: the cold retry happened, and did not happen twice. Every prompt 404s in
+    // this fixture, so a recovery without a bound would loop until something else stopped
+    // it — asserting the count is what pins the bound rather than the intent.
+    expect(creates(), "one cold restart, then it gives up honestly").toHaveLength(1);
+  });
+
+  /**
    * CONTINUITY IS WITHIN ONE TIER'S RUN, NEVER ACROSS TIERS. A tier that inherited the
    * previous model's conclusions would make three tiers into one opinion asked three
    * times, which is what D-1 and D-49 exist to prevent.

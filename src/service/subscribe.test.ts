@@ -42,7 +42,6 @@ import { subscribeTo } from "../mcp/server.ts";
 import { grantToken, revokeByPrefix } from "../mcp/auth.ts";
 import { reviewUri } from "../mcp/events.ts";
 import { DEFAULT_HEARTBEAT } from "../ops/heartbeat.ts";
-import { DEFAULT_SPEND } from "../ops/spend.ts";
 import { Store } from "../store/store.ts";
 import { startHttp } from "./http.ts";
 
@@ -145,7 +144,7 @@ beforeEach(async () => {
       port,
       host: "127.0.0.1",
       heartbeat: { ...DEFAULT_HEARTBEAT, dataDir: "/tmp" },
-      spend: DEFAULT_SPEND,
+      allowMetered: false,
     },
   ));
 

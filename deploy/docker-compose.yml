@@ -101,7 +101,24 @@ services:
       #
       # The service REFUSES TO START if this variable is still set, rather than ignoring
       # it: a setting that silently does nothing is decoration a reader believes.
-      LORE_DAILY_CEILING_USD: "100"  # stops STARTING reviews when hit, never mid-review
+      # MAY A FALLBACK WALK ONTO A ROUTE THAT BILLS PER CALL (D-117)?
+      #
+      # This replaced LORE_DAILY_CEILING_USD, and the two are not the same instrument.
+      # The ceiling was a TOTAL: it noticed after the money was gone and then stopped the
+      # gate for everybody, which on 2026-08-16 was eight reviews on three colleagues'
+      # branches, at round 0, over a bill an unrelated batch had run up. This is asked per
+      # call, before the call, from the route id — `openrouter/` is the only metered
+      # provider here (D-121).
+      #
+      # "0" is this deployment's answer: every tier has a subscription route, and a tier
+      # whose plan is out is honestly reported as skipped (`passed_partial`, named in
+      # checks_skipped) rather than quietly bought at ~$4.83 a call. Set it to "1" to buy
+      # the coverage instead — that is a deliberate purchase, not a fallback.
+      #
+      # The service REFUSES TO START if LORE_DAILY_CEILING_USD is still set anywhere,
+      # rather than ignoring it: believing a number caps the day when none does is worse
+      # than having no answer at all.
+      LORE_ALLOW_METERED: "0"
       # LORE_RUN_TESTS is gone (D-71). lore READS a test suite — whether the change
       # is covered, whether a test asserts what its name claims — and never runs one.
       # A suite that fails belongs to whoever owns the repository, and CI already

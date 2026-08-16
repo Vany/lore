@@ -2,10 +2,8 @@
  * The gap between accepting a review and it being claimable, and what happens if it fails.
  *
  * `review_start` writes the review row, answers the client `state: "queued"`, and only
- * then asks whether there is budget to run it. That last step is fire-and-forget by
- * design — a spend check that blocked the reply would make every `review_start` wait on
- * two table scans and possibly a webhook — which means it is also the one place a review
- * can be **accepted and then quietly never happen**.
+ * then puts it on the queue. That last step is fire-and-forget by design, which means it
+ * is also the one place a review can be **accepted and then quietly never happen**.
  *
  * Nothing reconciles that. `reclaimOrphanedJobs` frees jobs stuck `running`; a review
  * with no job at all is invisible to it, so it sits `queued` while its client polls a
@@ -27,34 +25,28 @@
  */
 
 import { Alerter, CONDITIONS } from "../ops/alerts.ts";
-import { mayStart, type SpendConfig } from "../ops/spend.ts";
 import type { Store } from "../store/store.ts";
 
 /**
- * Decide whether this review may run, and put it where the worker will find it.
+ * Put this review where the worker will find it.
  *
  * Returns rather than throws: every caller is a fire-and-forget `void`, and a rejection
  * from here has nowhere to go but the process's unhandled-rejection handler.
+ *
+ * NOTHING IS REFUSED HERE ANY MORE (D-121). This used to ask a daily spend ceiling for
+ * permission and write `failed` on the review when the answer was no — the string
+ * `not started: today's spend 101.36 has reached the 100.00 ceiling`, which on 2026-08-16
+ * eight of other people's reviews carried into their clients as a failure. Money is not
+ * a reason to refuse somebody's review; what a metered route may do is settled before the
+ * call instead (D-117), and a review that is admitted is a review that will run.
  */
 export async function enqueueOrFail(
   store: Store,
-  spend: SpendConfig,
   alerter: Alerter,
   reviewId: string,
   stage: "fast" | "deep",
-): Promise<"queued" | "refused" | "failed"> {
+): Promise<"queued" | "failed"> {
   try {
-    // Checked before starting, never mid-review: killing a review halfway leaves it
-    // neither passed nor honestly failed, and wastes what was already spent.
-    const verdict = await mayStart(store, spend, alerter);
-    if (!verdict.allowed) {
-      store.updateReview(reviewId, { state: "failed" });
-      store.setFailureReason(
-        reviewId,
-        `not started: today's spend ${verdict.spent.toFixed(2)} has reached the ${verdict.ceiling.toFixed(2)} ceiling`,
-      );
-      return "refused";
-    }
     store.enqueue(reviewId, stage);
     return "queued";
   } catch (e) {

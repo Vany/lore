@@ -7,6 +7,7 @@
  * also what replaces the bash predecessor while the service is being built.
  */
 
+import { allowMeteredFromEnv } from "./core/metered.ts";
 import { mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -465,6 +466,13 @@ export async function main(argv: readonly string[]): Promise<ExitCode> {
         principal,
         worktree: args.target,
         type,
+        // THE SAME KNOB THE REST OF THIS BINARY READS (D-117). `runRound` defaults to
+        // refusing metered routes and takes the answer from its caller; `propose` and the
+        // bootstrap survey get it from `concreteRoute`'s env default. So `lore review`
+        // ignored `LORE_ALLOW_METERED` while `lore propose` honoured it — one money knob
+        // with two behaviours in one command, and the skip text told the user to set the
+        // variable they had already set.
+        allowMetered: allowMeteredFromEnv(process.env["LORE_ALLOW_METERED"]),
       });
     } catch (e) {
       // lore-ok[178a57e7]: the finding says this marks the review failed without

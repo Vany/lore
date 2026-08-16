@@ -100,7 +100,7 @@ describe("the deployed service's review_cancel", () => {
       dataDir: dir,
       port: PORT,
       host: "127.0.0.1",
-      dailyCeilingUsd: 10,
+      allowMetered: false,
     });
 
     const out = await cancel();

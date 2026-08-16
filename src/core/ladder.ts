@@ -8,6 +8,7 @@
  * SPEC: spec/review-ladder.md §1, §5
  */
 
+import { allowMeteredFromEnv, withoutMetered } from "./metered.ts";
 import { readFileSync } from "node:fs";
 import * as z from "zod";
 import { absent } from "./optional.ts";
@@ -279,9 +280,87 @@ export function concreteRoute(
   pools: ModelPools,
   known: (model: string) => RouteState | undefined,
   rand: () => number = Math.random,
+  /**
+   * May this pick a route that bills per call (D-117)?
+   *
+   * GATED HERE, at the chokepoint, and that is the point of the parameter existing at
+   * all. The first version of the gate covered `runRound` and left this function — the
+   * OTHER indirection that turns a nickname into a concrete route — open, so the hourly
+   * screen, the bootstrap survey and `propose` (proposer AND critics) could each hand
+   * opencode a paid route while the deployment was documented as never paying. Once an
+   * hour, indefinitely, silently. Four callers, none of which had any reason to think
+   * about money.
+   *
+   * That is the same lesson twice in one change: *an exemption written for a literal
+   * value must be re-checked against every indirection that can produce that value.* So
+   * the check lives where the routes are chosen rather than at each caller, and the fifth
+   * caller is gated by existing.
+   *
+   * Defaults to the deployment's own answer so a caller cannot forget it. Overridable
+   * because a default that cannot be overridden is untestable.
+   */
+  allowMetered: boolean = allowMeteredFromEnv(process.env["LORE_ALLOW_METERED"]),
 ): string | undefined {
-  const usable = withQuota(routesFor(tier, pools), known).usable;
+  const all = routesFor(tier, pools);
+  // ONLY A NICKNAME'S POOL IS FILTERED — a literal `openrouter/x` written as the tier's
+  // model is the operator switching it on, exactly as in `runRound`. Keeping the two
+  // rules identical matters more than the saving: two different answers to "is this route
+  // allowed" is how the first hole was reached.
+  const permitted = exemptLiteral(tier, pools) ? all : withoutMetered(all, allowMetered);
+  const usable = withQuota(permitted, known).usable;
   return usable.length > 1 ? poolOrder(usable, rand)[0] : usable[0];
+}
+
+/**
+ * WHY THERE IS NO ROUTE — because "parked" and "not allowed" are answered differently.
+ *
+ * One is a clock and the other is a person: a quota park lifts by itself at a time we can
+ * name, a metered gate lifts when somebody decides and never on its own. Telling an
+ * operator their routes are "out of quota" when the truth is that a toggle forbids the one
+ * with quota sends them to wait for a reset that will not help.
+ *
+ * The round already says this properly; the rule was written in `runRound` — *a pool
+ * emptied by the gate is not a pool out of quota, and the two must not share a sentence* —
+ * and then the OTHER callers of `concreteRoute` went on sharing it. This is that sentence
+ * made available rather than repeated, so a fourth caller cannot get it wrong privately.
+ *
+ * `undefined` when a route WAS found; there is nothing to explain.
+ */
+export function noRouteBecause(
+  tier: Tier,
+  pools: ModelPools,
+  known: (model: string) => RouteState | undefined,
+  allowMetered: boolean = allowMeteredFromEnv(process.env["LORE_ALLOW_METERED"]),
+): string | undefined {
+  const all = routesFor(tier, pools);
+  const permitted = exemptLiteral(tier, pools) ? all : withoutMetered(all, allowMetered);
+  if (withQuota(permitted, known).usable.length > 0) return undefined;
+  const model = tier.model ?? "?";
+  // THE TOGGLE IS THE WHOLE REMEDY ONLY WHEN NOTHING PERMITTED SURVIVES.
+  //
+  // `permitted.length === 0`, not `permitted.length < all.length`. The looser test was
+  // true whenever ANY route had been gated — including the state where a free route
+  // survives the gate and is merely PARKED, which self-heals when its backoff lifts. In
+  // that state the sentence told an operator that waiting would not help and pointed them
+  // at a deployment-wide money toggle to work around a condition that would have cleared
+  // by itself, in the one channel this project insists must be exactly right.
+  if (permitted.length === 0 && all.length > 0) {
+    return (
+      `no route to ${model} may be used: ${all.join(", ")} bill per call and this deployment does not ` +
+      "allow metered routes. Set LORE_ALLOW_METERED=1 to use them; waiting will not change it"
+    );
+  }
+  // BOTH CAUSES AT ONCE, and it says so rather than picking the more dramatic one: a free
+  // route exists and is parked, and a metered one was refused. Waiting DOES fix this.
+  if (permitted.length < all.length) {
+    const blocked = all.filter((r) => !permitted.includes(r));
+    return (
+      `every permitted route to ${model} is out of quota (${blocked.join(", ")} would be allowed but bills ` +
+      "per call, and this deployment does not allow metered routes). The parked routes return on their own " +
+      "when their backoff lifts"
+    );
+  }
+  return `every route to ${model} is out of quota`;
 }
 
 /** What is known about a route's quota, as `routeUnavailable` returns it. */
@@ -358,6 +437,44 @@ export function poolOrder(routes: readonly string[], rand: () => number = Math.r
 }
 
 /**
+ * IS THIS TIER'S OWN MODEL EXEMPT FROM THE METERED GATE (D-117)?
+ *
+ * Two conditions, and both are about whether a PERSON chose this route:
+ *
+ *  * it must be a literal model id rather than a nickname — a pool is lore picking between
+ *    interchangeable routes, and a shuffled pool mate is nobody's decision;
+ *  * and the ladder must be one an operator wrote, because the built-in default is three
+ *    literal `openrouter/` models nobody chose.
+ *
+ * One definition, because there are three gate sites and a fourth will be added: the first
+ * version of this rule lived in `runRound` alone, and the two places it was missing are
+ * exactly where the holes were found.
+ */
+export function exemptLiteral(tier: Tier, pools: ModelPools, source = process.env["LORE_TIERS"]): boolean {
+  return pools[tier.model ?? ""] === undefined && ladderIsOperatorWritten(source);
+}
+
+/**
+ * DID A PERSON CHOOSE THIS LADDER, or is it the one lore ships with?
+ *
+ * The metered exemption rests entirely on this. `openrouter/x` written as a tier's model
+ * is the operator switching a paid route on — chosen, immediate, and theirs. The BUILT-IN
+ * default is three literal `openrouter/` models, chosen by nobody, and exempting those
+ * made `LORE_ALLOW_METERED=0` gate exactly nothing on the configuration this repository
+ * ships: `deploy/docker-compose.yml` passes `LORE_TIERS: ${LORE_TIERS:-}`, blank means
+ * `DEFAULT_TIERS`, and every call would have billed while five documents promised that no
+ * charging route is ever called.
+ *
+ * Vany, asked which way to resolve it: exempt only an operator-written ladder.
+ *
+ * Same predicate as `loadTiers`' own first line, deliberately — two readings of "is this
+ * configured" that could disagree is how the hole opened in the first place.
+ */
+export function ladderIsOperatorWritten(source = process.env["LORE_TIERS"]): source is string {
+  return source !== undefined && source.trim().length > 0;
+}
+
+/**
  * Load the ladder from configuration.
  *
  * `LORE_TIERS` is either inline JSON or a path to a JSON file. SPEC has always
@@ -369,7 +486,7 @@ export function poolOrder(routes: readonly string[], rand: () => number = Math.r
  * kind of divergence nobody notices until the bill or the findings look wrong.
  */
 export function loadTiers(source = process.env["LORE_TIERS"]): readonly Tier[] {
-  if (source === undefined || source.trim().length === 0) return DEFAULT_TIERS;
+  if (!ladderIsOperatorWritten(source)) return DEFAULT_TIERS;
 
   // Memoised per source, so the single-vendor warning is said once per process
   // rather than once per review type. A warning repeated three times at startup

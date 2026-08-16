@@ -27,7 +27,6 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { initialState } from "../core/ladder.ts";
 import { grantToken } from "../mcp/auth.ts";
 import { DEFAULT_HEARTBEAT } from "../ops/heartbeat.ts";
-import { DEFAULT_SPEND } from "../ops/spend.ts";
 import { Store } from "../store/store.ts";
 import { startHttp } from "./http.ts";
 
@@ -113,7 +112,7 @@ beforeEach(() => {
   ({ close } = startHttp(
     store,
     { store, worktreeFor: async () => worktree, enqueue: () => undefined, attest: async () => "lore: attested" },
-    { port, host: "127.0.0.1", heartbeat: { ...DEFAULT_HEARTBEAT, dataDir: "/tmp" }, spend: DEFAULT_SPEND },
+    { port, host: "127.0.0.1", heartbeat: { ...DEFAULT_HEARTBEAT, dataDir: "/tmp" }, allowMetered: false },
   ));
 });
 

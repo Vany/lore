@@ -26,7 +26,7 @@ import { asSubscriber, eventsFor, NO_EVENTS, ScopedEventBus } from "../mcp/event
 import { buildServer, type ServerDeps } from "../mcp/server.ts";
 import { decide } from "../knowledge/decide.ts";
 import { board } from "../ops/board.ts";
-import { type SpendConfig, spendByTier, startOfDayIso } from "../ops/spend.ts";
+import { spendByTier, startOfDayIso } from "../ops/spend.ts";
 import { checkHealth, type HeartbeatConfig } from "../ops/heartbeat.ts";
 import type { GateState } from "../reviewer/gate.ts";
 import type { Store } from "../store/store.ts";
@@ -37,8 +37,8 @@ export interface HttpConfig {
   readonly port: number;
   readonly host: string;
   readonly heartbeat: HeartbeatConfig;
-  /** So /status can report the ceiling — and whether it is capable of firing. */
-  readonly spend: SpendConfig;
+  /** Whether metered fallback routes may be used (D-117) — reported by `/status`. */
+  readonly allowMetered: boolean;
   /**
    * The model-call gate, so `/status` can answer D-26 for the REMOTE half too.
    *
@@ -267,21 +267,17 @@ async function handle(
           // and "nothing to do" and "refusing to take work" are opposite facts.
           draining: store.isDraining(),
           spend_today_by_tier: spendByTier(store, startOfDayIso()),
-          // A ceiling that CANNOT fire must say so. Both providers are subscriptions,
-          // so every usage row carries cost_usd = 0 and `spendToday: 0` against a $100
-          // ceiling reads as headroom when it actually means "nothing here measures
-          // spending". Opposite facts, identical in a dashboard.
-          spend_ceiling: {
-            usd: cfg.spend.dailyCeilingUsd,
-            metered: store.hasMeteredUsage(),
-            ...(store.hasMeteredUsage()
-              ? {}
-              : {
-                  note:
-                    "INERT: no model call has ever reported a cost, because these providers bill a flat " +
-                    "subscription. This ceiling cannot fire. Read `spendToday: 0` as unmeasured, not as headroom.",
-                }),
-          },
+          // WHAT THE MONEY CAN DO, WHICH IS THE ONLY REMAINING MONEY DECISION (D-117).
+          //
+          // This used to be `spend_ceiling`, and reporting it taught an operator that a
+          // dollar figure bounded the day. None does (D-121): `spendToday` above is a
+          // reading, and nothing branches on it. What CAN be refused is a route that bills
+          // per call, and that is a yes/no a person set — so it is the yes/no reported.
+          //
+          // Stays in the payload when false, because a key that disappears in the safe
+          // case teaches a monitor to ignore its absence, and this is the field that says
+          // whether an outage will cost money or coverage.
+          allow_metered: cfg.allowMetered,
           // Findings produced and never collected. 18 sat unread for hours, 14 of
           // them high — the review reached findings_ready and nothing ever polled it.
           // A finding nobody reads is a review that did not run, one step later.

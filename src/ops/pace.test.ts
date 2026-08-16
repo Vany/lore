@@ -221,8 +221,38 @@ describe("paceNote", () => {
     expect(note).toMatch(/ONE CALL/);
     expect(note).toContain("t1");
     expect(note).toContain("40");
-    // The number SHRINKS as the round ages, and a client that caches the first one
-    // waits twice as long as it needs to. That has to be said, not implied.
+  });
+
+  /**
+   * THE NOTE MUST NOT PROMISE A NUMBER THAT CANNOT MOVE.
+   *
+   * This test asserted "READ THIS FIELD AGAIN EVERY TIME… it SHRINKS as the round ages"
+   * against a fixture whose median is 300s — five times the cap. So the sentence was
+   * pinned by a case that could never demonstrate it, while a real client polling a real
+   * t1 round read `119000` four calls running and re-read the number each time exactly as
+   * instructed, learning nothing. Measured on lore's own review of this change.
+   *
+   * The cap itself is right and stays. Vany: *"if we want to provide a time of polling —
+   * it must always be less than 120 seconds."* What was wrong is a doc claiming behaviour
+   * the field does not have, which is the drift rule applied to prose.
+   */
+  it("says the interval is the CAP when the measurement is above it", () => {
+    runs("t1", 40, 200, 400);
+    const pace = paceFor(store, "t1", REPO);
+    expect(pace?.capped, "300s median against a 119s cap").toBe(true);
+    const note = paceNote(pace);
+    expect(note).toMatch(/THIS IS THE CAP, NOT THE MEASUREMENT/);
+    expect(note, "and it says not to expect movement yet").toMatch(/rather than shrinking/);
+    expect(note, "the shrinking promise is NOT made here").not.toMatch(/It SHRINKS as the round ages/);
+  });
+
+  // And where the measurement really is below the cap, the original advice is right and
+  // is still given — the fix is a second sentence, not a replacement.
+  it("keeps the shrink advice when the measurement is under the cap", () => {
+    runs("t2", 40, 40, 60);
+    const pace = paceFor(store, "t2", REPO);
+    expect(pace?.capped).toBe(false);
+    const note = paceNote(pace);
     expect(note).toMatch(/READ THIS FIELD AGAIN EVERY TIME/);
     expect(note).toMatch(/do not reuse the number/i);
   });

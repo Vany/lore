@@ -179,6 +179,52 @@ describe("sessions kept by a review that ended without a job", () => {
    * round after the first a cold start again, silently, while the flag still said the
    * session was being kept.
    */
+  /**
+   * THE ROWS MUST OUTLIVE THE RELEASE THAT READS THEM.
+   *
+   * `clearSessionTrees` deletes the durable `session-id:` rows (D-122), and after a
+   * restart those rows are the ONLY record of which opencode sessions a review holds —
+   * the in-memory map is empty by design, which is the whole reason they exist. Clearing
+   * before releasing therefore deleted the ids and left `release` enumerating nothing:
+   * no DELETE reached opencode, and the sessions lived until opencode itself restarted.
+   * That is the accumulation `release` exists to prevent, on the one path this reconcile
+   * is the designated backstop for.
+   *
+   * Asserted by having the fake reviewer READ the store at release time, which is exactly
+   * what the real one does through its port. A test that only checked "release was
+   * called" passed against the broken order.
+   */
+  it("still has the durable session rows when release runs", async () => {
+    review("rev1", "expired");
+    const key = "rev1:t2:openrouter/moonshotai/kimi-k3";
+    store.setKeptSession(key, "ses_kept");
+    let sawAtRelease: readonly string[] = [];
+    // A `Keeping` rather than a bare object, because `idleOnce` waits on `.released` —
+    // the harness's own signal that the reconcile has happened.
+    class Watching extends Keeping {
+      override async release(id: string): Promise<void> {
+        // WHAT THE REAL ONE DOES: it reads the durable keys to find the sessions to
+        // delete. If the rows are already gone, it deletes nothing and says nothing.
+        sawAtRelease = store.keptSessionKeys();
+        await super.release(id);
+      }
+    }
+    const spy = new Watching(["rev1"]);
+
+    await idleOnce(spy);
+
+    expect(sawAtRelease, "release could still see what to delete").toContain(key);
+    // WAITED FOR, not asserted immediately: `idleOnce` returns the moment `release` is
+    // ENTERED, and the clear is the statement after it returns. Asserting straight away
+    // reads the store mid-sequence and fails against the correct implementation — the
+    // same race the comment at the top of this file describes for the release itself.
+    const deadline = Date.now() + 10_000;
+    while (store.keptSessionKeys().length > 0 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    expect(store.keptSessionKeys(), "and only then are the rows cleared").toStrictEqual([]);
+  });
+
   it("are left alone while the review is still open", async () => {
     review("rev1", "findings_ready");
     review("rev2", "running");

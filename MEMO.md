@@ -3,6 +3,75 @@
 Newest first. Updated at the end of each task: what changed, what I learned, what
 surprised me.
 
+## 2026-08-17 — the ceiling comes out; a price stops deciding anything
+
+**What changed.** D-121: the daily spend ceiling is deleted. `mayStart` and its enqueue
+refusal, `frozenBySpend` and the dispatcher freeze, the round-boundary backstop, the
+retention-sweep exemption, both spend alerts, `hasMeteredUsage` and the `metered` flag are
+gone; `LORE_DAILY_CEILING_USD` now refuses to start the service. In its place D-117 is
+built: `isMeteredRoute` in `src/core/metered.ts` filters the fallback chain, gated by
+`LORE_ALLOW_METERED` (default `0`). `/status` swaps `spend_ceiling` for `allow_metered`.
+1428 tests green.
+
+**How it started.** Vany asked whether the service was running. It was — and paused, at
+$101.36 against a $100 ceiling, having burned the day's budget between 00:05 and 03:29 UTC
+and been shut for the seventeen hours since. Every dollar was t2 on
+`openrouter/moonshotai/kimi-k3`: the Kimi subscription hit its billing-cycle limit at 05:06
+the previous day, D-48 parked it, and the chain walked onto the metered twin. 163.6M cached
+tokens against 10.6M fresh input, ≈$0.62 per M — the bill was almost entirely cache reads
+on 8M-token contexts.
+
+**What I learned — I had the sequencing backwards, and Vany's correction was the whole
+change.** My instinct was to keep the ceiling and add the route gate beside it. His rule is
+simpler and better: *we only show the price, there is no decision on the basis of it.*
+Which exposes that a total is the wrong SHAPE for the question. It can only speak after the
+money is gone, it cannot tell who spent it, and its only remedy is collective — so it
+converts a money problem into an availability problem, and this project holds a gate that
+did not run to be its worst outcome. The route question is per call, answerable from a
+string before the call, and free when the answer is yes.
+
+**Also learned: he was literally right that there is no price CALCULATION.** I went looking
+for a rate card and there is none; `usageFromMessages` sums `info.cost` from opencode. What
+came out was a decision, not any arithmetic. Worth checking the claim before arguing with
+it — I nearly argued with the wrong half.
+
+**Surprised me: D-119 lasted one day.** Written 2026-08-16, deleted 2026-08-17. It was
+correct about its own subject — `failed` is far too strong for a bounded, recoverable,
+internal condition — and it fixed the symptom one layer below where the defect was. A
+pause is a better ceiling and still a ceiling. The lesson I want to keep is that *softening
+a guard's consequence is not the same as asking whether the guard should exist*, and the
+first is much easier to reach for.
+
+**What this gives up, and I want it recorded rather than discovered.** Nothing bounds the
+total any more. At `LORE_ALLOW_METERED=0` that is safe by construction — no charging route
+is ever called — but the day somebody sets `=1` and a subscription dies, lore will bill on
+every call until a person looks. That is now a purchase somebody made rather than one that
+happened to them, which was the point, and it is not the same as being protected.
+
+**Left deliberately unfiltered: a tier's LITERAL model.** Naming `openrouter/x` as the
+model is the operator switching it on — it runs every round at a cost that is chosen and
+immediate. A fallback is conditional: insurance, invisible until a subscription dies, then
+billing every call for the length of the outage.
+
+**And the review caught me drawing that line one level too wide.** lore's own t1 raised
+`ccccf0db` at high: I exempted `member.model`, but a nickname is not a route — `routesFor`
+expands it to a pool and `poolOrder` SHUFFLES, so a metered pool mate becomes the
+unfiltered PRIMARY in some rounds and in every round once the free routes are parked. The
+gate would have been absent from exactly the path the incident took, while SPEC, TODO, MEMO
+and the compose file all said no charging route could ever be called. The lesson is narrow
+and worth keeping: *an exemption written for a literal value must be re-checked against
+every indirection that can produce that value* — I reasoned about `openrouter/x` typed by a
+person and never asked what else could arrive in the same variable.
+
+Four more findings, all real, none argued: README still described a `metered` flag this
+change deleted; `make status` still told operators a cool-off cost metered money and left
+coverage FULL, wrong in both directions under the new default; a `server.ts` comment still
+described the ceiling in the present tense; and my new operator log fired on non-route
+faults, naming a money cause for a hang. Fixing the status banner turned up a fifth thing
+nobody reported — it read `LORE_ALLOW_METERED === "1"` while `envBool` accepts
+`true/yes/on`, so `=true` would have paid for fallbacks while the operator view said it
+would not. One shared `METERED_YES` now.
+
 ## 2026-08-16 — the gate spent the day finding defects in its own repairs
 
 **What changed.** D-113 (the change-set is pinned; an empty one fails), D-114 (the round

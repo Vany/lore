@@ -68,9 +68,12 @@ retry loop is the most expensive thing a client can do here: each attempt is an 
 spent learning nothing, and the round takes as long as it takes either way.
 
 RE-READ THE INTERVAL EVERY TIME. NEVER REUSE THE LAST ONE. It answers "how much longer
-FROM HERE", so it shrinks as a round ages — a round that has already outlived the
-typical one is not another typical one away from finishing, it is nearly done. Caching
-the first number is how a client waits twice as long as it needed to.
+FROM HERE" — but READ \`check_back_note\` WITH IT rather than inferring from the number,
+because there are two cases and they look identical. Below the two-minute cap it shrinks as
+a round ages: one that has outlived the typical round is not another typical one away from
+finishing, it is nearly done. AT the cap — which is where a long-running tier sits for
+several calls — it does not move at all, and the note says so. A constant there is the
+bound, not a stalled review and not a stale field.
 
 PUSH YOUR BRANCH FIRST. The one requirement is that your code has reached ORIGIN:
 lore reviews what origin has, never your working copy, so a commit that exists only
@@ -136,8 +139,9 @@ anywhere would say so. review_inbox is how you find what is yours.
 USE THIS TO READ AND TO WAIT — one call at a time. \`check_back_after_ms\` says how long
 before anything can plausibly have changed, measured from this repository's completed
 rounds and never more than two minutes. RE-READ IT EVERY TIME: it answers "how much longer
-FROM HERE", so it shrinks as a round ages, and reusing the first number is how a client
-waits twice as long as it needed to.
+FROM HERE". On a tier whose rounds run long it sits AT the two-minute cap for several calls
+before it starts falling, so read \`check_back_note\` rather than inferring from the number
+— the note says which of the two you are being handed.
 
 A tight retry loop is the most expensive thing a client can do here — every attempt is an
 LLM turn that learns nothing, and the round finishes when it finishes.
@@ -262,7 +266,12 @@ not an answer is silence — an unanswered finding stops the review advancing, f
 Then ONE of three shapes, and they are the whole instruction:
 
   * \`justify_with\` present, nothing else — open, nobody has argued about it. Fix it,
-    or answer it with the lore-ok line given.
+    or answer it with the lore-ok line given. \`fixed_elsewhere\` rides along with it and
+    is the case people get wrong: repairing the CAUSE in other code is often the right
+    repair, and it leaves the named line untouched — which the next round reads as a
+    finding nobody answered, so it cannot settle however it goes. Fixing elsewhere is
+    fine; fixing elsewhere WITHOUT the lore-ok comment at the named line costs you a
+    whole round.
 
   * \`justify_with\` AND \`justification_rejected\` — open, and you already tried. A
     reviewer read your reason and refused it, so this is worse than a finding nobody
@@ -700,8 +709,9 @@ export const RESOURCE_DOCS: Readonly<Record<string, { title: string; priority: n
 2. review_poll(review_id) — ONE call, then leave. Come back when \`check_back_note\`
    says: it is measured from this repository's completed rounds and is never more than
    two minutes.
-   RE-READ IT ON EVERY REPLY. Never reuse the last number — it answers "how much longer
-   FROM HERE", so it shrinks as the round ages, and caching it doubles your wait.
+   RE-READ IT ON EVERY REPLY and never reuse the last number; read \`check_back_note\`
+   with it. Below the cap the number shrinks as the round ages and caching it doubles your
+   wait; AT the cap it stays put for several calls and the note says so.
    Each poll returns only what is NEW. A tight retry loop is the most expensive thing
    you can do here: every attempt is a turn that learns nothing.
 4. For each finding: fix it, or justify it with // lore-ok[fp]: <reason>
@@ -851,8 +861,9 @@ The loop:
 2. review_poll(review_id) — ONE call, then leave and do something else. Come back when
    \`check_back_note\` says: measured from this repository's own completed rounds, and
    never more than two minutes.
-   RE-READ IT ON EVERY REPLY — never reuse the last number. It answers "how much longer
-   FROM HERE", so it shrinks as the round ages, and caching it doubles your wait.
+   RE-READ IT ON EVERY REPLY — never reuse the last number — and read \`check_back_note\`
+   with it. Below the cap the number shrinks as the round ages and caching it doubles your
+   wait; AT the cap it stays put for several calls and the note says so.
    Each poll returns only what is NEW. A tight retry loop is the most expensive thing
    you can do here: every attempt is a turn that learns nothing.
 4. For each finding: fix it, or justify it with // lore-ok[fp]: <reason>

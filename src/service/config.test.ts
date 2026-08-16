@@ -17,7 +17,7 @@ import { configFromEnv } from "./main.ts";
 
 const KEYS = [
   "LORE_WEBHOOK_URL", "LORE_HEARTBEAT_URL", "LORE_CONCURRENCY",
-  "LORE_PORT", "LORE_DAILY_CEILING_USD", "LORE_DATA_DIR", "LORE_HOST",
+  "LORE_PORT", "LORE_DAILY_CEILING_USD", "LORE_ALLOW_METERED", "LORE_DATA_DIR", "LORE_HOST",
 ];
 let saved: Record<string, string | undefined>;
 
@@ -52,15 +52,32 @@ describe("a variable set to nothing is not set", () => {
 
   it("falls back to the defaults when blank, rather than to zero", () => {
     process.env["LORE_PORT"] = "";
-    process.env["LORE_DAILY_CEILING_USD"] = "";
+    process.env["LORE_ALLOW_METERED"] = "";
     const cfg = configFromEnv();
     expect(cfg.port).toBe(7777);
-    expect(cfg.dailyCeilingUsd).toBeGreaterThan(0);
+    // NO IS THE DEFAULT, and it is the decision rather than a timid one: a deployment on
+    // flat subscriptions has never agreed to an invoice (D-117).
+    expect(cfg.allowMetered).toBe(false);
+  });
+
+  it.each([["1", true], ["true", true], ["yes", true], ["on", true], ["0", false], ["off", false]])(
+    "reads LORE_ALLOW_METERED=%j as %j",
+    (raw, expected) => {
+      process.env["LORE_ALLOW_METERED"] = raw;
+      expect(configFromEnv().allowMetered).toBe(expected);
+    },
+  );
+
+  // THE ONE SETTING WHERE GUESSING SPENDS MONEY. Read as "no" it strips tiers out of
+  // every review during an outage; read as "yes" it buys them. Neither may be guessed.
+  it.each([["maybe"], ["2"], ["y"]])("refuses LORE_ALLOW_METERED=%j rather than guessing", (bad) => {
+    process.env["LORE_ALLOW_METERED"] = bad;
+    expect(() => configFromEnv()).toThrow(/LORE_ALLOW_METERED/);
   });
 
   // Blank means "use the default" and is normal. Garbage means the deployment is
   // misconfigured, and quietly substituting a default hides it until someone
-  // wonders why the ceiling never fired.
+  // wonders why a knob had no effect.
   it.each([["LORE_CONCURRENCY", "two"], ["LORE_CONCURRENCY", "0"], ["LORE_PORT", "no"]])(
     "refuses %s=%j at startup rather than guessing",
     (key, bad) => {
@@ -92,6 +109,26 @@ describe("a setting that no longer exists", () => {
     } finally {
       if (before === undefined) delete process.env["LORE_CONCURRENCY"];
       else process.env["LORE_CONCURRENCY"] = before;
+    }
+  });
+
+  /**
+   * AND THE ONE WHOSE ABSENCE IS ABOUT MONEY (D-121).
+   *
+   * An operator who left `LORE_DAILY_CEILING_USD` in their `.env` believes a number caps
+   * the day. None does — price is reported and never acted on — so ignoring it would let
+   * somebody run a deployment they think is bounded and is not. The message names the
+   * replacement, because a refusal a reader cannot act on is a wall.
+   */
+  it("refuses to start rather than ignoring LORE_DAILY_CEILING_USD", () => {
+    const before = process.env["LORE_DAILY_CEILING_USD"];
+    process.env["LORE_DAILY_CEILING_USD"] = "100";
+    try {
+      expect(() => configFromEnv()).toThrow(/no longer does anything/);
+      expect(() => configFromEnv()).toThrow(/LORE_ALLOW_METERED/);
+    } finally {
+      if (before === undefined) delete process.env["LORE_DAILY_CEILING_USD"];
+      else process.env["LORE_DAILY_CEILING_USD"] = before;
     }
   });
 

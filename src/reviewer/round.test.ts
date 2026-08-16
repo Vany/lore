@@ -1452,7 +1452,7 @@ describe("falling back to a metered twin", () => {
       const primary = type.tiers.find((t) => t.id === "t1")?.model ?? "";
       const reviewer = new AllOut([primary, "openrouter/twin"]);
 
-      const r = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type });
+      const r = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type, allowMetered: true });
 
       expect(reviewer.asked).toStrictEqual([primary, "openrouter/twin", "zai/last-resort"]);
       expect(r.decision.kind, "the tier ran, so the ladder carries on").not.toBe("stopped");
@@ -1463,7 +1463,7 @@ describe("falling back to a metered twin", () => {
       const primary = type.tiers.find((t) => t.id === "t1")?.model ?? "";
       const reviewer = new AllOut([primary]);
 
-      await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type });
+      await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type, allowMetered: true });
 
       expect(reviewer.asked, "the last resort costs money and was not needed").toStrictEqual([
         primary,
@@ -1481,7 +1481,7 @@ describe("falling back to a metered twin", () => {
       const primary = type.tiers.find((t) => t.id === "t1")?.model ?? "";
       const reviewer = new AllOut([primary, "openrouter/twin", "zai/last-resort"]);
 
-      const r = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type });
+      const r = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type, allowMetered: true });
 
       const said = JSON.stringify(r);
       expect(said).toContain("openrouter/twin");
@@ -1506,7 +1506,7 @@ describe("falling back to a metered twin", () => {
       }
       const reviewer = new TwinBroken();
 
-      await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type });
+      await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type, allowMetered: true });
 
       expect(reviewer.asked).toStrictEqual([primary, "openrouter/twin"]);
     });
@@ -1517,7 +1517,7 @@ describe("falling back to a metered twin", () => {
     const primary = type.tiers.find((t) => t.id === "t1")?.model ?? "";
     const reviewer = new OutOfQuota(primary);
 
-    const r = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type });
+    const r = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type, allowMetered: true });
 
     expect(reviewer.asked).toStrictEqual([primary, "openrouter/twin"]);
     // NOT skipped and NOT promoted: the tier ran, so the ladder advances normally.
@@ -1545,7 +1545,7 @@ describe("falling back to a metered twin", () => {
     }
     const reviewer = new Broken();
 
-    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type }).catch(() => undefined);
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type, allowMetered: true }).catch(() => undefined);
 
     expect(reviewer.asked, "one call: the twin would fail the same way").toHaveLength(1);
   });
@@ -1578,7 +1578,7 @@ describe("falling back to a metered twin", () => {
 
     let last;
     for (let i = 0; i < 8; i++) {
-      last = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type }).catch(() => undefined);
+      last = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type, allowMetered: true }).catch(() => undefined);
       if (last === undefined || !["escalate", "fastClean"].includes(last.decision.kind)) break;
     }
 
@@ -1614,7 +1614,7 @@ describe("falling back to a metered twin", () => {
       }
     }
 
-    await runRound({ store, reviewer: new TwinBurnsThenDies(), reviewId: "r1", principal: "p", worktree: dir, type }).catch(
+    await runRound({ store, reviewer: new TwinBurnsThenDies(), reviewId: "r1", principal: "p", worktree: dir, allowMetered: true, type }).catch(
       () => undefined,
     );
 
@@ -1647,7 +1647,7 @@ describe("falling back to a metered twin", () => {
       }
     }
 
-    await runRound({ store, reviewer: new CancelledMidFallback(), reviewId: "r1", principal: "p", worktree: dir, type }).catch(
+    await runRound({ store, reviewer: new CancelledMidFallback(), reviewId: "r1", principal: "p", worktree: dir, allowMetered: true, type }).catch(
       () => undefined,
     );
 
@@ -1672,7 +1672,7 @@ describe("falling back to a metered twin", () => {
       }
     }
 
-    await runRound({ store, reviewer: new TwinCostsThenDies(), reviewId: "r1", principal: "p", worktree: dir, type }).catch(
+    await runRound({ store, reviewer: new TwinCostsThenDies(), reviewId: "r1", principal: "p", worktree: dir, allowMetered: true, type }).catch(
       () => undefined,
     );
 
@@ -1695,7 +1695,7 @@ describe("falling back to a metered twin", () => {
     }
     const reviewer = new BothOut();
 
-    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type }).catch(() => undefined);
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type, allowMetered: true }).catch(() => undefined);
 
     expect(reviewer.asked, "primary, then twin, then stop").toHaveLength(2);
   });
@@ -1735,7 +1735,7 @@ describe("a tier whose fallback also failed", () => {
       }
     }
 
-    await runRound({ store, reviewer: new BothOut(), reviewId: "r1", principal: "p", worktree: dir, type });
+    await runRound({ store, reviewer: new BothOut(), reviewId: "r1", principal: "p", worktree: dir, allowMetered: true, type });
 
     const notice = (store.tierRunsFor("r1").find((t) => t["tier"] === "t1")?.["unavailable"] ?? "") as string;
     expect(notice, "the primary's reason, as before").toContain("billing cycle");
@@ -1767,7 +1767,7 @@ describe("a cool-off and a fallback together", () => {
     );
     const reviewer = new Answers();
 
-    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type });
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type, allowMetered: true });
 
     expect(reviewer.asked, "the primary is never called; the twin is").toStrictEqual(["openrouter/twin"]);
     // AND THE SPEND IS ATTRIBUTED TO WHAT ANSWERED. This is the one table that says what
@@ -1842,7 +1842,7 @@ describe("a cool-off and a fallback together", () => {
       new Date(Date.now() - 16 * 60_000).toISOString(),
     );
 
-    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type });
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type, allowMetered: true });
     expect(reviewer.asked, "the probe happens, is refused, and the twin answers")
       .toStrictEqual([primary, "openrouter/twin"]);
     const after = store.tierUnavailable("t1");
@@ -1856,90 +1856,211 @@ describe("a cool-off and a fallback together", () => {
       ticket: "a second review, moments later", type: CODE_ARCH.id, state: "running",
       ladder: initialState(CODE_ARCH.tiers),
     });
-    await runRound({ store, reviewer, reviewId: "r2", principal: "p", worktree: dir, type });
+    await runRound({ store, reviewer, reviewId: "r2", principal: "p", worktree: dir, type, allowMetered: true });
     expect(reviewer.asked, "which does NOT pay to ask the dead primary again")
       .toStrictEqual([primary, "openrouter/twin", "openrouter/twin"]);
   });
 });
 
 /**
- * The ceiling that bounds the only metered path in lore (D-93).
+/**
+ * A METERED ROUTE IS ONE THE OPERATOR SWITCHED ON (D-117).
  *
- * `mayStart` is checked at enqueue and never again, on the reasoning that killing a review
- * halfway leaves it neither passed nor honestly failed. That was free while every provider
- * billed a flat subscription reporting `cost_usd: 0` — the ceiling could not fire, so where
- * it was checked did not matter. D-93 made one path metered and turned it into the only
- * thing between a runaway agentic review and real money.
+ * The fallback chain is the exact line the 2026-08-16 incident walked through: the Kimi
+ * subscription answered `403: you have reached your usage limit for this billing cycle`,
+ * D-48 parked it, and the chain stepped onto `openrouter/moonshotai/kimi-k3` — the same
+ * model, ~$4.83 a call, twenty-one calls, $101.36. Every rule involved behaved correctly.
+ * Route health and route COST are different questions, and only the first was ever asked.
  *
- * Untested until now, which for the headline guard of its own commit is the shape this
- * project exists to refuse.
+ * A daily spend ceiling used to be what noticed, four hours and a hundred dollars later,
+ * by stopping eight reviews on three other people's branches. It is gone (D-121); this is
+ * what replaced it, and the difference that matters is WHEN: before the call, from the
+ * route id, and never as a total.
  */
-describe("the day's spend ceiling", () => {
-  const spend = (usd: number) => {
-    const repo = store.upsertRepo("demo", "git@x:demo.git");
-    store.recordUsage({
-      repoId: repo.id, reviewId: "r1", tier: "t2", model: "openrouter/twin",
-      inputTokens: 0, cachedTokens: 0, outputTokens: 0, costUsd: usd, outcome: "ok",
-    });
-  };
+describe("a fallback that would walk onto a metered route", () => {
+  const withFallback = (...fallback: string[]) => ({
+    ...CODE_ARCH,
+    t0: [] as const,
+    tiers: CODE_ARCH.tiers.map((t) => (t.id === "t1" ? { ...t, fallback } : t)),
+  });
+
+  /** Exhausts exactly the named routes, so a fixture never proves a broader claim. */
+  class OutOn implements ReviewerLike {
+    readonly asked: string[] = [];
+    readonly dead: readonly string[];
+    constructor(dead: readonly string[]) {
+      this.dead = dead;
+    }
+    async review(tier: Tier): Promise<ReviewerResult> {
+      this.asked.push(tier.model ?? "?");
+      if (this.dead.includes(tier.model ?? "")) throw new Exhausted("plan is out");
+      return { findings: [], discarded: [], raw: "", inputTokens: 0, cachedTokens: 0, outputTokens: 0, costUsd: 0, latencyMs: 1, retried: false, steps: 1 };
+    }
+  }
+
+  it("is not walked when nobody said lore may pay", async () => {
+    const type = withFallback("openrouter/twin");
+    const primary = type.tiers.find((t) => t.id === "t1")?.model ?? "";
+    const reviewer = new OutOn([primary]);
+
+    let last;
+    for (let i = 0; i < 8; i++) {
+      last = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type }).catch(() => undefined);
+      if (last === undefined || !["escalate", "fastClean"].includes(last.decision.kind)) break;
+    }
+
+    // THE MONEY WAS NEVER SPENT. Not "spent and then noticed" — the call did not happen.
+    expect(reviewer.asked, "the twin is never asked").not.toContain("openrouter/twin");
+    // AND THE LOSS IS SAID OUT LOUD, which is the half that keeps this honest: a tier that
+    // did not run is named, so the verdict is the weaker claim rather than a quiet one.
+    expect(store.getReview("r1", "p")?.ladder.unavailable ?? [], "t1 is skipped").toContain("t1");
+    expect(last?.decision.kind, "and the review still reaches a verdict").toBe("passed");
+  });
+
+  it("is walked when the operator has bought that safety net", async () => {
+    const type = withFallback("openrouter/twin");
+    const primary = type.tiers.find((t) => t.id === "t1")?.model ?? "";
+    const reviewer = new OutOn([primary]);
+
+    const r = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type, allowMetered: true });
+
+    expect(reviewer.asked).toStrictEqual([primary, "openrouter/twin"]);
+    // The tier RAN, so nothing is weakened — which is the deployment that deliberately
+    // pays for a safety net getting the safety net it paid for.
+    expect(store.getReview("r1", "p")?.ladder.unavailable ?? []).toStrictEqual([]);
+    expect(["escalate", "fastClean"]).toContain(r.decision.kind);
+  });
 
   /**
-   * A CEILING PAUSES A REVIEW; IT NEVER FAILS ONE (D-119).
-   *
-   * This test asserted the opposite until 2026-08-16, and the day it was written the
-   * behaviour it pinned destroyed eight reviews across three people's branches — all at
-   * round 0, having read nothing, because lore was out of money for a few hours. `failed`
-   * is the strongest thing this service can say and it means the ladder did not read the
-   * code; that was true, and so was the part nobody said: the condition is internal,
-   * bounded by the day, and entirely recoverable.
-   *
-   * So the round refuses in the shape the worker already REQUEUES on, and the review is
-   * left exactly as it was. Ordinarily the dispatcher gates claiming and nothing reaches
-   * here at all; this is the seam where a job was claimed a moment before the ceiling
-   * tripped.
+   * REFUSING THE METER IS NOT REFUSING THE CHAIN. Filtering the whole fallback list on
+   * finding one metered entry would throw away the free routes beside it — turning a
+   * money guard into a coverage loss nobody asked for, in the outage the chain exists for.
    */
-  it("refuses the round without touching the review, once the day's spend reaches it", async () => {
-    spend(12);
-    const reviewer = new ScriptedReviewer([[]]);
-    const before = store.getReview("r1", "p");
+  it("still walks to a free route standing beside the metered one", async () => {
+    const type = withFallback("openrouter/twin", "zai-coding-plan2/glm-5.2");
+    const primary = type.tiers.find((t) => t.id === "t1")?.model ?? "";
+    const reviewer = new OutOn([primary]);
 
-    await expect(
-      runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: { ...CODE_ARCH, t0: [] as const }, dailyCeilingUsd: 10 }),
-    ).rejects.toThrow(ServiceUnreachable);
+    const r = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type });
 
-    // NOT FAILED, NOT MOVED. The ladder, the state and the findings are the client's work
-    // and none of it is ours to spend on an outage of our own.
-    expect(store.getReview("r1", "p")?.state).toBe(before?.state);
-    expect(store.getReview("r1", "p")?.ladder).toStrictEqual(before?.ladder);
-
-    // AND NOTHING IS TOLD (D-120). A reason here would reach the client, and lore's
-    // budget is not the client's business — they are not even told there was a pause.
-    expect(store.failureReason("r1") ?? "", "silence, not an explanation").toBe("");
+    expect(reviewer.asked, "the meter is stepped over, not the chain").toStrictEqual([primary, "zai-coding-plan2/glm-5.2"]);
+    expect(store.getReview("r1", "p")?.ladder.unavailable ?? []).toStrictEqual([]);
+    expect(["escalate", "fastClean"]).toContain(r.decision.kind);
   });
 
-  // BETWEEN rounds, never inside one. The whole reason this check was at enqueue and
-  // nowhere else is that a round abandoned half-spent is worse than one that overran.
-  it("stops before spending on the round, so nothing is abandoned half-paid-for", async () => {
-    spend(12);
-    let asked = 0;
-    const reviewer: ReviewerLike = {
-      async review(): Promise<ReviewerResult> {
-        asked++;
-        return { findings: [], discarded: [], raw: "", inputTokens: 0, cachedTokens: 0, outputTokens: 0, costUsd: 0, latencyMs: 1, retried: false, steps: 1 };
-      },
+  /**
+   * A POOL MATE IS NOT "THE TIER'S OWN MODEL" — raised by t1 against this change (ccccf0db).
+   *
+   * The gate first covered the fallback chain only, exempting `member.model` on the
+   * reasoning that naming a metered route IS the operator choosing it. A NICKNAME breaks
+   * that reasoning: `routesFor` expands it to a pool and `poolOrder` shuffles, so a metered
+   * pool mate becomes the unfiltered PRIMARY in some rounds — and in EVERY round once the
+   * free routes are parked, which is exactly the 2026-08-16 shape. It would have falsified
+   * the claim written into SPEC, TODO, MEMO and the compose file: at
+   * `LORE_ALLOW_METERED=0`, no charging route is ever called.
+   */
+  describe("a pool with a metered route in it", () => {
+    // GLM-5.2 AND NOT K3, and the difference is what makes this a valid config at all.
+    // The finding's own example paired `kimi-for-coding/k3` with
+    // `openrouter/moonshotai/kimi-k3`, which `loadTiers` REFUSES — a pool is several routes
+    // to ONE model and those two last segments differ (`k3` vs `kimi-k3`). The hazard is
+    // real anyway, and this is its reachable shape: `glm-5.2` on a Z.ai plan and on
+    // OpenRouter is the same model by two routes, passes the pool check, and
+    // `openrouter/z-ai/glm-5.2` is a route this deployment genuinely lists.
+    const MIXED = JSON.stringify({
+      models: { "GLM5.2": ["zai-coding-plan/glm-5.2", "openrouter/z-ai/glm-5.2"] },
+      tiers: [
+        { id: "t0", kind: "deterministic", stage: "fast" },
+        { id: "t1", kind: "model", model: "GLM5.2", stage: "fast" },
+      ],
+    });
+    let saved: string | undefined;
+    beforeEach(() => {
+      saved = process.env["LORE_TIERS"];
+      process.env["LORE_TIERS"] = MIXED;
+    });
+    afterEach(() => {
+      if (saved === undefined) delete process.env["LORE_TIERS"];
+      else process.env["LORE_TIERS"] = saved;
+    });
+
+    const pooled = { ...CODE_ARCH, t0: [] as const, tiers: CODE_ARCH.tiers.map((t) => (t.id === "t1" ? { ...t, model: "GLM5.2" } : t)) };
+
+    // TWENTY FIRST ROUNDS, because `poolOrder` SHUFFLES: one round proves nothing about a
+    // route picked at random, and a single-run assertion would pass half the time with the
+    // gate removed. Twenty is ~1e-6 of passing by luck.
+    //
+    // A FRESH REVIEW EACH TIME, not twenty rounds of one. Twenty rounds walk the LADDER
+    // forward — round 2 is the deep rung, not a second draw for t1 — so the loop would have
+    // measured the shuffle once and the ladder nineteen times.
+    it("never runs the metered pool route as the primary", async () => {
+      for (let i = 0; i < 20; i++) {
+        const id = `rPool${String(i)}`;
+        store.createReview({
+          id, repoId, principal: "p", branch: "feat/holds", intoRef: "main",
+          ticket: "one draw from the pool", type: CODE_ARCH.id, state: "running",
+          ladder: initialState(CODE_ARCH.tiers),
+        });
+        const reviewer = new OutOn([]);
+        await runRound({ store, reviewer, reviewId: id, principal: "p", worktree: dir, type: pooled });
+        expect(reviewer.asked, "the free plan every time, never the twin").toStrictEqual(["zai-coding-plan/glm-5.2"]);
+      }
+    });
+
+    /**
+     * THE INCIDENT ITSELF, one layer in: the subscription is parked and only the metered
+     * route is left in the pool. Before the fix this ran `openrouter/moonshotai/kimi-k3`
+     * on EVERY round at ~$4.83 a call, under the setting documented as never paying.
+     */
+    it("skips the tier when the free plan is parked and only the metered route remains", async () => {
+      store.markRouteUnavailable("zai-coding-plan/glm-5.2", new Date(Date.now() + 86_400_000).toISOString(), "billing cycle", 1, true);
+      const reviewer = new OutOn([]);
+
+      let last;
+      for (let i = 0; i < 8; i++) {
+        last = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: pooled }).catch(() => undefined);
+        if (last === undefined || !["escalate", "fastClean"].includes(last.decision.kind)) break;
+      }
+
+      // T1'S POOL ROUTE, and only that. Tiers ABOVE t1 in this fixture are configured with
+      // literal `openrouter/` models, which are exempt by design — naming one IS switching
+      // it on. Asserting `asked` was empty would have failed on that deliberate exemption
+      // and told me the gate was broken when it was working.
+      expect(reviewer.asked, "t1's metered pool route was never bought").not.toContain("openrouter/z-ai/glm-5.2");
+      expect(store.getReview("r1", "p")?.ladder.unavailable ?? [], "t1 is skipped instead").toContain("t1");
+      expect(last?.decision.kind, "and the review still reaches a verdict").toBe("passed");
+    });
+
+    it("runs it when the operator has allowed metered routes", async () => {
+      store.markRouteUnavailable("zai-coding-plan/glm-5.2", new Date(Date.now() + 86_400_000).toISOString(), "billing cycle", 1, true);
+      const reviewer = new OutOn([]);
+
+      await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: pooled, allowMetered: true });
+
+      expect(reviewer.asked, "the twin answers, because it was bought on purpose").toStrictEqual(["openrouter/z-ai/glm-5.2"]);
+    });
+  });
+
+  /**
+   * A TIER'S OWN MODEL IS NEVER FILTERED, however metered it is.
+   *
+   * Naming `openrouter/x` as the model IS the operator switching it on: it runs every
+   * round, and its cost is chosen and immediate. A fallback is CONDITIONAL — insurance,
+   * invisible until a subscription dies, then billing every call for as long as the
+   * outage lasts. Identical config; only one of them can surprise somebody.
+   */
+  it("does not refuse a metered route the tier is configured to use", async () => {
+    const type = {
+      ...CODE_ARCH,
+      t0: [] as const,
+      tiers: CODE_ARCH.tiers.map((t) => (t.id === "t1" ? { ...t, model: "openrouter/chosen" } : t)),
     };
+    const reviewer = new OutOn([]);
 
-    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: { ...CODE_ARCH, t0: [] as const }, dailyCeilingUsd: 10 }).catch(() => undefined);
+    const r = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type });
 
-    expect(asked, "no tier was asked, so no round was half-paid-for").toBe(0);
-  });
-
-  // Inert under subscriptions, which is every deployment today: the sum is structurally
-  // zero, so this must never fire and never change existing behaviour.
-  it("does not fire when nothing is metered", async () => {
-    const reviewer = new ScriptedReviewer([[]]);
-    const r = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: { ...CODE_ARCH, t0: [] as const }, dailyCeilingUsd: 10 });
-    expect(r.decision.kind).not.toBe("stopped");
+    expect(reviewer.asked, "the configured model runs, metered or not").toContain("openrouter/chosen");
+    expect(["escalate", "fastClean"]).toContain(r.decision.kind);
   });
 });
 
@@ -2068,8 +2189,8 @@ describe("a pool of routes to one model", () => {
     }
     const reviewer = new Raises();
     const type = nicknamed();
-    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type });
-    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type });
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type, allowMetered: true });
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type, allowMetered: true });
 
     expect(reviewer.asked).toHaveLength(2);
     expect(reviewer.asked[1], "re-rolling would give a kept session a different model").toBe(reviewer.asked[0]);
@@ -2116,7 +2237,7 @@ describe("a pool of routes to one model", () => {
   it("falls to the configured fallback only once the whole pool is out", async () => {
     const reviewer = new Answers(["zai-coding-plan/glm-5.2", "zai-coding-plan2/glm-5.2"]);
     await runRound({
-      store, reviewer, reviewId: "r1", principal: "p", worktree: dir,
+      store, reviewer, reviewId: "r1", principal: "p", worktree: dir, allowMetered: true,
       type: nicknamed(["openrouter/z-ai/glm-5.2"]),
     });
 
@@ -2207,7 +2328,7 @@ describe("a pool of routes to one model", () => {
     };
     store.markRouteUnavailable("kimi/k3", "2126-01-01T00:00:00.000Z", "out of quota", 3, false);
     const reviewer = new Answers();
-    const r = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type });
+    const r = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type, allowMetered: true });
 
     expect(reviewer.asked, "the refused route is not re-confirmed").not.toContain("kimi/k3");
     expect(reviewer.asked[0], "the fallback still runs").toMatch(/^zai-coding-plan2?\/glm-5\.2$/);
@@ -2225,7 +2346,7 @@ describe("a pool of routes to one model", () => {
     store.markRouteUnavailable("kimi/k3", "2126-01-01T00:00:00.000Z", "out", 3, false);
     store.markRouteUnavailable("openrouter/moonshotai/kimi-k3", "2126-01-01T00:00:00.000Z", "out", 3, false);
     const reviewer = new Answers();
-    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type });
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type, allowMetered: true });
 
     expect(reviewer.asked, "both marked routes stay unasked").toStrictEqual([reviewer.asked[0]]);
     expect(reviewer.asked[0]).toMatch(/^zai-coding-plan2?\/glm-5\.2$/);
@@ -2245,7 +2366,7 @@ describe("a pool of routes to one model", () => {
     store.markRouteUnavailable("zai-coding-plan/glm-5.2", "2126-01-01T00:00:00.000Z", "out", 3, false);
     store.markRouteUnavailable("zai-coding-plan2/glm-5.2", "2126-01-01T00:00:00.000Z", "out", 3, false);
     const reviewer = new Answers();
-    const r = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type });
+    const r = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type, allowMetered: true });
 
     expect(reviewer.asked, "no call spent re-confirming a parked route").toStrictEqual([]);
     expect(r.decision.kind, "skipped and promoted, not failed").not.toBe("stopped");
@@ -2293,8 +2414,8 @@ describe("a pool of routes to one model", () => {
       }
     }
     const reviewer = new Raises();
-    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type });
-    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type });
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type, allowMetered: true });
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type, allowMetered: true });
 
     expect(reviewer.asked, "the kept route both rounds, never a re-roll").toStrictEqual([
       "zp3/glm-5.2",
@@ -2329,7 +2450,7 @@ describe("a pool of routes to one model", () => {
     store.markTierUnavailable("t1", "2126-01-01T00:00:00.000Z", "provider said out", 1, true, "2020-01-01T00:00:00.000Z");
     store.markRouteUnavailable("kimi/k3", "2126-01-01T00:00:00.000Z", "out", 3, false);
     const reviewer = new Answers();
-    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type });
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type, allowMetered: true });
 
     expect(reviewer.asked[0], "the probe reached the provider").toBe("kimi/k3");
   });
@@ -2357,7 +2478,7 @@ describe("a pool of routes to one model", () => {
       tiers: CODE_ARCH.tiers.map((t) => (t.id === "t1" ? { ...t, model: "kimi/k3", fallback: ["GLM5.2"] } : t)),
     };
     const reviewer = new KimiOut();
-    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type });
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type, allowMetered: true });
 
     expect(reviewer.asked[0]).toBe("kimi/k3");
     expect(reviewer.asked[1], "the nickname resolved to a real route").toMatch(/^zai-coding-plan2?\/glm-5\.2$/);
@@ -2372,7 +2493,7 @@ describe("a pool of routes to one model", () => {
       "openrouter/z-ai/glm-5.2",
     ]);
     const r = await runRound({
-      store, reviewer, reviewId: "r1", principal: "p", worktree: dir,
+      store, reviewer, reviewId: "r1", principal: "p", worktree: dir, allowMetered: true,
       type: nicknamed(["openrouter/z-ai/glm-5.2"]),
     });
 
@@ -2739,7 +2860,7 @@ describe("skip_if_quota together with a fallback", () => {
     }
     const reviewer = new PrimaryOut();
 
-    const r = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type });
+    const r = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, allowMetered: true, type });
 
     expect(reviewer.asked).toStrictEqual([primary, "openrouter/twin"]);
     // NOT skipped: the tier ran, so it never enters `unavailable` and the verdict is not
@@ -2766,7 +2887,7 @@ describe("skip_if_quota together with a fallback", () => {
 
     let last;
     for (let i = 0; i < 8; i++) {
-      last = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type }).catch(() => undefined);
+      last = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, allowMetered: true, type }).catch(() => undefined);
       if (last === undefined || !["escalate", "fastClean"].includes(last.decision.kind)) break;
     }
 
@@ -2805,7 +2926,7 @@ describe("a tier whose credentials died", () => {
 
   it("asks the same model through the twin, and parks the dead route for the status line", async () => {
     const reviewer = new AuthDead();
-    const r = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: withTwin });
+    const r = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, allowMetered: true, type: withTwin });
 
     expect(reviewer.asked).toStrictEqual([primary, "openrouter/twin"]);
     expect(store.getReview("r1", "p")?.ladder.unavailable ?? [], "the tier ran — nothing is skipped").toStrictEqual([]);

@@ -30,7 +30,7 @@ import { CancelledByLore, DidNotRun, Exhausted, ProviderAuthFailed, ServiceUnrea
 import { FindingSchema, type Finding } from "../core/finding.ts";
 import type { Tier } from "../core/ladder.ts";
 import { loadPools, routesFor } from "../core/ladder.ts";
-import { sessionKey, shouldCompact } from "./continuity.ts";
+import { type KeptSessions, sessionKey, shouldCompact } from "./continuity.ts";
 import { Gate, type GateState } from "./gate.ts";
 import { DEFAULT_TIMEOUT_MS, longFetch } from "./long-fetch.ts";
 import { OUTPUT_CONTRACT } from "./prompts.ts";
@@ -125,6 +125,14 @@ export interface ReviewerConfig {
    * status and silence is what the deadline is for.
    */
   readonly retryStormMs?: number;
+  /**
+   * Where kept sessions survive a restart (D-80).
+   *
+   * Absent means the old behaviour exactly — sessions live and die with the process,
+   * which is right for the CLI and for tests, and was wrong for the service: a deploy
+   * threw away every warm conversation of every open review and nothing said so.
+   */
+  readonly keptSessions?: KeptSessions;
 }
 
 export const DEFAULT_REVIEWER: ReviewerConfig = {
@@ -323,6 +331,25 @@ class HttpStatus extends Error {
   }
 }
 
+/**
+ * THE SESSION IS GONE FROM OPENCODE — its own type, not a status to sniff for.
+ *
+ * Only reachable since kept session ids became durable: a stored id can outlive the
+ * session it names (opencode's volume replaced, its data pruned, this database restored
+ * from a backup older than the session). It needs to survive `ask`'s classifier
+ * untouched, and the first version did not — it was thrown as a plain `HttpStatus`, the
+ * classifier turned every unrecognised status into `DidNotRun`, and the recovery below
+ * could no longer tell a vanished session from a model that answered badly. Caught by the
+ * test that asserts the cold restart happens exactly once.
+ */
+class SessionGone extends Error {
+  readonly sessionId: string;
+  constructor(sessionId: string) {
+    super(`opencode has no session ${sessionId}`);
+    this.sessionId = sessionId;
+  }
+}
+
 /** `openrouter/z-ai/glm-5.2` → provider `openrouter`, model `z-ai/glm-5.2`. */
 export function splitModel(id: string): { providerID: string; modelID: string } {
   const slash = id.indexOf("/");
@@ -355,9 +382,18 @@ export class Reviewer implements ReviewerLike {
    * (D-80). Separate from `sessions` above, which is the per-round handle a cancel uses
    * and is cleared every round by design.
    *
-   * In memory only, and deliberately: a lore restart loses it, the next round finds
-   * nothing and starts cold, which is exactly the behaviour before this existed. Nothing
-   * is lost but the saving.
+   * A PROCESS-LOCAL CACHE over `cfg.keptSessions`, which is where these actually live.
+   *
+   * This was the only copy, and in memory only — so a lore restart lost every warm
+   * conversation and the next round of every open review started COLD, re-reading the
+   * whole diff at full price. opencode had not lost anything: its sessions are in a named
+   * volume that outlives the container. Only the ids were gone, and nothing reported it,
+   * so a deploy quietly cost far more than the one interrupted round it was supposed to.
+   *
+   * Vany: *"deployment must not kill the full ladder, may be one step."*
+   *
+   * Still a Map because the lookup is on every turn and the port is a database; the port
+   * is consulted only when this misses, which after a restart is once per tier.
    */
   private readonly kept = new Map<string, string>();
   /**
@@ -711,6 +747,16 @@ export class Reviewer implements ReviewerLike {
     reviewId: string | undefined,
     extract: (text: string) => Listed<T>,
     contract: string,
+    /**
+     * Set on the ONE retry that follows a resumed session opencode no longer has.
+     *
+     * Persisting ids makes a failure reachable that a private Map could not produce: a
+     * row pointing at a session that is gone — opencode's volume replaced, its data
+     * pruned, a database restored from a backup older than the session. Left alone that
+     * row would fail its tier on every future round of the review, permanently, which is
+     * worse than the cold start it was avoiding. So: forget, start cold, once.
+     */
+    noResume = false,
   ): Promise<SessionResult<T>> {
     const started = Date.now();
     // SUBSCRIBED BEFORE THE SESSION EXISTS, not after. The stream takes a moment to
@@ -724,9 +770,26 @@ export class Reviewer implements ReviewerLike {
     const keptKey = reviewId !== undefined && tier.conversation === true
       ? sessionKey(reviewId, tier.id, tier.model ?? "")
       : undefined;
-    const continuing = keptKey === undefined ? undefined : this.kept.get(keptKey);
+    // MEMORY, THEN THE PORT. After a restart the map is empty and the port still knows,
+    // which is the whole point of this change; `noResume` is the recovery path below
+    // refusing to resume an id opencode has since forgotten.
+    const continuing = keptKey === undefined || noResume
+      ? undefined
+      : (this.kept.get(keptKey) ?? this.cfg.keptSessions?.get(keptKey));
+    const resumedFromStore = continuing !== undefined && !this.kept.has(keptKey ?? "");
     const sessionId = continuing ?? (await this.createSession(tier));
-    if (keptKey !== undefined && continuing === undefined) this.kept.set(keptKey, sessionId);
+    if (keptKey !== undefined && continuing === undefined) {
+      this.kept.set(keptKey, sessionId);
+      // WRITTEN WHEN THE SESSION IS OPENED, not when the round ends. A round that dies
+      // mid-call is exactly the case this exists for, and a record written at the end
+      // would not exist for any of them.
+      this.cfg.keptSessions?.set(keptKey, sessionId);
+    } else if (keptKey !== undefined && resumedFromStore) {
+      this.kept.set(keptKey, sessionId);
+    }
+    if (resumedFromStore) {
+      console.error(`[lore:log] ${tier.id} resumed its kept session across a restart — no cold re-read (D-80).`);
+    }
     // ADDED to the review's live set, never OVERWRITING it — a rung's members register
     // concurrently under the same reviewId (D-109), and a plain overwrite here is
     // exactly what let one member's registration erase another's. Cleared in `finally`
@@ -818,6 +881,37 @@ export class Reviewer implements ReviewerLike {
       if (continuing !== undefined) await this.compactIfFull(continuing, tier);
       return await this.conduct(sessionId, tier, text, worktree, started, extract, contract);
     } catch (e) {
+      // A SESSION OPENCODE NO LONGER HAS: forget it and start cold, exactly once.
+      //
+      // Only reachable now that ids are durable. The row can outlive the session it names
+      // — opencode's volume replaced, its data pruned, this database restored from a
+      // backup older than the session — and a 404 on `session.prompt` is how that shows.
+      // Left in place the row would fail this tier on every future round of the review,
+      // permanently, which is strictly worse than the cold start it was saving.
+      //
+      // NARROW ON PURPOSE: only when we RESUMED (`continuing`), only on 404, and only
+      // once (`noResume`). A 404 without a resume is a bug worth surfacing, not a thing
+      // to paper over, and a second attempt would be a loop.
+      if (e instanceof SessionGone && continuing !== undefined && !noResume) {
+        console.error(
+          `[lore:log] ${tier.id}: opencode no longer has session ${continuing} — forgetting it and starting a ` +
+            "fresh one. This round pays for a cold read; later rounds resume normally.",
+        );
+        if (keptKey !== undefined) {
+          this.kept.delete(keptKey);
+          this.cfg.keptSessions?.forget(keptKey);
+        }
+        this.aborters.delete(sessionId);
+        this.watchers.delete(sessionId);
+        return await this.conductSession(tier, prompt, worktree, reviewId, extract, contract, true);
+      }
+      // UNRECOVERABLE, so it leaves as something the ladder has a rule for. `SessionGone`
+      // is ours and nothing above knows it; `DidNotRun` says exactly what happened and is
+      // already handled everywhere. Reached when a FRESH session 404s, which is opencode
+      // misbehaving rather than a stale row, and is worth saying plainly.
+      if (e instanceof SessionGone) {
+        throw new DidNotRun(`tier ${tier.id}: ${e.message} — the session vanished mid-round; nothing was learned.`);
+      }
       // ABANDONING THE REQUEST DOES NOT STOP THE MODEL.
       //
       // Measured: three T2 calls that failed client-side went on to consume
@@ -922,10 +1016,16 @@ export class Reviewer implements ReviewerLike {
    * `release` prefixes on, so the two cannot disagree about where the id ends.
    */
   keptReviews(): readonly string[] {
+    // MEMORY *AND* THE DURABLE RECORD. The cache alone is empty after a restart — the one
+    // event durable ids exist for — so the reconcile would sweep nothing exactly when
+    // there is most to sweep, and the rows and their opencode sessions would outlive the
+    // reviews that own them with nothing anywhere left to clear them.
+    //
     // The FIRST colon, not the last: the key is `<reviewId>:<tierId>:<model>` and a model
     // id carries slashes rather than colons, so the review id is everything before the
     // first one. Splitting on the last returned `rev:t2` and released nothing.
-    return [...new Set([...this.kept.keys()].map((k) => k.slice(0, k.indexOf(":"))))];
+    const keys = [...this.kept.keys(), ...(this.cfg.keptSessions?.keys() ?? [])];
+    return [...new Set(keys.map((k) => k.slice(0, k.indexOf(":"))))];
   }
 
   /**
@@ -937,9 +1037,21 @@ export class Reviewer implements ReviewerLike {
    * three tiers is 384 sessions opencode would hold for reviews that finished hours ago.
    */
   async release(reviewId: string): Promise<void> {
-    for (const [key, sessionId] of [...this.kept]) {
+    // THE DURABLE KEYS TOO, and for the same reason `keptReviews` reads them: after a
+    // restart the cache holds nothing, so releasing from it alone would leave the sessions
+    // of every pre-restart review open on opencode for ever.
+    const held = new Map<string, string>(this.kept);
+    for (const key of this.cfg.keptSessions?.keys() ?? []) {
+      const id = this.cfg.keptSessions?.get(key);
+      if (id !== undefined && !held.has(key)) held.set(key, id);
+    }
+    for (const [key, sessionId] of held) {
       if (!key.startsWith(`${reviewId}:`)) continue;
       this.kept.delete(key);
+      // AND THE DURABLE COPY, or the next process resumes a session this line just
+      // deleted — a 404 the recovery path would absorb, but only after paying for a
+      // round trip to learn something we knew here.
+      this.cfg.keptSessions?.forget(key);
       await this.client.session.delete({ path: { id: sessionId } }).catch(() => undefined);
     }
   }
@@ -1099,8 +1211,10 @@ export class Reviewer implements ReviewerLike {
     // summed the session (`usageFromMessages`), which made success and failure count
     // different quantities — recorded as a known inconsistency while every provider was a
     // flat subscription and the numbers were decorative. D-93 made one path metered: a
-    // COMPLETED review then reported a fraction of what it spent, and both `mayStart` and
-    // the round-boundary ceiling sum that fraction.
+    // COMPLETED review then reported a fraction of what it spent, and two spend gates
+    // summed that fraction. Both gates are gone (D-121) and the reason to be accurate is
+    // not — this is the number an operator reads to decide whether to keep paying, and an
+    // under-count reads as a deployment that is cheaper than it is.
     //
     // Falls back to the single message when the session cannot be read, which is the
     // conservative direction available: an under-count is what we had, and inventing a
@@ -1290,6 +1404,10 @@ export class Reviewer implements ReviewerLike {
       // instead of "out of quota" (exit 75) — losing the quota alert and the
       // spend-ceiling behaviour with it.
       const status = res.response?.status ?? 200;
+      // 404 IS ABOUT THE SESSION, not about the model or the plan. Separated before the
+      // generic throw so the classifier below cannot flatten it into `DidNotRun` — which
+      // it did, silently disabling the recovery in `conductSession`.
+      if (status === 404) throw new SessionGone(sessionId);
       if (status >= 400) {
         throw new HttpStatus(status, JSON.stringify(res.error ?? {}).slice(0, 300));
       }
@@ -1313,6 +1431,9 @@ export class Reviewer implements ReviewerLike {
       // `rate.?limit|quota|insufficient`, so it would arrive as a plain `DidNotRun` and
       // the ladder would fail the review instead of stepping over the tier.
       if (e instanceof TierUnavailable) throw e;
+      // Same reasoning, one line later: this one is answered by opening a new session,
+      // which is a decision only `conductSession` can take.
+      if (e instanceof SessionGone) throw e;
       const status = e instanceof HttpStatus ? e.status : undefined;
       const message = e instanceof Error ? e.message : String(e);
       // Quota is never a reason to fall through to another tier or provider: a
@@ -1459,11 +1580,12 @@ export async function usageFromMessages(res: unknown): Promise<Usage | undefined
   let output = 0;
   // SUMMED, not hard-zeroed. This returned `cost: 0` on the reasoning that every provider
   // here bills a flat subscription and reports nothing — true until D-93 put a METERED
-  // provider on the fallback path. The daily ceiling sums `cost_usd`, so a failed metered
-  // call recorded with a zero contributed exactly nothing to the only guard against
-  // runaway spend, which is precisely the row it was added to make visible. A provider
-  // that genuinely reports nothing still sums to zero, so the subscription case is
-  // unchanged.
+  // provider on the fallback path. A failed metered call recorded with a zero then made
+  // the money it burned invisible, which is precisely the row it was added to expose: a
+  // call that dies after eighty steps was paid for exactly like one that succeeded. No
+  // guard reads this now (D-121) — a person does, and a person deciding whether to keep
+  // paying for a route needs the failures counted. A provider that genuinely reports
+  // nothing still sums to zero, so the subscription case is unchanged.
   let cost = 0;
   for (const r of rows) {
     if (r.info?.role !== "assistant") continue;

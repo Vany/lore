@@ -66,5 +66,25 @@ export default defineConfig({
   root: import.meta.dirname,
   test: {
     exclude: [...configDefaults.exclude, "**/.claude/**", "**/lore/data/**", "**/repos/*/wt/*/**"],
+    // THE SUITE MODELS A CONFIGURED DEPLOYMENT, and until D-117 it did not have to say so.
+    //
+    // The metered gate exempts a tier's literal model only when a PERSON wrote the ladder
+    // it is in (`exemptLiteral`), because the built-in `DEFAULT_TIERS` is three literal
+    // `openrouter/` routes nobody chose. With `LORE_TIERS` unset every test therefore ran
+    // on an all-metered ladder with metered refused, and 69 of them failed for having no
+    // model at all — correctly, and about the fixture rather than the code.
+    //
+    // The value is `DEFAULT_TIERS` verbatim, so the ladder tests see is unchanged in every
+    // respect but the one that matters here: it is now configuration somebody supplied.
+    // Tests that care about the built-in default pass `source` to the pure functions
+    // directly, which is why those keep working.
+    env: {
+      LORE_TIERS: JSON.stringify([
+        { id: "t0", kind: "deterministic", stage: "fast" },
+        { id: "t1", kind: "model", model: "openrouter/z-ai/glm-5.2", effort: "medium", stage: "fast" },
+        { id: "t2", kind: "model", model: "openrouter/moonshotai/kimi-k3", effort: "high", stage: "deep" },
+        { id: "t3", kind: "model", model: "openrouter/openai/gpt-5.6-sol-pro", effort: "high", stage: "deep" },
+      ]),
+    },
   },
 });

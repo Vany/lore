@@ -54,6 +54,15 @@ const RULES: readonly { readonly find: RegExp; readonly replace: string }[] = [
   // own backoff has not yet passed. The comeback time is genuinely useful to a client
   // deciding whether to wait; the route list it is choosing between is not.
   { find: /no route for tier (t\d+) has quota: [^—]*— /g, replace: "tier $1 has no route with quota — " },
+  // LORE'S BUDGET IS NOT THE CLIENT'S BUSINESS (D-120), and the metered refusal walked
+  // straight past this file the day it was written. `no route for tier tN may be used: …
+  // bills per call and this deployment does not allow metered routes` is procurement
+  // language: it names our billing arrangement, our configuration, and an action only an
+  // operator can take, to an agent that will repeat all three to its user and act on none
+  // of them. Same mistake as `failed_because` naming the spend ceiling, in new words, one
+  // day later. What the client keeps is the only part that is theirs: the tier did not run.
+  { find: /no route for tier (t\d+) may be used: .+/g, replace: "tier $1 could not be run for this review" },
+  { find: /every route of \S+ bills per call[^.]*\.[^.]*\./g, replace: "a tier could not be run for this review." },
   { find: /\bwas answered by \S+ rather than \S+/g, replace: "was answered by an equivalent stand-in for its usual model" },
   { find: /the subscription is out of quota, so the same model was asked through a metered provider/g, replace: "its usual capacity was exhausted, so an equivalent answered — its opinion counts in full" },
   { find: /refused on quota:/g, replace: "was out of capacity:" },

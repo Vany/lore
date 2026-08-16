@@ -1,7 +1,7 @@
 import { readdirSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
-  ladderChanged, clientDeliveredWork, DEFAULT_TIERS, anyTierRan, initialState, loadTiers, loadPools, loadHelper, markAnsweredBy, markUnavailable, concreteRoute, fallbackRoutes, poolOrder, routesFor, rungKey, rungMembers, settle, withQuota, soleVendorOf, step, vendorOf, type Decision, type LadderState, type Tier, ladderFingerprint } from "./ladder.ts";
+  ladderChanged, clientDeliveredWork, DEFAULT_TIERS, anyTierRan, initialState, loadTiers, loadPools, loadHelper, markAnsweredBy, markUnavailable, concreteRoute, exemptLiteral, noRouteBecause, fallbackRoutes, poolOrder, routesFor, rungKey, rungMembers, settle, withQuota, soleVendorOf, step, vendorOf, type Decision, type LadderState, type Tier, ladderFingerprint } from "./ladder.ts";
 
 const clean = (state: LadderState) => step({ state, raised: [] });
 
@@ -934,6 +934,111 @@ describe("resolving a tier to one concrete route", () => {
     expect(concreteRoute(tier("GLM5.2"), pools, parked)).toBe("zp2/glm-5.2");
     const all = () => ({ until: "2126-01-01T00:00:00.000Z", stated: false });
     expect(concreteRoute(tier("GLM5.2"), pools, all), "no model for this, said as undefined").toBeUndefined();
+  });
+
+  /**
+   * THE OTHER INDIRECTION THAT PRODUCES A PAID ROUTE (D-117).
+   *
+   * Gating `runRound` alone left this open, and its callers are the hourly screen, the
+   * bootstrap survey and `propose` (proposer AND critics) — none of which has any reason
+   * to think about money. Every one of them could hand opencode a metered route while the
+   * deployment was documented as never paying, once an hour, indefinitely, silently.
+   */
+  const metered = { "GLM5.2": ["zp1/glm-5.2", "openrouter/z-ai/glm-5.2"] };
+
+  it("does not pick a metered pool route unless the operator allowed it", () => {
+    // The free sibling is parked, so the metered one is the ONLY route left — which is
+    // the dead-subscription case, and the one where the old code always paid.
+    const parked = (m: string) => (m === "zp1/glm-5.2" ? { until: "2126-01-01T00:00:00.000Z", stated: false } : undefined);
+    expect(concreteRoute(tier("GLM5.2"), metered, parked, Math.random, false)).toBeUndefined();
+    expect(concreteRoute(tier("GLM5.2"), metered, parked, Math.random, true)).toBe("openrouter/z-ai/glm-5.2");
+  });
+
+  // TWENTY DRAWS, because the pick shuffles: with both routes alive, one call proves
+  // nothing about which the shuffle could have chosen.
+  it("never draws the metered sibling while both are alive", () => {
+    for (let i = 0; i < 20; i++) {
+      expect(concreteRoute(tier("GLM5.2"), metered, () => undefined, Math.random, false)).toBe("zp1/glm-5.2");
+    }
+  });
+
+  // The same exemption as the round's: a literal metered id IS the operator's choice —
+  // PROVIDED a person wrote the ladder it is in. `LORE_TIERS` is set by the suite's own
+  // config, so this is that case.
+  it("hands a literally-configured metered model through, gate or no gate", () => {
+    expect(concreteRoute(tier("openrouter/z-ai/glm-5.2"), metered, () => undefined, Math.random, false))
+      .toBe("openrouter/z-ai/glm-5.2");
+  });
+
+  /**
+   * THE BUILT-IN LADDER IS NOBODY'S CHOICE, and exempting it made the gate inert on the
+   * configuration this repository SHIPS.
+   *
+   * `DEFAULT_TIERS` is three literal `openrouter/` models and `deploy/docker-compose.yml`
+   * passes a blank `LORE_TIERS`, which means exactly that default. Under the first version
+   * of the rule — "a literal id is the operator's decision" — every one of those was
+   * exempt, so `LORE_ALLOW_METERED=0` filtered nothing and every call billed, while README,
+   * SPEC, TODO, MEMO and the compose comment all promised no charging route is ever called.
+   *
+   * Vany, asked which way to resolve it: exempt only an operator-written ladder.
+   */
+  it("does not exempt a literal metered model from the ladder lore ships with", () => {
+    const t = tier("openrouter/z-ai/glm-5.2");
+    // `source` empty is what an unset LORE_TIERS looks like, which is what the shipped
+    // compose passes.
+    expect(exemptLiteral(t, {}, ""), "nobody chose this").toBe(false);
+    expect(exemptLiteral(t, {}, "/etc/lore/tiers.json"), "somebody did").toBe(true);
+    // And a nickname is never exempt however the ladder arrived.
+    expect(exemptLiteral(tier("GLM5.2"), metered, "/etc/lore/tiers.json")).toBe(false);
+  });
+
+  /**
+   * PARKED AND FORBIDDEN ARE ANSWERED DIFFERENTLY — one by a clock, one by a person.
+   *
+   * The screen and `propose` both said "every route to X is out of quota" whenever
+   * `concreteRoute` came back empty, which since the gate can mean the surviving route has
+   * quota and is merely disallowed. An operator reads that and waits for a reset that is
+   * not the constraint. The rule was already written for the round's own case; the other
+   * callers went on sharing the sentence it forbids.
+   */
+  describe("saying WHY there is no route", () => {
+    const parkedFree = (m: string) => (m === "zp1/glm-5.2" ? { until: "2126-01-01T00:00:00.000Z", stated: false } : undefined);
+
+    // NOTHING PERMITTED SURVIVES: the toggle really is the only remedy, so say so.
+    it("names the toggle when every route bills per call", () => {
+      const allMetered = { "GLM5.2": ["openrouter/z-ai/glm-5.2", "openrouter/moonshotai/glm-5.2"] };
+      const why = noRouteBecause(tier("GLM5.2"), allMetered, () => undefined, false) ?? "";
+      expect(why).toMatch(/bill per call/);
+      expect(why).toMatch(/LORE_ALLOW_METERED=1/);
+      expect(why, "and says waiting is the wrong move").toMatch(/waiting will not change it/);
+      expect(why, "never the sentence that sends someone to wait").not.toMatch(/every route to .* is out of quota/);
+    });
+
+    /**
+     * BOTH CAUSES AT ONCE, and the first version got this wrong in the dangerous
+     * direction. The branch was "any route was gated", which is true here — and told an
+     * operator that waiting would not help and pointed them at a deployment-wide money
+     * toggle, to work around a parked free route that returns by itself when its backoff
+     * lifts. The money channel is the one this project insists must be exactly right.
+     */
+    it("says waiting DOES help when a free route survives the gate and is only parked", () => {
+      const why = noRouteBecause(tier("GLM5.2"), metered, parkedFree, false) ?? "";
+      expect(why, "the permitted route is parked, not forbidden").toMatch(/out of quota/);
+      expect(why, "and the backoff is what clears it").toMatch(/backoff/);
+      expect(why, "so it must NOT send anyone to the toggle").not.toMatch(/waiting will not change it/);
+      // The metered route is still named — an operator seeing only "out of quota" would
+      // not know a second route existed and was refused on purpose.
+      expect(why).toMatch(/openrouter\/z-ai\/glm-5\.2/);
+    });
+
+    it("still says out of quota when that is genuinely why", () => {
+      const allParked = () => ({ until: "2126-01-01T00:00:00.000Z", stated: false });
+      expect(noRouteBecause(tier("GLM5.2"), pools, allParked, false) ?? "").toMatch(/out of quota/);
+    });
+
+    it("explains nothing when a route was found", () => {
+      expect(noRouteBecause(tier("GLM5.2"), pools, () => undefined, false)).toBeUndefined();
+    });
   });
 });
 

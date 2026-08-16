@@ -1,72 +1,41 @@
 /**
- * The daily spend ceiling.
+ * WHAT WAS SPENT — REPORTED, NEVER ACTED ON (D-121).
  *
- * At 30 PRs a day this is a $500–2,600/month tool, and a cheap tier looping on a
- * pathological branch is exactly the shape that runs up a bill nobody sees until
- * the invoice.
+ * Vany: *"we only show the price, there is no decision on the basis of it."*
  *
- * When the ceiling is reached the service **stops starting reviews** rather than
- * continuing quietly. A review not started is honest; a review that runs and cannot
- * be paid for is not.
+ * Everything here is read by the operator views and by nothing else. No caller may branch
+ * on these numbers: money does not decide whether a review starts, whether a round runs,
+ * whether a job is claimed, or whether anybody is expired. That is the whole contract of
+ * this file, and it is the reason it is this short.
  *
- * SPEC: spec/operations.md §4
+ * It used to hold a daily ceiling that refused admission at $100. The ceiling was not
+ * wrong about the money and it was the wrong instrument anyway: by the time a total can
+ * fire, the money is spent, and the people it stops are not the people who spent it. On
+ * 2026-08-16 it stopped eight reviews across three colleagues' branches at round 0, having
+ * read nothing, for a bill run up by an unrelated batch. A gate that cannot run is this
+ * project's worst outcome — worse than the invoice it was guarding.
+ *
+ * What guards the money now is D-117: a metered route is one the operator switched on,
+ * asked before the call from the route id, in `core/metered.ts`. A price is evidence for a
+ * person; it is not a control loop.
+ *
+ * lore does not CALCULATE any of this. There is no rate card here and there never was —
+ * `cost_usd` is whatever opencode reported for the call (`usageFromMessages`), summed.
+ *
+ * SPEC: spec/operations.md §4, SPEC.md D-121
  */
 
 import type { Store } from "../store/store.ts";
-import { Alerter, CONDITIONS } from "./alerts.ts";
-
-export interface SpendConfig {
-  readonly dailyCeilingUsd: number;
-  /** Fraction of the ceiling at which a ticket is raised rather than a page. */
-  readonly warnAt: number;
-}
-
-export const DEFAULT_SPEND: SpendConfig = { dailyCeilingUsd: 100, warnAt: 0.8 };
-
-export function startOfDayIso(): string {
-  return `${new Date().toISOString().slice(0, 10)}T00:00:00.000Z`;
-}
-
-export interface SpendVerdict {
-  readonly allowed: boolean;
-  readonly spent: number;
-  readonly ceiling: number;
-  /**
-   * Whether this deployment reports cost at all.
-   *
-   * `false` means the ceiling CANNOT FIRE, and that is not a bug — it is what a
-   * subscription looks like. Both current providers bill a flat rate, so every one of
-   * the 84 usage rows carries `cost_usd = 0` and this sums exactly that column.
-   *
-   * It matters because an unfired ceiling reads as headroom. "Spend is $0 against a
-   * $100 ceiling" and "nothing here can measure spend" are opposite facts that look
-   * identical in a dashboard, and this is the only thing that separates them. A guard
-   * that cannot fire must say so rather than stay quiet and be mistaken for one that
-   * looked.
-   */
-  readonly metered: boolean;
-}
 
 /**
- * May a new review start?
+ * Midnight UTC today.
  *
- * Checked before starting, at enqueue — and `runRound` asks again at every ROUND
- * BOUNDARY (D-93), which is not the same as mid-review: killing a review halfway leaves it in
- * a state that is neither passed nor honestly failed, and wastes everything already
- * spent on it.
+ * The day boundary the operator views group by. UTC and not a local zone because the
+ * providers bill that way and an operator comparing lore's figure against an invoice
+ * should not have to reason about which midnight either of them meant.
  */
-export async function mayStart(store: Store, cfg: SpendConfig, alerter: Alerter): Promise<SpendVerdict> {
-  const spent = store.spendSince(startOfDayIso());
-  const metered = store.hasMeteredUsage();
-
-  if (spent >= cfg.dailyCeilingUsd) {
-    await alerter.send(CONDITIONS.spendCeiling(spent, cfg.dailyCeilingUsd));
-    return { allowed: false, spent, ceiling: cfg.dailyCeilingUsd, metered };
-  }
-  if (spent >= cfg.dailyCeilingUsd * cfg.warnAt) {
-    await alerter.send(CONDITIONS.spendAnomaly(spent, cfg.dailyCeilingUsd * cfg.warnAt));
-  }
-  return { allowed: true, spent, ceiling: cfg.dailyCeilingUsd, metered };
+export function startOfDayIso(): string {
+  return `${new Date().toISOString().slice(0, 10)}T00:00:00.000Z`;
 }
 
 /** Per-tier spend, for the operator view — where the money actually goes. */

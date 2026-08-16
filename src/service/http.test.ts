@@ -11,7 +11,6 @@ import { MAX_OPEN_REVIEWS } from "../core/admission.ts";
 import { initialState } from "../core/ladder.ts";
 import type { ReviewState } from "../core/review-state.ts";
 import { STALE_HOURS, STALE_GRACE_DAYS } from "../ops/retention.ts";
-import { DEFAULT_SPEND } from "../ops/spend.ts";
 import { BOARD_PAGE } from "./board-page.ts";
 import { DEFAULT_HEARTBEAT } from "../ops/heartbeat.ts";
 import { grantToken, hashToken, revokeByPrefix } from "../mcp/auth.ts";
@@ -60,7 +59,7 @@ beforeEach(() => {
       port: nextPort(),
       host: "127.0.0.1",
       heartbeat: { ...DEFAULT_HEARTBEAT, dataDir: "/tmp" },
-      spend: DEFAULT_SPEND,
+      allowMetered: false,
     },
   );
   close = server.close;
@@ -1470,25 +1469,30 @@ describe("one review per branch", () => {
   });
 });
 
-// "$0 spent against a $100 ceiling" and "nothing here can measure spending" are
-// opposite facts that look identical in a dashboard. Both providers bill a flat
-// subscription, so all 84 usage rows carry cost_usd = 0 and the ceiling has never
-// been able to fire — a guard that cannot fire must say so rather than stay quiet
-// and be mistaken for one that looked.
-describe("the spend ceiling says whether it can fire", () => {
-  it("declares itself inert when nothing has ever reported a cost", async () => {
-    const body = (await (await fetch(`${base}/status`)).json()) as Record<string, Record<string, unknown>>;
-    expect(body["spend_ceiling"]?.["metered"]).toBe(false);
-    expect(String(body["spend_ceiling"]?.["note"])).toMatch(/INERT/);
-    expect(String(body["spend_ceiling"]?.["note"])).toMatch(/not as headroom/);
+/**
+ * WHAT THE MONEY MAY DO, WHICH IS THE ONLY MONEY DECISION LEFT (D-117, D-121).
+ *
+ * `/status` used to publish `spend_ceiling`, and publishing it taught an operator that a
+ * dollar figure bounded the day. None does: `spendToday` is a reading and nothing branches
+ * on it. What CAN be refused is a route that bills per call, so that is what is reported —
+ * and it is reported in both states, because a key that vanishes in the safe case teaches
+ * a monitor to ignore its absence.
+ */
+describe("status says whether an outage will cost money or coverage", () => {
+  it("reports the metered-route decision", async () => {
+    const body = (await (await fetch(`${base}/status`)).json()) as Record<string, unknown>;
+    expect(body["allow_metered"], "present, and false is the default").toBe(false);
   });
 
-  it("stops explaining itself once a real cost is recorded", async () => {
+  // The number is still there and still means what it says. Reporting is the whole of
+  // what lore does with a price now.
+  it("still reports what was spent, and acts on none of it", async () => {
     store.recordUsage({ tier: "t1", costUsd: 0.42, outcome: "ok" });
 
-    const body = (await (await fetch(`${base}/status`)).json()) as Record<string, Record<string, unknown>>;
-    expect(body["spend_ceiling"]?.["metered"]).toBe(true);
-    expect(body["spend_ceiling"]).not.toHaveProperty("note");
+    const body = (await (await fetch(`${base}/status`)).json()) as Record<string, unknown>;
+    expect(body["spendToday"]).toBeCloseTo(0.42, 6);
+    expect(body, "no ceiling is published, because none exists").not.toHaveProperty("spend_ceiling");
+    expect(body["ok"], "and a spend does not make the service unhealthy").toBe(true);
   });
 });
 

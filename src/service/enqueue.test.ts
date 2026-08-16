@@ -2,7 +2,7 @@
  * A review the client was told is `queued` must never silently not run.
  *
  * The enqueue is fire-and-forget: `review_start` writes the row, answers
- * `state: "queued"`, and asks about budget afterwards. So everything that can go wrong
+ * `state: "queued"`, and queues the job afterwards. So everything that can go wrong
  * here goes wrong AFTER the client has been told the review exists — and nothing
  * reconciles a review with no job. `reclaimOrphanedJobs` frees jobs stuck `running`; a
  * review that never got one is invisible to it. It waits until the retention sweep calls
@@ -18,7 +18,6 @@
 
 import { describe, expect, it } from "vitest";
 import { Alerter, type Alert } from "../ops/alerts.ts";
-import { DEFAULT_SPEND } from "../ops/spend.ts";
 import { initialState } from "../core/ladder.ts";
 import { Store } from "../store/store.ts";
 import { enqueueOrFail } from "./enqueue.ts";
@@ -46,9 +45,9 @@ const seeded = (): { store: Store; id: string } => {
 const alerter = () => new Recording({ timeoutMs: 100 });
 
 describe("putting an accepted review where the worker will find it", () => {
-  it("queues a job when there is budget", async () => {
+  it("queues a job", async () => {
     const { store, id } = seeded();
-    const out = await enqueueOrFail(store, DEFAULT_SPEND, alerter(), id, "fast");
+    const out = await enqueueOrFail(store, alerter(), id, "fast");
     expect(out).toBe("queued");
     expect(store.claimJob()?.reviewId, "a worker can now see it").toBe(id);
     store.close();
@@ -69,7 +68,7 @@ describe("putting an accepted review where the worker will find it", () => {
     const broken = new Store(":memory:");
     broken.close();
 
-    const out = await enqueueOrFail(broken, DEFAULT_SPEND, a, id, "fast");
+    const out = await enqueueOrFail(broken, a, id, "fast");
 
     expect(out, "it must not reject: the caller is a fire-and-forget `void`").toBe("failed");
     // PAGES, because nothing else in the system can notice one missing job: the process
@@ -93,7 +92,7 @@ describe("putting an accepted review where the worker will find it", () => {
       throw new Error("database is locked");
     };
 
-    const out = await enqueueOrFail(refusing, DEFAULT_SPEND, a, id, "fast");
+    const out = await enqueueOrFail(refusing, a, id, "fast");
 
     expect(out).toBe("failed");
     expect(store.getReview(id, "alice")?.state, "terminal, so nobody waits on it").toBe("failed");
@@ -103,15 +102,31 @@ describe("putting an accepted review where the worker will find it", () => {
     store.close();
   });
 
-  // A ceiling that refuses must also be terminal and must say so. Silently not queueing
-  // is the same defect wearing a policy.
-  it("fails the review when the spend ceiling refuses it", async () => {
+  /**
+   * MONEY IS NOT A REASON TO REFUSE SOMEBODY'S REVIEW (D-121).
+   *
+   * A daily spend ceiling used to answer here, and when it said no this wrote `failed`
+   * plus `not started: today's spend 101.36 has reached the 100.00 ceiling` — a string
+   * eight of other people's reviews carried into their clients on 2026-08-16, at round 0,
+   * having read nothing. It was lore's ledger, printed in their failure.
+   *
+   * Admission is now unconditional, so this pins the only remaining rule: a review that
+   * was accepted is queued, and the only `failed` this function writes is for a store
+   * that would not take it.
+   */
+  it("never refuses for spend, however much has been spent today", async () => {
     const { store, id } = seeded();
-    const out = await enqueueOrFail(store, { ...DEFAULT_SPEND, dailyCeilingUsd: 0 }, alerter(), id, "fast");
+    const repo = store.upsertRepo("demo", "git@x:demo.git");
+    store.recordUsage({
+      repoId: repo.id, reviewId: id, tier: "t2", model: "openrouter/twin",
+      inputTokens: 0, cachedTokens: 0, outputTokens: 0, costUsd: 10_000, outcome: "ok",
+    });
 
-    expect(out).toBe("refused");
-    expect(store.getReview(id, "alice")?.state).toBe("failed");
-    expect(store.claimJob(), "nothing was queued").toBeUndefined();
+    const out = await enqueueOrFail(store, alerter(), id, "fast");
+
+    expect(out).toBe("queued");
+    expect(store.getReview(id, "alice")?.state, "untouched — nobody was failed for a bill").toBe("queued");
+    expect(store.claimJob()?.reviewId, "and a worker can see it").toBe(id);
     store.close();
   });
 });

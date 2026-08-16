@@ -957,19 +957,6 @@ export class Store {
   }
 
   /**
-   * Has any model call this deployment ever made reported a cost?
-   *
-   * Distinguishes "spent nothing" from "cannot measure spending". Asked of ALL of
-   * history rather than of today, because a subscription-only deployment never
-   * reports a cost on any day, and one day's zero is normal even where costs exist.
-   */
-  hasMeteredUsage(): boolean {
-    const row = this.db.prepare("SELECT 1 AS present FROM usage WHERE cost_usd > 0 LIMIT 1").get() as
-      | Record<string, number>
-      | undefined;
-    return row !== undefined;
-  }
-
   /**
    * Every engine that could not run in this review, deduplicated, worst-case first
    * seen. Empty means everything the review type asks for actually executed.
@@ -2577,10 +2564,73 @@ export class Store {
       .run(`session-t0:${reviewId}:${tierId}:${route}`, JSON.stringify(seen));
   }
 
+  /**
+   * WHICH opencode SESSION A TIER IS KEEPING — the one part of D-80 that used to die
+   * with the process.
+   *
+   * The map lived in `Reviewer` memory and nowhere else, so a restart lost every warm
+   * conversation lore held. opencode did NOT lose them: its session store is a named
+   * volume that survives container recreation. Only the ids were forgotten — so every
+   * tier of every open review fell back to a cold start and re-read the whole diff at
+   * full price, on a deploy that was supposed to cost one interrupted round.
+   *
+   * Vany: *"deployment must not kill the full ladder, may be one step."* That is what
+   * this makes true. `reclaimOrphanedJobs` already requeues the interrupted round and
+   * the ladder, findings and ratified justifications were always in SQLite; this was the
+   * last thing a restart destroyed, and it was the expensive one.
+   *
+   * KEYED BY THE COMPOSED `sessionKey` (review, tier, MODEL), not by the triple, so the
+   * key format has exactly one definition and it lives with the sessions in
+   * `reviewer/continuity.ts`. Same reasoning as the per-route keying of `session-tree`
+   * below it: one tier can hold several sessions when a pool or a fallback is in play.
+   */
+  keptSessionOf(key: string): string | undefined {
+    const row = this.db.prepare("SELECT value FROM meta WHERE key = ?").get(`session-id:${key}`) as
+      | { value?: string }
+      | undefined;
+    return row?.value;
+  }
+
+  setKeptSession(key: string, sessionId: string): void {
+    this.db
+      .prepare("INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+      .run(`session-id:${key}`, sessionId);
+  }
+
+  /**
+   * A session opencode no longer has.
+   *
+   * Persisting an id makes a new failure reachable that an in-memory map could not have:
+   * a row pointing at a session that is gone (opencode's volume wiped, its data pruned,
+   * a database restored from a backup older than the session). Left in place that row
+   * would fail the same tier on EVERY future round of that review — permanent, and worse
+   * than the cold start it was meant to avoid. So the resume path forgets and starts
+   * cold, once, and says so.
+   */
+  forgetKeptSession(key: string): void {
+    this.db.prepare("DELETE FROM meta WHERE key = ?").run(`session-id:${key}`);
+  }
+
+  /**
+   * Every kept-session key on record, prefix stripped.
+   *
+   * The reconcile sweeps reviews that ended without a job or a cancel — the retention
+   * sweep marking one `expired` in SQL — and it can only sweep what it can enumerate. A
+   * lookup-only port left it reading the process-local cache, which a restart empties, so
+   * the rows and their opencode sessions would survive every review that owned them.
+   */
+  keptSessionKeys(): readonly string[] {
+    const rows = this.db.prepare("SELECT key FROM meta WHERE key LIKE 'session-id:%'").all() as { key?: string }[];
+    return rows.map((r) => String(r.key ?? "").slice("session-id:".length)).filter((k) => k !== "");
+  }
+
   /** Housekeeping for a review that ended — the records are meaningless without it. */
   clearSessionTrees(reviewId: string): void {
     this.db.prepare("DELETE FROM meta WHERE key LIKE ?").run(`session-tree:${reviewId}:%`);
     this.db.prepare("DELETE FROM meta WHERE key LIKE ?").run(`session-t0:${reviewId}:%`);
+    // The session ids go the same way and for the same reason: a review that ended will
+    // never send another turn, and a row nobody reads is a row that outlives its meaning.
+    this.db.prepare("DELETE FROM meta WHERE key LIKE ?").run(`session-id:${reviewId}:%`);
   }
 
   /** Accept a diff while a round runs; it is applied at the reviewer's next emission (D-107). */
@@ -3365,6 +3415,48 @@ export class Store {
       | undefined;
     const v = row?.["human_decision"];
     return v === null || v === undefined ? undefined : String(v);
+  }
+
+  /**
+   * REVIEWS HOLDING A HIGH FINDING NOBODY HAS COLLECTED, older than `hours`.
+   *
+   * `make status` has shown these since D-96 and nothing ever alerted on them, so the one
+   * party who can see a rotting review is the operator — who cannot act, because the
+   * findings belong to another principal's token and `review_inbox` is correctly scoped to
+   * that token. Observed 2026-08-17: one review on `master` holding an undelivered HIGH,
+   * unread for nearly three days, visible on `/status` the whole time and invisible to
+   * every client. A deep tier was paid to produce it.
+   *
+   * `delivered_at IS NULL` is the same predicate the operator view groups by, so the two
+   * cannot disagree about what "uncollected" means. HIGH only, and the branch's OWN
+   * (`preexisting = 0`) — D-68's reasoning applies here more than anywhere, because an
+   * alert that fires on the same inherited pattern match every day is one nobody reads.
+   *
+   * Counted as REVIEWS rather than findings: the thing that has gone wrong is that a
+   * client stopped coming back, and that is one fact per review however many findings sit
+   * behind it.
+   */
+  uncollectedHighOlderThan(hours: number): number {
+    const cutoff = new Date(Date.now() - hours * 3_600_000).toISOString();
+    const row = this.db
+      .prepare(
+        // A REVIEW THAT CAN STILL BE ANSWERED, and the join is the whole of it.
+        //
+        // Without it this counted EXPIRED reviews too — and nothing ever marks their
+        // findings delivered, because `markDelivered` is only reached from poll and cancel,
+        // which an abandoned review never sees again. The count would therefore never fall,
+        // and the finding row survives until the 90-day deletion cascades it. `needs_human`
+        // ageing does not have this problem because expiry empties that state; this one had
+        // to be told.
+        `SELECT COUNT(*) AS c FROM (
+           SELECT f.review_id FROM finding f JOIN review r ON r.id = f.review_id
+           WHERE f.delivered_at IS NULL AND f.severity = 'high' AND f.preexisting = 0
+             AND r.state NOT IN (${TERMINAL_SQL})
+           GROUP BY f.review_id HAVING MIN(f.first_seen) < ?
+         )`,
+      )
+      .get(cutoff) as Record<string, number | bigint> | undefined;
+    return Number(row?.["c"] ?? 0);
   }
 
   /**

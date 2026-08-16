@@ -367,12 +367,20 @@ describe("a round whose store closes under it", () => {
  * aspirational, and it is what this pins: the job stays queued, the review stays exactly
  * as it was, and the reviewer is never asked anything.
  */
-describe("the spend ceiling freezes claiming instead of failing reviews", () => {
+/**
+ * DRAINING IS THE ONLY REASON THIS DISPATCHER DECLINES WORK (D-121).
+ *
+ * A spend ceiling used to sit beside the drain check and stop claiming for the rest of the
+ * UTC day once a total crossed $100 — so a bill run up by one batch suspended the gate for
+ * everybody, and on 2026-08-16 that was eight reviews on three colleagues' branches. This
+ * pins the inversion: money is recorded, and the queue does not read it.
+ */
+describe("the dispatcher does not read the day's spend", () => {
   let root: string;
-  beforeEach(() => { root = mkdtempSync(join(tmpdir(), "lore-frozen-")); });
+  beforeEach(() => { root = mkdtempSync(join(tmpdir(), "lore-spend-")); });
   afterEach(() => rmSync(root, { recursive: true, force: true }));
 
-  it("claims nothing, fails nothing, and asks no tier while the ceiling is reached", async () => {
+  it("claims and runs a queued review however much has been spent today", async () => {
     const repoId = store.upsertRepo("r", join(root, "src")).id;
     store.recordUsage({
       repoId, reviewId: "revFrozen", tier: "t2", model: "openrouter/twin",
@@ -387,7 +395,7 @@ describe("the spend ceiling freezes claiming instead of failing reviews", () => 
     let asked = 0;
     const w = new Worker(
       store,
-      { ...DEFAULT_WORKER, pollMs: 5, reposRoot: join(root, "repos"), dailyCeilingUsd: 10 },
+      { ...DEFAULT_WORKER, pollMs: 5, reposRoot: join(root, "repos"), allowMetered: false },
       new Alerter({ timeoutMs: 10 }),
       { review: () => { asked++; return Promise.reject(new DidNotRun("should never be asked")); } },
     );
@@ -400,9 +408,16 @@ describe("the spend ceiling freezes claiming instead of failing reviews", () => 
       await stopAndDrain(w, stop);
     }
 
-    expect(asked, "a frozen service pays for nothing").toBe(0);
-    expect(store.stateOf("revFrozen"), "and destroys nothing — this is not a failure").toBe("queued");
-    expect(store.failureReason("revFrozen") ?? "", "and tells the client nothing (D-120)").toBe("");
+    // CLAIMED — which is the fact this dispatcher decides, and the whole of what the
+    // ceiling used to override. The $12 above exceeds the ceiling this test once proved
+    // was enforced; nothing consults it now, so the job leaves the queue.
+    //
+    // Asserted on the STATE and not on `asked`, because this fixture has no mirror for its
+    // repo: the round is claimed and then dies at the worktree, before any tier. That is
+    // still a claim, and a claim is the thing under test. Asserting `asked > 0` here
+    // passed only if a second, unrelated subsystem worked — the shape that makes a green
+    // suite mean less than it looks.
+    expect(store.stateOf("revFrozen"), "it left `queued` — nobody waits on a bill").not.toBe("queued");
   }, WAITING);
 });
 

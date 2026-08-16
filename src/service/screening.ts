@@ -14,7 +14,7 @@
  */
 
 import { retryAt } from "../core/cooloff.ts";
-import { concreteRoute, loadHelper, loadPools } from "../core/ladder.ts";
+import { concreteRoute, loadHelper, loadPools, noRouteBecause } from "../core/ladder.ts";
 import { dataDir } from "../core/paths.ts";
 import { rescreen } from "../knowledge/rescreen.ts";
 import { screenFor, screenUsage, type ScreenUsage } from "../knowledge/screen.ts";
@@ -86,7 +86,11 @@ export async function screeningPass(
   // No usable route means no pass this hour, said out loud: the rules stay live exactly
   // as they do through a tier cool-off.
   if (route === undefined) {
-    log(`[lore:log] background screen skipped — every route to ${named.model ?? "?"} is out of quota`);
+    // WHY, not just that. This said "out of quota" for both causes, and since the metered
+    // gate one of them is a toggle rather than a clock — so an operator read the hourly
+    // line, waited for a quota reset that was never the constraint, and never learned the
+    // screen was off by their own configuration.
+    log(`[lore:log] background screen skipped — ${noRouteBecause(named, loadPools(), (m) => store.routeUnavailable(m)) ?? "no route"}`);
     return;
   }
   const tier = { ...named, model: route };
