@@ -355,6 +355,57 @@ describe("a round whose store closes under it", () => {
 // — killed the loop, and `void Promise.allSettled(loops)` collected the rejection and
 // discarded it. Concurrency fell from N to N-1 to zero while `/healthz` answered ok and
 // `/status` reported `ok: true`, and nothing anywhere could notice.
+/**
+ * A FROZEN SERVICE TAKES NOTHING AND BREAKS NOTHING (D-119).
+ *
+ * The ceiling used to be checked inside the round, which meant the job was CLAIMED first
+ * and the review then written `failed` — and on 2026-08-16 that destroyed eight reviews
+ * across three people's branches, all at round 0 having read nothing, because lore was out
+ * of money for a few hours.
+ *
+ * Gating the CLAIM is what makes "do not restart, wait till unfreeze" true rather than
+ * aspirational, and it is what this pins: the job stays queued, the review stays exactly
+ * as it was, and the reviewer is never asked anything.
+ */
+describe("the spend ceiling freezes claiming instead of failing reviews", () => {
+  let root: string;
+  beforeEach(() => { root = mkdtempSync(join(tmpdir(), "lore-frozen-")); });
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  it("claims nothing, fails nothing, and asks no tier while the ceiling is reached", async () => {
+    const repoId = store.upsertRepo("r", join(root, "src")).id;
+    store.recordUsage({
+      repoId, reviewId: "revFrozen", tier: "t2", model: "openrouter/twin",
+      inputTokens: 0, cachedTokens: 0, outputTokens: 0, costUsd: 12, outcome: "ok",
+    });
+    store.createReview({
+      id: "revFrozen", repoId, principal: "p", branch: "work", intoRef: "main",
+      ticket: "t", type: "code-arch", state: "queued", ladder: initialState(),
+    });
+    store.enqueue("revFrozen", "fast");
+
+    let asked = 0;
+    const w = new Worker(
+      store,
+      { ...DEFAULT_WORKER, pollMs: 5, reposRoot: join(root, "repos"), dailyCeilingUsd: 10 },
+      new Alerter({ timeoutMs: 10 }),
+      { review: () => { asked++; return Promise.reject(new DidNotRun("should never be asked")); } },
+    );
+    const stop = w.start();
+    try {
+      // Long enough that an ungated dispatcher would have claimed and failed it many
+      // times over at a 5ms poll.
+      await new Promise((r) => setTimeout(r, 300));
+    } finally {
+      await stopAndDrain(w, stop);
+    }
+
+    expect(asked, "a frozen service pays for nothing").toBe(0);
+    expect(store.stateOf("revFrozen"), "and destroys nothing — this is not a failure").toBe("queued");
+    expect(store.failureReason("revFrozen") ?? "", "and tells the client nothing (D-120)").toBe("");
+  }, WAITING);
+});
+
 describe("a store fault does not silently cost the service its capacity", () => {
   /** An alerter that records rather than sends, so the page is observable. */
   const recorder = () => {

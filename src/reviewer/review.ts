@@ -36,7 +36,7 @@ import { parseLoreOk } from "../core/lore-ok.ts";
 import { decidedByPersonOrClock, isTerminal, type ReviewState } from "../core/review-state.ts";
 import type { ReviewType } from "../core/review-type.ts";
 import { retryAt, shouldProbe } from "../core/cooloff.ts";
-import { startOfDayIso } from "../ops/spend.ts";
+import { frozenBySpend } from "../ops/frozen.ts";
 import { ServiceUnreachable, CancelledByLore, DidNotRun, Exhausted, ProviderAuthFailed, TierUnavailable, TooLargeForTier } from "../core/errors.ts";
 import { hunkAround, hunkStillPresent, makeScope, type Scope } from "../core/scope.ts";
 import { baseCommitFor, blobSha, computeDiff, renderDiff } from "../git/diff.ts";
@@ -438,43 +438,32 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   //
   // Inert under subscriptions, deliberately: every `usage` row carries `cost_usd: 0`, so
   // the sum is zero and this never fires. It becomes real the moment a fallback does.
-  if (input.dailyCeilingUsd !== undefined) {
-    const spent = store.spendSince(startOfDayIso());
-    if (spent >= input.dailyCeilingUsd) {
-      // THE OPERATOR GETS THE LEDGER; THE CLIENT GETS A SERVICE (D-120).
-      //
-      // This reason used to read "the day's spend ceiling is reached — $101.36 of
-      // $100.00", and eight of other people's reviews carried that string today. It is
-      // lore's ledger printed inside somebody else's failure: an operational fact they
-      // cannot act on, which implicitly asks them to work around a service that exists to
-      // serve them. Vany: *"we are serving. We do not hand off our responsibility to the
-      // client."*
-      //
-      // So the client is told what is true and theirs — nothing was reviewed, do not
-      // merge, it is being dealt with — and the number goes to the log.
-      //
-      // STILL A FAILURE ONLY UNTIL D-119 LANDS. The right answer is to PAUSE and resume
-      // when the ceiling lifts, keeping the ladder and compacting the sessions; that is a
-      // larger change and is written down. This closes the disclosure half now, because
-      // it is wrong every time it fires.
-      console.error(
-        `[lore:log] review ${reviewId} stopped: the day's spend ceiling is reached — $${spent.toFixed(2)} of ` +
-          `$${input.dailyCeilingUsd.toFixed(2)}. The client is NOT told this (D-120); they are told the review ` +
-          "did not run and that lore is dealing with it.",
-      );
-      const why =
-        "lore could not complete this review, and nothing about your code was concluded — this is NOT a pass and " +
-        "you must not merge on it. The cause is on lore's side, it is known, and it does not need anything from " +
-        "you. Start a fresh review later, or ask the person who runs lore if it is urgent.";
-      store.setFailureReason(reviewId, why);
-      store.updateReview(reviewId, { state: "failed" });
-      // THE THROW IS OPERATOR-FACING and keeps the number: it lands in `job.last_error`
-      // and the worker's log, which no client reads. Only `failure_reason` above travels.
-      throw new DidNotRun(
-        `review ${reviewId} stopped: the day's spend ceiling is reached — $${spent.toFixed(2)} of ` +
-          `$${input.dailyCeilingUsd.toFixed(2)}`,
-      );
-    }
+  if (input.dailyCeilingUsd !== undefined && frozenBySpend(store, input.dailyCeilingUsd)) {
+    // A BACKSTOP THAT REQUEUES, NEVER ONE THAT FAILS (D-119).
+    //
+    // The dispatcher gates CLAIMING while frozen, so ordinarily nothing reaches here. This
+    // covers the seam: a job claimed a moment before the ceiling tripped, or a round that
+    // began under a ceiling raised and then lowered again.
+    //
+    // It used to write `failed` and a reason naming the spend — and on 2026-08-16 that
+    // destroyed eight reviews across three people's branches at round 0, having read
+    // nothing, because lore was out of money for a few hours. `failed` is the strongest
+    // thing this service can say; a bounded, recoverable, entirely internal condition is
+    // not what it is for.
+    //
+    // `ServiceUnreachable` is the right error and not a borrowed one: from the review's
+    // point of view a provider it cannot pay for is a provider it cannot reach. The worker
+    // already requeues on it (`requeueJob`) without burning an attempt or touching the
+    // review, which is precisely "do not restart, wait till unfreeze" — the ladder,
+    // findings, ratified justifications, pinned worktree and kept sessions all stand.
+    //
+    // Nothing is written to `failure_reason`, so the client is told nothing (D-120). To
+    // them the review is still running, which is true.
+    console.error(
+      `[lore:log] round for ${reviewId} not started: the day's spend ceiling is reached. Requeued, not failed; ` +
+        "the review is untouched and no client is told.",
+    );
+    throw new ServiceUnreachable("lore is not taking work at the moment; this round will run when it is");
   }
 
   const roundTree = await treeHash(worktree);

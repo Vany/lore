@@ -455,8 +455,7 @@ confess. It is something to fix. The operator gets everything — the ceiling, t
 per-call cost, the parked route, the pause; the client gets a service that either reviews
 their code or says plainly what it did not examine.
 
-**D-119 — the spend ceiling PAUSES a review; it never fails one. DECIDED 2026-08-16, not
-yet built.**
+**D-119 — the spend ceiling PAUSES a review; it never fails one. BUILT 2026-08-16.**
 
 Vany: *"in case of ceiling: compact, do not restart, wait till unfreeze."*
 
@@ -475,6 +474,18 @@ So the ceiling becomes a PAUSE:
   so the model keeps what it has learned about the codebase across the freeze and the
   resumed round is a cheap continuation rather than a cold read. This is the one thing that
   makes waiting cheaper than restarting.
+**How it is built: the CLAIM is gated, not the round.** The check moved from inside
+`runRound` to the dispatcher, beside the drain check, and that is the whole trick — a job
+that is never claimed cannot be failed. It stays `queued`, the review stays in whatever
+state it was, and no `attempts` is burned against the give-up bound. The round-level check
+survives as a backstop for the seam (a job claimed a moment before the ceiling tripped)
+and now throws `ServiceUnreachable`, which the worker already requeues on without touching
+the review — from a review's point of view a provider it cannot pay for is one it cannot
+reach. **The retention sweep is skipped whole while frozen**, because `expired` after 48h
+of not moving must never be said about somebody who was not moving *because lore was not
+working*; a freeze is bounded by the day and cannot reap a review alone, but it can push
+one that was already close, and that review would be destroyed for our outage.
+
 * **Wait until it unfreezes, and say NOTHING about why.** Per D-120 the freeze is lore's
   business, so to the client the review is simply still running — which is true. It polls,
   `check_back_after_ms` answers, and it waits exactly as it would for a slow deep tier.

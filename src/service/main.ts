@@ -13,6 +13,7 @@ import { mkdir } from "node:fs/promises";
 import { Alerter, CONDITIONS } from "../ops/alerts.ts";
 import { DEFAULT_HEARTBEAT, startHeartbeat, type HeartbeatConfig } from "../ops/heartbeat.ts";
 import { DEFAULT_RETENTION, collect } from "../ops/retention.ts";
+import { frozenBySpend } from "../ops/frozen.ts";
 import { DEFAULT_SPEND } from "../ops/spend.ts";
 import { repoPaths, worktreeFor } from "../git/repo.ts";
 import { DEFAULT_REVIEWER, Reviewer } from "../reviewer/opencode.ts";
@@ -257,6 +258,20 @@ export async function serve(cfg: ServiceConfig): Promise<() => void> {
   // — a deleted review costs one re-run, deleted knowledge costs everything the
   // workgroup ever taught the service.
   const sweep = setInterval(() => {
+    // NOBODY IS EXPIRED WHILE LORE IS FROZEN (D-119).
+    //
+    // The sweep turns a non-terminal review `expired` after 48h of not moving — and a
+    // review waiting on the spend ceiling is not moving BECAUSE LORE IS NOT WORKING. A
+    // freeze is bounded by the day, so it cannot reap a review on its own; it can push one
+    // that was already close over the edge, and that review would be destroyed for our
+    // outage. `expired` never means "found nothing" (INV-1), which is exactly why it must
+    // not be said about somebody who was waiting as instructed.
+    //
+    // Skipped whole rather than adjusted by the frozen duration: the worktree and
+    // old-review collection it also does are not urgent, an hour of not sweeping costs
+    // disk and nothing else, and a cutoff arithmetic that has to track freeze windows is a
+    // second thing to keep correct for a saving nobody asked for.
+    if (frozenBySpend(store, cfg.dailyCeilingUsd)) return;
     void collect(store, { ...DEFAULT_RETENTION, reposRoot }).then(
       (r) => {
         if (r.worktreesRemoved + r.reviewsDeleted + r.reviewsExpired > 0) {

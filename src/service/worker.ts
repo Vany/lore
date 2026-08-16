@@ -27,6 +27,7 @@ import { Alerter, CONDITIONS } from "../ops/alerts.ts";
 import { Reviewer, type ReviewerLike } from "../reviewer/opencode.ts";
 import { CancelledByLore, ServiceUnreachable } from "../core/errors.ts";
 import { consumeHeldDiffs, runRound } from "../reviewer/review.ts";
+import { frozenBySpend } from "../ops/frozen.ts";
 
 export interface WorkerConfig {
   readonly reposRoot: string;
@@ -56,6 +57,17 @@ export const DEFAULT_WORKER: WorkerConfig = {
  */
 const RECONCILE_EVERY_MS = 60_000;
 
+/**
+ * How often to re-ask whether the spend ceiling has lifted (D-119).
+ *
+ * `pollMs` is two seconds because claiming should be immediate; re-reading a daily figure
+ * that many times a minute is noise in the one query the freeze makes hot. A minute is
+ * within the resolution anyone cares about — the ceiling is a DAY — and it bounds the
+ * delay before a waiting review resumes at a minute, which nobody will notice against a
+ * deep round.
+ */
+const FROZEN_POLL_MS = 60_000;
+
 export class Worker {
   private readonly store: Store;
   private readonly cfg: WorkerConfig;
@@ -68,6 +80,8 @@ export class Worker {
   /** When the session reconcile last finished, and whether one is in flight (D-80). */
   private reconciledAt = 0;
   private reconciling = false;
+  /** Whether the last claim attempt found the ceiling reached — so the log says it once. */
+  private frozen = false;
 
   constructor(store: Store, cfg: WorkerConfig, alerter: Alerter, reviewer: ReviewerLike = new Reviewer()) {
     this.store = store;
@@ -162,6 +176,41 @@ export class Worker {
         if (this.store.isDraining()) {
           await sleep(this.cfg.pollMs);
           continue;
+        }
+        // FROZEN BY THE CEILING: TAKE NOTHING, BREAK NOTHING, WAIT (D-119).
+        //
+        // This used to be checked inside the round, which meant the round was CLAIMED
+        // first and then wrote `failed` on the review — so on 2026-08-16 eight reviews
+        // across three people's branches were destroyed at round 0, having read nothing,
+        // by a service that was merely out of money for a few hours. `failed` is the
+        // strongest thing lore can say and it was said about a state that was recoverable
+        // and bounded.
+        //
+        // Gating the CLAIM instead is what makes "do not restart" true rather than
+        // aspirational: the job stays `queued`, the review stays in whatever state it was,
+        // its ladder and findings and ratified justifications are untouched, its worktree
+        // stays pinned, its kept sessions (D-80) stay warm, and no `attempts` is burned
+        // against the give-up bound. When the ceiling lifts the next poll claims it and the
+        // round is a cheap continuation rather than a cold re-read.
+        //
+        // The client is told NOTHING about any of this (D-120). To them the review is
+        // still running, which is true.
+        if (frozenBySpend(this.store, this.cfg.dailyCeilingUsd)) {
+          if (!this.frozen) {
+            this.frozen = true;
+            // Once per transition, not once per poll: a line every two seconds is how an
+            // operator learns to scroll past the log that carries real faults.
+            console.error(
+              "[lore:log] the day's spend ceiling is reached — claiming nothing until it lifts. " +
+                "Queued reviews are UNTOUCHED and will resume; nothing is failed and no client is told.",
+            );
+          }
+          await sleep(FROZEN_POLL_MS);
+          continue;
+        }
+        if (this.frozen) {
+          this.frozen = false;
+          console.error("[lore:log] the spend ceiling has lifted — claiming resumed.");
         }
         job = this.store.claimJob();
       } catch (e) {
