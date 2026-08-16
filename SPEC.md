@@ -2228,23 +2228,27 @@ field along while corrupting a field that means something else. The tail is cut 
 MARKED, which is the whole difference from the silent truncation D-64 condemns. A small
 visible loss beats a total silent one, and the model has been paid either way.
 
-`[OPEN]` — **three refusals that can still cost a finding, each with a stated reason for
-existing, so none is reversed silently:**
+**Two of the three remaining refusals are now REPAIRS, and each repair says so.** A `line`
+that cannot be a line and a malformed `cwe` are dropped rather than costing the finding:
+the line degrades it to file-level, which the schema already supports, and the CWE is a
+taxonomy field most findings do not carry at all. Both were justified as drift detectors,
+and the objection to them was that they detected drift *by discarding the report* — the
+trade D-115 and D-116 reversed twice before this.
 
-* **`line: 0` / negative / fractional.** Dropping the line would degrade the finding to
-  file-level, which the schema already supports, and keep it. Nothing is gained by losing
-  the whole record over a bad line number.
-* **A malformed `cwe`** (`CWE-abc`). The comment calls this drift worth failing on — and
-  it fails by discarding a finding, which is the trade D-115 and D-116 have now reversed
-  twice. Dropping the field keeps both the finding and the signal, if the signal has a
-  channel to go to.
-* **An unknown key** (`.strict()`). The deliberate drift detector, and the same objection
-  applies with the most force: a model inventing one field costs its entire report.
+**The channel is `evidence`, following the precedent `foldOverlongClaim` set with
+`Claim in full:`.** No new field to keep in sync, no plumbing through the round, and it
+lands in front of every reader at once: the client polling it, the operator board, and the
+next tier — which is the one that can judge whether the drift matters. `checks_skipped`
+carries LOSSES; this carries REPAIRS, and a repair is part of the finding rather than a
+fact about the round.
 
-The shape of the answer for all three is the same and is why they are open rather than
-done: **fail loudly WITHOUT losing the finding** — drop the offending field, keep the
-record, and put the drift where an operator reads it. That last part is the work; there is
-no channel today that says "this arrived malformed and we kept it anyway".
+`[OPEN]` — **`.strict()` on unknown keys is deliberately left alone**, and it is the one
+refusal that can still cost a whole report. It is the strongest drift signal the schema
+has: an unknown key means the prompt and the contract have parted company, which is a
+larger fact than any single finding. The same repair would work — drop the keys, say so in
+`evidence` — and reversing the strongest of the three is a decision rather than an obvious
+repair, so it is written down rather than taken quietly alongside the two that are not in
+doubt.
 
 **D-115 — a severity nobody planned for maps; it never costs the finding.
 BUILT 2026-08-16.**

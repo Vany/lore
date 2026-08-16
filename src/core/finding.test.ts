@@ -54,10 +54,18 @@ describe("parseFinding", () => {
     expect(() => parseFinding({ ...valid, file: "../../secrets.env" })).toThrow();
   });
 
-  it("accepts a well-formed cwe and rejects a malformed one", () => {
+  it("accepts a well-formed cwe, and REPAIRS a malformed one rather than losing the finding", () => {
     expect(parseFinding({ ...valid, cwe: "CWE-362" }).cwe).toBe("CWE-362");
-    expect(() => parseFinding({ ...valid, cwe: "89" })).toThrow();
-    expect(() => parseFinding({ ...valid, cwe: "CWE-" })).toThrow();
+    // Reversed by D-116's follow-through. These used to throw, discarding a whole finding
+    // over a taxonomy field most findings do not even carry. The drift is still reported —
+    // in `evidence`, where every reader of the finding sees it — which is the thing the
+    // old rejection was for.
+    for (const bad of ["89", "CWE-", "CWE-abc", "nonsense"]) {
+      const got = parseFinding({ ...valid, cwe: bad });
+      expect(got.cwe, `cwe=${bad}`).toBeUndefined();
+      expect(got.evidence).toContain("lore dropped the CWE");
+      expect(got.evidence, "the original evidence survives the repair").toContain(valid.evidence);
+    }
   });
 
   // Every way a model has been seen to write "no CWE applies", pinned.
@@ -76,9 +84,11 @@ describe("parseFinding", () => {
     expect(parseFinding({ ...valid, cwe }).cwe).toBeUndefined();
   });
 
-  // The other half: forgiving blank must not become forgiving anything. A CWE the
-  // schema and the reviewer disagree about is drift, and drift fails loudly.
-  it.each([["CWE-abc"], ["nonsense"], [89], [{}], [[]]])("still rejects %s as a cwe", (cwe) => {
+  // The other half, revised. Drift still fails loudly — it just no longer fails by
+  // DISCARDING the report, which is the trade D-115 and D-116 reversed twice before this.
+  // A cwe that is not a string at all is a different fault: that is a malformed reply
+  // rather than an unfamiliar vocabulary, and it still refuses.
+  it.each([[89], [{}], [[]]])("still rejects %s as a cwe, because it is not a word", (cwe) => {
     expect(() => parseFinding({ ...valid, cwe })).toThrow();
   });
 
@@ -99,29 +109,39 @@ describe("parseFinding", () => {
     }
   });
 
-  // Forgiving blank must not become forgiving anything, on any of them.
+  // Forgiving blank must not become forgiving anything — still true of `symbol`, whose
+  // wrong shapes are malformed replies rather than impossible values.
   it.each([
     ["symbol", 42],
     ["symbol", {}],
-    ["line", "top"],
-    ["line", 0],
-    ["line", -1],
-    ["line", 1.5],
   ])("still rejects %s = %s", (field, v) => {
     expect(() => parseFinding({ ...valid, [field]: v })).toThrow();
   });
 
   /**
-   * FOLDS AN OVER-LONG CLAIM RATHER THAN THROWING THE FINDING AWAY (D-116). Reversed
-   * deliberately, exactly as the severity case above was: this used to assert `toThrow()`,
-   * and the cost was measured on this repository: a t2 finding — a ledger read ordered
-   * before a bound check — was lost to `claim: Too big: expected string to have <=500
-   * characters`, in the same review where two more were lost to the severity word D-115
-   * had just fixed.
-   *
-   * Derived from the constant, not from a literal: the cap moved 300 → 500 and a
-   * hardcoded 301 would have kept passing while asserting nothing.
+   * A LINE THAT CANNOT BE A LINE DEGRADES THE FINDING TO FILE-LEVEL, rather than costing
+   * it. Reversed with the cwe case above and for the same reason: the schema already
+   * supports a file-level finding, so dropping the number keeps strictly more information
+   * than dropping the record. `0`, `-1`, `1.5` and `"top"` are all cases where the model
+   * MEANT a line and named an impossible one — distinct from omitting it, which `absent`
+   * has always read as "no line" and still does.
    */
+  it.each([["top"], [0], [-1], [1.5]])("repairs line = %s into a file-level finding", (v) => {
+    const got = parseFinding({ ...valid, line: v });
+    expect(got.line).toBeUndefined();
+    expect(got.evidence).toContain("lore dropped the line");
+    expect(got.evidence).toContain(valid.evidence);
+  });
+
+  // Both repairs at once, because a reply that got one field wrong often got two.
+  it("repairs a bad line and a bad cwe together, reporting both", () => {
+    const got = parseFinding({ ...valid, line: 0, cwe: "CWE-abc" });
+    expect(got.line).toBeUndefined();
+    expect(got.cwe).toBeUndefined();
+    expect(got.evidence).toContain("lore dropped the line");
+    expect(got.evidence).toContain("lore dropped the CWE");
+  });
+
   /**
    * THE SAME RULE ON THE FIELDS IT HAD NOT REACHED. D-115 fixed `severity`, D-116 fixed
    * `claim`, and these two kept the identical defect one field along — which is exactly
@@ -153,6 +173,17 @@ describe("parseFinding", () => {
     expect(f.evidence.length).toBeLessThanOrEqual(2000);
   });
 
+  /**
+   * FOLDS AN OVER-LONG CLAIM RATHER THAN THROWING THE FINDING AWAY (D-116). Reversed
+   * deliberately, exactly as the severity case above was: this used to assert `toThrow()`,
+   * and the cost was measured on this repository: a t2 finding — a ledger read ordered
+   * before a bound check — was lost to `claim: Too big: expected string to have <=500
+   * characters`, in the same review where two more were lost to the severity word D-115
+   * had just fixed.
+   *
+   * Derived from the constant, not from a literal: the cap moved 300 → 500 and a
+   * hardcoded 301 would have kept passing while asserting nothing.
+   */
   it("folds an over-long claim instead of losing the finding", () => {
     const long = `${"word ".repeat(CLAIM_MAX)}end`;
     const f = parseFinding({ ...valid, claim: long });
@@ -211,10 +242,19 @@ describe("parseFinding", () => {
     expect(() => parseFinding({ ...valid, failureScenario: "" })).toThrow();
   });
 
-  it("rejects a non-positive or fractional line", () => {
-    expect(() => parseFinding({ ...valid, line: 0 })).toThrow();
-    expect(() => parseFinding({ ...valid, line: -1 })).toThrow();
-    expect(() => parseFinding({ ...valid, line: 1.5 })).toThrow();
+  // The line cases moved to `repairs line = %s into a file-level finding` above, where
+  // the reversal is explained. Left as a pointer rather than deleted: two tests asserting
+  // opposite things about `line` in one file is how a reversal gets half-applied, and this
+  // file already carries one instance of exactly that (the `cwe` reasoning that was
+  // written down while nothing executed it).
+  // Any line that cannot be one is dropped, whatever shape it arrived in. Written after
+  // the first attempt asserted that `{}` and `[]` still refuse — they do not, and should
+  // not: the rule is about the FINDING surviving, and it does not become less true because
+  // the model sent an object where a number belongs.
+  it.each([[{}], [[]], [true]])("repairs a line of shape %s the same way", (v) => {
+    const got = parseFinding({ ...valid, line: v });
+    expect(got.line).toBeUndefined();
+    expect(got.evidence).toContain("lore dropped the line");
   });
 
   /**

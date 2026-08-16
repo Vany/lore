@@ -109,6 +109,74 @@ function foldOverlongClaim(input: unknown): unknown {
 }
 
 /**
+ * THE LAST THREE REFUSALS THAT COULD COST A FINDING — repaired, and each repair SAID.
+ *
+ * D-115 (`severity`) and D-116 (`claim`, then `evidence`/`failureScenario`) established
+ * the rule: *validation at the reviewer boundary must not be able to lose a finding*.
+ * Three refusals survived it, each with a written reason, and the reason was the same in
+ * all three: they are DRIFT DETECTORS. A `line` of 0, a `cwe` of `CWE-abc`, an unknown
+ * key — each means the model and this schema disagree, and disagreement should be loud.
+ *
+ * It was loud by discarding the report, which is the trade the two decisions above
+ * reversed twice. **The answer is to fail loudly WITHOUT losing the finding**: drop the
+ * field that cannot be honoured, keep everything that can, and write what happened where
+ * a reader will see it.
+ *
+ * `evidence` is where it goes, following the precedent `foldOverlongClaim` already set
+ * with `Claim in full:` — no new channel to plumb, no new field to keep in sync, and it
+ * lands in front of every reader of the finding at once: the client that polls it, the
+ * operator board, and the next tier, which is the one that can tell whether the drift
+ * matters. `checks_skipped` carries losses; this carries repairs, and a repair is part of
+ * the finding rather than a fact about the round.
+ *
+ * A dropped `line` degrades the finding to file-level, which the schema already supports —
+ * strictly more information than no finding at all.
+ */
+function repairStructure(input: unknown): unknown {
+  if (typeof input !== "object" || input === null) return input;
+  const o = input as Record<string, unknown>;
+  const notes: string[] = [];
+  const out: Record<string, unknown> = { ...o };
+
+  // A line that is not a usable 1-indexed integer. `absent` already reads null/blank as
+  // "no line"; this is the case where the model MEANT a line and named an impossible one.
+  const line = o["line"];
+  if (line !== undefined && line !== null && line !== "") {
+    const bad = typeof line !== "number" || !Number.isInteger(line) || line <= 0;
+    if (bad) {
+      delete out["line"];
+      notes.push(
+        `lore dropped the line the reviewer gave (${JSON.stringify(line)}), which cannot be a 1-indexed ` +
+          "line number; this is a file-level finding instead.",
+      );
+    }
+  }
+
+  const cwe = o["cwe"];
+  if (typeof cwe === "string" && cwe.trim() !== "" && !/^CWE-\d+$/.test(cwe.trim())) {
+    delete out["cwe"];
+    notes.push(
+      `lore dropped the CWE the reviewer gave (${JSON.stringify(cwe)}), which is not a CWE id. The ` +
+        "reviewer and this schema disagree about that vocabulary — worth looking at, and not worth " +
+        "losing this finding over.",
+    );
+  }
+
+  // `.strict()` IS DELIBERATELY LEFT ALONE, and it is the one that still costs a finding.
+  //
+  // An unknown key is the strongest drift signal this schema has — it means the prompt and
+  // the contract have parted company, which is a bigger fact than any single finding — and
+  // reversing it is a real decision rather than an obvious repair. The same treatment would
+  // work (drop the keys, say so here), and it is written down as open in SPEC D-116 rather
+  // than taken quietly along with the two that are unambiguous.
+
+  if (notes.length === 0) return input;
+  const evidence = typeof out["evidence"] === "string" ? out["evidence"].trim() : "";
+  out["evidence"] = evidence ? `${evidence}\n\n${notes.join("\n")}` : notes.join("\n");
+  return out;
+}
+
+/**
  * THE SAME RULE ON THE TWO FIELDS IT HAD NOT REACHED YET.
  *
  * D-115 fixed `severity`, D-116 fixed `claim`, and `evidence` and `failureScenario` kept
@@ -250,8 +318,11 @@ const FindingObject = z
 // the carried claim arrives would leave the join to overflow `TEXT_MAX` and lose the
 // finding both folds exist to save. `foldOverlongClaim` keeps its own join inside the cap;
 // this is the backstop for an evidence the MODEL wrote too long.
+// ORDER IS LOAD-BEARING, and each step is tested. The claim fold WRITES into `evidence`;
+// `repairStructure` APPENDS to it; the clamp must therefore run last, or a repaired
+// finding could overflow `TEXT_MAX` and be lost by the very chain that saved it.
 export const FindingSchema = z.preprocess(
-  (v) => clampOverlongText(foldOverlongClaim(v)),
+  (v) => clampOverlongText(repairStructure(foldOverlongClaim(v))),
   FindingObject,
 );
 

@@ -1643,12 +1643,13 @@ describe("emissionOf", () => {
    * findings the model explicitly tried to report.
    */
   it("carries schema-rejected findings through a done declaration", () => {
-    // `line: 0` rather than a strange severity, which is what this used to be: an
-    // unknown severity is now MAPPED rather than refused, because losing a whole finding
-    // over one word is the loss this very test is about. A non-positive line is still a
-    // real refusal — there is no line 0 to point at — so the property holds with an
-    // example that is still an example.
-    const bad = { file: "a.ts", line: 0, severity: "high", claim: "c", evidence: "e", failureScenario: "f" };
+    // The example has moved TWICE, which is the point: `severity: "catastrophic"` stopped
+    // being a refusal (D-115), then `line: 0` stopped being one too (it is repaired into a
+    // file-level finding). An absolute path is the stable one — it is a SAFETY refusal
+    // rather than a strictness refusal, and repairing it would mean guessing at a path
+    // outside the repo. If this example ever needs replacing again, that is a signal the
+    // refusals have narrowed to their proper core, not that this test is fragile.
+    const bad = { file: "/etc/passwd", severity: "high", claim: "c", evidence: "e", failureScenario: "f" };
     const r = emissionOf(
       '```json\n' + JSON.stringify({ findings: [bad] }) + '\n```\n```json\n{"done": true}\n```',
     );
