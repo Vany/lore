@@ -72,6 +72,36 @@ nobody reported — it read `LORE_ALLOW_METERED === "1"` while `envBool` accepts
 `true/yes/on`, so `=true` would have paid for fallbacks while the operator view said it
 would not. One shared `METERED_YES` now.
 
+**How it ended: `passed`, after seven rounds and 23 findings — 20 of them defects in this
+very change.** None were argued; every one was real. The two that mattered most were both
+reasoning errors of the same shape, and neither would have survived contact with a careful
+reader who was not me:
+
+* The metered exemption was written for `openrouter/x` typed by a person, and I never asked
+  what ELSE could arrive in that variable. A nickname's pool could (shuffled, so ~half the
+  rounds, then every round once the free routes park), `concreteRoute` could (the hourly
+  screen, the bootstrap survey, `propose`), and — worst — `DEFAULT_TIERS` could, which is
+  three literal `openrouter/` models reached by the shipped compose passing a blank
+  `LORE_TIERS`. On the configuration this repository DISTRIBUTES, the gate filtered nothing
+  while five documents promised no charging route is ever called. The rule now lives once,
+  in `exemptLiteral`, needing both conditions.
+* Making session ids durable broke the thing that deletes them: `clearSessionTrees` now
+  removes the rows `release` must enumerate, and both call sites cleared first. The leak
+  `release` exists to prevent, reintroduced by the change that made the ids survive.
+
+**The general lesson, and it is the one to carry: an exemption written for a literal value
+must be re-checked against every indirection that can produce that value.** Three
+indirections, found one at a time, each by a tier reading what I had just written.
+
+**Proven in production, on the outage that caused it.** Kimi's plan is still exhausted. The
+seven t2 calls this review itself took ran on `zai-coding-plan2/glm-5.2` at $0, where the
+21 that preceded the change ran on `openrouter/moonshotai/kimi-k3` for $101.36 —
+`spendToday` did not move a cent. Roughly $34 not spent, and the tier still ran.
+
+Deployed at `38651df` after the verdict. Vany chose to deploy over a live review rather than
+wait; it had already reached `findings_ready`, so it cost nothing — and D-122 means the next
+one would have cost a single step regardless.
+
 ## 2026-08-16 — the gate spent the day finding defects in its own repairs
 
 **What changed.** D-113 (the change-set is pinned; an empty one fails), D-114 (the round
