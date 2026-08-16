@@ -258,13 +258,20 @@ export async function consumeHeldDiffs(
     store.updateReview(reviewId, { treeHash: after });
     diffs.push(h.diff);
     applied += 1;
+    // RECORDED PER DIFF, WHERE THAT DIFF VERIFIES (D-114).
+    //
+    // This is the single point every held diff passes through — the round's emission
+    // boundary and the worker's late-hold sweep both land here — so the signal belongs
+    // here rather than in whichever caller remembers it.
+    //
+    // PER DIFF AND NOT AFTER THE LOOP, because the loop has early returns: a later diff
+    // that fails to apply, or verifies to a tree its submitter did not claim, drops the
+    // remaining chain and returns a mismatch. The diffs that already verified STAY in the
+    // worktree — `restoreTree` only rewinds the one that failed — so that is client work
+    // which landed, and an `if (applied > 0)` after the loop would never have run for it.
+    // Idempotent, so calling it per diff costs nothing.
+    store.noteClientWork(reviewId);
   }
-  // RECORDED WHERE IT VERIFIES (D-114). This is the single point every held diff passes
-  // through — the round's emission boundary and the worker's late-hold sweep both land
-  // here — so putting the signal here is what stops it being forgotten in whichever
-  // window the caller happens not to cover. Durable, so a round that dies after this
-  // point still leaves the work counted.
-  if (applied > 0) store.noteClientWork(reviewId);
   return { applied, diffs };
 }
 
