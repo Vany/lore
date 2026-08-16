@@ -250,6 +250,23 @@ describe("subscriptions/listen", () => {
     expect(body.subscribe?.params?.resourceSubscriptions).toStrictEqual([reviewUri("revS")]);
   });
 
+  /**
+   * `cacheHints` IS AN OPTION THE SDK HONOURS, asserted rather than assumed.
+   *
+   * The option was read out of `ServerOptions` in the installed SDK, which is the right
+   * source — but nothing proved the value reaches the wire, and an SDK that ignored an
+   * unknown constructor option would leave a long comment describing behaviour that does
+   * not exist. That is the shape this project calls a guard which may not be capable of
+   * firing, and it is the same mistake as reading a protocol fact out of a type: one
+   * assertion settles it in either direction, and fails loudly the day an SDK bump drops
+   * the option.
+   */
+  it("sends the tool-list cache hint on the wire", async () => {
+    const listed = (await alice.client.listTools()) as { ttlMs?: number; cacheScope?: string };
+    expect(listed.ttlMs, "the hint never reached the result").toBe(60_000);
+    expect(listed.cacheScope, "a review's surface is never shared-cacheable").toBe("private");
+  });
+
   it("negotiates the modern protocol revision at all", () => {
     // If this fails, every other test in this file is testing the legacy fallback
     // and passing for the wrong reason. Named separately so that shows up as its

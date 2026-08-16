@@ -294,9 +294,14 @@ describe("git runs through one runner", () => {
   // that is a directory prefix grows quietly.
   const MAY_SPAWN = new Set(["git/exec.ts", "git/repo.ts", "git/diff.ts", "t0/exec.ts"]);
 
+  // EITHER IMPORT FORM. This matched `from "node:child_process"` only — and this codebase
+  // already spawns through `await import("node:child_process")` in two of the four exempt
+  // files, so the dynamic form was an equally easy second way that the guard could not
+  // see. `repin.ts`, the incident this was written for, happened to use the static form;
+  // a ratchet that holds only the door the last defect came through is not a ratchet.
   it("has no second way to spawn a process", () => {
     const offenders = FILES.filter(
-      (f) => !MAY_SPAWN.has(f.path) && /from "node:child_process"/.test(f.text),
+      (f) => !MAY_SPAWN.has(f.path) && /node:child_process/.test(f.text),
     ).map((f) => f.path);
     expect(
       offenders,
