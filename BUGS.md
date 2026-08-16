@@ -107,6 +107,24 @@ fingerprint and defers a similarity key for want of evidence. **This is the evid
 
 ## 5. "Fixed one layer in" costs a round every time
 
+**ADDRESSED 2026-08-16 — and it was never a round, it was a sentence.** The marker can
+ride in the SAME diff as the fix: the round applies the submit and then reads both the
+code change and the justification, so one submit settles it. `TOOL_DOCS.submit` said
+*"say so at the named line with a lore-ok and submit again"*, and that word is where the
+extra round came from — a client that follows it fixes, submits, reads `will_not_settle`,
+and submits a second time for something it knew when it chose where to fix. The text now
+says to put the marker in with the fix, and points at `.lore-ok.md` for the case the
+entry below never names: a finding whose line the fix DELETED, where there is no site
+left to write at.
+
+**Two of the five bugs in this list turned out to be capabilities that existed and were
+not said** (this and §3). That is the pattern worth carrying: when the loop feels
+expensive, check whether the engine already does it before designing a protocol addition.
+For an agent there is no README to stumble across — the tool text is the entire world,
+so an unsaid capability and an absent one are the same thing.
+
+
+
 **2026-08-14/15, at least six times, and four rounds on one seam.**
 
 D-56 settles a finding only when the code AT THE NAMED LINE moved. But the right fix is

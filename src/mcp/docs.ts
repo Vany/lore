@@ -400,10 +400,19 @@ tree_hash is what the next diff must be built against.
 
 READ \`will_not_settle\` IN THE REPLY. It lists open findings that name code this diff
 did not change. Those CANNOT be settled by the next round however it goes — a tier that
-stops raising something it never saw move has changed its mind, not been satisfied — so
-if you fixed the cause elsewhere, which is often the right place, say so at the named
-line with a lore-ok and submit again. Ignoring it costs a full deep-tier round to learn
-the same thing.
+stops raising something it never saw move has changed its mind, not been satisfied.
+
+FIXING THE CAUSE ELSEWHERE IS OFTEN RIGHT, AND IT COSTS NOTHING EXTRA IF YOU SAY SO IN
+THE SAME DIFF. Put the lore-ok in with the fix — one submit, one round, ruled on
+together. You do not have to fix, submit, read \`will_not_settle\`, then submit a second
+time: that is a whole deep-tier round bought to learn something you already knew when you
+chose where to fix it. \`will_not_settle\` exists to catch what you MISSED, not to make
+you take two turns over what you meant.
+
+If the named line no longer exists — you deleted the code, or the fix removed the very
+lines the finding pointed at — there is nowhere to write the marker, so put it in
+\`.lore-ok.md\` at the repo root in the markdown form. That file is read on every round
+exactly like a source comment.
 
 For a finding you believe is WRONG, do not skip it silently. Write at the site:
 
@@ -411,9 +420,11 @@ For a finding you believe is WRONG, do not skip it silently. Write at the site:
      * lore-ok[<fingerprint>]: <reason>          (inside a /** */ block)
     <!-- lore-ok[<fingerprint>]: <reason> -->    (for markdown)
 
-Those three forms are the whole list; anything else is never read. If the file has
-no comment syntax at all — JSON, a lockfile, generated output — put it in
-.lore-ok.md at the repo root, using the markdown form.
+Those three forms are the whole list; anything else is never read. \`.lore-ok.md\` at the
+repo root is read on every round as well, in the markdown form, and it is the right home
+for two cases: a file that has no comment syntax at all — JSON, a lockfile, generated
+output — and a finding whose named line your fix DELETED, where there is no site left to
+write at.
 
 APPEAL TO A DEVELOPMENT RULE when the finding enforces something this project decided
 NOT to enforce. That is a different claim from "this line is fine", and it is answerable

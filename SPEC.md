@@ -2211,16 +2211,27 @@ submit — which is not a runaway, it is the feature. `round` itself is never re
 numbers `tier_run` rows, and two rounds sharing a number would corrupt the one table that
 exists to say whether a review really ran.
 
-`[OPEN]` — the other two things D-112 breaks, both still counted the old way:
+**The other two things D-112 was thought to break turn out not to be, and saying so is the
+decision** (2026-08-16). Both were listed as needing answers before the incremental loop
+opened up; the answer in each case is that the existing behaviour is right, for a reason
+worth writing down rather than a mechanism worth building.
 
-* **Admission's 128 open reviews** is a different number if reviews stop ending. Each holds
-  a worktree, a slot and N kept sessions, and a parked review holds disk and sessions
-  without holding compute — so the limit is measuring one thing and protecting another.
-  What it should count is not yet decided.
-* **Staleness reaping** dims to `findings_stale` at 48h and abandons a week later, judged
-  by time since anything moved — which cannot tell a deliberately long-lived review from
-  a dead one. A submit or a `pull_fresh` moves it, so an active incremental review is
-  safe; a real developer's weekend is not.
+* **Admission's 128 is not measuring the wrong thing.** It counts open reviews including
+  parked ones, deliberately — a review in `findings_ready` holds a pinned worktree and
+  becomes work again on the next submit, so it occupies the service whether or not anyone
+  is currently thinking about it. Longer-lived reviews raise the count, which is exactly
+  what a bound is for. The busiest day this service has had held about a dozen; 128 is
+  far above traffic by design, and it is not a throughput knob.
+  The real gap is fairness, not arithmetic: **the limit is global, so one principal can
+  consume every slot and lock out colleagues.** Not built, because with this workgroup's
+  volume it cannot fire — the trigger to build it is the first refusal caused by somebody
+  else's reviews, and the refusal message already names `review_cancel` as the remedy.
+* **Staleness reaping tells the two apart correctly.** `findings_stale` at 48h and
+  abandonment a week later are judged by time since the review last moved, and an
+  incremental review that is being FED moves on every submit and every `pull_fresh`. A
+  review nobody has touched for nine days is abandoned by any definition D-112 offers,
+  and the sweep is what keeps INV-1 honest about it — `expired` never means "found
+  nothing", which is precisely why it must eventually fire.
 
 **D-113 — a review's change-set is PINNED, and an empty one is a failure, not a pass.
 BUILT 2026-08-16.**

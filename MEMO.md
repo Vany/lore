@@ -3,6 +3,52 @@
 Newest first. Updated at the end of each task: what changed, what I learned, what
 surprised me.
 
+## 2026-08-16 — the gate spent the day finding defects in its own repairs
+
+**What changed.** D-113 (the change-set is pinned; an empty one fails), D-114 (the round
+bounds count arguing, not working), D-115 (a severity nobody planned for maps rather than
+costing the finding), the git-runner ratchet, `cacheHints`, conditional subscribe
+advertising, and a dependency bump that cleared two advisories. Deployed at `f4b1598`.
+
+**What I learned — the shape of every defect found today was the same, and it was mine.**
+Nine of the review's findings were in code I had written within the hour, several in fixes
+for findings raised an hour earlier. D-114's bounds reset was wrong three times running:
+
+1. written at SUBMIT time, into a ladder blob the running round had already snapshotted —
+   clobbered by that round's terminal write;
+2. moved to the EMISSION BOUNDARY — missed the worker's late-hold sweep, where a diff
+   arriving after the model declares done is consumed at no boundary at all;
+3. still on the SUCCESS path — missed a round dying after it consumed, with the held rows
+   already deleted so nothing downstream could ever see the work.
+
+Three windows of one defect is a wrong LOCUS, not an incomplete fix, and the rule
+underneath is that **the ladder blob has exactly one legitimate writer per round** — so a
+signal originating outside a round must not be a ladder write. It is a durable flag now,
+set where a diff verifies and taken where the ladder is owned. And then the reviewer found
+that moving it there had dropped the tree-moved test, reopening the same unbounded loop
+one comparison from where I closed it.
+
+**Surprised me, and it is the most important thing today: a finding was LOST.** t1 raised
+the loop defect twice, once at `severity: "critical"`. Zod rejects the whole object on one
+bad field, so that copy was discarded entirely and the client got a `checks_skipped` line
+saying a finding existed and could not be shown. One unplanned word cost a complete report
+about an unbounded loop, and it reached me only because the model happened to re-raise it
+at a permitted severity. INV-1 in its purest form, committed by the validation layer. D-115
+maps instead of refusing: **validation at the reviewer boundary must not be able to lose a
+finding.**
+
+**Also worth carrying: two of the five client-loop bugs in `BUGS.md` were capabilities that
+already existed and were never said.** §3's non-consuming re-read is `lore://review/{id}`,
+which works and no text mentioned. §5's "fixed one layer in costs a round" was one word —
+`TOOL_DOCS.submit` said *"submit again"* when the marker rides in the same diff as the fix.
+For an agent there is no README to stumble across, so an unsaid capability and an absent
+one are the same thing. Check the engine before designing a protocol addition.
+
+**What the day cost.** The $100 daily ceiling was hit at $101.36 and stopped everything,
+including eight of other people's reviews, most at round 0. The ceiling behaved correctly;
+the question it raises is whether one shared ceiling is right now that a batch review can
+run four deep rounds against a twelve-commit diff.
+
 ## 2026-08-16 — D-110, wrong twice: `node_modules` cannot answer a protocol question
 
 **What changed.** D-110 is `[OPEN]` and gated on the SDK, having been "closed" twice today

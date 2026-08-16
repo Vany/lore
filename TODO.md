@@ -67,17 +67,19 @@ that part is pulled out into its own open item rather than hidden inside a tick.
       they bound arguing rather than working. Termination is unchanged: with no new input
       the floor stops moving and the budget runs out exactly as before.
 
-- [ ] **(b) Admission's 128 open reviews counts the wrong thing if reviews stop ending.**
-      Each open review holds a worktree, a slot and N kept sessions — but a PARKED review
-      holds disk and sessions without holding compute, so one number is protecting two
-      different resources. Decide what the limit is actually for before changing it; the
-      refusal message is good and the arithmetic behind it is not.
+- [x] **(b) and (c) answered 2026-08-16: neither is broken, and that is the decision.**
+      Admission counts parked reviews on purpose — a parked review holds a pinned
+      worktree and becomes work again on the next submit — so longer-lived reviews raising
+      the count is the bound working. Staleness distinguishes correctly too: an
+      incremental review being fed moves on every submit, and one untouched for nine days
+      is abandoned by any definition D-112 offers. SPEC D-114 carries the reasoning.
 
-- [ ] **(c) Staleness reaping cannot tell a long-lived review from a dead one.**
-      `findings_stale` at 48h and abandonment a week later are judged by time since
-      anything moved. A submit or `pull_fresh` moves it, so an ACTIVE incremental review
-      is safe — a developer's weekend is not. Needs a signal that means "still mine"
-      without letting a poll extend a review for ever.
+- [ ] **Per-principal admission share — the one real gap, deliberately unbuilt.** The 128
+      is global, so one principal can take every slot and lock out colleagues. It cannot
+      fire at this workgroup's volume (busiest day: about a dozen open), and the refusal
+      already names `review_cancel` as the remedy. **The trigger to build it is the first
+      refusal caused by somebody else's reviews** — until then it is a mechanism for a
+      problem nobody has.
 
 - [ ] **Measure where the cheapness stops.** A kept session hits 97–99% prompt cache, so
       marginal turns are cheap — until it compacts at 2/3 of the window, and compaction
