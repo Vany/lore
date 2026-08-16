@@ -2588,7 +2588,18 @@ export class Store {
     this.db
       .prepare("INSERT INTO held_diff(review_id, diff, tree_hash, created_at) VALUES(?, ?, ?, ?)")
       .run(reviewId, diff, treeHash, now());
-    this.notedClientWork(reviewId);
+    // NO BOUNDS RESET HERE, though a held diff IS client work.
+    //
+    // It was here, and it was silently thrown away: this is a read-modify-write of the
+    // ladder blob, fired while a round is in flight BY DEFINITION (a diff is only held
+    // when one is), and that round writes its own ladder at the end from the snapshot it
+    // took at the start. The reset lived for the length of one round and vanished — so
+    // D-114 worked precisely when a client waited for a quiet moment and failed when it
+    // followed the documented "submit any time" cadence, which is backwards.
+    //
+    // The round applies the reset itself, at the emission boundary where the diff lands
+    // and the tree is observed to move (`consumeHeldDiffs`), so there is exactly one
+    // writer of the ladder per round.
   }
 
   /**

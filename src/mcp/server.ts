@@ -988,12 +988,21 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
         );
       }
 
-      // NEW WORK, so the round bounds start counting again (D-114). Before the state
-      // change, because both write the ladder row and the last writer wins: `updateReview`
-      // here patches only `state` and `treeHash`, so ordering it second would leave the
-      // reset in place, but relying on which fields a sibling call happens to touch is
-      // exactly how two writers to one blob come to disagree.
-      store.notedClientWork(review_id);
+      // NEW WORK, so the round bounds start counting again (D-114) — BUT ONLY IF THE TREE
+      // ACTUALLY MOVED.
+      //
+      // Resetting on any verified submit is an unbounded loop, and a loop a compliant
+      // client walks into: `applyPatch` no-ops on an empty diff, the tree hash still
+      // verifies, and lore's own texts tell a client with nothing to change to submit an
+      // empty diff. Each such nudge used to wipe the counters, advance the floor, move
+      // `updated_at` past the stale sweep's reach, and enqueue a full round — t0 plus a
+      // model tier, on the shared subscriptions, for ever. Before D-114 the global bound
+      // stopped that at twelve; D-114 removed the backstop without replacing it.
+      //
+      // `applied !== before` is the same test `pull_fresh` already makes before it counts
+      // origin as having moved. A submit that changes nothing is a client saying "I have
+      // no more to give", which is exactly when the bounds should keep counting.
+      if (applied !== before) store.notedClientWork(review_id);
       store.updateReview(review_id, { state: "queued", treeHash: applied });
       deps.enqueue(review_id, "fast");
 

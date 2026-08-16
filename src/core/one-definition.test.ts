@@ -312,17 +312,23 @@ describe("git runs through one runner", () => {
     for (const path of MAY_SPAWN) {
       const f = FILES.find((x) => x.path === path);
       expect(f, `${path} is exempt and does not exist — delete the exemption`).toBeDefined();
+      // ANCHORED TO THE OPTION, NOT THE WORD. `/maxBuffer/` matched the prose in these
+      // files' own comments, so an edit could delete the option, keep the comment
+      // explaining it, and leave this green — a guard whose failure mode is agreeing
+      // with a file that stopped doing the thing. That is the same shape as the ratchet
+      // that held nothing, twenty lines up in this file's own history.
       expect(
-        /maxBuffer/.test(f?.text ?? ""),
-        `${path} spawns directly and no longer sets maxBuffer; either set it or use git/exec.ts`,
+        /maxBuffer\s*:/.test(f?.text ?? ""),
+        `${path} spawns directly and no longer PASSES maxBuffer (a comment mentioning it is not enough); ` +
+          "either set it or use git/exec.ts",
       ).toBe(true);
       // `t0/exec.ts` runs the target repo's own tooling, not git, so a git ceiling would
       // mean nothing there — it carries its own env hygiene instead. Every git-running
       // exemption must carry the ceiling.
       if (path !== "t0/exec.ts") {
         expect(
-          /GIT_CEILING_DIRECTORIES/.test(f?.text ?? ""),
-          `${path} runs git directly without GIT_CEILING_DIRECTORIES — D-61 says git will climb out of cwd`,
+          /GIT_CEILING_DIRECTORIES\s*:/.test(f?.text ?? ""),
+          `${path} names GIT_CEILING_DIRECTORIES but no longer SETS it — D-61 says git will climb out of cwd`,
         ).toBe(true);
       }
     }

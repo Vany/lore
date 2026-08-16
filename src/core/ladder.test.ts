@@ -130,6 +130,24 @@ describe("step", () => {
   });
 
   /**
+   * A SUBMIT THAT CHANGES NOTHING IS NOT WORK, and the difference is a whole ladder.
+   *
+   * The reset used to fire on any verified submit — and `applyPatch` no-ops on an empty
+   * diff, its tree hash still verifies, and lore's own texts tell a client with nothing to
+   * change to submit an empty diff. So a compliant agent could hold a review open for
+   * ever, each nudge wiping the counters and buying t0 plus a model tier on the shared
+   * subscriptions. Before D-114 the global bound stopped that at twelve; D-114 removed the
+   * backstop without replacing it. The callers now test the tree, not the call.
+   */
+  it("counts a submit as work only when it is the ladder that was told so", () => {
+    const s = { ...initialState(), round: 7 };
+    expect(clientDeliveredWork(s).workRound, "told: the floor moves").toBe(7);
+    // Not told — the shape of every no-op submit after the fix — leaves the floor where
+    // it was, so the budget keeps counting down to a stop.
+    expect(s.workRound, "not told: nothing moved").toBeUndefined();
+  });
+
+  /**
    * TERMINATION IS THE PROPERTY THIS MUST NOT COST. A review nobody feeds still stops,
    * and it stops in the same number of rounds it always did — the floor only moves when
    * work arrives, so a ladder arguing with itself gets exactly the old budget.

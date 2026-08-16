@@ -94,6 +94,53 @@ describe("the base a review measures from", () => {
   });
 
   /**
+   * A PIN OUTLIVES THE REF IT WAS CUT FROM. Created by this project's own batch
+   * procedure: a batch reviews `into: review-base/<sha>`, both scratch refs are deleted as
+   * documented cleanup, and the mirror's `fetch --prune` drops them within five minutes.
+   * An open review — and D-112 reviews stay open for days — then hit "the base branch does
+   * not exist" on its next round and died with every ratified justification, while the pin
+   * held everything the measurement needed.
+   */
+  it("survives the base ref being deleted, when a pin resolves", async () => {
+    const pinned = await baseCommitFor(repo, "main");
+    g("branch", "-q", "-D", "main");
+
+    const held = await computeDiff(repo, "main", pinned);
+    expect(held.mergeBase).toBe(pinned);
+    expect(held.changedFiles).toStrictEqual(["b.txt"]);
+    // The staleness questions were never asked, and say so rather than guessing.
+    expect(held.behindBy, "nothing knowable to be behind").toBe(0);
+    expect(held.mergesClean, "not 'clean' — unasked").toBeUndefined();
+    expect(held.overlap).toStrictEqual([]);
+  });
+
+  it("still refuses when the base ref is gone and there is no pin", async () => {
+    g("branch", "-q", "-D", "main");
+    await expect(computeDiff(repo, "main")).rejects.toThrow(/does not exist/);
+  });
+
+  /**
+   * OVERLAP IS "WHAT DID BOTH SIDES TOUCH", so it must be measured from the LIVE
+   * merge-base. From the pin it degenerates exactly where D-113 matters most: once `into`
+   * contains the branch, `diff(pin, into)` covers the branch's own change-set and every
+   * file it touched is reported as changed by both sides — sending a deep tier to hunt for
+   * conflicts between the branch and its own merged work, every round.
+   */
+  it("does not report the branch's own files as touched by both sides", async () => {
+    const pinned = await baseCommitFor(repo, "main");
+    g("checkout", "-q", "main");
+    g("merge", "-q", "--ff-only", "work");
+    writeFileSync(join(repo, "c.txt"), "c\n");
+    g("add", "-A");
+    g("commit", "-qm", "the base moves on after absorbing the work");
+    g("checkout", "-q", "work");
+
+    const held = await computeDiff(repo, "main", pinned);
+    expect(held.changedFiles, "still measured from the pin").toStrictEqual(["b.txt"]);
+    expect(held.overlap, "b.txt is the branch's OWN work, not a collision").toStrictEqual([]);
+  });
+
+  /**
    * `mergesClean`, `behindBy` and the overlap analysis ask about `into` AS IT IS NOW —
    * that is the whole point of those three, and pinning the base must not freeze them
    * too. Here the base moves ahead independently, which is the ordinary stale-branch case.

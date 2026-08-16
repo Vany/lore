@@ -170,7 +170,43 @@ export async function computeDiff(
   // fact needed to fix it — this repo has `master`, not `main` — was nowhere in the
   // output. The branch list is included because "does not exist" invites a second
   // guess, and the right one is usually visible from here.
-  if ((await gitMaybe(worktree, ["rev-parse", "--verify", "--quiet", `${resolved}^{commit}`])) === undefined) {
+  // THE PINNED BASE WINS WHEN THERE IS ONE (D-113), and it is verified before it is
+  // trusted: a stored sha that no longer resolves — a force-push that dropped it, a
+  // mirror recut — must not silently become `git diff <missing-sha>`, which fails with
+  // raw git vocabulary at the one moment the client needs a reason. An unresolvable pin
+  // falls through to the live merge-base, which is where this review would have been
+  // without the column.
+  //
+  // RESOLVED BEFORE THE EXISTENCE CHECK BELOW, not after, because a review with a working
+  // pin does not need `into` to exist any more. That ordering was a live defect created by
+  // this project's own batch procedure: a batch reviews `into: review-base/<sha>`, both
+  // scratch refs are deleted as documented cleanup, and the host refresher's
+  // `fetch --prune` drops them from the mirror within five minutes. An open review — and
+  // D-112 reviews stay open for days — then failed its next round with "the base branch
+  // does not exist", stranding every ratified justification, while the pin column held
+  // everything the measurement actually needed.
+  const pinned =
+    pinnedBase === undefined
+      ? undefined
+      : await gitMaybe(worktree, ["rev-parse", "--verify", "--quiet", `${pinnedBase}^{commit}`]);
+
+  const intoExists =
+    (await gitMaybe(worktree, ["rev-parse", "--verify", "--quiet", `${resolved}^{commit}`])) !== undefined;
+
+  // THE BASE MUST EXIST — unless a pin already answers the only question it was needed
+  // for. `resolved` falls back to the raw name above, and `mergeBase` falls back to
+  // `resolved` — so an `into` naming a branch this repository does not have travelled
+  // all the way to `git diff <name>`, which failed with `fatal: ambiguous argument
+  // 'main': unknown revision or path not in the working tree` and a host filesystem
+  // path. That reached a client as a `failed` review with no reason at all, and reached
+  // the operator log as raw git vocabulary about a directory nobody can see.
+  //
+  // Measured: a review of `teammater` (whose only branch is `master`) started with
+  // `into: main` died in 1.4 seconds, before any tier was asked anything, and the one
+  // fact needed to fix it — this repo has `master`, not `main` — was nowhere in the
+  // output. The branch list is included because "does not exist" invites a second
+  // guess, and the right one is usually visible from here.
+  if (!intoExists && pinned === undefined) {
     const branches = await gitLines(worktree, [
       "for-each-ref",
       "--format=%(refname:strip=3)",
@@ -185,17 +221,6 @@ export async function computeDiff(
           : `Branches lore can see: ${known.slice(0, 20).join(", ")}. Start the review again with the right one.`),
     );
   }
-
-  // THE PINNED BASE WINS WHEN THERE IS ONE (D-113), and it is verified before it is
-  // trusted: a stored sha that no longer resolves — a force-push that dropped it, a
-  // mirror recut — must not silently become `git diff <missing-sha>`, which fails with
-  // raw git vocabulary at the one moment the client needs a reason. An unresolvable pin
-  // falls through to the live merge-base, which is where this review would have been
-  // without the column.
-  const pinned =
-    pinnedBase === undefined
-      ? undefined
-      : await gitMaybe(worktree, ["rev-parse", "--verify", "--quiet", `${pinnedBase}^{commit}`]);
 
   const mergeBase =
     pinned ??
@@ -217,9 +242,13 @@ export async function computeDiff(
   const untracked = await gitLines(worktree, ["ls-files", "--others", "--exclude-standard"]);
   const changedFilesFrom = await gitLines(worktree, ["diff", "--name-only", mergeBase]);
   const changedFiles = changedFilesFrom;
-  const behindBy = Number(
-    (await gitMaybe(worktree, ["rev-list", "--count", `HEAD..${resolved}`])) ?? "0",
-  );
+  // ZERO WHEN `into` IS GONE, not a crash. A review whose base ref was deleted under it
+  // is not behind anything knowable, and `gitMaybe` already answers `undefined` for a ref
+  // that will not resolve — but saying so explicitly is what stops the three staleness
+  // questions below being read as "measured and fine" when they were never asked.
+  const behindBy = intoExists
+    ? Number((await gitMaybe(worktree, ["rev-list", "--count", `HEAD..${resolved}`])) ?? "0")
+    : 0;
 
   // Everything below is deterministic, costs milliseconds, and answers a question
   // the model would otherwise have to infer from the diff alone — which is where
@@ -235,9 +264,24 @@ export async function computeDiff(
   // not run" turns the very case we are asking about into "unknown". Anything above
   // 1 is a real failure — an old git, a bad ref — and stays unknown, because
   // "probably fine" is the claim this project exists to refuse.
-  const mergesClean = await mergeCheck(worktree, resolved);
+  const mergesClean = intoExists ? await mergeCheck(worktree, resolved) : undefined;
 
-  const baseTouched = new Set(await gitLines(worktree, ["diff", "--name-only", mergeBase, resolved]));
+  // OVERLAP IS MEASURED FROM THE LIVE MERGE-BASE, NEVER FROM THE PIN.
+  //
+  // The question is "which files did BOTH sides touch since they diverged", and with the
+  // pinned base it degenerates exactly where D-113 matters most: once `into` contains this
+  // branch, `diff(pin, into)` includes the branch's OWN change-set, so every file the
+  // branch touched is reported as changed by both sides — each annotated with the branch's
+  // own commits — and the reviewer prompt sends a deep tier hunting for conflicts between
+  // the branch and its own merged work, every round, at deep-tier cost.
+  //
+  // D-113's rule as written: the pin decides what is MEASURED; `mergesClean`, `behindBy`
+  // and this ask about `into` as it stands now. The docstring and SPEC both said so while
+  // this line quietly did the opposite.
+  const liveBase = intoExists ? await gitMaybe(worktree, ["merge-base", resolved, "HEAD"]) : undefined;
+  const baseTouched = new Set(
+    liveBase === undefined ? [] : await gitLines(worktree, ["diff", "--name-only", liveBase, resolved]),
+  );
   const overlapFiles = changedFilesFrom.filter((f) => baseTouched.has(f));
 
   // Capped: a monorepo can overlap in dozens of files, and this is read by a model
@@ -245,7 +289,9 @@ export async function computeDiff(
   const overlap: OverlapFile[] = [];
   for (const file of overlapFiles.slice(0, MAX_OVERLAP)) {
     const baseCommits = (
-      await gitLines(worktree, ["log", "--format=%h %s", `${mergeBase}..${resolved}`, "--", file])
+      liveBase === undefined
+        ? []
+        : await gitLines(worktree, ["log", "--format=%h %s", `${liveBase}..${resolved}`, "--", file])
     )
       .filter((l) => l.length > 0)
       .slice(0, MAX_COMMITS_PER_FILE);

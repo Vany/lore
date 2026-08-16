@@ -2163,6 +2163,22 @@ So both counters restart when the CLIENT delivers work — a submitted diff, or 
 `pull_fresh` onto commits that genuinely moved (`clientDeliveredWork`). New work is new
 material, not the same argument continuing.
 
+**WORK MEANS THE TREE MOVED, and the distinction is a whole ladder.** `applyPatch` no-ops
+on an empty diff, its tree hash still verifies, and lore's own texts tell a client with
+nothing to change to submit an empty diff — so a reset on *any* verified submit is an
+unbounded loop that a compliant agent walks into, each nudge wiping the counters, pushing
+`updated_at` past the stale sweep and buying t0 plus a model tier on the shared
+subscriptions. The callers therefore test the tree (`applied !== before`, the same test
+`pull_fresh` already makes), never the call.
+
+**And exactly one writer touches the ladder per round.** A held diff is submitted *while a
+round is in flight, by definition*, and that round writes its own ladder at the end from
+the snapshot it took at the start — so a reset written at submit time lived one round and
+vanished. D-114 then held for a client that waited for a quiet moment and failed for one
+that followed the documented "submit any time" cadence, which is backwards. The round
+applies the reset itself, at the emission boundary where the diff lands and the tree is
+observed to move.
+
 **Termination is untouched, and that is the whole justification.** The property the bounds
 guarantee is *"a ladder arguing with itself stops"*, and that is preserved exactly: with no
 new input the floor stops moving and the budget runs out in the same number of rounds it
@@ -2223,7 +2239,18 @@ sitting in `findings_ready` looking ready to continue.
 
 `mergesClean`, `behindBy` and the overlap analysis still ask about `into` **as it stands
 now**. Pinning is about what is MEASURED, not about pretending the base stopped moving;
-staleness is one of the few things a reviewer can act on.
+staleness is one of the few things a reviewer can act on. Overlap in particular must use
+the LIVE merge-base: computed from the pin it degenerates precisely where D-113 matters,
+because once `into` contains the branch, `diff(pin, into)` covers the branch's own
+change-set and every file it touched is reported as changed by both sides — sending a deep
+tier to hunt for conflicts between the branch and its own merged work, every round.
+
+**A pin outlives the ref it was cut from.** The base-ref existence check runs only when
+there is no usable pin, because the batch procedure above *guarantees* the ref will vanish:
+both scratch refs are deleted as documented cleanup and the mirror's `fetch --prune` drops
+them within five minutes, while the review stays open for days. With a resolving pin the
+missing ref means the staleness questions cannot be asked — `behindBy: 0`,
+`mergesClean: undefined`, no overlap — not that the review is dead.
 
 **D-112 makes this urgent rather than tidy.** A review that follows the work is a review
 that outlives its branch's merge, so the collapse stops being an edge and becomes the

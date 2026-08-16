@@ -230,6 +230,26 @@ describe("subscriptions/listen", () => {
     expect(hint.subscribe?.params?.resourceSubscriptions).toStrictEqual([reviewUri("revS")]);
   });
 
+  /**
+   * OVER THE REAL WIRE, because the two tests above hand-build the `ctx` they assert on —
+   * and this file's own header says a hand-rolled frame "encodes my guess at the wire
+   * rather than the wire". `wireRevision` reads the envelope through a cast, since the SDK
+   * types `RequestMetaEnvelope` as `{}`; if the runtime ever puts the protocol version
+   * somewhere else, every hand-built test still passes and 2026-era clients — the only
+   * ones the feature exists for — silently never see the hint. That is the delivery
+   * mechanism that quietly does not work, which is this project's defining failure.
+   */
+  it("puts the hint in a real reply to a real 2026-era client", async () => {
+    const reply = await alice.client.callTool({ name: "review_poll", arguments: { review_id: "revS" } });
+    const body = JSON.parse(
+      (reply as { content: { type: string; text: string }[] }).content[0]?.text ?? "{}",
+    ) as { subscribe?: { method?: string; params?: { resourceSubscriptions?: string[] } } };
+    expect(body.subscribe?.method, "no hint reached a client that can hold a stream").toBe(
+      "subscriptions/listen",
+    );
+    expect(body.subscribe?.params?.resourceSubscriptions).toStrictEqual([reviewUri("revS")]);
+  });
+
   it("negotiates the modern protocol revision at all", () => {
     // If this fails, every other test in this file is testing the legacy fallback
     // and passing for the wrong reason. Named separately so that shows up as its
