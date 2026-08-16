@@ -130,16 +130,16 @@ describe("step", () => {
   });
 
   /**
-   * A SUBMIT THAT CHANGES NOTHING IS NOT WORK, and the difference is a whole ladder.
+   * THE REDUCER ONLY — the gate that decides WHEN to call it lives in `review_submit`,
+   * and is held by `service/submit-gate.test.ts`, which drives the real tool against a
+   * real worktree with a patch that applies and changes nothing.
    *
-   * The reset used to fire on any verified submit — and `applyPatch` no-ops on an empty
-   * diff, its tree hash still verifies, and lore's own texts tell a client with nothing to
-   * change to submit an empty diff. So a compliant agent could hold a review open for
-   * ever, each nudge wiping the counters and buying t0 plus a model tier on the shared
-   * subscriptions. Before D-114 the global bound stopped that at twelve; D-114 removed the
-   * backstop without replacing it. The callers now test the tree, not the call.
+   * Named for that deliberately. This test first claimed to cover the no-op-submit fix
+   * and covered the reducer it is implemented with, which is the "named for a property it
+   * does not test" shape — and it would have stayed green through a refactor that dropped
+   * the gate and reopened the unbounded loop.
    */
-  it("counts a submit as work only when it is the ladder that was told so", () => {
+  it("moves the floor when told, and only then", () => {
     const s = { ...initialState(), round: 7 };
     expect(clientDeliveredWork(s).workRound, "told: the floor moves").toBe(7);
     // Not told — the shape of every no-op submit after the fix — leaves the floor where

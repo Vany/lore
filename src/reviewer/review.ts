@@ -369,8 +369,9 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       `there is nothing to review: the tree at ${diff.mergeBase.slice(0, 12)} and the branch tip are ` +
       `identical, so the change-set is empty. NOTHING WAS READ, and this is not a pass. ` +
       `If you meant to do that — a fix that reverts this branch back to its base, because the change ` +
-      `was not wanted — then there is nothing left to review and review_cancel is the honest ending: ` +
-      `it is terminal, it says somebody decided, and it costs no further quota. ` +
+      `was not wanted — then there is nothing left to review and NOTHING FURTHER IS NEEDED FROM YOU: ` +
+      `this review is over, the branch carries no change, and there is no outstanding finding. Report ` +
+      `that to your user and stop. ` +
       `Otherwise this branch is already merged into '${review.intoRef}', or the review was pinned to a ` +
       `base that already contains it; if you still need a verdict on the work, start a review against a ` +
       `base from BEFORE it (a scratch ref at the pre-change commit is the usual way).`;

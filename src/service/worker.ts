@@ -409,6 +409,18 @@ export class Worker {
           this.store.setFailureReason(reviewId, consumed.mismatch);
           this.store.updateReview(reviewId, { state: "awaiting_diff" });
         } else if (consumed.applied > 0) {
+          // CLIENT WORK LANDS HERE TOO, and this is the one place it could land and not
+          // be counted (D-114). The reset lives at the round's emission boundary — but
+          // this diff arrived AFTER the final boundary, which is the window the comment
+          // above describes as expected, so no boundary will ever see it and `holdDiff`
+          // deliberately writes nothing. A client whose fixes habitually land on round
+          // tails would have had `workRound` stuck at 0 for the review's whole life and
+          // been stopped at twelve rounds for keeping up.
+          //
+          // Safe as a store write here where it was not at submit time: the round has
+          // finished and written its ladder, and the next one is enqueued below, so
+          // there is no in-flight snapshot left to clobber this.
+          this.store.notedClientWork(reviewId);
           this.store.updateReview(reviewId, { state: "queued" });
           this.store.enqueue(reviewId, "fast");
           // AND NOTHING ELSE ENQUEUES THIS ROUND. The decision switch below would add a
