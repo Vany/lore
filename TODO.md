@@ -39,6 +39,63 @@ that part is pulled out into its own open item rather than hidden inside a tick.
 
 ## Now — nothing here is about writing more features
 
+### 2026-08-17 — decided after D-121/D-122 shipped, in priority order
+
+Vany: *"answer yourself."* These are mine, taken deliberately rather than deferred, and
+each says why. They fold into SPEC as decisions when they are BUILT; until then this is
+where they live, because SPEC describes what stands.
+
+- [ ] **1. A GARBLED FENCED BLOCK GETS ONE RE-ASK.** Four findings were lost this way in a
+      single day — every round of our own review carried *"t1 produced a finding this
+      review does NOT contain — a fenced JSON block did not parse"*.
+
+      The extraction is already right in the large: every candidate block is parsed, the
+      ones that parse contribute, and a garbled sibling is reported loudly (D-66, measured
+      — the old all-or-nothing rule binned five paid replies, one a 40-minute t2 round
+      whose single finding was correct and load-bearing). The gap is narrow: `conduct`
+      retries only when the WHOLE reply fails to yield a list, so a partially garbled reply
+      is never re-asked, and the finding in the bad block is simply gone.
+
+      **Re-ask once, for a `JSON.parse` failure only.** A syntax error is usually
+      truncation and a re-ask has a real chance; a SCHEMA violation does not, and the code
+      already knows it — told the exact rule twice, glm-5.2 shortened its claim by 44
+      characters and still landed 14 over the cap. So this must not become a general
+      retry-on-rejection: that trade was measured and lost. One turn, on the warm session,
+      bounded per round.
+
+- [ ] **2. `review_submit` ACCEPTS A PUSHED COMMIT** as an alternative to `tree_hash` — the
+      proposal already written at the entry below, now decided. Additive to the contract,
+      so no client breaks by not using it.
+
+      The number is the argument: **16 reviews passed out of 128**, against 58 failed, 28
+      cancelled and 18 expired, with one branch reviewed thirteen times. A review that has
+      taken one submit is unanswerable by every later session, and the only exit discards
+      every ratified justification. I hit it myself driving D-121: my submit failed on a
+      tree mismatch and I fell back to force-pushing the ref and re-pinning.
+
+- [ ] **3. D-118's CONFIG WINDOW comes after those two.** It was load-bearing before and
+      it is more so now: with the ceiling gone, `LORE_ALLOW_METERED` is the ONLY money
+      control in the service, and it lives in an env var in a `.env` nobody reads — which
+      is the complaint that produced D-118 in the first place.
+
+**Decided and NOT to be built, with the reasoning, so nobody re-opens them by accident:**
+
+- **Metered stays OFF while Kimi's cycle is out.** I predicted weaker verdicts and was
+  wrong: our own review of D-121 came back `passed`, not `passed_partial`, with
+  `checks_skipped` reading *"t2 was answered by an equivalent stand-in"* — the free Z.ai
+  plan covered the dead Kimi seat at $0, on seven calls that would have cost ~$34. Full
+  coverage, no spend. Revisit only if a verdict actually returns partial.
+- **The clear-before-release check stays.** It carries `raised 3× and justified away 2×`,
+  and it was RIGHT the third time, on a real session leak. A resource-leak detector with a
+  one-in-three hit rate is cheap to answer and expensive to miss.
+- **No `oxlint` or `biome` swap; wait for typescript-eslint.** Adding one is not swapping a
+  linter — T0 detects engines by config file, parses their output, extracts rule classes
+  and wires them into D-83 appeals. That is a new engine surface for coverage that overlaps
+  `tsc` and the model tiers. The gap is REPORTED rather than silent, which is the part that
+  mattered.
+
+
+
 ### 2026-08-16 — the metered fallback, which cost $101.36 in four hours
 
 - [x] **The ceiling is GONE, and price decides nothing** — D-121, built 2026-08-17. Vany:
