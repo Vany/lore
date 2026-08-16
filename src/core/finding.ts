@@ -54,7 +54,95 @@ export type Severity = (typeof SEVERITIES)[number];
 export const CLAIM_MAX = 500;
 const TEXT_MAX = 2000;
 
-export const FindingSchema = z
+/**
+ * FOLDED, NEVER REFUSED — the same rule as `severity`, on the field that outlived it.
+ *
+ * D-115 fixed `severity` and wrote the general rule beside it: *validation at the reviewer
+ * boundary must not be able to lose a finding*. `claim` was the other instance and was not
+ * fixed with it. Eleven minutes before that commit landed, a review lost a t2 finding to
+ * `claim: Too big: expected string to have <=500 characters` — a real defect about a ledger
+ * read ordered before a bound check, discarded at the door for length, while the two t3
+ * findings beside it were discarded for the severity word. Same review, same cause, one
+ * field behind.
+ *
+ * Raising the cap again is what the previous three occurrences did (300 → 500, D-64), and
+ * it does not converge: the retry does not shorten reliably — measured, a model told the
+ * exact rule cut 44 characters and still missed by 14 — so every raise buys time until a
+ * model writes a longer sentence. This one overshot by well over a hundred characters, not
+ * by a clause.
+ *
+ * Truncating alone is worse and was itself a bug: `t0/engines.ts` and `security/osv.ts`
+ * cut claims mid-clause at a hardcoded 300, which is exactly the failure D-64's rationale
+ * names — *a claim silently cut mid-clause is a finding that says something its author did
+ * not*. So nothing here is silent and nothing is lost: the full claim is carried into
+ * `evidence` verbatim, and what stays in `claim` is cut at a word boundary and marked with
+ * an ellipsis, so a reader sees both that it was cut and what it said.
+ *
+ * `evidence` is clamped afterwards because a fold must not trade one refusal for another —
+ * an over-long `evidence` would fail `TEXT_MAX` and lose the finding we just saved. The
+ * carried claim goes FIRST so it is the tail of the original evidence that gives way.
+ *
+ * The cap itself is unchanged and the prompt still asks for one sentence: this governs what
+ * happens when a model does not comply, not what it is asked for.
+ */
+function foldOverlongClaim(input: unknown): unknown {
+  if (typeof input !== "object" || input === null) return input;
+  const o = input as Record<string, unknown>;
+  const claim = o["claim"];
+  if (typeof claim !== "string") return input;
+
+  const full = claim.trim();
+  if (full.length <= CLAIM_MAX) return input;
+
+  // Cut at the last word boundary before the cap, but only if one falls in the back half —
+  // otherwise a single unbroken token would shrink the claim to almost nothing.
+  const head = full.slice(0, CLAIM_MAX - 1);
+  const lastSpace = head.lastIndexOf(" ");
+  const kept = lastSpace > CLAIM_MAX / 2 ? head.slice(0, lastSpace) : head;
+
+  const evidence = typeof o["evidence"] === "string" ? o["evidence"].trim() : "";
+  const carried = `Claim in full: ${full}`;
+  let joined = evidence ? `${carried}\n\n${evidence}` : carried;
+  if (joined.length > TEXT_MAX) joined = `${joined.slice(0, TEXT_MAX - 1)}…`;
+
+  return { ...o, claim: `${kept.trimEnd()}…`, evidence: joined };
+}
+
+/**
+ * THE SAME RULE ON THE TWO FIELDS IT HAD NOT REACHED YET.
+ *
+ * D-115 fixed `severity`, D-116 fixed `claim`, and `evidence` and `failureScenario` kept
+ * the identical defect: `.max(TEXT_MAX)` refuses, and a refusal on one field discards the
+ * whole finding. Fixing the third instance one field at a time is how the first two came
+ * to exist, so this closes the class instead — every text field a model writes is clamped,
+ * and none of them can cost the report.
+ *
+ * **This one is lossy at the tail and cannot not be.** `claim` had somewhere to go: its
+ * full text is carried into `evidence`. `evidence` has nowhere — carrying it into
+ * `failureScenario` would just move the same problem one field along and corrupt a field
+ * that means something else. So the tail is cut and MARKED, which is the whole difference
+ * from the silent mid-clause truncation D-64 condemns: a reader sees that it was cut.
+ *
+ * Losing the end of an over-long evidence paragraph is a small, visible loss. Losing the
+ * finding is a silent total one, and the model has already been paid for it either way.
+ */
+function clampOverlongText(input: unknown): unknown {
+  if (typeof input !== "object" || input === null) return input;
+  const o = input as Record<string, unknown>;
+  let changed = false;
+  const out: Record<string, unknown> = { ...o };
+  for (const field of ["evidence", "failureScenario"] as const) {
+    const v = o[field];
+    if (typeof v !== "string") continue;
+    const text = v.trim();
+    if (text.length <= TEXT_MAX) continue;
+    out[field] = `${text.slice(0, TEXT_MAX - 1).trimEnd()}…`;
+    changed = true;
+  }
+  return changed ? out : input;
+}
+
+const FindingObject = z
   .object({
     /** Repo-relative path. Absolute paths are rejected below. */
     file: z.string().min(1).max(1024),
@@ -100,7 +188,14 @@ export const FindingSchema = z
       return "high";
     }, z.enum(SEVERITIES)),
 
-    /** What is wrong, in one sentence. */
+    /**
+     * What is wrong, in one sentence.
+     *
+     * The cap stays enforced here rather than being widened: `foldOverlongClaim` has
+     * already brought any over-long claim inside it, so this is the invariant the store
+     * and every consumer rely on, not the gate a model has to clear. An empty claim is
+     * still refused — a finding that states nothing is not a finding.
+     */
     claim: z.string().min(1).max(CLAIM_MAX),
 
     /** Where the proof is — file:line references, quoted code. */
@@ -143,6 +238,22 @@ export const FindingSchema = z
     message: "file must be repo-relative and must not escape the repo",
     path: ["file"],
   });
+
+/**
+ * The fold runs BEFORE the object, so an over-long claim never reaches the cap that
+ * would refuse it. Wrapping rather than putting the fold on the `claim` field itself,
+ * because it has to write `evidence` too, and a field-level preprocess cannot see its
+ * siblings. `.strict()` still applies: the spread preserves unknown keys, so prompt/schema
+ * drift is still caught.
+ */
+// `claim` folds FIRST, because its fold writes into `evidence` — clamping evidence before
+// the carried claim arrives would leave the join to overflow `TEXT_MAX` and lose the
+// finding both folds exist to save. `foldOverlongClaim` keeps its own join inside the cap;
+// this is the backstop for an evidence the MODEL wrote too long.
+export const FindingSchema = z.preprocess(
+  (v) => clampOverlongText(foldOverlongClaim(v)),
+  FindingObject,
+);
 
 export type Finding = z.infer<typeof FindingSchema>;
 

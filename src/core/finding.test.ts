@@ -111,11 +111,98 @@ describe("parseFinding", () => {
     expect(() => parseFinding({ ...valid, [field]: v })).toThrow();
   });
 
-  // Derived from the constant, not from a literal: the cap moved 300 → 500 and a
-  // hardcoded 301 would have kept passing while asserting nothing.
-  it("rejects a claim that sprawls past one sentence", () => {
-    expect(() => parseFinding({ ...valid, claim: "x".repeat(CLAIM_MAX + 1) })).toThrow();
-    expect(() => parseFinding({ ...valid, claim: "x".repeat(CLAIM_MAX) })).not.toThrow();
+  /**
+   * FOLDS AN OVER-LONG CLAIM RATHER THAN THROWING THE FINDING AWAY (D-116). Reversed
+   * deliberately, exactly as the severity case above was: this used to assert `toThrow()`,
+   * and the cost was measured on this repository: a t2 finding — a ledger read ordered
+   * before a bound check — was lost to `claim: Too big: expected string to have <=500
+   * characters`, in the same review where two more were lost to the severity word D-115
+   * had just fixed.
+   *
+   * Derived from the constant, not from a literal: the cap moved 300 → 500 and a
+   * hardcoded 301 would have kept passing while asserting nothing.
+   */
+  /**
+   * THE SAME RULE ON THE FIELDS IT HAD NOT REACHED. D-115 fixed `severity`, D-116 fixed
+   * `claim`, and these two kept the identical defect one field along — which is exactly
+   * how the first two came to exist. Parameterised over the fields so adding a third text
+   * field without deciding this question is not possible by accident.
+   */
+  it.each([["evidence"], ["failureScenario"]])(
+    "clamps an over-long %s instead of losing the finding",
+    (field) => {
+      const long = "word ".repeat(600); // 3000 chars, well past TEXT_MAX
+      const got = parseFinding({ ...valid, [field]: long });
+      const text = got[field as "evidence" | "failureScenario"];
+      expect(text.length).toBeLessThanOrEqual(2000);
+      // MARKED, never silent — the whole difference from the mid-clause truncation D-64
+      // condemns is that a reader can see something was cut.
+      expect(text.endsWith("…")).toBe(true);
+    },
+  );
+
+  // Order matters: the claim fold WRITES into evidence, so clamping evidence first would
+  // leave the join to overflow and lose the finding both folds exist to save.
+  it("survives an over-long claim and an over-long evidence together", () => {
+    const f = parseFinding({
+      ...valid,
+      claim: "c".repeat(CLAIM_MAX * 3),
+      evidence: "e".repeat(5000),
+    });
+    expect(f.claim.length).toBeLessThanOrEqual(CLAIM_MAX);
+    expect(f.evidence.length).toBeLessThanOrEqual(2000);
+  });
+
+  it("folds an over-long claim instead of losing the finding", () => {
+    const long = `${"word ".repeat(CLAIM_MAX)}end`;
+    const f = parseFinding({ ...valid, claim: long });
+    expect(f.claim.length).toBeLessThanOrEqual(CLAIM_MAX);
+    expect(f.claim.endsWith("…")).toBe(true);
+  });
+
+  // Nothing the author wrote may be lost — that is the whole difference between this and
+  // the mid-clause truncation D-64's rationale condemns. Sized like the observed failure
+  // (a claim a few hundred over the cap), which is the case this has to get right; the
+  // pathological one is asserted separately below.
+  it("carries the full claim into evidence, verbatim", () => {
+    const long = `${"word ".repeat(140)}end`;
+    expect(long.length).toBeGreaterThan(CLAIM_MAX);
+    const f = parseFinding({ ...valid, claim: long });
+    expect(f.evidence).toContain(long.trim());
+    expect(f.evidence).toContain(valid.evidence);
+    expect(f.evidence.length).toBeLessThanOrEqual(2000);
+  });
+
+  // Both fields share TEXT_MAX, so a claim longer than the whole evidence budget cannot be
+  // carried whole AND leave the original evidence intact. The claim wins, because it is the
+  // field that was about to cost the finding — and the clamp is marked, not silent. Asserted
+  // rather than left implicit: this is the one case where the fold is lossy.
+  it("prefers the claim over the original evidence when the claim alone exceeds TEXT_MAX", () => {
+    const enormous = "word ".repeat(600); // 3000 chars, well past TEXT_MAX
+    const f = parseFinding({ ...valid, claim: enormous, evidence: "original evidence" });
+    expect(f.evidence.startsWith("Claim in full: word word")).toBe(true);
+    expect(f.evidence.endsWith("…")).toBe(true);
+    expect(f.evidence.length).toBeLessThanOrEqual(2000);
+  });
+
+  // A fold must not trade one refusal for another: evidence at its own cap plus a carried
+  // claim would overflow TEXT_MAX and lose the finding this just rescued.
+  it("keeps evidence inside its cap when both are at their limits", () => {
+    const f = parseFinding({
+      ...valid,
+      claim: "x".repeat(CLAIM_MAX * 3),
+      evidence: "e".repeat(2000),
+    });
+    expect(f.evidence.length).toBeLessThanOrEqual(2000);
+    expect(f.claim.length).toBeLessThanOrEqual(CLAIM_MAX);
+  });
+
+  // The boundary itself is untouched: a claim exactly at the cap is not a fold candidate,
+  // so it keeps its last character and gains no ellipsis and no evidence prefix.
+  it("leaves a claim at exactly the cap alone", () => {
+    const f = parseFinding({ ...valid, claim: "x".repeat(CLAIM_MAX) });
+    expect(f.claim).toBe("x".repeat(CLAIM_MAX));
+    expect(f.evidence).toBe(valid.evidence);
   });
 
   it("rejects empty required text", () => {

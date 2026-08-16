@@ -1173,13 +1173,19 @@ describe("extractFindings", () => {
   // from the constant here. A literal would have gone on asserting the old number
   // while the message carried the new one — and this test exists precisely because
   // a model cannot comply with a limit it is told wrongly.
-  it("names the CAP, not the JSON, when a claim is too long", () => {
+  //
+  // REVERSED BY D-116, after a fifth loss the raise did not prevent. Length no longer
+  // rejects anything: the claim is folded and the full text carried into `evidence`. The
+  // message-quality rule this test defended still holds for the faults that DO reject —
+  // `cwe` above is one — but survival is the stronger property, because an operator does
+  // not need a well-worded error about a finding they did not lose.
+  it("folds an over-long claim instead of rejecting the reply", () => {
     const long = JSON.parse(FINDING_JSON).findings[0];
-    const reason = why(JSON.stringify({ findings: [{ ...long, claim: "x".repeat(CLAIM_MAX + 25) }] }));
-    expect(reason).toMatch(/claim: /);
-    // Actionable: it has to carry the limit, or a model cannot comply with it.
-    expect(reason).toContain(String(CLAIM_MAX));
-    expect(reason).not.toMatch(/JSON/);
+    const claim = "x".repeat(CLAIM_MAX + 25);
+    const r = extractFindings(JSON.stringify({ findings: [{ ...long, claim }] }));
+    if (!r.ok) throw new Error(`expected the finding to survive its length: ${r.why}`);
+    expect(r.findings[0]?.claim.length).toBeLessThanOrEqual(CLAIM_MAX);
+    expect(r.findings[0]?.evidence).toContain(claim);
   });
 
   it("says which of the three faults it was", () => {

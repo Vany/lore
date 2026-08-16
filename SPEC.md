@@ -2151,6 +2151,60 @@ D-77 still holds and nothing skips the ladder. What changes is that batching is 
 DEFAULT rather than a compromise: fix everything found, review it together, push it
 together.
 
+**D-116 — an over-long claim folds; it never costs the finding either. BUILT 2026-08-16.**
+
+D-115 fixed `severity` and wrote the rule beside it: *validation at the reviewer boundary
+must not be able to lose a finding*. `claim` was the other instance of that rule and was
+not fixed with it. Eleven minutes before D-115 was committed, review
+`rev_dCU6W98KgCZiwIXtnHtWeq-x` lost a t2 finding on `reversal-apply.ts:514` — a ledger read
+ordered before a local bound check — to `claim: Too big: expected string to have <=500
+characters`, in the same review where two t3 findings were lost to the severity word.
+Three real findings, one review, one rule, one field behind.
+
+Raising the cap is what the last three occurrences did (300 → 500, D-64) and it does not
+converge: the retry does not shorten reliably — a model told the exact rule cut 44
+characters and still missed by 14 — so every raise buys time until someone writes a longer
+sentence. This one overshot by well over a hundred characters, not by a clause.
+
+Truncating alone is worse, and was itself the bug D-64 found in `t0/engines.ts` and
+`security/osv.ts`: *a claim silently cut mid-clause is a finding that says something its
+author did not*. So the fold is neither. **The full claim is carried into `evidence`
+verbatim, and what remains in `claim` is cut at a word boundary and marked with an
+ellipsis** — nothing is lost and nothing is silent. `CLAIM_MAX` is unchanged and the prompt
+still asks for one sentence; this governs only what happens when a model does not comply.
+
+One case is lossy and is asserted as such: `claim` and `evidence` share `TEXT_MAX`, so a
+claim longer than the entire evidence budget cannot be carried whole *and* leave the
+original evidence intact. The claim wins, because it is the field that was about to cost
+the finding, and the clamp is marked.
+
+**`evidence` and `failureScenario` are clamped by the same change, because fixing the
+third instance one field at a time is how the first two came to exist.** Both had the
+identical `.max(TEXT_MAX)` refusal, and a refusal on any one field discards the whole
+finding. This clamp is lossy at the tail and cannot not be — `claim` had somewhere to go,
+`evidence` has nowhere, and carrying it into `failureScenario` would move the problem one
+field along while corrupting a field that means something else. The tail is cut and
+MARKED, which is the whole difference from the silent truncation D-64 condemns. A small
+visible loss beats a total silent one, and the model has been paid either way.
+
+`[OPEN]` — **three refusals that can still cost a finding, each with a stated reason for
+existing, so none is reversed silently:**
+
+* **`line: 0` / negative / fractional.** Dropping the line would degrade the finding to
+  file-level, which the schema already supports, and keep it. Nothing is gained by losing
+  the whole record over a bad line number.
+* **A malformed `cwe`** (`CWE-abc`). The comment calls this drift worth failing on — and
+  it fails by discarding a finding, which is the trade D-115 and D-116 have now reversed
+  twice. Dropping the field keeps both the finding and the signal, if the signal has a
+  channel to go to.
+* **An unknown key** (`.strict()`). The deliberate drift detector, and the same objection
+  applies with the most force: a model inventing one field costs its entire report.
+
+The shape of the answer for all three is the same and is why they are open rather than
+done: **fail loudly WITHOUT losing the finding** — drop the offending field, keep the
+record, and put the drift where an operator reads it. That last part is the work; there is
+no channel today that says "this arrived malformed and we kept it anyway".
+
 **D-115 — a severity nobody planned for maps; it never costs the finding.
 BUILT 2026-08-16.**
 
