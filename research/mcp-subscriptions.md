@@ -3,6 +3,8 @@
 **Wire protocol verified 2026-08-06. §7, the SDK layer, added 2026-08-08** after four
 wrong diagnoses in one evening — read that section before writing any client, because
 every trap in it fails SILENTLY and the wire half below is not enough to avoid them.
+**§3 corrected 2026-08-16**: it had put the Tasks vocabulary in the wrong wire era, which
+is the one fact that decides whether Tasks is worth adopting (it is not).
 
 Checked against the published spec revision `2026-07-28` and against the INSTALLED
 `@modelcontextprotocol` packages at **2.0.0**, which is what this deployment runs.
@@ -122,17 +124,34 @@ neither. lore declares both (`src/mcp/server.ts`); `listChanged` comes free with
 listen router drops `resourceSubscriptions` from the honoured filter and answers the
 subscription with an empty ack — accepted, and silent forever.
 
-## 3. Tasks, the other candidate
+## 3. Tasks is not a candidate — re-checked 2026-08-16, and the earlier note here was wrong
 
-The same revision carries a task model — `tasks/get`, `tasks/list`, `tasks/status`,
-`tasks/result`, `tasks/cancel`, `CreateTaskResult`, task-augmented requests — present in
-both `core` and `server` of the installed SDK.
+This section used to say *"the same revision carries a task model"*, listing `tasks/get`,
+`tasks/list`, `tasks/status`, `tasks/result`, `tasks/cancel` as present in the installed
+SDK, and called it conceptually the closer fit — a review outlives a request, which is
+what tasks were added for. **"Present in the SDK" was true and "the same revision" was
+not**, and the difference is the whole answer.
 
-Conceptually it is the closer fit: `review_start` returns an id and the client polls
-*because a review outlives a request*, which is the exact problem tasks were added for.
-Against it: adopting tasks changes the shape of the client contract, where subscription
-is additive and reuses a resource that already exists. Not researched in depth here;
-recorded so the choice is made knowingly rather than by default.
+The SDK carries TWO wire-era registries (`server@2.0.0`,
+`dist/src-CX2iR2pK.mjs`: `rev2025RequestMethods` vs `rev2026RequestMethods`):
+
+- **2025-11-25** — `tasks/get`, `tasks/result`, `tasks/list`, `tasks/cancel`, plus a push
+  `notifications/tasks/status`.
+- **2026-07-28** — `tools/call`, `tools/list`, `prompts/get`, `prompts/list`,
+  `resources/list`, `resources/templates/list`, `resources/read`, `completion/complete`,
+  `server/discover`, `subscriptions/listen`. **No `tasks/*`.** Also no
+  `resources/subscribe`: `subscriptions/listen` replaced it.
+
+Every Tasks schema in `core@2.0.0` is annotated *"2025-11-25 wire vocabulary with no SDK
+runtime; kept importable for interoperability only"*, and `codecResultValidator`'s own
+comment says the result map *"deliberately excludes the `tasks/*` methods, so the
+spec-method overload refuses them up front"*. So it is not an unimplemented-but-coming
+surface; it is a superseded one, kept importable for talking to 2025-era peers.
+
+**Reading the method names out of `node_modules` was not enough — the grep that found
+them found both eras at once and reported a union.** Which era a method belongs to is the
+fact that decides, and it is one registry lookup away. Cost: a decision recorded twice on
+a wrong premise (D-110), settled only when someone re-checked.
 
 ## 4. The era is opt-in on the client — measured 2026-08-06
 

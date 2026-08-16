@@ -3,6 +3,34 @@
 Newest first. Updated at the end of each task: what changed, what I learned, what
 surprised me.
 
+## 2026-08-16 — D-110 settled: Tasks is a retired vocabulary, and the era is the fact
+
+**What changed.** D-110 closed rather than deferred: the delivery menu is TWO surfaces,
+`subscriptions/listen` (built, D-80/D-103) and `review_poll` (the floor), and there is no
+third one to build. SPEC, `TODO.md` and `research/mcp-subscriptions.md` §3 updated to say
+so; no code moved, because nothing was ever built on the wrong premise.
+
+**What I learned — the fact that decides was one lookup away, and I reported a union
+instead.** The installed SDK keeps two wire-era registries. `tasks/get|result|list|cancel`
+and `notifications/tasks/status` live in the **2025-11-25** one; the **2026-07-28** one
+has no `tasks/*` at all, and no `resources/subscribe` either — `subscriptions/listen`
+replaced it. Grepping `node_modules` for method names finds both eras at once and reads
+like one protocol. `research/mcp-subscriptions.md` had said *"the same revision carries a
+task model"* since 08-08, and D-110 inherited it twice on 08-15 without re-checking.
+
+**Surprised me.** Yesterday I parked Tasks with *"there is no `tasks/update`, so it is
+poll-shaped"* — and `notifications/tasks/status` is right there in the 2025 registry, a
+push notification. The conclusion (do not build it) survived on a completely different and
+much stronger reason: every Tasks schema is annotated *"2025-11-25 wire vocabulary with no
+SDK runtime; kept importable for interoperability only"*, and the SDK's result map
+excludes `tasks/*` so the typed request path refuses those methods outright. **A right
+answer resting on a wrong reason is not settled** — it reopens the moment anyone checks,
+which is exactly what happened when Vany asked "what is with channels?".
+
+Also worth recording: the transport items parked as "on a clock" cost nothing. Stateless
+transport drops `Mcp-Session-Id`, a string lore's source never mentions, and the
+deprecated legacy HTTP+SSE transport is one we do not use. The look took one grep.
+
 ## 2026-08-14 — D-109: the deep tiers run together, and a dead credential walks the chain
 
 **What changed.** The ladder walks RUNGS — a nested array in the tiers file is a set of

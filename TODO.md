@@ -78,44 +78,33 @@ that part is pulled out into its own open item rather than hidden inside a tick.
 
 ### 2026-08-15 — delivery surfaces, and three fixes to today's fixes
 
-- [ ] **Weigh the MCP Tasks extension as a way to deliver findings** (D-110, `[OPEN]`).
-      Researched today, NOT built. The premise moved on contact: "channels" is not an MCP
-      primitive, the push surface is `subscriptions/listen`, and lore ALREADY implements
-      it — so there is nothing to adopt instead of subscriptions.
+- [x] **Weigh the MCP Tasks extension as a way to deliver findings** (D-110). **CLOSED
+      2026-08-16, nothing to build.** The premise moved twice. First: "channels" is not an
+      MCP primitive — the push surface is `subscriptions/listen`, and lore already
+      implements it, so there was never anything to adopt instead of subscriptions.
 
-      What is genuinely new is the **Tasks extension** (`io.modelcontextprotocol/tasks`,
-      SEP-2663, poll-based `tasks/get` + `tasks/update`), promoted out of the experimental
-      core for long-running asynchronous work — which is exactly what a review is, and the
-      first standard shape that fits the problem rather than one we bent `review_poll`
-      into.
+      Second, and the reason this is closed rather than deferred: **Tasks is a RETIRED
+      vocabulary, not an emerging one.** The SDK keeps two wire-era registries, and the
+      2026-07-28 one carries no `tasks/*` at all — only `tools/*`, `prompts/*`,
+      `resources/{list,templates/list,read}`, `completion/complete`, `server/discover` and
+      `subscriptions/listen`. Every Tasks schema is annotated *"2025-11-25 wire vocabulary
+      with no SDK runtime; kept importable for interoperability only"*, and the result map
+      excludes `tasks/*` so the typed request path refuses those methods outright.
 
-      **ANSWERED 2026-08-15 by reading the installed SDK, and the answer narrows it.**
-      `@modelcontextprotocol/server@2.0.0` — which lore already depends on — defines
-      `tasks/get`, `tasks/result`, `tasks/list`, `tasks/cancel`. There is NO
-      `tasks/update`. So Tasks is POLL-shaped, not push-shaped: it is a standard spelling
-      of what `review_poll` already does, not a third way to be told something.
+      Yesterday's reason for parking it — *"there is no `tasks/update`, so it is
+      poll-shaped"* — was wrong on the fact: `notifications/tasks/status` is right there in
+      the 2025 registry. The verdict survived on a better reason, which is the only kind
+      worth keeping, since a wrong reason reopens a settled question the moment someone
+      checks it.
 
-      That kills "use it instead of subscriptions" and leaves a narrower real benefit:
-      **interop** — a generic harness could drive a review knowing no lore-specific tools
-      (`tasks/get` for state, `tasks/result` for findings, `tasks/cancel` for cancel).
-      Worth having for reach, worth nothing for latency, which `subscriptions/listen`
-      already provides.
+      Polling stays the FLOOR whatever happens, and a live delivery surface is only ever
+      added on evidence of a client that cannot use the two we have.
 
-      **So: build it when a client we actually have cannot use `review_poll`, and not
-      before.** A second spelling of a working surface, for no client that exists, is a
-      second thing to keep correct — and `review_poll` carries semantics a generic
-      `tasks/result` would have to duplicate or discard: deltas, `check_back_after_ms`
-      measured from this repository's own completed rounds, and the settle/justify
-      vocabulary.
-
-      Polling stays the FLOOR whatever happens. A client whose harness supports nothing
-      must still be able to complete a review, and a delivery mechanism that silently does
-      not work is indistinguishable from a review that found nothing (INV-1).
-
-- [ ] **On a clock, not broken yet:** the same release makes the transport stateless and
-      drops `Mcp-Session-Id`, and deprecates the legacy HTTP+SSE transport with a
-      year-long offramp. Neither affects lore today. Both need a look before the offramp
-      closes.
+- [x] **Transport changes in the same revision: NOT on a clock after all** (2026-08-16).
+      Stateless transport drops `Mcp-Session-Id` — which lore's source never mentions, so
+      there is nothing to migrate — and the deprecated legacy HTTP+SSE transport is one we
+      do not use. Both were parked as "need a look before the offramp closes"; the look
+      took one grep and found no exposure.
 
 - [x] **Three fixes to fixes shipped the same day** (`884cdf8`). DONE. lore's own review of
       `main` found all three, and was right about each:
