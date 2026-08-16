@@ -198,12 +198,36 @@ describe("subscriptions/listen", () => {
   });
 
   /**
-   * AND NOTHING IN A REPLY POINTS AT IT. The hiding is the behaviour under test: the
-   * fields are easy to put back one at a time, and a client that cannot subscribe should
-   * never be told to.
+   * WHO IS TOLD ABOUT THE STREAM (D-103, revised 2026-08-16).
+   *
+   * D-103 removed the hint from every reply because no client could act on it, and an
+   * instruction a client must fail at is worse than silence — it displaces the interval
+   * the client actually needed. That reasoning is about the CLIENT's connection, not
+   * about lore, and the connection answers it: `subscriptions/listen` exists only in the
+   * 2026-07-28 method registry, so a client on an earlier era cannot call it at all.
+   *
+   * So the hint goes out on exactly the connections where it is followable. Both
+   * directions are pinned, because getting either wrong is silent: an unfollowable
+   * instruction on a legacy connection, or a client that could have streamed being told
+   * to poll for ever.
    */
-  it("offers no subscription hint in a reply", () => {
-    expect(subscribeTo("revS")).toStrictEqual({});
+  it("offers no subscription hint to a connection that cannot hold a stream", () => {
+    expect(subscribeTo("revS"), "no envelope at all — a 2025-era request").toStrictEqual({});
+    expect(
+      subscribeTo("revS", { mcpReq: { envelope: { "io.modelcontextprotocol/protocolVersion": "2025-11-25" } } }),
+      "an envelope naming an era with no subscriptions/listen in its registry",
+    ).toStrictEqual({});
+  });
+
+  it("offers the hint, ready to send, on a 2026-07-28 connection", () => {
+    const hint = subscribeTo("revS", {
+      mcpReq: { envelope: { "io.modelcontextprotocol/protocolVersion": "2026-07-28" } },
+    }) as { subscribe?: { method?: string; params?: { resourceSubscriptions?: string[] } } };
+    expect(hint.subscribe?.method).toBe("subscriptions/listen");
+    // The filter is the one this same file proves the server honours, above — a hint
+    // naming a URI the listen router would drop is the failure D-103 was written about,
+    // wearing the opposite coat.
+    expect(hint.subscribe?.params?.resourceSubscriptions).toStrictEqual([reviewUri("revS")]);
   });
 
   it("negotiates the modern protocol revision at all", () => {

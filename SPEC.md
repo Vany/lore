@@ -2151,6 +2151,53 @@ D-77 still holds and nothing skips the ladder. What changes is that batching is 
 DEFAULT rather than a compromise: fix everything found, review it together, push it
 together.
 
+**D-113 — a review's change-set is PINNED, and an empty one is a failure, not a pass.
+BUILT 2026-08-16.**
+
+Found by driving lore, not by reading it. `computeDiff` measured every round from
+`merge-base(intoRef, HEAD)`, and `intoRef` is a branch NAME re-resolved on each round. So
+the question "what is this a review of" was re-answered continuously against a moving
+target, and the answer could reach *nothing at all*:
+
+> when the base branch advances to CONTAIN the branch under review, `merge-base` returns
+> HEAD itself, and `git diff HEAD` from a worktree at HEAD is empty.
+
+Every tier is then shown an empty diff. A tier shown nothing raises nothing, and the merge
+cannot distinguish that from a tier that looked and was satisfied — so the ladder settles
+on the silence and can return **`passed` over a diff of zero bytes**. INV-1's failure in
+its most complete form, reached without any component malfunctioning.
+
+**This is not a corner case; it is the ordinary end of every branch.** A branch that
+merges triggers it. So does D-77's own batch gate, whose commits reach `origin/main`
+before the ladder has ruled — which is how it was found, on lore's own batch review,
+sitting in `findings_ready` looking ready to continue.
+
+**Two changes, and the second is the one that must never be removed:**
+
+1. **`review.base_commit`** (schema 19) holds the commit the change-set is measured from,
+   resolved at PIN time and only at pin time — the first round, and every `pull_fresh`. A
+   pin is the one moment the client has said *"this is my branch now"*, which is exactly
+   when the question may be re-answered: a developer who merged the base into their branch
+   to catch up gets a base that accounts for it, instead of a frozen one that would report
+   all of the base's commits as their work. Between pins nothing moves. A NULL — every row
+   written before this — recomputes exactly as before, because back-filling a base for a
+   review already in flight would silently redefine what it is attesting to. A pinned sha
+   that no longer resolves falls back to the live merge-base rather than failing the diff.
+
+2. **A round whose change-set is empty FAILS, with a reason.** The pin makes the collapse
+   rare; it does not make it impossible, and a guard that only usually fires is the shape
+   this project exists to refuse. `failed_because` names both ways to arrive — the branch
+   is already merged, or the review was pinned against a base that already contains it —
+   because the remedy differs and neither is guessable from the outside.
+
+`mergesClean`, `behindBy` and the overlap analysis still ask about `into` **as it stands
+now**. Pinning is about what is MEASURED, not about pretending the base stopped moving;
+staleness is one of the few things a reviewer can act on.
+
+**D-112 makes this urgent rather than tidy.** A review that follows the work is a review
+that outlives its branch's merge, so the collapse stops being an edge and becomes the
+expected end of every long-lived review.
+
 **D-112 — the review is INCREMENTAL and CHECKPOINTED: it follows the work instead of
 gating a snapshot. Framing built 2026-08-16; checkpoint verdicts `[OPEN]`.**
 
@@ -3343,6 +3390,21 @@ removes it. So the delete belongs in the same command as the push rather than in
 later step a crash can skip, and stale `review/*` refs are something to look for. What
 the property actually guarantees is that no reviewed-by-nobody tree becomes the branch
 anyone builds on.
+
+**A BATCH NEEDS A SECOND SCRATCH REF, FOR THE BASE.** `into: main` names "before this
+change" only while none of the change is on `main` — and under the batch gate part of it
+always is, because a commit may reach `origin/main` unreviewed while the batch waits. Once
+that happens `merge-base(main, HEAD)` no longer marks the start of the batch: it slides
+forward commit by commit, so the ladder is handed a fraction of the work while the ticket
+describes all of it, and when `main` catches up entirely the change-set is empty. Both
+failures are silent from the client's side — the review looks healthy and reports on less
+and less. So a batch pushes **`review-base/<sha>` at the commit before the batch begins**
+alongside `review/<sha>` at its tip, and starts the review `into` the base ref. Two refs,
+deleted in the same command as they are pushed, and nothing sweeps either.
+
+Measured on lore's own batch: pinned at a base three files back while the ticket described
+ten commits, then zero files once `main` had absorbed the lot. D-113 stops the change-set
+moving underneath a running review, and this stops it being wrong at the start.
 
 **And the amend is not checked against what was reviewed.** "Submitting means the final
 round runs against the code that is actually pushed" was stated as fact and the

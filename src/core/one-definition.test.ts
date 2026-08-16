@@ -266,6 +266,70 @@ describe("SQL lives in the Store", () => {
 });
 
 /**
+ * GIT RUNS THROUGH `git/exec.ts`, and nowhere else. The sibling of the rule above, and
+ * absent for exactly as long, which is why it was broken.
+ *
+ * `service/repin.ts` built its own `promisify(execFile)` and called git with `{ cwd }`
+ * and nothing else. What it opted out of was not style:
+ *
+ *   * **`GIT_CEILING_DIRECTORIES`** (D-61). Git walks UP from `cwd` looking for a
+ *     repository, so a missing or empty `bare.git` makes `rev-parse` answer from whatever
+ *     ENCLOSES it. That is not hypothetical — it is the recorded incident that put the
+ *     ceiling there, where `fetch --prune` ran against the operator's own checkout. In
+ *     `repin.ts` the wrong answer decides whether to DESTROY a worktree holding fixes a
+ *     client submitted and never committed (D-40): they exist nowhere else.
+ *   * **a timeout**, so a git blocked on a lock held the review for ever.
+ *   * **`maxBuffer`**, harmless for `rev-parse` and not harmless in general.
+ *
+ * `propose/cli.ts` had the same runner for the same reason: nothing said not to.
+ *
+ * The check is on the IMPORT, not on a call shape, because the fault is having a second
+ * way to run git at all — every option above is one somebody has to remember, and the
+ * whole value of `git/exec.ts` is that nobody has to.
+ */
+describe("git runs through one runner", () => {
+  // `git/exec.ts` IS the runner and `git/repo.ts` and `git/diff.ts` reach for `execFile`
+  // deliberately, each with the full option set spelled out, because they need the child
+  // handle or a stream rather than a buffered result. Named individually: an exemption
+  // that is a directory prefix grows quietly.
+  const MAY_SPAWN = new Set(["git/exec.ts", "git/repo.ts", "git/diff.ts", "t0/exec.ts"]);
+
+  it("has no second way to spawn a process", () => {
+    const offenders = FILES.filter(
+      (f) => !MAY_SPAWN.has(f.path) && /from "node:child_process"/.test(f.text),
+    ).map((f) => f.path);
+    expect(
+      offenders,
+      "these spawn processes directly and so miss GIT_CEILING_DIRECTORIES, the timeout and maxBuffer that " +
+        `every other call gets — import { git } from git/exec.ts instead:\n  ${offenders.join("\n  ")}`,
+    ).toStrictEqual([]);
+  });
+
+  // The exemption is granted for spelling the options out. If one stops doing that, it is
+  // no longer the thing the exemption was granted for — which is how `repin.ts` came to
+  // look like a legitimate second runner in the first place.
+  it("has no exemption that stopped setting the options it was exempted for", () => {
+    for (const path of MAY_SPAWN) {
+      const f = FILES.find((x) => x.path === path);
+      expect(f, `${path} is exempt and does not exist — delete the exemption`).toBeDefined();
+      expect(
+        /maxBuffer/.test(f?.text ?? ""),
+        `${path} spawns directly and no longer sets maxBuffer; either set it or use git/exec.ts`,
+      ).toBe(true);
+      // `t0/exec.ts` runs the target repo's own tooling, not git, so a git ceiling would
+      // mean nothing there — it carries its own env hygiene instead. Every git-running
+      // exemption must carry the ceiling.
+      if (path !== "t0/exec.ts") {
+        expect(
+          /GIT_CEILING_DIRECTORIES/.test(f?.text ?? ""),
+          `${path} runs git directly without GIT_CEILING_DIRECTORIES — D-61 says git will climb out of cwd`,
+        ).toBe(true);
+      }
+    }
+  });
+});
+
+/**
  * A NUL byte makes a source file invisible to every text tool at once.
  *
  * `enrich.ts` carried one inside a string literal — `k.path ?? "\0"` where a space was

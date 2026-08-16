@@ -121,6 +121,13 @@ Fetch findings discovered since your last poll.
 Returns ONLY NEW findings. Anything you have already been shown will not appear again
 — do not re-fix something absent from the response.
 
+IF YOU HAVE LOST FINDINGS YOU WERE ALREADY GIVEN, DO NOT POLL AGAIN — read the resource
+\`lore://review/{review_id}\`. It returns every finding on the review in full, with the
+fingerprint \`lore-ok\` needs, and it consumes nothing and settles nothing. Polling
+cannot recover them by construction: the ids you are missing are precisely the ones this
+call will never show you twice. Do not restart the review to see them again either —
+that discards every justification already ratified.
+
 THIS CALL CONSUMES WHAT IT RETURNS, so it answers only for the token that started the
 review. A review you did not start is NOT FOUND here, even on a repository you hold a
 token for, because polling it would take findings its owner has never seen and nothing
@@ -693,6 +700,13 @@ export const RESOURCE_DOCS: Readonly<Record<string, { title: string; priority: n
 
 Rules that decide whether this works:
 - Polls return only new findings. Never re-fix what is not in the response.
+- LOST YOUR NOTES? READ \`lore://review/{review_id}\`. A poll consumes what it returns,
+  so a session that compacted, crashed or simply forgot cannot get its open findings
+  back by polling again — the ids it needs are exactly the ones it will never be shown
+  a second time. That resource returns EVERY finding on the review in full, with the
+  fingerprint you need for \`lore-ok\`, and reading it consumes nothing and settles
+  nothing. Read it instead of guessing, and never restart a review to see them again:
+  a restart throws away every justification already ratified.
 - \`failed\` and \`expired\` are not \`passed\`. Report and stop; do not merge.
 - \`fast_clean\` is not \`passed\` either — the deep tiers have not run.
 - \`passed_partial\` is terminal and will NEVER become \`passed\`, so waiting for that

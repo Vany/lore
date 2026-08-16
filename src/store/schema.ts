@@ -21,7 +21,7 @@ import { SEVERITIES } from "../core/finding.ts";
 // adds the columns, because this number is what `assertNotDowngrade` compares — left
 // behind, it says a database written by this build is identical to one written before
 // the columns existed.
-export const SCHEMA_VERSION = 18;
+export const SCHEMA_VERSION = 19;
 
 /**
  * How findings are ordered wherever the service hands them out: worst first.
@@ -112,6 +112,16 @@ CREATE TABLE IF NOT EXISTS review (
   -- The tree actually reviewed. The attestation covers this, not a branch name
   -- (D-40): if the branch moved, the signature does not describe what is there now.
   tree_hash   TEXT,
+  -- WHAT THIS REVIEW IS A REVIEW OF, frozen at review_start (D-113).
+  --
+  -- The commit the change-set is measured FROM. Every round used to recompute it as
+  -- merge-base(into_ref, HEAD), resolving into_ref freshly each time — so when the base
+  -- branch advanced to CONTAIN the branch under review, the merge-base collapsed onto
+  -- HEAD and the change-set became empty. Four tiers then read nothing and the ladder
+  -- could still return 'passed'. NULL predates the column and falls back to the old
+  -- recompute, because inventing a base for a review already in flight would change what
+  -- it claims to have read.
+  base_commit TEXT,
   ladder      TEXT NOT NULL,
   -- WHY a review did not run, in the client's words, when the LADDER is what stopped
   -- it rather than a round that threw. failureReason used to read only job.last_error,
@@ -439,6 +449,12 @@ export const MIGRATIONS: readonly { readonly table: string; readonly column: str
   // opinion" — the unchanged check simply cannot fire for a review that old, same as
   // before this existed.
   { table: "review", column: "origin_tree_hash", sql: "ALTER TABLE review ADD COLUMN origin_tree_hash TEXT" },
+  // THE COMMIT THE CHANGE-SET IS MEASURED FROM, frozen at review_start (D-113). See the
+  // column's comment in DDL for what moved underneath it. NULL predates the column and
+  // means "recompute as before" — deliberately, because a review already in flight was
+  // started under the old rule and back-filling a base would silently redefine what it
+  // is attesting to.
+  { table: "review", column: "base_commit", sql: "ALTER TABLE review ADD COLUMN base_commit TEXT" },
 ];
 
 /**

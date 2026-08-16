@@ -12,20 +12,17 @@
  * SPEC: spec/propose.md §1, §6
  */
 
-import { execFile } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { promisify } from "node:util";
 import { DidNotRun, UsageError } from "../core/errors.ts";
 import { reviewType } from "../core/review-type.ts";
+import { git } from "../git/exec.ts";
 import { removeWorktree, repoPaths, worktreeFor } from "../git/repo.ts";
 import type { Reviewer } from "../reviewer/opencode.ts";
 import type { Store } from "../store/store.ts";
 import { isLens, LENSES, type Lens } from "./proposal.ts";
 import { renderProposals } from "./render.ts";
 import { propose } from "./run.ts";
-
-const run = promisify(execFile);
 
 export interface ProposeCliInput {
   readonly store: Store;
@@ -87,7 +84,7 @@ export async function proposeCli(i: ProposeCliInput): Promise<string> {
   try {
     // The RESOLVED SHA. `master` means something different next week, and this document
     // is read weeks later by someone reconstructing what was actually looked at.
-    const sha = (await run("git", ["rev-parse", "HEAD"], { cwd: worktree })).stdout.trim();
+    const sha = (await git(worktree, ["rev-parse", "HEAD"])).stdout.trim();
 
     const type = reviewType(i.mode);
     const result = await propose(

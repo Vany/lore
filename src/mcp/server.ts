@@ -29,6 +29,7 @@ import { buildVex, findingsNeedingTriage, renderVex } from "../security/vex.ts";
 import { isSettled, type RecordedFinding, type Store } from "../store/store.ts";
 import type { Principal } from "./auth.ts";
 import { REVIEW_PROMPT_TEXT, RESOURCE_DOCS, TOOL_DOCS } from "./docs.ts";
+import { reviewUri } from "./events.ts";
 
 export interface ServerDeps {
   readonly store: Store;
@@ -55,7 +56,9 @@ export interface ServerDeps {
     reviewId: string,
     /** Origin's tree as this review last pinned it — repin leaves the worktree alone if origin still points there. */
     expectTree?: string,
-  ) => Promise<{ worktree: string; treeHash: string; synced: boolean }>;
+    /** The review's `into`, so the base the change-set is measured from is re-resolved at this pin (D-113). */
+    intoRef?: string,
+  ) => Promise<{ worktree: string; treeHash: string; synced: boolean; baseCommit?: string | undefined }>;
 }
 
 const text = (s: string) => ({ content: [{ type: "text" as const, text: s }] });
@@ -164,29 +167,52 @@ function nextStep(state: ReviewState, freshFindings = 0): string {
 }
 
 /**
- * NOTHING ABOUT SUBSCRIPTIONS TRAVELS TO A CLIENT — deliberately, and it is not gone.
+ * The wire revision this request was sent for, or `undefined` on a 2025-era connection.
  *
- * Vany: *"we are keeping our subscription mechanism, but it is not yet ready in the
- * client — the client can only poll. So we ask the client to poll, and keep the
- * subscribing model hidden."*
- *
- * The server still declares `resources: { subscribe: true }`, still honours
- * `subscriptions/listen`, and still wakes a subscriber on every state change (D-80). What
- * stopped is ADVERTISING it. Every reply used to carry a ready-made `subscribe` frame, a
- * `subscribe_filter`, and eight hundred words on why an SDK helper needs the second shape
- * — advice a client that cannot subscribe must read, fail at, and then work past to find
- * the interval it actually needed.
- *
- * That is worse than silence for a client that polls: the reply's most prominent
- * instruction is one it cannot follow, and the fallback reads as a consolation. So the
- * replies now say one thing — poll, at this interval — and the capability waits for a
- * client that can use it.
- *
- * Kept as a function returning nothing so the call sites stay honest: they say WHERE the
- * subscription hint used to go, and restoring it is one edit rather than an archaeology.
+ * `ctx.mcpReq.envelope` is the per-request `_meta` envelope (2026-07-28), keyed by the
+ * reserved names verbatim. The SDK types it as `Partial<{}>` — an empty type, so there is
+ * nothing to index — hence the one cast, which is confined to this function rather than
+ * spread across the call sites that want the answer.
  */
-export function subscribeTo(_reviewId: string): object {
-  return {};
+function wireRevision(ctx: unknown): string | undefined {
+  const envelope = (ctx as { mcpReq?: { envelope?: Record<string, unknown> } } | undefined)?.mcpReq?.envelope;
+  const version = envelope?.["io.modelcontextprotocol/protocolVersion"];
+  return typeof version === "string" ? version : undefined;
+}
+
+/**
+ * Tell a client about the stream ONLY IF ITS CONNECTION CAN HOLD ONE (D-103, revised).
+ *
+ * D-103 removed the subscribe frame from every reply because no client could act on it:
+ * the most prominent instruction in the response was one that would fail, and the polling
+ * interval it actually needed read as a consolation prize. That was right, and it threw
+ * away Vany's rule with it — *"the model chooses what its harness supports"* — by deciding
+ * for every client at once that the answer was no.
+ *
+ * The connection already answers the question. `subscriptions/listen` exists only in the
+ * 2026-07-28 method registry, so a client that negotiated an earlier era CANNOT call it —
+ * not "probably will not", cannot: the method is not in its era. A client that negotiated
+ * 2026-07-28 can, and lore serves it (D-80, proven end to end in `subscribe.test.ts`).
+ *
+ * So the hint is emitted on exactly the connections where it is followable, and on every
+ * other one the reply says what it has said since D-103: poll, at this interval. Nobody
+ * is handed an instruction they cannot carry out, and nobody who could stream is kept in
+ * the dark because somebody else could not.
+ */
+export function subscribeTo(reviewId: string, ctx?: unknown): object {
+  if (wireRevision(ctx) !== "2026-07-28") return {};
+  return {
+    subscribe: {
+      method: "subscriptions/listen",
+      params: { resourceSubscriptions: [reviewUri(reviewId)] },
+      note:
+        "Your connection can hold a notification stream, so you do not have to poll on a timer: open " +
+        "subscriptions/listen with the filter above and lore wakes you on every state change of this " +
+        "review. Poll once when woken to collect what is new — the stream says THAT something happened, " +
+        "review_poll says what. Polling on the interval still works and is never wrong; this only saves " +
+        "the calls that would have found nothing.",
+    },
+  };
 }
 
 function newReviewId(): string {
@@ -203,7 +229,29 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
   // which is this project's defining failure with a new coat of paint (D-80).
   const server = new McpServer(
     { name: "lore", version: "0.1.0" },
-    { capabilities: { resources: { subscribe: true } } },
+    {
+      capabilities: { resources: { subscribe: true } },
+      // ONE MINUTE ON THE TOOL LIST, AND NOTHING ELSE CACHED AT ALL.
+      //
+      // 2026-07-28 added `CacheableResult` (`ttlMs`, `cacheScope`) to the list and read
+      // methods. The SDK's own defaults are already the safe ones — `ttlMs: 0`,
+      // `cacheScope: 'private'` — so nothing here is about correctness or disclosure;
+      // it is about a client re-listing a static tool set on every session.
+      //
+      // WHY THE NUMBER IS SMALL, and why it is the only one set. In this service the tool
+      // descriptions ARE the interface: an agent has no README and no support channel, so
+      // `TOOL_DOCS` is the entire contract, and it changes in the same deploy as the
+      // behaviour it describes (CLAUDE.md). A long TTL therefore buys round-trips at the
+      // price of clients acting confidently on a contract that has been replaced — this
+      // project's defining failure, bought back with a config value. Sixty seconds saves
+      // the repeat listing within one session and cannot outlive a deploy by long.
+      //
+      // `resources/read` is deliberately left at 0: `lore://review/{id}` moves on every
+      // state change and every finding, and it is the one surface a client polls to learn
+      // that something happened. Caching it would be caching the answer to "has anything
+      // changed", which is the question.
+      cacheHints: { "tools/list": { ttlMs: 60_000, cacheScope: "private" } },
+    },
   );
   const { store } = deps;
 
@@ -303,7 +351,7 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
         ),
       }),
     },
-    async ({ branch, into, ticket, type, restart, pull_request, pull_fresh }) => {
+    async ({ branch, into, ticket, type, restart, pull_request, pull_fresh }, ctx) => {
       // AN OPEN REVIEW OF THIS BRANCH IS THE ONE TO CONTINUE, NOT TO DUPLICATE.
       //
       // Measured 2026-08-05, the first day a real client drove this: six reviews of
@@ -360,7 +408,8 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
         // against it meant this check could only ever fire on a review that had NEVER
         // been fixed, and a no-op pull_fresh after any submit silently rewound the review
         // to the pre-fix tip. `originTreeHash` is the one field ordinary fixes never move.
-        const before = store.getReview(open.id, store.principalOf(open.id) ?? who.principal)?.originTreeHash;
+        const openRow = store.getReview(open.id, store.principalOf(open.id) ?? who.principal);
+        const before = openRow?.originTreeHash;
         // lore-ok[a204d46d]: both halves upheld, and both fixed in `repinReview` rather
         // than here. The destroy-then-compare ORDER is gone — `expectTree` goes in, and
         // the recut happens only once origin is known to have moved — and the ref
@@ -372,7 +421,7 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
         // `before` goes IN, so the decision is made before anything is destroyed rather
         // than compared after — see `repinReview`. Passing it is what makes the
         // "unchanged" reply below safe to give.
-        const pinned = await deps.repin(open.id, before);
+        const pinned = await deps.repin(open.id, before, openRow?.intoRef);
         if (before !== undefined && pinned.treeHash === before) {
           return text(
             JSON.stringify({
@@ -385,7 +434,15 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
             }),
           );
         }
-        store.updateReview(open.id, { state: "queued", treeHash: pinned.treeHash, originTreeHash: pinned.treeHash });
+        // THE BASE MOVES ONLY AT A PIN (D-113), and this is one. Omitted rather than
+        // written as undefined when the ref would not resolve: `updateReview` treats
+        // undefined as "leave it", and the stored base is the last one that was true.
+        store.updateReview(open.id, {
+          state: "queued",
+          treeHash: pinned.treeHash,
+          originTreeHash: pinned.treeHash,
+          ...(pinned.baseCommit === undefined ? {} : { baseCommit: pinned.baseCommit }),
+        });
         deps.enqueue(open.id, "fast");
         return text(
           JSON.stringify({
@@ -518,7 +575,7 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           // context by the time this returns; the response note always is.
           ...pacing(store, { id, repoId: who.repoId, state: "queued", type: rt.id, ladder: initialState(rt.tiers) }),
           // Where the subscription hint used to go. See `subscribeTo` (D-103).
-          ...subscribeTo(id),
+          ...subscribeTo(id, ctx),
           // THE STRING A CLIENT IS GUARANTEED TO READ, and it pointed at a field that is
           // no longer here. D-103 stopped handing out the subscribe frame; this sentence
           // went on saying "SEND THE `subscribe` CALL BELOW" for exactly one deploy, which
@@ -542,7 +599,7 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       description: TOOL_DOCS.poll,
       inputSchema: z.object({ review_id: z.string().min(1) }),
     },
-    async ({ review_id }) => {
+    async ({ review_id }, ctx) => {
       const review = mine(review_id);
       const fresh = store.undelivered(review_id);
       store.markDelivered(review_id, fresh.map((f) => f.fingerprint));
@@ -644,7 +701,7 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           // is the client's, and handing it a subscribe call there would read as
           // permission to sleep on findings that are already its problem — the
           // abandonment D-70 measured. Terminal states have nothing left to announce.
-          ...(["queued", "running", "fast_clean"].includes(review.state) ? subscribeTo(review_id) : {}),
+          ...(["queued", "running", "fast_clean"].includes(review.state) ? subscribeTo(review_id, ctx) : {}),
           // Deterministic, known in milliseconds, and the fact a landing decision
           // actually turns on. It was reaching the reviewer's prompt and stopping
           // there, so a client triaging eight open pull requests would have needed
@@ -1576,7 +1633,10 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
   server.registerResource(
     "review-trail",
     new ResourceTemplate("lore://review/{review_id}", { list: undefined }),
-    { title: "Full audit trail for one review", mimeType: "application/json" },
+    {
+      title: "Every finding on one review, in full — reading it consumes nothing",
+      mimeType: "application/json",
+    },
     async (uri: URL, vars: Record<string, string | string[]>) => {
       const id = String(Array.isArray(vars["review_id"]) ? vars["review_id"][0] : vars["review_id"]);
       const review = mine(id);

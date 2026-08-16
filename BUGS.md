@@ -64,6 +64,18 @@ ids it needs are precisely the ones it will never be shown again (see 3).
 
 ## 3. Poll returns deltas only, so a client that loses its notes cannot recover them
 
+**ADDRESSED 2026-08-16 — the capability already existed and nothing said so.**
+`lore://review/{id}` returns every finding in full, owner-checked through `mine()`, and
+consumes nothing. Verified by reading it as a client over MCP, not by reading the code:
+six findings came back complete with claim, evidence, failure scenario and fingerprint.
+
+So the entry below is wrong where it says the client channel cannot reach it — the
+channel was there and no text mentioned it, which for an agent is the same thing. Fixed
+in `TOOL_DOCS.poll`, the workflow resource and the resource's own title. **The general
+lesson is the one worth keeping: a capability an agent is not TOLD about does not exist.
+There is no README to find it in.**
+
+
 **2026-08-14, several times.**
 
 `review_poll` consumes what it returns. Correct for the delivery model, and it means a

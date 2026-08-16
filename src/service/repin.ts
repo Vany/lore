@@ -21,19 +21,26 @@
  * one: completion, not pickup.
  */
 
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { gitMaybe } from "../git/exec.ts";
+import { baseCommitFor } from "../git/diff.ts";
 import { removeWorktree, repoPaths, treeHash, worktreeFor } from "../git/repo.ts";
 import { requestMirrorRefresh } from "../git/mirror-request.ts";
 import type { Store } from "../store/store.ts";
-
-const run = promisify(execFile);
 
 export interface RepinResult {
   readonly worktree: string;
   readonly treeHash: string;
   /** What the sync said, for the caller's message when the tree did not move. */
   readonly synced: boolean;
+  /**
+   * The commit the change-set is measured from, re-resolved at this pin (D-113).
+   *
+   * A pin is the one moment the client has said "this is my branch now", so it is the
+   * only moment the base may move — a developer who merged `into` into their branch gets
+   * a base that accounts for it. `undefined` when the caller named no `into` (the CLI
+   * path) or the ref would not resolve, and the caller then leaves the stored base alone.
+   */
+  readonly baseCommit?: string | undefined;
 }
 
 /**
@@ -56,9 +63,20 @@ export interface RepinResult {
  */
 async function originTree(bare: string, branch: string): Promise<string | undefined> {
   for (const ref of [`origin/${branch}^{tree}`, `refs/heads/${branch}^{tree}`]) {
-    const tree = await run("git", ["rev-parse", "--verify", "--quiet", ref], { cwd: bare })
-      .then((r) => r.stdout.trim())
-      .catch(() => undefined);
+    // THROUGH `git/exec.ts`, NOT A LOCAL `promisify(execFile)`, which is what this was.
+    //
+    // That local runner passed `{ cwd }` and nothing else, so it silently opted out of
+    // the one thing every other git call in this service gets: `GIT_CEILING_DIRECTORIES`.
+    // Without it git walks UP from `cwd` hunting for a repository, so an empty or missing
+    // `bare.git` makes `rev-parse` answer from whatever ENCLOSES it — the exact fault
+    // D-61 was written for, reopened in the file whose whole job is deciding whether to
+    // destroy a worktree. A tree hash from the wrong repository here either matches (and
+    // the destructive recut is skipped when it was needed) or does not (and the recut
+    // runs, taking with it fixes a client submitted that exist nowhere else, because a
+    // submit is applied and never committed, D-40).
+    //
+    // It also had no timeout, so a git blocked on a lock held the review for ever.
+    const tree = await gitMaybe(bare, ["rev-parse", "--verify", "--quiet", ref]);
     if (tree !== undefined && tree !== "") return tree;
   }
   return undefined;
@@ -74,6 +92,12 @@ export async function repinReview(
    * nothing is re-pinned and the worktree is left exactly as it stands — see below.
    */
   expectTree?: string,
+  /**
+   * The review's `into`, so the base can be re-resolved on the tree this pin cuts
+   * (D-113). Passed in rather than read here: the caller already holds the review row,
+   * and a second read would be a second chance for the two to disagree.
+   */
+  intoRef?: string,
 ): Promise<RepinResult> {
   const at = store.reviewLocation(reviewId);
   if (at === undefined) throw new Error(`review ${reviewId} has no repository on record`);
@@ -118,5 +142,18 @@ export async function repinReview(
   }
   await removeWorktree(paths, reviewId);
   const worktree = await worktreeFor(paths, reviewId, at.branch, at.gitUrl);
-  return { worktree, treeHash: await treeHash(worktree), synced: refreshed.fetched };
+  // RE-RESOLVED HERE, on the tree that was just cut, because this is a PIN (D-113).
+  //
+  // Between pins the base is frozen, which is what stops the change-set collapsing as
+  // `into` advances. At a pin it must move, or a developer who merged the base into their
+  // branch to catch up would have every one of the base's commits reported as their own
+  // work. `undefined` — no `into` named, or a ref that will not resolve — leaves the
+  // stored base exactly as it was, which is the reading that cannot invent a change-set.
+  const baseCommit = intoRef === undefined ? undefined : await baseCommitFor(worktree, intoRef);
+  return {
+    worktree,
+    treeHash: await treeHash(worktree),
+    synced: refreshed.fetched,
+    ...(baseCommit === undefined ? {} : { baseCommit }),
+  };
 }

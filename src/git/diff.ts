@@ -87,7 +87,62 @@ export interface OverlapFile {
   readonly baseCommits: readonly string[];
 }
 
-export async function computeDiff(worktree: string, base: string): Promise<ReviewDiff> {
+/**
+ * WHAT A REVIEW IS A REVIEW OF, decided once and then kept (D-113).
+ *
+ * `merge-base(into, HEAD)` answers "where did this branch leave the base", which is the
+ * right question at the moment a review is PINNED and the wrong one every time after.
+ * `into` keeps moving: it is a branch name resolved fresh on every round, and when it
+ * advances to CONTAIN the branch under review — which is precisely what happens when the
+ * work merges, or when a batch gate pushes its own commits before the ladder has ruled —
+ * the merge-base collapses onto HEAD and the change-set becomes EMPTY. Four tiers then
+ * read nothing, find nothing, and the ladder can still return `passed`: an attestation
+ * over a diff of zero bytes, which is INV-1's failure in its most complete form.
+ *
+ * Measured 2026-08-16 on lore's own batch review: three files at pin time, and after two
+ * further commits of the same batch reached `main`, `merge-base(origin/main, HEAD)`
+ * returned HEAD itself and the diff was zero lines — while the review sat in
+ * `findings_ready` looking ready to continue.
+ *
+ * So the base is resolved HERE, at pin time only — `review_start`'s first round and every
+ * `pull_fresh` — and stored. Recomputing at a pin is deliberate rather than lazy: a pin is
+ * the one moment the CLIENT has said "this is my branch now", so a developer who merged
+ * the base into their branch gets a base that accounts for it, instead of a frozen one
+ * that would report all of `into`'s commits as theirs. Between pins nothing moves.
+ */
+export async function baseCommitFor(worktree: string, into: string): Promise<string | undefined> {
+  const resolved = await resolveInto(worktree, into);
+  if (resolved === undefined) return undefined;
+  return await gitMaybe(worktree, ["merge-base", resolved, "HEAD"]);
+}
+
+/**
+ * `origin/<base>` first, exactly as `addWorktree` resolves the branch, or `undefined`
+ * when the ref does not exist at all. Shared by `computeDiff` and `baseCommitFor` so the
+ * two cannot disagree about which ref `into` names.
+ */
+async function resolveInto(worktree: string, base: string): Promise<string | undefined> {
+  const resolved =
+    (await gitMaybe(worktree, ["rev-parse", "--verify", "--quiet", `origin/${base}^{commit}`])) ?? base;
+  return (await gitMaybe(worktree, ["rev-parse", "--verify", "--quiet", `${resolved}^{commit}`])) === undefined
+    ? undefined
+    : resolved;
+}
+
+export async function computeDiff(
+  worktree: string,
+  base: string,
+  /**
+   * The commit this review was pinned to measure from (`review.baseCommit`), when it has
+   * one. `undefined` for rows written before D-113, which recompute exactly as before —
+   * back-filling a base for a review already in flight would silently redefine what it is
+   * attesting to.
+   *
+   * Only the MEASUREMENT uses it. `mergesClean`, `behindBy` and the overlap analysis all
+   * ask about `into` AS IT IS NOW, which is the whole point of those three.
+   */
+  pinnedBase?: string | undefined,
+): Promise<ReviewDiff> {
   // `origin/<base>` first, exactly as `addWorktree` resolves the branch.
   //
   // A worktree shares its refs with the bare mirror, and in a mirror the LOCAL
@@ -131,7 +186,19 @@ export async function computeDiff(worktree: string, base: string): Promise<Revie
     );
   }
 
+  // THE PINNED BASE WINS WHEN THERE IS ONE (D-113), and it is verified before it is
+  // trusted: a stored sha that no longer resolves — a force-push that dropped it, a
+  // mirror recut — must not silently become `git diff <missing-sha>`, which fails with
+  // raw git vocabulary at the one moment the client needs a reason. An unresolvable pin
+  // falls through to the live merge-base, which is where this review would have been
+  // without the column.
+  const pinned =
+    pinnedBase === undefined
+      ? undefined
+      : await gitMaybe(worktree, ["rev-parse", "--verify", "--quiet", `${pinnedBase}^{commit}`]);
+
   const mergeBase =
+    pinned ??
     (await gitMaybe(worktree, ["merge-base", resolved, "HEAD"])) ??
     (await gitMaybe(worktree, ["rev-parse", resolved])) ??
     resolved;

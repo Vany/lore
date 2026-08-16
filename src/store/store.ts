@@ -68,6 +68,16 @@ export interface ReviewRow {
    * the column existed, which the check reads as "no opinion" rather than a guess.
    */
   readonly originTreeHash?: string | undefined;
+  /**
+   * The commit this review's change-set is measured FROM (D-113), resolved at pin time —
+   * the first round, and every `pull_fresh` — and untouched between pins.
+   *
+   * `intoRef` is a branch NAME, so recomputing the merge-base every round let the
+   * change-set shrink and finally vanish as the base branch advanced to contain the
+   * branch under review. `undefined` predates the column and recomputes as before,
+   * because back-filling a base for an in-flight review would redefine what it attests.
+   */
+  readonly baseCommit?: string | undefined;
   readonly ladder: LadderState;
   /**
    * When this review last moved — and therefore when the stale sweep will take it.
@@ -472,6 +482,7 @@ export class Store {
       state: (row["state"] ?? "failed") as ReviewState,
       treeHash: un(row["tree_hash"] ?? null),
       originTreeHash: un(row["origin_tree_hash"] ?? null),
+      baseCommit: un(row["base_commit"] ?? null),
       tokenHash: un(row["token_hash"] ?? null),
       tiers: un(row["tiers"] ?? null),
       pullRequest: un(row["pull_request"] ?? null),
@@ -498,7 +509,13 @@ export class Store {
 
   updateReview(
     id: string,
-    patch: { state?: ReviewState; ladder?: LadderState; treeHash?: string; originTreeHash?: string },
+    patch: {
+      state?: ReviewState;
+      ladder?: LadderState;
+      treeHash?: string;
+      originTreeHash?: string;
+      baseCommit?: string;
+    },
   ): void {
     // See `refusedByClose`: the deploy window, where a round writes its own ending into
     // a handle that is already shut. The review keeps the state it had and its `running`
@@ -528,6 +545,14 @@ export class Store {
     if (patch.originTreeHash !== undefined) {
       sets.push("origin_tree_hash = ?");
       args.push(patch.originTreeHash);
+    }
+    // WRITTEN ONLY AT A PIN (D-113) — the first round, and every `pull_fresh`. A pin is
+    // the one moment the client has said "this is my branch now", so it is the only
+    // moment the question "what is this a review OF" may legitimately be re-answered.
+    // Every ordinary round leaves it alone, which is the whole point of the column.
+    if (patch.baseCommit !== undefined) {
+      sets.push("base_commit = ?");
+      args.push(patch.baseCommit);
     }
     args.push(id);
     this.db.prepare(`UPDATE review SET ${sets.join(", ")} WHERE id = ?`).run(...args);
@@ -3022,7 +3047,13 @@ export class Store {
    * and the count must never overstate in that window either.
    */
   queueDepth(): number {
-    // COUNT() comes back as bigint from node:sqlite for large values.
+    // `Number()` because the DECLARED type is `number | bigint`, not because a bigint
+    // can arrive here. Verified against Node 26: node:sqlite returns integers as JS
+    // numbers and THROWS `RangeError: Value is too large to be represented as a
+    // JavaScript number` past 2^53 — it never silently hands back a bigint unless
+    // `StatementSync.setReadBigInts(true)` is called, which nothing here does. A comment
+    // saying otherwise stood for months and read as a guard against overflow; the real
+    // reason a count cannot overflow is that it counts rows in a queue.
     const row = this.db
       .prepare(
         `SELECT COUNT(*) AS c FROM job j JOIN review rv ON rv.id = j.review_id

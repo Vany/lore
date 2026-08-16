@@ -19,12 +19,12 @@
   "dependencies": {
     "@modelcontextprotocol/node": "^2.0.0",
     "@modelcontextprotocol/server": "^2.0.0",
-    "@opencode-ai/sdk": "^1.18.11",
+    "@opencode-ai/sdk": "^1.18.18",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@modelcontextprotocol/client": "^2.0.0",
-    "@types/node": "^26.1.2",
+    "@types/node": "^26.2.0",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"
   }

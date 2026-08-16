@@ -39,7 +39,7 @@ import { retryAt, shouldProbe } from "../core/cooloff.ts";
 import { startOfDayIso } from "../ops/spend.ts";
 import { ServiceUnreachable, CancelledByLore, DidNotRun, Exhausted, ProviderAuthFailed, TierUnavailable, TooLargeForTier } from "../core/errors.ts";
 import { hunkAround, hunkStillPresent, makeScope, type Scope } from "../core/scope.ts";
-import { blobSha, computeDiff, renderDiff } from "../git/diff.ts";
+import { baseCommitFor, blobSha, computeDiff, renderDiff } from "../git/diff.ts";
 import { applyPatch, restoreTree, treeDelta, treeHash } from "../git/repo.ts";
 import { detectAndRecord, renderConflicts } from "../knowledge/conflict.ts";
 import { promoteRecurring } from "../knowledge/derive.ts";
@@ -324,8 +324,50 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   if (members.length === 0) throw new Error(`ladder cursor ${review.ladder.cursor} names no runnable tier`);
 
   // 1. What changed.
-  const diff = await computeDiff(worktree, review.intoRef);
+  //
+  // THE BASE IS PINNED ON THE FIRST ROUND AND KEPT (D-113). `intoRef` is a branch name,
+  // so recomputing the merge-base every round let the change-set shrink as the base
+  // advanced — and vanish entirely once the base CONTAINED this branch, at which point
+  // every tier reads nothing and the ladder can still return `passed`. `pull_fresh` is
+  // the only other writer, because a pin is the only moment the client has said "this is
+  // my branch now" (see `store.updateReview`).
+  //
+  // A row with no base and a round already past 0 predates the column: it keeps the old
+  // recompute rather than being given a base mid-flight, which would change what it
+  // claims to have read.
+  let pinnedBase = review.baseCommit;
+  if (pinnedBase === undefined && review.ladder.round === 0) {
+    pinnedBase = await baseCommitFor(worktree, review.intoRef);
+    if (pinnedBase !== undefined) store.updateReview(reviewId, { baseCommit: pinnedBase });
+  }
+  const diff = await computeDiff(worktree, review.intoRef, pinnedBase);
   store.setBehindBy(reviewId, diff.behindBy);
+
+  // NOTHING TO READ IS NOT A CLEAN REVIEW (INV-1).
+  //
+  // An empty change-set used to run the whole ladder over zero bytes and let it settle on
+  // the silence, because a tier that is shown nothing raises nothing and the merge cannot
+  // tell that apart from a tier that looked and was satisfied. `passed` then meant "four
+  // models agreed about a diff that did not exist".
+  //
+  // Reachable two ways, and the message names both because the fix differs: the branch is
+  // fully merged into `into` (so there is genuinely nothing outstanding), or the review
+  // was pinned to a base that already contains it. Refusing here costs one git call and
+  // saves a whole ladder's quota on a question with no content.
+  // `untracked` is part of the test, not an afterthought: those files are invisible to
+  // `git diff` (INV-4) and are reviewed by name, so a branch whose only content is a new
+  // unstaged file has a real change-set and an empty patch.
+  if (diff.changedFiles.length === 0 && diff.untracked.length === 0 && diff.patch.trim().length === 0) {
+    const why =
+      `there is nothing to review: the tree at ${diff.mergeBase.slice(0, 12)} and the branch tip are ` +
+      `identical, so the change-set is empty. NOTHING WAS READ, and this is not a pass. Either this ` +
+      `branch is already merged into '${review.intoRef}', or the review was pinned to a base that ` +
+      `already contains it — if you still need a verdict, start a review against a base from BEFORE ` +
+      `the work (a scratch ref at the pre-change commit is the usual way).`;
+    store.setFailureReason(reviewId, why);
+    store.updateReview(reviewId, { state: "failed" });
+    throw new DidNotRun(`review ${reviewId} stopped: ${why}`);
+  }
 
   // 2. Deterministic first. An LLM is never paid for what tsc decides for free.
   //

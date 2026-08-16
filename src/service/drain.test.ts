@@ -398,6 +398,14 @@ describe("a store fault does not silently cost the service its capacity", () => 
 describe("a round interrupted by lore itself is requeued, not failed", () => {
   let root: string;
 
+  // A BRANCH WITH A COMMIT ON IT, not `main` reviewed into `main`.
+  //
+  // This fixture used to do the latter, which is an EMPTY change-set — and a round over
+  // an empty change-set is now refused before any tier is asked anything (INV-1: a review
+  // that read nothing is not a review that found nothing). The test then timed out
+  // waiting for a second round that could never come, which is the right refusal
+  // reporting a fixture that was never a review. What it is here to observe — a round
+  // dying mid-flight and being retried — needs a round that actually starts.
   const makeRepo = (dir: string) => {
     mkdirSync(dir, { recursive: true });
     const g = (...a: string[]) => execFileSync("git", a, { cwd: dir, stdio: "ignore" });
@@ -407,6 +415,11 @@ describe("a round interrupted by lore itself is requeued, not failed", () => {
     writeFileSync(join(dir, "a.txt"), "a\n");
     g("add", "-A");
     g("commit", "-qm", "x");
+    g("checkout", "-q", "-b", "work");
+    writeFileSync(join(dir, "b.txt"), "b\n");
+    g("add", "-A");
+    g("commit", "-qm", "the change under review");
+    g("checkout", "-q", "main");
   };
 
   const mirrored = (id: string) => {
@@ -418,7 +431,7 @@ describe("a round interrupted by lore itself is requeued, not failed", () => {
     execFileSync("git", ["clone", "--bare", src, bare], { stdio: "ignore" });
     writeFileSync(join(bare, "FETCH_HEAD"), "");
     store.createReview({
-      id, repoId, principal: "p", branch: "main", intoRef: "main",
+      id, repoId, principal: "p", branch: "work", intoRef: "main",
       ticket: "t", type: "code-arch", state: "queued", ladder: initialState(),
     });
     store.enqueue(id, "fast");

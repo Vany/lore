@@ -391,7 +391,8 @@ export async function serve(cfg: ServiceConfig): Promise<() => void> {
       enqueue: (reviewId, stage) => {
         void enqueueOrFail(store, { ...DEFAULT_SPEND, dailyCeilingUsd: cfg.dailyCeilingUsd }, alerter, reviewId, stage);
       },
-      repin: (reviewId, expectTree) => repinReview(store, reposRoot, dataDir(), reviewId, expectTree),
+      repin: (reviewId, expectTree, intoRef) =>
+        repinReview(store, reposRoot, dataDir(), reviewId, expectTree, intoRef),
       attest: async (reviewId) => {
         return render(await attest(store, reviewId, store.principalOf(reviewId) ?? "", keyPath));
       },
