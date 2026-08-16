@@ -1002,6 +1002,13 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       // `applied !== before` is the same test `pull_fresh` already makes before it counts
       // origin as having moved. A submit that changes nothing is a client saying "I have
       // no more to give", which is exactly when the bounds should keep counting.
+      // lore-ok[8bcf23f5]: the correction is right and the gate stays. The empty-diff
+      // path really is unreachable — the schema is `diff.min(1)` and `git apply` exits
+      // non-zero with no valid patches — and the residual it names, `holdDiff` resetting
+      // the bounds before verification, is gone because `holdDiff` no longer writes the
+      // ladder at all. The tree-moved test is kept regardless: it is the correct rule for
+      // "did the client give me new material", and keeping it does not depend on which
+      // of the two routes to a no-op submit happens to be open today.
       if (applied !== before) store.notedClientWork(review_id);
       store.updateReview(review_id, { state: "queued", treeHash: applied });
       deps.enqueue(review_id, "fast");

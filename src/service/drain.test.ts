@@ -223,6 +223,17 @@ describe("a worker does not overwrite an ending somebody chose", () => {
     },
   });
 
+  // lore-ok[c4fb3911]: the fixture IS main-into-main and the test passes anyway — the
+  // empty-change-set refusal never gates it. `cancelsThenRefuses` is reached through the
+  // knowledge BOOTSTRAP, which runs before any round, so the review is already
+  // `cancelled` when runRound is claimed and stops on the terminal check instead. 13 of
+  // 13 pass in 2.8s. The reviewer reached the same conclusion from source and retracted.
+  // lore-ok[f76a571b]: the retraction, accepted and kept — see above.
+  //
+  // KEPT AS A COMMENT because the weaker true thing inside the wrong claim is worth
+  // knowing: this test reaches its mock by a path its NAME does not mention, so a change
+  // to bootstrap could silence it without failing it. That fragility is real; the
+  // timeout was not.
   it("leaves a cancelled review cancelled when the round refuses mid-flight", async () => {
     const repoId = store.upsertRepo("r", join(root, "src")).id;
     withMirror(repoId);
@@ -293,6 +304,12 @@ describe("a round whose store closes under it", () => {
   beforeEach(() => { root2 = mkdtempSync(join(tmpdir(), "lore-close-")); });
   afterEach(() => rmSync(root2, { recursive: true, force: true }));
 
+  // lore-ok[3e13f71d]: same mechanism, same answer. The mock that closes the store is
+  // invoked by the knowledge bootstrap BEFORE runRound, so the store really is closed
+  // under a live round and the guard really is exercised; the empty-change-set refusal is
+  // never reached. Verified by running the file, and the log line naming the bootstrap is
+  // in the verbose output. The reviewer retracted this independently.
+  // lore-ok[b74c7bff]: the retraction, accepted and kept — see above.
   it("stops quietly instead of throwing out of a detached promise", async () => {
     const repoId = store.upsertRepo("r", join(root2, "src")).id;
     const src = join(root2, "src");

@@ -118,8 +118,13 @@ export async function baseCommitFor(worktree: string, into: string): Promise<str
 
 /**
  * `origin/<base>` first, exactly as `addWorktree` resolves the branch, or `undefined`
- * when the ref does not exist at all. Shared by `computeDiff` and `baseCommitFor` so the
- * two cannot disagree about which ref `into` names.
+ * when the ref does not exist at all.
+ *
+ * THE ONLY PLACE THIS IS DECIDED, and the claim is now true of the code: `computeDiff`
+ * and `baseCommitFor` both call it. It said the same thing while `computeDiff` carried an
+ * inline duplicate, which is the one-thing-defined-twice class this repository ratchets
+ * against — and the disagreement it would produce is the pin resolving against one commit
+ * while the measurement runs against another, which is D-113's whole subject.
  */
 async function resolveInto(worktree: string, base: string): Promise<string | undefined> {
   const resolved =
@@ -154,8 +159,19 @@ export async function computeDiff(
   // base. Measured here at 165 KB against 94 KB for the same work.
   //
   // A sha or a tag has no `origin/` form, so it falls through untouched.
-  const resolved = (await gitMaybe(worktree, ["rev-parse", "--verify", "--quiet", `origin/${base}^{commit}`]))
-    ?? base;
+  //
+  // THROUGH `resolveInto`, not a second copy of it. This was the same two-step resolution
+  // written out again inline, under a comment on `resolveInto` claiming the two could not
+  // disagree — so the ref logic D-113's correctness rests on was defined twice, behind a
+  // door labelled "cannot disagree". Change the resolution order once and the pin would be
+  // computed against one commit while every round's `git diff` ran against another, which
+  // is the exact pin/measurement split D-113 exists to make impossible.
+  //
+  // `undefined` means the ref does not resolve; `resolved` keeps the raw name for the
+  // message below, which is the only thing that still wants it.
+  const into = await resolveInto(worktree, base);
+  const intoExists = into !== undefined;
+  const resolved = into ?? base;
 
   // THE BASE MUST EXIST, and saying so here is the difference between an answer and a
   // riddle. `resolved` falls back to the raw name above, and `mergeBase` falls back to
@@ -189,9 +205,6 @@ export async function computeDiff(
     pinnedBase === undefined
       ? undefined
       : await gitMaybe(worktree, ["rev-parse", "--verify", "--quiet", `${pinnedBase}^{commit}`]);
-
-  const intoExists =
-    (await gitMaybe(worktree, ["rev-parse", "--verify", "--quiet", `${resolved}^{commit}`])) !== undefined;
 
   // THE BASE MUST EXIST — unless a pin already answers the only question it was needed
   // for. `resolved` falls back to the raw name above, and `mergeBase` falls back to
