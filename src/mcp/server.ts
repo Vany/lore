@@ -436,7 +436,7 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
         }
         // NEW COMMITS FROM THE CLIENT, so the round bounds restart (D-114) — a
         // `pull_fresh` that got this far is one where origin genuinely moved.
-        store.notedClientWork(open.id);
+        store.noteClientWork(open.id);
         // THE BASE MOVES ONLY AT A PIN (D-113), and this is one. Omitted rather than
         // written as undefined when the ref would not resolve: `updateReview` treats
         // undefined as "leave it", and the stored base is the last one that was true.
@@ -1009,7 +1009,7 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       // ladder at all. The tree-moved test is kept regardless: it is the correct rule for
       // "did the client give me new material", and keeping it does not depend on which
       // of the two routes to a no-op submit happens to be open today.
-      if (applied !== before) store.notedClientWork(review_id);
+      if (applied !== before) store.noteClientWork(review_id);
       store.updateReview(review_id, { state: "queued", treeHash: applied });
       deps.enqueue(review_id, "fast");
 

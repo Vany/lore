@@ -15,7 +15,6 @@ import { join } from "node:path";
 import {
   DEFAULT_TIERS,
   anyTierRan,
-  clientDeliveredWork,
   markUnavailable,
   ladderChanged,
   ladderFingerprint,
@@ -260,6 +259,12 @@ export async function consumeHeldDiffs(
     diffs.push(h.diff);
     applied += 1;
   }
+  // RECORDED WHERE IT VERIFIES (D-114). This is the single point every held diff passes
+  // through — the round's emission boundary and the worker's late-hold sweep both land
+  // here — so putting the signal here is what stops it being forgotten in whichever
+  // window the caller happens not to cover. Durable, so a round that dies after this
+  // point still leaves the work counted.
+  if (applied > 0) store.noteClientWork(reviewId);
   return { applied, diffs };
 }
 
@@ -267,8 +272,24 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   const { store, reviewId, principal, worktree, type } = input;
   const startedAt = new Date().toISOString();
 
-  const review = store.getReview(reviewId, principal);
-  if (review === undefined) throw new Error(`review ${reviewId} not found for this principal`);
+  const loaded = store.getReview(reviewId, principal);
+  if (loaded === undefined) throw new Error(`review ${reviewId} not found for this principal`);
+
+  // THE PENDING CLIENT-WORK SIGNAL IS TAKEN HERE, AND PERSISTED BEFORE ANYTHING ELSE
+  // HAPPENS (D-114). Three earlier attempts each applied the reset at a moment only one
+  // path reached — submit time, the emission boundary, the success-path terminal write —
+  // and each missed a different window, the last being a round that dies AFTER consuming
+  // a verified diff whose held rows are already deleted, so nothing downstream could ever
+  // observe the work. `noteClientWork` records it where it verifies; this takes it where
+  // the ladder is owned, and writes it at once so a round dying later cannot lose it.
+  //
+  // A diff consumed mid-round leaves the flag set for the NEXT round rather than this
+  // one, so the round that judges the work still counts against the old budget. That is
+  // one round conservative and deliberately so: the alternative is a signal applied twice
+  // for one submit, which hands a client double the budget for the same material.
+  const takenLadder = store.withClientWork(reviewId, loaded.ladder);
+  if (takenLadder !== loaded.ladder) store.updateReview(reviewId, { ladder: takenLadder });
+  const review = { ...loaded, ladder: takenLadder };
 
   // TOCTOU with cancellation, closed at the last moment before anything is spent.
   //
@@ -756,8 +777,6 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   const hold = {
     chain: [] as string[],
     mismatch: undefined as string | undefined,
-    /** A held diff landed and moved the tree, so the round bounds restart (D-114). */
-    clientWork: false,
     lastT0: t0ForTier as { findings: readonly Finding[]; unavailable: readonly string[] },
   };
   const roundFindings: { readonly origin: string; readonly line: string }[] = [];
@@ -1152,16 +1171,6 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
           return false;
         }
         if (consumed.applied > 0) {
-          // THE CLIENT DELIVERED WORK, and the round records it rather than the store
-          // (D-114). `holdDiff` used to do this at submit time, into the ladder blob,
-          // while this very round held a snapshot of it — so the reset was overwritten by
-          // the round's own terminal write and D-114 did nothing for exactly the clients
-          // that follow the documented "submit any time" cadence. One writer per round.
-          //
-          // `consumed.applied > 0` means a diff applied AND hash-verified against the
-          // tree the client named, so the tree moved: an empty diff cannot reach here
-          // with a changed hash.
-          hold.clientWork = true;
           hold.chain.push(...consumed.diffs);
           const touched = consumed.diffs.flatMap((d) =>
             [...d.matchAll(/^\+\+\+ b\/(.+)$/gm)].map((m) => m[1] ?? "").filter((x) => x !== ""),
@@ -2377,19 +2386,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // is told `findings_ready` and handed nothing, for ever, until a bound stops it.
   // `ladderNow`, never `review.ladder`: a skipped member's `unavailable` mark is part of
   // this round's truth, and stepping from the stale state would resurrect the member.
-  // THE BOUNDS RESTART IF THE CLIENT'S WORK LANDED DURING THIS ROUND (D-114).
-  //
-  // Applied here, on the round's own ladder, because the round is the single writer of
-  // that column: `holdDiff` used to write the reset at submit time, into a blob this
-  // round had already snapshotted, and the round's terminal write put it straight back.
-  // The effect was that D-114 held for a client that waited for a quiet moment and failed
-  // for one that submitted mid-round, which is the cadence the texts ask for.
-  //
-  // BEFORE `settle` and `step`, so this round counts as the first against the fresh
-  // budget rather than the last against the old one — the same arithmetic the synchronous
-  // submit path gets, where the reset lands and the NEXT round is enqueued.
-  const afterWork = hold.clientWork ? clientDeliveredWork(ladderNow) : ladderNow;
-  const withSettled = settle(afterWork, [...accepted, ...fixed]);
+  const withSettled = settle(ladderNow, [...accepted, ...fixed]);
   // WHO ACTUALLY ANSWERED THIS TIER, carried into the verdict (D-49, D-93).
   //
   // Independence is checked against the model that READ the code, not the one the config

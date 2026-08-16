@@ -123,7 +123,20 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-const workRound = () => store.getReview("revGate", "alice")?.ladder.workRound;
+/**
+ * What the NEXT round would make of the ladder, which is where the signal is applied.
+ *
+ * `review_submit` records client work as a durable flag rather than writing the ladder,
+ * because the ladder has one legitimate writer per round and three earlier versions of
+ * this were each clobbered or missed in a different window. So the observable consequence
+ * of a submit is what the next round takes, and this asks exactly that. It consumes, so
+ * each test calls it once.
+ */
+const nextRoundFloor = () => {
+  const ladder = store.getReview("revGate", "alice")?.ladder;
+  if (ladder === undefined) return undefined;
+  return store.withClientWork("revGate", ladder).workRound;
+};
 
 describe("review_submit counts work by what it did to the tree", () => {
   it("restarts the bounds when the diff actually changes something", async () => {
@@ -142,7 +155,7 @@ describe("review_submit counts work by what it did to the tree", () => {
     });
 
     expect(out["status"], String(out["note"] ?? out["error"] ?? "")).not.toBe("refused");
-    expect(workRound(), "real work refills the budget").toBe(5);
+    expect(nextRoundFloor(), "real work refills the budget at the next round").toBe(5);
   });
 
   /**
@@ -162,6 +175,6 @@ describe("review_submit counts work by what it did to the tree", () => {
 
     expect(out["status"], String(out["note"] ?? out["error"] ?? "")).not.toBe("refused");
     expect(treeNow(), "the patch really did apply and really changed nothing").toBe(unchanged);
-    expect(workRound(), "a submit with no material must not refill the budget").toBeUndefined();
+    expect(nextRoundFloor(), "a submit with no material must not refill the budget").toBeUndefined();
   });
 });

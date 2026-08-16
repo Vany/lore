@@ -2603,24 +2603,54 @@ export class Store {
   }
 
   /**
-   * The client delivered work, so the round bounds start counting again (D-114).
+   * The client delivered work: recorded WHERE IT VERIFIES, applied where the ladder is
+   * owned (D-114).
    *
-   * Called from every path where a tree change originates with the CLIENT — a submitted
-   * diff, held or applied straight away, and a `pull_fresh` onto new commits. Not from a
-   * round's own output, which is the thing the bounds exist to limit.
+   * Three windows produced the same defect in three shapes before this became one flag,
+   * and the pattern is the lesson: the ladder blob has exactly one legitimate writer per
+   * round, so anything that wants to change it from outside a round either gets clobbered
+   * or has to find its own moment — and each moment missed a different path.
    *
-   * A read-modify-write of the ladder blob, and safe as one for the same reason every
-   * other ladder write is: a review has at most one round in flight, and a submit that
-   * races a round is HELD rather than applied (see `holdDiff`'s caller).
+   *   * written at SUBMIT time, into a blob the running round had already snapshotted:
+   *     overwritten by that round's terminal write, so it worked only for clients that
+   *     waited for a quiet moment;
+   *   * moved to the round's emission boundary: missed the worker's late-hold sweep,
+   *     where a diff that arrives after the model declares done is consumed at no
+   *     boundary at all;
+   *   * still missed a round that DIES after consuming — `ServiceUnreachable`, the
+   *     ordinary D-104 case — because the reset was on the success path while the held
+   *     rows were already deleted, so nothing downstream could ever observe the work.
+   *
+   * A durable flag outside the ladder fixes all three at once. It is set the moment a
+   * diff applies and hash-verifies, survives a round dying, and is taken by the next
+   * round when it owns the ladder. `meta` rather than a column: it is a transient signal,
+   * not a fact about the review, and it is deleted as it is read.
    */
-  notedClientWork(reviewId: string): void {
-    const row = this.db.prepare("SELECT ladder FROM review WHERE id = ?").get(reviewId) as
+  noteClientWork(reviewId: string): void {
+    this.db
+      .prepare("INSERT INTO meta(key, value) VALUES(?, '1') ON CONFLICT(key) DO UPDATE SET value = '1'")
+      .run(`client-work:${reviewId}`);
+  }
+
+  /**
+   * Whether client work landed since the last round took it — and clears it.
+   *
+   * Read-and-clear in one call so the signal cannot be applied twice: two resets for one
+   * submit would hand a client double the budget for the same material.
+   */
+  takeClientWork(reviewId: string): boolean {
+    const key = `client-work:${reviewId}`;
+    const row = this.db.prepare("SELECT value FROM meta WHERE key = ?").get(key) as
       | Record<string, string>
       | undefined;
-    if (row === undefined) return;
-    const ladder = JSON.parse(row["ladder"] ?? "{}") as LadderState;
-    if (typeof ladder.round !== "number") return;
-    this.updateReview(reviewId, { ladder: clientDeliveredWork(ladder) });
+    if (row === undefined) return false;
+    this.db.prepare("DELETE FROM meta WHERE key = ?").run(key);
+    return true;
+  }
+
+  /** Applies a pending client-work signal to a ladder, or returns it untouched. */
+  withClientWork(reviewId: string, ladder: LadderState): LadderState {
+    return this.takeClientWork(reviewId) ? clientDeliveredWork(ladder) : ladder;
   }
 
   /** In arrival order — each was built by the client on top of the one before. */
