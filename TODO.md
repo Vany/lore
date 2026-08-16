@@ -62,13 +62,22 @@ that part is pulled out into its own open item rather than hidden inside a tick.
       wrong produces a signature over a tree nobody read, which is worse than having no
       checkpoint at all.
 
-- [ ] **Three things incremental review breaks, all needing answers before the loop opens
-      up.** (a) The per-tier round bound fires on any long-lived review — TODO already
-      calls it "the wrong instrument", and this makes it urgent. (b) Admission: 128 open
-      reviews is a different number if reviews never end, and each holds a worktree, a
-      slot and N kept sessions. (c) Staleness: `findings_stale` at 48h and expiry a week
-      later reap ABANDONED reviews, and their only signal — time since anything moved —
-      cannot tell an incremental review from a dead one.
+- [x] **(a) The round bounds fired on any long-lived review.** DONE 2026-08-16 (D-114).
+      Both `perTierRounds` and `globalRounds` restart when the client delivers work, so
+      they bound arguing rather than working. Termination is unchanged: with no new input
+      the floor stops moving and the budget runs out exactly as before.
+
+- [ ] **(b) Admission's 128 open reviews counts the wrong thing if reviews stop ending.**
+      Each open review holds a worktree, a slot and N kept sessions — but a PARKED review
+      holds disk and sessions without holding compute, so one number is protecting two
+      different resources. Decide what the limit is actually for before changing it; the
+      refusal message is good and the arithmetic behind it is not.
+
+- [ ] **(c) Staleness reaping cannot tell a long-lived review from a dead one.**
+      `findings_stale` at 48h and abandonment a week later are judged by time since
+      anything moved. A submit or `pull_fresh` moves it, so an ACTIVE incremental review
+      is safe — a developer's weekend is not. Needs a signal that means "still mine"
+      without letting a poll extend a review for ever.
 
 - [ ] **Measure where the cheapness stops.** A kept session hits 97–99% prompt cache, so
       marginal turns are cheap — until it compacts at 2/3 of the window, and compaction

@@ -2151,6 +2151,37 @@ D-77 still holds and nothing skips the ladder. What changes is that batching is 
 DEFAULT rather than a compromise: fix everything found, review it together, push it
 together.
 
+**D-114 — the round bounds count ARGUING, not WORKING. BUILT 2026-08-16.**
+
+`perTierRounds: 3` and `globalRounds: 12` counted a review's whole life. That is right for
+a gate on a snapshot and wrong for the incremental review D-112 opened up: a review that
+follows the work accumulates rounds *because someone keeps feeding it*, so a developer
+using it as intended would be stopped at twelve **for succeeding**, with `stopped` — a
+non-verdict that reads as failure.
+
+So both counters restart when the CLIENT delivers work — a submitted diff, or a
+`pull_fresh` onto commits that genuinely moved (`clientDeliveredWork`). New work is new
+material, not the same argument continuing.
+
+**Termination is untouched, and that is the whole justification.** The property the bounds
+guarantee is *"a ladder arguing with itself stops"*, and that is preserved exactly: with no
+new input the floor stops moving and the budget runs out in the same number of rounds it
+always did. What a client can now do is extend a review indefinitely by continuing to
+submit — which is not a runaway, it is the feature. `round` itself is never rewound: it
+numbers `tier_run` rows, and two rounds sharing a number would corrupt the one table that
+exists to say whether a review really ran.
+
+`[OPEN]` — the other two things D-112 breaks, both still counted the old way:
+
+* **Admission's 128 open reviews** is a different number if reviews stop ending. Each holds
+  a worktree, a slot and N kept sessions, and a parked review holds disk and sessions
+  without holding compute — so the limit is measuring one thing and protecting another.
+  What it should count is not yet decided.
+* **Staleness reaping** dims to `findings_stale` at 48h and abandons a week later, judged
+  by time since anything moved — which cannot tell a deliberately long-lived review from
+  a dead one. A submit or a `pull_fresh` moves it, so an active incremental review is
+  safe; a real developer's weekend is not.
+
 **D-113 — a review's change-set is PINNED, and an empty one is a failure, not a pass.
 BUILT 2026-08-16.**
 

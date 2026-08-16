@@ -1,7 +1,7 @@
 import { readdirSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
-  ladderChanged, DEFAULT_TIERS, anyTierRan, initialState, loadTiers, loadPools, loadHelper, markAnsweredBy, markUnavailable, concreteRoute, fallbackRoutes, poolOrder, routesFor, rungKey, rungMembers, settle, withQuota, soleVendorOf, step, vendorOf, type Decision, type LadderState, type Tier, ladderFingerprint } from "./ladder.ts";
+  ladderChanged, clientDeliveredWork, DEFAULT_TIERS, anyTierRan, initialState, loadTiers, loadPools, loadHelper, markAnsweredBy, markUnavailable, concreteRoute, fallbackRoutes, poolOrder, routesFor, rungKey, rungMembers, settle, withQuota, soleVendorOf, step, vendorOf, type Decision, type LadderState, type Tier, ladderFingerprint } from "./ladder.ts";
 
 const clean = (state: LadderState) => step({ state, raised: [] });
 
@@ -103,6 +103,45 @@ describe("step", () => {
     for (let i = 0; i < 3; i++) s = step({ state: s, raised: [`f${i}`], limits }).state;
     const r = step({ state: s, raised: ["f9"], limits });
     expect(r.decision).toStrictEqual({ kind: "stopped", bound: "global" });
+  });
+
+  /**
+   * THE BOUNDS COUNT ARGUING, NOT WORKING (D-114).
+   *
+   * Both used to count a review's whole life, which is right for a snapshot gate and
+   * fatal for the incremental review D-112 opened up: a review that follows the work
+   * accumulates rounds BECAUSE someone keeps feeding it, and would be stopped at twelve
+   * for succeeding. New work restarts the count; nothing else does.
+   */
+  it("restarts the bounds when the client delivers work, and not otherwise", () => {
+    let s = initialState();
+    const limits = { perTierRounds: 99, globalRounds: 3 };
+    for (let i = 0; i < 3; i++) s = step({ state: s, raised: [`f${i}`], limits }).state;
+
+    // One round short of the wall, the client submits — so the ladder gets a full budget
+    // for the new material rather than dying on the round that would have judged it.
+    s = clientDeliveredWork(s);
+    expect(s.workRound, "the floor is where the work arrived").toBe(3);
+    expect(s.tierRounds, "and the per-tier counters go with it").toStrictEqual({});
+
+    const after = step({ state: s, raised: ["f9"], limits });
+    expect(after.decision.kind, "the round that used to be the wall").not.toBe("stopped");
+    expect(after.state.round, "while the audit trail keeps counting up").toBe(4);
+  });
+
+  /**
+   * TERMINATION IS THE PROPERTY THIS MUST NOT COST. A review nobody feeds still stops,
+   * and it stops in the same number of rounds it always did — the floor only moves when
+   * work arrives, so a ladder arguing with itself gets exactly the old budget.
+   */
+  it("still stops when no work arrives, at the same distance from the floor", () => {
+    const limits = { perTierRounds: 99, globalRounds: 3 };
+    let s = clientDeliveredWork({ ...initialState(), round: 40 });
+    for (let i = 0; i < 3; i++) s = step({ state: s, raised: [`f${i}`], limits }).state;
+    expect(step({ state: s, raised: ["f9"], limits }).decision).toStrictEqual({
+      kind: "stopped",
+      bound: "global",
+    });
   });
 
   // The whole design rests on this: whatever the reviewers do, the loop ends.

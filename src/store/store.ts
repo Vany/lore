@@ -15,7 +15,7 @@ import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { AmbiguousFingerprint } from "../core/errors.ts";
 import type { Finding, Severity } from "../core/finding.ts";
-import type { LadderState } from "../core/ladder.ts";
+import { clientDeliveredWork, type LadderState } from "../core/ladder.ts";
 import { isTerminal, TERMINAL_SQL, type ReviewState, FINDINGS_SQL } from "../core/review-state.ts";
 import type { Scope } from "../core/scope.ts";
 import { DDL, FINDING_ORDER_SQL, PRAGMAS, SCHEMA_VERSION, applyMigrations, assertNotDowngrade } from "./schema.ts";
@@ -2588,6 +2588,28 @@ export class Store {
     this.db
       .prepare("INSERT INTO held_diff(review_id, diff, tree_hash, created_at) VALUES(?, ?, ?, ?)")
       .run(reviewId, diff, treeHash, now());
+    this.notedClientWork(reviewId);
+  }
+
+  /**
+   * The client delivered work, so the round bounds start counting again (D-114).
+   *
+   * Called from every path where a tree change originates with the CLIENT — a submitted
+   * diff, held or applied straight away, and a `pull_fresh` onto new commits. Not from a
+   * round's own output, which is the thing the bounds exist to limit.
+   *
+   * A read-modify-write of the ladder blob, and safe as one for the same reason every
+   * other ladder write is: a review has at most one round in flight, and a submit that
+   * races a round is HELD rather than applied (see `holdDiff`'s caller).
+   */
+  notedClientWork(reviewId: string): void {
+    const row = this.db.prepare("SELECT ladder FROM review WHERE id = ?").get(reviewId) as
+      | Record<string, string>
+      | undefined;
+    if (row === undefined) return;
+    const ladder = JSON.parse(row["ladder"] ?? "{}") as LadderState;
+    if (typeof ladder.round !== "number") return;
+    this.updateReview(reviewId, { ladder: clientDeliveredWork(ladder) });
   }
 
   /** In arrival order — each was built by the client on top of the one before. */

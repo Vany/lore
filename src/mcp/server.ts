@@ -434,6 +434,9 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
             }),
           );
         }
+        // NEW COMMITS FROM THE CLIENT, so the round bounds restart (D-114) — a
+        // `pull_fresh` that got this far is one where origin genuinely moved.
+        store.notedClientWork(open.id);
         // THE BASE MOVES ONLY AT A PIN (D-113), and this is one. Omitted rather than
         // written as undefined when the ref would not resolve: `updateReview` treats
         // undefined as "leave it", and the stored base is the last one that was true.
@@ -985,6 +988,12 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
         );
       }
 
+      // NEW WORK, so the round bounds start counting again (D-114). Before the state
+      // change, because both write the ladder row and the last writer wins: `updateReview`
+      // here patches only `state` and `treeHash`, so ordering it second would leave the
+      // reset in place, but relying on which fields a sibling call happens to touch is
+      // exactly how two writers to one blob come to disagree.
+      store.notedClientWork(review_id);
       store.updateReview(review_id, { state: "queued", treeHash: applied });
       deps.enqueue(review_id, "fast");
 

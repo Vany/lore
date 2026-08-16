@@ -648,6 +648,23 @@ export interface LadderState {
   readonly cursor: number;
   readonly round: number;
   readonly tierRounds: Readonly<Record<string, number>>;
+  /**
+   * The round at which the CLIENT last delivered work, so the bounds count arguing
+   * rather than working (D-114).
+   *
+   * Both bounds used to count a review's whole life, which is right for a snapshot gate
+   * and wrong for the incremental review D-112 opened up: a review that follows the work
+   * accumulates rounds because someone keeps feeding it, and it would hit
+   * `globalRounds` — twelve — for succeeding. Absent on rows written before this, read as
+   * 0, which is exactly the old arithmetic.
+   *
+   * TERMINATION IS UNCHANGED, and this is the only thing that matters here. The bound
+   * that guarantees it is "rounds since new work arrived", not "rounds ever": with no
+   * new input the floor stops moving, the count runs out, and the review stops. A client
+   * can extend a review indefinitely only by continuing to submit — which is not a
+   * runaway, it is the feature.
+   */
+  readonly workRound?: number;
   /** Fingerprints already fixed, or justified and accepted. */
   readonly settled: readonly string[];
   /** An unresolvable knowledge conflict is open (D-39). Blocks `passed`. */
@@ -693,6 +710,27 @@ export interface LadderState {
  */
 export function markAnsweredBy(state: LadderState, tierId: string, model: string): LadderState {
   return { ...state, answeredBy: { ...(state.answeredBy ?? {}), [tierId]: model } };
+}
+
+/**
+ * The client delivered work — a submitted diff, or a `pull_fresh` onto new commits — so
+ * the round bounds start counting again from here (D-114).
+ *
+ * Both counters move together because they bound the same thing from two angles: how long
+ * the ladder may go round on ONE piece of work before admitting it cannot settle it. New
+ * work is new material, not the same argument continuing, and a review that keeps
+ * receiving it is being used rather than looping.
+ *
+ * `round` itself is NOT reset. It numbers `tier_run` rows and is the review's audit
+ * trail; rewinding it would make two different rounds share a number, in the one table
+ * that exists to say whether a review really ran.
+ *
+ * NOT called for fixes lore applies on its own account, and there are none — every tree
+ * change that is not a round's own output comes from the client. If that ever stops being
+ * true, this is the line that decides whether the bound still means anything.
+ */
+export function clientDeliveredWork(state: LadderState): LadderState {
+  return { ...state, tierRounds: {}, workRound: state.round };
 }
 
 export function initialState(tiers: readonly Tier[] = DEFAULT_TIERS): LadderState {
@@ -859,7 +897,13 @@ export function step(input: StepInput): { readonly state: LadderState; readonly 
   // against the round itself, clean or not. A ceiling that a good result may
   // exceed is not a ceiling. INV-1 still holds: `stopped` is a named terminal
   // state and never reads as a pass.
-  if (round > limits.globalRounds) {
+  // COUNTED FROM THE LAST TIME THE CLIENT DELIVERED WORK, not from the review's birth
+  // (D-114). Twelve rounds of ARGUING is a review that cannot converge and should stop;
+  // twelve rounds spread across a week of a developer submitting, fixing and submitting
+  // again is a review doing its job, and killing it there would make D-112's incremental
+  // loop unusable by design. Termination is untouched: with no new work the floor stops
+  // moving and this runs out exactly as before.
+  if (round - (prev.workRound ?? 0) > limits.globalRounds) {
     return { state: base, decision: { kind: "stopped", bound: "global" } };
   }
 
