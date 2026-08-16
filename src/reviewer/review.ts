@@ -441,13 +441,39 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   if (input.dailyCeilingUsd !== undefined) {
     const spent = store.spendSince(startOfDayIso());
     if (spent >= input.dailyCeilingUsd) {
+      // THE OPERATOR GETS THE LEDGER; THE CLIENT GETS A SERVICE (D-120).
+      //
+      // This reason used to read "the day's spend ceiling is reached — $101.36 of
+      // $100.00", and eight of other people's reviews carried that string today. It is
+      // lore's ledger printed inside somebody else's failure: an operational fact they
+      // cannot act on, which implicitly asks them to work around a service that exists to
+      // serve them. Vany: *"we are serving. We do not hand off our responsibility to the
+      // client."*
+      //
+      // So the client is told what is true and theirs — nothing was reviewed, do not
+      // merge, it is being dealt with — and the number goes to the log.
+      //
+      // STILL A FAILURE ONLY UNTIL D-119 LANDS. The right answer is to PAUSE and resume
+      // when the ceiling lifts, keeping the ladder and compacting the sessions; that is a
+      // larger change and is written down. This closes the disclosure half now, because
+      // it is wrong every time it fires.
+      console.error(
+        `[lore:log] review ${reviewId} stopped: the day's spend ceiling is reached — $${spent.toFixed(2)} of ` +
+          `$${input.dailyCeilingUsd.toFixed(2)}. The client is NOT told this (D-120); they are told the review ` +
+          "did not run and that lore is dealing with it.",
+      );
       const why =
-        `the day's spend ceiling is reached — $${spent.toFixed(2)} of $${input.dailyCeilingUsd.toFixed(2)}. ` +
-        "This review stopped between rounds, so nothing was abandoned half-finished, and the tiers that had " +
-        "already run kept what they found. It is NOT a pass: the rounds that did not happen looked at nothing.";
+        "lore could not complete this review, and nothing about your code was concluded — this is NOT a pass and " +
+        "you must not merge on it. The cause is on lore's side, it is known, and it does not need anything from " +
+        "you. Start a fresh review later, or ask the person who runs lore if it is urgent.";
       store.setFailureReason(reviewId, why);
       store.updateReview(reviewId, { state: "failed" });
-      throw new DidNotRun(`review ${reviewId} stopped: ${why}`);
+      // THE THROW IS OPERATOR-FACING and keeps the number: it lands in `job.last_error`
+      // and the worker's log, which no client reads. Only `failure_reason` above travels.
+      throw new DidNotRun(
+        `review ${reviewId} stopped: the day's spend ceiling is reached — $${spent.toFixed(2)} of ` +
+          `$${input.dailyCeilingUsd.toFixed(2)}`,
+      );
     }
   }
 
@@ -1714,6 +1740,16 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     // user so a later `passed` is not over-read, and this belongs in exactly that
     // sentence (D-66). Silence here would be the tier's own findings quietly
     // disappearing, which is INV-1 with the loss one layer further in.
+    // THE MONEY GOES HERE, TO THE OPERATOR, AND NOWHERE ELSE (D-120). A metered fallback
+    // is a cost event, and a cost event is lore's to notice and lore's to act on. The
+    // client's copy of this, below, names the ROUTE and stops there.
+    if (fellBackTo !== undefined && (result.costUsd ?? 0) > 0) {
+      console.error(
+        `[lore:log] ${member.id} fell back to ${fellBackTo} and THIS CALL COST $${(result.costUsd ?? 0).toFixed(2)} ` +
+          `— ${member.model ?? "?"} is out of quota, and every call costs this until it refreshes. ` +
+          "Nothing about this reaches the client, deliberately.",
+      );
+    }
     store.closeTierRun(
       tierRunId,
       result.findings.length > 0 ? "findings" : "clean",
@@ -1722,18 +1758,21 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
         ...(fellBackTo === undefined
           ? []
           : [
-              // THE NUMBER, not just the word "metered" (D-117).
+              // THE ROUTE, NEVER THE MONEY (D-120).
               //
-              // This line already said "it was not free" and was read as routine for four
-              // hours while t2 billed ~$4.83 a call: twenty-one calls, $101.36, and the
-              // only thing that finally spoke was the daily ceiling — by which point the
-              // money was spent and the reviews it stopped belonged to other people. A
-              // warning without a magnitude cannot be triaged; one that says $4.83 can be
-              // acted on the first time it appears.
-              `${member.id} was answered by ${fellBackTo} rather than ${member.model ?? "?"} — the subscription is ` +
-                `out of quota, so the same model was asked through a metered provider, and THIS CALL COST ` +
-                `$${(result.costUsd ?? 0).toFixed(2)}. The tier ran and its opinion counts; this notice is here ` +
-                "because it was not free, and it will keep costing that per call until the subscription refreshes.",
+              // Which route answered is the CLIENT'S business: D-49's independence claim
+              // rests on which models actually read the code, and a tier answered by a
+              // different provider than its config names changes what the verdict is worth.
+              //
+              // What it COST is ours. This line briefly carried the per-call figure — and
+              // that put lore's budget in a channel the client reads, which is the same
+              // mistake as `failed_because` naming the spend ceiling: it hands a client an
+              // operational problem they did not sign up for and cannot act on, and invites
+              // them to work around a service that is supposed to serve them. The number
+              // went to the operator log, where somebody can act on it.
+              `${member.id} was answered by ${fellBackTo} rather than ${member.model ?? "?"} — a different ` +
+                "provider than this tier is configured for. The tier ran and its opinion counts in full; it is " +
+                "named here because two tiers on one vendor is weaker evidence than two on different ones.",
             ]),
       ],
       roundTree,

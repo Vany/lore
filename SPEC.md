@@ -419,6 +419,42 @@ unreachable rather than merely unlikely, and any attempt to use it fails loudly.
 
 The staging script refuses to emit an auth file that still contains one.
 
+**D-120 — the client is never told anything about lore's budget. WE ARE SERVING; we do not
+hand our responsibility to the person we serve. DECIDED 2026-08-16.**
+
+Vany: *"never tell client anything about the budget. Here is SLA, we serving. We do not
+hand off our responsibility to the client."*
+
+A client asked for a review. Whether lore can afford to run it is **lore's problem**, and
+saying so in a client channel does three bad things at once: it hands somebody an
+operational fact they cannot act on, it implicitly asks them to work around a service that
+exists to serve them, and it invites exactly the wrong behaviour — retrying, waiting,
+downgrading their own expectations, or merging unreviewed because the tool said it was out
+of money.
+
+**What the client may be told, and it is a complete list:** what was examined, what was
+NOT examined and therefore what the verdict is worth, and what to do next. INV-1 is fully
+served by that — `passed_partial` naming the tiers that did not run is the honest weaker
+claim, and it stays. What must never appear is WHY in money terms: no ceiling, no spend
+figure, no per-call cost, no "out of quota", no "come back when the budget resets".
+
+**Two live leaks this decision closes**, both of which read as diligence and are not:
+
+* `failed_because: "not started: today's spend 101.36 has reached the 100.00 ceiling"` —
+  the exact string eight of other people's reviews carried today. It is lore's ledger,
+  printed in their failure.
+* The metered-fallback notice in `checks_skipped`, which briefly carried `THIS CALL COST
+  $4.83`. Fixed the same day it shipped: the client's line names the ROUTE — which is
+  genuinely theirs, because D-49's independence claim rests on which models read the code
+  — and the figure moved to the operator log.
+
+**The distinction is the audience, not the honesty.** D-41/D-42 already say lore has two
+audiences and two channels; this is that rule applied to the one subject where the
+temptation to blur them is strongest, because a budget failure *feels* like something to
+confess. It is something to fix. The operator gets everything — the ceiling, the
+per-call cost, the parked route, the pause; the client gets a service that either reviews
+their code or says plainly what it did not examine.
+
 **D-119 — the spend ceiling PAUSES a review; it never fails one. DECIDED 2026-08-16, not
 yet built.**
 
@@ -439,9 +475,12 @@ So the ceiling becomes a PAUSE:
   so the model keeps what it has learned about the codebase across the freeze and the
   resumed round is a cheap continuation rather than a cold read. This is the one thing that
   makes waiting cheaper than restarting.
-* **Wait until it unfreezes.** The ceiling is a daily figure, so the wait is bounded and
-  knowable. The client is told which state it is in and roughly when it lifts — a pause
-  with an ETA is actionable in a way `failed` never is.
+* **Wait until it unfreezes, and say NOTHING about why.** Per D-120 the freeze is lore's
+  business, so to the client the review is simply still running — which is true. It polls,
+  `check_back_after_ms` answers, and it waits exactly as it would for a slow deep tier.
+  There is no client-visible difference between "t3 is still reading" and "we are waiting
+  for midnight", and there should not be: both mean *not finished yet*, and only one of
+  them is any of their concern.
 * **`failed` is reserved for what it means.** A review that stopped because the money ran
   out did not fail; nobody spent anything on the tiers that did not run, and nothing about
   the code was concluded either way.

@@ -1891,11 +1891,20 @@ describe("the day's spend ceiling", () => {
       runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: { ...CODE_ARCH, t0: [] as const }, dailyCeilingUsd: 10 }),
     ).rejects.toThrow(/spend ceiling/);
 
-    // TERMINAL AND NAMED. `failed` is not a pass and not "found nothing", and the reason
-    // is what a client reads instead of guessing why its review stopped.
+    // TERMINAL AND NAMED, AND THE NUMBER IS NOT THE CLIENT'S (D-120). This used to assert
+    // that the client-facing reason contained "$12.00 of $10.00" — and eight of other
+    // people's reviews carried exactly that string on 2026-08-16. It is lore's ledger
+    // printed inside somebody else's failure: an operational fact they cannot act on,
+    // which implicitly asks them to work around a service that exists to serve them.
+    //
+    // Both halves are asserted, because the failure mode is one-sided in either direction:
+    // a reason that leaks the budget, or a reason so vague the client cannot tell a
+    // non-verdict from a pass.
     expect(store.getReview("r1", "p")?.state).toBe("failed");
-    expect(store.failureReason("r1")).toMatch(/\$12\.00 of \$10\.00/);
-    expect(store.failureReason("r1"), "and it must not read as a verdict").toMatch(/NOT a pass/);
+    const reason = store.failureReason("r1") ?? "";
+    expect(reason, "the ledger is not the client's business").not.toMatch(/\$|ceiling|spend|quota|budget/i);
+    expect(reason, "and it must not read as a verdict").toMatch(/NOT a pass/);
+    expect(reason, "nor leave them wondering whether it is their move").toMatch(/does not need anything from you/);
   });
 
   // BETWEEN rounds, never inside one. The whole reason this check was at enqueue and

@@ -149,9 +149,12 @@ ONLY \`passed\` means the branch is clean.
 
 - \`passed_partial\` means every tier that COULD run agreed, but the evidence is
   weaker than a pass, for either or both of two reasons:
-    * a tier could not ANSWER — nobody could pay for it, or it never replied on either
-      attempt — so its work passed to the next tier up and one fewer independent vendor
-      read this code ("we did everything we can"). checks_skipped names which, and why;
+    * a tier could not ANSWER — it was unavailable to lore, or it never replied on
+      either attempt — so its work passed to the next tier up and one fewer independent
+      vendor read this code ("we did everything we can"). checks_skipped names which.
+      WHY a tier was unavailable is lore's business and not yours: it is being dealt
+      with, it needs nothing from you, and what matters here is only that one fewer
+      vendor read your code;
     * every tier that ran came from ONE vendor, so they share blind spots. Three
       tiers from one model family is one opinion asked three times, not three
       independent reviews.
