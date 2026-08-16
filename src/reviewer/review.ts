@@ -1722,9 +1722,18 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
         ...(fellBackTo === undefined
           ? []
           : [
+              // THE NUMBER, not just the word "metered" (D-117).
+              //
+              // This line already said "it was not free" and was read as routine for four
+              // hours while t2 billed ~$4.83 a call: twenty-one calls, $101.36, and the
+              // only thing that finally spoke was the daily ceiling — by which point the
+              // money was spent and the reviews it stopped belonged to other people. A
+              // warning without a magnitude cannot be triaged; one that says $4.83 can be
+              // acted on the first time it appears.
               `${member.id} was answered by ${fellBackTo} rather than ${member.model ?? "?"} — the subscription is ` +
-                "out of quota, so the same model was asked through a metered provider. The tier ran and its " +
-                "opinion counts; this notice is here because it was not free.",
+                `out of quota, so the same model was asked through a metered provider, and THIS CALL COST ` +
+                `$${(result.costUsd ?? 0).toFixed(2)}. The tier ran and its opinion counts; this notice is here ` +
+                "because it was not free, and it will keep costing that per call until the subscription refreshes.",
             ]),
       ],
       roundTree,
