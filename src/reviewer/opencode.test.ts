@@ -1637,7 +1637,12 @@ describe("emissionOf", () => {
    * findings the model explicitly tried to report.
    */
   it("carries schema-rejected findings through a done declaration", () => {
-    const bad = { file: "a.ts", line: 1, severity: "catastrophic", claim: "c", evidence: "e", failureScenario: "f" };
+    // `line: 0` rather than a strange severity, which is what this used to be: an
+    // unknown severity is now MAPPED rather than refused, because losing a whole finding
+    // over one word is the loss this very test is about. A non-positive line is still a
+    // real refusal — there is no line 0 to point at — so the property holds with an
+    // example that is still an example.
+    const bad = { file: "a.ts", line: 0, severity: "high", claim: "c", evidence: "e", failureScenario: "f" };
     const r = emissionOf(
       '```json\n' + JSON.stringify({ findings: [bad] }) + '\n```\n```json\n{"done": true}\n```',
     );

@@ -270,7 +270,16 @@ export async function consumeHeldDiffs(
     // worktree — `restoreTree` only rewinds the one that failed — so that is client work
     // which landed, and an `if (applied > 0)` after the loop would never have run for it.
     // Idempotent, so calling it per diff costs nothing.
-    store.noteClientWork(reviewId);
+    //
+    // `after !== before` AND NOT MERELY "IT VERIFIED". Verification compares `after` to
+    // the hash the CLIENT CLAIMED, which a no-op patch satisfies perfectly: the client
+    // sends `-a`/`+a` naming the unchanged tree, git applies it, exits 0, and the tree is
+    // byte-identical. Without this comparison the held path had no tree-moved test at all
+    // — the synchronous path's `applied !== before` does not cover it — so alternating
+    // held and synchronous no-ops refilled the twelve-round budget indefinitely, each
+    // cycle buying t0 plus a model tier. That is the unbounded loop this signal was added
+    // to close, re-entered by moving the signal here and leaving the gate behind.
+    if (after !== before) store.noteClientWork(reviewId);
   }
   return { applied, diffs };
 }

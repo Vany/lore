@@ -69,7 +69,36 @@ export const FindingSchema = z
      */
     symbol: absent(z.string().min(1).max(256)),
 
-    severity: z.enum(SEVERITIES),
+    /**
+     * COERCED, NEVER REFUSED — because refusing it throws the whole finding away.
+     *
+     * `z.enum(SEVERITIES)` rejected anything else, and a rejected finding fails the whole
+     * object: the model had read the code, found a real defect, and its report was
+     * discarded at the door over one word. Observed on this repository — t1 raised a
+     * `critical` finding about an unbounded round loop, the parse failed, and what reached
+     * the client was a `checks_skipped` line saying a finding existed and could not be
+     * shown. Honest, and still a review that found something and said nothing, which is
+     * INV-1 exactly.
+     *
+     * The scale is deliberately three (D-50) and stays three; a model that reaches for a
+     * fourth word is expressing urgency, not proposing a taxonomy. So the word is mapped
+     * and the finding survives.
+     *
+     * ANYTHING UNRECOGNISED BECOMES `high`, not `low`. A severity nobody planned for is
+     * more likely to be an escalation than a nit — `critical`, `blocker`, `severe` all
+     * point one way — and `severityRank` already ranks an unknown value FIRST for the same
+     * reason: burying it is how it goes unread.
+     */
+    severity: z.preprocess((v) => {
+      if (typeof v !== "string") return v;
+      const word = v.trim().toLowerCase();
+      if ((SEVERITIES as readonly string[]).includes(word)) return word;
+      if (word === "moderate" || word === "med") return "medium";
+      if (word === "info" || word === "informational" || word === "minor" || word === "trivial" || word === "nit") {
+        return "low";
+      }
+      return "high";
+    }, z.enum(SEVERITIES)),
 
     /** What is wrong, in one sentence. */
     claim: z.string().min(1).max(CLAIM_MAX),

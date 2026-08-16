@@ -2151,6 +2151,30 @@ D-77 still holds and nothing skips the ladder. What changes is that batching is 
 DEFAULT rather than a compromise: fix everything found, review it together, push it
 together.
 
+**D-115 — a severity nobody planned for maps; it never costs the finding.
+BUILT 2026-08-16.**
+
+`severity` was `z.enum(["high","medium","low"])`, and Zod rejects the whole object on one
+bad field — so a model that wrote `critical` had its entire finding discarded at the door.
+Measured on this repository: t1 raised a `critical` finding about an unbounded round loop,
+the parse failed, and what reached the client was a `checks_skipped` line saying a finding
+existed and could not be shown. Honest, and still **a review that found something and said
+nothing**, which is INV-1 in its purest form. It only surfaced at all because the model
+re-raised the same defect at a permitted severity on its next emission; nothing guarantees
+that.
+
+The scale stays three (D-50) and is not up for renegotiation — a model reaching for a
+fourth word is expressing urgency, not proposing a taxonomy. So the word is mapped and the
+finding survives: the obvious synonyms go where they belong, and **anything unrecognised
+becomes `high`**, because an unplanned severity points at escalation far more often than
+at a nit, and `severityRank` already ranks an unknown value first for exactly that reason.
+A severity that is not a string at all is still refused — that is a malformed report, not
+an unfamiliar word.
+
+The general rule this is an instance of: **validation at the reviewer boundary must not be
+able to lose a finding.** Refusing input protects the store; here it was discarding the
+product.
+
 **D-114 — the round bounds count ARGUING, not WORKING. BUILT 2026-08-16.**
 
 `perTierRounds: 3` and `globalRounds: 12` counted a review's whole life. That is right for

@@ -130,8 +130,34 @@ describe("parseFinding", () => {
     expect(() => parseFinding({ ...valid, line: 1.5 })).toThrow();
   });
 
-  it("rejects an unknown severity", () => {
-    expect(() => parseFinding({ ...valid, severity: "critical" })).toThrow();
+  /**
+   * MAPS AN UNKNOWN SEVERITY RATHER THAN THROWING THE FINDING AWAY. Reversed
+   * deliberately: this used to assert `toThrow()`, and the cost of that strictness was
+   * measured on this repository — t1 raised a `critical` finding about an unbounded round
+   * loop, the parse failed, and the whole report was discarded. What reached the client
+   * was a `checks_skipped` line saying a finding existed and could not be shown: a review
+   * that found something and said nothing, which is INV-1 exactly.
+   *
+   * The scale stays three (D-50). A model reaching for a fourth word is expressing
+   * urgency, not proposing a taxonomy, so the word is mapped and the finding survives.
+   */
+  it("maps an unknown severity to high instead of losing the finding", () => {
+    expect(parseFinding({ ...valid, severity: "critical" }).severity).toBe("high");
+    expect(parseFinding({ ...valid, severity: "blocker" }).severity).toBe("high");
+    // Unrecognised means ESCALATE, never bury: `severityRank` ranks an unknown first for
+    // the same reason, and a nit misfiled as high costs a reader one line.
+    expect(parseFinding({ ...valid, severity: "wat" }).severity).toBe("high");
+  });
+
+  it("maps the ordinary synonyms to the scale that exists", () => {
+    expect(parseFinding({ ...valid, severity: "MODERATE" }).severity).toBe("medium");
+    expect(parseFinding({ ...valid, severity: "informational" }).severity).toBe("low");
+    expect(parseFinding({ ...valid, severity: " High " }).severity).toBe("high");
+  });
+
+  it("still rejects a severity that is not a word at all", () => {
+    expect(() => parseFinding({ ...valid, severity: 3 })).toThrow();
+    expect(() => parseFinding({ ...valid, severity: null })).toThrow();
   });
 });
 
