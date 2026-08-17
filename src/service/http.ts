@@ -26,6 +26,7 @@ import { asSubscriber, eventsFor, NO_EVENTS, ScopedEventBus } from "../mcp/event
 import { buildServer, type ServerDeps } from "../mcp/server.ts";
 import { decide } from "../knowledge/decide.ts";
 import { board } from "../ops/board.ts";
+import { configView } from "../ops/config-view.ts";
 import { spendByTier, startOfDayIso } from "../ops/spend.ts";
 import { checkHealth, type HeartbeatConfig } from "../ops/heartbeat.ts";
 import type { GateState } from "../reviewer/gate.ts";
@@ -234,6 +235,18 @@ async function handle(
           : { ...outcome, error: "no open conflict between those two statements — it may already be settled" },
       ),
     );
+    return;
+  }
+
+  // THE SHAPE OF THIS DEPLOYMENT (D-118), for a person and for a script.
+  //
+  // The knobs that decide what runs and what it costs live in a `.env` nobody reads, a
+  // JSON file on the host, and `make` targets one person runs — so the answer to "why did
+  // this cost $101.36" was one variable that nothing anywhere displayed. Read-only, and
+  // each row says how to change it; see `ops/config-view.ts` for why writing is not here.
+  if (url.pathname === "/config.json") {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify(configView(), null, 2));
     return;
   }
 

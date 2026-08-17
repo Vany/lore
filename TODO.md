@@ -131,7 +131,29 @@ where they live, because SPEC describes what stands.
       the one place every paid call already passes through. The second is probably right
       and is more than a night's change.
 
-- [ ] **3. D-118's CONFIG WINDOW comes after those two.** It was load-bearing before and
+- [ ] **3. D-118's CONFIG WINDOW — the READ half is built (2026-08-17); the WRITE half and
+      the token button are not.**
+
+      Built: `/config.json` and `ops/config-view.ts` — every parameter with value, chosen
+      vs defaulted, what it does and how to change it; the ladder resolved to real routes;
+      one derived sentence saying whether an outage costs money or coverage.
+
+      **Not built, and the reason is not time.** A live-editable knob means every reader
+      going through one resolver, and `concreteRoute`, `noRouteBecause` and `renderStatus`
+      read `process.env` directly. Wiring some of them would have the window assert a value
+      the ladder does not use — the defect class five findings had just been raised about.
+      Doing it properly is: one `settingOf(key)` resolver over a store-backed override with
+      the env as default, every reader routed through it, and a test that no reader reads
+      the variable directly. That is the real shape and it is a session of its own.
+
+      Also not built: the token button (`make new` from the page, creating the repo row
+      when the URL is new). It inherits one rule that cannot bend — the plaintext is shown
+      once and never stored — and it is a credential-issuing endpoint on a page with no
+      authentication of its own, which needs its own thinking rather than an hour at the
+      end of a long night.
+
+      **Still rendered nowhere.** `/config.json` answers, and the board page does not show
+      it yet — the section is the small remaining piece of the read half. It was load-bearing before and
       it is more so now: with the ceiling gone, `LORE_ALLOW_METERED` is the ONLY money
       control in the service, and it lives in an env var in a `.env` nobody reads — which
       is the complaint that produced D-118 in the first place.

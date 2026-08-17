@@ -628,7 +628,8 @@ that happened to them. Under `LORE_ALLOW_METERED=0`, the default and this deploy
 setting, the bound is structural: no route that charges is ever called.
 
 **D-118 — the operator board grows a CONFIG window, and it is where the knobs live.
-DECIDED 2026-08-16, not yet built.**
+DECIDED 2026-08-16; the READ half built 2026-08-17, the write half and the token button
+deliberately not.**
 
 Vany: *"make config window on web with this checkbox, also put all parameters there. And
 issue new key for button, also it may create new repo if needed."*
@@ -648,6 +649,27 @@ of their own deployment.
 * **The token is shown once and never again**, exactly as `make new` behaves now: the
   plaintext is not stored, only its hash, so a database backup is not a set of live
   credentials. The window must not weaken that — it is the one rule the button inherits.
+
+**What is built (2026-08-17): `/config.json` and `ops/config-view.ts`** — every parameter
+with its value, whether it was CHOSEN or defaulted, what it does, and how to change it;
+the ladder RESOLVED to the routes that will actually be called rather than the nicknames
+the file names; and one derived sentence answering whether an outage costs money or
+coverage. That is the whole of D-118's stated problem — *an operator cannot see the shape
+of their own deployment* — and on 2026-08-16 the answer to "why did this cost $101.36" was
+one variable that nothing anywhere displayed.
+
+**Why the write half is NOT built, as a decision rather than an unfinished edge.** A
+live-editable knob needs every reader of it to go through one resolver, and several read
+`process.env` directly today — `concreteRoute`, `noRouteBecause`, `renderStatus`. Wiring
+some of them leaves the window asserting a value the ladder does not use, which is exactly
+the defect class five findings in one round had just been raised about: a rule stated in
+one place and applied in another. Each row therefore says how to change it, and nothing
+pretends to. `source` is on every row for the same reason — "0" means nothing without
+"because you set it" or "because that is the default", and the post-mortem needed precisely
+that distinction.
+
+A credential is never rendered: `LORE_WEBHOOK_URL` shows `(set)`, and a test asserts the
+value cannot appear anywhere in the payload.
 
 **D-117 — a metered route is one the operator switched on, and that operator is a person.
 DECIDED 2026-08-16 after it cost $101.36 in four hours; BUILT 2026-08-17.**
