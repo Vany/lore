@@ -1,7 +1,7 @@
 import { readdirSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
-  ladderChanged, clientDeliveredWork, DEFAULT_TIERS, anyTierRan, initialState, loadTiers, loadPools, loadHelper, markAnsweredBy, markUnavailable, concreteRoute, exemptLiteral, noRouteBecause, fallbackRoutes, poolOrder, routesFor, rungKey, rungMembers, settle, withQuota, soleVendorOf, step, vendorOf, type Decision, type LadderState, type Tier, ladderFingerprint } from "./ladder.ts";
+  ladderChanged, clientDeliveredWork, DEFAULT_TIERS, anyTierRan, initialState, loadTiers, loadPools, loadHelper, markAnsweredBy, markUnavailable, concreteRoute, exemptLiteral, noRouteBecause, vendorCollapse, fallbackRoutes, poolOrder, routesFor, rungKey, rungMembers, settle, withQuota, soleVendorOf, step, vendorOf, type Decision, type LadderState, type Tier, ladderFingerprint } from "./ladder.ts";
 
 const clean = (state: LadderState) => step({ state, raised: [] });
 
@@ -341,7 +341,91 @@ describe("single-vendor ladders cannot pass (D-49)", () => {
       kind: "passedPartial",
       skipped: [],
       soleVendor: "z-ai",
+      // `soleVendor` is kept and still means what it always did — every tier was one
+      // vendor. It is now the extreme case of the spread beside it, so a client reading
+      // the old field is never told anything false.
+      vendorSpread: { distinct: 1, tiers: 3, vendors: ["z-ai"] },
     });
+  });
+
+  /**
+   * TWO VENDORS ACROSS THREE TIERS IS ALSO NOT THREE OPINIONS (D-49, widened 2026-08-17).
+   *
+   * The rule asked only "are they ALL the same", so the whole range between three
+   * independent opinions and one opinion asked three times was worth nothing to the
+   * verdict. D-117 made that range the common case: when a subscription dies the free
+   * fallback is by construction another plan from a vendor already in the ladder, because
+   * that is why it is free.
+   *
+   * Observed on lore's own review of D-121, which passed CLEAN on exactly this shape:
+   * t1 `zai-coding-plan/glm-5.3` and t2 answered by `zai-coding-plan2/glm-5.2` are both
+   * z-ai, t3 was OpenAI. Vany, asked what it should be worth: downgrade on any collapse.
+   */
+  it("refuses a clean pass when two tiers shared a vendor and a third did not", () => {
+    const TWO_OF_THREE: readonly Tier[] = [
+      { id: "t0", kind: "deterministic", stage: "fast" },
+      { id: "t1", kind: "model", model: "zai-coding-plan/glm-5.3", effort: "medium", stage: "fast" },
+      { id: "t2", kind: "model", model: "zai-coding-plan2/glm-5.2", effort: "high", stage: "deep" },
+      { id: "t3", kind: "model", model: "openai/gpt-5.6-terra", effort: "high", stage: "deep" },
+    ];
+    const d = runClean(TWO_OF_THREE);
+    expect(d.kind, "two opinions, three tiers").toBe("passedPartial");
+    // NOT `soleVendor`: it would be a lie here, and the old field keeps its old meaning.
+    expect(d).not.toHaveProperty("soleVendor");
+    expect(d).toHaveProperty("vendorSpread", { distinct: 2, tiers: 3, vendors: ["z-ai", "openai"] });
+  });
+
+  /**
+   * A TIER THAT RAN ON TWO VENDORS GOT TWO OPINIONS, and the old accounting forgot one.
+   *
+   * `answeredBy` is last-write-wins — it exists so a warm session is not abandoned, and it
+   * must forget. Independence borrowed it and inherited the forgetting: a tier that ran on
+   * Kimi for five rounds and Z.ai for two reported only Z.ai, so the verdict claimed a
+   * collapse most of the review did not have. Reverse the order and it claims three
+   * independent opinions while one vendor read the code twice. Wrong in both directions,
+   * and invisible from outside the service.
+   *
+   * `readBy` accumulates, so the union is the answer. Vany, asked what independence should
+   * be measured over: every vendor that read the review.
+   */
+  it("counts a vendor that read at some point, not only the one currently on the tier", () => {
+    const THREE: readonly Tier[] = [
+      { id: "t0", kind: "deterministic", stage: "fast" },
+      { id: "t1", kind: "model", model: "zai-coding-plan/glm-5.3", effort: "medium", stage: "fast" },
+      { id: "t2", kind: "model", model: "kimi-for-coding/k3", effort: "high", stage: "deep" },
+      { id: "t3", kind: "model", model: "openai/gpt-5.6-terra", effort: "high", stage: "deep" },
+    ];
+    // Rounds 1-5: t2 answered on its own Kimi plan. Round 6: the plan died and Z.ai covered
+    // for it. `answeredBy` is last-write-wins, so it now says z-ai and has forgotten
+    // Moonshot entirely — which is correct for stickiness and wrong for independence.
+    let s = initialState(THREE);
+    s = markAnsweredBy(s, "t2", "kimi-for-coding/k3");
+    s = markAnsweredBy(s, "t2", "zai-coding-plan2/glm-5.2");
+
+    expect(
+      vendorCollapse(THREE, [], s.answeredBy ?? {}),
+      "read through the forgetting field alone, this looks like a collapse",
+    ).toBeDefined();
+
+    expect(
+      vendorCollapse(THREE, [], s.answeredBy ?? {}, s.readBy ?? {}),
+      "but Moonshot did read this code, so three vendors did",
+    ).toBeUndefined();
+  });
+
+  /**
+   * A LADDER OF ONE MODEL TIER HAS ONE VENDOR BY CONSTRUCTION, and that is not a collapse.
+   *
+   * `distinct < tiers` would have been the obvious test and would have refused `passed` to
+   * every single-tier configuration for a property it cannot have. The collapse is a
+   * REPEAT — the same vendor reading the code twice.
+   */
+  it("does not punish a one-tier ladder for having one vendor", () => {
+    const ONE_TIER: readonly Tier[] = [
+      { id: "t0", kind: "deterministic", stage: "fast" },
+      { id: "t1", kind: "model", model: "openai/gpt-5.6-terra", effort: "high", stage: "fast" },
+    ];
+    expect(runClean(ONE_TIER).kind).toBe("passed");
   });
 
   it("still passes outright when the vendors really are distinct", () => {
@@ -363,6 +447,7 @@ describe("single-vendor ladders cannot pass (D-49)", () => {
       kind: "passedPartial",
       skipped: ["t3"],
       soleVendor: "z-ai",
+      vendorSpread: { distinct: 1, tiers: 2, vendors: ["z-ai"] },
     });
   });
 

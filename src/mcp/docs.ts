@@ -159,9 +159,12 @@ ONLY \`passed\` means the branch is clean.
       WHY a tier was unavailable is lore's business and not yours: it is being dealt
       with, it needs nothing from you, and what matters here is only that one fewer
       vendor read your code;
-    * every tier that ran came from ONE vendor, so they share blind spots. Three
-      tiers from one model family is one opinion asked three times, not three
-      independent reviews.
+    * FEWER VENDORS READ YOUR CODE THAN TIERS RAN, so some of them share blind spots.
+      Three tiers from one model family is one opinion asked three times, not three
+      independent reviews — and two tiers from one family plus a third is two opinions,
+      not three. Any repeat lands here, not only a total collapse: when a subscription
+      runs out, the stand-in that covers it is often another plan from a vendor already
+      in the ladder, which is exactly when this is easiest to miss.
   Both are real evidence and both are weaker evidence. Say so to your user rather
   than reporting it as a pass; the attestation names which tiers were skipped and
   which vendor, if only one, actually looked at the code.
@@ -521,8 +524,8 @@ and the findings are still available from review_poll.
 
   attest: `
 Available once state is \`passed\` — or \`passed_partial\`, which is the case that
-most needs a record: the line names which tiers were skipped and, if only one vendor
-looked, which. Refusing to attest a partial review would leave the operator with no
+most needs a record: the line names which tiers were skipped, and how many distinct
+vendors actually read the code against how many tiers ran. Refusing to attest a partial review would leave the operator with no
 account of it at all, which is worse than an honest incomplete one.
 
 Returns one signed line recording what was done:
@@ -803,8 +806,9 @@ fast_clean      cheap tiers clean, deep tiers still running — NOT a pass
 needs_human     a question you must not answer yourself — NOT a pass
 passed          every tier agrees. The only clean state.
 passed_partial  every tier that COULD run agreed, and something above them did not.
-                A tier ABOVE the one that passed never ran, or every tier that ran came
-                from one vendor. Real evidence, weaker evidence. NOT a pass.
+                A tier ABOVE the one that passed never ran, or fewer vendors read the
+                code than tiers ran — any repeat, not only a total collapse.
+                Real evidence, weaker evidence. NOT a pass.
                 A tier skipped BELOW one that passed does not land here: the ladder is
                 a gate, so the tier above re-read everything it would have (D-88).
                 checks_skipped names every tier that did not run, either way

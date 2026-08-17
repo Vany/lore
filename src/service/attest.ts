@@ -88,6 +88,7 @@ export async function attest(store: Store, reviewId: string, principal: string, 
   const everyTier = countTiers(store, reviewId);
   const skipped = review.ladder.unavailable ?? [];
   const sole = review.ladder.soleVendor;
+  const spread = review.ladder.vendorSpread;
 
   // Deliberately plain. Every number in it can be checked against the audit trail.
   //
@@ -102,7 +103,18 @@ export async function attest(store: Store, reviewId: string, principal: string, 
   // count that would otherwise mislead.
   const caveats = [
     skipped.length === 0 ? undefined : `${skipped.join(", ")} could not run`,
-    sole === undefined ? undefined : `every tier that ran was ${sole}, so these are not independent opinions`,
+    sole === undefined
+      ? // THE PARTIAL COLLAPSE IS ALSO A CAVEAT, and it had no way to be said here.
+        //
+        // Only the total one had a field, so three tiers read by two vendors signed as if
+        // three independent opinions had looked — in the one output whose entire value is
+        // that it can be trusted, and against exactly the number a reader takes as a proxy
+        // for rigour. D-117 made this the common shape rather than a rarity.
+        spread === undefined
+        ? undefined
+        : `${String(spread.distinct)} vendor(s) read this across ${String(spread.tiers)} tiers ` +
+          `(${spread.vendors.join(", ")}), so they are not ${String(spread.tiers)} independent opinions`
+      : `every tier that ran was ${sole}, so these are not independent opinions`,
     // Named, not merely subtracted. A reader comparing "2 tiers" here against a trail
     // showing three would otherwise think the line was wrong; it is the trail that
     // includes tiers which read an earlier tree.

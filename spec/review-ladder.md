@@ -48,9 +48,12 @@ them together (§5.0, D-109).
 
 **Three vendors, one per tier**, which is what D-32 and D-49 have always asked for and
 the deployment did not have until 2026-08-06: T1 and T2 were both Z.ai, so two thirds of
-the ladder shared a blind spot. Nothing was reported falsely — D-49's sole-vendor check
-only fires when EVERY tier is one vendor — but the independence was thinner than the
-ladder implies. Read the tiers file for what is actually being spent, and `SPEC.md` D-54
+the ladder shared a blind spot. That shape used to be reported as a clean `passed`,
+because the check only fired when EVERY tier was one vendor; since 2026-08-17 any repeat
+reaches `passed_partial` (D-49, widened). It matters more than it did, because a tier
+whose subscription is out falls back to another plan from a vendor already in the ladder —
+the free one — so the ladder collapses toward two vendors exactly when a provider is
+having a bad day. Read the tiers file for what is actually being spent, and `SPEC.md` D-54
 for why T1 moved.
 
 **`k3`, not `k3-256k`.** The suffix names the SMALLER variant: `k3` carries 1,048,576
@@ -601,8 +604,10 @@ A skip therefore lands in one of two places:
 | **below** the dearest tier that answered | does not prevent `passed` | its work was done again, above it |
 | **at or above** it | `passed_partial` | nothing read this code at that level |
 
-`soleVendor` (D-49) is unchanged and independent: if every tier that ran came from one
-vendor it is still `passed_partial`, however the skips lie.
+The vendor rule (D-49) is independent of all this: if fewer vendors read the code than
+tiers ran — any repeat, not only a total collapse — it is `passed_partial` however the
+skips lie. `soleVendor` still names the extreme case where there was exactly one;
+`vendorSpread` carries the count for every other.
 
 **The pivot is the dearest tier that ANSWERED, never the cursor.** `runRound` promotes a
 dead tier's work by calling `step` with no findings raised, so a tier that FAILED arrives

@@ -371,6 +371,15 @@ export function renderStatus(db: DatabaseSync, reviewId?: string, dataDir = "/va
     }
     if (ladder.soleVendor !== undefined) {
       out.push(`    ${yellow(`◑ every tier that ran was ${ladder.soleVendor}`)} ${dim("— one opinion asked repeatedly, not independent reviews (D-49)")}`);
+    } else if (ladder.vendorSpread !== undefined) {
+      // THE PARTIAL COLLAPSE, which used to be invisible here because only the total one
+      // had a field. It is the common shape under D-117: a dead subscription falls back to
+      // another plan from a vendor already in the ladder, since that is the free one.
+      const v = ladder.vendorSpread;
+      out.push(
+        `    ${yellow(`◑ ${String(v.distinct)} vendor(s) read this, across ${String(v.tiers)} tiers`)} ` +
+          `${dim(`— ${v.vendors.join(", ")}; fewer opinions than rungs, so they are not ${String(v.tiers)} independent reviews (D-49)`)}`,
+      );
     }
 
     // Money and quota, per model call. On a subscription cost is $0 and the number

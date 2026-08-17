@@ -2612,6 +2612,25 @@ export class Store {
   }
 
   /**
+   * TRUE EXACTLY ONCE PER DAY, for a notice that must be said and must not repeat.
+   *
+   * `INSERT OR IGNORE` rather than a read-then-write, because the alternative is a
+   * check-then-act race between concurrent rounds — and the shape it guards is a message
+   * about money, where saying it twice trains an operator to skip it and saying it zero
+   * times is the 2026-08-16 incident. SQLite decides, once, and the winner is whoever's
+   * insert changed a row.
+   *
+   * The day key is passed in rather than read here so the caller owns the boundary and a
+   * test can name a day.
+   */
+  claimDailyNotice(kind: string, dayIso: string): boolean {
+    const r = this.db
+      .prepare("INSERT OR IGNORE INTO meta(key, value) VALUES(?, ?)")
+      .run(`told:${kind}:${dayIso}`, "1");
+    return Number(r.changes ?? 0) > 0;
+  }
+
+  /**
    * Every kept-session key on record, prefix stripped.
    *
    * The reconcile sweeps reviews that ended without a job or a cancel — the retention

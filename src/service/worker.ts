@@ -399,6 +399,10 @@ export class Worker {
       worktree,
       type,
       ...(this.cfg.allowMetered === undefined ? {} : { allowMetered: this.cfg.allowMetered }),
+      // SO A PAID ROUTE CAN REACH A PERSON. The round writes the per-call figure to the
+      // log either way; this is the channel somebody who is not watching the log reads,
+      // and it fires once a day at most (D-117).
+      alerter: this.alerter,
     });
 
     // A DIFF HELD DURING THE ROUND'S LAST TURN (D-107). The stream consumes holds at

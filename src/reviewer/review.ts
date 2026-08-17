@@ -36,8 +36,10 @@ import { parseLoreOk } from "../core/lore-ok.ts";
 import { decidedByPersonOrClock, isTerminal, type ReviewState } from "../core/review-state.ts";
 import type { ReviewType } from "../core/review-type.ts";
 import { retryAt, shouldProbe } from "../core/cooloff.ts";
-import { withoutMetered } from "../core/metered.ts";
+import { isMeteredRoute, withoutMetered } from "../core/metered.ts";
 import { exemptLiteral } from "../core/ladder.ts";
+import { type Alert, CONDITIONS } from "../ops/alerts.ts";
+import { startOfDayIso } from "../ops/spend.ts";
 import { ServiceUnreachable, CancelledByLore, DidNotRun, Exhausted, ProviderAuthFailed, TierUnavailable, TooLargeForTier } from "../core/errors.ts";
 import { hunkAround, hunkStillPresent, makeScope, type Scope } from "../core/scope.ts";
 import { baseCommitFor, blobSha, computeDiff, renderDiff } from "../git/diff.ts";
@@ -84,6 +86,14 @@ export interface RoundInput {
    * money, which is the safe direction and the one the CLI and the tests want.
    */
   readonly allowMetered?: boolean;
+  /**
+   * Where an operator-facing event goes, when there is one.
+   *
+   * OPTIONAL, because the CLI has no webhook and a person running it is already reading
+   * the log this duplicates. The service passes its own; absent means the round says its
+   * piece on stderr and nothing else, which is exactly what happened before this existed.
+   */
+  readonly alerter?: { send(alert: Alert): Promise<void> };
 }
 
 export interface RoundResult {
@@ -1822,6 +1832,32 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
           "Nothing about this reaches the client, deliberately.",
       );
     }
+    // AND ONCE A DAY IT REACHES A PERSON, not only the log (D-117's second shape, which
+    // was only ever half-built — the figure went to stderr, which is read by somebody
+    // already looking, and during the four hours that cost $101.36 nobody was).
+    //
+    // THE ROUTE THAT RAN, and only when it is NOT the one the operator wrote.
+    //
+    // `ranOn !== member.model` is the whole test, and it is not `exemptLiteral`: that
+    // predicate answers "is this tier's MODEL exempt from the gate", which is a different
+    // question and gave the wrong answer for the case this exists for — a tier with an
+    // ordinary subscription model that fell back to a paid route has an exempt model and
+    // is precisely the event worth reporting. The question here is whether LORE chose the
+    // paid route or the operator did.
+    //
+    // So: a tier configured as `openrouter/x` running on `openrouter/x` says nothing —
+    // chosen, immediate, and not news. A nickname pool collapsing onto its paid member, or
+    // a chain walking to a paid twin, both say it, because both are lore reaching a paid
+    // route because something broke.
+    const ranOn = fellBackTo ?? chosenRoute;
+    if (
+      ranOn !== undefined &&
+      ranOn !== member.model &&
+      isMeteredRoute(ranOn) &&
+      store.claimDailyNotice("metered-route", startOfDayIso())
+    ) {
+      await input.alerter?.send(CONDITIONS.meteredRouteInUse(member.id, ranOn, result.costUsd ?? 0));
+    }
     store.closeTierRun(
       tierRunId,
       result.findings.length > 0 ? "findings" : "clean",
@@ -2539,7 +2575,19 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // this record, not a separate one.
   let answered = withSettled;
   for (const o of ranMembers) {
-    const ranOn = o.fellBackTo ?? o.chosenRoute;
+    // THE ROUTE THAT RAN, WHICHEVER IT WAS — including the tier's own model.
+    //
+    // This recorded only fallbacks and pool picks, on the reasoning that a tier answering
+    // on its configured model is the default and needs no entry. True for stickiness, and
+    // false for D-49 once `readBy` started accumulating who has READ this code: a tier
+    // that answered on Kimi in round 1 and fell back to Z.ai in round 6 recorded only the
+    // Z.ai route, so the union it was supposed to make honest was missing the very opinion
+    // that made the review independent. Counting the configured model instead of the route
+    // would be worse — a tier dead since round 0 would be credited with an opinion nobody
+    // gave, which is INV-1 exactly.
+    //
+    // So the rule is: what actually answered gets recorded, and nothing else ever does.
+    const ranOn = o.fellBackTo ?? o.chosenRoute ?? o.member.model;
     if (ranOn !== undefined) answered = markAnsweredBy(answered, o.member.id, ranOn);
   }
   const stepped = step({

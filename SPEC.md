@@ -189,7 +189,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-92** | **t0 is not re-run on a tree it has already read**, and its pattern engines see the branch's files, not the repository | built 2026-08-09 |
 | **D-93** | **An exhausted subscription asks elsewhere** — a list of routes, tried in order, verified at startup | built 2026-08-09; list 2026-08-12 |
 | **D-94** | **A cooled-off tier is asked again every 15 minutes.** lore could hear a tier die and not hear it recover | built 2026-08-10 |
-| **D-49** | A single-vendor ladder reaches `passed_partial`, never `passed` | confirmed |
+| **D-49** | **Fewer vendors than tiers** reaches `passed_partial`, never `passed` — widened from single-vendor 2026-08-17 | confirmed |
 | **D-50** | Exploration is **counted per review before it is capped**. Distribution measured 2026-08-11: longer rounds find LESS | cap `[OPEN]` |
 | **D-51** | An accepted justification is **repo knowledge**, carried across reviews | confirmed |
 | **D-52** | The per-tier cap bounds *iteration*, so a clean tier escalates past it | confirmed |
@@ -456,6 +456,65 @@ confess. It is something to fix. The operator gets everything — the ceiling, t
 per-call cost, the parked route, the pause; the client gets a service that either reviews
 their code or says plainly what it did not examine.
 
+**D-49 widened — ANY vendor repeat costs the verdict, not only a total collapse.
+DECIDED and BUILT 2026-08-17.**
+
+The rule asked the weakest possible version of its own question: *are they ALL the same
+vendor?* So three tiers read by two vendors was a clean `passed`, and the entire range
+between "three independent opinions" and "one opinion asked three times" was worth nothing.
+
+**D-117 made that range the common case rather than a rarity.** When a subscription runs
+out, the free fallback is by construction another plan from a vendor already in the ladder
+— that is *why* it is free — so every metered refusal trades money for vendor diversity.
+Measured on lore's own review of D-121, which passed CLEAN on exactly this shape: t1 on
+`zai-coding-plan/glm-5.3` and t2 answered by `zai-coding-plan2/glm-5.2` are both `z-ai`, t3
+was OpenAI. Two opinions, three tiers, a clean pass, and only a `checks_skipped` sentence
+saying otherwise.
+
+Vany, asked what two-of-three should be worth: **downgrade on any collapse.** I argued the
+cost and he took it anyway — see below; the argument is recorded because it is the thing to
+re-read if this turns out to have been wrong.
+
+**The collapse is a REPEAT, not `distinct < tiers`.** A ladder of one model tier has one
+vendor by construction, and the obvious arithmetic would have refused `passed` to every
+single-tier configuration for a property it cannot have.
+
+**What it costs, stated rather than discovered.** `passed_partial` already means "a tier
+could not answer", and this loads a second meaning onto it. While a subscription is out —
+which is now — every deep review reaches `passed_partial` rather than `passed`. A state
+that is normal during an outage teaches people to ignore it, and that is the risk taken
+here deliberately: the alternative was a verdict that says three independent opinions read
+the code when two did, which is the kind of quiet overstatement INV-1 exists to refuse.
+
+**Measured over every vendor that READ the review, not the one each tier is on now.**
+`answeredBy` is last-write-wins — it exists so a warm session is not abandoned when a route
+flips, and it must forget. Independence borrowed that field and inherited the forgetting: a
+tier that ran on Kimi for five rounds and Z.ai for two reported only Z.ai, so the verdict
+claimed a collapse most of the review did not have; reverse the order and it claims three
+independent opinions while one vendor read the code twice. Wrong in both directions and
+invisible from outside. Vany, asked what it should be measured over: every vendor that read
+the review.
+
+So `readBy` accumulates beside `answeredBy`, and the recording changed at the source: what
+ACTUALLY answered is recorded, including a tier's own model, where before only fallbacks
+and pool picks were. Crediting the CONFIGURED model instead would be worse than the bug —
+a tier dead since round 0 would be counted as an opinion nobody gave, which is INV-1
+exactly.
+
+**Accumulation is also what makes the arithmetic honest.** Over a last-write-wins field the
+test had to be "some vendor appears twice", because `distinct < tiers` would have refused
+`passed` to every single-tier ladder for a property it cannot have. Over the union,
+`distinct < tiers` is simply right: one tier contributing one vendor is `1 < 1`, false; and
+a tier that ran on two vendors contributes both, so a review where Moonshot read at t2
+before Z.ai covered for it really did get three opinions and says so.
+
+`soleVendor` is KEPT beside the new `vendorSpread` and still means exactly what it always
+did — every tier was one vendor. A client reading the old field is never told anything
+false; it is simply the extreme case of the new one. The spread is carried in the ladder
+STATE and not only in the `Decision`, because the attestation and the operator board are
+written from the state after a review ends, and a collapse visible only inside a decision
+would be invisible in both places a reader goes to find out what a verdict was worth.
+
 **D-122 — a kept session outlives the process that opened it, so a deploy costs ONE STEP.
 DECIDED and BUILT 2026-08-17.**
 
@@ -622,13 +681,29 @@ at round 0**, having read nothing.
 The ceiling worked. It is the wrong instrument to find this out from, because by the time
 it fires the money is spent and the people it stops are not the people who spent it.
 
+**And the SECOND branch is now built too, which it was not when this said it was.** The
+per-call figure reached the operator LOG the day the gate shipped, and that sentence was
+written here as though the shape were complete. It was not: a log line is read by somebody
+already looking, and during the four hours of 2026-08-16 that cost $101.36, nobody was.
+Since 2026-08-17 the FIRST call each UTC day that runs on a paid route lore reached
+itself — not one the operator configured — sends a **ticket** naming the tier, the route
+and what that call cost. An EVENT, not a threshold: no total is consulted, so D-121 is
+untouched, and it cannot fire at all under `LORE_ALLOW_METERED=0`. Latched per day, because
+a message about money repeated every round is one an operator learns to skip.
+
+The test is `ranOn !== member.model`, and deliberately not `exemptLiteral`: that predicate
+answers whether a tier's MODEL is exempt from the gate, and a tier with an ordinary
+subscription model falling back to a paid twin has an exempt model while being exactly the
+event worth reporting. The question is who chose the route, lore or the operator.
+
 **Settled, 2026-08-17: the first branch, made switchable.** A metered fallback is refused
 by default — `passed_partial` with the tier in `checks_skipped`, which is honest, free and
 was already implemented — and `LORE_ALLOW_METERED=1` restores it for a deployment that has
 deliberately bought metered capacity, which was the objection to refusing outright. The
 second branch (stay available, become loud) shipped as well and is not an alternative to
 this one: the per-call figure already reaches the operator log the moment a chain falls
-back. The third — a ceiling with a second dimension — died with the ceiling (D-121).
+back — as a ticket since 2026-08-17, not only a log line. The third — a ceiling with a
+second dimension — died with the ceiling (D-121).
 
 **Where it lives:** `isMeteredRoute` in `src/core/metered.ts`, applied to the fallback
 chain AND to a tier's route pool in `runRound`, with the exemption defined once in

@@ -2042,6 +2042,86 @@ describe("a fallback that would walk onto a metered route", () => {
   });
 
   /**
+   * LORE SAYS IT HAS STARTED PAYING — once a day, to a person (D-117).
+   *
+   * The per-call figure went to stderr and nowhere else, which is read by somebody already
+   * looking; during the four hours of 2026-08-16 that cost $101.36, nobody was. An EVENT,
+   * not a threshold: no total is consulted, so D-121 is untouched.
+   */
+  describe("the notice that a paid route is answering", () => {
+    // T1'S OWN MODEL MUST BE A SUBSCRIPTION HERE, or there is no event to report: the
+    // suite's ladder is all `openrouter/` literals, which `exemptLiteral` correctly treats
+    // as the operator's own paid choice and which therefore suppress this notice. The
+    // event is lore reaching a paid route BECAUSE something broke, so the fixture has to
+    // have something to break.
+    const withFallback2 = {
+      ...CODE_ARCH,
+      t0: [] as const,
+      tiers: CODE_ARCH.tiers.map((t) =>
+        t.id === "t1" ? { ...t, model: "zai-coding-plan/glm-5.3", fallback: ["openrouter/twin"] } : t,
+      ),
+    };
+    const primaryOf = () => withFallback2.tiers.find((t) => t.id === "t1")?.model ?? "";
+
+    /** Records what would have been sent, and never touches the network. */
+    const spy = () => {
+      const sent: { condition: string; detail: string; severity: string }[] = [];
+      return { sent, send: (a: { condition: string; detail: string; severity: string }) => { sent.push(a); return Promise.resolve(); } };
+    };
+
+    it("tickets the first paid call, naming the route and what it cost", async () => {
+      const a = spy();
+      class Paid implements ReviewerLike {
+        async review(tier: Tier): Promise<ReviewerResult> {
+          if (tier.model === primaryOf()) throw new Exhausted("plan is out");
+          return { findings: [], discarded: [], raw: "", inputTokens: 0, cachedTokens: 0, outputTokens: 0, costUsd: 4.83, latencyMs: 1, retried: false, steps: 1 };
+        }
+      }
+
+      await runRound({ store, reviewer: new Paid(), reviewId: "r1", principal: "p", worktree: dir, type: withFallback2, allowMetered: true, alerter: a });
+
+      expect(a.sent).toHaveLength(1);
+      expect(a.sent[0]?.severity, "nothing is broken; a person should know").toBe("ticket");
+      expect(a.sent[0]?.detail).toContain("openrouter/twin");
+      expect(a.sent[0]?.detail, "the figure a decision is made on").toContain("4.83");
+    });
+
+    // ONCE A DAY, and the latch is the whole point: a message about money said on every
+    // round is one an operator learns to skip, which is the failure mode of the channel
+    // rather than of the code.
+    it("says it once a day however many rounds pay", async () => {
+      const a = spy();
+      class Paid implements ReviewerLike {
+        async review(tier: Tier): Promise<ReviewerResult> {
+          if (tier.model === primaryOf()) throw new Exhausted("plan is out");
+          return { findings: [], discarded: [], raw: "", inputTokens: 0, cachedTokens: 0, outputTokens: 0, costUsd: 4.83, latencyMs: 1, retried: false, steps: 1 };
+        }
+      }
+      const reviewer = new Paid();
+      for (const id of ["r1", "r1", "r1"]) {
+        await runRound({ store, reviewer, reviewId: id, principal: "p", worktree: dir, type: withFallback2, allowMetered: true, alerter: a }).catch(() => undefined);
+      }
+      expect(a.sent, "three rounds, one notice").toHaveLength(1);
+    });
+
+    // A DEPLOYMENT THAT CONFIGURED A PAID MODEL IS NOT SURPRISED BY IT. Ticketing that
+    // daily would be telling an operator their own configuration is working.
+    it("says nothing when the tier's own configured model is the paid one", async () => {
+      const a = spy();
+      const literal = { ...CODE_ARCH, t0: [] as const, tiers: CODE_ARCH.tiers.map((t) => (t.id === "t1" ? { ...t, model: "openrouter/chosen" } : t)) };
+      class Answers2 implements ReviewerLike {
+        async review(): Promise<ReviewerResult> {
+          return { findings: [], discarded: [], raw: "", inputTokens: 0, cachedTokens: 0, outputTokens: 0, costUsd: 4.83, latencyMs: 1, retried: false, steps: 1 };
+        }
+      }
+
+      await runRound({ store, reviewer: new Answers2(), reviewId: "r1", principal: "p", worktree: dir, type: literal, alerter: a });
+
+      expect(a.sent, "chosen, immediate, and not news").toStrictEqual([]);
+    });
+  });
+
+  /**
    * A TIER'S OWN MODEL IS NEVER FILTERED, however metered it is.
    *
    * Naming `openrouter/x` as the model IS the operator switching it on: it runs every

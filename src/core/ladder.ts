@@ -738,17 +738,77 @@ export function soleVendorOf(
   unavailable: readonly string[] = [],
   answeredBy: Readonly<Record<string, string>> = {},
 ): string | undefined {
-  const vendors = new Set(
-    tiers
-      .filter((t) => t.kind === "model" && !unavailable.includes(t.id))
-      // WHO ANSWERED, falling back to who was ASKED. A tier that ran on its fallback was
-      // read by that model's vendor, whatever the config says — and since a chain may now
-      // end at a different model on a paying plan, the two can disagree about the only
-      // thing this function exists to decide.
-      .map((t) => vendorOf(answeredBy[t.id] ?? t.model ?? "")),
-  );
-  const [only] = [...vendors];
-  return vendors.size === 1 ? only : undefined;
+  const spread = vendorSpread(tiers, unavailable, answeredBy);
+  return spread.distinct === 1 ? spread.vendors[0] : undefined;
+}
+
+/**
+ * HOW MANY INDEPENDENT OPINIONS ACTUALLY READ THIS CODE, against how many tiers ran.
+ *
+ * D-1's premise is that each tier is a different vendor, because two tiers from one model
+ * family share blind spots and are not two opinions. The rule enforcing it only ever asked
+ * the weakest possible version of the question — *are they ALL the same?* — so three tiers
+ * answered by two vendors was a clean `passed`, and the erosion between "all different" and
+ * "all identical" was invisible to the verdict.
+ *
+ * D-117 made that erosion systematic rather than incidental. When a subscription dies the
+ * free fallback is, by construction, another plan from a vendor already in the ladder —
+ * that is WHY it is free — so every metered refusal trades money for vendor diversity.
+ * Observed the day the gate shipped: t1 on `zai-coding-plan/glm-5.3` and t2 answered by
+ * `zai-coding-plan2/glm-5.2` are both z-ai, t3 was OpenAI, and the review passed clean.
+ *
+ * Vany, asked what two-of-three should be worth: downgrade on ANY collapse.
+ *
+ * `answeredBy` over `model`, because a tier that ran on its fallback was read by THAT
+ * model's vendor whatever the config says — the two disagree exactly when this matters.
+ */
+export interface VendorSpread {
+  /** Distinct vendors among the model tiers that ran. */
+  readonly distinct: number;
+  /** How many model tiers ran. `distinct < tiers` is the collapse. */
+  readonly tiers: number;
+  /** Their names, for the sentence a person reads. */
+  readonly vendors: readonly string[];
+}
+
+export function vendorSpread(
+  tiers: readonly Tier[],
+  unavailable: readonly string[] = [],
+  answeredBy: Readonly<Record<string, string>> = {},
+  readBy: Readonly<Record<string, readonly string[]>> = {},
+): VendorSpread {
+  const ran = tiers.filter((t) => t.kind === "model" && !unavailable.includes(t.id));
+  const vendors = new Set<string>();
+  for (const t of ran) {
+    // EVERY ROUTE THIS TIER HAS RUN ON, not the one it happens to be on now. `answeredBy`
+    // is the fallback for a review recorded before `readBy` existed, and for a tier that
+    // never left its configured model — where the two agree by construction.
+    const routes = readBy[t.id] ?? [answeredBy[t.id] ?? t.model ?? ""];
+    for (const r of routes) vendors.add(vendorOf(r));
+  }
+  return { distinct: vendors.size, tiers: ran.length, vendors: [...vendors] };
+}
+
+/**
+ * Did fewer vendors read this code than tiers ran? `undefined` when the review got as many
+ * independent opinions as it had rungs.
+ *
+ * `distinct < tiers`, and accumulation is what makes that arithmetic honest. Measured over
+ * a last-write-wins field it was wrong in the one shape that matters most — a single tier,
+ * which has one vendor by construction and would have been refused `passed` for a property
+ * it cannot have. Over the UNION it comes out right without a special case: one tier
+ * contributing one vendor is `1 < 1`, false. A tier that ran on two vendors contributes
+ * both, so a review where Moonshot read at t2 before Z.ai covered for it really did get
+ * three opinions, and says so.
+ */
+export function vendorCollapse(
+  tiers: readonly Tier[],
+  unavailable: readonly string[] = [],
+  answeredBy: Readonly<Record<string, string>> = {},
+  readBy: Readonly<Record<string, readonly string[]>> = {},
+): VendorSpread | undefined {
+  const spread = vendorSpread(tiers, unavailable, answeredBy, readBy);
+  return spread.distinct < spread.tiers ? spread : undefined;
 }
 
 export interface Limits {
@@ -802,6 +862,23 @@ export interface LadderState {
    */
   readonly soleVendor?: string;
   /**
+   * How many vendors actually read the code, against how many tiers ran.
+   *
+   * Carried in the STATE and not only in the decision, because the attestation and the
+   * operator board are written from the state after the review has ended — and a
+   * two-of-three collapse that only ever existed inside a `Decision` would be invisible to
+   * both, which is where a reader goes to find out what a verdict was worth.
+   */
+  readonly vendorSpread?: VendorSpread;
+  /**
+   * Every route each tier has run on in this review, accumulated.
+   *
+   * Beside `answeredBy` rather than replacing it: that one answers "where is this tier
+   * now" for route stickiness and must keep forgetting, this one answers "who has read
+   * this code" for D-49 and must not.
+   */
+  readonly readBy?: Readonly<Record<string, readonly string[]>>;
+  /**
    * The model that ACTUALLY ANSWERED each tier, where it was not the configured one.
    *
    * Independence is the product's whole claim, and until 2026-08-12 it was checked
@@ -826,7 +903,24 @@ export interface LadderState {
  * leaves no entry, so `answeredBy` stays empty on every review where nothing ran out.
  */
 export function markAnsweredBy(state: LadderState, tierId: string, model: string): LadderState {
-  return { ...state, answeredBy: { ...(state.answeredBy ?? {}), [tierId]: model } };
+  // TWO RECORDS, TWO QUESTIONS, and conflating them was the defect.
+  //
+  // `answeredBy` is LAST-WRITE-WINS and exists for route stickiness — *which route is this
+  // tier currently on*, so a warm session is not abandoned. Independence borrowed it, and
+  // borrowed a field that forgets: a tier that ran on Kimi for five rounds and Z.ai for two
+  // reported only Z.ai, so the verdict claimed a vendor collapse most of the review did not
+  // have. Reverse the order and it claims three independent opinions when one vendor read
+  // the code twice. Wrong in both directions, and invisible from outside.
+  //
+  // `readBy` ACCUMULATES: every route this tier has ever run on in this review. A blind
+  // spot is a property of who looked, not of which tree they looked at, so the honest
+  // question for D-49 is over the union.
+  const seen = state.readBy?.[tierId] ?? [];
+  return {
+    ...state,
+    answeredBy: { ...(state.answeredBy ?? {}), [tierId]: model },
+    readBy: { ...(state.readBy ?? {}), [tierId]: seen.includes(model) ? seen : [...seen, model] },
+  };
 }
 
 /**
@@ -951,7 +1045,19 @@ export type Decision =
    * tiers were unpayable (D-48), or every tier that ran came from one vendor
    * (D-49), or both. `skipped` and `soleVendor` say which.
    */
-  | { readonly kind: "passedPartial"; readonly skipped: readonly string[]; readonly soleVendor?: string }
+  | {
+      readonly kind: "passedPartial";
+      readonly skipped: readonly string[];
+      readonly soleVendor?: string;
+      /**
+       * Set when fewer vendors read the code than tiers ran (D-49, widened 2026-08-17).
+       *
+       * `soleVendor` is kept beside it and still means exactly what it always did — every
+       * tier was one vendor — so a client reading the old field is never told something
+       * false. It is simply the extreme case of this one.
+       */
+      readonly vendorSpread?: VendorSpread;
+    }
   /** A human must answer before this can proceed. Not a pass. */
   | { readonly kind: "needsHuman" }
   /** A bound was hit. Not a pass — see §5. */
@@ -1097,6 +1203,14 @@ export function step(input: StepInput): { readonly state: LadderState; readonly 
     // consequence is a comment.
     const skipped = base.unavailable;
     const sole = soleVendorOf(tiers, skipped, base.answeredBy ?? {});
+    // ANY REPEAT COSTS THE VERDICT, not only a total collapse (D-49, widened 2026-08-17).
+    //
+    // This asked `soleVendorOf` alone — all-one-vendor — so three tiers read by two vendors
+    // passed clean, and the whole range between "three independent opinions" and "one
+    // opinion asked three times" was worth nothing to the verdict. D-117 made that range
+    // the common case: a dead subscription falls back to another plan from a vendor already
+    // in the ladder, because that is the fallback that costs nothing.
+    const collapse = vendorCollapse(tiers, skipped, base.answeredBy ?? {}, base.readBy ?? {});
     // A TIER SKIPPED BELOW ONE THAT PASSED DOES NOT WEAKEN THE VERDICT (D-88).
     //
     // Vany: *"quota on t1 must allow to skip it and start t2. passing of t2 must make t1
@@ -1123,15 +1237,25 @@ export function step(input: StepInput): { readonly state: LadderState; readonly 
       return i > ranTo;
     });
     return {
-      state: { ...base, cursor: prev.cursor, ...(sole === undefined ? {} : { soleVendor: sole }) },
+      state: {
+        ...base,
+        cursor: prev.cursor,
+        ...(sole === undefined ? {} : { soleVendor: sole }),
+        ...(collapse === undefined ? {} : { vendorSpread: collapse }),
+      },
       decision:
-        above.length === 0 && sole === undefined
+        above.length === 0 && collapse === undefined
           ? { kind: "passed" }
           : // `skipped`, not `above`: the client is still told every tier that did not
             // run. What changed is which of them costs the verdict, never which of them
             // is disclosed — a `passed` that quietly stopped mentioning t1 would be the
             // silent downgrade this whole project exists to refuse.
-            { kind: "passedPartial", skipped, ...(sole === undefined ? {} : { soleVendor: sole }) },
+            {
+              kind: "passedPartial",
+              skipped,
+              ...(sole === undefined ? {} : { soleVendor: sole }),
+              ...(collapse === undefined ? {} : { vendorSpread: collapse }),
+            },
     };
   }
 

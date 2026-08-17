@@ -198,6 +198,33 @@ export const CONDITIONS = {
       "This does not clear by itself and lore will not retry.",
   }),
   /**
+   * LORE HAS STARTED PAYING, and until now nothing said so in a channel a person reads.
+   *
+   * The 2026-08-16 shape exactly: at 05:06 a subscription hit its billing-cycle limit, the
+   * chain walked onto a metered twin, and the first thing to speak was a daily ceiling four
+   * hours and $101.36 later — to everyone except the person who had spent it. The per-call
+   * figure went to the operator LOG that day, which is seen only by somebody already
+   * looking, and during those four hours nobody was.
+   *
+   * AN EVENT, NOT A THRESHOLD, and that is what makes it compatible with D-121. No total is
+   * consulted and no number decides anything; this says a paid ROUTE ran, which D-120
+   * already establishes as the operator's business. It cannot fire at all under
+   * `LORE_ALLOW_METERED=0`, because no metered call happens.
+   *
+   * NOT for a tier whose own configured model is metered: that runs every round by the
+   * operator's explicit choice, and telling them daily that their configuration is doing
+   * what they configured is how a channel becomes noise. This is for the route lore
+   * reached BECAUSE something broke.
+   */
+  meteredRouteInUse: (tier: string, route: string, usd: number): Alert => ({
+    severity: "ticket",
+    condition: "a paid route is now answering reviews",
+    detail:
+      `${tier} fell through to ${route}, which bills per call — that call cost $${usd.toFixed(2)}, and every ` +
+      "one will until the subscription behind it refreshes. Nothing is broken and no review is at risk; this " +
+      "is the only notice you get, once a day. Set LORE_ALLOW_METERED=0 to skip the tier instead of paying.",
+  }),
+  /**
    * A FINDING NOBODY HAS READ IS A REVIEW THAT DID NOT RUN, ONE STEP LATER.
    *
    * A ticket rather than a page: nothing is broken, and the remedy is a person nudging a
