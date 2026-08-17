@@ -1769,6 +1769,15 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
           // round-boundary ceiling blind to exactly the runaway shape it is the only
           // guard against.
           const twinSpent = (twin as { spent?: { input: number; cached: number; output: number; cost: number } }).spent;
+          // AND THE OPERATOR HEARS ABOUT IT HERE, where a paid call is known to have been
+          // attempted. The failure-path notice I added first read `fellBackTo ?? chosenRoute`
+          // — and `fellBackTo` is assigned only AFTER a twin succeeds, `chosenRoute` only for
+          // a pool pick, so on the ordinary shape (a configured fallback that times out
+          // after spending) both were undefined and nothing was ever sent. The money left
+          // and the alert did not. `twinModel` is the route that was actually asked.
+          if (isMeteredRoute(twinModel)) {
+            await tellPaidRoute(store, input.alerter, member.id, twinModel, twinSpent?.cost ?? 0);
+          }
           if (twinSpent !== undefined) {
             store.recordUsage({
               repoId: review.repoId,
@@ -1878,7 +1887,21 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     // chosen, immediate, and not news. A nickname pool collapsing onto its paid member, or
     // a chain walking to a paid twin, both say it, because both are lore reaching a paid
     // route because something broke.
-    const ranOn = fellBackTo ?? chosenRoute;
+    // ONLY WHEN NOTHING FREE WAS AVAILABLE TO PICK.
+    //
+    // Wording was not the fix. A metered member of a pool can be `pool[0]` by shuffle with
+    // every free sibling perfectly healthy — the operator put it there and said metered was
+    // allowed, so that is their arrangement working, not news. Alerting on it consumed the
+    // day's single notice, so a REAL exhaustion hours later was silent: the benign case
+    // eating the alarm meant for the dangerous one.
+    //
+    // `freeWasAvailable` is the discriminator, taken from the routes believed usable at
+    // SELECTION time. A pool that still had a free route and yielded a paid one was a coin
+    // toss; a pool whose free routes were all parked, leaving only the twin, is the
+    // 2026-08-16 shape and speaks. A `fellBackTo` always speaks — a chain is walked only
+    // because something refused.
+    const freeWasAvailable = routes.some((r) => !isMeteredRoute(r));
+    const ranOn = fellBackTo ?? (freeWasAvailable ? undefined : chosenRoute);
     if (ranOn !== undefined && ranOn !== member.model && isMeteredRoute(ranOn)) {
       await tellPaidRoute(store, input.alerter, member.id, ranOn, result.costUsd ?? 0);
     }
@@ -1971,6 +1994,9 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       // every attempt failed the same way and none of them reached the alert. The event is
       // "lore started paying", which the money leaving proves; whether an answer came back
       // is a different question and not this one.
+      // The twin-failure case is handled where the twin actually spent (see above); this
+      // covers a PRIMARY that was itself a paid route lore picked because nothing free was
+      // left, and then died.
       const paidRoute = fellBackTo ?? chosenRoute;
       if (paidRoute !== undefined && paidRoute !== member.model && isMeteredRoute(paidRoute)) {
         await tellPaidRoute(store, input.alerter, member.id, paidRoute, spent.cost);

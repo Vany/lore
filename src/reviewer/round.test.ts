@@ -2104,6 +2104,50 @@ describe("a fallback that would walk onto a metered route", () => {
       expect(a.sent, "three rounds, one notice").toHaveLength(1);
     });
 
+    /**
+     * A COIN TOSS IS NOT AN INCIDENT, and it must not eat the day's alarm.
+     *
+     * A metered member of a pool can be `pool[0]` by shuffle with every free sibling
+     * healthy — the operator put it there and allowed metered, so that is their
+     * arrangement working. Alerting on it consumed the single daily notice, so a REAL
+     * exhaustion hours later was silent: the benign case eating the alarm meant for the
+     * dangerous one. Fixing the alert's WORDING did not fix that; the condition had to.
+     */
+    it("says nothing when a free sibling was available and the shuffle picked the paid one", async () => {
+      const a = spy();
+      const MIXED = JSON.stringify({
+        models: { GLM: ["zai-coding-plan/glm-5.2", "openrouter/z-ai/glm-5.2"] },
+        tiers: [
+          { id: "t0", kind: "deterministic", stage: "fast" },
+          { id: "t1", kind: "model", model: "GLM", stage: "fast" },
+        ],
+      });
+      const saved = process.env["LORE_TIERS"];
+      process.env["LORE_TIERS"] = MIXED;
+      try {
+        const pooled = { ...CODE_ARCH, t0: [] as const, tiers: CODE_ARCH.tiers.map((t) => (t.id === "t1" ? { ...t, model: "GLM" } : t)) };
+        class Answers3 implements ReviewerLike {
+          async review(): Promise<ReviewerResult> {
+            return { findings: [], discarded: [], raw: "", inputTokens: 0, cachedTokens: 0, outputTokens: 0, costUsd: 4.83, latencyMs: 1, retried: false, steps: 1 };
+          }
+        }
+        // TWENTY DRAWS, because the shuffle decides which route is picked: one run proves
+        // nothing about a condition that only fires on half of them.
+        for (let i = 0; i < 20; i++) {
+          const id = `rPick${String(i)}`;
+          store.createReview({
+            id, repoId, principal: "p", branch: "feat/holds", intoRef: "main",
+            ticket: "one draw", type: CODE_ARCH.id, state: "running", ladder: initialState(CODE_ARCH.tiers),
+          });
+          await runRound({ store, reviewer: new Answers3(), reviewId: id, principal: "p", worktree: dir, type: pooled, allowMetered: true, alerter: a });
+        }
+        expect(a.sent, "a healthy pool picking its paid member is not news").toStrictEqual([]);
+      } finally {
+        if (saved === undefined) delete process.env["LORE_TIERS"];
+        else process.env["LORE_TIERS"] = saved;
+      }
+    });
+
     // A DEPLOYMENT THAT CONFIGURED A PAID MODEL IS NOT SURPRISED BY IT. Ticketing that
     // daily would be telling an operator their own configuration is working.
     it("says nothing when the tier's own configured model is the paid one", async () => {
