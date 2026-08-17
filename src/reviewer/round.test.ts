@@ -2444,13 +2444,82 @@ describe("a pool of routes to one model", () => {
    * `stated: false`, and every t2 round still burned two refused calls before landing on
    * the super fallback, because a guessed mark could not skip anything.
    */
-  it("goes straight past a lone primary inside its backoff, without calling it", async () => {
+  /**
+   * A BACKOFF LORE GUESSED IS RE-TESTED; ONE A PROVIDER STATED IS NOT (D-94, widened to
+   * routes 2026-08-17).
+   *
+   * `shouldProbe` was only ever asked about the TIER mark — and both outages this service
+   * actually has are ROUTE marks, so nothing re-tested them. Measured the morning it was
+   * found: `openai/gpt-5.6-terra` parked at a GUESSED 19:18Z, last asked at 00:46Z eleven
+   * hours earlier, while t3 answered on Z.ai and every verdict came back `passed_partial`
+   * for a vendor collapse that no longer had to exist.
+   *
+   * The trade is twelve seconds (D-91 makes a refusal arrive fast) against a whole vendor.
+   */
+  it("re-tests a route parked on lore's own guess, and keeps it if it answers", async () => {
+    const type = {
+      ...CODE_ARCH,
+      t0: [] as const,
+      tiers: CODE_ARCH.tiers.map((t) => (t.id === "t1" ? { ...t, model: "kimi/k3", fallback: ["GLM5.2"] } : t)),
+    };
+    // `stated: false` — a doubling backoff lore invented, reaching into 2126.
+    store.markRouteUnavailable("kimi/k3", "2126-01-01T00:00:00.000Z", "out of quota", 3, false);
+    const reviewer = new Answers();
+
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type, allowMetered: true });
+
+    expect(reviewer.asked, "the guess is questioned rather than obeyed").toContain("kimi/k3");
+    // ONE SUCCESS CLEARS IT, so the next round does not probe at all — the route is simply
+    // back, which is the whole point of asking.
+    expect(store.routeUnavailable("kimi/k3"), "and it is no longer parked").toBeUndefined();
+  });
+
+  // A STATED RESET IS THE PROVIDER TELLING US SOMETHING TRUE (D-91). Probing it would be
+  // re-asking a question already answered, which is the cost Vany refused: *"I do not want
+  // a regular check for quota if nothing happens."*
+  it("does not re-test a route whose reset the provider stated", async () => {
+    const type = {
+      ...CODE_ARCH,
+      t0: [] as const,
+      tiers: CODE_ARCH.tiers.map((t) => (t.id === "t1" ? { ...t, model: "kimi/k3", fallback: ["GLM5.2"] } : t)),
+    };
+    store.markRouteUnavailable("kimi/k3", "2126-01-01T00:00:00.000Z", "billing cycle", 3, true);
+    const reviewer = new Answers();
+
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type, allowMetered: true });
+
+    expect(reviewer.asked, "the provider's word is taken").not.toContain("kimi/k3");
+  });
+
+  // AND NOT ON EVERY ROUND. The probe is bounded by PROBE_INTERVAL_MS exactly as the
+  // per-tier one is: a route that refuses again is stamped and left alone, which is what
+  // stops this becoming the per-round re-ask that was measured burning two calls a round
+  // to learn nothing.
+  it("probes a still-dead route once, not on every round", async () => {
     const type = {
       ...CODE_ARCH,
       t0: [] as const,
       tiers: CODE_ARCH.tiers.map((t) => (t.id === "t1" ? { ...t, model: "kimi/k3", fallback: ["GLM5.2"] } : t)),
     };
     store.markRouteUnavailable("kimi/k3", "2126-01-01T00:00:00.000Z", "out of quota", 3, false);
+    const reviewer = new Answers(["kimi/k3"]);
+
+    for (const id of ["r1", "r1", "r1"]) {
+      await runRound({ store, reviewer, reviewId: id, principal: "p", worktree: dir, type, allowMetered: true }).catch(
+        () => undefined,
+      );
+    }
+
+    expect(reviewer.asked.filter((m) => m === "kimi/k3"), "asked once across three rounds").toHaveLength(1);
+  });
+
+  it("goes straight past a lone primary inside its backoff, without calling it", async () => {
+    const type = {
+      ...CODE_ARCH,
+      t0: [] as const,
+      tiers: CODE_ARCH.tiers.map((t) => (t.id === "t1" ? { ...t, model: "kimi/k3", fallback: ["GLM5.2"] } : t)),
+    };
+    store.markRouteUnavailable("kimi/k3", "2126-01-01T00:00:00.000Z", "out of quota", 3, true);
     const reviewer = new Answers();
     const r = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type, allowMetered: true });
 
@@ -2467,8 +2536,8 @@ describe("a pool of routes to one model", () => {
         t.id === "t1" ? { ...t, model: "kimi/k3", fallback: ["openrouter/moonshotai/kimi-k3", "GLM5.2"] } : t,
       ),
     };
-    store.markRouteUnavailable("kimi/k3", "2126-01-01T00:00:00.000Z", "out", 3, false);
-    store.markRouteUnavailable("openrouter/moonshotai/kimi-k3", "2126-01-01T00:00:00.000Z", "out", 3, false);
+    store.markRouteUnavailable("kimi/k3", "2126-01-01T00:00:00.000Z", "out", 3, true);
+    store.markRouteUnavailable("openrouter/moonshotai/kimi-k3", "2126-01-01T00:00:00.000Z", "out", 3, true);
     const reviewer = new Answers();
     await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type, allowMetered: true });
 
@@ -2487,8 +2556,8 @@ describe("a pool of routes to one model", () => {
       t0: [] as const,
       tiers: CODE_ARCH.tiers.map((t) => (t.id === "t1" ? { ...t, model: "GLM5.2", fallback: [] } : t)),
     };
-    store.markRouteUnavailable("zai-coding-plan/glm-5.2", "2126-01-01T00:00:00.000Z", "out", 3, false);
-    store.markRouteUnavailable("zai-coding-plan2/glm-5.2", "2126-01-01T00:00:00.000Z", "out", 3, false);
+    store.markRouteUnavailable("zai-coding-plan/glm-5.2", "2126-01-01T00:00:00.000Z", "out", 3, true);
+    store.markRouteUnavailable("zai-coding-plan2/glm-5.2", "2126-01-01T00:00:00.000Z", "out", 3, true);
     const reviewer = new Answers();
     const r = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type, allowMetered: true });
 
@@ -2522,7 +2591,7 @@ describe("a pool of routes to one model", () => {
       t0: [] as const,
       tiers: CODE_ARCH.tiers.map((t) => (t.id === "t1" ? { ...t, model: "kimi/k3", fallback: ["GLM5.2"] } : t)),
     };
-    store.markRouteUnavailable("kimi/k3", "2126-01-01T00:00:00.000Z", "out", 3, false);
+    store.markRouteUnavailable("kimi/k3", "2126-01-01T00:00:00.000Z", "out", 3, true);
     // The previous round settled on zp3 — the roll must not happen again, this round or next.
     const ladder = { ...initialState(CODE_ARCH.tiers), answeredBy: { t1: "zp3/glm-5.2" } };
     store.db.prepare("UPDATE review SET ladder = ? WHERE id = 'r1'").run(JSON.stringify(ladder));

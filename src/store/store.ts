@@ -2958,6 +2958,23 @@ export class Store {
       .run(`route-unavailable:${model}`, JSON.stringify({ until: untilIso, why, failures, stated }));
   }
 
+  /**
+   * A PARKED ROUTE WAS JUST RE-TESTED (D-94, widened to routes 2026-08-17).
+   *
+   * Stamped BEFORE the call, so a route that hangs cannot be probed again by every review
+   * that starts while it hangs — the same reason the per-tier probe stamps first.
+   *
+   * The mark is otherwise untouched: a probe that fails leaves the backoff exactly as it
+   * was, and one that succeeds clears the whole row through `clearRouteUnavailable`.
+   */
+  markRouteProbed(model: string): void {
+    const mark = this.routeUnavailable(model);
+    if (mark === undefined) return;
+    this.db
+      .prepare("INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+      .run(`route-unavailable:${model}`, JSON.stringify({ ...mark, probedAt: new Date().toISOString() }));
+  }
+
   /** Forgotten the moment the route answers, exactly as for a tier. */
   clearRouteUnavailable(model: string): void {
     this.db.prepare("DELETE FROM meta WHERE key = ?").run(`route-unavailable:${model}`);
@@ -2970,14 +2987,23 @@ export class Store {
    * what the next backoff is computed from, and an operator wants to know a route failed
    * at all rather than only that it is failing now.
    */
-  routeUnavailable(model: string): { readonly until: string; readonly why: string; readonly failures: number; readonly stated: boolean } | undefined {
+  routeUnavailable(model: string): { readonly until: string; readonly why: string; readonly failures: number; readonly stated: boolean; readonly probedAt?: string } | undefined {
     const row = this.db.prepare("SELECT value FROM meta WHERE key = ?").get(`route-unavailable:${model}`) as
       | Record<string, string>
       | undefined;
     if (row?.["value"] === undefined) return undefined;
     try {
-      const v = JSON.parse(row["value"]) as { until?: string; why?: string; failures?: number; stated?: boolean };
-      return { until: v.until ?? "", why: v.why ?? "", failures: v.failures ?? 1, stated: v.stated === true };
+      const v = JSON.parse(row["value"]) as { until?: string; why?: string; failures?: number; stated?: boolean; probedAt?: string };
+      return {
+        until: v.until ?? "",
+        why: v.why ?? "",
+        failures: v.failures ?? 1,
+        stated: v.stated === true,
+        // Absent means never probed, which `shouldProbe` reads as "due now" — so the first
+        // review after this shipped re-tests every route parked on a guess, which is
+        // exactly right for marks written before probing existed.
+        ...(v.probedAt === undefined ? {} : { probedAt: v.probedAt }),
+      };
     } catch {
       // Unreadable is not "out of quota". A row we cannot parse must not silently strike
       // a paid-for route out of every ladder that names it.

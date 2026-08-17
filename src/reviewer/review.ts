@@ -1476,7 +1476,44 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     // EXCEPT WHEN PROBING (D-94). The probe is the one call whose whole purpose is to
     // reach a provider we believe is down, so it must not be filtered by that belief —
     // filtered, lore could never again learn that anything recovered early.
-    const believed = probing ? { usable: all } : withQuota(all, (m) => store.routeUnavailable(m));
+    // AND A PARKED ROUTE IS RE-TESTED TOO, when its backoff was OUR GUESS (D-94, widened
+    // to routes 2026-08-17).
+    //
+    // `shouldProbe` was only ever asked about the TIER mark, and both of the outages this
+    // service actually has are ROUTE marks — so nothing re-tested them and a parked route
+    // sat out its whole doubling backoff untouched. Measured the morning it was found:
+    // `openai/gpt-5.6-terra` parked at a GUESSED 19:18Z, last asked at 00:46Z, eleven
+    // hours earlier, while t3 answered on Z.ai and every verdict came back
+    // `passed_partial` for a vendor collapse that no longer had to exist. The provider's
+    // limit was a rolling window that had almost certainly reset several times over.
+    //
+    // D-90's reasoning — do not re-ask a dead provider every round — was written when
+    // asking cost 2700s. D-91 made it about twelve seconds and D-94 acted on that for
+    // tiers only. Twelve seconds against a whole vendor is not a close trade.
+    //
+    // A STATED RESET IS STILL HONOURED TO THE SECOND. That is the provider telling us
+    // something true (D-91), and probing it would be re-asking a question already
+    // answered; only a backoff lore invented is re-tested. Stamped before the call so a
+    // hanging route is not probed again by every review that starts meanwhile.
+    const dueProbe = new Set<string>();
+    if (!probing) {
+      for (const r of all) {
+        const mark = store.routeUnavailable(r);
+        if (mark !== undefined && !mark.stated && shouldProbe(mark, Date.now())) {
+          store.markRouteProbed(r);
+          dueProbe.add(r);
+        }
+      }
+    }
+    const believed = probing
+      ? { usable: all }
+      : withQuota(all, (m) => (dueProbe.has(m) ? undefined : store.routeUnavailable(m)));
+    if (dueProbe.size > 0) {
+      console.error(
+        `[lore:log] ${reviewId}: re-testing parked route(s) ${[...dueProbe].join(", ")} for ${member.id} — ` +
+          "their backoff was lore's guess, not the provider's word, and one success clears it.",
+      );
+    }
     const routes = believed.usable;
     const stuck = review.ladder.answeredBy?.[member.id];
     // THE KEPT ROUTE FIRST, AND THE REST STILL BEHIND IT. Collapsing the pool to the

@@ -456,6 +456,39 @@ confess. It is something to fix. The operator gets everything — the ceiling, t
 per-call cost, the parked route, the pause; the client gets a service that either reviews
 their code or says plainly what it did not examine.
 
+**D-125 — D-94's probe covers ROUTES, not only tiers. BUILT 2026-08-17.**
+
+Vany, on being offered a manual route-clear: *"no, everything must be automated."*
+
+`shouldProbe` was only ever asked about the TIER mark — and every outage this service
+actually has is a ROUTE mark, so nothing re-tested one. A parked route sat out its entire
+doubling backoff untouched.
+
+**Measured the morning it was found.** `openai/gpt-5.6-terra` parked until a GUESSED
+19:18Z, last asked at 00:46Z — eleven hours earlier. `kimi-for-coding/k3` likewise. So t2
+and t3 both answered on `zai-coding-plan2/glm-5.2`, all three tiers were z-ai, and ten
+consecutive reviews came back `passed_partial` for a total vendor collapse. Every finding
+in them was solved; what was missing was a second opinion, and the ladder had one available
+that nobody was asking. OpenAI's limit on that plan is a rolling window which had almost
+certainly reset several times over.
+
+**A GUESS IS RE-TESTED; A STATED RESET IS HONOURED TO THE SECOND.** That is the whole rule.
+When a provider names its reset (D-91) it has told us something true and probing it is
+re-asking an answered question — which is the cost Vany refused when he said *"I do not
+want a regular check for quota if nothing happens."* A doubling backoff lore invented is
+not information, and re-testing it costs about twelve seconds since D-91 made a refusal
+arrive fast. Twelve seconds against a whole vendor is not a close trade.
+
+Bounded by `PROBE_INTERVAL_MS` exactly as the per-tier probe is, and stamped BEFORE the
+call so a hanging route is not probed again by every review that starts meanwhile. A mark
+written before this existed has no stamp, which reads as "never probed" — so the first
+review after it ships re-tests every route parked on a guess, which is exactly right.
+
+D-90's original reasoning — do not re-ask a dead provider every round — was written when
+asking cost 2700s. D-91 made it twelve seconds; D-94 acted on that for tiers and left
+routes behind, and the gap was invisible because a route mark and a tier mark look alike
+from outside.
+
 **D-123 — a fenced block that will not PARSE is asked for again, once. BUILT 2026-08-17.**
 
 A reply carrying two fenced blocks where one parses and one does not looks healthy: items
