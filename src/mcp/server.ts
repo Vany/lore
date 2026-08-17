@@ -20,7 +20,7 @@ import { initialState, ladderFingerprint, type LadderState } from "../core/ladde
 import { isAttestable, isClean, isTerminal, needsClient, type ReviewState } from "../core/review-state.ts";
 import { DEFAULT_TYPE, reviewType, reviewTypeIds } from "../core/review-type.ts";
 import { STALE_GRACE_DAYS, STALE_HOURS } from "../ops/retention.ts";
-import { applyPatch, restoreTree, treeDelta, treeHash } from "../git/repo.ts";
+import { applyPatch, restoreTree, revParse, treeDelta, treeHash } from "../git/repo.ts";
 import { requestMirrorRefresh } from "../git/mirror-request.ts";
 import { dataDir } from "../core/paths.ts";
 import { decide } from "../knowledge/decide.ts";
@@ -947,9 +947,33 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       // than surfacing as an opaque git error.
       let patch = diff;
       if (commit !== undefined) {
+        // RESOLVED TO A SHA BEFORE IT REACHES GIT'S ARGV, and this is not tidiness.
+        //
+        // A client-supplied string went verbatim into `git diff <tree> <commit>`, and git
+        // parses an argument beginning with `-` as an OPTION rather than a ref. So
+        // a `--output=` pointed at the service's own database file made git write the diff
+        // straight over it — an arbitrary-file-write primitive handed to every token holder,
+        // from a review tool call, against the knowledge base that IS the product. (The
+        // path is not spelled here: `one-definition.test.ts` refuses a hand-built database
+        // path anywhere in the source, and it is right to refuse one in prose too.) It also breaks
+        // D-61 outright: git must never be aimed outside the directory it was given.
+        //
+        // `rev-parse --verify --quiet <ref>^{commit}` is the pattern `addWorktree` already
+        // uses for a client-supplied branch, and it answers both questions at once: an
+        // option is not a commit-ish, so it resolves to nothing and is refused by name;
+        // anything that does resolve comes back as a 40-character sha, which cannot be an
+        // option whatever the caller wrote. Everything downstream sees only that sha.
+        const resolved = await revParse(worktree, commit);
+        if (resolved === undefined) {
+          throw new Error(
+            `lore cannot see commit ${commit} for ${review_id}. Push it to origin and call again — lore reviews ` +
+              "what origin has, never a working copy. (If that string was not a commit, it is refused for that " +
+              "reason: only a commit-ish is accepted here.)",
+          );
+        }
         await requestMirrorRefresh(dataDir()).catch(() => undefined);
         const at = await treeHash(worktree);
-        patch = await treeDelta(worktree, at, commit).catch((e: unknown) => {
+        patch = await treeDelta(worktree, at, resolved).catch((e: unknown) => {
           throw new Error(
             `lore cannot see commit ${commit} for ${review_id}: ${e instanceof Error ? e.message : String(e)}. ` +
               "Push it to origin and call again — lore reviews what origin has, never a working copy.",

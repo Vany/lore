@@ -324,6 +324,24 @@ export async function removeWorktree(paths: RepoPaths, reviewId: string): Promis
 }
 
 /**
+ * A COMMIT-ISH THE CALLER NAMED, AS A SHA — or `undefined` if it is not one.
+ *
+ * The one gate between a client's string and git's argv. Git reads any argument starting
+ * with `-` as an OPTION, so an unvalidated ref is an option-injection surface: `--output=`
+ * alone turns a read into an arbitrary file write, and this service hands that argv slot to
+ * anyone holding a token. `^{commit}` also refuses a tree or a blob, so what comes back is
+ * always a commit and always 40 hex characters — a shape that cannot be an option however
+ * the caller wrote it.
+ *
+ * `--quiet` because a ref that does not exist is an ordinary answer here, not a fault.
+ */
+export async function revParse(worktree: string, ref: string): Promise<string | undefined> {
+  const out = await gitMaybe(worktree, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]);
+  const sha = out?.trim();
+  return sha !== undefined && /^[0-9a-f]{40}$/.test(sha) ? sha : undefined;
+}
+
+/**
  * What changed between two pinned trees, as a unified diff (D-108).
  *
  * Both arguments are write-tree objects the submits and re-pins recorded, so this is
