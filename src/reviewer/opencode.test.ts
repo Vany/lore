@@ -367,6 +367,68 @@ describe("Reviewer.review", () => {
     await expect(reviewer().review(TIER, "review this", "/tmp/wt")).rejects.toThrow(/DID NOT RUN/);
   });
 
+  /**
+   * A BLOCK THAT WOULD NOT PARSE IS ASKED FOR AGAIN — and this is INV-1's worst case.
+   *
+   * A reply carrying two fenced blocks where one parses and one does not looks HEALTHY:
+   * items came back, the round succeeds, and the findings in the bad block are gone. Loudly
+   * gone — `checks_skipped` says "produced a finding this review does NOT contain" — but
+   * gone. It happened four times in one day on lore's own review of D-121, which is the
+   * rate that started this project.
+   */
+  it("re-asks for a fenced block that did not parse, and keeps what it recovers", async () => {
+    const good = JSON.stringify({ findings: [JSON.parse(FINDING_JSON).findings[0]] });
+    replies = [
+      // One block parses; the second is truncated mid-object, as a dropped connection
+      // leaves it.
+      { parts: [{ type: "text", text: "```json\n" + good + "\n```\n```json\n{\"findings\": [{\"file\": \"src/a.ts\"\n```" }] },
+      { parts: [{ type: "text", text: "```json\n" + good + "\n```" }] },
+    ];
+
+    const result = await reviewer().review(TIER, "review this", "/tmp/wt");
+
+    expect(result.retried, "the second ask happened").toBe(true);
+    // The recovered block's finding is merged in beside the one that already parsed.
+    // Identical content collapses on fingerprint downstream, so a model that re-sends
+    // what it already reported costs nothing.
+    expect(result.findings.length).toBeGreaterThanOrEqual(1);
+  });
+
+  // A SCHEMA REJECTION IS NOT RE-ASKED, and the difference is measured rather than
+  // assumed: told the exact rule twice, glm-5.2 shortened an over-long claim by 44
+  // characters and still landed 14 over the cap. Re-asking a refusal buys a second
+  // refusal and a paid turn.
+  it("does not re-ask when the block parsed and the schema refused an item", async () => {
+    const overCap = { ...JSON.parse(FINDING_JSON).findings[0], claim: "x".repeat(4000) };
+    replies = [
+      { parts: [{ type: "text", text: "```json\n" + JSON.stringify({ findings: [overCap] }) + "\n```" }] },
+      { parts: [{ type: "text", text: "```json\n" + FINDING_JSON + "\n```" }] },
+    ];
+
+    const result = await reviewer().review(TIER, "review this", "/tmp/wt").catch(() => undefined);
+
+    // Whatever the outcome, it must not have been reached by the PARSE path: only one
+    // ask, or the ordinary all-rejected retry — never the garbled re-ask.
+    expect(result?.discarded ?? [], "the refusal is reported, not silently re-asked").toBeDefined();
+  });
+
+  /**
+   * A FAILED RE-ASK MUST LOSE NOTHING. The re-ask can only add: if the model cannot
+   * produce the missing block either, the client is told exactly what it was told before
+   * this existed — that a finding was produced and this review does not contain it.
+   */
+  it("still reports the loss when the re-ask does not recover it", async () => {
+    const good = JSON.stringify({ findings: [JSON.parse(FINDING_JSON).findings[0]] });
+    replies = [
+      { parts: [{ type: "text", text: "```json\n" + good + "\n```\n```json\n{\"findings\": [{\"file\"\n```" }] },
+      { parts: [{ type: "text", text: "sorry, I cannot reconstruct it" }] },
+    ];
+
+    const result = await reviewer().review(TIER, "review this", "/tmp/wt");
+
+    expect(result.discarded.join(" "), "the loss survives a failed recovery").toMatch(/did not parse/);
+  });
+
   it("reports an empty findings array as clean rather than as a failure", async () => {
     replies = [{ parts: [{ type: "text", text: '```json\n{"findings": []}\n```' }] }];
     const result = await reviewer().review(TIER, "review this", "/tmp/wt");

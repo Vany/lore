@@ -1128,6 +1128,56 @@ export class Reviewer implements ReviewerLike {
 
     let extracted = extract(first.text);
     let retried = false;
+    // A BLOCK THAT WOULD NOT PARSE GETS ASKED FOR AGAIN — ONCE (INV-1).
+    //
+    // The retry below fires only when the WHOLE reply failed, so a reply carrying two
+    // fenced blocks where one parsed and one did not looked healthy and was never
+    // re-asked: the findings in the bad block were simply gone. Loudly gone — they reach
+    // `checks_skipped` as "produced a finding this review does NOT contain" — but gone,
+    // four times in one day on lore's own review of D-121.
+    //
+    // ONLY A PARSE FAILURE, never a schema rejection. That distinction is measured, not
+    // guessed: told the exact rule twice, glm-5.2 shortened an over-long claim by 44
+    // characters and still landed 14 over, so re-asking a refusal buys a second refusal
+    // and a paid turn. A syntax error is usually truncation, which a re-send fixes.
+    //
+    // MERGED, NOT REPLACED, and the second ask is told to send only the missing block: the
+    // items that already parsed are already ours, and a model re-listing them would double
+    // them. Identical re-sends are harmless anyway — a finding's fingerprint is derived
+    // from its content, so a duplicate collapses onto the original.
+    // Captured before the reassignment below: `extracted` is a `let`, so the narrowing
+    // does not survive into the closure that filters this same note out.
+    const lostBlock = extracted.ok ? extracted.garbled : undefined;
+    if (extracted.ok && lostBlock !== undefined) {
+      retried = true;
+      const again = await this.ask(
+        sessionId,
+        tier,
+        `Part of your last reply was lost: ${extracted.garbled}.
+` +
+          "The blocks that DID parse are recorded — do not repeat them. Re-send ONLY the contents of the " +
+          "block that failed, as one valid json block. If that block held nothing you have not already " +
+          `reported, reply with an empty array.
+
+${contract}`,
+        worktree,
+      );
+      const recovered = extract(again.text);
+      if (recovered.ok) {
+        extracted = {
+          ok: true,
+          items: [...extracted.items, ...recovered.items],
+          // BOTH SETS OF LOSSES, and the original `garbled` note is dropped only if the
+          // re-ask actually produced something. A silent recovery that lost a second block
+          // would otherwise report neither.
+          rejected: [...extracted.rejected.filter((r) => r !== lostBlock), ...recovered.rejected],
+          ...(recovered.garbled === undefined ? {} : { garbled: recovered.garbled }),
+        };
+      }
+      // A FAILED RE-ASK CHANGES NOTHING. `extracted` still carries the original loss in
+      // `rejected`, so the client is told exactly what it was told before this existed —
+      // the re-ask can only add, never subtract.
+    }
     if (!extracted.ok) {
       // One retry, contract restated — and, since 2026-08-04, carrying WHAT was
       // wrong. A model told only "could not be parsed" is guessing: glm-5.2 trimmed
@@ -1812,7 +1862,25 @@ export type Extraction =
  * have that bug again within a month.
  */
 export type Listed<T> =
-  | { readonly ok: true; readonly items: readonly T[]; readonly rejected: readonly string[] }
+  | {
+      readonly ok: true;
+      readonly items: readonly T[];
+      readonly rejected: readonly string[];
+      /**
+       * A fenced block that would not PARSE, while its siblings did.
+       *
+       * Carried apart from `rejected` — which it also appears in, so the loud reporting is
+       * unchanged — because the two losses have opposite remedies and only a caller that
+       * can tell them apart may act. A schema rejection is not worth re-asking: told the
+       * exact rule twice, glm-5.2 shortened its claim by 44 characters and still landed 14
+       * over the cap. A SYNTAX error usually means truncation, and asking again for that
+       * one block is cheap on a warm session.
+       *
+       * A string in `rejected` would have to be sniffed for, which is the drift shape this
+       * repository keeps paying for; a field cannot be mistaken for the other kind.
+       */
+      readonly garbled?: string;
+    }
   // `rejected` on the FAILURE arm exists for exactly one consumer: a streamed done
   // declaration sharing its message with a findings block whose every item the schema
   // refused. The batch path retries such a reply; the done path cannot (done ends the
@@ -1976,6 +2044,9 @@ export function extractList<T>(text: string, key: string, parseOne: ItemParser<T
       ok: true,
       items: merged,
       rejected: fencedGarbled === undefined ? mergedRejected : [...mergedRejected, fencedGarbled],
+      // AND SEPARATELY, so the caller can ask for it again. It stays in `rejected` above:
+      // if the re-ask fails, the loss must still be reported exactly as it was before.
+      ...(fencedGarbled === undefined ? {} : { garbled: fencedGarbled }),
     };
   }
   // The losses ride the failure DIRECTLY, never inferred from `why`: the rank above

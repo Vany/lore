@@ -456,6 +456,31 @@ confess. It is something to fix. The operator gets everything — the ceiling, t
 per-call cost, the parked route, the pause; the client gets a service that either reviews
 their code or says plainly what it did not examine.
 
+**D-123 — a fenced block that will not PARSE is asked for again, once. BUILT 2026-08-17.**
+
+A reply carrying two fenced blocks where one parses and one does not looks healthy: items
+came back, the round succeeds, and whatever was in the bad block is gone. Loudly gone —
+D-66 already puts it in `checks_skipped` as *"produced a finding this review does NOT
+contain"* — but gone, and the retry could not help because it fires only when the WHOLE
+reply fails to yield a list. Four such losses in one day, on lore's own review of D-121.
+That is the rate this project exists to refuse.
+
+**Only a parse failure, never a schema rejection, and the difference is measured.** Told
+the exact rule twice, glm-5.2 shortened an over-long claim by 44 characters and still landed
+14 over the cap: re-asking a refusal buys a second refusal and a paid turn. A syntax error
+is usually truncation, and a re-send on a warm session is one cheap exchange.
+
+Carried as its own field (`garbled`) rather than sniffed out of the prose in `rejected`,
+because the two losses have opposite remedies and a string that must be pattern-matched is
+the drift shape this repository keeps paying for. It stays in `rejected` as well: **the
+re-ask can only add.** If the model cannot reconstruct the block either, the client is told
+exactly what it was told before this existed.
+
+**The provider's own balance is not tracked and never will be.** Vany: *"this information
+has no meaning for us, do not track it, we can't use it for a decision."* Consistent with
+D-121 — a number about money does not decide anything here — and it forecloses the
+plausible-looking feature of checking credit before walking a fallback chain.
+
 **D-49 widened — ANY vendor repeat costs the verdict, not only a total collapse.
 DECIDED and BUILT 2026-08-17.**
 

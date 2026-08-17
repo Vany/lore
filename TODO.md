@@ -45,7 +45,7 @@ Vany: *"answer yourself."* These are mine, taken deliberately rather than deferr
 each says why. They fold into SPEC as decisions when they are BUILT; until then this is
 where they live, because SPEC describes what stands.
 
-- [ ] **1. A GARBLED FENCED BLOCK GETS ONE RE-ASK.** Four findings were lost this way in a
+- [x] **1. A GARBLED FENCED BLOCK GETS ONE RE-ASK.** BUILT 2026-08-17 (D-123). Four findings were lost this way in a
       single day — every round of our own review carried *"t1 produced a finding this
       review does NOT contain — a fenced JSON block did not parse"*.
 
