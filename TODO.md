@@ -63,7 +63,7 @@ where they live, because SPEC describes what stands.
       retry-on-rejection: that trade was measured and lost. One turn, on the warm session,
       bounded per round.
 
-- [ ] **2. `review_submit` ACCEPTS A PUSHED COMMIT** as an alternative to `tree_hash` — the
+- [x] **2. `review_submit` ACCEPTS A PUSHED COMMIT** BUILT 2026-08-17 (D-124). as an alternative to `tree_hash` — the
       proposal already written at the entry below, now decided. Additive to the contract,
       so no client breaks by not using it.
 
@@ -72,6 +72,22 @@ where they live, because SPEC describes what stands.
       taken one submit is unanswerable by every later session, and the only exit discards
       every ratified justification. I hit it myself driving D-121: my submit failed on a
       tree mismatch and I fell back to force-pushing the ref and re-pinning.
+
+- [ ] **The board is forgotten every time the ladder learns a new fact** — third
+      occurrence, and the reviewer asked for the cause rather than another manual fix.
+
+      The shape: a field is added to `LadderState`, `/status` and the attestation learn to
+      read it, and the operator board does not — because `parseLadder` extracted exactly
+      one number and discarded the rest, so every new fact needed a fifth edit that nobody
+      had a reason to think of. Fixed at the cause on 2026-08-17: it returns the parsed
+      ladder, so a new field is AVAILABLE there the moment it exists.
+
+      **That removes the step that was being missed, and does not remove the class.**
+      Nothing forces anybody to RENDER an available field. A real answer would be a
+      mechanical check — every `LadderState` field that reaches `/status` or `attest` must
+      also reach the board payload — and it is not obvious how to write one that is not
+      itself a list somebody has to remember to update. Left open deliberately, with the
+      third occurrence recorded, because the next one should be a rule and not a fix.
 
 - [ ] **3. D-118's CONFIG WINDOW comes after those two.** It was load-bearing before and
       it is more so now: with the ceiling gone, `LORE_ALLOW_METERED` is the ONLY money

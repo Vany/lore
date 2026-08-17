@@ -2612,13 +2612,32 @@ export class Store {
   }
 
   /**
-   * TRUE EXACTLY ONCE PER DAY, for a notice that must be said and must not repeat.
+   * Has this notice already been delivered today?
    *
-   * `INSERT OR IGNORE` rather than a read-then-write, because the alternative is a
-   * check-then-act race between concurrent rounds — and the shape it guards is a message
-   * about money, where saying it twice trains an operator to skip it and saying it zero
-   * times is the 2026-08-16 incident. SQLite decides, once, and the winner is whoever's
-   * insert changed a row.
+   * Separate from `claimDailyNotice` because the claim must happen AFTER the notice
+   * actually got out, and the check must happen before it is attempted — one atomic
+   * check-and-claim cannot express that, and using it as both was how an undelivered
+   * alert came to suppress every later one for a day.
+   */
+  dailyNoticeGiven(kind: string, dayIso: string): boolean {
+    const row = this.db.prepare("SELECT 1 AS present FROM meta WHERE key = ?").get(`told:${kind}:${dayIso}`) as
+      | Record<string, number>
+      | undefined;
+    return row !== undefined;
+  }
+
+  /**
+   * TRUE FOR WHOEVER CLAIMS THE DAY, once.
+   *
+   * `INSERT OR IGNORE` so two concurrent rounds cannot both believe they were first —
+   * SQLite decides, and the winner is whoever's insert changed a row.
+   *
+   * CLAIMED AFTER THE NOTICE IS DELIVERED, never before. This was both the check and the
+   * claim, which read well and meant an undelivered alert — a webhook answering 500 —
+   * consumed the day: the operator heard nothing and every later paid call was suppressed
+   * by a record of a message that never arrived. `dailyNoticeGiven` above is the check
+   * half; the cost of splitting them is a possible duplicate under a race, which is the
+   * right way round for a message about money.
    *
    * The day key is passed in rather than read here so the caller owns the boundary and a
    * test can name a day.

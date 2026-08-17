@@ -737,8 +737,17 @@ export function soleVendorOf(
   tiers: readonly Tier[],
   unavailable: readonly string[] = [],
   answeredBy: Readonly<Record<string, string>> = {},
+  // READ FROM THE SAME UNION THE VERDICT USES, or the two describe different reviews.
+  //
+  // This forwarded no `readBy`, so the verdict was computed over the accumulated record
+  // while `soleVendor` — the field `/status` and the SIGNED attestation render as fact —
+  // was still computed over the forgetting one. Three tiers that each ended on OpenAI
+  // after reading through Z.ai, Moonshot and OpenAI would pass correctly and be attested
+  // as "every tier that ran was openai": one opinion, in the output whose entire value is
+  // that it can be trusted, about a review that had three.
+  readBy: Readonly<Record<string, readonly string[]>> = {},
 ): string | undefined {
-  const spread = vendorSpread(tiers, unavailable, answeredBy);
+  const spread = vendorSpread(tiers, unavailable, answeredBy, readBy);
   return spread.distinct === 1 ? spread.vendors[0] : undefined;
 }
 
@@ -1202,7 +1211,7 @@ export function step(input: StepInput): { readonly state: LadderState; readonly 
     // warn-instead-of-enforce shape as INV-8's missing agent file. A rule with no
     // consequence is a comment.
     const skipped = base.unavailable;
-    const sole = soleVendorOf(tiers, skipped, base.answeredBy ?? {});
+    const sole = soleVendorOf(tiers, skipped, base.answeredBy ?? {}, base.readBy ?? {});
     // ANY REPEAT COSTS THE VERDICT, not only a total collapse (D-49, widened 2026-08-17).
     //
     // This asked `soleVendorOf` alone — all-one-vendor — so three tiers read by two vendors

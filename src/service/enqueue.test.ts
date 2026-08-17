@@ -25,9 +25,9 @@ import { enqueueOrFail } from "./enqueue.ts";
 /** Captures what would have been sent, and never touches the network. */
 class Recording extends Alerter {
   readonly sent: Alert[] = [];
-  override async send(alert: Alert): Promise<void> {
+  override async send(alert: Alert): Promise<boolean> {
     this.sent.push(alert);
-    return Promise.resolve();
+    return Promise.resolve(true);
   }
 }
 

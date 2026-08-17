@@ -18,7 +18,7 @@
 
 import { mayAdmit } from "../core/admission.ts";
 import { loadavg } from "node:os";
-import { fallbackRoutes, loadPools, loadTiers, routesFor } from "../core/ladder.ts";
+import { fallbackRoutes, loadPools, loadTiers, routesFor, type VendorSpread } from "../core/ladder.ts";
 import { isTerminal, type ReviewState } from "../core/review-state.ts";
 import type { GateState } from "../reviewer/gate.ts";
 import { spendByTier, startOfDayIso } from "./spend.ts";
@@ -165,6 +165,14 @@ export interface BoardReview {
      */
     readonly repoId: string;
   }[];
+  /**
+   * Fewer vendors read this review than tiers ran (D-49), when that is why it is partial.
+   *
+   * Absent on the ordinary case. Present, it is usually the ONLY explanation of a
+   * `passed_partial` that skipped nothing — without it the board shows a downgrade with no
+   * visible cause.
+   */
+  readonly vendorSpread?: VendorSpread;
   /** Findings whose `(origin, round)` matches no tier run. Normally empty; never hidden. */
   readonly orphanFindings: readonly BoardFinding[];
   /**
@@ -341,7 +349,13 @@ export function board(store: Store, now = Date.now(), modelGate?: () => GateStat
         into: String(r["into_ref"] ?? ""),
         type: String(r["type"] ?? ""),
         state,
-        round: ladder,
+        round: ladder.round,
+        // WHY A VERDICT WAS DOWNGRADED, on the surface an operator actually watches. The
+        // state carries this precisely so the board and the attestation can say it after
+        // a review ends (D-49), and the board was the half that never did — so
+        // `PASSED_PARTIAL` appeared with no skipped work and no explanation, and the one
+        // question it raises had no answer anywhere a person was looking.
+        ...(ladder.vendorSpread === undefined ? {} : { vendorSpread: ladder.vendorSpread }),
         createdAt: String(r["created_at"] ?? ""),
         endedAt: isTerminal(state) ? String(r["updated_at"] ?? "") : undefined,
         movedAt: movedAt(String(r["updated_at"] ?? ""), mine, store, id),
@@ -457,13 +471,27 @@ function questionsFor(
   return out;
 }
 
-function parseLadder(raw: unknown): number {
+/**
+ * THE WHOLE LADDER, not one field of it — and that is the fix for a RECURRING defect.
+ *
+ * This returned `round` and threw the rest away, so every fact added to `LadderState` had
+ * to be remembered in four places (the state, `/status`, the attestation, and here) and
+ * the board was reliably the one forgotten. The reviewer that caught it the third time
+ * said so directly: *fix this instance, then ask what keeps producing it.* What produced
+ * it was an extractor that had to be edited for each new field.
+ *
+ * Returning the parsed object means a new field is AVAILABLE here the moment it exists.
+ * That does not force anybody to render it — nothing can — but it removes the step that
+ * was actually being missed, and an unused field is visible to a reader in a way an
+ * un-extracted one is not.
+ */
+function parseLadder(raw: unknown): { round: number; vendorSpread?: VendorSpread } {
   try {
-    const v = JSON.parse(String(raw ?? "{}")) as { round?: number };
-    return v.round ?? 0;
+    const v = JSON.parse(String(raw ?? "{}")) as { round?: number; vendorSpread?: VendorSpread };
+    return { round: v.round ?? 0, ...(v.vendorSpread === undefined ? {} : { vendorSpread: v.vendorSpread }) };
   } catch {
     // A ladder we cannot parse is a display problem, never a reason to blank the board.
-    return 0;
+    return { round: 0 };
   }
 }
 

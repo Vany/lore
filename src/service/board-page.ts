@@ -383,6 +383,26 @@ function detail(r) {
 
   // A check that did not run must never read as a check that found nothing (INV-1).
   for (const s of r.checksSkipped) out.push('<div class="skip">did not run: ' + esc(s) + "</div>");
+  // AND WHY A VERDICT WAS DOWNGRADED WHEN NOTHING WAS SKIPPED AT ALL (D-49).
+  //
+  // A passed_partial with an empty checksSkipped is the shape that has no other
+  // explanation on this page: every tier ran, and the review is still not a pass, because
+  // fewer vendors read it than there were rungs. Without this line an operator sees the
+  // downgrade and nothing that accounts for it.
+  //
+  // NO BACKTICKS ANYWHERE IN HERE, comments included: this function is inside the page's
+  // template literal, so one closes the string and the file stops parsing.
+  if (r.vendorSpread !== undefined) {
+    const v = r.vendorSpread;
+    out.push(
+      '<div class="skip">' +
+        esc(
+          String(v.distinct) + " vendor(s) read this across " + String(v.tiers) + " tiers (" +
+            v.vendors.join(", ") + ") — not " + String(v.tiers) + " independent opinions",
+        ) +
+        "</div>",
+    );
+  }
   return out.join("");
 }
 

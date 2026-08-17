@@ -35,26 +35,49 @@ export class Alerter {
     this.cfg = cfg;
   }
 
-  async send(alert: Alert): Promise<void> {
+  /**
+   * Returns whether the notice actually got OUT — which one caller depends on.
+   *
+   * It returned `void` and swallowed everything, so a webhook answering 500 or 429 was
+   * indistinguishable from a delivered alert: `fetch` resolves on any status, and nothing
+   * looked at it. Harmless while every caller sent unconditionally and repeated itself on
+   * the next beat; not harmless once a caller latches, because a single undelivered notice
+   * then suppresses every later one — the paid-route ticket, which exists precisely to
+   * break a silence, would have created a longer one.
+   *
+   * `true` also when no webhook is configured: the console line IS the delivery in that
+   * deployment, and treating it as a failure would mean the latch never closes and the
+   * same notice repeats on every round.
+   */
+  async send(alert: Alert): Promise<boolean> {
     // Always local first. If the webhook is unreachable this is the only record —
     // and the far end notices anyway, because the heartbeat stops arriving.
     const line = `[lore:${alert.severity}] ${alert.condition} — ${alert.detail}`;
     if (alert.severity === "page") console.error(line);
     else console.warn(line);
 
-    if (this.cfg.webhookUrl === undefined || alert.severity === "log") return;
+    if (this.cfg.webhookUrl === undefined || alert.severity === "log") return true;
 
     try {
-      await fetch(this.cfg.webhookUrl, {
+      const res = await fetch(this.cfg.webhookUrl, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ ...alert, service: "lore", at: new Date().toISOString() }),
         signal: AbortSignal.timeout(this.cfg.timeoutMs),
       });
+      // A STATUS IS AN ANSWER, and this never looked at one. `fetch` resolves on 500 as
+      // readily as on 204, so a webhook that was refusing everything read exactly like one
+      // that was delivering everything.
+      if (!res.ok) {
+        console.error(`[lore:log] alert webhook answered ${String(res.status)} — the far end did not take it`);
+        return false;
+      }
+      return true;
     } catch (e) {
       // Never throw from alerting: a broken alerter must not also break the thing
       // it was watching. Its own silence is what the deadman detects.
       console.error(`[lore:log] alert webhook failed — ${e instanceof Error ? e.message : String(e)}`);
+      return false;
     }
   }
 }
@@ -219,10 +242,16 @@ export const CONDITIONS = {
   meteredRouteInUse: (tier: string, route: string, usd: number): Alert => ({
     severity: "ticket",
     condition: "a paid route is now answering reviews",
+    // "RAN ON", not "fell through": a metered member of a POOL can be the very first route
+    // picked, with nothing having failed at all, and a sentence claiming a fall-through
+    // would send an operator hunting for an outage that never happened. Both shapes are
+    // the same fact — lore chose a route that charges — and that is what this says. The
+    // route is named, so anyone who wants to know which shape it was can look.
     detail:
-      `${tier} fell through to ${route}, which bills per call — that call cost $${usd.toFixed(2)}, and every ` +
-      "one will until the subscription behind it refreshes. Nothing is broken and no review is at risk; this " +
-      "is the only notice you get, once a day. Set LORE_ALLOW_METERED=0 to skip the tier instead of paying.",
+      `${tier} ran on ${route}, which bills per call — that call cost $${usd.toFixed(2)}, and every one will ` +
+      "for as long as lore keeps choosing it. Nothing is broken and no review is at risk; this is the only " +
+      "notice you get today, whatever else runs on a paid route. Set LORE_ALLOW_METERED=0 to skip such a tier " +
+      "instead of paying for it.",
   }),
   /**
    * A FINDING NOBODY HAS READ IS A REVIEW THAT DID NOT RUN, ONE STEP LATER.

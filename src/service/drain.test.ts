@@ -428,6 +428,7 @@ describe("a store fault does not silently cost the service its capacity", () => 
     const a = new Alerter({ timeoutMs: 10 });
     a.send = async (alert: Alert) => {
       sent.push(alert);
+      return Promise.resolve(true);
     };
     return { alerter: a, sent };
   };

@@ -366,6 +366,19 @@ Applied to the review's private copy of your branch. Nothing is committed or pus
 history stays yours. The tree_hash is verified after applying; a mismatch fails
 loudly rather than reviewing code that exists nowhere.
 
+SEND A PUSHED \`commit\` INSTEAD OF A \`diff\` IF YOU CANNOT BUILD ONE. Exactly one of the
+two, never both. This exists for the case that used to be a dead end: a review's tree is
+its pinned base PLUS every patch already applied, and that tree lives only inside lore — so
+a session that did not make the earlier submissions cannot check it out, cannot diff
+against it, and cannot compute a matching hash. If you have inherited a review, or you
+rebased and a diff is hopeless by construction, push your work and name the commit. lore
+syncs with origin, works out the delta itself, and carries on with the SAME review: same
+findings, same ratified justifications, same ladder position.
+
+Do NOT reach for \`restart\` when a diff will not apply. It discards every justification
+this review has ratified and re-runs the cheap tiers from the beginning; the commit form
+costs nothing and keeps all of it.
+
 SUBMIT WHENEVER YOU ARE READY, including while a reviewer is still reading. A submit
 that lands mid-round is HELD — accepted, kept, and handed to EVERY reviewer that is
 reading (the deep phase runs two together), each at its own next emission, with rulings
@@ -718,7 +731,7 @@ export const RESOURCE_DOCS: Readonly<Record<string, { title: string; priority: n
    Each poll returns only what is NEW. A tight retry loop is the most expensive thing
    you can do here: every attempt is a turn that learns nothing.
 4. For each finding: fix it, or justify it with // lore-ok[fp]: <reason>
-5. review_submit(review_id, diff, tree_hash) — any time once findings exist, in ANY
+5. review_submit(review_id, diff | commit, tree_hash) — any time once findings exist, in ANY
    state including fast_clean. If reviewers are mid-read your diff is HELD and handed
    to each of them at its own next emission; you never wait for a state and never
    resubmit.
@@ -871,7 +884,7 @@ The loop:
    Each poll returns only what is NEW. A tight retry loop is the most expensive thing
    you can do here: every attempt is a turn that learns nothing.
 4. For each finding: fix it, or justify it with // lore-ok[fp]: <reason>
-5. review_submit(review_id, diff, tree_hash) — any time once findings exist, in ANY
+5. review_submit(review_id, diff | commit, tree_hash) — any time once findings exist, in ANY
    state including fast_clean. If reviewers are mid-read your diff is HELD and handed
    to each of them at its own next emission; you never wait for a state and never
    resubmit.

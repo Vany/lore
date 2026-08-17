@@ -93,7 +93,7 @@ export interface RoundInput {
    * the log this duplicates. The service passes its own; absent means the round says its
    * piece on stderr and nothing else, which is exactly what happened before this existed.
    */
-  readonly alerter?: { send(alert: Alert): Promise<void> };
+  readonly alerter?: { send(alert: Alert): Promise<boolean> };
 }
 
 export interface RoundResult {
@@ -287,6 +287,35 @@ export async function consumeHeldDiffs(
     if (after !== before) store.noteClientWork(reviewId);
   }
   return { applied, diffs };
+}
+
+/**
+ * SAY, ONCE A DAY, THAT LORE IS PAYING — and only once it has actually been said.
+ *
+ * THE LATCH IS CLAIMED AFTER DELIVERY, not before, and that ordering is the whole of this
+ * function's reason to exist. Claiming first meant a webhook answering 500 consumed the
+ * day's notice: the operator heard nothing, and every genuine paid call for the next
+ * twenty-four hours was suppressed by a record of a message that never arrived. An alert
+ * that exists to break a silence would have made a longer one.
+ *
+ * The cost of this order is a rare DUPLICATE — two rounds can both send before either
+ * claims. That is the right way round: saying it twice is a moment's noise, and saying it
+ * zero times is the 2026-08-16 incident.
+ */
+async function tellPaidRoute(
+  store: Store,
+  alerter: RoundInput["alerter"],
+  tierId: string,
+  route: string,
+  usd: number,
+): Promise<void> {
+  if (alerter === undefined) return;
+  const day = startOfDayIso();
+  if (store.dailyNoticeGiven("metered-route", day)) return;
+  // UNDELIVERED IS NOT SAID. A webhook that refused it leaves the latch open, so the next
+  // paid call tries again — which is what "once a day" was always supposed to mean.
+  if (!(await alerter.send(CONDITIONS.meteredRouteInUse(tierId, route, usd)))) return;
+  store.claimDailyNotice("metered-route", day);
 }
 
 export async function runRound(input: RoundInput): Promise<RoundResult> {
@@ -1850,13 +1879,8 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     // a chain walking to a paid twin, both say it, because both are lore reaching a paid
     // route because something broke.
     const ranOn = fellBackTo ?? chosenRoute;
-    if (
-      ranOn !== undefined &&
-      ranOn !== member.model &&
-      isMeteredRoute(ranOn) &&
-      store.claimDailyNotice("metered-route", startOfDayIso())
-    ) {
-      await input.alerter?.send(CONDITIONS.meteredRouteInUse(member.id, ranOn, result.costUsd ?? 0));
+    if (ranOn !== undefined && ranOn !== member.model && isMeteredRoute(ranOn)) {
+      await tellPaidRoute(store, input.alerter, member.id, ranOn, result.costUsd ?? 0);
     }
     store.closeTierRun(
       tierRunId,
@@ -1940,6 +1964,17 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
         // spend for a completed review.
         outcome: "failed",
       });
+      // AND A FAILED PAID CALL IS STILL A PAID CALL.
+      //
+      // The notice lived only on the success path, so a metered fallback that timed out
+      // after the provider had counted $0.42 spent it silently — and repeatedly, since
+      // every attempt failed the same way and none of them reached the alert. The event is
+      // "lore started paying", which the money leaving proves; whether an answer came back
+      // is a different question and not this one.
+      const paidRoute = fellBackTo ?? chosenRoute;
+      if (paidRoute !== undefined && paidRoute !== member.model && isMeteredRoute(paidRoute)) {
+        await tellPaidRoute(store, input.alerter, member.id, paidRoute, spent.cost);
+      }
     }
     // The row is already open, so whatever happens next this tier leaves evidence.
     // Before this existed, a `glm-5.2` call that ran 30 minutes and timed out wrote

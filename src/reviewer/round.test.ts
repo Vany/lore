@@ -2066,7 +2066,7 @@ describe("a fallback that would walk onto a metered route", () => {
     /** Records what would have been sent, and never touches the network. */
     const spy = () => {
       const sent: { condition: string; detail: string; severity: string }[] = [];
-      return { sent, send: (a: { condition: string; detail: string; severity: string }) => { sent.push(a); return Promise.resolve(); } };
+      return { sent, send: (a: { condition: string; detail: string; severity: string }) => { sent.push(a); return Promise.resolve(true); } };
     };
 
     it("tickets the first paid call, naming the route and what it cost", async () => {

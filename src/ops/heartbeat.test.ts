@@ -49,8 +49,9 @@ const until = async (ready: () => boolean, ms = 2_000): Promise<void> => {
 
 /** Captures what would have gone to the webhook. No network, no config to forget. */
 class Capturing extends Alerter {
-  override async send(a: Alert): Promise<void> {
+  override async send(a: Alert): Promise<boolean> {
     sent.push(a);
+    return Promise.resolve(true);
   }
 }
 

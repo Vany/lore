@@ -20,7 +20,9 @@ import { initialState, ladderFingerprint, type LadderState } from "../core/ladde
 import { isAttestable, isClean, isTerminal, needsClient, type ReviewState } from "../core/review-state.ts";
 import { DEFAULT_TYPE, reviewType, reviewTypeIds } from "../core/review-type.ts";
 import { STALE_GRACE_DAYS, STALE_HOURS } from "../ops/retention.ts";
-import { applyPatch, restoreTree, treeHash } from "../git/repo.ts";
+import { applyPatch, restoreTree, treeDelta, treeHash } from "../git/repo.ts";
+import { requestMirrorRefresh } from "../git/mirror-request.ts";
+import { dataDir } from "../core/paths.ts";
 import { decide } from "../knowledge/decide.ts";
 import { enrich, renderEnrichment } from "../knowledge/enrich.ts";
 import { paceFor, paceNote } from "../ops/pace.ts";
@@ -870,16 +872,33 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
     "review_submit",
     {
       description: TOOL_DOCS.submit,
-      inputSchema: z.object({
-        review_id: z.string().min(1),
-        diff: z.string().min(1).describe("unified diff of your fixes"),
-        tree_hash: z
-          .string()
-          .min(1)
-          .describe("git write-tree of your working tree after applying — verified after we apply"),
-      }),
+      inputSchema: z
+        .object({
+          review_id: z.string().min(1),
+          // `absent`, not `.optional()`: the caller is a language model and writes `null`
+          // for absent as readily as it omits the key, which plain `.optional()` rejects
+          // as a hard validation error against an agent that did nothing wrong. Blank is
+          // forgiven, wrong is still refused.
+          diff: absent(z.string().min(1)).describe("unified diff of your fixes"),
+          commit: absent(z.string().min(1)).describe(
+            "a commit you have PUSHED, as an alternative to `diff` — use this when you did not compose the " +
+              "earlier submissions and so cannot diff against the review's tree",
+          ),
+          tree_hash: z
+            .string()
+            .min(1)
+            .describe("git write-tree of the tree you mean — verified after we apply or check out"),
+        })
+        // EXACTLY ONE, and it is refused here rather than downstream. Both would be two
+        // descriptions of a tree that can disagree, and lore would have to pick; neither
+        // leaves nothing to apply, and the tree-hash check would then pass trivially
+        // against the tree already in the worktree — a submit that reviewed nothing while
+        // looking like it worked.
+        .refine((v) => (v.diff === undefined) !== (v.commit === undefined), {
+          message: "send exactly one of `diff` or `commit` — not both, and not neither",
+        }),
     },
-    async ({ review_id, diff, tree_hash }) => {
+    async ({ review_id, diff, commit, tree_hash }) => {
       const review = mine(review_id);
 
       // A FINISHED REVIEW TAKES NO MORE WORK.
@@ -904,6 +923,59 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       // behind us; the check and the write then sit together with nothing to yield
       // between them.
       const worktree = await deps.worktreeFor(review_id);
+
+      // A PUSHED COMMIT IS NORMALISED TO A DIFF, ONCE, HERE (D-124).
+      //
+      // Every path below — the mid-round hold, the tree-hash check, `filesInDiff` for the
+      // fix-elsewhere notice — already works on a diff, so a second shape threaded through
+      // three call sites would be three chances for the two to diverge. `treeDelta` from
+      // the worktree's current tree to the commit's is exactly the patch that turns one
+      // into the other, deletions included, so the rest of this handler cannot tell the
+      // difference and does not need to.
+      //
+      // WHY IT EXISTS: a review's tree is the pinned base plus every patch already
+      // applied, and that tree lives only inside lore. A session that did not make the
+      // earlier submissions cannot check it out, cannot diff against it, and cannot
+      // compute a matching hash — so a review that has taken ONE submit was unanswerable
+      // by every later session, and the only exit was `restart`, which re-pays the cheap
+      // tiers and discards every ratified justification. Measured on this deployment: 16
+      // reviews passed out of 128, against 58 failed, 28 cancelled and 18 expired, with
+      // one branch reviewed thirteen times.
+      //
+      // The mirror is refreshed first because the commit was pushed a moment ago and lore
+      // reviews what origin has. A commit lore cannot see is refused by name below rather
+      // than surfacing as an opaque git error.
+      let patch = diff;
+      if (commit !== undefined) {
+        await requestMirrorRefresh(dataDir()).catch(() => undefined);
+        const at = await treeHash(worktree);
+        patch = await treeDelta(worktree, at, commit).catch((e: unknown) => {
+          throw new Error(
+            `lore cannot see commit ${commit} for ${review_id}: ${e instanceof Error ? e.message : String(e)}. ` +
+              "Push it to origin and call again — lore reviews what origin has, never a working copy.",
+          );
+        });
+        // AN EMPTY DELTA IS NOT A SUBMIT. The worktree already IS that tree, so there is
+        // nothing to review and the hash check below would pass trivially — a call that
+        // looked like work and did none, which is the shape D-114's bounds reset was
+        // abused by. Said plainly instead.
+        if (patch.trim() === "") {
+          throw new Error(
+            `commit ${commit} is the tree this review already has, so there is nothing to submit. If you meant ` +
+              "to hand over new work, push it first; if you meant that you have no more to give, poll instead.",
+          );
+        }
+      }
+
+      // UNREACHABLE, and it says so rather than being typed away. The schema refuses a
+      // call carrying neither, so arriving here is a programming error — and this project
+      // does not let a scaffolded path continue quietly.
+      if (patch === undefined) {
+        throw new Error(
+          `internal: review_submit for ${review_id} reached the apply path with neither a diff nor a commit; ` +
+            "the input schema should have refused this call.",
+        );
+      }
 
       // REFUSED while a round is pending, because the next line writes into the
       // directory that round reads (D-55).
@@ -950,7 +1022,7 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       // dropped diff. The double-check below closes the race where the round finished
       // between the check and the hold — then nothing would ever consume it.
       if (store.hasPendingRound(review_id)) {
-        store.holdDiff(review_id, diff, tree_hash);
+        store.holdDiff(review_id, patch, tree_hash);
         if (store.hasPendingRound(review_id)) {
           return {
             content: [
@@ -978,7 +1050,7 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
 
       // Recorded BEFORE the patch, because the refusal below has to be able to undo it.
       const before = await treeHash(worktree);
-      await applyPatch(worktree, diff);
+      await applyPatch(worktree, patch);
 
       const applied = await treeHash(worktree);
       if (applied !== tree_hash) {
@@ -1080,7 +1152,7 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
                 review_id,
                 (r, sh) => store.resolveShort(r, sh),
                 f,
-                filesInDiff(diff),
+                filesInDiff(patch),
               );
               return answered ? undefined : f;
             }),
