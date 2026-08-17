@@ -2953,9 +2953,23 @@ export class Store {
    * somebody else's guess (D-90).
    */
   markRouteUnavailable(model: string, untilIso: string, why: string, failures: number, stated = false): void {
+    // AN UPDATE THAT DOES NOT NAME `probedAt` KEEPS THE ONE ALREADY THERE — the same rule
+    // `markTierUnavailable` carries above, and for the same reason, which I reproduced here
+    // within an hour of writing the route probe.
+    //
+    // The probe stamps the mark before it calls; the call refuses; this line rewrites the
+    // mark from the catch with no stamp — so the probe is erased by the very refusal that
+    // discovered it, `shouldProbe` reads "never probed", and every round re-asks a dead
+    // route. That is the per-round re-ask D-94 exists to bound, restored in full while
+    // looking fixed. Caught by watching the live deployment rather than by the test I wrote
+    // for it, which passed for an unrelated reason.
+    const kept = this.routeUnavailable(model)?.probedAt;
     this.db
       .prepare("INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
-      .run(`route-unavailable:${model}`, JSON.stringify({ until: untilIso, why, failures, stated }));
+      .run(
+        `route-unavailable:${model}`,
+        JSON.stringify({ until: untilIso, why, failures, stated, ...(kept === undefined ? {} : { probedAt: kept }) }),
+      );
   }
 
   /**

@@ -2504,13 +2504,27 @@ describe("a pool of routes to one model", () => {
     store.markRouteUnavailable("kimi/k3", "2126-01-01T00:00:00.000Z", "out of quota", 3, false);
     const reviewer = new Answers(["kimi/k3"]);
 
-    for (const id of ["r1", "r1", "r1"]) {
+    // FRESH REVIEWS, not three rounds of one. The first version reused `r1`, whose ladder
+    // simply advanced past t1 — so rounds two and three never reached the parked route and
+    // the test passed without exercising the bound at all. It went green against a build
+    // that re-probed on EVERY round, and the live deployment is what caught that.
+    for (let i = 0; i < 3; i++) {
+      const id = `rProbe${String(i)}`;
+      store.createReview({
+        id, repoId, principal: "p", branch: "feat/holds", intoRef: "main",
+        ticket: "one look at a dead route", type: CODE_ARCH.id, state: "running",
+        ladder: initialState(CODE_ARCH.tiers),
+      });
       await runRound({ store, reviewer, reviewId: id, principal: "p", worktree: dir, type, allowMetered: true }).catch(
         () => undefined,
       );
     }
 
-    expect(reviewer.asked.filter((m) => m === "kimi/k3"), "asked once across three rounds").toHaveLength(1);
+    expect(reviewer.asked.filter((m) => m === "kimi/k3"), "asked once across three reviews").toHaveLength(1);
+    // AND THE STAMP SURVIVED THE REFUSAL THAT DISCOVERED IT, which is the mechanism the
+    // bound rests on: the catch rewrites the mark, and a write that does not name a stamp
+    // must keep the stored one.
+    expect(store.routeUnavailable("kimi/k3")?.probedAt, "the probe is remembered").toBeDefined();
   });
 
   it("goes straight past a lone primary inside its backoff, without calling it", async () => {
