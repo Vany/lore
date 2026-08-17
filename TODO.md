@@ -73,6 +73,38 @@ where they live, because SPEC describes what stands.
       every ratified justification. I hit it myself driving D-121: my submit failed on a
       tree mismatch and I fell back to force-pushing the ref and re-pinning.
 
+- [ ] **I WRITE THE SPEC CLAIM WIDER THAN THE CODE, AND THE REVIEWER KEEPS CATCHING IT.**
+      Five findings in one round carried `seen 7× before in this repo — a pattern rather
+      than an incident. Worth asking why it recurs, not only fixing it here.` They asked,
+      so here is the answer rather than a sixth fix.
+
+      Every one was the same shape: **a rule stated in one place and applied in another,
+      where the statement is the more ambitious of the two.** Concretely, from one night:
+
+      * `spec/operations.md` said the paid-route ticket fires on "the first CALL each UTC
+        day" when it fires on the first review ROUND — the screen, `propose` and bootstrap
+        reach paid routes and are not wired to it.
+      * D-49's SPEC entry said the spread is stored "because the attestation and the
+        operator board are written from the state", while the board did not read it.
+      * `markAnsweredBy`'s own contract said "only ever called on the fallback path" in the
+        same commit that made it called for every member.
+      * D-117's entry said the operator-alert shape had shipped when only its log half had.
+
+      **Why it recurs: I write the prose while holding the INTENT, and the code while
+      holding the mechanism, and nothing forces the two into the same sentence.** The
+      existing mechanical checks catch the code-to-code version of this (`one-definition`,
+      `docs.test.ts`, the `/status` field test) — there is no check at all for a SPEC
+      sentence describing behaviour that does not exist, because prose cannot be executed.
+
+      **The candidate rule, not yet built:** every SPEC claim about behaviour names the
+      symbol that implements it, and a test asserts the symbol exists and is reachable from
+      where the claim says it fires. That is a real check for a third of these — the
+      "fires on X" and "written from Y" kind — and no check at all for the rest.
+
+      Deliberately left open rather than half-built. The honest interim is smaller and it
+      is a habit, not a tool: **write the SPEC sentence last, from the code, not first from
+      the intent.**
+
 - [ ] **The board is forgotten every time the ladder learns a new fact** — third
       occurrence, and the reviewer asked for the cause rather than another manual fix.
 
@@ -88,6 +120,16 @@ where they live, because SPEC describes what stands.
       also reach the board payload — and it is not obvious how to write one that is not
       itself a list somebody has to remember to update. Left open deliberately, with the
       third occurrence recorded, because the next one should be a rule and not a fix.
+
+- [ ] **The paid-route ticket is wired only into review rounds.** The hourly knowledge
+      screen, the bootstrap survey and `propose` all reach a paid route through
+      `concreteRoute`, and under `LORE_ALLOW_METERED=1` they can spend unattended with no
+      ticket at all — the 2026-08-16 shape ($101.36, nobody looking) on the one path the
+      alert was never wired into. `concreteRoute` is the chokepoint and would be the place,
+      but it is a pure function with no store and no alerter, so wiring it means threading
+      both through four callers or moving the notice to where usage is RECORDED, which is
+      the one place every paid call already passes through. The second is probably right
+      and is more than a night's change.
 
 - [ ] **3. D-118's CONFIG WINDOW comes after those two.** It was load-bearing before and
       it is more so now: with the ceiling gone, `LORE_ALLOW_METERED` is the ONLY money

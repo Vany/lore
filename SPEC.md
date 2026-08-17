@@ -710,9 +710,14 @@ it fires the money is spent and the people it stops are not the people who spent
 per-call figure reached the operator LOG the day the gate shipped, and that sentence was
 written here as though the shape were complete. It was not: a log line is read by somebody
 already looking, and during the four hours of 2026-08-16 that cost $101.36, nobody was.
-Since 2026-08-17 the FIRST call each UTC day that runs on a paid route lore reached
+Since 2026-08-17 the FIRST REVIEW ROUND each UTC day that runs on a paid route lore reached
 itself — not one the operator configured — sends a **ticket** naming the tier, the route
-and what that call cost. An EVENT, not a threshold: no total is consulted, so D-121 is
+and what that call cost. **Only review rounds**: the hourly screen, the bootstrap survey
+and `propose` reach paid routes through `concreteRoute` and are not wired to it, so a
+deployment at `LORE_ALLOW_METERED=1` whose screen is paying hourly with no reviews running
+gets no ticket at all. Recorded in `TODO.md` as an open gap rather than described as
+covered — the first version of this paragraph said "the first call", which is the same
+overstatement the alert exists to prevent. An EVENT, not a threshold: no total is consulted, so D-121 is
 untouched, and it cannot fire at all under `LORE_ALLOW_METERED=0`. Latched per day, because
 a message about money repeated every round is one an operator learns to skip.
 

@@ -786,7 +786,20 @@ export function vendorSpread(
   answeredBy: Readonly<Record<string, string>> = {},
   readBy: Readonly<Record<string, readonly string[]>> = {},
 ): VendorSpread {
-  const ran = tiers.filter((t) => t.kind === "model" && !unavailable.includes(t.id));
+  // A TIER THAT READ AND THEN DIED STILL CONTRIBUTED AN OPINION.
+  //
+  // This filtered on `unavailable` alone, which drops such a tier from BOTH the vendor set
+  // and the tier count — so `markUnavailable` could UPGRADE a verdict: z-ai reading at t1
+  // for three rounds and again at t2, with t1's plan then dying, left `ran = {t2, t3}` and
+  // `2 < 2` false, a clean `passed` over a review where one vendor read at two rungs. The
+  // opposite of what widening D-49 was for, reached through the exclusion.
+  //
+  // Excluding a tier that never ran at all is still right — it contributed nothing, and
+  // counting it would claim an opinion nobody gave (INV-1). The discriminator is whether
+  // it READ, which `readBy` now answers directly.
+  const ran = tiers.filter(
+    (t) => t.kind === "model" && (!unavailable.includes(t.id) || (readBy[t.id]?.length ?? 0) > 0),
+  );
   const vendors = new Set<string>();
   for (const t of ran) {
     // EVERY ROUTE THIS TIER HAS RUN ON, not the one it happens to be on now. `answeredBy`
@@ -906,10 +919,21 @@ export interface LadderState {
 }
 
 /**
- * Record which model answered a tier, when it was not the tier's own (D-49, D-93).
+ * Record which model answered a tier (D-49, D-93).
  *
- * Only ever called on the fallback path. A tier that answers on its configured model
- * leaves no entry, so `answeredBy` stays empty on every review where nothing ran out.
+ * CALLED FOR EVERY MEMBER THAT RAN, including one that answered on its own configured
+ * model. It used to be called only on the fallback path — so `answeredBy` stayed empty on
+ * a review where nothing ran out, which was a fine space optimisation and became a defect
+ * the moment `readBy` started accumulating who has READ the code: a tier that answered on
+ * Kimi in round 1 and fell back to Z.ai in round 6 recorded only the Z.ai route, and the
+ * union that was supposed to make independence honest was missing the very opinion that
+ * made the review independent.
+ *
+ * So the two fields are not the same claim and must not be read as one. `answeredBy` is
+ * LAST-WRITE-WINS and answers *where is this tier now*, for route stickiness. `readBy`
+ * ACCUMULATES and answers *who has read this code*, for D-49. Neither is any longer a
+ * reliable signal of "this tier ran out or fell back" — that question is answered by
+ * comparing an entry against the tier's configured model, not by the entry existing.
  */
 export function markAnsweredBy(state: LadderState, tierId: string, model: string): LadderState {
   // TWO RECORDS, TWO QUESTIONS, and conflating them was the defect.
@@ -1249,8 +1273,15 @@ export function step(input: StepInput): { readonly state: LadderState; readonly 
       state: {
         ...base,
         cursor: prev.cursor,
-        ...(sole === undefined ? {} : { soleVendor: sole }),
-        ...(collapse === undefined ? {} : { vendorSpread: collapse }),
+        // ONLY WHEN THERE IS A COLLAPSE TO DESCRIBE. Both fields are read as caveats —
+        // `make status` prints "one opinion asked repeatedly" and the SIGNED attestation
+        // says "not independent opinions" — so writing `soleVendor` on a CLEAN verdict
+        // puts a D-49 disclaimer on a review that satisfied D-49. That is exactly what a
+        // one-model-tier ladder now does: one vendor, one tier, `1 < 1` false, `passed` —
+        // and it would have been attested as one opinion asked repeatedly.
+        ...(collapse === undefined
+          ? {}
+          : { vendorSpread: collapse, ...(sole === undefined ? {} : { soleVendor: sole }) }),
       },
       decision:
         above.length === 0 && collapse === undefined
