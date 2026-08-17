@@ -456,6 +456,57 @@ confess. It is something to fix. The operator gets everything — the ceiling, t
 per-call cost, the parked route, the pause; the client gets a service that either reviews
 their code or says plainly what it did not examine.
 
+**A vendor verdict must REPLACE, never merge. FIXED 2026-08-17.**
+
+Two findings, one root, both from lore's own review of D-49's widening. `soleVendor` was
+seeded by `initialState` from the CONFIG, before a single tier had run, and `step()`'s
+terminal branch only ever ADDED it back on a fresh collapse — an object spread of `base`
+cannot delete a key `base` already carries. So a one-model-tier ladder that finished
+`passed` was signed *"every tier that ran was X, so these are not independent opinions"*,
+and — worse, because it is the ordinary shape rather than an edge case — a three-tier
+all-one-vendor CONFIG that diversified mid-review through a cross-vendor fallback was
+signed the same way about a review a second vendor had genuinely read.
+
+Fixed by removing the write entirely, in both directions. `initialState` writes nothing:
+nothing has run at round 0, so there is nothing yet to attest. And the terminal branch of
+`step()` now destructures `soleVendor`/`vendorSpread` OUT of `base` before building the
+returned state, then conditionally re-adds them — REPLACE, not merge — so a review that
+reaches this branch a second time (a client's late fix, a `pull_fresh`, taking it through
+another terminal pass) cannot inherit a verdict from the pass before it. The one thing
+tying both readers together — `/status` and the signed attestation neither have access to
+the tier config at read time, only the persisted `LadderState` blob — is unchanged; what
+changed is that the blob is now authoritative for THIS assessment alone.
+
+**SECURITY — a client's `commit` reached git's argv as an option. FIXED 2026-08-17,
+same day it shipped.** D-124's commit form passed the caller's string straight into
+`git diff <tree> <commit>`; git parses any argument beginning with `-` as an OPTION rather
+than a ref, so `commit: "--output=<path>"` made git write the diff over an arbitrary file
+— reachable by any token holder from an ordinary `review_submit` call, against a service
+whose database IS the product, and a direct breach of D-61 (git may never be aimed outside
+the directory it was given). Raised by lore's own t2 at high, against code deployed hours
+earlier. Fixed with the pattern already used for a client-supplied branch: `rev-parse
+--verify --quiet <ref>^{commit}`, checked to be 40 hex characters, so only a sha ever
+reaches argv — an option resolves to nothing and is refused by name.
+
+**And the fix for THAT exposed a second bug: the resolution itself raced a running round
+(D-55).** Computing the delta called `treeHash(worktree)` — `git add -A` plus
+`write-tree`, which mutates the shared index — unconditionally, before checking whether a
+round was mid-read of the same worktree. A submit that only wanted to know what changed
+could collide with the round's own periodic re-hash (`withHoldLock` in `runRound`); when
+the round's side of that race lost, it surfaced as something that was not a route fault,
+so a tier's catch rethrew it and the WHOLE REVIEW failed — over a submit that never
+touched the tree it corrupted.
+
+Fixed by not needing the live snapshot at all: the review's own `treeHash` column,
+written back on every prior submit and round boundary, already records what its worktree
+currently represents — the same value D-40's pin discipline treats as authoritative
+everywhere else. Reading it is a query, not a filesystem write, so it cannot collide with
+anything the round is doing; `treeDelta` itself was never the hazard, since `git diff
+<tree> <tree>` reads two committed objects and touches no index. Falls back to a live
+snapshot only when no tree is recorded yet AND no round is pending — a state a review
+reaching `review_submit` should not be able to reach, since the tool's own precondition
+(`findings exist`) implies a completed round, which always writes this field.
+
 **D-125 — D-94's probe covers ROUTES, not only tiers. BUILT 2026-08-17.**
 
 Vany, on being offered a manual route-clear: *"no, everything must be automated."*

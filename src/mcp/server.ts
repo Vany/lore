@@ -972,7 +972,41 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           );
         }
         await requestMirrorRefresh(dataDir()).catch(() => undefined);
-        const at = await treeHash(worktree);
+        // THE STORED TREE, NOT A FRESH SNAPSHOT — raised by lore's own t2 at high, and the
+        // fix is not a lock, it is not needing one.
+        //
+        // `treeHash(worktree)` is `git add -A` followed by `write-tree`: it MUTATES the
+        // index, taking the same lock a round's own periodic re-hashing takes on this
+        // shared worktree (`withHoldLock` in `runRound`, D-107, D-109). Calling it HERE,
+        // before the pending-round check below has run, raced that lock — and when the
+        // round's own hash lost, it threw something that was not a route fault, so the
+        // tier's catch rethrew it and the WHOLE REVIEW failed. A submit that merely asked
+        // "what changed" was able to kill a round it never touched.
+        //
+        // `review.treeHash` is the review's OWN record of what its worktree currently
+        // represents, written back on every prior submit and round boundary — the same
+        // value D-40's pin discipline already treats as authoritative. Reading it is a
+        // SQLite query, not a filesystem write, so it cannot collide with anything the
+        // round is doing. `treeDelta` itself was never the hazard: `git diff <tree>
+        // <tree>` reads two committed objects and touches no index at all.
+        //
+        // Falls back to a live snapshot only when no tree has been recorded yet, which a
+        // review reaching `review_submit` should not be able to reach — `findings exist`
+        // is the tool's own precondition, and findings imply a completed round, which
+        // always writes this field. Guarded by the pending-round check that already exists
+        // below, so the rare fallback carries no less safety than the normal diff path did.
+        const at =
+          review.treeHash ??
+          (store.hasPendingRound(review_id)
+            ? undefined
+            : await treeHash(worktree));
+        if (at === undefined) {
+          throw new Error(
+            `${review_id} has no recorded tree yet and a round is currently reading its worktree, so the ` +
+              "commit form cannot compute a delta safely right now. Poll and try again once the round parks, " +
+              "or send `diff` instead.",
+          );
+        }
         patch = await treeDelta(worktree, at, resolved).catch((e: unknown) => {
           throw new Error(
             `lore cannot see commit ${commit} for ${review_id}: ${e instanceof Error ? e.message : String(e)}. ` +

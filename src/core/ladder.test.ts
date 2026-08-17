@@ -451,9 +451,64 @@ describe("single-vendor ladders cannot pass (D-49)", () => {
     });
   });
 
-  it("carries the vendor in the state, so the attestation can name it", () => {
-    expect(initialState(ONE_VENDOR).soleVendor).toBe("z-ai");
-    expect(initialState(DEFAULT_TIERS).soleVendor).toBeUndefined();
+  /**
+   * NOTHING IS WRITTEN AT ROUND 0, and this is the fix rather than an oversight.
+   *
+   * This asserted the opposite until 2026-08-17: `initialState` seeded `soleVendor` from
+   * the CONFIG, before a single tier had run, and it survived to a review's terminal
+   * state no matter how the review actually turned out — because the terminal step only
+   * ever ADDED the field back on a collapse and an object spread of `base` cannot delete
+   * a key `base` already carries. A one-model-tier ladder that finished `passed` was
+   * signed "every tier that ran was X, so these are not independent opinions"; a
+   * three-tier all-Z.ai config that diversified through a cross-vendor fallback was
+   * signed the same way about a review OpenAI had partly read. Two findings, one root.
+   */
+  it("writes no vendor verdict before a single tier has run", () => {
+    expect(initialState(ONE_VENDOR)).not.toHaveProperty("soleVendor");
+    expect(initialState(ONE_VENDOR)).not.toHaveProperty("vendorSpread");
+    expect(initialState(DEFAULT_TIERS)).not.toHaveProperty("soleVendor");
+  });
+
+  /**
+   * A REVIEW THAT REACHES A CLEAN VERDICT CARRIES NO STALE ONE FROM AN EARLIER PASS.
+   *
+   * `step()`'s terminal branch can run more than once in the life of one review — a
+   * client's late fix or a `pull_fresh` can send an already-`passed` review through it
+   * again. `base` going into the second pass can already hold a vendor verdict from the
+   * FIRST; if this pass computes a clean spread, the fix must ACTIVELY strip the old one
+   * rather than merge over it, or the state would describe a review that no longer exists.
+   */
+  it("does not let a stale vendor verdict survive into a later clean pass", () => {
+    // Round one: every tier is z-ai, climbed to its terminal state via the same helper
+    // the tests above use.
+    let s = initialState(ONE_VENDOR);
+    let d = step({ state: s, raised: [], tiers: ONE_VENDOR }).decision;
+    for (let i = 0; i < 5 && (d.kind === "fastClean" || d.kind === "escalate"); i++) {
+      const r = step({ state: s, raised: [], tiers: ONE_VENDOR });
+      s = r.state;
+      d = r.decision;
+    }
+    expect(d.kind, "the fixture is one vendor throughout").toBe("passedPartial");
+    expect(s.soleVendor).toBe("z-ai");
+
+    // The client sends more work and the ladder is walked again from the top — t2 now
+    // answers on OpenAI and t3 on Moonshot, which `readBy` accumulates, so this SECOND
+    // terminal pass has all three tiers on different vendors and no collapse to report.
+    s = {
+      ...s,
+      cursor: 0,
+      readBy: { ...s.readBy, t2: ["openai/gpt-5.6-terra"], t3: ["kimi-for-coding/k3"] },
+    };
+    let d2 = step({ state: s, raised: [], tiers: ONE_VENDOR }).decision;
+    for (let i = 0; i < 5 && (d2.kind === "fastClean" || d2.kind === "escalate"); i++) {
+      const r = step({ state: s, raised: [], tiers: ONE_VENDOR });
+      s = r.state;
+      d2 = r.decision;
+    }
+
+    expect(d2.kind, "z-ai and openai now, so this pass is clean").toBe("passed");
+    expect(s, "the first pass's verdict must not survive").not.toHaveProperty("soleVendor");
+    expect(s).not.toHaveProperty("vendorSpread");
   });
 });
 

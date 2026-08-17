@@ -978,7 +978,23 @@ export function clientDeliveredWork(state: LadderState): LadderState {
 }
 
 export function initialState(tiers: readonly Tier[] = DEFAULT_TIERS): LadderState {
-  const sole = soleVendorOf(tiers);
+  // NO VENDOR FIELD WRITTEN HERE — the two findings that reached high severity on this
+  // file were both this line, in the end.
+  //
+  // `soleVendor` used to be seeded from the CONFIG before a single tier had run, and it
+  // survived to a review's TERMINAL state no matter how the review actually turned out,
+  // because `step()`'s terminal branch only ever ADDED the field back on a collapse and
+  // never removed it on the branch that had none — an object spread of `base` cannot
+  // delete a key `base` already carries. So a one-model-tier ladder that finished `passed`
+  // was signed as "every tier that ran was X, so these are not independent opinions", and
+  // a three-tier all-Z.ai config that diversified through a cross-vendor fallback was
+  // signed the same way about a review OpenAI had partly read.
+  //
+  // Nothing before the first tier runs is load-bearing: `answeredBy` and `readBy` are both
+  // empty at round 0, so any vendor computed from the CONFIG alone describes an intent,
+  // not a review. The only write that is allowed to mean anything is the one at the
+  // terminal branch of `step()`, made from what actually happened — and it now REPLACES
+  // rather than merges, so this file has exactly one place left that can get it wrong.
   return {
     cursor: firstModelTier(tiers),
     round: 0,
@@ -986,9 +1002,6 @@ export function initialState(tiers: readonly Tier[] = DEFAULT_TIERS): LadderStat
     settled: [],
     needsHuman: false,
     unavailable: [],
-    // Omitted rather than set to undefined, so a serialised state round-trips to
-    // something a strict equality check still recognises.
-    ...(sole === undefined ? {} : { soleVendor: sole }),
   };
 }
 
@@ -1269,16 +1282,23 @@ export function step(input: StepInput): { readonly state: LadderState; readonly 
       const i = tiers.findIndex((t) => t.id === id);
       return i > ranTo;
     });
+    // STRIPPED BEFORE THE SPREAD, then conditionally re-added — REPLACE, not merge.
+    //
+    // `{ ...base, ...(collapse === undefined ? {} : {...}) }` only ever ADDS these two
+    // keys; it cannot remove one `base` already carries. `base` reaching this line can
+    // already have a vendor verdict from an EARLIER terminal step of the same review — a
+    // review that passed, took more work through `pull_fresh` or a late fix, and reached
+    // this branch a second time — and if THIS pass computes no collapse, the merge left
+    // the previous pass's verdict sitting in state, describing a review that no longer
+    // exists. `initialState` no longer seeds either field for the identical reason at
+    // round 0. Destructuring them out of `base` first is what makes this terminal step
+    // authoritative rather than additive: every reader of the persisted state — `/status`,
+    // the signed attestation — sees exactly what THIS assessment says, never a mixture.
+    const { soleVendor: _staleSoleVendor, vendorSpread: _staleVendorSpread, ...baseWithoutVendorFields } = base;
     return {
       state: {
-        ...base,
+        ...baseWithoutVendorFields,
         cursor: prev.cursor,
-        // ONLY WHEN THERE IS A COLLAPSE TO DESCRIBE. Both fields are read as caveats —
-        // `make status` prints "one opinion asked repeatedly" and the SIGNED attestation
-        // says "not independent opinions" — so writing `soleVendor` on a CLEAN verdict
-        // puts a D-49 disclaimer on a review that satisfied D-49. That is exactly what a
-        // one-model-tier ladder now does: one vendor, one tier, `1 < 1` false, `passed` —
-        // and it would have been attested as one opinion asked repeatedly.
         ...(collapse === undefined
           ? {}
           : { vendorSpread: collapse, ...(sole === undefined ? {} : { soleVendor: sole }) }),
