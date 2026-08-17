@@ -198,8 +198,12 @@ describe("what the expanded detail carries", () => {
     const b = store.openTierRun("r1", "t0", 2, ago(200_000));
     store.closeTierRun(b, "clean", ["eslint: not configured"]);
 
-    expect([...(find("r1")?.checksSkipped ?? [])].sort())
+    expect([...(find("r1")?.checksSkipped ?? [])].map((c) => c.text).sort())
       .toStrictEqual(["eslint: not configured", "tests: disabled"]);
+    // AND EACH IS LABELLED. Both of these are genuine losses; the label exists because one
+    // KIND of entry is not, and the board used to print "did not run:" in front of a
+    // sentence whose own words were "the tier ran and its opinion counts in full".
+    expect(find("r1")?.checksSkipped.every((c) => !c.ranAnyway), "both are real losses").toBe(true);
   });
 
   /**

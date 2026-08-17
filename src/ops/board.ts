@@ -19,6 +19,7 @@
 import { mayAdmit } from "../core/admission.ts";
 import { loadavg } from "node:os";
 import { fallbackRoutes, loadPools, loadTiers, routesFor, type VendorSpread } from "../core/ladder.ts";
+import { isCoverageLoss } from "../core/checks-skipped.ts";
 import { isTerminal, type ReviewState } from "../core/review-state.ts";
 import type { GateState } from "../reviewer/gate.ts";
 import { spendByTier, startOfDayIso } from "./spend.ts";
@@ -129,12 +130,19 @@ export interface BoardReview {
     readonly open: number;
   };
   /**
-   * Checks that did NOT run, deduplicated across rounds (INV-1).
+   * What this review did not cover, and what it covered differently — deduplicated across
+   * rounds, and labelled HERE (INV-1).
    *
-   * On a board whose other numbers all say what happened, the absence of this line would
-   * quietly claim full coverage.
+   * On a board whose other numbers all say what happened, the absence of these would
+   * quietly claim full coverage — and printing them all as losses claims the opposite
+   * about the one kind that is not.
+   *
+   * `ranAnyway` is computed server-side rather than in the page because the page is one
+   * template literal of client-side JavaScript and cannot import the predicate that knows
+   * the wording. A second copy of that rule in the browser is the drift this codebase
+   * keeps paying for; a boolean on the payload is one definition with two readers.
    */
-  readonly checksSkipped: readonly string[];
+  readonly checksSkipped: readonly { readonly text: string; readonly ranAnyway: boolean }[];
   /**
    * WHY A PERSON IS NEEDED, in full — the two statements that cannot both be true.
    *
@@ -363,7 +371,7 @@ export function board(store: Store, now = Date.now(), modelGate?: () => GateStat
         stepNote: stepNote(state, mine, draining),
         tiers: mine,
         findings: { ...f, open: open.get(id) ?? 0 },
-        checksSkipped: store.checksSkippedFor(id),
+        checksSkipped: store.checksSkippedFor(id).map((text) => ({ text, ranAnyway: !isCoverageLoss(text) })),
         // Only for the state it explains. Two queries per parked review, and a parked
         // review is rare — but they are per-repo, so a board full of them would repeat
         // the same lookup; `questionsFor` memoises on the repository for this pass.

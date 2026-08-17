@@ -604,6 +604,15 @@ A skip therefore lands in one of two places:
 | **below** the dearest tier that answered | does not prevent `passed` | its work was done again, above it |
 | **at or above** it | `passed_partial` | nothing read this code at that level |
 
+**A FALLBACK TO THE SAME VENDOR COSTS THE VERDICT NOTHING, and the client's line says so.**
+`zai-coding-plan/glm-5.3` giving way to `zai-coding-plan2/glm-5.2` is one company on a
+second subscription — the ordinary shape here, and the one this deployment takes most
+often. The note used to call it *"a different provider"* and attach D-49's weaker-evidence
+sentence to it, which was false twice: the provider did not change and neither did
+independence. Vany, reading one: *"glm 5.2 is ok for t1."* It now distinguishes a route
+change from a VENDOR change, using the same `vendorOf` the verdict has always used, so a
+caveat is spent only where there is something to caveat.
+
 The vendor rule (D-49) is independent of all this: if fewer vendors read the code than
 tiers ran — any repeat, not only a total collapse — it is `passed_partial` however the
 skips lie. `soleVendor` still names the extreme case where there was exactly one;

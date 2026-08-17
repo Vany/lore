@@ -37,7 +37,8 @@ import { decidedByPersonOrClock, isTerminal, type ReviewState } from "../core/re
 import type { ReviewType } from "../core/review-type.ts";
 import { retryAt, shouldProbe } from "../core/cooloff.ts";
 import { isMeteredRoute, withoutMetered } from "../core/metered.ts";
-import { exemptLiteral } from "../core/ladder.ts";
+import { exemptLiteral, vendorOf } from "../core/ladder.ts";
+import { RAN_ON_OTHER_ROUTE } from "../core/checks-skipped.ts";
 import { type Alert, CONDITIONS } from "../ops/alerts.ts";
 import { startOfDayIso } from "../ops/spend.ts";
 import { ServiceUnreachable, CancelledByLore, DidNotRun, Exhausted, ProviderAuthFailed, TierUnavailable, TooLargeForTier } from "../core/errors.ts";
@@ -1925,9 +1926,29 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
               // operational problem they did not sign up for and cannot act on, and invites
               // them to work around a service that is supposed to serve them. The number
               // went to the operator log, where somebody can act on it.
-              `${member.id} was answered by ${fellBackTo} rather than ${member.model ?? "?"} — a different ` +
-                "provider than this tier is configured for. The tier ran and its opinion counts in full; it is " +
-                "named here because two tiers on one vendor is weaker evidence than two on different ones.",
+              // SAY WHICH OF TWO DIFFERENT THINGS HAPPENED, because only one of them costs
+              // the verdict anything.
+              //
+              // This asserted "a different provider than this tier is configured for" and
+              // the D-49 sentence for EVERY fallback — including the one this deployment
+              // takes most often, `zai-coding-plan/glm-5.3` to `zai-coding-plan2/glm-5.2`,
+              // which is the same company on a second subscription. Vany, reading it:
+              // *"glm 5.2 is ok for t1."* He is right, and the line was wrong twice: the
+              // provider did not change, and independence did not change, so a client was
+              // told its review was weaker evidence when nothing about the evidence moved.
+              //
+              // `vendorOf` already knows this — both alias to `z-ai` — and the verdict has
+              // used it all along, so the PROSE was the only thing claiming otherwise. A
+              // caveat that fires on the ordinary case is one a reader learns to skip,
+              // which spends the credibility the real case needs.
+              vendorOf(fellBackTo) === vendorOf(member.model ?? "")
+                ? `${member.id} ${RAN_ON_OTHER_ROUTE} ${fellBackTo} rather than ${member.model ?? "?"} — the same ` +
+                  "vendor on another route, because the configured one was unavailable. The tier ran and its " +
+                  "opinion counts in full, and nothing about this review's independence changed."
+                : `${member.id} ${RAN_ON_OTHER_ROUTE} ${fellBackTo} rather than ${member.model ?? "?"} — a different ` +
+                  "VENDOR than this tier is configured for. The tier ran and its opinion counts in full; it is " +
+                  "named because which vendors read your code is what makes the tiers independent, and this " +
+                  "review's mix is not the one the ladder describes.",
             ]),
       ],
       roundTree,

@@ -381,8 +381,15 @@ function detail(r) {
     out.push('<div class="skip">' + r.findingsNotShown + " more finding(s) not shown here</div>");
   }
 
-  // A check that did not run must never read as a check that found nothing (INV-1).
-  for (const s of r.checksSkipped) out.push('<div class="skip">did not run: ' + esc(s) + "</div>");
+  // A check that did not run must never read as a check that found nothing (INV-1) — and
+  // a tier that RAN must not be printed as one that did not, which this did to every
+  // fallback line by prefixing all of them alike. The sentence said the tier ran and its
+  // opinion counted in full; the prefix in front of it said the opposite, on the surface
+  // an operator reads first. isCoverageLoss (server-side) is the one definition, beside
+  // the wording it recognises; this page cannot import it, so it renders the flag.
+  for (const s of r.checksSkipped) {
+    out.push('<div class="skip">' + (s.ranAnyway ? "ran differently: " : "did not run: ") + esc(s.text) + "</div>");
+  }
   // AND WHY A VERDICT WAS DOWNGRADED WHEN NOTHING WAS SKIPPED AT ALL (D-49).
   //
   // A passed_partial with an empty checksSkipped is the shape that has no other
