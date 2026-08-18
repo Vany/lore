@@ -92,6 +92,19 @@ export function decidedByPersonOrClock(state: ReviewState): boolean {
 }
 
 /**
+ * The same set, for SQL that has to name it — `TERMINAL_SQL`'s sibling, derived for the
+ * same reason: written out twice, the two eventually disagree.
+ *
+ * Needed because `failed` was found sharing `TERMINAL_SQL`'s exclusion in the uncollected-
+ * findings query when it should not have: a review that FAILED is the round's own
+ * mechanical conclusion, not a person's decision that the work is over, and it says
+ * nothing about whether anyone ever saw what a tier found before the round died. Measured
+ * live — a HIGH finding on `master`, undelivered for four days, invisible to the alert
+ * built to catch exactly this, because the review carrying it happened to end `failed`.
+ */
+export const PERSON_OR_CLOCK_DECIDED_SQL: string = [...PERSON_OR_CLOCK_DECIDED].map((s) => `'${s}'`).join(", ");
+
+/**
  * The two findings states — bright and gray — for SQL that must treat them alike.
  *
  * Derived here for the same reason `TERMINAL_SQL` is: spelled out at a call site, one

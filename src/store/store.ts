@@ -16,7 +16,7 @@ import { DatabaseSync } from "node:sqlite";
 import { AmbiguousFingerprint } from "../core/errors.ts";
 import type { Finding, Severity } from "../core/finding.ts";
 import { clientDeliveredWork, type LadderState } from "../core/ladder.ts";
-import { isTerminal, TERMINAL_SQL, type ReviewState, FINDINGS_SQL } from "../core/review-state.ts";
+import { isTerminal, TERMINAL_SQL, PERSON_OR_CLOCK_DECIDED_SQL, type ReviewState, FINDINGS_SQL } from "../core/review-state.ts";
 import type { Scope } from "../core/scope.ts";
 import { DDL, FINDING_ORDER_SQL, PRAGMAS, SCHEMA_VERSION, applyMigrations, assertNotDowngrade } from "./schema.ts";
 import { NO_EVENTS, type ReviewEvents } from "../mcp/events.ts";
@@ -3518,18 +3518,29 @@ export class Store {
     const cutoff = new Date(Date.now() - hours * 3_600_000).toISOString();
     const row = this.db
       .prepare(
-        // A REVIEW THAT CAN STILL BE ANSWERED, and the join is the whole of it.
+        // EXCLUDES ONLY WHAT GENUINELY SELF-RESOLVES, and `TERMINAL_SQL` was the wrong
+        // set for that — found live, four days after this line shipped.
         //
-        // Without it this counted EXPIRED reviews too — and nothing ever marks their
-        // findings delivered, because `markDelivered` is only reached from poll and cancel,
-        // which an abandoned review never sees again. The count would therefore never fall,
-        // and the finding row survives until the 90-day deletion cascades it. `needs_human`
-        // ageing does not have this problem because expiry empties that state; this one had
-        // to be told.
+        // `TERMINAL_SQL` excluded `failed` alongside `expired`/`cancelled`, and `failed`
+        // has neither of THEIR reasons to be excluded. `cancelled` hands its findings over
+        // explicitly at the moment of cancelling (`review_cancel` calls `markDelivered` on
+        // everything raised, as its own comment says: "this is the handover") — genuinely
+        // self-resolving. `expired` only happens after `findings_ready` sat unanswered for
+        // days of escalating signal (`findings_stale`, then the sweep) — the client was
+        // told repeatedly and chose not to come back. `failed` has NEITHER: a round can
+        // fail on its very first attempt, with no warning and no handover, and nothing
+        // marks what it already found as delivered. That is precisely the live case that
+        // found this — a HIGH finding on `master`, undelivered for four days, invisible to
+        // this query the whole time because the review carrying it happened to end
+        // `failed` rather than `expired`.
+        //
+        // `PERSON_OR_CLOCK_DECIDED_SQL` is the set this always meant: a person's decision
+        // or the clock's abandonment-timeout, as opposed to the round's own mechanical
+        // conclusion — which says nothing about whether anyone ever saw what it found.
         `SELECT COUNT(*) AS c FROM (
            SELECT f.review_id FROM finding f JOIN review r ON r.id = f.review_id
            WHERE f.delivered_at IS NULL AND f.severity = 'high' AND f.preexisting = 0
-             AND r.state NOT IN (${TERMINAL_SQL})
+             AND r.state NOT IN (${PERSON_OR_CLOCK_DECIDED_SQL})
            GROUP BY f.review_id HAVING MIN(f.first_seen) < ?
          )`,
       )

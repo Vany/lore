@@ -942,6 +942,66 @@ describe("usage and jobs", () => {
 });
 
 /**
+ * WHICH TERMINAL ENDINGS GENUINELY SELF-RESOLVE, and `failed` is not one of them.
+ *
+ * Found live: a HIGH finding sat on `master` for four days, undelivered, invisible to
+ * this exact query the whole time — because the review carrying it ended `failed`, and
+ * the query excluded every terminal state alike. `cancelled` is safe to exclude because
+ * `review_cancel` hands its findings over explicitly at the moment of cancelling;
+ * `expired` is safe because the client was told repeatedly over days before it happened.
+ * `failed` can happen on a review's very first round, with no warning and no handover.
+ */
+describe("uncollectedHighOlderThan", () => {
+  const old = "2020-01-01T00:00:00.000Z";
+
+  it("counts a HIGH finding sitting on a FAILED review, unlike expired or cancelled", () => {
+    newReview("revFailed");
+    store.recordFinding("revFailed", finding("f1", { firstSeen: old }));
+    store.updateReview("revFailed", { state: "failed" });
+
+    newReview("revExpired");
+    store.recordFinding("revExpired", finding("f2", { firstSeen: old }));
+    store.updateReview("revExpired", { state: "expired" });
+
+    newReview("revCancelled");
+    store.recordFinding("revCancelled", finding("f3", { firstSeen: old }));
+    store.updateReview("revCancelled", { state: "cancelled" });
+
+    // ONE review counted, not three — `failed` only. A review whose ending genuinely
+    // self-resolves must not inflate a ticket meant to prompt a person into action.
+    expect(store.uncollectedHighOlderThan(1)).toBe(1);
+  });
+
+  it("does not count once the finding is delivered, whatever the review's ending", () => {
+    newReview("revFailed");
+    store.recordFinding("revFailed", finding("f1", { firstSeen: old }));
+    store.markDelivered("revFailed", ["f1"]);
+    store.updateReview("revFailed", { state: "failed" });
+
+    expect(store.uncollectedHighOlderThan(1)).toBe(0);
+  });
+
+  it("ignores a finding younger than the threshold", () => {
+    newReview("revFailed");
+    store.recordFinding("revFailed", finding("f1", { firstSeen: new Date().toISOString() }));
+    store.updateReview("revFailed", { state: "failed" });
+
+    expect(store.uncollectedHighOlderThan(24)).toBe(0);
+  });
+
+  // D-68's reasoning applies here too: an inherited pattern match is not this branch's
+  // own defect, and an alert that fires on it every day is one nobody reads.
+  it("ignores medium severity and inherited findings", () => {
+    newReview("revFailed");
+    store.recordFinding("revFailed", finding("f1", { firstSeen: old, severity: "medium" }));
+    store.recordFinding("revFailed", finding("f2", { firstSeen: old, preexisting: true }));
+    store.updateReview("revFailed", { state: "failed" });
+
+    expect(store.uncollectedHighOlderThan(1)).toBe(0);
+  });
+});
+
+/**
  * The database this code will actually meet is not an empty one.
  *
  * `lore` runs on a deployed SQLite file created by schema version 1, and

@@ -507,6 +507,46 @@ snapshot only when no tree is recorded yet AND no round is pending — a state a
 reaching `review_submit` should not be able to reach, since the tool's own precondition
 (`findings exist`) implies a completed round, which always writes this field.
 
+**D-126 — a review nobody delivered to is an operator ticket, EXCLUDING only the endings
+that genuinely self-resolve. BUILT 2026-08-17; corrected 2026-08-18.**
+
+`make status` has shown a review holding an undelivered HIGH finding since D-96, and
+nothing ever alerted on it — the one party who can see it is the operator, and the
+operator cannot act, because the findings belong to another principal's token and
+`review_inbox` is correctly scoped to that token. `uncollectedHighOlderThan(hours)` counts
+these; the heartbeat tickets it once, latched on the count so it does not repeat while it
+stands, and re-arms when the count changes.
+
+**Shipped excluding every terminal state, which was one exclusion too many — found
+LIVE, a day after it shipped.** A HIGH finding on `master` sat undelivered for **four
+days**, invisible to this query the whole time, because the review carrying it happened to
+end `failed` and `failed` shared `TERMINAL_SQL`'s exclusion with `cancelled` and `expired`.
+That set answers "is this review over"; the right question is "did this ending already
+account for whoever should have seen the finding" — and only two of the three terminal
+states do:
+
+* **`cancelled` hands its findings over explicitly**, at the moment of cancelling —
+  `review_cancel` calls `markDelivered` on everything raised, by design, as its own
+  comment says: *"a cancelled review still found what it found... marked delivered,
+  because this is the handover."* Genuinely self-resolving.
+* **`expired` only happens after days of escalating, repeated signal** —
+  `findings_ready` sitting unanswered dims to `findings_stale` at 48h and is swept a week
+  after that. By the time a review reaches `expired`, the client has been told, twice,
+  and chose not to come back.
+* **`failed` has neither property.** A round can fail on its very first attempt, with no
+  warning and no handover, and nothing anywhere marks what it had already found as
+  delivered. It is the round's own mechanical conclusion, not a person's or the clock's
+  decision, and it says nothing about whether anyone ever saw what a tier found before it
+  died.
+
+Fixed by excluding `PERSON_OR_CLOCK_DECIDED_SQL` (`cancelled`, `expired`) instead of
+`TERMINAL_SQL` — the distinction `decidedByPersonOrClock` already existed to make, for a
+different but related reason (D-107's late-diff handling), applied here for the first
+time. `passed` and `passed_partial` were never excluded and still are not: a review's own
+terminal step does not hand its findings over either, and the normal client loop (poll
+until terminal, one more poll to see it) already collects them in the ordinary case — this
+only fires where that loop did not happen.
+
 **D-125 — D-94's probe covers ROUTES, not only tiers. BUILT 2026-08-17.**
 
 Vany, on being offered a manual route-clear: *"no, everything must be automated."*
