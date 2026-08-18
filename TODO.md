@@ -39,6 +39,30 @@ that part is pulled out into its own open item rather than hidden inside a tick.
 
 ## Now — nothing here is about writing more features
 
+### 2026-08-18 — needs a person, not a fix
+
+- [ ] **CHECK WHETHER KIMI AND OPENAI ARE ACTUALLY DEAD, NOT JUST RATE-LIMITED.** Both
+      `kimi-for-coding/k3` and `openai/gpt-5.6-terra` have refused every D-125 probe —
+      **27 consecutive failures each**, one every 15 minutes for roughly a day, backoff
+      now maxed at 24h. Both refusals classify as quota ("out of quota" / usage-limit
+      wording), never auth, so D-125 keeps re-testing correctly and lore has no way to
+      tell "still rate-limited" from "the plan actually lapsed" from in here — both look
+      identical from the refusal text alone. 27 straight misses is long enough that the
+      two stop being equally likely.
+
+      **Needs a person on the provider's own dashboard** — lore holds no billing access
+      and this is not a code question. If either has genuinely lapsed, the probe will
+      quietly retry it forever at the 24h ceiling, burning nothing (good) but also never
+      telling anyone the *right* fix is a renewed subscription rather than patience.
+
+      Every deep review meanwhile reads `passed_partial`: t2 and t3 both fall through to
+      `zai-coding-plan2/glm-5.2` — the only non-metered entry in either fallback list,
+      per D-117 — so all three tiers land on one vendor. `spec/review-ladder.md` already
+      records why the fallback is 5.2 and not 5.3 (the GLM5.2 pool spanned both Z.ai
+      plans and was deliberately split so a deep tier could not land on T1's own seat;
+      plan2 simply does not carry 5.3). Not a bug — the honest consequence of the outage
+      above, once vendor independence is properly enforced (D-49, widened 2026-08-17).
+
 ### 2026-08-17 — decided after D-121/D-122 shipped, in priority order
 
 Vany: *"answer yourself."* These are mine, taken deliberately rather than deferred, and
