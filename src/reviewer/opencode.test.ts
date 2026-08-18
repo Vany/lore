@@ -429,6 +429,31 @@ describe("Reviewer.review", () => {
     expect(result.discarded.join(" "), "the loss survives a failed recovery").toMatch(/did not parse/);
   });
 
+  /**
+   * THE EXACT REGRESSION (de36efae, found by lore's own review of D-123).
+   *
+   * The re-ask's own prompt tells the model "if that block held nothing you have not
+   * already reported, reply with an empty array" — an ordinary, well-behaved reply the
+   * prompt itself invites. The bug: the merge dropped the loss note whenever the re-ask
+   * PARSED, not whenever it RECOVERED something, so this exact reply made the note vanish
+   * with nothing recovered to justify it. Pre-D-123 the client at least saw the loss;
+   * this reply made D-123 lose it more quietly than no feature at all.
+   */
+  it("keeps the loss note when the re-ask replies with an empty array", async () => {
+    const good = JSON.stringify({ findings: [JSON.parse(FINDING_JSON).findings[0]] });
+    replies = [
+      { parts: [{ type: "text", text: "```json\n" + good + "\n```\n```json\n{\"findings\": [{\"file\"\n```" }] },
+      // Exactly what the re-ask prompt asks for when the model believes there is nothing
+      // new — a valid, well-formed, EMPTY reply.
+      { parts: [{ type: "text", text: '```json\n{"findings": []}\n```' }] },
+    ];
+
+    const result = await reviewer().review(TIER, "review this", "/tmp/wt");
+
+    expect(result.retried, "the re-ask still happened").toBe(true);
+    expect(result.discarded.join(" "), "an empty reply does not clear an unverified loss").toMatch(/did not parse/);
+  });
+
   it("reports an empty findings array as clean rather than as a failure", async () => {
     replies = [{ parts: [{ type: "text", text: '```json\n{"findings": []}\n```' }] }];
     const result = await reviewer().review(TIER, "review this", "/tmp/wt");

@@ -1163,20 +1163,35 @@ ${contract}`,
         worktree,
       );
       const recovered = extract(again.text);
-      if (recovered.ok) {
+      // ONLY WHEN SOMETHING WAS ACTUALLY RECOVERED — raised by lore's own t2 at high, and
+      // the finding is exactly right.
+      //
+      // This dropped `lostBlock` from `rejected` whenever `recovered.ok`, and `recovered.ok`
+      // is true for `{"findings": []}` as much as for a reply with real items: the prompt
+      // ABOVE explicitly invites that reply — "if that block held nothing you have not
+      // already reported, reply with an empty array" — so an ordinary, well-behaved
+      // response made the loss note VANISH with nothing recovered to justify it. The one
+      // finding this feature exists to stop losing could be lost by the feature itself,
+      // more quietly than before it existed: pre-D-123 the client at least saw "produced a
+      // finding this review does NOT contain".
+      //
+      // An empty-array reply does not resolve the uncertainty a truncated block leaves
+      // behind — it is the model's OWN claim that there was nothing more, which is exactly
+      // the self-report this project does not trust standing alone (the same INV-1 shape
+      // as everywhere else: "I looked and found nothing" is not "I did not look", and here
+      // it is not verifiable either way). So the note stays unless real items came back.
+      if (recovered.ok && recovered.items.length > 0) {
         extracted = {
           ok: true,
           items: [...extracted.items, ...recovered.items],
-          // BOTH SETS OF LOSSES, and the original `garbled` note is dropped only if the
-          // re-ask actually produced something. A silent recovery that lost a second block
-          // would otherwise report neither.
+          // BOTH SETS OF LOSSES, dropping the original only now that recovery is real.
           rejected: [...extracted.rejected.filter((r) => r !== lostBlock), ...recovered.rejected],
           ...(recovered.garbled === undefined ? {} : { garbled: recovered.garbled }),
         };
       }
-      // A FAILED RE-ASK CHANGES NOTHING. `extracted` still carries the original loss in
-      // `rejected`, so the client is told exactly what it was told before this existed —
-      // the re-ask can only add, never subtract.
+      // AN EMPTY OR FAILED RE-ASK CHANGES NOTHING. `extracted` still carries the original
+      // loss in `rejected`, so the client is told exactly what it was told before this
+      // existed — the re-ask can only add, never subtract.
     }
     if (!extracted.ok) {
       // One retry, contract restated — and, since 2026-08-04, carrying WHAT was

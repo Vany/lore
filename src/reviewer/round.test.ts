@@ -2796,6 +2796,86 @@ describe("a streamed tier-run", () => {
     expect(store.getReview("r1", "p")?.state).toBe("findings_ready");
   });
 
+  /**
+   * THE done DECLARATION SURVIVES A RE-ASK — the exact regression (62dffc58, found by
+   * lore's own review of D-123).
+   *
+   * `conduct`'s garbled-block re-ask calls the streamed loop's `extract` closure a SECOND
+   * time on the re-ask's own reply, which is about ONE missing block and never carries its
+   * own `done` marker. Overwriting `flag.done` with that second, narrower answer let a
+   * model's genuine "I have examined everything" on the first reply be silently un-said —
+   * INV-1's own load-bearing marker, reset by a question that was never about it. The loop
+   * then failed to break and asked an unwanted extra turn.
+   *
+   * `StreamingWithReask` models exactly what `conduct` does within one turn: two calls to
+   * `extract`, first on a reply that declares done, second on a re-ask reply that does not
+   * — simulating a rung member whose first emission had one clean block and one garbled
+   * one, the garbled one recovered by an empty-array reply. The whole test IS the
+   * assertion: with the fix, the round ends after this one script entry; with the bug, the
+   * loop believes it is not done, asks again, the one-entry script is exhausted, and the
+   * mock throws.
+   */
+  class StreamingWithReask implements ReviewerLike {
+    readonly asked: string[] = [];
+    private script: string[];
+    constructor(script: string[]) {
+      this.script = script;
+    }
+    async review(): Promise<never> {
+      throw new Error("a conversation tier must stream, not run a batch round");
+    }
+    async askFor<T>(
+      _tier: Tier,
+      prompt: unknown,
+      _worktree: string,
+      extract: (text: string) => Listed<T>,
+      _contract: string,
+    ): Promise<SessionResult<T>> {
+      const p = prompt as { initial: string; continued: string };
+      this.asked.push(this.asked.length === 0 ? p.initial : p.continued);
+      const text = this.script.shift();
+      if (text === undefined) throw new Error("the script ran out — the loop asked more than the test expected");
+      // FIRST CALL: the turn's real reply — one clean finding, and a done declaration
+      // sitting beside a block that (in the real system) failed to parse.
+      const first = extract(text);
+      if (!first.ok) throw new Error(`the fixture's own emission was refused: ${first.why}`);
+      // SECOND CALL: exactly what conduct's re-ask does — the SAME closure, called again,
+      // on a COMPLIANT recovery: the model reconstructs the lost block's real content,
+      // without redeclaring `done` — the re-ask asked about ONE block, not about the
+      // state of the whole tree, so an honest reply has no reason to repeat it.
+      //
+      // NOT an empty array: `emissionOf` refuses `{"findings": []}` outright unless a
+      // done marker sits beside it (its own rule — empty-without-done is a contract
+      // failure for a streamed emission, never "nothing lost"), so that reply can never
+      // reach the assignment this test exists to exercise. A reply that IS accepted but
+      // carries no done marker is what a genuine recovery looks like, and it is the
+      // shape that stomped `flag.done` before the fix.
+      const second: Finding = { ...HOLD_BUG, file: "src/recovered.ts", claim: "reconstructed from the lost block" };
+      const recovery = extract("```json\n" + JSON.stringify({ findings: [second] }) + "\n```");
+      if (!recovery.ok) throw new Error(`the fixture's recovery reply was refused: ${recovery.why}`);
+      return {
+        items: [...first.items, ...recovery.items], raw: text, inputTokens: 10, cachedTokens: 5, outputTokens: 5,
+        costUsd: 0, latencyMs: 1, retried: true, steps: 1, rejected: first.rejected,
+      };
+    }
+  }
+
+  it("does not let a re-ask's reply erase the done declaration from the same turn", async () => {
+    const reviewer = new StreamingWithReask([
+      '```json\n{"findings": [' + JSON.stringify(HOLD_BUG) + '], "done": true}\n```',
+    ]);
+
+    const r = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: STREAM_TYPE });
+
+    // ONE TURN, not two: the script had exactly one entry, so reaching a decision at all
+    // proves the loop broke on `flag.done` rather than asking again and exhausting it.
+    expect(reviewer.asked).toHaveLength(1);
+    expect(r.newFindings.map((f) => f.claim)).toContain(HOLD_BUG.claim);
+    // AND THE RECOVERED FINDING SURVIVES TOO — the merge is additive, not a replacement.
+    expect(r.newFindings.map((f) => f.claim)).toContain("reconstructed from the lost block");
+    expect(store.getReview("r1", "p")?.state).toBe("findings_ready");
+  });
+
   it("lands a held diff at the emission boundary and puts it to the same session", async () => {
     const reviewer = new Streaming([
       emission([HOLD_BUG]),

@@ -1158,7 +1158,21 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
         worktree,
         (text: string): Listed<Finding> => {
           const r = emissionOf(text);
-          if (r.ok) flag.done = r.done === true;
+          // MONOTONIC, NOT AN OVERWRITE — raised by lore's own t2 against D-123.
+          //
+          // `conduct`'s garbled-block re-ask calls THIS SAME closure a second time, on the
+          // re-ask's own reply — which the re-ask prompt asks about ONE missing block, not
+          // about the state of the whole tree, so a compliant reply carries no `done`
+          // marker of its own and parses with `done: false`. Overwriting `flag.done` with
+          // that let a model's genuine "I have examined the whole tree" declaration on the
+          // FIRST reply be silently un-said by the SECOND — INV-1's own load-bearing
+          // marker, reset by a question that was never about it. The loop then failed to
+          // break, bought an unwanted extra paid turn, and re-invited findings after the
+          // model had already considered itself finished.
+          //
+          // Once true, stays true: a later, narrower answer cannot retract an earlier,
+          // authoritative one.
+          if (r.ok) flag.done = flag.done || r.done === true;
           return r;
         },
         STREAM_CONTRACT,

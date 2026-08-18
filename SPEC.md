@@ -565,6 +565,34 @@ has no meaning for us, do not track it, we can't use it for a decision."* Consis
 D-121 — a number about money does not decide anything here — and it forecloses the
 plausible-looking feature of checking credit before walking a fallback chain.
 
+**Two more bugs in the re-ask, found by lore's own review of D-123 the day it shipped —
+both FIXED 2026-08-18.**
+
+**The merge could make a loss QUIETER than no feature at all.** The re-ask's own prompt
+invites the model to reply with an empty array when the lost block "held nothing you have
+not already reported" — an ordinary, well-behaved reply. The merge dropped the loss note
+from `rejected` whenever the recovery reply merely *parsed* (`recovered.ok`), and an empty
+array parses as readily as a real finding does. So the one well-behaved reply the prompt
+itself asks for made the loss note vanish with nothing recovered to justify it — pre-D-123
+the client at least saw *"produced a finding this review does NOT contain"*; this made
+D-123 lose it more silently than before D-123 existed. Fixed by dropping the note only when
+the recovery produced at least one real item (`recovered.items.length > 0`). An empty-array
+reply does not resolve what a truncated block held — it is the model's own unverifiable
+claim that there was nothing more, the same self-report this project does not trust
+standing alone anywhere else (INV-1: "I looked and found nothing" is not "I did not look").
+
+**And the re-ask could erase a genuine `done` declaration from the SAME turn.** The
+streamed loop's `flag.done` is set by re-invoking the caller's `extract` closure — once on
+the turn's real reply, and AGAIN on the re-ask's recovery reply, because `conduct`'s
+garbled-block handling does not know it is inside a streamed run. A recovery reply is about
+ONE missing block, never about the state of the whole tree, so a compliant one carries no
+`done` marker — and the closure's unconditional `flag.done = r.done === true` let that
+second, narrower answer silently un-set what the FIRST reply had genuinely declared. The
+loop then failed to break on INV-1's own load-bearing marker, bought an unwanted extra paid
+turn, and could re-invite findings after the model had already considered itself finished.
+Fixed by making the assignment monotonic — `flag.done = flag.done || r.done === true` — so
+a later, narrower answer can never retract an earlier, authoritative one.
+
 **D-49 widened — ANY vendor repeat costs the verdict, not only a total collapse.
 DECIDED and BUILT 2026-08-17.**
 
