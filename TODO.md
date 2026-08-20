@@ -39,6 +39,36 @@ that part is pulled out into its own open item rather than hidden inside a tick.
 
 ## Now — nothing here is about writing more features
 
+### 2026-08-20 — argued deferral: `mirror-refresh.sh` can't say WHICH repo failed
+
+- [ ] **A COMPLETED SYNC PASS IS NOT A PER-REPO GUARANTEE, and nothing threads the gap
+      through.** `mirror-refresh.sh`'s `serve_requests` calls `one_pass` (which fetches
+      every registered repo and returns a count of how many failed) and deletes the
+      request once `one_pass` RETURNS — whatever it returned. A network outage, an
+      expired credential, or one bad repo among many can fail the fetch for the exact
+      repository a client is waiting on, get logged to `mirror.log`, and still be
+      reported to lore as `fetched: true`. Found by lore's own t2, reviewing D-127's
+      batch, against `review_submit`'s commit form — but it is the same claim
+      `addWorktree` has made since D-100, on the same evidence.
+
+      **What is already fixed, same commit:** both messages that read `fetched: true`
+      (`src/git/repo.ts`'s branch-missing refusal, `src/mcp/server.ts`'s commit-missing
+      refusal) no longer claim the branch/commit is "confirmed absent" or "not a timing
+      problem" — they say a pass completed, name the likelier explanation (bad
+      name/wrong repo), and point at `mirror.log` for the narrower case. That closes the
+      actual harm: a caller no longer told something false with confidence.
+
+      **What is deliberately NOT fixed here: a real three-state `RefreshOutcome`.**
+      Proper per-repo failure tracking needs `one_pass` to record WHICH repos failed
+      (not just how many) somewhere lore can read it — a per-repo status file, or a
+      failed-ids list written beside the heartbeat — then `RefreshOutcome` gaining a
+      third state and both call sites gaining a third branch. That is a protocol change
+      to `mirror-refresh.sh` (shell, with the exact per-repo/per-pass race conditions
+      D-100's own comments show this file has been burned by before), not a two-line
+      fix, and it deserves the same deliberateness those comments were bought with —
+      not a same-day addition to an unrelated speed pass. Argued deferral: the softened
+      messages remove the false certainty today; the real fix is worth its own change.
+
 ### 2026-08-18 — needs a person, not a fix
 
 - [ ] **CHECK WHETHER KIMI AND OPENAI ARE ACTUALLY DEAD, NOT JUST RATE-LIMITED.** Both

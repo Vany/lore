@@ -233,7 +233,16 @@ export async function addWorktree(
         `Your token is scoped to that repository — if the branch belongs to a different one, ` +
         `you are holding the wrong token, and the branch existing elsewhere will not help. ` +
         (refreshed?.fetched === true
-          ? " lore re-synced from origin before saying this, and the branch is still not there — so it is not a timing problem: check the name, check you pushed to this repository, and check the push reached the remote."
+          // NOT "CONFIRMED ABSENT" — a completed pass is not a per-repo guarantee. Softened
+          // 2026-08-20, alongside the identical claim in `review_submit`'s commit form:
+          // `mirror-refresh.sh` discards `one_pass`'s per-repo failure count and deletes the
+          // request once the pass RETURNS, whatever it returned, so `fetched: true` here
+          // means "a pass completed", not "this repository's fetch succeeded" (TODO.md).
+          ? " lore's mirror daemon completed a sync pass since asking, and the branch is still not there. Most " +
+            "likely: check the name, check you pushed to this repository, and check the push reached the remote. " +
+            "But a single repository's fetch CAN fail inside a completed pass without lore seeing it (the daemon " +
+            "does not yet report per-repo results) — if you are confident this was pushed here, `mirror.log` on " +
+            "the lore host is where that would show."
           : ` lore could not confirm a fresh sync first (${refreshed?.why ?? "no sync was attempted"}), so its view of origin may be behind — report that rather than assuming the branch is wrong.`) +
         (nearby.length > 0 ? ` Most recent branches lore can see there: ${nearby.join(", ")}.` : " lore can see no branches there at all."),
     );

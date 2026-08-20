@@ -21,7 +21,7 @@ import { isAttestable, isClean, isTerminal, needsClient, type ReviewState } from
 import { DEFAULT_TYPE, reviewType, reviewTypeIds } from "../core/review-type.ts";
 import { STALE_GRACE_DAYS, STALE_HOURS } from "../ops/retention.ts";
 import { applyPatch, restoreTree, revParse, treeDelta, treeHash } from "../git/repo.ts";
-import { requestMirrorRefresh } from "../git/mirror-request.ts";
+import { requestMirrorRefresh, type RefreshOutcome } from "../git/mirror-request.ts";
 import { dataDir } from "../core/paths.ts";
 import { decide } from "../knowledge/decide.ts";
 import { enrich, renderEnrichment } from "../knowledge/enrich.ts";
@@ -942,9 +942,16 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       // reviews passed out of 128, against 58 failed, 28 cancelled and 18 expired, with
       // one branch reviewed thirteen times.
       //
-      // The mirror is refreshed first because the commit was pushed a moment ago and lore
-      // reviews what origin has. A commit lore cannot see is refused by name below rather
-      // than surfacing as an opaque git error.
+      // A COMMIT LORE CANNOT SEE IS REFUSED ONLY AFTER A REAL REFRESH FAILS TO FIND IT
+      // (D-100's pattern, applied here — found by lore's own t1, 2026-08-20).
+      //
+      // This used to refresh AFTER the check, which reads as refresh-then-check but ran
+      // check-then-refresh: a commit pushed moments before this call was refused, told to
+      // "push and call again", and every immediate retry hit the same stale mirror — for
+      // as long as the host's fetch timer takes — since nothing between the refusal and
+      // the retry ever refreshed anything. The doc text this shipped with said "lore syncs
+      // with origin and works out the delta itself", which was true of the diff computed
+      // AFTER resolution and false of the resolution itself.
       let patch = diff;
       if (commit !== undefined) {
         // RESOLVED TO A SHA BEFORE IT REACHES GIT'S ARGV, and this is not tidiness.
@@ -963,15 +970,46 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
         // option is not a commit-ish, so it resolves to nothing and is refused by name;
         // anything that does resolve comes back as a 40-character sha, which cannot be an
         // option whatever the caller wrote. Everything downstream sees only that sha.
-        const resolved = await revParse(worktree, commit);
+        let resolved = await revParse(worktree, commit);
+        // MISSING → REFRESH → RE-RESOLVE, never the other order. Gated on `fetched` so a
+        // refresh that did not actually run (host busy, no daemon) does not spend a second
+        // git call re-asking a question that cannot have a new answer.
+        let refreshed: RefreshOutcome | undefined;
         if (resolved === undefined) {
+          refreshed = await requestMirrorRefresh(dataDir()).catch(() => undefined);
+          if (refreshed?.fetched === true) resolved = await revParse(worktree, commit);
+        }
+        if (resolved === undefined) {
+          // NOT FETCHED IS NOT THE SAME CLAIM AS FETCHED-AND-STILL-ABSENT (D-100's
+          // pattern, `addWorktree`). Collapsing them into one sentence told a caller
+          // whose refresh never ran — daemon down, host busy — the same "it is
+          // genuinely not there" story as a caller whose refresh ran clean and found
+          // nothing; the first case means lore's view of origin may simply be stale,
+          // which `refreshed.why` says and this message used to discard.
+          //
+          // AND `fetched: true` IS ITSELF NOT "SUCCEEDED" — found by lore's own t2 against
+          // this exact fix. `mirror-refresh.sh`'s `serve_requests` deletes the request (the
+          // only signal `fetched` reads) once `one_pass` RETURNS, whatever it returned: a
+          // per-repo fetch failure inside that pass — network down, an expired credential —
+          // is logged to `mirror.log` and nowhere else, discarded rather than threaded back
+          // through the file-based protocol. `RefreshOutcome` has no third state to carry
+          // it (TODO.md: needs the daemon to report per-repo, not per-pass). So `fetched:
+          // true` here means "a pass completed", not "this repository's fetch succeeded" —
+          // shared with `addWorktree`'s identical claim, softened there too, same commit.
           throw new Error(
-            `lore cannot see commit ${commit} for ${review_id}. Push it to origin and call again — lore reviews ` +
-              "what origin has, never a working copy. (If that string was not a commit, it is refused for that " +
-              "reason: only a commit-ish is accepted here.)",
+            `lore cannot see commit ${commit} for ${review_id}. ` +
+              (refreshed?.fetched === true
+                ? "lore's mirror daemon completed a sync pass since asking. Most likely the string is not a real " +
+                  "commit-ish, or was not pushed to this repository — but a single repository's fetch CAN fail " +
+                  "inside a completed pass without lore seeing it (the daemon does not yet report per-repo results), " +
+                  "so if you are confident this was pushed here, check `mirror.log` on the lore host before assuming " +
+                  "the commit is wrong."
+                : `lore could not confirm a fresh sync first (${refreshed?.why ?? "no sync was attempted"}), so its ` +
+                  "view of origin may be behind — report that rather than assuming the commit is wrong.") +
+              " (If that string was not meant as a commit, it is refused for that reason too: only a commit-ish is " +
+              "accepted here.)",
           );
         }
-        await requestMirrorRefresh(dataDir()).catch(() => undefined);
         // THE STORED TREE, NOT A FRESH SNAPSHOT — raised by lore's own t2 at high, and the
         // fix is not a lock, it is not needing one.
         //

@@ -153,6 +153,12 @@ to review.
 > history stays yours. The `tree_hash` is verified after applying; a mismatch fails
 > loudly rather than reviewing code that exists nowhere.
 >
+> Send a pushed `commit` instead of a `diff` if you cannot build one — inherited a
+> review, or a rebase made a diff hopeless. Exactly one of the two, never both; lore
+> syncs with origin and works out the delta itself (D-124).
+>
+<!-- lore-ok[bc8401a9]: true because the cause was fixed at the other site the finding names, src/mcp/server.ts — refresh now runs between a failed resolve and the refusal, not after it, so a just-pushed commit is retried against a fresh mirror before being refused. -->
+>
 > For a finding you believe is **wrong**, do not skip it silently. Write at the
 > site:
 >

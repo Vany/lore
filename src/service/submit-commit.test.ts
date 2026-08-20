@@ -39,6 +39,7 @@ let root: string;
 let worktree: string;
 let token: string;
 let portSeq = 42_611;
+let priorDataDir: string | undefined;
 
 const g = (...a: string[]) => execFileSync("git", a, { cwd: worktree, stdio: "pipe" }).toString().trim();
 
@@ -75,6 +76,16 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<{ 
 
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "lore-submit-commit-"));
+  // PINNED TO A DIRECTORY WITH NO HEARTBEAT FILE, deliberately (found by lore's own t2
+  // against D-127's batch). `commit`'s resolve-failure path now calls
+  // `requestMirrorRefresh(dataDir())`, and unpinned that reads the REAL `LORE_DATA_DIR`
+  // (or `~/.lore`) — on a machine running an actual `mirror-daemon`, the heartbeat is
+  // fresh, so this test would write a real mirror-request into a live deployment's data
+  // directory and race its own assertion against whatever that daemon does. `root` is
+  // fresh per test and has no heartbeat, so `requestMirrorRefresh` answers `fetched:
+  // false` immediately regardless of what else is running on the machine.
+  priorDataDir = process.env["LORE_DATA_DIR"];
+  process.env["LORE_DATA_DIR"] = root;
   worktree = join(root, "wt");
   mkdirSync(worktree, { recursive: true });
   execFileSync("git", ["init", "-q", "-b", "main"], { cwd: worktree, stdio: "pipe" });
@@ -100,6 +111,8 @@ beforeEach(() => {
 afterEach(() => {
   close();
   store.close();
+  if (priorDataDir === undefined) delete process.env["LORE_DATA_DIR"];
+  else process.env["LORE_DATA_DIR"] = priorDataDir;
   rmSync(root, { recursive: true, force: true });
 });
 
@@ -145,6 +158,12 @@ describe("review_submit with a pushed commit instead of a diff", () => {
 
       expect(isError || body["error"] !== undefined, JSON.stringify(body)).toBe(true);
       expect(JSON.stringify(body)).toMatch(/cannot see commit/);
+      // D-100's pattern (found by lore's own t1 against D-127's batch): a resolve failure
+      // is retried once against a fresh mirror before refusing, and — since `beforeEach`
+      // pins `LORE_DATA_DIR` to a fresh directory with no heartbeat file — the retry
+      // itself cannot run, which must be SAID rather than folded into the same sentence
+      // a confirmed-absent commit gets.
+      expect(JSON.stringify(body)).toMatch(/could not confirm a fresh sync/);
     },
   );
 

@@ -8,7 +8,10 @@
  * the code without knowing that.
  */
 
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Finding } from "../core/finding.ts";
 import { renderT0, renderT0Delta, runT0 } from "./runner.ts";
 import { CODE_ARCH } from "../core/review-type.ts";
@@ -95,20 +98,42 @@ describe("nothing the target controls runs in the service", () => {
 /**
  * D-127: host engines and the sandbox used to run one after the other for no reason
  * beyond argument order — an unrelated multi-minute install held up a two-second
- * ast-grep/semgrep pair. They now run concurrently. No engine here asks for `tsc` or
- * `eslint`, so the sandbox phase short-circuits before touching docker (`wanted.length
- * === 0`) and this stays a fast test — what it proves is that merging two
- * `Promise.all` branches back together did not scramble the result, not that it is
- * fast (that claim is a wall-clock one, verified live, not in a unit test).
+ * ast-grep/semgrep pair in production. They now run concurrently. No engine here asks
+ * for `tsc` or `eslint`, so the sandbox phase short-circuits before touching docker
+ * (`wanted.length === 0`) and this stays a fast test — what it proves is that merging
+ * two `Promise.all` branches back together did not scramble the result, not that it
+ * is fast (that claim is a wall-clock one, verified live, not in a unit test).
+ *
+ * RUNS AGAINST AN EMPTY TEMP DIRECTORY, not this repo — found twice by lore's own
+ * review of this same test. First against `semgrep` (`detect()` is unconditionally
+ * true, so it shells out for real on any machine that has it — a natural machine for
+ * this project — fetching the registry ruleset against vitest's 5s default timeout).
+ * Then, after swapping in `sbom`, against `sbom` too: `npx --no-install` does not mean
+ * "no network", it means "do not fall back to installing" — on a machine with cdxgen
+ * cached OR globally installed (`npm i -g @cyclonedx/cdxgen`, cdxgen's own documented
+ * setup), `npx --no-install` runs it for real, same failure shape. Both engines gate
+ * on a REPO FILE (`sgconfig.yml`, `package.json`) before touching a binary at all, so
+ * an empty directory makes both report `unavailable`/`skipped` without executing
+ * anything — hermetic regardless of what is installed on whatever machine runs this.
  */
 describe("runT0 merges the host and sandbox branches", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "lore-runt0-"));
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
   it("returns one outcome per requested engine, in request order", async () => {
-    const out = await runT0(process.cwd(), { engines: ["ast-grep", "semgrep"] });
-    expect(out.outcomes.map((o) => o.engine)).toStrictEqual(["ast-grep", "semgrep"]);
+    const out = await runT0(dir, { engines: ["ast-grep", "sbom"] });
+    expect(out.outcomes.map((o) => o.engine)).toStrictEqual(["ast-grep", "sbom"]);
+    // Both unavailable/skipped, never a real finding — the point is they did not run,
+    // confirming the directory truly has neither config file rather than happening to
+    // report nothing found.
+    expect(out.findings).toStrictEqual([]);
   });
 
   it("asking for nothing produces nothing, not a crash", async () => {
-    const out = await runT0(process.cwd(), { engines: [] });
+    const out = await runT0(dir, { engines: [] });
     expect(out.outcomes).toStrictEqual([]);
     expect(out.findings).toStrictEqual([]);
   });

@@ -61,7 +61,7 @@ nothing.
 |---|---|---|
 | `review_start` | `branch*`, `into*`, `ticket*`, `pull_request`, `type` | `{review_id, state: "queued", note}` — returns immediately |
 | `review_poll` | `review_id*` | `{state, clean, note, new_findings[], open_count, human_decision?}` — §2.1.1 |
-| `review_submit` | `review_id*`, `diff*`, `tree_hash*` | `{review_id, state, tree_hash}` |
+| `review_submit` | `review_id*`, `tree_hash*`, exactly one of `diff` / `commit` | `{review_id, state, tree_hash}` |
 | `review_cancel` | `review_id*`, `reason` | `{state: "cancelled", stopped_in_flight, findings[], note}` — §2.5 |
 | `review_attest` | `review_id*` | the signed line, with its tree hash |
 | `review_inbox` | — | `{reviews[], needs_human, note}` — every OPEN review of the caller's, each with `waiting_on` and `expires_at` — §2.4.1 |
@@ -619,6 +619,24 @@ is committed and nothing is pushed; the client remains the owner of its own hist
 it, a partial or fuzzy apply leaves the server reviewing code that exists nowhere —
 not in git, not on the client's disk. A mismatch is a hard failure, never a warning:
 reviewing the wrong tree produces confident findings about code no one has.
+
+### 4.1 `commit` — for a session that cannot diff (D-124)
+
+`review_submit` takes exactly one of `diff` or `commit`, never both, never neither.
+A review's tree is the pinned base plus every patch already applied, and that tree
+lives only inside lore — a session that did not make the earlier submissions cannot
+check it out, cannot diff against it, and cannot compute a matching hash. Before
+`commit` existed, the only way through was `restart`, which discards every ratified
+justification and re-pays the cheap tiers.
+
+`commit` names a commit **already pushed to origin** — lore reviews what origin has,
+never a working copy, and a commit it cannot see is refused by name. It is resolved
+to a sha server-side (`git rev-parse --verify --quiet <ref>^{commit}`) before it can
+reach any git argv, and normalised to the equivalent diff exactly once, so every
+other path in this handler — the mid-round hold, the tree-hash check, the
+fix-elsewhere notice — still works on a diff and cannot tell the two shapes apart.
+`tree_hash*` is still required either way: it names the tree the caller means, and
+the server verifies it after applying regardless of which shape produced it.
 
 ## 5. Concurrency
 
