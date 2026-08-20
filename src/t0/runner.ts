@@ -81,8 +81,6 @@ export async function withInstallLock<T>(cacheDir: string, fn: () => Promise<T>)
 }
 
 export async function runT0(worktree: string, opts: T0Options): Promise<T0Result> {
-  const outcomes: EngineOutcome[] = [];
-
   // FILES THAT STILL EXIST, because a branch's diff names the ones it DELETED too.
   // `git diff --name-only` lists them and they are not in the worktree, and semgrep
   // treats a missing scanning root as fatal (`InvalidScanningRootError`, exit 2) — so a
@@ -93,17 +91,21 @@ export async function runT0(worktree: string, opts: T0Options): Promise<T0Result
   // and a caller computing a diff has no reason to know which engines read the disk.
   const files = opts.files?.filter((f) => existsSync(join(worktree, f)));
 
-  // Host-safe engines only: lore's own binaries, reading files.
-  for (const engine of opts.engines) {
-    if (engine === "tsc" || engine === "eslint") continue;
-    outcomes.push(await runEngine(worktree, engine, files));
-  }
-
-  // Everything that needs the target's node_modules runs in the sandbox, together,
-  // off one install.
-  outcomes.push(
-    ...(await sandboxed(worktree, opts.sandbox ?? DEFAULT_SANDBOX, opts.engines)),
-  );
+  // HOST ENGINES RUN CONCURRENTLY WITH THE SANDBOX, not before it (D-127).
+  //
+  // The two share no state: host engines are lore's own binaries reading `worktree`
+  // read-only, and the sandbox works entirely inside its own `/work` copy and its own
+  // node_modules cache. Before this they ran one after the other, so a two-second
+  // ast-grep/semgrep pair sat and waited for an unrelated multi-minute install for no
+  // reason beyond the order they happened to be written in. Engines within each group
+  // are independent of each other too — same reasoning, `Promise.all` rather than a
+  // loop.
+  const hostEngines = opts.engines.filter((e) => e !== "tsc" && e !== "eslint");
+  const [hostOutcomes, sandboxOutcomes] = await Promise.all([
+    Promise.all(hostEngines.map((engine) => runEngine(worktree, engine, files))),
+    sandboxed(worktree, opts.sandbox ?? DEFAULT_SANDBOX, opts.engines),
+  ]);
+  const outcomes = [...hostOutcomes, ...sandboxOutcomes];
 
   const skipped = outcomes.filter((o) => o.skipped !== undefined).map((o) => o.skipped ?? "");
   // Said once, to the operator's log, so an optional engine's absence is visible to
@@ -187,9 +189,13 @@ async function sandboxed(
     // A typechecks against the cache while B installs into it, and A reports errors
     // that are not real, about somebody else's branch, in our own voice.
     //
-    // The cost is bounded and small. T0 runs in 5–11s on this deployment, measured
-    // across every review in the table, and the serialisation is per LOCKFILE HASH —
-    // two repos, or two branches with different dependencies, never wait on each other.
+    // What the LOCK adds is bounded and small — the QUEUEING, on top of whatever
+    // install/typecheck/lint already cost on their own. The install is what actually
+    // dominates T0's wall-clock, especially cold (spec/deployment.md §3: p90 537s,
+    // measured), and that cost is real and paid regardless of this lock; serialising
+    // only means a second reviewer sharing the lockfile hash waits in line rather than
+    // reading a half-written node_modules. The key is per LOCKFILE HASH — two repos, or
+    // two branches with different dependencies, never wait on each other.
     return await withInstallLock(cacheDir, async () => {
       const installed = await install(cfg, worktree, cacheDir, scratch, cmds);
       if (installed.unavailable !== undefined) {

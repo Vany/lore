@@ -507,6 +507,60 @@ snapshot only when no tree is recorded yet AND no round is pending — a state a
 reaching `review_submit` should not be able to reach, since the tool's own precondition
 (`findings exist`) implies a completed round, which always writes this field.
 
+**D-127 — host engines and the sandbox run CONCURRENTLY within one T0 pass, not in
+sequence. BUILT 2026-08-20.**
+
+Vany: *"it spend a lot of time, throw out unnecessary, speed it up as we can."* Measured
+first rather than guessed: `tier_run` shows fresh code-arch T0 passes at p50 346s / p90
+873s over the preceding week — an order of magnitude past the "T0 runs in 5–11s" a
+`runner.ts` comment had claimed since the file was written, and past `spec/deployment.md`
+§3.1's own measured p90 of 537s. Both were true once, on lore's own small repo with a warm
+cache; neither is the shape of a review against a larger, colder target.
+
+**`runT0` ran ast-grep and semgrep in a `for` loop, then separately awaited the sandboxed
+install+tsc+eslint phase — two independent pieces of work, paid one after the other for no
+reason beyond the order they were written in.** They share no state: the host engines are
+lore's own binaries reading `worktree` read-only (D-24's boundary keeps them out of the
+sandbox, not the other way round), and the sandbox works entirely inside its own `/work`
+copy and its own node_modules cache, touching `worktree` only through its `:ro` mount. A
+two-second ast-grep/semgrep pair sat and waited for an unrelated multi-minute install.
+Fixed with two `Promise.all`s — host engines against each other (same independence
+argument) and the host group against the sandboxed group — in `runT0` (`src/t0/runner.ts`).
+Outcome order is unchanged, since `Promise.all` resolves in input order regardless of
+completion order.
+
+**Considered and set aside: running `checkTypes` and `checkLint` against each other,
+inside the sandboxed phase, the same way.** They are NOT independent the way the outer
+split is — both are currently wired to the SAME `scratch` directory and the SAME
+node_modules `cacheDir`, and `withInstallLock`'s own history (the comment on `sandboxed`
+in `runner.ts`) is a record of exactly this shape of race already costing two rounds of
+confident false claims about someone else's branch, from tsc and eslint sharing a
+directory with an install. Doing this safely needs its own scratch subdirectory per
+phase — cheap, since `SYNC` already re-syncs from `/src` at the start of every phase
+regardless of what a sibling left there — and probably a read-only mount for node_modules
+during the read-only phases, which is a separate design question (some target-authored
+`lint`/`typecheck` script writing into node_modules would go from "races silently" to
+"fails loudly as a false finding," and INV-1 makes that trade worth thinking through
+rather than assuming). Left for a change that can justify it on its own, not bundled into
+a same-day speed pass.
+
+**Considered and set aside: raising the sandbox's `--cpus 2` limit.** Never a reasoned
+decision — `git log` shows it as the value the file was born with, unexplained, while
+`--memory` was later raised from 2g to 6g with a comment naming the exact incident
+(`turbo run typecheck` OOM-killing a 30-package fan-out). `spec/deployment.md` §4 names
+CPU as the scarce resource on a 16-core host with a 14-core Docker VM, so 2 is
+conservative on the numbers alone — but it is a shared-host resource question with a
+real number to pick and a blast radius that lands on colleagues' concurrent reviews under
+a burst, not a single reviewable code change. Flagged rather than changed.
+
+**Not done: disabling SBOM/OSV over its 100% failure rate on this deployment.** Read
+before touching — `generateSbom`'s cdxgen path calls `npx --no-install`, which is
+specifically documented to fail immediately rather than reach the network when the
+package is not cached, so the "no SBOM could be produced" outcome seen in the data is a
+fast, correct `unavailable` report (INV-1 working as designed), not wasted wall-clock.
+Nothing to fix here — the security review type this belongs to was not this pass's
+subject anyway.
+
 **D-126 — a review nobody delivered to is an operator ticket, EXCLUDING only the endings
 that genuinely self-resolve. BUILT 2026-08-17; corrected 2026-08-18.**
 

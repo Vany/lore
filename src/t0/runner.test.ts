@@ -10,7 +10,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { Finding } from "../core/finding.ts";
-import { renderT0, renderT0Delta } from "./runner.ts";
+import { renderT0, renderT0Delta, runT0 } from "./runner.ts";
 import { CODE_ARCH } from "../core/review-type.ts";
 import { runEngine } from "./engines.ts";
 import type { T0Engine } from "../core/review-type.ts";
@@ -89,6 +89,28 @@ describe("nothing the target controls runs in the service", () => {
   it("still runs its own scanners here", async () => {
     const out = await runEngine(process.cwd(), "ast-grep");
     expect(out.unavailable ?? "").not.toMatch(/runs in the sandbox/);
+  });
+});
+
+/**
+ * D-127: host engines and the sandbox used to run one after the other for no reason
+ * beyond argument order — an unrelated multi-minute install held up a two-second
+ * ast-grep/semgrep pair. They now run concurrently. No engine here asks for `tsc` or
+ * `eslint`, so the sandbox phase short-circuits before touching docker (`wanted.length
+ * === 0`) and this stays a fast test — what it proves is that merging two
+ * `Promise.all` branches back together did not scramble the result, not that it is
+ * fast (that claim is a wall-clock one, verified live, not in a unit test).
+ */
+describe("runT0 merges the host and sandbox branches", () => {
+  it("returns one outcome per requested engine, in request order", async () => {
+    const out = await runT0(process.cwd(), { engines: ["ast-grep", "semgrep"] });
+    expect(out.outcomes.map((o) => o.engine)).toStrictEqual(["ast-grep", "semgrep"]);
+  });
+
+  it("asking for nothing produces nothing, not a crash", async () => {
+    const out = await runT0(process.cwd(), { engines: [] });
+    expect(out.outcomes).toStrictEqual([]);
+    expect(out.findings).toStrictEqual([]);
   });
 });
 
