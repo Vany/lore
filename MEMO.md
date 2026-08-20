@@ -3,6 +3,74 @@
 Newest first. Updated at the end of each task: what changed, what I learned, what
 surprised me.
 
+## 2026-08-20 — T0 runs its host engines and the sandbox at once (D-127)
+
+**What changed.** `runT0` ran ast-grep/semgrep in a sequential loop, then separately
+awaited the sandboxed install+tsc+eslint phase — two independent pieces of work paid
+one after the other for no reason beyond argument order. Both now run via
+`Promise.all`, host engines against each other too. Also corrected a stale
+`runner.ts` comment claiming "T0 runs in 5–11s" (measured p50=346s/p90=873s over the
+preceding week — off by roughly two orders of magnitude), and documented
+`review_submit`'s `commit` parameter (D-124) in `spec/mcp-api.md`'s tool table and
+`spec/agent-docs.md` — it had been real in code and in the served `TOOL_DOCS` text
+since D-124 shipped, but never reached either spec file.
+
+**How it started.** Vany: *"it spend a lot of time, throw out unnecessary, speed it
+up as we can."* Measured first (`tier_run` durations from the live database) rather
+than guessed — confirmed the real cost, that T0's near-zero finding rate is a free
+gate's expected behaviour rather than evidence it is useless, and that the
+ast-grep/semgrep-vs-sandbox serialisation was pure waste with no correctness reason
+behind it.
+
+**Three real bugs found by lore's own review of this batch, all fixed:**
+
+- `review_submit`'s commit-resolution refused a just-pushed commit ("push it and call
+  again") while refreshing the mirror AFTER the check, not before — the refresh
+  could never help the exact case the surrounding comment said it existed for.
+  Reordered to `addWorktree`'s established D-100 pattern: missing → refresh →
+  re-resolve → only then refuse.
+- That refusal's `fetched: true` branch (and its sibling in `addWorktree`) claimed
+  the mirror sync "confirmed absent" — but `mirror-refresh.sh`'s `serve_requests`
+  discards `one_pass`'s per-repo failure count and reports completion regardless, so
+  a live daemon whose fetch is silently failing for this one repo reads identically
+  to a genuinely-absent commit. Softened both messages to stop overclaiming; the
+  real fix (per-repo failure tracking through the file-based protocol) is an argued
+  deferral in `TODO.md` — shell-script surgery on `mirror-refresh.sh` deserves its
+  own deliberate change, not a same-day addition to an unrelated speed pass.
+- Two of my own new tests shelled out to real host tools (`semgrep`, then `sbom`'s
+  `cdxgen` fallback) on any machine that happened to have them cached or installed —
+  found TWICE by the same review, back to back. I fixed the `semgrep` instance by
+  swapping in `sbom`, asserted in the replacement comment that `sbom` was safe
+  because `npx --no-install` "fails fast, no network" — and the very next round
+  found the identical bug in what I had just written. Fixed properly by moving both
+  tests to a fresh empty temp directory, so each engine's own config-gate
+  (`sgconfig.yml`, `package.json`) reports it unavailable before touching a binary
+  at all — hermetic regardless of host tooling, rather than hermetic because of an
+  assumption about one flag's exact guarantee.
+
+**What I learned — `npx --no-install` means "do not fall back to installing," not
+"do not execute."** I stated the opposite as fact, in a code comment, twice, and
+verified it precisely zero times before writing it down. The only way to make a test
+genuinely hermetic against a tool that shells out is to gate on something that
+cannot be true regardless of host state — a repo config file that does not exist —
+never on a claim about a package manager's install semantics, which turned out to be
+narrower than I assumed and which I never actually checked.
+
+**Surprised me — a `passed_partial` review can go terminal with a finding that
+received no verdict at all.** The attestation for this batch: "9 findings, 7 fixed,
+1 justified" — arithmetic that is silently short one. The ninth (`26faa974`, the
+mirror-refresh honesty fix above) was raised by t3 at round 5, fixed in the tree by
+round 6, and t3's round 6 pass explicitly settled five OTHER findings — including
+two it had raised itself, later than this one — but recorded no verdict for it
+either way: not `fixed`, not re-raised. Confirmed independently that the code fix is
+genuinely present in the reviewed tree. This reads like a real gap in lore's own
+round/verdict bookkeeping rather than a defect in the reviewed code, but I have not
+read `review.ts`'s verdict-recording logic closely enough to say why — raised to
+Vany rather than chased, since this task was T0's wall-clock and that is a separate
+investigation into lore's own correctness.
+
+**Deployed and verified.** `ed7e92d` live, `/status` clean, no problems.
+
 ## 2026-08-17 — the ceiling comes out; a price stops deciding anything
 
 **What changed.** D-121: the daily spend ceiling is deleted. `mayStart` and its enqueue
