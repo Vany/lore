@@ -3,6 +3,72 @@
 Newest first. Updated at the end of each task: what changed, what I learned, what
 surprised me.
 
+## 2026-08-21 — "title"/"detail" is a naming drift, not a lost finding (D-128)
+
+**What changed.** `repairFieldNames` in `src/core/finding.ts` now runs first in the
+finding-parsing pipeline: when the canonical field (`claim`, `evidence`) is genuinely
+missing and a plausible alias (`title`, `detail`) is present, it promotes the alias
+instead of letting `.strict()` refuse the whole finding. `failureScenario` backfills from
+the promoted `evidence` when nothing else names it.
+
+**How it started.** Vany, looking at a live review of `rigid-monorepo`'s reconciliation
+branch: *"seems we seriously failed."* He was right: t3 had raised a CRITICAL finding
+about a genuine bug — a widened position fetch (from an earlier round's own fix) now
+pulling in positions whose ledger credit stayed filtered out, reported as a permanent
+phantom shortfall — using `{"title", "detail"}` instead of `{"claim", "evidence"}`.
+`.strict()` refused it. It survived only because the automatic retry `opencode.ts` sends
+on a whole-reply failure happened to land on the right names the second time — a second,
+independent generation of the same finding, not a guaranteed one.
+
+**Six more findings from lore's own review of the fix, each caught within minutes of the
+one before it — the deepest chain of self-review this project has driven in one sitting:**
+
+1. My first draft's OWN motivation was wrong: I read the two attempts' differing severity
+   words (`critical`, then `high`) as a regression the retry caused. It is not — D-115
+   maps any unrecognised severity to `high` on every attempt identically, so a perfectly-
+   named first try would have recorded `high` too. The real near-miss was total loss on a
+   second roll, not a severity difference that was never real. Caught by lore's own t1,
+   reviewing the decision that had just been written down — the drift this project polices,
+   inside its own newest paragraph, before the ink dried.
+2. `delete out["title"]`/`out["detail"]` ran OUTSIDE the guard that earned them, so a
+   stray alias beside an already-correct canonical field was silently dropped instead of
+   being left for `.strict()` to name.
+3. The entry guard returned early whenever `claim` alone was already present, so a reply
+   that got `claim` right but `evidence` wrong — the same substitution, one field along —
+   was never reached at all.
+4. A wrong-TYPED canonical field (`claim: 7`) was treated identically to a missing one and
+   silently overwritten by the alias. Asked as a question, not filed as a bug — *"could
+   this require the key to be absent rather than merely unusable?"* — and the answer was
+   yes, on precedent already sitting in the same file: `cwe`'s "blank is forgiven; WRONG is
+   still rejected" (D-116).
+5. The final note-append step could fabricate an ENTIRE `evidence` value out of nothing but
+   its own repair note, when a reply supplied no real evidence anywhere — a note like `lore
+   read "title" as "claim"` satisfies `z.string().min(1)` and reads as proof of nothing.
+6. That same defect turned out to be older than D-128 itself: `repairStructure`'s
+   line/cwe-repair note-append carried the identical shape since D-115/D-116, unnoticed
+   because nothing had ever constructed a bad-`line` finding with no evidence anywhere to
+   trigger it. My OWN SPEC paragraph excusing it as "safe" was itself wrong — the required-
+   evidence check is the Zod parse that runs AFTER every preprocessing step, so nothing had
+   actually guaranteed evidence by the time either function's note-append ran — and lore's
+   own t2 caught the false claim inside the same round that introduced it.
+
+**What I learned — a fix under this project's own review is not exempt from the failure
+mode it fixes.** Every one of the six was a smaller instance of D-128's own lesson:
+something that looked handled turned out to have an unstated assumption, found by the same
+mechanism the fix was building. Writing the SPEC paragraph BEFORE the last round confirmed
+it clean cost two corrections to the paragraph itself — worth doing anyway, since a wrong
+"why" left standing is exactly the kind of claim this project polices in code.
+
+**Surprised me — the attestation's own wording, unrelated to any of the above.** The
+signed line reads *"3 tiers (t0, t2, t3) — 1 earlier tier(s) read an earlier tree and did
+not re-read this one, so this is PARTIAL"* while the review's own `state` was `passed`,
+not `passed_partial` — t1 closed early (D-6, "a closed tier stays closed") and correctly
+never needed re-asking, but the attestation TEXT still reads as though the verdict itself
+were partial. Not chased — flagged for whoever next reads an attestation and wonders why a
+`passed` review's own signed line calls itself partial.
+
+**Deployed and verified.** `8aac477` live, `/status` clean, no problems.
+
 ## 2026-08-20 — T0 runs its host engines and the sandbox at once (D-127)
 
 **What changed.** `runT0` ran ast-grep/semgrep in a sequential loop, then separately

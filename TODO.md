@@ -39,6 +39,22 @@ that part is pulled out into its own open item rather than hidden inside a tick.
 
 ## Now — nothing here is about writing more features
 
+### 2026-08-21 — noticed, not yet root-caused
+
+- [ ] **AN ATTESTATION FOR A `passed` REVIEW CALLS ITSELF "PARTIAL" IN ITS OWN TEXT.**
+      `rev_l27ApR_CIRhvugkb_XjWbi50` (D-128's own review) reached `state: "passed"` —
+      verified via `review_poll` before attesting — but `review_attest`'s signed line
+      read *"1 earlier tier(s) read an earlier tree and did not re-read this one, so this
+      is PARTIAL"*. t1 had closed early (D-6: a closed tier stays closed) and correctly
+      never needed re-asking once later rounds' fixes didn't touch anything it had
+      opinions about — that is ordinary and right — but the ATTESTATION TEXT'S "so this is
+      PARTIAL" reads as a claim about the verdict itself, not the state I could see. Worth
+      checking whether this wording is generated independently of `state`/`clean` and can
+      drift from them, or whether it is accurately describing something `passed` should not
+      claim. Not investigated: found while reading the sign-off of an otherwise-complete
+      task, and the actual verdict (`passed`, `open_count: 0`) was independently confirmed
+      before this was noticed.
+
 ### 2026-08-20 — argued deferral: `mirror-refresh.sh` can't say WHICH repo failed
 
 - [ ] **A COMPLETED SYNC PASS IS NOT A PER-REPO GUARANTEE, and nothing threads the gap
