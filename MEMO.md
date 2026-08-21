@@ -3,6 +3,33 @@
 Newest first. Updated at the end of each task: what changed, what I learned, what
 surprised me.
 
+## 2026-08-21 — the "PARTIAL" wording was already right; it was just untested
+
+**Resolved the item this same MEMO flagged an entry above.** `attest.ts` (lines 143-155)
+already draws the distinction on purpose: `partial` is `state === "passed_partial"` OR
+`tiers < everyTier` — TWO independent sources, not one. The second fires when a CLOSED
+tier's own approval covers an earlier tree than the one being signed (D-6: a closed tier
+is not re-run after a later fix that never touched what it cared about) — which is a fact
+about what the SIGNATURE covers, true on a full `passed`, and orthogonal to whether the
+ladder's own verdict was complete. The code's own comment already anticipated the exact
+confusion I had: *"a `passed` whose t1 verdict was given against a tree two fixes ago is
+genuinely partial COVER of the tree being signed, whatever the verdict says. A test caught
+me collapsing them."*
+
+**What was actually missing: a test for this exact case.** `attest.test.ts` had two tests
+under "what a signed line calls PARTIAL" — a tier skipped below a pass (correctly NOT
+partial, D-88) and the ladder's own `passed_partial` (correctly IS partial) — but nothing
+exercising the third source, the one D-128's own review had just hit live. Added
+`"calls a full pass PARTIAL when a closed tier never re-read the signed tree"`, replaying
+the exact shape: t1 on an earlier tree, t0/t2/t3 on the current one, state `passed`,
+nothing `unavailable`. It passed against the UNCHANGED code, confirming the design was
+correct all along — the gap was coverage, not behaviour.
+
+**What I learned — "not yet root-caused" was premature; five minutes of reading the file
+resolved it.** I flagged this as an open question before reading the one file that answers
+it. Worth remembering: a TODO entry earns "needs investigation" only after a first pass at
+the obvious source, not before.
+
 ## 2026-08-21 — "title"/"detail" is a naming drift, not a lost finding (D-128)
 
 **What changed.** `repairFieldNames` in `src/core/finding.ts` now runs first in the

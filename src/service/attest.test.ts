@@ -255,4 +255,32 @@ describe("what a signed line calls PARTIAL", () => {
     expect(a.line).toContain("t3 could not run");
     expect(a.line, "nothing read this code at t3's level").toContain("PARTIAL");
   });
+
+  /**
+   * THE THIRD SOURCE OF PARTIAL, and — unlike the two above — never exercised by a
+   * test before this one: a `passed` review whose ladder verdict is genuinely
+   * complete, no tier `unavailable`, but a CLOSED tier's own approval covers an
+   * EARLIER tree than the one this signature names (D-6: a closed tier is not
+   * re-run after a later fix). `attest.ts`'s own comment names this as independent
+   * of the ladder's verdict — "a `passed` whose t1 verdict was given against a tree
+   * two fixes ago is genuinely partial COVER of the tree being signed, whatever the
+   * verdict says" — found live on D-128's own review (`rev_l27ApR...`), where t1
+   * closed after round 2 and never re-read the four rounds of fixes after it.
+   */
+  it("calls a full pass PARTIAL when a closed tier never re-read the signed tree", async () => {
+    review("passed");
+    const at = "2026-08-03T00:00:00.000Z";
+    store.recordTierRun("r1", "t1", 1, "clean", at, "an-earlier-tree");
+    store.recordTierRun("r1", "t0", 2, "clean", at, "4f2a9c1");
+    store.recordTierRun("r1", "t2", 2, "clean", at, "4f2a9c1");
+    store.recordTierRun("r1", "t3", 2, "clean", at, "4f2a9c1");
+
+    const a = await attest(store, "r1", "p", keyPath);
+
+    expect(a.line, "no tier is unavailable, nothing was skipped").not.toContain("could not run");
+    expect(a.line, "but t1's approval does not cover this tree").toContain(
+      "1 earlier tier(s) read an earlier tree and did not re-read this one",
+    );
+    expect(a.line, "so the signed line still says so").toContain("PARTIAL");
+  });
 });
