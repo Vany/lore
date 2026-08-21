@@ -507,6 +507,132 @@ snapshot only when no tree is recorded yet AND no round is pending — a state a
 reaching `review_submit` should not be able to reach, since the tool's own precondition
 (`findings exist`) implies a completed round, which always writes this field.
 
+**D-128 — a finding that names its fields "title"/"detail" is a naming drift, not a
+malformed reply: repaired at the boundary rather than gambled on a retry. BUILT
+2026-08-20.**
+
+Vany, looking at a live review of a real financial reconciliation branch: *"seems we
+seriously failed."* He was right, and precisely: `rev_Orn2HYgY43GwgxkSvQaEdmA0`
+(`rigid-monorepo`, a client's own repo lore reviews), round 7, t3 raised a **critical**
+finding about a genuine bug in settlement reconciliation
+(`services/clearing-settlement/src/logic/run-reconciliation.ts`) — the widened position
+fetch D-49's earlier round had produced now pulls in positions whose matching ledger
+credit is still filtered out, reported as a permanent phantom shortfall. Real money-
+handling logic, real bug, and lore nearly lost the finding that caught it.
+
+**The model wrote `{"title": ..., "detail": ..., "severity": "critical", ...}`.**
+`FindingSchema` wants `claim`/`evidence`, and is `.strict()` besides — so this was refused
+twice over: the unknown keys, and `claim` being genuinely absent underneath them. It
+reached the client only as `checks_skipped`: *"t3 produced a finding this review does NOT
+contain"*, with the raw rejected JSON as the only trace.
+
+**It was not actually lost — but only because the retry `opencode.ts` already sends on a
+whole-reply failure happened to land on the right names the second time, and nothing
+guarantees that.** `conduct`'s retry restates the contract and asks the model to try again;
+here the second attempt used `claim`/`evidence` correctly and the finding survived, one
+round-trip later, as a NEW finding (`d97e8bed`, same file, same mechanism, differently
+worded — a second, independent generation of the same finding, not a copy of the first).
+Nothing compares a retry's content against the attempt it replaces, so nothing would have
+noticed had it come back paraphrased worse, missing a detail the first had, or not
+recovered at all — **the actual near-miss was total loss of a critical finding, gambled on
+a second roll**, not the specific difference this decision first reached for. `d97e8bed`
+was fixed and verified by round 8; the review reached `passed`. The bug is closed. The
+near-miss is what this decision is about.
+
+**Corrected by lore's own t1, reviewing this very fix: severity was never actually at
+risk.** The first draft of this decision read the two attempts' differing severity words
+(`critical`, then `high`) as a regression the retry caused. It is not one: D-115 maps any
+word `SEVERITIES` does not recognise — `critical` included — to `high`, on every attempt
+identically, so a perfectly-named first try reporting `severity: "critical"` would have
+recorded `high` too. `finding.test.ts` proves it directly: the repaired reply's own test
+asserts `severity` is `"high"`, for the same reason a correctly-shaped one would be. Left
+uncorrected, this would have been believed rather than checked the next time severity
+fidelity across a retry mattered — the drift this project polices, caught in its own
+newest decision before the ink dried.
+
+**Fixed at the boundary, matching D-115/D-116's established rule that validation here must
+not be able to lose a finding — extended from "the model got a value wrong" to "the model
+got a NAME wrong."** `repairFieldNames` in `src/core/finding.ts` runs first in the
+preprocessing chain (before `foldOverlongClaim`, which reads `claim` by name and would
+no-op on a finding still calling it `title`): when the canonical field is missing AND a
+plausible alias is present, it promotes the alias and notes the substitution in `evidence`
+— `title` → `claim`, `detail` → `evidence`. Where `failureScenario` has no third field to
+draw from, it reuses the promoted `evidence` rather than leaving the finding one required
+field short, and says so. This removes the retry — and the total-loss risk a second,
+independent generation of the finding carries — for the one substitution actually
+observed, rather than trusting a second attempt to fix what the first got wrong.
+
+**A second finding, from the same review of the same fix: the delete lived outside the
+guard that earned it.** The first version promoted `title`→`claim` and `detail`→`evidence`
+each inside their own `if`, then deleted BOTH alias keys unconditionally afterward — so a
+reply with `evidence` already correct but a stray `detail` sitting beside it fell through
+the `!hasEvidence` guard, consumed nothing, and still had `detail` deleted with no note,
+on the exact path `.strict()` exists to police as drift. Fixed by moving each `delete`
+inside the guard whose promotion it belongs to, so an alias that was never consumed is left
+exactly where it was: a stray key for `.strict()` to name, not content silently discarded.
+
+**A third finding, from the review of THAT fix: the entry guard was checking the wrong
+question.** `if (hasClaim || ...) return input` treated "claim is already fine" as "there
+is nothing here to repair" — but the two fields are independent, and a reply that gets
+`claim` right while still calling `evidence` `detail` (the same substitution, one field
+along, half right instead of all wrong) was returned untouched before either per-field
+guard could run, sent through the same whole-reply retry and total-loss risk this decision
+exists to remove. Fixed by asking each field's own question at entry — `needsClaim`,
+`needsEvidence` — and proceeding if either is true, rather than letting one field's health
+stand in for the other's.
+
+**A question, from the review of THAT fix: should `claim: 7` beside a good `title` be
+silently overwritten?** No — and the line the answer sits on already exists in this file.
+`cwe`'s rule is "blank is forgiven; WRONG is still rejected" (D-116), and `still rejects
+[89], [{}], [[]] as a cwe` pins the wrong-type half of it. A canonical field that is
+absent, `null`, or an empty/blank string said nothing, which every other repair here
+already forgives; a canonical field holding a NUMBER or an OBJECT where a string was asked
+for is a stronger, more specific drift signal — the reply's TYPES have parted from the
+contract, not just its NAMES — and an alias silently papering over that would hide exactly
+what `.strict()` exists to surface. So `missing()` now checks for absent/null/blank only;
+a wrong-typed canonical field is left alone, its now-genuinely-unused alias stays present
+too, and the schema names both problems in one rejection.
+
+**A fourth finding, sharper than the first three: a repair note is not proof, and the
+final step let it stand in for one.** `title` alone — no `detail`, no `evidence` under
+either name — still reached the note-appending join at the end of the function, which had
+nothing real to attach its note to and fell back to making the note itself the entire
+`evidence` value: `"lore read \"title\" as \"claim\" — the reviewer used the wrong field
+name."` satisfies `evidence: z.string().min(1)` and reads exactly like proof, to the next
+tier and to the client, of nothing. Fixed by appending the note only where usable content
+already exists to attach it to; a finding with genuinely no evidence anywhere still fails
+the required-field check precisely as it would have without any of these repairs, going
+through the ordinary retry rather than being admitted on a sentence about its own repair.
+
+**A fifth finding: the previous paragraph's own safety claim about `repairStructure` was
+false, and lore's own t2 caught it inside the same round.** It said that join "only ever
+runs on a finding whose `evidence` this schema already required and never touches" —
+backwards. The required-field check is the Zod parse that runs AFTER every preprocessing
+step, `repairStructure` included, so nothing has required `evidence` yet by the time it
+runs — `repairStructure` predates D-128 and carried the identical fabricate-evidence-from-
+a-note defect the whole time, unnoticed because nothing had constructed a bad `line`/`cwe`
+finding with no evidence anywhere to trigger it. Fixed the same way, in the same function
+shape: the note is appended only where real content already exists.
+
+**A sixth finding: the `failureScenario` backfill still used the OLD blank-or-wrong-is-
+the-same test, one field after `claim`/`evidence` were fixed to tell them apart.**
+`usable(o["failureScenario"])` read `failureScenario: 42` as absent, so the backfill
+silently overwrote it with the promoted `evidence` and wrote a note — *"lore could not
+find a distinct failure scenario"* — that was now false: one was given, just wrong-typed.
+Fixed by reusing `missing()` here too, so a wrong-typed `failureScenario` is left alone
+for the schema to refuse on its own terms, matching `claim` and `evidence` beside it
+rather than lagging them by one field, which is exactly how D-115 and D-116 came to be
+three separate decisions instead of one.
+
+**Deliberately narrow, on purpose, twice over.** It fires only when the canonical field is
+genuinely missing: a reply that already has a correct `claim` and ALSO sends a stray
+`title` still hits `.strict()` exactly as `finding.test.ts`'s existing "rejects unknown
+keys rather than dropping them" expects — an extra field beside otherwise-correct output
+is a stronger drift signal than a substitution for an absent one, and this repair leaves
+it alone (now correctly, on both fields). And it repairs the two names actually seen rather
+than a speculative table of synonyms for every field: `severity`'s synonym list (D-115)
+grew the same way, one real incident at a time, and this starts from one.
+
 **D-127 — host engines and the sandbox run CONCURRENTLY within one T0 pass, not in
 sequence. BUILT 2026-08-20.**
 

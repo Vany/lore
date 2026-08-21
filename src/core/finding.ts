@@ -55,6 +55,120 @@ export const CLAIM_MAX = 500;
 const TEXT_MAX = 2000;
 
 /**
+ * A MODEL THAT REACHES FOR "title"/"detail" HAS THE SHAPE RIGHT, ONLY THE NAMES WRONG —
+ * so treat it as a naming drift to repair, not a malformed reply to refuse (D-128).
+ *
+ * Observed on this repository's own review of D-127, on a CRITICAL finding about a real
+ * money-handling bug (`services/clearing-settlement/src/logic/run-reconciliation.ts`):
+ * the model wrote `{"title": "...", "detail": "...", "severity": "critical", ...}` instead
+ * of `claim`/`evidence`. `.strict()` refused it for the unknown keys, and `claim` being
+ * genuinely absent would have refused it a second way even without `.strict()`. It survived
+ * only because the retry `opencode.ts` sends on a whole-reply failure happened to land on
+ * the right names the second time — a second, independent generation of the same finding,
+ * worded differently from the first. Nothing compares a retry's content against the attempt
+ * it replaces, so nothing would have noticed had it come back paraphrased worse, missing a
+ * detail the first had, or not recovered at all — the actual near-miss was total loss on a
+ * critical finding, gambled on a second roll. (Severity itself was never at risk here: D-115
+ * maps any unrecognised word, including `critical`, to `high`, on both attempts identically
+ * — that part of the story is what lore's own t1 corrected, reviewing this fix, and SPEC
+ * D-128 says so.) Closing this at the boundary removes the retry, and the total-loss risk it
+ * carries, for the one substitution actually seen — matching every other repair in this
+ * file: do not gamble that a second attempt fixes what the first got wrong when the first
+ * attempt's own intent is legible right there.
+ *
+ * DELIBERATELY NARROW. Fires only when the CANONICAL field is missing, so a reply that
+ * already got `claim` right and also sent a stray `title` still hits `.strict()` exactly as
+ * `finding.test.ts`'s "rejects unknown keys rather than dropping them" expects — an extra
+ * field beside otherwise-correct output is a stronger drift signal than a substitution for
+ * a genuinely missing one, and this repair does not touch that case. And it repairs the two
+ * NAMES actually seen rather than a speculative table of every plausible synonym: `severity`
+ * accumulated its synonym list from repeated real incidents (D-115), and this starts the
+ * same way, from one.
+ */
+function repairFieldNames(input: unknown): unknown {
+  if (typeof input !== "object" || input === null) return input;
+  const o = input as Record<string, unknown>;
+  const usable = (v: unknown): v is string => typeof v === "string" && v.trim() !== "";
+  // MISSING, never WRONG TYPE — asked by lore's own t2, reviewing this repair: should
+  // `claim: 7` beside a good `title` be silently overwritten? No. `absent`, undefined and
+  // an empty/blank string are all "nothing was said", which is what every other repair in
+  // this file already forgives (`cwe`'s "blank is forgiven; WRONG is still rejected" is the
+  // named precedent, and `still rejects [89], [{}], [[]] as a cwe` pins the wrong-type half
+  // of it). A NUMBER or an OBJECT where a string was asked for is a stronger, more specific
+  // drift signal than a naming substitution — it means the reviewer's output does not match
+  // the contract's TYPES, not just its NAMES — and letting an alias quietly paper over that
+  // would hide the very drift `.strict()` exists to surface. So a wrong-typed canonical
+  // field is left exactly alone: not promoted over, and its sibling alias (now genuinely
+  // unused) stays present too, so the schema's own rejection names both problems at once.
+  const missing = (v: unknown): boolean => v === undefined || v === null || (typeof v === "string" && v.trim() === "");
+  // SAME LINE, THIRD FIELD — found by lore's own t2, minutes after `missing()` was written
+  // for `claim`/`evidence` and not carried to the field beside them: `usable()` here treated
+  // `failureScenario: 42` as "absent", so the backfill below silently overwrote a genuinely
+  // present (if wrong-typed) value and then said "lore could not find a distinct failure
+  // scenario" — false, one was given. `missing()` closes it the same way: wrong type is left
+  // alone for the schema to refuse on its own terms, never quietly overwritten.
+  const scenarioMissing = missing(o["failureScenario"]);
+  const title = usable(o["title"]) ? o["title"].trim() : undefined;
+  const detail = usable(o["detail"]) ? o["detail"].trim() : undefined;
+  // ONE REPAIRABLE FIELD IS ENOUGH TO ENTER — found by lore's own t1 against this exact
+  // guard. `hasClaim` alone used to return early, so a reply with `claim` right but
+  // `evidence` missing and `detail` present (the D-128 substitution one field along, half
+  // right instead of all wrong) was never reached: the promotion at `!hasEvidence` below
+  // would have handled it, and never got the chance to. Each field's own guard already
+  // decides whether IT needs repair; the entry guard's only job is "is there anything here
+  // for either of them to do", not "is claim, specifically, already fine".
+  const needsClaim = missing(o["claim"]) && title !== undefined;
+  const needsEvidence = missing(o["evidence"]) && detail !== undefined;
+  if (!needsClaim && !needsEvidence) return input;
+
+  const out: Record<string, unknown> = { ...o };
+  const notes: string[] = [];
+  // THE DELETE LIVES INSIDE THE GUARD IT BELONGS TO, not after both — found by lore's own
+  // t1 against this exact function. `evidence` already valid but `detail` ALSO present
+  // (redundant, or genuinely different) used to fall through `!hasEvidence` and reach an
+  // unconditional `delete out["detail"]` anyway: a stray field silently vanished with no
+  // note, on the one path this file exists to keep loud — the same shape `.strict()` is
+  // supposed to catch as drift and never got the chance to. Deleting only where the value
+  // was actually consumed leaves an UNUSED alias exactly where it was: a stray key for
+  // `.strict()` to name, matching "rejects unknown keys rather than dropping them".
+  if (needsClaim) {
+    out["claim"] = title;
+    notes.push('lore read "title" as "claim" — the reviewer used the wrong field name.');
+    delete out["title"];
+  }
+  if (needsEvidence) {
+    out["evidence"] = detail;
+    notes.push('lore read "detail" as "evidence" — the reviewer used the wrong field name.');
+    delete out["detail"];
+  }
+  // NO THIRD FIELD TO DRAW FROM — `detail` already went to `evidence` above. Reused rather
+  // than left absent: repeating it is a smaller loss than losing the finding, and the note
+  // says the two were never actually distinguished, rather than implying they were.
+  if (scenarioMissing && usable(out["evidence"])) {
+    out["failureScenario"] = out["evidence"];
+    notes.push('lore could not find a distinct failure scenario and reused "evidence" for it.');
+  }
+  if (notes.length === 0) return input;
+  // A NOTE IS NOT PROOF, and must never stand in for the field that holds it — found by
+  // lore's own t2, reviewing this repair: a reply with `title` alone (no `detail`, no
+  // `evidence` under either name) used to fall into this join with nothing real behind it,
+  // so `evidence` became JUST the repair note — "lore read title as claim" — which
+  // satisfies `z.string().min(1)` and reads as proof of nothing. `repairStructure`'s
+  // identical-looking join carried the SAME defect until minutes later in this same
+  // review — the required-field check is the Zod parse that runs after every preprocess
+  // in this chain, this one and that one both, so neither can assume evidence is already
+  // guaranteed by the time it runs. So the note is appended ONLY where real content
+  // already exists to attach it to — never fabricated from nothing — and a finding with
+  // genuinely no evidence anywhere still fails the required-field check exactly as it
+  // would have without any of this, going through the ordinary retry rather than being
+  // admitted on a note.
+  if (usable(out["evidence"])) {
+    out["evidence"] = `${out["evidence"]}\n\n${notes.join("\n")}`;
+  }
+  return out;
+}
+
+/**
  * FOLDED, NEVER REFUSED — the same rule as `severity`, on the field that outlived it.
  *
  * D-115 fixed `severity` and wrote the general rule beside it: *validation at the reviewer
@@ -171,8 +285,17 @@ function repairStructure(input: unknown): unknown {
   // than taken quietly along with the two that are unambiguous.
 
   if (notes.length === 0) return input;
-  const evidence = typeof out["evidence"] === "string" ? out["evidence"].trim() : "";
-  out["evidence"] = evidence ? `${evidence}\n\n${notes.join("\n")}` : notes.join("\n");
+  // A NOTE IS NOT PROOF HERE EITHER — the same fix `repairFieldNames` just needed, found by
+  // lore's own t2 on THIS function seconds later: the SPEC text excusing this join called it
+  // safe because it "only ever runs on a finding whose evidence this schema already
+  // required" — backwards, since the required-field check is the Zod parse AFTER every
+  // preprocessing step, including this one. A reply with a bad `line` or `cwe` and no
+  // `evidence` anywhere reaches this join with nothing real to attach a note to, and used to
+  // get `evidence` fabricated FROM the note alone. Same fix: append only where usable content
+  // already exists; a finding with genuinely no evidence still fails the required-field check.
+  if (typeof out["evidence"] === "string" && out["evidence"].trim() !== "") {
+    out["evidence"] = `${out["evidence"].trim()}\n\n${notes.join("\n")}`;
+  }
   return out;
 }
 
@@ -314,7 +437,9 @@ const FindingObject = z
  * siblings. `.strict()` still applies: the spread preserves unknown keys, so prompt/schema
  * drift is still caught.
  */
-// `claim` folds FIRST, because its fold writes into `evidence` — clamping evidence before
+// FIELD NAMES REPAIR FIRST, because every step after it reads `claim`/`evidence` by name —
+// `foldOverlongClaim` no-ops on a finding still calling it `title`, and would fold nothing.
+// `claim` folds SECOND, because its fold writes into `evidence` — clamping evidence before
 // the carried claim arrives would leave the join to overflow `TEXT_MAX` and lose the
 // finding both folds exist to save. `foldOverlongClaim` keeps its own join inside the cap;
 // this is the backstop for an evidence the MODEL wrote too long.
@@ -322,7 +447,7 @@ const FindingObject = z
 // `repairStructure` APPENDS to it; the clamp must therefore run last, or a repaired
 // finding could overflow `TEXT_MAX` and be lost by the very chain that saved it.
 export const FindingSchema = z.preprocess(
-  (v) => clampOverlongText(repairStructure(foldOverlongClaim(v))),
+  (v) => clampOverlongText(repairStructure(foldOverlongClaim(repairFieldNames(v)))),
   FindingObject,
 );
 

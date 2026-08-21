@@ -143,6 +143,162 @@ describe("parseFinding", () => {
   });
 
   /**
+   * D-128, from a real loss on this repository's own review of D-127: a critical finding
+   * about a real reconciliation bug (services/clearing-settlement/src/logic/run-
+   * reconciliation.ts), reported as `{"title": ..., "detail": ..., "severity": "critical"}`
+   * instead of `claim`/`evidence`, refused by `.strict()`, and recovered only because a
+   * retry — a second, independently-worded generation of the same finding — happened to
+   * land on the right names. This is that exact reply, repaired at the boundary instead of
+   * gambled on a second attempt.
+   */
+  it("reads title/detail as claim/evidence instead of losing a finding to the wrong field names", () => {
+    const garbled = {
+      file: "services/clearing-settlement/src/logic/run-reconciliation.ts",
+      line: 130,
+      symbol: "runReconciliation",
+      severity: "critical",
+      title: "Lookback widening counts pre-window clearing positions without their credits",
+      detail:
+        "`positionFromDate` now fetches positions before `fromDate`, but ledger credits are still filtered " +
+        "at `fromDate` itself, so a pre-window position can be counted with no matching credit ever fetched.",
+    };
+    const got = parseFinding(garbled);
+    expect(got.claim).toBe(garbled.title);
+    expect(got.evidence).toContain(garbled.detail);
+    // Nothing invented a distinct failure scenario, so it reuses evidence rather than
+    // failing the whole finding over the one field with no source to repair it from.
+    expect(got.failureScenario).toContain(garbled.detail);
+    // NOT evidence that severity survived unchanged: "critical" is not one of SEVERITIES
+    // and D-115 maps any unrecognised word to "high" — on a well-formed reply exactly as
+    // readily as on this repaired one (see the synonym table below). What this repair
+    // actually removes is the RETRY, and the total-loss risk a second, independent
+    // generation of the finding carries — not a severity difference, which was never real.
+    expect(got.severity).toBe("high");
+    expect("title" in got).toBe(false);
+    expect("detail" in got).toBe(false);
+  });
+
+  it("leaves a reply that already has claim alone, even beside a stray title", () => {
+    // The narrow half of D-128: an extra field beside otherwise-correct output is a
+    // stronger drift signal than a substitution for a genuinely missing one, and this
+    // repair must not swallow it — `.strict()` still refuses, matching "rejects unknown
+    // keys rather than dropping them" above.
+    expect(() => parseFinding({ ...valid, title: "a stray title" })).toThrow();
+  });
+
+  // THE OTHER HALF OF THE SAME NARROWNESS, missed the first time — found by lore's own t1
+  // reviewing D-128 itself. `claim` missing (title legitimately promoted) but `evidence`
+  // ALREADY present, with a stray `detail` beside it: the promotion loop used to delete
+  // `detail` unconditionally after checking whether `evidence` needed it, so this exact
+  // shape silently dropped the reviewer's `detail` content with no note and no chance for
+  // `.strict()` to name it — the drift detector this repair is supposed to leave standing.
+  it("does not silently drop a stray detail when evidence did not need it", () => {
+    expect(() =>
+      parseFinding({
+        file: valid.file,
+        severity: valid.severity,
+        title: "the claim, misnamed",
+        evidence: valid.evidence,
+        detail: "unrelated content beside an already-correct evidence",
+        failureScenario: valid.failureScenario,
+      }),
+    ).toThrow();
+  });
+
+  it("repairs claim alone when only title is wrong, leaving a correct evidence untouched", () => {
+    const got = parseFinding({ file: valid.file, severity: valid.severity, title: "the claim, misnamed",
+      evidence: valid.evidence, failureScenario: valid.failureScenario });
+    expect(got.claim).toBe("the claim, misnamed");
+    expect(got.evidence).toContain(valid.evidence);
+    expect(got.failureScenario).toBe(valid.failureScenario); // untouched: it was never missing
+  });
+
+  // THE MIRROR GAP, found by lore's own t1 reviewing the fix above: the entry guard
+  // returned early whenever `claim` was already present, so a reply that got `claim`
+  // right but `evidence` wrong — the same substitution, one field along — was never
+  // reached at all, even though the `detail`→`evidence` promotion below could have
+  // handled it. Each field's repair must not depend on the OTHER field having needed one.
+  it("repairs evidence alone when only detail is wrong, leaving a correct claim untouched", () => {
+    const got = parseFinding({ file: valid.file, severity: valid.severity, claim: valid.claim,
+      detail: "the evidence, misnamed", failureScenario: valid.failureScenario });
+    expect(got.claim).toBe(valid.claim); // untouched: it was never missing
+    expect(got.evidence).toContain("the evidence, misnamed");
+    expect("detail" in got).toBe(false);
+  });
+
+  // MISSING IS NOT THE SAME CLAIM AS WRONG-TYPED — asked by lore's own t2, reviewing the
+  // fix above: should `claim: 7` beside a good `title` be silently overwritten? This
+  // answers no, and pins the line the answer depends on: the same distinction `cwe`
+  // already draws ("blank is forgiven; WRONG is still rejected"). A wrong-typed claim is
+  // left exactly alone — not promoted over — so `.strict()` names BOTH problems: the type
+  // error on `claim`, and the now-genuinely-unused `title` beside it.
+  it("does not promote title over a wrong-typed claim, letting the type error stand", () => {
+    expect(() => parseFinding({ ...valid, claim: 7 as never, title: "a real claim" })).toThrow();
+  });
+
+  // THE OTHER HALF OF THE SAME LINE: an EMPTY claim is "nothing was said", the same as
+  // absent, and stays repair-eligible — matching `absent()`'s treatment of blank
+  // elsewhere in this file, not the wrong-type case above.
+  it("still promotes title over a blank (not wrong-typed) claim", () => {
+    const got = parseFinding({ ...valid, claim: "   ", title: "a real claim" });
+    expect(got.claim).toBe("a real claim");
+  });
+
+  // A NOTE IS NOT PROOF — found by lore's own t2, reviewing the repair above. `title`
+  // alone, no `detail` and no `evidence` under either name: before this, the final
+  // note-append step had nothing real to attach its note to and fabricated `evidence`
+  // FROM the note itself ("lore read title as claim"), which satisfies the schema and
+  // reads as proof of nothing. This must still fail exactly as it would have with none of
+  // these repairs — a model that supplied no evidence gets no evidence invented for it.
+  it("still refuses a finding whose evidence is fabricated from nothing but a repair note", () => {
+    expect(() =>
+      parseFinding({
+        file: valid.file,
+        severity: valid.severity,
+        title: "a claim with no evidence anywhere",
+        failureScenario: valid.failureScenario,
+      }),
+    ).toThrow();
+  });
+
+  // THE SAME BUG, FOUND SECONDS LATER IN `repairStructure` — the SPEC text excusing that
+  // join called it safe because it "only runs on a finding whose evidence this schema
+  // already required", which is backwards: the required check is the Zod parse AFTER every
+  // preprocessing step, this one included. A bad `line` with no `evidence` anywhere used to
+  // reach the join with nothing real to attach a note to, fabricating evidence from the
+  // "lore dropped the line" note alone.
+  it("still refuses a finding whose evidence is fabricated from nothing but a line-repair note", () => {
+    expect(() =>
+      parseFinding({
+        file: valid.file,
+        line: 0, // malformed, triggers repairStructure's note
+        severity: valid.severity,
+        claim: valid.claim,
+        failureScenario: valid.failureScenario,
+        // no evidence anywhere
+      } as never),
+    ).toThrow();
+  });
+
+  // THE THIRD FIELD, missed when `missing()` was written for claim/evidence and not
+  // carried to the backfill beside them: a wrong-typed `failureScenario` used to read as
+  // "absent" (via `usable()`) and get silently overwritten by the evidence backfill, with
+  // a note claiming none was found — false, one was given, just wrong-typed. `title`/
+  // `detail` here (not `claim`/`evidence`) are what get the repair PAST the entry guard,
+  // so the backfill guard is the thing actually under test.
+  it("does not let the failureScenario backfill overwrite a wrong-typed one", () => {
+    expect(() =>
+      parseFinding({
+        file: valid.file,
+        severity: valid.severity,
+        title: "a claim",
+        detail: "the evidence",
+        failureScenario: 42 as never,
+      }),
+    ).toThrow();
+  });
+
+  /**
    * THE SAME RULE ON THE FIELDS IT HAD NOT REACHED. D-115 fixed `severity`, D-116 fixed
    * `claim`, and these two kept the identical defect one field along — which is exactly
    * how the first two came to exist. Parameterised over the fields so adding a third text
