@@ -3,6 +3,68 @@
 Newest first. Updated at the end of each task: what changed, what I learned, what
 surprised me.
 
+## 2026-08-24 — commandsFor stops assuming every repo is a JS project (D-129)
+
+**What changed.** `commandsFor` (`src/t0/sandbox.ts`) now returns a `ToolchainOutcome` —
+`{ok, toolchain}` or `{ok: false, why}` — and gates on `package.json` at the worktree root
+first, before any lockfile is even asked about. `detectEcosystems` lands beside it: every
+npm/cargo marker found at the root and one level down, as independent facts, because a
+repo can genuinely be more than one. Foundation for T0 Rust support; no cargo caller yet,
+by design — wiring `cargo check`/`clippy` into the sandboxed phase is next, kept separate
+so this slice stays reviewable on its own (D-25's walking-skeleton precedent).
+
+**How it started.** Provisioning `atuin` (a pure Rust repo, this deployment's first) for a
+new principal's key: its review sat with zero `tier_run` rows and zero logged activity for
+15 minutes, indistinguishable from a hang. It was not one. `commandsFor` found no
+pnpm/yarn/bun lockfile, exactly as expected for a Rust repo, and unconditionally fell
+through to npm — never having asked whether `package.json` existed at all. T0 queued a
+real `npm ci` behind `withInstallLock`'s shared `no-lockfile` cache bucket, which every
+OTHER lockfile-less repo also shares, for an install that had nothing to install and, once
+it finally got its turn, took about two seconds.
+
+**Six findings across five rounds, the same shape as D-128's chain: a fix that survives
+its own author's first read still owes the review a second one.**
+
+1. `detectEcosystems` checked only the worktree root, missing `teammater` — the exact
+   repository its own doc comment named as the reason it returns a list instead of one
+   answer — and my SPEC.md paragraph claimed this was "verified directly against both
+   real repositories" when only the root and subdirectory cases had been checked
+   separately, never together against the repo that actually motivated it. Fixed by
+   walking one level down (root plus immediate subdirectories, skipping dotfiles,
+   `node_modules`, `target`, `dist`, `build`, `vendor`); SPEC corrected to describe what
+   was actually checked.
+2. `commandsFor` and `detectEcosystems` disagreed about `acdc`, a real repository this
+   deployment reviews (its only manifest is `infra/package.json`, no root one): one said
+   "not a JS/TS project" (false), the other correctly found it nested. Fixed by having
+   `commandsFor` consult `detectEcosystems` before its final refusal, so the two cannot
+   state the same fact two different ways.
+3. A stale `package-lock.json` surviving a manifest's deletion (a bad merge, a
+   mid-migration commit) was still trusted as sufficient npm evidence on its own —
+   recreating the exact wasted-install shape D-129 exists to remove.
+4. The final refusal claimed "not a JS/TS project" as a fact about the whole repository
+   when only one level of `readdir` had ever been checked. Findings 3 and 4, same round,
+   fixed together: gate on root `package.json` first, once, before any lockfile is even
+   asked about, and reword the refusal to "as far as this checked" rather than a blanket
+   claim the search was never positioned to support.
+5. SPEC.md contradicted itself: one paragraph said `detectEcosystems` had "no caller
+   yet," a later paragraph — added for finding 2's own fix — said `commandsFor` now calls
+   it. Clarified to "no CARGO caller yet": still true, and a different claim from having
+   gained an NPM-side caller within the same batch.
+6. SPEC.md still described `package-lock.json` as "checked as its own positive signal…
+   not folded into the npm fallback" after finding 3/4's restructuring had folded it in.
+   Rewritten to describe the shape the code actually ended up in.
+
+**What I learned — nothing new, the same lesson D-128 already wrote down, seen from the
+other side.** Every finding here was against work already inside this project's own
+review, including two rounds of findings against SPEC.md prose written to describe an
+earlier round's *own* fix. The discipline that holds is procedural, not something to get
+right by being more careful on the next attempt: submit the smallest diff that answers
+what's open, let the tier re-read it, and treat a finding against your own just-written
+fix exactly like one against inherited code — because from the review's side, that is
+exactly what it is.
+
+**Deployed and verified.** `6b48171` live, `/status` clean, no problems.
+
 ## 2026-08-21 — the "PARTIAL" wording was already right; it was just untested
 
 **Resolved the item this same MEMO flagged an entry above.** `attest.ts` (lines 143-155)
