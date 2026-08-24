@@ -15,7 +15,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { dataDir } from "../core/paths.ts";
 import { runTool, type ToolResult } from "./exec.ts";
@@ -88,7 +88,7 @@ export const DEFAULT_SANDBOX: SandboxConfig = {
  */
 export async function lockfileKey(worktree: string): Promise<string> {
   const cmds = await commandsFor(worktree);
-  const name = cmds?.lockfile;
+  const name = cmds.ok ? cmds.toolchain.lockfile : undefined;
   if (name === undefined) return "no-lockfile";
   const content = await readFile(join(worktree, name)).catch(() => undefined);
   return content === undefined
@@ -184,6 +184,11 @@ const SYNC =
   "{ echo 'sandbox: /src is EMPTY. The host daemon mounts by HOST path, so this means the worktree path does not exist on the host — LORE_HOST_DATA and the container data dir must be the same path.' >&2; exit 1; }";
 
 
+/** Does this worktree have `f` at its root? Shared by every existence check below. */
+async function has(worktree: string, f: string): Promise<boolean> {
+  return (await readFile(join(worktree, f)).catch(() => undefined)) !== undefined;
+}
+
 /**
  * Which package manager this repository actually uses, chosen by its lockfile.
  *
@@ -192,9 +197,6 @@ const SYNC =
  * guard both refuse it — and the failure is not confined to the suite: `tsc` and
  * `eslint` resolve through `node_modules`, so an install that does not happen takes
  * the whole deterministic tier with it.
- *
- * `undefined` means we recognise the lockfile and cannot honour it. That is reported
- * as an unavailable engine, never as a clean run.
  */
 export interface Toolchain {
   readonly name: string;
@@ -215,33 +217,19 @@ export interface Toolchain {
   readonly run: (script: string) => string;
 }
 
-export async function toolchain(worktree: string): Promise<Toolchain | undefined | "npm"> {
-  const has = async (f: string) => (await readFile(join(worktree, f)).catch(() => undefined)) !== undefined;
-
-  // Order matters only where a repo carries two lockfiles, which is itself a mess;
-  // the most specific manager wins so we do not silently pick the wrong one.
-  if (await has("pnpm-lock.yaml")) {
-    return {
-      name: "pnpm",
-      lockfile: "pnpm-lock.yaml",
-      install: "pnpm install --frozen-lockfile || pnpm install",
-      run: (script) => `pnpm run ${script}`,
-    };
-  }
-  if (await has("yarn.lock")) {
-    return {
-      name: "yarn",
-      lockfile: "yarn.lock",
-      install: "yarn install --immutable || yarn install",
-      run: (script) => `yarn run ${script}`,
-    };
-  }
-  // Bun is a different runtime, not just a different installer, and is not in the
-  // sandbox image. Saying so beats installing with npm and reporting whatever that
-  // produces as though it were the project's own suite.
-  if ((await has("bun.lock")) || (await has("bun.lockb"))) return undefined;
-  return "npm";
-}
+/**
+ * `ok: false` means we could not honour this repo as a JS/TS project — and WHY,
+ * so a caller can say something true instead of reusing whichever reason happened
+ * to be checked last (D-129, found live: a pure-Rust repo, atuin, had no
+ * package.json at all, yet `commandsFor` unconditionally fell through to "npm with
+ * no lockfile" and queued a real `npm ci` against a tree with nothing for it to
+ * install — 15 minutes behind an unrelated review sharing the same empty
+ * `no-lockfile` cache bucket, for a repo that was never a JS project). Reported as
+ * an unavailable engine, never as a clean run.
+ */
+export type ToolchainOutcome =
+  | { readonly ok: true; readonly toolchain: Toolchain }
+  | { readonly ok: false; readonly why: string };
 
 const NPM: Toolchain = {
   name: "npm",
@@ -250,10 +238,140 @@ const NPM: Toolchain = {
   run: (script) => `npm run --silent ${script}`,
 };
 
-/** The commands to use, with npm as the default for a repo with no lockfile. */
-export async function commandsFor(worktree: string): Promise<Toolchain | undefined> {
-  const t = await toolchain(worktree);
-  return t === undefined ? undefined : t === "npm" ? NPM : t;
+/**
+ * The commands to use, or why none apply — npm is the default ONLY once
+ * `package.json` confirms this is actually a JS/TS project, not whenever no
+ * lockfile matched. Order matters only where a repo carries two lockfiles, which
+ * is itself a mess; the most specific manager wins so we do not silently pick the
+ * wrong one.
+ */
+export async function commandsFor(worktree: string): Promise<ToolchainOutcome> {
+  // PACKAGE.JSON AT THE ROOT, FIRST, BEFORE ANY LOCKFILE — found by lore's own t2,
+  // reviewing this exact function: a lockfile alone used to be treated as enough
+  // evidence, on the reasoning that no manager writes one without a `package.json`
+  // to install against. True when the lockfile was WRITTEN; not guaranteed to
+  // still be true when it is READ — a branch that deletes its manifest but leaves
+  // a stale `package-lock.json` behind (a bad merge, a mid-migration commit) would
+  // still resolve `ok: true`, and the install this triggers has nothing to
+  // install, recreating exactly the wasted-queueing shape D-129 exists to remove.
+  // Gating on `package.json` FIRST, once, closes it for all four lockfiles at
+  // once rather than as a special case of one; everything below only ever decides
+  // WHICH manager, never WHETHER this is a JS project at all.
+  if (!(await has(worktree, "package.json"))) {
+    // NOT YET "NOT A JS/TS PROJECT" — this function can only drive an install from
+    // the worktree ROOT (the sandbox mounts nothing else), so a missing root
+    // `package.json` is not yet evidence the repo is not JS/TS at all. Found live,
+    // by lore's own t1, on a real repo this deployment reviews: `acdc` keeps its
+    // only manifest at `infra/package.json`, no root one — this function said "not
+    // a JS/TS project" while `detectEcosystems` (a one-level walk, same file)
+    // correctly found it at `infra/`. Reusing that walk here rather than repeating
+    // it by hand keeps the two answers from being able to disagree about the same
+    // question again. Still `ok: false`: knowing a nested manifest exists is not
+    // the same as being able to install from it, which stays the next slice's work.
+    const nested = (await detectEcosystems(worktree)).find((f) => f.ecosystem === "npm");
+    if (nested !== undefined) {
+      return {
+        ok: false,
+        why: `package.json exists at ${nested.dir}/, not the worktree root — installing from a nested ` +
+          "manifest is not supported yet",
+      };
+    }
+    // BOUNDED BY WHAT WAS ACTUALLY CHECKED — found by lore's own t2 beside the
+    // finding above: this function (via `detectEcosystems`) only ever looks at the
+    // root and one level down, so a manifest two levels deep (`apps/web/package.json`)
+    // is genuinely possible and genuinely unseen. Said as a claim about the search,
+    // not a claim about the repository — the wording this replaced ("not a JS/TS
+    // project", full stop) asserted more than one level of `readdir` can support.
+    return {
+      ok: false,
+      why: "no package.json within one level of the worktree root — not a JS/TS project as far as this checked",
+    };
+  }
+
+  // FROM HERE, `package.json` IS CONFIRMED AT THE ROOT. Order matters only where a
+  // repo carries two lockfiles, which is itself a mess; the most specific manager
+  // wins so we do not silently pick the wrong one.
+  if (await has(worktree, "pnpm-lock.yaml")) {
+    return {
+      ok: true,
+      toolchain: {
+        name: "pnpm",
+        lockfile: "pnpm-lock.yaml",
+        install: "pnpm install --frozen-lockfile || pnpm install",
+        run: (script) => `pnpm run ${script}`,
+      },
+    };
+  }
+  if (await has(worktree, "yarn.lock")) {
+    return {
+      ok: true,
+      toolchain: {
+        name: "yarn",
+        lockfile: "yarn.lock",
+        install: "yarn install --immutable || yarn install",
+        run: (script) => `yarn run ${script}`,
+      },
+    };
+  }
+  // Bun is a different runtime, not just a different installer, and is not in the
+  // sandbox image. Saying so beats installing with npm and reporting whatever that
+  // produces as though it were the project's own suite.
+  if ((await has(worktree, "bun.lock")) || (await has(worktree, "bun.lockb"))) {
+    return { ok: false, why: "this repository uses bun, which the sandbox image does not carry" };
+  }
+  // `package-lock.json`, or no lockfile at all — both are npm once `package.json`
+  // is confirmed present, and npm resolves fine from a missing lockfile on its own.
+  return { ok: true, toolchain: NPM };
+}
+
+export type Ecosystem = "npm" | "cargo";
+
+export interface EcosystemFound {
+  readonly ecosystem: Ecosystem;
+  /** Repo-relative directory the marker was found in — `"."` for the worktree root. */
+  readonly dir: string;
+}
+
+/** Noise a one-level walk should not report as a project root in its own right. */
+const SKIP_DIRS = new Set(["node_modules", "target", "dist", "build", "vendor"]);
+
+/**
+ * Every ecosystem T0 finds evidence of in this worktree, and WHERE — not exactly
+ * one, and not only at the root.
+ *
+ * Independent existence checks rather than a single classification, because a repo
+ * can genuinely be more than one at once: teammater's root is plain JS served as
+ * static files with no `package.json` anywhere, while its nested `server/` is a
+ * real Cargo project. Most repos are exactly one; a repo with neither is neither
+ * silently mis-routed nor forced into a default that does not describe it — which
+ * is the bug `commandsFor`'s own npm fallback just stopped making.
+ *
+ * ONE LEVEL DEEP, not arbitrary recursion — found by lore's own t1, reviewing the
+ * first version of this function: root-only missed teammater entirely, the exact
+ * repository the doc comment above names as the reason this returns a list rather
+ * than a single answer. Unlike an npm or cargo WORKSPACE, which always declares its
+ * members from a root manifest (so root-only detection is enough to find the
+ * declaration, even if walking the members themselves is a later concern),
+ * teammater's `server/` is not a workspace member of anything — just an unrelated
+ * crate sharing a repository, with nothing at the root marking it. One level catches
+ * that real, observed shape without turning this into a general-purpose project-file
+ * crawler: deeper nesting and true workspace-aware discovery stay the next slice's
+ * problem, which needs manifest paths for `cargo check --manifest-path=...` anyway
+ * and is better placed to decide how far to look.
+ */
+export async function detectEcosystems(worktree: string): Promise<readonly EcosystemFound[]> {
+  const found: EcosystemFound[] = [];
+  const checkDir = async (dir: string, abs: string): Promise<void> => {
+    if (await has(abs, "package.json")) found.push({ ecosystem: "npm", dir });
+    if (await has(abs, "Cargo.toml")) found.push({ ecosystem: "cargo", dir });
+  };
+  await checkDir(".", worktree);
+  const entries = await readdir(worktree, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name.startsWith(".") || SKIP_DIRS.has(entry.name)) continue;
+    await checkDir(entry.name, join(worktree, entry.name));
+  }
+  return found;
 }
 
 /**

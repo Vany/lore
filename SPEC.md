@@ -507,6 +507,102 @@ snapshot only when no tree is recorded yet AND no round is pending — a state a
 reaching `review_submit` should not be able to reach, since the tool's own precondition
 (`findings exist`) implies a completed round, which always writes this field.
 
+**D-129 — `commandsFor` stops assuming every repository is a JS project, and T0
+gains real project-type detection ahead of Rust support. BUILT 2026-08-24.**
+
+Found live, provisioning `atuin` (a pure Rust project) as this deployment's first
+non-JS repository: `review_start` sat with zero `tier_run` rows and zero logged
+activity for **15 minutes**, indistinguishable from a hang. It was not one.
+`commandsFor` checked for `pnpm-lock.yaml`, `yarn.lock`, `bun.lock*` — found none, as
+expected for a Rust repo — and then unconditionally fell through to `"npm"`, never
+having asked whether `package.json` existed at all. T0's sandboxed phase then queued
+a genuine `npm ci` behind `withInstallLock`'s `no-lockfile` cache bucket, a directory
+every OTHER repository with no recognised JS lockfile ALSO shares — atuin wasn't
+stuck, it was waiting in a line it had no business standing in, for an install that,
+once it finally ran, installed nothing (there was no `package.json` to install
+from) in about two seconds.
+
+**Fixed at the root rather than the symptom — described here as it stands after
+three rounds of the review finding this description had not kept up with the code
+it describes.** `commandsFor` now returns a `ToolchainOutcome` — `{ok:true,
+toolchain}` or `{ok:false, why}` — and gates on `package.json` at the worktree root
+FIRST, before any lockfile is even asked about: everything below that gate (pnpm,
+yarn, bun, then npm as the remaining case — `package-lock.json` included, with no
+dedicated check of its own) only ever decides WHICH manager, never WHETHER this is
+a JS project. A repository with no root `package.json` falls to `detectEcosystems`
+(below) to say WHERE one was found nearby, if anywhere, rather than reusing the
+same reason for every shape of absence — the old hardcoded bun message, reused
+verbatim for every `undefined`, is gone the same way. `why` is always carried from
+the exact branch that produced it, and `runner.ts`'s `sandboxed()` turns it
+straight into an honest `unavailable` for tsc/eslint — never reaching
+`lockfileKey`, `withInstallLock`, or an install attempt at all.
+
+**And the foundation for the reason atuin is here at all.** `detectEcosystems`
+(`src/t0/sandbox.ts`) reports every project marker T0 finds in a worktree — `npm`
+(`package.json`), `cargo` (`Cargo.toml`) — as an independent fact rather than a
+single classification, because a repo can genuinely be more than one: teammater's
+root is plain JS served as static files with no `package.json` anywhere, while its
+nested `server/` is a real Cargo project. Landed with no CARGO caller yet — cargo
+check/clippy sandboxed execution is still the next slice (D-129's own tracking
+task #2), kept separate so that part is reviewable and tested against real
+fixtures before anything acts on it, matching D-25's walking-skeleton precedent.
+(It gained an NPM-side caller within this same batch — see below — which is a
+different thing: `commandsFor` consulting it to describe what it already found is
+not the cargo-execution slice this paragraph is deferring.)
+
+**The first version of that sentence claimed teammater as verification and was
+wrong to — caught by lore's own t1, inside the same round.** `detectEcosystems`
+checked only the worktree root, so `detectEcosystems(teammater) === []`: the exact
+repository named as the reason this returns a list instead of one answer was
+invisible to it. Unlike an npm or cargo WORKSPACE, which always declares its
+members from a root manifest, teammater's `server/` is not a workspace member of
+anything — an unrelated crate sharing a repository, with nothing at the root
+marking it — so root-only detection served every case except its own motivating
+one. Fixed by walking one level down, not arbitrary recursion: `detectEcosystems`
+now checks the root and each immediate subdirectory (skipping dotfiles,
+`node_modules`, `target`, `dist`, `build`, `vendor`), and returns WHERE each marker
+was found (`{ecosystem, dir}`), not just whether one exists — which the next slice
+needs anyway, since `cargo check --manifest-path=...` has to be pointed somewhere.
+`detectEcosystems(teammater)` now correctly answers `[{ecosystem: "cargo", dir:
+"server"}]`, checked directly against the real checkout, not a fixture standing in
+for it. Deeper nesting and true workspace-aware discovery are still out of scope,
+deliberately — the next slice needs manifest paths regardless and is better placed
+to decide how far to look.
+
+**A third finding, in the same round, on a repo neither fixture had imagined:
+`commandsFor` and `detectEcosystems` disagreed about a real repository this
+deployment actually reviews.** `acdc` keeps its only manifest at
+`infra/package.json` — no root one — and `commandsFor` said `{ok: false, why: "no
+package.json — not a JS/TS project"}` while `detectEcosystems`, checked against the
+same tree, correctly reported `[{ecosystem: "npm", dir: "infra"}]`. Two functions
+in the same file, answering overlapping questions, free to disagree — exactly the
+shape this codebase's own recurring finding class names. `commandsFor` still
+cannot DRIVE an install from a nested manifest (the sandbox mounts nothing but the
+worktree root, and wiring that is real scope, correctly left to the next slice),
+but it can stop claiming the repository is not JS/TS at all when it plainly is.
+Fixed by having `commandsFor` ask `detectEcosystems` before giving up, so the two
+cannot state the same fact two different ways: `ok: false` now says exactly what
+was found and where — `"package.json exists at infra/, not the worktree root —
+installing from a nested manifest is not supported yet"` — checked directly
+against `acdc`'s own mirror, not invented from the finding's description of it.
+
+**A fourth and fifth finding, same round: a stale lockfile was trusted as proof of
+a manifest that might no longer exist, and the final refusal still overclaimed.**
+`commandsFor` used to treat any of the four lockfiles as its OWN sufficient
+evidence, on the reasoning that no manager writes one without a `package.json` to
+install against — true when the lockfile was WRITTEN, not guaranteed true when it
+is READ. A branch that deletes its manifest but leaves a stale `package-lock.json`
+behind (a bad merge, a mid-migration commit) resolved `ok: true` regardless, and
+the install this triggered had nothing to install — recreating the exact
+wasted-queueing shape this whole decision exists to remove. Fixed by gating on
+`package.json` at the root FIRST, once, before any lockfile is even asked about;
+every lockfile check below it now only ever decides WHICH manager, never WHETHER
+this is a JS project. Separately: the final "not a JS/TS project" refusal is
+itself bounded by a one-level walk (`detectEcosystems`), so a manifest genuinely
+two levels deep (`apps/web/package.json`) is possible and unseen — the message now
+says "as far as this checked" rather than asserting a fact about the whole
+repository that only one level of `readdir` was ever positioned to support.
+
 **D-128 — a finding that names its fields "title"/"detail" is a naming drift, not a
 malformed reply: repaired at the boundary rather than gambled on a retry. BUILT
 2026-08-20.**

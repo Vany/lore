@@ -149,14 +149,11 @@ async function sandboxed(
   const wanted = engines.filter((e) => e === "tsc" || e === "eslint");
   if (wanted.length === 0) return [];
 
-  const cmds = await commandsFor(worktree);
-  if (cmds === undefined) {
-    return wanted.map((engine) => ({
-      engine,
-      findings: [],
-      unavailable: "this repository uses bun, which the sandbox image does not carry",
-    }));
+  const outcome = await commandsFor(worktree);
+  if (!outcome.ok) {
+    return wanted.map((engine) => ({ engine, findings: [], unavailable: outcome.why }));
   }
+  const cmds = outcome.toolchain;
 
   const scripts = await packageScripts(worktree);
   const cacheDir = join(cfg.cacheRoot, await lockfileKey(worktree));
