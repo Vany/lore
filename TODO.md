@@ -1276,12 +1276,17 @@ grows sideways is the one nobody can review.
 
 - [x] **The streamed conversation (D-107).** Emit-and-stop contract, held diffs landing
       at emission boundaries, mid-run delivery, the done declaration, gc pinning. Built
-      and mutation-tested; driving through its own review gate now. NOT deployed —
-      Vany's explicit scope: implement, fix, review, no deploy.
-- [ ] **Deploy D-107** — Vany's call, after the review verdict.
-- [ ] **Measure the loop against the batch baseline** once deployed: emissions per run,
+      and mutation-tested; driving through its own review gate now.
+- [x] **Deploy D-107.** Stale checkbox, struck 2026-08-24: every deploy since
+      2026-08-14 has shipped whatever was on `main`, and D-107's commits (`628f475`
+      onward) have been ancestors of every one of them, including today's D-129 deploy
+      — there was never a flag holding the behaviour back once it merged. Nobody had
+      come back to strike this line.
+- [ ] **Measure the loop against the batch baseline:** emissions per run,
       time-to-first-finding (the new number that matters), and whether MAX_EMISSIONS=32
-      is ever hit in anger. Baseline: `research/t2-token-cost.md`.
+      is ever hit in anger. Baseline: `research/t2-token-cost.md`. Genuinely still
+      open — checked 2026-08-24, no measurement of this shape exists in `MEMO.md`,
+      `SPEC.md` or `research/`.
 
 ## Later
 
