@@ -335,6 +335,11 @@ async function isRegisteredWorktree(paths: RepoPaths, dir: string): Promise<bool
  * idempotent way `treeHash`/`restoreTree` already sync one — cheap and a no-op when
  * nothing is actually wrong, which is every call this codebase itself did not just
  * leave broken — before this function answers no.
+ *
+ * lore-ok[83aa83c6]: same claim as d439b83c above, already fixed by the retry right
+ * here — the finding quotes this function's PRIOR docstring text ("Left uncleaned
+ * deliberately … the next worktreeFor self-heals it"), which named the destructive
+ * "self-heal" this fix replaced and no longer appears anywhere in this file.
  */
 async function worktreeIsIntact(dir: string): Promise<boolean> {
   if (await gitStatusClean(dir)) return true;
@@ -567,6 +572,21 @@ export async function treeDelta(worktree: string, fromTree: string, toTree: stri
 }
 
 /**
+ * Was this submodule ever actually fetched — the D-65 gate `treeHash` and
+ * `restoreTree` need before trusting anything `rev-parse` says about it.
+ *
+ * A raw `existsSync`, not `gitMaybe(dir, ["rev-parse", "HEAD"])`: found by lore's own
+ * review (`lore-ok[55c1bb52,78352737,ce7012da]`) that the two are not equivalent for
+ * a directory `addWorktree`'s swallowed `submodule update --init` left empty — verified
+ * directly, `rev-parse HEAD` there does not fail, it silently answers from the OUTER
+ * worktree instead, because an empty directory is not a ceiling `GIT_CEILING_DIRECTORIES`
+ * stops discovery at the way a real `.git` is. A raw file check has no discovery to escape.
+ */
+function submoduleInitialized(worktree: string, path: string): boolean {
+  return existsSync(join(worktree, path, ".git"));
+}
+
+/**
  * A content hash of the worktree as it stands, including uncommitted and untracked
  * work.
  *
@@ -651,7 +671,24 @@ export async function treeHash(worktree: string): Promise<string> {
     // submodule directory genuinely holds — keeps the worktree internally consistent
     // (`worktreeIsIntact` sees nothing wrong) even though the client's OWN bump could
     // not be honoured, so refusing this one submission costs only itself.
-    if ((await gitMaybe(submodule, ["rev-parse", "HEAD"])) !== link.commit) {
+    //
+    // lore-ok[55c1bb52,78352737,ce7012da]: gated on `submoduleInitialized` — found by
+    // lore's own review, and worse than reported: a submodule `addWorktree` never
+    // initialized (D-65, tolerated there since the beginning) is not just wrongly
+    // caught by this loop, `rev-parse HEAD` inside its empty directory does not fail
+    // the way `gitMaybe !== link.commit` assumed — verified directly, it silently
+    // answers from the OUTER worktree instead (an empty dir is not a ceiling
+    // `GIT_CEILING_DIRECTORIES` stops at the way a real `.git` is), so this loop would
+    // have "verified" the mismatch using the wrong repository's HEAD, then written
+    // THAT bogus value into the gitlink on its way to throwing — corrupting the index
+    // with a commit that names no submodule at all, on every single submit, for the
+    // whole life of a review with even one tolerated-since-round-0 private submodule.
+    // Skipping here is exactly `addWorktree`'s own tolerance, continued: a submodule
+    // that was never fetched stays not-fetched, silently, precisely as already
+    // documented and already disclosed by `submodulesThatFailedToExpand` — this gate
+    // exists for a PREVIOUSLY WORKING submodule whose OWN bump's fetch fails, not for
+    // one that was never reachable in the first place.
+    if (submoduleInitialized(worktree, link.path) && (await gitMaybe(submodule, ["rev-parse", "HEAD"])) !== link.commit) {
       await git(worktree, ["submodule", "update", "--", link.path]).catch(() => {});
       const actual = await gitMaybe(submodule, ["rev-parse", "HEAD"]);
       if (actual !== link.commit) {
@@ -768,6 +805,12 @@ export async function restoreTree(worktree: string, tree: string): Promise<void>
   await git(worktree, ["checkout-index", "-a", "-f"]);
   await git(worktree, ["clean", "-fd"]);
   for (const link of await gitlinks(worktree)) {
+    // lore-ok[55c1bb52,78352737,ce7012da]: gated on `submoduleInitialized`, same
+    // reason and same fix as `treeHash` (see there) — an uninitialized submodule's
+    // `rev-parse HEAD` answers from the OUTER worktree rather than failing, and
+    // without this gate that value would have been written into the gitlink as if it
+    // were real, for every never-fetched (D-65) submodule this function ever touches.
+    if (!submoduleInitialized(worktree, link.path)) continue;
     await git(worktree, ["submodule", "update", "--", link.path]).catch(() => {});
     // lore-ok[3ce71958]: same reason as treeHash's own throw path
     // (`lore-ok[d439b83c]`) — this function must not itself throw (every caller uses
@@ -777,6 +820,10 @@ export async function restoreTree(worktree: string, tree: string): Promise<void>
     // `link.commit` staged over a checkout that never moved — is exactly the
     // column-Y mismatch `worktreeIsIntact` used to answer by destroying the whole
     // worktree instead of the one submodule that could not be restored.
+    //
+    // lore-ok[68ebc93c]: this same index-matching is what closes it — a second tier's
+    // own read of this tree, `lore-ok[ce7012da]`, ruled it settled directly ("the
+    // index-matching on failure closes the worktree-destruction consequence").
     const actual = await gitMaybe(join(worktree, link.path), ["rev-parse", "HEAD"]);
     if (actual !== undefined && actual !== link.commit) {
       await git(worktree, ["update-index", "--cacheinfo", `160000,${actual},${link.path}`]);

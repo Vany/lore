@@ -536,4 +536,54 @@ describe("worktreeFor recovers from a worktree that never finished, without touc
       "the submodule mismatch must have been repaired to match the index",
     ).toBe(commitA);
   });
+
+  // Found by lore's own review (55c1bb52, 78352737, ce7012da): the ad43ea6d/d6f934ac
+  // reachability check ran over EVERY gitlink in the index, not just ones a submission
+  // touched — so a submodule addWorktree already tolerates being unable to fetch
+  // (D-65, the exact case repo.ts:272's swallowed `submodule update --init` exists
+  // for) made treeHash throw on EVERY future submit, for ANY file, forever: the repo
+  // becomes permanently unreviewable. Worse than reported — reproduced directly that
+  // `rev-parse HEAD` inside the never-initialized directory does not fail, it silently
+  // answers from the OUTER worktree, so the old code would have written that bogus
+  // value into the gitlink on its way to throwing. This builds a genuinely
+  // uninitialized submodule (no `protocol.file.allow`, matching a real inaccessible
+  // remote) and checks an UNRELATED fix still submits cleanly.
+  it("treeHash tolerates a submodule addWorktree could never initialize, for an unrelated fix", async () => {
+    const innerDir = join(root, "inner-never-reachable");
+    mkdirSync(innerDir);
+    g(innerDir, "init", "-q", "-b", "main");
+    g(innerDir, "config", "user.email", "t@example.com");
+    g(innerDir, "config", "user.name", "t");
+    writeFileSync(join(innerDir, "f.txt"), "a\n");
+    g(innerDir, "add", "-A");
+    g(innerDir, "commit", "-qm", "commit A");
+
+    const srcDir = join(root, "src");
+    execFileSync("git", ["-c", "protocol.file.allow=always", "submodule", "add", "-q", innerDir, "inner"], {
+      cwd: srcDir,
+      stdio: "ignore",
+    });
+    g(srcDir, "add", "-A");
+    g(srcDir, "commit", "-qm", "add submodule, never reachable from the worktree side");
+    execFileSync("git", ["push", "-q", paths.bare, "main:main"], { cwd: srcDir, stdio: "ignore" });
+
+    // Deliberately WITHOUT GIT_ALLOW_PROTOCOL=file: addWorktree's own `submodule
+    // update --init` (repo.ts) hits the same restriction a real private, no-credentials
+    // remote would, and swallows it exactly as designed.
+    const w = await worktreeFor(paths, "rev6", "main", "");
+    expect(existsSync(join(w, "inner", ".git")), "fixture must genuinely be uninitialized, or this test proves nothing").toBe(
+      false,
+    );
+
+    writeFileSync(join(w, "unrelated.txt"), "a fix that never touches inner\n");
+    execFileSync("git", ["add", "-A"], { cwd: w, stdio: "ignore" });
+
+    await expect(treeHash(w), "an unrelated fix must not be blocked by a submodule nothing ever fetched").resolves.toEqual(
+      expect.any(String),
+    );
+    expect(
+      await gitlinks(w),
+      "the untouched, never-initialized gitlink must be exactly what it always was, not the outer worktree's own HEAD",
+    ).toStrictEqual([{ commit: g(innerDir, "rev-parse", "HEAD"), path: "inner" }]);
+  });
 });
