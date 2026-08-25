@@ -321,12 +321,30 @@ async function isRegisteredWorktree(paths: RepoPaths, dir: string): Promise<bool
  * origin had no reason to move. Column Y is the one this function exists to ask about
  * — verified directly, deleting most of a 40,000-file checkout while leaving its
  * index untouched (the shape a partial checkout leaves) produced 35,001 lines shaped
- * ` D <path>`, space then D, Y non-blank. Safe against false positives specifically
- * for what this function reuses: T0's sandbox mounts the worktree `:ro`
- * (`src/t0/sandbox.ts`), so nothing lore does not do itself between rounds can leave
- * column Y non-blank.
+ * ` D <path>`, space then D, Y non-blank.
+ *
+ * lore-ok[d439b83c,3ce71958]: found by lore's own review — NOT safe against every
+ * false positive after all. `treeHash`'s swallowed submodule-update failure
+ * (`lore-ok[7f6e08e7]`) and `restoreTree`'s own submodule step, on the SAME kind of
+ * failure, both leave a real, measured column-Y mismatch — `MM inner` / ` M inner` —
+ * for a worktree that is otherwise completely fine. Reporting that as "not intact"
+ * used to send `worktreeFor` straight to `removeWorktree`: not a rebuild of one
+ * submodule but destruction of the ENTIRE review worktree, every previously accepted,
+ * never-committed fix in it gone with it (D-40) — far worse than the narrow
+ * inconsistency it was reacting to. A dirty submodule is retried the SAME safe,
+ * idempotent way `treeHash`/`restoreTree` already sync one — cheap and a no-op when
+ * nothing is actually wrong, which is every call this codebase itself did not just
+ * leave broken — before this function answers no.
  */
 async function worktreeIsIntact(dir: string): Promise<boolean> {
+  if (await gitStatusClean(dir)) return true;
+  for (const link of await gitlinks(dir)) {
+    await git(dir, ["submodule", "update", "--", link.path]).catch(() => {});
+  }
+  return gitStatusClean(dir);
+}
+
+async function gitStatusClean(dir: string): Promise<boolean> {
   const { stdout } = await git(dir, ["status", "--porcelain"]);
   return stdout
     .split("\n")
@@ -619,14 +637,27 @@ export async function treeHash(worktree: string): Promise<string> {
     // needs. Skipped when nothing needs to move (the common, unchanged case, so this
     // never runs `submodule update` needlessly); when it DOES need to move and still
     // cannot afterward, this refuses the submit outright rather than verify a tree
-    // hash for content lore cannot actually show a reviewer. Left uncleaned
-    // deliberately — no `restoreTree` call here — because the resulting state
-    // (index at the new commit, checkout stuck at the old one) is exactly what
-    // `worktreeIsIntact` already treats as not reusable, so the next `worktreeFor`
-    // self-heals it without a second cleanup path to keep in sync with the first.
+    // hash for content lore cannot actually show a reviewer.
+    //
+    // lore-ok[d439b83c]: the index entry is put back to match reality BEFORE
+    // throwing — found by lore's own review, against my own prior design here: this
+    // used to leave the index at the commit that could not be checked out, on the
+    // reasoning that `worktreeIsIntact` would treat the resulting mismatch as "not
+    // reusable" and self-heal on the next `worktreeFor`. Measured wrong — "not
+    // reusable" meant `removeWorktree`, destroying the ENTIRE review worktree and
+    // every OTHER accepted, never-committed fix living in it (D-40), not a narrow
+    // repair of this one submodule. Matching the index to what is ACTUALLY checked
+    // out — not `link.commit`, and not the pre-submit commit either, whichever the
+    // submodule directory genuinely holds — keeps the worktree internally consistent
+    // (`worktreeIsIntact` sees nothing wrong) even though the client's OWN bump could
+    // not be honoured, so refusing this one submission costs only itself.
     if ((await gitMaybe(submodule, ["rev-parse", "HEAD"])) !== link.commit) {
       await git(worktree, ["submodule", "update", "--", link.path]).catch(() => {});
-      if ((await gitMaybe(submodule, ["rev-parse", "HEAD"])) !== link.commit) {
+      const actual = await gitMaybe(submodule, ["rev-parse", "HEAD"]);
+      if (actual !== link.commit) {
+        if (actual !== undefined) {
+          await git(worktree, ["update-index", "--cacheinfo", `160000,${actual},${link.path}`]);
+        }
         throw new DidNotRun(
           `submodule '${link.path}' is pinned at ${link.commit} but lore could not check that commit out ` +
             `to verify it — most likely a private remote lore's container has no credentials for (D-65), or ` +
@@ -738,6 +769,18 @@ export async function restoreTree(worktree: string, tree: string): Promise<void>
   await git(worktree, ["clean", "-fd"]);
   for (const link of await gitlinks(worktree)) {
     await git(worktree, ["submodule", "update", "--", link.path]).catch(() => {});
+    // lore-ok[3ce71958]: same reason as treeHash's own throw path
+    // (`lore-ok[d439b83c]`) — this function must not itself throw (every caller uses
+    // it to recover FROM a failure, not to report a new one), so on the same rare
+    // failure it matches the index to whatever the submodule directory genuinely has
+    // checked out rather than leave the two disagreeing. The alternative — leaving
+    // `link.commit` staged over a checkout that never moved — is exactly the
+    // column-Y mismatch `worktreeIsIntact` used to answer by destroying the whole
+    // worktree instead of the one submodule that could not be restored.
+    const actual = await gitMaybe(join(worktree, link.path), ["rev-parse", "HEAD"]);
+    if (actual !== undefined && actual !== link.commit) {
+      await git(worktree, ["update-index", "--cacheinfo", `160000,${actual},${link.path}`]);
+    }
   }
 }
 

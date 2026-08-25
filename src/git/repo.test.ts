@@ -345,7 +345,19 @@ describe("gitlinks reads the worktree a review is reviewing, not its starting HE
     expect(await gitlinks(outerDir)).toStrictEqual([{ commit: unreachable, path: "inner" }]);
 
     await expect(treeHash(outerDir)).rejects.toThrow(/could not check that commit out/);
+
+    // Found by lore's own review (d439b83c), on top of the throw above: leaving the
+    // index at the unreachable commit made the worktree look broken to
+    // `worktreeIsIntact` for every call after this one, not just this one — which
+    // used to mean the ENTIRE worktree got destroyed and rebuilt, taking every other
+    // accepted fix with it. The index must follow reality back down, same as the
+    // submodule's checkout never left it.
+    expect(
+      await gitlinks(outerDir),
+      "a refused bump must not leave the index pointing at a commit nothing has checked out",
+    ).toStrictEqual([{ commit: commitA, path: "inner" }]);
   });
+
 });
 
 /**
@@ -452,5 +464,76 @@ describe("worktreeFor recovers from a worktree that never finished, without touc
 
     const w = await worktreeFor(paths, "rev4", "main", "");
     expect(existsSync(join(w, "a.txt")), "self-healed to a real worktree instead of waiting forever").toBe(true);
+  });
+
+  // Found by lore's own review (d439b83c, 3ce71958): treeHash's and restoreTree's own
+  // swallowed submodule-update failures can leave a real `git status` mismatch for
+  // ONE submodule — and `worktreeIsIntact`, before this fix, answered that by
+  // sending this function to `removeWorktree`: not a repair of the one submodule but
+  // destruction of the ENTIRE review worktree, every other previously accepted,
+  // never-committed fix in it gone with it (D-40). Builds that exact mismatch on a
+  // worktree that also carries a stand-in for other accumulated work, and checks
+  // `worktreeFor` repairs it in place instead of destroying anything.
+  it("repairs a submodule/index mismatch in place, rather than destroying the whole worktree over it", async () => {
+    const innerDir = join(root, "inner");
+    mkdirSync(innerDir);
+    g(innerDir, "init", "-q", "-b", "main");
+    g(innerDir, "config", "user.email", "t@example.com");
+    g(innerDir, "config", "user.name", "t");
+    writeFileSync(join(innerDir, "f.txt"), "a\n");
+    g(innerDir, "add", "-A");
+    g(innerDir, "commit", "-qm", "commit A");
+    const commitA = g(innerDir, "rev-parse", "HEAD");
+    writeFileSync(join(innerDir, "f.txt"), "a\nb\n");
+    g(innerDir, "add", "-A");
+    g(innerDir, "commit", "-qm", "commit B");
+    const commitB = g(innerDir, "rev-parse", "HEAD");
+
+    const srcDir = join(root, "src");
+    execFileSync("git", ["-c", "protocol.file.allow=always", "submodule", "add", "-q", innerDir, "inner"], {
+      cwd: srcDir,
+      stdio: "ignore",
+    });
+    g(srcDir, "add", "-A");
+    g(srcDir, "commit", "-qm", "add submodule at A");
+    execFileSync("git", ["push", "-q", paths.bare, "main:main"], { cwd: srcDir, stdio: "ignore" });
+
+    // `addWorktree`'s own `submodule update --init` (repo.ts) takes no config
+    // override and swallows its failure — exactly the D-65 shape, and exactly what a
+    // local file:// submodule hits by git's own default security policy. The env var
+    // is what a real deployment never needs (https/ssh remotes are unaffected) and
+    // this fixture does, to get past worktree creation to the state under test.
+    const priorAllowProtocol = process.env.GIT_ALLOW_PROTOCOL;
+    process.env.GIT_ALLOW_PROTOCOL = "file";
+    let w: string;
+    try {
+      w = await worktreeFor(paths, "rev5", "main", "");
+    } finally {
+      if (priorAllowProtocol === undefined) delete process.env.GIT_ALLOW_PROTOCOL;
+      else process.env.GIT_ALLOW_PROTOCOL = priorAllowProtocol;
+    }
+    writeFileSync(join(w, "other-accepted-fix.txt"), "from an earlier round of this same review\n");
+    execFileSync("git", ["add", "-A"], { cwd: w, stdio: "ignore" });
+
+    // The exact shape a swallowed submodule-update failure leaves: index names a
+    // commit the submodule directory does not actually have checked out.
+    execFileSync("git", ["checkout", "-q", commitB], { cwd: join(w, "inner"), stdio: "ignore" });
+    execFileSync("git", ["update-index", "--cacheinfo", `160000,${commitA},inner`], { cwd: w, stdio: "ignore" });
+    expect(
+      execFileSync("git", ["status", "--porcelain"], { cwd: w, encoding: "utf8" }),
+      "fixture must actually be dirty in column Y, or this test proves nothing",
+    ).toMatch(/^.M inner$/m);
+
+    const w2 = await worktreeFor(paths, "rev5", "main", "");
+
+    expect(w2, "the SAME worktree, not a fresh one cut from origin").toBe(w);
+    expect(
+      existsSync(join(w2, "other-accepted-fix.txt")),
+      "an earlier round's accepted fix must survive a submodule repair",
+    ).toBe(true);
+    expect(
+      execFileSync("git", ["rev-parse", "HEAD"], { cwd: join(w2, "inner"), encoding: "utf8" }).trim(),
+      "the submodule mismatch must have been repaired to match the index",
+    ).toBe(commitA);
   });
 });
