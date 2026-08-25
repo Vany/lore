@@ -423,6 +423,17 @@ export async function worktreeFor(
   // path on a peer's still-running add exactly as readily as on a finished one.
   // `worktreeAddInProgress` first means a live peer is waited on, never handed back
   // as done.
+  //
+  // lore-ok[0729e877]: same claim as f1f825ce above, already fixed by the reorder
+  // right here — the finding's own evidence cites this function checking
+  // `isRegisteredWorktree` before `worktreeAddInProgress`, which was true of the tree
+  // BEFORE this fix and is not true of this line. A second tier's independent read of
+  // this same tree, `lore-ok[285165c3]`, measured the ordering below as the correct,
+  // safe fix and said so directly.
+  //
+  // lore-ok[285165c3]: this IS the ordering that finding measured as correct — nothing
+  // further to change here. Recorded for the same reason 0729e877 is: this line does
+  // not move again just because a finding agreed with it.
   if (await worktreeAddInProgress(paths, existing)) return busy();
   if (await worktreeIsReusable(paths, existing)) {
     await ensureBare(paths, gitUrl, false);
@@ -568,12 +579,13 @@ export async function treeDelta(worktree: string, fromTree: string, toTree: stri
  * the finding the bump was meant to answer can never settle. `git submodule update`
  * closes it the same way `addWorktree` already trusts it to: reads the INDEX entry
  * just written (not HEAD, verified directly — this runs with HEAD unmoved) and checks
- * the submodule out to match. Swallowed on failure for the same reason `addWorktree`'s
- * own call is (D-65: most commonly a private remote lore has no credentials for, not
- * this submit's fault) — and largely still visible when it matters: objects missing
- * is the common way this fails, and that is what leaves the NEXT round's
- * `--submodule=diff` unable to expand the pair, which `submodulesThatFailedToExpand`
- * (`diff.ts`) already turns into an explicit warning rather than silence.
+ * the submodule out to match. When it fails, D-65 is still the common reason (most
+ * commonly a private remote lore has no credentials for) — but NOT swallowed the way
+ * `addWorktree`'s own call is: `lore-ok[7f6e08e7]` below found the visibility this
+ * paragraph used to claim for that case does not actually exist (git never emits the
+ * `(diff failed)` marker `submodulesThatFailedToExpand` needs when nothing moved on
+ * either side of the comparison), so a genuine, unrecoverable failure refuses the
+ * submit outright there instead.
  *
  * lore-ok[70cc792a]: the restore loop above answers a BUMP; a client DELETING a
  * submodule needed the opposite direction, found by lore's own review and reproduced
@@ -596,7 +608,34 @@ export async function treeHash(worktree: string): Promise<string> {
   await git(worktree, ["add", "-A"]);
   for (const link of before) {
     await git(worktree, ["update-index", "--cacheinfo", `160000,${link.commit},${link.path}`]);
-    await git(worktree, ["submodule", "update", "--", link.path]).catch(() => {});
+    const submodule = join(worktree, link.path);
+    // lore-ok[7f6e08e7]: the swallowed `submodule update` above (D-65 reasoning
+    // unchanged) is not on its own the visibility this docstring used to claim —
+    // found by lore's own review, correctly, against my own prior comment: when the
+    // update genuinely fails, the worktree side of a gitlink for git's own diffing is
+    // whatever is ACTUALLY checked out, which never moved — so the NEXT round's
+    // `git diff <mergeBase>` sees the submodule's OLD commit on BOTH sides and shows
+    // no pair to fail expanding, not the `(diff failed)` marker `submodulesThatFailedToExpand`
+    // needs. Skipped when nothing needs to move (the common, unchanged case, so this
+    // never runs `submodule update` needlessly); when it DOES need to move and still
+    // cannot afterward, this refuses the submit outright rather than verify a tree
+    // hash for content lore cannot actually show a reviewer. Left uncleaned
+    // deliberately — no `restoreTree` call here — because the resulting state
+    // (index at the new commit, checkout stuck at the old one) is exactly what
+    // `worktreeIsIntact` already treats as not reusable, so the next `worktreeFor`
+    // self-heals it without a second cleanup path to keep in sync with the first.
+    if ((await gitMaybe(submodule, ["rev-parse", "HEAD"])) !== link.commit) {
+      await git(worktree, ["submodule", "update", "--", link.path]).catch(() => {});
+      if ((await gitMaybe(submodule, ["rev-parse", "HEAD"])) !== link.commit) {
+        throw new DidNotRun(
+          `submodule '${link.path}' is pinned at ${link.commit} but lore could not check that commit out ` +
+            `to verify it — most likely a private remote lore's container has no credentials for (D-65), or ` +
+            `the commit was never pushed anywhere lore's mirror can reach. Refusing rather than accepting a ` +
+            `submission lore cannot actually show a reviewer: re-send once the commit is reachable, or push ` +
+            `it somewhere lore's mirror already has credentials for.`,
+        );
+      }
+    }
   }
   const resurrected = (await gitlinks(worktree)).filter((link) => !beforePaths.has(link.path));
   for (const link of resurrected) {
@@ -681,11 +720,25 @@ export async function gitlinks(worktree: string): Promise<readonly Gitlink[]> {
  * the review's accepted diffs as uncommitted changes, and a hard reset would throw away
  * every earlier round with the failed one. `clean -fd` removes files the patch created,
  * which `checkout-index` would leave behind.
+ *
+ * lore-ok[3c9916f4]: `git submodule update` added at the end, for the same reason
+ * `treeHash` (`lore-ok[d6f934ac]`) needed it — found by lore's own review, reproduced
+ * directly: `checkout-index` writes REGULAR files from the index, and a gitlink has
+ * none to write, so a submodule's own checkout is untouched by everything above.
+ * Reproduced concretely: bump `inner` A→B, let `treeHash` check it out to B (the
+ * `d6f934ac` fix, working as intended), then call THIS function with the pre-bump
+ * tree — the index correctly names A again, but `inner`'s real HEAD stayed at B. The
+ * caller telling a client "nothing was applied, the worktree is back where it
+ * started" was false the moment this ran on a rejected submodule bump: the next
+ * round's diff would have shown the "undone" bump as real, unreviewed content.
  */
 export async function restoreTree(worktree: string, tree: string): Promise<void> {
   await git(worktree, ["read-tree", tree]);
   await git(worktree, ["checkout-index", "-a", "-f"]);
   await git(worktree, ["clean", "-fd"]);
+  for (const link of await gitlinks(worktree)) {
+    await git(worktree, ["submodule", "update", "--", link.path]).catch(() => {});
+  }
 }
 
 // lore-ok[40f980fe]: fixed inside — the `execFile` options below now carry `timeout:

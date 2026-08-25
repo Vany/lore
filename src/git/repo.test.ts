@@ -7,7 +7,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync }
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { applyPatch, gitlinks, revParse, treeHash, type RepoPaths, worktreeFor } from "./repo.ts";
+import { applyPatch, gitlinks, restoreTree, revParse, treeHash, type RepoPaths, worktreeFor } from "./repo.ts";
 
 /**
  * A CLIENT'S STRING MUST NOT REACH GIT'S ARGV AS ITSELF.
@@ -288,6 +288,63 @@ describe("gitlinks reads the worktree a review is reviewing, not its starting HE
       encoding: "utf8",
     });
     expect(untracked, "no leftover inner/* debris should show as untracked either").toBe("");
+  });
+
+  // Found by lore's own review (3c9916f4): a rejected submission calls `restoreTree`
+  // to put the worktree back exactly as `review_submit` tells the client — but
+  // `checkout-index` only ever writes REGULAR files from the index, and a gitlink has
+  // none, so a submodule bump that `treeHash` had already checked out (the d6f934ac
+  // fix, working) survives a restore meant to undo it. The next round would have
+  // reviewed a "refused" bump as if it were real, unreviewed content.
+  it("restoreTree also checks the submodule back out, undoing a bump treeHash applied", async () => {
+    execFileSync("git", ["checkout", "-q", commitB], { cwd: join(outerDir, "inner"), stdio: "ignore" });
+    const patch = execFileSync("git", ["diff", "--submodule=short"], { cwd: outerDir, encoding: "utf8" });
+    execFileSync("git", ["checkout", "-q", commitA], { cwd: join(outerDir, "inner"), stdio: "ignore" });
+
+    const before = await treeHash(outerDir);
+    await applyPatch(outerDir, patch);
+    await treeHash(outerDir);
+    expect(
+      execFileSync("git", ["rev-parse", "HEAD"], { cwd: join(outerDir, "inner"), encoding: "utf8" }).trim(),
+      "the bump must really have moved the submodule first, or this test proves nothing",
+    ).toBe(commitB);
+
+    await restoreTree(outerDir, before);
+
+    expect(await gitlinks(outerDir), "the index must be back at the pre-bump commit").toStrictEqual([
+      { commit: commitA, path: "inner" },
+    ]);
+    const innerHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: join(outerDir, "inner"), encoding: "utf8" }).trim();
+    expect(innerHead, "the submodule's own checkout must follow the index back, not stay at the bumped commit").toBe(
+      commitA,
+    );
+  });
+
+  // Found by lore's own review (7f6e08e7), against my own prior comment on this
+  // function: a swallowed `submodule update` failure is NOT visible via
+  // `submodulesThatFailedToExpand` the way that comment claimed — when the checkout
+  // never moves, the next round's diff has nothing to fail expanding, just two
+  // identical commits and a silently stale read. Refusing outright, instead, is what
+  // this test pins: a gitlink pointing at a commit `inner`'s own git genuinely cannot
+  // resolve (never fetched, never will be — the D-65 shape) must throw rather than
+  // let treeHash succeed over content it cannot show a reviewer.
+  it("treeHash refuses to verify a submodule bump it could not actually check out", async () => {
+    const unreachable = "1111111111111111111111111111111111111111";
+    const patch = [
+      "diff --git a/inner b/inner",
+      "index " + commitA.slice(0, 7) + ".." + unreachable.slice(0, 7) + " 160000",
+      "--- a/inner",
+      "+++ b/inner",
+      "@@ -1 +1 @@",
+      "-Subproject commit " + commitA,
+      "+Subproject commit " + unreachable,
+      "",
+    ].join("\n");
+
+    await applyPatch(outerDir, patch);
+    expect(await gitlinks(outerDir)).toStrictEqual([{ commit: unreachable, path: "inner" }]);
+
+    await expect(treeHash(outerDir)).rejects.toThrow(/could not check that commit out/);
   });
 });
 
