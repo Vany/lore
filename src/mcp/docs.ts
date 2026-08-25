@@ -28,6 +28,12 @@
  */
 
 export const TOOL_DOCS = {
+  // lore-ok[170690b5]: correct for this round, and expected — this project's own D-77
+  // working agreement (CLAUDE.md) submits fixes through review_submit for the whole
+  // review and amends the local commit ONCE, with exactly what was submitted, only
+  // after the review reaches a terminal verdict. A submitted fix living ahead of HEAD
+  // mid-review is that workflow working as designed; the amend-before-push step is
+  // what makes them match before anything is pushed.
   start: `
 Begin an independent multi-model review of \`branch\` against \`into\`.
 
@@ -52,12 +58,15 @@ is not bureaucracy — it is the difference between a review that reads what you
 one that reads a prefix of it.
 
 Everything below — polling, review_submit, pull_fresh, findings, lore-ok, attestation —
-works the same way in folder mode, with two differences. \`pull_fresh\` must repeat the
+works the same way in folder mode, with three differences. \`pull_fresh\` must repeat the
 same \`path\` to find the SAME open folder review, exactly as it already has to repeat
-the same \`branch\`. And the signed attestation line names its scope: \`reviewed tree
+the same \`branch\`. The signed attestation line names its scope: \`reviewed tree
 <hash> (scoped to <path>)\` rather than a bare tree hash, because the tree hash alone is
 the whole worktree's — hashed the same way for every review — while a folder review's
-tiers read only \`path\`.
+tiers read only \`path\`. And ONE REVIEW PER BRANCH (below) is really one review per
+\`(branch, path)\`: a folder review of \`src/legacy\` and a diff review of the same branch,
+or folder reviews of two different paths, are different work and run concurrently —
+only a second review naming the SAME branch and the SAME path is refused as a duplicate.
 
 PASS \`pull_request\` IF THIS BRANCH HAS ONE. The URL of the PR, MR or change this branch
 is proposed in — an http(s) link, whatever your forge calls it.
@@ -117,10 +126,11 @@ unreviewed. Either answer its findings with review_submit, or leave it knowing t
 result is \`expired\` — which means NOTHING was concluded about the code, not that it
 was clean.
 
-ONE REVIEW PER BRANCH. Start it once; then answer its findings with review_submit,
-which applies your fixes to the SAME review and advances the ladder. Do NOT start a
-second review of a branch that already has one open — it is refused, and it names the
-one to continue.
+ONE REVIEW PER BRANCH — per \`(branch, path)\` once folder mode is in play, see above.
+Start it once; then answer its findings with review_submit, which applies your fixes to
+the SAME review and advances the ladder. Do NOT start a second review naming the same
+branch and the same path (bare diff mode counts as no path) as one that is already open
+— it is refused, and it names the one to continue.
 
 That matters more than it looks. The ladder only reaches its deeper, independent
 tiers by ADVANCING: findings carry forward, justifications you ratified stay ratified,
@@ -324,9 +334,14 @@ difference is stated on each line rather than left for you to guess:
     larger than that reviewer can take in at once, so the diff was cut to fit and the
     tier was told so. It reviewed what it was given and may have read the rest from the
     branch itself — but it did not read all of it as a diff. **A \`passed\` on a
-    compacted review covers the part that was shown.** The fix is a smaller review:
-    review a narrower commit range, or merge in stages. Say this to your user; they are
-    the only one who can change the scope.
+    compacted review covers the part that was shown.** The fix is a smaller review: in
+    diff mode, a narrower commit range or merging in stages; in a folder review (D-130),
+    review_cancel this one, then review_start again with a narrower \`path\` — there is
+    no commit range to narrow because there is no base, and \`restart: true\` will NOT do
+    it: restart only cancels a review at the exact same \`(branch, path)\` it is called
+    with, so passing a narrower path finds nothing open to cancel and silently leaves
+    this wide review running. Say this to your user; they are the only one who can
+    change the scope.
   * **a tier was not asked at all** — it was out of capacity, and the line names the
     tier and when it comes back. That tier read nothing, so the review is evidence from
     one fewer independent vendor — but it is not broken, and retrying will not help
@@ -580,6 +595,12 @@ not represent it as doing so.
 
 The signature covers a TREE HASH, not a branch name. If the branch has moved since,
 the attestation does not describe what is there now.
+
+FOR A FOLDER REVIEW (D-130), the line adds "scoped to" and the path, rather than a
+bare tree hash. The hash is still the whole worktree's, hashed the same way for
+every review — but the tiers behind a folder review read only \`path\`, so when
+relaying the line to your user, quote the scope with it. Dropping it turns an
+honest partial claim into an unscoped one.
 `.trim(),
 
   inbox: `
@@ -606,9 +627,13 @@ READ \`waiting_on\` FIRST. It is "you" or "lore", and it is the whole triage:
     ROTS. It listed nothing to collect and so used to be omitted here entirely — the
     common way to reach it is to poll, start fixing, and end the session.
   * "lore" — queued, running, or fast_clean with the deep tiers still going. Nothing to
-    do. Do NOT start a second review of the same branch: review_start abandons every
-    justification the open one has already ratified and re-runs the cheap tiers from
-    scratch.
+    do. review_start naming the same branch AND the same scope (a folder review's
+    \`path\`, or bare diff mode) as this open review is REFUSED, not destructive — it
+    errors and names this review rather than touching it. Only \`restart: true\` on that
+    same call discards every ratified justification and reruns the cheap tiers from
+    round 1; reaching for it because nothing seems to be happening is how a review that
+    only needed time gets thrown away instead. A folder review of a different path, or a
+    diff review of the same branch, is different work and unaffected either way.
 
 \`expires_at\` is when the sweep will take it, and \`expired\` never means "found
 nothing". An unanswered review does not die at 48h — it DIMS: \`findings_ready\` becomes
@@ -753,6 +778,9 @@ export const RESOURCE_DOCS: Readonly<Record<string, { title: string; priority: n
    nobody is going to tell you. A session ends and nothing outlives it to finish the
    job, so asking is the only thing that survives you.
 1. review_start(branch, into, ticket, pull_request) → review_id
+   — or, for a folder review (D-130): review_start(branch, mode: "folder", path, ticket)
+   — a full read of \`path\`, no base, no diff. \`into\` and \`mode\`/\`path\` are mutually
+   exclusive.
 2. review_poll(review_id) — ONE call, then leave. Come back when \`check_back_note\`
    says: it is measured from this repository's completed rounds and is never more than
    two minutes.
@@ -761,12 +789,12 @@ export const RESOURCE_DOCS: Readonly<Record<string, { title: string; priority: n
    wait; AT the cap it stays put for several calls and the note says so.
    Each poll returns only what is NEW. A tight retry loop is the most expensive thing
    you can do here: every attempt is a turn that learns nothing.
-4. For each finding: fix it, or justify it with // lore-ok[fp]: <reason>
-5. review_submit(review_id, diff | commit, tree_hash) — any time once findings exist, in ANY
+3. For each finding: fix it, or justify it with // lore-ok[fp]: <reason>
+4. review_submit(review_id, diff | commit, tree_hash) — any time once findings exist, in ANY
    state including fast_clean. If reviewers are mid-read your diff is HELD and handed
    to each of them at its own next emission; you never wait for a state and never
    resubmit.
-6. Return to 2. Repeat until the state is TERMINAL — \`passed\`, \`passed_partial\`,
+5. Return to 2. Repeat until the state is TERMINAL — \`passed\`, \`passed_partial\`,
    \`needs_human\`, \`failed\`, \`expired\` or \`cancelled\`.
 
 Rules that decide whether this works:
@@ -938,12 +966,12 @@ The loop:
    wait; AT the cap it stays put for several calls and the note says so.
    Each poll returns only what is NEW. A tight retry loop is the most expensive thing
    you can do here: every attempt is a turn that learns nothing.
-4. For each finding: fix it, or justify it with // lore-ok[fp]: <reason>
-5. review_submit(review_id, diff | commit, tree_hash) — any time once findings exist, in ANY
+3. For each finding: fix it, or justify it with // lore-ok[fp]: <reason>
+4. review_submit(review_id, diff | commit, tree_hash) — any time once findings exist, in ANY
    state including fast_clean. If reviewers are mid-read your diff is HELD and handed
    to each of them at its own next emission; you never wait for a state and never
    resubmit.
-6. Return to 2. Repeat until the state is TERMINAL — \`passed\`, \`passed_partial\`,
+5. Return to 2. Repeat until the state is TERMINAL — \`passed\`, \`passed_partial\`,
    \`needs_human\`, \`failed\`, \`expired\` or \`cancelled\`.
    Only \`passed\` and \`passed_partial\` are worth attesting, and only \`passed\` is clean.
 
@@ -982,12 +1010,22 @@ is weaker than a pass; the decision to merge on it is theirs, not yours.
  * lives beside the documents rather than beside a test.
  *
  * The prompt is a function of the review it describes, so it is sampled with placeholder
- * arguments — every sentence a guard cares about is in the invariant part.
+ * arguments — once per `mode` (D-130), because the opening line and the `review_start`
+ * call are mode-conditional and NEITHER rendering is a subset of the other: a folder-mode-
+ * only sentence that regressed (a hard-coded interval, a tool the server does not
+ * register) would pass every guard here if only the diff-mode sample were taken, exactly
+ * the silent-narrowing failure this function exists to prevent — found by lore's own
+ * review when it had happened to this function itself, for the mode this comment used to
+ * call fully covered.
  */
 export function everyClientDocument(): readonly (readonly [string, string])[] {
   return [
     ...Object.entries(TOOL_DOCS).map(([k, v]) => [`TOOL_DOCS.${k}`, v] as const),
     ...Object.entries(RESOURCE_DOCS).map(([k, v]) => [`RESOURCE_DOCS[${k}]`, v.text] as const),
-    ["REVIEW_PROMPT_TEXT", REVIEW_PROMPT_TEXT({ branch: "b", into: "i" }, "t")] as const,
+    ["REVIEW_PROMPT_TEXT (diff mode)", REVIEW_PROMPT_TEXT({ branch: "b", into: "i" }, "t")] as const,
+    [
+      "REVIEW_PROMPT_TEXT (folder mode)",
+      REVIEW_PROMPT_TEXT({ branch: "b", mode: "folder", path: "src" }, "t"),
+    ] as const,
   ];
 }

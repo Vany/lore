@@ -3,6 +3,50 @@
 Newest first. Updated at the end of each task: what changed, what I learned, what
 surprised me.
 
+## 2026-08-25 — auditing D-130's own texts, after shipping it
+
+**What changed.** Vany asked to "update and refine all our prompts and texts... it
+is prompts too in fact" — MCP tool docs, resource docs, the review MCP prompt, the
+model-facing reviewer prompts, and the CLI's help text, read in full against each
+other rather than against any single file. Three real gaps, all D-130 aftermath:
+`RESOURCE_DOCS["lore://docs/workflow"]` never mentioned `mode: "folder"` as an
+alternative to `into` (the numbered loop also had a stale gap at step 3 from an
+earlier edit); `TOOL_DOCS.attest` didn't say a folder review's attestation line
+carries a scope, so a client relaying it could silently drop the one detail that
+makes a folder attestation's claim honest; and `compositionBlock` — a sibling of
+`taskFraming`, both gating on how prose-heavy a diff is — never got the
+`scopePath` branch `taskFraming` got inside the D-130 commit itself, so a
+mostly-documentation folder review was told "this is a change... the author saying
+the same thing a different way," which is backwards for a stable folder nobody
+just reworded. `cli.ts` was read and had nothing to fix: folder mode is
+deliberately MCP-only (D-130's own stated scope), and the CLI's `USAGE` text
+correctly says nothing about it.
+
+**Ruled out before touching anything.** `streamFix` looked like a plausible fourth
+gap — same "does this know about scopePath" question as `compositionBlock` — but
+tracing its actual call sites showed it consumes `treeDelta`/raw fix-chain text,
+never `renderDiff` output, so there was nothing there to branch on. Worth stating
+plainly: not everything that pattern-matches to "another instance of the D-130
+gap" is one, and confirming that by reading call sites cost less than the finding
+would have cost to unwind later.
+
+**Wrote a test whose comment said something false about its own history.** First
+draft of the `compositionBlock` test comment claimed the finding was "found in the
+same pass that found `taskFraming`'s version of this" — implying the two were
+discovered together. `git log -S"WHAT THIS PATH IS FOR"` showed `taskFraming`'s
+branch shipped inside the D-130 commit (`f2185a3`) itself; only `compositionBlock`
+was missed, and only THIS pass found it. Caught by checking the claim against git
+history before it went in the commit that would have carried it — the kind of
+easy-to-write, easy-to-not-verify sentence this project's own comment-density rule
+(`PROG.md`) exists to make expensive to get wrong.
+
+**Deliberately did not touch.** `BAR`, `position()`, `typeGuidance`,
+`OUTPUT_CONTRACT`, `STREAM_CONTRACT` — D-79 documents these as sensitive to
+wording changes in ways that aren't visible from reading them cold, and nothing in
+this pass surfaced a concrete defect in any of them. "Refine all our prompts"
+read as license to rewrite freely was the wrong reading; scoped to what a
+verified gap actually required.
+
 ## 2026-08-25 — folder mode: a review with no base (D-130)
 
 **What changed.** `review_start` gained `mode: "folder"` + `path` as an alternative

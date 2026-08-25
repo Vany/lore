@@ -327,10 +327,33 @@ export function proseShare(diff: string): { readonly added: number; readonly pro
   return { added, prose };
 }
 
-/** Told to the model only when the diff is overwhelmingly prose, so it stays rare enough to read. */
-function compositionBlock(diff: string): string {
+/**
+ * Told to the model only when the diff is overwhelmingly prose, so it stays rare
+ * enough to read.
+ *
+ * Branches on `scopePath` for the same reason `taskFraming` does (D-130): a folder
+ * review's "diff" is every line in the path shown as added, not an incremental
+ * change, so "this is a CHANGE about prose... the author saying the same thing a
+ * different way" would describe a stable docs folder as if someone had just
+ * reworded it. `taskFraming` got this branch inside the D-130 commit itself; this
+ * sibling function has the identical shape of prose-framing text but was not
+ * touched then — found later, auditing every client-facing text for D-130 gaps.
+ */
+function compositionBlock(diff: string, scopePath: string | undefined): string {
   const { added, prose } = proseShare(diff);
   if (added < 20 || prose * 4 < added * 3) return "";
+  if (scopePath !== undefined) {
+    return [
+      "",
+      "WHAT THIS PATH IS MADE OF",
+      `Of ${String(added)} lines, ${String(prose)} are comments or documentation — mostly prose, not code.`,
+      "",
+      "A documentation finding still counts, and drift is a real defect. But it must name a READER and what",
+      "they would DO wrongly — a client that would call an API that does not behave that way, a maintainer who",
+      "would undo a guard. 'This sentence is inconsistent with that one' is the finding this shape of read",
+      "generates endlessly, and answering it writes more prose for the next round to fault.",
+    ].join("\n");
+  }
   return [
     "",
     "WHAT THIS CHANGE IS MADE OF",
@@ -525,7 +548,7 @@ export function reviewPrompt(i: PromptInput): string {
     policyBlock(i.policyCount ?? 0),
     i.conflicts ?? "",
     settledBlock(i.settled),
-    compositionBlock(i.diff),
+    compositionBlock(i.diff, i.scopePath),
     "",
     "DETERMINISTIC RESULTS",
     i.t0,

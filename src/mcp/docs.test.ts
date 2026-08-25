@@ -98,6 +98,31 @@ describe("the loop starts by asking what is already waiting", () => {
     expect(inbox).toBeGreaterThan(-1);
     expect(inbox).toBeLessThan(start);
   });
+
+  // Both of these render the same six-step loop as a numbered list; a step cut during
+  // an edit leaves a gap (0, 1, 2, 4, 5, 6 — no 3) that reads as a missing step rather
+  // than a renumbering nobody did. Checked mechanically so a future edit to one number
+  // cannot silently reopen it.
+  it.each(loops)("%s numbers its loop 0 through 5, with no gap", (_name, text) => {
+    const steps = [...text.matchAll(/^(\d+)\. /gm)].map((m) => Number(m[1]));
+    expect(steps).toStrictEqual([0, 1, 2, 3, 4, 5]);
+  });
+
+  // D-130: folder mode is the alternative to a diff, and the static reference doc is
+  // the one place an agent following "the documented way" would look for it before it
+  // has chosen a mode — found missing here once already, across the change that
+  // introduced folder mode. REVIEW_PROMPT_TEXT is deliberately NOT in this check: it
+  // renders ONE already-chosen mode's call (see the standalone tests below), not both
+  // as alternatives, so a diff-mode sample legitimately never mentions "folder".
+  it("RESOURCE_DOCS[lore://docs/workflow] mentions folder mode as an alternative to into", () => {
+    expect(RESOURCE_DOCS["lore://docs/workflow"]?.text ?? "").toMatch(/mode: "folder"/);
+  });
+
+  it("REVIEW_PROMPT_TEXT renders the folder-mode call when mode is folder", () => {
+    const text = REVIEW_PROMPT_TEXT({ branch: "b", mode: "folder", path: "src" }, "t");
+    expect(text).toMatch(/mode: "folder"/);
+    expect(text).toContain('path: "src"');
+  });
 });
 
 describe("the docs name tools that exist", () => {
@@ -212,6 +237,7 @@ describe("every behaviour a client must know about reaches the texts", () => {
     ["query", "empty means not bootstrapped yet (D-35)", "count: 0"],
     ["submit", "choose on truth, not on which answer is cheaper (D-73)", "CHOOSE ON WHETHER THE FINDING IS TRUE"],
     ["submit", "a marker at the site is safe now (D-73)", "safe to write at the site"],
+    ["attest", "a folder review's line names its scope (D-130)", "scoped to"],
   ])("%s tells the client: %s", (tool, _why, needle) => {
     expect(TOOL_DOCS[tool as keyof typeof TOOL_DOCS]).toContain(needle);
   });

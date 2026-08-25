@@ -139,6 +139,26 @@ describe("the bar for reporting anything", () => {
     expect(flat(promptAt(0, 3, CODE_ARCH, { diff: codeDiff }))).not.toMatch(/WHAT THIS CHANGE IS MADE OF/);
   });
 
+  // compositionBlock had the same gap taskFraming was already fixed for inside the
+  // D-130 commit (D-130): "this is a CHANGE about prose... the author saying the same
+  // thing a different way" would describe a stable docs folder, read in full, as if
+  // someone had just reworded it.
+  it("does not call a mostly-prose folder read a change someone reworded", () => {
+    const proseDiff = [
+      "+++ b/spec/thing.md",
+      ...Array.from({ length: 40 }, (_, i) => `+a documentation line ${String(i)}`),
+      "+++ b/src/a.ts",
+      "+const x = 1;",
+      "+const y = 2;",
+    ].join("\n");
+    const p = flat(promptAt(0, 3, CODE_ARCH, { diff: proseDiff, scopePath: "spec" }));
+    expect(p).toMatch(/WHAT THIS PATH IS MADE OF/);
+    expect(p).not.toMatch(/WHAT THIS CHANGE IS MADE OF/);
+    expect(p).not.toMatch(/this is a change about/i);
+    expect(p).not.toMatch(/the author saying the same thing a different way/);
+    expect(p).toMatch(/name a READER and what they would DO wrongly/);
+  });
+
   it("holds prose to the same bar rather than excluding it", () => {
     const p = promptAt(0);
     expect(flat(p)).toMatch(/prose or spec finding clears the same bar/i);
