@@ -3,7 +3,95 @@
 Newest first. Updated at the end of each task: what changed, what I learned, what
 surprised me.
 
-## 2026-08-25 — the first real folder review, and it earned its keep immediately
+## 2026-08-25 — src/git reviews itself: a submodule chain of eight, and a tool that couldn't submit
+
+**What changed.** Vany: "review src/git pls" — lore's git boundary reviewing itself,
+folder mode, `rev_AlPC4vTQyt8mn3qOfPvDGoFz`. Twelve rounds, 38 findings, `passed_partial`
+(28 fixed, 9 justified — same one-short-of-38 gap the src/core entry below already
+explains: the ladder's own expiry re-opening a settled finding mid-review, not a
+counting bug). The commits carry the fixes (`7b0a49c` through `290a8c0`); this is the
+two things the numbers don't say — a chain of submodule bugs that kept opening a layer
+deeper every time I thought I'd closed it, and a tool that stopped letting me submit at all.
+
+**The submodule chain, in the order it was actually found, because the order is the
+lesson.** `applyPatch` lacked `--index`, so a gitlink hunk had no working-tree bytes to
+apply to and silently matched nothing (fixed, then reviewed clean). Then: `treeHash`'s
+own `git add -A` reverted the bump `--index` had just staged, because `add -A` reads a
+submodule's WORKING DIRECTORY, not the index — fixed with a snapshot-and-restore. Then:
+restoring the INDEX entry doesn't move the submodule's own checkout, so the bump was
+invisible to the *next* round's diff even though the submit verified — fixed by adding
+`git submodule update` to the restore loop. Then: the same restore loop only handles a
+BUMP; a DELETED submodule's leftover `.git` gets read by `add -A` as an embedded
+repository and resurrected — fixed the other direction, remove what `add -A` invented
+that the pre-loop snapshot never had. Then: `restoreTree` (the rejected-submission
+recovery path) has the identical blindness — `checkout-index` never touches a gitlink —
+so a refused bump stayed live in the worktree while the client was told nothing was
+applied. Then, worst: `worktreeIsIntact` (a fix from the SAME review, for a DIFFERENT
+bug — see below) treats any of these mismatches as "not reusable" and sends
+`worktreeFor` straight to `removeWorktree` — not a rebuild of one submodule but silent
+destruction of the ENTIRE review worktree, every previously accepted fix in it gone
+with it, since a submit is applied and never committed (D-40). Fixed two ways at once:
+`worktreeIsIntact` retries the same safe resync before giving up, and both `treeHash`
+and `restoreTree` now put the index back to whatever's ACTUALLY checked out when they
+can't move it, so the destructive path is rarely even reached. Then, the sharpest one:
+that fix's own reachability check ran over the WHOLE index, not just what a submission
+touched — so a repo with even one submodule `addWorktree` already tolerates being
+unable to fetch (D-65, a swallowed, EXPECTED failure since this project's early
+history) would fail every future submit, for any file, forever. And the mechanism was
+worse than "throws too often": `rev-parse HEAD` inside a never-initialized submodule
+directory doesn't fail, it silently answers from the OUTER repository — verified
+directly — because an empty directory isn't a ceiling `GIT_CEILING_DIRECTORIES` stops
+discovery at the way a real `.git` is. The fix that "verified" a bump by checking
+`rev-parse` would have staged the wrong REPOSITORY'S commit into a gitlink on its way
+to throwing. Closed with a raw `existsSync` gate (`submoduleInitialized`) — no
+discovery to escape — before either function trusts a `rev-parse` answer about
+anything.
+
+**Every layer was found by lore's own review, most of them about a fix from the
+immediately preceding round.** Nothing here was hypothetical-adversarial the way last
+week's `hunkStillPresent` finding was (see below) — each one was reproduced directly,
+against real git, before I fixed it and before I believed the finding. The pattern
+worth naming again: a fix to a MECHANISM (here, "what does a gitlink's index entry vs.
+its worktree checkout mean") needed checking everywhere that mechanism is touched, not
+just the line the finding named — `treeHash` and `restoreTree` are siblings, and I
+fixed one, submitted, and got the other back as a new finding twice in a row before
+doing both together.
+
+**A second, unrelated chain, found in the same review: `worktreeFor` trusted
+registration as proof of "finished."** `git worktree add` registers itself (admin dir,
+`git worktree list` entry) from its very first written file, not at completion —
+measured directly on a 40,000-file checkout, registered at 48 files in. The fast path
+checked registration before checking `worktreeAddInProgress` (the lock), so a live
+peer's still-running checkout — or, the review argued at length before conceding this
+part, possibly a killed one — could be handed back as done. Reordered: the lock first,
+always. Whether a SIGTERM-killed `git worktree add` can also leave a REGISTERED-but-dead
+directory took two rounds and two tiers to settle — my own six reproductions with this
+codebase's exact kill mechanism (`execFile`'s timeout, SIGTERM) never left one
+registered; a tier's own reproduction, on a different fixture, said it could. Landed on
+defense-in-depth rather than resolving the disagreement: `worktreeIsIntact` (see above)
+catches whichever version of reality is true, because it checks the RESULT, not the
+mechanism.
+
+**Surprised me: `review_submit`'s diff path stopped working, and I didn't find out
+from an error message that said so.** Four rounds of real fixes into this review, every
+`review_submit(diff:...)` attempt started failing with "does not apply to the tree
+under review" — a genuine tool bug, TOOL_DOCS.submit's own documented and *measured*
+fragility ("many harnesses strip trailing whitespace from a tool argument"), tripped at
+a scale I hadn't hit before (a 430-line diff, heavy in the prose style this whole
+codebase writes comments in). Two attempts gave two DIFFERENT failing hunks for
+byte-identical resubmissions — which is what ruled out a stale base and pointed at
+transport rather than content. Verified by inspecting the review's actual worktree
+directly on the host (`lore/data/repos/<id>/wt/<review>`, a real bind mount, no
+container needed): the tree hash matched exactly, and the SAME diff applied cleanly
+with `git apply --check --index` run BY HAND in that exact worktree. The tool's own
+docs already prescribe the fix — push, then `review_start(mode: "folder", path,
+pull_fresh: true)` — and it worked every time, six commits straight, carrying every
+round's findings and justifications forward with zero loss. Worth remembering
+concretely, not just "diffs are risky": the failure mode is silent about WHICH
+mechanism failed (a client cannot tell "your diff is wrong" from "the transport ate
+it"), so two failed attempts with different symptoms — not one — is the actual signal
+to stop retrying and switch to pushing, and this repo's own review-ladder docs already
+say so before a client has to discover it the hard way.
 
 **What changed.** Vany: "okay, review our src/core pls" — the first FOLDER-mode
 review anyone has actually asked for a real answer from, not a smoke test. Eight
