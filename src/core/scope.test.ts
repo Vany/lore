@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { hashHunk, isStale, makeScope } from "./scope.ts";
+import { hashHunk, hunkAround, hunkStillPresent, isStale, makeScope } from "./scope.ts";
 
 describe("hashHunk", () => {
   it("ignores reformatting", () => {
@@ -90,5 +90,68 @@ describe("a justification does not invalidate itself", () => {
     const recorded = makeScope("blob1", withMarker);
     const edited = CODE.replace("toBe(204)", "toBe(200)");
     expect(isStale(recorded, makeScope("blob2", edited))).toBe(true);
+  });
+});
+
+// Found by lore's own review of src/core (D-130 folder mode): hunkAround used to
+// CLIP its window at a file's start or end (as few as radius + 1 lines) instead of
+// keeping it full size, while hunkStillPresent's slide only ever tries full
+// 2*radius+1-line windows once the file is longer than that — so a clipped window's
+// hash could never match anything the search tries, and a verdict on a finding near
+// either end of any file over that length read as stale on every later round, even
+// unchanged. Same shape as the 2026-08-06 livelock this file's docstring already
+// describes, triggered by position instead of by lore-ok stripping.
+describe("hunkAround and hunkStillPresent round-trip at a file's boundaries", () => {
+  const longSource = Array.from({ length: 100 }, (_, i) => `line ${i + 1}`).join("\n");
+
+  it.each([
+    ["the first line", 1],
+    ["a few lines from the start", 5],
+    ["a few lines from the end", 95],
+    ["the last line", 100],
+    ["comfortably in the middle", 50],
+  ])("a finding on %s survives on the unchanged file", (_name, line) => {
+    const hunk = hashHunk(hunkAround(longSource, line));
+    expect(hunkStillPresent(longSource, hunk)).toBe(true);
+  });
+
+  it("still expires a boundary finding when the code around it actually changed", () => {
+    const hunk = hashHunk(hunkAround(longSource, 3));
+    const edited = longSource.replace("line 3", "line 3 (changed)");
+    expect(hunkStillPresent(edited, hunk)).toBe(false);
+  });
+
+  it("a boundary finding survives an unrelated edit far away in the file", () => {
+    const hunk = hashHunk(hunkAround(longSource, 3));
+    const editedElsewhere = longSource.replace("line 50", "line 50 (changed)");
+    expect(hunkStillPresent(editedElsewhere, hunk)).toBe(true);
+  });
+
+  it("a short file (at or under the window size) round-trips as a whole", () => {
+    const shortSource = Array.from({ length: 13 }, (_, i) => `s${i + 1}`).join("\n");
+    const hunk = hashHunk(hunkAround(shortSource, 7));
+    expect(hunkStillPresent(shortSource, hunk)).toBe(true);
+    // A real edit to the ORIGINAL content still expires it.
+    expect(hunkStillPresent(shortSource.replace("s7", "s7 (changed)"), hunk)).toBe(false);
+  });
+
+  // Found by lore's own review of src/core (D-130 folder mode), sibling of the boundary-
+  // clipping bug above: hunkAround captures the WHOLE file when it has <= window lines,
+  // so the recorded hash represents FEWER than `window` lines. If that same file later
+  // GROWS past `window`, the old search only ever tried full-`window` slices and could
+  // never reproduce a shorter recorded hash — a verdict on a short, untouched file read as
+  // stale the moment unrelated lines were added anywhere. hunkStillPresent now tries every
+  // length from the full window down to one line, so a shorter original capture can still
+  // be found as a contiguous, unchanged block wherever it ended up.
+  it("a verdict from a short file survives growth past the window size, in either direction", () => {
+    const original = Array.from({ length: 13 }, (_, i) => `s${i + 1}`).join("\n");
+    const hunk = hashHunk(hunkAround(original, 7));
+    const grownAfter = `${original}\n${Array.from({ length: 20 }, (_, i) => `new ${i + 1}`).join("\n")}`;
+    expect(hunkStillPresent(grownAfter, hunk)).toBe(true);
+    const grownBefore = `${Array.from({ length: 20 }, (_, i) => `new ${i + 1}`).join("\n")}\n${original}`;
+    expect(hunkStillPresent(grownBefore, hunk)).toBe(true);
+    // The original content itself still expires the verdict once it actually changes.
+    const grownAndEdited = grownAfter.replace("s7", "s7 (changed)");
+    expect(hunkStillPresent(grownAndEdited, hunk)).toBe(false);
   });
 });

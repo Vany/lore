@@ -163,7 +163,14 @@ function repairFieldNames(input: unknown): unknown {
   // would have without any of this, going through the ordinary retry rather than being
   // admitted on a note.
   if (usable(out["evidence"])) {
-    out["evidence"] = `${out["evidence"]}\n\n${notes.join("\n")}`;
+    // NOTE FIRST, EVIDENCE SECOND — found by lore's own review, sibling of the identical
+    // fix `repairStructure` just needed and asserted (`lore-ok[cf3dff66]`) as though this
+    // was the only place it applied: this function runs FIRST in the chain
+    // (`clampOverlongText(repairStructure(foldOverlongClaim(repairFieldNames(v))))`), so a
+    // note appended AFTER a long `detail`/`evidence` here is just as exposed to
+    // clampOverlongText's later tail-cut, which keeps the first TEXT_MAX-1 characters and
+    // discards the rest.
+    out["evidence"] = `${notes.join("\n")}\n\n${String(out["evidence"]).trim()}`;
   }
   return out;
 }
@@ -251,6 +258,9 @@ function repairStructure(input: unknown): unknown {
   const o = input as Record<string, unknown>;
   const notes: string[] = [];
   const out: Record<string, unknown> = { ...o };
+  // Tracks every write to `out`, not just the ones that also push a note — a silent
+  // whitespace trim changes `out` without having anything worth disclosing.
+  let changed = false;
 
   // A line that is not a usable 1-indexed integer. `absent` already reads null/blank as
   // "no line"; this is the case where the model MEANT a line and named an impossible one.
@@ -259,6 +269,7 @@ function repairStructure(input: unknown): unknown {
     const bad = typeof line !== "number" || !Number.isInteger(line) || line <= 0;
     if (bad) {
       delete out["line"];
+      changed = true;
       notes.push(
         `lore dropped the line the reviewer gave (${JSON.stringify(line)}), which cannot be a 1-indexed ` +
           "line number; this is a file-level finding instead.",
@@ -267,13 +278,32 @@ function repairStructure(input: unknown): unknown {
   }
 
   const cwe = o["cwe"];
-  if (typeof cwe === "string" && cwe.trim() !== "" && !/^CWE-\d+$/.test(cwe.trim())) {
-    delete out["cwe"];
-    notes.push(
-      `lore dropped the CWE the reviewer gave (${JSON.stringify(cwe)}), which is not a CWE id. The ` +
-        "reviewer and this schema disagree about that vocabulary — worth looking at, and not worth " +
-        "losing this finding over.",
-    );
+  if (typeof cwe === "string" && cwe.trim() !== "") {
+    const trimmed = cwe.trim();
+    if (/^CWE-\d+$/.test(trimmed)) {
+      // WRITE THE TRIM BACK — found by lore's own review. This used to test the trimmed
+      // value but leave the padded original in `out`, so "CWE-362 " passed this check
+      // (valid once trimmed) and then failed the schema's own untrimmed regex downstream,
+      // losing the WHOLE finding — worse than a genuinely malformed cwe like "CWE-abc",
+      // which this branch already repairs. No note: padding is not a vocabulary
+      // disagreement worth surfacing, the same reasoning hashHunk applies to whitespace.
+      // MUST also flip `changed`, not just write `out` — found seconds later, same
+      // review: the guard below used to key off `notes.length`, so a silent trim with
+      // nothing to disclose changed `out` and then had that change thrown away by
+      // `return input`.
+      if (trimmed !== cwe) {
+        out["cwe"] = trimmed;
+        changed = true;
+      }
+    } else {
+      delete out["cwe"];
+      changed = true;
+      notes.push(
+        `lore dropped the CWE the reviewer gave (${JSON.stringify(cwe)}), which is not a CWE id. The ` +
+          "reviewer and this schema disagree about that vocabulary — worth looking at, and not worth " +
+          "losing this finding over.",
+      );
+    }
   }
 
   // `.strict()` IS DELIBERATELY LEFT ALONE, and it is the one that still costs a finding.
@@ -284,7 +314,7 @@ function repairStructure(input: unknown): unknown {
   // work (drop the keys, say so here), and it is written down as open in SPEC D-116 rather
   // than taken quietly along with the two that are unambiguous.
 
-  if (notes.length === 0) return input;
+  if (!changed) return input;
   // A NOTE IS NOT PROOF HERE EITHER — the same fix `repairFieldNames` just needed, found by
   // lore's own t2 on THIS function seconds later: the SPEC text excusing this join called it
   // safe because it "only ever runs on a finding whose evidence this schema already
@@ -293,8 +323,15 @@ function repairStructure(input: unknown): unknown {
   // `evidence` anywhere reaches this join with nothing real to attach a note to, and used to
   // get `evidence` fabricated FROM the note alone. Same fix: append only where usable content
   // already exists; a finding with genuinely no evidence still fails the required-field check.
-  if (typeof out["evidence"] === "string" && out["evidence"].trim() !== "") {
-    out["evidence"] = `${out["evidence"].trim()}\n\n${notes.join("\n")}`;
+  if (notes.length > 0 && typeof out["evidence"] === "string" && out["evidence"].trim() !== "") {
+    // NOTE FIRST, EVIDENCE SECOND — found by lore's own review: this used to append the
+    // note AFTER evidence, so on a reply whose evidence already sat near TEXT_MAX,
+    // clampOverlongText (which runs after this and cuts the TAIL, keeping the first
+    // TEXT_MAX-1 characters) could slice the note off entirely — silently defeating the
+    // "marked, never silent" rule this file states twice. Same reasoning
+    // `foldOverlongClaim` already applies to its own carried claim: whatever a later
+    // tail-clamp must not lose goes first, and the sacrificial content goes last.
+    out["evidence"] = `${notes.join("\n")}\n\n${out["evidence"].trim()}`;
   }
   return out;
 }
@@ -368,6 +405,10 @@ const FindingObject = z
      * point one way — and `severityRank` already ranks an unknown value FIRST for the same
      * reason: burying it is how it goes unread.
      */
+    // lore-ok[d9908e4b]: fixed in repairStructure's cwe branch, not here — a trimmed-valid
+    // cwe now writes the trimmed value back to `out` AND flips a `changed` flag the
+    // function's own early-return guard now checks, so it survives to the schema's
+    // untrimmed regex instead of being silently discarded by `return input`.
     severity: z.preprocess((v) => {
       if (typeof v !== "string") return v;
       const word = v.trim().toLowerCase();
@@ -425,7 +466,15 @@ const FindingObject = z
   // notice the findings had quietly got worse. The reviewer gets one retry
   // (spec/review-ladder.md §3) and then the review fails loudly.
   .strict()
-  .refine((f) => !f.file.startsWith("/") && !f.file.includes(".."), {
+  // A SEGMENT, not a substring — found by lore's own review. `.includes("..")` refused any
+  // path containing two consecutive dots anywhere, including a legal filename like
+  // `docs/api..deprecated.md` (verified: git tracks it without complaint). Only ".." as a
+  // whole path SEGMENT — "../x", "a/../b", a trailing "..", or a bare ".." — can escape the
+  // repo; splitting on "/" and checking each segment is what the traversal risk actually
+  // is, and it is the one field no repair step in this chain covers, so an over-broad guard
+  // here discards the whole finding rather than degrading it (the exact trade D-115/D-116
+  // reversed twice for every other field).
+  .refine((f) => !f.file.startsWith("/") && !f.file.split("/").includes(".."), {
     message: "file must be repo-relative and must not escape the repo",
     path: ["file"],
   });
@@ -446,6 +495,12 @@ const FindingObject = z
 // ORDER IS LOAD-BEARING, and each step is tested. The claim fold WRITES into `evidence`;
 // `repairStructure` APPENDS to it; the clamp must therefore run last, or a repaired
 // finding could overflow `TEXT_MAX` and be lost by the very chain that saved it.
+// lore-ok[cf3dff66]: fixed inside `repairStructure` itself, not here — its note now goes
+// FIRST and the original evidence SECOND, so this step's own tail-clamp cuts the
+// (sacrificial) evidence tail rather than the (load-bearing) repair note. Verified with
+// evidence at 1990 chars plus a bad `line`: the note survives intact. Order stays exactly
+// as this comment describes; only what `repairStructure` puts first within its own output
+// changed.
 export const FindingSchema = z.preprocess(
   (v) => clampOverlongText(repairStructure(foldOverlongClaim(repairFieldNames(v)))),
   FindingObject,

@@ -127,7 +127,17 @@ export class ServiceUnreachable extends DidNotRun {}
  * they were.
  */
 
-/** A tier's provider is out of budget or rate limit. Never a reason to skip it. *//** A tier's provider is out of budget or rate limit. Never a reason to skip it. */
+/**
+ * A tier's provider is out of budget or rate limit — the canonical `TierUnavailable`
+ * (D-48): the ladder steps over it and reaches `passed_partial` at best.
+ *
+ * Found by lore's own review, pasted twice back-to-back and inverted: this used to say
+ * "Never a reason to skip it", backwards from D-48's own SPEC entry ("A tier that cannot
+ * ANSWER — unfundable, or dead after its retry — is skipped, not fatal") and from the
+ * parent class's own docblock above. An editing artifact, not a decision — nothing in
+ * `ladder.ts` ever read this comment, so behaviour was never at risk, only a reader's
+ * understanding of it.
+ */
 export class Exhausted extends TierUnavailable {
   /**
    * When the provider says the limit lifts, ISO, if it said so.

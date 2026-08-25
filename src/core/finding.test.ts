@@ -52,6 +52,20 @@ describe("parseFinding", () => {
 
   it("rejects a path that escapes the repo", () => {
     expect(() => parseFinding({ ...valid, file: "../../secrets.env" })).toThrow();
+    expect(() => parseFinding({ ...valid, file: "a/../b" })).toThrow();
+    expect(() => parseFinding({ ...valid, file: "a/b/.." })).toThrow();
+    expect(() => parseFinding({ ...valid, file: ".." })).toThrow();
+  });
+
+  // Found by lore's own review of src/core (D-130 folder mode): the escape guard used to
+  // be a bare `.includes("..")`, which refuses ANY path containing two consecutive dots
+  // anywhere — not just a ".." path segment. Verified against real git: it tracks
+  // `docs/api..deprecated.md` without complaint. No repair step in this file's chain
+  // touches `file`, so an over-broad guard here does not degrade the finding, it discards
+  // the whole thing.
+  it("accepts a legal filename that merely contains two dots, not a traversal segment", () => {
+    expect(parseFinding({ ...valid, file: "docs/api..deprecated.md" }).file).toBe("docs/api..deprecated.md");
+    expect(parseFinding({ ...valid, file: "src/a..b.ts" }).file).toBe("src/a..b.ts");
   });
 
   it("accepts a well-formed cwe, and REPAIRS a malformed one rather than losing the finding", () => {
@@ -66,6 +80,16 @@ describe("parseFinding", () => {
       expect(got.evidence).toContain("lore dropped the CWE");
       expect(got.evidence, "the original evidence survives the repair").toContain(valid.evidence);
     }
+  });
+
+  // Found by lore's own review of src/core (D-130 folder mode): a padded-but-valid cwe
+  // ("CWE-362 ") used to fail this file's own repair check on a TRIMMED comparison, then
+  // fail the schema's UNTRIMMED regex downstream — losing the whole finding, which is
+  // worse than what happens to a genuinely malformed cwe like "CWE-abc" one line above.
+  // Silently normalized, not repaired-with-a-note: padding is not a vocabulary
+  // disagreement worth surfacing.
+  it.each([["CWE-362 "], [" CWE-362"], ["  CWE-362  "]])("normalizes a padded-but-valid cwe %s", (cwe) => {
+    expect(parseFinding({ ...valid, cwe }).cwe).toBe("CWE-362");
   });
 
   // Every way a model has been seen to write "no CWE applies", pinned.
@@ -142,6 +166,18 @@ describe("parseFinding", () => {
     expect(got.evidence).toContain("lore dropped the CWE");
   });
 
+  // Found by lore's own review of src/core (D-130 folder mode): repairStructure used to
+  // append its note AFTER evidence, so on evidence already close to TEXT_MAX,
+  // clampOverlongText's tail-cut (it runs last and keeps the first TEXT_MAX-1 characters)
+  // could slice the note off entirely — silently defeating the "marked, never silent"
+  // rule this file states twice, on the one path meant to disclose a repair. The note now
+  // goes first, same reasoning foldOverlongClaim already applies to its own carried claim.
+  it("keeps the line-repair note intact even when evidence alone is close to TEXT_MAX", () => {
+    const got = parseFinding({ ...valid, line: 0, evidence: "e".repeat(1990) });
+    expect(got.line).toBeUndefined();
+    expect(got.evidence).toContain("lore dropped the line the reviewer gave (0)");
+  });
+
   /**
    * D-128, from a real loss on this repository's own review of D-127: a critical finding
    * about a real reconciliation bug (services/clearing-settlement/src/logic/run-
@@ -176,6 +212,22 @@ describe("parseFinding", () => {
     expect(got.severity).toBe("high");
     expect("title" in got).toBe(false);
     expect("detail" in got).toBe(false);
+  });
+
+  // Found by lore's own review of src/core (D-130 folder mode), sibling of the same fix
+  // to repairStructure: this used to append its "lore read X as Y" note AFTER the
+  // promoted detail/evidence, so a long detail already close to TEXT_MAX let
+  // clampOverlongText's later tail-cut slice the note off entirely — repairFieldNames
+  // runs FIRST in the chain, so it is exposed to the same clamp every later step is.
+  it("keeps the field-name repair note intact even when detail alone is close to TEXT_MAX", () => {
+    const got = parseFinding({
+      file: valid.file,
+      severity: valid.severity,
+      title: "a claim, misnamed",
+      detail: "e".repeat(1990),
+      failureScenario: valid.failureScenario,
+    } as never);
+    expect(got.evidence).toContain('lore read "detail" as "evidence"');
   });
 
   it("leaves a reply that already has claim alone, even beside a stray title", () => {

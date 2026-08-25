@@ -27,6 +27,17 @@ describe("telling a check that did not run from a tier that ran differently", ()
     expect(isCoverageLoss(ranAnyway("t1", "zai-coding-plan2/glm-5.2", "zai-coding-plan/glm-5.3"))).toBe(false);
   });
 
+  /**
+   * TierSchema (core/ladder.ts) validates a tier id as `z.string().min(1)` with only a
+   * uniqueness check — every shipped config happens to use t0-t3, but nothing requires
+   * it. Found by lore's own review of a fix to this very predicate: anchoring on the
+   * id's SHAPE (`^t\d+`) rather than merely its PRESENCE (`^\S+`) would silently
+   * misclassify the writer's own sentence for any operator-chosen id not shaped that way.
+   */
+  it("reads back the sentence the writer builds for a tier id the shipped configs don't use", () => {
+    expect(isCoverageLoss(ranAnyway("review-a", "zp2/glm-5.2", "zp1/glm-5.2"))).toBe(false);
+  });
+
   it("calls a genuine non-coverage line what it is", () => {
     for (const line of [
       "eslint: no `lint` script and no eslint config",
@@ -44,5 +55,28 @@ describe("telling a check that did not run from a tier that ran differently", ()
    */
   it("treats wording it has never seen as a loss", () => {
     expect(isCoverageLoss("something nobody has written yet")).toBe(true);
+  });
+
+  /**
+   * Found by lore's own review of src/core (D-130 folder mode): the phrase can arrive
+   * embedded in text this module does not control — a rejected finding's note carries up
+   * to 300 characters of the model's own raw JSON, and a tier-unavailable note carries a
+   * caught error's message. Either can legitimately quote RAN_ON_OTHER_ROUTE without being
+   * the sentence it names, and lore reviewing its own repository is exactly the case where
+   * a model's finding text is likely to say "was answered by" while talking ABOUT this
+   * file. A bare substring match used to read all of these as "ran anyway".
+   */
+  it("still calls it a loss when the phrase arrives buried in untrusted text, not as the sentence itself", () => {
+    for (const line of [
+      // Shaped like parseFindingItem's rejected-finding note (opencode.ts).
+      'finding 2 of 3: Required at "severity" — {"file":"x.ts","claim":"t1 was answered by ' +
+        'a fallback route here and the verdict still claims independence"}',
+      // Shaped like the tier-unavailable note (review.ts), whose caught error text is
+      // never under this module's control.
+      "tier t2 (kimi-for-coding/k3) could not answer on either attempt and was SKIPPED — " +
+        "its work passed to the next tier. Last error: upstream said t3 was answered by a stand-in",
+    ]) {
+      expect(isCoverageLoss(line), line).toBe(true);
+    }
   });
 });
