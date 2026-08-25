@@ -8,10 +8,11 @@
  */
 
 import { existsSync } from "node:fs";
-import { mkdir, rm, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, realpath, rm, stat } from "node:fs/promises";
+import { basename, join } from "node:path";
 import { DidNotRun } from "../core/errors.ts";
 import { dataDir } from "../core/paths.ts";
+import { unquoteGitPath } from "./diff.ts";
 import { requestMirrorRefresh, type RefreshOutcome } from "./mirror-request.ts";
 import { git, gitMaybe } from "./exec.ts";
 
@@ -176,6 +177,16 @@ export async function ensureBare(
   }
 }
 
+/**
+ * How long `git worktree add` (below) may run before its own timeout kills it.
+ *
+ * Reused by `worktreeAddInProgress` below as more than a duration: nothing this
+ * codebase starts runs past it, so a lock still standing when this much time has
+ * passed cannot be a legitimate in-progress checkout FROM HERE, only one orphaned by
+ * a kill that did not let git clean up after itself.
+ */
+const WORKTREE_ADD_TIMEOUT_MS = 300_000;
+
 export async function addWorktree(
   paths: RepoPaths,
   reviewId: string,
@@ -247,12 +258,76 @@ export async function addWorktree(
         (nearby.length > 0 ? ` Most recent branches lore can see there: ${nearby.join(", ")}.` : " lore can see no branches there at all."),
     );
   }
-  await git(paths.bare, ["worktree", "add", "--detach", dir, ref], 300_000);
-  await git(dir, ["submodule", "update", "--init", "--recursive"], 600_000).catch(() => {
-    // Submodules that cannot be initialised are announced by the diff layer rather
-    // than failing the review — but they are never silently treated as absent.
-  });
+  await git(paths.bare, ["worktree", "add", "--detach", dir, ref], WORKTREE_ADD_TIMEOUT_MS);
+  // FAILING TO INITIALISE A SUBMODULE DOES NOT FAIL THE REVIEW — most commonly a
+  // private remote lore's container has no credentials for (D-65), which is expected
+  // and not this worktree's fault. lore-ok[6238936e]: fixed at the READER, not here —
+  // this comment used to claim the loss was "announced by the diff layer", which
+  // nothing did. `diff.ts`'s `submodulesThatFailedToExpand` now detects git's own
+  // "(diff failed)" marker in the patch (verified directly: that is exactly what
+  // `--submodule=diff` prints here, since the objects this swallowed failure would
+  // have fetched are the ones the expansion needs) and `appendTail` turns it into an
+  // explicit warning naming the submodule, so the claim below is true now rather than
+  // aspirational.
+  await git(dir, ["submodule", "update", "--init", "--recursive"], 600_000).catch(() => {});
   return dir;
+}
+
+/**
+ * Ground truth for "is there really a worktree at this path" — git's own
+ * registration (`worktree list`), not the filesystem. `pruneWorktrees` below already
+ * distrusts a raw path one direction (a registration with no directory behind it);
+ * this is the same distrust the other way.
+ *
+ * lore-ok[a386ebff,9f189b25,dd6f1801,d7a82471]: `worktreeFor` used to ask
+ * `existsSync` alone, found wrong by lore's own review and reproduced directly —
+ * `git worktree add` killed by its own 300s timeout (`addWorktree` above, real
+ * SIGTERM via node's `execFile`) leaves a populated, `.git`-bearing directory that
+ * `existsSync` cannot tell apart from a finished one, and `git worktree list
+ * --porcelain` never names. Compares REALPATHs on both sides, not raw strings — git
+ * records a worktree's path resolved (confirmed directly: a path reached through a
+ * symlinked prefix, `/tmp` on this machine, comes back from `worktree list` as
+ * `/private/tmp/...`), so comparing `dir` as constructed against that verbatim would
+ * report every such worktree unregistered and rebuild it on every call.
+ */
+async function isRegisteredWorktree(paths: RepoPaths, dir: string): Promise<boolean> {
+  if (!existsSync(dir)) return false;
+  const real = await realpath(dir);
+  const { stdout } = await git(paths.bare, ["worktree", "list", "--porcelain"]);
+  return stdout.split("\n").some((line) => line === `worktree ${real}`);
+}
+
+/**
+ * Is a `git worktree add` for this exact path GENUINELY running right now — as
+ * opposed to merely having left a directory behind?
+ *
+ * Exists because the fix above is not by itself enough: a directory that exists but
+ * is not yet registered is exactly what a peer's checkout looks like WHILE it is
+ * still running, not only after it has died. Deleting on that observation alone
+ * (verified: `worktreeAddInProgress` is what stands between `worktreeFor` and doing
+ * that) would trade one review over a tree that exists nowhere for another —
+ * corrupting a *concurrent, live* checkout instead of reusing a dead one.
+ *
+ * `git worktree add` holds `<bare>/worktrees/<name>/index.lock` for the operation's
+ * full duration — verified directly, present within the first tick of a real
+ * checkout and still there at the last one — and removes it however the process
+ * ends, INCLUDING a SIGTERM kill: verified directly that `execFile`'s own timeout
+ * kill, the only kill this codebase's `git()` wrapper ever sends, leaves neither the
+ * lock nor its directory behind. So an ordinary timeout can never orphan this lock.
+ *
+ * A harder kill this codebase does not control (OOM, a deploy's SIGKILL after its
+ * stop grace period, `kill -9` by hand) still can, so age matters too:
+ * `WORKTREE_ADD_TIMEOUT_MS` is how long anything started here is ever allowed to
+ * hold this lock, so a lock older than that cannot be a live checkout from this
+ * codebase — only a leftover from one that did not exit cleanly, safe to treat as
+ * dead. The margin is generous on purpose: mistaking a live checkout for dead and
+ * deleting it is the failure this function exists to prevent, and the cost of the
+ * opposite mistake is only a slower self-heal.
+ */
+async function worktreeAddInProgress(paths: RepoPaths, dir: string): Promise<boolean> {
+  const lock = join(paths.bare, "worktrees", basename(dir), "index.lock");
+  const st = await stat(lock).catch(() => undefined);
+  return st !== undefined && Date.now() - st.mtimeMs < WORKTREE_ADD_TIMEOUT_MS + 60_000;
 }
 
 /**
@@ -282,28 +357,52 @@ export async function worktreeFor(
   gitUrl: string,
 ): Promise<string> {
   const existing = join(paths.worktrees, reviewId);
+  const busy = (): never => {
+    throw new DidNotRun(
+      `another call is already creating this review's worktree — try again in a few seconds.`,
+    );
+  };
 
   // Re-checked AFTER the await, not before it. `ensureBare` yields, and both the
   // worker and `review_submit` reach this function — so a snapshot taken beforehand
   // can be stale by the time it is used, and the caller that loses the race would
   // call `addWorktree` on a path that now exists. The worker treats a throw here as
   // a failed round, so losing that race failed the review outright.
-  if (existsSync(existing)) {
+  if (await isRegisteredWorktree(paths, existing)) {
     await ensureBare(paths, gitUrl, false);
     return existing;
   }
+  if (await worktreeAddInProgress(paths, existing)) return busy();
+  // Only past both checks above is a directory here known dead rather than
+  // in-progress — this call's own attempt from a prior round, or a peer's that did
+  // not survive (see `isRegisteredWorktree`, `worktreeAddInProgress`). Clearing it is
+  // what lets the ordinary "no worktree yet" path below self-heal in the same round
+  // instead of failing forever on a path `addWorktree` refuses to check out into a
+  // second time.
+  if (existsSync(existing)) await rm(existing, { recursive: true, force: true });
   await ensureBare(paths, gitUrl, true);
 
   try {
     return await addWorktree(paths, reviewId, branch, gitUrl);
   } catch (e) {
-    // Narrow on purpose: ONLY when the directory now exists, which means a
-    // concurrent caller created the same review's worktree from the same pinned
-    // base while this one was working. Every other failure — `branch not found`,
-    // a broken bare repo — leaves no directory behind and propagates, because a
-    // catch that cannot tell those apart is how a round once continued against a
-    // path that had never been created.
-    if (existsSync(existing)) return existing;
+    // Narrow on purpose: ONLY when the directory is now REGISTERED, which means a
+    // concurrent caller finished creating the same review's worktree from the same
+    // pinned base while this one was working — `isRegisteredWorktree`, not
+    // `existsSync`, because this call's OWN `addWorktree` can be the one that left a
+    // directory behind without finishing it (the timeout above), and treating that
+    // as a peer's success is how a round once reviewed a tree that existed nowhere.
+    if (await isRegisteredWorktree(paths, existing)) return existing;
+    // Second narrow case: a PEER is still actively creating it — this call lost the
+    // race inside `addWorktree` itself (git's own lock is why it threw). Neither
+    // reusable yet nor safe to delete out from under a live checkout, so this waits
+    // exactly as the up-front check above does.
+    if (await worktreeAddInProgress(paths, existing)) return busy();
+    // Every other failure — `branch not found`, a broken bare repo, a partial
+    // directory neither peer nor this call completed — propagates and clears
+    // whatever partial directory it left, because a catch that cannot tell those
+    // apart is how a round once continued against a path that had never been
+    // created.
+    await rm(existing, { recursive: true, force: true }).catch(() => {});
     throw e;
   }
 }
@@ -332,6 +431,9 @@ export async function removeWorktree(paths: RepoPaths, reviewId: string): Promis
   await rm(dir, { recursive: true, force: true });
 }
 
+/** A hex object id, in EITHER format git actually has: SHA-1 (40) or SHA-256 (64). Nothing in between is real. */
+const OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+
 /**
  * A COMMIT-ISH THE CALLER NAMED, AS A SHA — or `undefined` if it is not one.
  *
@@ -339,15 +441,24 @@ export async function removeWorktree(paths: RepoPaths, reviewId: string): Promis
  * with `-` as an OPTION, so an unvalidated ref is an option-injection surface: `--output=`
  * alone turns a read into an arbitrary file write, and this service hands that argv slot to
  * anyone holding a token. `^{commit}` also refuses a tree or a blob, so what comes back is
- * always a commit and always 40 hex characters — a shape that cannot be an option however
- * the caller wrote it.
+ * always a commit and always pure hex — a shape that cannot be an option however the
+ * caller wrote it, whichever length git gave it.
+ *
+ * lore-ok[a1f2bbd6]: was `{40}` only — found by lore's own review, verified directly
+ * against a real `git init --object-format=sha256` repository: a genuine, existing
+ * commit there is 64 hex characters, and the old regex refused it, so `review_submit`'s
+ * commit form would tell a client holding a real, resolvable sha that it "was not
+ * pushed to this repository" — false, and unfixable by anything the client could do.
+ * `OBJECT_ID` accepts exactly the two lengths git's object formats actually produce,
+ * not an open-ended one: the security property this gate exists for is "pure hex, no
+ * leading `-`", which either length satisfies identically.
  *
  * `--quiet` because a ref that does not exist is an ordinary answer here, not a fault.
  */
 export async function revParse(worktree: string, ref: string): Promise<string | undefined> {
   const out = await gitMaybe(worktree, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]);
   const sha = out?.trim();
-  return sha !== undefined && /^[0-9a-f]{40}$/.test(sha) ? sha : undefined;
+  return sha !== undefined && OBJECT_ID.test(sha) ? sha : undefined;
 }
 
 /**
@@ -375,9 +486,28 @@ export async function treeDelta(worktree: string, fromTree: string, toTree: stri
  *
  * Mutates the worktree's index, which is safe because the index belongs to this
  * review alone.
+ *
+ * lore-ok[ad43ea6d]: found by lore's own review, and it is real — `git add -A` does
+ * not merely leave a submodule's gitlink alone, it REWRITES it to whatever commit the
+ * submodule's own working directory has checked out, discarding whatever
+ * `applyPatch`'s `--index` fix (`lore-ok[40f980fe]`) had just staged. Verified
+ * directly: right after `applyPatch`, the index correctly names the bumped commit;
+ * right after THIS function's own `add -A`, `gitlinks` reads the pre-bump commit
+ * again, unconditionally, every time. Nothing in this codebase ever wants that:
+ * `addWorktree` runs `submodule update --init` exactly once, at worktree creation,
+ * and nothing after that ever moves what a submodule directory has checked out — a
+ * gitlink only changes because a client's patch changed it, so the index a patch just
+ * wrote is the one true value, and `add -A`'s working-tree-wins rule for submodules is
+ * wrong for this project specifically. Snapshotting before and restoring after is
+ * cheap (`gitlinks` is one `ls-files -s`) and leaves every regular file's handling,
+ * which `add -A` gets right, untouched.
  */
 export async function treeHash(worktree: string): Promise<string> {
+  const before = await gitlinks(worktree);
   await git(worktree, ["add", "-A"]);
+  for (const link of before) {
+    await git(worktree, ["update-index", "--cacheinfo", `160000,${link.commit},${link.path}`]);
+  }
   const { stdout } = await git(worktree, ["write-tree"]);
   return stdout.trim();
 }
@@ -389,7 +519,7 @@ export interface Gitlink {
 }
 
 /**
- * Every submodule pointer in the tree.
+ * Every submodule pointer in the tree — the WORKTREE, meaning the INDEX, not `HEAD`.
  *
  * This workgroup uses submodules rather than monorepos (D-36), so vendored code
  * arrives as a gitlink with **no package and no version** — which is precisely what
@@ -397,16 +527,37 @@ export interface Gitlink {
  * security review enumerates `package-lock.json` and reports clean about a dependency
  * tree it never enumerated.
  *
- * Mode `160000` is git's gitlink mode; `ls-tree -r` does not descend into one, so each
- * submodule yields exactly one row whatever it contains.
+ * lore-ok[23ac90bf]: was `ls-tree -r HEAD`, which is correct only when HEAD and the
+ * index agree — found by lore's own review, and the review's own OTHER finding
+ * (`lore-ok[40f980fe]`'s sibling, applyPatch's `--index` fix) is what makes this one
+ * reachable rather than moot: before `--index`, a submitted gitlink bump silently
+ * failed to apply at all (D-40's tree-hash check caught it, refusing the submission),
+ * so HEAD and the index could never actually disagree about a gitlink. Verified
+ * directly with the real `applyPatch`, before and after that fix — after it, a bumped
+ * submodule sits correctly in `ls-files -s` while `ls-tree -r HEAD` still shows the
+ * ORIGINAL commit, because `--index` writes the index and nothing here ever moves
+ * HEAD (T0 runs on the pinned worktree mid-review, same as `computeDiff`/INV-3). OSV's
+ * whole purpose is querying what a review is ACTUALLY attesting over; enumerating from
+ * HEAD after a review has advanced past it queries a commit nobody is reviewing.
+ *
+ * Mode `160000` is git's gitlink mode; `ls-files -s` lists one line per index entry
+ * with no recursion into it, so each submodule yields exactly one row.
  */
 export async function gitlinks(worktree: string): Promise<readonly Gitlink[]> {
-  const { stdout } = await git(worktree, ["ls-tree", "-r", "HEAD"]);
+  // lore-ok[fa429ab3,059ab094]: `-c core.quotePath=false` + `unquoteGitPath`, same
+  // fix `diff.ts` carries on every `ls-files`/`diff --name-only` call site (each with
+  // its own lore-ok recording the incident) — found missing HERE by lore's own
+  // review, on the rewrite that fixed this line's SHA-256 gap (`a1f2bbd6`) without
+  // porting the quoting fix alongside it. `unquoteGitPath` is exported from
+  // `diff.ts` rather than copied, so this stays one implementation rather than a
+  // second one to independently forget.
+  const { stdout } = await git(worktree, ["-c", "core.quotePath=false", "ls-files", "-s"]);
   const out: Gitlink[] = [];
   for (const line of stdout.split("\n")) {
-    // <mode> SP <type> SP <sha> TAB <path>
-    const m = /^160000 commit ([0-9a-f]{40})\t(.+)$/.exec(line);
-    if (m?.[1] !== undefined && m[2] !== undefined) out.push({ commit: m[1], path: m[2] });
+    // <mode> SP <sha> SP <stage> TAB <path>. lore-ok[a1f2bbd6]: same fix as revParse
+    // above, same file — a SHA-256 repository's gitlink is 64 hex characters, not 40.
+    const m = /^160000 ([0-9a-f]{40}|[0-9a-f]{64}) \d\t(.+)$/.exec(line);
+    if (m?.[1] !== undefined && m[2] !== undefined) out.push({ commit: m[1], path: unquoteGitPath(m[2]) });
   }
   return out;
 }
@@ -442,6 +593,10 @@ export async function restoreTree(worktree: string, tree: string): Promise<void>
   await git(worktree, ["clean", "-fd"]);
 }
 
+// lore-ok[40f980fe]: fixed inside — the `execFile` options below now carry `timeout:
+// 120_000`, the same bound every other git call in this module gets, and the reject
+// path names a timeout kill honestly rather than inheriting `describeApplyFailure`'s
+// "worktree is unchanged" claim, which is not verified for a killed mid-write.
 export async function applyPatch(worktree: string, patch: string): Promise<void> {
   const { execFile } = await import("node:child_process");
   await new Promise<void>((resolve, reject) => {
@@ -461,17 +616,54 @@ export async function applyPatch(worktree: string, patch: string): Promise<void>
       // Being lenient here cannot produce a silently wrong tree. `review_submit` hashes
       // the result and compares it against the client's `tree_hash` (D-40), so a recount
       // that guessed wrong fails loudly at that check instead of being reviewed.
-      ["apply", "--recount", "--whitespace=nowarn", "-"],
+      //
+      // `--index`: WITHOUT IT, A SUBMODULE BUMP IS SILENTLY LOST — found by lore's own
+      // review, verified directly against real git and this exact function. A gitlink
+      // (mode 160000) has no working-tree bytes to rewrite — a plain `git apply` (no
+      // flags) can only write to files on disk, so a gitlink-only hunk applies to
+      // NOTHING, `treeHash`'s later `git add -A` finds nothing changed to stage either,
+      // and the whole submission then fails D-40's tree-hash check with "nothing was
+      // applied, resend the whole diff" — advice that cannot ever help, since resending
+      // hits the identical gap. `git apply --index` writes the new gitlink straight into
+      // the index, which is where a gitlink lives; verified this does not disturb the
+      // ordinary regular-file case apply.test.ts already covers.
+      ["apply", "--index", "--recount", "--whitespace=nowarn", "-"],
       {
         cwd: worktree,
         maxBuffer: 64 * 1024 * 1024,
         // The same ceiling every other invocation gets (D-61): a patch must never be
         // applied to a repository above the worktree it was meant for.
         env: { ...process.env, GIT_CEILING_DIRECTORIES: worktree },
+        // THE SAME BOUND EVERY OTHER GIT CALL GETS (`exec.ts`'s `git()` default,
+        // `diff.ts`'s `mergeCheck`) — found by lore's own review: this is the one raw
+        // `execFile` in the module (needed for stdin piping, which the `git()` wrapper
+        // does not support) and it had no timeout at all. Both direct callers
+        // (`mcp/server.ts`'s `review_submit` handler, `reviewer/review.ts`'s
+        // `consumeHeldDiffs`, itself inside a round job) `await` this with no outer
+        // bound of their own, so a stall here — a bind-mount hiccup, pathological
+        // `--recount` work on a huge patch — used to hang the MCP call, or the round
+        // job, forever: no failure, no DidNotRun, nothing for the abandonment sweep to
+        // find because the row never stops being `running`.
+        timeout: 120_000,
       },
       (err, _stdout, stderr) => {
         if (err) {
-          reject(new DidNotRun(describeApplyFailure(String(stderr)), err));
+          // ON A TIMEOUT KILL, stderr IS EMPTY (verified: node kills with SIGTERM before
+          // git writes anything) — `describeApplyFailure`'s fallback message claims
+          // "Nothing was applied; the worktree is unchanged", which is not a guarantee
+          // this codebase has verified for a `git apply` interrupted mid-write across a
+          // multi-file patch. Named honestly instead of inheriting that claim.
+          const err2 = err as NodeJS.ErrnoException & { killed?: boolean; signal?: NodeJS.Signals | null };
+          reject(
+            err2.killed === true
+              ? new DidNotRun(
+                  "git apply did not finish within 120s and was stopped. Whether it applied none, some or all " +
+                    "of the patch before being stopped is not known — do not assume the worktree is unchanged. " +
+                    "Report this rather than resending the same diff.",
+                  err,
+                )
+              : new DidNotRun(describeApplyFailure(String(stderr)), err),
+          );
           return;
         }
         resolve();

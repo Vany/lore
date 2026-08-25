@@ -21,6 +21,40 @@ const MAX_COMMITS_PER_FILE = 4;
 const MAX_DIFF_CHARS = 600_000;
 
 /**
+ * Which submodules `--submodule=diff` could not expand, named.
+ *
+ * Found by lore's own review: `addWorktree` (`repo.ts`) swallows a failed `git
+ * submodule update --init` under a comment claiming the loss is "announced by the
+ * diff layer" — nothing announced it, anywhere in this codebase, until now. When a
+ * submodule's objects are missing (no credentials for a private remote, D-65),
+ * `--submodule=diff` cannot expand the bump, and git says so INSIDE the patch text —
+ * verified directly against real git: `Submodule <path> <a>..<b>:` followed by an
+ * error line and a literal `(diff failed)`. That text was already reaching every
+ * tier, unamplified, in a codebase whose whole design is that a check which did not
+ * run says so LOUDLY (INV-1) rather than leaving a reader to notice three lines of
+ * raw git output. D-36 promises a gitlink change is "expanded, or told explicitly it
+ * was too large" (spec/review-ladder.md §6.1); this is the untold case.
+ *
+ * Scans backward from each `(diff failed)` line rather than matching the error
+ * line's exact wording, which is git's own and not this project's to pin.
+ */
+function submodulesThatFailedToExpand(patch: string): readonly string[] {
+  const lines = patch.split("\n");
+  const names: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i] !== "(diff failed)") continue;
+    for (let j = i - 1; j >= 0 && j >= i - 5; j--) {
+      const m = /^Submodule (\S+) /.exec(lines[j] ?? "");
+      if (m?.[1] !== undefined) {
+        names.push(m[1]);
+        break;
+      }
+    }
+  }
+  return names;
+}
+
+/**
  * git's well-known empty-tree object. Present in every repository with no setup —
  * it is how `wholeTreeDiff` (D-130) gets a real, ordinary `git diff` (every file
  * shown as added) instead of a hand-rolled "pretend this is a diff" shape.
@@ -33,6 +67,8 @@ export interface ReviewDiff {
   readonly stat: string;
   readonly patch: string;
   readonly truncated: boolean;
+  /** Submodules `--submodule=diff` could not expand — see `submodulesThatFailedToExpand`. */
+  readonly submoduleExpansionFailed: readonly string[];
   readonly totalChars: number;
   /**
    * Set only by `wholeTreeDiff` (D-130): the path this folder review is scoped to
@@ -260,17 +296,45 @@ export async function computeDiff(
   // --submodule=diff expands a gitlink bump into the submodule's own diff. Without
   // it a two-line pointer change can hide thousands of lines, and the reviewer
   // would call it low-risk having never seen it (D-36).
+  //
+  // lore-ok[032c44ea]: `-c core.quotePath=false` ON EVERY CALL BELOW, same reasoning as
+  // `wholeTreeDiff`'s `noQuote` (`lore-ok[01d5371d]`) — found by lore's own review: this
+  // function, `wholeTreeDiff`'s older sibling, never got the D-130 quoting fix ported
+  // back to it. Verified directly: `git ls-files --others` under this process's default
+  // `core.quotePath` (unset, so true) prints an untracked `café.txt` as the C-quoted
+  // `"caf\303\251.txt"` — the literal string, quote marks and octal escapes included,
+  // that would have reached `untracked`/`changedFiles` here. The flag alone does not
+  // cover a control character, backslash or literal quote, which git quotes
+  // unconditionally regardless of it — `unquoteGitPath` below is the same decoder
+  // `wholeTreeDiff` and `filesInDiff` already use for exactly that gap.
+  const noQuote = ["-c", "core.quotePath=false"];
   const { stdout: rawPatch } = await git(worktree, [
+    ...noQuote,
     "diff",
     "--submodule=diff",
     "--no-color",
     mergeBase,
   ]);
-  const { stdout: stat } = await git(worktree, ["diff", "--stat", "--submodule=short", mergeBase]);
+  const { stdout: stat } = await git(worktree, [...noQuote, "diff", "--stat", "--submodule=short", mergeBase]);
 
-  const untracked = await gitLines(worktree, ["ls-files", "--others", "--exclude-standard"]);
-  const changedFilesFrom = await gitLines(worktree, ["diff", "--name-only", mergeBase]);
-  const changedFiles = changedFilesFrom;
+  const untracked = (await gitLines(worktree, [...noQuote, "ls-files", "--others", "--exclude-standard"])).map(
+    (line) => unquoteGitPath(line),
+  );
+  const changedFilesFrom = (await gitLines(worktree, [...noQuote, "diff", "--name-only", mergeBase])).map((line) =>
+    unquoteGitPath(line),
+  );
+  // UNIONED WITH filesInDiff(rawPatch), NOT SWAPPED — found by lore's own review: the
+  // exact gap wholeTreeDiff was already fixed for (its own changedFiles is parsed from
+  // the patch, not --name-only, specifically for this). `--name-only` lists a
+  // submodule bump as its bare gitlink name only, never the files inside it, even
+  // though `--submodule=diff` expands the inner content into the patch itself —
+  // verified directly: `--name-only` on a real submodule bump prints just the gitlink
+  // path while the same diff's patch carries the expanded inner file. Swapping
+  // OUTRIGHT to filesInDiff alone would have cost every DELETED file: it only matches
+  // `+++ b/<path>`, and a deletion's new side is `/dev/null`, which wholeTreeDiff never
+  // needs to worry about (everything there is an addition, diffed against nothing).
+  // computeDiff's diffs are real, so deletions are the common case the union keeps.
+  const changedFiles = [...new Set([...changedFilesFrom, ...filesInDiff(rawPatch)])];
   // ZERO WHEN `into` IS GONE, not a crash. A review whose base ref was deleted under it
   // is not behind anything knowable, and `gitMaybe` already answers `undefined` for a ref
   // that will not resolve — but saying so explicitly is what stops the three staleness
@@ -308,8 +372,19 @@ export async function computeDiff(
   // and this ask about `into` as it stands now. The docstring and SPEC both said so while
   // this line quietly did the opposite.
   const liveBase = intoExists ? await gitMaybe(worktree, ["merge-base", resolved, "HEAD"]) : undefined;
+  // lore-ok[56b4abef]: `noQuote` + `unquoteGitPath` here too — found by lore's own review:
+  // the quoting fix decoded `changedFilesFrom` but left this side of the SAME comparison
+  // raw. Before that fix, both sides were consistently quoted and `.has()` matched by
+  // coincidence; after it, a non-ASCII/tab/backslash/quote name touched by both sides
+  // would decode on one side only, the lookup would fail, and the overlap this field
+  // exists to flag would go silently missing for exactly the names the original fix was
+  // about.
   const baseTouched = new Set(
-    liveBase === undefined ? [] : await gitLines(worktree, ["diff", "--name-only", liveBase, resolved]),
+    liveBase === undefined
+      ? []
+      : (await gitLines(worktree, [...noQuote, "diff", "--name-only", liveBase, resolved])).map((line) =>
+          unquoteGitPath(line),
+        ),
   );
   const overlapFiles = changedFilesFrom.filter((f) => baseTouched.has(f));
 
@@ -329,8 +404,10 @@ export async function computeDiff(
 
   // A branch that changes source and no tests is a question worth asking every time,
   // and one a reviewer should never have to derive from a file list that may be cut.
+  // Counted from `changedFiles` (the union), not `changedFilesFrom` alone, so a test
+  // file changed only INSIDE a submodule is not invisible to this count either.
   const isTest = (f: string) => /(\.test\.|\.spec\.|(^|\/)tests?\/|__tests__)/.test(f);
-  const changedTests = changedFilesFrom.filter(isTest).length;
+  const changedTests = changedFiles.filter(isTest).length;
 
   const truncated = rawPatch.length > MAX_DIFF_CHARS;
   const patch = truncated
@@ -345,10 +422,11 @@ export async function computeDiff(
     mergesClean,
     overlap,
     changedTests,
-    changedSource: changedFilesFrom.length - changedTests,
+    changedSource: changedFiles.length - changedTests,
     stat: stat.trim(),
     patch,
     truncated,
+    submoduleExpansionFailed: submodulesThatFailedToExpand(rawPatch),
     totalChars: rawPatch.length,
     untracked,
     changedFiles: [...changedFiles, ...untracked],
@@ -429,6 +507,7 @@ export async function wholeTreeDiff(worktree: string, path: string): Promise<Rev
     stat: stat.trim(),
     patch,
     truncated,
+    submoduleExpansionFailed: submodulesThatFailedToExpand(rawPatch),
     totalChars: rawPatch.length,
     untracked,
     changedFiles: [...changedFiles, ...untracked],
@@ -453,7 +532,7 @@ export async function wholeTreeDiff(worktree: string, path: string): Promise<Rev
  * sequence as UTF-8 once at the end, which reassembles a multi-byte escape run
  * correctly the same way the bytes were always meant to be read together.
  */
-function unquoteGitPath(raw: string): string {
+export function unquoteGitPath(raw: string): string {
   if (!raw.startsWith('"') || !raw.endsWith('"')) return raw;
   const MNEMONIC: Record<string, number> = { a: 0x07, b: 0x08, f: 0x0c, n: 0x0a, r: 0x0d, t: 0x09, v: 0x0b };
   const bytes: number[] = [];
@@ -626,6 +705,16 @@ function appendTail(parts: string[], d: ReviewDiff): void {
       "",
       `WARNING: the diff is ${d.totalChars} characters and was cut to ${MAX_DIFF_CHARS}.`,
       "You have NOT seen the whole change. Read the rest from the worktree before concluding anything.",
+    );
+  }
+  if (d.submoduleExpansionFailed.length > 0) {
+    parts.push(
+      "",
+      `WARNING: ${d.submoduleExpansionFailed.length} submodule(s) changed but could not be expanded — ` +
+        `this worktree does not have their objects (usually a private remote lore's container has no ` +
+        `credentials for, D-65): ${d.submoduleExpansionFailed.join(", ")}.`,
+      "The lines below for these are a bare gitlink pointer change, NOT their inner diff. Do not call this " +
+        "low-risk from what you can see here — the real change inside these submodules is unread.",
     );
   }
 

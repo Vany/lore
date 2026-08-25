@@ -12,7 +12,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { filesInDiff, renderDiff, wholeTreeDiff } from "./diff.ts";
+import { computeDiff, filesInDiff, renderDiff, wholeTreeDiff } from "./diff.ts";
 
 let root: string;
 let repo: string;
@@ -166,6 +166,33 @@ describe("wholeTreeDiff", () => {
     expect(d.patch).toContain("inner/deep.txt");
   });
 
+  // Found by lore's own review of src/git: `addWorktree` swallows a failed `git
+  // submodule update --init` under a comment claiming the loss is "announced by the
+  // diff layer" — nothing was. When a submodule's objects are missing (no credentials
+  // for a private remote, D-65), `--submodule=diff` cannot expand it and git says so
+  // INSIDE the patch: `Submodule <path> ...:` / `error: ...` / `(diff failed)`,
+  // verified directly. That text reached every tier already, unamplified.
+  it("names a submodule whose objects are missing, rather than silently showing a bare gitlink", async () => {
+    const innerRoot = join(root, "inner-missing");
+    mkdirSync(innerRoot, { recursive: true });
+    const gInner = (...a: string[]) => execFileSync("git", a, { cwd: innerRoot, stdio: "pipe" }).toString().trim();
+    gInner("init", "-q", "-b", "main");
+    gInner("config", "user.email", "t@e.com");
+    gInner("config", "user.name", "t");
+    writeFileSync(join(innerRoot, "deep.txt"), "deep\n");
+    gInner("add", "-A");
+    gInner("commit", "-qm", "inner");
+
+    g("-c", "protocol.file.allow=always", "submodule", "add", "-q", innerRoot, "inner");
+    g("add", "-A");
+    g("commit", "-qm", "outer, with a submodule");
+    g("submodule", "deinit", "-f", "inner");
+
+    const d = await wholeTreeDiff(repo, ".");
+    expect(d.submoduleExpansionFailed).toContain("inner");
+    expect(renderDiff(d)).toContain("could not be expanded");
+  });
+
   // Found by lore's own review of D-130: git C-style-quotes a path needing it, which
   // by default is any non-ASCII name — `+++ "b/src/caf\303\251.ts"`, verified
   // directly — and filesInDiff's plain `+++ b/<path>` match does not un-quote it.
@@ -226,6 +253,131 @@ describe("wholeTreeDiff", () => {
     expect(clientDiff, "this test means to exercise the quoted form").toContain('\\303\\251');
 
     expect(filesInDiff(clientDiff)).toContain("src/café.ts");
+  });
+});
+
+// Found by lore's own review of src/git (D-130 folder mode): computeDiff, wholeTreeDiff's
+// older sibling in this same file, never got the D-130 quoting fix ported back to it —
+// `ls-files` and `diff --name-only` ran with no `-c core.quotePath=false` and no
+// `unquoteGitPath`, so `untracked` and `changedFiles` would have carried git's literal
+// C-quoted, octal-escaped string instead of the real name for exactly the cases pinned
+// above for wholeTreeDiff.
+describe("computeDiff carries the same quoting fix wholeTreeDiff does", () => {
+  it("names an untracked non-ASCII file by its real name, not git's quoted form", async () => {
+    writeFileSync(join(repo, "a.txt"), "a\n");
+    g("add", "-A");
+    g("commit", "-qm", "initial");
+    writeFileSync(join(repo, "naïve.txt"), "y\n");
+
+    const d = await computeDiff(repo, "main");
+    expect(d.untracked).toContain("naïve.txt");
+    expect(d.changedFiles).toContain("naïve.txt");
+  });
+
+  it("names a tracked, modified non-ASCII file by its real name in changedFiles", async () => {
+    mkdirSync(join(repo, "src"), { recursive: true });
+    writeFileSync(join(repo, "src", "café.ts"), "x\n");
+    g("add", "-A");
+    g("commit", "-qm", "a file with a non-ASCII name");
+    writeFileSync(join(repo, "src", "café.ts"), "x\ny\n");
+
+    const d = await computeDiff(repo, "main");
+    expect(d.changedFiles).toContain("src/café.ts");
+  });
+
+  // Found by lore's own review of src/git: the first pass of this fix decoded
+  // changedFilesFrom but left baseTouched (the OTHER side of the overlap comparison,
+  // `diff --name-only liveBase resolved`) raw — so a non-ASCII name touched by both
+  // sides decoded on one side only, `.has()` failed, and the overlap this field exists
+  // to flag went silently missing for exactly the names the fix was about.
+  it("finds a non-ASCII file both sides touched, in overlap", async () => {
+    writeFileSync(join(repo, "café.txt"), "a\n");
+    g("add", "-A");
+    g("commit", "-qm", "base");
+    g("checkout", "-qb", "feature");
+    writeFileSync(join(repo, "café.txt"), "a\nbranch\n");
+    g("add", "-A");
+    g("commit", "-qm", "branch touches café.txt");
+    g("checkout", "-q", "main");
+    writeFileSync(join(repo, "café.txt"), "a\nmain-side\n");
+    g("add", "-A");
+    g("commit", "-qm", "main also touches café.txt");
+    g("checkout", "-q", "feature");
+
+    const d = await computeDiff(repo, "main");
+    expect(d.overlap.map((o) => o.file)).toContain("café.txt");
+  });
+
+  // Sibling of wholeTreeDiff's identical test above: computeDiff shares the same
+  // `submodulesThatFailedToExpand` detection, wired in separately since it is a
+  // separate function with its own `rawPatch`. Two commits directly on `main`, HEAD
+  // left at the second — the exact shape verified manually before writing the fix.
+  it("names a submodule bump whose objects are missing, rather than silently showing a bare gitlink", async () => {
+    const innerRoot = join(root, "inner-bump-missing");
+    mkdirSync(innerRoot, { recursive: true });
+    const gInner = (...a: string[]) => execFileSync("git", a, { cwd: innerRoot, stdio: "pipe" }).toString().trim();
+    gInner("init", "-q", "-b", "main");
+    gInner("config", "user.email", "t@e.com");
+    gInner("config", "user.name", "t");
+    writeFileSync(join(innerRoot, "f.txt"), "a\n");
+    gInner("add", "-A");
+    gInner("commit", "-qm", "commit A");
+    const commitA = gInner("rev-parse", "HEAD");
+    writeFileSync(join(innerRoot, "f.txt"), "a\nb\n");
+    gInner("add", "-A");
+    gInner("commit", "-qm", "commit B");
+    const commitB = gInner("rev-parse", "HEAD");
+
+    g("-c", "protocol.file.allow=always", "submodule", "add", "-q", innerRoot, "inner");
+    execFileSync("git", ["checkout", "-q", commitA], { cwd: join(repo, "inner"), stdio: "pipe" });
+    g("add", "-A");
+    g("commit", "-qm", "add submodule, pinned at A");
+
+    execFileSync("git", ["checkout", "-q", commitB], { cwd: join(repo, "inner"), stdio: "pipe" });
+    g("add", "-A");
+    g("commit", "-qm", "bump submodule to B");
+    g("submodule", "deinit", "-f", "inner");
+
+    const d = await computeDiff(repo, "main~1");
+    expect(d.submoduleExpansionFailed).toContain("inner");
+    expect(renderDiff(d)).toContain("could not be expanded");
+  });
+
+  // Found by lore's own review of src/git: `--name-only` lists a submodule bump as its
+  // bare gitlink name only, never the files inside it, even though `--submodule=diff`
+  // expands the inner content into the patch — the exact gap wholeTreeDiff was already
+  // fixed for. Swapping outright would have lost every deletion (filesInDiff only
+  // matches `+++ b/<path>`, never `/dev/null`), so both are checked together.
+  it("names files inside a bumped submodule in changedFiles, and still names a deleted file", async () => {
+    const innerRoot = join(root, "inner-changedfiles");
+    mkdirSync(innerRoot, { recursive: true });
+    const gInner = (...a: string[]) => execFileSync("git", a, { cwd: innerRoot, stdio: "pipe" }).toString().trim();
+    gInner("init", "-q", "-b", "main");
+    gInner("config", "user.email", "t@e.com");
+    gInner("config", "user.name", "t");
+    writeFileSync(join(innerRoot, "f.txt"), "a\n");
+    gInner("add", "-A");
+    gInner("commit", "-qm", "commit A");
+    const commitA = gInner("rev-parse", "HEAD");
+    writeFileSync(join(innerRoot, "f.txt"), "a\nb\n");
+    gInner("add", "-A");
+    gInner("commit", "-qm", "commit B");
+    const commitB = gInner("rev-parse", "HEAD");
+
+    writeFileSync(join(repo, "remove.txt"), "gone soon\n");
+    g("-c", "protocol.file.allow=always", "submodule", "add", "-q", innerRoot, "inner");
+    execFileSync("git", ["checkout", "-q", commitA], { cwd: join(repo, "inner"), stdio: "pipe" });
+    g("add", "-A");
+    g("commit", "-qm", "add submodule at A, and a file to remove later");
+
+    execFileSync("git", ["checkout", "-q", commitB], { cwd: join(repo, "inner"), stdio: "pipe" });
+    g("rm", "-q", "remove.txt");
+    g("add", "-A");
+    g("commit", "-qm", "bump submodule to B, remove a file");
+
+    const d = await computeDiff(repo, "main~1");
+    expect(d.changedFiles).toContain("inner/f.txt");
+    expect(d.changedFiles).toContain("remove.txt");
   });
 });
 

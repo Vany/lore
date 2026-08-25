@@ -12,14 +12,7 @@ import { mkdtempSync, rmSync, writeFileSync, existsSync, utimesSync, renameSync 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  HEARTBEAT_FILE,
-  HEARTBEAT_STALE_MS,
-  REQUEST_FILE,
-  mirrorRefresherAge,
-  requestMirrorRefresh,
-  SERVING_FILE,
-} from "./mirror-request.ts";
+import { HEARTBEAT_FILE, HEARTBEAT_STALE_MS, REQUEST_FILE, requestMirrorRefresh, SERVING_FILE } from "./mirror-request.ts";
 
 let dir: string;
 
@@ -141,13 +134,5 @@ describe("asking the host to fetch", () => {
     clearTimeout(t);
 
     expect(out.fetched).toBe(true);
-  });
-
-  it("reports the refresher's age for the operator view", async () => {
-    expect(await mirrorRefresherAge(dir), "no refresher is not age zero").toBeUndefined();
-    beat(5_000);
-    const age = await mirrorRefresherAge(dir);
-    expect(age).toBeGreaterThan(3_000);
-    expect(age).toBeLessThan(30_000);
   });
 });

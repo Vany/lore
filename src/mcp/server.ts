@@ -1308,7 +1308,25 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
 
       // Recorded BEFORE the patch, because the refusal below has to be able to undo it.
       const before = await treeHash(worktree);
-      await applyPatch(worktree, patch);
+      // lore-ok[8c09e43a]: found by lore's own review, the direct consequence of giving
+      // applyPatch a timeout (`lore-ok[40f980fe]`) — a killed mid-write used to be
+      // unreachable (a hang, not a throw), so a bare `await` here never needed to restore
+      // anything on failure: every OTHER applyPatch throw genuinely leaves the worktree
+      // untouched. A timeout kill does not — its own message says so explicitly — so this
+      // path now needs the identical restore-on-catch consumeHeldDiffs already has
+      // (review.ts:236-249) rather than leaving a partial apply sitting in the worktree
+      // for the next round's computeDiff (INV-3) to read as ratified work.
+      try {
+        await applyPatch(worktree, patch);
+      } catch (e) {
+        await restoreTree(worktree, before).catch((e2: unknown) => {
+          console.error(
+            `[lore:log] could not restore ${review_id}'s worktree after a failed apply — ` +
+              `it is left at a tree nobody has seen: ${e2 instanceof Error ? e2.message : String(e2)}`,
+          );
+        });
+        throw e;
+      }
 
       const applied = await treeHash(worktree);
       if (applied !== tree_hash) {

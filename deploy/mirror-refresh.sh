@@ -181,7 +181,16 @@ one_pass() {
       # refs/remotes/origin/*, so a clone alone leaves the mirror in the state where
       # `origin/<branch>` does not resolve and a review silently takes the frozen
       # local branch instead. The refspec and the fetch are what finish the job.
+      #
+      # `{ beat; true; }` BETWEEN THEM — found by lore's own review of the per-repo
+      # `beat` fix just above: THIS branch alone runs two $LIMIT-bounded commands
+      # sequentially, clone then fetch, each up to FETCH_TIMEOUT — so a first clone
+      # landing near the limit followed by its fetch could still leave a gap up to
+      # 2×FETCH_TIMEOUT before reaching the per-repo `beat` after this whole block,
+      # exceeding HEARTBEAT_STALE_MS even after that fix. `true` keeps a hiccup writing
+      # the heartbeat file from being read as "the clone failed" by the `if` below.
       if err=$( { $LIMIT git clone --bare -- "$url" "$bare" \
+            && { beat; true; } \
             && git -C "$bare" config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*' \
             && $LIMIT git -C "$bare" fetch --prune --tags origin; } 2>&1); then
         log "cloned   $name"
@@ -193,6 +202,14 @@ one_pass() {
         failed=$((failed + 1))
       fi
     fi
+    # AFTER EVERY REPO, NOT ONLY BETWEEN PASSES — found by lore's own review of
+    # src/git (mirror-request.ts's HEARTBEAT_STALE_MS is the reader on the other
+    # side). The main loop's own `beat` between `one_pass` and `serve_requests` bounds
+    # the gap by the WHOLE pass's length, which is every registered repo's
+    # $FETCH_TIMEOUT summed — already past HEARTBEAT_STALE_MS with two repos, and
+    # growing without bound as more are registered. Beating per repo instead bounds
+    # the real gap at ONE repo's fetch, however many are registered.
+    beat
   done < "$list"
 
   rm -f "$list"

@@ -21,7 +21,7 @@
  * SPEC: SPEC.md D-100, D-65
  */
 
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 /** Where the two sides meet. Both names live here so they cannot drift apart. */
@@ -41,14 +41,58 @@ export const SERVING_FILE = `${REQUEST_FILE}.serving`;
 /**
  * How stale a heartbeat may be before we call the watcher dead.
  *
- * Generous against the loop's own period: a pass that is mid-fetch on a large repository
- * has not written a heartbeat for as long as that fetch takes, and calling it dead then
- * would refuse a review because the host was busy doing the very thing we asked for.
+ * Generous against `mirror-refresh.sh`'s own per-repo fetch timeout (`FETCH_TIMEOUT`,
+ * default 240s, `LORE_MIRROR_TIMEOUT` to change it on the host), not against the loop's
+ * outer period — found by lore's own review: this used to be 90s with that same "generous
+ * against the loop's own period" reasoning, but the loop's `beat` used to run only BETWEEN
+ * full passes, and one pass is every registered repo's fetch, sequentially, each up to
+ * `FETCH_TIMEOUT` — so a legitimate mid-pass gap with two or more repos already exceeded
+ * 90s, and grew without bound as more repos were registered. `mirror-refresh.sh` now beats
+ * after every repo, not only between passes, which bounds the real gap at one repo's
+ * timeout regardless of how many are registered — but this constant assumes the DEFAULT
+ * `FETCH_TIMEOUT`; a deployment that raises `LORE_MIRROR_TIMEOUT` needs this raised to
+ * match, since nothing here can see that host-side env var.
  */
-export const HEARTBEAT_STALE_MS = 90_000;
+export const HEARTBEAT_STALE_MS = 300_000;
 
-/** How long to wait for the host to consume the request before giving up on it. */
-export const REFRESH_TIMEOUT_MS = 45_000;
+/**
+ * How long to wait for the host to consume the request before giving up on it.
+ *
+ * Found by lore's own review, the same underlying gap as `HEARTBEAT_STALE_MS` above:
+ * `serve_requests` answers ANY on-demand request by running a full `one_pass` — every
+ * registered repo, sequentially, each up to `FETCH_TIMEOUT` (default 240s) — not a
+ * targeted fetch of the one repo the caller actually needs. This is `addWorktree`'s
+ * SYNCHRONOUS path (a client that just pushed and immediately asked for a review, the
+ * exact D-100 shape this whole mechanism exists to answer), so timing out here throws
+ * `DidNotRun` and fails the review round even though the daemon is alive and
+ * correctly working.
+ *
+ * lore-ok[dcaac29b]: was 90_000, raised to match `HEARTBEAT_STALE_MS` — found wrong by
+ * lore's own review, against my own reasoning in this same comment: the previous
+ * version claimed 90s "closes the common case (one slow repo, comfortably under it)",
+ * which its own first paragraph already contradicts — a SINGLE legitimate fetch can
+ * take up to `FETCH_TIMEOUT` (240s default), and 90 is not comfortably under 240, it
+ * is under it by less than half. The reason given for staying smaller than
+ * `HEARTBEAT_STALE_MS` — "a client's own MCP transport may time out a single call
+ * well before 300s" — was never verified against an actual number anywhere in this
+ * codebase or its docs, while the failure this shortness causes is real and
+ * reproduced: a healthy daemon, mid-fetch, reported as unreachable, failing a review
+ * round that per this repo's own CLAUDE.md blocks a push. An unverified risk of a
+ * slower call loses to a confirmed one of a wrong, unrecoverable-by-retry answer, so
+ * this now shares `HEARTBEAT_STALE_MS`'s margin against the same `FETCH_TIMEOUT`
+ * ceiling rather than guessing a smaller number under it. Kept as a separate constant
+ * from `HEARTBEAT_STALE_MS` regardless, because they answer different questions (is
+ * anyone listening, at all, vs. how long this one call personally waits) even though
+ * today they share a value.
+ *
+ * Still bounded by the SAME per-repo-granularity gap TODO.md already tracks ("A
+ * COMPLETED SYNC PASS IS NOT A PER-REPO GUARANTEE") and deliberately defers as its own
+ * change: on a deployment with several repos all needing a fetch in the same pass,
+ * this can still fire before `one_pass` returns, no matter how generous. That case is
+ * unchanged by this fix and not what this fix claims to close — only the single-repo
+ * case is.
+ */
+export const REFRESH_TIMEOUT_MS = 300_000;
 
 export interface RefreshOutcome {
   /** Did a fetch actually happen while we waited? */
@@ -130,18 +174,4 @@ export async function requestMirrorRefresh(
     }
     await new Promise((r) => setTimeout(r, 250));
   }
-}
-
-/** What the host wrote when it last completed a pass, for `/status` and the board. */
-export async function mirrorRefresherAge(dataDir: string, now: () => number = Date.now): Promise<number | undefined> {
-  const beat = await stat(join(dataDir, HEARTBEAT_FILE)).then(
-    (s) => s.mtimeMs,
-    () => undefined,
-  );
-  return beat === undefined ? undefined : now() - beat;
-}
-
-/** Read for diagnostics only — the request's own content is never part of the protocol. */
-export async function pendingRequest(dataDir: string): Promise<string | undefined> {
-  return readFile(join(dataDir, REQUEST_FILE), "utf8").catch(() => undefined);
 }
