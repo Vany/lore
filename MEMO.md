@@ -8,10 +8,10 @@ surprised me.
 **What changed.** Vany asked to "update and refine all our prompts and texts... it
 is prompts too in fact" — MCP tool docs, resource docs, the review MCP prompt, the
 model-facing reviewer prompts, and the CLI's help text, read in full against each
-other rather than against any single file. Three real gaps, all D-130 aftermath:
-`RESOURCE_DOCS["lore://docs/workflow"]` never mentioned `mode: "folder"` as an
-alternative to `into` (the numbered loop also had a stale gap at step 3 from an
-earlier edit); `TOOL_DOCS.attest` didn't say a folder review's attestation line
+other rather than against any single file. Three gaps found by reading, all D-130
+aftermath: `RESOURCE_DOCS["lore://docs/workflow"]` never mentioned `mode: "folder"`
+as an alternative to `into` (the numbered loop also had a stale gap at step 3 from
+an earlier edit); `TOOL_DOCS.attest` didn't say a folder review's attestation line
 carries a scope, so a client relaying it could silently drop the one detail that
 makes a folder attestation's claim honest; and `compositionBlock` — a sibling of
 `taskFraming`, both gating on how prose-heavy a diff is — never got the
@@ -21,6 +21,50 @@ the same thing a different way," which is backwards for a stable folder nobody
 just reworded. `cli.ts` was read and had nothing to fix: folder mode is
 deliberately MCP-only (D-130's own stated scope), and the CLI's `USAGE` text
 correctly says nothing about it.
+
+**Then lore's own review of the commit found six more, in the same family.** Read
+by ME the docs said "one review per branch, refused"; the CODE's dedup key has been
+`(branch, path)` since D-130 itself — a folder review and a diff review of the same
+branch, or folder reviews of two different paths, run concurrently, and only a
+second review naming the exact same pair is refused. `TOOL_DOCS.start` and
+`TOOL_DOCS.inbox` both still said the old, branch-only version (`c140bdaf`).
+Separately, `everyClientDocument()` — the corpus every drift guard (hard-coded
+intervals, back-off wording, tools that don't exist) scans — sampled
+`REVIEW_PROMPT_TEXT` in diff mode only, so its folder-mode-only sentences (the
+opening line, the `review_start` call itself) were invisible to every one of those
+guards (`51863c19`); now sampled once per mode. And `TOOL_DOCS.poll`'s compaction
+remedy ("a narrower commit range, or merge in stages") was diff-mode-only, with no
+folder-mode equivalent stated anywhere a client hitting it would find one
+(`86264d27`).
+
+**Twice in this round, my own fix for one of these carried a new wrong claim about
+the same mechanics, caught by the very next round.** Fixing `c140bdaf` I wrote
+"review_start on that exact pair abandons every justification" for the still-open
+case — false: plain `review_start` on an open `(branch, path)` is REFUSED, not
+destructive; only `restart: true` discards anything (`f5cf8d9c`). Fixing
+`86264d27` I wrote "restart with a narrower path" as the folder-mode compaction
+remedy — also false: `restart`'s cancel is keyed to the exact `(branch, path)` it
+is called with, so a narrower path finds nothing open and silently no-ops, leaving
+the wide review running (`373ecdd2`); the real remedy is `review_cancel` the wide
+one, then `review_start` fresh. Both wrong sentences were plausible-sounding
+descriptions of `restart`/`review_start` written from memory of the general shape
+rather than from re-reading `server.ts`'s actual branches — worth remembering
+that a fix touching the SAME mechanism a finding was just raised about deserves a
+re-read of the code, not just of the sentence being replaced.
+
+**One finding justified rather than fixed (`170690b5`, HIGH).** The reviewer
+correctly noticed these fixes existed as held `review_submit` diffs but not yet in
+the local commit — true in the instant it read the tree, and exactly this
+project's own D-77 working agreement: submit fixes for the whole review, amend
+the local commit once with exactly what was submitted, only after a terminal
+verdict. Answered with a `lore-ok` explaining the workflow rather than committing
+early, which would have broken the "one clean amend" shape for no reason.
+
+**Deployed and verified.** `79b5423` live, `/status` clean. The deploy landed
+mid-round on a colleague's `feat/RIGID-573-simulator-presents-cvv2` review — `t2`
+and `t3` both killed at round 5, 102s in, and both requeued automatically. Stated
+here as the cost, not asked about beforehand: Vany's standing instruction is that
+"deploy" means now, and re-opening that calculation each time is its own cost.
 
 **Ruled out before touching anything.** `streamFix` looked like a plausible fourth
 gap — same "does this know about scopePath" question as `compositionBlock` — but
