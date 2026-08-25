@@ -126,6 +126,49 @@ describe("detectAndRecord", () => {
   it("renders nothing when there is nothing to settle", () => {
     expect(renderConflicts(store, repoId)).toBe("");
   });
+
+  // Found by lore's own review (592cd49f): nothing that retires a rule for a reason
+  // OTHER than resolving a conflict (a document changing under retireForChangedBlob,
+  // retirePolicy, settleLateScreen) ever touched knowledge_conflict — so a conflict
+  // stayed open, and blocking (openConflicts feeds needsHuman directly), forever once
+  // either side was gone. Worse: renderConflicts builds its lookup from LIVE rows
+  // only and silently drops a pair it cannot fully resolve, so the reviewer would be
+  // told "CONTRADICTIONS TO RESOLVE" and shown nothing under it — needs_human with no
+  // way to ever clear it, since resolveConflict (the only thing that closes a row)
+  // needs a live pair to retire one side of.
+  it("stops blocking once a document edit retires one side of a recorded conflict", () => {
+    const withProvenance = (statement: string) =>
+      store.addKnowledge({
+        repoId, kind: "rule", source: "ingested", statement, why: undefined, path: undefined,
+        cwe: undefined, provenance: "PROG.md", sourceBlob: "blob-v1", confidence: 1,
+      });
+    withProvenance("money amounts are always integers in minor units");
+    withProvenance("money amounts are never integers in minor units");
+    detectAndRecord(store, repoId);
+    expect(store.openConflicts(repoId)).toHaveLength(1);
+
+    // The ordinary D-20 re-derive path: PROG.md changed, so its rules are retired —
+    // nothing here is "resolving" the contradiction, the document just moved on.
+    store.retireForChangedBlob(repoId, "PROG.md", "blob-v2", "deterministic-v1");
+
+    expect(
+      store.openConflicts(repoId),
+      "a conflict naming a retired rule cannot be settled by anyone and must not block passing",
+    ).toHaveLength(0);
+    expect(
+      renderConflicts(store, repoId),
+      "must not show an empty CONTRADICTIONS TO RESOLVE section with nothing to resolve",
+    ).toBe("");
+  });
+
+  it("keeps blocking when both sides of a conflict are still live", () => {
+    add("money amounts are always integers in minor units");
+    add("money amounts are never integers in minor units");
+    detectAndRecord(store, repoId);
+
+    expect(store.openConflicts(repoId)).toHaveLength(1);
+    expect(renderConflicts(store, repoId).length).toBeGreaterThan(0);
+  });
 });
 
 // THE FIRST TIME needs_human EVER FIRED IN PRODUCTION, IT WAS WRONG.

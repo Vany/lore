@@ -2341,11 +2341,29 @@ export class Store {
    * Both `open` and `needs-human` count. Escalating to a person is not progress
    * toward passing — it is a statement that passing requires someone who has not
    * looked yet.
+   *
+   * lore-ok[592cd49f]: JOINs both sides against LIVE `knowledge` rows now — found by
+   * lore's own review, reproduced directly: nothing that retires a rule for a reason
+   * OTHER than resolving a conflict (`retireForChangedBlob` on a document edit,
+   * `retirePolicy`, `settleLateScreen`) ever touched `knowledge_conflict`, so a
+   * conflict recorded between two rules stayed `open` — and blocking — forever once
+   * either rule was gone. Worse, `renderConflicts` builds its `byId` map from live
+   * rows only and silently drops a pair it cannot fully resolve, so the reviewer was
+   * told to settle a contradiction and shown nothing to settle: `needs_human` with no
+   * way to ever clear it, since `resolveConflict` is the only path that closes a row
+   * and it needs a live pair to retire one side of. A conflict whose rule no longer
+   * exists cannot be reasoned about by anyone, so it is not "still blocking" by this
+   * function's own contract — the row itself is untouched (still `open` in the table,
+   * the history intact), only what counts as OUTSTANDING changes.
    */
   openConflicts(repoId: string): readonly { left: string; right: string; state: string }[] {
     const rows = this.db
       .prepare(
-        "SELECT left_id, right_id, state FROM knowledge_conflict WHERE repo_id = ? AND state IN ('open', 'needs-human')",
+        `SELECT c.left_id, c.right_id, c.state
+         FROM knowledge_conflict c
+         JOIN knowledge l ON l.id = c.left_id AND l.retired_at IS NULL
+         JOIN knowledge r ON r.id = c.right_id AND r.retired_at IS NULL
+         WHERE c.repo_id = ? AND c.state IN ('open', 'needs-human')`,
       )
       .all(repoId) as Record<string, string>[];
     return rows.map((r) => ({

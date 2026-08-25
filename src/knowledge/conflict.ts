@@ -198,6 +198,16 @@ export function renderConflicts(store: Store, repoId: string): string {
   for (const c of open) {
     const l = byId.get(c.left);
     const r = byId.get(c.right);
+    // lore-ok[592cd49f]: found real by lore's own review, fixed at the SOURCE, not
+    // here — `open` (from `store.openConflicts`) used to include a conflict whose
+    // rule had been retired for a reason unrelated to resolving it (a document
+    // edit, a policy retirement, a late screen-out), so this silently dropped it
+    // from the prompt while `needsHuman` (keyed off the SAME `openConflicts` call)
+    // kept blocking on it forever — nothing left to resolve, and no way to clear it.
+    // `openConflicts` now requires BOTH sides to still be live, so `open` no longer
+    // names a conflict this loop cannot fully render; this remains as the correct
+    // defensive fallback for the two reads (`openConflicts`, then this function's
+    // own `knowledgeFor`) not being one atomic snapshot.
     if (l === undefined || r === undefined) continue;
     lines.push(
       "",
