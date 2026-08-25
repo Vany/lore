@@ -484,8 +484,9 @@ export async function treeDelta(worktree: string, fromTree: string, toTree: stri
  * exists nowhere — not in git, not on the client's disk — and reporting on it with
  * full confidence.
  *
- * Mutates the worktree's index, which is safe because the index belongs to this
- * review alone.
+ * Mutates the worktree's index AND, for a submodule the loop below actually
+ * touches, that submodule's own checkout — both safe because the whole worktree
+ * belongs to this review alone.
  *
  * lore-ok[ad43ea6d]: found by lore's own review, and it is real — `git add -A` does
  * not merely leave a submodule's gitlink alone, it REWRITES it to whatever commit the
@@ -493,20 +494,31 @@ export async function treeDelta(worktree: string, fromTree: string, toTree: stri
  * `applyPatch`'s `--index` fix (`lore-ok[40f980fe]`) had just staged. Verified
  * directly: right after `applyPatch`, the index correctly names the bumped commit;
  * right after THIS function's own `add -A`, `gitlinks` reads the pre-bump commit
- * again, unconditionally, every time. Nothing in this codebase ever wants that:
- * `addWorktree` runs `submodule update --init` exactly once, at worktree creation,
- * and nothing after that ever moves what a submodule directory has checked out — a
- * gitlink only changes because a client's patch changed it, so the index a patch just
- * wrote is the one true value, and `add -A`'s working-tree-wins rule for submodules is
- * wrong for this project specifically. Snapshotting before and restoring after is
- * cheap (`gitlinks` is one `ls-files -s`) and leaves every regular file's handling,
- * which `add -A` gets right, untouched.
+ * again, unconditionally, every time. Restoring the INDEX entry (below) is enough to
+ * make THIS submit's own tree-hash check pass — but not enough on its own, which
+ * `d6f934ac` found: a gitlink's WORKTREE side, for git's own diffing, is whatever the
+ * submodule directory has ACTUALLY CHECKED OUT, never the index. So a bump that only
+ * ever touches the index is invisible to the very NEXT round — `computeDiff`'s
+ * `git diff <mergeBase>` reads the submodule's real HEAD, sees it still at the OLD
+ * commit exactly like `mergeBase` does, and renders zero bytes of patch for a file
+ * `--name-only` still lists as changed. Accepted-but-unreadable: the submit verifies,
+ * every later disk read — the tiers, T0, `codeMoved` — still sees the old bytes, and
+ * the finding the bump was meant to answer can never settle. `git submodule update`
+ * closes it the same way `addWorktree` already trusts it to: reads the INDEX entry
+ * just written (not HEAD, verified directly — this runs with HEAD unmoved) and checks
+ * the submodule out to match. Swallowed on failure for the same reason `addWorktree`'s
+ * own call is (D-65: most commonly a private remote lore has no credentials for, not
+ * this submit's fault) — and largely still visible when it matters: objects missing
+ * is the common way this fails, and that is what leaves the NEXT round's
+ * `--submodule=diff` unable to expand the pair, which `submodulesThatFailedToExpand`
+ * (`diff.ts`) already turns into an explicit warning rather than silence.
  */
 export async function treeHash(worktree: string): Promise<string> {
   const before = await gitlinks(worktree);
   await git(worktree, ["add", "-A"]);
   for (const link of before) {
     await git(worktree, ["update-index", "--cacheinfo", `160000,${link.commit},${link.path}`]);
+    await git(worktree, ["submodule", "update", "--", link.path]).catch(() => {});
   }
   const { stdout } = await git(worktree, ["write-tree"]);
   return stdout.trim();

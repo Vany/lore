@@ -221,6 +221,38 @@ describe("gitlinks reads the worktree a review is reviewing, not its starting HE
     const treeEntries = execFileSync("git", ["ls-tree", tree], { cwd: outerDir, encoding: "utf8" });
     expect(treeEntries, "the tree object treeHash wrote must itself name the bumped commit").toContain(commitB);
   });
+
+  // Found by lore's own review (d6f934ac), on top of the fix just above: restoring
+  // ONLY the index entry makes THIS submit verify, but a gitlink's worktree side for
+  // git's own diffing is the submodule's ACTUAL checkout, not the index — so the next
+  // round's `computeDiff` (a plain `git diff <mergeBase>`, reproduced here the same
+  // way) would still read the submodule's old, unmoved HEAD and render zero bytes of
+  // patch for a file `--name-only` still lists as changed. Without checking the
+  // submodule out to match, this test's diff below comes back empty even though
+  // `gitlinks`/`write-tree` already report the bump correctly.
+  it("treeHash also checks the submodule out, so the NEXT round's diff can see the bump", async () => {
+    const mergeBase = execFileSync("git", ["rev-parse", "HEAD"], { cwd: outerDir, encoding: "utf8" }).trim();
+
+    execFileSync("git", ["checkout", "-q", commitB], { cwd: join(outerDir, "inner"), stdio: "ignore" });
+    const patch = execFileSync("git", ["diff", "--submodule=short"], { cwd: outerDir, encoding: "utf8" });
+    execFileSync("git", ["checkout", "-q", commitA], { cwd: join(outerDir, "inner"), stdio: "ignore" });
+
+    await applyPatch(outerDir, patch);
+    await treeHash(outerDir);
+
+    const innerHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: join(outerDir, "inner"), encoding: "utf8" }).trim();
+    expect(innerHead, "the submodule's own checkout must follow the restored index entry, not stay at the old commit").toBe(
+      commitB,
+    );
+
+    const nextRoundDiff = execFileSync(
+      "git",
+      ["-c", "core.quotePath=false", "diff", "--submodule=diff", "--no-color", mergeBase],
+      { cwd: outerDir, encoding: "utf8" },
+    );
+    expect(nextRoundDiff.length, "the bump must not render as an empty, invisible patch next round").toBeGreaterThan(0);
+    expect(nextRoundDiff).toContain(`Submodule inner ${commitA.slice(0, 7)}`);
+  });
 });
 
 /**
