@@ -53,7 +53,18 @@ export interface ReviewRow {
    * branch name to the thing they actually want to look at.
    */
   readonly pullRequest?: string | undefined;
-  readonly intoRef: string;
+  /**
+   * The branch this review diffs against. `undefined` means there is none to diff
+   * against at all — a folder review (D-130), scoped by `reviewPath` instead.
+   */
+  readonly intoRef?: string | undefined;
+  /**
+   * Set only for a folder review (D-130): the path it is scoped to (`"."` for the
+   * whole worktree), reviewed as a full read against git's empty tree rather than
+   * against `intoRef`. `undefined` is an ordinary branch-vs-`into` review — today's
+   * only shape before this column existed, and still the default.
+   */
+  readonly reviewPath?: string | undefined;
   readonly ticket: string;
   readonly type: string;
   readonly state: ReviewState;
@@ -388,8 +399,8 @@ export class Store {
     const t = now();
     this.db
       .prepare(
-        `INSERT INTO review(id, repo_id, principal, token_hash, tiers, branch, pull_request, into_ref, ticket, type, state, tree_hash, origin_tree_hash, ladder, created_at, updated_at)
-         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO review(id, repo_id, principal, token_hash, tiers, branch, pull_request, into_ref, review_path, ticket, type, state, tree_hash, origin_tree_hash, ladder, created_at, updated_at)
+         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         r.id,
@@ -399,7 +410,14 @@ export class Store {
         n(r.tiers),
         r.branch,
         n(r.pullRequest),
-        r.intoRef,
+        // "" rather than NULL: `into_ref` predates this column and is TEXT NOT NULL in
+        // the original CREATE TABLE, and this project's migration system deliberately
+        // refuses anything beyond ADD COLUMN (schema.ts) — relaxing an existing NOT
+        // NULL needs a table rebuild, real risk on a live database for a boundary this
+        // narrow. "" cannot collide with a real branch name; git itself refuses an
+        // empty ref name. Confined to this file — see the matching read below.
+        r.intoRef ?? "",
+        n(r.reviewPath),
         r.ticket,
         r.type,
         r.state,
@@ -445,14 +463,31 @@ export class Store {
   openReviewFor(
     repoId: string,
     branch: string,
+    /**
+     * `undefined` for an ordinary diff review; a path for a folder review (D-130).
+     *
+     * Part of the dedup key, not just the lookup: a folder review of `src/payments`
+     * and a diff review of the same branch are different work, and so are folder
+     * reviews of two different paths on the same branch. `IS`, not `=` — SQLite's `=`
+     * never matches NULL, which would have made every diff-mode review on a branch
+     * invisible to its own one-review-per-branch check.
+     */
+    path?: string | undefined,
   ): { id: string; state: string; round: number; ageHours: number } | undefined {
+    // lore-ok[b547e780]: equivalent spellings of one path ("src", "src/", "./src")
+    // would defeat this comparison if they ever reached it — fixed one layer up, not
+    // here: `mcp/server.ts`'s `normalizeReviewPath` canonicalizes `path` before it is
+    // ever passed in, for both this lookup and the row `createReview` writes, so the
+    // two sides of this `IS` are always already in the same spelling by the time this
+    // function sees them. Verified directly: http.test.ts's "treats equivalent
+    // spellings of one path as the same review, not three".
     const row = this.db
       .prepare(
         `SELECT id, state, ladder, updated_at FROM review
-         WHERE repo_id = ? AND branch = ? AND state NOT IN (${TERMINAL_SQL})
+         WHERE repo_id = ? AND branch = ? AND review_path IS ? AND state NOT IN (${TERMINAL_SQL})
          ORDER BY created_at DESC LIMIT 1`,
       )
-      .get(repoId, branch) as Record<string, string> | undefined;
+      .get(repoId, branch, n(path)) as Record<string, string> | undefined;
     if (row === undefined) return undefined;
     const ladder = JSON.parse(row["ladder"] ?? "{}") as { round?: number };
     const updated = Date.parse(row["updated_at"] ?? "");
@@ -476,7 +511,9 @@ export class Store {
       repoId: row["repo_id"] ?? "",
       principal: row["principal"] ?? "",
       branch: row["branch"] ?? "",
-      intoRef: row["into_ref"] ?? "",
+      // The write side's "" sentinel, undone. See the matching comment in createReview.
+      intoRef: row["into_ref"] === "" || row["into_ref"] === undefined ? undefined : row["into_ref"],
+      reviewPath: un(row["review_path"] ?? null),
       ticket: row["ticket"] ?? "",
       type: row["type"] ?? "",
       state: (row["state"] ?? "failed") as ReviewState,
@@ -3349,7 +3386,7 @@ export class Store {
   boardReviews(finishedSinceIso: string, limit = 60): readonly Record<string, string | null>[] {
     return this.db
       .prepare(
-        `SELECT id, repo_id, branch, pull_request, into_ref, type, state, ladder, created_at, updated_at FROM review
+        `SELECT id, repo_id, branch, pull_request, into_ref, review_path, type, state, ladder, created_at, updated_at FROM review
          WHERE state NOT IN (${TERMINAL_SQL}) OR updated_at > ?
          ORDER BY (state IN (${TERMINAL_SQL})), updated_at DESC
          LIMIT ?`,

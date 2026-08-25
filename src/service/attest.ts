@@ -158,8 +158,16 @@ export async function attest(store: Store, reviewId: string, principal: string, 
       ? `${tiers} tiers (${named})`
       : `${tiers} tiers (${named}) — ${caveats.join("; ")}${partial ? ", so this is PARTIAL" : ""}`;
 
+  // D-130, found by lore's own review of D-130 (medium, CWE-1078): a folder review's
+  // tiers read only `reviewPath`, but `review.treeHash` is the WHOLE WORKTREE's tree
+  // — hashed the same way for every review, folder or diff (D-40). Without this, "lore:
+  // reviewed tree X" reads as a claim about everything at X, and a reader — or
+  // automation gating a merge on the signature — has no way to tell a scoped read from
+  // a full one without leaving the signed line for the unsigned audit trail. Named here
+  // instead, in the one output whose whole value is that it can be trusted on its own.
+  const scopedTo = review.reviewPath === undefined ? "" : ` (scoped to ${review.reviewPath})`;
   const line =
-    `lore: reviewed tree ${review.treeHash} against this repo's rules and lore's own — ` +
+    `lore: reviewed tree ${review.treeHash}${scopedTo} against this repo's rules and lore's own — ` +
     `${scope}, ${counts.raised} findings, ${counts.fixed} fixed, ${counts.justified} justified.`;
 
   const { privateKey, publicKey } = await loadOrCreateKey(keyPath);

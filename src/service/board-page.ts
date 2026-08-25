@@ -351,7 +351,9 @@ function detail(r) {
   // to invent the question or drop it, which is what the MCP surface once did until a
   // client said it could not surface a question it was never given.
   if (r.state === "needs_human") out.push(question(r));
-  out.push('<div class="dim">' + esc(r.id) + " · " + esc(r.type) + " · into " + esc(r.into) +
+  // D-130: a folder review carries a path, not an into to merge into.
+  const target = r.path ? "folder " + esc(r.path) : "into " + esc(r.into);
+  out.push('<div class="dim">' + esc(r.id) + " · " + esc(r.type) + " · " + target +
     " · started " + esc(r.createdAt.slice(0, 19).replace("T", " ")) + "Z</div>");
 
   if (r.tiers.length > 0) {

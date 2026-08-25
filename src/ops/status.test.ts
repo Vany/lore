@@ -232,6 +232,52 @@ describe("what a running review is actually doing", () => {
   });
 });
 
+// D-130: a folder review carries no into_ref (the write side stores "" there — see
+// store.ts's createReview). Left unguarded, `${into_ref}`.slice(0, 12) would render
+// as a bare arrow with nothing after it rather than telling the reader what this
+// review is actually scoped to.
+describe("a folder review's board line names its path, not a missing into", () => {
+  it("shows the folder path instead of an empty into", () => {
+    const repo = store.upsertRepo("demo", "git@x:demo.git");
+    store.createReview({
+      id: "rev_folder",
+      repoId: repo.id,
+      principal: "alice",
+      branch: "feat/x",
+      reviewPath: "src/payments",
+      ticket: "t",
+      type: "code-arch",
+      state: "running",
+      ladder: initialState(),
+    });
+
+    const out = render();
+    expect(out).toContain("folder: src/payments");
+    expect(out).not.toContain("undefined");
+  });
+
+  // The ordinary case stays exactly as it was — this is one new branch, not a
+  // rewrite of the line every other review's status depends on.
+  it("still shows into for an ordinary diff review", () => {
+    const repo = store.upsertRepo("demo", "git@x:demo.git");
+    store.createReview({
+      id: "rev_diff",
+      repoId: repo.id,
+      principal: "alice",
+      branch: "feat/x",
+      intoRef: "main",
+      ticket: "t",
+      type: "code-arch",
+      state: "running",
+      ladder: initialState(),
+    });
+
+    const out = render();
+    expect(out).toContain("main");
+    expect(out).not.toContain("folder:");
+  });
+});
+
 /**
  * Every state the review machine can reach has to have a colour and a sentence.
  *

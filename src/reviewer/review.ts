@@ -43,7 +43,7 @@ import { type Alert, CONDITIONS } from "../ops/alerts.ts";
 import { startOfDayIso } from "../ops/spend.ts";
 import { ServiceUnreachable, CancelledByLore, DidNotRun, Exhausted, ProviderAuthFailed, TierUnavailable, TooLargeForTier } from "../core/errors.ts";
 import { hunkAround, hunkStillPresent, makeScope, type Scope } from "../core/scope.ts";
-import { baseCommitFor, blobSha, computeDiff, renderDiff } from "../git/diff.ts";
+import { baseCommitFor, blobSha, computeDiff, renderDiff, wholeTreeDiff } from "../git/diff.ts";
 import { applyPatch, restoreTree, treeDelta, treeHash } from "../git/repo.ts";
 import { detectAndRecord, renderConflicts } from "../knowledge/conflict.ts";
 import { promoteRecurring } from "../knowledge/derive.ts";
@@ -408,12 +408,32 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // A row with no base and a round already past 0 predates the column: it keeps the old
   // recompute rather than being given a base mid-flight, which would change what it
   // claims to have read.
-  let pinnedBase = review.baseCommit;
-  if (pinnedBase === undefined && review.ladder.round === 0) {
-    pinnedBase = await baseCommitFor(worktree, review.intoRef);
-    if (pinnedBase !== undefined) store.updateReview(reviewId, { baseCommit: pinnedBase });
+  //
+  // A FOLDER REVIEW (D-130) HAS NO `into` TO PIN A BASE AGAINST — `reviewPath` set means
+  // this review is a full read of that path, not a diff between two refs, so none of
+  // the base-pinning machinery above applies. `wholeTreeDiff` produces the same
+  // `ReviewDiff` shape by a shorter, separate path (see its own doc comment for why it
+  // is not a branch inside `computeDiff`).
+  let diff;
+  if (review.reviewPath !== undefined) {
+    diff = await wholeTreeDiff(worktree, review.reviewPath);
+  } else {
+    // NEVER undefined here in practice — every row is one mode or the other (the MCP
+    // layer requires `into` whenever `path` is absent, and folder-mode rows always
+    // carry a `reviewPath`) — but stated as a real check rather than a silent `?? ""`
+    // fallback, because a fallback here would turn a genuine data-integrity bug into
+    // `computeDiff`'s "branch '' does not exist", one confusing layer away from the
+    // actual cause.
+    if (review.intoRef === undefined) {
+      throw new Error(`review ${reviewId} has neither intoRef nor reviewPath — cannot tell what to review`);
+    }
+    let pinnedBase = review.baseCommit;
+    if (pinnedBase === undefined && review.ladder.round === 0) {
+      pinnedBase = await baseCommitFor(worktree, review.intoRef);
+      if (pinnedBase !== undefined) store.updateReview(reviewId, { baseCommit: pinnedBase });
+    }
+    diff = await computeDiff(worktree, review.intoRef, pinnedBase);
   }
-  const diff = await computeDiff(worktree, review.intoRef, pinnedBase);
   store.setBehindBy(reviewId, diff.behindBy);
 
   // NOTHING TO READ IS NOT A CLEAN REVIEW (INV-1).
@@ -437,16 +457,24 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     // the first two told that client its branch was merged or its pin was wrong (neither
     // true) and sent it to buy a fresh ladder to re-read the code it had just deleted, as
     // the only route off a `failed` state it reached by doing what it was asked.
+    //
+    // FOLDER MODE (D-130) HAS NO BASE TO BE MERGED INTO OR PINNED AGAINST — the only way
+    // it reaches an empty change-set is a path with nothing tracked at it, so its message
+    // says that instead of naming a branch/base relationship that does not apply here.
     const why =
-      `there is nothing to review: the tree at ${diff.mergeBase.slice(0, 12)} and the branch tip are ` +
-      `identical, so the change-set is empty. NOTHING WAS READ, and this is not a pass. ` +
-      `If you meant to do that — a fix that reverts this branch back to its base, because the change ` +
-      `was not wanted — then there is nothing left to review and NOTHING FURTHER IS NEEDED FROM YOU: ` +
-      `this review is over, the branch carries no change, and there is no outstanding finding. Report ` +
-      `that to your user and stop. ` +
-      `Otherwise this branch is already merged into '${review.intoRef}', or the review was pinned to a ` +
-      `base that already contains it; if you still need a verdict on the work, start a review against a ` +
-      `base from BEFORE it (a scratch ref at the pre-change commit is the usual way).`;
+      review.reviewPath !== undefined
+        ? `there is nothing to review: '${review.reviewPath}' has no tracked files (and nothing untracked) at ` +
+          `'${review.branch}'. NOTHING WAS READ, and this is not a pass. Check the path is right, and that it ` +
+          `exists on the branch you named.`
+        : `there is nothing to review: the tree at ${diff.mergeBase.slice(0, 12)} and the branch tip are ` +
+          `identical, so the change-set is empty. NOTHING WAS READ, and this is not a pass. ` +
+          `If you meant to do that — a fix that reverts this branch back to its base, because the change ` +
+          `was not wanted — then there is nothing left to review and NOTHING FURTHER IS NEEDED FROM YOU: ` +
+          `this review is over, the branch carries no change, and there is no outstanding finding. Report ` +
+          `that to your user and stop. ` +
+          `Otherwise this branch is already merged into '${review.intoRef}', or the review was pinned to a ` +
+          `base that already contains it; if you still need a verdict on the work, start a review against a ` +
+          `base from BEFORE it (a scratch ref at the pre-change commit is the usual way).`;
     store.setFailureReason(reviewId, why);
     store.updateReview(reviewId, { state: "failed" });
     throw new DidNotRun(`review ${reviewId} stopped: ${why}`);
@@ -909,6 +937,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       // times — and found the only thing such a tree offers, which is comments.
       round: review.ladder.round + 1,
       tierRounds: review.ladder.tierRounds,
+      scopePath: diff.scopePath,
     });
 
   // COMPACT TO THE READER, rather than to a constant.
@@ -942,6 +971,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     continued: await compactToFit(input.reviewer, member, renderDiff(diff), (diffText) =>
       continuedPrompt({
         diff: diffText,
+        scopePath: diff.scopePath,
         t0: renderT0(t0ForTier),
         // THIS TIER'S OWN open findings, not the review's. D-10 says the tier that raised a
         // finding judges the answer to it, so handing t2 the findings t1 is still waiting
@@ -2943,16 +2973,6 @@ async function scopeOf(worktree: string, file: string, line: number | undefined)
  * else to put its reason, and missing that would reintroduce the nag for exactly the
  * files that cannot avoid it.
  */
-/**
- * Files a unified diff touches, for the preview's marker scan.
- *
- * `+++ b/<path>` is the post-image name, which is the one that exists in the worktree
- * after the patch applies. `/dev/null` is a deletion and has no marker to find.
- */
-export function filesInDiff(diff: string): readonly string[] {
-  return [...diff.matchAll(/^\+\+\+ b\/(.+)$/gm)].map((m) => (m[1] ?? "").trim()).filter((p) => p.length > 0);
-}
-
 export async function alreadyAnswered(
   worktree: string,
   reviewId: string,

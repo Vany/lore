@@ -58,6 +58,14 @@ Draft text. These are the deliverable, not a summary of it.
 
 > Begin an independent multi-model review of `branch` against `into`.
 >
+> <!-- lore-ok[45d7c573]: fixed here, same round it was raised — the folder-mode
+>      paragraph immediately below. Verified directly against the current file. -->
+> **Folder mode is the alternative to a diff (D-130).** Pass `mode: "folder"` and
+> `path` instead of `into` to review what is AT a path — no base, every file in it
+> read as it stands rather than as a change. `into` and `path` are mutually
+> exclusive. `path` is required when `mode` is `"folder"` and has no default to the
+> repository root — pass `"."` to mean the whole tree explicitly.
+>
 > **`ticket` is required** — the text of the task this change implements. Without it
 > the reviewers can only ask whether the code is correct, never whether it is the
 > code that was asked for. Paste the ticket body; do not summarise it, and do not
@@ -270,7 +278,9 @@ MCP prompts are **user-controlled** and surface as slash commands, so this appea
 as `/lore:review <branch> <into>`. It exists because the loop is multi-step and
 stateful: an agent handed only tools will improvise it, and §2 lists how that goes.
 
-Arguments: `branch` (required), `into` (required).
+Arguments: `branch` (required); `into` (required unless `mode` is `"folder"`);
+`mode` (default `"diff"`; D-130's folder mode, mirroring `review_start` §2.3.3);
+`path` (required when `mode` is `"folder"`, refused otherwise).
 
 Draft returned message:
 

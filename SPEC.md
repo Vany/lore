@@ -507,6 +507,234 @@ snapshot only when no tree is recorded yet AND no round is pending — a state a
 reaching `review_submit` should not be able to reach, since the tool's own precondition
 (`findings exist`) implies a completed round, which always writes this field.
 
+**D-130 — a review can target a folder instead of a diff: no base, every file at a
+path read as it stands. BUILT 2026-08-25.**
+
+Every review before this was diff-scoped — `review_start` required `branch` and
+`into`, and the whole pipeline (T0, the model prompts, findings, the ladder,
+attestation) was built around "what changed between two refs." Vany asked for a
+second, explicit way in: point lore at a folder — a whole repository, or a
+subdirectory — and review what's *there*, with diff mode staying the default.
+
+**The move that kept this small: represent it as a diff against git's well-known
+empty tree, scoped to a path.** `git diff 4b825dc642cb6eb9a060e54bf8d69288fbee4904
+-- path` (that hash exists in every repository, no setup needed) is an ordinary
+unified diff where every file is shown as added — verified directly before writing
+any code. Because the result is a genuine `ReviewDiff` (`src/git/diff.ts`), almost
+every mechanism downstream of one needs **no changes**: T0's pattern engines are
+already scoped to `diff.changedFiles` (D-92), which `wholeTreeDiff` populates as
+exactly the files under `path` — so they read what folder mode means to review, not
+the whole worktree, with nothing folder-specific added; the model prompts, finding
+storage, staleness (D-56), `review_submit` and the ladder all consume a
+`ReviewDiff`/worktree generically and never inspect how the diff was produced.
+Attestation is the one exception, below. `wholeTreeDiff` is a new function beside
+`computeDiff`, not a branch inside it —
+`computeDiff` is dense with incidents about resolving a real `into` (merge-base,
+`behindBy`, `mergesClean`, overlap since divergence), none of which has an answer
+without one, and threading a fake base through it risked exactly the kind of edge
+case its own comments document this project having been burned by before.
+
+**`renderDiff` needed a real branch, not just graceful degradation.** Its header
+text ("THIS DIFF IS THE CHANGE THE BRANCH INTRODUCES", a commit list, "the fork
+point") is actively wrong for a folder review — mechanically nothing crashes
+(zeroed `commits`/`behindBy` collapse those blocks harmlessly), but the framing
+would mislead a model into treating a stable, unremarkable folder as a suspicious
+zero-history branch. `ReviewDiff` gained one field, `scopePath: string | undefined`,
+so `renderDiff` (and the empty-diff refusal in `runRound`) can self-detect the mode
+from the diff object itself rather than a second mode parameter threaded everywhere
+one travels. Set, it prints instead: *this is a full read of `path`, not a diff
+against a prior version — every line below is shown as added because that is how a
+whole tree renders as a diff, not because it is new code.*
+
+**MCP surface: `review_start` gained `mode` and `path`, not a new tool.**
+`mode: z.enum(["diff", "folder"])`, default `"diff"` — today's exact behaviour when
+omitted. `path` is required when `mode: "folder"`, refused otherwise; `into` is
+required for `mode: "diff"` (unchanged), refused for `"folder"`, which has no base
+for it to name.
+
+*Why an explicit `mode` rather than inferring folder mode from an omitted `into`:*
+today, forgetting `into` gets a clear schema error. If omission silently meant
+folder mode instead, that mistake would silently review the wrong thing at the
+wrong scope instead of failing loudly — a footgun this project's whole ethos
+(INV-1, D-40, "refuse rather than guess") argues against for the sake of one
+shorter parameter.
+
+*Why `path` has no default to the repository root:* a whole real repository's
+diff-against-empty-tree usually exceeds the existing 600,000-character ceiling
+(INV-7) and every tier that reads it spends real quota on a mostly-truncated
+prompt. Silently defaulting an unscoped "review the folder" to the whole repo risks
+a client burning a full ladder's quota by accident; `"."` said explicitly costs
+nothing and matches how every other ambiguous client intent in this surface is
+refused rather than guessed.
+
+**Store layer: one migration, one pre-existing constraint worked around rather than
+relaxed.** `review.review_path TEXT` is a plain additive `ADD COLUMN` (`schema.ts`),
+nullable, matching every migration before it. `into_ref` predates this feature and
+is `TEXT NOT NULL` in the original `CREATE TABLE` — and this project's migration
+list can only express `ADD COLUMN`, deliberately (`applyMigrations` refuses anything
+else). Relaxing an existing `NOT NULL` needs a real table rebuild, which was real
+risk on a live database for a boundary this narrow. Folder-mode rows instead write
+`""` to `into_ref` — confined entirely to `store.ts`'s read/write boundary and
+translated back to `undefined` there, never leaking the sentinel into the rest of
+the codebase, which sees `ReviewRow.intoRef?: string` exactly as if the column were
+truly nullable. Unambiguous rather than merely convenient: git itself refuses an
+empty ref name, so `""` cannot collide with a real branch.
+
+**One-review-per-branch (D-40) is keyed on `(repo, branch, path)`, not `(repo,
+branch)`.** `store.openReviewFor` gained a `path` parameter, compared with SQL `IS`
+rather than `=` (which never matches NULL, and would have made every ordinary
+diff-mode review invisible to its own dedup check). A folder review of one path no
+longer collides with a diff review of the same branch, or a folder review of a
+different path on it. Consequence stated plainly rather than left to be discovered:
+`pull_fresh` on an open folder review must repeat the same `path` to find it, same
+as it already has to repeat the same `branch`.
+
+**D-92's argv-scoping is what actually keeps a folder review inside `path`, and it
+needed no code of its own to change — corrected here after first describing this
+the other way round.** Pattern engines are invoked with `files: diff.changedFiles`
+(`review.ts`), turned into their argv by `scopePaths` (`t0/engines.ts`) — so in
+folder mode they scan exactly `path`'s contents, never the rest of the worktree,
+automatically. **D-68's `preexisting` demotion is a real safety net underneath
+that, not the primary mechanism keeping a folder review scoped:** `scopePaths`
+falls back to scanning everything (`["--", "."]`) once a change-set exceeds 200
+files, and only THAT path — the same one an ordinary large diff already takes —
+can produce an out-of-`path` pattern-engine hit for D-68 to correctly rank below
+the review's own findings. Below that fallback, there is nothing outside `path` to
+demote, because nothing outside it was ever scanned.
+
+**Attestation DOES need a change — found by lore's own review, medium severity,
+after the paragraph above first claimed otherwise.** The signed line's tree hash
+is the whole worktree's, identically for every review (D-40) — that stays, so a
+signature remains checkable against `git rev-parse` regardless of mode — but the
+tiers behind a folder review read only `path`, and "reviewed tree X" with nothing
+further would claim more than that to a reader who takes the signed line on its
+own, as its whole design intends they should be able to. `attest.ts` now appends
+`(scoped to <path>)` right after the tree hash when `reviewPath` is set — a plain
+fact stated beside the claim it qualifies, not a caveat conditioned on anything
+having gone wrong.
+
+**A submodule inside `path` used to lose its findings to D-68's own demotion —
+found by lore's own review, verified directly against a real git submodule fixture
+before fixing.** `changedFiles` came from `git diff --name-only`, which lists a
+submodule only by its gitlink name ("inner"), never the files inside it — true even
+with `--submodule=diff`, confirmed empirically. The patch text (same flag) DOES
+expand it. So a pattern-engine hit on `inner/deep.txt` read `diff.changedFiles` as
+not containing it and was marked `preexisting`, sorted last, exactly the demotion
+D-68 gives a hit genuinely outside the review. In a full read — where the workgroup's
+own submodule shape (D-36, §6.1) makes this a real case, not a hypothetical one —
+that silently buried a first-class finding as inherited repository debt. Fixed by
+building `changedFiles` from the patch text itself (`filesInDiff`, moved here from
+`reviewer/review.ts` — diff-text parsing belongs beside the code producing diff
+text, not one layer up in the code consuming it) rather than a separate
+`--name-only` call.
+
+**The tier-facing prompt wrapper still asked "does it do MORE than was asked?" —
+found by lore's own review, contradicting the very header it wraps.** `renderDiff`'s
+folder-mode framing ("judge it as the code that exists, not as a change someone just
+made") was fixed in an earlier round of this same review, but `reviewPrompt`'s own
+"THE TASK THIS CHANGE IMPLEMENTS" section — unconditional, no branch on scope —
+still told every tier to flag "unrequested refactors, renames and improvements" as
+code nobody decided to write. In folder mode almost everything read is exactly that:
+code nobody "just wrote". A compliant tier reading both instructions would flag a
+stable module's entire pre-existing contents as scope creep. `taskFraming()`
+(`reviewer/prompts.ts`) now branches on `scopePath`: folder mode asks whether the
+code matches what the ticket says it should do, and explicitly says not to flag
+existing code as unrequested.
+
+**`path` reaching outside the worktree was neither refused nor given lore's own
+failure vocabulary — found by lore's own review, matching the precedent `into`
+already set.** `"../shared"` or an absolute path (natural for an agent, which the
+review loop's own prompt trains it to think in) normalized without complaint and
+reached `wholeTreeDiff`'s `git diff ... -- <path>` call, which exits non-zero for a
+pathspec outside the repository — the exact "raw git vocabulary about a directory
+nobody can see" failure `computeDiff`'s own comments document `into` being given a
+curated refusal to prevent. `path` now gets the same: refused at the door, before
+anything is looked up or spent, naming the actual problem rather than a git
+internals error about a path on the client's machine.
+
+**Found a second time, same finding: the refusal checked absoluteness on the
+NORMALIZED path, and normalizing can erase the very thing being checked for.**
+`normalizeReviewPath("/")` is `"."` — `posix.normalize("/")` is `"/"`, and the
+trailing-slash strip that turns `"src/"` into `"src"` then empties it, landing on
+the same `"."` fallback an ordinary whole-tree request produces. A refusal reading
+only the normalized value saw a harmless relative path and let it through — an
+absolute `path: "/"` silently became a review of the entire repository, exactly
+the unscoped-by-accident shape `path` having no default exists to prevent.
+`pathEscapesWorktree` now takes both the raw input and its normalized form:
+absoluteness is asked of what the client actually sent, `..`-escaping of the
+normalized value (which needs normalizing to catch — `"foo/../.."` is not
+obviously escaping otherwise) — each check reads the input built to answer it.
+
+**A NUL byte in `path` used to fail from Node's own `execFile`, after the review
+row already existed and a slot was already spent.** `wholeTreeDiff` passes `path`
+straight through to git as an `execFile` argument, which Node refuses outright for
+any argument containing `"\0"` — not a git error, not a lore-worded one, and not
+until the worker actually ran. Refused at the door now instead, the same shape as
+every other `path` validation here.
+
+**A non-ASCII filename inside `path` was reported under git's quoted form, not its
+real name — and the first fix only closed the common case.** git C-style-quotes any
+path needing it, which by default means any non-ASCII name (`+++
+"b/src/caf\303\251.ts"`, confirmed directly), and `filesInDiff`'s plain `+++
+b/<path>` match does not un-quote it — the same shape of gap the submodule finding
+above named, a different cause. `wholeTreeDiff`'s git calls pass `-c
+core.quotePath=false`, which asks git for the real bytes instead (applied to
+`ls-files` too, since an untracked non-ASCII filename has the identical failure) —
+**but that setting only controls the non-ASCII case.** Found a second time, HIGH
+severity: a control character, a backslash or a literal `"` in a filename is
+C-style-quoted UNCONDITIONALLY, config or nothing, because git's line-oriented
+format would otherwise be ambiguous around them (`+++ "b/src/a\tb.ts"`, confirmed
+directly for a tab). `filesInDiff` now decodes git's quoting itself
+(`unquoteGitPath`) rather than relying on the config flag alone.
+
+**And found a THIRD time: `filesInDiff` is not only fed `wholeTreeDiff`'s own
+output.** `review_submit` also runs it on a CLIENT-supplied diff, generated under
+whatever git config the client has — `core.quotePath=true`, git's own default,
+unless they set it otherwise — so the "never a multi-byte sequence" reasoning the
+decoder was first written under was true of `wholeTreeDiff`'s own diffs and false
+in general. A non-ASCII character is SEVERAL octal-escaped bytes together
+(`café.ts` as `\303\251` is two bytes forming one UTF-8 codepoint, not two
+characters), and the first decoder converted one `\NNN` escape to one JS code unit
+— correct for a single-byte escape, wrong for this one: byte-by-byte produced
+mojibake (`Ã©`) instead of the real name. `unquoteGitPath` now collects raw BYTES
+(a plain character contributes its own byte, a mnemonic escape its byte, `\NNN`
+exactly the byte git wrote) and decodes the whole run as UTF-8 once at the end,
+which reassembles a multi-byte escape correctly instead of one code unit at a time.
+
+**And a fourth site with the identical gap: `untracked` had no decoding applied at
+all.** `ls-files` C-quotes a control character, backslash or literal quote in a
+filename unconditionally too, the same rule as `diff` — but unlike `changedFiles`,
+`untracked` was built straight from `ls-files`' raw lines, with none of the
+un-quoting `filesInDiff` does for the patch. A tab in an untracked file's name
+would have shown up as git's literal quoted string, quote marks and all, both in
+the list itself and — merged in — in `changedFiles`. Each line is now passed
+through `unquoteGitPath` individually.
+
+**Two more places still described `review_start` as branch-against-`into` only,
+after the tool's own doc string had already been fixed.** `spec/agent-docs.md`'s
+`review_start` tool-description draft (§3) and `TOOL_DOCS.submit`'s embedded
+`pull_fresh` recipe both predate this change and neither was touched by it — found
+by lore's own review, twice more, the same shape as the `review` MCP prompt earlier
+in this same review. Both now show the folder-mode form beside the diff-mode one.
+
+**The folder-mode header uppercased the path along with the sentence around it.**
+`` `${where.toUpperCase()}` `` ran over the whole interpolated string, so a path
+like `src/PayRoll` printed as `` `SRC/PAYROLL` `` in the one sentence whose job is
+telling a tier what to (re-)read — a path that does not exist on a case-sensitive
+filesystem. Found beside a second, real gap: the test meant to pin this asserted
+only that the RENDER contained the path's lowercase form, which the patch body
+(`+++ b/src/a.txt`) satisfies regardless of what the header itself says — a test
+named for a property it did not check. Fixed by keeping the emphasis static (caps
+around the path) rather than a transform applied to it, and by rewriting the test
+to read the header line specifically, with a mixed-case path.
+
+**Explicitly out of scope for this slice, named rather than silently dropped**
+(D-25's walking-skeleton precedent): the CLI (`cli.ts`) gaining a `--path` flag —
+MCP is the validated path (D-76), and the CLI is unaffected, still sending an
+explicit `into` always; chunking or sharding a folder too large for the diff
+ceiling, which falls back to the same truncate-and-announce degradation (INV-7)
+every oversized diff already gets.
+
 **D-129 — `commandsFor` stops assuming every repository is a JS project, and T0
 gains real project-type detection ahead of Rust support. BUILT 2026-08-24.**
 

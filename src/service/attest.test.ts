@@ -37,6 +37,15 @@ function review(state: string): void {
   store.db.prepare("UPDATE review SET state = ? WHERE id = 'r1'").run(state);
 }
 
+function folderReview(state: string): void {
+  store.createReview({
+    id: "r1", repoId, principal: "p", branch: "feat/x", reviewPath: "src/payments",
+    ticket: "t", type: "code-arch", state: "running", ladder: initialState(),
+    treeHash: "4f2a9c1",
+  });
+  store.db.prepare("UPDATE review SET state = ? WHERE id = 'r1'").run(state);
+}
+
 describe("attest", () => {
   it("refuses anything that has not passed", async () => {
     for (const state of ["running", "fast_clean", "needs_human", "failed", "expired", "findings_ready"]) {
@@ -74,6 +83,26 @@ describe("attest", () => {
 
     const a = await attest(store, "r1", "p", keyPath);
     expect(a.line).toContain("4 tiers (t0, t1, t2, t3)");
+  });
+
+  // Found by lore's own review of D-130 (medium, CWE-1078): the tree hash is the
+  // whole worktree's for every review, but a folder review's tiers read only
+  // reviewPath — "reviewed tree X" alone would claim more than that to a reader who
+  // takes only the signed line, never the unsigned audit trail.
+  it("names the scoped path for a folder review, right beside the tree it signs", async () => {
+    folderReview("passed");
+    store.recordTierRun("r1", "t0", 1, "clean", "2026-08-03T00:00:00.000Z", "4f2a9c1");
+
+    const a = await attest(store, "r1", "p", keyPath);
+    expect(a.line).toContain("reviewed tree 4f2a9c1 (scoped to src/payments)");
+  });
+
+  it("says nothing about scope for an ordinary diff review", async () => {
+    review("passed");
+    store.recordTierRun("r1", "t0", 1, "clean", "2026-08-03T00:00:00.000Z", "4f2a9c1");
+
+    const a = await attest(store, "r1", "p", keyPath);
+    expect(a.line).not.toContain("scoped to");
   });
 
   // THE CLAIM NARROWS WITH THE LADDER. A closed tier is not re-run after a fix

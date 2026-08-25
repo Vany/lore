@@ -757,6 +757,58 @@ Drift is checked both ways: **code that contradicts its spec is a finding, and s
 is a spec that no longer describes the code.** It is a defect regardless of which
 side moved.
 
+### 6.4 Folder mode: scope with no base (D-130)
+
+Every review above is diff-scoped: a base, a branch, a merge-base between them.
+`review_start`'s `mode: "folder"` is the one exception — a review of a *path*, not a
+*change*, with no `into` and nothing behind it to be stale against.
+
+**Represented as a diff against git's empty tree.** `git diff <empty-tree> -- path`
+(`4b825dc642cb6eb9a060e54bf8d69288fbee4904`, well-known, needs no setup) produces an
+ordinary unified diff where every file is shown as added, scoped to `path` exactly
+as `--` scopes any other `git diff`. This is the whole trick: because the result is
+a real, ordinary diff, every mechanism in §§1-5 above and everything downstream of
+one — T0 (D-8), the model prompts, finding storage and staleness (D-56), the
+fix-or-justify ladder, `review_submit`, attestation — needs no folder-specific
+branch of its own. None of it inspects *how* a diff was produced.
+
+**What genuinely does not apply, and reads as an honest empty value rather than an
+invented one:** `behindBy` (nothing to be behind), the branch's own commit list
+(there is no fork point), `mergesClean` and file-overlap-since-divergence (no base
+to merge into or diverge from). A reviewer told "0 commits, at the fork point" about
+a folder review would be reading a lie dressed as a fact — the render for this
+shape says plainly that this is a full read, not a diff against a prior version,
+rather than reusing branch-mode's framing over zeroed fields.
+
+**What actually keeps a folder review inside `path` is D-92's argv-scoping, not
+D-68's demotion.** Pattern engines are invoked with `files: diff.changedFiles`
+(`src/reviewer/review.ts`), which `scopePaths` (`src/t0/engines.ts`) turns into
+their own argv — so in the ordinary case they scan exactly `path`'s contents and
+nothing outside it exists for them to even find. D-68's `preexisting` filtering is
+the safety net one layer under that, not the mechanism doing the day-to-day work:
+`scopePaths` falls back to scanning the whole worktree (`["--", "."]`) once a
+change-set exceeds 200 files, and only in that fallback — the same one an
+ordinary large diff already takes — can a pattern-engine hit land outside `path`
+for D-68 to correctly demote. Below the fallback threshold there is nothing
+outside the scope to demote, because nothing outside it was scanned.
+
+**`changedFiles` is built from the patch text, not a separate `--name-only` call —
+found by lore's own review, verified against a real submodule fixture.** `git diff
+--name-only` lists a submodule by its gitlink name only ("inner"), never the files
+inside it, even with `--submodule=diff` — the patch itself (same flag) DOES expand
+it. The workgroup's own submodule shape (D-36, §6.1) makes this a real case: a
+pattern-engine hit inside a submodule would have read as outside `changedFiles` and
+been demoted by D-68 as inherited debt, in a full read where "outside the diff"
+should be nearly meaningless. `wholeTreeDiff` now derives `changedFiles` from
+`filesInDiff` (`+++ b/<path>` lines in the rendered patch), which the patch already
+expands correctly — one fewer git call, and no submodule-shaped blind spot.
+
+**Scoped to `path`, not the whole repository, unless `path` is `"."`.** A worktree
+can be a monorepo with modules nobody asked about; `path` is git pathspec syntax
+(`--`), so it composes with an ordinary subdirectory the same way any other scoped
+`git diff` does. See `spec/mcp-api.md` §2.3.3 for the client-facing contract,
+including why `path` has no default.
+
 ## 7. Inherited invariants
 
 Each cost real debugging time in `~/c/review`. Incidents:

@@ -10,6 +10,7 @@
  */
 
 import { randomBytes } from "node:crypto";
+import { posix } from "node:path";
 import { forClient } from "./plain.ts";
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/server";
 import * as z from "zod";
@@ -21,12 +22,13 @@ import { isAttestable, isClean, isTerminal, needsClient, type ReviewState } from
 import { DEFAULT_TYPE, reviewType, reviewTypeIds } from "../core/review-type.ts";
 import { STALE_GRACE_DAYS, STALE_HOURS } from "../ops/retention.ts";
 import { applyPatch, restoreTree, revParse, treeDelta, treeHash } from "../git/repo.ts";
+import { filesInDiff } from "../git/diff.ts";
 import { requestMirrorRefresh, type RefreshOutcome } from "../git/mirror-request.ts";
 import { dataDir } from "../core/paths.ts";
 import { decide } from "../knowledge/decide.ts";
 import { enrich, renderEnrichment } from "../knowledge/enrich.ts";
 import { paceFor, paceNote } from "../ops/pace.ts";
-import { alreadyAnswered, codeMoved, filesInDiff } from "../reviewer/review.ts";
+import { alreadyAnswered, codeMoved } from "../reviewer/review.ts";
 import { buildVex, findingsNeedingTriage, renderVex } from "../security/vex.ts";
 import { isSettled, type RecordedFinding, type Store } from "../store/store.ts";
 import type { Principal } from "./auth.ts";
@@ -221,6 +223,60 @@ function newReviewId(): string {
   return `rev_${randomBytes(18).toString("base64url")}`;
 }
 
+// lore-ok[b53881c1]: same finding as e393b46f below (an absolute root path — "/"
+// and its variants — normalizing to "." here before the escape check could see it
+// was absolute), raised twice with different wording. See that comment for the fix
+// and how it was verified; not repeated here to avoid two accounts drifting apart.
+
+/**
+ * A folder review's `path`, in one canonical spelling (D-130, found by lore's own
+ * review: `"src"`, `"src/"` and `"./src"` name the same scope to git, but the dedup
+ * key and `pull_fresh` lookup below compare it byte-exact). Without this, two
+ * spellings of one path pass the one-review-per-(branch, path) check as though they
+ * were different work — a second open review of the same directory, burning a
+ * second ladder's quota, exactly the duplication that check exists to prevent.
+ */
+function normalizeReviewPath(path: string): string {
+  const n = posix.normalize(path).replace(/\/+$/, "");
+  return n === "" ? "." : n;
+}
+
+// lore-ok[e393b46f]: real for one round — `"/"` (and `"//"`, `"/."`) normalizes to
+// `"."` here, exactly as described — but fixed already, one function down:
+// `pathEscapesWorktree` checks `posix.isAbsolute` on the RAW input this function
+// receives, not the normalized output it returns, specifically because this
+// function can erase the leading `/` the check needs. Verified directly: node
+// -e confirms `pathEscapesWorktree("/", normalizeReviewPath("/"))` is `true`, and
+// http.test.ts's escape suite includes `"/"` itself.
+
+/**
+ * `path` names somewhere outside the worktree — `"../shared"`, or an absolute one
+ * like `"/home/agent/repo/src"` (natural for an agent that thinks in absolute
+ * paths, which the review loop itself trains it to).
+ *
+ * Found by lore's own review of D-130, matching the precedent `into` already set
+ * (`computeDiff`'s own comments: an unresolvable name reaching git "reached a client
+ * as a failed review with no reason at all... raw git vocabulary about a directory
+ * nobody can see"). Unrefused, this same failure was one call away: `wholeTreeDiff`
+ * passes `path` straight into `git diff ... -- <path>`, which exits non-zero for a
+ * pathspec outside the repository — a `failed` review naming a directory on the
+ * client's machine and a lore-internal worktree path, instead of a door refusal.
+ *
+ * TAKES BOTH THE RAW INPUT AND ITS NORMALIZED FORM — found by lore's own review,
+ * a second time: `"/"` normalizes (via `normalizeReviewPath`) to `"."`, since
+ * `posix.normalize("/")` is `"/"` and the trailing-slash strip then empties it,
+ * which this function's first version read from the ALREADY-NORMALIZED value and so
+ * saw a harmless relative `"."` — silently reviewing the whole repository instead of
+ * refusing the absolute path that was actually sent. Absoluteness is a property of
+ * what the client wrote, and normalizing away the leading `/` before asking must not
+ * also normalize away the refusal. `..`-escaping still needs the normalized form —
+ * `"foo/../.."` is not obviously escaping without it — so each check reads the input
+ * built to answer it, not whichever was more convenient.
+ */
+function pathEscapesWorktree(raw: string, normalized: string): boolean {
+  return posix.isAbsolute(raw) || normalized === ".." || normalized.startsWith("../");
+}
+
 export function buildServer(who: Principal, deps: ServerDeps): McpServer {
   // `resources.subscribe` is DECLARED, not implied. `registerResource` advertises
   // `resources.listChanged` on its own and stops there, and the listen router honours
@@ -305,19 +361,48 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       description: TOOL_DOCS.start,
       inputSchema: z.object({
         branch: z.string().min(1).describe("branch under review"),
-        into: z
-          .string()
-          .min(1)
-          .describe(
-            "branch it will merge into — it must EXIST in this repository, and it is not " +
-              "assumed to be `main`: a repository whose trunk is `master` needs `master` here. " +
-              "A name lore cannot find fails the review naming the branches it can see.",
-          ),
+        // REQUIRED FOR mode: "diff" (the default), REFUSED for mode: "folder" — see
+        // that param. `absent()` rather than a plain optional so the two can be
+        // told apart from "forgot it" (schema now accepts the omission; the handler
+        // still refuses a diff-mode review with no `into`, same message as today).
+        into: absent(z.string().min(1)).describe(
+          "branch it will merge into — it must EXIST in this repository, and it is not " +
+            "assumed to be `main`: a repository whose trunk is `master` needs `master` here. " +
+            "A name lore cannot find fails the review naming the branches it can see. " +
+            "REQUIRED for mode: \"diff\" (the default); do not pass it for mode: \"folder\", " +
+            "which has no base to diff against.",
+        ),
         ticket: z
           .string()
           .min(1)
           .describe("the task text, pasted verbatim — not summarised, not your own description"),
         type: absent(z.enum(reviewTypeIds() as [string, ...string[]])).describe(`default: ${DEFAULT_TYPE}`),
+        // D-130. Default "diff" is today's exact behaviour: `branch` diffed against
+        // `into`, unchanged. "folder" reviews `path` as it stands — no base, no diff,
+        // every file read as it exists — and needs `path` instead of `into`.
+        //
+        // A THIRD ENUM VALUE, not an inferred mode from an omitted `into`: a client
+        // that simply forgets `into` today gets a clear schema error. If omitting it
+        // silently meant folder mode instead, that same mistake would silently review
+        // the wrong thing at the wrong scope rather than fail loudly — a new footgun
+        // this project's whole ethos (INV-1, D-40) argues against for the sake of one
+        // shorter parameter.
+        mode: absent(z.enum(["diff", "folder"])).describe(
+          'default "diff": review `branch` against `into`, exactly as always. Pass "folder" to ' +
+            "review `path` as a full read instead — no base, every file in it read as it stands, " +
+            "not as a change. Use this for a rewrite with no clean incremental diff, or a module " +
+            "you want a fresh independent look at regardless of its git history.",
+        ),
+        // REQUIRED for mode: "folder", REFUSED otherwise. No default to the repo root:
+        // a whole real repository's diff-against-nothing usually blows past the diff
+        // size ceiling and every tier that reads it spends real quota on a mostly-cut
+        // prompt, so an unscoped "review the folder" risks burning a full ladder's
+        // quota by accident. Pass "." explicitly if you really do mean the whole tree.
+        path: absent(z.string().min(1)).describe(
+          'the path mode: "folder" reviews, relative to the repository root — "." for the whole ' +
+            'tree, or a subdirectory ("src/payments") to scope it. Required when mode is "folder", ' +
+            "refused otherwise.",
+        ),
         // OPTIONAL, AND IT HAD TO BE. Required would have failed every `review_start`
         // from every client already working — three people on one repository — the
         // moment this deployed, and lore's own reviews are cut from scratch
@@ -353,7 +438,77 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
         ),
       }),
     },
-    async ({ branch, into, ticket, type, restart, pull_request, pull_fresh }, ctx) => {
+    async ({ branch, into, ticket, type, restart, pull_request, pull_fresh, mode, path }, ctx) => {
+      // D-130: THE TWO NEW PARAMS MUST NOT CONTRADICT EACH OTHER OR `into`, checked
+      // before anything is looked up or spent — the same "refuse at the door" shape
+      // `pull_fresh` + `restart` already gets below. Skipped by nothing: even a
+      // pull_fresh call is worth checking, since `path` has to match what an open
+      // folder review was actually started with to be found at all (see `open`,
+      // next), and a silently-ignored contradiction there would be confusing in a
+      // different way.
+      const folderMode = mode === "folder";
+      if (folderMode && path === undefined) {
+        throw new Error(
+          'mode: "folder" needs `path` — the path to review, relative to the repository root. Pass "." ' +
+            "for the whole tree, or a subdirectory to scope it. There is no default: an unscoped folder " +
+            "review usually exceeds the diff size ceiling and spends real quota reading a mostly-cut prompt.",
+        );
+      }
+      // A NUL BYTE REACHING `execFile` THROWS FROM NODE ITSELF, not from git — and by
+      // then the row already exists and a slot is already spent. Found by lore's own
+      // review of D-130: `wholeTreeDiff` passes `path` straight into an `execFile`
+      // argument (`git/exec.ts`), which Node refuses outright for any argument
+      // containing "\0" — a queued-then-failed review instead of a door refusal,
+      // exactly the class INV-1 exists to keep from happening quietly.
+      if (path !== undefined && path.includes("\0")) {
+        throw new Error("path must not contain a NUL byte.");
+      }
+      // lore-ok[4a56e160]: fixed immediately above, same round it was raised — the
+      // NUL-byte check now runs before this line (and before `open` is looked up,
+      // same as every other `path` validation here), refusing at the door instead
+      // of reaching `execFile` after a review row already exists.
+      if (folderMode && into !== undefined) {
+        throw new Error(
+          'mode: "folder" and `into` contradict each other: folder mode has no base to diff against, so ' +
+            "there is nothing for `into` to name. Omit `into`, or drop mode: \"folder\" and use the default " +
+            "diff review instead.",
+        );
+      }
+      if (!folderMode && path !== undefined) {
+        throw new Error(
+          '`path` only applies to mode: "folder" — omit it for an ordinary diff review, or pass ' +
+            'mode: "folder" to scope this review to it.',
+        );
+      }
+      // `into` IS REQUIRED HERE TOO, checked at the same "nothing spent yet" point as
+      // the three above it — found by lore's own review of D-130, HIGH severity: this
+      // check used to sit right before `createReview`, AFTER the restart-cancel block
+      // below. Before D-130 that was safe, because schema-level `into: z.string().min(1)`
+      // made a request missing it unreachable at all — Zod rejected it before the
+      // handler ran. Making `into` optional (so folder mode could omit it) made this
+      // path live, and a late check reintroduces the exact incident this file's own
+      // restart-cancel comment (below) documents fixing: a client that restarts and
+      // forgets `into` would have its predecessor CANCELLED — every ratified
+      // justification gone — and then be refused for the missing field, worse off than
+      // before it asked. Checked here, before `open` is even looked up, nothing is
+      // ever destroyed on the way to this refusal.
+      if (!folderMode && into === undefined) {
+        throw new Error(
+          '`into` is required unless mode: "folder" is set — the branch this one will merge into. ' +
+            "It must EXIST in this repository, and it is not assumed to be `main`.",
+        );
+      }
+      // CANONICAL FROM HERE ON — see normalizeReviewPath. Every read of `path` below
+      // this line uses `scopedPath` instead, so the dedup key and the stored row agree
+      // with each other regardless of which spelling the client sent.
+      const scopedPath = path === undefined ? undefined : normalizeReviewPath(path);
+      if (path !== undefined && scopedPath !== undefined && pathEscapesWorktree(path, scopedPath)) {
+        throw new Error(
+          `path must stay inside the repository, relative to its root — "${path}" does not. Pass a path like ` +
+            '"src" or "src/payments", not an absolute one or one starting with "..".',
+        );
+      }
+
       // AN OPEN REVIEW OF THIS BRANCH IS THE ONE TO CONTINUE, NOT TO DUPLICATE.
       //
       // Measured 2026-08-05, the first day a real client drove this: six reviews of
@@ -369,7 +524,13 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       // rather than silently returning the existing review, because "here is a
       // review_id" that is not the one just asked for is exactly the kind of quiet
       // substitution this project refuses.
-      const open = store.openReviewFor(who.repoId, branch);
+      //
+      // `path` IS PART OF THE DEDUP KEY (D-130): a folder review of `src/payments` and
+      // a diff review of the same branch are different work, and so are folder
+      // reviews of two different paths on the same branch. A pull_fresh meant to
+      // continue one of several open folder reviews on this branch has to name the
+      // same path again, exactly as it already has to name the same branch again.
+      const open = store.openReviewFor(who.repoId, branch, scopedPath);
       // CONTINUE, RE-PINNED (D-108). The middle path between "answer with a diff" and
       // "abandon everything": the client pushed more commits, so the SAME review moves
       // its pin to origin's new tip. Nothing resets — the tier that raised the open
@@ -565,7 +726,8 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
         tiers: ladderFingerprint(rt.tiers),
         branch,
         ...(pull_request === undefined ? {} : { pullRequest: pull_request }),
-        intoRef: into,
+        ...(folderMode ? {} : { intoRef: into }),
+        ...(folderMode ? { reviewPath: scopedPath } : {}),
         ticket,
         type: rt.id,
         state: "queued",
@@ -1891,23 +2053,45 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
   server.registerPrompt(
     "review",
     {
-      title: "Review a branch before merging",
+      title: "Review a branch, or a folder within it",
       description:
         "Drives the whole review loop. An agent handed only tools will improvise the multi-step, stateful part — this is what stops that.",
       argsSchema: z.object({
         branch: z.string().describe("branch under review"),
-        into: z.string().describe("branch it will merge into"),
+        // D-130. into required for the default diff review; omit both it and mode
+        // for that case. mode: "folder" needs path instead, not into.
+        into: absent(z.string()).describe('branch it will merge into — omit for mode: "folder"'),
+        mode: absent(z.enum(["diff", "folder"])).describe('default "diff"; "folder" reviews `path` instead of `into`'),
+        path: absent(z.string()).describe('path to review, when mode is "folder"'),
         ticket: z.string().describe("the task text, pasted verbatim"),
       }),
     },
-    ({ branch, into, ticket }) => ({
-      messages: [
-        {
-          role: "user" as const,
-          content: { type: "text" as const, text: REVIEW_PROMPT_TEXT(branch, into, ticket) },
-        },
-      ],
-    }),
+    ({ branch, into, mode, path, ticket }) => {
+      const folderMode = mode === "folder";
+      if (folderMode && path === undefined) {
+        throw new Error('mode: "folder" needs `path` — the path to review, relative to the repository root.');
+      }
+      if (folderMode && into !== undefined) {
+        throw new Error('mode: "folder" and `into` contradict each other — folder mode has no base to diff against.');
+      }
+      if (!folderMode && path !== undefined) {
+        throw new Error('`path` only applies to mode: "folder" — omit it, or pass mode: "folder" to use it.');
+      }
+      if (!folderMode && into === undefined) {
+        throw new Error('`into` is required unless mode: "folder" is set — the branch this one will merge into.');
+      }
+      return {
+        messages: [
+          {
+            role: "user" as const,
+            content: {
+              type: "text" as const,
+              text: REVIEW_PROMPT_TEXT({ branch, into, mode, path }, ticket),
+            },
+          },
+        ],
+      };
+    },
   );
 
   return server;

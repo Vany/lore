@@ -238,6 +238,97 @@ describe("review", () => {
       expect(store.openReviewFor(repoId, "feat/x")?.ageHours).toBe(0);
     });
   });
+
+  // D-130: a folder review of one path and a diff review of the same branch are
+  // different work, and so are folder reviews of two different paths — none of the
+  // three should collide with either of the others in the one-review-per-branch check.
+  describe("openReviewFor's dedup key includes path (D-130)", () => {
+    it("does not confuse a folder review with a diff review of the same branch", () => {
+      store.createReview({
+        id: "diff-rev",
+        repoId,
+        principal: PRINCIPAL,
+        branch: "feat/x",
+        intoRef: "origin/main",
+        ticket: "do the thing",
+        type: "code-arch",
+        state: "running",
+        ladder: initialState(),
+      });
+      store.createReview({
+        id: "folder-rev",
+        repoId,
+        principal: PRINCIPAL,
+        branch: "feat/x",
+        reviewPath: "src/payments",
+        ticket: "do the thing",
+        type: "code-arch",
+        state: "running",
+        ladder: initialState(),
+      });
+
+      expect(store.openReviewFor(repoId, "feat/x")?.id).toBe("diff-rev");
+      expect(store.openReviewFor(repoId, "feat/x", "src/payments")?.id).toBe("folder-rev");
+    });
+
+    it("does not confuse two folder reviews of the same branch at different paths", () => {
+      store.createReview({
+        id: "payments-rev",
+        repoId,
+        principal: PRINCIPAL,
+        branch: "feat/x",
+        reviewPath: "src/payments",
+        ticket: "do the thing",
+        type: "code-arch",
+        state: "running",
+        ladder: initialState(),
+      });
+      store.createReview({
+        id: "auth-rev",
+        repoId,
+        principal: PRINCIPAL,
+        branch: "feat/x",
+        reviewPath: "src/auth",
+        ticket: "do the thing",
+        type: "code-arch",
+        state: "running",
+        ladder: initialState(),
+      });
+
+      expect(store.openReviewFor(repoId, "feat/x", "src/payments")?.id).toBe("payments-rev");
+      expect(store.openReviewFor(repoId, "feat/x", "src/auth")?.id).toBe("auth-rev");
+      expect(store.openReviewFor(repoId, "feat/x", "src/nowhere")).toBeUndefined();
+    });
+  });
+});
+
+describe("a folder review's row (D-130)", () => {
+  it("round-trips with no intoRef and a reviewPath, not the write-side sentinel", () => {
+    store.createReview({
+      id: "rev1",
+      repoId,
+      principal: PRINCIPAL,
+      branch: "feat/x",
+      reviewPath: "src/payments",
+      ticket: "do the thing",
+      type: "code-arch",
+      state: "running",
+      ladder: initialState(),
+    });
+
+    const row = store.getReview("rev1", PRINCIPAL);
+    expect(row?.reviewPath).toBe("src/payments");
+    // "" is the write-side representation forced by into_ref's pre-existing NOT NULL
+    // constraint (store.ts's createReview) — it must never leak out as a real value.
+    expect(row?.intoRef).toBeUndefined();
+  });
+
+  it("still round-trips an ordinary diff review with no reviewPath", () => {
+    newReview("rev1");
+    const row = store.getReview("rev1", PRINCIPAL);
+    expect(row?.intoRef).toBe("origin/main");
+    expect(row?.reviewPath).toBeUndefined();
+  });
 });
 
 describe("findings", () => {
@@ -1063,6 +1154,72 @@ describe("opening a database that already exists", () => {
     const reopened = new Store(path);
     expect(reopened.db.prepare("SELECT COUNT(*) AS n FROM usage").get()).toMatchObject({ n: 2 });
     reopened.close();
+  });
+
+  /**
+   * `review` as it stood before D-130 (`review_path` did not exist), including a real
+   * row written under that shape — `into_ref` populated, `NOT NULL`, no other option.
+   * The scenario this de-risks: `into_ref` predates folder mode and cannot have its
+   * constraint relaxed by this migration system (ADD COLUMN only), so a folder review
+   * writes "" to it instead (store.ts's createReview). This proves that write actually
+   * succeeds against a real pre-D-130 table, not only against the fixture every other
+   * test in this file creates fresh.
+   */
+  const V1_REVIEW = `CREATE TABLE review (
+    id           TEXT PRIMARY KEY,
+    repo_id      TEXT NOT NULL,
+    principal    TEXT NOT NULL,
+    token_hash   TEXT,
+    tiers        TEXT,
+    branch       TEXT NOT NULL,
+    pull_request TEXT,
+    into_ref     TEXT NOT NULL,
+    ticket       TEXT NOT NULL,
+    type         TEXT NOT NULL,
+    state        TEXT NOT NULL,
+    tree_hash    TEXT,
+    base_commit  TEXT,
+    ladder       TEXT NOT NULL,
+    failed_because TEXT,
+    created_at   TEXT NOT NULL,
+    updated_at   TEXT NOT NULL
+  )`;
+
+  it("adds review_path to a pre-D-130 review table, and a folder review can then be written", () => {
+    const path = join(dir, "pre-d130.db");
+    const v1 = new DatabaseSync(path);
+    v1.exec(V1_REVIEW);
+    v1.exec(
+      `INSERT INTO review(id, repo_id, principal, branch, into_ref, ticket, type, state, ladder, created_at, updated_at)
+       VALUES('old-rev', 'repo1', 'tok_x', 'main', 'origin/main', 't', 'code-arch', 'passed', '{}', '2026-01-01', '2026-01-01')`,
+    );
+    v1.close();
+
+    const migrated = new Store(path);
+    // The pre-existing row is untouched by the migration.
+    expect(
+      migrated.db.prepare("SELECT into_ref, review_path FROM review WHERE id = 'old-rev'").get(),
+    ).toMatchObject({ into_ref: "origin/main", review_path: null });
+
+    // A folder review, written against the now-migrated table, does not trip the
+    // pre-existing into_ref NOT NULL constraint.
+    const repoId = migrated.upsertRepo("demo", "git@x:demo.git").id;
+    expect(() =>
+      migrated.createReview({
+        id: "folder-rev",
+        repoId,
+        principal: "tok_x",
+        branch: "feat/y",
+        reviewPath: "src",
+        ticket: "t",
+        type: "code-arch",
+        state: "running",
+        ladder: initialState(),
+      }),
+    ).not.toThrow();
+    expect(migrated.getReview("folder-rev", "tok_x")?.reviewPath).toBe("src");
+    expect(migrated.getReview("folder-rev", "tok_x")?.intoRef).toBeUndefined();
+    migrated.close();
   });
 
   it("records the version it left the database at, not the one it found", () => {

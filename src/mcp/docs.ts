@@ -38,6 +38,27 @@ own description of what you built: an agent describing its own work describes wh
 made, not what was asked, which destroys the only independent statement of intent the
 reviewers get.
 
+FOLDER MODE IS THE ALTERNATIVE TO A DIFF. Pass \`mode: "folder"\` and \`path\` instead of
+\`into\` to review what is AT a path — no base, no diff, every file in it read as it
+stands rather than as a change. Use it for a rewrite with no clean incremental diff, or
+a module you want a fresh, independent look at regardless of its git history. \`into\`
+and \`path\` are mutually exclusive: folder mode has no base for \`into\` to name.
+
+\`path\` is REQUIRED when \`mode\` is \`"folder"\` — there is no default to the repository
+root. Pass \`"."\` if you genuinely mean the whole tree; otherwise name the subdirectory.
+An unscoped whole-repository review usually exceeds the diff size ceiling (\`spec/review-
+ladder.md\` §6) and spends real quota reading a mostly-truncated prompt, so naming a path
+is not bureaucracy — it is the difference between a review that reads what you meant and
+one that reads a prefix of it.
+
+Everything below — polling, review_submit, pull_fresh, findings, lore-ok, attestation —
+works the same way in folder mode, with two differences. \`pull_fresh\` must repeat the
+same \`path\` to find the SAME open folder review, exactly as it already has to repeat
+the same \`branch\`. And the signed attestation line names its scope: \`reviewed tree
+<hash> (scoped to <path>)\` rather than a bare tree hash, because the tree hash alone is
+the whole worktree's — hashed the same way for every review — while a folder review's
+tiers read only \`path\`.
+
 PASS \`pull_request\` IF THIS BRANCH HAS ONE. The URL of the PR, MR or change this branch
 is proposed in — an http(s) link, whatever your forge calls it.
 
@@ -334,6 +355,11 @@ disagree, trust neither and say so, because that is a bug in lore rather than a
 fact about your branch.
 `.trim(),
 
+  // lore-ok[f910deea]: fixed here, same round it was raised — the pull_fresh
+  // recipe below used to show only the branch/into form, which a folder-mode
+  // client cannot use (into is refused for mode: "folder"). The FOR A FOLDER
+  // REVIEW paragraph a few lines down now shows the mode/path form beside it.
+  // Verified directly against the current string.
   submit: `
 Submit your fixes as a unified diff, with the git tree hash of your working tree
 after applying them.
@@ -406,6 +432,11 @@ That re-pins the SAME review to origin's new tip — findings, ratified justific
 the ladder all carry, and the same review_id comes back. Nothing whitespace-significant
 crosses the wire, the tree hash comes from git rather than from a claim you have to get
 exactly right, and there is no diff to compose at all. Same loop, one less way to fail.
+
+FOR A FOLDER REVIEW (D-130), repeat mode and path instead of into — pull_fresh finds the
+open review by branch AND path, exactly as an ordinary pull_fresh finds it by branch alone:
+
+    review_start(branch, mode: "folder", path, ticket, pull_fresh: true)
 
 Use review_submit when you genuinely cannot push: no remote, no credentials, or work you
 do not want in history yet. It is fully supported, and everything below applies to it.
@@ -863,9 +894,33 @@ model reviewing its own output confirms the design it already had in mind.
   },
 };
 
-export const REVIEW_PROMPT_TEXT = (branch: string, into: string, ticket: string): string =>
-  `
-You are shepherding \`${branch}\` through an independent review before it merges into \`${into}\`.
+/**
+ * D-130, found by lore's own review of D-130: `mode`/`path` landed at `review_start`
+ * and its docs, but not at this loop template — an agent reaching for the documented
+ * way to drive the loop (`registerPrompt`'s own description: "an agent handed only
+ * tools will improvise... this is what stops that") had no way to discover or
+ * express folder mode from it. The opening line and the step 1 call both branch on
+ * `mode`, rather than rendering an `into` folder mode never supplied.
+ */
+export const REVIEW_PROMPT_TEXT = (
+  target: {
+    readonly branch: string;
+    readonly into?: string | undefined;
+    readonly mode?: "diff" | "folder" | undefined;
+    readonly path?: string | undefined;
+  },
+  ticket: string,
+): string => {
+  const folderMode = target.mode === "folder";
+  const opening = folderMode
+    ? `You are shepherding an independent review of \`${target.path}\` on \`${target.branch}\` — no base, every ` +
+      "file in it read as it stands rather than as a change."
+    : `You are shepherding \`${target.branch}\` through an independent review before it merges into \`${target.into}\`.`;
+  const startCall = folderMode
+    ? `review_start(branch: "${target.branch}", mode: "folder", path: "${target.path}", ticket: <paste the ticket, do not summarise>)`
+    : `review_start(branch: "${target.branch}", into: "${target.into}", ticket: <paste the ticket, do not summarise>)`;
+  return `
+${opening}
 
 The reviewers are models that did NOT write this code. You are not being second-guessed
 by a peer; you are being audited. Treat findings as evidence to investigate, not as
@@ -874,7 +929,7 @@ opinions to argue with.
 The loop:
 0. review_inbox() — FIRST. A review from an earlier session is still open and still
    yours, and nothing but this call will tell you.
-1. review_start(branch: "${branch}", into: "${into}", ticket: <paste the ticket, do not summarise>)
+1. ${startCall}
 2. review_poll(review_id) — ONE call, then leave and do something else. Come back when
    \`check_back_note\` says: measured from this repository's own completed rounds, and
    never more than two minutes.
@@ -913,6 +968,7 @@ When the state is \`passed\` — or \`passed_partial\` — call review_attest an
 user that line. On a partial one, say which tiers were skipped and that the evidence
 is weaker than a pass; the decision to merge on it is theirs, not yours.
 `.trim();
+};
 
 /**
  * EVERY STRING A CLIENT IS EVER SHOWN, named once so no document can be quietly left out.
@@ -932,6 +988,6 @@ export function everyClientDocument(): readonly (readonly [string, string])[] {
   return [
     ...Object.entries(TOOL_DOCS).map(([k, v]) => [`TOOL_DOCS.${k}`, v] as const),
     ...Object.entries(RESOURCE_DOCS).map(([k, v]) => [`RESOURCE_DOCS[${k}]`, v.text] as const),
-    ["REVIEW_PROMPT_TEXT", REVIEW_PROMPT_TEXT("b", "i", "t")] as const,
+    ["REVIEW_PROMPT_TEXT", REVIEW_PROMPT_TEXT({ branch: "b", into: "i" }, "t")] as const,
   ];
 }

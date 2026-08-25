@@ -455,6 +455,13 @@ export const MIGRATIONS: readonly { readonly table: string; readonly column: str
   // started under the old rule and back-filling a base would silently redefine what it
   // is attesting to.
   { table: "review", column: "base_commit", sql: "ALTER TABLE review ADD COLUMN base_commit TEXT" },
+  // A FOLDER REVIEW'S SCOPE (D-130): the path it reviews as a full read against git's
+  // empty tree, instead of diffing `into_ref` (which the write side sets to "" for
+  // these rows — see store.ts's `createReview`, since `into_ref` predates this column
+  // and is TEXT NOT NULL, and this migration list can only ADD a column, never relax
+  // an existing constraint). NULL is every review before this column existed, and
+  // every ordinary branch-vs-`into` review from here on — nearly all of them.
+  { table: "review", column: "review_path", sql: "ALTER TABLE review ADD COLUMN review_path TEXT" },
 ];
 
 /**

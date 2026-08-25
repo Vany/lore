@@ -89,7 +89,7 @@ describe("the texts say the wait shrinks, and never to cache it", () => {
 describe("the loop starts by asking what is already waiting", () => {
   const loops: readonly [string, string][] = [
     ["RESOURCE_DOCS[lore://docs/workflow]", RESOURCE_DOCS["lore://docs/workflow"]?.text ?? ""],
-    ["REVIEW_PROMPT_TEXT", REVIEW_PROMPT_TEXT("b", "i", "t")],
+    ["REVIEW_PROMPT_TEXT", REVIEW_PROMPT_TEXT({ branch: "b", into: "i" }, "t")],
   ];
 
   it.each(loops)("%s opens with review_inbox, before review_start", (_name, text) => {
@@ -148,7 +148,7 @@ describe("the docs describe every state the code can produce", () => {
   // prompt said exactly that.
   const loops: readonly [string, string][] = [
     ["lore://docs/workflow", RESOURCE_DOCS["lore://docs/workflow"]?.text ?? ""],
-    ["REVIEW_PROMPT_TEXT", REVIEW_PROMPT_TEXT("b", "i", "t")],
+    ["REVIEW_PROMPT_TEXT", REVIEW_PROMPT_TEXT({ branch: "b", into: "i" }, "t")],
   ];
   it.each(loops)("%s does not tell the client to loop until `passed` alone", (_n, text) => {
     const terminalButNotClean = REVIEW_STATES.filter((s) => isTerminal(s) && s !== "passed");
@@ -170,7 +170,7 @@ describe("what the docs promise about attestation is what the code allows", () =
   it.each([
     ["TOOL_DOCS.attest", TOOL_DOCS.attest],
     ["lore://docs/states", RESOURCE_DOCS["lore://docs/states"]?.text ?? ""],
-    ["REVIEW_PROMPT_TEXT", REVIEW_PROMPT_TEXT("b", "i", "t")],
+    ["REVIEW_PROMPT_TEXT", REVIEW_PROMPT_TEXT({ branch: "b", into: "i" }, "t")],
   ])("%s does not restrict attestation to `passed` alone", (_n, text) => {
     if (/attest/i.test(text)) expect(text).toContain("passed_partial");
   });

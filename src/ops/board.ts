@@ -355,6 +355,10 @@ export function board(store: Store, now = Date.now(), modelGate?: () => GateStat
           ? undefined
           : String(r["pull_request"]),
         into: String(r["into_ref"] ?? ""),
+        // D-130: present only for a folder review, which has no `into` to merge into.
+        ...(r["review_path"] === null || r["review_path"] === undefined
+          ? {}
+          : { path: String(r["review_path"]) }),
         type: String(r["type"] ?? ""),
         state,
         round: ladder.round,

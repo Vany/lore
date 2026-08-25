@@ -71,6 +71,18 @@ export interface PromptInput {
    */
   readonly round?: number;
   readonly tierRounds?: Readonly<Record<string, number>>;
+  /**
+   * Set only for a folder review (D-130), matching `ReviewDiff.scopePath`.
+   *
+   * Found by lore's own review of D-130: this wrapper's own "THE TASK THIS CHANGE
+   * IMPLEMENTS" section — "does it do MORE than was asked? Unrequested refactors...
+   * Flag them" — is written for an incremental change and directly contradicts
+   * `renderFolderDiff`'s own header ("judge it as the code that exists, not as a
+   * change someone just made") that it wraps. In folder mode every line in the path
+   * is code nobody "just wrote", so that instruction would have a compliant tier
+   * flagging a stable module's whole contents as unrequested scope creep.
+   */
+  readonly scopePath?: string | undefined;
 }
 
 /**
@@ -246,6 +258,38 @@ function typeGuidance(typeId: string): string {
 }
 
 /**
+ * What to judge the code against — a task it changed, or a task it is meant to serve
+ * while sitting still (D-130). Found by lore's own review of D-130: the change-shaped
+ * version of this ("does it do MORE than was asked? ... Flag unrequested refactors")
+ * directly contradicts `renderFolderDiff`'s own "judge it as the code that exists, not
+ * as a change someone just made" — a compliant tier reading both would flag a stable
+ * module's entire pre-existing contents as unrequested scope creep.
+ */
+function taskFraming(scopePath: string | undefined): string {
+  if (scopePath === undefined) {
+    return [
+      "THE TASK THIS CHANGE IMPLEMENTS",
+      "Judge the change against this, not against what the code appears to be trying to do:",
+      "  - does it do what was asked?",
+      "  - does it do LESS than was asked — a requirement with no corresponding code?",
+      "  - does it do MORE than was asked? Unrequested refactors, renames and 'improvements' are code nobody",
+      "    decided to write and no ticket justifies. Flag them; they are not automatically wrong, but they must",
+      "    be noticed.",
+    ].join("\n");
+  }
+  return [
+    "WHAT THIS PATH IS FOR",
+    "This is a full read of existing code, not a change — judge it against what it is meant to do, not against",
+    "what someone just wrote:",
+    "  - does it do what the ticket says it should?",
+    "  - is anything the ticket describes missing, or done differently than described?",
+    "Do NOT flag code here for being 'unrequested' or for doing 'more than was asked' — almost none of what you",
+    "are reading was written for this ticket, and treating a stable module's own contents as scope creep is not",
+    "review, it is noise.",
+  ].join("\n");
+}
+
+/**
  * How much of this diff is prose, so a finding about prose can be priced against it.
  *
  * Counted from the added lines only: a round that adds 170 comment lines and 20 code
@@ -398,15 +442,39 @@ export interface ContinuedInput {
   readonly diff: string;
   /** This tier's own still-open findings, one line each, for it to rule on (D-10). */
   readonly open: readonly string[];
+  /**
+   * Set only for a folder review (D-130), matching `ReviewDiff.scopePath` — what this
+   * tier is re-reading is a full read of a path, not a diff against what it saw before.
+   *
+   * Found by lore's own review of D-130: `i.diff` here is `renderDiff`'s output, which
+   * for a folder review is `renderFolderDiff`'s — opening with "THIS IS A FULL READ...
+   * NOT A DIFF AGAINST A PRIOR VERSION". Left unbranched, this function's own headers
+   * ("WHAT CHANGED SINCE YOU LAST LOOKED", "new work on the same branch") contradicted
+   * the block they introduce, on the one path (a tier without `conversation: true`,
+   * D-80's proven fallback) still live for exactly this shape of diff.
+   */
+  readonly scopePath?: string | undefined;
 }
 
 export function continuedPrompt(i: ContinuedInput): string {
+  const folderMode = i.scopePath !== undefined;
+  const intro = folderMode
+    ? ["The author has answered. Re-read the files you care about at the path you are reviewing rather than", "assuming — there is no diff to apply; the path is read fresh, as it now stands."]
+    : ["The author has answered. Their diff is applied to the worktree you are already in —", "same path, same branch — so re-read the files you care about rather than assuming."];
+  const nothingOutstanding = folderMode
+    ? "You raised nothing outstanding last round. Review the path as you did before."
+    : "You raised nothing outstanding last round. This is new work on the same branch: review it as you did before.";
+  const diffHeader = folderMode
+    ? "THE PATH, AS IT NOW STANDS — NOT A DIFF AGAINST WHAT YOU SAW BEFORE"
+    : "WHAT CHANGED SINCE YOU LAST LOOKED";
+  const closing = folderMode
+    ? ["Then review it as you would any other read: a fix can break something that was working. Same bar as", "before — consequence you can state, and something the author would still have missed."]
+    : ["Then review the change itself as you would any other: it is new code, and a fix can", "break something that was working. Same bar as before — consequence you can state, and", "something the author would still have missed."];
   return [
-    "The author has answered. Their diff is applied to the worktree you are already in —",
-    "same path, same branch — so re-read the files you care about rather than assuming.",
+    ...intro,
     "",
     i.open.length === 0
-      ? "You raised nothing outstanding last round. This is new work on the same branch: review it as you did before."
+      ? nothingOutstanding
       : [
           "YOU RAISED THESE, and they are still open:",
           ...i.open.map((c) => `  - ${c}`),
@@ -419,12 +487,10 @@ export function continuedPrompt(i: ContinuedInput): string {
     "DETERMINISTIC RESULTS FOR THE NEW TREE",
     i.t0,
     "",
-    "WHAT CHANGED SINCE YOU LAST LOOKED",
+    diffHeader,
     i.diff,
     "",
-    "Then review the change itself as you would any other: it is new code, and a fix can",
-    "break something that was working. Same bar as before — consequence you can state, and",
-    "something the author would still have missed.",
+    ...closing,
   ].join("\n");
 }
 
@@ -452,13 +518,7 @@ export function reviewPrompt(i: PromptInput): string {
     "Read the surrounding files, not just the diff — a diff alone hides the seam. Read the project's README,",
     "CLAUDE.md / AGENTS.md, and any specs or ADRs that bear on this change.",
     "",
-    "THE TASK THIS CHANGE IMPLEMENTS",
-    "Judge the change against this, not against what the code appears to be trying to do:",
-    "  - does it do what was asked?",
-    "  - does it do LESS than was asked — a requirement with no corresponding code?",
-    "  - does it do MORE than was asked? Unrequested refactors, renames and 'improvements' are code nobody",
-    "    decided to write and no ticket justifies. Flag them; they are not automatically wrong, but they must",
-    "    be noticed.",
+    taskFraming(i.scopePath),
     "",
     indent(i.ticket),
     knowledgeBlock(i.knowledge),

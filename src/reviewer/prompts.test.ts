@@ -282,4 +282,48 @@ describe("the continued prompt", () => {
     expect(out).toMatch(/new work on the same branch/i);
     expect(out).toContain("+const a = 1;");
   });
+
+  // Found by lore's own review of D-130: this function's own headers ("WHAT CHANGED
+  // SINCE YOU LAST LOOKED", "new work on the same branch") contradicted the folder-mode
+  // block renderDiff produces when scopePath is set, on the one path (a tier without
+  // conversation: true) still live for exactly this shape of diff.
+  describe("in folder mode (scopePath set)", () => {
+    const folderBase = { ...base, diff: "THIS IS A FULL READ of src — not a diff against a prior version.", scopePath: "src" };
+
+    it("does not claim a diff or a branch", () => {
+      const out = continuedPrompt({ ...folderBase, open: [] });
+      expect(out).not.toMatch(/WHAT CHANGED SINCE YOU LAST LOOKED/);
+      expect(out).not.toMatch(/new work on the same branch/i);
+      expect(out).not.toMatch(/Their diff is applied/);
+    });
+
+    it("still carries the path's content and the tier's own open findings", () => {
+      const out = continuedPrompt({ ...folderBase, open: ["ab12cd34 src/pay.ts:12 — x"] });
+      expect(out).toContain("THIS IS A FULL READ of src");
+      expect(out).toContain("ab12cd34");
+    });
+  });
+});
+
+// Found by lore's own review of D-130: "does it do MORE than was asked? ... Flag
+// unrequested refactors" is written for an incremental change and directly
+// contradicts renderFolderDiff's own "judge it as the code that exists, not as a
+// change someone just made" — a compliant tier reading both would flag a stable
+// module's entire contents as scope creep.
+describe("the task framing, in folder mode (scopePath set)", () => {
+  it("does not ask whether the code does MORE than was asked", () => {
+    const p = promptAt(0, 3, CODE_ARCH, { scopePath: "src/payments" });
+    expect(p).not.toMatch(/does it do MORE than was asked/);
+    expect(p).not.toMatch(/Unrequested refactors/);
+  });
+
+  it("asks whether the code matches what the ticket says it should do", () => {
+    const p = promptAt(0, 3, CODE_ARCH, { scopePath: "src/payments" });
+    expect(p).toMatch(/does it do what the ticket says it should/);
+  });
+
+  it("still asks the ordinary change-shaped question when scopePath is absent", () => {
+    const p = promptAt(0);
+    expect(p).toMatch(/does it do MORE than was asked/);
+  });
 });

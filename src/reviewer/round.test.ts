@@ -192,6 +192,36 @@ describe("runRound", () => {
     expect(prompt).toContain("does it do MORE than was asked?");
   });
 
+  // D-130: a folder review has no `into` and no diff to speak of — runRound routes it
+  // to wholeTreeDiff instead of computeDiff, and the prompt has to say so honestly
+  // rather than reusing branch-mode's "THIS DIFF IS THE CHANGE THE BRANCH INTRODUCES"
+  // framing over a diff that, mechanically, shows everything as added.
+  it("reviews a path as a full read, not a diff, when reviewPath is set", async () => {
+    store.createReview({
+      id: "r2",
+      repoId,
+      principal: "p",
+      branch: "feat/holds",
+      reviewPath: "src",
+      ticket: "Review this module on its own terms.",
+      type: CODE_ARCH.id,
+      state: "running",
+      ladder: initialState(CODE_ARCH.tiers),
+    });
+    const reviewer = new ScriptedReviewer([[]]);
+    const result = await runRound({ store, reviewer, reviewId: "r2", principal: "p", worktree: dir, type: TYPE });
+
+    expect(result.decision.kind).not.toBe("stopped");
+    const prompt = reviewer.prompts[0] ?? "";
+    expect(prompt).toContain("Review this module on its own terms.");
+    expect(prompt).toContain("FULL READ");
+    expect(prompt).toContain("src/hold.ts");
+    expect(prompt).not.toContain("THIS DIFF IS THE CHANGE THE BRANCH INTRODUCES");
+    // PROG.md sits outside src/ in the fixture, so a path-scoped folder review must
+    // not pull it into the diff the way an unscoped one (or a branch diff) would.
+    expect(prompt).not.toContain("PROG.md");
+  });
+
   it("ingests the repo's own rules and hands them to the reviewer", async () => {
     const reviewer = new ScriptedReviewer([[]]);
     await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });

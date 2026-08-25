@@ -286,8 +286,15 @@ export function renderStatus(db: DatabaseSync, reviewId?: string, dataDir = "/va
     const st = style(String(r["state"]));
     const ladder = JSON.parse(String(r["ladder"] ?? "{}")) as Partial<LadderState>;
 
+    // FOLDER REVIEWS (D-130) CARRY NO `into_ref` — the write side stores "" for these
+    // rows rather than true SQL NULL (store.ts's createReview explains why: into_ref
+    // predates this feature and is TEXT NOT NULL, and this project's migration list
+    // can only ADD a column, never relax an existing constraint). Rendered as the
+    // path instead of an arrow to nothing.
+    const path = r["review_path"];
+    const target = path === null || path === undefined ? String(r["into_ref"]).slice(0, 12) : `(folder: ${path})`;
     out.push(
-      `${st.paint(`${st.mark} ${String(r["state"]).toUpperCase()}`)}  ${bold(String(r["branch"]))} ${dim("→")} ${String(r["into_ref"]).slice(0, 12)}  ${dim(id)}`,
+      `${st.paint(`${st.mark} ${String(r["state"]).toUpperCase()}`)}  ${bold(String(r["branch"]))} ${dim("→")} ${target}  ${dim(id)}`,
     );
 
     // The tier ladder, with what actually ran. This is the line that was missing:

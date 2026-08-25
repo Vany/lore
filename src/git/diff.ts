@@ -20,6 +20,13 @@ const MAX_OVERLAP = 10;
 const MAX_COMMITS_PER_FILE = 4;
 const MAX_DIFF_CHARS = 600_000;
 
+/**
+ * git's well-known empty-tree object. Present in every repository with no setup —
+ * it is how `wholeTreeDiff` (D-130) gets a real, ordinary `git diff` (every file
+ * shown as added) instead of a hand-rolled "pretend this is a diff" shape.
+ */
+const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+
 export interface ReviewDiff {
   readonly base: string;
   readonly mergeBase: string;
@@ -27,6 +34,15 @@ export interface ReviewDiff {
   readonly patch: string;
   readonly truncated: boolean;
   readonly totalChars: number;
+  /**
+   * Set only by `wholeTreeDiff` (D-130): the path this folder review is scoped to
+   * (`"."` for the whole worktree). Absent for an ordinary branch-vs-`into` diff.
+   *
+   * This is what lets `renderDiff` and callers detect folder mode from the
+   * `ReviewDiff` itself, instead of threading a second mode flag everywhere a
+   * `ReviewDiff` already travels.
+   */
+  readonly scopePath?: string;
   /** Invisible to `git diff`, so they are listed by name (INV-4). */
   readonly untracked: readonly string[];
   /** Files touched, for scoping knowledge and T0 work. */
@@ -339,6 +355,151 @@ export async function computeDiff(
   };
 }
 
+/**
+ * A review with no base: everything at `path` (or the whole worktree, for `"."`),
+ * shown as a diff against nothing (D-130).
+ *
+ * Deliberately a SIBLING of `computeDiff`, not a branch inside it. `computeDiff` is
+ * dense with incidents about resolving a real `into` — merge-base, `behindBy`,
+ * `mergesClean`, overlap since divergence — none of which has an answer without one.
+ * Threading a fake base through that function risks exactly the kind of edge case its
+ * own comments document lore having been burned by before. This produces the same
+ * `ReviewDiff` shape by a shorter, separate path instead: `git diff <EMPTY_TREE>`
+ * against a single ref diffs against the WORKING TREE (INV-3, same as `computeDiff`),
+ * so uncommitted work in the review worktree is included here exactly as it is there.
+ *
+ * Branch-only facts get honest empty values rather than invented ones: there is no
+ * base to be behind, no commit list, nothing to check a merge against.
+ */
+export async function wholeTreeDiff(worktree: string, path: string): Promise<ReviewDiff> {
+  const scope = path === "." ? [] : ["--", path];
+  // lore-ok[01d5371d]: `-c core.quotePath=false` ON EVERY CALL BELOW closes the
+  // common case — found by lore's own review of D-130: git C-style-quotes a path
+  // needing it, which by default is any non-ASCII name (`+++
+  // "b/src/caf\303\251.ts"`, verified directly), and this flag asks git for the
+  // real bytes instead, for the patch and for `ls-files` (`untracked` would have
+  // the identical failure for a non-ASCII name). It does NOT close a control
+  // character, backslash or literal quote in a name — git quotes those
+  // unconditionally — which is why `filesInDiff` (`git/diff.ts`) also decodes
+  // git's quoting itself (`unquoteGitPath`) rather than relying on this flag alone.
+  const noQuote = ["-c", "core.quotePath=false"];
+
+  const { stdout: rawPatch } = await git(worktree, [...noQuote, "diff", "--submodule=diff", "--no-color", EMPTY_TREE, ...scope]);
+  const { stdout: stat } = await git(worktree, [...noQuote, "diff", "--stat", "--submodule=short", EMPTY_TREE, ...scope]);
+
+  // lore-ok[ec79f1c2]: `ls-files` C-quotes a control character, backslash or literal
+  // quote in a filename unconditionally too — the same rule `filesInDiff` decodes
+  // for the patch, found by lore's own review at that site and applying here by the
+  // identical mechanism, not yet wired in. Each line un-quoted individually, since
+  // `ls-files --others` output is one raw (possibly quoted) path per line, not a
+  // diff this repo already has a block-level parser for.
+  const untracked = (await gitLines(worktree, [...noQuote, "ls-files", "--others", "--exclude-standard", ...scope])).map(
+    (line) => unquoteGitPath(line),
+  );
+  // PARSED FROM THE PATCH, not a separate `--name-only` call — found by lore's own
+  // review: `--name-only` lists a submodule as its gitlink name only ("inner"), never
+  // the files inside it, even with `--submodule=diff` — verified directly, a real git
+  // submodule fixture prints only "inner" from `--name-only` while the patch itself
+  // (same flag) expands to `inner/deep.txt`. This project's own submodule workflow
+  // (D-36, spec/review-ladder.md §6.1) makes that a real gap, not a hypothetical one: a
+  // pattern-engine hit inside a submodule would read `diff.changedFiles` as not
+  // containing it, be marked `preexisting` (D-68) and demoted — in a full read, where
+  // "outside the diff" should be nearly meaningless, silently burying a first-class
+  // finding as inherited repository debt.
+  const changedFiles = filesInDiff(rawPatch);
+
+  const isTest = (f: string) => /(\.test\.|\.spec\.|(^|\/)tests?\/|__tests__)/.test(f);
+  const changedTests = changedFiles.filter(isTest).length;
+
+  const truncated = rawPatch.length > MAX_DIFF_CHARS;
+  const patch = truncated
+    ? `${rawPatch.slice(0, MAX_DIFF_CHARS)}\n\n[DIFF TRUNCATED at ${MAX_DIFF_CHARS} of ${rawPatch.length} characters — read the rest from the worktree directly.]`
+    : rawPatch;
+
+  return {
+    base: EMPTY_TREE,
+    mergeBase: EMPTY_TREE,
+    scopePath: path,
+    behindBy: 0,
+    commits: [],
+    mergesClean: undefined,
+    overlap: [],
+    changedTests,
+    changedSource: changedFiles.length - changedTests,
+    stat: stat.trim(),
+    patch,
+    truncated,
+    totalChars: rawPatch.length,
+    untracked,
+    changedFiles: [...changedFiles, ...untracked],
+  };
+}
+
+/**
+ * Reverses git's C-style path quoting (`quote.c`'s `quote_c_style`).
+ *
+ * `wholeTreeDiff` passes `-c core.quotePath=false`, which stops IT from ever
+ * producing octal-escaped non-ASCII names — but `filesInDiff` is also used on a
+ * CLIENT-SUPPLIED diff (`review_submit`), generated under whatever config the
+ * client's own git has, which is `core.quotePath=true` by default. Found by lore's
+ * own review of D-130: a first version of this decoded one `\NNN` escape to one
+ * JS code UNIT via `fromCharCode`, correct only for a single-byte escape — but
+ * git's octal escapes are raw BYTES, and a non-ASCII character is a run of SEVERAL
+ * of them (`café.ts` as `\303\251` is two bytes forming one UTF-8 codepoint, not
+ * two characters). Decoding byte-by-byte with `fromCharCode` produced mojibake
+ * ("Ã©") instead of the real name. This collects raw BYTES instead — a plain ASCII
+ * character contributes its own byte, `\t`/`\n`/etc. contribute their mnemonic's
+ * byte, `\NNN` contributes exactly the byte git wrote — and decodes the WHOLE
+ * sequence as UTF-8 once at the end, which reassembles a multi-byte escape run
+ * correctly the same way the bytes were always meant to be read together.
+ */
+function unquoteGitPath(raw: string): string {
+  if (!raw.startsWith('"') || !raw.endsWith('"')) return raw;
+  const MNEMONIC: Record<string, number> = { a: 0x07, b: 0x08, f: 0x0c, n: 0x0a, r: 0x0d, t: 0x09, v: 0x0b };
+  const bytes: number[] = [];
+  const inner = raw.slice(1, -1);
+  for (let i = 0; i < inner.length; i++) {
+    const c = inner[i] ?? "";
+    if (c !== "\\") {
+      bytes.push(...Buffer.from(c, "utf8"));
+      continue;
+    }
+    const next = inner[++i] ?? "";
+    if (next in MNEMONIC) {
+      bytes.push(MNEMONIC[next] as number);
+    } else if (next === "\\" || next === '"') {
+      bytes.push(next.charCodeAt(0));
+    } else if (/[0-7]/.test(next)) {
+      bytes.push(Number.parseInt(next + inner.slice(i + 1, i + 3), 8));
+      i += 2;
+    }
+  }
+  return Buffer.from(bytes).toString("utf8");
+}
+
+/**
+ * Files a unified diff touches, parsed from the diff TEXT rather than a separate
+ * `--name-only` call.
+ *
+ * Moved here from `reviewer/review.ts` (D-130): `wholeTreeDiff` needed it for the
+ * reason below, and a git-diff-text parser belongs beside the code that produces
+ * git diff text, not one layer up in the reviewer that consumes it.
+ *
+ * `+++ b/<path>` is the post-image name, which is the one that exists in the worktree
+ * after the patch applies — quoted or not (`unquoteGitPath`); `/dev/null` is a
+ * deletion and has no marker to find, fine for `wholeTreeDiff`, which never has
+ * one (everything is added, against nothing), and pre-existing behaviour
+ * everywhere else this was already used.
+ */
+export function filesInDiff(diff: string): readonly string[] {
+  const out: string[] = [];
+  for (const m of diff.matchAll(/^\+\+\+ (.+)$/gm)) {
+    const path = unquoteGitPath((m[1] ?? "").trim());
+    if (path.startsWith("b/") && path.length > 2) out.push(path.slice(2));
+  }
+  return out;
+}
+
 /** git blob sha of a working-tree file — the coarse half of a verdict's scope. */
 export async function blobSha(worktree: string, path: string): Promise<string | undefined> {
   return gitMaybe(worktree, ["hash-object", "--", path]);
@@ -381,6 +542,7 @@ async function mergeCheck(worktree: string, base: string): Promise<boolean | und
 }
 
 export function renderDiff(d: ReviewDiff): string {
+  if (d.scopePath !== undefined) return renderFolderDiff(d, d.scopePath);
   // Spelled out, because naming the base was not enough. A reviewer given
   // `Base: main (merge-base abc123)` went and ran `git diff main..HEAD` itself,
   // got the two-dot picture, and reported at high severity that the branch had
@@ -442,6 +604,16 @@ export function renderDiff(d: ReviewDiff): string {
     d.stat,
   ];
 
+  appendTail(parts, d);
+  return parts.join("\n");
+}
+
+/**
+ * The untracked list, the truncation notice, and the patch itself — identical in
+ * both diff shapes (branch-vs-`into`, and D-130's whole-tree read), so it is written
+ * once rather than kept in sync between them by hand.
+ */
+function appendTail(parts: string[], d: ReviewDiff): void {
   if (d.untracked.length > 0) {
     parts.push(
       "",
@@ -458,5 +630,41 @@ export function renderDiff(d: ReviewDiff): string {
   }
 
   parts.push("", "--- DIFF ---", d.patch);
+}
+
+/**
+ * D-130: a full read of `path`, not a diff against a prior version.
+ *
+ * The branch-mode framing above ("THIS DIFF IS THE CHANGE THE BRANCH INTRODUCES",
+ * a commit list, a fork point) is actively wrong here — there is no prior version,
+ * no commits, no fork point, and telling a model there is invites it to treat a
+ * stable, unremarkable folder as a suspicious zero-history branch. Every line in
+ * the patch below is shown as added because that is how a whole tree renders as a
+ * diff against nothing, not because any of it is new.
+ */
+function renderFolderDiff(d: ReviewDiff, path: string): string {
+  // lore-ok[d1831d70]: fixed here, same round it was raised — NOT `.toUpperCase()`
+  // on the whole sentence, which included the interpolated path, so `src/PayRoll`
+  // printed as `SRC/PAYROLL` in the one sentence whose job is telling a tier what to
+  // actually read or re-read (see continuedPrompt's "re-read the files you care
+  // about at the path"). Emphasis is static caps around the path, not a transform
+  // applied to it. Verified directly: whole-tree-diff.test.ts's "names the scoped
+  // path in the header, in its real case".
+  const where = path === "." ? "THE WHOLE WORKTREE" : `\`${path}\``;
+  const parts = [
+    `THIS IS A FULL READ OF ${where} — NOT A DIFF AGAINST A PRIOR VERSION.`,
+    "",
+    "There is no earlier tree to compare against, no base, no commit history for this review to reason",
+    "about. Every line in the patch below is shown as added because that is how a complete tree renders",
+    "as a diff, not because any of it is new or recently written. Judge it as the code that exists, not",
+    "as a change someone just made.",
+    "",
+    d.changedSource > 0 && d.changedTests === 0
+      ? `${d.changedSource} source file(s), and NO test file. Ask whether that is right.`
+      : `${d.changedSource} source file(s) and ${d.changedTests} test file(s).`,
+    "",
+    d.stat,
+  ];
+  appendTail(parts, d);
   return parts.join("\n");
 }

@@ -1453,6 +1453,27 @@ describe("one review per branch", () => {
     expect(String(store.failureReason(firstId, false) ?? "")).toContain("superseded by a restart");
   });
 
+  // Found by lore's own review of D-130, HIGH severity: making `into` optional (at
+  // the schema level, to allow folder mode) made a request missing it reach the
+  // handler for the first time ever — before, `into: z.string().min(1)` refused it
+  // before any code ran. A late "into is required" check, sitting after this exact
+  // restart-cancel block, would destroy the predecessor and THEN refuse — the precise
+  // incident the block above's own comment documents fixing, reopened by this change.
+  it("refuses a restart with no into BEFORE cancelling the predecessor, not after", async () => {
+    const first = await start();
+    const firstId = JSON.parse(first.result?.content?.[0]?.text ?? "{}").review_id as string;
+
+    const out = await start({ restart: true, into: undefined });
+    expect(out.result?.isError, "refused for the missing into").toBe(true);
+    expect(message(out)).toContain("into");
+
+    // The predecessor must be exactly as it was — not cancelled by a restart that
+    // was itself refused.
+    expect(store.getReview(firstId, "alice")?.state, "not destroyed by a refused restart").toBe("queued");
+    const failure = store.failureReason(firstId, false);
+    expect(failure, "no cancellation was recorded either").toBeUndefined();
+  });
+
   it("lets a finished branch be reviewed again without ceremony", async () => {
     const first = await start();
     const id = JSON.parse(first.result?.content?.[0]?.text ?? "{}").review_id as string;
@@ -1466,6 +1487,131 @@ describe("one review per branch", () => {
     await start();
     const other = await start({ branch: "feat/y" });
     expect(JSON.parse(other.result?.content?.[0]?.text ?? "{}").review_id).toMatch(/^rev_/);
+  });
+});
+
+/**
+ * A REVIEW WITH NO BASE (D-130). `mode: "folder"` and `path` replace `into` for a
+ * full read of a path rather than a diff — these are the refusals that keep the two
+ * shapes from being sent contradictory instructions, and the one path that proves a
+ * folder review actually gets written the way the rest of the system expects to read it.
+ */
+describe("folder mode", () => {
+  const callRaw = async (name: string, args: Record<string, unknown>) => {
+    const res = await mcp({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }, token);
+    const line = (await res.text()).split("\n").find((l) => l.startsWith("data:")) ?? "";
+    return JSON.parse(line.slice("data:".length)) as {
+      result?: { content?: { text?: string }[]; isError?: boolean };
+      error?: { message?: string };
+    };
+  };
+  const message = (r: Awaited<ReturnType<typeof callRaw>>) =>
+    `${r.error?.message ?? ""} ${r.result?.content?.[0]?.text ?? ""}`;
+
+  // No default `into` here — most of this block is specifically about when it may
+  // and may not be present.
+  const start = (args: Record<string, unknown>) => callRaw("review_start", { branch: "feat/x", ticket: "t", ...args });
+
+  it("refuses folder mode with no path, rather than defaulting to the repo root", async () => {
+    const out = await start({ mode: "folder" });
+    expect(out.result?.isError).toBe(true);
+    expect(message(out)).toContain("path");
+  });
+
+  it("refuses folder mode combined with into, naming the contradiction", async () => {
+    const out = await start({ mode: "folder", path: ".", into: "main" });
+    expect(out.result?.isError).toBe(true);
+    expect(message(out)).toContain("contradict");
+  });
+
+  it("refuses path without folder mode", async () => {
+    const out = await start({ into: "main", path: "src" });
+    expect(out.result?.isError).toBe(true);
+    expect(message(out)).toContain("folder");
+  });
+
+  it("refuses ordinary (diff) mode with no into, same as always", async () => {
+    const out = await start({});
+    expect(out.result?.isError).toBe(true);
+    expect(message(out)).toContain("into");
+  });
+
+  it("starts a folder review, recorded with a path and no into", async () => {
+    const out = await start({ mode: "folder", path: "src/payments" });
+    expect(out.result?.isError).toBeUndefined();
+    const id = JSON.parse(out.result?.content?.[0]?.text ?? "{}").review_id as string;
+    expect(id).toMatch(/^rev_/);
+
+    const row = store.db.prepare("SELECT into_ref, review_path FROM review WHERE id = ?").get(id) as {
+      into_ref: string;
+      review_path: string | null;
+    };
+    expect(row.review_path).toBe("src/payments");
+    expect(row.into_ref, "the write-side sentinel forced by into_ref's NOT NULL").toBe("");
+  });
+
+  // The dedup key is (branch, path) (D-130), not branch alone — a folder review must
+  // not be refused as a duplicate of an ordinary diff review on the same branch, or
+  // vice versa.
+  it("does not treat a folder review as a duplicate of a diff review on the same branch", async () => {
+    const diffReview = await start({ branch: "feat/shared", into: "main" });
+    expect(diffReview.result?.isError).toBeUndefined();
+
+    const folderReview = await start({ branch: "feat/shared", mode: "folder", path: "." });
+    expect(folderReview.result?.isError, message(folderReview)).toBeUndefined();
+  });
+
+  // Found by lore's own review of D-130: "src", "src/" and "./src" name the same
+  // scope to git, but a byte-exact dedup key would have let each spelling open its
+  // own review of the identical directory — the exact duplication one-review-per-
+  // (branch, path) exists to prevent, just reachable through a spelling instead of
+  // a second call.
+  it("treats equivalent spellings of one path as the same review, not three", async () => {
+    const first = await start({ branch: "feat/spellings", mode: "folder", path: "src" });
+    expect(first.result?.isError, message(first)).toBeUndefined();
+    const id = JSON.parse(first.result?.content?.[0]?.text ?? "{}").review_id as string;
+
+    for (const spelling of ["src/", "./src"]) {
+      const again = await start({ branch: "feat/spellings", mode: "folder", path: spelling });
+      expect(again.result?.isError, `path: "${spelling}" should collide with the first review`).toBe(true);
+      expect(message(again)).toContain(id);
+    }
+
+    const row = store.db.prepare("SELECT review_path FROM review WHERE id = ?").get(id) as { review_path: string };
+    expect(row.review_path, "stored in one canonical spelling").toBe("src");
+  });
+
+  // Found by lore's own review of D-130, matching the precedent `into` already set:
+  // an unrefused path escaping the worktree reaches wholeTreeDiff's git call and
+  // fails with raw git vocabulary about a directory nobody watching this service
+  // can see, instead of a door refusal naming the actual problem.
+  //
+  // "/" is here on its own: found by lore's own review a SECOND time, because the
+  // first fix checked absoluteness on the NORMALIZED path — and normalizeReviewPath("/")
+  // is "." (posix.normalize("/") is "/", the trailing-slash strip then empties it),
+  // a harmless-looking relative path that silently passed the door and reviewed the
+  // whole repository instead of refusing the absolute path actually sent.
+  it.each([["../shared"], ["/home/agent/repo/src"], [".."], ["/"]])(
+    "refuses a path that escapes the worktree: %s",
+    async (path) => {
+      const out = await start({ mode: "folder", path });
+      expect(out.result?.isError, message(out)).toBe(true);
+      expect(message(out)).toContain("inside the repository");
+    },
+  );
+
+  it("still accepts an ordinary relative path", async () => {
+    const out = await start({ branch: "feat/relative", mode: "folder", path: "src/payments" });
+    expect(out.result?.isError, message(out)).toBeUndefined();
+  });
+
+  // Found by lore's own review of D-130: a NUL byte in `path` throws from Node's own
+  // `execFile` when wholeTreeDiff finally uses it, not from git — by which point the
+  // review row already exists and a slot is already spent. Refused at the door instead.
+  it("refuses a path containing a NUL byte", async () => {
+    const out = await start({ mode: "folder", path: "src\0junk" });
+    expect(out.result?.isError, message(out)).toBe(true);
+    expect(message(out)).toContain("NUL");
   });
 });
 

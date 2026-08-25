@@ -23,9 +23,10 @@ import type { Finding } from "../core/finding.ts";
 import { fingerprint } from "../core/fingerprint.ts";
 import { initialState } from "../core/ladder.ts";
 import { CODE_ARCH } from "../core/review-type.ts";
+import { filesInDiff } from "../git/diff.ts";
 import { Store, type RecordedFinding } from "../store/store.ts";
 import type { ReviewerLike, ReviewerResult } from "./opencode.ts";
-import { alreadyAnswered, filesInDiff, runRound } from "./review.ts";
+import { alreadyAnswered, runRound } from "./review.ts";
 
 /** A model tier that says exactly what the test scripts, and keeps every prompt it saw. */
 class ScriptedReviewer implements ReviewerLike {

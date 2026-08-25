@@ -412,6 +412,41 @@ not a branch name.** If the branch has moved since, the attestation does not des
 what is now there, and merging on the strength of it would be wrong. The tree hash is
 in the signed line precisely so this is checkable rather than assumed.
 
+## 2.3.3 Folder mode: a review with no base (D-130)
+
+`review_start` normally diffs `branch` against `into`. Pass `mode: "folder"` and
+`path` instead to review what is *at* a path — no base, no diff, every file read as
+it stands rather than as a change. `into` and `path` are mutually exclusive; the
+schema refuses either combined with the other mode.
+
+**Mechanically, a folder review is a diff against git's well-known empty-tree
+object** (`4b825dc642cb6eb9a060e54bf8d69288fbee4904`, present in every repository
+with no setup), scoped to `path`. That is what lets every consumer downstream of a
+diff — T0, the model prompts, finding storage, `preexisting`/D-68, `review_submit`,
+the ladder, attestation — work unchanged: none of it knows or cares whether the diff
+came from two branches or from nothing. See `spec/review-ladder.md` §6.4 for the
+scope semantics this produces.
+
+**`path` has no default.** Pass `"."` to mean the whole tree explicitly; there is no
+silent fallback to the repository root. A whole real repository's diff-against-empty
+usually exceeds the diff size ceiling (§2.3.2's sibling concern, `MAX_DIFF_CHARS` in
+`src/git/diff.ts`) and every tier that reads a truncated prompt spends real quota on
+a prefix of the repository — an unscoped default would make that easy to trigger by
+accident. Naming `path` explicitly is the same "refuse rather than infer" shape as
+`into` failing loudly on a name lore cannot find, applied to scope instead of a ref.
+
+**`mode` is an explicit enum, not inferred from an omitted `into`.** A client that
+forgets `into` today gets a clear schema error naming the missing field. If omission
+silently meant folder mode instead, that same mistake would silently review the
+wrong thing at the wrong scope rather than fail loudly — the opposite of what every
+other refusal in this surface is for.
+
+**One-review-per-branch (§2.4.2) is keyed on `(branch, path)`, not `branch` alone.**
+A folder review of `src/payments` and a diff review of the same branch are different
+work, and so are folder reviews of two different paths on the same branch.
+`pull_fresh` on an open folder review has to repeat the same `path` to find it,
+exactly as it already has to repeat the same `branch`.
+
 ## 2.4 Two-stage review (D-34)
 
 At 30 PRs a day nobody waits for a full ladder. The review splits:
@@ -538,8 +573,10 @@ sets of findings for one PR. Measured: `feat/RIGID-129` accumulated seven overla
 generations this way, ended only by the operator mass-cancelling from the board. Now the
 predecessor ends exactly as `review_cancel` would end it — `cancelled`, findings handed
 over, the reason recorded as *superseded by a restart* — in the same call, state first,
-so a round claimed in that instant finds a terminal review before spending. One branch,
-one live review, is now an invariant of `review_start` rather than an etiquette.
+so a round claimed in that instant finds a terminal review before spending. One live
+review per dedup key is now an invariant of `review_start` rather than an etiquette —
+the key itself is `(branch, path)` since D-130 added folder mode (§2.3.3), not `branch`
+alone, so a diff review and a folder review of the same branch are correctly two.
 
 ### 2.5 `review_cancel` stops both ends, and says when it could not
 
@@ -675,3 +712,11 @@ lore: reviewed <tree-hash> against this repo's rules and lore's own rules —
 It asserts **what was done**, never that the code is flawless. "Our models stopped
 finding things" does not imply "no defects remain", and the first bug that ships
 behind an overclaiming badge is the one that discredits the whole service.
+
+**A folder review's line names its scope (D-130).** The tree hash is still the
+whole worktree's — hashed identically for every review, so an attestation stays
+comparable and checkable against `git rev-parse` the same way regardless of mode —
+but the tiers read only `path`, and asserting "reviewed tree X" with no further
+word would claim more than that. The line instead reads `reviewed tree <hash>
+(scoped to <path>)`, so a reader who takes only the signed line — never the
+unsigned audit trail — cannot mistake a scoped read for a full one.
