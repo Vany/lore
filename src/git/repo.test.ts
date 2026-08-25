@@ -253,6 +253,42 @@ describe("gitlinks reads the worktree a review is reviewing, not its starting HE
     expect(nextRoundDiff.length, "the bump must not render as an empty, invisible patch next round").toBeGreaterThan(0);
     expect(nextRoundDiff).toContain(`Submodule inner ${commitA.slice(0, 7)}`);
   });
+
+  // Found by lore's own review (70cc792a), the opposite direction from the bump
+  // fixes above: the restore loop answers "add -A MOVED a gitlink `before` already
+  // had" — it does nothing for one add -A INVENTS. Deleting a submodule removes its
+  // gitlink from the index cleanly (`applyPatch --index`, so the pre-loop snapshot is
+  // correctly empty), but git's own apply cannot rmdir the submodule's directory
+  // while the submodule's OWN `.git` is still inside it, so the directory survives
+  // untracked. `add -A` then reads that survivor as an embedded repository and
+  // re-stages the gitlink `before` never had anything to restore over.
+  it("treeHash does not let add -A resurrect a gitlink the client deleted", async () => {
+    // `git rm inner` also rewrites `.gitmodules` to drop the submodule's own section,
+    // staging both in one step — the ordinary shape of a real deletion.
+    execFileSync("git", ["rm", "-q", "inner"], { cwd: outerDir, stdio: "ignore" });
+    const patch = execFileSync("git", ["diff", "--cached", "--submodule=short"], { cwd: outerDir, encoding: "utf8" });
+    execFileSync("git", ["reset", "-q", "--hard", "HEAD"], { cwd: outerDir, stdio: "ignore" });
+    execFileSync("git", ["-c", "protocol.file.allow=always", "submodule", "update", "--init"], {
+      cwd: outerDir,
+      stdio: "ignore",
+    });
+    expect(existsSync(join(outerDir, "inner", ".git")), "fixture must start with inner really checked out").toBe(true);
+
+    await applyPatch(outerDir, patch);
+    expect(await gitlinks(outerDir), "the deletion must apply cleanly first").toStrictEqual([]);
+
+    await treeHash(outerDir);
+
+    expect(await gitlinks(outerDir), "add -A must not resurrect the deleted gitlink").toStrictEqual([]);
+    expect(existsSync(join(outerDir, "inner")), "the leftover directory must be cleaned up, not merely untracked").toBe(
+      false,
+    );
+    const untracked = execFileSync("git", ["ls-files", "--others", "--exclude-standard"], {
+      cwd: outerDir,
+      encoding: "utf8",
+    });
+    expect(untracked, "no leftover inner/* debris should show as untracked either").toBe("");
+  });
 });
 
 /**
@@ -309,6 +345,24 @@ describe("worktreeFor recovers from a worktree that never finished, without touc
     const w = await worktreeFor(paths, "rev2", "main", "");
     expect(existsSync(join(w, "garbage.txt")), "the dead directory must not have been reused as-is").toBe(false);
     expect(existsSync(join(w, "a.txt")), "a real, freshly-cut worktree must be there instead").toBe(true);
+  });
+
+  // Found by lore's own review (f1f825ce): registration alone answers "has a
+  // `git worktree add` STARTED", not "has it finished" — verified directly, on a
+  // 40,000-file checkout, registered from its very first written file. The fast path
+  // used to trust registration by itself, which returned a live peer's (or a
+  // partially-killed) checkout as done from the moment it began. This constructs the
+  // shape directly — registered (a real, completed `worktreeFor` call), then
+  // mutilated exactly like an interrupted checkout would be (see `worktreeIsIntact`) —
+  // rather than timing a real kill, which this suite cannot do cheaply.
+  it("does not reuse a registered worktree whose checkout does not match its index", async () => {
+    const w1 = await worktreeFor(paths, "rev1b", "main", "");
+    rmSync(join(w1, "a.txt"));
+    expect(existsSync(join(w1, "a.txt"))).toBe(false);
+
+    const w2 = await worktreeFor(paths, "rev1b", "main", "");
+    expect(w2).toBe(w1);
+    expect(existsSync(join(w2, "a.txt")), "must have been rebuilt clean, not reused mutilated").toBe(true);
   });
 
   it("refuses to touch a worktree a peer is genuinely still creating", async () => {

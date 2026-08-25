@@ -274,21 +274,32 @@ export async function addWorktree(
 }
 
 /**
- * Ground truth for "is there really a worktree at this path" — git's own
- * registration (`worktree list`), not the filesystem. `pruneWorktrees` below already
- * distrusts a raw path one direction (a registration with no directory behind it);
- * this is the same distrust the other way.
+ * git's own registration (`worktree list`) for this path — necessary, but (see
+ * `worktreeIsIntact` below) not sufficient, to call a worktree reusable.
  *
  * lore-ok[a386ebff,9f189b25,dd6f1801,d7a82471]: `worktreeFor` used to ask
- * `existsSync` alone, found wrong by lore's own review and reproduced directly —
- * `git worktree add` killed by its own 300s timeout (`addWorktree` above, real
- * SIGTERM via node's `execFile`) leaves a populated, `.git`-bearing directory that
- * `existsSync` cannot tell apart from a finished one, and `git worktree list
- * --porcelain` never names. Compares REALPATHs on both sides, not raw strings — git
- * records a worktree's path resolved (confirmed directly: a path reached through a
- * symlinked prefix, `/tmp` on this machine, comes back from `worktree list` as
- * `/private/tmp/...`), so comparing `dir` as constructed against that verbatim would
- * report every such worktree unregistered and rebuild it on every call.
+ * `existsSync` alone, found wrong by lore's own review and reproduced directly — a
+ * killed or still-running `git worktree add` leaves a populated, `.git`-bearing
+ * directory `existsSync` cannot tell apart from a finished one. Compares REALPATHs on
+ * both sides, not raw strings — git records a worktree's path resolved (confirmed
+ * directly: a path reached through a symlinked prefix, `/tmp` on this machine, comes
+ * back from `worktree list` as `/private/tmp/...`), so comparing `dir` as constructed
+ * against that verbatim would report every such worktree unregistered and rebuild it
+ * on every call.
+ *
+ * lore-ok[f1f825ce]: this alone is not proof of DONE, and treating it as such was the
+ * bug in the fix above — found by lore's own review, reproduced directly: a live,
+ * still-checking-out `git worktree add` is already registered from its first tick
+ * (confirmed on a 40,000-file checkout — 48 files in, `worktree list --porcelain`
+ * already named it), well before it is safe to hand back to a caller expecting a
+ * finished tree. `worktreeFor` below now asks `worktreeAddInProgress` FIRST, and
+ * trusts registration only once that says no one is actively writing — and even then
+ * pairs it with `worktreeIsIntact`, because registration surviving a kill specifically
+ * (as opposed to a live in-progress add) could not be reproduced here — six isolated
+ * attempts with this codebase's own kill mechanism (`execFile`'s timeout, SIGTERM)
+ * all cleared the registration along with the lock — but a harder kill this codebase
+ * does not control (OOM, a deploy's SIGKILL after its stop grace period) was never
+ * ruled out, so this checks rather than assumes either way.
  */
 async function isRegisteredWorktree(paths: RepoPaths, dir: string): Promise<boolean> {
   if (!existsSync(dir)) return false;
@@ -298,15 +309,42 @@ async function isRegisteredWorktree(paths: RepoPaths, dir: string): Promise<bool
 }
 
 /**
+ * Does this worktree's checkout on DISK actually match its own INDEX — the question
+ * `isRegisteredWorktree` cannot answer, because registration and a FINISHED checkout
+ * are not the same event (see its docs).
+ *
+ * Reads only the SECOND column of `git status --porcelain` (`XY path`: X is index-vs-
+ * HEAD, Y is worktree-vs-index) — found wrong the other way by this file's own new
+ * tests, against `repin.test.ts`: a worktree carrying an applied, still-unreviewed fix
+ * (`applyPatch --index`, staged and on disk together) is SUPPOSED to disagree with
+ * HEAD, column X, and treating that as broken discarded a real client submission that
+ * origin had no reason to move. Column Y is the one this function exists to ask about
+ * — verified directly, deleting most of a 40,000-file checkout while leaving its
+ * index untouched (the shape a partial checkout leaves) produced 35,001 lines shaped
+ * ` D <path>`, space then D, Y non-blank. Safe against false positives specifically
+ * for what this function reuses: T0's sandbox mounts the worktree `:ro`
+ * (`src/t0/sandbox.ts`), so nothing lore does not do itself between rounds can leave
+ * column Y non-blank.
+ */
+async function worktreeIsIntact(dir: string): Promise<boolean> {
+  const { stdout } = await git(dir, ["status", "--porcelain"]);
+  return stdout
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .every((line) => line[1] === " ");
+}
+
+/**
  * Is a `git worktree add` for this exact path GENUINELY running right now — as
  * opposed to merely having left a directory behind?
  *
- * Exists because the fix above is not by itself enough: a directory that exists but
- * is not yet registered is exactly what a peer's checkout looks like WHILE it is
- * still running, not only after it has died. Deleting on that observation alone
- * (verified: `worktreeAddInProgress` is what stands between `worktreeFor` and doing
- * that) would trade one review over a tree that exists nowhere for another —
- * corrupting a *concurrent, live* checkout instead of reusing a dead one.
+ * Exists because the checks above are not by themselves enough: a directory that
+ * exists but is not yet registered — or IS registered but not yet intact — is
+ * exactly what a peer's checkout looks like WHILE it is still running, not only
+ * after it has died or finished. Deleting on that observation alone (verified:
+ * `worktreeAddInProgress` is what stands between `worktreeFor` and doing that) would
+ * trade one review over a tree that exists nowhere for another — corrupting a
+ * *concurrent, live* checkout instead of reusing a dead one.
  *
  * `git worktree add` holds `<bare>/worktrees/<name>/index.lock` for the operation's
  * full duration — verified directly, present within the first tick of a real
@@ -323,11 +361,21 @@ async function isRegisteredWorktree(paths: RepoPaths, dir: string): Promise<bool
  * dead. The margin is generous on purpose: mistaking a live checkout for dead and
  * deleting it is the failure this function exists to prevent, and the cost of the
  * opposite mistake is only a slower self-heal.
+ *
+ * lore-ok[f1f825ce]: `worktreeFor` now calls this FIRST, before either registration
+ * check above — registration alone answers "has `git worktree add` started", not
+ * "has it finished", and checking registration first was the bug: it took the fast
+ * path on a live peer's directory from the peer's very first written file onward.
  */
 async function worktreeAddInProgress(paths: RepoPaths, dir: string): Promise<boolean> {
   const lock = join(paths.bare, "worktrees", basename(dir), "index.lock");
   const st = await stat(lock).catch(() => undefined);
   return st !== undefined && Date.now() - st.mtimeMs < WORKTREE_ADD_TIMEOUT_MS + 60_000;
+}
+
+/** `isRegisteredWorktree` AND `worktreeIsIntact` together — see both for why neither alone is enough. */
+async function worktreeIsReusable(paths: RepoPaths, dir: string): Promise<boolean> {
+  return (await isRegisteredWorktree(paths, dir)) && (await worktreeIsIntact(dir));
 }
 
 /**
@@ -368,41 +416,55 @@ export async function worktreeFor(
   // can be stale by the time it is used, and the caller that loses the race would
   // call `addWorktree` on a path that now exists. The worker treats a throw here as
   // a failed round, so losing that race failed the review outright.
-  if (await isRegisteredWorktree(paths, existing)) {
+  //
+  // lore-ok[f1f825ce]: IN-PROGRESS CHECKED BEFORE REGISTERED, not after — found by
+  // lore's own review. Registration answers "has an add started", which is true from
+  // a live checkout's very first written file, so checking it first took the fast
+  // path on a peer's still-running add exactly as readily as on a finished one.
+  // `worktreeAddInProgress` first means a live peer is waited on, never handed back
+  // as done.
+  if (await worktreeAddInProgress(paths, existing)) return busy();
+  if (await worktreeIsReusable(paths, existing)) {
     await ensureBare(paths, gitUrl, false);
     return existing;
   }
-  if (await worktreeAddInProgress(paths, existing)) return busy();
-  // Only past both checks above is a directory here known dead rather than
-  // in-progress — this call's own attempt from a prior round, or a peer's that did
-  // not survive (see `isRegisteredWorktree`, `worktreeAddInProgress`). Clearing it is
-  // what lets the ordinary "no worktree yet" path below self-heal in the same round
-  // instead of failing forever on a path `addWorktree` refuses to check out into a
-  // second time.
-  if (existsSync(existing)) await rm(existing, { recursive: true, force: true });
+  // Only past every check above is a directory here known dead rather than
+  // in-progress or merely unfinished — this call's own attempt from a prior round, or
+  // a peer's that did not survive (see `worktreeAddInProgress`, `worktreeIsReusable`).
+  // Clearing it is what lets the ordinary "no worktree yet" path below self-heal in
+  // the same round instead of failing forever on a path `addWorktree` refuses to
+  // check out into a second time.
+  //
+  // `removeWorktree` below, not a bare `rm` — found by this file's own new tests: a
+  // dead worktree that DID reach a real `git worktree add` is still REGISTERED, and
+  // deleting only the directory leaves git's own bookkeeping believing it still
+  // exists, so the `addWorktree` call below fails outright — "missing but already
+  // registered worktree; use 'add -f' ... or 'prune'". `removeWorktree` clears the
+  // registration first, exactly what a second `git worktree add` at this path needs.
+  if (existsSync(existing)) await removeWorktree(paths, reviewId);
   await ensureBare(paths, gitUrl, true);
 
   try {
     return await addWorktree(paths, reviewId, branch, gitUrl);
   } catch (e) {
-    // Narrow on purpose: ONLY when the directory is now REGISTERED, which means a
-    // concurrent caller finished creating the same review's worktree from the same
-    // pinned base while this one was working — `isRegisteredWorktree`, not
-    // `existsSync`, because this call's OWN `addWorktree` can be the one that left a
-    // directory behind without finishing it (the timeout above), and treating that
-    // as a peer's success is how a round once reviewed a tree that existed nowhere.
-    if (await isRegisteredWorktree(paths, existing)) return existing;
-    // Second narrow case: a PEER is still actively creating it — this call lost the
-    // race inside `addWorktree` itself (git's own lock is why it threw). Neither
-    // reusable yet nor safe to delete out from under a live checkout, so this waits
-    // exactly as the up-front check above does.
+    // Same order as above and for the same reason: a peer still writing this
+    // worktree is what this call's OWN `addWorktree` just lost a race against (git's
+    // own lock is why it threw) — wait on it rather than assume anything from the
+    // directory it left behind.
     if (await worktreeAddInProgress(paths, existing)) return busy();
+    // Narrow on purpose: ONLY when the directory is REGISTERED AND INTACT, which
+    // means a concurrent caller FINISHED creating the same review's worktree from the
+    // same pinned base while this one was working — not `existsSync`, because this
+    // call's OWN `addWorktree` can be the one that left a directory behind without
+    // finishing it (the timeout above), and treating that as a peer's success is how
+    // a round once reviewed a tree that existed nowhere.
+    if (await worktreeIsReusable(paths, existing)) return existing;
     // Every other failure — `branch not found`, a broken bare repo, a partial
     // directory neither peer nor this call completed — propagates and clears
-    // whatever partial directory it left, because a catch that cannot tell those
-    // apart is how a round once continued against a path that had never been
-    // created.
-    await rm(existing, { recursive: true, force: true }).catch(() => {});
+    // whatever partial directory it left (registration included, same reason as
+    // above), because a catch that cannot tell those apart is how a round once
+    // continued against a path that had never been created.
+    await removeWorktree(paths, reviewId).catch(() => {});
     throw e;
   }
 }
@@ -512,13 +574,34 @@ export async function treeDelta(worktree: string, fromTree: string, toTree: stri
  * is the common way this fails, and that is what leaves the NEXT round's
  * `--submodule=diff` unable to expand the pair, which `submodulesThatFailedToExpand`
  * (`diff.ts`) already turns into an explicit warning rather than silence.
+ *
+ * lore-ok[70cc792a]: the restore loop above answers a BUMP; a client DELETING a
+ * submodule needed the opposite direction, found by lore's own review and reproduced
+ * directly — `applyPatch --index` removes the gitlink from the index correctly (the
+ * pre-loop snapshot below is empty, exactly as it should be), but git's own apply
+ * cannot `rmdir` the submodule's directory while the submodule's OWN `.git` file is
+ * still in it, so the directory survives on disk untracked. `add -A` then meets a
+ * directory that still looks like an embedded repository and stages it right back as
+ * a gitlink at whatever commit that leftover checkout has — a resurrection the empty
+ * snapshot has no entry to restore over. Closed the same way the bump direction is
+ * closed, from the other side: anything `gitlinks` reports AFTER `add -A` that was
+ * NOT in the snapshot is something `add -A` invented, never the client, so it comes
+ * back out — from the index so the tree matches what was actually deleted, and off
+ * disk so it does not read as untracked debris (`ls-files --others`, the next round's
+ * `computeDiff`) or get reinvented by this same function on every later call.
  */
 export async function treeHash(worktree: string): Promise<string> {
   const before = await gitlinks(worktree);
+  const beforePaths = new Set(before.map((l) => l.path));
   await git(worktree, ["add", "-A"]);
   for (const link of before) {
     await git(worktree, ["update-index", "--cacheinfo", `160000,${link.commit},${link.path}`]);
     await git(worktree, ["submodule", "update", "--", link.path]).catch(() => {});
+  }
+  const resurrected = (await gitlinks(worktree)).filter((link) => !beforePaths.has(link.path));
+  for (const link of resurrected) {
+    await git(worktree, ["rm", "-r", "--cached", "--ignore-unmatch", "--", link.path]);
+    await rm(join(worktree, link.path), { recursive: true, force: true }).catch(() => {});
   }
   const { stdout } = await git(worktree, ["write-tree"]);
   return stdout.trim();

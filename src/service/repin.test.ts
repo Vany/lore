@@ -103,7 +103,12 @@ describe("repinReview", () => {
     const cut = await worktreeFor(paths, "rev1", "main", join(root, "src"));
     const atOrigin = await treeHash(cut);
     // What review_submit leaves behind: applied to the worktree, committed nowhere.
+    // Staged, matching `applyPatch`'s real `git apply --index` (worktree and index
+    // move together) — not a bare write, which `worktreeFor`'s own intactness check
+    // (repo.ts, `worktreeIsIntact`) reads as an interrupted checkout rather than a
+    // submitted fix, since a bare write is exactly the shape THAT leaves behind.
     writeFileSync(join(cut, "a.txt"), "the client's fix\n");
+    g(cut, "add", "-A");
 
     const out = await repinReview(store, reposRoot, reposRoot, "rev1", atOrigin);
 
