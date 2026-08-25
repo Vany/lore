@@ -3,6 +3,94 @@
 Newest first. Updated at the end of each task: what changed, what I learned, what
 surprised me.
 
+## 2026-08-25 — the first real folder review, and it earned its keep immediately
+
+**What changed.** Vany: "okay, review our src/core pls" — the first FOLDER-mode
+review anyone has actually asked for a real answer from, not a smoke test. Eight
+genuine bugs, in the module with the least git-diff traffic and the most riding
+on it being right: `passed_partial` on `rev_rxKtrY4MrdbAaH-h_i2sGEZA`, 12
+findings, 8 fixed, 3 justified. Full account in the commit (`e1705e0`); this is
+what the numbers don't say.
+
+**The staleness tracker itself was stale, in two independent ways.**
+`hunkAround` clipped its capture window at a file's start or end instead of
+staying full-size — a verdict on any finding within 12 lines of either boundary
+read as "code is gone" on a byte-identical file, every round, forever. Verified
+directly: a finding at line 5 of a 100-line file captured 17 lines, and the
+search — which only ever tries full 25-line windows — could never reproduce
+that hash. This is the SAME shape as the 2026-08-06 livelock `hashHunk`'s own
+docstring warns about, reopened by POSITION instead of by the lore-ok-stripping
+bug that first one was. Fixed by clamping the window's START to stay in bounds
+rather than clamping its LENGTH. The sibling: a verdict captured while its file
+was short (≤25 lines, whole-file hash) could never be found again once the file
+grew past that threshold, for the identical reason. Fixed by searching every
+window length from the full size down to one line — an O(window) constant
+multiplier on an already-linear search, measured at 172ms worst case on a
+3000-line file with no match, which is fine for a background task.
+
+**Two of my own fixes, mid-review, introduced fresh wrong claims — again.**
+Exactly the pattern from the docs-refinement pass three hours earlier, same
+session: fixing `isCoverageLoss`'s substring-match bug, I anchored the
+replacement regex on `^t\d+`, assuming every tier id looks like the three
+shipped configs' `t0`–`t3` — `TierSchema` never enforced that shape, only
+uniqueness. Caught by the next round, fixed by anchoring on presence (`^\S+`)
+instead of shape. Second instance: `repairStructure`'s note-ordering fix
+(evidence near `TEXT_MAX` swallowing its own disclosure note, see below) got a
+`lore-ok` claiming the fix, and the SAME bug existed verbatim in
+`repairFieldNames` — an earlier function in the identical preprocessing chain —
+which the lore-ok's own wording implied had already been covered. Worth
+restating past three hours: a fix to a MECHANISM invites the review to check
+every other USE of that mechanism, not just the one line that moved.
+
+**`finding.ts` carried three more, all the D-115/D-116 family: validation at
+the reviewer boundary must not be able to lose a finding.** A whitespace-padded
+CWE (`"CWE-362 "`) passed `repairStructure`'s trimmed-value check but never got
+the TRIM written back, so it reached the schema's untrimmed regex and lost the
+WHOLE finding — worse than a genuinely malformed CWE, which the same function
+already repairs correctly. Fixing it needed a second pass: the function's
+early-return guard keyed off `notes.length`, so a silent trim (correct, no note
+needed) changed `out` and then had that change thrown away by `return input`.
+Needed an explicit `changed` flag, not just the write. Separately, the file-
+escape guard rejected any path containing `".."` as a SUBSTRING, not just as a
+traversal SEGMENT — refusing a legal, git-trackable filename like
+`docs/api..deprecated.md`. Verified against real git before fixing, not
+assumed.
+
+**One finding got argued down to unreachable, twice more, by two different deep
+tiers.** `hunkStillPresent`'s lore-ok-stripping could in principle collide two
+25-line windows that are ENTIRELY marker-start lines — but that requires 25
+consecutive `lore-ok[...]` starts with no code or continuation prose between
+any of them, a shape no documented workflow in this codebase produces. t1
+raised it, argued itself down to "does not clear the consequence bar" inside
+its own emission, and I agreed and justified rather than added defensive code
+for a case that needs deliberate adversarial construction to reach. t2 and t3
+each independently re-derived the same conclusion in later rounds and needed
+their own `lore-ok` markers — the mechanism does not let "another tier agrees"
+settle a finding without an explicit answer, even when the answer is "yes,
+still true."
+
+**Surprised me: the review outlived its own most-argued finding.** Adding the
+two confirmation markers right beside the original `lore-ok[7f126450]` shifted
+enough surrounding context that the ladder's OWN expiry mechanism — the one
+this review spent half its rounds fixing — re-opened that exact finding one
+round later, purely from the insertion. The review still reached `passed_partial`
+regardless; the attestation's "12 findings, 8 fixed, 3 justified" honestly
+doesn't sum to 12, which is the correct, visible way for that gap to show up
+rather than being smoothed over.
+
+**Deploy cost, stated as fact.** Between the two deploys for the D-130 docs
+commit, a colleague's `feat/RIGID-573` review round 5 was killed twice —
+`FORCE=1` skips `guard-idle` entirely and hard-recreates the container, no
+drain. `reclaimOrphanedJobs` bounds retries at 3 attempts; the third kill
+landed inside that same round (t3 at 1787s, ~30 minutes in, t2 already
+finished) and the job burned out to permanently `failed` rather than requeuing
+again — that colleague needed a fresh `review_start`, not just a wait. Vany's
+own instruction on this ("deploy" means now, state the cost after, never
+re-open the calculation) is exactly what made the second deploy — purely to
+clear a cosmetic `-dirty` build stamp from a trailing memo commit — an
+avoidable choice I made anyway; bundling that commit into the first deploy
+would have cost one interruption instead of two.
+
 ## 2026-08-25 — auditing D-130's own texts, after shipping it
 
 **What changed.** Vany asked to "update and refine all our prompts and texts... it
