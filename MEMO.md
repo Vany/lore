@@ -3,6 +3,80 @@
 Newest first. Updated at the end of each task: what changed, what I learned, what
 surprised me.
 
+## 2026-08-25 — folder mode: a review with no base (D-130)
+
+**What changed.** `review_start` gained `mode: "folder"` + `path` as an alternative
+to `into` — a review of a path as it stands, no base, no diff. Represented as a
+diff against git's empty tree (`wholeTreeDiff`, beside `computeDiff`, not inside
+it), which is the whole trick: because the result is a genuine `ReviewDiff`,
+everything downstream already knew how to read one. Full design and every fix in
+`SPEC.md`'s D-130 entry; this is the narrative, not the changelog.
+
+**How it started.** Vany asked for it directly after I'd already gone looking for
+it and found nothing — a genuinely new surface, not a bug fix, so it went through
+`EnterPlanMode` before any code: git's empty-tree trick verified live before
+committing to the design, every downstream consumer checked by reading it rather
+than assumed compatible.
+
+**Eleven rounds, 22 findings, 14 fixed and 7 justified — the deepest single review
+this project has driven, and worth its own entry for the *shape* of it, not the
+count.** Three things stood out.
+
+**First: the dominant pattern was one bug peeled four times, not four bugs.**
+`core.quotePath=false` fixed non-ASCII filenames being quoted — round 6. Round 8
+found the SAME flag does nothing for a control character, backslash or literal
+quote, which git quotes unconditionally regardless of config — a real decoder
+(`unquoteGitPath`) replaced the flag-only fix. Round 10 found that decoder itself
+was wrong for the general case: it converted one `\NNN` octal escape to one JS code
+unit, correct only when `wholeTreeDiff`'s own `quotePath=false` output was the only
+input — but `filesInDiff` is ALSO run on a client-supplied diff in `review_submit`,
+under whatever quoting the client's own git used, where a non-ASCII character is
+several octal-escaped bytes together and decoding them one at a time produces
+mojibake, not the real name. Round 11 found the identical gap a fourth time,
+untouched by any of the first three fixes: `untracked` (from `ls-files`) had no
+decoding applied AT ALL. Each fix was correct and verified when made; each one was
+also, in hindsight, a narrower question than the one actually being asked ("does
+this flag solve quoting" rather than "what does this codebase's quoting boundary
+actually need to handle, and everywhere it's asked"). Worth remembering the next
+time a fix feels complete after the first counterexample is gone.
+
+**Second: `will_not_settle` needs an explicit `lore-ok` even when the fix is real
+and in the same submission.** A finding pointing at `store.ts:480` was fixed by
+adding validation in `server.ts`, one file over — correct, verified, and still came
+back as `will_not_settle` because the NAMED line had not moved. Six findings hit
+this shape across the review, including two (`d1831d70`, `01d5371d`) where I was
+confident the fix was RIGHT THERE, a few lines from the named one, just shifted by
+later insertions in the same round. The mechanism does not infer "nearby code
+changed, so this is probably fine" — it wants the fingerprint acknowledged AT THE
+NAME, every time, no matter how close the real fix landed. Answering it is cheap;
+assuming it isn't needed is how a genuinely-fixed finding keeps coming back.
+
+**Third: the one HIGH-severity finding was a regression in MY OWN validation
+ordering, not in the feature.** Making `into` optional (so folder mode could omit
+it) made a request missing it reach the handler for the first time ever — before,
+the schema's `min(1)` refused it before any code ran. The new "into is required"
+check was placed right before `createReview`, AFTER the restart-cancel block below
+it — so a restart with no `into` would cancel the client's predecessor and THEN
+refuse, reopening the exact destroy-then-refuse incident this file's own comment
+documents fixing (D-108's "worse off than before it asked"). Loosening a
+previously-required field doesn't just add a new code path — it can make an OLD
+one reachable that used to be provably impossible. Worth checking explicitly next
+time a schema field goes from required to optional, rather than only checking the
+new value's own handling.
+
+**Surprised me, about myself.** Constructing a test for a NUL-byte refusal, I
+typed the byte itself rather than the `\0` escape — the tool call silently
+embedded a literal NUL into the TypeScript source file. `grep` failed to find it,
+the Edit tool's string-matching failed to find it, and only `xxd`/`python3 -c
+"...count(b'\x00')"` at the byte level showed what had actually happened. Fixed
+with a targeted `perl -i -pe 's/\x00/\\0/g'`. Small, but a clean reminder that
+"looks like a space in the transcript" and "is a control character in the file"
+are not the same fact, and the tool that answers which one is true is whichever
+one reads bytes, not text.
+
+**Deployed and verified.** `f2185a3` live, `/status` clean, D-130's own review
+shows PASSED on the board.
+
 ## 2026-08-24 — commandsFor stops assuming every repo is a JS project (D-129)
 
 **What changed.** `commandsFor` (`src/t0/sandbox.ts`) now returns a `ToolchainOutcome` —
