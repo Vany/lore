@@ -94,4 +94,23 @@ describe("the operator's view of development rules", () => {
       store.close();
     }
   });
+
+  // a6a4b832/c7235bcb, found by lore's own review: `short` reached `id LIKE
+  // '${short}%'` with no character gate, so `%`/`_` are SQL wildcards, not literal
+  // text. With exactly one live rule, "%%%%" (4 chars, passes the schema's min(4))
+  // matched it and would have retired a rule nobody identified. `cite_as` — the
+  // only value this parameter is documented to hold — is always hex, so a hex-only
+  // gate costs nothing legitimate.
+  it("refuses a wildcard pattern rather than silently matching every live rule", () => {
+    const { store, repoId } = setup();
+    try {
+      addRule(store, repoId, { statement: "services bind 0.0.0.0", why: "overlay", by: "vany" });
+
+      expect(store.retirePolicy(repoId, "%%%%", "not a real id")).toBe("not-found");
+      expect(store.retirePolicy(repoId, "____", "not a real id")).toBe("not-found");
+      expect(ruleReport(store, repoId).rules, "the real rule must survive untouched").toHaveLength(1);
+    } finally {
+      store.close();
+    }
+  });
 });

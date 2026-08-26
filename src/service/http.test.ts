@@ -211,6 +211,28 @@ describe("replies ask a client to poll and nothing else", () => {
     }
   });
 
+  // 76470c5e/004465f7, found by lore's own review: this fixture is a fresh Store
+  // with zero completed rounds of any tier, so check_back_after_ms is GUARANTEED
+  // absent (pace.ts's own MIN_RUNS) — the state every freshly provisioned repo's
+  // first review_start is in. The reply's own `note` field used to tell a client
+  // "ONE call when `check_back_after_ms` says" unconditionally, naming a field the
+  // same reply omits — the same defect class this project's own comment, right
+  // above the note in server.ts, already names ("a reply telling a client to do
+  // something the same reply makes impossible").
+  it("does not tell a client to wait on a field the same reply omits", async () => {
+    store.upsertRepo("demo3", "git@x:demo3.git");
+    const started = await callTool("review_start", { branch: "feat/no-median-yet", into: "main", ticket: "t" });
+
+    expect(started["check_back_after_ms"], "the fixture has zero completed rounds").toBeUndefined();
+    expect(
+      String(started["note"]),
+      "must not name check_back_after_ms as the unconditional wait signal when it is absent",
+    ).not.toMatch(/ONE call when `check_back_after_ms` says/);
+    expect(String(started["note"]), "must still point at the field that is always present").toContain(
+      "check_back_note",
+    );
+  });
+
   it("says the same for a poll that is still waiting", async () => {
     store.createReview({
       id: "revWaiting", repoId, principal: "alice", branch: "feat/waiting", intoRef: "main",
@@ -1393,6 +1415,49 @@ describe("knowledge_teach scopes a rule the same way however its path is spelled
       {
         jsonrpc: "2.0", id: 1, method: "tools/call",
         params: { name: "knowledge_teach", arguments: { statement: "s", why: "w", path: "../shared" } },
+      },
+      token,
+    );
+    const line = (await res.text()).split("\n").find((l) => l.startsWith("data:")) ?? "";
+    const rpc = JSON.parse(line.slice("data:".length)) as { result?: { content?: { text?: string }[]; isError?: boolean } };
+    expect(rpc.result?.isError).toBe(true);
+    expect(rpc.result?.content?.[0]?.text).toMatch(/must stay inside the repository/);
+  });
+});
+
+// c5e38bc8/2a540515, found by lore's own review: the fixes just above normalized
+// the WRITE side (knowledge_teach) so a rule taught with a natural spelling still
+// matches a canonical query — but the READ side (knowledge_query) passed its own
+// `path` straight to knowledgeFor unnormalized, so the SAME rule, taught at the
+// canonical spelling, silently missed a query spelled "src/tests/" or "./src/tests"
+// — not an error, just a lower count that reads as "nothing here" instead of "your
+// spelling could never match".
+describe("knowledge_query normalizes its own path the same way knowledge_teach does (c5e38bc8, 2a540515)", () => {
+  const teach = () =>
+    callTool("knowledge_teach", {
+      statement: "tests under here may bind to loopback",
+      why: "sandboxed, no real network",
+      path: "src/tests",
+    });
+
+  it("finds a canonically taught rule when queried with a trailing slash", async () => {
+    await teach();
+    const out = await callTool("knowledge_query", { path: "src/tests/" });
+    expect(out["count"], "a trailing slash on the QUERY path must not miss the rule").toBe(1);
+  });
+
+  it("finds a canonically taught rule when queried with a leading ./", async () => {
+    await teach();
+    const out = await callTool("knowledge_query", { path: "./src/tests" });
+    expect(out["count"], "a leading ./ on the QUERY path must not miss the rule").toBe(1);
+  });
+
+  it("refuses an absolute query path rather than silently returning zero", async () => {
+    await teach();
+    const res = await mcp(
+      {
+        jsonrpc: "2.0", id: 1, method: "tools/call",
+        params: { name: "knowledge_query", arguments: { path: "/home/agent/repo/src/tests" } },
       },
       token,
     );

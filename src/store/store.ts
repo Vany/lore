@@ -2062,8 +2062,21 @@ export class Store {
    * joins them to the live rule, so they stop applying the moment this row is retired,
    * and the rows stay readable as the record of a check that WAS off and why. Deleting
    * them would erase the only evidence that a review once did not cover something.
+   *
+   * a6a4b832/c7235bcb: found by lore's own review — `short` reached the `LIKE`
+   * pattern below with no character gate, so `%` or `_` in it are SQL wildcards, not
+   * literal text. A rule id (`randomUUID()`, `addKnowledge`) is always lowercase
+   * hex before its first hyphen, and `cite_as` — the only value this parameter is
+   * documented to hold — is always an 8-hex-char prefix of one, so a caller sending
+   * anything else is not naming a rule this repo could have. With exactly one live
+   * policy, `short: "%%%%"` matched it and retired a rule nobody identified,
+   * silently re-enabling every check it had suppressed; with several, it made them
+   * all read as "ambiguous". Same gate as the identical shape one module over
+   * (`revokeByPrefix`, mcp/auth.ts) — ambiguity is refused, but a pattern that was
+   * never really a prefix must not reach the query to be ambiguous or unique about.
    */
   retirePolicy(repoId: string, short: string, reason: string): "retired" | "not-found" | "ambiguous" {
+    if (!/^[0-9a-f]{4,64}$/i.test(short)) return "not-found";
     const rows = this.db
       .prepare("SELECT id FROM knowledge WHERE repo_id = ? AND kind = 'policy' AND retired_at IS NULL AND id LIKE ?")
       .all(repoId, `${short}%`) as { id: string }[];

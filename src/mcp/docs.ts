@@ -691,6 +691,14 @@ memory is built from its own docs during its FIRST REVIEW, so a repo that has no
 been reviewed yet has none — the \`note\` field says which case you are in, and it is
 the only thing that can tell you. Read it before reporting anything about lore's
 state.
+
+\`path\` FINDS WHAT APPLIES TO IT, spelling aside — "src/payments", "src/payments/",
+"./src/payments" all name the same place, and any of them ALSO finds a rule taught
+at a containing directory, "src" say (a rule's scope covers what is under it, not
+only what it was taught at exactly). Pass a path relative to the repository root; an
+absolute one or one starting with ".." is refused outright, the same way
+\`knowledge_teach\` refuses one, rather than silently returning \`count: 0\` for a
+spelling that could never match anything.
 `.trim(),
 
   vex: `

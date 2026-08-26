@@ -838,12 +838,24 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           // went on saying "SEND THE `subscribe` CALL BELOW" for exactly one deploy, which
           // is a reply telling a client to do something the same reply makes impossible.
           // Caught by reading the response to lore's own review_start.
+          //
+          // 76470c5e/004465f7: found real by lore's own review, the same defect class
+          // as the one just above — a reply telling a client to do something the same
+          // reply can make impossible. `check_back_after_ms` is OMITTED below MIN_RUNS
+          // (`pacing`, a few lines up), which is every tier's first 20 rounds — the
+          // state a freshly provisioned repository's FIRST EVER review_start is
+          // guaranteed to be in. The round-4 fix touched TOOL_DOCS.start, a tool
+          // DESCRIPTION that may not even be in context by the time this returns; this
+          // reply note is the one string this project's own comment, right above,
+          // already says is guaranteed read — and it was the one left unfixed.
           note:
             "Started. This does NOT mean it finished, and NOTHING can have happened yet. Poll it with " +
-            "review_poll: ONE call when `check_back_after_ms` says, never a sleep loop. RE-READ that " +
-            "number on every reply, together with `check_back_note`: below the two-minute cap it shrinks " +
-            "as the round ages and reusing the first one doubles your wait, while AT the cap it stays put " +
-            "for several calls and the note says so. Between calls, go and do something else.",
+            "review_poll: ONE call when `check_back_note` says. `check_back_after_ms` gives the same " +
+            "answer as a number WHEN IT IS PRESENT — RE-READ it on every reply rather than reusing the " +
+            "first one, since below the two-minute cap it shrinks as the round ages, and AT the cap it " +
+            "stays put for several calls. It is OMITTED on a tier's first 20 rounds (no honest median " +
+            "yet, common on a freshly provisioned repository) — `check_back_note` always has a full " +
+            "instruction regardless. Between calls, go and do something else.",
         }),
       );
     },
@@ -1957,7 +1969,26 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       // a real conflict back as unresolvable. NO_LIMIT for the same reason
       // aa57c0f2 gave: resolving a question about this repo's whole knowledge needs
       // every live row, not a sampled window.
-      let items = store.knowledgeFor(who.repoId, path, NO_LIMIT);
+      //
+      // c5e38bc8/2a540515: found real by lore's own review — the WRITE side
+      // (knowledge_teach, the fix a few hundred lines down for 28941e15/7e754395)
+      // normalizes and refuses an escaping `path`; this READ side passed it straight
+      // to `knowledgeFor` unnormalized. `knowledgeFor`'s SQL (store.ts, `? = path OR
+      // ? LIKE path || '/%'`) matches only an exact segment boundary, so a query
+      // spelled "src/" (trailing slash), "./src" or an absolute "/src" — every one a
+      // client composes naturally — silently missed every rule scoped to "src": not
+      // an error, just a lower `count` and an empty-looking answer that reads as "no
+      // knowledge here" rather than "your spelling could never match". Same fix,
+      // same reason: normalize before querying, and refuse rather than silently
+      // returning zero for a path that can never match anything.
+      const scopedPath = path === undefined ? undefined : normalizeReviewPath(path);
+      if (path !== undefined && scopedPath !== undefined && pathEscapesWorktree(path, scopedPath)) {
+        throw new Error(
+          `path must stay inside the repository, relative to its root — "${path}" does not. Pass a path like ` +
+            '"src" or "src/payments", not an absolute one or one starting with "..".',
+        );
+      }
+      let items = store.knowledgeFor(who.repoId, scopedPath, NO_LIMIT);
       if (contains !== undefined) {
         const needle = contains.toLowerCase();
         items = items.filter(
@@ -2325,12 +2356,26 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
     { title: "What is known about a path", mimeType: "application/json" },
     async (uri: URL, vars: Record<string, string | string[]>) => {
       const path = String(Array.isArray(vars["path"]) ? vars["path"][0] : vars["path"] ?? "");
+      // c5e38bc8/2a540515: the same unnormalized-read gap as knowledge_query, fixed
+      // the same way — see that handler's comment. Refusing here too, not only
+      // there: leaving the resource lenient while the tool refuses would just be a
+      // second, subtler flavour of the same inconsistency this file keeps producing
+      // between near-identical read paths — mine() throwing "not found" from a
+      // resource handler a few dozen lines up is the existing precedent that a
+      // resource read already has a working error channel.
+      const scopedPath = normalizeReviewPath(path);
+      if (pathEscapesWorktree(path, scopedPath)) {
+        throw new Error(
+          `path must stay inside the repository, relative to its root — "${path}" does not. Pass a path like ` +
+            '"src" or "src/payments", not an absolute one or one starting with "..".',
+        );
+      }
       return {
         contents: [
           {
             uri: uri.href,
             mimeType: "application/json",
-            text: JSON.stringify(store.knowledgeFor(who.repoId, path), null, 2),
+            text: JSON.stringify(store.knowledgeFor(who.repoId, scopedPath), null, 2),
           },
         ],
       };
