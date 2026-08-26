@@ -235,6 +235,23 @@ async function sandboxed(
           unavailable: `install could not run: ${installed.unavailable ?? ""}`,
         }));
       }
+      // KILLED, CHECKED BEFORE `!installed.ok` — found by lore's own review of this
+      // same fix, fingerprint bd0f45f3: `install()` calls `runTool` directly, the
+      // same shape as the sandboxed calls above it, so an OOM-killed install (a
+      // native module's build step, or a large enough tree on its own) fell into
+      // `!installed.ok` below and came out as a confident, high-severity claim that
+      // the branch's dependencies do not install — `installed.unavailable` stays
+      // undefined for a 137, since exec.ts only sets it for ENOENT or Node's own
+      // timeout.
+      if (installed.code === KILLED) {
+        return wanted.map((engine) => ({
+          engine,
+          findings: [],
+          unavailable:
+            `install (${cmds.name}) was killed (exit ${KILLED}) — almost always the sandbox memory limit, ` +
+            `not a fault in the branch. Nothing that needs it is known either way.`,
+        }));
+      }
       if (!installed.ok) {
         // One finding, not one per engine — it is a single fact about the branch. The
         // others report unavailable, because that is what they are.
@@ -361,7 +378,17 @@ async function checkTypes(
   // usually truncates to nothing: `findings: []`, indistinguishable from tsc
   // actually running clean. The sharpest form of the same bug fixed above.
   if (r.code === KILLED) return scriptFinding("tsc", "npx tsc --noEmit", r);
-  return { engine: "tsc", findings: parseTsc(`${r.stdout}\n${r.stderr}`) };
+  // Found by lore's own review, fingerprint fde373d4: the KILLED check above closed
+  // one exit code of a wider hole this branch had — an unrelated non-zero exit whose
+  // output does not happen to match `TSC_LINE` (tsc missing from node_modules, a
+  // tsconfig error in a shape the regex does not cover, a heap-OOM abort at exit 134,
+  // not 137) still fell through to `findings: parseTsc(...)`, empty, with no
+  // `unavailable` — a run that never completed, reading as a clean pass. Matches the
+  // typecheck-script branch above: parse first, but only trust an empty result when
+  // the process itself says it succeeded.
+  const parsed = parseTsc(`${r.stdout}\n${r.stderr}`);
+  if (parsed.length > 0) return { engine: "tsc", findings: parsed };
+  return r.ok ? { engine: "tsc", findings: [] } : scriptFinding("tsc", "npx tsc --noEmit", r);
 }
 
 async function checkLint(

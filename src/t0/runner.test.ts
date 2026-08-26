@@ -145,16 +145,19 @@ describe("runT0 merges the host and sandbox branches", () => {
  * before anything checked the exit code — found live: lore's own tsc check was
  * OOM-killed mid-run, and the partial output already sitting in the buffer was
  * silently returned as `findings`, indistinguishable from a complete, honest result.
- * `checkTypes` and `checkLint` now check `r.code === KILLED` before attempting to
- * parse, in all three places that call `runInSandbox` directly (the fourth,
- * `checkLint`'s `lint`-script branch, never parsed at all and was already correct).
+ * `checkTypes` and `checkLint` check `r.code === KILLED` before attempting to parse,
+ * everywhere they call `runInSandbox` directly — and `sandboxed()` itself checks it
+ * for `install()`, found by lore's own review of this fix, fingerprint bd0f45f3: an
+ * OOM-killed install fell into the same handling as a genuine one and came out as a
+ * confident, wrong claim that the branch's dependencies do not install. A second
+ * review finding, fingerprint fde373d4, closed a related but KILLED-independent hole
+ * in the bare-tsc branch: a non-137 failure whose output does not match tsc's error
+ * format also used to read as a clean pass — same shape, different trigger.
  *
  * Exercised end to end through `runT0`, with a stand-in `docker`: `execFile`
  * (exec.ts) does not go through a shell, so it happily runs an arbitrary executable
- * given by absolute path, and `SandboxConfig.runtime` is just that path. The stand-in
- * succeeds on its first call (install) and reports exit 137 with parseable partial
- * output on its second (the actual check) — no real docker, no network, so this
- * stays hermetic and fast.
+ * given by absolute path, and `SandboxConfig.runtime` is just that path — no real
+ * docker, no network, so this stays hermetic and fast.
  */
 describe("a run the sandbox itself killed is never mistaken for a clean or partial one", () => {
   let dir: string;
@@ -163,9 +166,22 @@ describe("a run the sandbox itself killed is never mistaken for a clean or parti
   });
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
+  const baseSandbox = (runtime: string): SandboxConfig => ({
+    image: "unused",
+    cacheRoot: join(dir, "cache"),
+    scratchRoot: join(dir, "scratch"),
+    uid: 1000,
+    gid: 1000,
+    memory: "6g",
+    cpus: "2",
+    timeoutMs: 30_000,
+    runtime,
+  });
+
   // Content lives in its own file rather than inlined into the shell script text,
   // so nothing here has to worry about quoting JSON (eslint's fake output) inside a
-  // `sh -c` string.
+  // `sh -c` string. Succeeds on its first call (install) and reports exit 137 with
+  // `stdoutOnKill` on its second (the actual check).
   const fakeDocker = (stdoutOnKill: string): SandboxConfig => {
     const script = join(dir, "fake-docker.sh");
     const called = join(dir, ".called");
@@ -183,18 +199,20 @@ describe("a run the sandbox itself killed is never mistaken for a clean or parti
         "fi\n",
     );
     chmodSync(script, 0o755);
-    return {
-      image: "unused",
-      cacheRoot: join(dir, "cache"),
-      scratchRoot: join(dir, "scratch"),
-      uid: 1000,
-      gid: 1000,
-      memory: "6g",
-      cpus: "2",
-      timeoutMs: 30_000,
-      runtime: script,
-    };
+    return baseSandbox(script);
   };
+
+  it("sandboxed install: a killed install is reported killed, not a false 'dependencies do not install'", async () => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { typecheck: "tsc -b" } }));
+    const script = join(dir, "fake-docker-install-killed.sh");
+    writeFileSync(script, "#!/bin/sh\nexit 137\n");
+    chmodSync(script, 0o755);
+    const out = await runT0(dir, { engines: ["tsc"], sandbox: baseSandbox(script) });
+    const tsc = out.outcomes.find((o) => o.engine === "tsc");
+    expect(tsc?.findings, "a killed install must not become a false failing-dependency finding").toStrictEqual([]);
+    expect(tsc?.unavailable).toMatch(/killed/);
+    expect(tsc?.unavailable).toMatch(/not a fault in the branch/);
+  });
 
   it("checkTypes: a killed `typecheck` script is reported killed, not its partial output", async () => {
     writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { typecheck: "tsc -b" } }));
@@ -215,6 +233,30 @@ describe("a run the sandbox itself killed is never mistaken for a clean or parti
     expect(tsc?.findings, "the parseable line must not survive as a finding").toStrictEqual([]);
     expect(tsc?.unavailable).toMatch(/killed/);
     expect(tsc?.unavailable).toMatch(/not a fault in the branch/);
+  });
+
+  it("checkTypes: a bare tsc run that fails with no parseable output is reported failed, not clean", async () => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: {} }));
+    writeFileSync(join(dir, "tsconfig.json"), "{}");
+    const script = join(dir, "fake-docker-tsc-broken.sh");
+    const called = join(dir, ".called-broken");
+    writeFileSync(
+      script,
+      "#!/bin/sh\n" +
+        `if [ -f "${called}" ]; then\n` +
+        "  echo 'sh: 1: tsc: not found' >&2\n" +
+        "  exit 127\n" +
+        "else\n" +
+        `  touch "${called}"\n` +
+        "  exit 0\n" +
+        "fi\n",
+    );
+    chmodSync(script, 0o755);
+    const out = await runT0(dir, { engines: ["tsc"], sandbox: baseSandbox(script) });
+    const tsc = out.outcomes.find((o) => o.engine === "tsc");
+    expect(tsc?.findings, "output that never parsed must not read as a clean pass").toHaveLength(1);
+    expect(tsc?.findings?.[0]?.claim).toContain("fails on this branch");
+    expect(tsc?.unavailable).toBeUndefined();
   });
 
   it("checkLint: a killed bare eslint run is reported killed, not its partial output", async () => {
