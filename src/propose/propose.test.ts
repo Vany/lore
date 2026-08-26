@@ -81,6 +81,16 @@ describe("parseProposal", () => {
     const { preserves: _drop, ...without } = PROPOSAL;
     expect((parseProposal(without) as Proposal).preserves).toBeUndefined();
   });
+
+  // Fingerprint b551376e: `rejects` is the critic's structured verdict, read as a fact
+  // rather than left absent for a caller to infer from `idea`'s prose.
+  it("reads the critic's rejects verdict when set", () => {
+    expect((parseProposal({ ...PROPOSAL, rejects: true }) as Proposal).rejects).toBe(true);
+  });
+
+  it("leaves rejects genuinely absent, not false, when nothing said either way", () => {
+    expect((parseProposal(PROPOSAL) as Proposal).rejects).toBeUndefined();
+  });
 });
 
 describe("inScope", () => {

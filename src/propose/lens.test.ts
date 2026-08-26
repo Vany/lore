@@ -38,3 +38,17 @@ describe("criticPrompt asks for every field parseProposal requires", () => {
     expect(out).toMatch(/\* `touches` — the files the change lands in/);
   });
 });
+
+/**
+ * Fingerprint b551376e: spec/propose.md §6 says whatever propose itself rejects is
+ * written back to the knowledge base — but the only signal a critic had for "this is
+ * simply wrong" was prose buried in `idea`, which nothing could act on without parsing
+ * tone. `rejects` is the fact a critic now states instead.
+ */
+describe("criticPrompt asks for a structured rejects verdict, not prose alone", () => {
+  it("names the rejects field and what true means", () => {
+    const out = criticPrompt(INPUT, "some idea");
+    expect(out).toMatch(/`rejects`/);
+    expect(out).toMatch(/should not be pursued/);
+  });
+});

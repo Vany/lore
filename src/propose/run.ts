@@ -170,6 +170,62 @@ function recordFailedUsage(store: Store, repoId: string, tier: string, model: st
   });
 }
 
+/**
+ * Whatever `propose` itself is certain enough to reject is written back so the next
+ * sweep does not pay to have the same idea again (spec/propose.md §6). Two triggers,
+ * both decided by `propose` within its own run, needing no person's later verdict on a
+ * SURVIVING idea — which this tool has no way to learn, being fire-and-forget:
+ *
+ *   * the screen's own `out-of-scope` demotion (screen.ts) — dropped outright, never
+ *     shown for appraisal. A fact about where the change lands, not a judgment call.
+ *   * the critic's own structured `rejects` (proposal.ts) — never prose alone. `idea`
+ *     can already say "this is wrong" in passing without meaning it as a verdict, and
+ *     this file has no business parsing tone to find out which.
+ *
+ * Idempotent by provenance, the same guard `promoteRecurring` (knowledge/derive.ts)
+ * uses for the same reason: re-running this must not re-arm a lesson a person later
+ * resolved away (`hasKnowledgeFrom`'s own docs, store.ts, explain why checking LIVE
+ * rows only would silently undo that). Keyed by folder+commit+lens rather than the
+ * idea's own text — model prose is not stable across runs, so a text key would not
+ * catch the case this actually guards: `propose` invoked twice over the same tree. A
+ * later sweep on a different commit legitimately writes its own row even if the idea
+ * reads the same; `screen`'s own `restates` match (screen.ts) is what keeps THAT from
+ * costing the reader anything, by demoting it `already-decided` in the document rather
+ * than by suppressing the write.
+ */
+function writeBackRejections(store: Store, repoId: string, folder: string, commit: string, screened: readonly Screened[]): void {
+  for (const s of screened) {
+    const outOfScope = s.demotions.includes("out-of-scope");
+    const criticRejects = s.proposal.rejects === true;
+    if (!outOfScope && !criticRejects) continue;
+
+    const provenance = `propose:${folder}:${commit}:${s.proposal.lens}`;
+    if (store.hasKnowledgeFrom(repoId, provenance)) continue;
+
+    const reasons = [
+      outOfScope
+        ? (s.because[s.demotions.indexOf("out-of-scope")] ?? "it landed outside the folder asked about")
+        : undefined,
+      criticRejects ? "the critic judged it simply wrong" : undefined,
+    ].filter((r): r is string => r !== undefined);
+
+    store.addKnowledge({
+      repoId,
+      kind: "mistake",
+      source: "derived",
+      statement: `considered: ${s.proposal.idea}`,
+      why: reasons.join("; "),
+      path: s.proposal.touches.length === 1 ? s.proposal.touches[0] : undefined,
+      cwe: undefined,
+      provenance,
+      sourceBlob: undefined,
+      // Machine-checked scope is a fact; a critic's verdict is a judgment call, and
+      // this codebase already reserves 1 for what a person typed (knowledge_teach).
+      confidence: outOfScope ? 1 : 0.7,
+    });
+  }
+}
+
 export async function propose(deps: ProposeDeps, input: ProposeInput): Promise<ProposeResult> {
   // THIS USED TO REFUSE WHILE ANY REVIEW WAS IN FLIGHT, and does not since 2026-08-13 —
   // Vany's call, made while waiting on exactly that refusal. The rule was written when
@@ -340,5 +396,7 @@ export async function propose(deps: ProposeDeps, input: ProposeInput): Promise<P
   // exists for a different reason (matching a path against `folder` as plain text, not
   // resolving anything).
   const exists = (p: string): boolean => existsSync(join(input.worktree, p));
-  return { screened: screen(screenedAll, input.folder, input.knowledge, exists), sessionsSpent, silent };
+  const screened = screen(screenedAll, input.folder, input.knowledge, exists);
+  writeBackRejections(deps.store, deps.repoId, input.folder, input.commit, screened);
+  return { screened, sessionsSpent, silent };
 }

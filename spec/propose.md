@@ -134,11 +134,13 @@ tool's purpose (D-75).
 {
   "lens": "seams",
   "idea": "one paragraph, in the model's own words",
+  "touches": ["the files the change lands in — how §1.1's scope rule is applied"],
   "trueIf": "what would have to be true for this to be worth doing",
   "costIfWrong": "what it costs to find out this was a mistake",
   "contradictedBy": "what in the repo or its rules argues against it",
   "settledBy": "ONE measurement that would decide it",
-  "preserves": "what this must keep doing identically, and how you would know it still does"
+  "preserves": "what this must keep doing identically, and how you would know it still does",
+  "rejects": "CRITIC ONLY — true if the idea is simply wrong and should not be pursued at all (§6)"
 }
 ```
 
@@ -201,10 +203,31 @@ Then three sections, in this order:
    after the first run, and that is the tool working.
 3. **Unappraisable** — no falsifying measurement offered. Kept, ranked last, marked.
 
-**Whatever is rejected is written back to the knowledge base** as *considered X,
-rejected because Y*, with `knowledge_teach`'s provenance. That is what makes the second
-run cheaper than the first, and it is the half of this idea worth most: a codebase that
-records why it did **not** do things stops re-arguing them.
+**Two kinds of rejection are written back to the knowledge base**, as a `mistake` row
+reading *considered: \<the idea\>*, with why. Both are decided by `propose` itself,
+inside its own run — this tool is fire-and-forget and has no way to later learn what a
+person decided about a *surviving* idea, so nothing beyond its own run can trigger a
+write-back:
+
+- a proposal the screen demotes **out of scope, dropped** (§5) — a fact about where the
+  change lands, machine-checked, not a judgment call;
+- a proposal the **critic's own verdict** marks `rejects: true` (§4) — stated as a fact
+  by the critic, never inferred from tone in its prose, because prose that merely sounds
+  skeptical is not the same as a verdict.
+
+Not `knowledge_teach`'s provenance — that string is tied to an authenticated MCP
+principal (`taught by <principal>`), a concept this CLI-only tool does not have (D-16).
+Each written-back row instead carries `propose:<folder>:<commit>:<lens>`, which doubles
+as an idempotence key: re-running `propose` over the same tree does not re-arm a lesson
+a person later resolved away, the same guard `promoteRecurring`
+(`src/knowledge/derive.ts`) uses and for the same reason. A later sweep on a different
+commit writes its own row even if the idea reads the same — model prose is not stable
+enough to key on — and it is the screen's own `restates` match, not this guard, that
+keeps a repeated idea from costing the reader anything twice.
+
+That is what makes the second run cheaper than the first, and it is the half of this
+idea worth most: a codebase that records why it did **not** do things stops re-arguing
+them.
 
 ## 7. Bounds
 

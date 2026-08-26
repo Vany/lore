@@ -128,6 +128,10 @@ export function criticPrompt(i: LensInput, idea: string): string {
     "",
     "  * `idea` — restate it in your words, as you would to the person who has to do the work, INCLUDING what",
     "    the proposer left out. If you think it is simply wrong, say that first and say why.",
+    "  * `rejects` — true if you mean that literally: this should not be pursued, at all, full stop. False or",
+    "    omitted if you disagree with parts of it but there is still something here worth a person's time. This",
+    "    is what gets written back as a decision against the idea, so it is a fact you state, not a tone `idea`",
+    "    is left to imply.",
     "  * `touches` — the files the change lands in. Normally the SAME list the proposal gave you; correct it",
     "    only if you believe the change actually has to land somewhere else. This is required — an empty or",
     "    omitted list makes the idea unplaceable and it is dropped, whatever either of you thought of it.",
@@ -173,7 +177,8 @@ Reply with ONE fenced json block and nothing else. No preamble, no commentary af
     "costIfWrong": "what it costs to find out this was a mistake",
     "contradictedBy": "what in this repo or its rules argues against it",
     "settledBy": "ONE thing to run or count that would decide it",
-    "preserves": "what must keep working identically, and how you would check"
+    "preserves": "what must keep working identically, and how you would check",
+    "rejects": false
   }
 ]}
 \`\`\`
@@ -185,6 +190,8 @@ Rules:
   be placed, and it is dropped.
 - "settledBy" and "preserves" may be omitted if you genuinely have neither. Saying so is honest; inventing
   one to fill the field is not, and the document marks what arrived without them rather than hiding it.
+- "rejects" is the CRITIC's verdict, true only if the idea should not be pursued at all. A proposer has
+  nothing of its own to reject and should leave it false or omit it.
 - "proposals": [] is a valid answer. If you looked and would change nothing here, say that — it is worth more
   than an idea you do not believe.
 `.trim();

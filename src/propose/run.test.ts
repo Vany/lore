@@ -411,3 +411,64 @@ describe("a bootstrap fact is not settled knowledge in a propose prompt (77edbad
     expect(prompt.slice(caveatAt)).toContain("this module is invoked only by the scheduler");
   });
 });
+
+/**
+ * Fingerprint b551376e, Vany's own design call: `propose` is fire-and-forget, with no
+ * way to later learn what a person decided about a SURVIVING idea, so only what
+ * `propose` itself is certain enough of within its own run can be written back —
+ * the screen's own out-of-scope drop, and the critic's own structured `rejects`.
+ *
+ * These use a REAL worktree (this repo) rather than the fake `/wt` every other test in
+ * this file uses, so `exists` reflects genuine file presence — the suite needs that to
+ * isolate "landed outside the folder" from "the named file is imaginary", a different
+ * out-of-scope reason `screen.ts` also produces, and to prove a proposal that is
+ * genuinely appraisable writes back nothing at all.
+ */
+describe("whatever propose itself is certain enough to reject is written back", () => {
+  const real = (over: Partial<ProposeInput> = {}) => input({ worktree: process.cwd(), ...over });
+  const rejectedRows = () =>
+    store.db.prepare("SELECT * FROM knowledge WHERE repo_id = ? AND kind = 'mistake'").all(repoId) as Record<string, unknown>[];
+
+  it("writes back a proposal the screen drops as out-of-scope", async () => {
+    const elsewhere = { ...IDEA, touches: ["src/mcp/server.ts"] };
+    await propose({ store, repoId, ask: scripted([[elsewhere], [elsewhere]]) }, real());
+    const rows = rejectedRows();
+    expect(rows).toHaveLength(1);
+    expect(String(rows[0]?.["statement"])).toContain(IDEA.idea);
+    expect(String(rows[0]?.["source"])).toBe("derived");
+    expect(String(rows[0]?.["why"])).toContain("none of it inside");
+  });
+
+  it("writes back a proposal the critic structurally rejects, even in scope", async () => {
+    const rejected = { ...IDEA, rejects: true };
+    await propose({ store, repoId, ask: scripted([[IDEA], [rejected]]) }, real());
+    const rows = rejectedRows();
+    expect(rows).toHaveLength(1);
+    expect(String(rows[0]?.["why"])).toContain("critic judged it simply wrong");
+  });
+
+  it("writes back nothing for a proposal that survives both scope and critic", async () => {
+    await propose({ store, repoId, ask: scripted([[IDEA], [IDEA]]) }, real());
+    expect(rejectedRows()).toHaveLength(0);
+  });
+
+  it("does not re-arm a lesson a person resolved away by re-running over the same tree", async () => {
+    const elsewhere = { ...IDEA, touches: ["src/mcp/server.ts"] };
+    await propose({ store, repoId, ask: scripted([[elsewhere], [elsewhere]]) }, real());
+    await propose({ store, repoId, ask: scripted([[elsewhere], [elsewhere]]) }, real());
+    expect(rejectedRows()).toHaveLength(1);
+  });
+
+  it("writes a fresh row for a genuinely different sweep of the same tree", async () => {
+    const elsewhere = { ...IDEA, touches: ["src/mcp/server.ts"] };
+    await propose({ store, repoId, ask: scripted([[elsewhere], [elsewhere]]) }, real());
+    await propose({ store, repoId, ask: scripted([[elsewhere], [elsewhere]]) }, real({ commit: "def5678" }));
+    expect(rejectedRows()).toHaveLength(2);
+  });
+
+  it("scopes the written-back row to the single file the idea names", async () => {
+    const elsewhere = { ...IDEA, touches: ["src/mcp/server.ts"] };
+    await propose({ store, repoId, ask: scripted([[elsewhere], [elsewhere]]) }, real());
+    expect(rejectedRows()[0]?.["path"]).toBe("src/mcp/server.ts");
+  });
+});

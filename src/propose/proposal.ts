@@ -43,6 +43,15 @@ export interface Proposal {
   readonly settledBy?: string;
   /** What must keep working identically, and how you would know, or absent. */
   readonly preserves?: string;
+  /**
+   * The CRITIC's own verdict, stated as a fact rather than left for a reader to infer
+   * from `idea`'s prose: this is simply wrong and should not be pursued. Only a critic
+   * sets this — a proposer has nothing of its own to reject. Absent (not `false`) when
+   * a critic ran and did not say either way, or when there was no critic at all.
+   *
+   * SPEC: spec/propose.md §6
+   */
+  readonly rejects?: boolean;
 }
 
 /**
@@ -119,6 +128,7 @@ export function parseProposal(input: unknown): Proposal | { readonly rejected: s
     contradictedBy: str(o, "contradictedBy") ?? "",
     ...(str(o, "settledBy") === undefined ? {} : { settledBy: str(o, "settledBy") as string }),
     ...(str(o, "preserves") === undefined ? {} : { preserves: str(o, "preserves") as string }),
+    ...(typeof o["rejects"] === "boolean" ? { rejects: o["rejects"] } : {}),
   };
 }
 
