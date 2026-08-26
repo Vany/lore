@@ -471,4 +471,20 @@ describe("whatever propose itself is certain enough to reject is written back", 
     await propose({ store, repoId, ask: scripted([[elsewhere], [elsewhere]]) }, real());
     expect(rejectedRows()[0]?.["path"]).toBe("src/mcp/server.ts");
   });
+
+  /**
+   * Fingerprint 9c49fc0a: `rejects` is documented as the critic's field alone
+   * (proposal.ts), but nothing stopped a PROPOSER from setting it too — the shared
+   * PROPOSAL_CONTRACT shows the field on every call, proposer and critic alike — and
+   * every no-critic fallback spread the proposer's own object unchanged. A budget of 1
+   * (the documented "buys a proposer and no critic" case) with a proposer-set
+   * `rejects: true` would have written a permanent `mistake` row claiming a critic
+   * judged the idea wrong when no critic ever ran.
+   */
+  it("does not attribute a proposer's own rejects to a critic that never ran", async () => {
+    const selfRejecting = { ...IDEA, rejects: true };
+    const r = await propose({ store, repoId, ask: scripted([[selfRejecting]]) }, real({ budget: 1 }));
+    expect(r.screened[0]?.proposal.contradictedBy).toMatch(/NOT CRITICISED/);
+    expect(rejectedRows()).toHaveLength(0);
+  });
 });

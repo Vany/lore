@@ -226,6 +226,24 @@ function writeBackRejections(store: Store, repoId: string, folder: string, commi
   }
 }
 
+/**
+ * The proposer's own idea, annotated for the reader — never carrying a critic verdict
+ * it cannot have earned. `rejects` is the critic's field alone (proposal.ts); every
+ * path that lands here pushes the PROPOSER's own object because no critic verdict
+ * exists to prefer, and spreading it through unstripped let a proposer's own
+ * `rejects: true` — nothing stops one from setting it, PROPOSAL_CONTRACT shows the
+ * field on every call it sends, proposer and critic alike — get written back to the
+ * knowledge base attributed to a critic that never ran. Found by lore's own review,
+ * fingerprint 9c49fc0a. `exactOptionalPropertyTypes` is why this destructures `rejects`
+ * out rather than spreading `{ ...idea, rejects: undefined }`: the field is declared
+ * `boolean | undefined`-that-must-be-OMITTED, not one that accepts an explicit
+ * `undefined`.
+ */
+function uncriticised(idea: Proposal, why: string): Proposal {
+  const { rejects: _proposerRejects, ...rest } = idea;
+  return { ...rest, contradictedBy: `${idea.contradictedBy} — ${why}` };
+}
+
 export async function propose(deps: ProposeDeps, input: ProposeInput): Promise<ProposeResult> {
   // THIS USED TO REFUSE WHILE ANY REVIEW WAS IN FLIGHT, and does not since 2026-08-13 —
   // Vany's call, made while waiting on exactly that refusal. The rule was written when
@@ -326,16 +344,18 @@ export async function propose(deps: ProposeDeps, input: ProposeInput): Promise<P
       // configured" is false when one IS configured and the metered gate refused it, and
       // it sends the reader to edit a tiers file when the remedy is a toggle. The same
       // wrong-reason class as the proposer path above, one branch over.
-      screenedAll.push({
-        ...idea,
-        contradictedBy: `${idea.contradictedBy} — NOT CRITICISED: ${
-          critic === undefined
-            ? namedCritic === undefined
-              ? "no second vendor is configured, so this is one model's unchallenged opinion"
-              : `${noRouteBecause(namedCritic, loadPools(), () => undefined) ?? "its routes are unusable"}, so this is one model's unchallenged opinion`
-            : "the budget ran out before a critic could read it"
-        }`,
-      });
+      screenedAll.push(
+        uncriticised(
+          idea,
+          `NOT CRITICISED: ${
+            critic === undefined
+              ? namedCritic === undefined
+                ? "no second vendor is configured, so this is one model's unchallenged opinion"
+                : `${noRouteBecause(namedCritic, loadPools(), () => undefined) ?? "its routes are unusable"}, so this is one model's unchallenged opinion`
+              : "the budget ran out before a critic could read it"
+          }`,
+        ),
+      );
       continue;
     }
 
@@ -366,19 +386,14 @@ export async function propose(deps: ProposeDeps, input: ProposeInput): Promise<P
       // a critic that declined to endorse, and the proposer's own words go through
       // with that said.
       screenedAll.push(
-        c.items[0] ?? {
-          ...idea,
-          contradictedBy: `${idea.contradictedBy} — the critic (${critic.id}) read this and returned nothing, which is not an endorsement`,
-        },
+        c.items[0] ??
+          uncriticised(idea, `the critic (${critic.id}) read this and returned nothing, which is not an endorsement`),
       );
     } catch (e) {
       recordFailedUsage(deps.store, deps.repoId, `propose-critic:${lens}`, critic.model, e);
-      screenedAll.push({
-        ...idea,
-        contradictedBy: `${idea.contradictedBy} — NOT CRITICISED: the critic (${critic.id}) failed: ${
-          e instanceof Error ? e.message : String(e)
-        }`,
-      });
+      screenedAll.push(
+        uncriticised(idea, `NOT CRITICISED: the critic (${critic.id}) failed: ${e instanceof Error ? e.message : String(e)}`),
+      );
     }
   }
 
