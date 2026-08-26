@@ -133,6 +133,20 @@ describe("--folder is checked against the tree before anything is spent", () => 
     expect(asked).toHaveLength(0);
   });
 
+  /**
+   * Fingerprint 48d3e092: the first version of this guard only checked SOMETHING
+   * existed at `join(worktree, folder)` — `--folder ..` resolves to the worktree's own
+   * PARENT, which always exists on a real checkout, so it passed straight through to
+   * reproduce the exact guaranteed-waste-plus-poisoning run the guard exists to
+   * refuse (`inScope` can never match a repo-relative `touches` entry against a path
+   * outside the tree either).
+   */
+  it("refuses a folder that escapes the tree, even though something exists there", async () => {
+    const r = propose({ store, repoId, ask: scripted([[IDEA]]) }, input({ folder: ".." }));
+    await expect(r).rejects.toThrow(DidNotRun);
+    expect(asked).toHaveLength(0);
+  });
+
   it("does not check the repository root, which always exists", async () => {
     const r = await propose({ store, repoId, ask: scripted([[IDEA], [IDEA]]) }, input({ folder: "" }));
     expect(r.sessionsSpent).toBe(2);

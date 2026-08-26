@@ -37,7 +37,7 @@ import type { Listed, SessionResult } from "../reviewer/opencode.ts";
 import { extractList } from "../reviewer/opencode.ts";
 import type { KnowledgeItem, Store } from "../store/store.ts";
 import { existsSync, statSync } from "node:fs";
-import { join, posix } from "node:path";
+import { isAbsolute, join, posix, relative } from "node:path";
 import { criticPrompt, PROPOSAL_CONTRACT, proposerPrompt, type LensInput } from "./lens.ts";
 import { parseProposal, type Lens, type Proposal, type Screened } from "./proposal.ts";
 import { screen } from "./screen.ts";
@@ -303,6 +303,18 @@ export async function propose(deps: ProposeDeps, input: ProposeInput): Promise<P
   // need no check.
   if (input.folder !== "" && input.folder !== ".") {
     const folderPath = join(input.worktree, input.folder);
+    // lore-ok[48d3e092]: found by lore's own review — the ORIGINAL guard only checked
+    // SOMETHING existed at `folderPath`, and `--folder ../lib` (or `--folder ..`)
+    // resolves to the worktree's OWN PARENT, which always exists on a real checkout —
+    // passing straight through to reproduce the exact guaranteed-waste-plus-poisoning
+    // run this guard exists to refuse, since `inScope` can never match a repo-relative
+    // `touches` entry against a path outside the tree either. `relative` is how Node
+    // itself answers "is B inside A" — a leading `..` (or an absolute result, the
+    // cross-device case `relative` returns instead) means it escaped.
+    const rel = relative(input.worktree, folderPath);
+    if (rel.startsWith("..") || isAbsolute(rel)) {
+      throw new DidNotRun(`--folder ${input.folder} is outside the tree at commit ${input.commit} — it must name a directory inside the repository, not above it.`);
+    }
     if (!existsSync(folderPath) || !statSync(folderPath).isDirectory()) {
       throw new DidNotRun(
         `--folder ${input.folder} does not exist at commit ${input.commit} — check the spelling. A typo here ` +
@@ -329,10 +341,19 @@ export async function propose(deps: ProposeDeps, input: ProposeInput): Promise<P
   // lore-ok[5b72aabd]: found by lore's own review — `() => undefined` used to throw
   // away the store's own learned route-unavailability state (`store.routeUnavailable`,
   // the same signal `review.ts`'s `withQuota` calls read throughout), so this could
-  // pick a route a review parked as exhausted minutes ago and, having resolved it once
-  // before the lens loop, re-attempt that same dead route once per lens — each attempt
-  // burning real budget until the run ends with every lens "did not run" and nothing
-  // learned that a fresh `concreteRoute` call would already have known.
+  // pick a route a REVIEW parked as exhausted minutes ago, wasting a proposer session
+  // on a call already known dead before this run even started.
+  //
+  // lore-ok[77431767]: found by lore's own review, against the fix just above — this
+  // comment used to also claim a route THIS run watches fail is "not immediately
+  // retried against the next lens," which does not hold: this line resolves the
+  // proposer's route ONCE, before the lens loop (below), and reuses it for every lens
+  // regardless of a mid-run failure; `propose` never calls `markRouteUnavailable`
+  // itself, only reads what a REVIEW already wrote. Deliberately not closed: writing
+  // to that key from here risks propose misclassifying a transient failure and wrongly
+  // parking a route the shared review system could still use, and the existing
+  // `--budget` ceiling already bounds the cost of a dead route being retried — wasted
+  // attempts, not a runaway.
   const known = (m: string) => deps.store.routeUnavailable(m);
   const proposerRoute = concreteRoute(namedProposer, loadPools(), known);
   if (proposerRoute === undefined) {
@@ -434,8 +455,9 @@ export async function propose(deps: ProposeDeps, input: ProposeInput): Promise<P
     // because of exactly that), and stopping at the first name meant every proposal ran
     // uncriticised whenever it happened, even with a second, healthy vendor configured
     // and unused. Resolved exactly as the proposer was — a pool name is not a model id,
-    // and the same store-backed `known` (fingerprint 5b72aabd, above) so a route this
-    // very run just watched fail is not immediately retried against the next lens.
+    // and the same store-backed `known` (fingerprint 5b72aabd, above — see 77431767's
+    // correction there too: this reads what a REVIEW already marked, not anything this
+    // run's own failures teach it, since `propose` never writes that key itself).
     let critic: (Tier & { model: string }) | undefined;
     const criticRefusals: string[] = [];
     for (const candidate of criticCandidates) {
