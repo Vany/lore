@@ -36,7 +36,7 @@ import { vendorOf } from "../core/ladder.ts";
 import type { Listed, SessionResult } from "../reviewer/opencode.ts";
 import { extractList } from "../reviewer/opencode.ts";
 import type { KnowledgeItem, Store } from "../store/store.ts";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { criticPrompt, PROPOSAL_CONTRACT, proposerPrompt, type LensInput } from "./lens.ts";
 import { parseProposal, type Lens, type Proposal, type Screened } from "./proposal.ts";
@@ -77,7 +77,16 @@ export interface ProposeInput {
 
 export interface ProposeResult {
   readonly screened: readonly Screened[];
+  /** Sessions that SUCCEEDED — what `proposeCli`'s "nothing was thought about" check needs. */
   readonly sessionsSpent: number;
+  /**
+   * Sessions ATTEMPTED — successes and failures together, which is the true spend
+   * against `--budget` (a failed call is still a paid one, fingerprint b1030112) and
+   * what the document's own header reports. Kept separate from `sessionsSpent`
+   * because that field answers a different question — did ANYTHING succeed — and a
+   * run where every attempt failed must still report zero there.
+   */
+  readonly sessionsAttempted: number;
   /** Lenses that produced nothing, and why — never silently absent from the document. */
   readonly silent: readonly string[];
 }
@@ -265,6 +274,29 @@ function uncriticised(idea: Proposal, why: string): Proposal {
 }
 
 export async function propose(deps: ProposeDeps, input: ProposeInput): Promise<ProposeResult> {
+  // lore-ok[9b633abb]: found by lore's own review, fixed here rather than left as a
+  // guaranteed-waste run — nothing checked `--folder` existed in the tree at all. A
+  // typo (`src/stroe` for `src/store`) does not fail loud on its own: `inScope`
+  // demotes EVERY proposal out-of-scope, since nothing genuinely lands inside a folder
+  // that is not there, and the whole budget burns on lenses that produce ideas nobody
+  // will ever see. Worse since `writeBackRejections` (below) started existing:
+  // out-of-scope is one of its two triggers, so the typo would also write one
+  // confidence-1 `mistake` row per lens, each falsely marking a genuinely good idea
+  // "considered and rejected" forever — the SAME failure the stale-mirror refusal
+  // (spec/propose.md §1.2) already exists to prevent one axis over (the commit, not
+  // the folder). `""`/`"."` mean the repository root (inScope's own convention) and
+  // need no check.
+  if (input.folder !== "" && input.folder !== ".") {
+    const folderPath = join(input.worktree, input.folder);
+    if (!existsSync(folderPath) || !statSync(folderPath).isDirectory()) {
+      throw new DidNotRun(
+        `--folder ${input.folder} does not exist at commit ${input.commit} — check the spelling. A typo here ` +
+          "would not fail loud on its own: every proposal would land outside it, the whole budget would be " +
+          "spent on ideas nobody sees, and each one would be written back as a false permanent rejection.",
+      );
+    }
+  }
+
   // THIS USED TO REFUSE WHILE ANY REVIEW WAS IN FLIGHT, and does not since 2026-08-13 —
   // Vany's call, made while waiting on exactly that refusal. The rule was written when
   // one exhausted window stalled every review in the system; since then a tier's quota
@@ -278,11 +310,20 @@ export async function propose(deps: ProposeDeps, input: ProposeInput): Promise<P
   if (namedProposer === undefined) throw new DidNotRun("no model tier is configured, so there is nothing to ask");
   // Resolved for the same reason the screen resolves: a pool name is not a model id, and
   // this path fails LOUD when nothing can pay — a proposal is somebody waiting at a CLI.
-  const proposerRoute = concreteRoute(namedProposer, loadPools(), () => undefined);
+  //
+  // lore-ok[5b72aabd]: found by lore's own review — `() => undefined` used to throw
+  // away the store's own learned route-unavailability state (`store.routeUnavailable`,
+  // the same signal `review.ts`'s `withQuota` calls read throughout), so this could
+  // pick a route a review parked as exhausted minutes ago and, having resolved it once
+  // before the lens loop, re-attempt that same dead route once per lens — each attempt
+  // burning real budget until the run ends with every lens "did not run" and nothing
+  // learned that a fresh `concreteRoute` call would already have known.
+  const known = (m: string) => deps.store.routeUnavailable(m);
+  const proposerRoute = concreteRoute(namedProposer, loadPools(), known);
   if (proposerRoute === undefined) {
     // The same sentence the screen uses, from the same place: a person at a CLI told
     // "out of quota" when a toggle is the constraint waits for the wrong thing.
-    throw new DidNotRun(`${noRouteBecause(namedProposer, loadPools(), () => undefined) ?? "no route"} — nothing can propose`);
+    throw new DidNotRun(`${noRouteBecause(namedProposer, loadPools(), known) ?? "no route"} — nothing can propose`);
   }
   const proposer = { ...namedProposer, model: proposerRoute };
 
@@ -290,15 +331,22 @@ export async function propose(deps: ProposeDeps, input: ProposeInput): Promise<P
   const silent: string[] = [];
   let sessionsSpent = 0;
   /**
-   * Sessions ATTEMPTED, which is what the ceiling is about.
+   * Sessions ATTEMPTED, which is what the ceiling is about — and, since fingerprint
+   * 7429b981, what the document's own header reports as spent against `--budget` too.
    *
-   * `sessionsSpent` counts successes and is what the document reports. Enforcing the
-   * budget with it was a guard whose silence was ambiguous: a session that creates an
-   * opencode session, sends a prompt, burns tokens and then throws never incremented
-   * it — so a run where every call failed never tripped the ceiling and attempted every
-   * lens anyway. The operator's stated budget did not exist on the failure path.
+   * `sessionsSpent` counts successes only and answers a DIFFERENT question — did
+   * anything succeed at all, which `proposeCli`'s "nothing was thought about" refusal
+   * needs unchanged. Enforcing the budget with `sessionsSpent` was a guard whose
+   * silence was ambiguous: a session that creates an opencode session, sends a prompt,
+   * burns tokens and then throws never incremented it — so a run where every call
+   * failed never tripped the ceiling and attempted every lens anyway. The operator's
+   * stated budget did not exist on the failure path.
    *
-   * Found by `propose` reading its own folder on its first real run.
+   * Found by `propose` reading its own folder on its first real run. The document
+   * header used `sessionsSpent` for the same reason and inherited the same gap: a run
+   * with real, paid failures reported a FRACTION of what it actually spent against the
+   * budget the operator chose it for — found by lore's own review, fingerprint
+   * 7429b981, fixed by reporting THIS count instead (`sessionsAttempted`, ProposeResult).
    */
   let attempted = 0;
 
@@ -370,16 +418,18 @@ export async function propose(deps: ProposeDeps, input: ProposeInput): Promise<P
     // is this deployment's ROUTINE state (D-93's own pool-and-fallback design exists
     // because of exactly that), and stopping at the first name meant every proposal ran
     // uncriticised whenever it happened, even with a second, healthy vendor configured
-    // and unused. Resolved exactly as the proposer was — a pool name is not a model id.
+    // and unused. Resolved exactly as the proposer was — a pool name is not a model id,
+    // and the same store-backed `known` (fingerprint 5b72aabd, above) so a route this
+    // very run just watched fail is not immediately retried against the next lens.
     let critic: (Tier & { model: string }) | undefined;
     const criticRefusals: string[] = [];
     for (const candidate of criticCandidates) {
-      const route = concreteRoute(candidate, loadPools(), () => undefined);
+      const route = concreteRoute(candidate, loadPools(), known);
       if (route !== undefined) {
         critic = { ...candidate, model: route };
         break;
       }
-      criticRefusals.push(noRouteBecause(candidate, loadPools(), () => undefined) ?? `${candidate.id}: its routes are unusable`);
+      criticRefusals.push(noRouteBecause(candidate, loadPools(), known) ?? `${candidate.id}: its routes are unusable`);
     }
     if (critic === undefined || attempted + 1 > input.budget) {
       // UNCRITICISED, and it says so on the proposal rather than in a footnote. A
@@ -431,9 +481,20 @@ export async function propose(deps: ProposeDeps, input: ProposeInput): Promise<P
       // idea in hand, which the proposer could not. A critic that returned nothing is
       // a critic that declined to endorse, and the proposer's own words go through
       // with that said.
+      //
+      // lore-ok[84cf95be,006cfc04]: found by lore's own review — e1a18243's fix
+      // covered the proposer's own `idea === undefined` branch and not this one, which
+      // said "returned nothing" even when the critic replied and parsing refused every
+      // item (`c.rejected`, same field, same reason it is not an endorsement either
+      // way — but the STATED reason was false).
       screenedAll.push(
         c.items[0] ??
-          uncriticised(idea, `the critic (${critic.id}) read this and returned nothing, which is not an endorsement`),
+          uncriticised(
+            idea,
+            c.rejected.length > 0
+              ? `the critic (${critic.id}) replied, but nothing parsed — ${c.rejected.join("; ")} — which is not an endorsement`
+              : `the critic (${critic.id}) read this and returned nothing, which is not an endorsement`,
+          ),
       );
     } catch (e) {
       recordFailedUsage(deps.store, deps.repoId, `propose-critic:${lens}`, critic.model, e);
@@ -457,7 +518,7 @@ export async function propose(deps: ProposeDeps, input: ProposeInput): Promise<P
   // exists for a different reason (matching a path against `folder` as plain text, not
   // resolving anything).
   // A glob (`src/store/*.ts`) reads as "does not exist" under a literal `existsSync` —
-  // found by lore's own review, fingerprint bdd42529: the screen then drops it
+  // lore-ok[bdd42529]: found by lore's own review — the screen then drops it
   // out-of-scope with the false reason "names only files that do not exist", and
   // writeBackRejections (above) turns that false fact into a confidence-1 permanent
   // knowledge row. Globbing the tree to check properly is more machinery than this
@@ -468,5 +529,5 @@ export async function propose(deps: ProposeDeps, input: ProposeInput): Promise<P
   const exists = (p: string): boolean => looksLikeGlob(p) || existsSync(join(input.worktree, p));
   const screened = screen(screenedAll, input.folder, input.knowledge, exists);
   writeBackRejections(deps.store, deps.repoId, input.folder, input.commit, screened);
-  return { screened, sessionsSpent, silent };
+  return { screened, sessionsSpent, sessionsAttempted: attempted, silent };
 }

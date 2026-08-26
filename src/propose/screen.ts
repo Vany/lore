@@ -157,7 +157,7 @@ export function screen(
       because.push(missing.join("; "));
     }
 
-    // Found missing by lore's own review, fingerprint 287fffa0/67a0c784: `rejects` was
+    // lore-ok[287fffa0,67a0c784]: found missing by lore's own review — `rejects` was
     // read for the knowledge write-back (writeBackRejections, run.ts) and by nothing
     // that decides what the DOCUMENT shows — a critic-rejected idea had no demotion of
     // its own and landed in "Appraise these" exactly like one that survived.

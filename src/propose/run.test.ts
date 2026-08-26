@@ -11,6 +11,7 @@
 
 import { beforeEach, describe, expect, it } from "vitest";
 import { initialState } from "../core/ladder.ts";
+import { DidNotRun } from "../core/errors.ts";
 import type { Tier } from "../core/ladder.ts";
 import type { Listed, SessionResult } from "../reviewer/opencode.ts";
 import { Store } from "../store/store.ts";
@@ -70,11 +71,15 @@ function scripted(replies: readonly (unknown[] | null)[]) {
   };
 }
 
+// A REAL worktree (this repo itself), not the imaginary `/wt` this fixture used before
+// fingerprint 9b633abb: `propose` now refuses up front when `--folder` does not exist
+// in the tree, so a fake path here would refuse every test that does not override it.
+// Nothing in this suite actually depends on `src/store/store.ts` being absent.
 const input = (over: Partial<ProposeInput> = {}): ProposeInput => ({
   lenses: ["seams"],
   folder: "src/store",
   commit: "abc1234",
-  worktree: "/wt",
+  worktree: process.cwd(),
   question: "what would make this better to own?",
   tiers: TIERS,
   budget: 8,
@@ -115,11 +120,64 @@ describe("propose runs beside the product", () => {
   });
 });
 
+/**
+ * Fingerprint 9b633abb: nothing checked `--folder` existed in the tree at all. A typo
+ * does not fail loud on its own — every proposal lands "outside" a folder that is not
+ * there, the whole budget burns on lenses nobody will read, and (since writeBackRejections
+ * exists) each one is written back as a false, permanent, confidence-1 rejection.
+ */
+describe("--folder is checked against the tree before anything is spent", () => {
+  it("refuses before asking anything when the folder does not exist", async () => {
+    const r = propose({ store, repoId, ask: scripted([[IDEA]]) }, input({ folder: "src/this-does-not-exist" }));
+    await expect(r).rejects.toThrow(DidNotRun);
+    expect(asked).toHaveLength(0);
+  });
+
+  it("does not check the repository root, which always exists", async () => {
+    const r = await propose({ store, repoId, ask: scripted([[IDEA], [IDEA]]) }, input({ folder: "" }));
+    expect(r.sessionsSpent).toBe(2);
+  });
+});
+
+/**
+ * Fingerprint 5b72aabd: `concreteRoute`'s `known` callback used to be `() => undefined`,
+ * throwing away the store's own learned route-unavailability state — the same state
+ * `review.ts` reads throughout via `store.routeUnavailable`. A route this deployment
+ * parked minutes ago would be picked anyway and re-attempted once per lens, each
+ * attempt burning real budget for a call certain to fail.
+ */
+describe("route resolution reads the store's own learned unavailability", () => {
+  it("does not attempt a route the store has marked unavailable", async () => {
+    const until = new Date(Date.now() + 60_000).toISOString();
+    store.markRouteUnavailable("zai-coding-plan/glm-5-turbo", until, "exhausted", 1);
+    const r = propose({ store, repoId, ask: scripted([[IDEA]]) }, input({ tiers: [ZAI] }));
+    await expect(r).rejects.toThrow(DidNotRun);
+    expect(asked).toHaveLength(0);
+  });
+
+  it("attempts a route with no mark against it, same as before", async () => {
+    const r = await propose({ store, repoId, ask: scripted([[IDEA]]) }, input({ tiers: [ZAI] }));
+    expect(r.sessionsSpent).toBe(1);
+  });
+});
+
 describe("the budget is in sessions, and a critic is a session", () => {
   it("spends two sessions on one lens — proposer and critic", async () => {
     const r = await propose({ store, repoId, ask: scripted([[IDEA], [IDEA]]) }, input());
     expect(r.sessionsSpent).toBe(2);
     expect(asked.map((a) => a.tier)).toStrictEqual(["t2", "t1"]);
+  });
+
+  /**
+   * Fingerprint 7429b981: the document's header reports success-counted
+   * `sessionsSpent` as spend against `--budget`, but a failed call is still a paid
+   * one, fingerprint b1030112 — a run whose critic fails after the proposer succeeds
+   * actually spent 2 against the budget and reported 1.
+   */
+  it("reports sessions ATTEMPTED, not merely succeeded, as the real spend", async () => {
+    const r = await propose({ store, repoId, ask: scripted([[IDEA], null]) }, input());
+    expect(r.sessionsSpent).toBe(1);
+    expect(r.sessionsAttempted).toBe(2);
   });
 
   it("stops between lenses rather than half-way through one", async () => {
@@ -321,6 +379,44 @@ describe("the critic is a different vendor", () => {
     const r = await propose({ store, repoId, ask: scripted([[IDEA], []]) }, input());
     expect(r.screened[0]?.proposal.contradictedBy).toMatch(/returned nothing, which is not an endorsement/);
   });
+
+  /**
+   * Fingerprint 84cf95be/006cfc04: e1a18243's fix covered the proposer's own
+   * `idea === undefined` branch and not this one — a critic reply PARSING refused (not
+   * one that genuinely returned nothing) still said "returned nothing", which is not
+   * what happened, even though "not an endorsement" was still the right conclusion
+   * either way.
+   */
+  it("distinguishes that from a critic that replied but nothing parsed", async () => {
+    let n = 0;
+    const first = scripted([[IDEA]]);
+    const ask = async <T>(
+      tier: Tier,
+      prompt: string,
+      worktree: string,
+      extract: (text: string) => Listed<T>,
+      contract: string,
+    ): Promise<SessionResult<T>> => {
+      n++;
+      if (n === 1) return first(tier, prompt, worktree, extract, contract);
+      return {
+        items: [],
+        raw: "",
+        inputTokens: 1,
+        cachedTokens: 0,
+        outputTokens: 1,
+        costUsd: 0,
+        latencyMs: 1,
+        retried: true,
+        steps: 1,
+        rejected: ["seams: 'trueIf' is required and was empty"],
+      };
+    };
+    const r = await propose({ store, repoId, ask }, input());
+    expect(r.screened[0]?.proposal.contradictedBy).toMatch(/replied, but nothing parsed/);
+    expect(r.screened[0]?.proposal.contradictedBy).toContain("trueIf");
+    expect(r.screened[0]?.proposal.contradictedBy).not.toMatch(/read this and returned nothing/);
+  });
 });
 
 describe("a lens that did not look is not a lens that found nothing (INV-1)", () => {
@@ -496,20 +592,19 @@ describe("a bootstrap fact is not settled knowledge in a propose prompt (77edbad
  * `propose` itself is certain enough of within its own run can be written back —
  * the screen's own out-of-scope drop, and the critic's own structured `rejects`.
  *
- * These use a REAL worktree (this repo) rather than the fake `/wt` every other test in
- * this file uses, so `exists` reflects genuine file presence — the suite needs that to
- * isolate "landed outside the folder" from "the named file is imaginary", a different
- * out-of-scope reason `screen.ts` also produces, and to prove a proposal that is
- * genuinely appraisable writes back nothing at all.
+ * `input()`'s own worktree is real (this repo, not a fake path — fingerprint
+ * 9b633abb) precisely so `exists` reflects genuine file presence here: the suite
+ * needs that to isolate "landed outside the folder" from "the named file is
+ * imaginary", a different out-of-scope reason `screen.ts` also produces, and to
+ * prove a proposal that is genuinely appraisable writes back nothing at all.
  */
 describe("whatever propose itself is certain enough to reject is written back", () => {
-  const real = (over: Partial<ProposeInput> = {}) => input({ worktree: process.cwd(), ...over });
   const rejectedRows = () =>
     store.db.prepare("SELECT * FROM knowledge WHERE repo_id = ? AND kind = 'mistake'").all(repoId) as Record<string, unknown>[];
 
   it("writes back a proposal the screen drops as out-of-scope", async () => {
     const elsewhere = { ...IDEA, touches: ["src/mcp/server.ts"] };
-    await propose({ store, repoId, ask: scripted([[elsewhere], [elsewhere]]) }, real());
+    await propose({ store, repoId, ask: scripted([[elsewhere], [elsewhere]]) }, input());
     const rows = rejectedRows();
     expect(rows).toHaveLength(1);
     expect(String(rows[0]?.["statement"])).toContain(IDEA.idea);
@@ -525,41 +620,41 @@ describe("whatever propose itself is certain enough to reject is written back", 
    */
   it("does not treat a glob path as an invented one", async () => {
     const globby = { ...IDEA, touches: ["src/store/*.ts"] };
-    const r = await propose({ store, repoId, ask: scripted([[globby], [globby]]) }, real());
+    const r = await propose({ store, repoId, ask: scripted([[globby], [globby]]) }, input());
     expect(r.screened[0]?.demotions).toStrictEqual([]);
     expect(rejectedRows()).toHaveLength(0);
   });
 
   it("writes back a proposal the critic structurally rejects, even in scope", async () => {
     const rejected = { ...IDEA, rejects: true };
-    await propose({ store, repoId, ask: scripted([[IDEA], [rejected]]) }, real());
+    await propose({ store, repoId, ask: scripted([[IDEA], [rejected]]) }, input());
     const rows = rejectedRows();
     expect(rows).toHaveLength(1);
     expect(String(rows[0]?.["why"])).toContain("critic judged it simply wrong");
   });
 
   it("writes back nothing for a proposal that survives both scope and critic", async () => {
-    await propose({ store, repoId, ask: scripted([[IDEA], [IDEA]]) }, real());
+    await propose({ store, repoId, ask: scripted([[IDEA], [IDEA]]) }, input());
     expect(rejectedRows()).toHaveLength(0);
   });
 
   it("does not re-arm a lesson a person resolved away by re-running over the same tree", async () => {
     const elsewhere = { ...IDEA, touches: ["src/mcp/server.ts"] };
-    await propose({ store, repoId, ask: scripted([[elsewhere], [elsewhere]]) }, real());
-    await propose({ store, repoId, ask: scripted([[elsewhere], [elsewhere]]) }, real());
+    await propose({ store, repoId, ask: scripted([[elsewhere], [elsewhere]]) }, input());
+    await propose({ store, repoId, ask: scripted([[elsewhere], [elsewhere]]) }, input());
     expect(rejectedRows()).toHaveLength(1);
   });
 
   it("writes a fresh row for a genuinely different sweep of the same tree", async () => {
     const elsewhere = { ...IDEA, touches: ["src/mcp/server.ts"] };
-    await propose({ store, repoId, ask: scripted([[elsewhere], [elsewhere]]) }, real());
-    await propose({ store, repoId, ask: scripted([[elsewhere], [elsewhere]]) }, real({ commit: "def5678" }));
+    await propose({ store, repoId, ask: scripted([[elsewhere], [elsewhere]]) }, input());
+    await propose({ store, repoId, ask: scripted([[elsewhere], [elsewhere]]) }, input({ commit: "def5678" }));
     expect(rejectedRows()).toHaveLength(2);
   });
 
   it("scopes the written-back row to the single file the idea names", async () => {
     const elsewhere = { ...IDEA, touches: ["src/mcp/server.ts"] };
-    await propose({ store, repoId, ask: scripted([[elsewhere], [elsewhere]]) }, real());
+    await propose({ store, repoId, ask: scripted([[elsewhere], [elsewhere]]) }, input());
     expect(rejectedRows()[0]?.["path"]).toBe("src/mcp/server.ts");
   });
 
@@ -574,7 +669,7 @@ describe("whatever propose itself is certain enough to reject is written back", 
    */
   it("writes a statement conflict detection cannot read as agreeing or disagreeing with anything", async () => {
     const elsewhere = { ...IDEA, touches: ["src/mcp/server.ts"] };
-    await propose({ store, repoId, ask: scripted([[elsewhere], [elsewhere]]) }, real());
+    await propose({ store, repoId, ask: scripted([[elsewhere], [elsewhere]]) }, input());
     const statement = String(rejectedRows()[0]?.["statement"]);
     expect(polarity(statement)).toBe(0);
   });
@@ -590,7 +685,7 @@ describe("whatever propose itself is certain enough to reject is written back", 
    */
   it("does not attribute a proposer's own rejects to a critic that never ran", async () => {
     const selfRejecting = { ...IDEA, rejects: true };
-    const r = await propose({ store, repoId, ask: scripted([[selfRejecting]]) }, real({ budget: 1 }));
+    const r = await propose({ store, repoId, ask: scripted([[selfRejecting]]) }, input({ budget: 1 }));
     expect(r.screened[0]?.proposal.contradictedBy).toMatch(/NOT CRITICISED/);
     expect(rejectedRows()).toHaveLength(0);
   });

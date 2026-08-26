@@ -144,7 +144,8 @@ export async function proposeCli(i: ProposeCliInput): Promise<string> {
         mode: type.id,
         lenses: i.lenses,
         budget: i.budget,
-        sessionsSpent: result.sessionsSpent,
+        // ATTEMPTED, not merely succeeded — fingerprint 7429b981, RunHeader's own docs.
+        sessionsSpent: result.sessionsAttempted,
         at: i.now.toISOString(),
       },
       result.screened,

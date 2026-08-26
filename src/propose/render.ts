@@ -28,6 +28,12 @@ export interface RunHeader {
   readonly mode: string;
   readonly lenses: readonly string[];
   readonly budget: number;
+  /**
+   * Sessions ATTEMPTED against `--budget`, not merely succeeded — found by lore's own
+   * review, fingerprint 7429b981: a run with real, paid failures (a failed call is
+   * still a paid one, b1030112) used to report a success count here, a fraction of
+   * what it actually spent against the number the operator chose it for.
+   */
   readonly sessionsSpent: number;
   /** ISO instant, passed in rather than taken here so the document is reproducible. */
   readonly at: string;
