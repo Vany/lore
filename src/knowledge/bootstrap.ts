@@ -84,6 +84,20 @@ export async function bootstrap(opts: {
    * only ever spends anything once regardless.
    */
   intoRef?: string | undefined;
+  /**
+   * The FIRST review's own id, and whether it is still wanted — so its screen and
+   * survey sessions are registered and `review_cancel` can actually reach them.
+   *
+   * lore-ok[96ce9a48]: found real by lore's own review, against spec/knowledge.md
+   * §2.2's own words: "still true of the provisioning screen, and of any future
+   * inline caller" — bootstrap was never updated to say so. Without `reviewId`, a
+   * screen session is never registered, so a client cancelling mid-bootstrap is told
+   * truthfully that nothing is in flight while the screen and survey go on spending
+   * — the exact failure §2.2 names and the exact fix `review.ts`'s round already
+   * applies to its own tier call, mirrored here for both of bootstrap's model calls.
+   */
+  reviewId?: string;
+  stillWanted?: () => boolean;
 }): Promise<BootstrapResult> {
   // The cheap tier. This is a survey, not a judgement — paying the top tier to
   // describe a directory structure would be the same mistake as paying a model
@@ -122,11 +136,17 @@ export async function bootstrap(opts: {
   const screenOpt = ask === undefined || tier === undefined
     ? {}
     : {
-        // No `reviewId`: provisioning has no review, so there is nothing for a cancel
-        // to reach and nothing to attribute the spend to beyond the repository. It is
-        // recorded all the same — bootstrap screens every document a repo has, which is
-        // the largest single burst of screen calls the system ever makes.
+        // lore-ok[96ce9a48]: `reviewId`/`stillWanted` WERE omitted — found by lore's
+        // own review against spec/knowledge.md §2.2's explicit requirement ("still
+        // true of the provisioning screen"). Bootstrap DOES run inside a review (the
+        // repo's first one — `worker.ts` has the id in hand), so there is exactly as
+        // much for a cancel to reach here as there is for the round's own tier call;
+        // omitting them meant a client cancelling mid-bootstrap was told truthfully
+        // that nothing was in flight while the screen — "the largest single burst of
+        // screen calls the system ever makes" — went on spending regardless.
         screen: screenFor(ask, tier, opts.worktree, {
+          reviewId: opts.reviewId,
+          stillWanted: opts.stillWanted,
           spent: (u) => opts.store.recordUsage(screenUsage(u, opts.repoId)),
         }),
       };
@@ -179,24 +199,46 @@ export async function bootstrap(opts: {
       // `knowledgeBlock` in reviewer/prompts.ts, which now renders `kind: "fact"`
       // under an explicit "unverified, not a team decision" caveat rather than
       // folding it into "treat these as this team's decisions."
-      const result = await opts.reviewer.review(tier, ARCHITECTURE_PROMPT, opts.worktree);
-      for (const f of result.findings) {
-        opts.store.addKnowledge({
-          repoId: opts.repoId,
-          kind: "fact",
-          source: "derived",
-          statement: f.claim,
-          why: f.failureScenario,
-          path: f.file,
-          ...(f.cwe !== undefined ? { cwe: f.cwe } : { cwe: undefined }),
-          provenance: `bootstrap:${f.file}`,
-          sourceBlob: undefined,
-          // Lowest confidence in the store: one model's reading of a codebase it
-          // met a minute ago, unconfirmed by anything. Real reviews will correct it.
-          confidence: 0.5,
-        });
-        factsFromCode++;
-      }
+      // lore-ok[96ce9a48]: `reviewId`/`stillWanted` WERE omitted here too — same
+      // finding and fix as the screen a few lines up: spec/knowledge.md §2.2 requires
+      // a cancel to reach a screen session started by a review, and the survey is the
+      // OTHER model call bootstrap makes inside that same review.
+      const result = await opts.reviewer.review(tier, ARCHITECTURE_PROMPT, opts.worktree, opts.reviewId, opts.stillWanted);
+      // lore-ok[4bbccb96]: found real by lore's own review — this loop had no
+      // idempotence guard at all, unlike `ingestDocs`' rule-writes a few lines above
+      // (`store.hasKnowledgeBlob` re-checked INSIDE a transaction). worker.ts's
+      // one-shot check ("is this repo's knowledge empty") is check-then-act, and the
+      // dispatcher starts every claimed round at once (D-101, no pool) — so two
+      // reviews submitted for one fresh repo within the same few minutes (this
+      // deployment's own target is 30/day) can BOTH pass that check before either
+      // commits, both run the survey, and both write every fact with a fresh id.
+      // Facts have no retirement path (spec/knowledge.md §4), so a doubled write is
+      // permanent, not a one-round blip. Re-asked INSIDE the transaction, same shape
+      // as `ingestDocs`: the MODEL CALL above this line can still double-spend under
+      // a genuine race (recomputing it inside a transaction is not possible — it is
+      // an async network call), but the WRITE — the part that compounds forever — is
+      // guarded, matching the risk this codebase already accepts for the screen call
+      // one function above.
+      opts.store.tx(() => {
+        if (opts.store.knowledgeFor(opts.repoId, undefined, 1).length > 0) return;
+        for (const f of result.findings) {
+          opts.store.addKnowledge({
+            repoId: opts.repoId,
+            kind: "fact",
+            source: "derived",
+            statement: f.claim,
+            why: f.failureScenario,
+            path: f.file,
+            ...(f.cwe !== undefined ? { cwe: f.cwe } : { cwe: undefined }),
+            provenance: `bootstrap:${f.file}`,
+            sourceBlob: undefined,
+            // Lowest confidence in the store: one model's reading of a codebase it
+            // met a minute ago, unconfirmed by anything. Real reviews will correct it.
+            confidence: 0.5,
+          });
+          factsFromCode++;
+        }
+      });
     }
   }
 

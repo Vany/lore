@@ -377,6 +377,12 @@ export class Worker {
         // is already on the row loaded above; bootstrap needs it for the same reason
         // every ordinary round does (D-10 via ingestDocs, `53969ab8`).
         intoRef: review.intoRef,
+        // lore-ok[96ce9a48]: also omitted — found by lore's own review, against
+        // spec/knowledge.md §2.2's explicit requirement that a screen session
+        // started by a review can be cancelled with it, "still true of the
+        // provisioning screen". Same shape as `runRound`'s own `stillWanted` below.
+        reviewId,
+        stillWanted: () => !isTerminal(this.store.getReview(reviewId, principal)?.state ?? review.state),
       }).catch((e: unknown) => {
         // Never fatal: a review without a bootstrapped memory is a worse review,
         // not an impossible one. But it is said out loud rather than swallowed.

@@ -155,8 +155,15 @@ export function renderEnrichment(e: Enrichment): string | undefined {
     }
   }
   for (const k of e.related.slice(0, 2)) {
+    // lore-ok[652bb58d]: was `${k.source} rule` unconditionally — found by lore's own
+    // review. `relatedTo`'s pool includes `kind: "fact"` rows (bootstrap-derived,
+    // unverified — see `knowledgeBlock` in reviewer/prompts.ts, 70b88761), and this
+    // hardcoded the word "rule" for every source, presenting an unconfirmed survey
+    // guess as a rule of the codebase in a finding's history — the exact laundering
+    // 70b88761 closed in the prompt channel, surviving here in the enrichment one.
+    const label = k.kind === "fact" ? `${k.source} fact, unverified` : `${k.source} rule`;
     parts.push(
-      `${k.source} rule (${k.verifiedAt.slice(0, 10)}): ${k.statement}${k.why === undefined ? "" : ` — because ${k.why}`}`,
+      `${label} (${k.verifiedAt.slice(0, 10)}): ${k.statement}${k.why === undefined ? "" : ` — because ${k.why}`}`,
     );
   }
   return parts.length === 0 ? undefined : parts.join("; ");

@@ -229,10 +229,10 @@ export function screenFor(
   tier: Tier,
   worktree: string,
   opts: {
-    readonly reviewId?: string;
+    readonly reviewId?: string | undefined;
     readonly spent?: (u: ScreenUsage) => void;
     /** Asked once a provider slot is won: `false` means do not spend it. */
-    readonly stillWanted?: () => boolean;
+    readonly stillWanted?: (() => boolean) | undefined;
   } = {},
 ): Screen {
   const { reviewId, spent, stillWanted } = opts;

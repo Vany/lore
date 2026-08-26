@@ -153,3 +153,50 @@ describe("enrich (10bb335b: relatedTo's path boost is a sibling-directory bug to
     expect(e.related.some((k) => k.statement.includes("retry on timeout"))).toBe(true);
   });
 });
+
+// Found by lore's own review (652bb58d): the 70b88761 mitigation (a bootstrap-derived
+// fact rendered under an "unverified" caveat) covered only prompts.ts' knowledgeBlock.
+// renderEnrichment, a separate channel (a finding's history, delivered via
+// review_inbox and the CLI), still hardcoded the word "rule" for every related item's
+// source regardless of `kind`, presenting an unconfirmed survey guess as a rule of
+// the codebase through the door the first fix did not reach.
+describe("enrich (652bb58d: a related fact is not a related rule)", () => {
+  it("labels a bootstrap fact as unverified, not as a rule, in a finding's rendered history", () => {
+    store.addKnowledge({
+      repoId, kind: "fact", source: "derived",
+      statement: "this module is invoked only by the scheduler and its input is pre-validated",
+      why: undefined, path: "src/scheduler", cwe: undefined, provenance: "bootstrap:src/scheduler/invoker.ts",
+      sourceBlob: undefined, confidence: 0.5,
+    });
+
+    const f = finding({
+      fingerprint: "sched-1",
+      file: "src/scheduler/invoker.ts",
+      claim: "the invoker is called only by the scheduler with pre-validated input",
+    });
+    const e = enrich(store, repoId, f);
+    expect(e.related.some((k) => k.kind === "fact"), "fixture sanity: the fact must actually be related").toBe(true);
+
+    const rendered = renderEnrichment(e);
+    expect(rendered).toMatch(/fact, unverified/);
+    expect(rendered, "a fact must not be presented as a rule").not.toMatch(/derived rule/);
+  });
+
+  it("still labels a related taught rule as a rule (control)", () => {
+    store.addKnowledge({
+      repoId, kind: "rule", source: "taught",
+      statement: "the invoker is called only by the scheduler with pre-validated input",
+      why: undefined, path: "src/scheduler", cwe: undefined, provenance: undefined,
+      sourceBlob: undefined, confidence: 1,
+    });
+
+    const f = finding({
+      fingerprint: "sched-2",
+      file: "src/scheduler/invoker.ts",
+      claim: "the invoker is called only by the scheduler with pre-validated input",
+    });
+    const rendered = renderEnrichment(enrich(store, repoId, f));
+
+    expect(rendered).toMatch(/taught rule/);
+  });
+});

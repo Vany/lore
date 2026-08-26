@@ -3,9 +3,9 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { Store } from "../store/store.ts";
+import { NO_LIMIT, Store } from "../store/store.ts";
 import type { Tier } from "../core/ladder.ts";
-import type { ReviewerLike, ReviewerResult } from "../reviewer/opencode.ts";
+import type { ReviewerLike, ReviewerResult, SessionResult } from "../reviewer/opencode.ts";
 import { bootstrap } from "./bootstrap.ts";
 
 let store: Store;
@@ -137,5 +137,88 @@ describe("bootstrap reads a document at `into`, not the branch under review (c5d
       store.knowledgeFor(repoId, undefined, 1).length,
       "the one-shot retry guard must still see this repo as un-bootstrapped",
     ).toBe(0);
+  });
+});
+
+// Found by lore's own review (96ce9a48): spec/knowledge.md §2.2 requires a screen
+// session started by a review to be cancellable with it, "still true of the
+// provisioning screen" — but bootstrap passed neither reviewId nor stillWanted to
+// screenFor or to the survey's review() call, so a client cancelling mid-bootstrap
+// was told truthfully that nothing was in flight while both went on spending.
+describe("bootstrap's screen and survey carry reviewId/stillWanted through to a cancel (96ce9a48)", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "lore-bootstrap-cancel-"));
+    writeFileSync(join(dir, "CLAUDE.md"), "Money amounts are always integers in minor units, never floats.\n");
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  class RecordingReviewer implements ReviewerLike {
+    reviewReviewIds: (string | undefined)[] = [];
+    askForReviewIds: (string | undefined)[] = [];
+
+    async review(_t: Tier, _p: unknown, _w: string, reviewId?: string): Promise<ReviewerResult> {
+      this.reviewReviewIds.push(reviewId);
+      return { findings: [] } as unknown as ReviewerResult;
+    }
+
+    async askFor<T>(
+      _t: Tier,
+      _p: unknown,
+      _w: string,
+      _extract: (text: string) => unknown,
+      _contract: string,
+      reviewId?: string,
+    ): Promise<SessionResult<T>> {
+      this.askForReviewIds.push(reviewId);
+      return {
+        items: [], raw: "", inputTokens: 0, cachedTokens: 0, outputTokens: 0,
+        costUsd: 0, latencyMs: 1, retried: false, steps: 1, rejected: [],
+      };
+    }
+  }
+
+  it("passes reviewId to both the screen and the survey", async () => {
+    const reviewer = new RecordingReviewer();
+    const tier: Tier = { id: "t1", kind: "model", model: "zai/some-model", stage: "fast" };
+
+    await bootstrap({ store, repoId, worktree: dir, reviewer, tier, reviewId: "rev_test123", stillWanted: () => true });
+
+    expect(reviewer.askForReviewIds, "the screen must be registered against the review").toStrictEqual(["rev_test123"]);
+    expect(reviewer.reviewReviewIds, "the survey must be registered against the review").toStrictEqual(["rev_test123"]);
+  });
+});
+
+// Found by lore's own review (4bbccb96): the architecture survey had no idempotence
+// guard at all — unlike ingestDocs' rule-writes a few lines above it in the same
+// function, which re-check inside a transaction. worker.ts's one-shot check is
+// check-then-act and the dispatcher starts every claimed round at once (D-101), so
+// two first-reviews of one fresh repo could both pass it before either commits, both
+// run the survey, and both write every fact with a fresh id — permanently, since
+// facts have no retirement path.
+describe("bootstrap does not double-write survey facts under a race (4bbccb96)", () => {
+  class SlowFactReviewer implements ReviewerLike {
+    async review(): Promise<ReviewerResult> {
+      await new Promise((r) => setTimeout(r, 5));
+      return {
+        findings: [
+          { file: "src/x.ts", severity: "low", claim: "a fact about the codebase", evidence: "e", failureScenario: "s" },
+        ],
+      } as unknown as ReviewerResult;
+    }
+  }
+
+  it("two concurrent bootstrap calls write the fact exactly once", async () => {
+    const reviewer = new SlowFactReviewer();
+    const tier: Tier = { id: "t1", kind: "model", model: "zai/some-model", stage: "fast" };
+
+    await Promise.all([
+      bootstrap({ store, repoId, worktree: "/tmp", reviewer, tier }),
+      bootstrap({ store, repoId, worktree: "/tmp", reviewer, tier }),
+    ]);
+
+    const facts = store.knowledgeFor(repoId, undefined, NO_LIMIT).filter((k) => k.kind === "fact");
+    expect(facts, "two concurrent bootstraps must not both write the survey's facts").toHaveLength(1);
   });
 });

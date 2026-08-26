@@ -251,3 +251,34 @@ describe("polarity does not cancel across a sentence break either (a0f27140)", (
     expect(findConflicts([item("a", twoSentences), item("b", oneClauseJoined)])).toStrictEqual([]);
   });
 });
+
+// Found by lore's own review (7920c391, 5b53baa7) — TWICE, independently — on the
+// tree carrying the a0f27140 fix above: a bare `.` split on ANY period, not just a
+// sentence break, so a rule naming a filename, a version or a decimal ("gateway.ts",
+// "lore.db", "2.5 seconds" — this codebase's own rules name files constantly) had a
+// genuine single proposition broken into two fragments, read as "too compound to
+// say" (0), and silently exempted from conflict detection — the opposite failure
+// from the one a0f27140 fixed: not a false contradiction, but a missed one.
+describe("a period inside a filename or number is not a sentence break (7920c391, 5b53baa7)", () => {
+  it("still reads a negated rule about a dotted filename as negative, not undecidable", () => {
+    expect(polarity("Requests through gateway.ts must be retried on timeout")).toBe(1);
+    expect(polarity("Requests through gateway.ts must never be retried on timeout")).toBe(-1);
+    expect(polarity("Lore must never open lore.db read-write from the host")).toBe(-1);
+  });
+
+  it("still catches a real contradiction about a rule naming a file", () => {
+    const found = findConflicts([
+      item("a", "Requests through gateway.ts must be retried on timeout"),
+      item("b", "Requests through gateway.ts must never be retried on timeout"),
+    ]);
+    expect(found).toHaveLength(1);
+  });
+
+  it("still catches a real contradiction spanning two sentences about a dotted filename", () => {
+    const found = findConflicts([
+      item("a", "Lore must never open lore.db read-write from the host. The sweeper must never bypass the lock either."),
+      item("b", "Lore may open lore.db read-write from the host. The sweeper may bypass the lock as well."),
+    ]);
+    expect(found).toHaveLength(1);
+  });
+});
