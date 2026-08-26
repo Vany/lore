@@ -302,6 +302,7 @@ export async function propose(deps: ProposeDeps, input: ProposeInput): Promise<P
     };
 
     let idea: Proposal | undefined;
+    let rejected: readonly string[] = [];
     try {
       attempted++;
       const r = await deps.ask(proposer, proposerPrompt(base), input.worktree, proposalsOf, PROPOSAL_CONTRACT);
@@ -319,6 +320,7 @@ export async function propose(deps: ProposeDeps, input: ProposeInput): Promise<P
         outcome: r.items.length > 0 ? "findings" : "clean",
       });
       idea = r.items[0];
+      rejected = r.rejected;
     } catch (e) {
       recordFailedUsage(deps.store, deps.repoId, `propose:${lens}`, proposer.model, e);
       // A lens that could not run is NEVER simply absent from the document. That is
@@ -329,7 +331,18 @@ export async function propose(deps: ProposeDeps, input: ProposeInput): Promise<P
     }
 
     if (idea === undefined) {
-      silent.push(`${lens}: looked and would change nothing here`);
+      // lore-ok[e1a18243]: found by lore's own review — a reply whose proposals were
+      // ALL schema-refused (parseProposal, proposal.ts) used to read exactly like a
+      // proposer that genuinely looked and had nothing to say, even though
+      // PROPOSAL_CONTRACT's blessing of `"proposals": []` covers only the second case.
+      // `SessionResult.rejected` (reviewer/opencode.ts) is how reviewer/review.ts
+      // already tells these apart for findings (`agg.discarded`, surfaced via
+      // `checks_skipped`); this is the same distinction, applied here.
+      silent.push(
+        rejected.length > 0
+          ? `${lens}: replied, but nothing parsed — ${rejected.join("; ")}`
+          : `${lens}: looked and would change nothing here`,
+      );
       continue;
     }
 

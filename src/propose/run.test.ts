@@ -299,6 +299,33 @@ describe("a lens that did not look is not a lens that found nothing (INV-1)", ()
     expect(r.silent.join(" ")).not.toContain("did not run");
   });
 
+  /**
+   * Fingerprint e1a18243: a reply whose only proposal was schema-refused (not a
+   * transport failure — the call succeeded, `deps.ask` returns normally) used to read
+   * exactly like a proposer that genuinely had nothing to say, even though
+   * PROPOSAL_CONTRACT's blessing of `"proposals": []` covers only the second case. The
+   * reader appraising the document weeks later could not tell "said nothing" from
+   * "said something parsing threw away".
+   */
+  it("distinguishes that from a lens that replied but parsed to nothing", async () => {
+    const allRejected = async <T>(): Promise<SessionResult<T>> => ({
+      items: [],
+      raw: "",
+      inputTokens: 1,
+      cachedTokens: 0,
+      outputTokens: 1,
+      costUsd: 0,
+      latencyMs: 1,
+      retried: true,
+      steps: 1,
+      rejected: ["seams: 'trueIf' is required and was empty"],
+    });
+    const r = await propose({ store, repoId, ask: allRejected }, input({ lenses: ["seams"], budget: 1 }));
+    expect(r.silent.join(" ")).toContain("replied, but nothing parsed");
+    expect(r.silent.join(" ")).toContain("trueIf");
+    expect(r.silent.join(" ")).not.toContain("would change nothing");
+  });
+
   it("prints both in the document, under their own heading", () => {
     const doc = renderProposals(
       { repo: "demo", commit: "abc1234", folder: "src/store", mode: "code-arch", lenses: ["seams"], budget: 8, sessionsSpent: 1, at: "2026-08-07T00:00:00.000Z" },
