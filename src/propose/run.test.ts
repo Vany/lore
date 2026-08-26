@@ -10,6 +10,9 @@
  */
 
 import { beforeEach, describe, expect, it } from "vitest";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { initialState } from "../core/ladder.ts";
 import { DidNotRun } from "../core/errors.ts";
 import type { Tier } from "../core/ladder.ts";
@@ -145,6 +148,25 @@ describe("--folder is checked against the tree before anything is spent", () => 
     const r = propose({ store, repoId, ask: scripted([[IDEA]]) }, input({ folder: ".." }));
     await expect(r).rejects.toThrow(DidNotRun);
     expect(asked).toHaveLength(0);
+  });
+
+  /**
+   * Fingerprint 7bcfb5eb: the first version of the escape check tested
+   * `rel.startsWith("..")` as a raw STRING prefix, exactly the class this codebase's
+   * own `scopesOverlap`/`inScope` convention (segment-boundary, never a bare prefix)
+   * exists to avoid — a real directory named with a leading double dot is a true
+   * string prefix of `".."` without being outside the tree at all.
+   */
+  it("does not refuse a real directory literally named with a leading double dot", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lore-propose-escape-test-"));
+    try {
+      await mkdir(join(dir, "..venv-backup"), { recursive: true });
+      await expect(
+        propose({ store, repoId, ask: scripted([[IDEA], [IDEA]]) }, input({ worktree: dir, folder: "..venv-backup" })),
+      ).resolves.toBeDefined();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("does not check the repository root, which always exists", async () => {

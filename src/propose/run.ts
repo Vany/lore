@@ -331,10 +331,19 @@ export async function propose(deps: ProposeDeps, input: ProposeInput): Promise<P
     // passing straight through to reproduce the exact guaranteed-waste-plus-poisoning
     // run this guard exists to refuse, since `inScope` can never match a repo-relative
     // `touches` entry against a path outside the tree either. `relative` is how Node
-    // itself answers "is B inside A" — a leading `..` (or an absolute result, the
-    // cross-device case `relative` returns instead) means it escaped.
+    // itself answers "is B inside A" — a leading `..` SEGMENT (or an absolute result,
+    // the cross-device case `relative` returns instead) means it escaped.
+    //
+    // lore-ok[7bcfb5eb]: found by lore's own review, against the fix just above — the
+    // first version tested `rel.startsWith("..")` as a raw STRING prefix, exactly the
+    // class this codebase's own `scopesOverlap`/`inScope` convention (segment-boundary,
+    // never a bare prefix) exists to avoid. A real directory named with a leading
+    // double dot, `--folder ..venv-backup`, produces `rel === "..venv-backup"` — a
+    // true string prefix of `".."`, and a false "outside the tree" refusal about a
+    // directory that is inside it. Fixed to require the boundary: exactly `".."`, or
+    // `".."` followed by the separator.
     const rel = relative(input.worktree, folderPath);
-    if (rel.startsWith("..") || isAbsolute(rel)) {
+    if (rel === ".." || rel.startsWith("../") || isAbsolute(rel)) {
       throw new DidNotRun(`--folder ${input.folder} is outside the tree at commit ${input.commit} — it must name a directory inside the repository, not above it.`);
     }
     if (!existsSync(folderPath) || !statSync(folderPath).isDirectory()) {
