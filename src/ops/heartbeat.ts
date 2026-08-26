@@ -273,6 +273,17 @@ export function startHeartbeat(store: Store, cfg: HeartbeatConfig, alerter: Aler
    * new information and should speak; the same one for the ninth hour is not.
    */
   let toldUncollected = 0;
+  /**
+   * `eb3d53ea`: found by lore's own review — the IDENTICAL defect `toldUncollected`
+   * just above was fixed for, unfixed one condition over. `needsHumanOverAge` stands
+   * for as long as nobody resolves the conflict — a review once sat parked until it
+   * was swept as `expired`, which is 24h past this threshold before the sweep even
+   * starts the clock (`staleHours`) — so the unlatched send below posted the same
+   * ticket on every 60s beat for as long as it lasted: up to 1,440 copies of one
+   * alert in a day, the exact wolf-crying this file's comment names as the failure
+   * this whole table exists to avoid. Same count-based latch, same reasoning.
+   */
+  let toldNeedsHumanAgeing = 0;
   let stopped = false;
   const startedAt = Date.now();
 
@@ -329,8 +340,13 @@ export function startHeartbeat(store: Store, cfg: HeartbeatConfig, alerter: Aler
     // A ticket, not a page: one review parked on a question is normal, a pile of them
     // ageing means nobody is answering, and every one of them blocks a review from
     // ever passing (spec/knowledge.md §7.2).
-    if (health.needsHumanOverAge > 0) {
+    if (health.needsHumanOverAge > toldNeedsHumanAgeing) {
+      toldNeedsHumanAgeing = health.needsHumanOverAge;
       await alerter.send(CONDITIONS.needsHumanAgeing(health.needsHumanOverAge, cfg.needsHumanAgeHours));
+    } else if (health.needsHumanOverAge < toldNeedsHumanAgeing) {
+      // Somebody decided, or a document re-ingest closed the conflict (D-20). Re-arm,
+      // so the next one to age past the threshold speaks.
+      toldNeedsHumanAgeing = health.needsHumanOverAge;
     }
 
     // THE SAME FAILURE FROM THE OTHER END. `needs_human` is a review waiting on a person;

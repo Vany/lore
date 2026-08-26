@@ -406,6 +406,32 @@ describe("needs_human ageing", () => {
     stop();
     expect(sent.map((a) => a.condition)).toContain("needs_human findings ageing");
   });
+
+  // eb3d53ea, found by lore's own review: the IDENTICAL defect toldUncollected was
+  // latched to fix, unfixed one condition over. A parked review stands for as long
+  // as nobody resolves it — once for days, until the sweep took it — so this was
+  // unlatched, sending the same ticket on every single beat.
+  it("sends the ticket ONCE, not on every beat, while the count is unchanged", async () => {
+    parked("old", 48);
+    const stop = startHeartbeat(store, cfg({ intervalMs: 20 }), alerter);
+    await until(() => sent.some((a) => a.condition === "needs_human findings ageing"));
+    // Long enough for many more beats at 20ms.
+    await new Promise((r) => setTimeout(r, 300));
+    stop();
+    expect(sent.filter((a) => a.condition === "needs_human findings ageing")).toHaveLength(1);
+  });
+
+  // Latched on the COUNT, not on a boolean, exactly like toldUncollected: a second
+  // review ageing past the threshold is new information and must speak again.
+  it("speaks again when a SECOND review ages past the threshold", async () => {
+    parked("first", 48);
+    const stop = startHeartbeat(store, cfg({ intervalMs: 20 }), alerter);
+    await until(() => sent.filter((a) => a.condition === "needs_human findings ageing").length >= 1);
+    parked("second", 48);
+    await until(() => sent.filter((a) => a.condition === "needs_human findings ageing").length >= 2);
+    stop();
+    expect(sent.filter((a) => a.condition === "needs_human findings ageing")).toHaveLength(2);
+  });
 });
 
 describe("the beat sends the conditions that had no caller", () => {

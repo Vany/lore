@@ -53,6 +53,17 @@ rather than whether each route was. It checks members now. A page nobody is page
 is not a page, and a routing table that lists a route nobody dispatches is a claim
 about monitoring that does not exist.
 
+**Ageing `needs_human` was wired unlatched — found by lore's own review
+(eb3d53ea).** `findingsUncollected`, the sibling condition below, was fixed for
+exactly this once already, with the reasoning kept in `ops/heartbeat.ts`'s own
+comment: the beat runs every 60s and a parked review can stand for days, so an
+unlatched send posts the identical ticket on every beat for as long as it lasts —
+up to 1,440 copies in a day, before the sweep even starts its own 24h clock. That
+is the wolf-crying this whole table exists to prevent, reintroduced in the
+condition right beside the one it was already fixed for. Latched on the COUNT now,
+the same way: a second review ageing past the threshold is new information and
+speaks again; the same one standing for a ninth day does not.
+
 | condition | why it is urgent |
 |---|---|
 | **replica behind the database** | the knowledge base *is* the product; losing it loses everything the workgroup taught it. Measured as *behind*, never as *recently written*: litestream writes only when there is something to replicate, so an idle database and a dead replicator look identical under a freshness test. lore mounts the replica folder read-only so the beat can see it at all; a deployment that does not reports `unconfigured`, which is not green |
