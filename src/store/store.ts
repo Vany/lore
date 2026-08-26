@@ -1531,13 +1531,23 @@ export class Store {
    * permanently uncollectible, a terminal review refuses a submit — stayed in this
    * JSON forever, the exact predicate `uncollectedHighOlderThan` (the heartbeat
    * ticket for the same fact) already excludes them from, for the same reason.
+   *
+   * `high`/`high_pre` SPLIT, matching `ops/status.ts`'s `uncollectedLines` and this
+   * class's own `uncollectedHighOlderThan` (`f.preexisting = 0`) — found by lore's
+   * own review, fingerprint be79f02a: this was the one representation of "uncollected
+   * findings" left counting every `high` alike, so the JSON surface a monitor or
+   * operator SCRIPT reads (unlike the other two, which a person reads) reported
+   * inherited fixture noise — a branch whose only OWN finding is a `low`, plus two
+   * inherited semgrep hits on test fixtures neither touch, is D-68's own example —
+   * as branch-caused highs, alerting on the same known noise every day.
    */
   uncollectedByReview(): readonly Record<string, string | number | null>[] {
     return this.db
       .prepare(
         `SELECT r.id, r.branch,
                 COUNT(*) AS undelivered,
-                SUM(CASE WHEN f.severity = 'high' THEN 1 ELSE 0 END) AS high,
+                SUM(CASE WHEN f.severity = 'high' AND f.preexisting = 0 THEN 1 ELSE 0 END) AS high,
+                SUM(CASE WHEN f.severity = 'high' AND f.preexisting = 1 THEN 1 ELSE 0 END) AS high_pre,
                 MIN(f.first_seen) AS waiting_since
          FROM finding f JOIN review r ON r.id = f.review_id
          WHERE f.delivered_at IS NULL AND r.state NOT IN (${PERSON_OR_CLOCK_DECIDED_SQL})

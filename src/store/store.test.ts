@@ -1232,6 +1232,24 @@ describe("uncollectedByReview", () => {
     const rows = store.uncollectedByReview();
     expect(rows.map((r) => r["id"])).toStrictEqual(["revFailed"]);
   });
+
+  // be79f02a, found by lore's own review: this counted every `high` alike, unlike
+  // `uncollectedHighOlderThan` right above (`f.preexisting = 0`) and
+  // `ops/status.ts`'s `uncollectedLines` (the `high`/`high_pre` split) — the two
+  // other representations of the exact same fact. A branch whose only OWN finding
+  // is a `low`, plus inherited fixture noise reported as branch-caused highs, is
+  // D-68's own example of the wolf-crying this omission reproduced on the one
+  // surface a monitor SCRIPT reads rather than a person.
+  it("splits branch-caused highs from inherited ones, like the other two uncollected surfaces", () => {
+    newReview("revMixed");
+    store.recordFinding("revMixed", finding("own1", { firstSeen: old, severity: "high" }));
+    store.recordFinding("revMixed", finding("inherited1", { firstSeen: old, severity: "high", preexisting: true }));
+    store.recordFinding("revMixed", finding("inherited2", { firstSeen: old, severity: "high", preexisting: true }));
+
+    const row = store.uncollectedByReview().find((r) => r["id"] === "revMixed");
+    expect(row?.["high"], "only the branch's own high").toBe(1);
+    expect(row?.["high_pre"], "the two inherited highs, counted separately").toBe(2);
+  });
 });
 
 /**
