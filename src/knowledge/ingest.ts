@@ -488,7 +488,12 @@ export async function ingestDocs(
   let screenedOut = 0;
   let unscreened = 0;
 
-  const candidates = opts.files ?? (await discoverable(worktree));
+  // `discovered` is the TRUE, uncapped inventory — needed whole by the deletion sweep
+  // below (lore-ok[1774135c]). `candidates` is what this pass actually reads, capped
+  // for cost the same way it always was; the two coincide exactly when the caller
+  // restricted `opts.files` (never capped) or the repo is under the cap.
+  const discovered = opts.files ?? (await discoverable(worktree));
+  const candidates = opts.files === undefined ? capped(discovered) : discovered;
   for (const rel of candidates) {
     const read =
       opts.ref === undefined
@@ -623,14 +628,14 @@ export async function ingestDocs(
     });
   }
 
-  // lore-ok[a2f4d4f9]: a document DELETED, or RENAMED, is never in `candidates` —
+  // lore-ok[a2f4d4f9]: a document DELETED, or RENAMED, is never in `discovered` —
   // found by lore's own review, and real: `retireForChangedBlob` above is only ever
   // called for a document this loop actually reads, so a document that vanished
   // entirely left its rules live for ever, with no blob to invalidate them and
   // nothing that ever revisits the question. Anything this repo has ever ingested a
   // live rule from, that this pass did not even attempt to read, is gone.
   //
-  // A NARROW GAP REMAINS, named rather than silently left: `candidates` is always the
+  // A NARROW GAP REMAINS, named rather than silently left: `discovered` is always the
   // WORKTREE's own listing (`discoverable`, unchanged), even when `opts.ref` is set
   // (`lore-ok[53969ab8]`) — so a document the reviewed branch deleted but `into` still
   // has is indistinguishable here from one genuinely gone, and this sweep retires its
@@ -639,8 +644,13 @@ export async function ingestDocs(
   // immediately) — this is a document going briefly unread, not a false rule
   // believed — and closing it needs `discoverable` itself to become ref-aware, which
   // is its own change.
+  //
+  // lore-ok[1774135c]: this compares against `discovered` (uncapped), NOT `candidates`
+  // (capped at MAX_RULE_DOCS) — see `capped`'s docs. Comparing against the capped list
+  // would have retired every live rule from every document past the cap, on every
+  // review, reading "still exists past position 400" as "gone".
   if (opts.files === undefined) {
-    const stillPresent = new Set(candidates);
+    const stillPresent = new Set(discovered);
     for (const provenance of store.liveDocumentProvenances(repoId)) {
       if (stillPresent.has(provenance)) continue;
       retired += store.retireForMissingDoc(repoId, provenance, "document no longer exists");
@@ -664,12 +674,12 @@ export async function ingestDocs(
  * service exists to keep, missing for the one repository with a real user.
  *
  * Recursive, because ADRs get filed into subdirectories once there are enough of them.
- * The cap is per repository and announced when hit (`ingest: …`) rather than silently
- * truncating: a knowledge base that quietly stopped reading at some arbitrary file is
- * exactly the confident incompleteness this project refuses.
+ *
+ * Returns EVERY path found, uncapped — this is a directory walk, never a file read, so
+ * enumerating all of them costs nothing a cap would need to protect against. The read
+ * cap lives in `ingestDocs`, at the one place that actually opens and extracts from
+ * these files; see `MAX_RULE_DOCS`.
  */
-const MAX_RULE_DOCS = 400;
-
 async function discoverable(worktree: string): Promise<readonly string[]> {
   const out: string[] = [...RULE_DOCS];
 
@@ -687,15 +697,34 @@ async function discoverable(worktree: string): Promise<readonly string[]> {
     out.push(...found);
   }
 
-  if (out.length > MAX_RULE_DOCS) {
-    console.error(
-      `[lore:log] ingest: ${out.length} rule documents found, reading the first ${MAX_RULE_DOCS}. ` +
-        `The rest were NOT read — this repository's memory is incomplete and knows it.`,
-    );
-    return out.slice(0, MAX_RULE_DOCS);
-  }
   return out;
 }
+
+/**
+ * The cap is per repository and announced when hit (`ingest: …`) rather than silently
+ * truncating: a knowledge base that quietly stopped reading at some arbitrary file is
+ * exactly the confident incompleteness this project refuses.
+ *
+ * lore-ok[1774135c]: found real by lore's own review — the cap used to live INSIDE
+ * `discoverable`, so its truncated output was also what the a2f4d4f9 deletion sweep
+ * compared live rules against: past document #400, a document that plainly still
+ * exists read as "no longer exists" and every rule ingested from it was retired,
+ * permanently, on every review, with no path back (the sweep's own retirement means
+ * the document is never re-read to notice it is still there). Enumeration
+ * (`discoverable`) is now always uncapped and always cheap (a directory walk, not a
+ * read); only the READ list this function returns is capped, and the sweep in
+ * `ingestDocs` now compares against the uncapped enumeration instead.
+ */
+function capped(paths: readonly string[]): readonly string[] {
+  if (paths.length <= MAX_RULE_DOCS) return paths;
+  console.error(
+    `[lore:log] ingest: ${paths.length} rule documents found, reading the first ${MAX_RULE_DOCS}. ` +
+      `The rest were NOT read — this repository's memory is incomplete and knows it.`,
+  );
+  return paths.slice(0, MAX_RULE_DOCS);
+}
+
+const MAX_RULE_DOCS = 400;
 
 function hashOf(s: string): string {
   // Fallback when the file is untracked and git cannot hash it for us. Any stable

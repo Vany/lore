@@ -368,6 +368,53 @@ describe("the documents that get read", () => {
   });
 });
 
+// Found by lore's own review (1774135c): the deletion sweep (a2f4d4f9) compared live
+// rules against `discoverable`'s output, which silently truncates at MAX_RULE_DOCS
+// (400) — so a document past that position, sorted last but genuinely still on disk,
+// read as "no longer exists" and every rule from it was retired on every review, with
+// no path back since a retired document is never re-read. `discoverable` is now always
+// uncapped; the read cap moved to `ingestDocs` itself, and the sweep compares against
+// the uncapped enumeration.
+describe("a document past the 400-document read cap is not mistaken for a deleted one", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "lore-ingest-cap-"));
+    mkdirSync(join(dir, "docs/adr"), { recursive: true });
+    // 400 filler documents, named to sort ahead of the one under test, so the real
+    // discoverable() + capped() pipeline pushes it past the read cap while it still
+    // genuinely exists on disk.
+    for (let i = 0; i < 400; i++) {
+      writeFileSync(join(dir, "docs/adr", `f${String(i).padStart(4, "0")}.md`), `Filler rule number ${i} must always hold.\n`);
+    }
+    writeFileSync(join(dir, "docs/adr/zzz-late.md"), "A hold past the read cap must never be released early.\n");
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it("does not retire a live rule from a document that exists but sorts past the cap", async () => {
+    const store = new Store(":memory:");
+    const repoId = store.upsertRepo("r", "git@example.com:o/r.git").id;
+
+    // Seeded as already live, as though an earlier ingest (fewer documents at the
+    // time, or a different sort order) had actually read it.
+    store.addKnowledge({
+      repoId, kind: "rule", source: "ingested",
+      statement: "A hold past the read cap must never be released early",
+      why: undefined, path: undefined, cwe: undefined,
+      provenance: "docs/adr/zzz-late.md", sourceBlob: "seeded-blob", confidence: 0.8,
+    });
+
+    const result = await ingestDocs(store, repoId, dir);
+
+    expect(result.documents, "the read cap itself must still hold").toBeLessThanOrEqual(400);
+    expect(
+      store.knowledgeFor(repoId).some((k) => k.provenance === "docs/adr/zzz-late.md" && k.statement.includes("released early")),
+      "a document past the read cap still exists on disk and must not be swept as deleted",
+    ).toBe(true);
+    store.close();
+  });
+});
+
 // Found by lore's own review (53969ab8): `ingestDocs` reads the WORKTREE, which for
 // review.ts's caller is the branch under review — so a branch could edit its own
 // CLAUDE.md and have the very same review trust the new rule as a team decision
