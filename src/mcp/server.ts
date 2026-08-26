@@ -166,7 +166,17 @@ function nextStep(state: ReviewState, freshFindings = 0): string {
     case "expired":
       return "Nobody answered this review in time, so it concluded NOTHING about the code — not that it was clean. Start a fresh review if this branch still matters.";
     case "cancelled":
-      return "You stopped this review. The findings it had already produced are yours and are listed here; it concluded nothing beyond them, and the tiers that had not run never looked. Start a fresh review when you want the rest.";
+      // lore-ok[5e6c18de]: was "...are yours and are LISTED HERE" — found by lore's
+      // own review. `nextStep` is called only from `review_poll` (never from
+      // `review_cancel`'s own reply, which genuinely does list them), and a
+      // cancelled review's findings were already marked delivered at the cancel
+      // that produced them — so a POLL reaching this exact sentence has
+      // `new_findings: []` beside it, every time, contradicting "here" in the same
+      // response.
+      return "You stopped this review. The findings it had already produced are yours, at lore://review/" +
+        "{review_id} (a poll here returns nothing new — they were handed to you when you cancelled). It " +
+        "concluded nothing beyond them, and the tiers that had not run never looked. Start a fresh review " +
+        "when you want the rest.";
   }
 }
 
@@ -643,11 +653,25 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
             : `${Math.round(open.ageHours)} hours`;
         throw new Error(
           `${branch} already has an open review: ${open.id} (state ${open.state}, round ${open.round}, ` +
-            `last advanced ${age} ago). Continue it — poll it, then answer its findings with ` +
-            `review_submit; or, if you pushed more commits, call review_start with pull_fresh: true, which ` +
-            `re-pins the SAME review to origin's new tip with everything carried. Starting ` +
-            `again would re-run the cheap tiers from round 1 and abandon every justification this review ` +
-            `has already ratified, which is why the deep tiers are rarely reached. ` +
+            `last advanced ${age} ago). Continue it — poll it, then answer its findings with review_submit. ` +
+            // lore-ok[5e53c948]: found real by lore's own review — this used to
+            // prescribe poll-then-submit unconditionally and offer pull_fresh only
+            // "if you pushed more commits", but both poll and submit are bound to
+            // the token that STARTED the review (D-78, disclosed in
+            // `TOOL_DOCS.inbox`: "a review_poll on one of those ids still answers
+            // NOT FOUND"). A caller on a second, still-live token of the SAME
+            // principal — the ordinary shape of a token rotation's overlap window —
+            // hits exactly this dedup refusal (same repo, same branch) and then has
+            // no legal way to act on the id it was just given. pull_fresh is
+            // repo-scoped, not token-scoped, so it is the one action that works for
+            // that caller regardless of whether anything was pushed — re-pinning to
+            // an unchanged tip is harmless.
+            `IF EITHER SAYS "not found", a different, still-valid token of yours started this review — normal ` +
+            `during a token rotation's overlap window. Call review_start again with pull_fresh: true instead; ` +
+            `it works regardless of whether you pushed anything, re-pins the SAME review to origin's current ` +
+            `tip, and carries everything forward. Starting again would re-run the cheap tiers from round 1 and ` +
+            `abandon every justification this review has already ratified, which is why the deep tiers are ` +
+            `rarely reached. ` +
             (stale
               ? `BUT THAT REVIEW IS ${age.toUpperCase()} OLD. It is pinned to the tree it started with, so ` +
                 `if the branch has moved since — commits, a rebase, a force-push — it is reviewing code ` +
@@ -775,13 +799,36 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       const fresh = store.undelivered(review_id);
       store.markDelivered(review_id, fresh.map((f) => f.fingerprint));
 
+      // lore-ok[de741489]: found real by lore's own review — a needs_human review
+      // whose blocking conflict closed WITHOUT going through knowledge_resolve (an
+      // ordinary document edit retiring one side, D-20 — nothing else ever called
+      // `resumeNeedsHuman`) had no legal way forward: the text below used to say
+      // "call review_submit with an empty diff", which the tool's own schema
+      // refuses (`diff`/`commit` are each `.min(1)`, exactly one required, and an
+      // empty diff normalises to absent). Stuck until the 48h sweep expired it,
+      // concluding nothing, while every text said nothing was blocking it. Resumed
+      // HERE now — computed BEFORE the response is built, so `state`/`clean`/`note`
+      // below describe what is actually true after it, not the stale row `mine`
+      // read a moment ago.
+      const openConflicts = review.state === "needs_human" ? store.openConflicts(review.repoId) : [];
+      const justResumed = review.state === "needs_human" && openConflicts.length === 0;
+      if (justResumed) {
+        store.resumeNeedsHuman(
+          review.repoId,
+          "No contradiction is open any more. The document that supplied one side of it changed (or a " +
+            "person resolved it directly) and nothing else in this repository is blocking. Resumed " +
+            "automatically — carry on from where the review stopped, no submit needed.",
+        );
+      }
+      const state = justResumed ? "queued" : review.state;
+
       return text(
         JSON.stringify({
           review_id,
-          state: review.state,
+          state,
           // Restated on every poll, because failure mode 1 and 7 are the two most
           // likely ways this loop ends with unreviewed code shipped.
-          clean: isClean(review.state),
+          clean: isClean(state),
           // THE NEXT CALL, NAMED. This said only "NOT clean. Only `passed` means
           // clean." — true, and it left a client holding three findings with no
           // sentence telling it what to do with them. Every failure this surface has
@@ -789,7 +836,7 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           // told it not to: polling once and stopping, retrying a review that could
           // never succeed, walking away from `findings_ready` (the single largest
           // cause of abandoned reviews). A state name is not an instruction.
-          note: nextStep(review.state, fresh.length),
+          note: nextStep(state, fresh.length),
           // The branch's own defects FIRST, inherited ones after.
           //
           // Ordering is what a reader actually acts on, and severity alone put two
@@ -990,7 +1037,10 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           // matters.
           ...(() => {
             if (review.state !== "needs_human") return {};
-            const open = store.openConflicts(review.repoId);
+            // Reuses `openConflicts`, computed once above (before the response was
+            // built) so it and the resume side-effect it triggers stay in sync with
+            // `state`/`clean`/`note` — see the `lore-ok[de741489]` comment there.
+            const open = openConflicts;
             // lore-ok[aa57c0f2]: was capped at 1000 with no ordering — found by
             // lore's own review. A conflict naming an id past that window rendered
             // "(retired)" for a rule that was very much live, the 592cd49f bug's
@@ -1010,8 +1060,7 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
               };
             }
             // ANSWERED. The state is a record of where the review stopped, not a
-            // claim that it is still stopped — and the way out is a submit, which is
-            // the same way out as every other round.
+            // claim that it is still stopped.
             //
             // Written the wrong way round first, and caught while a real review was
             // sitting in exactly this position: with no open conflicts left, this
@@ -1019,11 +1068,15 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
             // lore. Resolution is the NORMAL exit from needs_human, not evidence of
             // data loss, and sending a client to raise a bug because a person did
             // what they were asked to do is its own small betrayal of INV-1.
+            //
+            // lore-ok[de741489]: `resumeNeedsHuman` already ran, above, before this
+            // response was built — see that comment for why "call review_submit
+            // with an empty diff" (what this used to say) does not work and never
+            // resumes a review closed by anything other than knowledge_resolve.
             return {
               needs_human_because:
-                "The question has been ANSWERED — no contradiction is open any more. Nothing is blocking this " +
-                "review: call review_submit with your work (an empty diff is fine if there is nothing to change) " +
-                "and the ladder continues from where it stopped.",
+                "The question has been ANSWERED — no contradiction is open any more. This review has just " +
+                "been resumed automatically; poll again shortly rather than calling review_submit.",
               open_questions: [],
             };
           })(),
@@ -1509,9 +1562,16 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
     async ({ review_id, reason }) => {
       const review = mine(review_id);
       if (isTerminal(review.state)) {
+        // lore-ok[5e6c18de]: was "available from review_poll AND lore://review/..." —
+        // found by lore's own review. Any findings a terminal review had were already
+        // marked delivered at the handover that made it terminal (cancel's own reply,
+        // or the round that produced a verdict), so `review_poll` — which returns
+        // only what it has not already handed the caller — legitimately answers
+        // `new_findings: []` here, every time. Only the resource still has them.
         throw new Error(
           `review ${review_id} is already '${review.state}' — there is nothing to cancel. Its findings are still ` +
-            "available from review_poll and lore://review/" + review_id + ".",
+            "available from lore://review/" + review_id + " (not review_poll — that returns only what it has not" +
+            " already handed you, and you already have all of it).",
         );
       }
 
@@ -2007,7 +2067,18 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       }),
     },
     async ({ left, right, note }) => {
-      store.escalateConflict(who.repoId, left, right, note);
+      // lore-ok[55452eb0]: found by lore's own review — this used to discard
+      // `escalateConflict`'s result and report "Recorded" unconditionally, so a
+      // wrong or already-settled id pair wrote nothing while the reply told the
+      // client a person would be notified. Mirrors `knowledge_resolve` a few
+      // handlers up, which already throws rather than claim a no-op succeeded.
+      const escalated = store.escalateConflict(who.repoId, left, right, note);
+      if (!escalated) {
+        throw new Error(
+          `no OPEN conflict between ${left} and ${right} in this repo — check knowledge_query, or it may` +
+            " already be needs-human",
+        );
+      }
       return text(
         JSON.stringify({
           escalated: true,

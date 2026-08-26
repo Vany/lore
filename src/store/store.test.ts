@@ -993,6 +993,28 @@ describe("knowledge", () => {
     expect(store.openConflicts(repoId)).toStrictEqual([{ left: a.id, right: b.id, state: "needs-human" }]);
   });
 
+  // Found by lore's own review (55452eb0): this used to return `void`, so
+  // knowledge_escalate's handler could not tell a real escalation from a silent
+  // no-op — a wrong id, another repo's ids, or a conflict already at needs-human —
+  // and reported "Recorded" regardless.
+  it("reports whether an escalation actually matched an open conflict", () => {
+    const a = store.addKnowledge({ repoId, kind: "rule", source: "taught", statement: "always X", why: undefined, path: undefined, cwe: undefined, provenance: undefined, sourceBlob: undefined, confidence: undefined });
+    const b = store.addKnowledge({ repoId, kind: "rule", source: "taught", statement: "never X", why: undefined, path: undefined, cwe: undefined, provenance: undefined, sourceBlob: undefined, confidence: undefined });
+
+    expect(
+      store.escalateConflict(repoId, a.id, b.id, "no conflict recorded yet"),
+      "no recorded conflict between these two ids must not report success",
+    ).toBe(false);
+
+    store.recordConflict(repoId, a.id, b.id);
+    expect(store.escalateConflict(repoId, a.id, b.id, "now it exists")).toBe(true);
+    // Already at needs-human: escalating again matches no OPEN row.
+    expect(
+      store.escalateConflict(repoId, a.id, b.id, "escalating twice"),
+      "a conflict already escalated must not report a fresh success",
+    ).toBe(false);
+  });
+
   // Found by lore's own review (372b6bf0, f9559e98): the path filter was a raw
   // `? LIKE path || '%'`, so a query for one directory pulled in a sibling one
   // sharing its text prefix — "src/payroll/x.ts" matched a rule scoped to "src/pay".

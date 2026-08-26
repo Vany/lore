@@ -1324,6 +1324,54 @@ describe("settling one of several conflicts resumes nothing, and says so", () =>
   });
 });
 
+// Found by lore's own review (55452eb0): the handler discarded escalateConflict's
+// result and reported "Recorded" unconditionally — a wrong id pair, or one already
+// escalated, wrote nothing while the client was told a person would be notified.
+describe("knowledge_escalate refuses to claim success for a no-op", () => {
+  /** The error path, which `callTool` cannot reach — it asserts there is no error. */
+  const callRaw = async (name: string, args: Record<string, unknown>) => {
+    const res = await mcp({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }, token);
+    const line = (await res.text()).split("\n").find((l) => l.startsWith("data:")) ?? "";
+    return JSON.parse(line.slice("data:".length)) as {
+      result?: { content?: { text?: string }[]; isError?: boolean };
+      error?: { message?: string };
+    };
+  };
+  const message = (r: Awaited<ReturnType<typeof callRaw>>) =>
+    `${r.error?.message ?? ""} ${r.result?.content?.[0]?.text ?? ""}`;
+
+  it("refuses rather than report 'Recorded' when the ids name no open conflict", async () => {
+    const a = store.addKnowledge({
+      repoId, kind: "rule", source: "taught", statement: "holds expire", why: undefined,
+      path: undefined, cwe: undefined, provenance: undefined, sourceBlob: undefined, confidence: undefined,
+    }).id;
+    const b = store.addKnowledge({
+      repoId, kind: "rule", source: "taught", statement: "holds never expire", why: undefined,
+      path: undefined, cwe: undefined, provenance: undefined, sourceBlob: undefined, confidence: undefined,
+    }).id;
+    // No recordConflict call — these two ids have no open conflict between them.
+
+    const out = await callRaw("knowledge_escalate", { left: a, right: b, note: "cannot decide" });
+    expect(out.result?.isError).toBe(true);
+    expect(message(out)).toMatch(/no OPEN conflict/);
+  });
+
+  it("still records a real escalation (control)", async () => {
+    const a = store.addKnowledge({
+      repoId, kind: "rule", source: "taught", statement: "holds expire", why: undefined,
+      path: undefined, cwe: undefined, provenance: undefined, sourceBlob: undefined, confidence: undefined,
+    }).id;
+    const b = store.addKnowledge({
+      repoId, kind: "rule", source: "taught", statement: "holds never expire", why: undefined,
+      path: undefined, cwe: undefined, provenance: undefined, sourceBlob: undefined, confidence: undefined,
+    }).id;
+    store.recordConflict(repoId, a as string, b as string);
+
+    const out = await callTool("knowledge_escalate", { left: a, right: b, note: "cannot decide" });
+    expect(out["escalated"]).toBe(true);
+  });
+});
+
 // THE TOOL PROMISED THE REASON WAS "RECORDED, AND THE ONLY ACCOUNT ANYONE GETS", and it
 // was recorded nowhere. It went into the reply and was dropped, so two reviews a real
 // client cancelled on 2026-08-07 read as `cancelled` with no account at all — whatever
@@ -1376,6 +1424,56 @@ describe("a cancelled review keeps the reason it was cancelled for", () => {
   });
 });
 
+// Found by lore's own review (5e6c18de): three texts told a client a cancelled
+// review's findings were "still available from review_poll" — but review_cancel
+// marks every finding delivered at the SAME handover that hands them back, so
+// review_poll's own `new_findings` is empty for a cancelled review, always. Only
+// `lore://review/{id}` — which returns the whole history, not a delta — still has
+// them.
+describe("a cancelled review's findings are not where the text used to say (5e6c18de)", () => {
+  const started = (id: string) => {
+    store.createReview({
+      id, repoId, principal: "alice", branch: "feat/w", intoRef: "main",
+      ticket: "t", type: "code-arch", state: "running", ladder: initialState(),
+    });
+  };
+
+  it("returns no new findings on a poll after cancel, and says so rather than 'listed here'", async () => {
+    started("revF");
+    store.recordFinding("revF", {
+      fingerprint: "fp1", file: "src/x.ts", line: 1, symbol: "s", severity: "high",
+      claim: "c", evidence: "e", failureScenario: "s", cwe: undefined,
+      origin: "t1", round: 1, firstSeen: new Date().toISOString(),
+    });
+    await callTool("review_cancel", { review_id: "revF" });
+
+    const out = await callTool("review_poll", { review_id: "revF" });
+    expect(out["new_findings"], "everything was already handed over at cancel").toStrictEqual([]);
+    expect(String(out["note"]), "must not claim the findings are in THIS response").not.toMatch(/listed here/);
+    expect(String(out["note"])).toContain("lore://review/");
+  });
+
+  it("points a repeat cancel at the resource for a review's findings, not review_poll", async () => {
+    started("revG");
+    await callTool("review_cancel", { review_id: "revG" });
+
+    const res = await mcp(
+      { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "review_cancel", arguments: { review_id: "revG" } } },
+      token,
+    );
+    const line = (await res.text()).split("\n").find((l) => l.startsWith("data:")) ?? "";
+    const rpc = JSON.parse(line.slice("data:".length)) as { result?: { content?: { text?: string }[]; isError?: boolean } };
+    const message = rpc.result?.content?.[0]?.text ?? "";
+    expect(rpc.result?.isError).toBe(true);
+    expect(message).toContain("lore://review/revG");
+    // May still MENTION review_poll to say don't use it — must not claim findings
+    // are AVAILABLE FROM it, the false shape the original text had.
+    expect(message, "must not claim the findings are available FROM review_poll").not.toMatch(
+      /available from review_poll/,
+    );
+  });
+});
+
 // Six reviews of one branch in two hours, four of another, and 13 of 30 reviews
 // stopping at round 1 — measured on the first day a real client drove this.
 //
@@ -1386,8 +1484,8 @@ describe("a cancelled review keeps the reason it was cancelled for", () => {
 // service whose product is accumulated memory is the whole failure.
 describe("one review per branch", () => {
   /** The error path, which `callTool` cannot reach — it asserts there is no error. */
-  const callRaw = async (name: string, args: Record<string, unknown>) => {
-    const res = await mcp({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }, token);
+  const callRaw = async (name: string, args: Record<string, unknown>, bearer: string = token) => {
+    const res = await mcp({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }, bearer);
     const line = (await res.text()).split("\n").find((l) => l.startsWith("data:")) ?? "";
     return JSON.parse(line.slice("data:".length)) as {
       result?: { content?: { text?: string }[]; isError?: boolean };
@@ -1414,6 +1512,28 @@ describe("one review per branch", () => {
     // And no NEW review was created behind the refusal.
     const { c } = store.db.prepare("SELECT COUNT(*) c FROM review WHERE branch = 'feat/x'").get() as { c: number };
     expect(c).toBe(1);
+  });
+
+  // Found by lore's own review (5e53c948): the refusal above unconditionally told the
+  // caller to "poll it, then answer with review_submit" — both bound to the token
+  // that STARTED the review (D-78, `TOOL_DOCS.inbox`'s own disclosure: "a
+  // review_poll on one of those ids still answers NOT FOUND"). A second, still-live
+  // token of the SAME principal — the ordinary shape of a rotation's overlap window
+  // — hits this exact dedup refusal (same repo, same branch) and then has no legal
+  // way to act on the id it was just handed, since poll/submit both answer "not
+  // found" for it too. pull_fresh is repo-scoped, not token-scoped, so it must be
+  // offered unconditionally here, not only "if you pushed more commits".
+  it("tells a caller on a rotated token that pull_fresh works even if poll/submit answer not found", async () => {
+    await start();
+    const rotated = grantToken(store, repoId, "alice");
+
+    const second = await callRaw("review_start", { branch: "feat/x", into: "main", ticket: "do the thing" }, rotated);
+    expect(second.result?.isError).toBe(true);
+    expect(message(second)).toMatch(/not found/);
+    expect(message(second)).toContain("pull_fresh");
+    expect(message(second), "must not condition pull_fresh on having pushed commits").not.toMatch(
+      /if you pushed more commits, call review_start with pull_fresh/,
+    );
   });
 
   // A rebase or force-push genuinely invalidates the pinned snapshot, so there has to
@@ -1722,16 +1842,28 @@ describe("needs_human says what the question is", () => {
 
   // Resolution is the normal exit from needs_human. Told "the record is gone, report
   // a defect", a client would file a bug because a person did what they were asked.
-  it("says the question was answered once the conflict is resolved", async () => {
+  //
+  // lore-ok[de741489]: found real by lore's own review — this called
+  // `store.resolveConflict` directly (not `decide()`/`knowledge_resolve`), exactly
+  // the shape a document edit retiring one side of a conflict takes (D-20) — so
+  // `resumeNeedsHuman` was never called, matching the real gap this test exists to
+  // guard: a review closed this way used to be told to "call review_submit" (which
+  // the schema refuses for an empty diff) and still say `state: "needs_human"`
+  // afterward. It must now come back ALREADY resumed, from the poll itself.
+  it("resumes the review itself once the conflict is resolved, rather than telling the client to submit", async () => {
     conflicted();
     const c = store.openConflicts(repoId)[0];
     store.resolveConflict(repoId, c?.left ?? "", c?.right ?? "", "a person chose");
 
     const out = await callTool("review_poll", { review_id: "revH" });
+    expect(out["state"], "the review must come back queued, not still needs_human").toBe("queued");
     expect(String(out["needs_human_because"])).toMatch(/ANSWERED/);
-    expect(String(out["needs_human_because"])).toContain("review_submit");
+    expect(String(out["needs_human_because"])).toMatch(/resumed automatically/);
     expect(String(out["needs_human_because"])).not.toMatch(/defect in lore/);
     expect(out["open_questions"]).toStrictEqual([]);
+    expect(store.getReview("revH", "alice")?.state, "the DB row itself must have moved, not just this reply").toBe(
+      "queued",
+    );
   });
 
   it("says nothing about questions on a review that has none", async () => {
@@ -1741,6 +1873,38 @@ describe("needs_human says what the question is", () => {
     });
     const out = await callTool("review_poll", { review_id: "revQ" });
     expect(out).not.toHaveProperty("open_questions");
+  });
+
+  // The realistic trigger for de741489: nobody called knowledge_resolve at all. An
+  // ORDINARY document edit re-ingested one side's document with different text,
+  // which retires the rule via D-20's re-derive path — a route recordConflict's own
+  // fix (592cd49f) already made openConflicts() stop counting, but that fix never
+  // added a resume call to the retirement path, only to knowledge_resolve's.
+  it("resumes a review whose blocking conflict closed via a document re-ingest, not knowledge_resolve", async () => {
+    store.createReview({
+      id: "revD", repoId, principal: "alice", branch: "feat/z", intoRef: "main",
+      ticket: "t", type: "code-arch", state: "needs_human", ladder: initialState(),
+    });
+    const a = store.addKnowledge({
+      repoId, kind: "rule", source: "ingested", statement: "Holds must expire after seven days",
+      why: undefined, path: undefined, cwe: undefined, provenance: "docs/adr/0022.md",
+      sourceBlob: "blob-v1", confidence: undefined,
+    });
+    const b = store.addKnowledge({
+      repoId, kind: "rule", source: "ingested", statement: "Holds must never expire",
+      why: undefined, path: undefined, cwe: undefined, provenance: "docs/adr/0030.md",
+      sourceBlob: undefined, confidence: undefined,
+    });
+    store.recordConflict(repoId, a.id, b.id);
+
+    // The document behind rule `a` changed — an ordinary re-ingest, nobody deciding
+    // anything about the conflict.
+    store.retireForChangedBlob(repoId, "docs/adr/0022.md", "blob-v2", "3");
+    expect(store.openConflicts(repoId), "fixture sanity: the conflict must actually be closed").toHaveLength(0);
+
+    const out = await callTool("review_poll", { review_id: "revD" });
+    expect(out["state"]).toBe("queued");
+    expect(String(out["needs_human_because"])).toMatch(/resumed automatically/);
   });
 });
 

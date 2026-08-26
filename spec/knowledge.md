@@ -559,3 +559,18 @@ blocking, the reviews behind one could never resume and the reply told the clien
 something the API refused. The exit is what this section always said it was: a person
 decides, the client calls `knowledge_resolve`.
 
+**A SECOND exit exists, found by lore's own review (de741489): a conflict does not
+only close through `knowledge_resolve`.** An ordinary document re-ingest can retire
+either side of it — the D-20 re-derive path, ready to fire on any change to the
+document that stated the rule, and unaware a conflict was recorded against it at all.
+Before this fix, `resumeNeedsHuman` was called from exactly one place —
+`knowledge_resolve`'s own `decide()` — so a review parked on a conflict closed this
+second way had nothing that would ever re-queue it: `review_poll` correctly reported
+`open_questions: []`, and its own text told the client to call `review_submit` with
+"an empty diff", which the tool's schema refuses outright. Stuck until the 48h
+staleness sweep expired it, having concluded nothing, while every text said nothing
+was blocking it. `review_poll` now performs the SAME check `knowledge_resolve` does —
+is this review's repository free of every open conflict — and calls `resumeNeedsHuman`
+itself when it is, so a review closed this way resumes on its very next poll rather
+than waiting for an action that was never coming.
+

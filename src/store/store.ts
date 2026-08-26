@@ -2427,15 +2427,28 @@ export class Store {
     });
   }
 
-  /** Mark a conflict as one only a person can settle. Still blocks passing. */
-  escalateConflict(repoId: string, leftId: string, rightId: string, note: string): void {
-    this.db
+  /**
+   * Mark a conflict as one only a person can settle. Still blocks passing.
+   *
+   * Returns whether a matching OPEN conflict actually existed to escalate.
+   *
+   * lore-ok[55452eb0]: was `void` — found by lore's own review, against
+   * `resolveConflict` a few methods above, which already returns whether it matched
+   * anything for exactly this reason. A conditional UPDATE with no existence check
+   * is a silent no-op for wrong ids, another repo's ids, or a conflict already at
+   * `needs-human` — and the caller (`knowledge_escalate`) reported "Recorded"
+   * regardless, so an author's note calling for a human decision could vanish while
+   * the reply said it was written down.
+   */
+  escalateConflict(repoId: string, leftId: string, rightId: string, note: string): boolean {
+    const res = this.db
       .prepare(
         `UPDATE knowledge_conflict SET state = 'needs-human', resolution = ?
          WHERE repo_id = ? AND state = 'open'
            AND ((left_id = ? AND right_id = ?) OR (left_id = ? AND right_id = ?))`,
       )
       .run(note, repoId, leftId, rightId, rightId, leftId);
+    return res.changes > 0;
   }
 
   /**

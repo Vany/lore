@@ -34,22 +34,33 @@ describe("revoking by hash prefix", () => {
     expect(authenticate(store, `Bearer ${token}`)).toBeUndefined();
   });
 
+  it("refuses an empty prefix rather than matching everything", () => {
+    grantToken(store, repoId, "a");
+    const r = revokeByPrefix(store, listTokens(store)[0]?.short.slice(0, 0) + "");
+    expect(r.kind).toBe("not-found");
+  });
+
   // git's rule (spec/review-ladder.md §3.1.2), and it matters more here: picking a
   // winner locks out a teammate AND leaves the leaked token live.
+  //
+  // lore-ok[5cc6d24d]: found real by lore's own review — this used to rely on TWO
+  // real, CSPRNG-random tokens happening to share a 4+ char hash prefix by chance
+  // (`if (common.length >= 4)`), which is a ~1-in-65536 event per pair. The property
+  // the test's own name and comment claim to check — "refuses an ambiguous prefix
+  // rather than choosing" — almost never actually ran; a regression that made
+  // `revokeByPrefix` pick a winner on ambiguity (revoking one match and leaving the
+  // other, leaked token live) would have passed this suite green. `store.insertToken`
+  // writes two CHOSEN hashes sharing a prefix directly, so the ambiguity branch is
+  // reached every run, not by luck.
   it("refuses an ambiguous prefix rather than choosing", () => {
-    grantToken(store, repoId, "a");
-    grantToken(store, repoId, "b");
-    const r = revokeByPrefix(store, listTokens(store)[0]?.short.slice(0, 0) + "");
-    // An empty prefix is not a prefix — it must not match everything.
-    expect(r.kind).toBe("not-found");
+    store.insertToken(`aaaa${"1".repeat(60)}`, "a", repoId, undefined);
+    store.insertToken(`aaaa${"2".repeat(60)}`, "b", repoId, undefined);
 
-    // A prefix every hash shares is the real ambiguity case.
-    const all = listTokens(store);
-    const common = commonPrefix(all.map((t) => t.short));
-    if (common.length >= 4) {
-      expect(revokeByPrefix(store, common).kind).toBe("ambiguous");
-    }
-    for (const t of all) expect(revokeByPrefix(store, t.short).kind).toBe("revoked");
+    const ambiguous = revokeByPrefix(store, "aaaa");
+    expect(ambiguous.kind, "a prefix both hashes share must not pick a winner").toBe("ambiguous");
+    // Neither was revoked by the ambiguous attempt — both still resolve individually.
+    expect(revokeByPrefix(store, `aaaa${"1".repeat(60)}`).kind).toBe("revoked");
+    expect(revokeByPrefix(store, `aaaa${"2".repeat(60)}`).kind).toBe("revoked");
   });
 
   it("says a token is already revoked rather than pretending it never existed", () => {
@@ -84,12 +95,3 @@ describe("listing tokens", () => {
     expect(JSON.stringify(listTokens(store))).not.toContain(token);
   });
 });
-
-function commonPrefix(xs: readonly string[]): string {
-  if (xs.length === 0) return "";
-  let p = xs[0] ?? "";
-  for (const x of xs) {
-    while (!x.startsWith(p) && p.length > 0) p = p.slice(0, -1);
-  }
-  return p;
-}

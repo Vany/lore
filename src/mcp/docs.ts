@@ -578,7 +578,9 @@ run never looked, and what they would have found is unknown. Never merge on a
 stopped before it finished.
 
 Already terminal is refused rather than silently accepted: there is nothing to cancel,
-and the findings are still available from review_poll.
+and the findings are still available from \`lore://review/{review_id}\` — NOT
+\`review_poll\`, which returns only what it has not already handed you, and cancelling
+hands you everything at once. A poll after that legitimately returns nothing new.
 `.trim(),
 
   attest: `
