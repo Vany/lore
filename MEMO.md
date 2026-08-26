@@ -3,6 +3,136 @@
 Newest first. Updated at the end of each task: what changed, what I learned, what
 surprised me.
 
+## 2026-08-26 — src/ops reviews itself: a deadman that couldn't stop shouting, an onboarding fix that couldn't itself boot, and a crash that pre-empted its own five previous fixes
+
+**What changed.** Vany: "coll, let's review src/ops" — the operator-facing
+observability/safety-net module (`alerts.ts`, `board.ts`, `status.ts`,
+`heartbeat.ts`, `retention.ts`, `pace.ts`, `spend.ts`, `config-view.ts`), folder
+mode, `rev_HHtN19r6-H0ESersLT4y-x7x`. Landed `passed_partial` (3 tiers ran — t0, t2,
+t3, all z-ai, not independent vendors; 1 earlier tier's read of an earlier tree
+never carried forward, hence PARTIAL, named explicitly in the signed line itself
+this time): 59 findings, 47 fixed by the ledger's own count, 0 justified, across
+thirteen rounds and thirteen commits (`44d5df7` through `9ddf783`). The 12 findings
+with no recorded verdict were all independently confirmed fixed on `origin/main`
+before attesting — `git show HEAD:<path>` for every one — the same stale-mirror
+pattern this whole review kept surfacing, this time simply never getting a
+FINAL round to close the loop on its own earliest findings before the tiers agreed
+to stop. This is by far the largest review this session has driven: it started as
+a routine sweep of one folder and ended up touching `src/core/review-type.ts`,
+`src/store/store.ts`, `src/service/main.ts` and `deploy/`, because the deepest
+finding it produced was architectural, not local.
+
+**The deadman couldn't stop shouting, three conditions over.** Rounds 1–3:
+`eb3d53ea` found the replica-absent page repeating on every 60s beat — the exact
+wolf-crying shape `spec/operations.md` already named as this file's whole reason
+to exist, unfixed on the ONE condition it was supposedly fixed for once already.
+Latched it; the review immediately found the SAME shape three conditions over
+(`60dcf7a5`/`ae4dc75d`/`452c4a7a`: needs-human ageing, uncollected findings,
+queue depth) — writing one latch does not teach the file the pattern, reading
+the whole function for siblings does. Round 4 caught my OWN round-3 latch
+silently defeating a test barrier two OTHER, unrelated tests depended on
+(`acc6d765`) — `queueWarnDepth: 0` had been used as a "the beat definitely ran"
+proof, and a latch starting at 0 made `0 > 0` false forever, so both tests
+degraded to timing out instead of asserting anything. Fixed with a real,
+changing barrier (`queued(n)`, hoisted to module scope) instead of a constant a
+future latch can silently defeat again. Round 8 found the deeper bug underneath
+all five latches at once (`ecb4d085`): every one set its "told" state BEFORE
+awaiting `alerter.send`, never checking the boolean it returns — so a webhook
+500 during the exact outage this file exists to page about left the condition
+marked "told" forever, no later beat ever retrying it. `reviewer/review.ts`'s
+`tellPaidRoute` already had the right pattern; heartbeat.ts's own five sites did
+not.
+
+**The onboarding fix that couldn't itself boot.** Round 7's `2146b6dd` found that
+`deploy/.env.example` — the file README.md and preflight both tell every new
+operator to copy — had never once been committed: `.gitignore`'s `.env.*`
+pattern ate the template too, silently, forever. Fixed it (a `!.env.example`
+negation, the file finally tracked) and felt done. Round 9 found the template I
+had just made real was wrong in four separate ways: `LORE_TIERS` named a host
+path (`/opt/lore/...`) that exists nowhere in the container, crashing the
+service at first boot; the `OPENROUTER_API_KEY` comment described a superseded
+design that contradicted the file's own recommended ladder two paragraphs up;
+`ZAI2_API_KEY` — required by that same recommended ladder's own fallback
+routes — was entirely absent; and the alerting URLs gave no hint that leaving
+them blank means nobody is ever paged, unlike the Plane section three lines
+below. Fixing the template's *content* surfaced a fifth bug in what carries
+it: `deploy/Makefile`'s own drift guard, whose header comment already records
+being burned once by exactly this scope mismatch, had never gained the new
+file, so `make push` would silently never ship it to a second host
+(`56ff8c04`). And separately, `config-view.ts`'s money-relevant remedy text
+("set it in .env and redeploy") turned out to describe a control that
+`docker-compose.yml` had hardcoded shut with no `${...}` interpolation at all
+(`3297759e`/`54d6c750`) — asked Vany before touching it, since
+`LORE_ALLOW_METERED` is named explicitly in this repo's own CLAUDE.md as
+money-sensitive; confirmed via `docker compose config` both that the default
+stayed identical for every untouched deployment and that the variable actually
+works now. Added two GENERAL mechanical checks afterward (every `${VAR}`
+`docker-compose.yml` reads must have a row in the template; `LORE_TIERS` must
+name a file the image actually ships) rather than trusting a second manual
+read to catch the next instance of the same class.
+
+**A crash that pre-empted its own five previous fixes.** The longest thread in
+this review, across five separate rounds (6, 8, 10, 11, 13), all one underlying
+fact: `loadTiers()`/`loadPools()` read `LORE_TIERS` from disk and THROW on a bad
+path or malformed JSON, and this codebase had SIX separate places calling them
+with nothing catching it. `ffbda1f7` (round 6, actually a cache-freshness/race
+finding that led here) started the pattern-matching; `c1b6fc4c` (round 10,
+`status.ts`'s `tierDownLines`) was the first of the family proper — the
+diagnostic command built to explain a broken deployment crashed on the exact
+broken-config class it exists to diagnose. `733b59e6`/`dad4747c` (round 11)
+found the SAME shape live in `board.ts` (worse: a raw `setInterval` tick with
+no enclosing catch anywhere, killing the whole RUNNING service the moment
+anyone opened the operator board) and in `service/main.ts`'s own boot-time
+IIFE, whose comment already said "NOT FATAL" while doing the opposite.
+`be75c51c`/`c176fafb` (round 13) found a second timer in the same file — the
+hourly screening pass — moving the crash from "the moment somebody is
+watching" to "an hour after nobody is." And `61df6e72` (round 13, the deepest):
+`core/review-type.ts` built `CODE_ARCH`/`SECURITY` with `tiers: loadTiers()` as
+a plain field on a module-level `const`, evaluated the INSTANT the module is
+imported — before every one of the other five fixes in this thread ever got a
+chance to run, since imports resolve before any application code executes.
+Considered the ~5-file blast radius of touching `ReviewType`'s public shape and
+asked Vany before proceeding rather than deferring or rushing it; the fix
+turned out smaller than feared — a JS getter instead of a plain field defers
+the read to first actual property access, indistinguishable from a plain
+property to every existing consumer, confirmed by a clean `tsc --noEmit`
+across the whole repository with zero other files touched. The crash doesn't
+disappear — a review genuinely cannot run without a valid ladder, and this
+codebase never silently substitutes a default for money-relevant config — it
+moves from "always, uncatchable, at every boot" to "only when a review
+actually needs the ladder, inside a context that already handles errors."
+Fixing it exposed two `round.test.ts` tests that were unknowingly relying on
+`CODE_ARCH.tiers` being a stale, frozen-at-import 4-tier snapshot as an
+accidental "something to fall through to" — confirmed empirically (a
+throwaway debug tier, watching `runRound` conclude `fastClean` instead of
+throwing, watching the debug tier itself never get asked) before writing the
+real fix: an explicit, self-contained extra tier, present only so the ladder
+has a rung beyond the one being exhausted.
+
+**The mirror kept lagging the push by one round, repeatedly, and the
+attestation finally said so itself.** From round 7 onward, nearly every
+`pull_fresh` produced a batch of findings restating the PREVIOUS round's own
+fixes as unfixed. Verified each time the same way: `git show HEAD:<path>` on
+`origin/main` directly, never trusting the review's own re-emission alone.
+Confirmed real every time — never once a genuine regression, always a stale
+tree read. By round 9 this was happening on almost every single round-trip;
+the final attestation line names it in so many words: "1 earlier tier(s) read
+an earlier tree and did not re-read this one" — the exact mechanism, stated
+in the signed record rather than inferred from a pattern across ten rounds.
+
+**What this round taught me operationally.** The single most valuable finding
+this review produced (`61df6e72`) was not itself a folder-scoped finding at
+all — it was the ROOT of five other findings this exact review had already
+raised and I had already fixed, each one a symptom of a cause two rounds
+older than its own fix. Chasing "why does this class of bug keep recurring"
+past the literal file a finding names, all the way to where the pattern
+actually originates, found the fix that made the other five fixes reachable
+in the first place. Also confirmed twice this round that asking before acting
+on an architecturally-heavy or money-relevant change is worth the pause: both
+times the actual fix was smaller and safer than the blast-radius estimate
+that prompted asking in the first place, which is not a reason to stop
+asking — it is what asking first is for.
+
 ## 2026-08-26 — src/mcp reviews itself: the protocol boundary, and my own fixes caught by the very next round
 
 **What changed.** Vany: "now src/mcp" — the actual protocol surface (`server.ts`,
