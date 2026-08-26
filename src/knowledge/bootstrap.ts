@@ -19,7 +19,7 @@ import { resolveInto } from "../git/diff.ts";
 import type { ReviewerLike } from "../reviewer/opencode.ts";
 import type { Store } from "../store/store.ts";
 import { detectAndRecord } from "./conflict.ts";
-import { ingestDocs } from "./ingest.ts";
+import { ingestDocs, type IngestResult } from "./ingest.ts";
 import { screenFor, screenUsage } from "./screen.ts";
 
 export interface BootstrapResult {
@@ -69,12 +69,17 @@ export async function bootstrap(opts: {
   /**
    * The FIRST review's own `into`, when it has one (D-130 folder mode does not).
    *
-   * lore-ok[c5df90ef]: found real by lore's own review — bootstrap runs from the
-   * worktree of the repo's first review, exactly the shape `53969ab8` closed for
+   * lore-ok[c5df90ef,65528bcd]: found real by lore's own review — bootstrap runs from
+   * the worktree of the repo's first review, exactly the shape `53969ab8` closed for
    * every ordinary round, and this call site kept reading the branch under review
-   * regardless. Resolved and passed to `ingestDocs` as `ref` the same way
-   * `review.ts` does; omitted (undefined or unresolvable) reads the worktree, which
-   * is correct when there genuinely is no base to defend against.
+   * regardless. Resolved and passed to `ingestDocs` as `ref` the same three-way split
+   * `review.ts`'s diff-mode round uses: OMITTED reads the worktree (no base exists to
+   * defend against — D-130 folder mode's first review); PRESENT AND RESOLVABLE reads
+   * at that ref; PRESENT AND UNRESOLVABLE skips document ingestion for this call
+   * rather than falling back to the worktree, which is the fallback this fix exists
+   * to refuse. The second and third cases look identical from the caller's side —
+   * both start from a defined `intoRef` — which is exactly why they were folded
+   * together by mistake the first time this was written.
    */
   intoRef?: string | undefined;
 }): Promise<BootstrapResult> {
@@ -107,30 +112,39 @@ export async function bootstrap(opts: {
   const tier = named === undefined || route === undefined ? undefined : { ...named, model: route };
   const ask = opts.reviewer?.askFor?.bind(opts.reviewer);
 
-  // lore-ok[c5df90ef]: resolved BEFORE the call, same as review.ts's diff-mode round —
-  // an unresolvable `intoRef` reads the worktree (the only option left), not silently;
-  // a genuinely absent one (folder mode's first review) has no base to defend against.
-  const into = opts.intoRef === undefined ? undefined : await resolveInto(opts.worktree, opts.intoRef);
-
   // Screened HERE too, rather than left for the next review to redo. This is the first
   // review of a repository, so it is the ingest that writes the whole base — leaving it
   // unscreened would mean the first review, the one with no other memory to fall back
   // on, is the one that reads the fragments. Without a reviewer it ingests unscreened
   // and stamped, which is the documented no-model path (D-81).
-  const docs = await ingestDocs(opts.store, opts.repoId, opts.worktree, {
-    ...(ask === undefined || tier === undefined
-      ? {}
-      : {
-          // No `reviewId`: provisioning has no review, so there is nothing for a cancel
-          // to reach and nothing to attribute the spend to beyond the repository. It is
-          // recorded all the same — bootstrap screens every document a repo has, which is
-          // the largest single burst of screen calls the system ever makes.
-          screen: screenFor(ask, tier, opts.worktree, {
-            spent: (u) => opts.store.recordUsage(screenUsage(u, opts.repoId)),
-          }),
+  const screenOpt = ask === undefined || tier === undefined
+    ? {}
+    : {
+        // No `reviewId`: provisioning has no review, so there is nothing for a cancel
+        // to reach and nothing to attribute the spend to beyond the repository. It is
+        // recorded all the same — bootstrap screens every document a repo has, which is
+        // the largest single burst of screen calls the system ever makes.
+        screen: screenFor(ask, tier, opts.worktree, {
+          spent: (u) => opts.store.recordUsage(screenUsage(u, opts.repoId)),
         }),
-    ...(into === undefined ? {} : { ref: into }),
-  });
+      };
+
+  // lore-ok[65528bcd]: found real by lore's own review, on the tree carrying the
+  // c5df90ef fix this replaces — that version resolved `intoRef` and then folded
+  // "genuinely absent" and "present but unresolvable" into the SAME branch (no `ref`
+  // passed either way), which reads the worktree for both. My own comment claimed
+  // "not silently", which was false: nothing distinguished the two, and nothing
+  // logged the fallback. review.ts's diff-mode round draws this same three-way split
+  // and its comment says exactly why the unresolvable case must not fall back to the
+  // worktree read — that fallback IS the hole `53969ab8`/`c5df90ef` closed, reopened
+  // by an unrelated resolution failure on the one call this repo only ever gets once.
+  let docs: IngestResult = { documents: 0, added: 0, retired: 0, screenedOut: 0, unscreened: 0 };
+  if (opts.intoRef === undefined) {
+    docs = await ingestDocs(opts.store, opts.repoId, opts.worktree, { ...screenOpt });
+  } else {
+    const into = await resolveInto(opts.worktree, opts.intoRef);
+    if (into !== undefined) docs = await ingestDocs(opts.store, opts.repoId, opts.worktree, { ...screenOpt, ref: into });
+  }
 
   let factsFromCode = 0;
   if (opts.reviewer !== undefined) {

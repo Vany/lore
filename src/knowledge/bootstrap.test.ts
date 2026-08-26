@@ -56,8 +56,10 @@ describe("bootstrap's model route respects a parked route (8d47c789)", () => {
 // FIRST review, exactly the shape `53969ab8` closed for every ordinary round — a
 // branch could add a self-serving rule to its own CLAUDE.md and have it ingested as a
 // live team decision before that same branch is ever judged, and because bootstrap is
-// one-shot the rule outlives the branch. `intoRef` closes it here the same way.
-describe("bootstrap reads a document at `into`, not the branch under review (c5df90ef)", () => {
+// one-shot the rule outlives the branch. `intoRef` closes it here the same way. A
+// second review (65528bcd) then caught the fix's own gap: an unresolvable `intoRef`
+// fell back to the worktree read exactly as silently as if it had been omitted.
+describe("bootstrap reads a document at `into`, not the branch under review (c5df90ef, 65528bcd)", () => {
   let dir: string;
 
   const g = (...args: string[]): string => execFileSync("git", args, { cwd: dir, encoding: "utf8" }).trim();
@@ -95,5 +97,15 @@ describe("bootstrap reads a document at `into`, not the branch under review (c5d
     await bootstrap({ store, repoId, worktree: dir });
     const statements = store.knowledgeFor(repoId).map((k) => k.statement);
     expect(statements.some((s) => s.includes("src/pay"))).toBe(true);
+  });
+
+  it("with an unresolvable intoRef, skips ingestion rather than falling back to the branch's worktree (65528bcd)", async () => {
+    const result = await bootstrap({ store, repoId, worktree: dir, intoRef: "no-such-ref-anywhere" });
+    const statements = store.knowledgeFor(repoId).map((k) => k.statement);
+    expect(
+      statements.some((s) => s.includes("src/pay")),
+      "an unresolvable base must not silently fall back to trusting the branch under review",
+    ).toBe(false);
+    expect(result.documents, "nothing should have been read at all this call").toBe(0);
   });
 });
