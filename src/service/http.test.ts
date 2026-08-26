@@ -1359,6 +1359,48 @@ describe("knowledge_teach scopes a rule the same way however its path is spelled
     const out = await callTool("knowledge_query", { path: "src/payroll/calc.ts" });
     expect(out["count"]).toBe(1);
   });
+
+  // Found by lore's own review (7e754395), against the fix just above — normalizing
+  // alone does not carry the refusal review_start pairs it with (pathEscapesWorktree).
+  // An absolute path survives normalizeReviewPath unchanged, so it would still have
+  // stored recorded: true and scoped nothing, ever — every consumer compares against
+  // an always-relative file path from a diff. Refused here the same way review_start
+  // refuses it at its own door, rather than silently recording a rule that can never
+  // fire — the realistic source is an agent trained by review_start's own
+  // folder-path convention to think in absolute paths.
+  it("refuses an absolute path rather than silently recording a rule that can never fire", async () => {
+    const res = await mcp(
+      {
+        jsonrpc: "2.0", id: 1, method: "tools/call",
+        params: {
+          name: "knowledge_teach",
+          arguments: { statement: "s", why: "w", path: "/home/agent/repo/src/tests" },
+        },
+      },
+      token,
+    );
+    const line = (await res.text()).split("\n").find((l) => l.startsWith("data:")) ?? "";
+    const rpc = JSON.parse(line.slice("data:".length)) as { result?: { content?: { text?: string }[]; isError?: boolean } };
+    expect(rpc.result?.isError).toBe(true);
+    expect(rpc.result?.content?.[0]?.text).toMatch(/must stay inside the repository/);
+
+    const out = await callTool("knowledge_query", {});
+    expect(out["count"], "the refused rule must not have been recorded at all").toBe(0);
+  });
+
+  it("refuses a path starting with .. the same way", async () => {
+    const res = await mcp(
+      {
+        jsonrpc: "2.0", id: 1, method: "tools/call",
+        params: { name: "knowledge_teach", arguments: { statement: "s", why: "w", path: "../shared" } },
+      },
+      token,
+    );
+    const line = (await res.text()).split("\n").find((l) => l.startsWith("data:")) ?? "";
+    const rpc = JSON.parse(line.slice("data:".length)) as { result?: { content?: { text?: string }[]; isError?: boolean } };
+    expect(rpc.result?.isError).toBe(true);
+    expect(rpc.result?.content?.[0]?.text).toMatch(/must stay inside the repository/);
+  });
 });
 
 // RESUMING A REVIEW THAT WILL ONLY PARK AGAIN IS NOT PROGRESS, and reporting it as
@@ -1969,6 +2011,28 @@ describe("needs_human says what the question is", () => {
     expect(out["open_questions"]).toStrictEqual([]);
     expect(store.getReview("revH", "alice")?.state, "the DB row itself must have moved, not just this reply").toBe(
       "queued",
+    );
+  });
+
+  // Found by lore's own review (9e18a0b1, afc10ea2, two tiers on the same defect) —
+  // the resume above corrects `state`/`clean`/`note` but `pacing` and the subscribeTo
+  // gate read `review.state`, the stale pre-resume value, straight off `mine`'s
+  // result. A just-resumed poll said `state: "queued"` with its `note` instructing
+  // "read `check_back_note` THIS TIME" while `check_back_note` itself was absent —
+  // `pacing` gated on the stale `needs_human` and returned `{}`. A reply telling a
+  // client to do something the same reply makes impossible.
+  it("carries check_back_note along with the resumed state, not the stale needs_human gate", async () => {
+    conflicted();
+    const c = store.openConflicts(repoId)[0];
+    store.resolveConflict(repoId, c?.left ?? "", c?.right ?? "", "a person chose");
+
+    const out = await callTool("review_poll", { review_id: "revH" });
+    expect(out["state"]).toBe("queued");
+    expect(String(out["note"]), "fixture sanity: the note must actually reference the field this checks").toMatch(
+      /check_back_note/,
+    );
+    expect(out, "the note points at a field pacing must actually include for the corrected state").toHaveProperty(
+      "check_back_note",
     );
   });
 

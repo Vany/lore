@@ -939,12 +939,25 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
             };
           }),
           open_count: store.openFindings(review_id).length,
-          ...pacing(store, review),
+          // lore-ok[9e18a0b1]: found real by lore's own review, same finding as
+          // afc10ea2 below — the de741489 resume above corrects the top-level
+          // `state`/`clean`/`note` but this read `review.state`, the STALE
+          // pre-resume value, straight from `mine`'s result. A just-resumed poll
+          // said `state: "queued"` with `nextStep("queued")` instructing "read
+          // `check_back_note` THIS TIME" while `pacing` gated on the stale
+          // `needs_human` and returned `{}` — a reply telling a client to do
+          // something the same reply makes impossible, the exact shape `de741489`'s
+          // own comment two screens up exists to prevent. `{ ...review, state }`
+          // carries the corrected value in without changing `pacing`'s signature.
+          ...pacing(store, { ...review, state }),
           // Only while there is something to wait FOR. In `findings_ready` the next move
           // is the client's, and handing it a subscribe call there would read as
           // permission to sleep on findings that are already its problem — the
           // abandonment D-70 measured. Terminal states have nothing left to announce.
-          ...(["queued", "running", "fast_clean"].includes(review.state) ? subscribeTo(review_id, ctx) : {}),
+          // lore-ok[afc10ea2]: same finding as 9e18a0b1 above, raised twice with
+          // different wording — `state` (the corrected local) reused here rather
+          // than `review.state`, for the identical reason.
+          ...(["queued", "running", "fast_clean"].includes(state) ? subscribeTo(review_id, ctx) : {}),
           // Deterministic, known in milliseconds, and the fact a landing decision
           // actually turns on. It was reaching the reviewer's prompt and stopping
           // there, so a client triaging eight open pull requests would have needed
@@ -1948,7 +1961,10 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
         // lore-ok[88958ae6]: same finding as 28941e15 below, raised twice with
         // different wording — normalized where the value is stored, a few lines
         // down. See that comment for the fix and how it was verified.
-        path: absent(z.string()).describe("scope it to a file or directory when it is not repo-wide"),
+        path: absent(z.string()).describe(
+          "scope it to a file or directory when it is not repo-wide, relative to the repository root " +
+            '(e.g. "src/payments") — not absolute and not starting with ".."',
+        ),
         kind: absent(z.enum(["rule", "fact", "mistake", "policy"])).describe(
           "policy = a development rule a review can be APPEALED to (D-83); default rule",
         ),
@@ -1964,13 +1980,32 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       // no finding history, no path-scoped knowledge_query. `normalizeReviewPath`
       // already exists in this file for exactly this canonicalization; it was applied
       // only to `review_start`'s folder path, ten handlers up, not to this one.
+      //
+      // lore-ok[7e754395]: found real by lore's own review, against the fix just
+      // above — normalizing alone does not carry the refusal `review_start` pairs it
+      // with (`pathEscapesWorktree`, `lore-ok[e393b46f]` at that function's own
+      // definition: "normalization alone cannot carry the refusal"). An absolute
+      // path or one starting with ".." survives `normalizeReviewPath` unchanged,
+      // still stores recorded: true, and still scopes nothing — every consumer
+      // compares against an always-relative file path from a diff, which an
+      // absolute or escaping string can never equal or prefix. An agent trained by
+      // review_start's own folder-path convention to think in absolute paths is the
+      // realistic source; refused here the same way review_start refuses it at its
+      // own door, rather than silently recording a rule that can never fire.
+      const scopedPath = path === undefined ? undefined : normalizeReviewPath(path);
+      if (path !== undefined && scopedPath !== undefined && pathEscapesWorktree(path, scopedPath)) {
+        throw new Error(
+          `path must stay inside the repository, relative to its root — "${path}" does not. Pass a path like ` +
+            '"src" or "src/payments", not an absolute one or one starting with "..".',
+        );
+      }
       const item = store.addKnowledge({
         repoId: who.repoId,
         kind: kind ?? "rule",
         source: "taught",
         statement,
         why,
-        ...(path !== undefined ? { path: normalizeReviewPath(path) } : { path: undefined }),
+        ...(scopedPath !== undefined ? { path: scopedPath } : { path: undefined }),
         cwe: undefined,
         provenance: `taught by ${who.principal}`,
         sourceBlob: undefined,
