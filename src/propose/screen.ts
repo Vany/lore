@@ -166,7 +166,7 @@ export function screen(
       because.push("the critic's own verdict was that this should not be pursued at all, not merely a disagreement with part of it");
     }
 
-    // lore-ok[0318670f]: found by lore's own review — `restates` alone ignored a
+    // lore-ok[0318670f,249cc0d8]: found by lore's own review — `restates` alone ignored a
     // knowledge row's own `k.path`, so an out-of-scope rejection recorded FOR ONE
     // FOLDER (correctly scoped to it — `writeBackRejections`, run.ts) still matched an
     // unrelated proposal in a LATER, different `--folder` run, demoting that run's own

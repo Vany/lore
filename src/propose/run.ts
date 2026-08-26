@@ -200,6 +200,28 @@ export function normalizedTouchPath(p: string): string | undefined {
 }
 
 /**
+ * The narrowest path that covers every touch — found by lore's own review,
+ * fingerprint 50a98db3: 0318670f fixed the READ side (screen.ts now respects a row's
+ * own `k.path`), but the WRITE side only ever set one for the single-touch case,
+ * falling back to repo-wide (`undefined`) for two or more — the MODAL case, since an
+ * idea that moves a seam necessarily touches both sides of it (§1.1) — reproducing the
+ * exact cross-folder leakage 0318670f fixed, for the common shape rather than the rare
+ * one. A shared ancestor directory is still a real, useful scope: it cannot match a
+ * future proposal that lands entirely outside it, which is the property that matters.
+ * Single-touch behaviour is unchanged — this is a strict generalisation of it.
+ */
+export function commonScope(touches: readonly string[]): string | undefined {
+  const normalized = touches.map(normalizedTouchPath).filter((p): p is string => p !== undefined);
+  const first = normalized[0];
+  if (first === undefined) return undefined;
+  const segLists = normalized.map((p) => p.split("/"));
+  const firstSegs = first.split("/");
+  let i = 0;
+  while (i < firstSegs.length && segLists.every((s) => s[i] === firstSegs[i])) i++;
+  return i === 0 ? undefined : firstSegs.slice(0, i).join("/");
+}
+
+/**
  * Whatever `propose` itself is certain enough to reject is written back so the next
  * sweep does not pay to have the same idea again (spec/propose.md §6). Two triggers,
  * both decided by `propose` within its own run, needing no person's later verdict on a
@@ -259,7 +281,7 @@ function writeBackRejections(store: Store, repoId: string, folder: string, commi
       source: "derived",
       statement: `considered and reject: ${s.proposal.idea}`,
       why: reasons.join("; "),
-      path: s.proposal.touches.length === 1 ? normalizedTouchPath(s.proposal.touches[0] ?? "") : undefined,
+      path: commonScope(s.proposal.touches),
       cwe: undefined,
       provenance,
       sourceBlob: undefined,

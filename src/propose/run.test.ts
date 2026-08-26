@@ -17,7 +17,7 @@ import type { Listed, SessionResult } from "../reviewer/opencode.ts";
 import { Store } from "../store/store.ts";
 import { polarity } from "../knowledge/conflict.ts";
 import { renderProposals } from "./render.ts";
-import { criticFor, normalizedTouchPath, propose, type ProposeInput } from "./run.ts";
+import { commonScope, criticFor, normalizedTouchPath, propose, type ProposeInput } from "./run.ts";
 import { screen } from "./screen.ts";
 import { parseProposal, type Proposal } from "./proposal.ts";
 
@@ -687,6 +687,17 @@ describe("whatever propose itself is certain enough to reject is written back", 
   });
 
   /**
+   * Fingerprint 50a98db3: a rejection over two or more touches used to fall back to
+   * repo-wide (`path: undefined`), the same cross-folder leakage 0318670f fixed for
+   * the single-touch case, reproduced for the shape most ideas actually have.
+   */
+  it("scopes a multi-touch rejection to their shared directory, not repo-wide", async () => {
+    const spread = { ...IDEA, touches: ["src/mcp/server.ts", "src/mcp/docs.ts"] };
+    await propose({ store, repoId, ask: scripted([[spread], [spread]]) }, input());
+    expect(rejectedRows()[0]?.["path"]).toBe("src/mcp");
+  });
+
+  /**
    * Fingerprint a90601f4: `knowledge/conflict.ts`'s `detectAndRecord` runs over every
    * live row at the start of every review round and pairs opposite-polarity,
    * high-overlap statements as a candidate contradiction — a bare "considered: <idea>"
@@ -744,5 +755,32 @@ describe("normalizedTouchPath", () => {
   it("returns undefined for the repository root, matching addKnowledge's own repo-wide convention", () => {
     expect(normalizedTouchPath(".")).toBeUndefined();
     expect(normalizedTouchPath("/")).toBeUndefined();
+  });
+});
+
+/**
+ * Fingerprint 50a98db3: `normalizedTouchPath` alone only ever scoped the single-touch
+ * case, falling back to repo-wide for two or more — the MODAL case, since an idea that
+ * moves a seam necessarily touches both sides of it (spec/propose.md §1.1).
+ */
+describe("commonScope", () => {
+  it("matches normalizedTouchPath exactly for a single touch", () => {
+    expect(commonScope(["src/mcp/server.ts"])).toBe("src/mcp/server.ts");
+  });
+
+  it("narrows to the shared directory for touches in the same one", () => {
+    expect(commonScope(["src/mcp/server.ts", "src/mcp/docs.ts"])).toBe("src/mcp");
+  });
+
+  it("narrows to the shared ancestor for touches in different directories, never repo-wide", () => {
+    expect(commonScope(["src/mcp/server.ts", "src/store/store.ts"])).toBe("src");
+  });
+
+  it("still returns undefined — genuinely repo-wide — when nothing was named at all", () => {
+    expect(commonScope([])).toBeUndefined();
+  });
+
+  it("normalizes each touch before comparing them", () => {
+    expect(commonScope(["./src/mcp/a.ts", "src/mcp/b.ts"])).toBe("src/mcp");
   });
 });
