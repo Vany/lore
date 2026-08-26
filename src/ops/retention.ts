@@ -212,10 +212,14 @@ export async function collect(store: Store, cfg: RetentionConfig = DEFAULT_RETEN
     // had never removed anything — the seven-day window meant nothing was ever old
     // enough. Setting that window to zero would have started the leak on the next
     // hourly pass, which is how this was found.
-    const removed = await removeWorktree(repoPaths(cfg.reposRoot, row["repo_id"] ?? ""), row["id"] ?? "").then(
-      () => true,
-      // Best-effort: failing the sweep over one directory would leave every later
-      // one uncollected.
+    // `removeWorktree` now reports whether a directory actually existed to remove
+    // (fingerprint edf707f1) — resolving `true` from `.then(() => true, ...)` regardless was the
+    // bug: `git worktree remove` is caught and `rm` runs `force: true`, so it always
+    // resolved, and every terminal review counted as a removal whether or not
+    // anything was there. `.catch(() => false)` keeps the same best-effort shape: a
+    // fault on one directory (a rare fs error, not "already gone") must not fail the
+    // sweep or block every later one.
+    const removed = await removeWorktree(repoPaths(cfg.reposRoot, row["repo_id"] ?? ""), row["id"] ?? "").catch(
       () => false,
     );
     if (removed) worktreesRemoved++;

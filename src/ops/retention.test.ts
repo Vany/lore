@@ -12,7 +12,26 @@ import { DEFAULT_RETENTION, collect, expireStale, type RetentionConfig } from ".
 let store: Store;
 let repoId: string;
 
-const cfg = { ...DEFAULT_RETENTION, reposRoot: "/tmp/lore-test-repos" };
+// `cacheRoot`/`scratchRoot` explicitly undefined, NOT left at DEFAULT_RETENTION's
+// values — found by lore's own review, fingerprint ca44a547: those default to
+// `dataDir()/npm-cache` and `dataDir()/scratch`, which is `~/.lore/...` on any
+// machine (vitest.config.ts never sets LORE_DATA_DIR), so every `collect()` call
+// below was running `collectSandbox`'s `rm -rf` against a real operator's real cache
+// and scratch directories, deleting anything older than 14 days on every `npm test`.
+// None of the tests in this file's `expireStale`/`collect` describes are about cache
+// or scratch — that is `describe("the sandbox cache does not grow for ever", ...)`'s
+// own job, with its own sandboxed roots — so turning them off here costs nothing.
+const cfg = { ...DEFAULT_RETENTION, reposRoot: "/tmp/lore-test-repos", cacheRoot: undefined, scratchRoot: undefined };
+
+// A dynamic repro would mean actually pointing `collect()` at a real `~/.lore` to
+// prove it gets deleted from — not a thing to build even to prove a fix. This
+// asserts the shape directly: a regression here (dropping either override) is
+// exactly the ca44a547 hazard returning, so it fails loudly rather than only on
+// whichever developer's machine happens to have an old cache directory.
+it("keeps the shared test cfg out of the real ~/.lore, on purpose", () => {
+  expect(cfg.cacheRoot, "must not default to dataDir()/npm-cache").toBeUndefined();
+  expect(cfg.scratchRoot, "must not default to dataDir()/scratch").toBeUndefined();
+});
 
 function review(id: string, state: string, updatedDaysAgo: number): void {
   store.createReview({
@@ -229,6 +248,23 @@ describe("a finished review gives its worktree back", () => {
     await collect(store, { ...DEFAULT_RETENTION, reposRoot: join(root, "repos") });
 
     expect(git("-C", bare(), "worktree", "list")).not.toContain("revGone");
+  });
+
+  // edf707f1, found by lore's own review: `removeWorktree` used to resolve cleanly
+  // whether or not a directory was actually there (`git worktree remove` caught,
+  // `rm` run with `force: true`), so `worktreesRemoved` counted every terminal review
+  // in the retention window on EVERY sweep — not only the one that genuinely removed
+  // something. `worktreeDays: 0` means a review stays in that window for the full 90
+  // `reviewDays`, so a second sweep over the same already-cleaned review is the
+  // ordinary hourly case, not an edge one.
+  it("reports a removal only on the sweep that actually removes something", async () => {
+    const dir = reviewWithWorktree("revOnce", "passed");
+    const first = await collect(store, { ...DEFAULT_RETENTION, reposRoot: join(root, "repos") });
+    expect(existsSync(dir)).toBe(false);
+    expect(first.worktreesRemoved, "the worktree genuinely existed on this sweep").toBe(1);
+
+    const second = await collect(store, { ...DEFAULT_RETENTION, reposRoot: join(root, "repos") });
+    expect(second.worktreesRemoved, "nothing was there for this sweep to remove").toBe(0);
   });
 
   it("leaves a review that can still be worked on alone", async () => {

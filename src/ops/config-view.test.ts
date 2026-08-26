@@ -171,4 +171,39 @@ describe("the deployment's own shape", () => {
       "secret-token",
     );
   });
+
+  /**
+   * 8a04e087, found by lore's own review: a BLANK `LORE_WEBHOOK_URL` — exactly what
+   * docker-compose passes through (`${LORE_WEBHOOK_URL:-}`) when an operator's `.env`
+   * omits it — rendered as value "(set)", source "set here", because the row
+   * pre-converted the raw value to the literal string "(set)" before `entry()`'s own
+   * blank check could see the real value. The page built to answer "is alerting wired"
+   * asserted it was, for the default, most common deployment shape.
+   */
+  it("says the webhook is UNSET when its env value is blank, not just when it is absent", () => {
+    const e = configView(env({ LORE_WEBHOOK_URL: "" })).entries.find((x) => x.name === "LORE_WEBHOOK_URL");
+    expect(e?.value).toBe("(unset — alerts are logged only)");
+    expect(e?.source).toBe("built-in default");
+  });
+
+  /**
+   * 4ef54ed2, found by lore's own review: `LORE_HEARTBEAT_URL` — the one variable that
+   * decides whether the §3 deadman can page at all — had no row on the page built to
+   * show every parameter, so an unarmed deadman was indistinguishable from an armed
+   * one here. Redacted and blank-checked the same way as `LORE_WEBHOOK_URL`.
+   */
+  it("shows the heartbeat URL, redacted, and treats a blank value as unset", () => {
+    const armed = configView(env({ LORE_HEARTBEAT_URL: "https://hc-ping.com/secret-uuid" })).entries.find(
+      (x) => x.name === "LORE_HEARTBEAT_URL",
+    );
+    expect(armed?.value).toBe("(set)");
+    expect(armed?.source).toBe("set here");
+    expect(JSON.stringify(configView(env({ LORE_HEARTBEAT_URL: "https://hc-ping.com/secret-uuid" })))).not.toContain(
+      "secret-uuid",
+    );
+
+    const unarmed = configView(env({ LORE_HEARTBEAT_URL: "" })).entries.find((x) => x.name === "LORE_HEARTBEAT_URL");
+    expect(unarmed?.value).toBe("(unset — the deadman cannot page)");
+    expect(unarmed?.source).toBe("built-in default");
+  });
 });

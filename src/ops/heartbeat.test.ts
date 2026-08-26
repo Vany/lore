@@ -444,6 +444,23 @@ describe("replica state", () => {
 
     expect((await checkHealth(store, cfg({ backupDir }))).replica).toBe("level");
   });
+
+  // 29321591, found by lore's own review: the walk behind this state stats every
+  // file under the replica directory, uncached — on a 30-day, 10s-cadence litestream
+  // retention window that is thousands of files, on every beat and every /status hit.
+  it("reuses a recent walk instead of re-reading the replica on every call", async () => {
+    const backupDir = replicaAt(REPLICA_BEHIND_SEC + 600);
+    wroteAgo(0);
+    const first = await checkHealth(store, cfg({ backupDir }));
+    expect(first.replica).toBe("behind");
+
+    // A fresh segment lands — this WOULD flip the state to "level" on a genuine
+    // re-walk, since its mtime is newer than the write `wroteAgo(0)` just recorded.
+    writeFileSync(join(backupDir, "generations", "0001", "fresh-segment"), "seg");
+
+    const second = await checkHealth(store, cfg({ backupDir }));
+    expect(second.replica, "cached: must not see the fresh segment yet").toBe("behind");
+  });
 });
 
 describe("needs_human ageing", () => {

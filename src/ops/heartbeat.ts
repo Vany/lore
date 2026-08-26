@@ -238,16 +238,40 @@ async function replicaState(store: Store, cfg: HeartbeatConfig): Promise<{ state
   return behindSec > REPLICA_BEHIND_SEC ? { state: "behind", behindSec } : { state: "level", behindSec };
 }
 
-/** Newest mtime anywhere under a directory, or undefined if it holds no files. */
+/** How long a `newestMtime` result may be reused before a fresh walk is required. */
+const MTIME_CACHE_MS = 15_000;
+let mtimeCache: { dir: string; at: number; value: number | undefined } | undefined;
+
+/**
+ * Newest mtime anywhere under a directory, or undefined if it holds no files.
+ *
+ * CACHED for MTIME_CACHE_MS — found by lore's own review, fingerprint 29321591: this
+ * walk stats every file under the directory, uncached, and runs on every 60s beat AND
+ * every incoming /status request (service/http.ts calls `checkHealth` directly).
+ * litestream's replica is configured to grow for 30 days at a 10s sync cadence
+ * (deploy/litestream.yml's own retention and sync-interval), and spec/operations.md
+ * §2.5 already records this shape of cost taking a status endpoint down once. An
+ * operator's own /status call during an outage — the worst possible moment to make the
+ * health check itself slow — now reuses whatever the periodic beat already found
+ * seconds earlier instead of re-walking. Keyed by directory rather than unconditional:
+ * a real deployment has exactly one backupDir, but every test builds its own fresh
+ * temp directory, so one test's cached value can never be read by another.
+ */
 async function newestMtime(dir: string): Promise<number | undefined> {
+  const now = Date.now();
+  if (mtimeCache !== undefined && mtimeCache.dir === dir && now - mtimeCache.at < MTIME_CACHE_MS) {
+    return mtimeCache.value;
+  }
   let newest: number | undefined;
   const entries = await readdir(dir, { withFileTypes: true, recursive: true }).catch(() => undefined);
-  if (entries === undefined) return undefined;
-  for (const e of entries) {
-    if (!e.isFile()) continue;
-    const s = await stat(join(e.parentPath, e.name)).catch(() => undefined);
-    if (s !== undefined && (newest === undefined || s.mtimeMs > newest)) newest = s.mtimeMs;
+  if (entries !== undefined) {
+    for (const e of entries) {
+      if (!e.isFile()) continue;
+      const s = await stat(join(e.parentPath, e.name)).catch(() => undefined);
+      if (s !== undefined && (newest === undefined || s.mtimeMs > newest)) newest = s.mtimeMs;
+    }
   }
+  mtimeCache = { dir, at: now, value: newest };
   return newest;
 }
 

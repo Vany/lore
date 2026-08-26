@@ -85,6 +85,20 @@ export interface ConfigView {
   readonly summary: string;
 }
 
+/**
+ * Unset OR blank, the one predicate every reader of a raw env value must share.
+ *
+ * Found by lore's own review, fingerprint 8a04e087: `LORE_WEBHOOK_URL`'s row
+ * pre-converted its raw value to the literal string "(set)" BEFORE `entry()` ever saw
+ * it, so `entry()`'s own `raw.trim() === ""` check — the one that makes blank read as
+ * unset everywhere else — never ran against the real value. `.env` files spell
+ * "unconfigured" as `LORE_WEBHOOK_URL=` (service/main.ts's own comment on `env()`),
+ * and docker-compose passes exactly that through as `""` when the operator's `.env`
+ * omits it, so the default, most common deployment shape read as "set here" on the
+ * one page built to answer whether alerting is wired.
+ */
+const isBlank = (raw: string | undefined): boolean => raw === undefined || raw.trim() === "";
+
 const entry = (
   name: string,
   raw: string | undefined,
@@ -148,9 +162,24 @@ export function configView(env: NodeJS.ProcessEnv = process.env): ConfigView {
     entry("LORE_HOST", env["LORE_HOST"], "0.0.0.0", "The interface bound. The perimeter is the tailnet (D-33).", "Redeploy."),
     entry(
       "LORE_WEBHOOK_URL",
-      env["LORE_WEBHOOK_URL"] === undefined ? undefined : "(set)",
+      isBlank(env["LORE_WEBHOOK_URL"]) ? undefined : "(set)",
       "(unset — alerts are logged only)",
       "Where operator alerts go. Unset means they reach the log and nowhere else.",
+      "Redeploy. The value is never shown here — it is a credential in most deployments.",
+    ),
+    // MISSING ENTIRELY BEFORE THIS FIX — found by lore's own review, fingerprint
+    // 4ef54ed2: the one variable that decides whether the §3 deadman exists at all
+    // had no row on the page built to show "every parameter with its value" (D-118),
+    // so an unarmed deadman was indistinguishable from an armed one here. Redacted
+    // the same way as LORE_WEBHOOK_URL — it is a ping URL, a credential in most
+    // deployments — and blank-checked through the same `isBlank`, for the same
+    // reason 8a04e087 fixed it there.
+    entry(
+      "LORE_HEARTBEAT_URL",
+      isBlank(env["LORE_HEARTBEAT_URL"]) ? undefined : "(set)",
+      "(unset — the deadman cannot page)",
+      "Where the heartbeat is POSTed. External monitoring alerts on ITS ABSENCE, so this is the " +
+        "one alert that survives lore itself being dead (spec/operations.md §3).",
       "Redeploy. The value is never shown here — it is a credential in most deployments.",
     ),
     entry(

@@ -521,10 +521,25 @@ export async function pruneWorktrees(paths: RepoPaths): Promise<void> {
   await git(paths.bare, ["worktree", "prune"]);
 }
 
-export async function removeWorktree(paths: RepoPaths, reviewId: string): Promise<void> {
+/**
+ * Removes the worktree, and reports whether there was one to remove.
+ *
+ * Returns `existsSync(dir)` AS TAKEN BEFORE either call below, not whether the calls
+ * succeeded — found by lore's own review, fingerprint edf707f1: `git worktree remove`
+ * is caught and `rm` runs with `force: true`, so on a directory that was ALREADY gone
+ * this resolves exactly as cleanly as one that genuinely held a worktree. A caller
+ * inferring "removed" from "did not reject" (retention.ts's own sweep, before this
+ * fix) counts every terminal review as a removal on every pass, forever — "swept 40
+ * worktrees" on an idle service where nothing was there. A directory whose git
+ * registration alone survives it (no directory, stale entry) is `pruneWorktrees`'s
+ * job, right beside every call site of this function — not double-counted here.
+ */
+export async function removeWorktree(paths: RepoPaths, reviewId: string): Promise<boolean> {
   const dir = join(paths.worktrees, reviewId);
+  const existed = existsSync(dir);
   await git(paths.bare, ["worktree", "remove", "--force", dir]).catch(() => undefined);
   await rm(dir, { recursive: true, force: true });
+  return existed;
 }
 
 /** A hex object id, in EITHER format git actually has: SHA-1 (40) or SHA-256 (64). Nothing in between is real. */

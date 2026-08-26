@@ -240,15 +240,23 @@ describe("what a running review is actually doing", () => {
     return repo.id;
   };
 
+  // a5b95147, found by lore's own review: the fixture's own id, `rev_screen`, matched
+  // the `/ingest|screen/` assertion below regardless of what `phaseNote` actually
+  // said — renderStatus prints the review id verbatim, so this passed whether or not
+  // the sentence it claimed to pin was present at all. Renamed to `revA`, which
+  // contains neither substring, so the assertion can only pass by matching the real
+  // note text.
   it("says NO TIER IS WORKING when the round has not reached one", () => {
-    running("rev_screen");
+    running("revA");
     // t0 done, nothing else opened — the exact shape of the four-and-a-half-hour stall.
-    const t0 = store.openTierRun("rev_screen", "t0", 1, new Date().toISOString());
+    const t0 = store.openTierRun("revA", "t0", 1, new Date().toISOString());
     store.closeTierRun(t0, "clean", []);
 
     const out = render();
     expect(out).toMatch(/NO TIER IS WORKING/);
-    expect(out, "and it must say where the round really is").toMatch(/ingest|screen/);
+    expect(out, "and it must say where the round really is").toMatch(
+      /between the deterministic sweep and its first tier/,
+    );
     expect(out).not.toMatch(/a tier is working/);
   });
 
