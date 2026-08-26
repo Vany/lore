@@ -145,6 +145,9 @@ THREE WAYS TO CONTINUE, IN ORDER:
 1. review_submit — you fixed things; send the diff. The same tier judges your answers.
 2. pull_fresh: true on review_start — you pushed more commits; the SAME review re-pins
    to origin's new tip with everything carried. No diff to compose, nothing reset.
+   ONLY WORKS ON YOUR OWN REVIEW, same as restart below: it is refused outright on a
+   colleague's, nothing touched, because re-pinning recuts the worktree and would
+   discard any fix they had submitted but not yet committed.
 3. restart: true — a person decided to discard this review's history. Everything is
    abandoned and the cheap tiers run again from round 1. This is almost never the
    right call, and reaching for it because a diff feels like work is how a branch gets

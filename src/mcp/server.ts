@@ -560,6 +560,28 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
               `begin one.`,
           );
         }
+        // aa8cc149: THE SAME GAP restart HAD, one branch over. `open` is
+        // repo-scoped so a colleague can see it — that is deliberate — but pull_fresh
+        // then acted on it with no ownership check at all, and `deps.repin` a few
+        // lines down RECUTS THE WORKTREE: a submit applied and never committed
+        // (D-40) exists nowhere else, so a colleague's pull_fresh on your branch
+        // could silently discard fixes you had already submitted, reset your round
+        // bounds, and re-queue your review — all under their action, no warning to
+        // either side. Worse than restart in one way: pull_fresh is documented as
+        // the SAFE continuation, so a caller reaching for it has no reason to expect
+        // it destroys anything. Principal, not `mine`'s full token binding, for the
+        // same reason as restart: this hands over no data, and the caller's OWN
+        // review must stay reachable from a rotated token — the token-rotation case
+        // the refusal below this whole branch already documents a path through.
+        if (open.principal !== who.principal) {
+          throw new Error(
+            `${branch} already has an open review (${open.id}, round ${open.round}) started by ` +
+              `${open.principal}, not you. pull_fresh: true would re-pin and re-queue it — and if it holds ` +
+              `fixes ${open.principal} submitted but never committed, discard them, since re-pinning recuts ` +
+              `the worktree from origin. Nothing has been touched. Ask ${open.principal} to continue it ` +
+              "themselves; only the principal who started a review can pull_fresh it over this surface.",
+          );
+        }
         if (store.hasPendingRound(open.id)) {
           throw new Error(
             `a round is running for ${open.id} right now — poll it, and call pull_fresh again when it parks. ` +
@@ -676,7 +698,9 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
             // CLI-only (`make revoke`, deploy/Makefile) — a human's move, not this
             // client's — so it is named as the ask rather than attempted here.
             `IF EITHER SAYS "not found", a different, still-valid token of yours started this review — normal ` +
-            `during a token rotation's overlap window. If anyone has pushed to ${branch} since, review_start ` +
+            `during a token rotation's overlap window. (It could instead be a colleague's review of the same ` +
+            `branch: both pull_fresh and restart below refuse cleanly and name them if so, so trying is safe ` +
+            `either way.) If anyone has pushed to ${branch} since, review_start ` +
             `again with pull_fresh: true re-pins the SAME review to origin's current tip and carries everything ` +
             `forward — try that first. If nobody has, pull_fresh will answer "unchanged" and change nothing: ` +
             `ask a person to revoke your OLD token instead (make revoke on the lore host; make tokens lists ` +
@@ -1050,18 +1074,24 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
                       ? "cancelled with no reason recorded — say that, and do not infer why"
                       : "no reason was recorded, which is itself a defect — report it rather than inferring a cause",
                 }
-              : // de431bb7: a cancelled review's reason is ALWAYS human-authored — its only
-                // two write sites are review_cancel's own `reason` param and the
-                // restart-supersede sentence a few hundred lines up, never opencode /
-                // provider / filesystem text. `forClient` exists to translate THAT
-                // vocabulary (its own module doc); run over a client's free text it
-                // silently deletes any URL the client wrote on purpose and rewrites a
-                // "…/repos/…" or "…/wt/…" substring into words the client never chose —
-                // corrupting the one field TOOL_DOCS.cancel calls "the only account
-                // anyone gets". The review_cancel handler's own immediate reply already
-                // echoes `reason` untranslated; this keeps a later poll's read of the
-                // same fact consistent with it, rather than corrupting it a second time.
-                { failed_because: review.state === "cancelled" ? why : forClient(why) };
+              : // 0796e115: de431bb7's fix (below) skipped forClient whenever the review's
+                // CURRENT state is `cancelled`, on the premise that a cancelled review's
+                // reason is always human-authored — wrong, found by lore's own review
+                // against its own prior fix. A held diff that fails to apply writes RAW
+                // kitchen text — an absolute worktree path, raw git plumbing
+                // (consumeHeldDiffs, reviewer/review.ts; worker.ts's late-hold sweep) —
+                // while the review is `awaiting_diff`, non-terminal. If that review is
+                // THEN cancelled with NO reason given, review_cancel never overwrites the
+                // column (it only writes when `reason` is non-empty), so the stale
+                // system-authored text survives unchanged into `cancelled` and this
+                // ternary, keyed on state, let it straight through untranslated. The
+                // state is not a reliable proxy for who wrote the text that happens to be
+                // sitting in the column; the text's own shape is. Both human-authored
+                // write sites — review_cancel's `reason` param and the restart-supersede
+                // sentence — use exactly one prefix, unconditionally: `cancelled by
+                // ${principal}: `. Checking for it is checking provenance directly,
+                // correct regardless of which state transitions happened first.
+                { failed_because: why.startsWith("cancelled by ") ? why : forClient(why) };
           })(),
           // A check that did not run is not a check that found nothing (INV-1). The
           // deterministic engines are the ones that go missing silently — no

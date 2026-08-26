@@ -1571,6 +1571,34 @@ describe("a cancelled review keeps the reason it was cancelled for", () => {
       "/srv/repos/rigid",
     );
   });
+
+  // 0796e115, found by lore's own review against its own de431bb7 fix just above:
+  // that fix skipped forClient whenever the review's CURRENT state is cancelled —
+  // but a held diff that fails to apply writes RAW kitchen text (an absolute
+  // worktree path, raw git plumbing) while the review is awaiting_diff, non-
+  // terminal (consumeHeldDiffs / worker.ts's late-hold sweep). A reasonless cancel
+  // from there never overwrites the stored text (review_cancel only writes when a
+  // reason is given), so it survives unchanged into cancelled, and the state-keyed
+  // check let it through raw — lore's own disk layout, to a client.
+  it("still translates a stale system reason that survives into cancelled with no reason given", async () => {
+    started("revG");
+    store.setFailureReason(
+      "revG",
+      "held diff 7 did not apply: git apply --check failed in /var/lib/lore/repos/abc-123/wt/rev_X: error: patch failed",
+    );
+    store.updateReview("revG", { state: "awaiting_diff" });
+
+    await callTool("review_cancel", { review_id: "revG" });
+
+    const out = await callTool("review_poll", { review_id: "revG" });
+    expect(out["state"]).toBe("cancelled");
+    expect(String(out["failed_because"]), "lore's own disk path must not reach the client").not.toContain(
+      "/var/lib/lore",
+    );
+    expect(String(out["failed_because"]), "must read as translated, not merely stripped").toContain(
+      "in the review's copy of your branch",
+    );
+  });
 });
 
 // Found by lore's own review (5e6c18de): three texts told a client a cancelled
@@ -1740,6 +1768,35 @@ describe("one review per branch", () => {
       // The throw is before any mutation, so the review keeps the exact state the
       // fixture created it in — "queued" from review_start itself.
       expect(store.getReview(id, "alice")?.state).toBe("queued");
+    });
+
+    // aa8cc149, found by lore's own review: the SAME gap restart had (8d847ca4), one
+    // branch over. `deps.repin` is not wired in this fixture at all, so before this
+    // fix a colleague's pull_fresh on someone else's review fell through to "this
+    // build cannot re-pin a review" — never refusing on OWNERSHIP, only on
+    // capability. On a real deployment that same call would reach repin and recut
+    // the worktree, discarding any fix the owner had submitted but not committed.
+    // The ownership check must fire before capability is even asked about.
+    it("refuses to pull_fresh a colleague's open review, naming its owner, not a capability gap", async () => {
+      const first = await start();
+      const firstId = JSON.parse(first.result?.content?.[0]?.text ?? "{}").review_id as string;
+
+      const bob = grantToken(store, repoId, "bob");
+      const out = await callRaw(
+        "review_start",
+        { branch: "feat/x", into: "main", ticket: "do the thing", pull_fresh: true },
+        bob,
+      );
+
+      expect(out.result?.isError).toBe(true);
+      expect(message(out), "name the review and its owner").toContain(firstId);
+      expect(message(out)).toContain("alice");
+      expect(message(out), "must refuse on OWNERSHIP, not fall through to a capability error").not.toMatch(
+        /cannot re-pin/,
+      );
+      expect(store.getReview(firstId, "alice")?.state, "the colleague's review must survive untouched").toBe(
+        "queued",
+      );
     });
   });
 

@@ -629,6 +629,20 @@ data, it only destroys-and-replaces, so the caller's own review must stay
 restartable from a rotated token exactly as §2.4.2's token-rotation paragraphs
 above already promise.
 
+**`pull_fresh: true` had the identical gap one paragraph over, found by lore's own
+review (aa8cc149) against its own fix above.** It reads the same repo-scoped `open`
+and was never checked against the caller's principal either — and unlike `restart`,
+which at least *sounds* destructive, `pull_fresh` is documented as the safe
+continuation, so a colleague reaching for it had no reason to expect harm. It is
+worse in one respect: re-pinning recuts the worktree, and a submit is applied and
+never committed (D-40, §4), so fixes the actual owner had already submitted but not
+yet committed exist nowhere else — a colleague's `pull_fresh` could discard them
+outright, reset the round bounds, and re-queue the review, all under the colleague's
+action. Fixed the same way, by principal, before capability is even asked about: a
+build with no `repin` wired at all must still refuse on ownership first, never fall
+through to "this build cannot re-pin a review" for a caller who was never allowed to
+ask in the first place.
+
 ### 2.5 `review_cancel` stops both ends, and says when it could not
 
 `cancelled` is its own terminal state, not `expired`: expired means nobody came back,
