@@ -3,6 +3,119 @@
 Newest first. Updated at the end of each task: what changed, what I learned, what
 surprised me.
 
+## 2026-08-26 — src/knowledge reviews itself: the product, not the mechanism, and a fix that broke its own fix four times running
+
+**What changed.** Vany: "okay, let's revie src/knowledge" — the memory layer itself,
+folder mode, `rev_JeMKtcw6dRLX5c_-ydE4RkoB`. Landed `passed_partial` (3 tiers ran, all
+z-ai — not independent vendors — one earlier tier's read of an earlier tree never
+carried forward, hence PARTIAL): 33 findings, 15 fixed, 17 justified, across roughly
+fourteen rounds and ten commits (`1c29725` through `ce0ad60`). CLAUDE.md's own framing
+held up under review: a bug here doesn't fail once, it injects a confidently wrong
+belief into every future session silently, and this review found several shapes of
+exactly that.
+
+**The D-10-for-documents chain, six links long.** `53969ab8`: `ingestDocs` read rule
+documents (CLAUDE.md, PROG.md, ADRs) from the WORKTREE, which for a diff-mode review is
+the branch under review — so a branch could write "never flag src/pay" into its own
+CLAUDE.md and have the same review trust it as a team decision, D-10 defeated through
+the knowledge door instead of the appeal door. This was the one architectural question
+this whole review escalated rather than decided alone (`AskUserQuestion`): check out
+`into` separately, defer entirely, or something else. Vany's call — ingest from
+`into`/trunk — closed the document half. `c5df90ef`, found on the very next round: the
+architecture SURVEY (bootstrap's other model call, reading the whole repo for "facts")
+had the identical hole and was never touched. `65528bcd`: my own fix for that folded
+"no base at all" and "base present but unresolvable" into the same branch, both reading
+the worktree — the exact fallback the fix existed to refuse, reopened by a resolution
+failure nobody would think to check for. `4f4c52a5`: skipping only the document half on
+an unresolvable ref left the survey free to write `fact` rows, which alone satisfies
+worker.ts's one-shot retry guard and permanently starves the repo of document rules.
+Then, on the SAME tree, `0b9f6b3a` — the guard I had just written to stop that
+re-checked "does this repo have any live knowledge", and `ingestDocs` a few lines
+earlier in the SAME call had already written rule rows for any repo with rule
+documents at all, the ordinary case, not an edge one: every real bootstrap was silently
+discarding its own survey output after paying for it. `96ce9a48` closed a parallel gap
+in the same function — `reviewId`/`stillWanted` were never threaded to the screen or
+the survey, so `review_cancel` mid-bootstrap was told truthfully that nothing was in
+flight while both went on spending, a straight contradiction of spec/knowledge.md
+§2.2's own words ("still true of the provisioning screen"). Vany chose the survey's
+final shape too: keep it reading the branch (checking out `into` separately is real new
+disk/time cost; skipping it whenever `into` exists silently kills the feature for the
+common case) and instead stop presenting its output as settled — which is where the
+LAST four findings of this chain live: `70b88761` (the reviewer prompt), `652bb58d`
+(a finding's rendered history), `b9033841` (`knowledge_query`'s response note), and
+`77edbad4` (propose's own second, independent copy of the same prompt block) all
+labelled a bootstrap `fact` as a "rule" or "team decision" somewhere a `[derived]` tag
+alone was never going to be noticed. Four separate places needed the identical caveat
+because nothing in this codebase renders knowledge from one shared function.
+
+**The polarity function broke its own fix four rounds running, and each round's finding
+was real.** `a0f27140`: the clause-splitter recognised comma/semicolon/colon/and/but/
+while but not a sentence-ending period, so a rule split across two sentences read as
+one undivided clause and its two negations cancelled to positive — the exact 2026-08-06
+production incident, reopened through prose instead of a comma. Fixed by adding a bare
+`.` to the split — which immediately broke every rule that names a file: `gateway.ts`,
+`lore.db`, `2.5 seconds` all contain periods with no sentence boundary at all, and
+splitting there manufactured a false "too compound to say", silently exempting the rule
+from conflict detection (`7920c391`, `5b53baa7` — found independently by two tiers the
+same round). Fixed by borrowing `ingest.ts`'s `sentences()` boundary — a period counts
+only with a capital letter after it — which reopened the FIRST bug for anyone who types
+a casual second sentence starting lowercase (`cbe21077`): the capital check, it turned
+out, protected nothing the whitespace-after-period requirement did not already protect
+on its own, since `gateway.ts` and `2.5` have no whitespace immediately after their
+internal period regardless of case. Dropped the capital check — which broke "e.g." and
+"i.e." (`b33fe48b`, `765247f4`, again two tiers independently): both are a period
+followed by whitespace MID-clause, introducing an example rather than a new claim, so
+splitting there isolated the abbreviation as its own falsely-positive fragment beside
+the real negative claim. The actual fix needed both halves at once — whitespace after
+the period AND not one of a short, closed abbreviation list — which is what `NEGATIONS`
+already does for its own word list, three functions above, and I only saw the parallel
+after writing it. Along the way I fooled myself twice with scratch reproductions that
+still had an unrelated "and" in the fixture, independently splitting the statement into
+differently-polarised clauses — the SAME mechanism the SEAM tests already cover — and
+read that as a fresh bug in the abbreviation regex until I isolated the fixture
+properly. The lesson is not "regex is hard"; it is that a heuristic tuned against one
+counterexample needs checking against every PRIOR counterexample before it ships, not
+just the one it was written for — and this review had four of them on file by the end,
+so the fourth fix could finally be checked against all of them at once instead of
+guessing which one would come back.
+
+**The same sibling-directory bug existed in four places and I found three of them
+together, then missed the fourth in the same file.** `372b6bf0`/`f9559e98`: raw
+`startsWith` in `relevantTo`, `scopesOverlap`, and `store.ts`'s `knowledgeFor` SQL all
+let `"src/payroll".startsWith("src/pay")` pull a sibling directory's rule into the
+wrong review. Fixed together, sharing `scopesOverlap`. `10bb335b`, same round: `enrich.ts`'s
+OWN `relatedTo` — seventy-five lines above the fix in the same file — carried a fourth,
+untouched copy of the identical `startsWith`. Same lesson as the polarity chain in
+miniature: fixing a mechanism everywhere ONE finding names it is not the same as fixing
+it everywhere it actually occurs.
+
+**One finding checked and genuinely not real (`0b2d5268`).** Claimed the deletion sweep
+flaps every round for a branch that deletes a document `into` still has — insert from
+`into`, retire via the sweep's own worktree-based existence check, insert again next
+round. Reproduced against a real git fixture (five consecutive rounds) and it does not
+reproduce: a document absent from the worktree is absent from `discovered`, which is
+also always a subset of `candidates`, so the read loop that only iterates `candidates`
+literally cannot reach it to "re-insert" it. Left as a `lore-ok` with the empirical
+check rather than a code change — the discipline this session keeps proving out is that
+"the tier may be wrong" is a real answer as often as "fix it", and only verification
+tells you which. A SEPARATE, real bug in the same area (`987bd101`) was hiding behind
+this one: `discoverable` listed the six ROOT rule documents unconditionally, existence
+unchecked, so a root file deleted EVERYWHERE (not just on one branch) never got swept —
+the worse bug the `0b2d5268` investigation surfaced as a side effect of reading the
+sweep closely enough to disprove the finding in front of it.
+
+**`aa57c0f2`: `knowledgeFor` had no `ORDER BY`,** so a plain `LIMIT` returned whichever
+rows SQLite enumerated first — the oldest live rows in practice — meaning a repo past
+the cap silently lost its newest knowledge, the rule someone just wrote with
+`knowledge_teach` most of all, from every prompt, conflict check and query alike.
+Ordering by `verified_at DESC` fixed the common case; the nine call sites that need
+every row to be correct rather than merely representative (conflict detection, and
+anything resolving a specific id an open conflict names) got a new `NO_LIMIT` sentinel
+instead of `undefined` — a default PARAMETER fires on an explicit `undefined` exactly
+as on an omitted argument, so `undefined` cannot mean "no cap" and mean "use the
+default" at the same time. Caught by a test that asked for every row and silently got
+200 back.
+
 ## 2026-08-25 — src/git reviews itself: a submodule chain of eight, and a tool that couldn't submit
 
 **What changed.** Vany: "review src/git pls" — lore's git boundary reviewing itself,
