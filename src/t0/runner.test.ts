@@ -8,7 +8,7 @@
  * the code without knowing that.
  */
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -17,6 +17,7 @@ import { renderT0, renderT0Delta, runT0 } from "./runner.ts";
 import { CODE_ARCH } from "../core/review-type.ts";
 import { runEngine } from "./engines.ts";
 import type { T0Engine } from "../core/review-type.ts";
+import type { SandboxConfig } from "./sandbox.ts";
 
 const f = (severity: Finding["severity"], file: string): Finding => ({
   file,
@@ -136,6 +137,101 @@ describe("runT0 merges the host and sandbox branches", () => {
     const out = await runT0(dir, { engines: [] });
     expect(out.outcomes).toStrictEqual([]);
     expect(out.findings).toStrictEqual([]);
+  });
+});
+
+/**
+ * A killed (137) sandboxed run used to be able to reach `parseTsc`/`parseEslint`
+ * before anything checked the exit code — found live: lore's own tsc check was
+ * OOM-killed mid-run, and the partial output already sitting in the buffer was
+ * silently returned as `findings`, indistinguishable from a complete, honest result.
+ * `checkTypes` and `checkLint` now check `r.code === KILLED` before attempting to
+ * parse, in all three places that call `runInSandbox` directly (the fourth,
+ * `checkLint`'s `lint`-script branch, never parsed at all and was already correct).
+ *
+ * Exercised end to end through `runT0`, with a stand-in `docker`: `execFile`
+ * (exec.ts) does not go through a shell, so it happily runs an arbitrary executable
+ * given by absolute path, and `SandboxConfig.runtime` is just that path. The stand-in
+ * succeeds on its first call (install) and reports exit 137 with parseable partial
+ * output on its second (the actual check) — no real docker, no network, so this
+ * stays hermetic and fast.
+ */
+describe("a run the sandbox itself killed is never mistaken for a clean or partial one", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "lore-t0-killed-"));
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  // Content lives in its own file rather than inlined into the shell script text,
+  // so nothing here has to worry about quoting JSON (eslint's fake output) inside a
+  // `sh -c` string.
+  const fakeDocker = (stdoutOnKill: string): SandboxConfig => {
+    const script = join(dir, "fake-docker.sh");
+    const called = join(dir, ".called");
+    const output = join(dir, "fake-stdout.txt");
+    writeFileSync(output, stdoutOnKill);
+    writeFileSync(
+      script,
+      "#!/bin/sh\n" +
+        `if [ -f "${called}" ]; then\n` +
+        `  cat "${output}"\n` +
+        "  exit 137\n" +
+        "else\n" +
+        `  touch "${called}"\n` +
+        "  exit 0\n" +
+        "fi\n",
+    );
+    chmodSync(script, 0o755);
+    return {
+      image: "unused",
+      cacheRoot: join(dir, "cache"),
+      scratchRoot: join(dir, "scratch"),
+      uid: 1000,
+      gid: 1000,
+      memory: "6g",
+      cpus: "2",
+      timeoutMs: 30_000,
+      runtime: script,
+    };
+  };
+
+  it("checkTypes: a killed `typecheck` script is reported killed, not its partial output", async () => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { typecheck: "tsc -b" } }));
+    const sandbox = fakeDocker("src/foo.ts(3,5): error TS2322: fake partial output before the kill");
+    const out = await runT0(dir, { engines: ["tsc"], sandbox });
+    const tsc = out.outcomes.find((o) => o.engine === "tsc");
+    expect(tsc?.findings, "the parseable line must not survive as a finding").toStrictEqual([]);
+    expect(tsc?.unavailable).toMatch(/killed/);
+    expect(tsc?.unavailable).toMatch(/not a fault in the branch/);
+  });
+
+  it("checkTypes: a killed bare `tsc --noEmit` is reported killed, not its partial output", async () => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: {} }));
+    writeFileSync(join(dir, "tsconfig.json"), "{}");
+    const sandbox = fakeDocker("src/foo.ts(3,5): error TS2322: fake partial output before the kill");
+    const out = await runT0(dir, { engines: ["tsc"], sandbox });
+    const tsc = out.outcomes.find((o) => o.engine === "tsc");
+    expect(tsc?.findings, "the parseable line must not survive as a finding").toStrictEqual([]);
+    expect(tsc?.unavailable).toMatch(/killed/);
+    expect(tsc?.unavailable).toMatch(/not a fault in the branch/);
+  });
+
+  it("checkLint: a killed bare eslint run is reported killed, not its partial output", async () => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: {} }));
+    writeFileSync(join(dir, "eslint.config.js"), "module.exports = [];\n");
+    const eslintJson = JSON.stringify([
+      {
+        filePath: join(dir, "src", "foo.ts"),
+        messages: [{ ruleId: "no-unused-vars", message: "fake partial output before the kill", line: 3, severity: 2 }],
+      },
+    ]);
+    const sandbox = fakeDocker(eslintJson);
+    const out = await runT0(dir, { engines: ["eslint"], sandbox });
+    const eslint = out.outcomes.find((o) => o.engine === "eslint");
+    expect(eslint?.findings, "the parseable message must not survive as a finding").toStrictEqual([]);
+    expect(eslint?.unavailable).toMatch(/killed/);
+    expect(eslint?.unavailable).toMatch(/not a fault in the branch/);
   });
 });
 

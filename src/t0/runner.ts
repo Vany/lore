@@ -332,6 +332,18 @@ async function checkTypes(
   if (scripts["typecheck"] !== undefined) {
     const r = await runInSandbox(cfg, worktree, cacheDir, scratch, cmds.run("typecheck"), false);
     if (r.unavailable !== undefined) return { engine: "tsc", findings: [], unavailable: r.unavailable };
+    // KILLED, CHECKED BEFORE THE PARSE — a monorepo's `turbo run typecheck` fans out
+    // across every package, and when the sandbox's own `--memory` limit kills it
+    // partway through, packages that had ALREADY finished still leave real,
+    // parseable tsc output sitting in the buffer. Parsing that first and returning
+    // whatever it found — the order below, for every OTHER non-zero exit — would
+    // silently turn a run killed before covering the whole monorepo into what reads
+    // as a complete pass with a few findings: exactly the INV-1 shape this file's
+    // own `KILLED` branch exists to prevent, reached by skipping past it whenever
+    // ANY package happened to report before the kill. A client must never have to
+    // work out that "some findings, no mention of the rest" meant "we ran out of
+    // memory," which is ours to prevent, not theirs to puzzle out.
+    if (r.code === KILLED) return scriptFinding("tsc", `${cmds.name} run typecheck`, r);
     // Still try the structured parse: a monorepo runner usually forwards tsc's own
     // lines, and per-file findings beat one blob whenever we can get them.
     const parsed = parseTsc(`${r.stdout}\n${r.stderr}`);
@@ -343,6 +355,12 @@ async function checkTypes(
   }
   const r = await runInSandbox(cfg, worktree, cacheDir, scratch, "npx --no-install tsc --noEmit --pretty false", false);
   if (r.unavailable !== undefined) return { engine: "tsc", findings: [], unavailable: r.unavailable };
+  // This branch never routed through `scriptFinding` at all, for ANY non-zero exit
+  // — so a KILLED run here (single-project `tsc --noEmit`, no monorepo runner
+  // involved) fell through to `parseTsc` unconditionally, on output that a kill
+  // usually truncates to nothing: `findings: []`, indistinguishable from tsc
+  // actually running clean. The sharpest form of the same bug fixed above.
+  if (r.code === KILLED) return scriptFinding("tsc", "npx tsc --noEmit", r);
   return { engine: "tsc", findings: parseTsc(`${r.stdout}\n${r.stderr}`) };
 }
 
@@ -364,6 +382,12 @@ async function checkLint(
   }
   const r = await runInSandbox(cfg, worktree, cacheDir, scratch, "npx --no-install eslint . --format json", false);
   if (r.unavailable !== undefined) return { engine: "eslint", findings: [], unavailable: r.unavailable };
+  // Same fix as both `tsc` branches above: checked explicitly rather than left to
+  // fall through as "unparseable output" — true in practice (a kill mid-run
+  // usually truncates eslint's single trailing JSON blob), but the wrong REASON
+  // reported. "Unparseable" reads as an eslint or config problem; "killed, sandbox
+  // memory limit" is the honest one and points at the right place to fix it.
+  if (r.code === KILLED) return scriptFinding("eslint", "npx eslint .", r);
   const parsed = parseEslint(r.stdout, worktree);
   return parsed === undefined
     ? { engine: "eslint", findings: [], unavailable: "eslint produced unparseable output" }
