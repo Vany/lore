@@ -1111,7 +1111,21 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           // narrows what any later `passed` is evidence OF. The model tiers are told
           // in their prompt; the client has no other way to find out.
           ...(() => {
-            const skipped = store.unavailableChecks(review_id).map(forClient);
+            // c1a9d4b6/fcf8e8cd: the third door of the class de431bb7/0796e115 fixed
+            // for `failed_because` above — one entry kind here embeds a TEAM-authored
+            // development rule's full statement verbatim, in quotes (D-83's design,
+            // reviewer/review.ts: "the client's channel is the audit trail and wants
+            // the whole reason"), and every producer of that kind matches the exact
+            // same shape " was NOT reported at " (review.ts's own `isSuppressionNotice`,
+            // "the only producer of it"). A rule whose statement happens to contain a
+            // URL, the word "opencode", or an absolute path is not kitchen text — it is
+            // a quote from a person, and running it through forClient anyway attributes
+            // words to the team that the team never wrote. Every other entry here is
+            // genuinely system-authored (an engine that could not run, a tier that
+            // failed over) and still needs translating.
+            const skipped = store.unavailableChecks(review_id).map((line) =>
+              line.includes(" was NOT reported at ") ? line : forClient(line),
+            );
             return skipped.length === 0
               ? {}
               : {

@@ -346,6 +346,16 @@ from either. The model tiers are told in their prompt and the CLI prints it, so 
 gap was only ever on the MCP side — where the client deciding whether to merge is.
 A `passed` with `checks_skipped` means the tiers that ran agree, not that the tests do.
 
+**Not every entry is "an engine did not run."** One kind is D-83's suppression
+notice — an engine finding an ACCEPTED APPEAL silenced, quoting the development
+rule's full statement verbatim (the client's channel is the audit trail and is
+meant to carry the whole reason; the reviewer's own prompt gets only "a rule
+exists", never what it says). That statement is TEAM-authored text, not lore's
+internal vocabulary, so it is exempted from the same translation every other entry
+gets, found by lore's own review (c1a9d4b6, fcf8e8cd) — a rule whose wording happens
+to contain a URL or the word "opencode" is quoted exactly as written, not rewritten
+into something the team never said.
+
 `failed_because` is present on `failed` and `expired`, carrying the reason the round
 stopped. Without it a client sees the word and nothing else — which is INV-1's shape
 exactly, since "did not run" and "found nothing" become indistinguishable to whoever

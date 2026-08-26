@@ -914,6 +914,36 @@ describe("findings are ranked worst first", () => {
     expect(out).not.toHaveProperty("checks_skipped");
   });
 
+  // c1a9d4b6/fcf8e8cd, found by lore's own review: a suppression notice quotes a
+  // TEAM-authored development rule's full statement verbatim (D-83's design — "the
+  // client's channel is the audit trail and wants the whole reason", review.ts) —
+  // but every checks_skipped entry was blanket-mapped through forClient, built for
+  // SYSTEM vocabulary. A rule whose statement happens to contain a URL or the word
+  // "opencode" got rewritten before the client ever saw it: a quote attributed to
+  // the team that the team never actually wrote. A genuinely system-authored entry
+  // in the SAME list must still translate, so this checks the fix is selective, not
+  // a second blanket skip in the other direction.
+  it("quotes a team-authored suppression notice verbatim, but still translates a system one beside it", async () => {
+    const id = store.openTierRun("rev1", "t0", 1, new Date().toISOString());
+    store.closeTierRun(id, "findings", [
+      "eslint was NOT reported at third_party/sdk.ts — t1 accepted an appeal to this project's development " +
+        'rule ab12cd34 ("the vendored opencode SDK under third_party is upstream\'s, not ours to lint — ' +
+        'tracked at https://github.com/org/sdk/issues/12") on 2026-08-20. Anything that rule would have ' +
+        "caught here is unexamined; retire the rule to switch it back on.",
+      "could not reach opencode at http://127.0.0.1:4000",
+    ]);
+
+    const out = await callTool("review_poll", { review_id: "rev1" });
+    const skipped = out["checks_skipped"] as string[];
+    expect(skipped[0], "the team's own words must survive, URL and all").toContain(
+      "https://github.com/org/sdk/issues/12",
+    );
+    expect(skipped[0], "must not rewrite a quote the team wrote").toContain("opencode SDK");
+    expect(skipped[1], "a genuinely system-authored entry must still translate").toBe(
+      "lore's model runtime was unreachable",
+    );
+  });
+
   // The case the test above did not cover, and t2 said so: a verdict EXISTS but
   // does not close anything. `justified-rejected` means the reviewer read the
   // reason and refused it, which leaves the finding open and makes it worse than
