@@ -286,4 +286,33 @@ describe("screen", () => {
     );
     expect(out.map((s) => s.proposal.idea)).toStrictEqual(["good", "weak", "elsewhere"]);
   });
+
+  /**
+   * Fingerprint 287fffa0/67a0c784: `rejects` was read for the knowledge write-back
+   * (writeBackRejections, run.ts) and by nothing that decided what the DOCUMENT
+   * shows — a critic-rejected idea had no demotion of its own and landed in
+   * "Appraise these" exactly like one that survived.
+   */
+  it("demotes a proposal the critic's own verdict rejects, even though it is otherwise sound", () => {
+    const [s] = screen([proposal({ rejects: true })], "src/store", []);
+    expect(s?.demotions).toContain("critic-rejects");
+    expect(s?.because.join(" ")).toContain("should not be pursued");
+  });
+
+  it("does not demote a proposal the critic said nothing about either way", () => {
+    const [s] = screen([proposal()], "src/store", []);
+    expect(s?.demotions).not.toContain("critic-rejects");
+  });
+
+  it("ranks a critic-rejected proposal alongside out-of-scope, not with survivors", () => {
+    // Rejected FIRST in the input: without its own demotion this would already sort as
+    // ["rejected", "good"] by input order alone, and the assertion below would pass for
+    // the wrong reason — put second, it only lands there because rank 3 puts it last.
+    const out = screen(
+      [proposal({ idea: "rejected", rejects: true }), proposal({ idea: "good" })],
+      "src/store",
+      [],
+    );
+    expect(out.map((s) => s.proposal.idea)).toStrictEqual(["good", "rejected"]);
+  });
 });

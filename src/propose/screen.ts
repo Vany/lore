@@ -157,6 +157,15 @@ export function screen(
       because.push(missing.join("; "));
     }
 
+    // Found missing by lore's own review, fingerprint 287fffa0/67a0c784: `rejects` was
+    // read for the knowledge write-back (writeBackRejections, run.ts) and by nothing
+    // that decides what the DOCUMENT shows — a critic-rejected idea had no demotion of
+    // its own and landed in "Appraise these" exactly like one that survived.
+    if (proposal.rejects === true) {
+      demotions.push("critic-rejects");
+      because.push("the critic's own verdict was that this should not be pursued at all, not merely a disagreement with part of it");
+    }
+
     const decided = rejected.find((k) => restates(proposal.idea, k.statement));
     if (decided !== undefined) {
       demotions.push("already-decided");
@@ -178,6 +187,7 @@ export function screen(
   const rank = (s: Screened): number => {
     if (s.demotions.length === 0) return 0;
     if (s.demotions.includes("out-of-scope")) return 3;
+    if (s.demotions.includes("critic-rejects")) return 3;
     if (s.demotions.includes("unappraisable")) return 2;
     if (s.demotions.includes("invented-paths")) return 2;
     return 1;

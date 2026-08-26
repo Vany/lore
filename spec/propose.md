@@ -195,25 +195,43 @@ allowed. A proposal document that does not say which tree it read is unappraisab
 the same way a finding without a file is — and this one is read weeks later, by which
 time nobody remembers.
 
-Then three sections, in this order:
+Then five sections, in this order — corrected here from three to match `render.ts`,
+which already had five before this sentence was last touched (`## Out of scope, dropped`
+predates this review; `## Rejected by its critic` is new in it, §6 below):
 
 1. **Appraise these** — proposals that survived their critic and are not already
    decided. `settledBy` first, then the idea, then the cost.
-2. **Already decided** — with the decision and its date. Usually the longest section
-   after the first run, and that is the tool working.
+2. **Already decided, or arguing with a decision** — with the decision and its date.
+   Usually the longest section after the first run, and that is the tool working.
 3. **Unappraisable** — no falsifying measurement offered. Kept, ranked last, marked.
+4. **Out of scope, dropped** — the change lands outside the folder this run was about
+   (§1.1). Recorded so the run is auditable, not for appraisal.
+5. **Rejected by its critic** — the critic's own `rejects: true` (§4, §6 below). Also
+   written back to the knowledge base. Recorded so the run is auditable, not for
+   appraisal.
 
 **Two kinds of rejection are written back to the knowledge base**, as a `mistake` row
-reading *considered: \<the idea\>*, with why. Both are decided by `propose` itself,
-inside its own run — this tool is fire-and-forget and has no way to later learn what a
-person decided about a *surviving* idea, so nothing beyond its own run can trigger a
-write-back:
+reading *considered and reject: \<the idea\>*, with why. Both are decided by `propose`
+itself, inside its own run — this tool is fire-and-forget and has no way to later learn
+what a person decided about a *surviving* idea, so nothing beyond its own run can
+trigger a write-back:
 
 - a proposal the screen demotes **out of scope, dropped** (§5) — a fact about where the
   change lands, machine-checked, not a judgment call;
 - a proposal the **critic's own verdict** marks `rejects: true` (§4) — stated as a fact
   by the critic, never inferred from tone in its prose, because prose that merely sounds
   skeptical is not the same as a verdict.
+
+The prefix is deliberately not just "considered" — found by lore's own review,
+fingerprint a90601f4. `knowledge/conflict.ts`'s `detectAndRecord` runs over every live
+row at the start of every review round and pairs opposite-polarity, high-overlap
+statements as a candidate contradiction; a bare "considered: \<idea\>" carries the
+idea's OWN polarity, so a rejected idea that agrees with a taught rule in substance but
+differs in phrasing could be read as CONTRADICTING it, parking the next review at
+`needs_human` over nothing. "considered and reject" is two clauses of opposite polarity
+by itself — verified against `polarity()` directly — which makes the row polarity-0
+(undecidable) before the idea's own words are even read, and `findConflicts` skips
+those rather than guessing.
 
 Not `knowledge_teach`'s provenance — that string is tied to an authenticated MCP
 principal (`taught by <principal>`), a concept this CLI-only tool does not have (D-16).

@@ -59,11 +59,16 @@ export function renderProposals(
 ): string {
   const survived = screened.filter((s) => s.demotions.length === 0);
   const dropped = screened.filter((s) => s.demotions.includes("out-of-scope"));
+  // Found missing by lore's own review, fingerprint 287fffa0/67a0c784: without its own
+  // section, a critic-rejected proposal fell into "decided" below (misleadingly framed
+  // as arguing with a PAST decision) or, before that fix existed at all, straight into
+  // "Appraise these" — the exact failure the structured `rejects` field was built to
+  // avoid, one layer down from where it was first found, fingerprint b551376e.
+  const rejectedByCritic = screened.filter((s) => !s.demotions.includes("out-of-scope") && s.demotions.includes("critic-rejects"));
   const weak = (s: Screened) => s.demotions.includes("unappraisable") || s.demotions.includes("invented-paths");
-  const unappraisable = screened.filter((s) => !s.demotions.includes("out-of-scope") && weak(s));
-  const decided = screened.filter(
-    (s) => s.demotions.length > 0 && !s.demotions.includes("out-of-scope") && !weak(s),
-  );
+  const notPlaced = (s: Screened) => s.demotions.includes("out-of-scope") || s.demotions.includes("critic-rejects");
+  const unappraisable = screened.filter((s) => !notPlaced(s) && weak(s));
+  const decided = screened.filter((s) => s.demotions.length > 0 && !notPlaced(s) && !weak(s));
 
   const lines: string[] = [
     `# Proposals for ${header.repo}${header.folder === "" || header.folder === "." ? "" : ` — ${header.folder}`}`,
@@ -121,10 +126,18 @@ export function renderProposals(
     unappraisable,
     n,
   );
-  section(
+  n = section(
     "Out of scope, dropped",
     "The change lands outside the folder this run was about. Recorded so the run is auditable, not for appraisal.",
     dropped,
+    n,
+  );
+  section(
+    "Rejected by its critic",
+    "The cross-vendor critic's own verdict was that this should not be pursued at all — not merely a " +
+      "disagreement with part of it. Also written back to the knowledge base. Recorded so the run is " +
+      "auditable, not for appraisal.",
+    rejectedByCritic,
     n,
   );
 

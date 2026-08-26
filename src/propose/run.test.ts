@@ -14,6 +14,7 @@ import { initialState } from "../core/ladder.ts";
 import type { Tier } from "../core/ladder.ts";
 import type { Listed, SessionResult } from "../reviewer/opencode.ts";
 import { Store } from "../store/store.ts";
+import { polarity } from "../knowledge/conflict.ts";
 import { renderProposals } from "./render.ts";
 import { criticFor, propose, type ProposeInput } from "./run.ts";
 import { screen } from "./screen.ts";
@@ -237,15 +238,15 @@ describe("a failed call is still a paid one, fingerprint b1030112", () => {
 
 describe("the critic is a different vendor", () => {
   it("picks a tier from another vendor, not merely another tier", () => {
-    expect(criticFor(TIERS, KIMI)?.id).toBe("t1");
-    expect(criticFor(TIERS, ZAI)?.id).toBe("t2");
+    expect(criticFor(TIERS, KIMI)[0]?.id).toBe("t1");
+    expect(criticFor(TIERS, ZAI)[0]?.id).toBe("t2");
   });
 
   // Two tiers from one family is one opinion asked twice — the argument that keeps
   // Claude out of the ladder, applied to ideas.
   it("finds nobody when every tier is the same vendor", () => {
     const sameVendor = [ZAI, { ...ZAI, id: "t2", model: "zai-coding-plan/glm-5.2" }];
-    expect(criticFor(sameVendor, ZAI)).toBeUndefined();
+    expect(criticFor(sameVendor, ZAI)).toStrictEqual([]);
   });
 
   /**
@@ -259,8 +260,45 @@ describe("the critic is a different vendor", () => {
     const pooled = { ...ZAI, id: "t1", model: "GLM5.2" };
     const zaiConcrete = { ...ZAI, id: "t2", model: "zai-coding-plan/glm-5.2" };
     // Without the pools, the concrete z.ai tier reads as a different vendor than "GLM5.2".
-    expect(criticFor([pooled, zaiConcrete], pooled, pools), "same company is not a critic").toBeUndefined();
-    expect(criticFor([pooled, KIMI], pooled, pools)?.id).toBe(KIMI.id);
+    expect(criticFor([pooled, zaiConcrete], pooled, pools), "same company is not a critic").toStrictEqual([]);
+    expect(criticFor([pooled, KIMI], pooled, pools)[0]?.id).toBe(KIMI.id);
+  });
+
+  /**
+   * Fingerprint b56c6982: the FIRST cross-vendor tier by name is not necessarily the
+   * first with a usable route today. `criticFor` itself only ranks candidates — this
+   * is `propose`'s own fallthrough, tested at that level via `propose` rather than by
+   * reaching into `concreteRoute`'s pool internals directly.
+   *
+   * `openrouter/`-prefixed is the one metered path (D-117, core/ladder.ts) —
+   * `concreteRoute` refuses it unless `LORE_ALLOW_METERED` allows it, which this test
+   * does not: cleared for its duration (with `LORE_TIERS`, which controls the literal-
+   * route exemption) so the result cannot depend on whatever the ambient environment
+   * happens to have set.
+   */
+  it("falls through to a second cross-vendor tier when the first has no usable route", async () => {
+    const prevAllow = process.env["LORE_ALLOW_METERED"];
+    const prevTiers = process.env["LORE_TIERS"];
+    delete process.env["LORE_ALLOW_METERED"];
+    delete process.env["LORE_TIERS"];
+    try {
+      // A real, different vendor (anthropic, via the gateway prefix) — just not a
+      // usable ROUTE today, the distinction the old code collapsed. The PROPOSER is
+      // `models[models.length - 1]` (run.ts), so it goes LAST — `metered` and KIMI are
+      // both candidates for it, tried in this order.
+      const metered: Tier = { id: "t3", kind: "model", model: "openrouter/anthropic/claude", stage: "fast" };
+      const r = await propose(
+        { store, repoId, ask: scripted([[IDEA], [IDEA]]) },
+        input({ tiers: [metered, KIMI, ZAI] }),
+      );
+      expect(r.screened[0]?.proposal.contradictedBy).not.toMatch(/NOT CRITICISED/);
+      expect(asked.map((a) => a.tier)).toStrictEqual(["t1", "t2"]);
+    } finally {
+      if (prevAllow === undefined) delete process.env["LORE_ALLOW_METERED"];
+      else process.env["LORE_ALLOW_METERED"] = prevAllow;
+      if (prevTiers === undefined) delete process.env["LORE_TIERS"];
+      else process.env["LORE_TIERS"] = prevTiers;
+    }
   });
 
   it("marks a proposal uncriticised when no second vendor exists", async () => {
@@ -380,6 +418,19 @@ describe("the document", () => {
     expect(out).toContain("src/mcp/server.ts");
   });
 
+  /**
+   * Fingerprint 287fffa0/67a0c784: a critic-rejected idea had no section of its own and
+   * fell into "Appraise these" — the document's most-read section — unmarked as having
+   * been rejected at all, even though the knowledge base recorded it as rejected in the
+   * same run.
+   */
+  it("puts a critic-rejected idea in its own section, not in Appraise these", () => {
+    const out = doc([parseProposal({ ...IDEA, rejects: true }) as Proposal]);
+    expect(out).toContain("## Rejected by its critic");
+    const appraiseSection = out.slice(out.indexOf("## Appraise these"), out.indexOf("## Already decided"));
+    expect(appraiseSection).not.toContain(IDEA.idea);
+  });
+
   it("says nothing was found rather than printing an empty section", () => {
     expect(doc([])).toContain("_Nothing._");
   });
@@ -466,6 +517,19 @@ describe("whatever propose itself is certain enough to reject is written back", 
     expect(String(rows[0]?.["why"])).toContain("none of it inside");
   });
 
+  /**
+   * Fingerprint bdd42529: a glob (`src/store/*.ts`) reads as "does not exist" under a
+   * literal `existsSync`, so the screen used to drop it out-of-scope with the false
+   * reason "names only files that do not exist" and write that false fact back as a
+   * permanent, confidence-1 knowledge row.
+   */
+  it("does not treat a glob path as an invented one", async () => {
+    const globby = { ...IDEA, touches: ["src/store/*.ts"] };
+    const r = await propose({ store, repoId, ask: scripted([[globby], [globby]]) }, real());
+    expect(r.screened[0]?.demotions).toStrictEqual([]);
+    expect(rejectedRows()).toHaveLength(0);
+  });
+
   it("writes back a proposal the critic structurally rejects, even in scope", async () => {
     const rejected = { ...IDEA, rejects: true };
     await propose({ store, repoId, ask: scripted([[IDEA], [rejected]]) }, real());
@@ -497,6 +561,22 @@ describe("whatever propose itself is certain enough to reject is written back", 
     const elsewhere = { ...IDEA, touches: ["src/mcp/server.ts"] };
     await propose({ store, repoId, ask: scripted([[elsewhere], [elsewhere]]) }, real());
     expect(rejectedRows()[0]?.["path"]).toBe("src/mcp/server.ts");
+  });
+
+  /**
+   * Fingerprint a90601f4: `knowledge/conflict.ts`'s `detectAndRecord` runs over every
+   * live row at the start of every review round and pairs opposite-polarity,
+   * high-overlap statements as a candidate contradiction — a bare "considered: <idea>"
+   * carries the IDEA'S OWN polarity, so a rejected idea that AGREES with a taught rule
+   * in substance but differs in phrasing could be read as CONTRADICTING it, parking a
+   * future review at `needs_human` over nothing. Exercises the REAL `polarity()`
+   * rather than a copy, since the whole point is safety against that exact function.
+   */
+  it("writes a statement conflict detection cannot read as agreeing or disagreeing with anything", async () => {
+    const elsewhere = { ...IDEA, touches: ["src/mcp/server.ts"] };
+    await propose({ store, repoId, ask: scripted([[elsewhere], [elsewhere]]) }, real());
+    const statement = String(rejectedRows()[0]?.["statement"]);
+    expect(polarity(statement)).toBe(0);
   });
 
   /**

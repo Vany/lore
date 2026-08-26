@@ -122,22 +122,25 @@ function knowledgeBlock(items: readonly KnowledgeItem[]): string {
 }
 
 /**
- * The critic must be a different VENDOR, not merely a different tier (D-1, applied to
- * ideas). Two tiers from one model family is one opinion asked twice, which is the same
- * argument that keeps Claude out of the review ladder.
+ * Every tier that could stand as critic — a different VENDOR than the proposer, not
+ * merely a different tier (D-1, applied to ideas). Two tiers from one model family is
+ * one opinion asked twice, which is the same argument that keeps Claude out of the
+ * review ladder. In LADDER ORDER, ranked cheapest first exactly as `tiers` is passed.
  *
- * `undefined` when no other vendor is configured — and then the proposal runs UNCRITICISED
- * and says so, rather than being graded by a sibling and presented as though it had been
- * challenged.
+ * Empty when no other vendor is configured at all — and then the proposal runs
+ * UNCRITICISED and says so, rather than being graded by a sibling and presented as
+ * though it had been challenged. A NON-EMPTY list is not a promise a critic will run:
+ * the caller (`propose`, below) still has to find one with a usable ROUTE, and used to
+ * stop at the first name regardless — fixed for fingerprint b56c6982, see the caller.
  */
-export function criticFor(tiers: readonly Tier[], proposer: Tier, pools: ModelPools = {}): Tier | undefined {
+export function criticFor(tiers: readonly Tier[], proposer: Tier, pools: ModelPools = {}): readonly Tier[] {
   // THROUGH THE POOLS, because `vendorOf` on a nickname compares the nickname itself —
   // "GLM5.2" is not in the alias table, so a pooled t1 would count as its own vendor and
   // could be handed a critic from the same company. Any route of a pool carries the
   // pool's vendor: the config refuses a pool that mixes models.
   const vend = (t: Tier): string => vendorOf(routesFor(t, pools)[0] ?? t.model ?? "");
   const mine = vend(proposer);
-  return tiers.find((t) => t.kind === "model" && t.model !== undefined && vend(t) !== mine);
+  return tiers.filter((t) => t.kind === "model" && t.model !== undefined && vend(t) !== mine);
 }
 
 /**
@@ -194,6 +197,21 @@ function recordFailedUsage(store: Store, repoId: string, tier: string, model: st
  * reads the same; `screen`'s own `restates` match (screen.ts) is what keeps THAT from
  * costing the reader anything, by demoting it `already-decided` in the document rather
  * than by suppressing the write.
+ *
+ * `statement`'s prefix is not just wording — found by lore's own review, fingerprint
+ * a90601f4. `knowledge/conflict.ts`'s `detectAndRecord` runs at the start of every
+ * review round over EVERY live row, this repo's included, and pairs opposite-polarity,
+ * high-overlap statements as a candidate contradiction. `"considered: <idea>"` carries
+ * the IDEA'S OWN polarity — a proposer arguing to split something the codebase was
+ * TAUGHT never to split writes a `+1`-polarity row beside a `-1`-polarity taught rule
+ * that agrees with the rejection, and the heuristic reads two rows that AGREE as a
+ * contradiction, parking the next review at `needs_human` over nothing. Verified
+ * directly against `polarity()`: "considered and reject: <idea>" scores 0 (undecidable
+ * — the prefix alone splits into a `+1` clause and a `-1` clause on `and`, before the
+ * idea's own words are even read) for every idea tried, including ones that are
+ * themselves all-negation. `findConflicts` skips polarity-0 rows entirely, which is
+ * this file's own documented bias: "a missed conflict leaves two rules to be caught
+ * later, while a false one stops a review and demands a person."
  */
 function writeBackRejections(store: Store, repoId: string, folder: string, commit: string, screened: readonly Screened[]): void {
   for (const s of screened) {
@@ -215,7 +233,7 @@ function writeBackRejections(store: Store, repoId: string, folder: string, commi
       repoId,
       kind: "mistake",
       source: "derived",
-      statement: `considered: ${s.proposal.idea}`,
+      statement: `considered and reject: ${s.proposal.idea}`,
       why: reasons.join("; "),
       path: s.proposal.touches.length === 1 ? s.proposal.touches[0] : undefined,
       cwe: undefined,
@@ -346,10 +364,23 @@ export async function propose(deps: ProposeDeps, input: ProposeInput): Promise<P
       continue;
     }
 
-    const namedCritic = criticFor(models, namedProposer, loadPools());
-    // Resolved exactly as the proposer was — a pool name is not a model id.
-    const criticRoute = namedCritic === undefined ? undefined : concreteRoute(namedCritic, loadPools(), () => undefined);
-    const critic = namedCritic === undefined || criticRoute === undefined ? undefined : { ...namedCritic, model: criticRoute };
+    const criticCandidates = criticFor(models, namedProposer, loadPools());
+    // TRIES EVERY CROSS-VENDOR TIER, not just the ladder-cheapest one — found by lore's
+    // own review, fingerprint b56c6982: the cheapest tier being parked on quota backoff
+    // is this deployment's ROUTINE state (D-93's own pool-and-fallback design exists
+    // because of exactly that), and stopping at the first name meant every proposal ran
+    // uncriticised whenever it happened, even with a second, healthy vendor configured
+    // and unused. Resolved exactly as the proposer was — a pool name is not a model id.
+    let critic: (Tier & { model: string }) | undefined;
+    const criticRefusals: string[] = [];
+    for (const candidate of criticCandidates) {
+      const route = concreteRoute(candidate, loadPools(), () => undefined);
+      if (route !== undefined) {
+        critic = { ...candidate, model: route };
+        break;
+      }
+      criticRefusals.push(noRouteBecause(candidate, loadPools(), () => undefined) ?? `${candidate.id}: its routes are unusable`);
+    }
     if (critic === undefined || attempted + 1 > input.budget) {
       // UNCRITICISED, and it says so on the proposal rather than in a footnote. A
       // reader who believes a second vendor challenged this when none did is exactly
@@ -364,9 +395,9 @@ export async function propose(deps: ProposeDeps, input: ProposeInput): Promise<P
           idea,
           `NOT CRITICISED: ${
             critic === undefined
-              ? namedCritic === undefined
+              ? criticCandidates.length === 0
                 ? "no second vendor is configured, so this is one model's unchallenged opinion"
-                : `${noRouteBecause(namedCritic, loadPools(), () => undefined) ?? "its routes are unusable"}, so this is one model's unchallenged opinion`
+                : `${criticRefusals.join("; ")}, so this is one model's unchallenged opinion`
               : "the budget ran out before a critic could read it"
           }`,
         ),
@@ -425,7 +456,16 @@ export async function propose(deps: ProposeDeps, input: ProposeInput): Promise<P
   // and no mismatch with `inScope`'s own leading-slash stripping (proposal.ts), which
   // exists for a different reason (matching a path against `folder` as plain text, not
   // resolving anything).
-  const exists = (p: string): boolean => existsSync(join(input.worktree, p));
+  // A glob (`src/store/*.ts`) reads as "does not exist" under a literal `existsSync` —
+  // found by lore's own review, fingerprint bdd42529: the screen then drops it
+  // out-of-scope with the false reason "names only files that do not exist", and
+  // writeBackRejections (above) turns that false fact into a confidence-1 permanent
+  // knowledge row. Globbing the tree to check properly is more machinery than this
+  // sanity check is worth; treating a glob-shaped name as present is the same bias the
+  // rest of this screen already has — a missed "invented path" costs a reader nothing,
+  // a false one costs the idea itself (proposal.ts's own `invented-paths` docs).
+  const looksLikeGlob = (p: string): boolean => /[*?[\]{}]/.test(p);
+  const exists = (p: string): boolean => looksLikeGlob(p) || existsSync(join(input.worktree, p));
   const screened = screen(screenedAll, input.folder, input.knowledge, exists);
   writeBackRejections(deps.store, deps.repoId, input.folder, input.commit, screened);
   return { screened, sessionsSpent, silent };

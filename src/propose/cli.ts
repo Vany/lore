@@ -12,14 +12,14 @@
  * SPEC: spec/propose.md §1, §6
  */
 
-import { mkdir, writeFile } from "node:fs/promises";
+import { access, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { DidNotRun, UsageError } from "../core/errors.ts";
 import { reviewType } from "../core/review-type.ts";
 import { git } from "../git/exec.ts";
 import { removeWorktree, repoPaths, worktreeFor } from "../git/repo.ts";
 import type { Reviewer } from "../reviewer/opencode.ts";
-import type { Store } from "../store/store.ts";
+import { NO_LIMIT, type Store } from "../store/store.ts";
 import { isLens, LENSES, type Lens } from "./proposal.ts";
 import { renderProposals } from "./render.ts";
 import { propose } from "./run.ts";
@@ -47,7 +47,10 @@ export function parseLenses(raw: string | undefined): readonly Lens[] {
   if (bad.length > 0) {
     throw new UsageError(`unknown lens(es): ${bad.join(", ")} — known: ${LENSES.join(", ")}`);
   }
-  return names as Lens[];
+  // Deduplicated — found by lore's own review, fingerprint 268bd330: `--lens
+  // seams,seams` ran the identical prompt twice, paying for a proposer and a critic on
+  // one vantage while an unknown name (an equally-plausible typo) was already refused.
+  return [...new Set(names)] as Lens[];
 }
 
 /** `--budget` in model sessions. Required, so the spend is chosen rather than discovered. */
@@ -61,6 +64,31 @@ export function parseBudget(raw: string | undefined): number {
     );
   }
   return n;
+}
+
+/**
+ * The first name in `dir` starting with `base` that nothing already occupies.
+ *
+ * Found missing by lore's own review, fingerprint 41c8217a: the document's name is
+ * date+sha+folder only, so two runs sharing all three — different `--mode`, a
+ * different `--lens` subset, or just a second look — collided on one path, and the
+ * second `writeFile` silently destroyed the first, exactly the loss the folder-in-name
+ * fix (above, on `slug`) was written to prevent one axis over. Rather than growing the
+ * name to encode every parameter that could ever distinguish two runs — a list with no
+ * natural end — this refuses to overwrite ANYTHING, for ANY reason: the sessions are
+ * already paid for by the time this runs, so the document must always land somewhere,
+ * never be silently replaced, and never be refused outright either (a hard refusal
+ * here would lose paid-for work just as surely as an overwrite does).
+ */
+export async function freePath(dir: string, base: string): Promise<string> {
+  for (let n = 1; ; n++) {
+    const candidate = join(dir, n === 1 ? `${base}.md` : `${base}-${String(n)}.md`);
+    try {
+      await access(candidate);
+    } catch {
+      return candidate;
+    }
+  }
 }
 
 export async function proposeCli(i: ProposeCliInput): Promise<string> {
@@ -97,7 +125,14 @@ export async function proposeCli(i: ProposeCliInput): Promise<string> {
         question: type.question,
         tiers: type.tiers,
         budget: i.budget,
-        knowledge: i.store.knowledgeFor(repoId),
+        // NO_LIMIT, not the ordinary 200-row cap — found by lore's own review,
+        // fingerprint 499b6cb8/f0592391. The screen's whole job is matching against
+        // EVERY decided-against row (screen.ts's `rejected` filter); a capped, newest-
+        // first read silently drops the OLDEST ones on a repo past the cap, and an
+        // early "considered and rejected" row falls out of the screen's memory exactly
+        // like `conflict detection` needed NO_LIMIT for (store.ts, lore-ok aa57c0f2) —
+        // both need every row to be correct, not merely representative.
+        knowledge: i.store.knowledgeFor(repoId, undefined, NO_LIMIT),
       },
     );
 
@@ -130,7 +165,11 @@ export async function proposeCli(i: ProposeCliInput): Promise<string> {
     // this finding is really about — a CWD-relative path when nothing was passed —
     // is resolved by the caller, `src/cli.ts`'s own argv wiring (`outDir: flagOf(argv,
     // "out") ?? join(dataDir(), "proposals")`), outside this folder's review scope.
-    const path = join(i.outDir, `${i.now.toISOString().slice(0, 10)}-${sha.slice(0, 7)}-${slug}.md`);
+    //
+    // NEVER OVERWRITTEN — see `freePath`'s own docs (fingerprint 41c8217a) for why a
+    // second run sharing this exact date+sha+folder gets a `-2` suffix instead of
+    // destroying the first run's paid-for document.
+    const path = await freePath(i.outDir, `${i.now.toISOString().slice(0, 10)}-${sha.slice(0, 7)}-${slug}`);
     await writeFile(path, doc, "utf8");
 
     if (result.sessionsSpent === 0) {

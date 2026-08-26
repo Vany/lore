@@ -75,7 +75,18 @@ export type Demotion =
    * invented sibling rides in on a genuine one, and the reader has no way to tell which
    * is which. A path in a proposal is a claim until something checks it.
    */
-  | "invented-paths";
+  | "invented-paths"
+  /**
+   * The critic's own `rejects: true`.
+   *
+   * Found missing by lore's own review, fingerprint 287fffa0/67a0c784: `rejects` was
+   * read by `writeBackRejections` (run.ts) for the knowledge base and by nothing that
+   * renders the document — a critic-rejected idea had no demotion of its own and
+   * landed in "Appraise these" exactly like one that survived, while the knowledge
+   * base simultaneously recorded it as rejected. The structured verdict spec/propose.md
+   * §6 was built for was stripped from the only output a person reads.
+   */
+  | "critic-rejects";
 
 export interface Screened {
   readonly proposal: Proposal;
