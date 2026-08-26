@@ -1101,10 +1101,24 @@ export class Store {
     readonly unavailableForTier: readonly string[] | undefined;
     /** The engine set that produced it, or `undefined` for a row written before D-92. */
     readonly engines: string | undefined;
+    /**
+     * Was the reused run itself interrupted (an engine killed, out of memory)?
+     *
+     * Found by lore's own review of the OOM-kill fix, fingerprint 4c38b78d/928bccd1:
+     * the reuse path used to hardcode `interrupted: false` on the reasoning that
+     * `codeMoved`'s own guard makes it moot — true only if the worktree cannot move
+     * within the SAME round after reuse fires, which D-107's held-diff boundary
+     * mechanism means it can. `false` for a row written before `interrupted` existed
+     * (the column predates it) — the same "cannot tell, so do not guess" stance
+     * `unavailableForTier` already takes one field up, chosen over `true` because an
+     * old row is far more likely to be a genuine clean run than a killed one, and
+     * this call site's only use of it is to WITHHOLD trust, never to grant it.
+     */
+    readonly interrupted: boolean;
   } | undefined {
     const row = this.db
       .prepare(
-        `SELECT tree_hash, unavailable, unavailable_for_tier, engines FROM tier_run
+        `SELECT tree_hash, unavailable, unavailable_for_tier, engines, outcome FROM tier_run
          WHERE review_id = ? AND tier = 't0' AND finished_at IS NOT NULL AND tree_hash IS NOT NULL
          ORDER BY id DESC LIMIT 1`,
       )
@@ -1118,7 +1132,13 @@ export class Store {
     // and the caller must re-derive rather than guess — see the field's own note.
     const stored = row?.["unavailable_for_tier"] ?? null;
     const forTier = stored === null ? undefined : lines(stored);
-    return { treeHash, unavailable: client, unavailableForTier: forTier, engines: row?.["engines"] ?? undefined };
+    return {
+      treeHash,
+      unavailable: client,
+      unavailableForTier: forTier,
+      engines: row?.["engines"] ?? undefined,
+      interrupted: row?.["outcome"] === "interrupted",
+    };
   }
 
   unavailableChecks(reviewId: string): readonly string[] {

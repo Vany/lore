@@ -241,11 +241,16 @@ async function sandboxed(
     // two branches with different dependencies, never wait on each other.
     return await withInstallLock(cacheDir, async () => {
       const installed = await install(cfg, worktree, cacheDir, scratch, cmds);
+      // `interrupted: installed.timedOut` — found by lore's own review, fingerprint
+      // dd36a31b: a timeout is the third way a run does not finish, structurally
+      // distinct from a stable absence (docker itself missing), and `ToolResult`
+      // already carries it rather than needing a message guessed at.
       if (installed.unavailable !== undefined) {
         return wanted.map((engine) => ({
           engine,
           findings: [],
           unavailable: `install could not run: ${installed.unavailable ?? ""}`,
+          interrupted: installed.timedOut,
         }));
       }
       // CHECKED BEFORE `!installed.ok` — found by lore's own review of this same
@@ -397,7 +402,9 @@ async function checkTypes(
 ): Promise<EngineOutcome> {
   if (scripts["typecheck"] !== undefined) {
     const r = await runInSandbox(cfg, worktree, cacheDir, scratch, cmds.run("typecheck"), false);
-    if (r.unavailable !== undefined) return { engine: "tsc", findings: [], unavailable: r.unavailable };
+    // `interrupted: r.timedOut`, fingerprint dd36a31b — same reasoning as the
+    // install site above: a timeout is a third way this did not finish.
+    if (r.unavailable !== undefined) return { engine: "tsc", findings: [], unavailable: r.unavailable, interrupted: r.timedOut };
     // CHECKED BEFORE THE PARSE, for both signals `ranOutOfMemory` currently
     // confirms — a monorepo's `turbo run typecheck` fans out across every package,
     // and when a memory limit stops it partway through, packages that had ALREADY
@@ -414,11 +421,14 @@ async function checkTypes(
     // lore-ok[6bc20289]: "for both signals `ranOutOfMemory` currently confirms" is
     // deliberately not a completeness claim — a memory limit can end a run other
     // ways this does not recognise (a Rust-based runner's own allocator message,
-    // a Go binary's "fatal error: runtime: out of memory", a signal death exec.ts's
-    // own mapping collapses to a plain exit code). Those are real but unbounded —
-    // every toolchain a target could run has its own crash text — and chasing
-    // them turns a fix for a confirmed incident into an open-ended allowlist with
-    // no natural stopping point.
+    // a Go binary's "fatal error: runtime: out of memory"). Those are real but
+    // unbounded — every toolchain a target could run has its own crash text — and
+    // chasing them turns a fix for a confirmed incident into an open-ended
+    // allowlist with no natural stopping point. (A bare host binary's own SIGKILL
+    // used to be a THIRD example here — exec.ts collapsed a signal death to a
+    // plain exit code — but that is now translated to the POSIX convention this
+    // check already reads, fingerprint 88fccc85/fdf8a29e/1b65dcdd, so it is one
+    // less case this lore-ok has to cover.)
     //
     // CORRECTED, fingerprint 24b65f50: an earlier version of this note claimed an
     // undetected case always degrades to a misattributed-but-honest signal — false
@@ -428,10 +438,17 @@ async function checkTypes(
     // exists for, not a lesser one, for exactly the toolchains this lore-ok
     // declines to chase. Accepted anyway: closing it needs the same unbounded
     // signature-matching this lore-ok already argues against, and this repo's own
-    // `turbo` scenario is covered (137 IS `ranOutOfMemory`'s first signal). A
+    // `turbo` scenario is covered (137 IS `ranOutOfMemory`'s first signal, and now
+    // reachable however docker itself reports it — see the SIGKILL note above). A
     // DIFFERENT runner's own kill text, found live, is what should extend it —
     // guessing at one now, unverified, risks the same false confidence this
     // incident started from.
+    //
+    // SHARPENED, fingerprint 8e820dae: the same undetected case also leaves
+    // `interrupted` unset on this path — inherent to the same boundary, not a
+    // separate gap: `interrupted` means DETECTED, and this whole note is about
+    // the case that, by construction, is not. Extending detection is what would
+    // set it, which is exactly the unbounded work declined above.
     if (ranOutOfMemory(r)) return scriptFinding("tsc", `${cmds.name} run typecheck`, r);
     // Still try the structured parse: a monorepo runner usually forwards tsc's own
     // lines, and per-file findings beat one blob whenever we can get them.
@@ -443,7 +460,8 @@ async function checkTypes(
     return { engine: "tsc", findings: [], unavailable: "no `typecheck` script and no root tsconfig.json" };
   }
   const r = await runInSandbox(cfg, worktree, cacheDir, scratch, "npx --no-install tsc --noEmit --pretty false", false);
-  if (r.unavailable !== undefined) return { engine: "tsc", findings: [], unavailable: r.unavailable };
+  // `interrupted: r.timedOut`, fingerprint dd36a31b.
+  if (r.unavailable !== undefined) return { engine: "tsc", findings: [], unavailable: r.unavailable, interrupted: r.timedOut };
   // This branch never routed through `scriptFinding` at all, for ANY non-zero exit
   // — so a run stopped by a memory limit here (single-project `tsc --noEmit`, no
   // monorepo runner involved) fell through to `parseTsc` unconditionally, on output
@@ -485,14 +503,16 @@ async function checkLint(
 ): Promise<EngineOutcome> {
   if (scripts["lint"] !== undefined) {
     const r = await runInSandbox(cfg, worktree, cacheDir, scratch, cmds.run("lint"), false);
-    if (r.unavailable !== undefined) return { engine: "eslint", findings: [], unavailable: r.unavailable };
+    // `interrupted: r.timedOut`, fingerprint dd36a31b — same reasoning as tsc above.
+  if (r.unavailable !== undefined) return { engine: "eslint", findings: [], unavailable: r.unavailable, interrupted: r.timedOut };
     return r.ok ? { engine: "eslint", findings: [] } : scriptFinding("eslint", `${cmds.name} run lint`, r);
   }
   if (!detect(worktree, "eslint")) {
     return { engine: "eslint", findings: [], unavailable: "no `lint` script and no eslint config" };
   }
   const r = await runInSandbox(cfg, worktree, cacheDir, scratch, "npx --no-install eslint . --format json", false);
-  if (r.unavailable !== undefined) return { engine: "eslint", findings: [], unavailable: r.unavailable };
+  // `interrupted: r.timedOut`, fingerprint dd36a31b — same reasoning as tsc above.
+  if (r.unavailable !== undefined) return { engine: "eslint", findings: [], unavailable: r.unavailable, interrupted: r.timedOut };
   // Same fix as both `tsc` branches above: checked explicitly rather than left to
   // fall through as "unparseable output" — true in practice (a run cut short by a
   // memory limit usually truncates eslint's single trailing JSON blob), but the

@@ -343,6 +343,35 @@ describe("a run the sandbox itself killed is never mistaken for a clean or parti
     expect(eslint?.unavailable).toMatch(/killed/);
     expect(eslint?.unavailable).toMatch(/not a fault in the branch/);
   });
+
+  // Fingerprint dd36a31b, found by lore's own review: a timeout is the THIRD way
+  // a run does not finish, alongside a kill and OOM, and it reaches `runInSandbox`
+  // as `r.unavailable` set with `r.timedOut` true — a structured signal `ToolResult`
+  // already carries, distinct from a STABLE absence (no config), which must not
+  // withhold trust from the round. Every `r.unavailable !== undefined` early return
+  // in checkTypes/checkLint now threads it through; this exercises one for real,
+  // with `execFile`'s own timeout killing a script that sleeps well past it.
+  it("checkTypes: a run that times out is interrupted, not a stable absence", async () => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { typecheck: "tsc -b" } }));
+    const script = join(dir, "fake-docker-hang.sh");
+    const called = join(dir, ".called-hang");
+    writeFileSync(
+      script,
+      "#!/bin/sh\n" +
+        `if [ -f "${called}" ]; then\n` +
+        "  sleep 5\n" +
+        "else\n" +
+        `  touch "${called}"\n` +
+        "  exit 0\n" +
+        "fi\n",
+    );
+    chmodSync(script, 0o755);
+    const sandbox = { ...baseSandbox(script), timeoutMs: 200 };
+    const out = await runT0(dir, { engines: ["tsc"], sandbox });
+    const tsc = out.outcomes.find((o) => o.engine === "tsc");
+    expect(tsc?.unavailable).toMatch(/timed out/);
+    expect(tsc?.interrupted, "a timeout withholds trust from this round the same as a kill").toBe(true);
+  });
 });
 
 /**

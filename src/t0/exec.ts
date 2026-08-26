@@ -8,9 +8,29 @@
  */
 
 import { execFile } from "node:child_process";
+import { constants } from "node:os";
 import { promisify } from "node:util";
 
 const run = promisify(execFile);
+
+/**
+ * A process a SIGNAL killed did not exit — Node reports the signal's NAME
+ * (`err.signal`, e.g. `"SIGKILL"`), never a number, and `err.code` in that case is
+ * `null`/`undefined`, not the POSIX `128 + signal` exit code a shell would report.
+ *
+ * Found by lore's own review, fingerprint 88fccc85/fdf8a29e/1b65dcdd: every `code
+ * === 137` check downstream (t0/engines.ts, t0/runner.ts) assumed the shell
+ * convention — true for `docker run`, which translates a killed CONTAINER into
+ * its OWN ordinary exit code, but never true for a bare host binary (semgrep,
+ * ast-grep) an OOM-killer signals directly. Translated here, once, to the
+ * convention every downstream check already assumes, rather than teaching each
+ * of them a second way to recognise the same fact.
+ */
+function signalToCode(signal: NodeJS.Signals | null | undefined): number | undefined {
+  if (signal === null || signal === undefined) return undefined;
+  const num = (constants.signals as Record<string, number | undefined>)[signal];
+  return num === undefined ? undefined : 128 + num;
+}
 
 export interface ToolResult {
   readonly ok: boolean;
@@ -46,7 +66,13 @@ export async function runTool(
     });
     return { ok: true, code: 0, stdout, stderr, timedOut: false };
   } catch (e) {
-    const err = e as NodeJS.ErrnoException & { stdout?: string; stderr?: string; code?: number | string; killed?: boolean };
+    const err = e as NodeJS.ErrnoException & {
+      stdout?: string;
+      stderr?: string;
+      code?: number | string;
+      killed?: boolean;
+      signal?: NodeJS.Signals | null;
+    };
     // ENOENT means the tool is not installed. That is not a clean result — it is a
     // check that did not run, and the caller must say so out loud.
     if (err.code === "ENOENT") {
@@ -55,7 +81,7 @@ export async function runTool(
     const timedOut = err.killed === true;
     return {
       ok: false,
-      code: typeof err.code === "number" ? err.code : 1,
+      code: typeof err.code === "number" ? err.code : (signalToCode(err.signal) ?? 1),
       stdout: err.stdout ?? "",
       stderr: err.stderr ?? "",
       timedOut,

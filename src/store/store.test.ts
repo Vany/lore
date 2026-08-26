@@ -881,6 +881,25 @@ describe("tier runs are opened before the tier is asked anything", () => {
     expect(Number(n["c"])).toBe(1);
   });
 
+  // Fingerprint 4c38b78d/928bccd1, found by lore's own review of the OOM-kill
+  // fix: `runRound`'s t0-reuse path (reviewer/review.ts) used to hardcode
+  // `interrupted: false` on a reused run, reasoning that `codeMoved`'s own
+  // guard made it moot — false, because D-107's held-diff boundary can move the
+  // worktree LATER in the SAME round, after reuse has already fired. The fix
+  // carries the REUSED run's own interrupted status forward instead of
+  // hardcoding it, which needs this field on `lastT0`'s own return.
+  it("carries a reused run's own interrupted status forward", () => {
+    const id = store.openTierRun("rev1", "t0", 1, new Date().toISOString());
+    store.closeTierRun(id, "interrupted", ["tsc: killed"], "treehash1");
+    expect(store.lastT0("rev1")?.interrupted).toBe(true);
+  });
+
+  it("says false for a genuinely clean run, not just absent", () => {
+    const id = store.openTierRun("rev1", "t0", 1, new Date().toISOString());
+    store.closeTierRun(id, "clean", [], "treehash1");
+    expect(store.lastT0("rev1")?.interrupted).toBe(false);
+  });
+
   // `roundStartedAt` feeds `check_back_after_ms`, which is conditioned on how long the
   // round has run and compared against the CURSOR TIER's latencies. It used to answer
   // with any open row — and during T0 the only open row is T0's, while the cursor

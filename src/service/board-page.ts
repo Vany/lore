@@ -503,12 +503,20 @@ function side(q, which) {
 /** One tier attempt, with the findings it raised nested underneath. */
 function run(r, t) {
   const running = !t.finishedAt;
+  // The 'interrupted' outcome, found by lore's own review of the OOM-kill fix,
+  // fingerprint d767498a: this file keeps its own copy of the outcome
+  // vocabulary, separate from ops/status.ts's, and the new outcome (store.ts)
+  // reached that surface without reaching this one — the same web-vs-operator
+  // drift D-102's own comment already names for 'reused'. NOT the s-failed
+  // cross mark: an engine that finished before another was killed still
+  // produced real findings, same reasoning as ops/status.ts's yellow, not red.
   const mark = running ? '<span class="s-running">▸</span>'
     : t.outcome === "findings" ? '<span class="sev-medium">✓</span>'
     : t.outcome === "clean" ? '<span class="s-passed">✓</span>'
     // NOT a tick. A reused run did no work, and a tick beside "0s" invited exactly the
     // question that found this: it read as a full sweep that finished instantly.
     : t.outcome === "reused" ? '<span class="dim">↺</span>'
+    : t.outcome === "interrupted" ? '<span class="skip">⚠</span>'
     : '<span class="s-failed">✘</span>';
   const took = running
     ? '<span class="clock s-running" data-used="' + esc(t.startedAt) + '">—</span>'
@@ -517,12 +525,17 @@ function run(r, t) {
   // tier whose findings are not being shown must not look the same (INV-1, again).
   // WHAT THIS ROW IS CLAIMING, and the reused case is the one that must not overclaim.
   // "raised nothing" about a run that did not happen is a check that did not run reported
-  // as a check that found nothing — INV-1, in the page written to refuse it.
+  // as a check that found nothing — INV-1, in the page written to refuse it. An
+  // INTERRUPTED run with zero findings is the same overclaim from a different
+  // trigger (fingerprint d767498a) — an engine that was killed or ran out of
+  // memory is not one that looked and found nothing.
   const count = t.outcome === "reused"
     ? '<span class="dim">not re-run — the tree was unchanged, so the earlier sweep still stands</span>'
-    : t.findings.length > 0
-      ? '<span class="dim">' + t.findings.length + " finding(s)</span>"
-      : running ? "" : '<span class="dim">raised nothing</span>';
+    : t.outcome === "interrupted" && t.findings.length === 0
+      ? '<span class="skip">did not finish — see below, not a clean sweep</span>'
+      : t.findings.length > 0
+        ? '<span class="dim">' + t.findings.length + " finding(s)</span>"
+        : running ? "" : '<span class="dim">raised nothing</span>';
   return '<div class="run"><div class="run-head">' +
       "<span>" + mark + " " + esc(t.tier) + "</span>" +
       '<span class="dim">round ' + t.round + "</span>" +

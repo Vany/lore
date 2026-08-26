@@ -183,6 +183,40 @@ describe("the board's own script runs", () => {
     expect(() => render(snapshot({ spendTodayUsd: 9 }))).not.toThrow();
   });
 
+  // Fingerprint d767498a, found by lore's own review of the OOM-kill fix: this
+  // page keeps its own copy of the tier_run outcome vocabulary, and the new
+  // 'interrupted' outcome (store.ts) reached ops/status.ts but not here — an
+  // interrupted t0 round with zero findings rendered the red cross mark AND
+  // "raised nothing", the exact INV-1 sentence a comment five lines above it
+  // says must never appear for a run that did not happen.
+  it("renders an interrupted t0 round as neither failed nor a clean sweep", () => {
+    const { render, byId } = loadPage();
+    const base = snapshot();
+    render({
+      ...base,
+      reviews: [
+        {
+          ...(base.reviews[0] as Record<string, unknown>),
+          tiers: [
+            {
+              tier: "t0",
+              round: 2,
+              outcome: "interrupted",
+              startedAt: new Date(Date.now() - 90_000).toISOString(),
+              finishedAt: new Date(Date.now() - 60_000).toISOString(),
+              findings: [],
+            },
+          ],
+        },
+      ],
+    });
+
+    const html = String(byId.get("board")?.innerHTML ?? "");
+    expect(html, "the row must exist to make either claim below meaningful").toContain("interrupted");
+    expect(html, "an interrupted run is not the same red mark as one that never ran").not.toContain("s-failed");
+    expect(html, "the exact overclaim this fix removes").not.toContain("raised nothing");
+  });
+
   it("renders the states that have their own shapes", () => {
     const { render } = loadPage();
     const base = snapshot();

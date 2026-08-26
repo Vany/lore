@@ -561,12 +561,15 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
         // no t0 findings at all — they were raised when the tree was first read and are
         // still open — so there is nothing here to classify.
         //
-        // `interrupted: false` — not tracked through `store.lastT0` (unlike `unavailable`),
-        // and deliberately not needed: this branch only reuses when `roundTree` EQUALS the
-        // tree t0 last read (`reuseT0`'s own guard), so `settleFixed`'s `codeMoved` check
-        // is false for every finding on a reused round regardless — nothing here could ever
-        // be mistaken for a fresh, trustworthy re-scan settling anything.
-        { findings: [], outcomes: [], skipped: [], unavailable: previousT0.unavailable, interrupted: false }
+        // CARRIED FROM THE REUSED RUN, not hardcoded — found by lore's own review,
+        // fingerprint 4c38b78d/928bccd1: an earlier version of this branch reasoned
+        // that `roundTree` equalling t0's last-read tree makes `settleFixed`'s
+        // `codeMoved` check false for everything this round, so `interrupted` could
+        // not matter. False — D-107's held-diff boundary can apply a fix to the SAME
+        // worktree LATER in this same round, after this line runs, moving it past
+        // `roundTree` before `settleFixed` reads it. If the tree t0 actually read
+        // was itself an interrupted run, that risk is real here too.
+        { findings: [], outcomes: [], skipped: [], unavailable: previousT0.unavailable, interrupted: previousT0.interrupted }
       : await (input.t0 ?? runT0)(worktree, {
           engines: type.t0,
           // SCOPED TO WHAT THE BRANCH TOUCHED (D-92). A pattern engine matches one file at

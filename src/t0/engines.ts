@@ -576,7 +576,12 @@ async function semgrep(worktree: string, scope?: Scope): Promise<EngineOutcome> 
     ["--config", "p/security-audit", "--json", "--quiet", "--metrics", "off", ...scopePaths(scope)],
     600_000,
   );
-  if (r.unavailable !== undefined) return { engine: "semgrep", findings: [], unavailable: r.unavailable };
+  // `interrupted: r.timedOut` — found by lore's own review, fingerprint dd36a31b:
+  // a timeout is the third way a run does not finish, alongside a kill and OOM,
+  // and `ToolResult` already carries it as a structured flag rather than a message
+  // to guess from. `unavailable` alone does not distinguish it from a stable
+  // absence (no rules configured), which must NOT withhold trust from this round.
+  if (r.unavailable !== undefined) return { engine: "semgrep", findings: [], unavailable: r.unavailable, interrupted: r.timedOut };
   // Found by lore's own review of the t0/runner.ts OOM fix, fingerprint 10986564:
   // the same wrong-reason defect that fix removed from checkTypes/checkLint stood
   // here too. semgrep runs on the HOST, not the sandbox, so this is never the
@@ -670,7 +675,8 @@ interface SgMatch {
 
 async function astGrep(worktree: string, scope?: Scope): Promise<EngineOutcome> {
   const r = await runTool(worktree, "ast-grep", ["scan", "--json", ...scopePaths(scope)], 300_000);
-  if (r.unavailable !== undefined) return { engine: "ast-grep", findings: [], unavailable: r.unavailable };
+  // Same fix as semgrep above, fingerprint dd36a31b.
+  if (r.unavailable !== undefined) return { engine: "ast-grep", findings: [], unavailable: r.unavailable, interrupted: r.timedOut };
   // Same fix as semgrep above, fingerprint 10986564.
   if (r.code === 137) {
     return {
