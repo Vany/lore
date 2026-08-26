@@ -418,12 +418,20 @@ async function checkTypes(
     // own mapping collapses to a plain exit code). Those are real but unbounded —
     // every toolchain a target could run has its own crash text — and chasing
     // them turns a fix for a confirmed incident into an open-ended allowlist with
-    // no natural stopping point. An undetected case still is not silence: it
-    // reaches `scriptFinding`'s genuine-failure arm below (a HIGH finding) or, on
-    // the bare-invocation branches, `unavailable` — a real signal that something
-    // did not go cleanly, misattributing the REASON rather than the ORIGINAL bug
-    // this fix exists for (a stopped run silently read as complete and clean).
-    // Extended the way cbb6824f and 9171c6c9 already did, if one is found live.
+    // no natural stopping point.
+    //
+    // CORRECTED, fingerprint 24b65f50: an earlier version of this note claimed an
+    // undetected case always degrades to a misattributed-but-honest signal — false
+    // on the branch four lines down. When `parseTsc` finds SOME real lines before
+    // an undetected interruption, `parsed.length > 0` returns them directly,
+    // never reaching `scriptFinding` at all — the ORIGINAL bug this whole fix
+    // exists for, not a lesser one, for exactly the toolchains this lore-ok
+    // declines to chase. Accepted anyway: closing it needs the same unbounded
+    // signature-matching this lore-ok already argues against, and this repo's own
+    // `turbo` scenario is covered (137 IS `ranOutOfMemory`'s first signal). A
+    // DIFFERENT runner's own kill text, found live, is what should extend it —
+    // guessing at one now, unverified, risks the same false confidence this
+    // incident started from.
     if (ranOutOfMemory(r)) return scriptFinding("tsc", `${cmds.name} run typecheck`, r);
     // Still try the structured parse: a monorepo runner usually forwards tsc's own
     // lines, and per-file findings beat one blob whenever we can get them.
