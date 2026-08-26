@@ -3,6 +3,149 @@
 Newest first. Updated at the end of each task: what changed, what I learned, what
 surprised me.
 
+## 2026-08-27 — src/propose's folder review: a missing write-back feature, then eight rounds finding what building it broke
+
+**What changed.** Folder review of `src/propose` (`rev__X9yu8r4xMlGH-Pm8ibJz_yi`,
+`path: src/propose`), driven to `passed_partial` over **eleven commits**
+(`41e15d6` through `f37e40d`). Rounds 1–2 were an ordinary audit sweep — five
+findings, four fixed (an undocumented `--json` flag that nothing read, `--out`
+defaulting CWD-relative instead of anchored, a self-contradicting module docstring,
+usage lost on a failed call), one left deliberately open: fingerprint `b551376e`,
+spec/propose.md §6's claim that "whatever is rejected is written back to the
+knowledge base" — a feature the spec had described since this tool was designed and
+the code had never once implemented.
+
+**Vany's own design call, in two rounds of `AskUserQuestion`.** `propose` is
+fire-and-forget — no way to later learn what a person decided about a *surviving*
+idea — so only what `propose` itself is certain enough of, within its own run, can
+trigger a write-back. First question: implement now, or correct the spec instead?
+*"Implement it now, same review."* Second, after finding the mechanism itself was
+still ambiguous: which of two candidates should trigger it — (A) the screen's own
+`out-of-scope` drop alone, or (B) that plus the critic's own verdict that an idea is
+simply wrong? *"(B) Out-of-scope + critic says wrong."* (B) needed something that
+didn't exist: a *structured* "the critic rejects this" fact, not prose parsed out of
+`idea`'s free text. New `rejects?: boolean` on `Proposal`, asked for explicitly in
+`criticPrompt`, read by `parseProposal` — and `writeBackRejections` (`run.ts`),
+called once after `screen()` returns, recording a `kind: "mistake"`, `source:
+"derived"` row per rejected proposal, idempotent by a `propose:<folder>:<commit>:
+<lens>` provenance key (the same `hasKnowledgeFrom` guard `promoteRecurring`,
+`knowledge/derive.ts`, already uses, and for the identical reason: a re-run must not
+silently re-arm a lesson a person resolved away).
+
+**Round 3 shipped the feature with a real gap of its own — a proposer's own
+`rejects: true` could be attributed to a critic that never ran**, since three
+no-critic fallback branches spread the proposer's own object unstripped
+(`uncriticised`, `run.ts` — `exactOptionalPropertyTypes` is why this destructures
+the field out rather than setting it `undefined`). Fixed same round, found by the
+review that read round 3's own diff.
+
+**Then eight more rounds, each fixing something the LAST fix's own blast radius
+had opened.** The throughline: `writeBackRejections` turns a screen or critic
+verdict into a *permanent* knowledge row, so every gap in it doesn't just mis-render
+a document once — it teaches the codebase something false, forever, and every later
+sweep inherits the lie. Roughly in the order found:
+
+- The critic's `rejects: true` was read for the write-back and by **nothing that
+  decided what the document showed** — a critic-rejected idea still landed in
+  "Appraise these" like one that survived, while the knowledge base simultaneously
+  recorded it rejected. New `critic-rejects` demotion and a "Rejected by its critic"
+  document section (fingerprints `287fffa0`/`67a0c784`).
+- The write-back's `"considered: <idea>"` statement carried the **idea's own
+  polarity** into `knowledge/conflict.ts`'s `detectAndRecord`, which runs over every
+  live row at the start of every review round — a rejected idea that *agreed* with a
+  taught rule in substance but not phrasing could read as *contradicting* it, parking
+  a future review at `needs_human` over nothing (`a90601f4`). Fixed by making the
+  prefix itself two opposite-polarity clauses ("considered and reject") — verified
+  directly against `polarity()`, not asserted.
+- A glob in `touches` (`src/store/*.ts`) read as "does not exist" under a literal
+  `existsSync`, so the screen dropped it out-of-scope with a **false** reason and
+  wrote that false fact back at confidence 1 (`bdd42529`).
+- `criticFor` picked only the ladder-cheapest cross-vendor tier; if its route had no
+  usable path, the proposal ran uncriticised even with a second, healthy vendor
+  configured and unused — the cheapest tier being parked on quota backoff being this
+  deployment's *routine* state, not an edge case (`b56c6982`). Now tries every
+  candidate in ladder order — a breaking change to `criticFor`'s own return type.
+- The knowledge screen read `knowledgeFor`'s default 200-row cap; a repo past it
+  silently lost its *oldest* decided-against rows, letting `propose` re-offer an
+  already-rejected idea as novel — the identical fix conflict detection already
+  needed for the identical reason (`499b6cb8`/`f0592391`, `NO_LIMIT`).
+- The document's name (date+sha+folder) collided across two runs differing only in
+  `--mode` or `--lens`, and the second `writeFile` silently destroyed the first
+  run's paid-for output (`41c8217a`) — fixed by refusing to overwrite *anything, for
+  any reason* (`freePath`, numbered suffixes) rather than trying to enumerate every
+  parameter that could ever distinguish two runs.
+- **Cross-folder leakage, found and narrowed three times in a row.** `restates`
+  matched an out-of-scope rejection recorded for one folder against an unrelated,
+  genuinely in-scope proposal in a *later*, differently-scoped run — a `--folder
+  src/mcp` run's best idea demoted "already decided" over a decision that was never
+  made about it, because it landed outside an *earlier* `src/store` sweep
+  (`0318670f`). Fixed by scoping the match itself (`inScope(k.path ?? "", touches)`,
+  reusing the exact function §1.1's own rule already uses the other direction) — but
+  the *write* side only ever set that scope for a single-touch proposal, falling
+  back to repo-wide for two or more, which is the *modal* case, since an idea that
+  moves a seam necessarily touches both sides of it (`50a98db3`, `commonScope` — the
+  narrowest shared ancestor directory). That still fell back to repo-wide when
+  touches shared **no** root segment at all (`deploy/x.sh` + `spec/y.md`) — the same
+  leakage for ideas spanning unrelated top-level areas, and the round-8 fix's own
+  test title ("never repo-wide") had overclaimed exactly this (`e6c44b9f`). Final
+  answer: skip the write-back entirely rather than falsely widen it — zero touches
+  has nothing to be dishonest about, so repo-wide is honest there; touches that
+  share nothing carry real information, and writing repo-wide anyway overstates it.
+- `--folder`'s own existence was never checked at all — a typo converted an entire
+  budget into out-of-scope drops *and* wrote one false permanent rejection per lens
+  (`9b633abb`). The guard that fixed it only checked *something* existed at the
+  resolved path — `--folder ..` resolves to the worktree's own parent, which always
+  exists (`48d3e092`) — and the escape check that fixed *that* tested a raw string
+  prefix, not a segment boundary, so a real directory named `..venv-backup` would
+  have been refused as "outside the tree" (`7bcfb5eb`) — the identical
+  bare-prefix-vs-segment-boundary lesson this codebase's `scopesOverlap`/`inScope`
+  already carry scars from, relearned a third time in one file.
+- `concreteRoute`'s `known` callback was `() => undefined` throughout, discarding
+  the store's own learned route-unavailability state (`5b72aabd`) — fixed to read
+  `store.routeUnavailable`. My own fix comment then overclaimed what it did ("a
+  route this run just watched fail is not immediately retried") — untrue: the
+  proposer's route resolves once, before the lens loop, and `propose` never
+  *writes* that state itself, only reads what a review already wrote
+  (`77431767`/`3be4bb83`) — corrected rather than widened, since writing to that
+  shared key from here risks `propose` misclassifying a transient failure and
+  wrongly parking a route the review system could still use.
+- One finding verified **wrong** and justified rather than fixed: "unlike a review,
+  propose never releases its opencode sessions" (`70a714ba`). Checked directly —
+  `client.session.delete` has exactly one call site, gated on a session having been
+  tracked as "kept," which requires both a `reviewId` and `tier.conversation ===
+  true`, an opt-in no tier in `DEFAULT_TIERS` sets. `propose` passing no `reviewId`
+  leaves it exactly where any ordinary, non-rung-sharing review tier call already
+  is — not a gap this file introduces or can fix alone.
+
+**The last round found nothing new — it found five old fixes whose own
+explanatory comments were never upgraded.** A deep tier dumped 18 findings at once
+from a stale read; 16 were already-fixed restatements already correctly marked, but
+auditing the two genuinely-new duplicate fingerprints turned up a pattern: five
+fixes (`a90601f4`, `790271a9`, `50a98db3`, and the two above) had been explained in
+plain "found by lore's own review, fingerprint X" prose at the moment each landed —
+never in the `lore-ok[X]` bracket form the ladder actually parses — because nothing
+had re-raised them as still-open since. A fix's own comment gets written in the
+narrative voice of the moment; the bracket form only gets checked when something
+forces the question. Cross-checked programmatically against all 18 fingerprints
+before moving on, rather than trusting memory of which ones already had it.
+
+**Verdict:** `passed_partial` — `rev__X9yu8r4xMlGH-Pm8ibJz_yi`, tree
+`360829262a9146766ff8e723507ac706cc6d5260` scoped to `src/propose`, 3 tiers (t0, t2, t3), 38 findings, 23
+fixed, 9 justified, 6 left open at settlement — all six independently confirmed
+already fixed with working `lore-ok` markers before this entry was written; the
+stale-mirror tier simply never got a chance to re-read the final tree, because the
+review reached its terminal state before the next submission (round 11, the
+citation-only commit above) could land — `review_submit` refused it outright:
+*"review ... is 'passed_partial' and takes no more submissions."* **Two honest
+caveats, not buried:** every tier that actually ran this round happened to be
+z-ai — t2 and t3 were both answered by same-vendor stand-ins for their configured
+models, so despite three tiers running, this was not the independent-vendor
+coverage the ladder is designed to provide. And commit `f37e40d` (round 11, the
+bracket-citation sweep) sits on `main`, pushed, but was never itself read by any
+tier — comment-only, no behavior change, full suite unchanged at 1813 green before
+and after, but a review that did not run is not a review that found nothing, so:
+said here, not silently.
+
 ## 2026-08-26 — an OOM-kill report that widened four times: a real SIGKILL was never 137, and a fix reused before it lands
 
 **What changed.** Vany, verbatim: "lore's tsc check got OOM-killed on its side /
