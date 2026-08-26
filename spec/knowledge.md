@@ -574,3 +574,15 @@ is this review's repository free of every open conflict — and calls `resumeNee
 itself when it is, so a review closed this way resumes on its very next poll rather
 than waiting for an action that was never coming.
 
+**`review_inbox` performs the same check too, found by lore's own review (c8d63c13):
+the poll fix alone still left one route to the trap.** The inbox is where a client
+looks FIRST each session, ahead of polling any one review by id, and it kept its own
+copy of the old, now-impossible instruction — "call `review_submit` on it (an empty
+diff is fine)" — for exactly the state `review_poll` had just been taught to resume
+on its own. A client that only ever calls the inbox, never polling the parked review
+directly, had no route to the earlier fix at all: told to submit an empty diff, told
+the truth about nothing being open, and refused by the tool it was told to call.
+`review_inbox` now resumes before building its response, the same as `review_poll` —
+so by the time either surface answers, a review this repository has stopped blocking
+is never still reported as `needs_human`.
+

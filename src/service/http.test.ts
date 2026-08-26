@@ -1277,6 +1277,90 @@ describe("an empty knowledge base explains itself", () => {
   });
 });
 
+// A REPOSITORY PAST 200 LIVE RULES READ AS THOUGH IT HAD STOPPED LEARNING.
+//
+// Found by lore's own review (562d4c2e, 0e9ae660) — the same LIMIT 200 default
+// aa57c0f2 already fixed for the conflict-id `byId` maps in this file was still live
+// here: `count` froze at 200 once a repo passed that many rules, and a `contains`
+// match among the older ones silently fell out of the window. Worse than a bare
+// zero: the empty-match note AFFIRMATIVELY said "This repository HAS knowledge;
+// nothing matched this filter. Widen it before concluding anything" — false when the
+// match exists beyond the window and no widening of the filter can reach it. This is
+// exactly the surface knowledge_resolve's own refusal ("check knowledge_query")
+// points a caller back to.
+describe("knowledge_query does not lose rules past two hundred (562d4c2e, 0e9ae660)", () => {
+  it("still finds a match older than the two hundred newest rules", async () => {
+    store.addKnowledge({
+      repoId, kind: "rule", source: "taught",
+      statement: "the payroll cutover window closes at midnight UTC, not local time",
+      why: "ADR-0041", path: undefined, cwe: undefined, provenance: undefined,
+      sourceBlob: undefined, confidence: undefined,
+    });
+    for (let i = 0; i < 205; i++) {
+      store.addKnowledge({
+        repoId, kind: "rule", source: "ingested", statement: `newer rule ${i}`, why: undefined,
+        path: undefined, cwe: undefined, provenance: `doc${i}.md`, sourceBlob: `b${i}`, confidence: 0.5,
+      });
+    }
+
+    const out = await callTool("knowledge_query", { contains: "payroll cutover" });
+    expect(out["count"], "the match must be found, not silently capped out of the window").toBe(1);
+    expect(String(out["note"])).not.toMatch(/nothing matched/);
+  });
+
+  it("reports the true total past two hundred live rules, not a frozen cap", async () => {
+    for (let i = 0; i < 205; i++) {
+      store.addKnowledge({
+        repoId, kind: "rule", source: "ingested", statement: `rule ${i}`, why: undefined,
+        path: undefined, cwe: undefined, provenance: `doc${i}.md`, sourceBlob: `b${i}`, confidence: 0.5,
+      });
+    }
+    const out = await callTool("knowledge_query", {});
+    expect(out["count"]).toBe(205);
+  });
+});
+
+// A TAUGHT RULE WITH A NATURAL DIRECTORY SPELLING SCOPED NOTHING, EVER.
+//
+// Found by lore's own review (28941e15, 88958ae6) — knowledge_teach stored `path`
+// verbatim, but every consumer (`scopesOverlap` in conflict.ts, `knowledgeFor`'s SQL
+// `LIKE path || '/%'`) matches at an EXACT segment boundary. "src/tests/" (a
+// trailing slash) and "./src" (a leading dot-segment) are the natural ways to spell
+// a directory, and both stored a rule that then matched no file, ever — recorded:
+// true, confidence 1, silently inert. `normalizeReviewPath` already existed in this
+// file for review_start's folder path; applied here too.
+describe("knowledge_teach scopes a rule the same way however its path is spelled (28941e15, 88958ae6)", () => {
+  it("matches a file under the directory when taught with a trailing slash", async () => {
+    await callTool("knowledge_teach", {
+      statement: "tests under here may bind to loopback",
+      why: "sandboxed, no real network",
+      path: "src/tests/",
+    });
+    const out = await callTool("knowledge_query", { path: "src/tests/foo.test.ts" });
+    expect(out["count"], "a trailing slash on the taught path must not make the rule unmatchable").toBe(1);
+  });
+
+  it("matches a file under the directory when taught with a leading ./", async () => {
+    await callTool("knowledge_teach", {
+      statement: "generated code here is not hand-reviewed",
+      why: "codegen output",
+      path: "./src/generated",
+    });
+    const out = await callTool("knowledge_query", { path: "src/generated/schema.ts" });
+    expect(out["count"], "a leading ./ on the taught path must not make the rule unmatchable").toBe(1);
+  });
+
+  it("keeps an already-canonical path untouched (control)", async () => {
+    await callTool("knowledge_teach", {
+      statement: "payroll math is fixed-point, never float",
+      why: "ADR-0012",
+      path: "src/payroll",
+    });
+    const out = await callTool("knowledge_query", { path: "src/payroll/calc.ts" });
+    expect(out["count"]).toBe(1);
+  });
+});
+
 // RESUMING A REVIEW THAT WILL ONLY PARK AGAIN IS NOT PROGRESS, and reporting it as
 // progress is worse than not resuming. `needsHuman` is recomputed from
 // `openConflicts(repoId)`, which is repo-wide: a parked review is blocked by EVERY open
@@ -1534,6 +1618,28 @@ describe("one review per branch", () => {
     expect(message(second), "must not condition pull_fresh on having pushed commits").not.toMatch(
       /if you pushed more commits, call review_start with pull_fresh/,
     );
+  });
+
+  // Found by lore's own review (393cf295), against the fix just above — this is
+  // EXACTLY the case 5e53c948 named ("regardless of whether you pushed anything")
+  // and got wrong: nothing was pushed, so origin has not moved, so pull_fresh's own
+  // "unchanged" reply (server.ts, a few lines above this refusal) would re-pin
+  // nothing and hand back "push your commits, then call again" — to a caller who has
+  // none. The message must not oversell pull_fresh as the one action that always
+  // works, and must name the mechanism that actually does: revoking the stale token
+  // (CLI-only, `mine`'s own comment) falls the binding back to repository scope.
+  it("does not oversell pull_fresh when nothing has been pushed, and names the actual way out", async () => {
+    await start();
+    const rotated = grantToken(store, repoId, "alice");
+
+    const second = await callRaw("review_start", { branch: "feat/x", into: "main", ticket: "do the thing" }, rotated);
+    expect(second.result?.isError).toBe(true);
+    expect(
+      message(second),
+      "pull_fresh does nothing when origin has not moved — must not claim otherwise",
+    ).not.toMatch(/works regardless of whether you pushed anything/);
+    expect(message(second), "the reliable fallback — revoking the stale token — must be named").toMatch(/revoke/);
+    expect(message(second)).toContain("make revoke");
   });
 
   // A rebase or force-push genuinely invalidates the pinned snapshot, so there has to
@@ -1905,6 +2011,76 @@ describe("needs_human says what the question is", () => {
     const out = await callTool("review_poll", { review_id: "revD" });
     expect(out["state"]).toBe("queued");
     expect(String(out["needs_human_because"])).toMatch(/resumed automatically/);
+  });
+});
+
+// review_inbox HAD ITS OWN COPY OF THE SAME OLD TEXT.
+//
+// de741489 taught review_poll to auto-resume, but review_inbox is where a client
+// looks FIRST (its own comment says so), and it kept "call review_submit on it (an
+// empty diff is fine)" — a call review_submit's own schema refuses (absent() maps ""
+// to undefined, and the exactly-one-of refine rejects both undefined). A client that
+// only ever calls the inbox, never polling the parked review directly, had no route
+// to the fix at all.
+//
+// lore-ok[c8d63c13]: fixed in review_inbox's own handler, mirroring review_poll's
+// resume-before-responding shape.
+describe("review_inbox resumes a needs_human review too, not only review_poll (c8d63c13)", () => {
+  it("comes back queued from the inbox once the blocking conflict is resolved, with no impossible instruction", async () => {
+    store.createReview({
+      id: "revI", repoId, principal: "alice", branch: "feat/inbox", intoRef: "main",
+      ticket: "t", type: "code-arch", state: "needs_human", ladder: initialState(),
+    });
+    const a = store.addKnowledge({
+      repoId, kind: "rule", source: "ingested", statement: "Holds must expire after seven days",
+      why: undefined, path: undefined, cwe: undefined, provenance: "docs/adr/0022.md",
+      sourceBlob: undefined, confidence: undefined,
+    });
+    const b = store.addKnowledge({
+      repoId, kind: "rule", source: "ingested", statement: "Holds must never expire",
+      why: undefined, path: undefined, cwe: undefined, provenance: "docs/adr/0030.md",
+      sourceBlob: undefined, confidence: undefined,
+    });
+    store.recordConflict(repoId, a.id, b.id);
+    store.resolveConflict(repoId, a.id, b.id, "a person chose");
+
+    const out = await callTool("review_inbox", {});
+    expect(
+      JSON.stringify(out),
+      "the old text told a client to submit an empty diff, which the schema has always refused",
+    ).not.toMatch(/empty diff/);
+    expect(out["needs_human"]).toBe(0);
+    const revRow = (out["reviews"] as { review_id: string; state: string }[]).find((r) => r.review_id === "revI");
+    expect(revRow?.state, "must reflect the resume the inbox itself just triggered, not the stale needs_human row").toBe(
+      "queued",
+    );
+    expect(store.getReview("revI", "alice")?.state, "the DB row itself must have moved, not just this reply").toBe(
+      "queued",
+    );
+  });
+
+  it("leaves a review needs_human when a real conflict is still open, and still names the question", async () => {
+    store.createReview({
+      id: "revI2", repoId, principal: "alice", branch: "feat/inbox2", intoRef: "main",
+      ticket: "t", type: "code-arch", state: "needs_human", ladder: initialState(),
+    });
+    const a = store.addKnowledge({
+      repoId, kind: "rule", source: "ingested", statement: "Holds must expire after seven days",
+      why: undefined, path: undefined, cwe: undefined, provenance: "docs/adr/0022.md",
+      sourceBlob: undefined, confidence: undefined,
+    });
+    const b = store.addKnowledge({
+      repoId, kind: "rule", source: "ingested", statement: "Holds must never expire",
+      why: undefined, path: undefined, cwe: undefined, provenance: "docs/adr/0030.md",
+      sourceBlob: undefined, confidence: undefined,
+    });
+    store.recordConflict(repoId, a.id, b.id);
+
+    const out = await callTool("review_inbox", {});
+    expect(out["needs_human"]).toBe(1);
+    const revRow = (out["reviews"] as { review_id: string; state: string }[]).find((r) => r.review_id === "revI2");
+    expect(revRow?.state, "a genuinely open conflict must not be resumed").toBe("needs_human");
+    expect(out["open_questions"]).toHaveLength(1);
   });
 });
 

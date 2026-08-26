@@ -654,24 +654,35 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
         throw new Error(
           `${branch} already has an open review: ${open.id} (state ${open.state}, round ${open.round}, ` +
             `last advanced ${age} ago). Continue it — poll it, then answer its findings with review_submit. ` +
-            // lore-ok[5e53c948]: found real by lore's own review — this used to
-            // prescribe poll-then-submit unconditionally and offer pull_fresh only
-            // "if you pushed more commits", but both poll and submit are bound to
-            // the token that STARTED the review (D-78, disclosed in
-            // `TOOL_DOCS.inbox`: "a review_poll on one of those ids still answers
-            // NOT FOUND"). A caller on a second, still-live token of the SAME
-            // principal — the ordinary shape of a token rotation's overlap window —
-            // hits exactly this dedup refusal (same repo, same branch) and then has
-            // no legal way to act on the id it was just given. pull_fresh is
-            // repo-scoped, not token-scoped, so it is the one action that works for
-            // that caller regardless of whether anything was pushed — re-pinning to
-            // an unchanged tip is harmless.
+            // lore-ok[5e53c948]: real for its own case, and superseded by 393cf295
+            // just below rather than rewritten in place — this is the reasoning that
+            // established pull_fresh as A way out; 393cf295 is what found it is not
+            // the ONLY one and corrected the overclaim. Kept so the two read as one
+            // history rather than a silent replacement.
+            //
+            // lore-ok[393cf295]: found real by lore's own review, against the fix
+            // just above — "works regardless of whether you pushed anything" is
+            // false in exactly the case this sentence exists for: rotation overlap
+            // with nothing new pushed. Origin has not moved, so pull_fresh takes the
+            // status: "unchanged" branch a few lines up — no re-pin, no requeue,
+            // nothing carried forward — and hands back "push your commits, then call
+            // again" to a caller with no commits to push.
+            //
+            // The mechanism that actually works regardless was already sitting in
+            // `mine`'s own comment: a REVOKED binding falls back to repository scope
+            // (D-78), so revoking the stale token unblocks poll/submit on the new one
+            // immediately, independent of whether origin has moved. Revoking is
+            // CLI-only (`make revoke`, deploy/Makefile) — a human's move, not this
+            // client's — so it is named as the ask rather than attempted here.
             `IF EITHER SAYS "not found", a different, still-valid token of yours started this review — normal ` +
-            `during a token rotation's overlap window. Call review_start again with pull_fresh: true instead; ` +
-            `it works regardless of whether you pushed anything, re-pins the SAME review to origin's current ` +
-            `tip, and carries everything forward. Starting again would re-run the cheap tiers from round 1 and ` +
-            `abandon every justification this review has already ratified, which is why the deep tiers are ` +
-            `rarely reached. ` +
+            `during a token rotation's overlap window. If anyone has pushed to ${branch} since, review_start ` +
+            `again with pull_fresh: true re-pins the SAME review to origin's current tip and carries everything ` +
+            `forward — try that first. If nobody has, pull_fresh will answer "unchanged" and change nothing: ` +
+            `ask a person to revoke your OLD token instead (make revoke on the lore host; make tokens lists ` +
+            `which one). A revoked binding falls back to repository scope, so poll and submit on your CURRENT ` +
+            `token work immediately, no re-pin needed. ` +
+            `Starting again (restart: true) would re-run the cheap tiers from round 1 and abandon every ` +
+            `justification this review has already ratified, which is why the deep tiers are rarely reached. ` +
             (stale
               ? `BUT THAT REVIEW IS ${age.toUpperCase()} OLD. It is pinned to the tree it started with, so ` +
                 `if the branch has moved since — commits, a rebase, a force-push — it is reviewing code ` +
@@ -1713,7 +1724,36 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       // have dropped anyway. Fixed there rather than here because the ordering is what
       // makes the cap safe, and a caller compensating for its query's ordering is a
       // second place to get it wrong.
-      const reviews = store.listReviews(who.principal, who.repoId);
+      // lore-ok[c8d63c13]: found real by lore's own review — de741489 taught
+      // `review_poll` to auto-resume a `needs_human` review once its blocking
+      // conflict closes, but the inbox is where a client looks FIRST (see the
+      // comment on `questions` below) and it kept its own copy of the old,
+      // now-impossible instruction: "call review_submit on it (an empty diff is
+      // fine)" — refused by review_submit's own schema (absent() maps "" to
+      // undefined, and its exactly-one-of refine rejects both undefined). A client
+      // that only ever calls the inbox, never polling the parked review directly,
+      // had no route to the earlier fix at all.
+      //
+      // Resumed HERE too, before `items` is built — same reason review_poll resumes
+      // before computing its response: everything below must describe the list
+      // AFTER the resume, not the rows `listReviews` read a moment ago. Re-fetching
+      // rather than patching `state` in place on each row also keeps `expires_at`
+      // honest — `updateReview` bumps `updated_at` on every row `resumeNeedsHuman`
+      // touches, and a locally-patched `state` next to a stale `updatedAt` would
+      // print a deadline computed from a timestamp resuming had already moved past.
+      const reviews0 = store.listReviews(who.principal, who.repoId);
+      const anyNeedsHuman = reviews0.some((r) => r.state === "needs_human");
+      const openConflictsNow = anyNeedsHuman ? store.openConflicts(who.repoId) : [];
+      const justResumed = anyNeedsHuman && openConflictsNow.length === 0;
+      if (justResumed) {
+        store.resumeNeedsHuman(
+          who.repoId,
+          "No contradiction is open any more. The document that supplied one side of it changed (or a " +
+            "person resolved it directly) and nothing else in this repository is blocking. Resumed " +
+            "automatically — carry on from where the review stopped, no submit needed.",
+        );
+      }
+      const reviews = justResumed ? store.listReviews(who.principal, who.repoId) : reviews0;
       const items = reviews.map((r) => {
         const fresh = store.undelivered(r.id);
         // WHOSE MOVE IT IS, which is the question this call is for and the one it could
@@ -1773,9 +1813,12 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       // review, same fix as the identical byId map above: resolving every open
       // conflict's id needs every live row, not a sampled window.
       const byId = new Map(store.knowledgeFor(who.repoId, undefined, NO_LIMIT).map((k) => [k.id, k]));
+      // Reuses `openConflictsNow` rather than querying again: any `needsHuman` review
+      // left in `items` survived the resume above, which only happens when at least
+      // one conflict was genuinely still open — the same list this maps over.
       const questions = needsHuman.length === 0
         ? []
-        : store.openConflicts(who.repoId).map((c) => ({
+        : openConflictsNow.map((c) => ({
             left: { id: c.left, statement: byId.get(c.left)?.statement ?? "(retired)", source: byId.get(c.left)?.provenance },
             right: { id: c.right, statement: byId.get(c.right)?.statement ?? "(retired)", source: byId.get(c.right)?.provenance },
           }));
@@ -1801,12 +1844,9 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           note:
             needsHuman.length === 0
               ? "Surface high-severity findings to your user rather than only logging them."
-              : questions.length > 0
-                ? "Some reviews need a PERSON. `open_questions` IS the question — two things this repository " +
-                  "believes that cannot both be true. Take both statements to your user verbatim; do not answer " +
-                  "them yourself. Then call knowledge_resolve with the id to keep, or knowledge_escalate."
-                : "A review is parked at needs_human but no contradiction is open any more — the question has " +
-                  "been answered. Call review_submit on it (an empty diff is fine) and the ladder continues.",
+              : "Some reviews need a PERSON. `open_questions` IS the question — two things this repository " +
+                "believes that cannot both be true. Take both statements to your user verbatim; do not answer " +
+                "them yourself. Then call knowledge_resolve with the id to keep, or knowledge_escalate.",
         }),
       );
     },
@@ -1824,7 +1864,18 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       }),
     },
     async ({ path, contains }) => {
-      let items = store.knowledgeFor(who.repoId, path);
+      // lore-ok[562d4c2e]: found real by lore's own review, same class this file
+      // already fixed twice over for the conflict-id `byId` maps (lore-ok[aa57c0f2]
+      // above) — the default LIMIT 200 (`verified_at DESC`) meant `count` froze once
+      // a repo's live rules passed 200, and past that point the zero-match note
+      // AFFIRMATIVELY told a caller "nothing matched this filter, widen it" for a
+      // `contains` match that existed beyond the window and no widening could reach.
+      // `knowledge_resolve`'s own refusal (below) tells a caller to "check
+      // knowledge_query" for exactly this reason, so a capped answer here could send
+      // a real conflict back as unresolvable. NO_LIMIT for the same reason
+      // aa57c0f2 gave: resolving a question about this repo's whole knowledge needs
+      // every live row, not a sampled window.
+      let items = store.knowledgeFor(who.repoId, path, NO_LIMIT);
       if (contains !== undefined) {
         const needle = contains.toLowerCase();
         items = items.filter(
@@ -1850,6 +1901,9 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
 
       return text(
         JSON.stringify({
+          // lore-ok[0e9ae660]: same finding as 562d4c2e above, raised twice with
+          // different wording — `items` is fixed there (NO_LIMIT), so `count` and
+          // the zero-match note below are both accurate as they stand now.
           count: items.length,
           items: items.map((k) => ({
             id: k.id,
@@ -1891,6 +1945,9 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       inputSchema: z.object({
         statement: z.string().min(1).describe("the rule or fact, stated plainly"),
         why: z.string().min(1).describe("the reason — a rule without one gets deleted by the next reader"),
+        // lore-ok[88958ae6]: same finding as 28941e15 below, raised twice with
+        // different wording — normalized where the value is stored, a few lines
+        // down. See that comment for the fix and how it was verified.
         path: absent(z.string()).describe("scope it to a file or directory when it is not repo-wide"),
         kind: absent(z.enum(["rule", "fact", "mistake", "policy"])).describe(
           "policy = a development rule a review can be APPEALED to (D-83); default rule",
@@ -1898,13 +1955,22 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       }),
     },
     async ({ statement, why, path, kind }) => {
+      // lore-ok[28941e15]: found real by lore's own review, same finding as 88958ae6
+      // below — every consumer of a knowledge row's `path` compares it at an EXACT
+      // segment boundary (`scopesOverlap` in conflict.ts requires `startsWith(b +
+      // "/")`; `knowledgeFor`'s SQL requires `LIKE path || '/%'`), so a rule taught
+      // with the natural spellings "src/" or "./src" stored verbatim recorded: true,
+      // confidence 1, and then matched no file, ever — attached to no review prompt,
+      // no finding history, no path-scoped knowledge_query. `normalizeReviewPath`
+      // already exists in this file for exactly this canonicalization; it was applied
+      // only to `review_start`'s folder path, ten handlers up, not to this one.
       const item = store.addKnowledge({
         repoId: who.repoId,
         kind: kind ?? "rule",
         source: "taught",
         statement,
         why,
-        ...(path !== undefined ? { path } : { path: undefined }),
+        ...(path !== undefined ? { path: normalizeReviewPath(path) } : { path: undefined }),
         cwe: undefined,
         provenance: `taught by ${who.principal}`,
         sourceBlob: undefined,

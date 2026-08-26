@@ -578,6 +578,29 @@ review per dedup key is now an invariant of `review_start` rather than an etique
 the key itself is `(branch, path)` since D-130 added folder mode (§2.3.3), not `branch`
 alone, so a diff review and a folder review of the same branch are correctly two.
 
+**A second, still-live token of the SAME principal hits this refusal with no legal
+way through, found by lore's own review (5e53c948) — the ordinary shape of a token
+rotation's overlap window.** `review_poll` and `review_submit` are bound to the token
+that STARTED the review (D-78), so the id this refusal hands back answers NOT FOUND
+to the caller's new token. The refusal now says so and names `pull_fresh: true` as
+the way through unconditionally, not only "if you pushed more commits" — `pull_fresh`
+is repo-scoped, not token-scoped, so it works for this caller regardless of which
+token started the review.
+
+**Unconditionally offering it oversold what it does when origin has not moved,
+found by lore's own review (393cf295) — the exact case the sentence exists for.**
+Rotation overlap with nothing new pushed leaves origin unchanged, so `pull_fresh`
+takes its `status: "unchanged"` reply — no re-pin, no requeue, nothing carried
+forward — and hands back "push your commits, then call again" to a caller with no
+commits to push. The message now says which of two things applies: if
+anyone has pushed since, `pull_fresh` re-pins and carries everything forward, same as
+always; if nobody has, it changes nothing, and the reliable way through is asking a
+person to revoke the stale token instead. A revoked binding falls back to repository
+scope (`mine`, D-78) rather than stranding the review, so poll and submit on the
+caller's current token work immediately once that happens — no re-pin needed, and
+independent of whether origin has moved. Revoking is CLI-only (`make revoke`, §1),
+an operator's move, so the message names it as the ask rather than attempting it.
+
 ### 2.5 `review_cancel` stops both ends, and says when it could not
 
 `cancelled` is its own terminal state, not `expired`: expired means nobody came back,
