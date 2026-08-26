@@ -201,7 +201,7 @@ describe("detectEcosystems", () => {
 // Observed: `turbo run typecheck` with 27 of 28 packages green and one killed,
 // reported as "`pnpm run typecheck` fails on this branch".
 describe("a process we killed did not fail", () => {
-  const result = (code: number) => ({ stdout: "some output", stderr: "", code });
+  const result = (code: number) => ({ ok: code === 0, stdout: "some output", stderr: "", code });
 
   it("reports a kill as unavailable, with nothing claimed about the branch", () => {
     const out = scriptFinding("tsc", "pnpm run typecheck", result(137));

@@ -561,7 +561,20 @@ async function semgrep(worktree: string, scope?: Scope): Promise<EngineOutcome> 
     600_000,
   );
   if (r.unavailable !== undefined) return { engine: "semgrep", findings: [], unavailable: r.unavailable };
-
+  // Found by lore's own review of the t0/runner.ts OOM fix, fingerprint 10986564:
+  // the same wrong-reason defect that fix removed from checkTypes/checkLint stood
+  // here too. semgrep runs on the HOST, not the sandbox, so this is never the
+  // `--memory` cgroup specifically — but a SIGKILL (137), most often an OOM-killer
+  // reacting to memory pressure wherever this process runs, still truncates the
+  // JSON the same way, and "unparseable output" points at semgrep's config rather
+  // than the actual cause.
+  if (r.code === 137) {
+    return {
+      engine: "semgrep",
+      findings: [],
+      unavailable: "semgrep was killed (exit 137) — most likely a memory limit, not a fault in the branch",
+    };
+  }
   const parsed = parseSemgrep(r.stdout, worktree);
   if (parsed === undefined) {
     return { engine: "semgrep", findings: [], unavailable: "semgrep produced unparseable output" };
@@ -641,7 +654,14 @@ interface SgMatch {
 async function astGrep(worktree: string, scope?: Scope): Promise<EngineOutcome> {
   const r = await runTool(worktree, "ast-grep", ["scan", "--json", ...scopePaths(scope)], 300_000);
   if (r.unavailable !== undefined) return { engine: "ast-grep", findings: [], unavailable: r.unavailable };
-
+  // Same fix as semgrep above, fingerprint 10986564.
+  if (r.code === 137) {
+    return {
+      engine: "ast-grep",
+      findings: [],
+      unavailable: "ast-grep was killed (exit 137) — most likely a memory limit, not a fault in the branch",
+    };
+  }
   const parsed = parseJson<SgMatch[]>(r.stdout);
   if (parsed === undefined) {
     return { engine: "ast-grep", findings: [], unavailable: "ast-grep produced unparseable output" };

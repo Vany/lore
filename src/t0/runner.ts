@@ -310,35 +310,44 @@ async function packageScripts(worktree: string): Promise<Record<string, string>>
 export const KILLED = 137;
 
 /**
- * The OTHER way a memory limit ends a run, found by lore's own review of the
- * `KILLED` fix, fingerprint cbb6824f: `KILLED` only recognises the cgroup's own
- * SIGKILL from OUTSIDE the process. V8 can also give up on ITS OWN heap ceiling and
- * abort ITSELF — typically exit 134, but the exit code alone is not distinctive
- * (134 is plain SIGABRT, and a real native-module crash could produce it too) — so
- * this checks for the fatal error V8 actually prints instead. The ticket that
- * motivated `KILLED` never said which of the two lore's own tsc check hit; only
- * one of them was covered.
+ * A memory limit that ends a run one of two CONFIRMED ways — not an exhaustive
+ * detector, see the note on `scriptFinding`'s genuine-failure arm below for what
+ * this deliberately does not chase. `KILLED` alone only recognises the cgroup's
+ * own SIGKILL from OUTSIDE the process, found by lore's own review of the
+ * original fix, fingerprint cbb6824f: V8 can also give up on ITS OWN heap ceiling
+ * and abort ITSELF — typically exit 134, but the exit code alone is not
+ * distinctive (134 is plain SIGABRT, and a real native-module crash could produce
+ * it too) — so this also checks for the fatal error V8 actually prints. The
+ * ticket that motivated `KILLED` never said which of the two lore's own tsc check
+ * hit; only one of them was covered at first.
  *
- * THE FULL PHRASE, NOT THE SHORT ONE — found by lore's own review of the fix
- * above, fingerprint 9171c6c9: checked before the parse and regardless of exit
- * code, so matching on the bare words "JavaScript heap out of memory" would treat
- * ANY output containing that sentence as an OOM, target-controlled content
- * included — and after this fix landed, this repository's OWN source (this
- * comment, this file's tests) contains exactly that sentence, discussing it. V8's
- * actual crash always emits the longer, fixed phrase below verbatim (hardcoded in
- * V8 itself, stable across versions); requiring it — rather than a fragment
- * short enough to appear in ordinary prose — is what makes this a signal about the
- * process's own fate rather than a claim about what the target wrote.
+ * THE FULL PHRASE, NOT THE SHORT ONE — found by lore's own review of that fix,
+ * fingerprint 9171c6c9: checked before the parse and regardless of exit code, so
+ * matching on the bare words "JavaScript heap out of memory" would treat ANY
+ * output containing that sentence as an OOM, target-controlled content included —
+ * and after this fix landed, this repository's OWN source (this comment, this
+ * file's tests) contains exactly that sentence, discussing it. V8's actual crash
+ * always emits the longer, fixed phrase below verbatim (hardcoded in V8 itself,
+ * stable across versions); requiring it — rather than a fragment short enough to
+ * appear in ordinary prose — is what makes this a signal about the process's own
+ * fate rather than a claim about what the target wrote.
+ *
+ * `!r.ok` GATES THE CONTENT MATCH TOO — found by lore's own review of that fix,
+ * fingerprint a7f2d87c: a run that exits 0 is not the process WE killed, whatever
+ * its logs happen to contain — a build step that catches and retries a child's
+ * OOM, say, then finishes and exits clean. Without this gate, that success would
+ * still read as "did not complete." The `KILLED` arm never needed the gate (137
+ * cannot be `ok`), but it costs nothing to state once for both.
  */
-function ranOutOfMemory(r: { code: number; stdout: string; stderr: string }): boolean {
-  return r.code === KILLED || `${r.stdout}\n${r.stderr}`.includes("Allocation failed - JavaScript heap out of memory");
+function ranOutOfMemory(r: { ok: boolean; code: number; stdout: string; stderr: string }): boolean {
+  return !r.ok && (r.code === KILLED || `${r.stdout}\n${r.stderr}`.includes("Allocation failed - JavaScript heap out of memory"));
 }
 
 /** A failed script becomes one finding carrying its tail. Its output is not a format. */
 export function scriptFinding(
   engine: string,
   script: string,
-  r: { stdout: string; stderr: string; code: number },
+  r: { ok: boolean; stdout: string; stderr: string; code: number },
 ): EngineOutcome {
   if (ranOutOfMemory(r)) {
     return {
@@ -374,18 +383,32 @@ async function checkTypes(
   if (scripts["typecheck"] !== undefined) {
     const r = await runInSandbox(cfg, worktree, cacheDir, scratch, cmds.run("typecheck"), false);
     if (r.unavailable !== undefined) return { engine: "tsc", findings: [], unavailable: r.unavailable };
-    // CHECKED BEFORE THE PARSE, both ways a memory limit can end this (see
-    // `ranOutOfMemory`) — a monorepo's `turbo run typecheck` fans out across every
-    // package, and when a memory limit stops it partway through, packages that had
-    // ALREADY finished still leave real, parseable tsc output sitting in the
-    // buffer. Parsing that first and returning whatever it found — the order below,
-    // for every OTHER non-zero exit — would silently turn a run stopped before
+    // CHECKED BEFORE THE PARSE, for both signals `ranOutOfMemory` currently
+    // confirms — a monorepo's `turbo run typecheck` fans out across every package,
+    // and when a memory limit stops it partway through, packages that had ALREADY
+    // finished still leave real, parseable tsc output sitting in the buffer.
+    // Parsing that first and returning whatever it found — the order below, for
+    // every OTHER non-zero exit — would silently turn a run stopped before
     // covering the whole monorepo into what reads as a complete pass with a few
     // findings: exactly the INV-1 shape this file's own OOM handling exists to
     // prevent, reached by skipping past it whenever ANY package happened to report
     // before the process gave out. A client must never have to work out that "some
     // findings, no mention of the rest" meant "we ran out of memory," which is
     // ours to prevent, not theirs to puzzle out.
+    //
+    // lore-ok[6bc20289]: "for both signals `ranOutOfMemory` currently confirms" is
+    // deliberately not a completeness claim — a memory limit can end a run other
+    // ways this does not recognise (a Rust-based runner's own allocator message,
+    // a Go binary's "fatal error: runtime: out of memory", a signal death exec.ts's
+    // own mapping collapses to a plain exit code). Those are real but unbounded —
+    // every toolchain a target could run has its own crash text — and chasing
+    // them turns a fix for a confirmed incident into an open-ended allowlist with
+    // no natural stopping point. An undetected case still is not silence: it
+    // reaches `scriptFinding`'s genuine-failure arm below (a HIGH finding) or, on
+    // the bare-invocation branches, `unavailable` — a real signal that something
+    // did not go cleanly, misattributing the REASON rather than the ORIGINAL bug
+    // this fix exists for (a stopped run silently read as complete and clean).
+    // Extended the way cbb6824f and 9171c6c9 already did, if one is found live.
     if (ranOutOfMemory(r)) return scriptFinding("tsc", `${cmds.name} run typecheck`, r);
     // Still try the structured parse: a monorepo runner usually forwards tsc's own
     // lines, and per-file findings beat one blob whenever we can get them.

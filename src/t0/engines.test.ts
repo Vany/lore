@@ -2,7 +2,7 @@
  * What the deterministic engines claim when they cannot run.
  */
 
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -61,6 +61,55 @@ describe("an optional engine's absence is not a gap in the review", () => {
     writeFileSync(join(dir, ".gitmodules"), '[submodule "vendor/pay"]\n\tpath = vendor/pay\n');
     expect(detect(dir, "osv")).toBe(true);
     expect(detect(dir, "sbom")).toBe(false);
+  });
+});
+
+/**
+ * Fingerprint 10986564, found by lore's own review of the t0/runner.ts OOM fix: the
+ * same wrong-reason defect removed from checkTypes/checkLint was still here. semgrep
+ * and ast-grep run on the HOST via `runTool`, resolving a bare command name through
+ * PATH — a fake executable placed first on PATH stands in for the real binary
+ * without needing it installed, and confirms a SIGKILL (137) is reported honestly
+ * instead of as "produced unparseable output", which points at the wrong thing.
+ */
+describe("a host engine the OS killed is never mistaken for a config problem", () => {
+  let dir: string;
+  let binDir: string;
+  let savedPath: string | undefined;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "lore-killed-host-"));
+    binDir = mkdtempSync(join(tmpdir(), "lore-killed-bin-"));
+    savedPath = process.env["PATH"];
+    process.env["PATH"] = `${binDir}:${savedPath ?? ""}`;
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(binDir, { recursive: true, force: true });
+    if (savedPath === undefined) delete process.env["PATH"];
+    else process.env["PATH"] = savedPath;
+  });
+
+  const fakeBinary = (name: string) => {
+    const script = join(binDir, name);
+    writeFileSync(script, "#!/bin/sh\necho 'partial output, truncated by the kill'\nexit 137\n");
+    chmodSync(script, 0o755);
+  };
+
+  it("semgrep: a killed run is reported killed, not unparseable", async () => {
+    fakeBinary("semgrep");
+    const out = await runEngine(dir, "semgrep");
+    expect(out.findings).toStrictEqual([]);
+    expect(out.unavailable).toMatch(/killed/);
+    expect(out.unavailable).not.toMatch(/unparseable/);
+  });
+
+  it("ast-grep: a killed run is reported killed, not unparseable", async () => {
+    writeFileSync(join(dir, "sgconfig.yml"), "ruleDirs: []\n");
+    fakeBinary("ast-grep");
+    const out = await runEngine(dir, "ast-grep");
+    expect(out.findings).toStrictEqual([]);
+    expect(out.unavailable).toMatch(/killed/);
+    expect(out.unavailable).not.toMatch(/unparseable/);
   });
 });
 

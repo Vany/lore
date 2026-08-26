@@ -147,19 +147,23 @@ describe("runT0 merges the host and sandbox branches", () => {
  * returned as `findings`, indistinguishable from a complete, honest result.
  * `checkTypes` and `checkLint` check `ranOutOfMemory(r)` before attempting to
  * parse, everywhere they call `runInSandbox` directly — and `sandboxed()` itself
- * checks it for `install()`. Five findings across two rounds of lore's own review
- * of this fix: bd0f45f3, an OOM-killed install fell into the same handling as a
- * genuine one and came out as a confident, wrong claim that the branch's
- * dependencies do not install; fde373d4, a related but memory-independent hole in
- * the bare-tsc branch where a non-137 failure whose output does not match tsc's
- * error format also used to read as a clean pass; cbb6824f, the cgroup's SIGKILL
- * (137) is not the only way a memory limit ends a run — V8 can abort on its OWN
- * heap ceiling too, which `ranOutOfMemory` now also recognises; 9171c6c9, that
- * recognition has to match V8's full, distinctive crash phrase rather than a
+ * checks it for `install()`. Findings from three rounds of lore's own review of
+ * this fix, tested here: bd0f45f3, an OOM-killed install fell into the same
+ * handling as a genuine one and came out as a confident, wrong claim that the
+ * branch's dependencies do not install; fde373d4, a related but memory-independent
+ * hole in the bare-tsc branch where a non-137 failure whose output does not match
+ * tsc's error format also used to read as a clean pass; cbb6824f, the cgroup's
+ * SIGKILL (137) is not the only way a memory limit ends a run — V8 can abort on
+ * its OWN heap ceiling too, which `ranOutOfMemory` now also recognises; 9171c6c9,
+ * that recognition has to match V8's full, distinctive crash phrase rather than a
  * fragment ordinary content (this file's own tests, after this fix landed) could
- * contain; and 1fa9229d, fde373d4's own fix overclaimed — the bare-tsc branch runs
+ * contain; 1fa9229d, fde373d4's own fix overclaimed — the bare-tsc branch runs
  * speculatively, with no script the target declared, so an unparseable failure
- * there is reported `unavailable`, not a "fails on this branch" finding.
+ * there is reported `unavailable`, not a "fails on this branch" finding; and
+ * a7f2d87c, the content match itself has to be gated on `!r.ok` — a run that
+ * exits 0 is not the process WE killed, whatever its own logs happen to quote.
+ * (10986564, the same fix one file over in `engines.ts` for host-run semgrep/
+ * ast-grep, is tested in `engines.test.ts` instead.)
  *
  * Exercised end to end through `runT0`, with a stand-in `docker`: `execFile`
  * (exec.ts) does not go through a shell, so it happily runs an arbitrary executable
@@ -264,6 +268,23 @@ describe("a run the sandbox itself killed is never mistaken for a clean or parti
     const out = await runT0(dir, { engines: ["tsc"], sandbox });
     const tsc = out.outcomes.find((o) => o.engine === "tsc");
     expect(tsc?.findings, "a real, parseable error must survive even if it mentions the short phrase").toHaveLength(1);
+    expect(tsc?.unavailable).toBeUndefined();
+  });
+
+  // Fingerprint a7f2d87c: a run that exits 0 is not the process WE killed, whatever
+  // its own logs happen to contain — e.g. a build step that catches and retries a
+  // child's OOM, then finishes and succeeds. Without gating the content match on
+  // `!r.ok`, that success would still read as "did not complete".
+  it("checkTypes: a run that exits 0 is never misread as OOM, whatever its own logs say", async () => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { typecheck: "tsc -b" } }));
+    const stdoutOnSuccess =
+      "retrying after a child reported FATAL ERROR: Reached heap limit " +
+      "Allocation failed - JavaScript heap out of memory\n" +
+      "retry succeeded\n";
+    const sandbox = fakeDocker(stdoutOnSuccess, 0);
+    const out = await runT0(dir, { engines: ["tsc"], sandbox });
+    const tsc = out.outcomes.find((o) => o.engine === "tsc");
+    expect(tsc?.findings, "a successful run must not be discarded because its own log mentions the phrase").toStrictEqual([]);
     expect(tsc?.unavailable).toBeUndefined();
   });
 
