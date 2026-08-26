@@ -17,6 +17,7 @@ import { join } from "node:path";
 import { dataDir } from "../core/paths.ts";
 import { isTerminal, type ReviewState } from "../core/review-state.ts";
 import { pruneWorktrees, removeWorktree, repoPaths } from "../git/repo.ts";
+import { isInstalling } from "../t0/runner.ts";
 import type { Store } from "../store/store.ts";
 
 export interface RetentionConfig {
@@ -113,10 +114,26 @@ async function collectSandbox(cfg: RetentionConfig): Promise<{ dirs: number; byt
     for (const e of entries) {
       if (!e.isDirectory()) continue;
       const path = join(root, e.name);
+      // NEVER A DIRECTORY AN INSTALL IS USING RIGHT NOW — found by lore's own
+      // review, fingerprint ffbda1f7: `t0/runner.ts`'s own comment on this same
+      // failure — "a half-written node_modules makes tsc and eslint report errors that are not
+      // real... cost two rounds of confident false claims about someone else's
+      // branch" — described exactly what an uncoordinated `rm` here can cause,
+      // reopened one caller over. `withInstallLock`'s lock covers readers too, not
+      // only the install itself, so a long cold install (or a burst of reviews
+      // queued behind one on the same lockfile hash) can leave a cache mid-use for
+      // minutes — old enough, on a quiet deployment, to be the oldest thing this
+      // sweep sees. Both run in the same process; `isInstalling` is the check that
+      // was already reachable and simply never asked.
+      if (isInstalling(path)) continue;
       const s = await stat(path).catch(() => undefined);
       // mtime, not atime: many filesystems mount `noatime`, so a read leaves no trace
       // and an actively-used cache would look abandoned. An npm cache is WRITTEN on
       // every install that adds a package, which is the event worth keeping it for.
+      // A WARM pnpm/yarn install may not touch it at all — `t0/runner.ts` now
+      // touches `cacheDir` itself on every use, unconditionally, for exactly that
+      // reason: recording use directly, rather than inferring it from a side
+      // effect that varies by package manager.
       if (s === undefined || s.mtimeMs > cutoff) continue;
       const size = await dirSize(path);
       const gone = await rm(path, { recursive: true, force: true }).then(() => true, () => false);

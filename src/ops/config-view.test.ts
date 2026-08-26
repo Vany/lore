@@ -68,7 +68,9 @@ describe("the deployment's own shape", () => {
     ]);
     expect(configView(env({ LORE_TIERS: subs, LORE_ALLOW_METERED: "0" })).summary).toMatch(/never money/);
 
-    // A tier POOLED onto a metered route: gated by the flag, exactly as before.
+    // A tier POOLED onto a metered route: gated by the flag, and NOT outage-shaped
+    // (fingerprint ec572ac6) — it can be picked on any ordinary round, not only when something
+    // has failed, so the summary must not say "on an outage" for this shape.
     const pooled = JSON.stringify({
       models: { GLM: ["openrouter/z-ai/glm-5.2"] },
       tiers: [
@@ -76,8 +78,13 @@ describe("the deployment's own shape", () => {
         { id: "t1", kind: "model", model: "GLM", stage: "fast" },
       ],
     });
-    expect(configView(env({ LORE_TIERS: pooled, LORE_ALLOW_METERED: "1" })).summary).toMatch(/costs money/);
-    expect(configView(env({ LORE_TIERS: pooled, LORE_ALLOW_METERED: "0" })).summary).toMatch(/REFUSED/);
+    const allowed = configView(env({ LORE_TIERS: pooled, LORE_ALLOW_METERED: "1" })).summary;
+    expect(allowed, "must not claim the cost is outage-conditioned").not.toMatch(/on an outage/);
+    expect(allowed).toMatch(/ANY round/);
+    const refused = configView(env({ LORE_TIERS: pooled, LORE_ALLOW_METERED: "0" })).summary;
+    expect(refused, "must not claim the tier is simply REFUSED — it has no other route").toMatch(
+      /keeps a paid route out of its pool/,
+    );
   });
 
   /**
@@ -120,6 +127,9 @@ describe("the deployment's own shape", () => {
     expect(t1?.fallbackRoutes).toStrictEqual(["openrouter/z-ai/glm-5.2"]);
     expect(t1?.metered, "metered via the fallback, not the primary").toBe(true);
     expect(view.summary, "must not claim this ladder cannot reach a paid route").toMatch(/costs money/);
+    // Unlike a pooled-metered primary (fingerprint ec572ac6), a fallback-only route genuinely IS
+    // conditional on the primary failing first — "on an outage" is accurate here.
+    expect(view.summary, "a fallback-only route really is outage-conditioned").toMatch(/on an outage/);
   });
 
   /**

@@ -196,9 +196,27 @@ export function configView(env: NodeJS.ProcessEnv = process.env): ConfigView {
   // exempt. So a tier can genuinely belong to BOTH lists at once: an exempt literal
   // primary that bills unconditionally, with a metered fallback that is still gated.
   const exempt = ladder.filter((l) => l.routes.some(isMeteredRoute) && l.exempt).map((l) => l.tier);
-  const gated = ladder
-    .filter((l) => (l.routes.some(isMeteredRoute) && !l.exempt) || l.fallbackRoutes.some(isMeteredRoute))
-    .map((l) => l.tier);
+  // GATED SPLITS AGAIN, BY WHETHER THE MONEY IS OUTAGE-SHAPED — found by lore's own
+  // review, fingerprint ec572ac6, against this same fix's OWN prior wording: "can
+  // reach one on an outage" is only true for a metered FALLBACK. A metered route
+  // sitting in a POOLED PRIMARY is not outage-gated at all — `runRound`'s own
+  // comment on `pool[0]`: "a nickname's pool can put a paid route there — in some
+  // rounds by shuffle, in every round once the free routes are parked" — so under
+  // LORE_ALLOW_METERED=1 such a tier can bill on ANY ordinary round, healthy or
+  // not, and under =0 a pool that is ENTIRELY metered runs no round at all rather
+  // than "costing on an outage".
+  //
+  // THE TWO CHECKS ARE INDEPENDENT, not `else` branches of one another — a second
+  // bug caught rewriting this same fix, before it shipped: whether the PRIMARY is
+  // pooled-metered says nothing about whether the FALLBACK is separately metered
+  // too, and gating `gatedFallback` on "the primary is NOT metered" excluded
+  // exactly the tier the previous fix's own test exists for (an exempt literal
+  // primary with a genuinely gated metered fallback) — that tier's primary is
+  // metered, so the wrongly-`!`-guarded check dropped its fallback from the
+  // summary entirely, the fallback note simply never appearing. A tier can be in
+  // `exempt` for its primary AND `gatedFallback` for its fallback at once.
+  const gatedPooled = ladder.filter((l) => l.routes.some(isMeteredRoute) && !l.exempt).map((l) => l.tier);
+  const gatedFallback = ladder.filter((l) => l.fallbackRoutes.some(isMeteredRoute)).map((l) => l.tier);
 
   const exemptNote =
     exempt.length === 0
@@ -206,18 +224,27 @@ export function configView(env: NodeJS.ProcessEnv = process.env): ConfigView {
       : `${exempt.join(", ")} ${exempt.length === 1 ? "names" : "name"} a paid route directly and ` +
         `${exempt.length === 1 ? "pays" : "pay"} every round regardless of LORE_ALLOW_METERED — an ` +
         "operator-written ladder naming a specific paid route IS the operator switching it on (D-117).";
-  const gatedNote =
-    gated.length === 0
+  const gatedPooledNote =
+    gatedPooled.length === 0
       ? undefined
       : allowMetered
-        ? `Paid fallback routes are ALLOWED, and ${gated.join(", ")} can reach one on an outage. That outage costs money.`
-        : `Paid fallback routes are REFUSED, and ${gated.join(", ")} can only reach one. An outage costs those ` +
-          "tiers, and the verdict is reported as partial rather than clean.";
+        ? `A paid route sits in ${gatedPooled.join(", ")}'s own pool, so it can be picked on ANY round, not ` +
+          "only an outage — every round once its free pool-mates are all parked, and some rounds before that."
+        : `${gatedPooled.join(", ")} keeps a paid route out of its pool under LORE_ALLOW_METERED=0 — reviews ` +
+          "run on its free pool-mates, or not at all if none are reachable, and the verdict is reported as " +
+          "partial rather than clean when that happens.";
+  const gatedFallbackNote =
+    gatedFallback.length === 0
+      ? undefined
+      : allowMetered
+        ? `Paid fallback routes are ALLOWED, and ${gatedFallback.join(", ")} can reach one on an outage. That outage costs money.`
+        : `Paid fallback routes are REFUSED, and ${gatedFallback.join(", ")} can only reach one. An outage costs ` +
+          "those tiers, and the verdict is reported as partial rather than clean.";
 
   const summary =
-    exemptNote === undefined && gatedNote === undefined
+    exemptNote === undefined && gatedPooledNote === undefined && gatedFallbackNote === undefined
       ? "No tier in this ladder can reach a route that bills per call. An outage costs coverage, never money."
-      : [exemptNote, gatedNote].filter((s) => s !== undefined).join(" ");
+      : [exemptNote, gatedPooledNote, gatedFallbackNote].filter((s) => s !== undefined).join(" ");
 
   return { entries, ladder, summary };
 }

@@ -193,6 +193,29 @@ describe("findings nobody has collected", () => {
     store.updateReview("revU", { state: "cancelled" });
     expect(render()).not.toContain("waiting to be collected");
   });
+
+  // 56141f57, found by lore's own review: the `reviews` query above excludes a
+  // review older than a day UNLESS it is non-terminal — but `failed` is
+  // deliberately NOT excluded from `uncollectedLines` (038955e5's own note:
+  // "failed has neither of THEIR reasons to be excluded", no warning, no handover,
+  // so its findings can sit undelivered indefinitely). A review that failed two
+  // days ago holding a HIGH finding made `reviews` empty, and the idle early
+  // return skipped this whole section — "lore is idle" while a real, undelivered
+  // HIGH finding sat unmentioned. The exact false all-clear this project refuses
+  // everywhere else.
+  it("still names an old FAILED review's undelivered finding while otherwise idle", () => {
+    withFinding("high", "a".repeat(64));
+    store.updateReview("revU", { state: "failed" });
+    const twoDaysAgo = new Date(Date.now() - 2 * 24 * 3_600_000).toISOString();
+    store.db.prepare("UPDATE review SET updated_at = ? WHERE id = ?").run(twoDaysAgo, "revU");
+
+    const out = render();
+    expect(out, "must still say the service is idle").toContain("lore` is idle");
+    expect(out, "must not hide the uncollected finding behind the idle message").toContain(
+      "waiting to be collected",
+    );
+    expect(out).toMatch(/1 finding\(s\), 1 high\s+feat\/unread/);
+  });
 });
 
 /**

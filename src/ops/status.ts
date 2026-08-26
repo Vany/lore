@@ -154,8 +154,26 @@ export function renderStatus(db: DatabaseSync, reviewId?: string, dataDir = "/va
 
   if (reviews.length === 0) {
     // Idle still reports the mirrors: "nothing happening" and "nothing CAN happen"
-    // look identical otherwise.
-    return [dim("no reviews in the last day. `lore` is idle."), "", ...mirrorLines(db, dataDir)].join("\n") + "\n";
+    // look identical otherwise. Uncollected findings and memory too — found by
+    // lore's own review, fingerprint 56141f57: this query excludes a review older than a day
+    // UNLESS it is non-terminal, but `uncollectedLines` deliberately does NOT
+    // exclude `failed` (038955e5's own note: "failed has neither of THEIR reasons
+    // to be excluded" — no warning, no handover, so its findings can sit
+    // undelivered indefinitely). A review that failed on round 1 holding a HIGH
+    // finding, with nothing else running for two days, made `reviews` empty and
+    // this early return skipped the one section built to say so — the exact false
+    // "idle" `make status` exists to refuse everywhere else. Both are
+    // self-contained queries with their own empty check, so calling them here
+    // costs nothing when there is genuinely nothing to say.
+    return (
+      [
+        dim("no reviews in the last day. `lore` is idle."),
+        "",
+        ...uncollectedLines(db),
+        ...memoryLines(db),
+        ...mirrorLines(db, dataDir),
+      ].join("\n") + "\n"
+    );
   }
 
   // A PROVIDER THAT IS DOWN, SAID FROM THE INSIDE (D-90). Until the cool-off existed this

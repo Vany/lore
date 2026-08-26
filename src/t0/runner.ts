@@ -9,7 +9,7 @@
  */
 
 import { existsSync } from "node:fs";
-import { mkdir, readFile, rm } from "node:fs/promises";
+import { mkdir, readFile, rm, utimes } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { compareFindings, type Finding } from "../core/finding.ts";
 import type { T0Engine } from "../core/review-type.ts";
@@ -78,6 +78,24 @@ export async function withInstallLock<T>(cacheDir: string, fn: () => Promise<T>)
     // Only if nothing has queued behind us; otherwise the map still names their turn.
     if (installing.get(cacheDir) === guard) installing.delete(cacheDir);
   }
+}
+
+/**
+ * Is an install (or a reader queued behind one, per `withInstallLock`'s own comment
+ * — "THE LOCK COVERS THE READERS TOO") in flight for this cache directory right now?
+ *
+ * Exported for `ops/retention.ts` — found by lore's own review, fingerprint
+ * ffbda1f7: the sandbox-cache sweep called `rm` on a cache directory with no reference to this map
+ * at all, so an old-but-still-mid-install directory (the exact case a long cold
+ * install, or a burst of reviews queued behind one, produces) could be deleted while
+ * `tsc`/`eslint` were reading it — the "half-written node_modules" failure this
+ * lock's own comment already documents once, reopened one caller over. Both live in
+ * the SAME process (`service/main.ts` calls the worker loops and the retention sweep
+ * alike), so this is the coordination the module comment above says a cross-process
+ * lock would need — it is not that, and does not need to be.
+ */
+export function isInstalling(cacheDir: string): boolean {
+  return installing.has(cacheDir);
 }
 
 export async function runT0(worktree: string, opts: T0Options): Promise<T0Result> {
@@ -158,6 +176,21 @@ async function sandboxed(
   const scripts = await packageScripts(worktree);
   const cacheDir = join(cfg.cacheRoot, await lockfileKey(worktree));
   await mkdir(cacheDir, { recursive: true });
+  // TOUCHED HERE, UNCONDITIONALLY — found by lore's own review, fingerprint
+  // ffbda1f7: retention's sweep judges this directory abandoned by ITS OWN mtime, which `npm ci` refreshes
+  // (it recreates node_modules' direct children, which this IS — sandbox.ts mounts
+  // `cacheDir` itself as `/work/node_modules`) but a WARM pnpm/yarn install may not: both
+  // link through a content-addressable store or `.pnpm`, and a frozen-lockfile install
+  // that finds everything already correct can leave node_modules' own listing — and so
+  // its mtime — untouched for as long as the lockfile does not change. A cache pnpm
+  // reuses every review, silently, would then read as abandoned and be deleted from
+  // under a repo that is using it constantly. Recording USE directly, on every call
+  // regardless of what the package manager decides to do, is honest where inferring it
+  // from a side effect that varies by tool is not.
+  await utimes(cacheDir, new Date(), new Date()).catch(() => {
+    // Best-effort: a cache directory retention is about to judge is not worth failing
+    // the review over if its timestamp cannot be touched.
+  });
   const scratch = join(cfg.scratchRoot, basename(worktree));
   await mkdir(scratch, { recursive: true });
 

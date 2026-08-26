@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { initialState } from "../core/ladder.ts";
 import type { ReviewState } from "../core/review-state.ts";
 import { Store } from "../store/store.ts";
+import { withInstallLock } from "../t0/runner.ts";
 import { DEFAULT_RETENTION, collect, expireStale, type RetentionConfig } from "./retention.ts";
 
 let store: Store;
@@ -310,6 +311,31 @@ describe("the sandbox cache does not grow for ever", () => {
 
     expect((await sweep()).cacheDirsRemoved).toBe(0);
     expect(existsSync(warm)).toBe(true);
+  });
+
+  // ffbda1f7, found by lore's own review: the sweep called `rm` with no reference
+  // to `withInstallLock`'s own map at all — a directory old ENOUGH by mtime (a
+  // long cold install, or a burst of reviews queued behind one, can leave it
+  // mid-use for minutes) could be deleted while tsc/eslint were reading it, the
+  // exact "half-written node_modules" false-finding failure runner.ts's own
+  // comment already documents once, reopened one caller over.
+  it("never deletes a cache directory an install is using right now, however old its mtime", async () => {
+    mkdirSync(join(root, "npm-cache"), { recursive: true });
+    const busy = dirAged(join(root, "npm-cache"), "lockfile-ccc", 30);
+
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((r) => {
+      release = r;
+    });
+    const installing = withInstallLock(busy, () => held);
+
+    try {
+      expect((await sweep()).cacheDirsRemoved, "must not delete a directory mid-install").toBe(0);
+      expect(existsSync(busy)).toBe(true);
+    } finally {
+      release();
+      await installing;
+    }
   });
 
   it("collects abandoned scratch as well as cache", async () => {
