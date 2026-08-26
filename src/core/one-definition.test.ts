@@ -547,6 +547,81 @@ describe("the template README.md and deploy/Makefile both point at is real", () 
 });
 
 /**
+ * 15be66bd/1be9520f, found by lore's own review: the template's own first-drafted
+ * LORE_TIERS named `/opt/lore/deploy/tiers.zai-openai.json`, a path that exists
+ * nowhere in the image (Dockerfile: WORKDIR /app, COPY deploy/tiers.*.json
+ * ./deploy/) — loadTiers() throws ENOENT reading it, unhandled, at boot. Checked
+ * mechanically rather than trusted by inspection a second time: strip the
+ * container's own WORKDIR prefix and confirm the named file is one this repository
+ * actually ships.
+ */
+describe("the template's LORE_TIERS names a file the image actually has", () => {
+  it("resolves to a real file under deploy/", () => {
+    const root = join(SRC, "..");
+    const env = readFileSync(join(root, "deploy", ".env.example"), "utf8");
+    const m = /^LORE_TIERS=(\S+)/m.exec(env);
+    expect(m?.[1], "update this check if the template stops setting LORE_TIERS by default").toBeDefined();
+    const path = m?.[1] ?? "";
+    expect(path, "must be the container's own WORKDIR, not a host path nothing mounts").toMatch(/^\/app\/deploy\//);
+    const named = path.replace(/^\/app\/deploy\//, "");
+    expect(
+      statSync(join(root, "deploy", named), { throwIfNoEntry: false })?.isFile(),
+      `deploy/${named} does not exist — LORE_TIERS names a file this repository does not ship`,
+    ).toBe(true);
+  });
+});
+
+/**
+ * 366453ed, generalised: that finding was one missing variable (ZAI2_API_KEY,
+ * which docker-compose.yml reads and the recommended ladder's own `helper` and
+ * fallback routes depend on) found by inspection. `history` on these findings
+ * names the actual pattern — "a defect that recurs is a missing rule" — so this
+ * checks the CLASS: every variable docker-compose.yml interpolates from the
+ * environment must have a row in the one file an operator is told to copy and
+ * fill in, or the two silently disagree about what a deployment needs.
+ */
+describe("every variable docker-compose.yml reads has a row in the template", () => {
+  it("names them all, except the ones nothing sets by hand", () => {
+    const root = join(SRC, "..");
+    const compose = readFileSync(join(root, "deploy", "docker-compose.yml"), "utf8");
+    const env = readFileSync(join(root, "deploy", ".env.example"), "utf8");
+
+    // BUILD-TIME OR HOST-SPECIFIC, never a `.env` row: `LORE_COMMIT`/`LORE_BUILT_AT`
+    // come from `deploy/Makefile`'s own STAMP at `make build`, and `LORE_DOCKER_GID`
+    // is a Linux-only override with its exact derivation already inline in
+    // docker-compose.yml, beside the "permission denied" message that is how an
+    // operator who needs it finds it.
+    const computed = new Set(["LORE_COMMIT", "LORE_BUILT_AT", "LORE_DOCKER_GID"]);
+
+    const referenced = [...compose.matchAll(/\$\{([A-Z_][A-Z0-9_]*)[^}]*\}/g)]
+      .map((m) => m[1] ?? "")
+      .filter((v) => !computed.has(v));
+    expect(referenced.length, "update this check if docker-compose.yml stops using ${VAR} interpolation").toBeGreaterThan(5);
+
+    const missing = [...new Set(referenced)].filter((v) => !new RegExp(`^${v}=`, "m").test(env));
+    expect(missing, "docker-compose.yml reads these, but .env.example never mentions them").toStrictEqual([]);
+  });
+});
+
+/**
+ * 56ff8c04, found by lore's own review: the template became a real, tracked
+ * deployment artifact (fingerprint 2146b6dd) but was never added to `deploy/Makefile`'s
+ * `DEPLOY_FILES`, so `make push` never copied it to a remote host and
+ * `check-deployed` never noticed — the drift guard's own header comment names
+ * exactly this failure shape ("a guard and its remedy disagreeing about scope").
+ */
+describe("the deploy-file drift guard covers the template it gained", () => {
+  it("lists .env.example in DEPLOY_FILES", () => {
+    const makefile = readFileSync(join(SRC, "..", "deploy", "Makefile"), "utf8");
+    const m = /^DEPLOY_FILES\s*=\s*([\s\S]*?)^\S/m.exec(`${makefile}\n\x00`);
+    expect(m?.[1], "update this check if DEPLOY_FILES is no longer assigned this way").toBeDefined();
+    expect(m?.[1] ?? "", "the template must be part of what make push/check-deployed compare").toMatch(
+      /(?:^|\s)\.env\.example(?:\s|\\)/,
+    );
+  });
+});
+
+/**
  * A DOCBLOCK BELONGS TO WHAT COMES AFTER IT, and two in a row means one is orphaned.
  *
  * Inserting a method just under an existing docblock silently rededicates that block to

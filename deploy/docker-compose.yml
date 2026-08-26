@@ -110,15 +110,23 @@ services:
       # call, before the call, from the route id — `openrouter/` is the only metered
       # provider here (D-121).
       #
-      # "0" is this deployment's answer: every tier has a subscription route, and a tier
-      # whose plan is out is honestly reported as skipped (`passed_partial`, named in
-      # checks_skipped) rather than quietly bought at ~$4.83 a call. Set it to "1" to buy
-      # the coverage instead — that is a deliberate purchase, not a fallback.
+      # "0" is this deployment's DEFAULT answer: every tier has a subscription route, and a
+      # tier whose plan is out is honestly reported as skipped (`passed_partial`, named in
+      # checks_skipped) rather than quietly bought at ~$4.83 a call. Set it to "1" in .env
+      # to buy the coverage instead — that is a deliberate purchase, not a fallback.
+      #
+      # ${LORE_ALLOW_METERED:-0}, NOT A BARE "0" — found by lore's own review, fingerprint
+      # 3297759e: this was hardcoded with no interpolation at all, so the comment two
+      # lines up and config-view.ts's own operator-facing remedy ("Set it in the
+      # deployment's .env and redeploy") were both describing a control that did not
+      # exist — an operator who set LORE_ALLOW_METERED=1 in .env, believing either, got
+      # no effect at all. The DEFAULT is unchanged for every deployment that has not
+      # touched this: "0" either way.
       #
       # The service REFUSES TO START if LORE_DAILY_CEILING_USD is still set anywhere,
       # rather than ignoring it: believing a number caps the day when none does is worse
       # than having no answer at all.
-      LORE_ALLOW_METERED: "0"
+      LORE_ALLOW_METERED: ${LORE_ALLOW_METERED:-0}
       # LORE_RUN_TESTS is gone (D-71). lore READS a test suite — whether the change
       # is covered, whether a test asserts what its name claims — and never runs one.
       # A suite that fails belongs to whoever owns the repository, and CI already

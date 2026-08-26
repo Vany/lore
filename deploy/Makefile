@@ -40,8 +40,14 @@ DBVOL   = $(PROJECT)_lore-db
 # reconciler copied twelve, so tier-config drift never blocked `make up` and
 # `sync-deployed` silently overwrote three files the operator was never told differed.
 # A guard and its remedy disagreeing about scope is the guard's whole value gone.
+# `.env.example` ADDED — found by lore's own review, fingerprint 56ff8c04, against
+# this same list's own header comment above: the template became a real, tracked
+# deployment artifact (fingerprint 2146b6dd) but was never added here, so `make push` never
+# copied it to a remote host and `check-deployed` never noticed it was missing —
+# exactly the silent-divergence class this list exists to catch, for the one file a
+# NEW deployment reads before anything else.
 DEPLOY_FILES = Makefile docker-compose.yml litestream.yml Dockerfile opencode.Dockerfile \
-               sandbox.Dockerfile smoke.mjs mirror-refresh.sh sync-opencode.sh \
+               sandbox.Dockerfile smoke.mjs mirror-refresh.sh sync-opencode.sh .env.example \
                tiers.kimi.json tiers.zai-kimi-openai.json tiers.zai-openai.json
 DBIMG   = $(PROJECT)-lore:latest
 DBRUN   = docker run --rm -v $(DBVOL):$(DB) -e LORE_DB_DIR=$(DB) --entrypoint node $(DBIMG)
