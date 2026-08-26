@@ -481,6 +481,71 @@ describe("ingesting at a ref, not the worktree (D-10 for documents)", () => {
   });
 });
 
+// A finding (0b2d5268) claimed ref-mode ingest of a branch that deletes a document
+// `into` still has flaps every round — insert from `into`, retire via the deletion
+// sweep (a2f4d4f9's own disclosed gap, since the sweep compares against the WORKTREE's
+// listing), insert again next round. Checked empirically and it does not reproduce:
+// a document absent from the worktree is absent from `discovered`, which means it is
+// absent from `candidates` too (`candidates` is always a subset of `discovered`), so
+// the read loop — which only ever iterates `candidates` — never reaches it and cannot
+// re-insert what it never reads. Root files (RULE_DOCS) are the other half: they are
+// listed unconditionally regardless of whether they exist, so a deleted root file
+// stays "present" and the sweep never touches it at all. This test is that check,
+// kept: five rounds, one write total, then stable.
+describe("a document the branch deletes but `into` keeps does not flap round over round (0b2d5268)", () => {
+  let dir: string;
+  let trunk: string;
+
+  const g = (...args: string[]): string => execFileSync("git", args, { cwd: dir, encoding: "utf8" }).trim();
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "lore-ingest-noflap-"));
+    g("init", "-q", "-b", "main");
+    g("config", "user.email", "t@example.com");
+    g("config", "user.name", "t");
+    writeFileSync(join(dir, "PROG.md"), "Money amounts are always integers in minor units, never floats.\n");
+    mkdirSync(join(dir, "docs/adr"), { recursive: true });
+    writeFileSync(join(dir, "docs/adr/0026-holds.md"), "Holds must be idempotent on the network transaction id.\n");
+    g("add", "-A");
+    g("commit", "-qm", "trunk");
+    trunk = g("rev-parse", "HEAD");
+    g("checkout", "-q", "-b", "feature");
+    rmSync(join(dir, "PROG.md"));
+    rmSync(join(dir, "docs/adr/0026-holds.md"));
+    g("add", "-A");
+    g("commit", "-qm", "branch deletes both rule documents");
+  });
+
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it("settles after the first round and stays settled for five more", async () => {
+    const store = new Store(":memory:");
+    const repoId = store.upsertRepo("r", "git@example.com:o/r.git").id;
+
+    const counts: number[] = [];
+    for (let round = 0; round < 5; round++) {
+      const result = await ingestDocs(store, repoId, dir, { ref: trunk });
+      // No round after the first should add or retire anything: nothing changed.
+      if (round > 0) {
+        expect(result.added, `round ${round} added something it should not have`).toBe(0);
+        expect(result.retired, `round ${round} retired something it should not have`).toBe(0);
+      }
+      counts.push(store.knowledgeFor(repoId).length);
+    }
+
+    expect(counts, "the live row count must never grow or shrink after the first round").toStrictEqual([
+      counts[0], counts[0], counts[0], counts[0], counts[0],
+    ]);
+    // The root file (into still has it) survives; the nested ADR (worktree lacks it,
+    // so it is never even a candidate) never arrives at all — the real, narrower
+    // gap already on record just above the sweep, not a growing pile of dead rows.
+    const statements = store.knowledgeFor(repoId).map((k) => k.statement);
+    expect(statements.some((s) => s.includes("integers in minor units"))).toBe(true);
+    expect(statements.some((s) => s.includes("network transaction id"))).toBe(false);
+    store.close();
+  });
+});
+
 // The screen is a model, so every test here is about what happens when the model is
 // wrong, absent, or expensive — never about it being right, which is not this module's
 // property to hold.

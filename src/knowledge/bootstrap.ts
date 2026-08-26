@@ -69,17 +69,19 @@ export async function bootstrap(opts: {
   /**
    * The FIRST review's own `into`, when it has one (D-130 folder mode does not).
    *
-   * lore-ok[c5df90ef,65528bcd]: found real by lore's own review — bootstrap runs from
-   * the worktree of the repo's first review, exactly the shape `53969ab8` closed for
-   * every ordinary round, and this call site kept reading the branch under review
-   * regardless. Resolved and passed to `ingestDocs` as `ref` the same three-way split
-   * `review.ts`'s diff-mode round uses: OMITTED reads the worktree (no base exists to
-   * defend against — D-130 folder mode's first review); PRESENT AND RESOLVABLE reads
-   * at that ref; PRESENT AND UNRESOLVABLE skips document ingestion for this call
-   * rather than falling back to the worktree, which is the fallback this fix exists
-   * to refuse. The second and third cases look identical from the caller's side —
-   * both start from a defined `intoRef` — which is exactly why they were folded
-   * together by mistake the first time this was written.
+   * lore-ok[c5df90ef,65528bcd,4f4c52a5]: found real by lore's own review — bootstrap
+   * runs from the worktree of the repo's first review, exactly the shape `53969ab8`
+   * closed for every ordinary round, and this call site kept reading the branch under
+   * review regardless. Resolved and passed to `ingestDocs` as `ref` the same
+   * three-way split `review.ts`'s diff-mode round uses: OMITTED reads the worktree
+   * (no base exists to defend against — D-130 folder mode's first review); PRESENT
+   * AND RESOLVABLE reads at that ref; PRESENT AND UNRESOLVABLE defers the WHOLE
+   * bootstrap — document ingest AND the architecture survey — rather than falling
+   * back to the worktree read (the fallback this fix exists to refuse) or letting the
+   * survey alone satisfy worker.ts's one-shot retry guard, which asks only "is there
+   * any knowledge yet" and cannot tell a clean bootstrap from a half one. A repo this
+   * happens to gets retried whole on its next review, at no extra cost — bootstrap
+   * only ever spends anything once regardless.
    */
   intoRef?: string | undefined;
 }): Promise<BootstrapResult> {
@@ -139,11 +141,28 @@ export async function bootstrap(opts: {
   // worktree read — that fallback IS the hole `53969ab8`/`c5df90ef` closed, reopened
   // by an unrelated resolution failure on the one call this repo only ever gets once.
   let docs: IngestResult = { documents: 0, added: 0, retired: 0, screenedOut: 0, unscreened: 0 };
+  let deferred = false;
   if (opts.intoRef === undefined) {
     docs = await ingestDocs(opts.store, opts.repoId, opts.worktree, { ...screenOpt });
   } else {
     const into = await resolveInto(opts.worktree, opts.intoRef);
     if (into !== undefined) docs = await ingestDocs(opts.store, opts.repoId, opts.worktree, { ...screenOpt, ref: into });
+    else deferred = true;
+  }
+
+  // lore-ok[4f4c52a5]: found real by lore's own review, on the tree carrying the
+  // 65528bcd fix — that version skipped only the DOCUMENT half on an unresolvable
+  // ref, but the architecture survey below has no such gate and would still write
+  // `fact` rows. worker.ts's one-shot retry guard is "is this repo's knowledge
+  // empty", not "did bootstrap's document ingest succeed" — one fact row satisfies
+  // it just as well as ten document rules do, so a transient resolution failure
+  // (mirror mid-refresh, the one case `resolveInto` actually fails on) would have
+  // let the survey run, made the guard permanently false, and left this repo's
+  // CLAUDE.md/PROG.md/ADRs un-ingested by bootstrap for the rest of its life — a
+  // partial, inconsistent seed is worse than retrying the whole thing next review,
+  // which costs nothing since bootstrap only spends anything once anyway.
+  if (deferred) {
+    return { documents: 0, rulesFromDocs: 0, factsFromCode: 0, conflicts: 0 };
   }
 
   let factsFromCode = 0;

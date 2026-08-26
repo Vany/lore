@@ -108,4 +108,34 @@ describe("bootstrap reads a document at `into`, not the branch under review (c5d
     ).toBe(false);
     expect(result.documents, "nothing should have been read at all this call").toBe(0);
   });
+
+  // Found by lore's own review (4f4c52a5), on the tree carrying the 65528bcd fix: that
+  // version skipped only ingestDocs on an unresolvable ref, leaving the architecture
+  // survey free to write `fact` rows — which alone satisfies worker.ts's one-shot
+  // retry guard (`knowledgeFor(repoId, undefined, 1).length === 0`) and permanently
+  // stops this repo's documents from ever being bootstrapped.
+  it("with an unresolvable intoRef, does not run the architecture survey either — the whole attempt defers (4f4c52a5)", async () => {
+    class FactWritingReviewer implements ReviewerLike {
+      calls = 0;
+      async review(): Promise<ReviewerResult> {
+        this.calls++;
+        return {
+          findings: [
+            { file: "src/x.ts", severity: "low", claim: "a fact nobody asked for", evidence: "e", failureScenario: "s" },
+          ],
+        } as unknown as ReviewerResult;
+      }
+    }
+    const reviewer = new FactWritingReviewer();
+    const tier: Tier = { id: "t1", kind: "model", model: "zai/some-model", stage: "fast" };
+
+    const result = await bootstrap({ store, repoId, worktree: dir, intoRef: "no-such-ref-anywhere", reviewer, tier });
+
+    expect(reviewer.calls, "the survey must not run when the whole bootstrap attempt is deferred").toBe(0);
+    expect(result.factsFromCode).toBe(0);
+    expect(
+      store.knowledgeFor(repoId, undefined, 1).length,
+      "the one-shot retry guard must still see this repo as un-bootstrapped",
+    ).toBe(0);
+  });
 });

@@ -653,6 +653,23 @@ export async function ingestDocs(
   // (capped at MAX_RULE_DOCS) — see `capped`'s docs. Comparing against the capped list
   // would have retired every live rule from every document past the cap, on every
   // review, reading "still exists past position 400" as "gone".
+  //
+  // lore-ok[0b2d5268]: raised as a per-round insert-then-retire flap for the SAME
+  // gap named above (a branch that deletes a document `into` still has) — checked
+  // empirically (five consecutive `ingestDocs({ ref: trunk })` calls against a real
+  // git fixture where the branch deletes both a root file and a nested ADR the base
+  // keeps) and it does not reproduce, for a reason the claim's own evidence already
+  // half-states without following through: a document the WORKTREE lacks is absent
+  // from `discovered`, which means it is absent from `candidates` too (`candidates`
+  // is only ever a subset of `discovered`) — so the read loop, which iterates
+  // `candidates`, never reaches it and cannot "re-insert" it. Root files (`RULE_DOCS`)
+  // are the other half: `discoverable` lists all six unconditionally, existence
+  // unchecked, so a root file the branch deleted stays in `discovered` and the sweep
+  // never sees it as missing at all — it keeps reading cleanly from `into` every
+  // round instead. Either way there is one write (or zero), not a cycle. The real,
+  // narrower cost is the gap already on record just above: a nested document the
+  // branch deletes is retired (at most once, not repeatedly) ahead of the next
+  // unrelated review that would have revived it from `into`.
   if (opts.files === undefined) {
     const stillPresent = new Set(discovered);
     for (const provenance of store.liveDocumentProvenances(repoId)) {
