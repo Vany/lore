@@ -268,6 +268,21 @@ function writeBackRejections(store: Store, repoId: string, folder: string, commi
     const provenance = `propose:${folder}:${commit}:${s.proposal.lens}`;
     if (store.hasKnowledgeFrom(repoId, provenance)) continue;
 
+    // lore-ok[e6c44b9f]: found by lore's own review, against the 50a98db3 fix just
+    // below — `commonScope` returns `undefined` both for NO touches (genuinely no
+    // scope information at all) and for touches that share NO root segment
+    // (`deploy/mirror-refresh.sh` + `docs/ops.md` — real information, just too spread
+    // out to summarise as one path), and the two cases were treated the same:
+    // written back repo-wide either way, reproducing 0318670f's cross-folder leakage
+    // for the second one. They are not the same case. Zero touches has nothing to be
+    // dishonest ABOUT, so repo-wide is the honest answer; touches that share nothing
+    // DO carry information, and writing repo-wide anyway would overstate it — so this
+    // is skipped rather than written falsely wide, the same asymmetry `restates`
+    // itself is biased toward (screen.ts: a missed match costs a reader a paragraph
+    // they recognise; a false one hides a new idea behind an old decision).
+    const scope = commonScope(s.proposal.touches);
+    if (scope === undefined && s.proposal.touches.length > 0) continue;
+
     const reasons = [
       outOfScope
         ? (s.because[s.demotions.indexOf("out-of-scope")] ?? "it landed outside the folder asked about")
@@ -281,7 +296,7 @@ function writeBackRejections(store: Store, repoId: string, folder: string, commi
       source: "derived",
       statement: `considered and reject: ${s.proposal.idea}`,
       why: reasons.join("; "),
-      path: commonScope(s.proposal.touches),
+      path: scope,
       cwe: undefined,
       provenance,
       sourceBlob: undefined,

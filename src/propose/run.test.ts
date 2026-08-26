@@ -720,6 +720,18 @@ describe("whatever propose itself is certain enough to reject is written back", 
   });
 
   /**
+   * Fingerprint e6c44b9f: touches sharing no root at all used to fall back to the
+   * SAME repo-wide row as genuinely no touches, reproducing 0318670f's cross-folder
+   * leakage for ideas spanning unrelated top-level areas. Real files, two different
+   * top-level directories neither one nested in the other.
+   */
+  it("writes back nothing, rather than falsely repo-wide, when touches share no root at all", async () => {
+    const unrelated = { ...IDEA, touches: ["deploy/mirror-refresh.sh", "spec/mcp-api.md"] };
+    await propose({ store, repoId, ask: scripted([[unrelated], [unrelated]]) }, input());
+    expect(rejectedRows()).toHaveLength(0);
+  });
+
+  /**
    * Fingerprint a90601f4: `knowledge/conflict.ts`'s `detectAndRecord` runs over every
    * live row at the start of every review round and pairs opposite-polarity,
    * high-overlap statements as a candidate contradiction — a bare "considered: <idea>"
@@ -794,12 +806,23 @@ describe("commonScope", () => {
     expect(commonScope(["src/mcp/server.ts", "src/mcp/docs.ts"])).toBe("src/mcp");
   });
 
-  it("narrows to the shared ancestor for touches in different directories, never repo-wide", () => {
+  it("narrows to the shared ancestor for touches in different directories under one root", () => {
     expect(commonScope(["src/mcp/server.ts", "src/store/store.ts"])).toBe("src");
   });
 
   it("still returns undefined — genuinely repo-wide — when nothing was named at all", () => {
     expect(commonScope([])).toBeUndefined();
+  });
+
+  /**
+   * Fingerprint e6c44b9f: this function's own return value cannot distinguish "no
+   * touches" from "touches that share nothing" — both are `undefined` — and the
+   * CALLER (writeBackRejections, above) is what has to tell them apart, since only it
+   * knows whether `touches` was empty. Confirmed here so that distinction is not lost
+   * if `commonScope` is ever read in isolation.
+   */
+  it("also returns undefined when touches share no root at all — the caller must not treat this as repo-wide", () => {
+    expect(commonScope(["deploy/mirror-refresh.sh", "docs/ops.md"])).toBeUndefined();
   });
 
   it("normalizes each touch before comparing them", () => {
