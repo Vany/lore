@@ -107,6 +107,14 @@ export function proposerPrompt(i: LensInput): string {
   ].join("\n");
 }
 
+/**
+ * Found by lore's own review, fingerprint 33be1f60: this prompt's own field list used
+ * to name five fields and omit two `parseProposal` (proposal.ts) and `screen` (screen.ts)
+ * both depend on — `trueIf`, which parsing hard-rejects when empty, and `touches`, whose
+ * absence demotes an otherwise-sound, correctly-placed idea out-of-scope. A critic that
+ * followed its own instructions exactly could have its verdict rejected as malformed, or
+ * silently drop the proposer's own scope. Both are now asked for explicitly.
+ */
 export function criticPrompt(i: LensInput, idea: string): string {
   return [
     "You are reading someone else's proposal about this code. You did not write it and you are not defending",
@@ -120,6 +128,11 @@ export function criticPrompt(i: LensInput, idea: string): string {
     "",
     "  * `idea` — restate it in your words, as you would to the person who has to do the work, INCLUDING what",
     "    the proposer left out. If you think it is simply wrong, say that first and say why.",
+    "  * `touches` — the files the change lands in. Normally the SAME list the proposal gave you; correct it",
+    "    only if you believe the change actually has to land somewhere else. This is required — an empty or",
+    "    omitted list makes the idea unplaceable and it is dropped, whatever either of you thought of it.",
+    "  * `trueIf` — your OWN answer, which may differ from the proposer's: what would have to be true for this",
+    "    to be worth doing. Required, and empty is not a valid answer — say what you actually believe.",
     "  * `costIfWrong` — what it costs to find out this was a mistake. Be concrete and be pessimistic: the",
     "    author of the code is the worst judge of this and so is its proposer.",
     "  * `contradictedBy` — what in this repository, its specs or its rules argues against it. Look; do not",

@@ -210,7 +210,13 @@ export async function main(argv: readonly string[]): Promise<ExitCode> {
         commit: flagOf(argv, "commit") ?? "master",
         mode: flagOf(argv, "mode") ?? DEFAULT_TYPE,
         lenses: parseLenses(flagOf(argv, "lens")),
-        outDir: flagOf(argv, "out") ?? "proposals",
+        // ANCHORED, NOT CWD-RELATIVE — found by lore's own review, fingerprint
+        // 9c6f2a60: `reposRoot` two lines up is already anchored via `dataDir()`
+        // for exactly this reason, and this default was not, on a command whose
+        // whole output IS this one file — a paid-for document written wherever the
+        // shell happened to be standing is a document nobody sent 8 sessions to
+        // produce and finds again.
+        outDir: flagOf(argv, "out") ?? join(dataDir(), "proposals"),
         now: new Date(),
       });
       process.stdout.write(`${path}\n`);

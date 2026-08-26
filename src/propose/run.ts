@@ -328,6 +328,17 @@ export async function propose(deps: ProposeDeps, input: ProposeInput): Promise<P
 
   // Checked against the worktree that was actually read, not against the repository as
   // it stands now — the proposals describe that tree and nothing else.
+  //
+  // lore-ok[85623b0c]: the claim that a leading slash makes `join` discard `worktree`
+  // (behaving like `resolve`) does not hold — verified directly: `join("/wt",
+  // "/src/store/store.ts")` returns `/wt/src/store/store.ts`, not `/src/store/store.ts`.
+  // `path.join` concatenates every argument and normalises the result; only
+  // `path.resolve` treats a later absolute segment as replacing what came before it.
+  // A leading `/` on a named path is therefore inert here — `p` and `/${p}` resolve to
+  // the same file inside `worktree` either way — so there is no host-filesystem escape
+  // and no mismatch with `inScope`'s own leading-slash stripping (proposal.ts), which
+  // exists for a different reason (matching a path against `folder` as plain text, not
+  // resolving anything).
   const exists = (p: string): boolean => existsSync(join(input.worktree, p));
   return { screened: screen(screenedAll, input.folder, input.knowledge, exists), sessionsSpent, silent };
 }

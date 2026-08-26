@@ -14,7 +14,7 @@ not on a merge and not on a schedule.
 ```
 lore propose --repo <name> --budget 8
              [--folder src/store] [--commit <ref>] [--mode code-arch]
-             [--lens seams,failure,data,greenfield]
+             [--lens seams,failure,data,greenfield] [--out <dir>]
 ```
 
 | flag | meaning | default |
@@ -25,6 +25,14 @@ lore propose --repo <name> --budget 8
 | `--commit` | what to think about, cut from lore's mirror | the head of `master` |
 | `--mode` | which question to ask, from the review-type vocabulary | `code-arch` |
 | `--lens a,b,c` | which vantages to run | all four |
+| `--out <dir>` | where the document is written | `<lore's data directory>/proposals` |
+
+The default for `--out` is anchored to lore's own data directory, not the current
+directory — found missing from this table by lore's own review, fingerprint 9c6f2a60,
+alongside the default itself: it used to be the bare relative string `proposals`, the
+one thing 8 paid-for sessions produce, written wherever the shell happened to be
+standing rather than somewhere findable again. `--repo`'s own registry lives under the
+same anchor for the same reason.
 
 No `--json`: the output is a document a person appraises, not a client contract —
 writing one for output nobody has judged yet is premature (`propose/cli.ts`'s own
@@ -32,7 +40,7 @@ header). MCP is one wrapper away once it has earned it. Found by lore's own revi
 fingerprint 6e36c2b1: this table listed one anyway, and nothing ever read it —
 `lore propose` prints the document's path unconditionally regardless of the flag.
 
-Writes `proposals/YYYY-MM-DD-<sha>-<folder>.md` and prints the path. The SHA and the
+Writes `<out>/YYYY-MM-DD-<sha>-<folder>.md` and prints the path. The SHA and the
 folder are both in the name because a per-folder sweep shares one commit and one date —
 without the folder, eleven runs write eleven times to one path and ten documents are
 lost after being paid for. Exit `0` when it produced a
