@@ -293,6 +293,36 @@ describe("a stated provider cool-off survives an otherwise-idle service", () => 
   });
 });
 
+// c1b6fc4c, found by lore's own review: `tierDownLines` called `loadPools`/`loadTiers`
+// with nothing catching them, and both read LORE_TIERS from disk and THROW on a bad
+// path or malformed JSON — reachable the moment any tier-unavailable mark exists,
+// which is this function's whole reason to run. `make status` is the one view built
+// to explain a service that will not start; it must not be the thing that also
+// crashes on the same broken config.
+describe("a LORE_TIERS that will not load does not crash the status view", () => {
+  let saved: string | undefined;
+  beforeEach(() => {
+    saved = process.env["LORE_TIERS"];
+    process.env["LORE_TIERS"] = "/definitely/does/not/exist/tiers.json";
+  });
+  afterEach(() => {
+    if (saved === undefined) delete process.env["LORE_TIERS"];
+    else process.env["LORE_TIERS"] = saved;
+  });
+
+  it("shows the tier's own mark with a degraded coverage line, instead of throwing", () => {
+    const until = new Date(Date.now() + 3_600_000).toISOString();
+    store.markTierUnavailable("t1", until, "quota exhausted", 1, true);
+
+    let out = "";
+    expect(() => {
+      out = render();
+    }, "a broken ladder file must not crash the one view built to explain a broken deployment").not.toThrow();
+    expect(out, "the tier's own mark must still be shown").toContain("IS NOT BEING ASKED");
+    expect(out, "must say why coverage could not be assessed").toContain("LORE_TIERS itself would not load");
+  });
+});
+
 // 0a47f502, found by lore's own review: the header's own "queued N" was a bare
 // `COUNT(*) FROM job WHERE state = 'queued'`, with no join to the review at all —
 // while store.queueDepth() (read by /status, the board and the queueBacked ticket)

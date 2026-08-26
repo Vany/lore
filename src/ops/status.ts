@@ -430,6 +430,25 @@ function tierDownLines(db: DatabaseSync): string[] {
     .all() as Row[];
   const nowIso = new Date().toISOString();
   const lines: string[] = [];
+
+  // LOADED ONCE, OUTSIDE THE LOOP, AND NEVER LET TO CRASH THIS VIEW — found by
+  // lore's own review, fingerprint c1b6fc4c: `loadPools`/`loadTiers` read and parse
+  // LORE_TIERS from disk and THROW — ENOENT on a bad path (the exact shape 15be66bd
+  // fixed one file over), UsageError on malformed JSON. Reachable the moment any
+  // tier-unavailable mark exists in `meta`, which is an ORDINARY condition, not an
+  // edge case — it is the whole reason this function exists. `make status` is the
+  // one view built to explain a service that will not start
+  // (spec/operations.md §2.4.1); it must not be the thing that ALSO crashes on the
+  // same broken config, printing a raw stack instead of the mirrors, the queue
+  // depth, or anything else on the page.
+  const ladder: { pools: ReturnType<typeof loadPools>; allowMetered: boolean } | { error: string } = (() => {
+    try {
+      return { pools: loadPools(), allowMetered: allowMeteredFromEnv(process.env["LORE_ALLOW_METERED"]) };
+    } catch (e) {
+      return { error: e instanceof Error ? e.message : String(e) };
+    }
+  })();
+
   for (const d of downRows) {
     let until = "";
     let why = "";
@@ -444,6 +463,21 @@ function tierDownLines(db: DatabaseSync): string[] {
     }
     if (until <= nowIso) continue;
     const tier = String(d["key"] ?? "").slice("tier-unavailable:".length);
+
+    if ("error" in ladder) {
+      // DEGRADED, NOT SILENT AND NOT A CRASH: the tier's own mark is still real and
+      // still shown, but coverage cannot be assessed without a ladder that loads.
+      lines.push(
+        stated
+          ? `${red(`✘ ${tier} IS NOT BEING ASKED`)} ${dim(`until ${until.slice(0, 19)}Z — ${why}.`)}`
+          : `${yellow(`◔ ${tier} is rested by the knowledge screen`)} ${dim(`until ${until.slice(0, 19)}Z — ${why}.`)}`,
+        `  ${red(`✘ cannot say whether it has a fallback — LORE_TIERS itself would not load: ${ladder.error}`)}`,
+        `  ${dim("It is retried automatically, and one success clears this.")}`,
+        "",
+      );
+      continue;
+    }
+
     // A FALLBACK LORE MAY ACTUALLY WALK ONTO, not one merely written in the file.
     //
     // lore-ok is not the answer to 9f64c74b — the finding is right and this is the fix.
@@ -457,8 +491,7 @@ function tierDownLines(db: DatabaseSync): string[] {
     //
     // So the question is resolved the way the round resolves it: expand nicknames, drop
     // what this deployment may not pay for, and ask what is left.
-    const allowMetered = allowMeteredFromEnv(process.env["LORE_ALLOW_METERED"]);
-    const pools = loadPools();
+    const { pools, allowMetered } = ladder;
     // A ROUTE MARK OF ITS OWN MAKES A SPARE NO SPARE. Read the same way the tier marks
     // above are, because a route that is itself parked cannot cover for anything.
     const parked = (route: string): boolean => {
