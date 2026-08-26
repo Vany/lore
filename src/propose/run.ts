@@ -146,12 +146,14 @@ export function criticFor(tiers: readonly Tier[], proposer: Tier, pools: ModelPo
  * `Reviewer.askFor` recovers spend from a session that fails mid-exploration and
  * attaches it to the thrown error as `.spent` (never `this` — a shared instance field
  * would cross-attribute concurrent rounds' spend); `reviewer/review.ts` already reads
- * it back this same way. Found missing here by lore's own review, fingerprint
- * b1030112: this file's own header claims "usage is recorded per session, so what it
- * cost is answerable afterwards" as one of propose's stated money bounds, and it was
- * false on exactly the path where the spend is real and highest — measured
- * 2026-08-09, two 45-minute failed attempts against an exhausted plan that the
- * trailing-usage read as zero.
+ * it back this same way.
+ *
+ * lore-ok[b1030112]: found missing here by lore's own review — this file's own header
+ * claims "usage is recorded per session, so what it cost is answerable afterwards" as
+ * one of propose's stated money bounds, and it was false on exactly the path where the
+ * spend is real and highest — measured 2026-08-09, two 45-minute failed attempts
+ * against an exhausted plan that the trailing-usage read as zero. This function is the
+ * fix; both call sites are below, in the proposer's and the critic's catch blocks.
  */
 function recordFailedUsage(store: Store, repoId: string, tier: string, model: string | undefined, e: unknown): void {
   const spent = (e as { spent?: { input: number; cached: number; output: number; cost: number } }).spent;

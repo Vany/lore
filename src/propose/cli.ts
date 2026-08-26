@@ -123,6 +123,13 @@ export async function proposeCli(i: ProposeCliInput): Promise<string> {
     // The folder belongs in the NAME. A per-folder sweep shares one commit and one
     // date, so without it every run overwrites the last and ten of eleven documents
     // are lost — after they were paid for.
+    //
+    // lore-ok[9c6f2a60]: found by lore's own review — this function trusts `i.outDir`
+    // as given rather than anchoring it itself, and that is correct: `ProposeCliInput`
+    // (above) declares it required, with no local default to get wrong. The default
+    // this finding is really about — a CWD-relative path when nothing was passed —
+    // is resolved by the caller, `src/cli.ts`'s own argv wiring (`outDir: flagOf(argv,
+    // "out") ?? join(dataDir(), "proposals")`), outside this folder's review scope.
     const path = join(i.outDir, `${i.now.toISOString().slice(0, 10)}-${sha.slice(0, 7)}-${slug}.md`);
     await writeFile(path, doc, "utf8");
 
