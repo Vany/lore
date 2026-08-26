@@ -17,7 +17,7 @@ import type { Listed, SessionResult } from "../reviewer/opencode.ts";
 import { Store } from "../store/store.ts";
 import { polarity } from "../knowledge/conflict.ts";
 import { renderProposals } from "./render.ts";
-import { criticFor, propose, type ProposeInput } from "./run.ts";
+import { criticFor, normalizedTouchPath, propose, type ProposeInput } from "./run.ts";
 import { screen } from "./screen.ts";
 import { parseProposal, type Proposal } from "./proposal.ts";
 
@@ -659,6 +659,20 @@ describe("whatever propose itself is certain enough to reject is written back", 
   });
 
   /**
+   * Fingerprint 790271a9: a `touches` entry stored verbatim — `./src/mcp/server.ts`
+   * (a leading `./`, which `exists`/`inScope` both already accept) — creates a `path`
+   * no path-scoped consumer (`knowledgeFor`'s SQL, `scopesOverlap`) can ever match,
+   * since both require an exact segment boundary. `normalizedTouchPath`'s own unit
+   * tests below cover the trailing-slash and leading-`/` forms directly; this proves
+   * the write-back actually calls it.
+   */
+  it("normalizes a touch path with a leading ./ before storing it", async () => {
+    const messy = { ...IDEA, touches: ["./src/mcp/server.ts"] };
+    await propose({ store, repoId, ask: scripted([[messy], [messy]]) }, input());
+    expect(rejectedRows()[0]?.["path"]).toBe("src/mcp/server.ts");
+  });
+
+  /**
    * Fingerprint a90601f4: `knowledge/conflict.ts`'s `detectAndRecord` runs over every
    * live row at the start of every review round and pairs opposite-polarity,
    * high-overlap statements as a candidate contradiction — a bare "considered: <idea>"
@@ -688,5 +702,33 @@ describe("whatever propose itself is certain enough to reject is written back", 
     const r = await propose({ store, repoId, ask: scripted([[selfRejecting]]) }, input({ budget: 1 }));
     expect(r.screened[0]?.proposal.contradictedBy).toMatch(/NOT CRITICISED/);
     expect(rejectedRows()).toHaveLength(0);
+  });
+});
+
+/**
+ * Fingerprint 790271a9: the forms `knowledgeFor`'s SQL and `scopesOverlap`'s exact
+ * segment-boundary comparison cannot see through, all of which `exists`/`inScope`
+ * already accept from a model.
+ */
+describe("normalizedTouchPath", () => {
+  it("strips a leading ./", () => {
+    expect(normalizedTouchPath("./src/mcp/server.ts")).toBe("src/mcp/server.ts");
+  });
+
+  it("strips a trailing slash", () => {
+    expect(normalizedTouchPath("src/mcp/")).toBe("src/mcp");
+  });
+
+  it("strips a leading /, the same inertness path.join already gives it (fingerprint 85623b0c)", () => {
+    expect(normalizedTouchPath("/src/mcp/server.ts")).toBe("src/mcp/server.ts");
+  });
+
+  it("leaves an already-clean path unchanged", () => {
+    expect(normalizedTouchPath("src/mcp/server.ts")).toBe("src/mcp/server.ts");
+  });
+
+  it("returns undefined for the repository root, matching addKnowledge's own repo-wide convention", () => {
+    expect(normalizedTouchPath(".")).toBeUndefined();
+    expect(normalizedTouchPath("/")).toBeUndefined();
   });
 });

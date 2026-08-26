@@ -166,13 +166,23 @@ export function screen(
       because.push("the critic's own verdict was that this should not be pursued at all, not merely a disagreement with part of it");
     }
 
-    const decided = rejected.find((k) => restates(proposal.idea, k.statement));
+    // lore-ok[0318670f]: found by lore's own review — `restates` alone ignored a
+    // knowledge row's own `k.path`, so an out-of-scope rejection recorded FOR ONE
+    // FOLDER (correctly scoped to it — `writeBackRejections`, run.ts) still matched an
+    // unrelated proposal in a LATER, different `--folder` run, demoting that run's own
+    // in-scope, genuinely-decided idea "already decided" over a decision that was
+    // never made about it. `inScope` (proposal.ts) is the same check §1.1's own scope
+    // rule already uses the other direction — repo-wide (`k.path` absent) still
+    // matches everything, matching every existing taught-rule test unscoped.
+    const inRowScope = (k: KnowledgeItem): boolean => inScope(k.path ?? "", proposal.touches);
+
+    const decided = rejected.find((k) => restates(proposal.idea, k.statement) && inRowScope(k));
     if (decided !== undefined) {
       demotions.push("already-decided");
       because.push(`this repository decided against it on ${decided.verifiedAt.slice(0, 10)}: ${decided.statement}`);
     }
 
-    const against = taught.find((k) => restates(proposal.idea, k.statement));
+    const against = taught.find((k) => restates(proposal.idea, k.statement) && inRowScope(k));
     if (against !== undefined && decided === undefined) {
       // Annotated, never dropped. A taught rule can be wrong and a model arguing with
       // one is worth reading — the reader is only told they are arguing with a decision

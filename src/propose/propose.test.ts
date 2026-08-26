@@ -242,6 +242,35 @@ describe("screen", () => {
     expect(s?.because.join(" ")).toContain("2026-07-04");
   });
 
+  /**
+   * Fingerprint 0318670f: out-of-scope is relative to the FOLDER a run was asked
+   * about, but `writeBackRejections` (run.ts) records the rejection with the path it
+   * actually landed at — so a LATER run scoped to THAT path is a different question
+   * than the one the earlier rejection answered, and must not inherit it. `restates`
+   * alone cannot tell these apart; only the row's own `path` can.
+   */
+  it("does not inherit a rejection scoped to a different path than this proposal touches", () => {
+    const k = known({
+      kind: "mistake",
+      statement: "Splitting the store's query surface from its migration surface was considered and rejected.",
+      path: "src/mcp/server.ts",
+      verifiedAt: "2026-07-04T00:00:00.000Z",
+    });
+    const [s] = screen([proposal()], "src/store", [k]);
+    expect(s?.demotions).not.toContain("already-decided");
+  });
+
+  it("still matches when the rejection's own scope overlaps what this proposal touches", () => {
+    const k = known({
+      kind: "mistake",
+      statement: "Splitting the store's query surface from its migration surface was considered and rejected.",
+      path: "src/store/store.ts",
+      verifiedAt: "2026-07-04T00:00:00.000Z",
+    });
+    const [s] = screen([proposal()], "src/store", [k]);
+    expect(s?.demotions).toContain("already-decided");
+  });
+
   // Fingerprint dda7d5b7, found by lore's own review: `run.ts`'s own knowledgeBlock
   // (lore-ok 77edbad4) already tells the PROPOSER that a `kind: "fact"` row is an
   // unverified, single-branch reading, not a confirmed decision — "an unverified
@@ -272,6 +301,21 @@ describe("screen", () => {
     const [s] = screen([proposal()], "src/store", [k]);
     expect(s?.demotions).toContain("contradicts-taught");
     expect(s?.because.join(" ")).toContain("taught rule");
+  });
+
+  // Fingerprint 0318670f, the same fix applied to the OTHER path-blind match this
+  // screen makes — a taught rule scoped to a path this proposal never touches has
+  // nothing to say about it either.
+  it("does not argue a taught rule scoped elsewhere contradicts this proposal", () => {
+    const k = known({
+      source: "taught",
+      path: "src/mcp/server.ts",
+      statement:
+        "The store's query surface and its migration surface stay in one file, so a migration cannot drift " +
+        "from the queries it changes.",
+    });
+    const [s] = screen([proposal()], "src/store", [k]);
+    expect(s?.demotions).not.toContain("contradicts-taught");
   });
 
   it("ranks survivors first and out-of-scope last", () => {

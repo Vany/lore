@@ -37,7 +37,7 @@ import type { Listed, SessionResult } from "../reviewer/opencode.ts";
 import { extractList } from "../reviewer/opencode.ts";
 import type { KnowledgeItem, Store } from "../store/store.ts";
 import { existsSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { join, posix } from "node:path";
 import { criticPrompt, PROPOSAL_CONTRACT, proposerPrompt, type LensInput } from "./lens.ts";
 import { parseProposal, type Lens, type Proposal, type Screened } from "./proposal.ts";
 import { screen } from "./screen.ts";
@@ -185,6 +185,21 @@ function recordFailedUsage(store: Store, repoId: string, tier: string, model: st
 }
 
 /**
+ * Matches `knowledgeFor`'s own segment-boundary comparison (store.ts) and
+ * `scopesOverlap`'s (knowledge/conflict.ts) — both require an EXACT, `/`-clean path,
+ * the same normalization `knowledge_teach` applies to a taught one (`mcp/server.ts`'s
+ * `normalizeReviewPath`, not imported here since propose has no business depending on
+ * the MCP surface for a two-line stdlib call). A model names `touches` in whatever
+ * form it likes — `./src/store/store.ts`, `src/store/`, or a leading `/` — and any of
+ * those, stored verbatim, creates a row no path-scoped consumer can ever find. Found
+ * by lore's own review, fingerprint 790271a9.
+ */
+export function normalizedTouchPath(p: string): string | undefined {
+  const n = posix.normalize(p).replace(/^\/+/, "").replace(/\/+$/, "");
+  return n === "" || n === "." ? undefined : n;
+}
+
+/**
  * Whatever `propose` itself is certain enough to reject is written back so the next
  * sweep does not pay to have the same idea again (spec/propose.md §6). Two triggers,
  * both decided by `propose` within its own run, needing no person's later verdict on a
@@ -244,7 +259,7 @@ function writeBackRejections(store: Store, repoId: string, folder: string, commi
       source: "derived",
       statement: `considered and reject: ${s.proposal.idea}`,
       why: reasons.join("; "),
-      path: s.proposal.touches.length === 1 ? s.proposal.touches[0] : undefined,
+      path: s.proposal.touches.length === 1 ? normalizedTouchPath(s.proposal.touches[0] ?? "") : undefined,
       cwe: undefined,
       provenance,
       sourceBlob: undefined,

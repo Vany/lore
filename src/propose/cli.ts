@@ -115,6 +115,27 @@ export async function proposeCli(i: ProposeCliInput): Promise<string> {
     const sha = (await git(worktree, ["rev-parse", "HEAD"])).stdout.trim();
 
     const type = reviewType(i.mode);
+    // lore-ok[ff761702]: found by lore's own review against an earlier tree — this
+    // named cli.ts:207, which no longer exists at that line (the file is 191 lines).
+    // The same claim as fingerprint 9b633abb, already fixed: `propose` (run.ts, its
+    // own top) now refuses before spending anything when `i.folder` does not exist in
+    // the tree, rather than converting the whole budget into out-of-scope drops and
+    // (since writeBackRejections exists) a false permanent rejection per lens.
+    // lore-ok[70a714ba]: the claim ("unlike a review there is no release(reviewId) to
+    // sweep them") does not hold — verified directly against reviewer/opencode.ts.
+    // `client.session.delete` (the only call that actually removes a session from
+    // opencode) has exactly ONE call site, inside `release()`, and it only iterates
+    // `this.kept`/`keptSessions`. A session enters either MAP only when
+    // `conductSession` computes `keptKey`, which requires BOTH `reviewId !== undefined`
+    // AND `tier.conversation === true` — an opt-in, rung-sharing setting no tier in
+    // `DEFAULT_TIERS` (core/ladder.ts) sets. So an ordinary review round's OWN
+    // non-rung-sharing tier calls are just as un-swept as propose's: `release`
+    // sweeps what was kept, not everything a review ever asked. propose passing no
+    // `reviewId` leaves it in the same position every review is already in for any
+    // tier that is not deliberately configured to share a rung across rounds — not a
+    // gap this file introduces, and not one `src/propose` can fix on its own: the
+    // question of whether ONE-SHOT sessions should be deleted after use at all is
+    // `Reviewer`'s design, outside this folder's review scope.
     const result = await propose(
       { store: i.store, repoId, ask: i.reviewer.askFor.bind(i.reviewer) },
       {
