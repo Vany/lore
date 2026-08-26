@@ -10,7 +10,7 @@
  * what it selects.
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { UsageError } from "./errors.ts";
 import { CODE_ARCH, DEFAULT_TYPE, SECURITY, reviewType, reviewTypeIds } from "./review-type.ts";
 
@@ -48,5 +48,38 @@ describe("review types are named pipelines", () => {
 
   it("advertises every registered type, so the CLI usage cannot drift from the registry", () => {
     expect([...reviewTypeIds()].sort()).toStrictEqual(["code-arch", "security"]);
+  });
+
+  // 61df6e72, found by lore's own review: `CODE_ARCH`/`SECURITY` used to build
+  // `tiers` with a PLAIN FIELD (`tiers: loadTiers()`), evaluated once, the instant
+  // this module was first imported — before `serve()`'s own body, and every one of
+  // the graceful-degradation fixes this session made elsewhere (board.ts,
+  // status.ts's `tierDownLines`, both `service/main.ts` timers), ever got a chance
+  // to run. A bad LORE_TIERS crashed the whole process the moment ANYTHING
+  // imported this module, which for a real service is immediately.
+  it("defers reading LORE_TIERS to first actual use, not to import", async () => {
+    const saved = process.env["LORE_TIERS"];
+    process.env["LORE_TIERS"] = "/definitely/does/not/exist/tiers.json";
+    // A genuinely fresh import: vitest's own module cache means a second static
+    // `import` of an already-loaded module would not re-run its top-level code, so
+    // this is the only way to observe what a real process's FIRST import does.
+    vi.resetModules();
+    try {
+      const fresh = await import("./review-type.ts");
+      // The import itself did not throw — proof the module loaded despite the
+      // broken LORE_TIERS, which a plain `tiers: loadTiers()` field could not do.
+      expect(fresh.CODE_ARCH.id).toBe("code-arch");
+      expect(fresh.SECURITY.id).toBe("security");
+      // The read is real, only deferred: an actual attempt to run a review still
+      // cannot proceed without a valid ladder, and must say so clearly rather than
+      // silently substituting a default (this codebase never does that with money-
+      // relevant config) — it just no longer happens before the process can boot.
+      expect(() => fresh.CODE_ARCH.tiers).toThrow(/ENOENT/);
+      expect(() => fresh.reviewType("security").tiers).toThrow(/ENOENT/);
+    } finally {
+      vi.resetModules();
+      if (saved === undefined) delete process.env["LORE_TIERS"];
+      else process.env["LORE_TIERS"] = saved;
+    }
   });
 });

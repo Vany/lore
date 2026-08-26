@@ -381,7 +381,23 @@ export async function serve(cfg: ServiceConfig): Promise<() => void> {
   const scheduleScreening = (): void => {
     if (screeningStopped) return;
     screening = setTimeout(() => {
-      void screeningPass(store, reviewer, loadTiers()).finally(scheduleScreening);
+      // `loadTiers()` EVALUATED BEFORE `screeningPass` EVEN STARTS, so a throw here
+      // is synchronous, inside a raw `setTimeout` callback — found by lore's own
+      // review, fingerprints be75c51c/c176fafb, against the sibling of the SAME
+      // `733b59e6` shape already fixed in board.ts's `setInterval` tick. A bad
+      // LORE_TIERS now boots green-ish (the earlier boot-time fixes all degrade
+      // gracefully) and then kills the WHOLE PROCESS an hour later when this timer
+      // first fires — moving the crash from the moment somebody is watching to an
+      // hour after nobody is, on a config that never changed in between.
+      let tiers: ReturnType<typeof loadTiers>;
+      try {
+        tiers = loadTiers();
+      } catch (e) {
+        console.error(`lore: screening pass skipped — LORE_TIERS could not be read: ${e instanceof Error ? e.message : String(e)}`);
+        scheduleScreening();
+        return;
+      }
+      void screeningPass(store, reviewer, tiers).finally(scheduleScreening);
     }, RESCREEN_INTERVAL_MS);
     screening.unref?.();
   };

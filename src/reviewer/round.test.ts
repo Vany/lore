@@ -2598,7 +2598,21 @@ describe("a pool of routes to one model", () => {
     const type = {
       ...CODE_ARCH,
       t0: [] as const,
-      tiers: CODE_ARCH.tiers.map((t) => (t.id === "t1" ? { ...t, model: "GLM5.2", fallback: [] } : t)),
+      // A SECOND, TRIVIAL TIER, NEVER ACTUALLY CALLED — found while fixing 61df6e72:
+      // `CODE_ARCH.tiers` is no longer a frozen import-time snapshot (a plain field)
+      // but a live getter reading the CURRENT LORE_TIERS (`POOL`, two tiers only,
+      // set in this describe's own `beforeEach`) — correctly, since a getter is
+      // indistinguishable from a plain property to every reader, `type.tiers.map(...)`
+      // now maps over `POOL`'s real two tiers instead of an unrelated 4-tier default
+      // this test never asked for. Measured directly: `runRound` needs SOMETHING
+      // after the exhausted t1 to conclude with a weaker verdict (`fastClean`) rather
+      // than throwing `Exhausted` uncaught — `t2` here is never itself asked
+      // (`reviewer.asked` stays `[]` either way), so this is not escalation, only
+      // the ladder having a rung beyond the one that was skipped.
+      tiers: [
+        ...CODE_ARCH.tiers.map((t) => (t.id === "t1" ? { ...t, model: "GLM5.2", fallback: [] } : t)),
+        { id: "t2", kind: "model" as const, model: "unused/never-asked", stage: "deep" as const },
+      ],
     };
     store.markRouteUnavailable("zai-coding-plan/glm-5.2", "2126-01-01T00:00:00.000Z", "out", 3, true);
     store.markRouteUnavailable("zai-coding-plan2/glm-5.2", "2126-01-01T00:00:00.000Z", "out", 3, true);
@@ -2729,9 +2743,20 @@ describe("a pool of routes to one model", () => {
       "zai-coding-plan2/glm-5.2",
       "openrouter/z-ai/glm-5.2",
     ]);
+    // A SECOND, TRIVIAL TIER BESIDE `nicknamed()`'s OWN — same reasoning as the
+    // backoff test above, found fixing 61df6e72: `nicknamed()` maps over
+    // `CODE_ARCH.tiers`, now a live getter reading `POOL` (two tiers), not a frozen
+    // 4-tier snapshot this test never asked for. `runRound` needs a rung beyond the
+    // one being exhausted to conclude with a decision rather than throwing —
+    // confirmed the extra tier is never itself asked.
+    const base = nicknamed(["openrouter/z-ai/glm-5.2"]);
+    const type = {
+      ...base,
+      tiers: [...base.tiers, { id: "t2", kind: "model" as const, model: "unused/never-asked", stage: "deep" as const }],
+    };
     const r = await runRound({
       store, reviewer, reviewId: "r1", principal: "p", worktree: dir, allowMetered: true,
-      type: nicknamed(["openrouter/z-ai/glm-5.2"]),
+      type,
     });
 
     // The tier was stepped over (D-48), so the account of WHY is on its run rather than in

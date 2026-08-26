@@ -21,11 +21,12 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { initialState } from "../core/ladder.ts";
 import { grantToken } from "../mcp/auth.ts";
 import { Store } from "../store/store.ts";
 import { serve } from "./main.ts";
+import { RESCREEN_INTERVAL_MS } from "./screening.ts";
 
 let dir: string;
 let stop: (() => void) | undefined;
@@ -165,6 +166,41 @@ describe("verifying the quota fallback at startup", () => {
       expect(rejections, "a broken LORE_TIERS must not crash the process").toStrictEqual([]);
     } finally {
       process.off("unhandledRejection", onRejection);
+      if (saved === undefined) delete process.env["LORE_TIERS"];
+      else process.env["LORE_TIERS"] = saved;
+    }
+  });
+
+  // be75c51c/c176fafb, found by lore's own review: the sibling of the SAME shape
+  // dad4747c fixed one call site over — `loadTiers()` is called SYNCHRONOUSLY inside
+  // the screening timer's raw `setTimeout` callback, before `screeningPass` is even
+  // entered. A throw there is a synchronous exception in a timer callback —
+  // `uncaughtException`, not `unhandledRejection` — and Node kills the process
+  // immediately, an hour after boot rather than at the moment someone is watching.
+  // Fake timers stand in for the real hour, matching this file's own reasoning that
+  // a unit test of the callback in isolation cannot see a wiring defect like this one.
+  it("does not let a broken LORE_TIERS crash the process an hour later via the screening timer", async () => {
+    vi.useFakeTimers();
+    const saved = process.env["LORE_TIERS"];
+    process.env["LORE_TIERS"] = "/definitely/does/not/exist/tiers.json";
+
+    const exceptions: unknown[] = [];
+    const onException = (e: unknown): void => {
+      exceptions.push(e);
+    };
+    process.on("uncaughtException", onException);
+    try {
+      stop = await serve({
+        dataDir: dir,
+        port: PORT,
+        host: "127.0.0.1",
+        allowMetered: false,
+      });
+      await vi.advanceTimersByTimeAsync(RESCREEN_INTERVAL_MS);
+      expect(exceptions, "a broken LORE_TIERS must not crash the process an hour later").toStrictEqual([]);
+    } finally {
+      process.off("uncaughtException", onException);
+      vi.useRealTimers();
       if (saved === undefined) delete process.env["LORE_TIERS"];
       else process.env["LORE_TIERS"] = saved;
     }

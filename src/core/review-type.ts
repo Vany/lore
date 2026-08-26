@@ -32,6 +32,23 @@ export interface ReviewType {
   readonly id: string;
   readonly description: string;
   readonly t0: readonly T0Engine[];
+  /**
+   * LAZY — a getter, not a plain field. Found by lore's own review, fingerprint
+   * 61df6e72: `CODE_ARCH`/`SECURITY` are module-level `const`s, so a plain
+   * `tiers: loadTiers()` field ran at IMPORT TIME — before `serve()`'s own body,
+   * before `configFromEnv()`, before any of the graceful-degradation fixes this
+   * same investigation added (board.ts, status.ts's `tierDownLines`, the two
+   * `service/main.ts` timers) ever got a chance to run. A bad LORE_TIERS crashed
+   * the whole process the moment ANYTHING imported this module — which for a real
+   * service is immediately, pre-empting every later fix. A getter defers the read
+   * to first ACTUAL use: the process can now reach `serve()`'s own body, `/status`
+   * and the board can still answer (they never read `ReviewType.tiers` at all),
+   * and only a genuine attempt to run a review — which cannot proceed without a
+   * valid ladder regardless — hits the error, inside a context that already
+   * catches it (an MCP tool call, a round) rather than an uncatchable module load.
+   * Every existing reader (`type.tiers`, `rt.tiers`) needed no change: a getter is
+   * indistinguishable from a plain property to the code reading it.
+   */
   readonly tiers: readonly Tier[];
   /** What the model tiers are being asked to judge. Shapes the prompts. */
   readonly question: string;
@@ -41,7 +58,9 @@ export const CODE_ARCH: ReviewType = {
   id: "code-arch",
   description: "Correctness and design of a prepared merge, judged against its ticket and specs.",
   t0: ["tsc", "eslint", "ast-grep", "semgrep"],
-  tiers: loadTiers(),
+  get tiers() {
+    return loadTiers();
+  },
   question:
     "Is this change correct, well-made, and the change that was actually asked for?",
 };
@@ -58,7 +77,9 @@ export const SECURITY: ReviewType = {
   id: "security",
   description: "Known-vulnerable dependencies and weaknesses, and whether they are reachable.",
   t0: ["sbom", "osv", "semgrep"],
-  tiers: loadTiers(),
+  get tiers() {
+    return loadTiers();
+  },
   question:
     "What known-vulnerable code are we shipping, and can it actually be reached from this application?",
 };
