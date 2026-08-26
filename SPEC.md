@@ -1813,7 +1813,12 @@ not re-raising.** Two guards make silence mean something, and neither is optiona
   about the code — t1 may be unable to see it — so closing a t3 finding on t1's
   silence is INV-1 exactly inverted. Only a tier at or above the origin may settle
   it; T0 settles only its own, and re-scans the whole worktree so its silence is
-  authoritative there.
+  authoritative there — **unless that round's T0 was itself interrupted** (an
+  engine killed, out of memory; `T0Result.interrupted`, found by lore's own review
+  of the OOM-kill fix, fingerprint dd98f788). An engine that did not finish proves
+  nothing about a finding it might have raised again, and there is no per-finding
+  record of which of T0's several engines raised which — so one interrupted engine
+  withholds T0's silence from settling anything that round, not only its own.
 - **The code must have MOVED.** A tier that stops mentioning untouched code has
   changed its mind, which is not a fix. The finding's scope is recorded when it is
   raised; absent scope means "cannot tell" and never settles.

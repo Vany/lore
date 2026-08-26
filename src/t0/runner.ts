@@ -36,6 +36,18 @@ export interface T0Result {
    * worth reading. See `EngineOutcome.skipped`.
    */
   readonly skipped: readonly string[];
+  /**
+   * True when ANY engine this round was interrupted rather than genuinely absent
+   * — see `EngineOutcome.interrupted`. Round-level rather than per-engine: a
+   * caller deciding whether to trust THIS ROUND's silence about a previously
+   * open finding cannot know, without a schema change this fix does not make,
+   * which specific engine originally raised it — so ANY interruption this round
+   * withholds trust from all of T0's silence for it, not just the interrupted
+   * engine's. Costs an auto-settle on an unrelated engine only on the rare round
+   * something was actually cut short; a permanently unconfigured engine (which
+   * never sets `interrupted`) never pays it.
+   */
+  readonly interrupted: boolean;
 }
 
 export interface T0Options {
@@ -137,6 +149,7 @@ export async function runT0(worktree: string, opts: T0Options): Promise<T0Result
       .filter((o) => o.unavailable !== undefined)
       .map((o) => `${o.engine}: ${o.unavailable ?? ""}`),
     skipped,
+    interrupted: outcomes.some((o) => o.interrupted === true),
   };
 }
 
@@ -250,6 +263,7 @@ async function sandboxed(
           unavailable:
             `install (${cmds.name}) did not complete (${installed.code === KILLED ? `killed, exit ${KILLED}` : "ran out of memory"}) — ` +
             `almost always a memory limit, not a fault in the branch. Nothing that needs it is known either way.`,
+          interrupted: true,
         }));
       }
       if (!installed.ok) {
@@ -356,6 +370,7 @@ export function scriptFinding(
       unavailable:
         `\`${script}\` did not complete (${r.code === KILLED ? `killed, exit ${KILLED}` : "ran out of memory"}) — ` +
         `almost always a memory limit, not a fault in the branch. Nothing it would have found is known either way.`,
+      interrupted: true,
     };
   }
   return {
@@ -515,10 +530,21 @@ export function renderT0Delta(prev: readonly SeenT0[], cur: T0Result, fp: (f: Fi
   const prevBy = new Map(prev.map((p) => [p.fingerprint, p]));
   const curBy = new Map(cur.findings.map((f) => [fp(f), f]));
   const fresh = [...curBy.entries()].filter(([k]) => !prevBy.has(k)).map(([, f]) => f);
-  const resolved = [...prevBy.values()].filter((p) => !curBy.has(p.fingerprint));
+  // AN INTERRUPTED ROUND'S SILENCE PROVES NOTHING about a previously-seen finding
+  // that is absent from `cur.findings` — it may be fixed, or the engine that would
+  // have re-raised it simply did not finish. Found by lore's own review of the
+  // OOM-kill fix, fingerprint 4a39ae0d: claiming "resolved" here during exactly
+  // the round t0 could not confirm is the same false-improvement claim
+  // `settleFixed` (reviewer/review.ts) makes with its verdict, aimed at the
+  // model's own memory of the review instead of the store — and a session that
+  // drops a still-real finding from its memory only recovers it if t0 happens to
+  // re-raise it as though it were new.
+  const missing = [...prevBy.values()].filter((p) => !curBy.has(p.fingerprint));
+  const resolved = cur.interrupted ? [] : missing;
+  const unconfirmed = cur.interrupted ? missing : [];
   const unchanged = cur.findings.length - fresh.length;
 
-  if (fresh.length === 0 && resolved.length === 0) {
+  if (fresh.length === 0 && resolved.length === 0 && unconfirmed.length === 0) {
     parts.push(
       cur.findings.length === 0
         ? "Deterministic tooling: still nothing."
@@ -527,10 +553,17 @@ export function renderT0Delta(prev: readonly SeenT0[], cur: T0Result, fp: (f: Fi
   } else {
     parts.push(
       `Deterministic tooling on the new tree: ${String(resolved.length)} resolved, ${String(fresh.length)} new, ` +
-        `${String(unchanged)} unchanged.`,
+        `${String(unchanged)} unchanged` +
+        `${unconfirmed.length === 0 ? "" : `, ${String(unconfirmed.length)} unconfirmed (t0 was interrupted)`}.`,
     );
     for (const p of resolved) {
       parts.push(`  resolved: ${p.file}${p.line !== undefined ? `:${String(p.line)}` : ""} — ${p.claim}`);
+    }
+    if (unconfirmed.length > 0) {
+      parts.push("  t0 did not finish this round (see NOT RUN below) — still treat these as open, not resolved:");
+      for (const p of unconfirmed) {
+        parts.push(`    ${p.file}${p.line !== undefined ? `:${String(p.line)}` : ""} — ${p.claim}`);
+      }
     }
     const ordered = [...fresh].sort(compareFindings);
     for (const f of ordered.slice(0, LISTED)) {

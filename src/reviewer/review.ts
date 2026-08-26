@@ -560,7 +560,13 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
         // an untouched file can be ranked below the branch's own (D-68). This round raises
         // no t0 findings at all — they were raised when the tree was first read and are
         // still open — so there is nothing here to classify.
-        { findings: [], outcomes: [], skipped: [], unavailable: previousT0.unavailable }
+        //
+        // `interrupted: false` — not tracked through `store.lastT0` (unlike `unavailable`),
+        // and deliberately not needed: this branch only reuses when `roundTree` EQUALS the
+        // tree t0 last read (`reuseT0`'s own guard), so `settleFixed`'s `codeMoved` check
+        // is false for every finding on a reused round regardless — nothing here could ever
+        // be mistaken for a fresh, trustworthy re-scan settling anything.
+        { findings: [], outcomes: [], skipped: [], unavailable: previousT0.unavailable, interrupted: false }
       : await (input.t0 ?? runT0)(worktree, {
           engines: type.t0,
           // SCOPED TO WHAT THE BRANCH TOUCHED (D-92). A pattern engine matches one file at
@@ -717,7 +723,13 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     //
     // It still counts as having LOOKED — the reuse requires the same tree and the same
     // engine set — so it stays out of `DID_NOT_LOOK_SQL` and weakens no verdict.
-    reuseT0 ? "reused" : t0.findings.length > 0 ? "findings" : "clean",
+    //
+    // `interrupted` BEFORE `clean`, found by lore's own review of the OOM-kill fix,
+    // fingerprint 68b3e26f: the same false claim `reused` was fixed for above, for a
+    // different trigger — an engine killed or out of memory also produces zero
+    // findings, and without this check that closed the row `clean` too, painted green
+    // on the operator board exactly where D-102's own comment says nothing else may.
+    reuseT0 ? "reused" : t0.interrupted ? "interrupted" : t0.findings.length > 0 ? "findings" : "clean",
     t0.unavailable,
     roundTree,
     t0ForTier.unavailable,
@@ -2725,6 +2737,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   for (const o of ranMembers) for (const fp of o.preFixEmitted) settleRaised.delete(fp);
   const fixed = await settleFixed(
     store, reviewId, worktree, tiers, strongest.member, [...open, ...rungFixCandidates], settleRaised, answeredOtherwise, round,
+    t0.interrupted,
   );
 
   // 7. A defect that keeps recurring is a missing rule, not N unrelated bugs.
@@ -3027,6 +3040,19 @@ async function settleFixed(
   /** Fingerprints this round already answered some other way — never also `fixed`. */
   answered: ReadonlySet<string>,
   round: number,
+  /**
+   * True when THIS round's t0 run had an engine that was interrupted rather than
+   * genuinely absent (`T0Result.interrupted`) — never true for a reused-because-
+   * unchanged round, since that reuse only fires when nothing moved and `codeMoved`
+   * below is then false for every finding regardless.
+   *
+   * Found by lore's own review of the OOM-kill fix, fingerprint dd98f788: this
+   * function's own premise comment — "T0 re-scans the whole worktree every round,
+   * so its silence is authoritative" — is exactly false in the round an engine got
+   * cut short, and the false `fixed` verdict it would record never expires
+   * (`expireStaleVerdicts` only reopens justifications, never a settled fix).
+   */
+  t0Interrupted: boolean,
 ): Promise<readonly string[]> {
   const rank = (id: string) => tierRank(tiers, id);
   const here = rank(tier.id);
@@ -3036,8 +3062,13 @@ async function settleFixed(
     if (raised.has(f.fingerprint)) continue;
     if (answered.has(f.fingerprint)) continue;
     // T0 re-scans the whole worktree every round, so its silence is authoritative
-    // for its own findings and means nothing for anyone else's.
-    const qualified = f.origin === "t0" ? tier.id === "t0" || here >= 0 : here >= 0 && here >= rank(f.origin);
+    // for its own findings and means nothing for anyone else's — UNLESS this round's
+    // t0 was itself interrupted, in which case its silence proves nothing about any
+    // t0 finding this round (see the parameter doc above; there is no per-engine
+    // record of which finding came from which of t0's several engines, so one
+    // interrupted engine withholds trust from all of t0's silence this round).
+    const t0Silent = tier.id === "t0" || here >= 0;
+    const qualified = f.origin === "t0" ? t0Silent && !t0Interrupted : here >= 0 && here >= rank(f.origin);
     if (!qualified) continue;
 
     if (!(await codeMoved(worktree, f))) continue;

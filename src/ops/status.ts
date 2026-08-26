@@ -264,7 +264,7 @@ export function renderStatus(db: DatabaseSync, reviewId?: string, dataDir = "/va
     // tier row is open is what separates "a tier is working" from "no tier has been
     // asked yet", and those are the two readings of a stalled review.
     const runs = db
-      .prepare("SELECT tier, round, outcome, started_at, finished_at FROM tier_run WHERE review_id = ? ORDER BY id")
+      .prepare("SELECT tier, round, outcome, unavailable, started_at, finished_at FROM tier_run WHERE review_id = ? ORDER BY id")
       .all(id) as Row[];
     const phase = phaseNote(runs, String(r["state"]));
     // Yellow, not dim: a running review that has not reached a tier is the shape of the
@@ -286,18 +286,25 @@ export function renderStatus(db: DatabaseSync, reviewId?: string, dataDir = "/va
         // file them next to `clean`.
         //
         // `TierOutcome` is the live vocabulary — clean | findings | failed |
-        // unpayable | reused. `stopped` and `passed` are LADDER decision kinds that reached
-        // this column only while `runRound` closed each row a second time; that write
-        // is gone. They stay in the two lists on purpose, because rows written before
-        // the fix are still in the database and a historical `stopped` must keep
-        // rendering red rather than falling through to yellow. Reading them as live
-        // values is what was wrong, not testing for them.
+        // unpayable | reused | interrupted. `stopped` and `passed` are LADDER decision
+        // kinds that reached this column only while `runRound` closed each row a second
+        // time; that write is gone. They stay in the two lists on purpose, because rows
+        // written before the fix are still in the database and a historical `stopped`
+        // must keep rendering red rather than falling through to yellow. Reading them as
+        // live values is what was wrong, not testing for them.
         const didNotRun = o === "unpayable" || o === "failed" || o === "stopped";
         // `reused` IS DIM, NOT YELLOW (D-102). Yellow here is the none-of-the-above warning
         // colour, and D-92 reuses t0 on roughly a fifth of all rounds — so the routine
         // healthy case would have worn the alarm on every review with a second round. That
         // is the same defect this branch fixed on the web board for queued rows, left
         // standing on the older operator surface until lore's own t2 pointed at it.
+        //
+        // `interrupted` falls through to yellow deliberately (found by lore's own review,
+        // fingerprint 68b3e26f) — not `didNotRun`'s red, because an engine that finished
+        // before another was killed still produced real findings, and not `clean`'s
+        // green, which this exists specifically to stop happening. Its own message is
+        // appended below rather than left for the operator to go find, matching what
+        // `unavailable` already gets one section down for the review as a whole.
         const paint = didNotRun
           ? red
           : o === "reused"
@@ -307,7 +314,8 @@ export function renderStatus(db: DatabaseSync, reviewId?: string, dataDir = "/va
               : o.startsWith("findings")
                 ? cyan
                 : yellow;
-        return `${paint(`${label} ${didNotRun ? `✘ ${o}` : o}`)} ${dim(took)}`;
+        const why = o === "interrupted" ? String(t["unavailable"] ?? "").split("\n")[0] ?? "" : "";
+        return `${paint(`${label} ${didNotRun ? `✘ ${o}` : o}${why === "" ? "" : ` (${why})`}`)} ${dim(took)}`;
       });
       out.push(`    ${cells.join(dim("  →  "))}`);
     }

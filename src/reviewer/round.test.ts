@@ -444,7 +444,7 @@ describe("runRound", () => {
     const SLOW_T0_MS = 25;
     const slow: NonNullable<Parameters<typeof runRound>[0]["t0"]> = async () => {
       await new Promise((r) => setTimeout(r, SLOW_T0_MS));
-      return { findings: [], outcomes: [], unavailable: [], skipped: [] };
+      return { findings: [], outcomes: [], unavailable: [], skipped: [], interrupted: false };
     };
 
     const entered = Date.now();
@@ -694,6 +694,33 @@ describe("runRound", () => {
       store.db.prepare("UPDATE finding SET origin = 't3' WHERE review_id = 'r1'").run();
       await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: KEEPS });
       expect(reviewer.continued[2], "another tier's is not").not.toContain(HOLD_BUG.claim);
+    });
+
+    // Fingerprint dd98f788, found by lore's own review of the OOM-kill fix (src/t0):
+    // this same silence-settles-a-fix mechanism assumed t0's silence about a
+    // previously open finding always meant a genuine re-check. An interrupted t0
+    // round's silence means nothing — some engine did not finish — and settling on
+    // it anyway would record a permanent `fixed` verdict `expireStaleVerdicts` can
+    // never reopen (it only reopens justifications, never a settled fix).
+    it("does not settle a t0 finding on an interrupted round's silence", async () => {
+      const T0_BUG: Finding = { ...HOLD_BUG, claim: "t0 found a real defect here" };
+      let call = 0;
+      const t0 = async () => {
+        call++;
+        return call === 1
+          ? { findings: [T0_BUG], outcomes: [], unavailable: [], skipped: [], interrupted: false }
+          : { findings: [], outcomes: [], unavailable: ["tsc: killed"], skipped: [], interrupted: true };
+      };
+      const type = { ...CODE_ARCH, t0: ["tsc"] as const };
+      const reviewer = new ScriptedReviewer([[], []]);
+
+      await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type, t0 });
+
+      fix();
+      const after = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type, t0 });
+
+      expect(after.fixed, "an interrupted round's silence must not settle a t0 finding").not.toContain(fingerprint(T0_BUG));
+      expect(store.openFindings("r1").map((f) => f.fingerprint)).toContain(fingerprint(T0_BUG));
     });
   });
 
@@ -1251,7 +1278,7 @@ describe("t0 on a tree that has not moved", () => {
   /** Counts how many times the engines were actually asked to run. */
   const countingT0 = (calls: { n: number }) => async () => {
     calls.n++;
-    return { findings: [], outcomes: [], unavailable: ["eslint: no config"], skipped: [] };
+    return { findings: [], outcomes: [], unavailable: ["eslint: no config"], skipped: [], interrupted: false };
   };
 
   it("runs once and is reused while the tree is unchanged", async () => {

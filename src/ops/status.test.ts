@@ -411,6 +411,33 @@ describe("what a running review is actually doing", () => {
   });
 });
 
+/**
+ * Fingerprint 68b3e26f, found by lore's own review of the OOM-kill fix: a t0 round
+ * an engine was killed in still closed with zero findings, and this board's own
+ * `outcome === "clean"` check painted that green — the colour this file's own header
+ * comment says means "genuinely clean, and nothing else may borrow it". The tier_run
+ * `unavailable` column already held the honest reason; this view just never selected
+ * it. `interrupted` is its own outcome now (store.ts), and the reason is inline.
+ */
+describe("an interrupted t0 engine is never painted as a clean, completed round", () => {
+  it("names the outcome and the reason, not a false clean", () => {
+    const repo = store.upsertRepo("demo", "git@x:demo.git");
+    store.createReview({
+      id: "rev_interrupted", repoId: repo.id, principal: "alice", branch: "feat/x", intoRef: "main",
+      ticket: "t", type: "code-arch", state: "running", ladder: initialState(),
+    });
+    const t0 = store.openTierRun("rev_interrupted", "t0", 1, new Date().toISOString());
+    store.closeTierRun(t0, "interrupted", [
+      "tsc: `npm run typecheck` did not complete (killed, exit 137) — almost always a memory limit, not a fault in the branch.",
+    ]);
+
+    const out = render();
+    expect(out).toContain("interrupted");
+    expect(out, "not the same red marker as a tier that never ran at all").not.toContain("✘ interrupted");
+    expect(out).toMatch(/killed, exit 137/);
+  });
+});
+
 // D-130: a folder review carries no into_ref (the write side stores "" there — see
 // store.ts's createReview). Left unguarded, `${into_ref}`.slice(0, 12) would render
 // as a bare arrow with nothing after it rather than telling the reader what this

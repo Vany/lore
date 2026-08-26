@@ -29,7 +29,7 @@ const f = (severity: Finding["severity"], file: string): Finding => ({
 
 describe("renderT0", () => {
   it("says plainly what did not run, rather than implying it was clean", () => {
-    const out = renderT0({ findings: [], outcomes: [], unavailable: ["tsc: not configured"], skipped: [] });
+    const out = renderT0({ findings: [], outcomes: [], unavailable: ["tsc: not configured"], skipped: [], interrupted: false });
     expect(out).toContain("Deterministic tooling found nothing.");
     expect(out).toContain("NOT RUN");
     expect(out).toContain("tsc: not configured");
@@ -39,7 +39,7 @@ describe("renderT0", () => {
     const out = renderT0({
       findings: [f("low", "a.ts"), f("high", "b.ts"), f("medium", "c.ts")],
       outcomes: [],
-      unavailable: [], skipped: [],
+      unavailable: [], skipped: [], interrupted: false,
     });
     const lines = out.split("\n").filter((l) => l.startsWith("  ["));
     expect(lines.map((l) => l.slice(0, 10))).toStrictEqual(["  [high] b", "  [medium]", "  [low] a."]);
@@ -53,7 +53,7 @@ describe("renderT0", () => {
     const out = renderT0({
       findings: [...nits, f("high", "broken.ts")],
       outcomes: [],
-      unavailable: [], skipped: [],
+      unavailable: [], skipped: [], interrupted: false,
     });
 
     expect(out).toContain("[high] broken.ts");
@@ -361,7 +361,7 @@ describe("renderT0Delta", () => {
   it("names what resolved, what is new, and how much stands", () => {
     const out = renderT0Delta(
       [seen("a.ts", 1, "old bug"), seen("b.ts", 2, "still here")],
-      { findings: [F("b.ts", 2, "still here"), F("c.ts", 3, "brand new", "high")], outcomes: [], skipped: [], unavailable: [] },
+      { findings: [F("b.ts", 2, "still here"), F("c.ts", 3, "brand new", "high")], outcomes: [], skipped: [], unavailable: [], interrupted: false },
       fp as never,
     );
     expect(out).toContain("1 resolved, 1 new, 1 unchanged");
@@ -371,14 +371,14 @@ describe("renderT0Delta", () => {
   });
 
   it("says still-nothing in one line when both sides are empty", () => {
-    const out = renderT0Delta([], { findings: [], outcomes: [], skipped: [], unavailable: [] }, fp as never);
+    const out = renderT0Delta([], { findings: [], outcomes: [], skipped: [], unavailable: [], interrupted: false }, fp as never);
     expect(out).toContain("still nothing");
   });
 
   it("says unchanged in one line when nothing moved", () => {
     const out = renderT0Delta(
       [seen("a.ts", 1, "x")],
-      { findings: [F("a.ts", 1, "x")], outcomes: [], skipped: [], unavailable: [] },
+      { findings: [F("a.ts", 1, "x")], outcomes: [], skipped: [], unavailable: [], interrupted: false },
       fp as never,
     );
     expect(out).toContain("unchanged — the 1 issue(s) you already know still stand");
@@ -387,8 +387,25 @@ describe("renderT0Delta", () => {
   // NOT-RUN is never delta'd: "nothing checked this" is the one fact repetition cannot
   // cheapen (INV-1).
   it("repeats the not-run section every time, whatever moved", () => {
-    const out = renderT0Delta([], { findings: [], outcomes: [], skipped: [], unavailable: ["eslint: no config"] }, fp as never);
+    const out = renderT0Delta([], { findings: [], outcomes: [], skipped: [], unavailable: ["eslint: no config"], interrupted: false }, fp as never);
     expect(out).toContain("NOT RUN");
     expect(out).toContain("eslint: no config");
+  });
+
+  // Fingerprint 4a39ae0d, found by lore's own review of the OOM-kill fix: a
+  // previously-seen finding absent from an INTERRUPTED round's findings used to be
+  // reported "resolved" — the same false-improvement claim `settleFixed`
+  // (reviewer/review.ts) made with its verdict, aimed at the model's own memory of
+  // the review instead of the store. T0 did not re-check it; it just did not finish.
+  it("does not claim a previously-seen finding resolved when t0 was interrupted", () => {
+    const out = renderT0Delta(
+      [seen("a.ts", 1, "old bug")],
+      { findings: [], outcomes: [], skipped: [], unavailable: ["tsc: killed"], interrupted: true },
+      fp as never,
+    );
+    expect(out, "an interrupted round must never claim a fix it did not verify").not.toContain("resolved: a.ts:1");
+    expect(out).toContain("unconfirmed");
+    expect(out).toContain("a.ts:1 — old bug");
+    expect(out).toMatch(/still treat these as open, not resolved/);
   });
 });

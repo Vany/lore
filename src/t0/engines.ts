@@ -44,6 +44,22 @@ export interface EngineOutcome {
    * Kept rather than dropped so the operator can still see it in the log.
    */
   readonly skipped?: string;
+  /**
+   * True when an engine ATTEMPTED to run and did not finish — killed, ran out of
+   * memory, timed out — as opposed to `unavailable` alone, which also covers a
+   * STABLE absence (no config, not installed) that says nothing about whether this
+   * ROUND's silence can be trusted.
+   *
+   * Found by lore's own review of the OOM-kill fix, fingerprints dd98f788 and
+   * 4a39ae0d: `settleFixed` (reviewer/review.ts) treats T0's silence about a
+   * previously open finding as proof it is fixed, and `renderT0Delta` tells a kept
+   * session the same previously-seen finding "resolved" — both on the reasoning
+   * that T0 re-scans the whole worktree every round. True for a genuinely absent
+   * config, which does not change round to round; false for a run that was cut
+   * short, which says nothing about the code either way. Consumers that need to
+   * know whether THIS round's silence means anything read this, not `unavailable`.
+   */
+  readonly interrupted?: boolean;
 }
 
 const cap = (s: string, n: number): string => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
@@ -573,6 +589,7 @@ async function semgrep(worktree: string, scope?: Scope): Promise<EngineOutcome> 
       engine: "semgrep",
       findings: [],
       unavailable: "semgrep was killed (exit 137) — most likely a memory limit, not a fault in the branch",
+      interrupted: true,
     };
   }
   const parsed = parseSemgrep(r.stdout, worktree);
@@ -660,6 +677,7 @@ async function astGrep(worktree: string, scope?: Scope): Promise<EngineOutcome> 
       engine: "ast-grep",
       findings: [],
       unavailable: "ast-grep was killed (exit 137) — most likely a memory limit, not a fault in the branch",
+      interrupted: true,
     };
   }
   const parsed = parseJson<SgMatch[]>(r.stdout);

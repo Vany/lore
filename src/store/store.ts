@@ -172,7 +172,15 @@ export function isSettled(v: VerdictKind): boolean {
 // an independent vendor. `CancelledByLore` exists for the same distinction one layer up,
 // and the rethrow that carries it was landing after this row had already been written
 // `failed`.
-export const TIER_OUTCOMES = ["clean", "findings", "failed", "unpayable", "reused", "stopped"] as const;
+// `interrupted` is t0's own, one level below the tier vocabulary above it: at least one
+// ENGINE attempted to run and did not finish (killed, ran out of memory) rather than
+// being genuinely absent (no config, not installed). Found by lore's own review,
+// fingerprint 68b3e26f: before this existed, an interrupted round's zero findings
+// closed the row `clean` — the same false claim D-102 already fixed for `reused`, here
+// for a different trigger. Kept distinct from `clean` (which the operator board paints
+// green) and out of `DID_NOT_LOOK_SQL` below, matching `reused`: unlike `failed` or
+// `unpayable`, t0 partially ran and may have real findings from engines that DID finish.
+export const TIER_OUTCOMES = ["clean", "findings", "failed", "unpayable", "reused", "stopped", "interrupted"] as const;
 export type TierOutcome = (typeof TIER_OUTCOMES)[number];
 
 /**
@@ -182,7 +190,9 @@ export type TierOutcome = (typeof TIER_OUTCOMES)[number];
  * `reused` is deliberately NOT here. D-92 reuses t0 only when the tree hash and the engine
  * set both match, so that run DID read these exact bytes — in an earlier round. It is the
  * one outcome that looked without working, and treating it as a miss would weaken every
- * verdict built on it for no reason.
+ * verdict built on it for no reason. `interrupted` is excluded for the same reason as
+ * `reused`, not the same reason as each other: t0 genuinely attempted this round, and an
+ * engine that finished before another was cut short still produced real findings.
  */
 const DID_NOT_LOOK_SQL = TIER_OUTCOMES.filter((o) => o === "failed" || o === "unpayable")
   .map((o) => `'${o}'`)
