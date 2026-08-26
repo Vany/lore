@@ -3,6 +3,125 @@
 Newest first. Updated at the end of each task: what changed, what I learned, what
 surprised me.
 
+## 2026-08-26 — src/mcp reviews itself: the protocol boundary, and my own fixes caught by the very next round
+
+**What changed.** Vany: "now src/mcp" — the actual protocol surface (`server.ts`,
+`auth.ts`, `events.ts`, `plain.ts`, `docs.ts`), folder mode,
+`rev_RPIcs7lQZVNpfrOok6YgXsBd`. Landed `passed_partial` (3 tiers ran — t0, t2, t3 —
+every tier that ran was z-ai, not independent vendors; one earlier tier's read of an
+earlier tree never carried forward): 37 findings, 19 fixed, 15 justified, across ten
+rounds and ten commits (`16c9217` through `d8a795f`). This module is the one place a
+mistake is directly exploitable rather than merely wrong, and the review found two
+genuine cross-principal blast-radius bugs alongside the usual doc-drift and
+provenance mistakes — plus something new for this session: my own fixes getting
+caught broken by the review's very next emission, four separate times.
+
+**A colleague could destroy your review, twice — restart, then pull_fresh, one door
+over.** `8d847ca4`: `restart: true` reads `review_start`'s repo-scoped open-review
+lookup — deliberately repo-scoped, so a teammate is TOLD about another's open review
+of a branch rather than duplicating the work — but then CANCELLED whatever it found
+with no ownership check, unlike `review_cancel`, which has always refused a review
+that is not the caller's own. A colleague hitting the stale-review advice with
+`restart: true` could destroy someone else's in-flight review: every ratified
+justification, any model call running, gone with no warning to either side. Fixed by
+checking principal (not full token binding — the caller's own review must stay
+restartable from a rotated token, the exact case two rounds earlier had already
+established a path through). `aa8cc149`, found reading the fix's own neighbourhood
+one round later: `pull_fresh: true` sits one branch over in the same handler, reads
+the identical repo-scoped lookup, and had the identical gap — worse in one respect,
+since `pull_fresh` is documented as the SAFE continuation, so a colleague reaching
+for it has no reason to expect it recuts the worktree and discards whatever the
+actual owner had submitted but not yet committed. Same fix, same reasoning, one
+finding apart — the kind of thing that makes "read the sibling code path" worth
+doing on every authorization fix from now on, not just the one line a finding names.
+
+**The `forClient` provenance question — de431bb7/0796e115/c1a9d4b6/fcf8e8cd/9e8af4bb,
+five findings across three rounds, converging on one shared, anchored helper.**
+`forClient` translates lore's own internal vocabulary (opencode, provider names,
+absolute host paths) out of what a client sees. The recurring mistake was applying
+it to text that was never internal vocabulary in the first place — a cancelled
+review's client-authored `reason`, a D-83 suppression notice quoting a TEAM's own
+development-rule statement verbatim. First fix (`de431bb7`) keyed the exemption on
+the review's CURRENT STATE (`cancelled`) — wrong, found one round later (`0796e115`):
+a held-diff failure writes raw kitchen text while a review is `awaiting_diff`, and a
+later reasonless cancel never overwrites it, so stale system text survived unchanged
+into `cancelled` and the state-keyed check let it through raw. Corrected to a
+content-based check (the human-authored write sites share one literal prefix,
+`cancelled by <principal>: `). Same round, a THIRD door of the identical class
+(`c1a9d4b6`/`fcf8e8cd`): `checks_skipped` blanket-translated every entry, including
+suppression notices quoting a team's rule verbatim — fixed with an unanchored
+`.includes()` check, which the review caught unanchored two rounds later
+(`9e8af4bb`): two OTHER `checks_skipped` writers embed untrusted text (a rejected
+finding's raw model JSON, a caught error message) that can legitimately CONTAIN the
+same substring, this repository reviewing itself being exactly the case where a
+model quoting this file's own source would produce it. `core/checks-skipped.ts` had
+already taught itself this precise lesson for a sibling recognizer
+(`RAN_ON_OTHER_ROUTE`/`isCoverageLoss`) — I had not found it before writing a second
+unanchored copy. Fixed properly this time by extending that file with
+`SUPPRESSION_NOTICE`/`isSuppressionNotice`, anchored the same way, and unifying
+every reader and writer (two in `reviewer/review.ts`, one in `server.ts`) onto the
+one shared definition instead of three independent copies of the same wording.
+
+**The id-matching chain — four rounds correcting one mechanism, ending by
+generalizing it to the last inconsistent path.** `a6a4b832`/`c7235bcb`:
+`knowledge_retire`'s `rule` reached `retirePolicy`'s `LIKE` pattern with no character
+gate, so `%`/`_` are SQL wildcards — with exactly one live rule, `rule: "%%%%"`
+retired it from input naming nothing. Fixed hex-only. `16d21041`/`0234d575`, one
+round later: hex-only rejects the hyphens of a full `randomUUID()` id — and a full
+id is not hypothetical, `knowledge_teach`'s own reply hands one back, and the appeal
+grammar already accepts one for a citation ("a full uuid resolves as well as its
+head"). Widened to hex-plus-hyphen. `72313b18`, the round after that: the widened
+gate still admitted a BARE TRAILING HYPHEN — `"550e8400-"` passed, and since every
+real id has a hyphen at position 9, that pattern matches exactly the same rows the
+plain 8-char prefix does, silently no more specific than what the caller believed
+was a longer, safer citation. Fixed to require the suffix end in hex, never a
+hyphen. `b1a9841c`, the review's LAST finding, arriving in the same poll as
+`passed_partial` itself: `knowledge_resolve`'s `keep`/`retire` were the one
+id-comparison path in the whole file still using exact equality after everything
+else had been hardened to prefix matching — and a client naturally holds one rule in
+two lengths (a full id from `open_questions`, an 8-char `cite_as` from
+`knowledge_teach`), so mixing them failed silently as "no open conflict" on a
+`needs_human` review a person had just decided. Fixed by generalizing
+`policyByShort` into `knowledgeByShort` (the same lookup, not restricted to
+`kind = 'policy'`, since conflicting rows are document-derived facts, never
+development rules) and resolving both ids through it before the exact conflict
+lookup. Caught my own mistake mid-fix by reading the whole function rather than
+stopping at the part the finding named: the retirement `UPDATE` a few lines below
+still referenced the raw, possibly-short id, which would have marked the conflict
+resolved while silently retiring nothing — a worse bug than the one being fixed,
+caught before it ever ran.
+
+**Two rounds of "the review's own documented recovery path was unusable."**
+`d6294062`: the ONE documented way to recover findings a client lost (a compacted or
+crashed session) — `lore://review/{review_id}` — returns the store's raw 64-hex
+fingerprint, but `lore-ok[...]`'s parser accepts exactly 8. The recovery path the
+docs pointed clients at produced a marker that could never parse. Fixed by adding a
+`short` field alongside the full one (kept full for `buildVex`'s verdict
+cross-referencing) and repointing both doc citations. `1ee794a4`/`e54c900e`, six
+rounds later: `nextStep`'s cancelled-state note told a client its findings were "at
+`lore://review/{review_id}`" — a LITERAL, never-substituted placeholder, real braces
+concatenated into the string, because `nextStep` had no review id to put there. The
+existing test for this exact note already checked it contained `"lore://review/"` —
+true of the placeholder too, which is exactly why nothing had caught it. `knowledge_query`
+had the same read/write asymmetry as one other pair this round (`c5e38bc8`/`2a540515`):
+`knowledge_teach` normalizes and refuses an escaping path on the write side, and the
+read side (`knowledge_query`, the `lore://knowledge/{+path}` resource) never got the
+same treatment, so a rule taught at "src/payments" silently missed a query spelled
+"./src/payments" — not an error, just a lower count reading as "no knowledge here."
+
+**What this round taught me operationally.** Four times this review, a fix from one
+round was found broken by the next — not new ground, my own prior work. Every one of
+them was caught the same way the rest of this session works: verify empirically
+before trusting a fix is complete, not just that it addresses the literal line a
+finding named. The lesson is not "I write bad fixes" — it is that a fix which
+narrows a security gate, or changes what gets translated, has a shape (too strict?
+too loose? checked the right thing but at the wrong layer?) that is worth checking
+against BOTH directions before considering it done, the same discipline
+`src/knowledge`'s polarity-function chain established two reviews ago. Also hit this
+repo's own bare-fingerprint-parenthetical comment-hygiene guard four separate times
+writing these very fixes — caught before commit every time by the actual test, never
+by reading my own prose carefully enough on the first pass.
+
 ## 2026-08-26 — src/knowledge reviews itself: the product, not the mechanism, and a fix that broke its own fix four times running
 
 **What changed.** Vany: "okay, let's revie src/knowledge" — the memory layer itself,
