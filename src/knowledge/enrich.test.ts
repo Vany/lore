@@ -105,3 +105,51 @@ describe("enrich (4029f8b3: a shared CWE alone is not a shared defect)", () => {
     expect(e.priorJustified).toBeGreaterThanOrEqual(2);
   });
 });
+
+// Found by lore's own review (10bb335b): a fourth copy of the raw-prefix scoping bug
+// already fixed in relevantTo, conflict.ts's scopesOverlap and store.ts's
+// knowledgeFor (372b6bf0/f9559e98) — relatedTo's own path-boost term was missed when
+// those three were fixed together, ~75 lines above in this same file.
+describe("enrich (10bb335b: relatedTo's path boost is a sibling-directory bug too)", () => {
+  it("does not boost a rule into 'related' just because a sibling directory shares a text prefix", () => {
+    store.addKnowledge({
+      repoId, kind: "rule", source: "taught",
+      statement: "Payments must retry on timeout and log the retry count",
+      why: undefined, path: "src/pay", cwe: undefined, provenance: undefined,
+      sourceBlob: undefined, confidence: 1,
+    });
+
+    // Token overlap alone scores 0.2, under RELATED_THRESHOLD (0.35) — only a wrongly
+    // applied path boost (+0.2, "src/payroll/adapter.ts".startsWith("src/pay")) would
+    // cross it.
+    const f = finding({
+      fingerprint: "payroll-1",
+      file: "src/payroll/adapter.ts",
+      claim: "The payroll adapter must retry declined captures on timeout",
+    });
+    const e = enrich(store, repoId, f);
+
+    expect(
+      e.related.some((k) => k.statement.includes("retry on timeout")),
+      "a rule scoped to src/pay must not be handed to a src/payroll finding as related",
+    ).toBe(false);
+  });
+
+  it("does boost a rule genuinely scoped to the finding's own directory (control)", () => {
+    store.addKnowledge({
+      repoId, kind: "rule", source: "taught",
+      statement: "Payments must retry on timeout and log the retry count",
+      why: undefined, path: "src/pay", cwe: undefined, provenance: undefined,
+      sourceBlob: undefined, confidence: 1,
+    });
+
+    const f = finding({
+      fingerprint: "pay-1",
+      file: "src/pay/adapter.ts",
+      claim: "The pay adapter must retry declined captures on timeout",
+    });
+    const e = enrich(store, repoId, f);
+
+    expect(e.related.some((k) => k.statement.includes("retry on timeout"))).toBe(true);
+  });
+});

@@ -98,7 +98,11 @@ function relatedTo(store: Store, repoId: string, f: RecordedFinding): readonly K
       k,
       score:
         (k.cwe !== undefined && k.cwe === f.cwe ? 0.5 : 0) +
-        (k.path !== undefined && f.file.startsWith(k.path) ? 0.2 : 0) +
+        // lore-ok[10bb335b]: a fourth copy of the raw-prefix bug already fixed a
+        // screen-height above in this same file (`relevantTo`) and in conflict.ts's
+        // `scopesOverlap` / store.ts's `knowledgeFor` — found by lore's own review,
+        // missed when those three were fixed together. Same shared function now.
+        (k.path !== undefined && scopesOverlap(f.file, k.path) ? 0.2 : 0) +
         jaccard(subjectTokens(k.statement), needle),
     }))
     .filter((s) => s.score >= RELATED_THRESHOLD)
