@@ -89,21 +89,35 @@ export interface ConflictCandidate {
  * turns out to protect nothing a plain "period followed by whitespace" does not
  * already protect on its own: `"gateway.ts must"` and `"2.5 seconds"` have NO
  * whitespace immediately after their internal period (`ts`/`5` follow it directly),
- * so the lookbehind never even reaches them — the capital check was solving a
- * problem the whitespace requirement had already solved, while breaking casually
- * capitalised prose. Dropped. Two passes remain — the original delimiters
- * (case-insensitive, unchanged), then a bare sentence boundary — because a period
- * followed by whitespace is itself unambiguous enough, and simpler than a check that
- * was never earning its keep.
+ * so the lookbehind never even reaches them.
+ *
+ * The THIRD fix dropped the capital-letter check entirely, which brought back a
+ * FOURTH failure: "e.g."/"i.e." — a period followed by whitespace, mid-proposition,
+ * introducing a clarifying example rather than a new claim ("must never bypass the
+ * pool, e.g. opening a direct socket is forbidden") — now split too, isolating "e.g."
+ * as its own fragment with no negation (reads positive) beside the real claim (reads
+ * negative), so the whole statement read "too compound to say" (0) and dropped out
+ * of conflict detection, the SAME missed-conflict failure as the filename case,
+ * reached through the two most common abbreviations in engineering prose instead.
+ *
+ * So the boundary needs BOTH conditions the first three fixes each got half of: a
+ * period followed by whitespace (protects filenames/decimals, which have no
+ * whitespace there at all) that is NOT one of a short list of abbreviations whose
+ * period is not proposition-ending (protects "e.g."/"i.e." and cousins, which DO have
+ * whitespace there). The list is short and closed for the same reason `NEGATIONS`
+ * is: this file has no business carrying a lexicon, only the handful of abbreviations
+ * actually plausible in a rule statement.
  */
+const ABBREVIATIONS = /(?<!\b(?:e\.g|i\.e|etc|vs|approx|cf)\.)(?<=[.!?])\s+/i;
+
 export function polarity(statement: string): number {
   // Clause boundaries (case-insensitive, as before), then — per fragment — a real
-  // sentence boundary: a period/!/? followed by whitespace. No capital-letter check
-  // (see the docs above for why one was tried and regressed casual prose) and never
-  // a bare `.` (see the docs above for why THAT regressed on filenames).
+  // sentence boundary: a period/!/? followed by whitespace, but not one that ends a
+  // known abbreviation (see the docs above for the two failures that shaped this)
+  // and never a bare `.` (see the docs above for why THAT regressed on filenames).
   const clauses = statement
     .split(/[,;:—]|\band\b|\bbut\b|\bwhile\b/i)
-    .flatMap((c) => c.split(/(?<=[.!?])\s+/))
+    .flatMap((c) => c.split(ABBREVIATIONS))
     .filter((c) => c.trim().length > 0);
   const polarities = new Set(
     clauses.map((c) => ((c.match(NEGATIONS)?.length ?? 0) % 2 === 0 ? 1 : -1)),

@@ -315,3 +315,43 @@ describe("a sentence break does not require a capital letter to follow (cbe21077
     expect(found).toStrictEqual([]);
   });
 });
+
+// Found by lore's own review (b33fe48b, 765247f4) — TWICE, independently — on the
+// tree carrying the cbe21077 fix directly above: dropping the capital-letter check
+// protected casual prose but reopened the missed-conflict failure for the two most
+// common abbreviations in engineering writing. "e.g." and "i.e." are a period
+// followed by whitespace MID-PROPOSITION, introducing a clarifying example rather
+// than a new claim — splitting there isolated the abbreviation as its own
+// no-negation (positive) fragment beside the real, negative claim, so the whole
+// statement read "too compound to say" (0) and dropped out of conflict detection —
+// the same missed-conflict shape as the filename case, reached through prose instead.
+describe("e.g./i.e. are not sentence breaks either (b33fe48b, 765247f4)", () => {
+  it("reads a rule using 'e.g.' mid-clause as one proposition, not two fragments", () => {
+    expect(
+      polarity("Requests must never bypass the connection pool, e.g. opening a direct socket is forbidden"),
+    ).toBe(-1);
+  });
+
+  it("reads a rule using 'i.e.' mid-clause as one proposition, not two fragments", () => {
+    // No "and"/comma here deliberately — those are their OWN, unrelated clause
+    // delimiters (see the SEAM tests above), and mixing one into this fixture would
+    // test that behaviour instead of the "i.e." period boundary this test is about.
+    expect(polarity("Holds are advisory i.e. soft must never block a capture")).toBe(-1);
+  });
+
+  it("still reads a real sentence break correctly when the first sentence happens to use 'etc.'", () => {
+    // "etc." genuinely can end a sentence, unlike "e.g."/"i.e." which never introduce
+    // a new claim — so this is not required to split, only to not produce a
+    // confidently WRONG polarity. Undecidable (0) is the safe answer this codebase
+    // already prefers over a false one either way.
+    expect(polarity("Guards must log every skip: timeouts, quota, etc. Silence must never happen")).not.toBe(1);
+  });
+
+  it("still catches a real contradiction between two rules that both use 'e.g.'", () => {
+    const found = findConflicts([
+      item("a", "Requests must never bypass the connection pool, e.g. opening a direct socket is forbidden"),
+      item("b", "Requests may bypass the connection pool, e.g. opening a direct socket is allowed"),
+    ]);
+    expect(found).toHaveLength(1);
+  });
+});
