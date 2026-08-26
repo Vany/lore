@@ -438,7 +438,17 @@ export async function serve(cfg: ServiceConfig): Promise<() => void> {
       return;
     }
     void alerter.send(CONDITIONS.fallbackUnavailable(missing));
-  })();
+  })().catch((e: unknown) => {
+    // THE `.catch` "NOT FATAL" ABOVE NEVER MEANT — found by lore's own review,
+    // fingerprint dad4747c: `loadTiers()` on the line above throws on a bad
+    // LORE_TIERS path or malformed JSON (the same class 15be66bd fixed one file
+    // over, and c1b6fc4c/733b59e6 fixed in status.ts/board.ts), and this whole IIFE
+    // was `void`-discarded with nothing catching the rejection that produces. An
+    // unhandled rejection crashes the WHOLE PROCESS by default — the opposite of
+    // "NOT FATAL", on the very first boot-time reader of a ladder file an operator
+    // just edited.
+    console.error(`lore: the fallback check could not complete: ${e instanceof Error ? e.message : String(e)}`);
+  });
 
   const http = startHttp(
     store,

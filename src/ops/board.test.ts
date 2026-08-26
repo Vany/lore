@@ -498,4 +498,27 @@ describe("the service facts above the list", () => {
       else process.env["LORE_TIERS"] = saved;
     }
   });
+
+  // 733b59e6, found by lore's own review: `loadPools`/`loadTiers` throw on a bad
+  // LORE_TIERS path or malformed JSON, and board() called them with nothing
+  // catching it. board-stream.ts calls board() from a raw `setInterval` tick with
+  // no enclosing try/catch anywhere in the chain — unlike /board.json's plain HTTP
+  // path, which http.ts's own top-level handler catch already protects — so an
+  // uncaught throw here is an uncaught exception in a timer callback: Node kills
+  // the whole process, taking every in-flight review round with it, the moment
+  // anyone has the board open while the ladder file is broken.
+  it("does not throw when LORE_TIERS will not load, degrading providers instead", () => {
+    const saved = process.env["LORE_TIERS"];
+    process.env["LORE_TIERS"] = "/definitely/does/not/exist/tiers.json";
+    try {
+      let b: ReturnType<typeof board> | undefined;
+      expect(() => {
+        b = board(store);
+      }, "a broken ladder file must not crash the live board stream").not.toThrow();
+      expect(b?.providers, "degrades to empty rather than a half-built list").toStrictEqual([]);
+    } finally {
+      if (saved === undefined) delete process.env["LORE_TIERS"];
+      else process.env["LORE_TIERS"] = saved;
+    }
+  });
 });

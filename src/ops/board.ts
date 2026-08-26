@@ -310,8 +310,25 @@ export function board(store: Store, now = Date.now(), modelGate?: () => GateStat
     draining,
     load: loadavg(),
     providers: (() => {
-      const pools = loadPools();
-      const tiers = loadTiers();
+      // NEVER LET A BAD LORE_TIERS TAKE THE PROCESS WITH IT — found by lore's own
+      // review, fingerprint 733b59e6: `loadTiers`/`loadPools` throw on a bad path or
+      // malformed JSON (the same class 15be66bd, c1b6fc4c fixed elsewhere), and THIS
+      // caller is reached from `board-stream.ts`'s `setInterval(tick, pollMs)` — a
+      // raw timer callback with no promise and no enclosing `.catch` anywhere in the
+      // chain, unlike `/board.json`'s plain HTTP path (already safe, wrapped by
+      // `handle`'s own top-level catch in http.ts). A throw here is an uncaught
+      // exception in a timer tick: Node kills the WHOLE PROCESS immediately, taking
+      // every in-flight review round with it, the moment anyone has the operator
+      // board open while the ladder file is broken.
+      let pools: ReturnType<typeof loadPools>;
+      let tiers: ReturnType<typeof loadTiers>;
+      try {
+        pools = loadPools();
+        tiers = loadTiers();
+      } catch (e) {
+        console.error(`[lore:log] board: LORE_TIERS could not be read: ${e instanceof Error ? e.message : String(e)}`);
+        return [];
+      }
       // Every concrete route the deployed ladder can reach for: primaries expanded
       // through their pools, then every fallback entry the same way. Deduped, in config
       // order, so the line reads stably instead of reshuffling per snapshot.

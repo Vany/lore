@@ -134,4 +134,39 @@ describe("verifying the quota fallback at startup", () => {
     expect(answer, "undefined is 'could not verify', never 'none missing'").toBeUndefined();
     r.close();
   });
+
+  // dad4747c, found by lore's own review: the fallback-check IIFE's own comment says
+  // "NOT FATAL", but it was `void`-discarded with nothing catching the rejection
+  // `loadTiers()` produces on a bad LORE_TIERS path — an unhandled rejection, which
+  // by Node's default crashes the WHOLE PROCESS, on the very first boot-time reader
+  // of a ladder file an operator just edited. Same shape as 8fe4d3ee
+  // (heartbeat.test.ts), same verification technique: capture
+  // `unhandledRejection` rather than let one actually crash the test runner.
+  it("does not let a broken LORE_TIERS escape the boot-time fallback check as an unhandled rejection", async () => {
+    const saved = process.env["LORE_TIERS"];
+    process.env["LORE_TIERS"] = "/definitely/does/not/exist/tiers.json";
+
+    const rejections: unknown[] = [];
+    const onRejection = (reason: unknown): void => {
+      rejections.push(reason);
+    };
+    process.on("unhandledRejection", onRejection);
+    try {
+      stop = await serve({
+        dataDir: dir,
+        port: PORT,
+        host: "127.0.0.1",
+        allowMetered: false,
+      });
+      // The fallback-check IIFE runs fire-and-forget from inside `serve`; give its
+      // rejection (if unhandled) time to actually surface as an event.
+      await new Promise((r) => setTimeout(r, 100));
+      await new Promise((r) => setImmediate(r));
+      expect(rejections, "a broken LORE_TIERS must not crash the process").toStrictEqual([]);
+    } finally {
+      process.off("unhandledRejection", onRejection);
+      if (saved === undefined) delete process.env["LORE_TIERS"];
+      else process.env["LORE_TIERS"] = saved;
+    }
+  });
 });
