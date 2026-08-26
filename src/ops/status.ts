@@ -292,7 +292,29 @@ export function renderStatus(db: DatabaseSync, reviewId?: string, dataDir = "/va
     );
   }
 
-  const depth = Number((db.prepare("SELECT COUNT(*) c FROM job WHERE state = 'queued'").get() as Row)["c"] ?? 0);
+  // JOINED AND TERMINAL-FILTERED, matching `store.queueDepth()` exactly (via the
+  // same shared `TERMINAL_SQL`, already imported above) — found by lore's own
+  // review, fingerprint 0a47f502: this was a bare `COUNT(*) FROM job WHERE state =
+  // 'queued'`, with no join to the review at all. `store.queueDepth()`'s own comment
+  // documents exactly why that overcounts — three unclaimable rows, one nineteen
+  // hours old, on a service with eleven idle workers — and `/status`, the board and
+  // the `queueBacked` ticket all read the correct, joined count already
+  // (heartbeat.ts calls `store.queueDepth()` directly). `make status`'s own header
+  // was the one reader left disagreeing with all three, capable of showing "queued
+  // 3" in the same breath `/status` answers `queueDepth: 0`. `running` jobs are NOT
+  // the same risk — `discardQueuedJobs`'s own comment: a running job on a
+  // terminated review is an abort in progress, and its worker (not this count)
+  // resolves it shortly — so `stuck` is left as the plain count it already was.
+  const depth = Number(
+    (
+      db
+        .prepare(
+          `SELECT COUNT(*) c FROM job j JOIN review rv ON rv.id = j.review_id
+           WHERE j.state = 'queued' AND rv.state NOT IN (${TERMINAL_SQL})`,
+        )
+        .get() as Row
+    )["c"] ?? 0,
+  );
   const stuck = Number((db.prepare("SELECT COUNT(*) c FROM job WHERE state = 'running'").get() as Row)["c"] ?? 0);
   out.push(
     `${bold("lore")}  ${dim("queued")} ${depth}  ${dim("in flight")} ${stuck}  ${dim(new Date().toISOString().slice(11, 19))}`,

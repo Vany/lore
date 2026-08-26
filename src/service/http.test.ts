@@ -399,6 +399,20 @@ describe("deciding a contradiction from the board", () => {
     const res = await fetch(`${base}/board/decide`);
     expect(res.status).toBe(405);
   });
+
+  // 8576fa61, found by lore's own review: a malformed body used to escape
+  // `JSON.parse` uncaught into the generic 500 in `createServer`'s own catch — the
+  // same status a genuine server bug gets, on an endpoint reachable by anything on
+  // the tailnet with no credential at all.
+  it("answers a malformed body with 400, not the generic 500", async () => {
+    const res = await fetch(`${base}/board/decide`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "not json at all {",
+    });
+    expect(res.status, "a caller's bad body is a caller fault, not a server fault").toBe(400);
+    expect((await res.json() as { error?: string }).error, "still a real, parseable error body").toBeTruthy();
+  });
 });
 
 /**

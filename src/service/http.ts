@@ -203,12 +203,30 @@ async function handle(
       res.end(JSON.stringify({ error: "use POST" }));
       return;
     }
-    const body = JSON.parse(await readBody(req)) as {
-      repo_id?: string;
-      keep?: string;
-      retire?: string;
-      reason?: string;
-    };
+    let body: { repo_id?: string; keep?: string; retire?: string; reason?: string };
+    try {
+      body = JSON.parse(await readBody(req)) as {
+        repo_id?: string;
+        keep?: string;
+        retire?: string;
+        reason?: string;
+      };
+    } catch (e) {
+      // CALLER FAULT, NOT SERVER FAULT — found by lore's own review, fingerprint
+      // 8576fa61: an unparseable or oversized body (readBody's own "request body too
+      // large" throws the same way) used to escape uncaught into the generic 500 in
+      // the outer `createServer` catch — the identical status a genuine server bug
+      // gets. This endpoint is unauthenticated on the tailnet (D-33's own scoping),
+      // so anything reachable there can trigger this; a monitor watching 5xx on this
+      // port would read a caller's bad body as "the service is broken", exactly the
+      // classification INV-1 already insists on elsewhere, unapplied here at the
+      // HTTP layer. Every other input fault on this endpoint (missing fields → 400,
+      // no open conflict → 409) was already classified correctly — only the parse
+      // step fell through to the generic handler.
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: e instanceof Error ? e.message : "malformed request body" }));
+      return;
+    }
     if (!body.repo_id || !body.keep || !body.retire) {
       res.writeHead(400, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "repo_id, keep and retire are all required" }));

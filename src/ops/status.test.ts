@@ -218,6 +218,30 @@ describe("findings nobody has collected", () => {
   });
 });
 
+// 0a47f502, found by lore's own review: the header's own "queued N" was a bare
+// `COUNT(*) FROM job WHERE state = 'queued'`, with no join to the review at all —
+// while store.queueDepth() (read by /status, the board and the queueBacked ticket)
+// joins and excludes a terminal review's jobs, for the exact reason its own comment
+// gives: three unclaimable rows, one nineteen hours old, on a service with eleven
+// idle workers. `make status`'s header was the one reader left disagreeing.
+describe("the header's own queue count agrees with everyone else's", () => {
+  it("does not count a queued job whose review has already ended", () => {
+    const repo = store.upsertRepo("demo", "git@x:demo.git");
+    store.createReview({
+      id: "revEnded", repoId: repo.id, principal: "p", branch: "b", intoRef: "main",
+      ticket: "t", type: "code-arch", state: "running", ladder: initialState(),
+    });
+    store.enqueue("revEnded", "fast");
+
+    // Bypasses `updateReview`'s own `discardQueuedJobs` call on a terminal
+    // transition, to build exactly the leaked-row shape `queueDepth()`'s comment
+    // describes rather than the ordinary, already-handled path.
+    store.db.prepare("UPDATE review SET state = ? WHERE id = ?").run("passed", "revEnded");
+
+    expect(render(), "the job's review already ended; it must not count as backlog").toMatch(/queued 0\s+in flight/);
+  });
+});
+
 /**
  * "A tier is working" was a label, not a fact, and it cost forty-five minutes.
  *

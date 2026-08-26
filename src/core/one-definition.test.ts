@@ -19,6 +19,7 @@
  * A reader believes a constant that looks used. These tests do not.
  */
 
+import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -513,6 +514,35 @@ describe("the replica threshold agrees with the shell that reimplements it", () 
     expect(Number(m?.[1]), `Makefile says ${m?.[1]}s, heartbeat.ts says ${REPLICA_BEHIND_SEC}s`).toBe(
       REPLICA_BEHIND_SEC,
     );
+  });
+});
+
+/**
+ * 2146b6dd, found by lore's own review: README.md's quick start and `deploy/
+ * Makefile`'s own preflight both say `cp .env.example .env` / "copy .env.example",
+ * but `.gitignore`'s `.env.*` pattern matched the template too — so the file had
+ * never once been committed, and `git add -A` (the review loop's own submission
+ * step, among others) silently dropped it every time. A reference two files agree
+ * on, pointing at something neither could actually produce.
+ */
+describe("the template README.md and deploy/Makefile both point at is real", () => {
+  const root = join(SRC, "..");
+
+  it("names .env.example somewhere neither can act on if it vanishes", () => {
+    const readme = readFileSync(join(root, "README.md"), "utf8");
+    const makefile = readFileSync(join(root, "deploy", "Makefile"), "utf8");
+    expect(readme, "update this check if the quick start stops naming the template").toContain(".env.example");
+    expect(makefile, "update this check if preflight stops naming the template").toContain(".env.example");
+  });
+
+  it("is not swallowed by .gitignore's own .env.* pattern", () => {
+    const ignored = spawnSync("git", ["check-ignore", "-q", "deploy/.env.example"], { cwd: root });
+    expect(ignored.status, "deploy/.env.example must not be gitignored — that is what 2146b6dd was").toBe(1);
+  });
+
+  it("is actually tracked, not merely unignored", () => {
+    const tracked = spawnSync("git", ["ls-files", "--error-unmatch", "deploy/.env.example"], { cwd: root });
+    expect(tracked.status, "unignored but never `git add`-ed is the same failure from the other side").toBe(0);
   });
 });
 

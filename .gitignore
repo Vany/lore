@@ -30,6 +30,15 @@ lore/
 *.log
 .env
 .env.*
+# `.env.*` ABOVE SWALLOWS ITS OWN TEMPLATE — found by lore's own review, fingerprint
+# 2146b6dd: README.md's quick start says `cp .env.example .env`, but `.env.example`
+# matches `.env.*` too, so `git add` (and `git add -A`, which the review loop itself
+# uses to build a submission) silently drops it. The template existed on disk and
+# had never once been committed — a new operator following the README got "No such
+# file or directory" on the very first command, with no tracked file anywhere to fix
+# it from. Un-ignored explicitly, by exact name rather than a wildcard, so nothing
+# else named `*.env.*` (a real per-machine override) is re-included by accident.
+!.env.example
 
 # Staged opencode credentials and deployment secrets. Never committed.
 deploy/opencode/
