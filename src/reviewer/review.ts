@@ -872,7 +872,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   const hold = {
     chain: [] as string[],
     mismatch: undefined as string | undefined,
-    lastT0: t0ForTier as { findings: readonly Finding[]; unavailable: readonly string[] },
+    lastT0: t0ForTier as { findings: readonly Finding[]; unavailable: readonly string[]; interrupted: boolean },
   };
   const roundFindings: { readonly origin: string; readonly line: string }[] = [];
   let holdLock: Promise<unknown> = Promise.resolve();
@@ -1128,7 +1128,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     // after. The session's memory holds the unchanged findings; re-sending them on every
     // boundary was the cold-start tax paid again in miniature. What was shown is
     // recorded, so the next message diffs against it.
-    const t0Seen = (cur: { findings: readonly Finding[]; unavailable: readonly string[] }): string => {
+    const t0Seen = (cur: { findings: readonly Finding[]; unavailable: readonly string[]; interrupted: boolean }): string => {
       const prev = store.sessionT0Of(reviewId, member.id, routeKey);
       const shown = cur.findings.map((f) => ({
         fingerprint: fingerprint(f),
@@ -1137,7 +1137,19 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
         severity: f.severity,
         claim: f.claim,
       }));
-      store.setSessionT0(reviewId, member.id, routeKey, shown);
+      // UNCONFIRMED FINDINGS STAY "SEEN" TOO — found by lore's own review,
+      // fingerprint 74ca0f53: an interrupted round's `cur.findings` is empty, so
+      // recording only THOSE as shown dropped every previously-seen finding this
+      // session already knew about the moment `renderT0Delta` reports them
+      // "unconfirmed" below instead of re-raising them. The NEXT round then had
+      // nothing to diff against — "still nothing" — while the store still held
+      // them open (`settleFixed`'s own `t0Interrupted` guard correctly refused to
+      // settle them; only this session's OWN memory of them was going stale).
+      // Carried forward exactly the fingerprints `renderT0Delta` is about to call
+      // unconfirmed, so the record and the text it produced stay the same claim.
+      const curFp = new Set(shown.map((s) => s.fingerprint));
+      const carried = cur.interrupted ? (prev ?? []).filter((p) => !curFp.has(p.fingerprint)) : [];
+      store.setSessionT0(reviewId, member.id, routeKey, [...shown, ...carried]);
       return prev === undefined
         ? renderT0(cur as Parameters<typeof renderT0>[0])
         : renderT0Delta(prev, cur as Parameters<typeof renderT0Delta>[1], fingerprint);
