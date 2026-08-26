@@ -112,6 +112,13 @@ export function promoteRecurring(store: Store, repoId: string, threshold = RECUR
 
   for (const c of clusters(store, repoId, threshold)) {
     const provenance = `recurrence:${c.kind}:${c.key}`;
+    // lore-ok[b04fcd4e]: found real by lore's own review, fixed at the SOURCE —
+    // `exists` (below) used to answer "was this promoted and still live", which
+    // silently re-promoted a cluster whose rule a person had just retired by
+    // resolving a conflict against it. `store.hasKnowledgeFrom` now answers "was
+    // this EVER promoted", live or retired, which is the question this idempotence
+    // guard actually needs (see its docstring for why that is safe specifically for
+    // a `mistake` row).
     if (exists(store, repoId, provenance)) continue;
 
     const where = c.paths.length <= 3 ? c.paths.join(", ") : `${c.paths.slice(0, 3).join(", ")} and ${c.paths.length - 3} more`;

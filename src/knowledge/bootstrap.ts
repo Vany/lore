@@ -81,7 +81,17 @@ export async function bootstrap(opts: {
   // `tier.model` may name a pool, and opencode refuses a pool name as a model id. An
   // unresolvable tier bootstraps without a model — survey skipped, ingest still runs —
   // which is the behaviour a missing tier always had here.
-  const route = named === undefined ? undefined : concreteRoute(named, loadPools(), () => undefined);
+  //
+  // lore-ok[8d47c789]: `known` is `store.routeUnavailable`, was `() => undefined` —
+  // found by lore's own review, against `screening.ts`'s identical call a few lines
+  // away in spirit, which already passes the real check. `() => undefined` told
+  // `concreteRoute` nothing is ever parked, so a quota-parked route in a multi-route
+  // pool could be picked here exactly as readily as a working one; the survey then
+  // throws on it, `worker.ts`'s catch swallows the throw, and because ingest already
+  // ran and left the knowledge base non-empty, the ONE-SHOT retry guard
+  // (`knowledgeFor(...).length === 0`) never fires again — a resolvable tier, killed
+  // by which of its routes got picked, permanently.
+  const route = named === undefined ? undefined : concreteRoute(named, loadPools(), (m) => opts.store.routeUnavailable(m));
   const tier = named === undefined || route === undefined ? undefined : { ...named, model: route };
   const ask = opts.reviewer?.askFor?.bind(opts.reviewer);
 

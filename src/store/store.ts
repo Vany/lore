@@ -201,6 +201,19 @@ export interface VerdictRow {
 }
 
 /**
+ * A candidate prior sighting of a finding, elsewhere in this repo — unfiltered.
+ *
+ * `claim` is returned uninterpreted because a CWE-only match is a weak signal (see
+ * `Store.priorLike`); the caller decides whether it is corroborated enough to count.
+ * `verdict` is the LATEST verdict for that finding, or `undefined` if it was never
+ * answered.
+ */
+export interface PriorFinding {
+  readonly claim: string;
+  readonly verdict: string | undefined;
+}
+
+/**
  * `policy` is a DEVELOPMENT RULE a client can appeal to (D-83).
  *
  * The others describe the codebase; a policy describes what this project has decided to
@@ -1307,51 +1320,69 @@ export class Store {
     }));
   }
 
-  /** Does any live rule for this repository come from this source? */
+  /**
+   * Has a rule from this source EVER existed for this repository — live or retired.
+   *
+   * lore-ok[b04fcd4e]: was `retired_at IS NULL`, found wrong by lore's own review and
+   * reproduced directly — `promoteRecurring` (`derive.ts`), this method's one caller,
+   * uses it purely as an idempotence guard ("did I already promote this cluster"),
+   * and a `mistake` row's only real retirement path is `resolveConflict`, a person or
+   * model DELIBERATELY deciding the derived lesson lost against another rule. Filtering
+   * to live rows made that decision self-undoing: the very next `promoteRecurring` (every
+   * review runs it) saw no live row, concluded the cluster had never been promoted, and
+   * silently re-inserted the identical statement — verified directly, with a brand new
+   * id, re-arming whatever it had just been resolved against. A `mistake` row is never
+   * retired by `retireForChangedBlob` (its `sourceBlob` is always undefined) or
+   * `retirePolicy` (`kind` is never `policy`), so "ever existed" and "a person decided
+   * against it" are the same fact for this caller — dropping the liveness filter closes
+   * the gap without weakening anything else, since nothing else calls this.
+   */
   hasKnowledgeFrom(repoId: string, provenance: string): boolean {
     return (
       this.db
-        .prepare("SELECT 1 FROM knowledge WHERE repo_id = ? AND provenance = ? AND retired_at IS NULL LIMIT 1")
+        .prepare("SELECT 1 FROM knowledge WHERE repo_id = ? AND provenance = ? LIMIT 1")
         .get(repoId, provenance) !== undefined
     );
   }
 
   /**
-   * What this repository decided about findings LIKE this one, elsewhere.
+   * Candidate findings LIKE this one, elsewhere in this repo.
    *
    * Matched on the normalised claim OR the CWE, not the fingerprint: the same defect in
    * another file is the same lesson described differently, and the fingerprint cannot
-   * see that (D-44). The current finding is excluded, so "prior" means what it says.
+   * see that (D-44). But a CWE alone is a WEAK signal — CWE-20 spans nearly any
+   * input-validation defect in the repo — so this deliberately over-fetches and
+   * returns the claim text uninterpreted rather than a count. The caller (`enrich.ts`'s
+   * `sameDefectPriors`) corroborates a CWE-only match against claim-text similarity
+   * before counting it as a real prior; a normalised-claim match needs no further
+   * corroboration since it is already the tight comparison. The current finding is
+   * excluded, so "prior" means what it says.
+   *
+   * lore-ok[4029f8b3]: found real by lore's own review — this used to be two methods
+   * (`countPriorLike`, `priorVerdictsLike`) that returned a raw count and a raw verdict
+   * list respectively, with no way for the caller to tell a genuine repeat from two
+   * findings that share nothing but a broad CWE. A repo with 40 unrelated CWE-754
+   * findings turned a brand-new, never-before-seen finding into "raised 40× ...
+   * justified away N× — the check itself may be wrong here. TELL YOUR USER" — fabricated
+   * pattern evidence off findings that had nothing to do with each other. Returning the
+   * claim text lets the caller require actual similarity, not just a shared taxonomy
+   * entry.
    */
-  priorVerdictsLike(repoId: string, fingerprint: string, normalizedClaim: string, cwe: string | undefined): readonly string[] {
+  priorLike(repoId: string, fingerprint: string, normalizedClaim: string, cwe: string | undefined): readonly PriorFinding[] {
     const rows = this.db
       .prepare(
-        `SELECT v.verdict AS verdict
+        `SELECT fi.claim AS claim,
+                (SELECT v.verdict FROM verdict v
+                 WHERE v.fingerprint = fi.fingerprint AND v.review_id = fi.review_id
+                 ORDER BY v.id DESC LIMIT 1) AS verdict
          FROM finding fi
          JOIN review r ON r.id = fi.review_id
-         JOIN verdict v ON v.fingerprint = fi.fingerprint AND v.review_id = fi.review_id
-         WHERE r.repo_id = ?
-           AND fi.fingerprint != ?
-           AND (LOWER(TRIM(fi.claim)) = ? OR (fi.cwe IS NOT NULL AND fi.cwe = ?))
-           AND v.id = (SELECT MAX(v2.id) FROM verdict v2
-                       WHERE v2.fingerprint = v.fingerprint AND v2.review_id = v.review_id)`,
-      )
-      .all(repoId, fingerprint, normalizedClaim, cwe ?? " ") as Record<string, string>[];
-    return rows.map((r) => r["verdict"] ?? "");
-  }
-
-  /** How many times this repository has raised a finding like this one, elsewhere. */
-  countPriorLike(repoId: string, fingerprint: string, normalizedClaim: string, cwe: string | undefined): number {
-    const row = this.db
-      .prepare(
-        `SELECT COUNT(*) AS c
-         FROM finding fi JOIN review r ON r.id = fi.review_id
          WHERE r.repo_id = ?
            AND fi.fingerprint != ?
            AND (LOWER(TRIM(fi.claim)) = ? OR (fi.cwe IS NOT NULL AND fi.cwe = ?))`,
       )
-      .get(repoId, fingerprint, normalizedClaim, cwe ?? " ") as Record<string, number> | undefined;
-    return Number(row?.["c"] ?? 0);
+      .all(repoId, fingerprint, normalizedClaim, cwe ?? " ") as { claim: string; verdict: string | null }[];
+    return rows.map((r) => ({ claim: r.claim, verdict: r.verdict ?? undefined }));
   }
 
   /**
@@ -2127,7 +2158,16 @@ export class Store {
     return Number(row?.n ?? 0);
   }
 
-  /** Live knowledge for a repo, optionally narrowed to a path prefix. */
+  /**
+   * Live knowledge for a repo, optionally narrowed to a path prefix.
+   *
+   * lore-ok[372b6bf0,f9559e98]: was `? LIKE path || '%'`, a raw prefix match with no
+   * segment boundary — found by lore's own review, the same bug `enrich.ts`'s
+   * `relevantTo` and `conflict.ts`'s `scopesOverlap` carried (see the latter's docs).
+   * `'src/payroll/x.ts' LIKE 'src/pay' || '%'` is true, so a query for one directory
+   * pulled in every rule scoped to any sibling sharing its prefix. Requires the
+   * boundary to land on a `/`, or an exact match for a rule scoped to one file.
+   */
   knowledgeFor(repoId: string, pathPrefix?: string, limit = 200): readonly KnowledgeItem[] {
     const rows = (
       pathPrefix === undefined
@@ -2137,9 +2177,9 @@ export class Store {
         : this.db
             .prepare(
               `SELECT * FROM knowledge WHERE repo_id = ? AND retired_at IS NULL
-               AND (path IS NULL OR ? LIKE path || '%') LIMIT ?`,
+               AND (path IS NULL OR ? = path OR ? LIKE path || '/%') LIMIT ?`,
             )
-            .all(repoId, pathPrefix, limit)
+            .all(repoId, pathPrefix, pathPrefix, limit)
     ) as Record<string, string | number | null>[];
     return rows.map(toKnowledge);
   }
@@ -2275,6 +2315,43 @@ export class Store {
       )
       .run(now(), currentBlob, repoId, provenance, currentBlob, n(extractor));
     // node:sqlite reports `changes` as number | bigint.
+    return Number(res.changes);
+  }
+
+  /**
+   * Every document this repo has EVER ingested a live rule from.
+   *
+   * `ingestDocs`'s own sweep (`lore-ok[a2f4d4f9]`) diffs this against what it just
+   * discovered on disk to find a document that is gone entirely — deleted, or
+   * renamed — which `retireForChangedBlob` can never reach, because nothing calls it
+   * for a path it never reads. `source_blob IS NOT NULL` is the same filter that
+   * function uses to mean "ingested from a document", excluding `taught` and
+   * `derived` rows, which have no document to disappear.
+   */
+  liveDocumentProvenances(repoId: string): readonly string[] {
+    const rows = this.db
+      .prepare(
+        "SELECT DISTINCT provenance FROM knowledge WHERE repo_id = ? AND retired_at IS NULL AND source_blob IS NOT NULL",
+      )
+      .all(repoId) as { provenance: string | null }[];
+    return rows.map((r) => r.provenance).filter((p): p is string => p !== null);
+  }
+
+  /**
+   * Retire every live rule from a document that no longer exists at all.
+   *
+   * The sibling case to `retireForChangedBlob`: that one retires when a document's
+   * TEXT changed, reached because re-ingestion calls it for every document it reads.
+   * A document deleted or renamed is never read again, so nothing ever calls that —
+   * `ingestDocs`'s sweep calls this instead, for exactly the provenances
+   * `liveDocumentProvenances` names that its own discovery pass did not find.
+   */
+  retireForMissingDoc(repoId: string, provenance: string, reason: string): number {
+    const res = this.db
+      .prepare(
+        "UPDATE knowledge SET retired_at = ?, retired_reason = ? WHERE repo_id = ? AND provenance = ? AND source_blob IS NOT NULL AND retired_at IS NULL",
+      )
+      .run(now(), reason, repoId, provenance);
     return Number(res.changes);
   }
 

@@ -136,10 +136,27 @@ export function findConflicts(items: readonly KnowledgeItem[]): readonly Conflic
   return out.sort((x, y) => y.similarity - x.similarity);
 }
 
-function scopesOverlap(a: string | undefined, b: string | undefined): boolean {
+/**
+ * Does one scope reach the other — as a whole PATH SEGMENT, not a raw string prefix.
+ *
+ * Exported for `enrich.ts`'s `relevantTo`, which asks the same question the other
+ * direction (does a changed FILE fall under a rule's scope) — a file that never
+ * changes is the limit case of a scope nothing else is under, so the same check
+ * answers both.
+ *
+ * lore-ok[372b6bf0,f9559e98]: was a raw `startsWith`, found wrong by lore's own
+ * review — `"src/payroll".startsWith("src/pay")` is true, so a rule scoped to
+ * `src/pay` reached every review touching `src/payroll/**`, and two rules scoped to
+ * unrelated SIBLING directories (`src/pay`, `src/payroll`) were treated as the same
+ * scope for conflict detection, recording contradictions between rules that were
+ * never about the same code. Requires the boundary to land on a `/` (or be an exact
+ * match), the same fix `store.ts`'s `knowledgeFor` needed for its own SQL version of
+ * this comparison.
+ */
+export function scopesOverlap(a: string | undefined, b: string | undefined): boolean {
   // An unscoped rule is repo-wide, so it can conflict with anything.
   if (a === undefined || b === undefined) return true;
-  return a.startsWith(b) || b.startsWith(a);
+  return a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
 }
 
 export interface ConflictReport {

@@ -47,8 +47,13 @@ beforeEach(() => {
 describe("what one review learns, the next one knows", () => {
   it("carries an accepted justification into the next review's context", () => {
     review("r1");
-    // Review 1: a finding is justified, the reviewer accepts, and the reason
-    // becomes lore — this is what runRound does on acceptance.
+    // Review 1: a finding is justified, the reviewer accepts. `runRound` itself
+    // never turns an accepted justification into a knowledge row — spec/knowledge.md
+    // §2.2.0: a `lore-ok` is a verdict about one finding, not a rule, and storing it
+    // loses the finding it was addressed to. This row is hand-written to pin what a
+    // DERIVED row from a source like this one — `promoteRecurring`'s output, in
+    // production — must still look like once it exists: readable back through
+    // `relevantTo` by the next review touching the same code.
     store.recordFinding("r1", finding("aaaa1111"));
     store.recordVerdict("r1", {
       fingerprint: "aaaa1111",
@@ -88,6 +93,20 @@ describe("what one review learns, the next one knows", () => {
     const known = relevantTo(store, repoId, ["src/pay/hold.ts"]).map((k) => k.statement);
     expect(known).toContain("amounts are integers in minor units"); // repo-wide, always applies
     expect(known).not.toContain("reports are paginated");
+  });
+
+  // Found by lore's own review (372b6bf0, f9559e98): path scope used to be a raw
+  // `startsWith`, so "src/payroll/adapter.ts".startsWith("src/pay") handed a rule
+  // scoped to a DIFFERENT, sibling directory to every review of this one.
+  it("does not hand a reviewer a rule scoped to a sibling directory sharing a text prefix", () => {
+    store.addKnowledge({
+      repoId, kind: "rule", source: "taught", statement: "payments retry on timeout",
+      why: undefined, path: "src/pay", cwe: undefined, provenance: undefined,
+      sourceBlob: undefined, confidence: 1,
+    });
+
+    const known = relevantTo(store, repoId, ["src/payroll/adapter.ts"]).map((k) => k.statement);
+    expect(known).not.toContain("payments retry on timeout");
   });
 
   it("gives a repeated finding its history", () => {

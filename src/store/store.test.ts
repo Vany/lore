@@ -992,6 +992,40 @@ describe("knowledge", () => {
 
     expect(store.openConflicts(repoId)).toStrictEqual([{ left: a.id, right: b.id, state: "needs-human" }]);
   });
+
+  // Found by lore's own review (372b6bf0, f9559e98): the path filter was a raw
+  // `? LIKE path || '%'`, so a query for one directory pulled in a sibling one
+  // sharing its text prefix — "src/payroll/x.ts" matched a rule scoped to "src/pay".
+  it("scopes a path query to real path segments, not a raw text prefix", () => {
+    store.addKnowledge({ repoId, kind: "rule", source: "taught", statement: "payments retry on timeout", why: undefined, path: "src/pay", cwe: undefined, provenance: undefined, sourceBlob: undefined, confidence: undefined });
+    expect(store.knowledgeFor(repoId, "src/payroll/adapter.ts").map((k) => k.statement)).toStrictEqual([]);
+    expect(store.knowledgeFor(repoId, "src/pay/hold.ts").map((k) => k.statement)).toStrictEqual(["payments retry on timeout"]);
+    expect(store.knowledgeFor(repoId, "src/pay").map((k) => k.statement)).toStrictEqual(["payments retry on timeout"]);
+  });
+
+  // Found by lore's own review (592cd49f): nothing that retires a rule for a reason
+  // OTHER than resolving a conflict ever touched knowledge_conflict, so a conflict
+  // naming a retired rule stayed open — and blocking — forever, with no way to
+  // settle a contradiction one side of which no longer exists.
+  it("stops counting a conflict as open once one of its rules is retired for an unrelated reason", () => {
+    // An untouched control conflict, to prove the fix does not over-filter.
+    const a = store.addKnowledge({ repoId, kind: "rule", source: "taught", statement: "always X", why: undefined, path: undefined, cwe: undefined, provenance: undefined, sourceBlob: undefined, confidence: undefined });
+    const b = store.addKnowledge({ repoId, kind: "rule", source: "derived", statement: "never X", why: undefined, path: undefined, cwe: undefined, provenance: undefined, sourceBlob: undefined, confidence: undefined });
+    store.recordConflict(repoId, a.id, b.id);
+
+    // The pair that is about to lose a side to an ordinary document edit — the D-20
+    // re-derive path, not a conflict resolution.
+    const doc1 = store.addKnowledge({ repoId, kind: "rule", source: "ingested", statement: "always Y", why: undefined, path: undefined, cwe: undefined, provenance: "PROG.md", sourceBlob: "v1", confidence: undefined });
+    const doc2 = store.addKnowledge({ repoId, kind: "rule", source: "ingested", statement: "never Y", why: undefined, path: undefined, cwe: undefined, provenance: "PROG.md", sourceBlob: "v1", confidence: undefined });
+    store.recordConflict(repoId, doc1.id, doc2.id);
+    expect(store.openConflicts(repoId)).toHaveLength(2);
+
+    store.retireForChangedBlob(repoId, "PROG.md", "v2", "x");
+    expect(
+      store.openConflicts(repoId),
+      "the conflict naming the two now-retired rules must stop blocking; the unrelated one must not",
+    ).toStrictEqual([{ left: a.id, right: b.id, state: "open" }]);
+  });
 });
 
 describe("usage and jobs", () => {

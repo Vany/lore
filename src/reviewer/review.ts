@@ -43,12 +43,12 @@ import { type Alert, CONDITIONS } from "../ops/alerts.ts";
 import { startOfDayIso } from "../ops/spend.ts";
 import { ServiceUnreachable, CancelledByLore, DidNotRun, Exhausted, ProviderAuthFailed, TierUnavailable, TooLargeForTier } from "../core/errors.ts";
 import { hunkAround, hunkStillPresent, makeScope, type Scope } from "../core/scope.ts";
-import { baseCommitFor, blobSha, computeDiff, renderDiff, wholeTreeDiff } from "../git/diff.ts";
+import { baseCommitFor, blobSha, computeDiff, renderDiff, resolveInto, wholeTreeDiff } from "../git/diff.ts";
 import { applyPatch, restoreTree, treeDelta, treeHash } from "../git/repo.ts";
 import { detectAndRecord, renderConflicts } from "../knowledge/conflict.ts";
 import { promoteRecurring } from "../knowledge/derive.ts";
 import { relevantTo } from "../knowledge/enrich.ts";
-import { ingestDocs } from "../knowledge/ingest.ts";
+import { ingestDocs, type IngestResult } from "../knowledge/ingest.ts";
 import { runT0, renderT0, renderT0Delta } from "../t0/runner.ts";
 import { engineRuleClass } from "../t0/engines.ts";
 import type { RecordedFinding, Store } from "../store/store.ts";
@@ -801,7 +801,23 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // `<version>-unscreened`, and are LIVE — 27 of 181 live rules were in exactly that state
   // when this was written, on a service that had been reviewing for a week. Waiting only
   // decided WHEN the fragments left the prompt, never whether the review could run.
-  const ingested = await ingestDocs(store, review.repoId, worktree, {});
+  // lore-ok[53969ab8]: `ref` is `into` as it stands, not the branch under review's own
+  // worktree — see `IngestOptions.ref` (`knowledge/ingest.ts`) for why. `undefined` for
+  // a folder review (`intoRef` unset, D-130) is correct: there is no branch-vs-trunk
+  // distinction to defend there, only one tree, so the worktree IS the only thing to
+  // read. For a diff-mode review, `into` failing to resolve (its branch deleted from
+  // origin since this review started, the one way `resolveInto` can still fail here —
+  // `review_start` already refused an `into` it could not see) skips ingestion for
+  // this round rather than falling back to the worktree: that fallback is exactly the
+  // hole this fix closes, and silently taking it because of an unrelated failure would
+  // reopen it under the one condition nobody would think to check for.
+  let ingested: IngestResult = { documents: 0, added: 0, retired: 0, screenedOut: 0, unscreened: 0 };
+  if (review.intoRef === undefined) {
+    ingested = await ingestDocs(store, review.repoId, worktree, {});
+  } else {
+    const into = await resolveInto(worktree, review.intoRef);
+    if (into !== undefined) ingested = await ingestDocs(store, review.repoId, worktree, { ref: into });
+  }
   // ASKED AGAIN, because the ingest above can now take minutes and spend money.
   //
   // The check at the top of this function was the only one, and it was written when

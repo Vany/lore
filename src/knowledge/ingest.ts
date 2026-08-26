@@ -20,7 +20,7 @@
 
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { blobSha } from "../git/diff.ts";
+import { blobSha, readAtRef } from "../git/diff.ts";
 import type { KnowledgeItem, Store } from "../store/store.ts";
 
 /** Documents that state a project's rules, in the order a reader would trust them. */
@@ -453,6 +453,20 @@ export interface IngestOptions {
   /** Restrict to these documents; otherwise everything discoverable. */
   readonly files?: readonly string[];
   readonly screen?: Screen;
+  /**
+   * Read documents as `into` has them, not as the worktree does — a resolved commit
+   * (`resolveInto`/`baseCommitFor`, `git/diff.ts`), never a raw ref string (D-61).
+   *
+   * lore-ok[53969ab8]: the gap this closes — found by lore's own review — is that a
+   * review reads its OWN worktree, which for `review.ts`'s caller IS the branch under
+   * review: a branch could edit its own CLAUDE.md and have the SAME review trust the
+   * new rule as a team decision while judging that branch's code, with none of the
+   * "the tier decides" ceremony D-10 requires of a `knowledge_teach`'d policy cited in
+   * an appeal — the screen (`screen.ts`) only judges rule SHAPE, never provenance.
+   * Omitted, this reads the worktree exactly as before — `bootstrap.ts`'s one-shot
+   * survey has no branch/base distinction to defend, and passes nothing.
+   */
+  readonly ref?: string;
 }
 
 /**
@@ -474,12 +488,24 @@ export async function ingestDocs(
   let screenedOut = 0;
   let unscreened = 0;
 
-  for (const rel of opts.files ?? (await discoverable(worktree))) {
-    const source = await readFile(join(worktree, rel), "utf8").catch(() => undefined);
-    if (source === undefined) continue;
+  const candidates = opts.files ?? (await discoverable(worktree));
+  for (const rel of candidates) {
+    const read =
+      opts.ref === undefined
+        ? await readFile(join(worktree, rel), "utf8")
+            .then((content) => ({ content, blob: undefined }))
+            .catch(() => undefined)
+        : await readAtRef(worktree, opts.ref, rel);
+    if (read === undefined) continue;
+    const source = read.content;
     documents++;
 
-    const blob = (await blobSha(worktree, rel)) ?? hashOf(source);
+    // `readAtRef` already resolved the blob AT `ref` directly (`git rev-parse
+    // <ref>:<path>`), which must be used as-is — re-hashing the WORKTREE's version
+    // of a file the branch has also edited would record the branch's blob against
+    // content read from `into`, the two halves of one fact disagreeing with each
+    // other from the moment they are written.
+    const blob = read.blob ?? (await blobSha(worktree, rel)) ?? hashOf(source);
 
     // RETIRE AND RE-EXTRACT AS ONE WRITE. These are two halves of one fact — *this
     // document changed, so what it used to say is no longer true and here is what it
@@ -553,7 +579,16 @@ export async function ingestDocs(
           source: "ingested",
           statement: c.statement,
           why: c.why,
-          path: pathScopeFor(rel),
+          // lore-ok[38025817]: was `pathScopeFor(rel)`, scoping a rule mined from a
+          // document under `docs/adr` (etc.) to that document's OWN directory — found
+          // wrong by lore's own review: `relevantTo`'s scope check asks whether a
+          // CHANGED FILE falls under a rule's path, and no path under `src/` can ever
+          // fall under `docs/adr` or `spec` — they share no prefix at all. So a rule
+          // mined from `docs/adr/0026-holds.md`, about `src/pay/hold.ts`, could never
+          // reach a review of `src/pay/hold.ts` — the one thing reading ADRs at all
+          // exists for (`discoverable`'s own docs: "the reasoning a reviewer most
+          // needs and can least infer"). Repo-wide, same as a root CLAUDE.md rule.
+          path: undefined,
           cwe: undefined,
           provenance: rel,
           sourceBlob: blob,
@@ -574,7 +609,7 @@ export async function ingestDocs(
             source: "ingested",
             statement: r.statement,
             why: undefined,
-            path: pathScopeFor(rel),
+            path: undefined, // lore-ok[38025817]: same fix as the `kept` branch above
             cwe: undefined,
             provenance: rel,
             sourceBlob: blob,
@@ -586,6 +621,30 @@ export async function ingestDocs(
         screenedOut++;
       }
     });
+  }
+
+  // lore-ok[a2f4d4f9]: a document DELETED, or RENAMED, is never in `candidates` —
+  // found by lore's own review, and real: `retireForChangedBlob` above is only ever
+  // called for a document this loop actually reads, so a document that vanished
+  // entirely left its rules live for ever, with no blob to invalidate them and
+  // nothing that ever revisits the question. Anything this repo has ever ingested a
+  // live rule from, that this pass did not even attempt to read, is gone.
+  //
+  // A NARROW GAP REMAINS, named rather than silently left: `candidates` is always the
+  // WORKTREE's own listing (`discoverable`, unchanged), even when `opts.ref` is set
+  // (`lore-ok[53969ab8]`) — so a document the reviewed branch deleted but `into` still
+  // has is indistinguishable here from one genuinely gone, and this sweep retires its
+  // rules early rather than the next `into`-only ingest of an unrelated review
+  // reviving them. Narrower than the hole `53969ab8` closed (an addition trusted
+  // immediately) — this is a document going briefly unread, not a false rule
+  // believed — and closing it needs `discoverable` itself to become ref-aware, which
+  // is its own change.
+  if (opts.files === undefined) {
+    const stillPresent = new Set(candidates);
+    for (const provenance of store.liveDocumentProvenances(repoId)) {
+      if (stillPresent.has(provenance)) continue;
+      retired += store.retireForMissingDoc(repoId, provenance, "document no longer exists");
+    }
   }
   return { documents, added, retired, screenedOut, unscreened };
 }
@@ -636,15 +695,6 @@ async function discoverable(worktree: string): Promise<readonly string[]> {
     return out.slice(0, MAX_RULE_DOCS);
   }
   return out;
-}
-
-/**
- * Rules from a spec under `spec/` or `docs/adr/` are usually about that area;
- * rules from a root `CLAUDE.md` are about everything.
- */
-function pathScopeFor(rel: string): string | undefined {
-  const dir = RULE_DIRS.find((d) => rel.startsWith(`${d}/`));
-  return dir === undefined ? undefined : dir;
 }
 
 function hashOf(s: string): string {

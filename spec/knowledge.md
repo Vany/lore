@@ -351,17 +351,24 @@ backwards rule. A `justified-rejected` finding is a real defect that stands, but
 not one the team has acted on, so it does not teach a rule yet either — deliberately
 conservative, because a wrong rule here is injected into every future session.
 
-### 2.3 A fact is learned once, however often it is argued
+### 2.3 A fact is learned once, however often it is re-derived
 
-An accepted justification adds its reason to the knowledge base — and only if that
-statement is not already held. Ratifying the same reason in a later round, or a later
-review, is the same fact about the codebase, not a new one.
+`promoteRecurring` (§3, `derive.ts`) runs after every review, over every review this
+repository has ever had — so the SAME cluster crossing the promotion threshold is
+recomputed on every single run, not just the review that first reached it. What stops
+that from writing a duplicate `mistake` row each time is a provenance key
+(`recurrence:<cwe-or-claim>:<key>`, one per cluster) checked for existence, not
+re-derived from scratch: a cluster this repository has already promoted is a fact
+already on record, and promoting it again would not teach anything the first row
+did not.
 
-Nothing checked this until 2026-08-06, and a justification livelock wrote the same
-sentence on every cycle: 21 of one repository's 27 derived rules were one reason about
-one false positive, each copy then entering the next reviewer's prompt. Matched on the
-statement itself, since the statement is the fact; a differently-worded reason for the
-same finding is a different claim and is kept.
+**"Already on record" means the provenance was ever used, live or retired — not
+merely live right now.** A `mistake` row's one real retirement path is a person or
+model resolving a conflict against it (§7): a deliberate decision that the derived
+lesson was wrong. Checking liveness instead of existence made that decision
+self-undoing — the very next review's `promoteRecurring` saw no LIVE row for that
+provenance, concluded the cluster had never been promoted, and silently re-inserted
+the identical statement, undoing the resolution it had just lost.
 
 ## 3. What is stored
 
@@ -372,18 +379,29 @@ same finding is a different claim and is kept.
   is not four bugs; it is one missing rule, and that promotion should be automatic.
 - **history** — what was raised, fixed, justified, and how often it recurred first.
 
-Every item carries: source, provenance, verification date, confidence, and `scope`
-(file blob sha + hunk hash) for invalidation.
+Every item carries: source, provenance, verification date, confidence. The schema
+also has `scope` columns (file blob sha + hunk hash, the same shape `finding` and
+`verdict` use for theirs) — unused by anything for `knowledge` specifically, not a
+built path yet (see §4).
 
 ## 4. Staleness
 
-Same rule as verdicts: **when the code an item describes changes, the item is
-invalidated.**
+**Built, for a document-sourced item: when the TEXT that justified a rule changes,
+the rule is re-derived, never retained** (D-20, §2.1) — `source_blob` on the row,
+checked on every ingest. This is the whole of what exists today.
 
-A knowledge base that only accumulates will eventually confidently describe code
-that no longer exists — and unlike a stale comment, it is injected into every
-future session automatically. Rot here is worse than in any other component,
-because it propagates.
+**Not built: invalidation when the CODE an item describes changes**, as opposed to
+the document that stated a rule ABOUT code. A `bootstrap`-written fact ("the sweeper
+releases holds after 7 days", confidence 0.5, no source document at all) or a taught
+rule with no `path` scope to a document has nothing that retires it when the code it
+was true of stops being true — the `scope` columns named above exist for exactly
+this and are not yet populated or checked by anything. Decided, not built: a
+knowledge base that only accumulates will eventually confidently describe code that
+no longer exists, and unlike a stale comment it is injected into every future
+session automatically — rot here is worse than in any other component, because it
+propagates. Flagged rather than silently assumed solved, found by lore's own
+review: this section used to describe the mechanism as standing behaviour, which
+it is not.
 
 ## 5. Use
 

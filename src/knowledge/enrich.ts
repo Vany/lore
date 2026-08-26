@@ -12,9 +12,9 @@
  */
 
 import { normalizeClaim } from "../core/finding.ts";
-import { jaccard, subjectTokens } from "./conflict.ts";
+import { jaccard, scopesOverlap, subjectTokens } from "./conflict.ts";
 import { rank } from "./ingest.ts";
-import type { KnowledgeItem, RecordedFinding, Store } from "../store/store.ts";
+import type { KnowledgeItem, PriorFinding, RecordedFinding, Store } from "../store/store.ts";
 
 export interface Enrichment {
   /** How many times this defect has been raised in this repo before, ever. */
@@ -38,53 +38,56 @@ export interface Enrichment {
   readonly related: readonly KnowledgeItem[];
 }
 
-/** Loose enough to catch a paraphrase, tight enough not to attach everything. */
+/**
+ * Loose enough to catch a paraphrase, tight enough not to attach everything.
+ *
+ * Shared by `relatedTo` (attaching a rule) and `sameDefectPriors` (counting a prior
+ * occurrence): both ask "is this actually about the same thing", just for different
+ * stakes.
+ */
 const RELATED_THRESHOLD = 0.35;
 
 export function enrich(store: Store, repoId: string, finding: RecordedFinding): Enrichment {
-  const answered = countPriorVerdicts(store, repoId, finding);
+  const prior = sameDefectPriors(store, repoId, finding);
+  let fixed = 0;
+  let justified = 0;
+  for (const p of prior) {
+    if (p.verdict === "fixed") fixed += 1;
+    else if (p.verdict === "justified-accepted") justified += 1;
+  }
   return {
-    priorOccurrences: countPrior(store, repoId, finding),
-    priorFixed: answered.fixed,
-    priorJustified: answered.justified,
+    priorOccurrences: prior.length,
+    priorFixed: fixed,
+    priorJustified: justified,
     related: relatedTo(store, repoId, finding),
   };
 }
 
 /**
- * How earlier sightings of this defect were settled, across every review of this repo.
+ * Earlier sightings of THIS SAME DEFECT, across every review of this repo — not
+ * merely findings that happen to share a CWE.
  *
- * Only the LATEST verdict per finding counts, for the reason `openFindings` learned:
- * verdicts accumulate, and a justification accepted and later rejected must not be
- * counted as an acceptance.
- */
-function countPriorVerdicts(
-  store: Store,
-  repoId: string,
-  f: RecordedFinding,
-): { fixed: number; justified: number } {
-  const rows = store.priorVerdictsLike(repoId, f.fingerprint, normalizeClaim(f.claim), f.cwe);
-
-  let fixed = 0;
-  let justified = 0;
-  for (const verdict of rows) {
-    if (verdict === "fixed") fixed += 1;
-    else if (verdict === "justified-accepted") justified += 1;
-  }
-  return { fixed, justified };
-}
-
-/**
- * Count earlier sightings across every review of this repo.
+ * `store.priorLike` fetches candidates matched on normalised claim OR shared CWE
+ * (D-44): CWE catches the same weakness described in different words, which the exact
+ * fingerprint cannot. But CWE alone is a weak signal — CWE-20 spans nearly any
+ * input-validation defect in the repo — so a CWE-only candidate is corroborated
+ * against claim-text similarity before it counts. A normalised-claim match always
+ * passes: its token sets are effectively identical, so it clears the threshold
+ * trivially and needs no special case.
  *
- * Matched on normalised claim OR shared CWE — CWE catches the same weakness
- * described differently, which the exact fingerprint cannot (D-44). The current
- * finding is excluded, so "prior" means what it says.
+ * lore-ok[4029f8b3]: found real by lore's own review — `countPrior` used to count
+ * every CWE-or-claim candidate unconditionally (see `store.priorLike`'s docs for the
+ * full incident). `renderEnrichment` turns `priorOccurrences`/`priorFixed`/
+ * `priorJustified` into an escalation ("the check itself may be wrong here — TELL
+ * YOUR USER"), so an inflated count was not cosmetic: it told a client to escalate a
+ * misfire that never happened, on any finding tagged with a common CWE.
  */
-function countPrior(store: Store, repoId: string, f: RecordedFinding): number {
-  return store.countPriorLike(repoId, f.fingerprint, normalizeClaim(f.claim), f.cwe);
+function sameDefectPriors(store: Store, repoId: string, f: RecordedFinding): readonly PriorFinding[] {
+  const needle = subjectTokens(f.claim);
+  return store
+    .priorLike(repoId, f.fingerprint, normalizeClaim(f.claim), f.cwe)
+    .filter((p) => jaccard(subjectTokens(p.claim), needle) >= RELATED_THRESHOLD);
 }
-
 
 function relatedTo(store: Store, repoId: string, f: RecordedFinding): readonly KnowledgeItem[] {
   const items = store.knowledgeFor(repoId, undefined, 1000);
@@ -172,8 +175,10 @@ export function relevantTo(
   limit = 60,
 ): readonly KnowledgeItem[] {
   const all = store.knowledgeFor(repoId, undefined, 1000);
-  const chosen = all.filter(
-    (k) => k.kind !== "policy" && (k.path === undefined || changedFiles.some((f) => f.startsWith(k.path ?? " "))),
-  );
+  // lore-ok[372b6bf0,f9559e98]: was a raw `startsWith`, found wrong by lore's own
+  // review — see `scopesOverlap`'s own docs (`conflict.ts`), which this now shares.
+  // `"src/payroll/adapter.ts".startsWith("src/pay")` is true, so a rule scoped to
+  // `src/pay` was handed to every review of `src/payroll/**` as a team decision.
+  const chosen = all.filter((k) => k.kind !== "policy" && (k.path === undefined || changedFiles.some((f) => scopesOverlap(f, k.path))));
   return rank(chosen).slice(0, limit);
 }

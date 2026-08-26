@@ -172,13 +172,15 @@ export async function baseCommitFor(worktree: string, into: string): Promise<str
  * `origin/<base>` first, exactly as `addWorktree` resolves the branch, or `undefined`
  * when the ref does not exist at all.
  *
- * THE ONLY PLACE THIS IS DECIDED, and the claim is now true of the code: `computeDiff`
- * and `baseCommitFor` both call it. It said the same thing while `computeDiff` carried an
- * inline duplicate, which is the one-thing-defined-twice class this repository ratchets
- * against — and the disagreement it would produce is the pin resolving against one commit
- * while the measurement runs against another, which is D-113's whole subject.
+ * THE ONLY PLACE THIS IS DECIDED, and the claim is now true of the code: `computeDiff`,
+ * `baseCommitFor` and `ingestDocs` (`knowledge/ingest.ts`, via `readAtRef` below) all
+ * call it. It said the same thing while `computeDiff` carried an inline duplicate, which
+ * is the one-thing-defined-twice class this repository ratchets against — and the
+ * disagreement it would produce is the pin resolving against one commit while the
+ * measurement runs against another, which is D-113's whole subject; for ingestion the
+ * same disagreement would mean asking a client's own branch what its team decided.
  */
-async function resolveInto(worktree: string, base: string): Promise<string | undefined> {
+export async function resolveInto(worktree: string, base: string): Promise<string | undefined> {
   const resolved =
     (await gitMaybe(worktree, ["rev-parse", "--verify", "--quiet", `origin/${base}^{commit}`])) ?? base;
   return (await gitMaybe(worktree, ["rev-parse", "--verify", "--quiet", `${resolved}^{commit}`])) === undefined
@@ -582,6 +584,35 @@ export function filesInDiff(diff: string): readonly string[] {
 /** git blob sha of a working-tree file — the coarse half of a verdict's scope. */
 export async function blobSha(worktree: string, path: string): Promise<string | undefined> {
   return gitMaybe(worktree, ["hash-object", "--", path]);
+}
+
+/**
+ * A file's content and blob sha AS OF A SPECIFIC COMMIT — never the working tree.
+ *
+ * For `ingestDocs` reading a rule document from `into` rather than the branch under
+ * review (`lore-ok[53969ab8]`, `knowledge/ingest.ts`): a branch's own edit to its own
+ * CLAUDE.md must not become a team decision the same review trusts while judging that
+ * branch's code (D-10's principle, unguarded for ingested rules — nothing plays the
+ * role `knowledge_teach`'s appeal ceremony plays for taught policies). `undefined`
+ * for a path that does not exist at `ref` — a document the branch added is not yet a
+ * team decision either, and one it deleted is `ingestDocs`'s own separate concern
+ * (`lore-ok[a2f4d4f9]`), not this function's.
+ *
+ * `ref` must already be a resolved commit (`resolveInto`, above) — never a client
+ * string reaching `git` unvalidated (D-61). `path` is `ref:path`, one argv element,
+ * because that is the only syntax `git show`/`git rev-parse` give a blob at a ref;
+ * it is never client-supplied either, always one of `discoverable`'s own file walk.
+ */
+export async function readAtRef(
+  worktree: string,
+  ref: string,
+  path: string,
+): Promise<{ readonly content: string; readonly blob: string } | undefined> {
+  const at = `${ref}:${path}`;
+  const content = await gitMaybe(worktree, ["show", at]);
+  if (content === undefined) return undefined;
+  const blob = await gitMaybe(worktree, ["rev-parse", "--verify", "--quiet", at]);
+  return blob === undefined ? undefined : { content, blob };
 }
 
 /**

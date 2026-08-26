@@ -71,6 +71,20 @@ describe("findConflicts", () => {
     ).toStrictEqual([]);
   });
 
+  // Found by lore's own review (372b6bf0, f9559e98): `scopesOverlap` used to be a
+  // raw `startsWith`, so "src/payroll".startsWith("src/pay") — sibling directories
+  // sharing a text prefix, not one containing the other — read as the same scope,
+  // and this repo's own test suite never caught it because "respects path scope"
+  // above uses two paths sharing no prefix at all.
+  it("does not treat sibling directories sharing a text prefix as the same scope", () => {
+    expect(
+      findConflicts([
+        item("a", "requests to the payments api are always retried on timeout", "src/pay"),
+        item("b", "requests to the payroll adapter are never retried on timeout", "src/payroll"),
+      ]),
+    ).toStrictEqual([]);
+  });
+
   it("treats an unscoped rule as repo-wide, so it can conflict with a scoped one", () => {
     expect(
       findConflicts([
