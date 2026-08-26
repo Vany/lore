@@ -1548,6 +1548,29 @@ describe("a cancelled review keeps the reason it was cancelled for", () => {
     expect(String(out["failed_because"])).not.toContain("socket hang up");
     expect(String(out["failed_because"])).toMatch(/no reason recorded/);
   });
+
+  // de431bb7, found by lore's own review: forClient exists to translate SYSTEM
+  // vocabulary (opencode, provider names, filesystem paths) out of what a client
+  // sees, but a cancelled review's reason is always the CLIENT'S OWN free text —
+  // and forClient ran over it anyway. Its URL-stripping rule deleted a link the
+  // client wrote on purpose; its path-rewrite rule turned "at /srv/repos/rigid"
+  // into words the client never wrote, in the field TOOL_DOCS.cancel calls "the
+  // only account anyone gets".
+  it("does not run a client's own cancel reason through the operator-vocabulary translator", async () => {
+    started("revF");
+    await callTool("review_cancel", {
+      review_id: "revF",
+      reason: "superseded by https://github.com/org/repo/pull/42, mirror was broken at /srv/repos/rigid",
+    });
+
+    const out = await callTool("review_poll", { review_id: "revF" });
+    expect(String(out["failed_because"]), "the client's own URL must survive").toContain(
+      "https://github.com/org/repo/pull/42",
+    );
+    expect(String(out["failed_because"]), "the client's own path must survive, not be rewritten").toContain(
+      "/srv/repos/rigid",
+    );
+  });
 });
 
 // Found by lore's own review (5e6c18de): three texts told a client a cancelled
@@ -1751,6 +1774,30 @@ describe("one review per branch", () => {
     expect(open.c, "exactly one live review per branch").toBe(1);
     // The account of WHY survives on the old review, as for any cancel.
     expect(String(store.failureReason(firstId, false) ?? "")).toContain("superseded by a restart");
+  });
+
+  // 8d847ca4, found by lore's own review: `open` is repo-scoped so any colleague can
+  // see a branch already has a review — that is deliberate, to stop duplicate work.
+  // Before this fix, restart: true acted on that same repo-scoped lookup with no
+  // ownership check, so a colleague's restart cancelled someone else's review: every
+  // justification it had ratified, any model call in flight, gone with no warning.
+  // review_cancel has always refused this via mine(); restart fell through it.
+  it("refuses to restart a colleague's open review, and leaves it untouched", async () => {
+    const first = await start();
+    const firstId = JSON.parse(first.result?.content?.[0]?.text ?? "{}").review_id as string;
+
+    const bob = grantToken(store, repoId, "bob");
+    const out = await callRaw(
+      "review_start",
+      { branch: "feat/x", into: "main", ticket: "do the thing", restart: true },
+      bob,
+    );
+
+    expect(out.result?.isError).toBe(true);
+    expect(message(out), "name the review and its owner").toContain(firstId);
+    expect(message(out)).toContain("alice");
+    expect(message(out), "must refuse outright, not start a second live review").toContain("NOTHING WAS STARTED");
+    expect(store.getReview(firstId, "alice")?.state, "the colleague's review must survive untouched").toBe("queued");
   });
 
   // Found by lore's own review of D-130, HIGH severity: making `into` optional (at

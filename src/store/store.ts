@@ -492,7 +492,7 @@ export class Store {
      * invisible to its own one-review-per-branch check.
      */
     path?: string | undefined,
-  ): { id: string; state: string; round: number; ageHours: number } | undefined {
+  ): { id: string; state: string; round: number; ageHours: number; principal: string } | undefined {
     // lore-ok[b547e780]: equivalent spellings of one path ("src", "src/", "./src")
     // would defeat this comparison if they ever reached it — fixed one layer up, not
     // here: `mcp/server.ts`'s `normalizeReviewPath` canonicalizes `path` before it is
@@ -502,7 +502,7 @@ export class Store {
     // spellings of one path as the same review, not three".
     const row = this.db
       .prepare(
-        `SELECT id, state, ladder, updated_at FROM review
+        `SELECT id, state, ladder, updated_at, principal FROM review
          WHERE repo_id = ? AND branch = ? AND review_path IS ? AND state NOT IN (${TERMINAL_SQL})
          ORDER BY created_at DESC LIMIT 1`,
       )
@@ -517,6 +517,12 @@ export class Store {
       // NaN would print as "NaN hours old", so an unparseable timestamp reads as 0 —
       // which suppresses the staleness advice rather than inventing it.
       ageHours: Number.isFinite(updated) ? Math.max(0, (Date.now() - updated) / 3_600_000) : 0,
+      // Who started it — 8d847ca4: `restart: true` cancels this review, and a
+      // destructive action needs to know whose it is before it can refuse to act on
+      // a colleague's, the same way every other review-touching handler does via
+      // `mine()`. Not part of the dedup key or the staleness advice above; only the
+      // restart guard reads it.
+      principal: row["principal"] ?? "",
     };
   }
 

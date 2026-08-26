@@ -19,6 +19,7 @@ import { absent } from "../core/optional.ts";
 import { worstSeverity } from "../core/finding.ts";
 import { initialState, ladderFingerprint, type LadderState } from "../core/ladder.ts";
 import { isAttestable, isClean, isTerminal, needsClient, type ReviewState } from "../core/review-state.ts";
+import { SHORT_LENGTH } from "../core/fingerprint.ts";
 import { DEFAULT_TYPE, reviewType, reviewTypeIds } from "../core/review-type.ts";
 import { STALE_GRACE_DAYS, STALE_HOURS } from "../ops/retention.ts";
 import { applyPatch, restoreTree, revParse, treeDelta, treeHash } from "../git/repo.ts";
@@ -729,6 +730,33 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       // is slot-neutral, and counting its own predecessor against it would refuse the one
       // operation that cannot make the service any fuller.
       const restarting = open !== undefined && restart === true;
+
+      // 8d847ca4: RESTART IS DESTRUCTIVE, AND `open` IS REPO-SCOPED, NOT PRINCIPAL-
+      // SCOPED (`store.openReviewFor`'s own comment: colleagues are told about each
+      // other's open reviews on purpose, to avoid duplicating work). That is right
+      // for the READ the refusal above gives every caller — it is not a licence to
+      // CANCEL a colleague's review. `review_cancel` refuses that via `mine()`; this
+      // path fell straight through to `setFailureReason`/`updateReview` with no
+      // check at all, so a repo-mate's `restart: true` on a stale-looking review
+      // could destroy someone else's in-flight work — every ratified justification,
+      // an in-flight model call — on a branch they never named as theirs.
+      //
+      // Principal, not `mine()`'s full token binding: restart does not hand over
+      // any data (nothing D-78 exists to guard here), it only destroys-and-replaces,
+      // and the caller's OWN review on a rotated token must still be restartable —
+      // the exact case 393cf295/5e53c948 already document a path through. Blocking
+      // that too would be a second dead end for the same rotation window.
+      if (restarting && open !== undefined && open.principal !== who.principal) {
+        throw new Error(
+          `${branch} already has an open review (${open.id}, round ${open.round}) started by ` +
+            `${open.principal}, not you. restart: true would cancel it — every justification it has ` +
+            `ratified, any model call in flight — and it is not yours to cancel. NOTHING WAS STARTED. Ask ` +
+            `${open.principal} to continue it (poll, then review_submit) or cancel it themselves; only the ` +
+            "principal who started a review can end it over this surface. An abandoned review is swept " +
+            "automatically after 48h of quiet and a further week, if waiting is an option.",
+        );
+      }
+
       const admission = mayAdmit(store.openReviewCount() - (restarting ? 1 : 0));
       if (!admission.allowed) {
         throw new Error(
@@ -1022,7 +1050,18 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
                       ? "cancelled with no reason recorded — say that, and do not infer why"
                       : "no reason was recorded, which is itself a defect — report it rather than inferring a cause",
                 }
-              : { failed_because: forClient(why) };
+              : // de431bb7: a cancelled review's reason is ALWAYS human-authored — its only
+                // two write sites are review_cancel's own `reason` param and the
+                // restart-supersede sentence a few hundred lines up, never opencode /
+                // provider / filesystem text. `forClient` exists to translate THAT
+                // vocabulary (its own module doc); run over a client's free text it
+                // silently deletes any URL the client wrote on purpose and rewrites a
+                // "…/repos/…" or "…/wt/…" substring into words the client never chose —
+                // corrupting the one field TOOL_DOCS.cancel calls "the only account
+                // anyone gets". The review_cancel handler's own immediate reply already
+                // echoes `reason` untranslated; this keeps a later poll's read of the
+                // same fact consistent with it, rather than corrupting it a second time.
+                { failed_because: review.state === "cancelled" ? why : forClient(why) };
           })(),
           // A check that did not run is not a check that found nothing (INV-1). The
           // deterministic engines are the ones that go missing silently — no
@@ -2223,7 +2262,19 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       const review = mine(id);
       // Verdicts and runs are a chronology, so they order by id; findings are a list
       // someone reads top-down, so they order worst first like everywhere else.
-      const findings = store.findingRowsForReview(id);
+      //
+      // lore-ok[d6294062]: `fingerprint` here is the store's full 64-hex column,
+      // preserved as-is because `buildVex` (src/security/vex.ts) keys `latestVerdict`
+      // lookups off this exact value — truncating it here would break VEX. But
+      // `review_poll` hands every client an 8-hex `fingerprint` (server.ts, `.slice(0,
+      // SHORT_LENGTH)`), and TOOL_DOCS pointed a client who lost that value at THIS
+      // resource for "the fingerprint lore-ok needs" — which the 64-hex form is not:
+      // SLASH_START (core/lore-ok.ts) accepts exactly 8 hex before `]`. `short` is the
+      // field docs.ts now names for that recovery.
+      const findings = store.findingRowsForReview(id).map((f) => ({
+        ...f,
+        short: String(f["fingerprint"] ?? "").slice(0, SHORT_LENGTH),
+      }));
       const verdicts = store.verdictsFor(id);
       const runs = store.tierRunsFor(id);
       return {

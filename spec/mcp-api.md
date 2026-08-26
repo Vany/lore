@@ -113,6 +113,12 @@ not `resources/list` — a client that reads only the latter never sees them):
 a client driving the loop is never shown the same finding twice; the resource gives
 the whole history, for a person asking what happened.
 
+Its `findings` carry the store's raw `fingerprint` column — the full 64-hex digest,
+not the 8-hex form `review_poll` hands out under the same field name — because
+`buildVex` keys verdict lookups off that exact value. Each entry also carries `short`,
+the 8-hex form `lore-ok[...]` actually accepts; a client recovering lost findings from
+this resource (§2.1.1 — polling can't replay them) uses `short`, not `fingerprint`.
+
 One prompt, `review(branch, into, ticket)`, drives the whole loop. It exists because
 an agent handed only tools improvises the multi-round, stateful part, and improvises
 it wrong.
@@ -124,8 +130,14 @@ it wrong.
 
 ```jsonc
 { "method": "subscriptions/listen",
-  "params": { "notifications": { "resourceSubscriptions": ["lore://review/<id>"] } } }
+  "params": { "resourceSubscriptions": ["lore://review/<id>"] } }
 ```
+
+**Unwrapped, exactly as shown.** A `notifications`-wrapped `params` is accepted and
+acknowledged but never delivers — measured against the real wire, not just the
+in-process harness, which cannot tell the two shapes apart (`subscribe.test.ts`,
+"still honours a subscription a client builds for itself"). `subscribeTo` (server.ts)
+emits the unwrapped shape for exactly this reason: it is the one proven to work.
 
 and is then sent `notifications/resources/updated` — carrying the URI and nothing else
 — **whenever that review's state changes, and only then**.
@@ -600,6 +612,22 @@ scope (`mine`, D-78) rather than stranding the review, so poll and submit on the
 caller's current token work immediately once that happens — no re-pin needed, and
 independent of whether origin has moved. Revoking is CLI-only (`make revoke`, §1),
 an operator's move, so the message names it as the ask rather than attempting it.
+
+**`restart: true` refuses a colleague's review rather than cancelling it, found by
+lore's own review (8d847ca4).** The dedup lookup behind this whole section is
+repo-scoped, not principal-scoped, on purpose — §2.4.2's opening paragraph is two
+teammates being told about each other's open review of one branch so neither
+duplicates the other's work. That is a reason to *tell*, not a licence to *destroy*:
+`restart` cancels whatever it finds open the same way `review_cancel` does, and
+`review_cancel` has always refused a review that is not the caller's own (`mine`,
+D-78). Before this fix `restart` used the repo-scoped lookup to decide what to
+cancel with no such check, so one principal's `restart: true` on a branch could
+cancel a different principal's in-flight review — every justification it had
+ratified, any model call still running — with nothing to warn either side. The
+check is by principal, not by `mine`'s full token binding: restart hands over no
+data, it only destroys-and-replaces, so the caller's own review must stay
+restartable from a rotated token exactly as §2.4.2's token-rotation paragraphs
+above already promise.
 
 ### 2.5 `review_cancel` stops both ends, and says when it could not
 

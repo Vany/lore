@@ -11,6 +11,8 @@
  * SPEC: spec/agent-docs.md
  */
 
+import { REVIEW_STATES } from "../core/review-state.ts";
+
 /**
  * The failure modes these texts exist to prevent, kept beside them so neither
  * drifts:
@@ -88,10 +90,13 @@ finished.
 
 POLL IT, ONE CALL AT A TIME, AT THE INTERVAL THE REPLY GIVES YOU.
 
-Every reply carries \`check_back_after_ms\` and \`check_back_note\`. That number is measured
-from this repository's own completed rounds and is never more than two minutes, so coming
+Every reply carries \`check_back_note\`, and USUALLY \`check_back_after_ms\` too — measured
+from this repository's own completed rounds, and never more than two minutes, so coming
 back when it says costs you one call and finds the review either finished or genuinely
-still working.
+still working. The first 20 rounds of a tier's history — every freshly provisioned
+repository starts here — have no honest median yet, so the field is OMITTED rather than
+guessed; \`check_back_note\` still gives you a full instruction on every reply, with or
+without the number.
 
 DO NOT SLEEP-POLL. One call, then go and do something else, then one more call. A tight
 retry loop is the most expensive thing a client can do here: each attempt is an LLM turn
@@ -144,7 +149,11 @@ THREE WAYS TO CONTINUE, IN ORDER:
    abandoned and the cheap tiers run again from round 1. This is almost never the
    right call, and reaching for it because a diff feels like work is how a branch gets
    reviewed all day and produces no verdict at all — which is exactly what happened
-   before the one-review rule was enforced.
+   before the one-review rule was enforced. ONLY WORKS ON YOUR OWN REVIEW: the open
+   review this refusal names may belong to a colleague on the same repo — you are
+   told about it so you do not duplicate their work, not so you can end it. restart:
+   true on a review that is not yours is refused outright, nothing started, nothing
+   touched; ask them to continue or cancel it.
 
 Expect several rounds of findings. That is the process working, not failing.
 `.trim(),
@@ -156,11 +165,13 @@ Returns ONLY NEW findings. Anything you have already been shown will not appear 
 — do not re-fix something absent from the response.
 
 IF YOU HAVE LOST FINDINGS YOU WERE ALREADY GIVEN, DO NOT POLL AGAIN — read the resource
-\`lore://review/{review_id}\`. It returns every finding on the review in full, with the
-fingerprint \`lore-ok\` needs, and it consumes nothing and settles nothing. Polling
-cannot recover them by construction: the ids you are missing are precisely the ones this
-call will never show you twice. Do not restart the review to see them again either —
-that discards every justification already ratified.
+\`lore://review/{review_id}\`. It returns every finding on the review in full, and it
+consumes nothing and settles nothing. USE EACH FINDING'S \`short\` FIELD IN \`lore-ok\`
+— the resource's own \`fingerprint\` field is the full 64-hex form, kept for
+cross-referencing verdicts, and \`lore-ok[...]\` accepts only 8 hex. Polling cannot
+recover lost findings by construction: the ids you are missing are precisely the ones
+this call will never show you twice. Do not restart the review to see them again
+either — that discards every justification already ratified.
 
 THIS CALL CONSUMES WHAT IT RETURNS, so it answers only for the token that started the
 review. A review you did not start is NOT FOUND here, even on a repository you hold a
@@ -177,8 +188,7 @@ before it starts falling, so read \`check_back_note\` rather than inferring from
 A tight retry loop is the most expensive thing a client can do here — every attempt is an
 LLM turn that learns nothing, and the round finishes when it finishes.
 
-States: queued, running, findings_ready, findings_stale, awaiting_diff, fast_clean, needs_human,
-passed, passed_partial, failed, expired.
+States: ${REVIEW_STATES.join(", ")}.
 
 ONLY \`passed\` means the branch is clean.
 
@@ -804,10 +814,13 @@ Rules that decide whether this works:
 - LOST YOUR NOTES? READ \`lore://review/{review_id}\`. A poll consumes what it returns,
   so a session that compacted, crashed or simply forgot cannot get its open findings
   back by polling again — the ids it needs are exactly the ones it will never be shown
-  a second time. That resource returns EVERY finding on the review in full, with the
-  fingerprint you need for \`lore-ok\`, and reading it consumes nothing and settles
-  nothing. Read it instead of guessing, and never restart a review to see them again:
-  a restart throws away every justification already ratified.
+  a second time. That resource returns EVERY finding on the review in full, and reading
+  it consumes nothing and settles nothing. USE EACH FINDING'S \`short\` FIELD IN
+  \`lore-ok\`, not \`fingerprint\` — the resource's \`fingerprint\` is the store's full
+  64-hex form (kept for cross-referencing verdicts), and \`lore-ok[...]\` accepts only
+  the 8-hex form, the same one \`review_poll\` already called \`fingerprint\`. Read it
+  instead of guessing, and never restart a review to see them again: a restart throws
+  away every justification already ratified.
 - \`failed\` and \`expired\` are not \`passed\`. Report and stop; do not merge.
 - \`fast_clean\` is not \`passed\` either — the deep tiers have not run.
 - \`passed_partial\` is terminal and will NEVER become \`passed\`, so waiting for that

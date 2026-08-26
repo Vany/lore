@@ -308,6 +308,29 @@ describe("the docs ask a client to poll, and mention nothing it cannot do", () =
     const src = readFileSync(new URL("./server.ts", import.meta.url), "utf8");
     expect(src, "still declared").toContain("resources: { subscribe: true }");
   });
+
+  // spec/mcp-api.md's own example drifted to the WRAPPED shape once (cfac0ddd) —
+  // accepted and acknowledged over the wire, and never delivers. subscribe.test.ts
+  // proved only the unwrapped shape is honoured ("after I guessed wrong in both
+  // directions"); this pins the spec's literal JSON against what subscribeTo actually
+  // emits, so a hand-edit cannot drift back without failing here.
+  it("spec/mcp-api.md's subscribe example matches the shape subscribeTo emits", () => {
+    const spec = readFileSync(new URL("../../spec/mcp-api.md", import.meta.url), "utf8");
+    const section = /^### 2\.0\.1 .*$([\s\S]*?)^### 2\.0\.2/m.exec(spec)?.[1] ?? "";
+    expect(section, "section 2.0.1 moved or was renamed").not.toBe("");
+    const block = /```jsonc\n([\s\S]*?)```/.exec(section)?.[1] ?? "";
+    expect(block, "no jsonc example found in 2.0.1").not.toBe("");
+    const parsed = JSON.parse(block) as { method?: string; params?: Record<string, unknown> };
+    expect(parsed.method).toBe("subscriptions/listen");
+    expect(parsed.params, "wrapped in a notifications key — the wire never honours that shape").toStrictEqual({
+      resourceSubscriptions: ["lore://review/<id>"],
+    });
+
+    const src = readFileSync(new URL("./server.ts", import.meta.url), "utf8");
+    expect(src, "subscribeTo itself must emit the unwrapped shape").toContain(
+      "params: { resourceSubscriptions: [reviewUri(reviewId)] }",
+    );
+  });
 });
 
 /**
