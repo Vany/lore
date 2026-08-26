@@ -3,6 +3,105 @@
 Newest first. Updated at the end of each task: what changed, what I learned, what
 surprised me.
 
+## 2026-08-26 — an OOM-kill report that widened four times: a real SIGKILL was never 137, and a fix reused before it lands
+
+**What changed.** Vany, verbatim: "lore's tsc check got OOM-killed on its side /
+client must not know about it, it is our problem and responsibility we have to
+silently fix the situation." Not a folder review — a standalone incident report,
+driven through a single diff-mode review (`rev_tyDbeU-kWi_jGAazC-fhLm-i`, `t0`
+against `main`). Landed `passed_partial` after **nine rounds and ten commits**
+(`7556146` through `cd4ddc9`): 34 findings, 28 fixed, 1 justified, 5 left open at
+attestation time and independently confirmed already fixed against `origin/main`
+before attesting — the now-familiar stale-mirror pattern, unusually persistent
+here because the fix kept landing faster than a tier could re-read it.
+
+**The bug, once found, was three call sites; fixing it honestly took nine rounds.**
+`checkTypes`/`checkLint` (`src/t0/runner.ts`) could reach `parseTsc`/`parseEslint`
+on a sandboxed run the cgroup's `--memory` limit had killed mid-way, returning
+whatever partial output had already been buffered as though it were a complete,
+honest result — exactly the shape INV-1 exists to name. `KILLED = 137` and
+`scriptFinding()` already existed as the correct, honest-reporting mechanism; the
+defect was that three call sites parsed before checking it. Fixed in commit
+`9527393`'s sibling `9ff6455` (round 1), immediately followed by lore's own review
+finding a **fourth** site I'd missed (`install()`'s own `runTool` call, same shape,
+never routed through the KILLED check at all) and a **fifth**, sharper one
+(round 1's own fix overclaimed: the bare-tsc branch's fallback still called
+`scriptFinding`'s genuine-failure arm — "the project's own gate does not pass" —
+for a branch that only ran speculatively, off a bare `tsconfig.json` with no
+declared script, where "not installed" was at least as likely as "really fails").
+
+**The scope grew twice, and both times I stopped and asked rather than deciding
+alone.** Round 4's review found three findings inside `src/reviewer/review.ts` —
+`settleFixed` treating a killed T0 engine's silence as proof a previously-open
+finding was fixed (a **permanent, unreopenable false verdict** — the worst failure
+mode this whole project exists to prevent, since `expireStaleVerdicts` only
+reopens justifications, never a settled fix), the operator board painting a
+killed round `clean` and green, and `renderT0Delta` telling a kept model session
+the same false "resolved" claim. That's the review ladder's *core* logic, not the
+T0 leaf module the incident report named — a materially bigger blast radius.
+Asked Vany; told to fix it anyway ("Fix review.ts too, same review"). Round 6
+found something worse: **round 4's own semgrep/ast-grep kill-detection was almost
+certainly dead code for the actual incident scenario** — Node reports a real
+`SIGKILL` as a signal name (`err.signal`), never a number, so `err.code` is
+`null`/`undefined` for a genuine kill, and `exec.ts`'s own mapping
+(`typeof err.code === "number" ? err.code : 1`) collapsed every real host OOM-kill
+to a generic exit code 1, indistinguishable from any other failure. `docker run`
+never had this problem — it translates a killed *container* into its own ordinary
+exit code, which is why `runner.ts`'s checks were already correct — only bare host
+binaries (`semgrep`, `ast-grep`, run via `execFile` with no shell or docker
+wrapper) did. Asked again; told to keep going.
+
+**The two-way race, twice.** The `interrupted` flag (added round 5 —
+`EngineOutcome.interrupted?: boolean`, aggregated into `T0Result.interrupted`) had
+to thread through *two* separate kinds of staleness, found one round apart. First
+(round 7): the t0-reuse path (`runRound`, D-92) hardcoded `interrupted: false` on
+the reasoning that `codeMoved`'s own guard made it moot — false, because D-107's
+held-diff boundary machinery can move the worktree *later in the same round*,
+after reuse has already fired, so `codeMoved` can still see real movement.
+`store.lastT0` grew an `interrupted` field, carried from the reused run's own
+outcome. Then (round 9): that carry worked for exactly *one* reuse hop, because a
+reusing round always closes its own `tier_run` row `outcome = 'reused'` (D-102 —
+the operator board needs to see that, not `interrupted`), so a *second* consecutive
+reuse read the first reuse's row and got `false` back. D-92 measured reuse at
+roughly a fifth of all rounds, so a chain longer than one is the ordinary case, not
+an edge one — `lastT0`'s query now walks back past any number of `reused` rows to
+the outcome underneath them. Same round, a sibling bug: `settleFixed` was passed
+the *round-start* `t0.interrupted` snapshot, not `hold.lastT0.interrupted` — the
+value D-107's boundary machinery actually keeps current when a held fix lands
+mid-round and triggers a fresh, boundary-triggered t0 re-run.
+
+**One file over, twice, in different ways.** `src/service/board-page.ts` — the
+*web* operator board — keeps its own, separate copy of the `tier_run` outcome
+vocabulary from `ops/status.ts`, and the `interrupted` outcome reached one surface
+and not the other (found round 7). Discovered mid-fix, painfully: the file is
+**one giant template literal** (`export const BOARD_PAGE = \`<!doctype html>...\``)
+— my first attempt at a fix comment used backtick-quoted identifiers, which
+prematurely closed the string and produced bizarre "',' expected" parse errors
+nowhere near the actual mistake. No backticks anywhere in this file, ever.
+
+**What a full test could not reach.** Two fixes (round 8's `t0Seen` — a kept
+session's own memory of "what T0 showed me" dropping a finding the moment an
+interrupted round reported it "unconfirmed" instead of re-raising it; round 9's
+`settleFixed`/`hold.lastT0` timing fix) went out **without a passing integration
+test**, said so plainly in both commit messages. Both need a multi-round,
+kept-session, D-107-boundary scenario through `runRound`'s test harness that hit
+an unrelated quirk — every round returning empty findings apparently leaves the
+session's own "have I seen a different tree" bookkeeping never set, so the
+`streamFix`/`t0Seen` code path never triggers at all, and I could not isolate why
+inside the time this incident already cost. Verified instead by tracing the exact
+read/write shape by hand. Both were confirmed real by an *independent* tier
+finding them from scratch, not by my own test — the review caught what the test
+suite could not.
+
+**The recurring lesson, restated because it recurred five separate times this
+review:** a fix that makes the *emitting* code honest is not the same fix as one
+that makes every *consumer* of that honesty correct. T0 reporting `interrupted`
+truthfully was round 1-4's work; teaching `settleFixed`, the status board, the web
+board, `renderT0Delta`, and a kept session's own memory to actually *read* it was
+rounds 5-9's. Each was a real, separate defect, not restatement — verified every
+time via `git show <sha>:<path>` directly against the pushed tree before either
+fixing again or trusting a "still open" claim.
+
 ## 2026-08-26 — src/ops reviews itself: a deadman that couldn't stop shouting, an onboarding fix that couldn't itself boot, and a crash that pre-empted its own five previous fixes
 
 **What changed.** Vany: "coll, let's review src/ops" — the operator-facing
