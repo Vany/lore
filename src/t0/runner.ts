@@ -235,21 +235,21 @@ async function sandboxed(
           unavailable: `install could not run: ${installed.unavailable ?? ""}`,
         }));
       }
-      // KILLED, CHECKED BEFORE `!installed.ok` — found by lore's own review of this
-      // same fix, fingerprint bd0f45f3: `install()` calls `runTool` directly, the
-      // same shape as the sandboxed calls above it, so an OOM-killed install (a
+      // CHECKED BEFORE `!installed.ok` — found by lore's own review of this same
+      // fix, fingerprint bd0f45f3: `install()` calls `runTool` directly, the same
+      // shape as the sandboxed calls above it, so a memory-exhausted install (a
       // native module's build step, or a large enough tree on its own) fell into
       // `!installed.ok` below and came out as a confident, high-severity claim that
       // the branch's dependencies do not install — `installed.unavailable` stays
-      // undefined for a 137, since exec.ts only sets it for ENOENT or Node's own
-      // timeout.
-      if (installed.code === KILLED) {
+      // undefined for either OOM signal, since exec.ts only sets it for ENOENT or
+      // Node's own timeout.
+      if (ranOutOfMemory(installed)) {
         return wanted.map((engine) => ({
           engine,
           findings: [],
           unavailable:
-            `install (${cmds.name}) was killed (exit ${KILLED}) — almost always the sandbox memory limit, ` +
-            `not a fault in the branch. Nothing that needs it is known either way.`,
+            `install (${cmds.name}) did not complete (${installed.code === KILLED ? `killed, exit ${KILLED}` : "ran out of memory"}) — ` +
+            `almost always a memory limit, not a fault in the branch. Nothing that needs it is known either way.`,
         }));
       }
       if (!installed.ok) {
@@ -309,19 +309,33 @@ async function packageScripts(worktree: string): Promise<Record<string, string>>
  */
 export const KILLED = 137;
 
+/**
+ * The OTHER way a memory limit ends a run, found by lore's own review of the
+ * `KILLED` fix, fingerprint cbb6824f: `KILLED` only recognises the cgroup's own
+ * SIGKILL from OUTSIDE the process. V8 can also give up on ITS OWN heap ceiling and
+ * abort ITSELF — typically exit 134, but the exit code alone is not distinctive
+ * (134 is plain SIGABRT, and a real native-module crash could produce it too) — so
+ * this checks for the fatal error V8 actually prints instead, which nothing else
+ * plausibly writes to stdout/stderr. The ticket that motivated `KILLED` never said
+ * which of the two lore's own tsc check hit; only one of them was covered.
+ */
+function ranOutOfMemory(r: { code: number; stdout: string; stderr: string }): boolean {
+  return r.code === KILLED || `${r.stdout}\n${r.stderr}`.includes("JavaScript heap out of memory");
+}
+
 /** A failed script becomes one finding carrying its tail. Its output is not a format. */
 export function scriptFinding(
   engine: string,
   script: string,
   r: { stdout: string; stderr: string; code: number },
 ): EngineOutcome {
-  if (r.code === KILLED) {
+  if (ranOutOfMemory(r)) {
     return {
       engine: engine as T0Engine,
       findings: [],
       unavailable:
-        `\`${script}\` was killed (exit ${KILLED}) — almost always the sandbox memory limit, ` +
-        `not a fault in the branch. Nothing it would have found is known either way.`,
+        `\`${script}\` did not complete (${r.code === KILLED ? `killed, exit ${KILLED}` : "ran out of memory"}) — ` +
+        `almost always a memory limit, not a fault in the branch. Nothing it would have found is known either way.`,
     };
   }
   return {
@@ -349,18 +363,19 @@ async function checkTypes(
   if (scripts["typecheck"] !== undefined) {
     const r = await runInSandbox(cfg, worktree, cacheDir, scratch, cmds.run("typecheck"), false);
     if (r.unavailable !== undefined) return { engine: "tsc", findings: [], unavailable: r.unavailable };
-    // KILLED, CHECKED BEFORE THE PARSE — a monorepo's `turbo run typecheck` fans out
-    // across every package, and when the sandbox's own `--memory` limit kills it
-    // partway through, packages that had ALREADY finished still leave real,
-    // parseable tsc output sitting in the buffer. Parsing that first and returning
-    // whatever it found — the order below, for every OTHER non-zero exit — would
-    // silently turn a run killed before covering the whole monorepo into what reads
-    // as a complete pass with a few findings: exactly the INV-1 shape this file's
-    // own `KILLED` branch exists to prevent, reached by skipping past it whenever
-    // ANY package happened to report before the kill. A client must never have to
-    // work out that "some findings, no mention of the rest" meant "we ran out of
-    // memory," which is ours to prevent, not theirs to puzzle out.
-    if (r.code === KILLED) return scriptFinding("tsc", `${cmds.name} run typecheck`, r);
+    // CHECKED BEFORE THE PARSE, both ways a memory limit can end this (see
+    // `ranOutOfMemory`) — a monorepo's `turbo run typecheck` fans out across every
+    // package, and when a memory limit stops it partway through, packages that had
+    // ALREADY finished still leave real, parseable tsc output sitting in the
+    // buffer. Parsing that first and returning whatever it found — the order below,
+    // for every OTHER non-zero exit — would silently turn a run stopped before
+    // covering the whole monorepo into what reads as a complete pass with a few
+    // findings: exactly the INV-1 shape this file's own OOM handling exists to
+    // prevent, reached by skipping past it whenever ANY package happened to report
+    // before the process gave out. A client must never have to work out that "some
+    // findings, no mention of the rest" meant "we ran out of memory," which is
+    // ours to prevent, not theirs to puzzle out.
+    if (ranOutOfMemory(r)) return scriptFinding("tsc", `${cmds.name} run typecheck`, r);
     // Still try the structured parse: a monorepo runner usually forwards tsc's own
     // lines, and per-file findings beat one blob whenever we can get them.
     const parsed = parseTsc(`${r.stdout}\n${r.stderr}`);
@@ -373,19 +388,19 @@ async function checkTypes(
   const r = await runInSandbox(cfg, worktree, cacheDir, scratch, "npx --no-install tsc --noEmit --pretty false", false);
   if (r.unavailable !== undefined) return { engine: "tsc", findings: [], unavailable: r.unavailable };
   // This branch never routed through `scriptFinding` at all, for ANY non-zero exit
-  // — so a KILLED run here (single-project `tsc --noEmit`, no monorepo runner
-  // involved) fell through to `parseTsc` unconditionally, on output that a kill
-  // usually truncates to nothing: `findings: []`, indistinguishable from tsc
+  // — so a run stopped by a memory limit here (single-project `tsc --noEmit`, no
+  // monorepo runner involved) fell through to `parseTsc` unconditionally, on output
+  // that usually truncates to nothing: `findings: []`, indistinguishable from tsc
   // actually running clean. The sharpest form of the same bug fixed above.
-  if (r.code === KILLED) return scriptFinding("tsc", "npx tsc --noEmit", r);
-  // Found by lore's own review, fingerprint fde373d4: the KILLED check above closed
-  // one exit code of a wider hole this branch had — an unrelated non-zero exit whose
-  // output does not happen to match `TSC_LINE` (tsc missing from node_modules, a
-  // tsconfig error in a shape the regex does not cover, a heap-OOM abort at exit 134,
-  // not 137) still fell through to `findings: parseTsc(...)`, empty, with no
-  // `unavailable` — a run that never completed, reading as a clean pass. Matches the
-  // typecheck-script branch above: parse first, but only trust an empty result when
-  // the process itself says it succeeded.
+  if (ranOutOfMemory(r)) return scriptFinding("tsc", "npx tsc --noEmit", r);
+  // Found by lore's own review, fingerprint fde373d4: the check above closed the
+  // memory-limit exit of a wider hole this branch had — an unrelated non-zero exit
+  // whose output does not happen to match `TSC_LINE` (tsc missing from
+  // node_modules, a tsconfig error in a shape the regex does not cover) still fell
+  // through to `findings: parseTsc(...)`, empty, with no `unavailable` — a run that
+  // never completed, reading as a clean pass. Matches the typecheck-script branch
+  // above: parse first, but only trust an empty result when the process itself
+  // says it succeeded.
   const parsed = parseTsc(`${r.stdout}\n${r.stderr}`);
   if (parsed.length > 0) return { engine: "tsc", findings: parsed };
   return r.ok ? { engine: "tsc", findings: [] } : scriptFinding("tsc", "npx tsc --noEmit", r);
@@ -410,11 +425,11 @@ async function checkLint(
   const r = await runInSandbox(cfg, worktree, cacheDir, scratch, "npx --no-install eslint . --format json", false);
   if (r.unavailable !== undefined) return { engine: "eslint", findings: [], unavailable: r.unavailable };
   // Same fix as both `tsc` branches above: checked explicitly rather than left to
-  // fall through as "unparseable output" — true in practice (a kill mid-run
-  // usually truncates eslint's single trailing JSON blob), but the wrong REASON
-  // reported. "Unparseable" reads as an eslint or config problem; "killed, sandbox
-  // memory limit" is the honest one and points at the right place to fix it.
-  if (r.code === KILLED) return scriptFinding("eslint", "npx eslint .", r);
+  // fall through as "unparseable output" — true in practice (a run cut short by a
+  // memory limit usually truncates eslint's single trailing JSON blob), but the
+  // wrong REASON reported. "Unparseable" reads as an eslint or config problem; a
+  // memory limit is the honest one and points at the right place to fix it.
+  if (ranOutOfMemory(r)) return scriptFinding("eslint", "npx eslint .", r);
   const parsed = parseEslint(r.stdout, worktree);
   return parsed === undefined
     ? { engine: "eslint", findings: [], unavailable: "eslint produced unparseable output" }

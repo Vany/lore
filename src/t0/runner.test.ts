@@ -141,18 +141,20 @@ describe("runT0 merges the host and sandbox branches", () => {
 });
 
 /**
- * A killed (137) sandboxed run used to be able to reach `parseTsc`/`parseEslint`
- * before anything checked the exit code — found live: lore's own tsc check was
- * OOM-killed mid-run, and the partial output already sitting in the buffer was
- * silently returned as `findings`, indistinguishable from a complete, honest result.
- * `checkTypes` and `checkLint` check `r.code === KILLED` before attempting to parse,
- * everywhere they call `runInSandbox` directly — and `sandboxed()` itself checks it
- * for `install()`, found by lore's own review of this fix, fingerprint bd0f45f3: an
- * OOM-killed install fell into the same handling as a genuine one and came out as a
- * confident, wrong claim that the branch's dependencies do not install. A second
- * review finding, fingerprint fde373d4, closed a related but KILLED-independent hole
- * in the bare-tsc branch: a non-137 failure whose output does not match tsc's error
- * format also used to read as a clean pass — same shape, different trigger.
+ * A killed sandboxed run used to be able to reach `parseTsc`/`parseEslint` before
+ * anything checked the exit code — found live: lore's own tsc check was OOM-killed
+ * mid-run, and the partial output already sitting in the buffer was silently
+ * returned as `findings`, indistinguishable from a complete, honest result.
+ * `checkTypes` and `checkLint` check `ranOutOfMemory(r)` before attempting to
+ * parse, everywhere they call `runInSandbox` directly — and `sandboxed()` itself
+ * checks it for `install()`. Three findings from lore's own review of this fix:
+ * bd0f45f3, an OOM-killed install fell into the same handling as a genuine one and
+ * came out as a confident, wrong claim that the branch's dependencies do not
+ * install; fde373d4, a related but memory-independent hole in the bare-tsc branch
+ * where a non-137 failure whose output does not match tsc's error format also used
+ * to read as a clean pass; and cbb6824f, the cgroup's SIGKILL (137) is not the only
+ * way a memory limit ends a run — V8 can abort on its OWN heap ceiling too, which
+ * `ranOutOfMemory` now also recognises by its distinctive fatal-error text.
  *
  * Exercised end to end through `runT0`, with a stand-in `docker`: `execFile`
  * (exec.ts) does not go through a shell, so it happily runs an arbitrary executable
@@ -180,9 +182,10 @@ describe("a run the sandbox itself killed is never mistaken for a clean or parti
 
   // Content lives in its own file rather than inlined into the shell script text,
   // so nothing here has to worry about quoting JSON (eslint's fake output) inside a
-  // `sh -c` string. Succeeds on its first call (install) and reports exit 137 with
-  // `stdoutOnKill` on its second (the actual check).
-  const fakeDocker = (stdoutOnKill: string): SandboxConfig => {
+  // `sh -c` string. Succeeds on its first call (install) and reports `exitCode`
+  // with `stdoutOnKill` on its second (the actual check) — 137 (the cgroup's own
+  // SIGKILL) unless told otherwise.
+  const fakeDocker = (stdoutOnKill: string, exitCode = 137): SandboxConfig => {
     const script = join(dir, "fake-docker.sh");
     const called = join(dir, ".called");
     const output = join(dir, "fake-stdout.txt");
@@ -192,7 +195,7 @@ describe("a run the sandbox itself killed is never mistaken for a clean or parti
       "#!/bin/sh\n" +
         `if [ -f "${called}" ]; then\n` +
         `  cat "${output}"\n` +
-        "  exit 137\n" +
+        `  exit ${String(exitCode)}\n` +
         "else\n" +
         `  touch "${called}"\n` +
         "  exit 0\n" +
@@ -221,6 +224,25 @@ describe("a run the sandbox itself killed is never mistaken for a clean or parti
     const tsc = out.outcomes.find((o) => o.engine === "tsc");
     expect(tsc?.findings, "the parseable line must not survive as a finding").toStrictEqual([]);
     expect(tsc?.unavailable).toMatch(/killed/);
+    expect(tsc?.unavailable).toMatch(/not a fault in the branch/);
+  });
+
+  // Fingerprint cbb6824f: the cgroup's SIGKILL (137) is not the only way a memory
+  // limit ends a run — V8 can also abort on its OWN heap ceiling, typically exit
+  // 134, with no cgroup kill involved at all. Mixed with a REAL parseable error
+  // from a package that finished first, which the fix must still discard: knowing
+  // one package's real result does not mean the rest is known to be clean.
+  it("checkTypes: a run that aborts on its own heap limit is reported as OOM, not its partial output", async () => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { typecheck: "tsc -b" } }));
+    const stdoutOnAbort =
+      "src/foo.ts(3,5): error TS2322: real error from a package that finished first\n" +
+      "\n<--- Last few GCs --->\n\nFATAL ERROR: Ineffective mark-compacts near heap limit " +
+      "Allocation failed - JavaScript heap out of memory\n";
+    const sandbox = fakeDocker(stdoutOnAbort, 134);
+    const out = await runT0(dir, { engines: ["tsc"], sandbox });
+    const tsc = out.outcomes.find((o) => o.engine === "tsc");
+    expect(tsc?.findings, "a heap-OOM abort must not be reported as a clean or partial result").toStrictEqual([]);
+    expect(tsc?.unavailable).toMatch(/ran out of memory/);
     expect(tsc?.unavailable).toMatch(/not a fault in the branch/);
   });
 
