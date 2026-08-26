@@ -17,7 +17,7 @@ import { concreteRoute, loadHelper, loadPools } from "../core/ladder.ts";
 import { DEFAULT_TIERS, type Tier } from "../core/ladder.ts";
 import { resolveInto } from "../git/diff.ts";
 import type { ReviewerLike } from "../reviewer/opencode.ts";
-import type { Store } from "../store/store.ts";
+import { NO_LIMIT, type Store } from "../store/store.ts";
 import { detectAndRecord } from "./conflict.ts";
 import { ingestDocs, type IngestResult } from "./ingest.ts";
 import { screenFor, screenUsage } from "./screen.ts";
@@ -204,23 +204,37 @@ export async function bootstrap(opts: {
       // a cancel to reach a screen session started by a review, and the survey is the
       // OTHER model call bootstrap makes inside that same review.
       const result = await opts.reviewer.review(tier, ARCHITECTURE_PROMPT, opts.worktree, opts.reviewId, opts.stillWanted);
-      // lore-ok[4bbccb96]: found real by lore's own review — this loop had no
-      // idempotence guard at all, unlike `ingestDocs`' rule-writes a few lines above
-      // (`store.hasKnowledgeBlob` re-checked INSIDE a transaction). worker.ts's
+      // lore-ok[4bbccb96,0b9f6b3a]: found real by lore's own review, TWICE — this loop
+      // had no idempotence guard at all, unlike `ingestDocs`' rule-writes a few lines
+      // above (`store.hasKnowledgeBlob` re-checked INSIDE a transaction). worker.ts's
       // one-shot check ("is this repo's knowledge empty") is check-then-act, and the
       // dispatcher starts every claimed round at once (D-101, no pool) — so two
       // reviews submitted for one fresh repo within the same few minutes (this
       // deployment's own target is 30/day) can BOTH pass that check before either
       // commits, both run the survey, and both write every fact with a fresh id.
       // Facts have no retirement path (spec/knowledge.md §4), so a doubled write is
-      // permanent, not a one-round blip. Re-asked INSIDE the transaction, same shape
-      // as `ingestDocs`: the MODEL CALL above this line can still double-spend under
-      // a genuine race (recomputing it inside a transaction is not possible — it is
-      // an async network call), but the WRITE — the part that compounds forever — is
-      // guarded, matching the risk this codebase already accepts for the screen call
-      // one function above.
+      // permanent, not a one-round blip.
+      //
+      // The FIRST fix re-checked "is this repo's knowledge empty" — the same question
+      // worker.ts asks — which was wrong for a reason obvious only once named: THIS
+      // SAME bootstrap call's own `ingestDocs`, a few lines above, already wrote live
+      // `rule` rows for any repo with rule documents at all — the ordinary case, not
+      // an edge one. So the re-check saw non-empty knowledge from ITS OWN prior write
+      // and silently discarded every survey fact, on every repo whose documents
+      // yielded a rule, after the model call was already paid for. Scoped to
+      // `kind === "fact"` now — the only question that distinguishes "a concurrent
+      // bootstrap already wrote facts" from "my own ingest just wrote rules", which is
+      // the one this guard actually needs answered. `NO_LIMIT` because this is exactly
+      // the kind of check aa57c0f2 named: correctness needs to see every row, not a
+      // capped, recency-ordered sample that could miss a fact for an unrelated reason.
+      //
+      // Re-asked INSIDE the transaction, same shape as `ingestDocs`: the MODEL CALL
+      // above this line can still double-spend under a genuine race (recomputing it
+      // inside a transaction is not possible — it is an async network call), but the
+      // WRITE — the part that compounds forever — is guarded, matching the risk this
+      // codebase already accepts for the screen call one function above.
       opts.store.tx(() => {
-        if (opts.store.knowledgeFor(opts.repoId, undefined, 1).length > 0) return;
+        if (opts.store.knowledgeFor(opts.repoId, undefined, NO_LIMIT).some((k) => k.kind === "fact")) return;
         for (const f of result.findings) {
           opts.store.addKnowledge({
             repoId: opts.repoId,

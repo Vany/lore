@@ -75,15 +75,43 @@ export interface ProposeResult {
   readonly silent: readonly string[];
 }
 
-/** What this repository already knows, so an idea it has had is not offered as new. */
+/**
+ * What this repository already knows, so an idea it has had is not offered as new.
+ *
+ * lore-ok[77edbad4]: found real by lore's own review — this is a SECOND, independent
+ * copy of `reviewer/prompts.ts`'s `knowledgeBlock`, and it carried the same bug
+ * 70b88761/652bb58d fixed there: a bootstrap-derived `kind: "fact"` row (a model's own
+ * unconfirmed reading of one branch's code) was rendered under the same "already
+ * knows about itself" framing as a taught rule, with no caveat. For propose
+ * specifically, an unverified planted claim can suppress or bias exactly the ideas
+ * this feature exists to generate. Split the same way: facts get their own,
+ * explicitly unverified block.
+ */
 function knowledgeBlock(items: readonly KnowledgeItem[]): string {
   if (items.length === 0) return "";
-  return [
-    "",
-    "WHAT THIS CODEBASE ALREADY KNOWS ABOUT ITSELF",
-    "An idea it has already had is not a new idea. Read these before you decide what to say.",
-    ...items.slice(0, 60).map((k) => `  [${k.source}] ${k.statement}${k.why === undefined ? "" : ` — because ${k.why}`}`),
-  ].join("\n");
+  const line = (k: KnowledgeItem): string => `  [${k.source}] ${k.statement}${k.why === undefined ? "" : ` — because ${k.why}`}`;
+  const facts = items.filter((k) => k.kind === "fact");
+  const rest = items.filter((k) => k.kind !== "fact");
+
+  const parts: string[] = [];
+  if (rest.length > 0) {
+    parts.push(
+      "",
+      "WHAT THIS CODEBASE ALREADY KNOWS ABOUT ITSELF",
+      "An idea it has already had is not a new idea. Read these before you decide what to say.",
+      ...rest.slice(0, 60).map(line),
+    );
+  }
+  if (facts.length > 0) {
+    parts.push(
+      "",
+      "UNVERIFIED, FROM ONE BRANCH'S FIRST READING",
+      "A model's own reading of this repository, taken once, on whichever branch got reviewed first — not" +
+        " confirmed by anything since. Weigh it accordingly.",
+      ...facts.slice(0, 60).map(line),
+    );
+  }
+  return parts.join("\n");
 }
 
 /**

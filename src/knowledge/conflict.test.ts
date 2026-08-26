@@ -282,3 +282,36 @@ describe("a period inside a filename or number is not a sentence break (7920c391
     expect(found).toHaveLength(1);
   });
 });
+
+// Found by lore's own review (cbe21077), on the tree carrying the 7920c391/5b53baa7
+// fix directly above: that fix required a capital letter after the period+whitespace
+// to count as a sentence break, borrowed from ingest.ts's sentences(). A casually
+// typed second sentence starting lowercase — realistic for a person typing a quick
+// rule — failed the capital check, stayed one undivided fragment, and its two
+// negations cancelled to positive: the ORIGINAL compounding bug, reopened by the
+// case of one letter. The capital check turned out to protect nothing the
+// whitespace-after-period requirement did not already protect on its own —
+// "gateway.ts"/"lore.db"/"2.5" have no whitespace immediately after their internal
+// period — so it is dropped; a period followed by whitespace is boundary enough.
+describe("a sentence break does not require a capital letter to follow (cbe21077)", () => {
+  it("reads a lowercase-started second sentence as a real sentence break, not one fragment", () => {
+    expect(
+      polarity("The gateway must never retry captures. retries must not double-charge customers"),
+      "must match the capitalized phrasing of the identical rule",
+    ).toBe(polarity("The gateway must never retry captures. Retries must not double-charge customers."));
+    expect(polarity("The gateway must never retry captures. retries must not double-charge customers")).toBe(-1);
+  });
+
+  it("still protects a dotted filename or decimal — unaffected by dropping the capital check", () => {
+    expect(polarity("Requests through gateway.ts must never be retried on timeout")).toBe(-1);
+    expect(polarity("Lore must never open lore.db read-write from the host")).toBe(-1);
+  });
+
+  it("does not record a false contradiction between a capitalized and a casually-typed phrasing of the same rule", () => {
+    const found = findConflicts([
+      item("a", "The gateway must never retry captures. Retries must not double-charge customers."),
+      item("b", "The gateway must never retry captures. retries must not double-charge customers"),
+    ]);
+    expect(found).toStrictEqual([]);
+  });
+});

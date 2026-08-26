@@ -292,3 +292,38 @@ describe("the document", () => {
     expect(doc([])).toContain("_Nothing._");
   });
 });
+
+// Found by lore's own review (77edbad4): this file carries its OWN, second copy of
+// reviewer/prompts.ts's knowledgeBlock, and it had the same bug 70b88761/652bb58d
+// fixed there — a bootstrap-derived `kind: "fact"` (a model's own unconfirmed
+// reading of one branch's code) was rendered under "already knows about itself"
+// with no caveat, which could suppress or bias exactly the ideas propose exists to
+// generate.
+describe("a bootstrap fact is not settled knowledge in a propose prompt (77edbad4)", () => {
+  it("puts a fact under an unverified caveat, separate from a taught rule", async () => {
+    const rule = store.addKnowledge({
+      repoId, kind: "rule", source: "taught", statement: "the store owns its own migrations",
+      why: undefined, path: undefined, cwe: undefined, provenance: undefined,
+      sourceBlob: undefined, confidence: 1,
+    });
+    const fact = store.addKnowledge({
+      repoId, kind: "fact", source: "derived", statement: "this module is invoked only by the scheduler",
+      why: undefined, path: undefined, cwe: undefined, provenance: "bootstrap:src/store/store.ts",
+      sourceBlob: undefined, confidence: 0.5,
+    });
+
+    await propose({ store, repoId, ask: scripted([[IDEA], [IDEA]]) }, input({ knowledge: [rule, fact] }));
+
+    const prompt = asked[0]?.prompt ?? "";
+    const caveatAt = prompt.indexOf("UNVERIFIED, FROM ONE BRANCH'S FIRST READING");
+    expect(caveatAt, "the caveat heading must be present").toBeGreaterThan(-1);
+    // The rule block is everything BEFORE the caveat heading; the fact must not
+    // appear there, or it would be sitting under "already knows about itself" too.
+    const ruleBlock = prompt.slice(0, caveatAt);
+    expect(ruleBlock).toContain("the store owns its own migrations");
+    expect(ruleBlock, "a fact must not appear under the same heading as a taught rule").not.toContain(
+      "invoked only by the scheduler",
+    );
+    expect(prompt.slice(caveatAt)).toContain("this module is invoked only by the scheduler");
+  });
+});

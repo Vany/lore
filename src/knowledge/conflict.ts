@@ -70,28 +70,40 @@ export interface ConflictCandidate {
  * exact same compounding bug, reached by writing two sentences instead of one
  * clause-joined statement.
  *
- * The first fix added a bare `.` to the split, which closed that hole and opened a
+ * The FIRST fix added a bare `.` to the split, which closed that hole and opened a
  * worse one immediately: a period inside a filename, a version number or a
  * decimal ("gateway.ts", "lore.db", "2.5 seconds") is not a sentence boundary at
  * all, and this codebase's own rules name files constantly. Splitting there breaks
  * ONE genuine proposition into two fragments of opposite polarity, which reads as
  * "too compound to say" (0) and `findConflicts` skips it — silently exempting the
  * rule from conflict detection entirely, the opposite failure from the one being
- * fixed: not a false contradiction, but a missed one. `ingest.ts`'s `sentences()`
- * already solves exactly this — a period only ends a sentence when followed by
- * whitespace and a capital letter — so this now does two passes: the original
- * delimiters (case-insensitive, unchanged), then that sentence boundary (case-
- * SENSITIVE — the capital-letter check is the whole signal, and mixing it into the
- * first pass's `/i` flag would match a lowercase letter too and defeat it, which is
- * why this is two `.split` calls rather than one merged regex).
+ * fixed: not a false contradiction, but a missed one.
+ *
+ * The SECOND fix borrowed `ingest.ts`'s `sentences()` boundary — a period ends a
+ * sentence only when followed by whitespace AND a capital letter — which brought
+ * back a THIRD failure: a casually-typed second sentence starting lowercase ("The
+ * gateway must never retry captures. retries must not double-charge customers", the
+ * way a person types a quick second thought) failed the capital check, stayed one
+ * undivided fragment, and its two negations cancelled to positive — the ORIGINAL
+ * compounding bug, reopened by the case of one letter. The capital-letter guard
+ * turns out to protect nothing a plain "period followed by whitespace" does not
+ * already protect on its own: `"gateway.ts must"` and `"2.5 seconds"` have NO
+ * whitespace immediately after their internal period (`ts`/`5` follow it directly),
+ * so the lookbehind never even reaches them — the capital check was solving a
+ * problem the whitespace requirement had already solved, while breaking casually
+ * capitalised prose. Dropped. Two passes remain — the original delimiters
+ * (case-insensitive, unchanged), then a bare sentence boundary — because a period
+ * followed by whitespace is itself unambiguous enough, and simpler than a check that
+ * was never earning its keep.
  */
 export function polarity(statement: string): number {
   // Clause boundaries (case-insensitive, as before), then — per fragment — a real
-  // sentence boundary: a period/!/? followed by whitespace and a capital letter,
-  // never a bare `.` (see the docs above for why that regressed on filenames).
+  // sentence boundary: a period/!/? followed by whitespace. No capital-letter check
+  // (see the docs above for why one was tried and regressed casual prose) and never
+  // a bare `.` (see the docs above for why THAT regressed on filenames).
   const clauses = statement
     .split(/[,;:—]|\band\b|\bbut\b|\bwhile\b/i)
-    .flatMap((c) => c.split(/(?<=[.!?])\s+(?=[A-Z"`*])/))
+    .flatMap((c) => c.split(/(?<=[.!?])\s+/))
     .filter((c) => c.trim().length > 0);
   const polarities = new Set(
     clauses.map((c) => ((c.match(NEGATIONS)?.length ?? 0) % 2 === 0 ? 1 : -1)),

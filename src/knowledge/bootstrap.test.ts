@@ -222,3 +222,41 @@ describe("bootstrap does not double-write survey facts under a race (4bbccb96)",
     expect(facts, "two concurrent bootstraps must not both write the survey's facts").toHaveLength(1);
   });
 });
+
+// Found by lore's own review (0b9f6b3a), on the tree carrying the 4bbccb96 fix
+// directly above: that fix's re-check asked "does this repo have ANY live knowledge",
+// but ingestDocs — a few lines earlier in this SAME bootstrap() call — already writes
+// live `rule` rows for any repo that has rule documents at all, the ordinary case.
+// So the re-check saw its OWN prior write and silently discarded every survey fact,
+// after the model call had already been paid for, on every repo whose documents
+// yielded a rule.
+describe("bootstrap's own document rules do not block its own survey facts (0b9f6b3a)", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "lore-bootstrap-facts-"));
+    writeFileSync(join(dir, "PROG.md"), "Money amounts are always integers in minor units, never floats.\n");
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  class FactReviewer implements ReviewerLike {
+    async review(): Promise<ReviewerResult> {
+      return {
+        findings: [
+          { file: "src/x.ts", severity: "low", claim: "a survey fact about the codebase", evidence: "e", failureScenario: "s" },
+        ],
+      } as unknown as ReviewerResult;
+    }
+  }
+
+  it("still writes the survey's facts when ingestDocs already wrote rules from the same repo's documents", async () => {
+    const reviewer = new FactReviewer();
+    const tier: Tier = { id: "t1", kind: "model", model: "zai/some-model", stage: "fast" };
+
+    const result = await bootstrap({ store, repoId, worktree: dir, reviewer, tier });
+
+    expect(result.rulesFromDocs, "fixture sanity: the document must have produced a rule").toBeGreaterThan(0);
+    expect(result.factsFromCode, "the survey's facts must survive its own prior document ingest").toBe(1);
+    expect(store.knowledgeFor(repoId, undefined, NO_LIMIT).some((k) => k.kind === "fact")).toBe(true);
+  });
+});
