@@ -108,8 +108,16 @@ export function screen(
   // so the pattern classified the whole knowledge base as decisions-against, and any
   // idea unlucky enough to share words with one was reported to the reader as already
   // rejected. Measured on the first real run.
+  //
+  // `kind !== "fact"` GUARDS THE TEXT MATCH — found by lore's own review, fingerprint
+  // dda7d5b7: `run.ts`'s own `knowledgeBlock` (lore-ok 77edbad4) already split `fact`
+  // rows out of the prompt as "UNVERIFIED, FROM ONE BRANCH'S FIRST READING", precisely
+  // because a bootstrap-derived reading can suppress or bias the ideas this feature
+  // exists to generate — but the screen half kept trusting them. `kind === "mistake"`
+  // is untouched: that classification is itself a deliberate record, never a fact row
+  // guessing at one, so it needs no exclusion.
   const rejected = knowledge.filter(
-    (k) => k.kind === "mistake" || /\b(?:considered|rejected|decided against)\b/i.test(k.statement),
+    (k) => k.kind === "mistake" || (k.kind !== "fact" && /\b(?:considered|rejected|decided against)\b/i.test(k.statement)),
   );
   const taught = knowledge.filter((k) => k.source === "taught");
 

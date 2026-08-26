@@ -14,7 +14,7 @@ not on a merge and not on a schedule.
 ```
 lore propose --repo <name> --budget 8
              [--folder src/store] [--commit <ref>] [--mode code-arch]
-             [--lens seams,failure,data,greenfield] [--json]
+             [--lens seams,failure,data,greenfield]
 ```
 
 | flag | meaning | default |
@@ -25,7 +25,12 @@ lore propose --repo <name> --budget 8
 | `--commit` | what to think about, cut from lore's mirror | the head of `master` |
 | `--mode` | which question to ask, from the review-type vocabulary | `code-arch` |
 | `--lens a,b,c` | which vantages to run | all four |
-| `--json` | the document as data, for a script | off |
+
+No `--json`: the output is a document a person appraises, not a client contract —
+writing one for output nobody has judged yet is premature (`propose/cli.ts`'s own
+header). MCP is one wrapper away once it has earned it. Found by lore's own review,
+fingerprint 6e36c2b1: this table listed one anyway, and nothing ever read it —
+`lore propose` prints the document's path unconditionally regardless of the flag.
 
 Writes `proposals/YYYY-MM-DD-<sha>-<folder>.md` and prints the path. The SHA and the
 folder are both in the name because a per-folder sweep shares one commit and one date —

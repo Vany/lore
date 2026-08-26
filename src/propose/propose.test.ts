@@ -232,6 +232,24 @@ describe("screen", () => {
     expect(s?.because.join(" ")).toContain("2026-07-04");
   });
 
+  // Fingerprint dda7d5b7, found by lore's own review: `run.ts`'s own knowledgeBlock
+  // (lore-ok 77edbad4) already tells the PROPOSER that a `kind: "fact"` row is an
+  // unverified, single-branch reading, not a confirmed decision — "an unverified
+  // planted claim can suppress or bias exactly the ideas this feature exists to
+  // generate." The screen half trusted the same row's wording as an actual decision.
+  // A `mistake` row with identical wording still demotes (the case above); only the
+  // unverified `fact` kind must not.
+  it("does not treat an unverified bootstrap fact as a decision this repository made", () => {
+    const k = known({
+      kind: "fact",
+      source: "derived",
+      statement: "Splitting the store's query surface from its migration surface was considered and rejected.",
+      verifiedAt: "2026-07-04T00:00:00.000Z",
+    });
+    const [s] = screen([proposal()], "src/store", [k]);
+    expect(s?.demotions).not.toContain("already-decided");
+  });
+
   // Not dropped: a taught rule can be wrong, and a model arguing against one is worth
   // reading. The reader is only told they are arguing with a decision, not with nothing.
   it("keeps an idea that argues with a taught rule, and says so", () => {

@@ -170,6 +170,71 @@ describe("the budget is in sessions, and a critic is a session", () => {
   });
 });
 
+/**
+ * Fingerprint b1030112, found by lore's own review: usage was recorded only after a
+ * successful `ask`, even though `Reviewer.askFor` deliberately recovers spend from a
+ * session that fails mid-exploration and attaches it to the thrown error as `.spent`
+ * (`reviewer/opencode.ts`, "Measured 2026-08-09: two t1 attempts ran 45 minutes each
+ * against an exhausted plan and our trailing-5h usage read ZERO"). The review path
+ * already reads it back this way; this file's own header names "usage is recorded per
+ * session" as one of propose's stated money bounds, and it was false on the one path
+ * where the spend is real and highest.
+ */
+describe("a failed call is still a paid one, fingerprint b1030112", () => {
+  const failWithSpend = (spent: { input: number; cached: number; output: number; cost: number }) => async () => {
+    const e = new Error("the provider refused") as Error & { spent?: typeof spent };
+    e.spent = spent;
+    throw e;
+  };
+
+  it("records a failed proposer's recovered spend, not just silence", async () => {
+    const r = await propose(
+      { store, repoId, ask: failWithSpend({ input: 500, cached: 100, output: 20, cost: 0.02 }) },
+      input({ lenses: ["seams"], budget: 1 }),
+    );
+    expect(r.sessionsSpent).toBe(0);
+    const rows = store.db.prepare("SELECT * FROM usage WHERE repo_id = ?").all(repoId) as Record<string, unknown>[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.["tier"]).toBe("propose:seams");
+    expect(rows[0]?.["outcome"]).toBe("failed");
+    expect(Number(rows[0]?.["input_tokens"])).toBe(500);
+    expect(Number(rows[0]?.["cached_tokens"])).toBe(100);
+    expect(Number(rows[0]?.["output_tokens"])).toBe(20);
+    expect(Number(rows[0]?.["cost_usd"])).toBe(0.02);
+  });
+
+  it("records a failed critic's recovered spend too, under its own tier name", async () => {
+    let n = 0;
+    const first = scripted([[IDEA]]);
+    const ask = async <T>(
+      tier: Tier,
+      prompt: string,
+      worktree: string,
+      extract: (text: string) => Listed<T>,
+      contract: string,
+    ): Promise<SessionResult<T>> => {
+      n++;
+      if (n === 1) return first(tier, prompt, worktree, extract, contract);
+      const e = new Error(`${tier.id} refused`) as Error & { spent?: { input: number; cached: number; output: number; cost: number } };
+      e.spent = { input: 900, cached: 0, output: 5, cost: 0.05 };
+      throw e;
+    };
+    await propose({ store, repoId, ask }, input({ lenses: ["seams"], budget: 2 }));
+    const rows = store.db.prepare("SELECT * FROM usage WHERE repo_id = ? AND outcome = 'failed'").all(repoId) as Record<string, unknown>[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.["tier"]).toBe("propose-critic:seams");
+    expect(Number(rows[0]?.["input_tokens"])).toBe(900);
+  });
+
+  // No `.spent` attached (a plain throw, no session ever opened) records nothing — the
+  // existing, already-correct silent case, confirmed unchanged.
+  it("records nothing when the failure carries no recovered spend", async () => {
+    await propose({ store, repoId, ask: scripted([null]) }, input({ lenses: ["seams"], budget: 1 }));
+    const rows = store.db.prepare("SELECT * FROM usage WHERE repo_id = ?").all(repoId) as Record<string, unknown>[];
+    expect(rows).toHaveLength(0);
+  });
+});
+
 describe("the critic is a different vendor", () => {
   it("picks a tier from another vendor, not merely another tier", () => {
     expect(criticFor(TIERS, KIMI)?.id).toBe("t1");
@@ -290,6 +355,25 @@ describe("the document", () => {
 
   it("says nothing was found rather than printing an empty section", () => {
     expect(doc([])).toContain("_Nothing._");
+  });
+
+  // Fingerprint 1efe9c5f, found by lore's own review: an uncriticised proposal (no
+  // second vendor configured, or the budget ran out first) has no demotion of its
+  // own, so it lands in "Appraise these" alongside genuinely criticised ones. The
+  // section's OWN note used to claim every entry there "Survived a critic from a
+  // different vendor" — true for most, false for this one, and the per-proposal NOT
+  // CRITICISED marker is easy to miss in a section a reader is likely to skim.
+  it("does not claim every survivor in 'Appraise these' was criticised", () => {
+    const uncriticised = {
+      ...IDEA,
+      contradictedBy: `${IDEA.contradictedBy} — NOT CRITICISED: no second vendor is configured, so this is one model's unchallenged opinion`,
+    };
+    const out = doc([parseProposal(uncriticised) as Proposal]);
+    expect(out).toContain("## Appraise these");
+    expect(out, "the section note must not blanket-claim a critic for every entry").not.toMatch(
+      /Survived a critic from a different vendor, in scope/,
+    );
+    expect(out).toContain("NOT CRITICISED");
   });
 });
 

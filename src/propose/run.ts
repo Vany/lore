@@ -1,21 +1,28 @@
 /**
  * The run: proposer, then a critic from a different vendor, then the screen.
  *
- * This is the only file here that spends money, so it is the one carrying the bounds.
- * From `spec/propose.md` §7, and none of them are precautionary — each has an incident
- * behind it:
+ * This is the only file here that spends money, so it is the one carrying the bounds —
+ * revised 2026-08-13, and this comment used to describe the ORIGINAL design rather than
+ * this one, found stale by lore's own review, fingerprint dc35ec0e: it kept claiming a
+ * refusal and a throttle this file no longer has, 130 lines above the code saying so.
+ * From `spec/propose.md` §7:
  *
- *   * **It refuses to start while any review is queued or running.** A whole-repo
- *     question has no diff to anchor exploration, so a proposer session costs at least
- *     what the largest t2 review did — 203,904 cached tokens against a 30-minute
- *     ceiling. Eight of those empties a rolling subscription window, and an exhausted
- *     window stalls *every review in the system*. Reviews are the product; this is
- *     inspiration.
- *   * **`--budget` is counted in sessions and is required**, so the spend is chosen
- *     rather than discovered. Proposers and critics both count: a critic is a paid
- *     session and pretending otherwise would double the real cost of a stated budget.
- *   * **It runs through the same model gate as reviews**, so it cannot burst past the
- *     provider ceiling that killed four reviews in 2.5 minutes.
+ *   * **It does NOT refuse while a review is queued or running**, and did until Vany —
+ *     waiting on exactly that refusal — overruled it. The original fear was real: the
+ *     largest t2 review sent 203,904 cached tokens, and eight such sessions could empty
+ *     a rolling subscription window, stalling every review in the system. What changed
+ *     under it: a tier's quota is now a POOL of subscriptions with a fallback chain
+ *     (D-93), so a burst here degrades a review to its next route rather than to
+ *     nothing, and D-98 removed every other queue of this kind on the same argument —
+ *     backpressure belongs at the door, not as an invisible wait that could leave this
+ *     never running on a busy day.
+ *   * **`--budget` is counted in sessions and is required**, and is now the ONLY bound
+ *     on this path. The spend is chosen rather than discovered, and proposers and
+ *     critics both count: a critic is a paid session and pretending otherwise would
+ *     double the real cost of a stated budget.
+ *   * **It is NOT throttled — since D-98, nothing stops it bursting** past the provider
+ *     ceiling that killed four reviews in 2.5 minutes. `--budget` is what bounds it now,
+ *     which is why it is required rather than defaulted.
  *   * **Usage is recorded per session**, so what it cost is answerable afterwards
  *     rather than estimated.
  *
@@ -133,6 +140,36 @@ export function criticFor(tiers: readonly Tier[], proposer: Tier, pools: ModelPo
   return tiers.find((t) => t.kind === "model" && t.model !== undefined && vend(t) !== mine);
 }
 
+/**
+ * A failed call is still a paid one — record what it burned before it died.
+ *
+ * `Reviewer.askFor` recovers spend from a session that fails mid-exploration and
+ * attaches it to the thrown error as `.spent` (never `this` — a shared instance field
+ * would cross-attribute concurrent rounds' spend); `reviewer/review.ts` already reads
+ * it back this same way. Found missing here by lore's own review, fingerprint
+ * b1030112: this file's own header claims "usage is recorded per session, so what it
+ * cost is answerable afterwards" as one of propose's stated money bounds, and it was
+ * false on exactly the path where the spend is real and highest — measured
+ * 2026-08-09, two 45-minute failed attempts against an exhausted plan that the
+ * trailing-usage read as zero.
+ */
+function recordFailedUsage(store: Store, repoId: string, tier: string, model: string | undefined, e: unknown): void {
+  const spent = (e as { spent?: { input: number; cached: number; output: number; cost: number } }).spent;
+  if (spent === undefined) return;
+  store.recordUsage({
+    repoId,
+    tier,
+    ...(model === undefined ? {} : { model }),
+    inputTokens: spent.input,
+    cachedTokens: spent.cached,
+    outputTokens: spent.output,
+    costUsd: spent.cost,
+    // The row says the call did NOT succeed, so a reader cannot mistake recovered
+    // spend for a completed proposal or critique.
+    outcome: "failed",
+  });
+}
+
 export async function propose(deps: ProposeDeps, input: ProposeInput): Promise<ProposeResult> {
   // THIS USED TO REFUSE WHILE ANY REVIEW WAS IN FLIGHT, and does not since 2026-08-13 —
   // Vany's call, made while waiting on exactly that refusal. The rule was written when
@@ -207,6 +244,7 @@ export async function propose(deps: ProposeDeps, input: ProposeInput): Promise<P
       });
       idea = r.items[0];
     } catch (e) {
+      recordFailedUsage(deps.store, deps.repoId, `propose:${lens}`, proposer.model, e);
       // A lens that could not run is NEVER simply absent from the document. That is
       // INV-1's shape: a vantage that did not look must not read as a vantage that saw
       // nothing worth changing.
@@ -278,6 +316,7 @@ export async function propose(deps: ProposeDeps, input: ProposeInput): Promise<P
         },
       );
     } catch (e) {
+      recordFailedUsage(deps.store, deps.repoId, `propose-critic:${lens}`, critic.model, e);
       screenedAll.push({
         ...idea,
         contradictedBy: `${idea.contradictedBy} — NOT CRITICISED: the critic (${critic.id}) failed: ${

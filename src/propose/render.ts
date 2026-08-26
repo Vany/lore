@@ -98,7 +98,14 @@ export function renderProposals(
   let n = 1;
   n = section(
     "Appraise these",
-    "Survived a critic from a different vendor, in scope, and not already decided.",
+    // NOT a blanket "survived a critic" — found by lore's own review, fingerprint
+    // 1efe9c5f: an uncriticised proposal (no second vendor configured, or the
+    // budget ran out first) has no demotion of its own and lands here too, marked
+    // only on ITS OWN entry's "Argued against by" line, not in this note. The old
+    // wording asserted cross-vendor challenge for every item in the section a
+    // reader is most likely to skim and trust.
+    "In scope and not already decided. Most survived a critic from a different vendor — check each " +
+      "entry's own \"Argued against by\" line for a NOT CRITICISED marker before trusting that one did.",
     survived,
     n,
   );
