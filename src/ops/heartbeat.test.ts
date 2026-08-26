@@ -536,6 +536,73 @@ describe("the beat sends the conditions that had no caller", () => {
     stop();
     expect(sent.filter((x) => x.condition.startsWith("backup"))).toStrictEqual([]);
   });
+
+  // ae4dc75d, found by lore's own review: both replica PAGE conditions were
+  // unlatched, the identical shape `pagedUnreadable` was already fixed for two
+  // conditions up. A litestream outage can last hours; this used to page every
+  // 60s for as long as it did — the channel guarding the product itself.
+  it("pages ONCE for a missing replica, not on every beat", async () => {
+    const backupDir = join(dir, "empty-backup");
+    mkdirSync(backupDir, { recursive: true });
+    const stop = startHeartbeat(store, cfg({ backupDir, intervalMs: 20, replicaGraceMs: 0 }), alerter);
+    await until(() => sent.some((x) => x.condition === "backup replica missing"));
+    // Long enough for many more beats at 20ms.
+    await new Promise((r) => setTimeout(r, 300));
+    stop();
+    expect(sent.filter((x) => x.condition === "backup replica missing")).toHaveLength(1);
+  });
+
+  it("pages ONCE for a replica behind the database, not on every beat", async () => {
+    const backupDir = replicaAt(REPLICA_BEHIND_SEC + 600);
+    wroteAgo(0);
+    const stop = startHeartbeat(store, cfg({ backupDir, intervalMs: 20 }), alerter);
+    await until(() => sent.some((x) => x.condition === "backup replica behind the database"));
+    await new Promise((r) => setTimeout(r, 300));
+    stop();
+    expect(sent.filter((x) => x.condition === "backup replica behind the database")).toHaveLength(1);
+  });
+});
+
+// 452c4a7a, found by lore's own review: the queue-depth ticket was unlatched too,
+// in the same function as the other three conditions this review fixed for exactly
+// this reason. A genuine CPU-bound backlog (the condition's own words: "T0 is the
+// bottleneck") can sit above the threshold for hours.
+describe("queue depth sustained", () => {
+  /** N reviews, each with one enqueued job — the queue depth that counts them. */
+  let queuedCalls = 0;
+  function queued(n: number): void {
+    queuedCalls += 1;
+    for (let i = 0; i < n; i++) {
+      const id = `q${String(queuedCalls)}-${String(i)}`;
+      store.createReview({
+        id, repoId: store.upsertRepo(id, `git@x:${id}.git`).id, principal: "p",
+        branch: `b-${id}`, intoRef: "main", ticket: "t", type: "code-arch", state: "running",
+        ladder: initialState(),
+      });
+      store.enqueue(id, "fast");
+    }
+  }
+
+  it("sends the ticket ONCE, not on every beat, while depth is unchanged", async () => {
+    queued(1);
+    const stop = startHeartbeat(store, cfg({ intervalMs: 20, queueWarnDepth: 1 }), alerter);
+    await until(() => sent.some((a) => a.condition === "queue depth sustained"));
+    await new Promise((r) => setTimeout(r, 300));
+    stop();
+    expect(sent.filter((a) => a.condition === "queue depth sustained")).toHaveLength(1);
+  });
+
+  // Latched on the COUNT, exactly like toldUncollected: a WORSE backlog is new
+  // information — "T0 is the bottleneck" said louder — and must speak again.
+  it("speaks again when the backlog gets WORSE", async () => {
+    queued(1);
+    const stop = startHeartbeat(store, cfg({ intervalMs: 20, queueWarnDepth: 1 }), alerter);
+    await until(() => sent.filter((a) => a.condition === "queue depth sustained").length >= 1);
+    queued(1); // now 2 claimable jobs
+    await until(() => sent.filter((a) => a.condition === "queue depth sustained").length >= 2);
+    stop();
+    expect(sent.filter((a) => a.condition === "queue depth sustained")).toHaveLength(2);
+  });
 });
 
 // THE HALF OF THE DISK QUESTION THAT IS OURS.

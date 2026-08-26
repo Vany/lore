@@ -68,12 +68,87 @@ describe("the deployment's own shape", () => {
     ]);
     expect(configView(env({ LORE_TIERS: subs, LORE_ALLOW_METERED: "0" })).summary).toMatch(/never money/);
 
+    // A tier POOLED onto a metered route: gated by the flag, exactly as before.
+    const pooled = JSON.stringify({
+      models: { GLM: ["openrouter/z-ai/glm-5.2"] },
+      tiers: [
+        { id: "t0", kind: "deterministic", stage: "fast" },
+        { id: "t1", kind: "model", model: "GLM", stage: "fast" },
+      ],
+    });
+    expect(configView(env({ LORE_TIERS: pooled, LORE_ALLOW_METERED: "1" })).summary).toMatch(/costs money/);
+    expect(configView(env({ LORE_TIERS: pooled, LORE_ALLOW_METERED: "0" })).summary).toMatch(/REFUSED/);
+  });
+
+  /**
+   * 60dcf7a5, found by lore's own review: a LITERAL model id (not a pool nickname) on
+   * an operator-written ladder is exempt from LORE_ALLOW_METERED entirely
+   * (`exemptLiteral`, D-117 — "configuring openrouter/x IS the operator switching it
+   * on"). The summary used to say "REFUSED" for this exact shape under
+   * ALLOW_METERED=0, while the tier ran and billed every round regardless — the one
+   * page built to answer "will this cost me money" giving the opposite answer.
+   */
+  it("says a literal paid model pays regardless of the flag, not that it is refused", () => {
     const paid = JSON.stringify([
       { id: "t0", kind: "deterministic", stage: "fast" },
       { id: "t1", kind: "model", model: "openrouter/z-ai/glm-5.2", stage: "fast" },
     ]);
-    expect(configView(env({ LORE_TIERS: paid, LORE_ALLOW_METERED: "1" })).summary).toMatch(/costs money/);
-    expect(configView(env({ LORE_TIERS: paid, LORE_ALLOW_METERED: "0" })).summary).toMatch(/REFUSED/);
+    const view = configView(env({ LORE_TIERS: paid, LORE_ALLOW_METERED: "0" }));
+    expect(view.summary, "must not claim the route is refused when it is exempt").not.toMatch(/REFUSED/);
+    expect(view.summary).toMatch(/regardless of LORE_ALLOW_METERED/);
+    expect(view.ladder.find((l) => l.tier === "t1")?.exempt).toBe(true);
+  });
+
+  /**
+   * 60dcf7a5, found by lore's own review: a tier's `routes` came only from its
+   * PRIMARY model — a free pooled primary with a metered FALLBACK read `metered:
+   * false`, so the summary said "costs coverage, never money" for the exact
+   * deployed shape (board.test.ts) that bills on every quota outage under
+   * LORE_ALLOW_METERED=1 (D-109 walks the fallback chain whenever it is set).
+   */
+  it("counts a metered FALLBACK even when the primary is free", () => {
+    const tiers = JSON.stringify([
+      { id: "t0", kind: "deterministic", stage: "fast" },
+      {
+        id: "t1", kind: "model", model: "zai-coding-plan/glm-5.3",
+        fallback: ["openrouter/z-ai/glm-5.2"], stage: "fast",
+      },
+    ]);
+    const view = configView(env({ LORE_TIERS: tiers, LORE_ALLOW_METERED: "1" }));
+    const t1 = view.ladder.find((l) => l.tier === "t1");
+    expect(t1?.routes.some((r) => r.startsWith("openrouter/")), "the primary itself is free").toBe(false);
+    expect(t1?.fallbackRoutes).toStrictEqual(["openrouter/z-ai/glm-5.2"]);
+    expect(t1?.metered, "metered via the fallback, not the primary").toBe(true);
+    expect(view.summary, "must not claim this ladder cannot reach a paid route").toMatch(/costs money/);
+  });
+
+  /**
+   * Self-caught while fixing 60dcf7a5: the first draft of the fix checked
+   * `l.metered && l.exempt` as though exemption applied to whichever route made
+   * the tier metered — wrong, since `runRound`'s own comment says the exemption is
+   * a property of the PRIMARY alone ("A fallback is CONDITIONAL... only one of
+   * them can surprise somebody") — a fallback is always gated by
+   * LORE_ALLOW_METERED, never exempt, regardless of the primary. A tier can
+   * genuinely be BOTH at once: bills unconditionally on its exempt literal
+   * primary, AND separately gated on a metered fallback.
+   */
+  it("distinguishes an exempt-paying primary from a separately-gated fallback on the same tier", () => {
+    const tiers = JSON.stringify([
+      { id: "t0", kind: "deterministic", stage: "fast" },
+      {
+        id: "t1", kind: "model", model: "openrouter/z-ai/glm-5.2",
+        fallback: ["openrouter/moonshotai/kimi-k3"], stage: "fast",
+      },
+    ]);
+    const view = configView(env({ LORE_TIERS: tiers, LORE_ALLOW_METERED: "0" }));
+    const t1 = view.ladder.find((l) => l.tier === "t1");
+    expect(t1?.exempt, "a literal primary on an operator-written ladder is exempt").toBe(true);
+    expect(t1?.routes.some((r) => r.includes("openrouter"))).toBe(true);
+    expect(t1?.fallbackRoutes.some((r) => r.includes("openrouter"))).toBe(true);
+    // The primary bills regardless of the flag; the fallback is still gated by it
+    // and refused under ALLOW_METERED=0 — both facts belong in one honest summary.
+    expect(view.summary).toMatch(/regardless of LORE_ALLOW_METERED/);
+    expect(view.summary).toMatch(/REFUSED/);
   });
 
   // A CREDENTIAL IS NEVER RENDERED, however convenient it would be to confirm it.

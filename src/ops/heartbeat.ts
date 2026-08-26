@@ -262,6 +262,18 @@ export function startHeartbeat(store: Store, cfg: HeartbeatConfig, alerter: Aler
   /** Latched so the one permanent fault pages once, not on every beat. */
   let pagedUnreadable = false;
   /**
+   * `ae4dc75d`: found by lore's own review, the SAME shape as `pagedUnreadable` a line
+   * up, unfixed on the two conditions right beside it. A replica outage can last hours
+   * — this is the channel guarding the product itself, and a page a minute for the life
+   * of the outage is the exact wolf-crying `pagedUnreadable`'s own comment exists to
+   * name. Two latches, not one: `absent` and `behind` are different facts (`ReplicaState`
+   * is a single value, so they cannot both hold at once, but the transition between them
+   * is still worth a fresh page), and each resets the moment its own condition stops
+   * holding, so a NEW outage of either kind speaks again.
+   */
+  let pagedReplicaAbsent = false;
+  let pagedReplicaBehind = false;
+  /**
    * Latched for the same reason, and it was NOT and that was a defect worth the comment.
    *
    * The beat runs every 60s and this condition stands until a person acts, so an unlatched
@@ -284,6 +296,17 @@ export function startHeartbeat(store: Store, cfg: HeartbeatConfig, alerter: Aler
    * this whole table exists to avoid. Same count-based latch, same reasoning.
    */
   let toldNeedsHumanAgeing = 0;
+  /**
+   * `452c4a7a`: found by lore's own review — the same shape a third time in this one
+   * function. `queueWarnDepth` is a threshold a genuine CPU-bound backlog can sit
+   * above for hours (the condition's own words: "T0 is the bottleneck"), so this
+   * ticket repeated itself on every beat for the life of the backlog. Count-based,
+   * same as `toldUncollected`: a backlog getting WORSE is new information and should
+   * speak again; the same depth on the ninth minute is not. Reset once it clears
+   * below the threshold, so a later backlog is not suppressed by a stale high-water
+   * mark from hours earlier.
+   */
+  let toldQueueDepth = 0;
   let stopped = false;
   const startedAt = Date.now();
 
@@ -341,7 +364,13 @@ export function startHeartbeat(store: Store, cfg: HeartbeatConfig, alerter: Aler
       pagedUnreadable = false;
 
       if (health.queueDepth >= cfg.queueWarnDepth) {
-        await alerter.send(CONDITIONS.queueBacked(health.queueDepth));
+        if (health.queueDepth > toldQueueDepth) {
+          toldQueueDepth = health.queueDepth;
+          await alerter.send(CONDITIONS.queueBacked(health.queueDepth));
+        }
+      } else if (toldQueueDepth > 0) {
+        // The backlog cleared. Re-arm, so a fresh one speaks again.
+        toldQueueDepth = 0;
       }
 
       // The knowledge base IS the product and this device has no redundancy, so these
@@ -349,9 +378,21 @@ export function startHeartbeat(store: Store, cfg: HeartbeatConfig, alerter: Aler
       // listed the replica under "someone should look now" the whole time, and nothing
       // ever sent it — the only replica check lived in `make status`, which is a command
       // a human runs, and a page nobody is paged by is not a page.
-      if (health.replica === "absent" && !replicaGrace) await alerter.send(CONDITIONS.backupAbsent());
-      else if (health.replica === "behind") {
-        await alerter.send(CONDITIONS.backupBehind(Math.round((health.replicaBehindSec ?? 0) / 60)));
+      if (health.replica === "absent" && !replicaGrace) {
+        if (!pagedReplicaAbsent) {
+          pagedReplicaAbsent = true;
+          await alerter.send(CONDITIONS.backupAbsent());
+        }
+      } else {
+        pagedReplicaAbsent = false;
+      }
+      if (health.replica === "behind") {
+        if (!pagedReplicaBehind) {
+          pagedReplicaBehind = true;
+          await alerter.send(CONDITIONS.backupBehind(Math.round((health.replicaBehindSec ?? 0) / 60)));
+        }
+      } else {
+        pagedReplicaBehind = false;
       }
 
       // A ticket, not a page: one review parked on a question is normal, a pile of them

@@ -53,16 +53,23 @@ rather than whether each route was. It checks members now. A page nobody is page
 is not a page, and a routing table that lists a route nobody dispatches is a claim
 about monitoring that does not exist.
 
-**Ageing `needs_human` was wired unlatched — found by lore's own review
-(eb3d53ea).** `findingsUncollected`, the sibling condition below, was fixed for
-exactly this once already, with the reasoning kept in `ops/heartbeat.ts`'s own
-comment: the beat runs every 60s and a parked review can stand for days, so an
-unlatched send posts the identical ticket on every beat for as long as it lasts —
-up to 1,440 copies in a day, before the sweep even starts its own 24h clock. That
-is the wolf-crying this whole table exists to prevent, reintroduced in the
-condition right beside the one it was already fixed for. Latched on the COUNT now,
-the same way: a second review ageing past the threshold is new information and
-speaks again; the same one standing for a ninth day does not.
+**Every condition in the beat was wired unlatched at least once — found by lore's
+own review, four separate times in one function.** `findingsUncollected` was fixed
+first, with the reasoning kept in `ops/heartbeat.ts`'s own comment: the beat runs
+every 60s and the condition it reports can stand for hours or days, so an unlatched
+send posts the identical alert on every beat for as long as it lasts — up to 1,440
+copies in a day, the wolf-crying this whole table exists to prevent. Ageing
+`needs_human` (eb3d53ea) had the identical shape one condition over. Reading the
+rest of the same function with that lesson in hand then found it a further two
+places at once: the queue-depth ticket (452c4a7a — a genuine CPU-bound backlog can
+sit above the threshold for hours, "T0 is the bottleneck" by the condition's own
+words) and BOTH replica pages, absent and behind (ae4dc75d — a litestream outage
+guarding the knowledge base itself can last hours, the exact channel `pagedUnreadable`
+two lines up was already latched to protect). Every one is latched now: the two
+TICKETS (`needsHumanAgeing`, `queueBacked`) on the COUNT, so a WORSE fact speaks
+again while the same one standing does not; the two PAGES (`backupAbsent`,
+`backupBehind`) as a plain boolean, matching `pagedUnreadable`'s own shape, since a
+replica fault is binary rather than something with a meaningful "worse."
 
 | condition | why it is urgent |
 |---|---|

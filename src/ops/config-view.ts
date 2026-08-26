@@ -22,7 +22,7 @@
  * distinction to answer whether anybody had chosen the behaviour.
  */
 
-import { DEFAULT_TIERS, loadPools, loadTiers, ladderIsOperatorWritten } from "../core/ladder.ts";
+import { DEFAULT_TIERS, exemptLiteral, loadPools, loadTiers, ladderIsOperatorWritten, routesFor } from "../core/ladder.ts";
 import { allowMeteredFromEnv, isMeteredRoute } from "../core/metered.ts";
 import { MAX_OPEN_REVIEWS } from "../core/admission.ts";
 import { DEFAULT_RETENTION } from "./retention.ts";
@@ -57,8 +57,25 @@ export interface ConfigView {
     readonly tier: string;
     readonly configured: string;
     readonly routes: readonly string[];
-    /** Whether any route for this tier bills per call (D-117). */
+    /**
+     * Every concrete route this tier's OWN fallback chain can reach (`ladder.ts`'s
+     * `fallbackRoutes`, scoped to this tier) — found by lore's own review,
+     * fingerprint 60dcf7a5: a tier can be entirely free on its primary and still
+     * bill, because a round pays on the fallback whenever `LORE_ALLOW_METERED=1` walks
+     * the chain there (D-109). Omitted from `routes` before this fix, `metered`
+     * below read `false` for exactly the deployed shape this page exists to warn
+     * about — a free pooled primary with a metered fallback.
+     */
+    readonly fallbackRoutes: readonly string[];
+    /** Whether any route this tier can reach, primary or fallback, bills per call (D-117). */
     readonly metered: boolean;
+    /**
+     * Does a LITERAL model id on this tier bypass `LORE_ALLOW_METERED` entirely
+     * (D-117's `exemptLiteral`)? A person who names a specific paid route directly,
+     * on an operator-written ladder, has already chosen it — the flag gates only
+     * routes LORE would otherwise pick between (a pool, or the built-in default).
+     */
+    readonly exempt: boolean;
   }[];
   /**
    * The one sentence that answers "will an outage cost me money or coverage".
@@ -96,9 +113,19 @@ export function configView(env: NodeJS.ProcessEnv = process.env): ConfigView {
   const ladder = tiers
     .filter((t) => t.kind === "model")
     .map((t) => {
-      const named = t.model ?? "";
-      const routes = pools[named] ?? (named === "" ? [] : [named]);
-      return { tier: t.id, configured: named, routes, metered: routes.some(isMeteredRoute) };
+      // The shared resolver, not a second hand-rolled copy of it — found by lore's
+      // own review against the SAME mistake this whole session keeps finding: one
+      // thing defined twice always disagrees eventually.
+      const routes = routesFor(t, pools);
+      const fallback = (t.fallback ?? []).flatMap((f) => routesFor({ ...t, model: f }, pools));
+      return {
+        tier: t.id,
+        configured: t.model ?? "",
+        routes,
+        fallbackRoutes: fallback,
+        metered: routes.some(isMeteredRoute) || fallback.some(isMeteredRoute),
+        exempt: exemptLiteral(t, pools, source),
+      };
     });
 
   const entries: ConfigEntry[] = [
@@ -149,14 +176,48 @@ export function configView(env: NodeJS.ProcessEnv = process.env): ConfigView {
     },
   ];
 
-  const paid = ladder.filter((l) => l.metered).map((l) => l.tier);
-  const summary =
-    paid.length === 0
-      ? "No tier in this ladder can reach a route that bills per call. An outage costs coverage, never money."
+  // SPLIT BY WHETHER `LORE_ALLOW_METERED` GOVERNS THE ROUTE AT ALL — found by lore's
+  // own review, fingerprint 60dcf7a5. The original split only on `allowMetered`,
+  // which is correct for a POOLED tier and wrong for an EXEMPT literal one: D-117's own rule
+  // is that naming a paid route directly, on an operator-written ladder, is the
+  // operator switching it on regardless of the flag (`exemptLiteral`). Under
+  // ALLOW_METERED=0 the old summary told an operator "Paid routes are REFUSED" for
+  // a tier that was billing every round — the one page built to answer "will this
+  // cost me money", giving the opposite answer.
+  //
+  // EXEMPTION IS A PROPERTY OF THE PRIMARY ROUTE ONLY, never the fallback — my own
+  // first draft of this fix got that wrong, checking `l.metered` (primary OR
+  // fallback) against `l.exempt` (a fact about the primary alone) as though they
+  // shared one flag. `runRound`'s own comment on the fallback chain is explicit:
+  // "THE PRIMARY IS DELIBERATELY NOT FILTERED [when exempt]... A fallback is
+  // CONDITIONAL... only one of them can surprise somebody" — the fallback chain is
+  // filtered by `allowMetered` alone (`withoutMetered(reachable, input.allowMetered)`),
+  // with no exemption check at all, regardless of whether the tier's primary is
+  // exempt. So a tier can genuinely belong to BOTH lists at once: an exempt literal
+  // primary that bills unconditionally, with a metered fallback that is still gated.
+  const exempt = ladder.filter((l) => l.routes.some(isMeteredRoute) && l.exempt).map((l) => l.tier);
+  const gated = ladder
+    .filter((l) => (l.routes.some(isMeteredRoute) && !l.exempt) || l.fallbackRoutes.some(isMeteredRoute))
+    .map((l) => l.tier);
+
+  const exemptNote =
+    exempt.length === 0
+      ? undefined
+      : `${exempt.join(", ")} ${exempt.length === 1 ? "names" : "name"} a paid route directly and ` +
+        `${exempt.length === 1 ? "pays" : "pay"} every round regardless of LORE_ALLOW_METERED — an ` +
+        "operator-written ladder naming a specific paid route IS the operator switching it on (D-117).";
+  const gatedNote =
+    gated.length === 0
+      ? undefined
       : allowMetered
-        ? `Paid routes are ALLOWED, and ${paid.join(", ")} can reach one. An outage costs money.`
-        : `Paid routes are REFUSED, and ${paid.join(", ")} can only reach one. An outage costs those tiers, ` +
-          "and the verdict is reported as partial rather than clean.";
+        ? `Paid fallback routes are ALLOWED, and ${gated.join(", ")} can reach one on an outage. That outage costs money.`
+        : `Paid fallback routes are REFUSED, and ${gated.join(", ")} can only reach one. An outage costs those ` +
+          "tiers, and the verdict is reported as partial rather than clean.";
+
+  const summary =
+    exemptNote === undefined && gatedNote === undefined
+      ? "No tier in this ladder can reach a route that bills per call. An outage costs coverage, never money."
+      : [exemptNote, gatedNote].filter((s) => s !== undefined).join(" ");
 
   return { entries, ladder, summary };
 }
