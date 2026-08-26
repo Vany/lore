@@ -900,6 +900,31 @@ describe("tier runs are opened before the tier is asked anything", () => {
     expect(store.lastT0("rev1")?.interrupted).toBe(false);
   });
 
+  // Fingerprint 1f8b0b2d, found by lore's own review of the fix directly above:
+  // it carried `interrupted` across exactly ONE reuse hop, because a reusing
+  // round always closes its OWN row `reused` (D-102 — the operator board must
+  // see that, not `interrupted`), so the SECOND consecutive reuse read the
+  // first reuse's own row, whose outcome says `reused`, never the `interrupted`
+  // truth two rows back. D-92 measured `reused` at roughly a fifth of all
+  // rounds, so a chain longer than one is the ordinary case, not an edge one.
+  it("carries interrupted status through a chain of several reuse rounds", () => {
+    const first = store.openTierRun("rev1", "t0", 1, new Date().toISOString());
+    store.closeTierRun(first, "interrupted", ["tsc: killed"], "treehash1");
+    for (let round = 2; round <= 4; round++) {
+      const id = store.openTierRun("rev1", "t0", round, new Date().toISOString());
+      store.closeTierRun(id, "reused", ["tsc: killed"], "treehash1");
+    }
+    expect(store.lastT0("rev1")?.interrupted, "three reuse rounds deep, still true").toBe(true);
+  });
+
+  it("a reuse chain under a genuinely clean run stays false", () => {
+    const first = store.openTierRun("rev1", "t0", 1, new Date().toISOString());
+    store.closeTierRun(first, "clean", [], "treehash1");
+    const id = store.openTierRun("rev1", "t0", 2, new Date().toISOString());
+    store.closeTierRun(id, "reused", [], "treehash1");
+    expect(store.lastT0("rev1")?.interrupted).toBe(false);
+  });
+
   // `roundStartedAt` feeds `check_back_after_ms`, which is conditioned on how long the
   // round has run and compared against the CURSOR TIER's latencies. It used to answer
   // with any open row — and during T0 the only open row is T0's, while the cursor

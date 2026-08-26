@@ -1113,14 +1113,30 @@ export class Store {
      * `unavailableForTier` already takes one field up, chosen over `true` because an
      * old row is far more likely to be a genuine clean run than a killed one, and
      * this call site's only use of it is to WITHHOLD trust, never to grant it.
+     *
+     * WALKS BACK PAST ANY NUMBER OF `reused` ROWS to the outcome underneath them —
+     * found by lore's own review of the fix directly above, fingerprint 1f8b0b2d:
+     * a reusing round always closes its OWN row `reused` (D-102 — the operator
+     * board must see that, not `interrupted`), so `interrupted` carried only ONE
+     * hop: the SECOND consecutive reuse read the first reuse's own row, whose
+     * outcome says `reused`, not the `interrupted` truth two rows back. D-92
+     * measured `reused` at roughly a fifth of all rounds, so a chain longer than
+     * one is the ordinary case, not an edge one. `unavailable`/`unavailableForTier`
+     * /`engines` do not need this — a reuse round already copies them forward
+     * verbatim (see the `t0 = {...}` reuse branch in reviewer/review.ts) — only
+     * `outcome`, which a reuse round deliberately overwrites for the board.
      */
     readonly interrupted: boolean;
   } | undefined {
     const row = this.db
       .prepare(
-        `SELECT tree_hash, unavailable, unavailable_for_tier, engines, outcome FROM tier_run
-         WHERE review_id = ? AND tier = 't0' AND finished_at IS NOT NULL AND tree_hash IS NOT NULL
-         ORDER BY id DESC LIMIT 1`,
+        `SELECT tree_hash, unavailable, unavailable_for_tier, engines,
+           (SELECT t2.outcome FROM tier_run t2
+            WHERE t2.review_id = t1.review_id AND t2.tier = 't0' AND t2.id <= t1.id AND t2.outcome != 'reused'
+            ORDER BY t2.id DESC LIMIT 1) AS underlying_outcome
+         FROM tier_run t1
+         WHERE t1.review_id = ? AND t1.tier = 't0' AND t1.finished_at IS NOT NULL AND t1.tree_hash IS NOT NULL
+         ORDER BY t1.id DESC LIMIT 1`,
       )
       .get(reviewId) as Record<string, string | null> | undefined;
     const treeHash = row?.["tree_hash"];
@@ -1137,7 +1153,7 @@ export class Store {
       unavailable: client,
       unavailableForTier: forTier,
       engines: row?.["engines"] ?? undefined,
-      interrupted: row?.["outcome"] === "interrupted",
+      interrupted: row?.["underlying_outcome"] === "interrupted",
     };
   }
 

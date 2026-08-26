@@ -2750,9 +2750,18 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // the very thing the fix fixed. `codeMoved` still guards: a fix that did not touch
   // the finding's code settles nothing.
   for (const o of ranMembers) for (const fp of o.preFixEmitted) settleRaised.delete(fp);
+  // `hold.lastT0.interrupted`, NOT the round-start `t0.interrupted` — found by
+  // lore's own review, fingerprint 5e8a675e: `codeMoved` (inside settleFixed)
+  // already reads the LIVE worktree, which D-107's boundary machinery can have
+  // moved past `t0`'s own round-start snapshot after a held fix landed and
+  // `hold.lastT0` was refreshed by a fresh, boundary-triggered t0 run. Passing
+  // the stale snapshot here would judge that fresher tree's findings by an
+  // interrupted-ness reading that describes a DIFFERENT, earlier t0 read.
+  // `hold.lastT0` starts equal to `t0ForTier` and is the one value every
+  // boundary keeps current for exactly this purpose (see `t0Seen`, above).
   const fixed = await settleFixed(
     store, reviewId, worktree, tiers, strongest.member, [...open, ...rungFixCandidates], settleRaised, answeredOtherwise, round,
-    t0.interrupted,
+    hold.lastT0.interrupted,
   );
 
   // 7. A defect that keeps recurring is a missing rule, not N unrelated bugs.
