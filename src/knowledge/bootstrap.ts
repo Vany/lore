@@ -15,6 +15,7 @@
 import { CLAIM_MAX } from "../core/finding.ts";
 import { concreteRoute, loadHelper, loadPools } from "../core/ladder.ts";
 import { DEFAULT_TIERS, type Tier } from "../core/ladder.ts";
+import { resolveInto } from "../git/diff.ts";
 import type { ReviewerLike } from "../reviewer/opencode.ts";
 import type { Store } from "../store/store.ts";
 import { detectAndRecord } from "./conflict.ts";
@@ -65,6 +66,17 @@ export async function bootstrap(opts: {
   /** Omit to ingest documents only — no model call, no cost. */
   reviewer?: ReviewerLike;
   tier?: Tier;
+  /**
+   * The FIRST review's own `into`, when it has one (D-130 folder mode does not).
+   *
+   * lore-ok[c5df90ef]: found real by lore's own review — bootstrap runs from the
+   * worktree of the repo's first review, exactly the shape `53969ab8` closed for
+   * every ordinary round, and this call site kept reading the branch under review
+   * regardless. Resolved and passed to `ingestDocs` as `ref` the same way
+   * `review.ts` does; omitted (undefined or unresolvable) reads the worktree, which
+   * is correct when there genuinely is no base to defend against.
+   */
+  intoRef?: string | undefined;
 }): Promise<BootstrapResult> {
   // The cheap tier. This is a survey, not a judgement — paying the top tier to
   // describe a directory structure would be the same mistake as paying a model
@@ -95,6 +107,11 @@ export async function bootstrap(opts: {
   const tier = named === undefined || route === undefined ? undefined : { ...named, model: route };
   const ask = opts.reviewer?.askFor?.bind(opts.reviewer);
 
+  // lore-ok[c5df90ef]: resolved BEFORE the call, same as review.ts's diff-mode round —
+  // an unresolvable `intoRef` reads the worktree (the only option left), not silently;
+  // a genuinely absent one (folder mode's first review) has no base to defend against.
+  const into = opts.intoRef === undefined ? undefined : await resolveInto(opts.worktree, opts.intoRef);
+
   // Screened HERE too, rather than left for the next review to redo. This is the first
   // review of a repository, so it is the ingest that writes the whole base — leaving it
   // unscreened would mean the first review, the one with no other memory to fall back
@@ -112,6 +129,7 @@ export async function bootstrap(opts: {
             spent: (u) => opts.store.recordUsage(screenUsage(u, opts.repoId)),
           }),
         }),
+    ...(into === undefined ? {} : { ref: into }),
   });
 
   let factsFromCode = 0;

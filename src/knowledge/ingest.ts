@@ -457,14 +457,18 @@ export interface IngestOptions {
    * Read documents as `into` has them, not as the worktree does — a resolved commit
    * (`resolveInto`/`baseCommitFor`, `git/diff.ts`), never a raw ref string (D-61).
    *
-   * lore-ok[53969ab8]: the gap this closes — found by lore's own review — is that a
-   * review reads its OWN worktree, which for `review.ts`'s caller IS the branch under
-   * review: a branch could edit its own CLAUDE.md and have the SAME review trust the
-   * new rule as a team decision while judging that branch's code, with none of the
+   * lore-ok[53969ab8,c5df90ef]: the gap this closes — found by lore's own review — is
+   * that a review reads its OWN worktree, which for `review.ts`'s caller IS the branch
+   * under review: a branch could edit its own CLAUDE.md and have the SAME review trust
+   * the new rule as a team decision while judging that branch's code, with none of the
    * "the tier decides" ceremony D-10 requires of a `knowledge_teach`'d policy cited in
    * an appeal — the screen (`screen.ts`) only judges rule SHAPE, never provenance.
-   * Omitted, this reads the worktree exactly as before — `bootstrap.ts`'s one-shot
-   * survey has no branch/base distinction to defend, and passes nothing.
+   * `bootstrap.ts`'s one-shot survey has the SAME hole: it runs from the first
+   * review's own worktree too, so a repo's very first review from an untrusted branch
+   * bootstrapped its entire initial knowledge base from that branch (c5df90ef —
+   * `worker.ts` has `review.intoRef` in hand at the bootstrap call site and now passes
+   * it through). Omitted entirely (no review to defend against — folder mode, or a
+   * caller with no base at all), this reads the worktree exactly as before.
    */
   readonly ref?: string;
 }

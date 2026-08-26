@@ -373,6 +373,10 @@ export class Worker {
         repoId: review.repoId,
         worktree,
         reviewer: this.reviewer,
+        // lore-ok[c5df90ef]: was omitted — found by lore's own review. `review.intoRef`
+        // is already on the row loaded above; bootstrap needs it for the same reason
+        // every ordinary round does (D-10 via ingestDocs, `53969ab8`).
+        intoRef: review.intoRef,
       }).catch((e: unknown) => {
         // Never fatal: a review without a bootstrapped memory is a worse review,
         // not an impossible one. But it is said out loud rather than swallowed.
