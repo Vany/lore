@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { Store } from "../store/store.ts";
+import { NO_LIMIT, Store } from "../store/store.ts";
 import { relevantTo } from "./enrich.ts";
 import { EXTRACTOR_VERSION, UNSCREENED, extractRules, ingestDocs, rank, type Screen } from "./ingest.ts";
 
@@ -430,8 +430,15 @@ describe("a document past the 400-document read cap is not mistaken for a delete
     const result = await ingestDocs(store, repoId, dir);
 
     expect(result.documents, "the read cap itself must still hold").toBeLessThanOrEqual(400);
+    // Uncapped (aa57c0f2): this checks whether ONE SPECIFIC row is still live, not
+    // whether it is among the most-recent N — the 400 filler documents this same
+    // fixture just ingested are all newer than the seeded row, so a capped,
+    // recency-ordered query would miss it for a reason unrelated to what this test
+    // is checking.
     expect(
-      store.knowledgeFor(repoId).some((k) => k.provenance === "docs/adr/zzz-late.md" && k.statement.includes("released early")),
+      store
+        .knowledgeFor(repoId, undefined, NO_LIMIT)
+        .some((k) => k.provenance === "docs/adr/zzz-late.md" && k.statement.includes("released early")),
       "a document past the read cap still exists on disk and must not be swept as deleted",
     ).toBe(true);
     store.close();

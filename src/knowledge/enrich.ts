@@ -14,7 +14,7 @@
 import { normalizeClaim } from "../core/finding.ts";
 import { jaccard, scopesOverlap, subjectTokens } from "./conflict.ts";
 import { rank } from "./ingest.ts";
-import type { KnowledgeItem, PriorFinding, RecordedFinding, Store } from "../store/store.ts";
+import { NO_LIMIT, type KnowledgeItem, type PriorFinding, type RecordedFinding, type Store } from "../store/store.ts";
 
 export interface Enrichment {
   /** How many times this defect has been raised in this repo before, ever. */
@@ -90,7 +90,11 @@ function sameDefectPriors(store: Store, repoId: string, f: RecordedFinding): rea
 }
 
 function relatedTo(store: Store, repoId: string, f: RecordedFinding): readonly KnowledgeItem[] {
-  const items = store.knowledgeFor(repoId, undefined, 1000);
+  // lore-ok[aa57c0f2]: was capped at 1000 with no ordering — found by lore's own
+  // review. This scores and picks the top 5 candidates itself, so truncating the
+  // POOL before scoring risks silently excluding the most relevant item in a repo
+  // past the cap; no cap here lets the scoring do that job instead of a row count.
+  const items = store.knowledgeFor(repoId, undefined, NO_LIMIT);
   const needle = subjectTokens(`${f.claim} ${f.file}`);
 
   const scored = items
@@ -178,7 +182,12 @@ export function relevantTo(
   changedFiles: readonly string[],
   limit = 60,
 ): readonly KnowledgeItem[] {
-  const all = store.knowledgeFor(repoId, undefined, 1000);
+  // lore-ok[aa57c0f2]: was capped at 1000 with no ordering — found by lore's own
+  // review. `rank().slice(0, limit)` below already does the real narrowing (taught
+  // outranks inferred, then confidence, then recency); truncating the candidate pool
+  // BEFORE that by an arbitrary row count could drop the most relevant rule in a
+  // repo past the cap before ranking ever saw it.
+  const all = store.knowledgeFor(repoId, undefined, NO_LIMIT);
   // lore-ok[372b6bf0,f9559e98]: was a raw `startsWith`, found wrong by lore's own
   // review — see `scopesOverlap`'s own docs (`conflict.ts`), which this now shares.
   // `"src/payroll/adapter.ts".startsWith("src/pay")` is true, so a rule scoped to

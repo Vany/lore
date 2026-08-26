@@ -14,7 +14,7 @@
  * SPEC: spec/knowledge.md §7
  */
 
-import type { KnowledgeItem, Store } from "../store/store.ts";
+import { NO_LIMIT, type KnowledgeItem, type Store } from "../store/store.ts";
 
 /**
  * Words that flip a statement's polarity.
@@ -60,10 +60,20 @@ export interface ConflictCandidate {
  * picking one. `findConflicts` skips those rather than guessing, which is the right
  * trade here: a missed conflict leaves two rules to be caught later, while a false one
  * stops a review and demands a person.
+ *
+ * lore-ok[a0f27140]: found real by lore's own review — the split below used to omit
+ * `.`, on the reasoning "the failure was WITHIN one sentence". True of the ORIGINAL
+ * incident, but not a reason to exclude periods: "The gateway must never retry
+ * captures. Retries must not double-charge customers." is the identical rule as the
+ * semicolon-joined version, and without a period boundary the two negations in that
+ * one undivided string cancel to positive — the exact same compounding bug, reached
+ * by writing two sentences instead of one clause-joined statement. A sentence break
+ * is a proposition boundary at least as clear as "and"/"but"/"while" already were.
  */
 export function polarity(statement: string): number {
-  // Clause boundaries, not sentence boundaries: the failure was WITHIN one sentence.
-  const clauses = statement.split(/[,;:—]|\band\b|\bbut\b|\bwhile\b/i).filter((c) => c.trim().length > 0);
+  // Clause AND sentence boundaries — the failure the comment above describes recurs
+  // across either, so both end a proposition here.
+  const clauses = statement.split(/[,;:.—]|\band\b|\bbut\b|\bwhile\b/i).filter((c) => c.trim().length > 0);
   const polarities = new Set(
     clauses.map((c) => ((c.match(NEGATIONS)?.length ?? 0) % 2 === 0 ? 1 : -1)),
   );
@@ -171,7 +181,10 @@ export interface ConflictReport {
  * *seen*; deciding it needs someone who can read the code.
  */
 export function detectAndRecord(store: Store, repoId: string): ConflictReport {
-  const live = store.knowledgeFor(repoId, undefined, 1000);
+  // lore-ok[aa57c0f2]: was capped at 1000 with no ordering — found by lore's own
+  // review. Conflict detection needs EVERY live row to find every pair; a sampled
+  // 1000 could miss a real contradiction just because one side arrived 1001st.
+  const live = store.knowledgeFor(repoId, undefined, NO_LIMIT);
   const candidates = findConflicts(live);
   const already = new Set(store.openConflicts(repoId).map((c) => `${c.left}|${c.right}`));
 
@@ -199,7 +212,11 @@ export function renderConflicts(store: Store, repoId: string): string {
   const open = store.openConflicts(repoId);
   if (open.length === 0) return "";
 
-  const byId = new Map(store.knowledgeFor(repoId, undefined, 1000).map((k) => [k.id, k]));
+  // lore-ok[aa57c0f2]: was capped at 1000 with no ordering, so a conflict naming an
+  // id past the window rendered "(retired)" for a rule that was very much live —
+  // the same misleading-render shape the 592cd49f fix closed, reached through a row
+  // count instead of a retirement.
+  const byId = new Map(store.knowledgeFor(repoId, undefined, NO_LIMIT).map((k) => [k.id, k]));
   const lines: string[] = [
     "",
     "CONTRADICTIONS TO RESOLVE",

@@ -14,6 +14,7 @@
 import { describe, expect, it } from "vitest";
 import { CODE_ARCH, SECURITY } from "../core/review-type.ts";
 import type { Tier } from "../core/ladder.ts";
+import type { KnowledgeItem } from "../store/store.ts";
 import { OUTPUT_CONTRACT, continuedPrompt, proseShare, reviewPrompt } from "./prompts.ts";
 
 const TIER: Tier = { id: "t1", kind: "model", model: "v/m", stage: "fast" };
@@ -181,6 +182,47 @@ describe("the finding is addressed to the author", () => {
 
   it("asks for what was found, not for instructions", () => {
     expect(flat(OUTPUT_CONTRACT)).toMatch(/what you would say to the author's face/i);
+  });
+});
+
+// Found by lore's own review (70b88761): a bootstrap-derived `fact` — a model's own,
+// unconfirmed reading of whichever branch got a repo's first review — used to get the
+// exact same "treat these as this team's decisions, not suggestions" framing as a
+// taught rule. A branch could plant a plausible-but-false architecture comment and
+// have the survey launder it into what every future review trusts as settled.
+describe("a bootstrap fact is not a team decision", () => {
+  const rule: KnowledgeItem = {
+    id: "k1", repoId: "r", kind: "rule", source: "taught",
+    statement: "Payments must retry on timeout", why: undefined, path: undefined,
+    cwe: undefined, provenance: undefined, sourceBlob: undefined, confidence: 1,
+    verifiedAt: "2026-08-01T00:00:00.000Z",
+  };
+  const fact: KnowledgeItem = {
+    id: "k2", repoId: "r", kind: "fact", source: "derived",
+    statement: "this module is invoked only by the scheduler", why: undefined, path: undefined,
+    cwe: undefined, provenance: "bootstrap:src/x.ts", sourceBlob: undefined, confidence: 0.5,
+    verifiedAt: "2026-08-01T00:00:00.000Z",
+  };
+
+  it("keeps a taught rule under 'treat these as this team's decisions'", () => {
+    const p = flat(promptAt(0, 3, CODE_ARCH, { knowledge: [rule] }));
+    expect(p).toMatch(/team's decisions, not suggestions[\s\S]*Payments must retry on timeout/);
+  });
+
+  it("puts a bootstrap fact under an explicit unverified caveat, not the team-decisions framing", () => {
+    const p = flat(promptAt(0, 3, CODE_ARCH, { knowledge: [fact] }));
+    expect(p).toMatch(/UNVERIFIED, FROM ONE BRANCH'S FIRST READING/);
+    expect(p).toMatch(/not a team decision/);
+    expect(p, "a fact must not appear in the team-decisions block").not.toMatch(
+      /team's decisions, not suggestions[\s\S]*invoked only by the scheduler/,
+    );
+  });
+
+  it("shows both blocks when a review has both kinds of knowledge", () => {
+    const p = flat(promptAt(0, 3, CODE_ARCH, { knowledge: [rule, fact] }));
+    expect(p).toMatch(/Payments must retry on timeout/);
+    expect(p).toMatch(/invoked only by the scheduler/);
+    expect(p).toMatch(/UNVERIFIED, FROM ONE BRANCH'S FIRST READING/);
   });
 });
 

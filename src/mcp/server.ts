@@ -30,7 +30,7 @@ import { enrich, renderEnrichment } from "../knowledge/enrich.ts";
 import { paceFor, paceNote } from "../ops/pace.ts";
 import { alreadyAnswered, codeMoved } from "../reviewer/review.ts";
 import { buildVex, findingsNeedingTriage, renderVex } from "../security/vex.ts";
-import { isSettled, type RecordedFinding, type Store } from "../store/store.ts";
+import { NO_LIMIT, isSettled, type RecordedFinding, type Store } from "../store/store.ts";
 import type { Principal } from "./auth.ts";
 import { REVIEW_PROMPT_TEXT, RESOURCE_DOCS, TOOL_DOCS } from "./docs.ts";
 import { reviewUri } from "./events.ts";
@@ -991,7 +991,11 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           ...(() => {
             if (review.state !== "needs_human") return {};
             const open = store.openConflicts(review.repoId);
-            const byId = new Map(store.knowledgeFor(review.repoId, undefined, 1000).map((k) => [k.id, k]));
+            // lore-ok[aa57c0f2]: was capped at 1000 with no ordering — found by
+            // lore's own review. A conflict naming an id past that window rendered
+            // "(retired)" for a rule that was very much live, the 592cd49f bug's
+            // other door; resolving every open conflict's id needs every live row.
+            const byId = new Map(store.knowledgeFor(review.repoId, undefined, NO_LIMIT).map((k) => [k.id, k]));
             const questions = open.map((c) => ({
               left: { id: c.left, statement: byId.get(c.left)?.statement ?? "(retired)", source: byId.get(c.left)?.provenance },
               right: { id: c.right, statement: byId.get(c.right)?.statement ?? "(retired)", source: byId.get(c.right)?.provenance },
@@ -1705,7 +1709,10 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       // was never given, and guessing is exactly what lore's own doctrine forbids.*
       // Being told to escalate something unnamed is worse than not being told, because
       // the only ways forward are to invent the question or to drop it.
-      const byId = new Map(store.knowledgeFor(who.repoId, undefined, 1000).map((k) => [k.id, k]));
+      // lore-ok[aa57c0f2]: was capped at 1000 with no ordering — found by lore's own
+      // review, same fix as the identical byId map above: resolving every open
+      // conflict's id needs every live row, not a sampled window.
+      const byId = new Map(store.knowledgeFor(who.repoId, undefined, NO_LIMIT).map((k) => [k.id, k]));
       const questions = needsHuman.length === 0
         ? []
         : store.openConflicts(who.repoId).map((c) => ({

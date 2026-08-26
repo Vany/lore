@@ -403,6 +403,15 @@ propagates. Flagged rather than silently assumed solved, found by lore's own
 review: this section used to describe the mechanism as standing behaviour, which
 it is not.
 
+A separate, narrower guard exists for the moment a `fact` is *written*, not for its
+staleness afterward: `bootstrap` reads whichever branch happens to be a repo's first
+review, so its facts are a model's own, unconfirmed reading of ONE branch — and the
+prompt says so. `knowledgeBlock` (`reviewer/prompts.ts`) renders `kind: "fact"` under
+an explicit "unverified, not a team decision" caveat, never folded into "treat these
+as this team's decisions" the way a `rule` is (found by lore's own review, 70b88761).
+Neither guard makes the other unnecessary: the caveat says a fact was never
+confirmed; staleness (above) is about a fact that WAS true and stopped being.
+
 ## 5. Use
 
 **At review time** — findings are enriched with their history, and **the history has to

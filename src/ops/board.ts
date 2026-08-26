@@ -23,7 +23,7 @@ import { isCoverageLoss } from "../core/checks-skipped.ts";
 import { isTerminal, type ReviewState } from "../core/review-state.ts";
 import type { GateState } from "../reviewer/gate.ts";
 import { spendByTier, startOfDayIso } from "./spend.ts";
-import type { Store } from "../store/store.ts";
+import { NO_LIMIT, type Store } from "../store/store.ts";
 
 type Row = Record<string, string | number | null>;
 
@@ -465,7 +465,10 @@ function questionsFor(
 ): BoardReview["openQuestions"] {
   const cached = memo.get(repoId);
   if (cached !== undefined) return cached;
-  const byId = new Map(store.knowledgeFor(repoId, undefined, 1000).map((k) => [k.id, k]));
+  // lore-ok[aa57c0f2]: was capped at 1000 with no ordering — found by lore's own
+  // review, same fix as the identical byId maps in mcp/server.ts: resolving every
+  // open conflict's id needs every live row, not a sampled window.
+  const byId = new Map(store.knowledgeFor(repoId, undefined, NO_LIMIT).map((k) => [k.id, k]));
   const out = store.openConflicts(repoId).map((c) => ({
     repoId,
     left: {

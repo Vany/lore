@@ -168,6 +168,17 @@ export async function bootstrap(opts: {
   let factsFromCode = 0;
   if (opts.reviewer !== undefined) {
     if (tier !== undefined) {
+      // lore-ok[70b88761]: DELIBERATELY reads `opts.worktree` (the branch under
+      // review), not `into` — found by lore's own review, which is right that a
+      // branch could plant a plausible-but-false architecture comment here for the
+      // survey to launder into a trusted `fact`. Not fixed the way `ingestDocs` was:
+      // Vany's call was to keep the survey reading the branch (checking out `into`
+      // separately is a real new operational cost; skipping the survey whenever
+      // `into` exists would silently disable it for the common diff-mode case) and
+      // instead stop the resulting facts from being presented as settled — see
+      // `knowledgeBlock` in reviewer/prompts.ts, which now renders `kind: "fact"`
+      // under an explicit "unverified, not a team decision" caveat rather than
+      // folding it into "treat these as this team's decisions."
       const result = await opts.reviewer.review(tier, ARCHITECTURE_PROMPT, opts.worktree);
       for (const f of result.findings) {
         opts.store.addKnowledge({

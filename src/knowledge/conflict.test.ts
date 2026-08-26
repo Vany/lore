@@ -232,3 +232,22 @@ describe("polarity does not cancel across independent clauses", () => {
     expect(found).toHaveLength(1);
   });
 });
+
+// Found by lore's own review (a0f27140): the split above used to omit `.`, reasoned
+// as "the failure was WITHIN one sentence" — true of the ORIGINAL incident above, but
+// not a reason to exclude periods. The identical rule written as two sentences hits
+// the same compounding bug the SEAM tests above exist to prevent, just across a
+// sentence break instead of a comma/and/but/while.
+describe("polarity does not cancel across a sentence break either (a0f27140)", () => {
+  const twoSentences = "The gateway must never retry captures. Retries must not double-charge customers.";
+  const oneClauseJoined = "The gateway must never retry captures; retries must not double-charge customers";
+
+  it("reads the same rule the same way whether it is one clause-joined statement or two sentences", () => {
+    expect(polarity(twoSentences)).toBe(polarity(oneClauseJoined));
+    expect(polarity(twoSentences)).toBe(-1);
+  });
+
+  it("does not record two phrasings of the same rule as a contradiction", () => {
+    expect(findConflicts([item("a", twoSentences), item("b", oneClauseJoined)])).toStrictEqual([]);
+  });
+});

@@ -390,16 +390,47 @@ function policyBlock(count: number): string {
 
 function knowledgeBlock(items: readonly KnowledgeItem[]): string {
   if (items.length === 0) return "";
-  const lines = items.slice(0, 60).map((k) => {
+  const line = (k: KnowledgeItem): string => {
     const why = k.why === undefined ? "" : ` — because ${k.why}`;
     return `  [${k.source}] ${k.statement}${why}`;
-  });
-  return [
-    "",
-    "WHAT THIS CODEBASE ALREADY KNOWS ABOUT ITSELF",
-    "Taught rules outrank inferred ones. Treat these as this team's decisions, not suggestions.",
-    ...lines,
-  ].join("\n");
+  };
+
+  // lore-ok[70b88761]: `kind: "fact"` is written in exactly one place — bootstrap's
+  // architecture survey, a model's ONE-TIME reading of whichever branch happened to
+  // be a repo's first review, unconfirmed by anything (confidence 0.5, the lowest in
+  // the store). Found by lore's own review: every item here used to get the SAME
+  // "treat these as this team's decisions, not suggestions" framing, so a branch
+  // could plant a plausible-but-false architecture comment and have the survey
+  // launder it into what every future review trusts as settled. Vany's call: keep
+  // the survey reading the branch (checking out `into` separately is a real new
+  // operational cost; skipping the survey whenever `into` exists would silently
+  // disable it for the common diff-mode case) and instead say plainly that a fact is
+  // not a decision — proportionate to what a `fact` actually is: unlike a `policy` or
+  // `rule`, nothing can CITE it in an appeal to excuse a finding (D-83); it is
+  // background a reviewer weighs, not a directive.
+  const facts = items.filter((k) => k.kind === "fact");
+  const rest = items.filter((k) => k.kind !== "fact");
+
+  const parts: string[] = [];
+  if (rest.length > 0) {
+    parts.push(
+      "",
+      "WHAT THIS CODEBASE ALREADY KNOWS ABOUT ITSELF",
+      "Taught rules outrank inferred ones. Treat these as this team's decisions, not suggestions.",
+      ...rest.slice(0, 60).map(line),
+    );
+  }
+  if (facts.length > 0) {
+    parts.push(
+      "",
+      "UNVERIFIED, FROM ONE BRANCH'S FIRST READING",
+      "A model's own reading of this repository, taken once, on whichever branch got reviewed first — not a" +
+        " team decision and not corroborated by anything since. Weigh it, do not treat it as settled, and say so" +
+        " if a finding turns on one of these being true.",
+      ...facts.slice(0, 60).map(line),
+    );
+  }
+  return parts.join("\n");
 }
 
 function settledBlock(settled: PromptInput["settled"]): string {

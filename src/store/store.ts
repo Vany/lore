@@ -226,6 +226,12 @@ export interface PriorFinding {
 export type KnowledgeKind = "rule" | "fact" | "mistake" | "policy";
 export type KnowledgeSource = "taught" | "ingested" | "derived";
 
+/**
+ * Pass as `knowledgeFor`'s `limit` for "every live row" — see that method's docs
+ * (`aa57c0f2`) for why this is `-1` and not `undefined`.
+ */
+export const NO_LIMIT = -1;
+
 export interface KnowledgeItem {
   readonly id: string;
   readonly repoId: string;
@@ -2159,7 +2165,8 @@ export class Store {
   }
 
   /**
-   * Live knowledge for a repo, optionally narrowed to a path prefix.
+   * Live knowledge for a repo, optionally narrowed to a path prefix — newest
+   * VERIFIED first. `limit: NO_LIMIT` means every live row, no cap.
    *
    * lore-ok[372b6bf0,f9559e98]: was `? LIKE path || '%'`, a raw prefix match with no
    * segment boundary — found by lore's own review, the same bug `enrich.ts`'s
@@ -2167,17 +2174,36 @@ export class Store {
    * `'src/payroll/x.ts' LIKE 'src/pay' || '%'` is true, so a query for one directory
    * pulled in every rule scoped to any sibling sharing its prefix. Requires the
    * boundary to land on a `/`, or an exact match for a rule scoped to one file.
+   *
+   * lore-ok[aa57c0f2]: found real by lore's own review — this had no ORDER BY, so a
+   * plain LIMIT returned whichever rows SQLite happened to enumerate first (the
+   * OLDEST live ones, in practice). A repo past the cap silently lost its NEWEST
+   * knowledge — the rule a person just wrote with knowledge_teach, most of all —
+   * from every review prompt, from conflict detection, and from knowledge_query,
+   * with nothing telling anyone. Ordering by `verified_at DESC` means a capped
+   * caller's window is now the MOST CURRENT rows rather than an arbitrary one.
+   * Callers that need every row to be correct — not merely representative — pass
+   * `NO_LIMIT`: conflict detection must see every pair to find one, and anything
+   * resolving a specific id an open conflict names must be able to find it, or it
+   * renders the same "(retired)" placeholder a genuinely retired row does, which is
+   * the 592cd49f bug's other door.
+   *
+   * `NO_LIMIT` is `-1`, not `undefined` — a DEFAULT PARAMETER fires on an explicit
+   * `undefined` exactly as it does on an omitted argument, so `undefined` cannot be
+   * told apart from "use the ordinary cap" at the call site. Caught by a test that
+   * asked for every row and silently got 200 anyway. `-1` is SQLite's own "no bound
+   * on rows returned," verified directly against `node:sqlite` rather than assumed.
    */
   knowledgeFor(repoId: string, pathPrefix?: string, limit = 200): readonly KnowledgeItem[] {
     const rows = (
       pathPrefix === undefined
         ? this.db
-            .prepare("SELECT * FROM knowledge WHERE repo_id = ? AND retired_at IS NULL LIMIT ?")
+            .prepare("SELECT * FROM knowledge WHERE repo_id = ? AND retired_at IS NULL ORDER BY verified_at DESC LIMIT ?")
             .all(repoId, limit)
         : this.db
             .prepare(
               `SELECT * FROM knowledge WHERE repo_id = ? AND retired_at IS NULL
-               AND (path IS NULL OR ? = path OR ? LIKE path || '/%') LIMIT ?`,
+               AND (path IS NULL OR ? = path OR ? LIKE path || '/%') ORDER BY verified_at DESC LIMIT ?`,
             )
             .all(repoId, pathPrefix, pathPrefix, limit)
     ) as Record<string, string | number | null>[];

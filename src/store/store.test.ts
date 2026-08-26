@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AmbiguousFingerprint } from "../core/errors.ts";
 import { initialState } from "../core/ladder.ts";
 import { SCHEMA_VERSION, applyMigrations } from "./schema.ts";
-import { SETTLING_VERDICTS, Store, type RecordedFinding, type VerdictKind } from "./store.ts";
+import { NO_LIMIT, SETTLING_VERDICTS, Store, type RecordedFinding, type VerdictKind } from "./store.ts";
 
 let store: Store;
 let repoId: string;
@@ -1025,6 +1025,44 @@ describe("knowledge", () => {
       store.openConflicts(repoId),
       "the conflict naming the two now-retired rules must stop blocking; the unrelated one must not",
     ).toStrictEqual([{ left: a.id, right: b.id, state: "open" }]);
+  });
+
+  // Found by lore's own review (aa57c0f2): `knowledgeFor` had no ORDER BY, so a plain
+  // LIMIT returned whichever rows SQLite happened to enumerate first — the OLDEST
+  // live rows in practice — meaning a repo past the cap silently lost its NEWEST
+  // knowledge from every capped caller: review prompts, conflict detection,
+  // knowledge_query. A person teaching a rule got a success reply and the rule was
+  // never shown to anything.
+  describe("knowledgeFor orders newest-verified first, and can be asked for everything (aa57c0f2)", () => {
+    it("puts a just-taught rule ahead of two hundred older ones under the default cap", () => {
+      for (let i = 0; i < 205; i++) {
+        store.addKnowledge({
+          repoId, kind: "rule", source: "ingested", statement: `old rule ${i}`, why: undefined, path: undefined,
+          cwe: undefined, provenance: `doc${i}.md`, sourceBlob: `b${i}`, confidence: 0.5,
+        });
+      }
+      const fresh = store.addKnowledge({
+        repoId, kind: "rule", source: "taught", statement: "just taught, must not be silently dropped",
+        why: undefined, path: undefined, cwe: undefined, provenance: undefined, sourceBlob: undefined, confidence: 1,
+      });
+
+      const capped = store.knowledgeFor(repoId);
+      expect(capped.length, "the default cap must still apply").toBeLessThanOrEqual(200);
+      expect(
+        capped.some((k) => k.id === fresh.id),
+        "the newest rule must survive the default cap, not be pushed out by 205 older ones",
+      ).toBe(true);
+    });
+
+    it("returns every live row with NO_LIMIT, past the old 1000 ceiling", () => {
+      for (let i = 0; i < 1005; i++) {
+        store.addKnowledge({
+          repoId, kind: "rule", source: "ingested", statement: `rule ${i}`, why: undefined, path: undefined,
+          cwe: undefined, provenance: `doc${i}.md`, sourceBlob: `b${i}`, confidence: 0.5,
+        });
+      }
+      expect(store.knowledgeFor(repoId, undefined, NO_LIMIT)).toHaveLength(1005);
+    });
   });
 });
 
