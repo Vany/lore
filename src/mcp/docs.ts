@@ -777,8 +777,9 @@ reviewing tier, which accepts it by not raising the finding again, or rejects it
   retire: `
 Withdraw a development rule that no longer holds.
 
-Takes the short id, and the reason — which is KEPT, and is what a later reader finds
-when they ask why a check came back.
+Takes the id — the short \`cite_as\` form, or the full id \`knowledge_teach\` returned,
+either resolves the same rule — and the reason, which is KEPT, and is what a later
+reader finds when they ask why a check came back.
 
 This is the other half of an appeal. An accepted appeal stops an engine's rule being
 reported for a path, and it holds for exactly as long as the development rule behind

@@ -98,9 +98,7 @@ describe("the operator's view of development rules", () => {
   // a6a4b832/c7235bcb, found by lore's own review: `short` reached `id LIKE
   // '${short}%'` with no character gate, so `%`/`_` are SQL wildcards, not literal
   // text. With exactly one live rule, "%%%%" (4 chars, passes the schema's min(4))
-  // matched it and would have retired a rule nobody identified. `cite_as` — the
-  // only value this parameter is documented to hold — is always hex, so a hex-only
-  // gate costs nothing legitimate.
+  // matched it and would have retired a rule nobody identified.
   it("refuses a wildcard pattern rather than silently matching every live rule", () => {
     const { store, repoId } = setup();
     try {
@@ -109,6 +107,25 @@ describe("the operator's view of development rules", () => {
       expect(store.retirePolicy(repoId, "%%%%", "not a real id")).toBe("not-found");
       expect(store.retirePolicy(repoId, "____", "not a real id")).toBe("not-found");
       expect(ruleReport(store, repoId).rules, "the real rule must survive untouched").toHaveLength(1);
+    } finally {
+      store.close();
+    }
+  });
+
+  // 16d21041/0234d575, found by lore's own review against its own a6a4b832 fix
+  // just above: that fix's first version was hex-only, rejecting the hyphens of a
+  // full randomUUID() id — but knowledge_teach's own reply hands one back as `id`,
+  // and the appeal grammar (core/lore-ok.ts) already accepts a full uuid for a
+  // citation ("resolves as well as its head"). Retiring the exact id a caller was
+  // just handed must not answer "not-found" while claiming no live rule starts
+  // with it — when the id IS that rule.
+  it("accepts the full id knowledge_teach hands back, not only its 8-char cite_as", () => {
+    const { store, repoId } = setup();
+    try {
+      const rule = addRule(store, repoId, { statement: "services bind 0.0.0.0", why: "overlay", by: "vany" });
+
+      expect(store.retirePolicy(repoId, rule.id, "moved off the overlay")).toBe("retired");
+      expect(ruleReport(store, repoId).rules).toStrictEqual([]);
     } finally {
       store.close();
     }

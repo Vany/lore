@@ -125,7 +125,7 @@ function pacing(
  * So each state names the next call. A client that reads only this field should still
  * do the right thing, because that is the client we actually have.
  */
-function nextStep(state: ReviewState, freshFindings = 0): string {
+function nextStep(state: ReviewState, freshFindings: number, reviewId: string): string {
   // STREAMED FINDINGS ARRIVE WHILE THE TIER IS STILL READING (D-107), so "running" with
   // findings in hand is not "nothing yet" — it is "start fixing now". A submit made now
   // is HELD and delivered at the reviewer's next emission; nothing needs resubmitting.
@@ -174,8 +174,18 @@ function nextStep(state: ReviewState, freshFindings = 0): string {
       // that produced them — so a POLL reaching this exact sentence has
       // `new_findings: []` beside it, every time, contradicting "here" in the same
       // response.
+      //
+      // 1ee794a4/e54c900e: THAT fix wrote a literal, never-substituted
+      // "{review_id}" placeholder in its place — real braces in the string, not a
+      // template interpolation — because `nextStep` had no review id to put there.
+      // A client reading this instruction and building the URI verbatim would
+      // issue `resources/read` on a template match for the LITERAL string
+      // "{review_id}", which `mine()` refuses as not found, at the exact moment
+      // the client is told its findings are one substitution away. Fixed the way
+      // `review_cancel`'s own messages already do it (`"lore://review/" +
+      // review_id`, a few hundred lines down): `nextStep` now takes the real id.
       return "You stopped this review. The findings it had already produced are yours, at lore://review/" +
-        "{review_id} (a poll here returns nothing new — they were handed to you when you cancelled). It " +
+        reviewId + " (a poll here returns nothing new — they were handed to you when you cancelled). It " +
         "concluded nothing beyond them, and the tiers that had not run never looked. Start a fresh review " +
         "when you want the rest.";
   }
@@ -911,7 +921,7 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           // told it not to: polling once and stopping, retrying a review that could
           // never succeed, walking away from `findings_ready` (the single largest
           // cause of abandoned reviews). A state name is not an instruction.
-          note: nextStep(state, fresh.length),
+          note: nextStep(state, fresh.length, review_id),
           // The branch's own defects FIRST, inherited ones after.
           //
           // Ordering is what a reader actually acts on, and severity alone put two
@@ -2162,7 +2172,7 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
     {
       description: TOOL_DOCS.retire,
       inputSchema: z.object({
-        rule: z.string().min(4).describe("short id of the development rule, as `cite_as` gave it"),
+        rule: z.string().min(4).describe("id of the development rule — `cite_as`, or the full id, either resolves it"),
         why: z.string().min(1).describe("why it no longer holds — this is kept, and is what a later reader gets"),
       }),
     },

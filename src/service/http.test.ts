@@ -1722,7 +1722,13 @@ describe("a cancelled review's findings are not where the text used to say (5e6c
     const out = await callTool("review_poll", { review_id: "revF" });
     expect(out["new_findings"], "everything was already handed over at cancel").toStrictEqual([]);
     expect(String(out["note"]), "must not claim the findings are in THIS response").not.toMatch(/listed here/);
-    expect(String(out["note"])).toContain("lore://review/");
+    // 1ee794a4/e54c900e, found by lore's own review: this string used to end in a
+    // literal, never-substituted "{review_id}" — real braces, not a template
+    // interpolation, because nextStep had no id to fill it with. A client
+    // following the instruction verbatim would resources/read a URI that does not
+    // exist. The real id must appear; the placeholder must not.
+    expect(String(out["note"]), "the REAL review id, ready to use as-is").toContain("lore://review/revF");
+    expect(String(out["note"]), "must not leave an unsubstituted placeholder").not.toContain("{review_id}");
   });
 
   it("points a repeat cancel at the resource for a review's findings, not review_poll", async () => {
