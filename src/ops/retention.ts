@@ -136,6 +136,19 @@ async function collectSandbox(cfg: RetentionConfig): Promise<{ dirs: number; byt
       // effect that varies by package manager.
       if (s === undefined || s.mtimeMs > cutoff) continue;
       const size = await dirSize(path);
+      // RE-CHECKED, NOT ASSUMED STILL TRUE FROM ABOVE — found by lore's own review,
+      // fingerprints fc9514a9 and e6127e35: `dirSize` is a full recursive walk,
+      // measured elsewhere in this codebase at seconds-to-a-minute on a large tree
+      // (spec/operations.md §2.5), and an install can acquire the lock at ANY point
+      // during it — the check above only proves nothing was installing when this
+      // directory's turn in the sweep BEGAN, not when the sweep is actually about to
+      // delete it. Re-asking right before `rm`, with nothing awaited in between,
+      // narrows the window from "however long dirSize takes" to as close to zero as
+      // this sweep can get without holding the cache directory's OWN lock for its
+      // full walk — which would serialise every OTHER directory in this loop behind
+      // whichever one happens to be busy, a worse trade for housekeeping than the
+      // residual race this leaves.
+      if (isInstalling(path)) continue;
       const gone = await rm(path, { recursive: true, force: true }).then(() => true, () => false);
       if (!gone) continue;
       dirs++;

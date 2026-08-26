@@ -378,10 +378,20 @@ export function startHeartbeat(store: Store, cfg: HeartbeatConfig, alerter: Aler
       // is on the other end mutes it. Latched rather than rate-limited: the condition is
       // binary and permanent until a person restores, so "again" carries no information.
       // The latch clears if the database becomes readable, so a restore re-arms it.
+      // LATCHED ON DELIVERY, NOT ON THE ATTEMPT — found by lore's own review,
+      // fingerprint ecb4d085, against every one of the six sites below. `alerter.send`'s
+      // own doc comment states the contract this violated: "not harmless once a caller
+      // latches, because a single undelivered notice then suppresses every later one."
+      // `reviewer/review.ts`'s `tellPaidRoute` already gets this right
+      // (`if (!(await alerter.send(...))) return;`, latching only on success) — these six
+      // set their latch BEFORE awaiting `send`, so a webhook 500 or a network timeout
+      // during exactly the outage this file exists to page about left the condition
+      // marked "told" for good, with no later beat ever retrying it.
       if (health.problems.some((p) => p.startsWith("DATABASE UNREADABLE"))) {
         if (!pagedUnreadable) {
-          pagedUnreadable = true;
-          await alerter.send(CONDITIONS.databaseUnreadable(health.problems[0] ?? "unreadable"));
+          if (await alerter.send(CONDITIONS.databaseUnreadable(health.problems[0] ?? "unreadable"))) {
+            pagedUnreadable = true;
+          }
         }
         return;
       }
@@ -389,8 +399,7 @@ export function startHeartbeat(store: Store, cfg: HeartbeatConfig, alerter: Aler
 
       if (health.queueDepth >= cfg.queueWarnDepth) {
         if (health.queueDepth > toldQueueDepth) {
-          toldQueueDepth = health.queueDepth;
-          await alerter.send(CONDITIONS.queueBacked(health.queueDepth));
+          if (await alerter.send(CONDITIONS.queueBacked(health.queueDepth))) toldQueueDepth = health.queueDepth;
         }
       } else if (toldQueueDepth > 0) {
         // The backlog cleared. Re-arm, so a fresh one speaks again.
@@ -404,16 +413,16 @@ export function startHeartbeat(store: Store, cfg: HeartbeatConfig, alerter: Aler
       // a human runs, and a page nobody is paged by is not a page.
       if (health.replica === "absent" && !replicaGrace) {
         if (!pagedReplicaAbsent) {
-          pagedReplicaAbsent = true;
-          await alerter.send(CONDITIONS.backupAbsent());
+          if (await alerter.send(CONDITIONS.backupAbsent())) pagedReplicaAbsent = true;
         }
       } else {
         pagedReplicaAbsent = false;
       }
       if (health.replica === "behind") {
         if (!pagedReplicaBehind) {
-          pagedReplicaBehind = true;
-          await alerter.send(CONDITIONS.backupBehind(Math.round((health.replicaBehindSec ?? 0) / 60)));
+          if (await alerter.send(CONDITIONS.backupBehind(Math.round((health.replicaBehindSec ?? 0) / 60)))) {
+            pagedReplicaBehind = true;
+          }
         }
       } else {
         pagedReplicaBehind = false;
@@ -423,8 +432,9 @@ export function startHeartbeat(store: Store, cfg: HeartbeatConfig, alerter: Aler
       // ageing means nobody is answering, and every one of them blocks a review from
       // ever passing (spec/knowledge.md §7.2).
       if (health.needsHumanOverAge > toldNeedsHumanAgeing) {
-        toldNeedsHumanAgeing = health.needsHumanOverAge;
-        await alerter.send(CONDITIONS.needsHumanAgeing(health.needsHumanOverAge, cfg.needsHumanAgeHours));
+        if (await alerter.send(CONDITIONS.needsHumanAgeing(health.needsHumanOverAge, cfg.needsHumanAgeHours))) {
+          toldNeedsHumanAgeing = health.needsHumanOverAge;
+        }
       } else if (health.needsHumanOverAge < toldNeedsHumanAgeing) {
         // Somebody decided, or a document re-ingest closed the conflict (D-20). Re-arm,
         // so the next one to age past the threshold speaks.
@@ -436,8 +446,9 @@ export function startHeartbeat(store: Store, cfg: HeartbeatConfig, alerter: Aler
       // work concluding nothing, and until now only the first had a channel — the second was
       // on the operator board, which is read by the one party who cannot act on it.
       if (health.uncollectedOverAge > toldUncollected) {
-        toldUncollected = health.uncollectedOverAge;
-        await alerter.send(CONDITIONS.findingsUncollected(health.uncollectedOverAge, cfg.uncollectedAgeHours));
+        if (await alerter.send(CONDITIONS.findingsUncollected(health.uncollectedOverAge, cfg.uncollectedAgeHours))) {
+          toldUncollected = health.uncollectedOverAge;
+        }
       } else if (health.uncollectedOverAge < toldUncollected) {
         // Somebody collected, or the sweep took it. Re-arm, so the next one speaks.
         toldUncollected = health.uncollectedOverAge;

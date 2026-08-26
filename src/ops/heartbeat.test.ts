@@ -55,6 +55,19 @@ class Capturing extends Alerter {
   }
 }
 
+/**
+ * A webhook that can be toggled to fail delivery — for ecb4d085: every latch in
+ * this file must NOT mark a condition "told" on a `send()` that returned `false`.
+ */
+class Unreliable extends Alerter {
+  fail = true;
+  override async send(a: Alert): Promise<boolean> {
+    if (this.fail) return Promise.resolve(false);
+    sent.push(a);
+    return Promise.resolve(true);
+  }
+}
+
 beforeEach(() => {
   store = new Store(":memory:");
   dir = mkdtempSync(join(tmpdir(), "lore-beat-"));
@@ -637,6 +650,26 @@ describe("queue depth sustained", () => {
     await until(() => sent.filter((a) => a.condition === "queue depth sustained").length >= 2);
     stop();
     expect(sent.filter((a) => a.condition === "queue depth sustained")).toHaveLength(2);
+  });
+
+  // ecb4d085, found by lore's own review: `toldQueueDepth` (and every other latch
+  // in this file) used to be set BEFORE awaiting `alerter.send`, so a webhook that
+  // failed on the one delivery attempt left the condition marked "told" forever —
+  // no later beat ever tried again, even once delivery would have worked.
+  it("retries on the NEXT beat after a failed delivery, rather than latching on the attempt", async () => {
+    queued(1);
+    const unreliable = new Unreliable({ timeoutMs: 10 });
+    const stop = startHeartbeat(store, cfg({ intervalMs: 20, queueWarnDepth: 1 }), unreliable);
+
+    // Several beats' worth of time while every delivery fails — nothing must ever
+    // be recorded as delivered while that holds.
+    await new Promise((r) => setTimeout(r, 100));
+    expect(sent.filter((a) => a.condition === "queue depth sustained")).toHaveLength(0);
+
+    unreliable.fail = false;
+    await until(() => sent.some((a) => a.condition === "queue depth sustained"));
+    stop();
+    expect(sent.filter((a) => a.condition === "queue depth sustained")).toHaveLength(1);
   });
 });
 

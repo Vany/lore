@@ -139,20 +139,41 @@ function phaseNote(runs: readonly Row[], state: string): string | undefined {
 export function renderStatus(db: DatabaseSync, reviewId?: string, dataDir = "/var/lib/lore"): string {
   const out: string[] = [];
 
+  // A BOUND ISO CUTOFF, NOT `datetime('now','-1 day')` — found by lore's own review,
+  // fingerprint 36006b58: `updated_at` is written as `new Date().toISOString()`
+  // (`T` separator, milliseconds, `Z`), but SQLite's own `datetime()` produces
+  // `YYYY-MM-DD HH:MM:SS` (a space). Compared as TEXT, `'T' > ' '` in ASCII
+  // regardless of the actual times that follow, so any review whose date matched
+  // the cutoff's date compared as "recent" even 24-48h old — verified directly: a
+  // review updated 28 hours ago was included. `board.ts`'s own `boardReviews` already
+  // does this correctly (`since = new Date(now - KEEP_FINISHED_MS).toISOString()`,
+  // bound as a parameter) — matched here rather than inventing a second way.
+  const dayAgoIso = new Date(Date.now() - 86_400_000).toISOString();
   const reviews = (
     reviewId === undefined
       ? db
           .prepare(
             `SELECT * FROM review
              WHERE state NOT IN (${TERMINAL_SQL})
-                OR updated_at > datetime('now','-1 day')
+                OR updated_at > ?
              ORDER BY updated_at DESC LIMIT 12`,
           )
-          .all()
+          .all(dayAgoIso)
       : db.prepare("SELECT * FROM review WHERE id = ?").all(reviewId)
   ) as Row[];
 
   if (reviews.length === 0) {
+    // A NAMED ID THAT MATCHED NOTHING IS NOT THE SAME FACT AS "NOTHING IS RUNNING" —
+    // found by lore's own review, fingerprint 1eaf7dc6: a caller who asked about ONE
+    // specific review (a typo, or an id whose row aged out past the 90-day retention
+    // window) got told the WHOLE SERVICE was idle — including the mirror and
+    // uncollected-findings sections below, which answer a question nobody asked. An
+    // operator diagnosing a stall on a service running eight OTHER reviews would be
+    // sent to check the service instead of the id, exactly the "aims the search"
+    // failure this file's own header warns `phaseNote` about.
+    if (reviewId !== undefined) {
+      return dim(`no review with id \`${reviewId}\` — check the id, or it may be older than this deployment's retention window.`) + "\n";
+    }
     // Idle still reports the mirrors: "nothing happening" and "nothing CAN happen"
     // look identical otherwise. Uncollected findings and memory too — found by
     // lore's own review, fingerprint 56141f57: this query excludes a review older than a day
@@ -165,8 +186,14 @@ export function renderStatus(db: DatabaseSync, reviewId?: string, dataDir = "/va
     // "idle" `make status` exists to refuse everywhere else. Both are
     // self-contained queries with their own empty check, so calling them here
     // costs nothing when there is genuinely nothing to say.
+    //
+    // `tierDownLines` goes FIRST, same as the non-idle path — found by lore's own
+    // review, fingerprint 3468ba9e: a stated provider cool-off can outlive every
+    // review that triggered it (days, per `runRound`'s own words), so it was invisible
+    // exactly when a service had nothing else running to hide it behind.
     return (
       [
+        ...tierDownLines(db),
         dim("no reviews in the last day. `lore` is idle."),
         "",
         ...uncollectedLines(db),
@@ -176,121 +203,14 @@ export function renderStatus(db: DatabaseSync, reviewId?: string, dataDir = "/va
     );
   }
 
-  // A PROVIDER THAT IS DOWN, SAID FROM THE INSIDE (D-90). Until the cool-off existed this
-  // was invisible here — `spec/operations.md` §2.4.2 has listed it as a gap since it was
-  // written — and an operator's only clue was reviews taking three quarters of an hour to
-  // reach their second tier. It goes at the TOP, above the reviews, because it explains
-  // them: every slow review below is slow for this one reason.
-  const downRows = db
-    .prepare("SELECT key, value FROM meta WHERE key LIKE 'tier-unavailable:%'")
-    .all() as Row[];
-  const nowIso = new Date().toISOString();
-  for (const d of downRows) {
-    let until = "";
-    let why = "";
-    let stated = false;
-    try {
-      const v = JSON.parse(String(d["value"] ?? "{}")) as { until?: string; why?: string; stated?: boolean };
-      until = v.until ?? "";
-      why = v.why ?? "";
-      stated = v.stated === true;
-    } catch {
-      // An unparseable mark is treated as absent, exactly as the store treats it.
-    }
-    if (until <= nowIso) continue;
-    const tier = String(d["key"] ?? "").slice("tier-unavailable:".length);
-    // A FALLBACK LORE MAY ACTUALLY WALK ONTO, not one merely written in the file.
-    //
-    // lore-ok is not the answer to 9f64c74b — the finding is right and this is the fix.
-    // This read the config alone, so it said "coverage is FULL — this costs metered money"
-    // for any tier with any fallback configured. Under D-117 that is wrong in both
-    // directions at once: with an all-`openrouter/` fallback list and LORE_ALLOW_METERED=0
-    // the chain is EMPTY, the tier is skipped every round and verdicts are `passed_partial`
-    // — while the one view an operator is taught to watch says coverage is full. And with
-    // the deployed config, where the fallback actually asked is a free second plan, the
-    // money half is false whenever it prints.
-    //
-    // So the question is resolved the way the round resolves it: expand nicknames, drop
-    // what this deployment may not pay for, and ask what is left.
-    const allowMetered = allowMeteredFromEnv(process.env["LORE_ALLOW_METERED"]);
-    const pools = loadPools();
-    // A ROUTE MARK OF ITS OWN MAKES A SPARE NO SPARE. Read the same way the tier marks
-    // above are, because a route that is itself parked cannot cover for anything.
-    const parked = (route: string): boolean => {
-      const row = db.prepare("SELECT value FROM meta WHERE key = ?").get(`route-unavailable:${route}`) as
-        | { value?: string }
-        | undefined;
-      if (row?.value === undefined) return false;
-      try {
-        return String((JSON.parse(row.value) as { until?: string }).until ?? "") > nowIso;
-      } catch {
-        return false;
-      }
-    };
-    // THE TIER'S OWN POOL COUNTS, AND THE ROUND WALKS IT FIRST.
-    // `reachable` in `runRound` is
-    // `[...spare, ...fallbacks]`, so a pooled tier with a live sibling route has FULL
-    // coverage and no fallback configured at all. Reading `t.fallback` alone printed "the
-    // provider named that time, so reviews step over the tier" over exactly that — the
-    // false degradation this banner's own comment, four lines up, exists to prevent,
-    // reached through the pool indirection the first fix considered only for fallbacks.
-    // TWO LISTS, NOT ONE SLICED. `slice(1)` assumed the tier's own primary was always at
-    // index 0 and dropped it — so when every one of the tier's own routes was parked or
-    // gated, index 0 was the first FALLBACK and the banner ate the very route keeping
-    // coverage full, reporting degradation exactly when there was none. That is the false
-    // degradation this banner's own header exists to prevent, reached through an
-    // arithmetic shortcut.
-    //
-    // The round's own shape is `reachable = [...pool.slice(1), ...fallbacks]`: the spares
-    // BESIDE the route that refused, plus the fallbacks. So the spares are counted from
-    // the tier's own routes and the primary is dropped from that list only, never from
-    // the fallbacks.
-    //
-    // AND THE EXEMPTION IS THE ROUND'S (`exemptLiteral`): a literal metered model in an
-    // operator-written ladder is one the round WILL call, so removing it here reported a
-    // tier as uncovered that is not.
-    const forTier = loadTiers().filter((t) => t.id === tier);
-    const ownSpares = forTier
-      .flatMap((t) => (exemptLiteral(t, pools) ? routesFor(t, pools) : withoutMetered(routesFor(t, pools), allowMetered)))
-      .filter((r) => !parked(r))
-      .slice(1);
-    const usableFallbacks = [
-      ...ownSpares,
-      ...forTier
-        .flatMap((t) => withoutMetered((t.fallback ?? []).flatMap((f) => routesFor({ ...t, model: f }, pools)), allowMetered))
-        .filter((r) => !parked(r)),
-    ];
-    const hasFallback = usableFallbacks.length > 0;
-    // WHETHER IT COSTS ANYTHING is a separate question from whether it exists, and the
-    // banner used to assert the expensive answer unconditionally. A free second plan
-    // answering for a dead one costs nothing and should not be reported as spending.
-    const fallbackCosts = usableFallbacks.some(isMeteredRoute);
-    // TWO MARKS, TWO CONSEQUENCES, and one banner used to claim the stronger one for
-    // both. Only a time the PROVIDER STATED stops a review calling the tier (D-90); a
-    // backoff the background screen guessed bounds the screen alone, and reviews go on
-    // asking. Printing "reviews step over it" for a guess told an operator their reviews
-    // were degraded when they were not — and would have sent them hunting a coverage gap
-    // that does not exist.
-    out.push(
-      stated
-        ? `${red(`✘ ${tier} IS NOT BEING ASKED`)} ${dim(`until ${until.slice(0, 19)}Z — ${why}.`)}`
-        : `${yellow(`◔ ${tier} is rested by the knowledge screen`)} ${dim(`until ${until.slice(0, 19)}Z — ${why}.`)}`,
-      // THREE CASES, NOT TWO. A stated cool-off degrades coverage only when the tier has
-      // nowhere else to go; with a D-93 fallback configured — which every deployed tiers
-      // file now has — reviews ask the twin, the tier never enters `unavailable`, and
-      // coverage is FULL. Saying "reviews step over it" there reports degradation exactly
-      // when the fallback is preventing it.
-      !stated
-        ? `  ${dim("this is lore's own guess, not the provider's word — REVIEWS STILL CALL THIS TIER normally.")}`
-        : hasFallback
-          ? fallbackCosts
-            ? `  ${dim("reviews ask its fallback instead, so coverage is FULL — this costs metered money, not evidence.")}`
-            : `  ${dim("reviews ask its fallback instead, so coverage is FULL — on another subscription, costing nothing.")}`
-          : `  ${dim("the provider named that time, so reviews step over the tier and say so; the screen waits too.")}`,
-      `  ${dim("It is retried automatically, and one success clears this.")}`,
-      "",
-    );
-  }
+  // A PROVIDER THAT IS DOWN, SAID FROM THE INSIDE (D-90). It goes at the TOP, above
+  // the reviews, because it explains them: every slow review below is slow for this
+  // one reason. Extracted to `tierDownLines` — found by lore's own review,
+  // fingerprint 3468ba9e: this used to sit AFTER the idle early-return above, so a
+  // stated cool-off in force (days, per `runRound`'s own words) on a service with no
+  // open reviews was invisible on the one surface an operator checks first. The
+  // early-return above now includes it too.
+  out.push(...tierDownLines(db));
 
   // JOINED AND TERMINAL-FILTERED, matching `store.queueDepth()` exactly (via the
   // same shared `TERMINAL_SQL`, already imported above) — found by lore's own
@@ -489,6 +409,134 @@ export function renderStatus(db: DatabaseSync, reviewId?: string, dataDir = "/va
   // over-trusts, and these two states are the ones that cost the most when misread.
   out.push(dim("only PASSED is clean. passed_partial and fast_clean are not passes."));
   return `${out.join("\n")}\n`;
+}
+
+/**
+ * A provider that is down, said from the inside (D-90).
+ *
+ * Until the cool-off existed this was invisible here — `spec/operations.md` §2.4.2
+ * has listed it as a gap since it was written — and an operator's only clue was
+ * reviews taking three quarters of an hour to reach their second tier.
+ *
+ * Extracted into its own function, called from BOTH the idle early-return and the
+ * normal path — found by lore's own review, fingerprint 3468ba9e: this used to be
+ * inline, after the idle check, so a stated cool-off in force on an otherwise-idle
+ * service (it can outlive every review that triggered it — days, per `runRound`'s
+ * own words) was invisible on the one surface built to explain exactly this.
+ */
+function tierDownLines(db: DatabaseSync): string[] {
+  const downRows = db
+    .prepare("SELECT key, value FROM meta WHERE key LIKE 'tier-unavailable:%'")
+    .all() as Row[];
+  const nowIso = new Date().toISOString();
+  const lines: string[] = [];
+  for (const d of downRows) {
+    let until = "";
+    let why = "";
+    let stated = false;
+    try {
+      const v = JSON.parse(String(d["value"] ?? "{}")) as { until?: string; why?: string; stated?: boolean };
+      until = v.until ?? "";
+      why = v.why ?? "";
+      stated = v.stated === true;
+    } catch {
+      // An unparseable mark is treated as absent, exactly as the store treats it.
+    }
+    if (until <= nowIso) continue;
+    const tier = String(d["key"] ?? "").slice("tier-unavailable:".length);
+    // A FALLBACK LORE MAY ACTUALLY WALK ONTO, not one merely written in the file.
+    //
+    // lore-ok is not the answer to 9f64c74b — the finding is right and this is the fix.
+    // This read the config alone, so it said "coverage is FULL — this costs metered money"
+    // for any tier with any fallback configured. Under D-117 that is wrong in both
+    // directions at once: with an all-`openrouter/` fallback list and LORE_ALLOW_METERED=0
+    // the chain is EMPTY, the tier is skipped every round and verdicts are `passed_partial`
+    // — while the one view an operator is taught to watch says coverage is full. And with
+    // the deployed config, where the fallback actually asked is a free second plan, the
+    // money half is false whenever it prints.
+    //
+    // So the question is resolved the way the round resolves it: expand nicknames, drop
+    // what this deployment may not pay for, and ask what is left.
+    const allowMetered = allowMeteredFromEnv(process.env["LORE_ALLOW_METERED"]);
+    const pools = loadPools();
+    // A ROUTE MARK OF ITS OWN MAKES A SPARE NO SPARE. Read the same way the tier marks
+    // above are, because a route that is itself parked cannot cover for anything.
+    const parked = (route: string): boolean => {
+      const row = db.prepare("SELECT value FROM meta WHERE key = ?").get(`route-unavailable:${route}`) as
+        | { value?: string }
+        | undefined;
+      if (row?.value === undefined) return false;
+      try {
+        return String((JSON.parse(row.value) as { until?: string }).until ?? "") > nowIso;
+      } catch {
+        return false;
+      }
+    };
+    // THE TIER'S OWN POOL COUNTS, AND THE ROUND WALKS IT FIRST.
+    // `reachable` in `runRound` is
+    // `[...spare, ...fallbacks]`, so a pooled tier with a live sibling route has FULL
+    // coverage and no fallback configured at all. Reading `t.fallback` alone printed "the
+    // provider named that time, so reviews step over the tier" over exactly that — the
+    // false degradation this banner's own comment, four lines up, exists to prevent,
+    // reached through the pool indirection the first fix considered only for fallbacks.
+    // TWO LISTS, NOT ONE SLICED. `slice(1)` assumed the tier's own primary was always at
+    // index 0 and dropped it — so when every one of the tier's own routes was parked or
+    // gated, index 0 was the first FALLBACK and the banner ate the very route keeping
+    // coverage full, reporting degradation exactly when there was none. That is the false
+    // degradation this banner's own header exists to prevent, reached through an
+    // arithmetic shortcut.
+    //
+    // The round's own shape is `reachable = [...pool.slice(1), ...fallbacks]`: the spares
+    // BESIDE the route that refused, plus the fallbacks. So the spares are counted from
+    // the tier's own routes and the primary is dropped from that list only, never from
+    // the fallbacks.
+    //
+    // AND THE EXEMPTION IS THE ROUND'S (`exemptLiteral`): a literal metered model in an
+    // operator-written ladder is one the round WILL call, so removing it here reported a
+    // tier as uncovered that is not.
+    const forTier = loadTiers().filter((t) => t.id === tier);
+    const ownSpares = forTier
+      .flatMap((t) => (exemptLiteral(t, pools) ? routesFor(t, pools) : withoutMetered(routesFor(t, pools), allowMetered)))
+      .filter((r) => !parked(r))
+      .slice(1);
+    const usableFallbacks = [
+      ...ownSpares,
+      ...forTier
+        .flatMap((t) => withoutMetered((t.fallback ?? []).flatMap((f) => routesFor({ ...t, model: f }, pools)), allowMetered))
+        .filter((r) => !parked(r)),
+    ];
+    const hasFallback = usableFallbacks.length > 0;
+    // WHETHER IT COSTS ANYTHING is a separate question from whether it exists, and the
+    // banner used to assert the expensive answer unconditionally. A free second plan
+    // answering for a dead one costs nothing and should not be reported as spending.
+    const fallbackCosts = usableFallbacks.some(isMeteredRoute);
+    // TWO MARKS, TWO CONSEQUENCES, and one banner used to claim the stronger one for
+    // both. Only a time the PROVIDER STATED stops a review calling the tier (D-90); a
+    // backoff the background screen guessed bounds the screen alone, and reviews go on
+    // asking. Printing "reviews step over it" for a guess told an operator their reviews
+    // were degraded when they were not — and would have sent them hunting a coverage gap
+    // that does not exist.
+    lines.push(
+      stated
+        ? `${red(`✘ ${tier} IS NOT BEING ASKED`)} ${dim(`until ${until.slice(0, 19)}Z — ${why}.`)}`
+        : `${yellow(`◔ ${tier} is rested by the knowledge screen`)} ${dim(`until ${until.slice(0, 19)}Z — ${why}.`)}`,
+      // THREE CASES, NOT TWO. A stated cool-off degrades coverage only when the tier has
+      // nowhere else to go; with a D-93 fallback configured — which every deployed tiers
+      // file now has — reviews ask the twin, the tier never enters `unavailable`, and
+      // coverage is FULL. Saying "reviews step over it" there reports degradation exactly
+      // when the fallback is preventing it.
+      !stated
+        ? `  ${dim("this is lore's own guess, not the provider's word — REVIEWS STILL CALL THIS TIER normally.")}`
+        : hasFallback
+          ? fallbackCosts
+            ? `  ${dim("reviews ask its fallback instead, so coverage is FULL — this costs metered money, not evidence.")}`
+            : `  ${dim("reviews ask its fallback instead, so coverage is FULL — on another subscription, costing nothing.")}`
+          : `  ${dim("the provider named that time, so reviews step over the tier and say so; the screen waits too.")}`,
+      `  ${dim("It is retried automatically, and one success clears this.")}`,
+      "",
+    );
+  }
+  return lines;
 }
 
 /**

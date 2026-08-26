@@ -205,6 +205,26 @@ describe("a finished review gives its worktree back", () => {
     rmSync(root, { recursive: true, force: true });
   });
 
+  // A SECOND, SEPARATE cfg from the module-level one above — this describe has its
+  // own local `store`/`root` — and it had the SAME ca44a547 hazard the module-level
+  // one was fixed for, missed because this block was not read as part of that fix.
+  // Found by lore's own review, fingerprint 9a7cdbf5: every `collect()` call below,
+  // including the two edf707f1 added, spread `DEFAULT_RETENTION` with only
+  // `reposRoot` overridden, leaving `cacheRoot`/`scratchRoot` at their real
+  // `~/.lore/...` default and running collectSandbox's `rm -rf` against them on
+  // every `npm test`.
+  const cfg = (): RetentionConfig => ({
+    ...DEFAULT_RETENTION,
+    reposRoot: join(root, "repos"),
+    cacheRoot: undefined,
+    scratchRoot: undefined,
+  });
+
+  it("keeps this describe's own cfg() out of the real ~/.lore too", () => {
+    expect(cfg().cacheRoot, "must not default to dataDir()/npm-cache").toBeUndefined();
+    expect(cfg().scratchRoot, "must not default to dataDir()/scratch").toBeUndefined();
+  });
+
   const reviewWithWorktree = (id: string, state: ReviewState) => {
     const dir = join(root, "repos", repoId, "wt", id);
     git("-C", bare(), "worktree", "add", "--detach", "-q", dir, "main");
@@ -219,7 +239,7 @@ describe("a finished review gives its worktree back", () => {
     const dir = reviewWithWorktree("revT", "passed");
     expect(git("-C", bare(), "worktree", "list")).toContain("revT");
 
-    await collect(store, { ...DEFAULT_RETENTION, reposRoot: join(root, "repos") });
+    await collect(store, cfg());
 
     expect(existsSync(dir)).toBe(false);
     // The half a bare `rm` leaves behind: git goes on listing a worktree that is not
@@ -232,7 +252,7 @@ describe("a finished review gives its worktree back", () => {
   // held its worktree for ever and its row was never collected.
   it("treats passed_partial as finished, like every other terminal state", async () => {
     const dir = reviewWithWorktree("revPP", "passed_partial");
-    await collect(store, { ...DEFAULT_RETENTION, reposRoot: join(root, "repos") });
+    await collect(store, cfg());
     expect(existsSync(dir)).toBe(false);
   });
 
@@ -245,7 +265,7 @@ describe("a finished review gives its worktree back", () => {
     rmSync(dir, { recursive: true, force: true }); // as if something removed it by hand
     expect(git("-C", bare(), "worktree", "list")).toContain("revGone");
 
-    await collect(store, { ...DEFAULT_RETENTION, reposRoot: join(root, "repos") });
+    await collect(store, cfg());
 
     expect(git("-C", bare(), "worktree", "list")).not.toContain("revGone");
   });
@@ -259,17 +279,17 @@ describe("a finished review gives its worktree back", () => {
   // ordinary hourly case, not an edge one.
   it("reports a removal only on the sweep that actually removes something", async () => {
     const dir = reviewWithWorktree("revOnce", "passed");
-    const first = await collect(store, { ...DEFAULT_RETENTION, reposRoot: join(root, "repos") });
+    const first = await collect(store, cfg());
     expect(existsSync(dir)).toBe(false);
     expect(first.worktreesRemoved, "the worktree genuinely existed on this sweep").toBe(1);
 
-    const second = await collect(store, { ...DEFAULT_RETENTION, reposRoot: join(root, "repos") });
+    const second = await collect(store, cfg());
     expect(second.worktreesRemoved, "nothing was there for this sweep to remove").toBe(0);
   });
 
   it("leaves a review that can still be worked on alone", async () => {
     const dir = reviewWithWorktree("revLive", "findings_ready");
-    await collect(store, { ...DEFAULT_RETENTION, reposRoot: join(root, "repos") });
+    await collect(store, cfg());
     expect(existsSync(dir)).toBe(true);
   });
 });
@@ -367,6 +387,51 @@ describe("the sandbox cache does not grow for ever", () => {
 
     try {
       expect((await sweep()).cacheDirsRemoved, "must not delete a directory mid-install").toBe(0);
+      expect(existsSync(busy)).toBe(true);
+    } finally {
+      release();
+      await installing;
+    }
+  });
+
+  // fc9514a9/e6127e35, found by lore's own review against the fix directly above:
+  // the `isInstalling` check ran once, BEFORE `dirSize`'s recursive walk, so an
+  // install starting during that walk (not before it) still raced the `rm`. Many
+  // files, so the walk takes long enough in practice to reliably start the install
+  // in the middle of it rather than before or after.
+  it("catches an install that starts DURING the size walk, not only one already running", async () => {
+    // The outer `beforeEach`'s "demo" repo would otherwise make `collect()` spawn a
+    // real `git worktree prune` (against a bare.git that does not exist here) before
+    // `collectSandbox` even starts — enough process-spawn overhead, measured, to
+    // swallow the timing window below before it begins and make this test pass
+    // regardless of which check the fix landed. Removed so `collectSandbox` starts
+    // as close to immediately as `sweep()` can make it.
+    store.db.prepare("DELETE FROM repo WHERE id = ?").run(repoId);
+
+    mkdirSync(join(root, "npm-cache"), { recursive: true });
+    const busy = dirAged(join(root, "npm-cache"), "lockfile-race", 30);
+    for (let i = 0; i < 1000; i++) writeFileSync(join(busy, `f${String(i)}`), "x");
+    // `dirAged` set `busy`'s own mtime to 30 days ago, but writing 1000 new entries
+    // into it just now bumped that mtime straight back to the present — the SAME
+    // fact `t0/runner.ts`'s ffbda1f7 fix relies on. Re-aged so the mtime check still
+    // lets this directory through to the size walk, which is the thing under test.
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 86_400_000);
+    utimesSync(busy, thirtyDaysAgo, thirtyDaysAgo);
+
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((r) => {
+      release = r;
+    });
+
+    const sweeping = sweep();
+    // Give collectSandbox's first isInstalling check (which sees nothing yet) and
+    // dirSize's walk a moment to actually be under way before the install starts.
+    await new Promise((r) => setTimeout(r, 5));
+    const installing = withInstallLock(busy, () => held);
+
+    try {
+      const result = await sweeping;
+      expect(result.cacheDirsRemoved, "the re-check must catch it, not only the first check").toBe(0);
       expect(existsSync(busy)).toBe(true);
     } finally {
       release();

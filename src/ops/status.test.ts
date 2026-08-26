@@ -45,10 +45,10 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-const render = () => {
+const render = (reviewId?: string) => {
   const db = new DatabaseSync(join(dir, "lore.db"), { readOnly: true });
   try {
-    return renderStatus(db, undefined, dir);
+    return renderStatus(db, reviewId, dir);
   } finally {
     db.close();
   }
@@ -215,6 +215,81 @@ describe("findings nobody has collected", () => {
       "waiting to be collected",
     );
     expect(out).toMatch(/1 finding\(s\), 1 high\s+feat\/unread/);
+  });
+});
+
+/**
+ * 36006b58, found by lore's own review: `updated_at` is written as
+ * `new Date().toISOString()` (a `T` separator), but the old query compared it
+ * against SQLite's `datetime('now','-1 day')` (a space separator) as plain TEXT.
+ * `'T' > ' '` in ASCII regardless of the times either side of it, so a review whose
+ * DATE happened to match the cutoff's date read as "recent" however old it actually
+ * was within that window — verified directly with a standalone script: a review
+ * updated 28 real hours ago was included.
+ *
+ * REAL, UNMOCKED TIME, deliberately: `datetime('now', ...)` is evaluated inside
+ * `node:sqlite`'s native engine, which reads the OS clock directly and is provably
+ * unreachable by `vi.setSystemTime()` (checked directly — SQLite kept answering the
+ * real date while `Date.now()` was pinned to 2020). The fixed code no longer calls
+ * SQLite's clock at all, but a test built to fail against the OLD code has to trigger
+ * the OLD code's actual comparison, which means using the OS clock it actually read.
+ * One minute before the cutoff shares the cutoff's calendar date on all but the
+ * rare run that starts in the sixty seconds after UTC midnight.
+ */
+describe("the 24-hour review window survives the text-vs-space quirk in SQLite's own dates", () => {
+  it("excludes a terminal review over a day old even when its calendar date matches the cutoff's", () => {
+    const repo = store.upsertRepo("demo", "git@x:demo.git");
+    store.createReview({
+      id: "revOld", repoId: repo.id, principal: "p", branch: "b", intoRef: "main",
+      ticket: "t", type: "code-arch", state: "passed", ladder: initialState(),
+    });
+    // Genuinely over a day old (24h + 1min), so it must be excluded — but its
+    // calendar date, on all but the rarest run, still matches the cutoff's, which is
+    // exactly the shape the text comparison got wrong.
+    const justOverADayAgo = new Date(Date.now() - (24 * 3_600_000 + 60_000)).toISOString();
+    store.db.prepare("UPDATE review SET updated_at = ? WHERE id = ?").run(justOverADayAgo, "revOld");
+
+    expect(render(), "a review just over a day old must not read as within the last day").toContain(
+      "lore` is idle",
+    );
+  });
+});
+
+// 1eaf7dc6, found by lore's own review: a specific reviewId that matched nothing
+// (a typo, or a row aged out past the retention window) fell into the SAME
+// `reviews.length === 0` branch as "nothing is running at all", so an operator
+// asking about one review was told the whole service was idle — including sections
+// about mirrors and uncollected findings that answer a question nobody asked.
+describe("a review id that matches nothing is not the same fact as an idle service", () => {
+  it("says the id was not found, not that lore is idle", () => {
+    const repo = store.upsertRepo("demo", "git@x:demo.git");
+    // A DIFFERENT review is actively running, so a correct "idle" reading is
+    // impossible here — proving this path is reached because of the id, not
+    // because the service genuinely has nothing going on.
+    store.createReview({
+      id: "revRunning", repoId: repo.id, principal: "p", branch: "b", intoRef: "main",
+      ticket: "t", type: "code-arch", state: "running", ladder: initialState(),
+    });
+
+    const out = render("rev_TYPO");
+    expect(out, "must not claim the service is idle").not.toContain("is idle");
+    expect(out, "must say the id was not found").toContain("rev_TYPO");
+  });
+});
+
+// 3468ba9e, found by lore's own review: `tierDownLines`'s D-90 banner used to run
+// only AFTER the idle early-return, so a stated provider cool-off in force — it can
+// outlive every review that triggered it, days per `runRound`'s own words — was
+// invisible on a service with no open reviews, exactly when an operator checking
+// "is anything wrong before I start work?" would see only "lore is idle".
+describe("a stated provider cool-off survives an otherwise-idle service", () => {
+  it("shows the cool-off banner alongside the idle message, not hidden behind it", () => {
+    const until = new Date(Date.now() + 3_600_000).toISOString();
+    store.markTierUnavailable("t1", until, "the provider said its limit resets then", 1, true);
+
+    const out = render();
+    expect(out, "must still say the service is idle").toContain("lore` is idle");
+    expect(out, "must not hide the cool-off behind the idle message").toContain("IS NOT BEING ASKED");
   });
 });
 

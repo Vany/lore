@@ -50,8 +50,21 @@ export class Alerter {
    * same notice repeats on every round.
    */
   async send(alert: Alert): Promise<boolean> {
-    // Always local first. If the webhook is unreachable this is the only record —
-    // and the far end notices anyway, because the heartbeat stops arriving.
+    // Always local first. If the webhook is unreachable this is the only record.
+    //
+    // NOT THE SAME CHANNEL AS THE DEADMAN — found by lore's own review, fingerprint
+    // 2a8105af, against this comment's own PRIOR claim that "the far end notices
+    // anyway, because the heartbeat stops arriving": the beat POSTs to
+    // `HeartbeatConfig.url`, a separate address from `webhookUrl` here, wired from a
+    // different env var (`LORE_HEARTBEAT_URL` vs `LORE_WEBHOOK_URL`) and sent
+    // unconditionally regardless of whether any `send()` call in the same beat
+    // succeeded. A webhook host that is down on its own — everything else
+    // healthy — never stops the beat, so the deadman stays silent while a page is
+    // lost. What actually protects a caller here is the return value below: every
+    // latching caller (`reviewer/review.ts`'s `tellPaidRoute`, and `heartbeat.ts`'s
+    // six latches, both now) re-arms on `false` rather than marking a failed
+    // delivery as told, so the NEXT beat tries again instead of the notice being
+    // lost for the life of the condition.
     const line = `[lore:${alert.severity}] ${alert.condition} — ${alert.detail}`;
     if (alert.severity === "page") console.error(line);
     else console.warn(line);
