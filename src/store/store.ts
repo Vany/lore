@@ -2083,9 +2083,19 @@ export class Store {
    * now matches directly, since this caller has no such upstream parser to lean
    * on. A caller retiring the exact id it was just handed must not be told no live
    * rule starts with its own id.
+   *
+   * 72313b18: THAT version still admitted a bare trailing hyphen — `"550e8400-"`
+   * passed `[0-9a-f-]{0,28}` because a hyphen is in the class. Every real id has a
+   * hyphen at position 9 (`randomUUID`'s own layout), so `LIKE '550e8400-%'`
+   * matches exactly the same rows `LIKE '550e8400%'` does — the trailing hyphen
+   * adds no precision, so a caller who typed it believing it narrowed the match
+   * (a transcription that truncated a longer id at its first hyphen, say) gets a
+   * result no different from having typed eight fewer characters, silently. The
+   * suffix must now END in hex, never in a hyphen — still every real id and every
+   * real prefix of one, never a pattern whose specificity is smaller than it looks.
    */
   retirePolicy(repoId: string, short: string, reason: string): "retired" | "not-found" | "ambiguous" {
-    if (!/^[0-9a-f]{8}[0-9a-f-]{0,28}$/i.test(short)) return "not-found";
+    if (!/^[0-9a-f]{8}([0-9a-f-]*[0-9a-f])?$/i.test(short)) return "not-found";
     const rows = this.db
       .prepare("SELECT id FROM knowledge WHERE repo_id = ? AND kind = 'policy' AND retired_at IS NULL AND id LIKE ?")
       .all(repoId, `${short}%`) as { id: string }[];

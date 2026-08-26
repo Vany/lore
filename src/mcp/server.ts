@@ -20,6 +20,7 @@ import { worstSeverity } from "../core/finding.ts";
 import { initialState, ladderFingerprint, type LadderState } from "../core/ladder.ts";
 import { isAttestable, isClean, isTerminal, needsClient, type ReviewState } from "../core/review-state.ts";
 import { SHORT_LENGTH } from "../core/fingerprint.ts";
+import { isSuppressionNotice } from "../core/checks-skipped.ts";
 import { DEFAULT_TYPE, reviewType, reviewTypeIds } from "../core/review-type.ts";
 import { STALE_GRACE_DAYS, STALE_HOURS } from "../ops/retention.ts";
 import { applyPatch, restoreTree, revParse, treeDelta, treeHash } from "../git/repo.ts";
@@ -1125,16 +1126,28 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
             // for `failed_because` above — one entry kind here embeds a TEAM-authored
             // development rule's full statement verbatim, in quotes (D-83's design,
             // reviewer/review.ts: "the client's channel is the audit trail and wants
-            // the whole reason"), and every producer of that kind matches the exact
-            // same shape " was NOT reported at " (review.ts's own `isSuppressionNotice`,
-            // "the only producer of it"). A rule whose statement happens to contain a
-            // URL, the word "opencode", or an absolute path is not kitchen text — it is
-            // a quote from a person, and running it through forClient anyway attributes
-            // words to the team that the team never wrote. Every other entry here is
+            // the whole reason"). A rule whose statement happens to contain a URL, the
+            // word "opencode", or an absolute path is not kitchen text — it is a quote
+            // from a person, and running it through forClient anyway attributes words
+            // to the team that the team never wrote. Every other entry here is
             // genuinely system-authored (an engine that could not run, a tier that
             // failed over) and still needs translating.
+            //
+            // 9e8af4bb: the first version of this check was `line.includes(" was NOT
+            // reported at ")` — unanchored. Two OTHER writers of this same list embed
+            // UNTRUSTED text verbatim (a rejected finding's up-to-300-char raw model
+            // JSON excerpt; a tier-unavailable note's caught error message), and either
+            // can legitimately CONTAIN that exact phrase — this repository reviews
+            // itself, and the phrase is the ladder's own vocabulary, so a model quoting
+            // this file's own source would do it. An unanchored match would then exempt
+            // untrusted text from translation on nothing more than a coincidental
+            // substring — the leak direction, unlike `isSuppressionNotice`'s OTHER use
+            // in reviewer/review.ts, where the same unanchored shape only ever dropped a
+            // line from a prompt. `isSuppressionNotice` (core/checks-skipped.ts) is
+            // anchored at the start against the one shape this list's real producer
+            // writes, exactly as `isCoverageLoss` already had to be for the same reason.
             const skipped = store.unavailableChecks(review_id).map((line) =>
-              line.includes(" was NOT reported at ") ? line : forClient(line),
+              isSuppressionNotice(line) ? line : forClient(line),
             );
             return skipped.length === 0
               ? {}

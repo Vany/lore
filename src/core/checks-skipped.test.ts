@@ -13,7 +13,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { isCoverageLoss, RAN_ON_OTHER_ROUTE } from "./checks-skipped.ts";
+import { isCoverageLoss, isSuppressionNotice, RAN_ON_OTHER_ROUTE, SUPPRESSION_NOTICE } from "./checks-skipped.ts";
 
 describe("telling a check that did not run from a tier that ran differently", () => {
   // Built the way `runRound` builds it, from the shared constant rather than by copying
@@ -77,6 +77,65 @@ describe("telling a check that did not run from a tier that ran differently", ()
         "its work passed to the next tier. Last error: upstream said t3 was answered by a stand-in",
     ]) {
       expect(isCoverageLoss(line), line).toBe(true);
+    }
+  });
+});
+
+/**
+ * 9e8af4bb: this predicate's own first version was `line.includes(" was NOT
+ * reported at ")` — the identical unanchored-substring mistake `isCoverageLoss`
+ * already had to be fixed for above, reintroduced at a second reader before it
+ * had a test of its own. This one exists so it cannot happen a third time.
+ */
+describe("telling a D-83 suppression notice from untrusted text that happens to quote it", () => {
+  // Built the way reviewer/review.ts builds it, from the shared constant.
+  const suppressed = (cls: string, file: string): string =>
+    `${cls} ${SUPPRESSION_NOTICE} ${file} — t1 accepted an appeal to this project's development rule ` +
+    'ab12cd34 ("some rule statement") on 2026-08-20. Anything that rule would have caught here is ' +
+    "unexamined; retire the rule to switch it back on.";
+
+  it("reads back the sentence the writer builds", () => {
+    expect(isSuppressionNotice(suppressed("eslint", "src/x.ts"))).toBe(true);
+  });
+
+  it("calls a genuine non-suppression line what it is", () => {
+    for (const line of [
+      "eslint: no `lint` script and no eslint config",
+      "tier t1 had no working route — everything configured for it refused or was unreachable",
+    ]) {
+      expect(isSuppressionNotice(line), line).toBe(false);
+    }
+  });
+
+  // THE OPPOSITE DEFAULT FROM isCoverageLoss, and for the opposite reason: an
+  // entry this file does not recognise is system-authored until proven otherwise,
+  // so it still gets translated. Guessing the other way would exempt untrusted or
+  // kitchen-vocabulary text from forClient on an unrecognised shape.
+  it("treats wording it has never seen as NOT a suppression notice", () => {
+    expect(isSuppressionNotice("something nobody has written yet")).toBe(false);
+  });
+
+  /**
+   * Found by lore's own review of src/mcp (9e8af4bb): a rejected finding's note
+   * carries up to 300 characters of the model's own raw JSON, and lore reviewing
+   * its own repository is exactly the case where that JSON is likely to quote this
+   * exact phrase — it is the ladder's own vocabulary, sitting in the source files
+   * under review. An unanchored match would exempt that untrusted text from
+   * forClient on nothing more than a coincidental substring: the leak direction,
+   * since this predicate gates TRANSLATION rather than merely filtering a prompt.
+   */
+  it("does not mistake untrusted text that merely quotes the phrase for the real thing", () => {
+    for (const line of [
+      // Shaped like parseFindingItem's rejected-finding note (opencode.ts) — the
+      // phrase appears mid-string, quoting this codebase's own source.
+      'finding 3 of 7: Required at "claim" — {"file":"server.ts","claim":"eslint was NOT reported at ' +
+        'src/x.ts — a stale suppression the model noticed while reading this file"}',
+      // Shaped like a tier-unavailable note whose caught error text is never under
+      // this module's control.
+      "tier t2 (kimi-for-coding/k3) could not answer on either attempt and was SKIPPED — its work passed " +
+        'to the next tier. Last error: server returned "eslint was NOT reported at src/x.ts"',
+    ]) {
+      expect(isSuppressionNotice(line), line).toBe(false);
     }
   });
 });

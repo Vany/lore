@@ -38,7 +38,7 @@ import type { ReviewType } from "../core/review-type.ts";
 import { retryAt, shouldProbe } from "../core/cooloff.ts";
 import { isMeteredRoute, withoutMetered } from "../core/metered.ts";
 import { exemptLiteral, vendorOf } from "../core/ladder.ts";
-import { RAN_ON_OTHER_ROUTE } from "../core/checks-skipped.ts";
+import { RAN_ON_OTHER_ROUTE, SUPPRESSION_NOTICE, isSuppressionNotice } from "../core/checks-skipped.ts";
 import { type Alert, CONDITIONS } from "../ops/alerts.ts";
 import { startOfDayIso } from "../ops/spend.ts";
 import { ServiceUnreachable, CancelledByLore, DidNotRun, Exhausted, ProviderAuthFailed, TierUnavailable, TooLargeForTier } from "../core/errors.ts";
@@ -621,12 +621,12 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     const s = cls === undefined ? undefined : suppressed.find((x) => x.ruleClass === cls && x.path === f.file);
     if (s === undefined) return true;
     silenced.push(
-      `${cls ?? ""} was NOT reported at ${f.file} — ${s.tier} accepted an appeal to this project's ` +
+      `${cls ?? ""} ${SUPPRESSION_NOTICE} ${f.file} — ${s.tier} accepted an appeal to this project's ` +
         `development rule ${s.policyShort} ("${s.statement}") on ${s.acceptedAt.slice(0, 10)}. Anything that ` +
         "rule would have caught here is unexamined; retire the rule to switch it back on.",
     );
     silencedForTier.push(
-      `${cls ?? ""} was NOT reported at ${f.file} — a tier accepted an appeal to one of this project's ` +
+      `${cls ?? ""} ${SUPPRESSION_NOTICE} ${f.file} — a tier accepted an appeal to one of this project's ` +
         "development rules. Nothing checked that rule's subject here; you are free to raise the underlying " +
         "problem yourself if you see it, and a finding you raise cannot be silenced this way.",
     );
@@ -652,9 +652,11 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // notice's own remedy ("retire the rule to switch it back on") did not work inside
   // the review that gave the advice.
   //
-  // Matched on the shape THIS FILE generates a few lines below, which is the only
-  // producer of it.
-  const isSuppressionNotice = (line: string): boolean => / was NOT reported at /.test(line);
+  // `isSuppressionNotice` (core/checks-skipped.ts) recognises the shape THIS FILE
+  // generates a few lines below, the only producer of it — imported rather than
+  // hand-rolled a second time here, per 9e8af4bb: an unanchored copy of this same
+  // check, at the OTHER reader of these entries (mcp/server.ts), read untrusted
+  // text as a suppression notice on nothing more than a coincidental substring.
   const carriedForTier = (reuseT0 ? previousT0?.unavailableForTier ?? [] : t0.unavailable).filter(
     (l) => !isSuppressionNotice(l),
   );
@@ -676,12 +678,12 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   if (reuseT0 && suppressed.length > 0) {
     for (const s of suppressed) {
       silenced.push(
-        `${s.ruleClass} was NOT reported at ${s.path} — ${s.tier} accepted an appeal to this project's ` +
+        `${s.ruleClass} ${SUPPRESSION_NOTICE} ${s.path} — ${s.tier} accepted an appeal to this project's ` +
           `development rule ${s.policyShort} ("${s.statement}") on ${s.acceptedAt.slice(0, 10)}. Anything that ` +
           "rule would have caught here is unexamined; retire the rule to switch it back on.",
       );
       silencedForTier.push(
-        `${s.ruleClass} was NOT reported at ${s.path} — a tier accepted an appeal to one of this project's ` +
+        `${s.ruleClass} ${SUPPRESSION_NOTICE} ${s.path} — a tier accepted an appeal to one of this project's ` +
           "development rules. Nothing checked that rule's subject here; you are free to raise the underlying " +
           "problem yourself if you see it, and a finding you raise cannot be silenced this way.",
       );

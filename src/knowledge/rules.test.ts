@@ -130,4 +130,25 @@ describe("the operator's view of development rules", () => {
       store.close();
     }
   });
+
+  // 72313b18, found by lore's own review against its own 16d21041 fix just above:
+  // that version still admitted a bare trailing hyphen, e.g. "<cite_as>-". Every
+  // real id has a hyphen at position 9 (randomUUID's own layout), so the trailing
+  // hyphen added no precision to the LIKE pattern — a caller who typed nine
+  // characters believing they were more specific than eight got exactly the same
+  // match. The 8-char cite_as alone must still work; only the pointless trailing
+  // hyphen is new ground.
+  it("refuses a bare trailing hyphen, which narrows nothing, but still accepts the plain 8-char prefix", () => {
+    const { store, repoId } = setup();
+    try {
+      const rule = addRule(store, repoId, { statement: "services bind 0.0.0.0", why: "overlay", by: "vany" });
+      const citeAs = rule.id.slice(0, 8);
+
+      expect(store.retirePolicy(repoId, `${citeAs}-`, "not the id")).toBe("not-found");
+      expect(ruleReport(store, repoId).rules, "must survive the refused attempt untouched").toHaveLength(1);
+      expect(store.retirePolicy(repoId, citeAs, "moved off the overlay")).toBe("retired");
+    } finally {
+      store.close();
+    }
+  });
 });

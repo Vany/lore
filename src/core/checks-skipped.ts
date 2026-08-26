@@ -66,3 +66,40 @@ const RAN_ON_OTHER_ROUTE_PREFIX = new RegExp(`^\\S+ ${RAN_ON_OTHER_ROUTE} `);
 export function isCoverageLoss(entry: string): boolean {
   return !RAN_ON_OTHER_ROUTE_PREFIX.test(entry);
 }
+
+/**
+ * The opening of the line a D-83 suppression notice writes — an accepted appeal
+ * silenced an engine finding, and the notice quotes the development rule verbatim.
+ *
+ * Exported so the writer (`reviewer/review.ts`, both the fresh-round and the
+ * D-83×D-92 reused-round producer) builds its sentence from this rather than
+ * repeating it, for the same reason `RAN_ON_OTHER_ROUTE` is exported.
+ */
+export const SUPPRESSION_NOTICE = "was NOT reported at";
+
+/**
+ * Anchored at the start, for the identical reason `RAN_ON_OTHER_ROUTE_PREFIX` is:
+ * found by lore's own review, reading the exact lesson this file already recorded
+ * above and not applying it to a second recognizer built the same unanchored way
+ * (fingerprint 9e8af4bb). A suppression notice's quoted rule statement, a rejected
+ * finding's raw model JSON, and a caught error's message can all legitimately
+ * CONTAIN "was NOT reported at" as a substring — this repository reviews itself,
+ * and the phrase is the ladder's own vocabulary — so a bare `.includes()` used to
+ * decide whether to translate an entry would exempt untrusted text from
+ * `forClient` on nothing more than a coincidental quote.
+ */
+const SUPPRESSION_NOTICE_PREFIX = new RegExp(`^\\S+ ${SUPPRESSION_NOTICE} `);
+
+/**
+ * Does this entry quote a TEAM-authored development rule's statement verbatim?
+ *
+ * `false` is the default for anything unrecognised — the opposite default from
+ * `isCoverageLoss`, and for the same reason in the opposite direction: an entry
+ * this file does not recognise is system-authored until proven otherwise, so it
+ * still gets translated. Guessing the other way would let untrusted or
+ * kitchen-vocabulary text skip translation on an unrecognised shape, which is the
+ * leak `forClient` exists to prevent.
+ */
+export function isSuppressionNotice(entry: string): boolean {
+  return SUPPRESSION_NOTICE_PREFIX.test(entry);
+}
