@@ -1522,7 +1522,16 @@ export class Store {
     return row?.["git_url"];
   }
 
-  /** Reviews holding findings nobody has collected — `/status`'s uncollected section. */
+  /**
+   * Reviews holding findings nobody has collected — `/status`'s uncollected section.
+   *
+   * `r.state NOT IN (PERSON_OR_CLOCK_DECIDED_SQL)` — the same fix as
+   * `ops/status.ts`'s ANSI rendering of this same fact (038955e5, found by lore's
+   * own review of that file first): without it, an `expired` review's findings —
+   * permanently uncollectible, a terminal review refuses a submit — stayed in this
+   * JSON forever, the exact predicate `uncollectedHighOlderThan` (the heartbeat
+   * ticket for the same fact) already excludes them from, for the same reason.
+   */
   uncollectedByReview(): readonly Record<string, string | number | null>[] {
     return this.db
       .prepare(
@@ -1531,7 +1540,7 @@ export class Store {
                 SUM(CASE WHEN f.severity = 'high' THEN 1 ELSE 0 END) AS high,
                 MIN(f.first_seen) AS waiting_since
          FROM finding f JOIN review r ON r.id = f.review_id
-         WHERE f.delivered_at IS NULL
+         WHERE f.delivered_at IS NULL AND r.state NOT IN (${PERSON_OR_CLOCK_DECIDED_SQL})
          GROUP BY r.id, r.branch
          ORDER BY waiting_since`,
       )

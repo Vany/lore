@@ -174,6 +174,25 @@ describe("findings nobody has collected", () => {
     store.markDelivered("revU", ["e".repeat(64)]);
     expect(render()).not.toContain("waiting to be collected");
   });
+
+  // 038955e5, found by lore's own review: this query had no review-state filter at
+  // all, unlike uncollectedHighOlderThan (the heartbeat ticket for this same fact),
+  // which excludes cancelled and expired. An expired review's findings are
+  // PERMANENTLY uncollectible — a terminal review refuses a submit — and already
+  // had days of escalating signal before the sweep ended it; without the filter
+  // they sat here for the full 90-day retention window, painted as something an
+  // operator should chase.
+  it("stays quiet about an expired review's findings — permanently uncollectible, already escalated", () => {
+    withFinding("high", "d".repeat(64));
+    store.updateReview("revU", { state: "expired" });
+    expect(render()).not.toContain("waiting to be collected");
+  });
+
+  it("stays quiet about a cancelled review's findings too — handed over at the cancel itself", () => {
+    withFinding("high", "c".repeat(64));
+    store.updateReview("revU", { state: "cancelled" });
+    expect(render()).not.toContain("waiting to be collected");
+  });
 });
 
 /**

@@ -27,7 +27,7 @@ import { DatabaseSync } from "node:sqlite";
 import { dataDir, dbPath } from "../core/paths.ts";
 import { exemptLiteral, loadPools, loadTiers, routesFor, type LadderState } from "../core/ladder.ts";
 import { allowMeteredFromEnv, isMeteredRoute, withoutMetered } from "../core/metered.ts";
-import { TERMINAL_SQL } from "../core/review-state.ts";
+import { PERSON_OR_CLOCK_DECIDED_SQL, TERMINAL_SQL } from "../core/review-state.ts";
 import { MAX_MIRROR_AGE_MS } from "../git/repo.ts";
 
 // Honest in a pipe: colour is for a human at a terminal, and a log file full of
@@ -532,6 +532,19 @@ function memoryLines(db: DatabaseSync): string[] {
  *
  * A finding nobody reads is the same failure as a review that did not run, one step
  * later: work was done, a defect was found, and the branch is no safer for it.
+ *
+ * `r.state NOT IN (PERSON_OR_CLOCK_DECIDED_SQL)` — found by lore's own review,
+ * fingerprint 038955e5. `store.uncollectedHighOlderThan`, the heartbeat ticket for
+ * this exact predicate, excludes `cancelled` (self-resolving — `review_cancel` hands every
+ * finding over as the cancel itself) and `expired` (already given days of
+ * escalating signal before the sweep ends it) — its own comment says "`delivered_at
+ * IS NULL` is the same predicate the operator view groups by, so the two cannot
+ * disagree about what 'uncollected' means", which this query, missing the same
+ * filter, made false. Without it, every `expired` review's dead findings sat here
+ * for the full 90-day retention window — permanently uncollectible (a terminal
+ * review refuses a submit) and already fully escalated — painted as something an
+ * operator should chase, growing by every abandoned review, while the ticket for
+ * the identical fact stayed correctly silent about them.
  */
 function uncollectedLines(db: DatabaseSync): string[] {
   const rows = db
@@ -541,7 +554,7 @@ function uncollectedLines(db: DatabaseSync): string[] {
               SUM(CASE WHEN f.severity = 'high' AND f.preexisting = 1 THEN 1 ELSE 0 END) AS high_pre,
               MIN(f.first_seen) AS since
        FROM finding f JOIN review r ON r.id = f.review_id
-       WHERE f.delivered_at IS NULL
+       WHERE f.delivered_at IS NULL AND r.state NOT IN (${PERSON_OR_CLOCK_DECIDED_SQL})
        GROUP BY r.id, r.branch ORDER BY since`,
     )
     .all() as Row[];

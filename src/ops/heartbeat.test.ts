@@ -210,6 +210,48 @@ describe("a database nobody can read is not a healthy service", () => {
     expect(calls, "nothing else may be asked: on this path every one of them throws").toStrictEqual([]);
   });
 
+  // 8fe4d3ee, found by lore's own review: `startHeartbeat` called `void
+  // beat().finally(schedule)` with no `.catch` anywhere in the chain — `.finally`
+  // runs on rejection too but does not swallow it, so a throw from ANY store read
+  // past the integrity check (a closed handle, SQLITE_BUSY) escaped as an unhandled
+  // promise rejection, which by Node's default crashes the whole process — every
+  // in-flight review round with it, not just the heartbeat. Reusing the Proxy stub
+  // above, inverted: integrity passes, so checkHealth proceeds past it and then
+  // genuinely throws from whichever real reader runs next.
+  it("does not let a beat that throws past the integrity check escape as an unhandled rejection", async () => {
+    const throwsLater = new Proxy(
+      {},
+      {
+        get(_t, prop: string) {
+          if (prop === "integrityFault") return () => undefined;
+          return () => {
+            throw new Error(`simulated: store read failed via ${prop}`);
+          };
+        },
+      },
+    ) as unknown as Store;
+
+    // checkHealth itself really does throw with this stub — the premise the fix answers.
+    await expect(checkHealth(throwsLater, cfg())).rejects.toThrow(/simulated/);
+
+    const rejections: unknown[] = [];
+    const onRejection = (reason: unknown): void => {
+      rejections.push(reason);
+    };
+    process.on("unhandledRejection", onRejection);
+    try {
+      const stop = startHeartbeat(throwsLater, cfg({ intervalMs: 20 }), alerter);
+      // Long enough for several beats, every one of them throwing.
+      await new Promise((r) => setTimeout(r, 200));
+      stop();
+      // Let any already-queued unhandled-rejection event drain before asserting.
+      await new Promise((r) => setImmediate(r));
+      expect(rejections, "a throwing beat must not become an unhandled rejection").toStrictEqual([]);
+    } finally {
+      process.off("unhandledRejection", onRejection);
+    }
+  });
+
   // `CONDITIONS.databaseUnreadable` lived only on the startup-refusal path, so a database
   // that went bad WHILE RUNNING put the words in `/status` and paged nobody — and
   // `/status` is a thing a person has to think to look at. Saying it unprompted is the

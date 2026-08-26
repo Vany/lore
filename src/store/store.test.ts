@@ -1208,6 +1208,32 @@ describe("uncollectedHighOlderThan", () => {
   });
 });
 
+// 038955e5, found by lore's own review: `/status`'s JSON endpoint
+// (service/http.ts's uncollected field) read this with no review-state filter at
+// all — not even `uncollectedHighOlderThan`'s own exclusion, right above, for the
+// identical underlying fact. An `expired` or `cancelled` review's findings are
+// either permanently uncollectible or already handed over at the cancel itself.
+describe("uncollectedByReview", () => {
+  const old = "2020-01-01T00:00:00.000Z";
+
+  it("lists a FAILED review's undelivered finding, unlike expired or cancelled", () => {
+    newReview("revFailed");
+    store.recordFinding("revFailed", finding("f1", { firstSeen: old }));
+    store.updateReview("revFailed", { state: "failed" });
+
+    newReview("revExpired");
+    store.recordFinding("revExpired", finding("f2", { firstSeen: old }));
+    store.updateReview("revExpired", { state: "expired" });
+
+    newReview("revCancelled");
+    store.recordFinding("revCancelled", finding("f3", { firstSeen: old }));
+    store.updateReview("revCancelled", { state: "cancelled" });
+
+    const rows = store.uncollectedByReview();
+    expect(rows.map((r) => r["id"])).toStrictEqual(["revFailed"]);
+  });
+});
+
 /**
  * The database this code will actually meet is not an empty one.
  *

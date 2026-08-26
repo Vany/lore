@@ -289,88 +289,108 @@ export function startHeartbeat(store: Store, cfg: HeartbeatConfig, alerter: Aler
 
   const beat = async (): Promise<void> => {
     if (stopped) return;
-    const health = await checkHealth(store, cfg);
-    // litestream is a SIBLING container that starts after this one and syncs on its
-    // own interval, so on a fresh deployment the replica folder is legitimately empty
-    // for the first moments — Docker creates it if the host path does not exist. A
-    // page on the first beat of every deploy is the wolf-crying failure D-59 is about,
-    // earned back in the very check written to avoid it.
-    //
-    // Only `absent` is held back. `behind` already requires a replica to exist and to
-    // have fallen behind, which cannot describe a service that has just started.
-    const replicaGrace = Date.now() - startedAt < cfg.replicaGraceMs;
+    // 8fe4d3ee: EVERYTHING BELOW, WRAPPED — found by lore's own review. This used to
+    // run with nothing catching it, called as `void beat().finally(schedule)` with no
+    // `.catch` anywhere in the chain: `.finally` runs on rejection too but does not
+    // swallow it, so a throw from any store read below (a closed handle during
+    // shutdown, SQLITE_BUSY past the write lock) escaped as an unhandled rejection —
+    // which by default takes the WHOLE PROCESS down, every in-flight review round
+    // with it. `service/worker.ts`'s `round` documents fixing the identical shape:
+    // "Detached, an escaping rejection is an unhandled one... the honest unit is the
+    // ROUND". The honest unit here is the BEAT. Swallowed rather than re-thrown,
+    // matching the design already stated a few lines down for the fetch step alone
+    // ("a failed beat is exactly what the far end is watching for") — a beat that
+    // cannot complete is not fatal, it is silence, and silence is the ONE signal this
+    // whole file exists to make someone notice (the deadman, §3): a beat that fails
+    // the same way every time stops reaching the fetch below, which is exactly the
+    // missed-heartbeat page already designed to catch it, at no risk to the process
+    // that everything else in this service depends on staying up.
+    try {
+      const health = await checkHealth(store, cfg);
+      // litestream is a SIBLING container that starts after this one and syncs on its
+      // own interval, so on a fresh deployment the replica folder is legitimately empty
+      // for the first moments — Docker creates it if the host path does not exist. A
+      // page on the first beat of every deploy is the wolf-crying failure D-59 is about,
+      // earned back in the very check written to avoid it.
+      //
+      // Only `absent` is held back. `behind` already requires a replica to exist and to
+      // have fallen behind, which cannot describe a service that has just started.
+      const replicaGrace = Date.now() - startedAt < cfg.replicaGraceMs;
 
-    // THE FAULT THAT ENDS THE SERVICE, PAGED FROM THE BEAT TOO — AND ONCE.
-    //
-    // `CONDITIONS.databaseUnreadable` existed only on the startup-refusal path, so a
-    // database that went bad WHILE RUNNING put the words in `/status` and paged nobody —
-    // and `/status` is a thing a person has to think to look at. This is the beat's whole
-    // purpose: to say it unprompted. First, and returning, because everything below reads
-    // a health report whose other fields are placeholders on this path.
-    //
-    // ONCE, because the startup path says "pages once" and a beat repeats for ever. A
-    // corrupt database does not heal, so every subsequent beat would re-send the same
-    // page — the alert channel filled by the one condition it exists for, until whoever
-    // is on the other end mutes it. Latched rather than rate-limited: the condition is
-    // binary and permanent until a person restores, so "again" carries no information.
-    // The latch clears if the database becomes readable, so a restore re-arms it.
-    if (health.problems.some((p) => p.startsWith("DATABASE UNREADABLE"))) {
-      if (!pagedUnreadable) {
-        pagedUnreadable = true;
-        await alerter.send(CONDITIONS.databaseUnreadable(health.problems[0] ?? "unreadable"));
+      // THE FAULT THAT ENDS THE SERVICE, PAGED FROM THE BEAT TOO — AND ONCE.
+      //
+      // `CONDITIONS.databaseUnreadable` existed only on the startup-refusal path, so a
+      // database that went bad WHILE RUNNING put the words in `/status` and paged nobody —
+      // and `/status` is a thing a person has to think to look at. This is the beat's whole
+      // purpose: to say it unprompted. First, and returning, because everything below reads
+      // a health report whose other fields are placeholders on this path.
+      //
+      // ONCE, because the startup path says "pages once" and a beat repeats for ever. A
+      // corrupt database does not heal, so every subsequent beat would re-send the same
+      // page — the alert channel filled by the one condition it exists for, until whoever
+      // is on the other end mutes it. Latched rather than rate-limited: the condition is
+      // binary and permanent until a person restores, so "again" carries no information.
+      // The latch clears if the database becomes readable, so a restore re-arms it.
+      if (health.problems.some((p) => p.startsWith("DATABASE UNREADABLE"))) {
+        if (!pagedUnreadable) {
+          pagedUnreadable = true;
+          await alerter.send(CONDITIONS.databaseUnreadable(health.problems[0] ?? "unreadable"));
+        }
+        return;
       }
-      return;
-    }
-    pagedUnreadable = false;
+      pagedUnreadable = false;
 
-    if (health.queueDepth >= cfg.queueWarnDepth) {
-      await alerter.send(CONDITIONS.queueBacked(health.queueDepth));
-    }
+      if (health.queueDepth >= cfg.queueWarnDepth) {
+        await alerter.send(CONDITIONS.queueBacked(health.queueDepth));
+      }
 
-    // The knowledge base IS the product and this device has no redundancy, so these
-    // are pages. Both were dead conditions until now: `spec/operations.md` §2.1 has
-    // listed the replica under "someone should look now" the whole time, and nothing
-    // ever sent it — the only replica check lived in `make status`, which is a command
-    // a human runs, and a page nobody is paged by is not a page.
-    if (health.replica === "absent" && !replicaGrace) await alerter.send(CONDITIONS.backupAbsent());
-    else if (health.replica === "behind") {
-      await alerter.send(CONDITIONS.backupBehind(Math.round((health.replicaBehindSec ?? 0) / 60)));
-    }
+      // The knowledge base IS the product and this device has no redundancy, so these
+      // are pages. Both were dead conditions until now: `spec/operations.md` §2.1 has
+      // listed the replica under "someone should look now" the whole time, and nothing
+      // ever sent it — the only replica check lived in `make status`, which is a command
+      // a human runs, and a page nobody is paged by is not a page.
+      if (health.replica === "absent" && !replicaGrace) await alerter.send(CONDITIONS.backupAbsent());
+      else if (health.replica === "behind") {
+        await alerter.send(CONDITIONS.backupBehind(Math.round((health.replicaBehindSec ?? 0) / 60)));
+      }
 
-    // A ticket, not a page: one review parked on a question is normal, a pile of them
-    // ageing means nobody is answering, and every one of them blocks a review from
-    // ever passing (spec/knowledge.md §7.2).
-    if (health.needsHumanOverAge > toldNeedsHumanAgeing) {
-      toldNeedsHumanAgeing = health.needsHumanOverAge;
-      await alerter.send(CONDITIONS.needsHumanAgeing(health.needsHumanOverAge, cfg.needsHumanAgeHours));
-    } else if (health.needsHumanOverAge < toldNeedsHumanAgeing) {
-      // Somebody decided, or a document re-ingest closed the conflict (D-20). Re-arm,
-      // so the next one to age past the threshold speaks.
-      toldNeedsHumanAgeing = health.needsHumanOverAge;
-    }
+      // A ticket, not a page: one review parked on a question is normal, a pile of them
+      // ageing means nobody is answering, and every one of them blocks a review from
+      // ever passing (spec/knowledge.md §7.2).
+      if (health.needsHumanOverAge > toldNeedsHumanAgeing) {
+        toldNeedsHumanAgeing = health.needsHumanOverAge;
+        await alerter.send(CONDITIONS.needsHumanAgeing(health.needsHumanOverAge, cfg.needsHumanAgeHours));
+      } else if (health.needsHumanOverAge < toldNeedsHumanAgeing) {
+        // Somebody decided, or a document re-ingest closed the conflict (D-20). Re-arm,
+        // so the next one to age past the threshold speaks.
+        toldNeedsHumanAgeing = health.needsHumanOverAge;
+      }
 
-    // THE SAME FAILURE FROM THE OTHER END. `needs_human` is a review waiting on a person;
-    // this is a person who stopped waiting on a review. Both end with a paid deep tier's
-    // work concluding nothing, and until now only the first had a channel — the second was
-    // on the operator board, which is read by the one party who cannot act on it.
-    if (health.uncollectedOverAge > toldUncollected) {
-      toldUncollected = health.uncollectedOverAge;
-      await alerter.send(CONDITIONS.findingsUncollected(health.uncollectedOverAge, cfg.uncollectedAgeHours));
-    } else if (health.uncollectedOverAge < toldUncollected) {
-      // Somebody collected, or the sweep took it. Re-arm, so the next one speaks.
-      toldUncollected = health.uncollectedOverAge;
-    }
+      // THE SAME FAILURE FROM THE OTHER END. `needs_human` is a review waiting on a person;
+      // this is a person who stopped waiting on a review. Both end with a paid deep tier's
+      // work concluding nothing, and until now only the first had a channel — the second was
+      // on the operator board, which is read by the one party who cannot act on it.
+      if (health.uncollectedOverAge > toldUncollected) {
+        toldUncollected = health.uncollectedOverAge;
+        await alerter.send(CONDITIONS.findingsUncollected(health.uncollectedOverAge, cfg.uncollectedAgeHours));
+      } else if (health.uncollectedOverAge < toldUncollected) {
+        // Somebody collected, or the sweep took it. Re-arm, so the next one speaks.
+        toldUncollected = health.uncollectedOverAge;
+      }
 
-    if (cfg.url !== undefined) {
-      await fetch(cfg.url, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(health),
-        signal: AbortSignal.timeout(10_000),
-      }).catch(() => {
-        // Deliberately silent here. A failed beat is exactly what the far end is
-        // watching for; shouting about it locally adds nothing it can act on.
-      });
+      if (cfg.url !== undefined) {
+        await fetch(cfg.url, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(health),
+          signal: AbortSignal.timeout(10_000),
+        }).catch(() => {
+          // Deliberately silent here. A failed beat is exactly what the far end is
+          // watching for; shouting about it locally adds nothing it can act on.
+        });
+      }
+    } catch (e) {
+      console.error(`[lore:log] heartbeat: a beat could not complete: ${e instanceof Error ? e.message : String(e)}`);
     }
   };
 
