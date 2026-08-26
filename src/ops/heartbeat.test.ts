@@ -103,6 +103,31 @@ function replicaAt(agoSec: number): string {
   return backup;
 }
 
+/**
+ * N reviews, each with one enqueued job — the queue depth that counts them.
+ *
+ * Also THE BARRIER for the replica-grace tests below: `queueWarnDepth: 0` used to
+ * make the queue-ticket fire on any beat regardless of what the queue held, proving
+ * the beat had genuinely run. `452c4a7a`'s latch broke that trick — found by lore's
+ * own review — since `0 > toldQueueDepth(0)` is false, so the ticket the barrier
+ * depended on never fires and "nothing arrived" passes vacuously whether the beat
+ * ran or not, exactly the failure the barrier comment says it exists to prevent. A
+ * real, changing depth is the only barrier the latch cannot silently defeat.
+ */
+let queuedCalls = 0;
+function queued(n: number): void {
+  queuedCalls += 1;
+  for (let i = 0; i < n; i++) {
+    const id = `q${String(queuedCalls)}-${String(i)}`;
+    store.createReview({
+      id, repoId: store.upsertRepo(id, `git@x:${id}.git`).id, principal: "p",
+      branch: `b-${id}`, intoRef: "main", ticket: "t", type: "code-arch", state: "running",
+      ladder: initialState(),
+    });
+    store.enqueue(id, "fast");
+  }
+}
+
 describe("health.ok is computed, never a literal", () => {
   // It was `ok: true` unconditionally, including on the beat that paged for a
   // critical disk. A health field that cannot say no is decoration a reader believes.
@@ -500,11 +525,18 @@ describe("the beat sends the conditions that had no caller", () => {
   it("does not page for a missing replica during the startup grace", async () => {
     const backupDir = join(dir, "empty-backup");
     mkdirSync(backupDir, { recursive: true });
-    // THE BARRIER — `queueWarnDepth: 0` makes the same beat emit a queue ticket whatever
-    // the queue holds. It used to be the footprint ticket, which was removed with the rest
-    // of the disk watching on 2026-08-12; the barrier is the part that had to survive,
-    // because without it this test passes against a heartbeat that never ran.
-    const stop = startHeartbeat(store, cfg({ backupDir, intervalMs: 3_600_000, queueWarnDepth: 0 }), alerter);
+    // THE BARRIER — a real, changing queue depth makes the same beat emit a queue
+    // ticket regardless of the replica. It used to be `queueWarnDepth: 0` alone (any
+    // depth, even zero, warns) until `452c4a7a`'s latch made that never fire at all:
+    // the send is now gated on `queueDepth > toldQueueDepth`, and a fresh
+    // `toldQueueDepth` starts at 0, so `0 > 0` is false on the very first beat —
+    // found by lore's own review, fingerprint acc6d765, reading its own prior
+    // round's fix against the barrier it silently broke. `until()` then timed out having sent
+    // nothing, and the absence assertion below passed whether or not the beat had
+    // run — exactly the failure this barrier exists to catch. A real, nonzero,
+    // genuinely queued depth is the only barrier the latch cannot defeat.
+    queued(1);
+    const stop = startHeartbeat(store, cfg({ backupDir, intervalMs: 3_600_000, queueWarnDepth: 1 }), alerter);
     await until(() => sent.some((x) => x.condition === "queue depth sustained"));
     stop();
     expect(sent.filter((x) => x.condition === "backup replica missing")).toStrictEqual([]);
@@ -531,8 +563,9 @@ describe("the beat sends the conditions that had no caller", () => {
   });
 
   it("stays quiet about a replica it was never given", async () => {
-    const stop = startHeartbeat(store, cfg({ intervalMs: 3_600_000, queueWarnDepth: 0 }), alerter);
-    await until(() => sent.some((x) => x.condition === "queue depth sustained")); // the barrier — see above
+    queued(1); // the barrier — see queued()'s own comment above
+    const stop = startHeartbeat(store, cfg({ intervalMs: 3_600_000, queueWarnDepth: 1 }), alerter);
+    await until(() => sent.some((x) => x.condition === "queue depth sustained"));
     stop();
     expect(sent.filter((x) => x.condition.startsWith("backup"))).toStrictEqual([]);
   });
@@ -568,21 +601,6 @@ describe("the beat sends the conditions that had no caller", () => {
 // this reason. A genuine CPU-bound backlog (the condition's own words: "T0 is the
 // bottleneck") can sit above the threshold for hours.
 describe("queue depth sustained", () => {
-  /** N reviews, each with one enqueued job — the queue depth that counts them. */
-  let queuedCalls = 0;
-  function queued(n: number): void {
-    queuedCalls += 1;
-    for (let i = 0; i < n; i++) {
-      const id = `q${String(queuedCalls)}-${String(i)}`;
-      store.createReview({
-        id, repoId: store.upsertRepo(id, `git@x:${id}.git`).id, principal: "p",
-        branch: `b-${id}`, intoRef: "main", ticket: "t", type: "code-arch", state: "running",
-        ladder: initialState(),
-      });
-      store.enqueue(id, "fast");
-    }
-  }
-
   it("sends the ticket ONCE, not on every beat, while depth is unchanged", async () => {
     queued(1);
     const stop = startHeartbeat(store, cfg({ intervalMs: 20, queueWarnDepth: 1 }), alerter);
