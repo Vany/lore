@@ -315,12 +315,23 @@ export const KILLED = 137;
  * SIGKILL from OUTSIDE the process. V8 can also give up on ITS OWN heap ceiling and
  * abort ITSELF — typically exit 134, but the exit code alone is not distinctive
  * (134 is plain SIGABRT, and a real native-module crash could produce it too) — so
- * this checks for the fatal error V8 actually prints instead, which nothing else
- * plausibly writes to stdout/stderr. The ticket that motivated `KILLED` never said
- * which of the two lore's own tsc check hit; only one of them was covered.
+ * this checks for the fatal error V8 actually prints instead. The ticket that
+ * motivated `KILLED` never said which of the two lore's own tsc check hit; only
+ * one of them was covered.
+ *
+ * THE FULL PHRASE, NOT THE SHORT ONE — found by lore's own review of the fix
+ * above, fingerprint 9171c6c9: checked before the parse and regardless of exit
+ * code, so matching on the bare words "JavaScript heap out of memory" would treat
+ * ANY output containing that sentence as an OOM, target-controlled content
+ * included — and after this fix landed, this repository's OWN source (this
+ * comment, this file's tests) contains exactly that sentence, discussing it. V8's
+ * actual crash always emits the longer, fixed phrase below verbatim (hardcoded in
+ * V8 itself, stable across versions); requiring it — rather than a fragment
+ * short enough to appear in ordinary prose — is what makes this a signal about the
+ * process's own fate rather than a claim about what the target wrote.
  */
 function ranOutOfMemory(r: { code: number; stdout: string; stderr: string }): boolean {
-  return r.code === KILLED || `${r.stdout}\n${r.stderr}`.includes("JavaScript heap out of memory");
+  return r.code === KILLED || `${r.stdout}\n${r.stderr}`.includes("Allocation failed - JavaScript heap out of memory");
 }
 
 /** A failed script becomes one finding carrying its tail. Its output is not a format. */
@@ -395,15 +406,27 @@ async function checkTypes(
   if (ranOutOfMemory(r)) return scriptFinding("tsc", "npx tsc --noEmit", r);
   // Found by lore's own review, fingerprint fde373d4: the check above closed the
   // memory-limit exit of a wider hole this branch had — an unrelated non-zero exit
-  // whose output does not happen to match `TSC_LINE` (tsc missing from
-  // node_modules, a tsconfig error in a shape the regex does not cover) still fell
-  // through to `findings: parseTsc(...)`, empty, with no `unavailable` — a run that
-  // never completed, reading as a clean pass. Matches the typecheck-script branch
-  // above: parse first, but only trust an empty result when the process itself
-  // says it succeeded.
+  // whose output does not happen to match `TSC_LINE` still fell through to
+  // `findings: parseTsc(...)`, empty, with no `unavailable` — a run that never
+  // completed, reading as a clean pass.
   const parsed = parseTsc(`${r.stdout}\n${r.stderr}`);
   if (parsed.length > 0) return { engine: "tsc", findings: parsed };
-  return r.ok ? { engine: "tsc", findings: [] } : scriptFinding("tsc", "npx tsc --noEmit", r);
+  if (r.ok) return { engine: "tsc", findings: [] };
+  // NOT `scriptFinding` here — found by lore's own review of the fix above,
+  // fingerprint 1fa9229d: unlike the typecheck-script branch, where the target
+  // itself declared this command as its gate, THIS branch runs tsc speculatively —
+  // triggered only by a tsconfig.json existing, which a repo can carry for editor
+  // support or another tool's path-mapping with no `typescript` devDependency
+  // behind it at all. `scriptFinding`'s genuine-failure arm claims "this is the
+  // project's own gate, and it does not pass" — too strong when the likelier
+  // explanation is that tsc was never installed to begin with, exactly the
+  // "a tool that is not there is a check that did not run" distinction exec.ts
+  // already draws for the outer, unsandboxed case.
+  return {
+    engine: "tsc",
+    findings: [],
+    unavailable: "`npx tsc --noEmit` did not exit cleanly and produced no parseable output — most likely not installed, so nothing is claimed about the branch",
+  };
 }
 
 async function checkLint(

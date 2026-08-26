@@ -147,14 +147,19 @@ describe("runT0 merges the host and sandbox branches", () => {
  * returned as `findings`, indistinguishable from a complete, honest result.
  * `checkTypes` and `checkLint` check `ranOutOfMemory(r)` before attempting to
  * parse, everywhere they call `runInSandbox` directly — and `sandboxed()` itself
- * checks it for `install()`. Three findings from lore's own review of this fix:
- * bd0f45f3, an OOM-killed install fell into the same handling as a genuine one and
- * came out as a confident, wrong claim that the branch's dependencies do not
- * install; fde373d4, a related but memory-independent hole in the bare-tsc branch
- * where a non-137 failure whose output does not match tsc's error format also used
- * to read as a clean pass; and cbb6824f, the cgroup's SIGKILL (137) is not the only
- * way a memory limit ends a run — V8 can abort on its OWN heap ceiling too, which
- * `ranOutOfMemory` now also recognises by its distinctive fatal-error text.
+ * checks it for `install()`. Five findings across two rounds of lore's own review
+ * of this fix: bd0f45f3, an OOM-killed install fell into the same handling as a
+ * genuine one and came out as a confident, wrong claim that the branch's
+ * dependencies do not install; fde373d4, a related but memory-independent hole in
+ * the bare-tsc branch where a non-137 failure whose output does not match tsc's
+ * error format also used to read as a clean pass; cbb6824f, the cgroup's SIGKILL
+ * (137) is not the only way a memory limit ends a run — V8 can abort on its OWN
+ * heap ceiling too, which `ranOutOfMemory` now also recognises; 9171c6c9, that
+ * recognition has to match V8's full, distinctive crash phrase rather than a
+ * fragment ordinary content (this file's own tests, after this fix landed) could
+ * contain; and 1fa9229d, fde373d4's own fix overclaimed — the bare-tsc branch runs
+ * speculatively, with no script the target declared, so an unparseable failure
+ * there is reported `unavailable`, not a "fails on this branch" finding.
  *
  * Exercised end to end through `runT0`, with a stand-in `docker`: `execFile`
  * (exec.ts) does not go through a shell, so it happily runs an arbitrary executable
@@ -246,6 +251,22 @@ describe("a run the sandbox itself killed is never mistaken for a clean or parti
     expect(tsc?.unavailable).toMatch(/not a fault in the branch/);
   });
 
+  // Fingerprint 9171c6c9: the short phrase alone is not distinctive enough to key
+  // on — this repository's own source now contains it, discussing this exact fix.
+  // A real tsc error whose message happens to quote that text (an ordinary
+  // failure, no cgroup kill and no V8 abort in sight) must still be reported as a
+  // real finding, not discarded as a false OOM.
+  it("checkTypes: a real error mentioning the short OOM phrase is not misread as an abort", async () => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { typecheck: "tsc -b" } }));
+    const stdoutOnFail =
+      'src/oom-handler.ts(12,3): error TS2322: Type \'string\' is not assignable to type \'"JavaScript heap out of memory"\'.\n';
+    const sandbox = fakeDocker(stdoutOnFail, 1);
+    const out = await runT0(dir, { engines: ["tsc"], sandbox });
+    const tsc = out.outcomes.find((o) => o.engine === "tsc");
+    expect(tsc?.findings, "a real, parseable error must survive even if it mentions the short phrase").toHaveLength(1);
+    expect(tsc?.unavailable).toBeUndefined();
+  });
+
   it("checkTypes: a killed bare `tsc --noEmit` is reported killed, not its partial output", async () => {
     writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: {} }));
     writeFileSync(join(dir, "tsconfig.json"), "{}");
@@ -257,7 +278,12 @@ describe("a run the sandbox itself killed is never mistaken for a clean or parti
     expect(tsc?.unavailable).toMatch(/not a fault in the branch/);
   });
 
-  it("checkTypes: a bare tsc run that fails with no parseable output is reported failed, not clean", async () => {
+  // Fingerprint 1fa9229d: this scenario used to become a HIGH "fails on this
+  // branch" finding (fde373d4's own fix, one round ago) — overclaiming, since this
+  // branch runs tsc speculatively (triggered by a bare tsconfig.json, no declared
+  // script) and "not found" is a tooling gap, not evidence the branch's own code
+  // fails to typecheck.
+  it("checkTypes: a bare tsc run that is not installed is reported unavailable, not a false 'fails on this branch'", async () => {
     writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: {} }));
     writeFileSync(join(dir, "tsconfig.json"), "{}");
     const script = join(dir, "fake-docker-tsc-broken.sh");
@@ -276,9 +302,8 @@ describe("a run the sandbox itself killed is never mistaken for a clean or parti
     chmodSync(script, 0o755);
     const out = await runT0(dir, { engines: ["tsc"], sandbox: baseSandbox(script) });
     const tsc = out.outcomes.find((o) => o.engine === "tsc");
-    expect(tsc?.findings, "output that never parsed must not read as a clean pass").toHaveLength(1);
-    expect(tsc?.findings?.[0]?.claim).toContain("fails on this branch");
-    expect(tsc?.unavailable).toBeUndefined();
+    expect(tsc?.findings, "an ambiguous, unparseable failure must not become a confident 'fails' claim").toStrictEqual([]);
+    expect(tsc?.unavailable).toMatch(/not installed/);
   });
 
   it("checkLint: a killed bare eslint run is reported killed, not its partial output", async () => {
