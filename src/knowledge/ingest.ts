@@ -18,7 +18,7 @@
  * SPEC: spec/knowledge.md §2
  */
 
-import { readFile, readdir } from "node:fs/promises";
+import { access, readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { blobSha, readAtRef } from "../git/diff.ts";
 import type { KnowledgeItem, Store } from "../store/store.ts";
@@ -657,19 +657,18 @@ export async function ingestDocs(
   // lore-ok[0b2d5268]: raised as a per-round insert-then-retire flap for the SAME
   // gap named above (a branch that deletes a document `into` still has) — checked
   // empirically (five consecutive `ingestDocs({ ref: trunk })` calls against a real
-  // git fixture where the branch deletes both a root file and a nested ADR the base
-  // keeps) and it does not reproduce, for a reason the claim's own evidence already
-  // half-states without following through: a document the WORKTREE lacks is absent
-  // from `discovered`, which means it is absent from `candidates` too (`candidates`
-  // is only ever a subset of `discovered`) — so the read loop, which iterates
-  // `candidates`, never reaches it and cannot "re-insert" it. Root files (`RULE_DOCS`)
-  // are the other half: `discoverable` lists all six unconditionally, existence
-  // unchecked, so a root file the branch deleted stays in `discovered` and the sweep
-  // never sees it as missing at all — it keeps reading cleanly from `into` every
-  // round instead. Either way there is one write (or zero), not a cycle. The real,
-  // narrower cost is the gap already on record just above: a nested document the
-  // branch deletes is retired (at most once, not repeatedly) ahead of the next
-  // unrelated review that would have revived it from `into`.
+  // git fixture) and it does not reproduce, for a reason the claim's own evidence
+  // already half-states without following through: a document the WORKTREE lacks is
+  // absent from `discovered`, which means it is absent from `candidates` too
+  // (`candidates` is only ever a subset of `discovered`) — so the read loop, which
+  // iterates `candidates`, never reaches it and cannot "re-insert" it. There is one
+  // write (a retirement, if a live row exists) or zero, not a cycle. Now true equally
+  // for root files and nested ones — `987bd101` closed the asymmetry where root files
+  // were exempt from this same existence check, which was a WORSE bug (a root file
+  // deleted everywhere, not just on one branch, kept its rules live forever) but had
+  // the side effect of also folding root files into this already-accepted gap: a
+  // document the branch alone deletes is retired ahead of the next unrelated review
+  // that would revive it from `into`, exactly like nested documents already were.
   if (opts.files === undefined) {
     const stillPresent = new Set(discovered);
     for (const provenance of store.liveDocumentProvenances(repoId)) {
@@ -696,13 +695,32 @@ export async function ingestDocs(
  *
  * Recursive, because ADRs get filed into subdirectories once there are enough of them.
  *
- * Returns EVERY path found, uncapped — this is a directory walk, never a file read, so
- * enumerating all of them costs nothing a cap would need to protect against. The read
- * cap lives in `ingestDocs`, at the one place that actually opens and extracts from
- * these files; see `MAX_RULE_DOCS`.
+ * Returns EVERY path that actually EXISTS, uncapped — this is a directory walk plus an
+ * existence check, never a file read, so enumerating all of them costs nothing a cap
+ * would need to protect against. The read cap lives in `ingestDocs`, at the one place
+ * that actually opens and extracts from these files; see `MAX_RULE_DOCS`.
+ *
+ * lore-ok[987bd101]: found real by lore's own review, in the SAME area as the sweep
+ * this feeds (`a2f4d4f9`, `1774135c`, `0b2d5268`) — `RULE_DOCS` used to be spread into
+ * `out` unconditionally, existence unchecked, because the read loop already handles a
+ * missing root file gracefully (`readFile`/`readAtRef` fail closed, `continue`). That
+ * was fine for the READ loop; it was fatal for the DELETION SWEEP added later, which
+ * reuses this same list to ask "does this document still exist" — a root document
+ * genuinely deleted (CLAUDE.md removed, PROG.md renamed away, at both the branch AND
+ * `into`) stayed in the unconditional list for ever, so the sweep always saw it as
+ * present and never retired its rules. Checked empirically: ingest, delete a root
+ * file, ingest again — the rule survived. Existence-checked now, the same way
+ * `RULE_DIRS`' `readdir` walk already existence-checks everything it finds.
  */
 async function discoverable(worktree: string): Promise<readonly string[]> {
-  const out: string[] = [...RULE_DOCS];
+  const out: string[] = [];
+  for (const rel of RULE_DOCS) {
+    const exists = await access(join(worktree, rel)).then(
+      () => true,
+      () => false,
+    );
+    if (exists) out.push(rel);
+  }
 
   for (const dir of RULE_DIRS) {
     const found: string[] = [];

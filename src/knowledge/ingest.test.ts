@@ -354,6 +354,29 @@ describe("the documents that get read", () => {
     store.close();
   });
 
+  // Found by lore's own review (987bd101): `discoverable` used to list all six
+  // RULE_DOCS root filenames unconditionally, existence unchecked — so a ROOT
+  // document deleted outright (not just a nested ADR) stayed in `discovered` for
+  // ever, the sweep always saw it as "still present", and its rules never retired —
+  // the a2f4d4f9 fix directly above closed this for nested documents and missed the
+  // root ones, which are the primary rule sources (CLAUDE.md itself, most of all).
+  it("retires a ROOT document's rules too when it is deleted outright, not only a nested one", async () => {
+    const store = new Store(":memory:");
+    const repoId = store.upsertRepo("r", "git@example.com:o/r.git").id;
+    await ingestDocs(store, repoId, dir);
+    expect(store.knowledgeFor(repoId).some((k) => k.statement.includes("Money<Currency>"))).toBe(true);
+
+    rmSync(join(dir, "CLAUDE.md"));
+    await ingestDocs(store, repoId, dir);
+
+    expect(
+      store.knowledgeFor(repoId).some((k) => k.statement.includes("Money<Currency>")),
+      "a rule from a ROOT document that no longer exists at all must not stay live",
+    ).toBe(false);
+    expect(store.knowledgeFor(repoId).some((k) => k.statement.includes("network transaction id"))).toBe(true);
+    store.close();
+  });
+
   it("does not retire anything when the caller explicitly restricted which files to read", async () => {
     const store = new Store(":memory:");
     const repoId = store.upsertRepo("r", "git@example.com:o/r.git").id;
@@ -483,16 +506,20 @@ describe("ingesting at a ref, not the worktree (D-10 for documents)", () => {
 
 // A finding (0b2d5268) claimed ref-mode ingest of a branch that deletes a document
 // `into` still has flaps every round — insert from `into`, retire via the deletion
-// sweep (a2f4d4f9's own disclosed gap, since the sweep compares against the WORKTREE's
-// listing), insert again next round. Checked empirically and it does not reproduce:
-// a document absent from the worktree is absent from `discovered`, which means it is
-// absent from `candidates` too (`candidates` is always a subset of `discovered`), so
-// the read loop — which only ever iterates `candidates` — never reaches it and cannot
-// re-insert what it never reads. Root files (RULE_DOCS) are the other half: they are
-// listed unconditionally regardless of whether they exist, so a deleted root file
-// stays "present" and the sweep never touches it at all. This test is that check,
-// kept: five rounds, one write total, then stable.
-describe("a document the branch deletes but `into` keeps does not flap round over round (0b2d5268)", () => {
+// sweep, insert again next round. Checked empirically and it does not reproduce: a
+// document absent from the WORKTREE is absent from `discovered`, hence absent from
+// `candidates` too (`candidates` is always a subset of `discovered`), so the read
+// loop — which only ever iterates `candidates` — never reaches it and cannot
+// "re-insert" what it never reads. This held for nested documents from the start; a
+// second review (987bd101) found root files (`RULE_DOCS`) had been exempt from the
+// same existence check `discoverable` gives everything else, which was its OWN bug
+// (a genuinely, everywhere-deleted root file's rules lived forever) — fixed by
+// existence-checking root files too, which also makes them subject to this module's
+// already-accepted narrow gap (a document the branch alone deletes is retired ahead
+// of the next unrelated review that would revive it from `into`) exactly like nested
+// documents always were. This test seeds a genuinely live row by ingesting at trunk
+// first, then checks the branch's ref-mode rounds retire it once and stay settled.
+describe("a document the branch deletes but `into` keeps does not flap round over round (0b2d5268, 987bd101)", () => {
   let dir: string;
   let trunk: string;
 
@@ -518,30 +545,32 @@ describe("a document the branch deletes but `into` keeps does not flap round ove
 
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-  it("settles after the first round and stays settled for five more", async () => {
+  it("retires a row seeded while the document existed exactly once, then stays settled", async () => {
     const store = new Store(":memory:");
     const repoId = store.upsertRepo("r", "git@example.com:o/r.git").id;
+
+    // Seed both rows as genuinely live, as an earlier ingest of trunk itself would have.
+    g("checkout", "-q", trunk);
+    const seeded = await ingestDocs(store, repoId, dir);
+    expect(seeded.added, "fixture sanity: both documents must seed a live row").toBe(2);
+    g("checkout", "-q", "feature");
 
     const counts: number[] = [];
     for (let round = 0; round < 5; round++) {
       const result = await ingestDocs(store, repoId, dir, { ref: trunk });
-      // No round after the first should add or retire anything: nothing changed.
-      if (round > 0) {
+      if (round === 0) {
+        expect(result.retired, "round 0 must retire both rows the branch's deletion orphaned").toBe(2);
+      } else {
         expect(result.added, `round ${round} added something it should not have`).toBe(0);
-        expect(result.retired, `round ${round} retired something it should not have`).toBe(0);
+        expect(result.retired, `round ${round} retired something it should not have again`).toBe(0);
       }
       counts.push(store.knowledgeFor(repoId).length);
     }
 
-    expect(counts, "the live row count must never grow or shrink after the first round").toStrictEqual([
+    expect(counts, "the live row count must never grow or shrink after round 0").toStrictEqual([
       counts[0], counts[0], counts[0], counts[0], counts[0],
     ]);
-    // The root file (into still has it) survives; the nested ADR (worktree lacks it,
-    // so it is never even a candidate) never arrives at all — the real, narrower
-    // gap already on record just above the sweep, not a growing pile of dead rows.
-    const statements = store.knowledgeFor(repoId).map((k) => k.statement);
-    expect(statements.some((s) => s.includes("integers in minor units"))).toBe(true);
-    expect(statements.some((s) => s.includes("network transaction id"))).toBe(false);
+    expect(counts[0], "both rows retired, none left live").toBe(0);
     store.close();
   });
 });
