@@ -29,9 +29,9 @@ export interface RunHeader {
   readonly lenses: readonly string[];
   readonly budget: number;
   /**
-   * Sessions ATTEMPTED against `--budget`, not merely succeeded — found by lore's own
-   * review, fingerprint 7429b981: a run with real, paid failures (a failed call is
-   * still a paid one, b1030112) used to report a success count here, a fraction of
+   * lore-ok[7429b981]: found by lore's own review. Sessions ATTEMPTED against
+   * `--budget`, not merely succeeded — a run with real, paid failures (a failed call
+   * is still a paid one, b1030112) used to report a success count here, a fraction of
    * what it actually spent against the number the operator chose it for.
    */
   readonly sessionsSpent: number;

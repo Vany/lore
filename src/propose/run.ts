@@ -185,14 +185,14 @@ function recordFailedUsage(store: Store, repoId: string, tier: string, model: st
 }
 
 /**
- * Matches `knowledgeFor`'s own segment-boundary comparison (store.ts) and
- * `scopesOverlap`'s (knowledge/conflict.ts) — both require an EXACT, `/`-clean path,
- * the same normalization `knowledge_teach` applies to a taught one (`mcp/server.ts`'s
- * `normalizeReviewPath`, not imported here since propose has no business depending on
- * the MCP surface for a two-line stdlib call). A model names `touches` in whatever
- * form it likes — `./src/store/store.ts`, `src/store/`, or a leading `/` — and any of
- * those, stored verbatim, creates a row no path-scoped consumer can ever find. Found
- * by lore's own review, fingerprint 790271a9.
+ * lore-ok[790271a9]: found by lore's own review. Matches `knowledgeFor`'s own
+ * segment-boundary comparison (store.ts) and `scopesOverlap`'s (knowledge/conflict.ts)
+ * — both require an EXACT, `/`-clean path, the same normalization `knowledge_teach`
+ * applies to a taught one (`mcp/server.ts`'s `normalizeReviewPath`, not imported here
+ * since propose has no business depending on the MCP surface for a two-line stdlib
+ * call). A model names `touches` in whatever form it likes — `./src/store/store.ts`,
+ * `src/store/`, or a leading `/` — and any of those, stored verbatim, creates a row no
+ * path-scoped consumer can ever find.
  */
 export function normalizedTouchPath(p: string): string | undefined {
   const n = posix.normalize(p).replace(/^\/+/, "").replace(/\/+$/, "");
@@ -200,8 +200,8 @@ export function normalizedTouchPath(p: string): string | undefined {
 }
 
 /**
- * The narrowest path that covers every touch — found by lore's own review,
- * fingerprint 50a98db3: 0318670f fixed the READ side (screen.ts now respects a row's
+ * lore-ok[50a98db3]: found by lore's own review. The narrowest path that covers every
+ * touch — 0318670f fixed the READ side (screen.ts now respects a row's
  * own `k.path`), but the WRITE side only ever set one for the single-touch case,
  * falling back to repo-wide (`undefined`) for two or more — the MODAL case, since an
  * idea that moves a seam necessarily touches both sides of it (§1.1) — reproducing the
@@ -244,8 +244,8 @@ export function commonScope(touches: readonly string[]): string | undefined {
  * costing the reader anything, by demoting it `already-decided` in the document rather
  * than by suppressing the write.
  *
- * `statement`'s prefix is not just wording — found by lore's own review, fingerprint
- * a90601f4. `knowledge/conflict.ts`'s `detectAndRecord` runs at the start of every
+ * `statement`'s prefix is not just wording — lore-ok[a90601f4,59246587]: found by
+ * lore's own review. `knowledge/conflict.ts`'s `detectAndRecord` runs at the start of every
  * review round over EVERY live row, this repo's included, and pairs opposite-polarity,
  * high-overlap statements as a candidate contradiction. `"considered: <idea>"` carries
  * the IDEA'S OWN polarity — a proposer arguing to split something the codebase was
@@ -390,7 +390,7 @@ export async function propose(deps: ProposeDeps, input: ProposeInput): Promise<P
   // pick a route a REVIEW parked as exhausted minutes ago, wasting a proposer session
   // on a call already known dead before this run even started.
   //
-  // lore-ok[77431767]: found by lore's own review, against the fix just above — this
+  // lore-ok[77431767,3be4bb83]: found by lore's own review, against the fix just above — this
   // comment used to also claim a route THIS run watches fail is "not immediately
   // retried against the next lens," which does not hold: this line resolves the
   // proposer's route ONCE, before the lens loop (below), and reuses it for every lens
