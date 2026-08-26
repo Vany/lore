@@ -729,6 +729,10 @@ through.
 The losing rule is retired with your reason, not deleted: "we used to believe X, until
 Y" is exactly what a codebase forgets and then re-argues.
 
+\`keep\`/\`retire\` TAKE EITHER LENGTH — the full id \`open_questions\` renders, or an
+8-char short form like \`cite_as\`, and you may mix them: one full, one short. Refused
+as ambiguous if a short form matches more than one rule, never guessed.
+
 RESOLVING THE LAST OPEN CONFLICT RESUMES EVERY REVIEW THAT WAS BLOCKED. The reply
 carries \`resumed_reviews\` — how many were parked and have now been re-queued. Poll
 them; they carry on from where they stopped, they do not start again.

@@ -1964,6 +1964,38 @@ export class Store {
   }
 
   /**
+   * `policyByShort`'s twin for ANY kind of knowledge row, not only `kind = 'policy'`
+   * — found by lore's own review, fingerprint b1a9841c. `knowledge_resolve`'s
+   * `keep`/`retire` name whichever two rows are in conflict, which are
+   * document-derived facts and ADR-sourced rules (D-35's bootstrap ingestion),
+   * never development rules — so `policyByShort`'s own `kind` filter would refuse
+   * them outright, not just their short form.
+   *
+   * `resolveConflict` matched `keep`/`retire` with exact `=` — the one id-comparison
+   * path in this file still exact after every OTHER one (`retirePolicy`,
+   * `policyByShort`, the appeal grammar) was hardened to prefix matching this same
+   * review. A client naturally holds the SAME rule in two lengths: `open_questions`
+   * (`review_poll`/`review_inbox`) renders full ids, `knowledge_teach` returns both
+   * a full `id` and an 8-char `cite_as`. Mixing them — full from one tool, short
+   * from the other, the obvious thing to do with two ids for one rule — made every
+   * `=` comparison fail silently as "no open conflict", for a `needs_human` review
+   * that a person HAD in fact just decided.
+   *
+   * Same charset gate and same ambiguity handling as `retirePolicy`: `undefined`
+   * covers both "matches nothing" and "matches more than one", collapsed exactly as
+   * `policyByShort` already collapses them, since the caller's own refusal message
+   * ("no open conflict between X and Y") is accurate either way.
+   */
+  knowledgeByShort(repoId: string, short: string): string | undefined {
+    if (!/^[0-9a-f]{8}([0-9a-f-]*[0-9a-f])?$/i.test(short)) return undefined;
+    const rows = this.db
+      .prepare("SELECT id FROM knowledge WHERE repo_id = ? AND retired_at IS NULL AND id LIKE ?")
+      .all(repoId, `${short}%`) as { id: string }[];
+    if (rows.length !== 1) return undefined;
+    return (rows[0] as { id: string }).id;
+  }
+
+  /**
    * Record that a tier accepted an appeal, for the whole (rule class, path) (D-83).
    *
    * `INSERT OR REPLACE` on the unique triple: re-accepting the same appeal refreshes
@@ -2442,22 +2474,35 @@ export class Store {
    * this. Latent until the resume gate started counting escalated conflicts as
    * blocking, which turned it into a review that could never be resumed and a reply
    * telling the client to do something the API refuses.
+   *
+   * **`keepId`/`retireId` resolve through `knowledgeByShort` first** — found by
+   * lore's own review, fingerprint b1a9841c: this matched them with exact `=`
+   * while every OTHER id path in this file now resolves a prefix, so a client
+   * holding the SAME rule in two lengths (a full id from `open_questions`, an
+   * 8-char `cite_as` from `knowledge_teach` — the two tools that hand a client
+   * ids to cite) failed silently here whenever it mixed them, on a `needs_human`
+   * review a person HAD just decided. A full id resolves through unchanged (it is
+   * a prefix of itself, matching exactly one row), so this changes nothing for an
+   * already-full pair.
    */
   resolveConflict(repoId: string, keepId: string, retireId: string, reason: string): boolean {
     return this.tx(() => {
+      const keep = this.knowledgeByShort(repoId, keepId);
+      const retire = this.knowledgeByShort(repoId, retireId);
+      if (keep === undefined || retire === undefined) return false;
       const open = this.db
         .prepare(
           `SELECT id FROM knowledge_conflict
            WHERE repo_id = ? AND state IN ('open', 'needs-human')
              AND ((left_id = ? AND right_id = ?) OR (left_id = ? AND right_id = ?))`,
         )
-        .get(repoId, keepId, retireId, retireId, keepId) as Record<string, number> | undefined;
+        .get(repoId, keep, retire, retire, keep) as Record<string, number> | undefined;
       if (open === undefined) return false;
 
       const t = now();
       this.db
         .prepare("UPDATE knowledge SET retired_at = ?, retired_reason = ? WHERE id = ? AND repo_id = ?")
-        .run(t, reason, retireId, repoId);
+        .run(t, reason, retire, repoId);
       this.db
         .prepare("UPDATE knowledge_conflict SET state = 'resolved', resolution = ?, resolved_at = ? WHERE id = ?")
         .run(reason, t, Number(open["id"]));

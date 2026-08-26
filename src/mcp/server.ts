@@ -2248,8 +2248,8 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
     {
       description: TOOL_DOCS.resolve,
       inputSchema: z.object({
-        keep: z.string().min(1).describe("id of the rule that is correct"),
-        retire: z.string().min(1).describe("id of the rule that is wrong"),
+        keep: z.string().min(1).describe("id of the rule that is correct — full or short, either resolves it"),
+        retire: z.string().min(1).describe("id of the rule that is wrong — full or short, either resolves it"),
         reason: z.string().min(1).describe("why — this is recorded and outlives both of you"),
       }),
     },

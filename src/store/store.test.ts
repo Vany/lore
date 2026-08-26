@@ -982,6 +982,28 @@ describe("knowledge", () => {
     expect(store.resolveConflict(repoId, "nope-a", "nope-b", "because")).toBe(false);
   });
 
+  // b1a9841c, found by lore's own review: every OTHER id-comparison path in this
+  // file (retirePolicy, policyByShort, the appeal grammar) resolves a prefix;
+  // resolveConflict matched keep/retire with exact `=`. A client naturally holds
+  // the SAME rule in two lengths — open_questions renders full ids, knowledge_teach
+  // returns both a full id and an 8-char cite_as — so mixing them (full for one
+  // side, short for the other, the obvious thing to do with two ids for one rule)
+  // must still resolve, or a needs_human review a person HAD just decided stays
+  // parked with nothing naming why.
+  it("settles a conflict named with a mix of full and short ids, not only two full ones", () => {
+    const keep = store.addKnowledge({ repoId, kind: "rule", source: "taught", statement: "always X", why: undefined, path: undefined, cwe: undefined, provenance: undefined, sourceBlob: undefined, confidence: undefined });
+    const lose = store.addKnowledge({ repoId, kind: "rule", source: "derived", statement: "never X", why: undefined, path: undefined, cwe: undefined, provenance: undefined, sourceBlob: undefined, confidence: undefined });
+    store.recordConflict(repoId, keep.id, lose.id);
+
+    // Full id for the winner (as open_questions would render it), short cite_as
+    // form for the loser (as knowledge_teach's reply would have given it).
+    expect(store.resolveConflict(repoId, keep.id, lose.id.slice(0, 8), "the schema was changed in July")).toBe(true);
+    expect(store.openConflicts(repoId)).toStrictEqual([]);
+    // The LOSING rule must actually be retired, not merely the conflict row marked
+    // resolved while the short id silently matched nothing to retire.
+    expect(store.knowledgeFor(repoId).map((k) => k.id)).toStrictEqual([keep.id]);
+  });
+
   // Escalating is not progress toward passing. It states that passing requires
   // someone who has not looked yet.
   it("keeps blocking when a conflict is escalated to a human", () => {

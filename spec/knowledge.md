@@ -574,6 +574,19 @@ is this review's repository free of every open conflict — and calls `resumeNee
 itself when it is, so a review closed this way resumes on its very next poll rather
 than waiting for an action that was never coming.
 
+**`keep`/`retire` resolve a SHORT id or a full one, and the two may be mixed —
+found by lore's own review (b1a9841c).** `resolveConflict` matched them with exact
+equality while every other id-comparison path this project has (`knowledge_retire`,
+an appeal's `lore-ok[...]: rule <id>` citation) resolves a prefix, refusing only
+genuine ambiguity. A client naturally ends up holding one rule in two lengths — a
+full id from `open_questions`, an 8-char `cite_as` from `knowledge_teach` — and
+mixing them is the obvious thing to do with two names for one rule. The exact match
+failed silently on exactly that mix: "no open conflict between X and Y", on a
+`needs_human` review a person had just decided, with nothing naming the length
+mismatch as the cause. Both ids now resolve through the same prefix lookup
+`knowledge_retire` uses before the conflict is looked up, so a full id (a prefix of
+itself) and a short one behave identically either way round.
+
 **`review_inbox` performs the same check too, found by lore's own review (c8d63c13):
 the poll fix alone still left one route to the trap.** The inbox is where a client
 looks FIRST each session, ahead of polling any one review by id, and it kept its own
