@@ -1243,6 +1243,38 @@ describe("an empty knowledge base explains itself", () => {
     expect(miss["count"]).toBe(0);
     expect(String(miss["note"])).toMatch(/HAS knowledge/);
   });
+
+  // Found by lore's own review (b9033841): the note blanket-framed every returned
+  // row as "this team's decisions", including a bootstrap `kind: "fact"` row — a
+  // model's own unconfirmed reading of one branch's code — through the exact
+  // surface TOOL_DOCS.query tells a client to trust before writing code. The same
+  // laundering 70b88761/652bb58d closed in the reviewer prompt and finding history.
+  it("does not present a bootstrap fact as a team decision in the note", async () => {
+    store.addKnowledge({
+      repoId, kind: "fact", source: "derived",
+      statement: "this module is invoked only by the scheduler", why: undefined,
+      path: "src/scheduler", cwe: undefined, provenance: "bootstrap:src/scheduler/invoker.ts",
+      sourceBlob: undefined, confidence: 0.5,
+    });
+
+    const out = await callTool("knowledge_query", {});
+    expect(out["count"]).toBe(1);
+    expect(String(out["note"]), "a fact must be flagged as unconfirmed, not folded into settled decisions").toMatch(
+      /unconfirmed/,
+    );
+  });
+
+  it("keeps the plain note when only rules are returned (control)", async () => {
+    store.addKnowledge({
+      repoId, kind: "rule", source: "taught",
+      statement: "holds are idempotent on the network transaction id", why: "ADR-0026",
+      path: undefined, cwe: undefined, provenance: undefined,
+      sourceBlob: undefined, confidence: undefined,
+    });
+
+    const out = await callTool("knowledge_query", {});
+    expect(String(out["note"])).toBe("Taught rules outrank inferred ones. These are this team's decisions, not suggestions.");
+  });
 });
 
 // RESUMING A REVIEW THAT WILL ONLY PARK AGAIN IS NOT PROGRESS, and reporting it as

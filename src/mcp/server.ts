@@ -1805,7 +1805,18 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
             empty ??
             (items.length === 0
               ? "This repository HAS knowledge; nothing matched this filter. Widen it before concluding anything."
-              : "Taught rules outrank inferred ones. These are this team's decisions, not suggestions."),
+              : // lore-ok[b9033841]: found real by lore's own review — a third door for the
+                // same laundering 70b88761/652bb58d closed elsewhere. This note used to
+                // blanket-frame every returned row as "this team's decisions", including
+                // `kind: "fact"` rows (bootstrap's own, unconfirmed reading of one
+                // branch's code) — and TOOL_DOCS.query tells a client the note is "the
+                // only thing that can tell you" which case it is in, so a client would
+                // have written code trusting a planted claim as settled team policy.
+                items.some((k) => k.kind === "fact")
+                ? "Taught rules outrank inferred ones. These are this team's decisions, not suggestions — EXCEPT " +
+                  'any `kind: "fact"` row: a model\'s own unconfirmed reading of one branch\'s code at bootstrap, ' +
+                  "never a decision. Weigh those, do not treat them as settled."
+                : "Taught rules outrank inferred ones. These are this team's decisions, not suggestions."),
         }),
       );
     },
