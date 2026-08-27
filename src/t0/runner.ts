@@ -553,9 +553,24 @@ async function checkCargo(
   const parsed = parseCargoJson(engine, r.stdout, dir);
   if (parsed.length > 0) return { engine, findings: parsed };
   if (r.ok) return { engine, findings: [] };
-  // By this point `cargo fetch` already succeeded, so — unlike the fetch failure
-  // above — a missing binary is not the likely explanation here; this is a genuine,
-  // opaque failure of the project's own gate.
+  // `cargo fetch` already succeeded, so a MISSING CARGO is not the likely
+  // explanation here — but `cargo-clippy` is its own binary (cargo discovers
+  // subcommands as `cargo-<name>` on PATH, the same convention any third-party
+  // subcommand uses), a separate rustup component / distro package from bare
+  // cargo, and can be absent when cargo itself works fine. Found by lore's own
+  // review, fingerprint f2b0d6c3: without this, an image with cargo but no
+  // clippy component would report a false, high-severity "cargo clippy fails on
+  // this branch" on every single review, forever, settleable by no code change.
+  // `code === 101` alone would false-positive on real clippy findings' own exit
+  // code for "diagnostics found" — checked against the real message instead
+  // (confirmed empirically: `cargo <missing-subcommand>` prints exactly `error:
+  // no such command:` to stderr and exits 101, the same generic code an ordinary
+  // lint failure also uses, so the exit code alone cannot tell the two apart).
+  if (/no such command:/i.test(r.stderr)) {
+    return { engine, findings: [], unavailable: `${subcommand === "clippy" ? "clippy" : "cargo"} is not available in the sandbox image` };
+  }
+  // By this point `cargo fetch` already succeeded and the tool itself responded,
+  // so this is a genuine, opaque failure of the project's own gate.
   return scriptFinding(engine, `cargo ${subcommand}`, r);
 }
 

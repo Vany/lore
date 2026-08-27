@@ -597,7 +597,27 @@ export function parseCargoJson(engine: "cargo-check" | "cargo-clippy", stdout: s
   // carries no span and no information beyond the individual diagnostics already
   // reported — dropped rather than turned into a finding with no site, matching how
   // every other engine here only ever produces site-anchored findings.
-  const diagnostics = messages.filter((m) => m.level === "error" || m.level === "warning");
+  //
+  // CLIPPY-NAMESPACED CODES ONLY, for the clippy engine — found by lore's own
+  // review, fingerprint d269a60f, and confirmed empirically: `clippy-driver` IS
+  // `rustc` with an extra lint pass layered on, so `cargo clippy`'s own JSON
+  // stream carries every ordinary rustc diagnostic `cargo check` would ALSO
+  // report (a plain `unused_variables` warning came back byte-identical from
+  // both, same fixture, same message, same code) — `ruleClaim` then makes the
+  // two ENGINES' claims for that one diagnostic literally identical strings,
+  // shown to the model tier twice in one prompt with no dedup at that layer
+  // (only the store's `ON CONFLICT DO NOTHING` and `renderT0Delta`'s later
+  // fingerprint map catch it, neither of which the FIRST round's prompt goes
+  // through). Kept to `clippy::`-prefixed codes for this engine; `cargo-check`
+  // stays the sole, authoritative source for everything else. Nothing is lost:
+  // clippy cannot even reach its own lint pass on code that fails to compile, so
+  // every compile error it would report, `cargo-check`'s own independent
+  // invocation already does.
+  const diagnostics = messages.filter((m) => {
+    if (m.level !== "error" && m.level !== "warning") return false;
+    if (engine === "cargo-clippy") return m.code?.code.startsWith("clippy::") ?? false;
+    return true;
+  });
   const flat = diagnostics.flatMap((m) => {
     const primary = m.spans.find((s) => s.is_primary);
     if (primary === undefined) return [];

@@ -503,6 +503,29 @@ describe("cargo's JSON is a different shape and needs its own parsing", () => {
     expect(f[0]?.evidence).toMatch(/2 SEPARATE SITES/);
   });
 
+  // CLIPPY REPEATS EVERY PLAIN RUSTC DIAGNOSTIC TOO — found by lore's own review,
+  // fingerprint d269a60f, and confirmed empirically: `cargo clippy`'s own JSON for
+  // a fixture with one plain `unused_variables` warning (no clippy lint involved
+  // at all) reported it byte-identical to `cargo check`'s. Without filtering, the
+  // SAME diagnostic would reach the model tier's prompt twice, once tagged each
+  // engine, with an identical claim string — doubling both the noise and the
+  // reported count. Kept to `clippy::`-prefixed codes for the clippy engine only;
+  // `cargo-check` stays untouched, since it is the one authoritative source for
+  // everything that is not clippy's own lint.
+  it("keeps only clippy's own lints for the clippy engine — plain rustc diagnostics are cargo-check's job", () => {
+    const out = [
+      compilerMessage({ level: "warning", code: "unused_variables", file: "src/a.rs", line: 2 }),
+      compilerMessage({ level: "warning", code: "clippy::needless_return", file: "src/a.rs", line: 5 }),
+    ].join("\n");
+    const clippy = parseCargoJson("cargo-clippy", out, ".");
+    expect(clippy).toHaveLength(1);
+    expect(clippy[0]?.line).toBe(5);
+    // Unaffected: cargo-check keeps the plain rustc diagnostic (and would keep a
+    // clippy-shaped one too, if it somehow appeared there — check is not filtered).
+    const check = parseCargoJson("cargo-check", out, ".");
+    expect(check).toHaveLength(2);
+  });
+
   // THE REBASING FIX ITSELF, AS A TEST — found by lore's own review, fingerprint
   // 47ddd7fa, and confirmed empirically against a real `cargo check --manifest-path
   // server/Cargo.toml` run: cargo's own `file_name` is relative to the manifest's

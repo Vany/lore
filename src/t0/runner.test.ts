@@ -438,6 +438,32 @@ describe("sandboxedCargo, through a fake docker", () => {
     expect(o?.findings[0]?.evidence).toMatch(/not found/);
   });
 
+  // A MISSING CLIPPY COMPONENT IS NOT A BROKEN BRANCH EITHER — found by lore's own
+  // review, fingerprint f2b0d6c3: `cargo-clippy` is its own binary, a separate
+  // rustup component / distro package from bare cargo, and can be absent when
+  // cargo itself works fine (fetch succeeds, exit 127's own check never fires).
+  // Confirmed empirically what cargo itself prints for a missing subcommand
+  // (`cargo some-fake-subcommand` on a real, working cargo): `error: no such
+  // command:` on stderr, exit 101 — the SAME generic exit code an ordinary lint
+  // failure also uses, so only the message tells the two apart.
+  it("a missing clippy component is reported plainly, not as a failing branch", async () => {
+    const script = join(dir, "fake-docker-no-clippy.sh");
+    const countFile = join(dir, ".count-noclippy");
+    writeFileSync(
+      script,
+      "#!/bin/sh\n" +
+        `N=$(cat "${countFile}" 2>/dev/null || echo 0)\n` +
+        `echo $((N+1)) > "${countFile}"\n` +
+        'if [ "$N" -eq 0 ]; then exit 0; ' +
+        "else echo 'error: no such command: \\`clippy\\`' >&2; exit 101; fi\n",
+    );
+    chmodSync(script, 0o755);
+    const out = await runT0(dir, { engines: ["cargo-clippy"], sandbox: baseSandbox(script) });
+    const o = out.outcomes.find((x) => x.engine === "cargo-clippy");
+    expect(o?.findings).toStrictEqual([]);
+    expect(o?.unavailable).toBe("clippy is not available in the sandbox image");
+  });
+
   // CARGO_HOME/CARGO_TARGET_DIR MUST ACTUALLY REACH CARGO — found by lore's own
   // review, fingerprint d341a76e: the cache mount at /work/.cargo was wired but
   // nothing ever pointed cargo's OWN env vars at it, so every fetch silently used
