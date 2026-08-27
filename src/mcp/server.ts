@@ -1394,7 +1394,26 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
         // is the tool's own precondition, and findings imply a completed round, which
         // always writes this field. Guarded by the pending-round check that already exists
         // below, so the rare fallback carries no less safety than the normal diff path did.
+        //
+        // THE HELD CHAIN'S OWN HEAD, FIRST — found live, not by a tier, when a second
+        // commit-form submit silently never landed. `heldDiffs`' own docblock states the
+        // assumption this violated: "each was built by the client on top of the one
+        // before" — true for the `diff` form, where the CLIENT computes each successive
+        // patch against their own prior one. False for this, the `commit` form (D-124):
+        // LORE computes the patch, from `review.treeHash` alone, which `holdDiff`
+        // deliberately does NOT advance ("NO BOUNDS RESET HERE" — a round applies it once,
+        // at its own boundary). A second commit-form submit arriving while the first is
+        // still held was therefore built from the SAME base as the first, not from what
+        // the first's own hold claims it will produce — so applying both in sequence
+        // (`consumeHeldDiffs`) landed the second on a tree it never diffed against, failed
+        // its hash check, and the whole held chain was dropped: `awaiting_diff`, with the
+        // review parked at whichever commit-form submit landed FIRST, silently discarding
+        // every one after it. Observed directly: a round-9 fix held, a round-10 fix
+        // submitted minutes later while it was still held, and round 10 never landed —
+        // `awaiting_diff` an hour later with no diagnosis anywhere in the response.
+        const heldChain = store.heldDiffs(review_id);
         const at =
+          heldChain[heldChain.length - 1]?.treeHash ??
           review.treeHash ??
           (store.hasPendingRound(review_id)
             ? undefined
@@ -1479,7 +1498,7 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       // dropped diff. The double-check below closes the race where the round finished
       // between the check and the hold — then nothing would ever consume it.
       if (store.hasPendingRound(review_id)) {
-        store.holdDiff(review_id, patch, tree_hash);
+        const heldId = store.holdDiff(review_id, patch, tree_hash);
         if (store.hasPendingRound(review_id)) {
           return {
             content: [
@@ -1502,7 +1521,13 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
         }
         // The round ended in the race window: nothing will consume the hold, so take it
         // back and fall through to the synchronous path below.
-        store.clearHeldDiff(review_id);
+        //
+        // BY ID, not the bare form that clears every row this review has. A concurrent
+        // submit can land its OWN hold in this exact window — the check above only says
+        // whether a round is pending, not whether another caller is here too — and the
+        // bare form would discard that hold as well, silently, the same loss this whole
+        // file exists to refuse.
+        store.clearHeldDiff(review_id, heldId);
       }
 
       // Recorded BEFORE the patch, because the refusal below has to be able to undo it.

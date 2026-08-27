@@ -3826,10 +3826,21 @@ Four things the implementation must get right, none reopening the decision:
   (synchronous refusal) to apply time (asynchronous) — so a mismatch must land the
   review in `awaiting_diff` with the reason on the next poll, never be a silently
   dropped diff. This is INV-1's corner of the feature.
-- **Held diffs chain deterministically.** A second submit while one is held was built by
-  the client on top of the first, and lore's worktree moves only when lore applies — the
-  review agent is read-only — so verify in arrival order; a mid-chain mismatch drops the
-  tail with a loud note.
+- **Held diffs chain deterministically.** A second submit while one is held is built on
+  top of the first, and lore's worktree moves only when lore applies — the review agent
+  is read-only — so verify in arrival order; a mid-chain mismatch drops the tail with a
+  loud note. For the raw `diff` form the CLIENT builds each patch on the one before; for
+  D-124's `commit` form LORE computes the patch itself, and had to be TAUGHT the same
+  invariant separately — found live, not designed: it built from `review.treeHash` alone
+  (the last APPLIED tree, which `holdDiff` deliberately never advances while a diff sits
+  held), so a second commit-form submit arriving while the first was still held was
+  built from the SAME base as the first rather than from what the first's own hold
+  claims it will produce. Applying both in sequence landed the second on a tree it never
+  diffed against, failed its hash check, and dropped the WHOLE chain — `awaiting_diff`
+  with no diagnosis anywhere in the response, the review parked wherever the first
+  commit-form submit landed. Fixed in `review_submit` (`src/mcp/server.ts`): `at` reads
+  `store.heldDiffs(review_id)`'s last row's own claimed tree first, falling back to
+  `review.treeHash` only when nothing is held.
 - **Crossing findings are stated in the client texts.** The round in flight will report
   findings the held diff may already fix; the next delivery settles them. An agent not
   told this will double-fix.

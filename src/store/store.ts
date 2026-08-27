@@ -3067,9 +3067,15 @@ export class Store {
     this.db.prepare("DELETE FROM meta WHERE key LIKE ?").run(`session-id:${reviewId}:%`);
   }
 
-  /** Accept a diff while a round runs; it is applied at the reviewer's next emission (D-107). */
-  holdDiff(reviewId: string, diff: string, treeHash: string): void {
-    this.db
+  /**
+   * Accept a diff while a round runs; it is applied at the reviewer's next emission
+   * (D-107). Returns the row's own id, so a caller that decides to take a hold BACK
+   * (a race window closed, nothing will ever consume it) can clear exactly the row it
+   * inserted rather than every row this review happens to have — a concurrent submit's
+   * own hold, landed in the same narrow window, is not this caller's to discard.
+   */
+  holdDiff(reviewId: string, diff: string, treeHash: string): number {
+    const res = this.db
       .prepare("INSERT INTO held_diff(review_id, diff, tree_hash, created_at) VALUES(?, ?, ?, ?)")
       .run(reviewId, diff, treeHash, now());
     // NO BOUNDS RESET HERE, though a held diff IS client work.
@@ -3084,6 +3090,7 @@ export class Store {
     // The round applies the reset itself, at the emission boundary where the diff lands
     // and the tree is observed to move (`consumeHeldDiffs`), so there is exactly one
     // writer of the ladder per round.
+    return Number(res.lastInsertRowid);
   }
 
   /**

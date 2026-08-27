@@ -207,6 +207,65 @@ describe("review_submit with a pushed commit instead of a diff", () => {
     expect(body["status"], JSON.stringify(body)).toBe("held");
   });
 
+  /**
+   * A SECOND HELD COMMIT MUST CHAIN ONTO THE FIRST, not restate it. Found live rather
+   * than by a tier: a fix submitted while an earlier one was still held silently never
+   * landed, because `at` was computed from `review.treeHash` — the last APPLIED tree,
+   * which `holdDiff` deliberately never advances — instead of the held chain's own
+   * head. `heldDiffs`' own docblock states the assumption this violated: "each was
+   * built by the client on top of the one before", true for the raw-`diff` form where
+   * the client computes it, false here where lore computes it FOR the commit form.
+   * Two held diffs built from the same stale base, applied in sequence, land on a tree
+   * neither of them actually diffed against — `awaiting_diff`, silently, an hour later.
+   */
+  it("bases a second held commit-form diff on the first's claimed tree, not the review's last-applied one", async () => {
+    const pinned = treeNow();
+    const repoId = store.upsertRepo("demo", "git@x:demo.git").id;
+    store.createReview({
+      id: "revChain", repoId, principal: "alice",
+      branch: "feat/x", intoRef: "main", ticket: "t", type: "code-arch",
+      state: "running", ladder: { ...initialState(), round: 5 }, treeHash: pinned,
+    });
+    store.enqueue("revChain", "fast");
+
+    // Two REAL, connected commits — fix 2 builds on fix 1's own result, exactly as a
+    // client's second submit would after seeing "held" for the first.
+    writeFileSync(join(worktree, "f.txt"), "b\n");
+    g("add", "-A");
+    g("commit", "-qm", "fix 1");
+    const commit1 = g("rev-parse", "HEAD");
+    const tree1 = treeNow();
+
+    writeFileSync(join(worktree, "f.txt"), "c\n");
+    g("add", "-A");
+    g("commit", "-qm", "fix 2");
+    const commit2 = g("rev-parse", "HEAD");
+    const tree2 = treeNow();
+
+    // Back to the review's own recorded base — the worktree state before either fix,
+    // matching `pinned`, since neither has actually been APPLIED to it yet.
+    g("reset", "--hard", "HEAD~2");
+    g("clean", "-fd");
+
+    const first = await callTool("review_submit", { review_id: "revChain", commit: commit1, tree_hash: tree1 });
+    expect(first.body["status"], JSON.stringify(first.body)).toBe("held");
+
+    const second = await callTool("review_submit", { review_id: "revChain", commit: commit2, tree_hash: tree2 });
+    expect(second.body["status"], JSON.stringify(second.body)).toBe("held");
+
+    const held = store.heldDiffs("revChain");
+    expect(held, "both held, in arrival order").toHaveLength(2);
+    expect(held[0]?.treeHash).toBe(tree1);
+    expect(held[1]?.treeHash).toBe(tree2);
+
+    // THE ACTUAL CLAIM: fix 2's own diff is against fix 1's RESULT (b -> c), not
+    // against the original base (which would restate fix 1's own a -> b change too,
+    // or — worse — collapse to a -> c and silently drop the base git-apply expects).
+    expect(held[1]?.diff, "diffed against fix 1's own result").toContain("-b");
+    expect(held[1]?.diff).toContain("+c");
+    expect(held[1]?.diff, "must not restate fix 1's own change too").not.toMatch(/^-a$/m);
+  });
+
   it("refuses cleanly rather than guessing when neither a stored tree nor a safe live one is available", async () => {
     const repoId = store.upsertRepo("demo", "git@x:demo.git").id;
     store.createReview({
