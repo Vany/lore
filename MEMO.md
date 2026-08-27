@@ -3,6 +3,110 @@
 Newest first. Updated at the end of each task: what changed, what I learned, what
 surprised me.
 
+## 2026-08-27 — mcp/server.ts: the held-diff-chaining fix got its own review, found three more bugs in itself, and I pushed unreviewed code to `main` by accident along the way
+
+**What changed.** The commit-form held-diff-chaining fix the previous entry's
+`awaiting_diff` investigation produced went through its own D-77 cycle
+(`rev_u7jJVldbXWLkTVtJKisyS8L2`), seven rounds (`cf66643` through `3f6ce00`),
+attested `passed_partial` at tree `1b3edc2`. Not a clean pass: 2 vendors read it
+across 3 tiers, 1 tier read an earlier round and never re-read the final one —
+named in the attestation rather than smoothed over.
+
+**Round 1 shipped with two races still in it.** The `heldDiffs`-based `at` fix
+(previous entry) read the held chain and inserted a new hold as two separate steps,
+separated by real async work (`revParse`, sometimes a mirror refresh) — two
+overlapping submits could both read the chain BEFORE either's insert landed, and
+both build from the same stale head (`015cd8d0`, fixed with a `withSubmitLock`
+per-review-id promise chain, the same shape `review.ts`'s existing `withHoldLock`
+already uses). Fixed in round 2 (`fac3ed6`), which surfaced a second shape the
+first round hadn't reached: a `commit`-form submit while a `diff`-form hold sat
+unconsumed sent `treeDelta` an object lore had never fetched — a raw hold's claimed
+tree is the CLIENT's own local `write-tree`, never pushed anywhere — and `git diff`
+died `fatal: bad object` instead of refusing by name (`2889d85b`). Round 3
+(`842d6ba`) found the lock itself was only half done: it covered the *decision* to
+hold but not the worktree mutation after it, so two submits finding no round
+pending could both apply and verify against the same shared worktree concurrently
+(`13339892`). Merging the apply path into the same lock surfaced a THIRD bug in the
+fixing: the `review` variable the handler used for `at` was a snapshot taken once
+at the top, before ever reaching the lock — caught by a new concurrent-submit test
+that failed with "patch does not apply" until `at` read a fresh `mine(review_id)`
+from inside the lock.
+
+**Round 4 closed the class rather than one instance of it.** The chaining fix
+trusted the client's `tree_hash` into a held row unverified, same as the raw-diff
+form always has to — except the commit form doesn't have to: `resolved^{tree}` is
+knowable directly via `rev-parse`, no apply needed. A wrong claim (still the right
+hex length) used to sit in the chain until `consumeHeldDiffs` discovered it wrong at
+consume time, dropping the whole tail (`109d9211`). Refused synchronously instead,
+before a single row is held. `treeObjectExists(): Promise<boolean>` became
+`resolveTree(): Promise<string | undefined>` (`git/repo.ts`) so one function serves
+both the existence check the raw-diff path needed and the value check this one
+does.
+
+**Rounds 6–7: the fix itself was fine, the docs were not — three findings, one root
+cause.** `CLAUDE.md`'s own rule is that MCP texts move with the behaviour in the
+same change; round 4 added a synchronous refusal and touched none of `docs.ts`,
+`spec/mcp-api.md`, or `SPEC.md`, and round 3's raw-hold-blocks-commit-form gate had
+shipped the same way even earlier. All three findings said so: the `tree_hash`
+schema text still read "verified after we apply or check out" — true only of `diff`
+now — and the workflow loop's "you never wait for a state and never resubmit" had
+no exception for the one case it doesn't hold. Fixed by rewriting the four surfaces
+(`TOOL_DOCS.submit`, both workflow-loop copies, `spec/mcp-api.md` §4.1, `SPEC.md`'s
+D-80 paragraph) rather than `lore-ok`-ing the gap away, and wiring the new facts
+into `docs.test.ts`'s existing "every behaviour a client must know about reaches
+the texts" table instead of inventing a second mechanism — the repo already had
+the right one, it just hadn't been used here.
+
+**A `lore-ok` tag has to be its own finding's tag, not a mention.** Round 7 fixed a
+real overclaim (`b39f4f4a`: a comment said "whatever holdDiff stores here has
+already been checked" without scoping that to the commit form — false for `diff`,
+which reaches the same call site unverified by design, D-107) by rewording the
+existing `lore-ok[109d9211]` comment and naming `b39f4f4a` in prose inside it. The
+ladder re-raised `b39f4f4a` as a NEW finding on the very next poll — the prose
+mention doesn't count as an answer; only a `lore-ok[b39f4f4a]:` tag does. Split into
+two separate `lore-ok` blocks in round 8. By the time round 8 was ready to submit,
+the review had already gone terminal on round 7's tree (`passed_partial`, 0 open
+findings) — some tier judged round 7's wording adequate despite the missing tag
+before the tag-only fix could reach it. Round 8 was dropped rather than pushed
+unreviewed: it fixed a house-style nitpick the verdict already treated as settled,
+so riding it into `main` on the "a commit may reach origin/main unreviewed if it
+says so" escape hatch would have spent that allowance on nothing. It was on the
+`review/cf66643` scratch ref's history at push time, recoverable if ever wanted, but
+not carried forward once that ref was deleted.
+
+**I pushed unreviewed code straight to `origin/main` by accident, mid-cycle.**
+Intending to push only an exempt `MEMO.md` commit, `git push origin main` pushed
+the already-queued fix commit right behind it, since both sat on the local branch
+in sequence. Origin's `main` had `cf66643` on it, unreviewed, for roughly as long
+as it took to notice. Recovered by treating it as the batch's actual start:
+`review-base/cf66643` at its parent, `review/cf66643` at its tip, reviewed from
+there exactly as D-113 describes — after the fact rather than never. Every round
+from there on pushed only to the scratch ref, confirmed by checking
+`git log -1 origin/main` before the final push landed the whole reviewed batch at
+once. **Practical lesson:** when a `MEMO.md`-only commit and a code commit are
+adjacent on the same local branch, `git push origin main` does not distinguish
+them — push by exact sha (`git push origin <sha>:main`) when only the trailing
+exempt commit is meant to move, not the branch name.
+
+**Closes the loop from the previous entry.** The `awaiting_diff` incident that
+motivated this whole cycle is now fixed, documented, tested (four new
+`submit-commit.test.ts` cases: chaining onto a claimed-not-yet-applied tree,
+concurrent commit-form submits, refusing a commit-form submit against an unverified
+raw hold, and the wrong-`tree_hash` synchronous refusal itself), and merged to
+`main` at `3f6ce00`, and deployed the same session (`make sync-deployed && make
+deploy FORCE=1`) — confirmed via `make status`: the container recreated cleanly and
+resumed serving colleagues' in-flight reviews immediately. One wrinkle on the way:
+`deploy/.env.example` had drifted from the live copy (the deployment's held a
+stale, superseded `LORE_TIERS` path and missing keys the repo's had already fixed
+with cited fingerprints), and `sync-deployed` silently skipped re-copying it —
+`cp`'s "identical" no-op apparently doesn't propagate as a hard stop the way it did
+outside this loop, so the drift guard in `make up` caught what the sync step
+missed. Copied by hand after confirming the real `.env` (unlike `.env.example`,
+excluded from sync on purpose) already had the correct path. Docker Hub also
+timed out twice pulling `node:24-bookworm-slim` mid-build (`DeadlineExceeded`) —
+transient; a direct `docker pull` succeeded on retry and the build then completed
+from cache.
+
 ## 2026-08-27 — src/reviewer's own folder review: eleven rounds on the reviewer reviewing itself, then a live `awaiting_diff` that turned out to be a real bug three modules away
 
 **What changed.** Folder review of `src/reviewer` itself (`rev_QaLsIY5rnsWLI2Rkrl1w3XhC`,
