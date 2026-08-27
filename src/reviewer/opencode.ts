@@ -364,7 +364,7 @@ export class Reviewer implements ReviewerLike {
   private readonly cfg: ReviewerConfig;
   private readonly gate: Gate;
   /** Lazily fetched, cached for the process: model id -> advertised context window. */
-  private limits?: Promise<Map<string, number>>;
+  private limits: Promise<Map<string, number>> | undefined = undefined;
   /**
    * review id -> every opencode session CURRENTLY reading for it, so `cancel` can stop
    * all of them.
@@ -690,20 +690,37 @@ export class Reviewer implements ReviewerLike {
     return limit === undefined ? undefined : Math.floor(limit * Reviewer.PROMPT_SHARE * Reviewer.CHARS_PER_TOKEN);
   }
 
-  /** Advertised context window for a provider-qualified model id, cached per process. */
+  /**
+   * Advertised context window for a provider-qualified model id, cached per process.
+   *
+   * lore-ok[277d5b24]: NOT CACHED ON FAILURE. `.catch(() => undefined)` used to feed
+   * a fetch that failed straight into the same map a success builds, so ONE dropped
+   * `/config/providers` call — a cold opencode container, a request racing its own
+   * startup — cached an EMPTY map for the rest of the process, indistinguishable from
+   * "no models configured": `promptBudgetChars` and D-80's 2/3-window compaction
+   * (`compactIfFull`) both read an unmeasurable window as "skip", and nothing said why.
+   * Now a failure resets `this.limits` so the NEXT call retries instead of inheriting
+   * a permanent false negative, and says so on `[lore:log]` — silent was the defect.
+   */
   private async contextLimit(model: string): Promise<number | undefined> {
     if (this.limits === undefined) {
-      this.limits = (async (): Promise<Map<string, number>> => {
-        const out = new Map<string, number>();
-        const res = await this.client.config.providers().catch(() => undefined);
-        for (const p of res?.data?.providers ?? []) {
-          for (const [id, m] of Object.entries(p.models ?? {})) {
-            const ctx = (m as { limit?: { context?: number } }).limit?.context;
-            if (typeof ctx === "number" && ctx > 0) out.set(`${p.id}/${id}`, ctx);
+      this.limits = this.client.config
+        .providers()
+        .then((res) => {
+          const out = new Map<string, number>();
+          for (const p of res?.data?.providers ?? []) {
+            for (const [id, m] of Object.entries(p.models ?? {})) {
+              const ctx = (m as { limit?: { context?: number } }).limit?.context;
+              if (typeof ctx === "number" && ctx > 0) out.set(`${p.id}/${id}`, ctx);
+            }
           }
-        }
-        return out;
-      })();
+          return out;
+        })
+        .catch((e: unknown) => {
+          this.limits = undefined;
+          console.error(`[lore:log] could not read /config/providers for context limits (${detail(e)}) — will retry next call`);
+          return new Map<string, number>();
+        });
     }
     return (await this.limits).get(model);
   }
@@ -1962,6 +1979,9 @@ export function extractList<T>(text: string, key: string, parseOne: ItemParser<T
     got = rank;
     why = reason;
   };
+  // lore-ok[b2aef74f]: fixed at the tail's `lost` computation, not here — this is the
+  // finding's anchor line inside `note`, but `allRejected` and `fencedGarbled` are not
+  // combined until the function's return, well below.
 
   // EVERY CANDIDATE THAT PARSES AND YIELDS A LIST CONTRIBUTES — not only the first.
   //

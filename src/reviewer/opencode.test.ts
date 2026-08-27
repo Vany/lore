@@ -861,6 +861,27 @@ describe("the prompt budget of a pooled tier", () => {
   });
 });
 
+/**
+ * A FAILED LOOKUP MUST NOT BE CACHED FOREVER (found by lore's own review, fingerprint
+ * 277d5b24). `contextLimit` used to cache whatever `/config/providers` produced,
+ * success or not — so one dropped call, cold container or a request racing opencode's
+ * own startup, permanently emptied the window map for the rest of the process. Both
+ * `promptBudgetChars` and D-80's 2/3-window compaction read that as "unmeasurable",
+ * which is the safe-but-silent direction: nothing said the lookup had failed at all.
+ */
+describe("a failed context-window lookup", () => {
+  it("retries on the next call instead of caching the failure forever", async () => {
+    providersDown = true;
+    const r = reviewer();
+    const first = await r.promptBudgetChars(TIER);
+    expect(first, "an unmeasurable window is undefined, never a false zero").toBeUndefined();
+
+    providersDown = false;
+    const second = await r.promptBudgetChars(TIER);
+    expect(second, "a later call must not inherit the earlier failure forever").toBeDefined();
+  });
+});
+
 describe("opening a session", () => {
   // Two debugging sessions in one day went looking at connectivity while opencode
   // was up and answering, because a status it never checked came out as "is a server
