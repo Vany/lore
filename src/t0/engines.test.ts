@@ -2,6 +2,7 @@
  * What the deterministic engines claim when they cannot run.
  */
 
+import { execSync } from "node:child_process";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -117,6 +118,44 @@ describe("sbom: a fallback-path caveat is not the same claim as 'did not run'", 
     chmodSync(join(binDir, "npx"), 0o755);
     const out = await runEngine(dir, "sbom");
     expect(out.unavailable).toMatch(/1 of 2 component/);
+  });
+});
+
+/**
+ * A cdxgen SBOM that enumerated N components and dropped every one (a pure
+ * Composer/NuGet tree, say) leaves `bom.components.length === 0` — the same
+ * shape as a tree with genuinely nothing to enumerate. `osv()`'s early return
+ * for that shape used to read only `bom.note`, which cdxgen never sets (it sets
+ * `incomplete`), so the drop count was discarded in favour of a blanket
+ * "nothing to query" — false on a tree cdxgen had, in fact, enumerated.
+ */
+describe("osv: a fully-dropped SBOM is a real gap, not 'nothing to query'", () => {
+  let dir: string;
+  let binDir: string;
+  let savedPath: string | undefined;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "lore-osvdrop-"));
+    execSync("git init -q", { cwd: dir });
+    binDir = mkdtempSync(join(tmpdir(), "lore-osvdrop-bin-"));
+    savedPath = process.env["PATH"];
+    process.env["PATH"] = `${binDir}:${savedPath ?? ""}`;
+    writeFileSync(join(dir, "package.json"), "{}\n");
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(binDir, { recursive: true, force: true });
+    if (savedPath === undefined) delete process.env["PATH"];
+    else process.env["PATH"] = savedPath;
+  });
+
+  it("reports the drop count, not 'nothing to query'", async () => {
+    const cdxgenOutput = JSON.stringify({
+      components: [{ name: "weird", version: "1.0.0", purl: "pkg:carthage/weird@1.0.0" }],
+    });
+    writeFileSync(join(binDir, "npx"), `#!/bin/sh\necho '${cdxgenOutput}'\nexit 0\n`);
+    chmodSync(join(binDir, "npx"), 0o755);
+    const out = await runEngine(dir, "osv");
+    expect(out.unavailable).toMatch(/1 of 1 component/);
   });
 });
 

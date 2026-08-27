@@ -209,14 +209,26 @@ function cweOf(v: OsvVuln): string | undefined {
  * them). This module never opens the worktree, so for ecosystems with more than
  * one common manifest shape (PyPI especially) the name is a typical one, named
  * as such, not a confirmed path.
+ *
+ * lore-ok[324ff769]: A REAL PATH, one per ecosystem — `Finding.file` is
+ * documented and consumed as "repo-relative path" (core/finding.ts, `buildVex`'s
+ * `affects[].ref`), not free text, so PyPI's own disambiguation ("could also be
+ * poetry.lock/Pipfile.lock") moved to `evidence` (below, `MANIFEST_CAVEAT`)
+ * instead of living inside the path field as a sentence no path-consumer could
+ * ever resolve.
  */
 const TYPICAL_MANIFEST: Record<Component["ecosystem"], string> = {
   npm: "package-lock.json",
-  PyPI: "requirements.txt (or poetry.lock/Pipfile.lock — not itself checked)",
+  PyPI: "requirements.txt",
   Go: "go.sum",
   "crates.io": "Cargo.lock",
   Maven: "pom.xml",
   RubyGems: "Gemfile.lock",
+};
+
+/** Where `TYPICAL_MANIFEST`'s guess is one of several equally common names. */
+const MANIFEST_CAVEAT: Partial<Record<Component["ecosystem"], string>> = {
+  PyPI: "manifest name is a typical guess: could also be poetry.lock or Pipfile.lock, not itself checked",
 };
 
 /** Turn vulnerable components into findings. */
@@ -251,6 +263,7 @@ export function toFindings(vulnerable: readonly Vulnerable[]): readonly Finding[
               : fixed.length === 1
                 ? `fixed in ${fixed[0] ?? ""}`
                 : `fixed in one of: ${fixed.join(", ")} — depending on which range applies to the installed version`,
+            ...(MANIFEST_CAVEAT[component.ecosystem] !== undefined ? [MANIFEST_CAVEAT[component.ecosystem]!] : []),
           ].join("\n"),
           2000,
         ),

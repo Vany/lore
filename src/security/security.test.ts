@@ -100,6 +100,19 @@ describe("toFindings", () => {
     expect((f?.claim ?? "").length).toBeLessThanOrEqual(CLAIM_MAX);
     expect((f?.failureScenario ?? "").length).toBeLessThanOrEqual(2000);
   });
+
+  // Fingerprint 324ff769: `file` is documented and consumed as a repo-relative
+  // PATH (core/finding.ts, buildVex's affects[].ref) — PyPI's ambiguity between
+  // requirements.txt/poetry.lock/Pipfile.lock belongs in `evidence`, which is
+  // free text, not smuggled into the path field as a sentence no path-consumer
+  // could ever resolve.
+  it("gives a PyPI finding a real path, with the ambiguity disclosed in evidence instead", () => {
+    const pypiComponent: Component = { name: "django", version: "3.0.0", ecosystem: "PyPI", transitive: false };
+    const [f] = toFindings([{ component: pypiComponent, vulns: [vuln] }]);
+    expect(f?.file).toBe("requirements.txt");
+    expect(f?.file).not.toContain(" ");
+    expect(f?.evidence).toContain("poetry.lock");
+  });
 });
 
 describe("queryComponents", () => {

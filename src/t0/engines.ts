@@ -443,7 +443,14 @@ async function osv(worktree: string): Promise<EngineOutcome> {
     const bom = await generateSbom(worktree);
 
     if (bom.components.length === 0 && links.length === 0) {
-      return { engine: "osv", findings: [], unavailable: bom.note ?? "nothing to query" };
+      // lore-ok[e3951d35]: `bom.incomplete` CHECKED FIRST. cdxgen can enumerate N
+      // raw components and drop every one as unqueryable (a Composer/NuGet-only
+      // tree) — `components.length` is 0 either way, but "12 of 12 dropped,
+      // nothing checked" and "nothing here to check" are different claims, and
+      // only the former is true when `incomplete` is set. `sbom()` (above)
+      // already gets this right on the exact same tree; this made osv's own line
+      // in checks_skipped false on it.
+      return { engine: "osv", findings: [], unavailable: bom.incomplete ?? bom.note ?? "nothing to query" };
     }
 
     if (bom.components.length > 0) findings.push(...toFindings(await queryComponents(bom.components)));
