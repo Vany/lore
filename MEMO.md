@@ -3,7 +3,112 @@
 Newest first. Updated at the end of each task: what changed, what I learned, what
 surprised me.
 
-## 2026-08-27 — src/propose's folder review: a missing write-back feature, then eight rounds finding what building it broke
+## 2026-08-27 — src/reviewer's own folder review: eleven rounds on the reviewer reviewing itself, then a live `awaiting_diff` that turned out to be a real bug three modules away
+
+**What changed.** Folder review of `src/reviewer` itself (`rev_QaLsIY5rnsWLI2Rkrl1w3XhC`,
+`path: src/reviewer` — the engine every other module's review this session ran
+through), driven to `passed_partial` over eleven commits (`d3e108f` through
+`5ee7301`), attested at tree `737bdb2`. The restart earlier in the session (four
+findings against the same fixed tree) is a separate memory; this entry covers the
+eleven rounds from there to the verdict.
+
+**The throughline: fixes to `.spent`/usage tracking and to cancel-classification
+each opened a sibling gap the SAME shape, found on the SAME code one round later.**
+Roughly in order:
+- `usageSoFar` became model-scoped (`45fa213f`) so a route flip's usage wasn't
+  floored against the wrong route's baseline — but a **cancel landing specifically
+  during the twin-fallback call** skipped the twin-attributed recording and fell
+  through to the outer catch, which has no `twinModel` in scope and names the
+  PRIMARY's model instead: the twin's real spend floored to zero against the
+  primary's unrelated total, with no paid-route alert either (`960cb2b7`). Fixed by
+  moving the twin's recording ahead of the cancel check and clearing `.spent`
+  afterward so the outer catch can't also misattribute it.
+- The SAME shape, one layer out: when the **primary itself** dies with spend
+  attached and a fallback rescues the round, the primary's `.spent` was only ever
+  read in the outer catch — which a successful rescue never reaches at all
+  (`f65306a0`). Fixed the same way (record early, clear after) — and clearing
+  `.spent` there *also* silently disarmed the outer catch's only paid-route alert
+  for the no-fallback shape, found the very next round (`39b5b427`, alert moved
+  beside the inner recording instead of shared).
+- `guard`'s entry check (opencode.ts) still described a wait D-101 deleted the
+  worker pool that used to create — found while fixing the REAL remaining gap,
+  `createSession`'s own un-abortable HTTP round trip (`40b5d6e5`). The fix itself
+  then repeated a class of bug already fixed once in review.ts: it threw a plain
+  `DidNotRun` for a cancel lore itself caused, which `runMember`'s catch cannot tell
+  from a real failure — booked `failed`, and on a second strike able to resurrect an
+  already-`cancelled` review through the skip machinery (`b9319d46`/`8c05a302`,
+  `CancelledByLore` not `DidNotRun`; found and fixed on my own new code, then found
+  a THIRD instance a round later on `compactIfFull`'s equally un-abortable read,
+  `d0eed5e8`).
+- `settledBlock`'s prompt told a tier to re-raise with "RAISED severity", machinery
+  `recordFinding`'s `ON CONFLICT DO NOTHING` doesn't have — Vany's call, softened
+  rather than wired up (`28198096`). The identical sentence lived in `streamFix`,
+  the streamed-round sibling, missed the first time and found the next round
+  (`924989e3`).
+- `filesInDiff` moved out of review.ts into git/diff.ts for D-130 with proper
+  git-quoted-path decoding, but the ONE call site still in review.ts (the emission
+  boundary's touched-files extraction) was never pointed at the mover — a fix
+  touching only a quoted (non-ASCII) path was silently never re-scanned
+  (`eab161bc`). Same gap, same round, in `proseShare` (prompts.ts), found next
+  round (`bd4ba2bd`).
+- The D-109 rung catch-up loop's 8-pass cap can leave a member stale with
+  `store.heldDiffs` already empty — a sibling's own boundary consumed the hold that
+  left it behind, mid the FINAL pass, with no pass 9 to notice (`83d84e62`). The
+  loop's own comment promised a backstop ("the worker's late-hold sweep turns into
+  a next round") that cannot fire on an empty `heldDiffs` — `runRound` now reports
+  the residual staleness and `worker.ts` requeues on it the same way it already
+  does for an unconsumed hold. **Not covered by a test**: reproducing the race
+  faithfully needs the loop to genuinely exhaust 8 passes with two rung members
+  racing on the last one, which is a much larger harness than anything else this
+  session — verified by code reading only, flagged to Vany as a real gap rather
+  than silently claimed covered.
+
+**The live incident: a "held" submit silently never landed, and the review sat in
+`awaiting_diff` for hours before anyone noticed.** Round 9 (`73686b8`) landed while
+a t2/t3 rung was still streaming — correctly held, correctly applied at the next
+boundary. Round 10 (`c16fc1e`, the `b9319d46` fix) was submitted shortly after —
+also came back `"held"` — but never actually landed: `review.treeHash` stayed at
+round 9's tree, round 10's fingerprints never reached `ladder.settled`, and roughly
+where the rung's own catch-up pass concluded, the review dropped into
+`awaiting_diff` with no diagnosis anywhere in the poll response. Root-caused with a
+research subagent rather than guessed at, since the failure mode lives entirely in
+`src/mcp/server.ts`, outside this review's own scope:
+
+**The actual bug (fixed as its own change, own review, not bundled into this
+one).** `review_submit`'s commit-form path computes its patch as
+`treeDelta(worktree, at, resolved)` where `at = review.treeHash` — the last
+*applied* tree. `holdDiff`'s own docblock states the assumption this needs:
+"each was built by the client on top of the one before" — true for the raw-`diff`
+form, where the CLIENT computes each successive patch against their own prior one.
+False for the `commit` form (D-124): LORE computes the patch, and `holdDiff`
+deliberately does NOT advance `review.treeHash` when holding ("NO BOUNDS RESET
+HERE" — a round applies it once, at its own boundary). So a second commit-form
+submit arriving while the first is still held is built from the SAME base as the
+first, not from what the first's own hold claims it will produce. Applying both in
+sequence lands the second on a tree it never actually diffed against, its hash
+check fails, and `consumeHeldDiffs` drops the WHOLE held chain — silently, with the
+review parked wherever the first commit-form submit landed. Fixed by reading
+`store.heldDiffs(review_id)` and using the LAST held diff's own claimed
+`treeHash` as `at` when the chain is non-empty. Same investigation surfaced a
+second, more theoretical race in the same function: the "round ended in the race
+window, take the hold back" path called `clearHeldDiff(review_id)` with no id,
+which would discard a concurrent submit's own hold landed in the same window —
+`holdDiff` now returns the row id it inserted, so the caller clears exactly its
+own row.
+
+**Practical consequence for how I drive future reviews here:** don't submit a
+second commit-form fix while an earlier one might still be held (unconfirmed via a
+poll showing the round has genuinely concluded, not just "queued" or "held").
+Every prior round this session happened to wait for a findings-delivering poll
+between submits, which is why this had never surfaced before — round 10 was the
+first time I submitted again quickly, mid-stream, on a rung specifically.
+
+**Surprised me.** The bug was in a module (`src/mcp`) that had already passed its
+own folder review earlier this session. A passed review is not immunity — it
+verifies the code as read against the diff/scope it covered, not against every
+interaction a LATER change (D-124, layered on afterward) might have with an
+invariant the earlier code never stated as its own.
+
 
 **What changed.** Folder review of `src/propose` (`rev__X9yu8r4xMlGH-Pm8ibJz_yi`,
 `path: src/propose`), driven to `passed_partial` over **eleven commits**
