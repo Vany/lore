@@ -226,8 +226,20 @@ const TYPICAL_MANIFEST: Record<Component["ecosystem"], string> = {
   RubyGems: "Gemfile.lock",
 };
 
-/** Where `TYPICAL_MANIFEST`'s guess is one of several equally common names. */
+/**
+ * Where `TYPICAL_MANIFEST`'s guess is one of several equally common names.
+ *
+ * lore-ok[59c1cbc2]: `npm` ADDED. OSV's own npm ecosystem covers whatever
+ * lockfile actually installed the package, not only npm's own —
+ * package-lock.json presented as fact on a yarn/pnpm/bun repo is the exact
+ * same nonexistent-path shape b03d0b1e (engines.ts) already fixed once for
+ * the cannot-enumerate finding, one field deeper: cdxgen enumerates a
+ * yarn.lock repo's npm-ecosystem components fine, and this caveat was the
+ * one place that disclosure was already wired to reach the reader — PyPI
+ * had it, npm (which has just as many common lockfile shapes) did not.
+ */
 const MANIFEST_CAVEAT: Partial<Record<Component["ecosystem"], string>> = {
+  npm: "manifest name is a typical guess: could also be yarn.lock, pnpm-lock.yaml, or bun.lock, not itself checked",
   PyPI: "manifest name is a typical guess: could also be poetry.lock or Pipfile.lock, not itself checked",
 };
 

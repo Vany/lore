@@ -254,6 +254,16 @@ describe("toFindings", () => {
     expect(f?.file).not.toContain(" ");
     expect(f?.evidence).toContain("poetry.lock");
   });
+
+  // Fingerprint 59c1cbc2: cdxgen enumerates npm-ecosystem components from
+  // yarn.lock/pnpm-lock.yaml/bun.lock just as readily as from
+  // package-lock.json — presenting "package-lock.json" as fact rather than a
+  // typical guess is the same nonexistent-path shape PyPI already discloses.
+  it("discloses the same package-lock.json ambiguity for npm", () => {
+    const [f] = toFindings([{ component, vulns: [vuln] }]);
+    expect(f?.file).toBe("package-lock.json");
+    expect(f?.evidence).toContain("yarn.lock");
+  });
 });
 
 describe("queryComponents", () => {
