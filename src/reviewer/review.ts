@@ -693,7 +693,14 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
           files: diff.changedFiles,
         });
   } catch (e) {
-    store.closeTierRun(t0RunId, "failed", [], roundTree);
+    // lore-ok[4ca2c2a4]: A REAL LINE, not `[]`. `[]` here reads exactly like a
+    // t0 run that ATTEMPTED every engine and found none of them unavailable —
+    // the same confident-clean shape INV-1 exists to forbid, and this is the
+    // one case where t0 did not even attempt anything: the whole phase threw.
+    // "t0:" is a new prefix, not an engine name (`checksSkippedFor`/`vexGap`
+    // both read these lines as `"<name>: <reason>"`), so it cannot collide
+    // with a real engine's own line.
+    store.closeTierRun(t0RunId, "failed", [`t0: threw before completing — ${e instanceof Error ? e.message : String(e)}`], roundTree);
     throw e;
   }
   if (reuseT0) {

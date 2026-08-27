@@ -157,6 +157,22 @@ describe("runRound", () => {
     expect(store.getReview("r1", "p")?.state).toBe("findings_ready");
   });
 
+  // Fingerprint 4ca2c2a4: the catch block around t0 used to close the round
+  // ("failed", []) — an empty unavailable list reads exactly like a t0 phase
+  // that attempted every engine and found none of them unavailable, when in
+  // fact the whole phase never got that far.
+  it("closes t0's tier_run with a real reason when the phase itself throws", async () => {
+    const reviewer = new ScriptedReviewer([]);
+    const throwingT0 = async () => {
+      throw new Error("ECONNREFUSED");
+    };
+    const t0 = throwingT0 as unknown as Parameters<typeof runRound>[0]["t0"];
+    await expect(
+      runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE, ...(t0 ? { t0 } : {}) }),
+    ).rejects.toThrow(/ECONNREFUSED/);
+    expect(store.latestT0Unavailable("r1")).toEqual(["t0: threw before completing — ECONNREFUSED"]);
+  });
+
   // A FAILURE MUST NAME ITS CAUSE (INV-1). Hitting a round bound left every job `done`
   // with no error, so `failureReason` — which read only `job.last_error` — had nothing,
   // and `review_poll` answered "no reason was recorded, which is itself a defect" about

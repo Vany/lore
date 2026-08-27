@@ -68,8 +68,9 @@ interface CycloneDxDoc {
   components?: { name?: string; version?: string; purl?: string }[];
 }
 
-export async function generateSbom(worktree: string): Promise<Sbom> {
-  const viaCdxgen = await cdxgen(worktree);
+/** `cdxgenTimeoutMs` exists for tests — a real timeout takes 300s to trigger otherwise. */
+export async function generateSbom(worktree: string, cdxgenTimeoutMs = 300_000): Promise<Sbom> {
+  const viaCdxgen = await cdxgen(worktree, cdxgenTimeoutMs);
   if (viaCdxgen.sbom !== undefined) return viaCdxgen.sbom;
 
   const viaLock = await fromPackageLock(worktree);
@@ -102,14 +103,21 @@ export async function generateSbom(worktree: string): Promise<Sbom> {
   };
 }
 
-async function cdxgen(worktree: string): Promise<{ readonly sbom?: Sbom; readonly crashed?: string }> {
+async function cdxgen(worktree: string, timeoutMs: number): Promise<{ readonly sbom?: Sbom; readonly crashed?: string }> {
   const r = await runTool(
     worktree,
     "npx",
     ["--no-install", "@cyclonedx/cdxgen", "-o", "/dev/stdout", "--spec-version", "1.6"],
-    300_000,
+    timeoutMs,
   );
-  if (r.unavailable !== undefined) return {};
+  // lore-ok[f4b810d9]: TIMEOUT DISTINGUISHED FROM GENUINE ABSENCE.
+  // `r.unavailable` (exec.ts) is set for BOTH a missing binary (ENOENT) and a
+  // run that hit the 300s timeout — cab708e4's own fix (below) covered this
+  // function's other two silent-fallback triggers but missed that this one
+  // conflates two causes under one flag too. A cdxgen that is genuinely
+  // installed and simply taking longer than five minutes on a large tree is
+  // not "not installed" either.
+  if (r.unavailable !== undefined) return r.timedOut ? { crashed: r.unavailable } : {};
   // lore-ok[af39c6f5]: `!r.ok` ALONE used to read exactly like `r.unavailable`
   // — both fell through to the same "cdxgen is not installed" sentence,
   // discarding whatever cdxgen actually said on stderr. A cdxgen that IS

@@ -3840,8 +3840,16 @@ export class Store {
    * 3, which ran fine, as unproven forever.
    */
   latestT0Unavailable(reviewId: string): readonly string[] | undefined {
+    // lore-ok[287b1a76,12255b33]: `finished_at IS NOT NULL` ADDED. `openTierRun`
+    // inserts the row (`unavailable` NULL) at ROUND START, before the round has
+    // done anything — without this filter, an in-flight round (still running,
+    // or one a dead process left open) read exactly like a round that finished
+    // and reported nothing unavailable: the `undefined`-means-"never run" case
+    // this function exists to distinguish, hiding one round late.
     const row = this.db
-      .prepare("SELECT unavailable FROM tier_run WHERE review_id = ? AND tier = 't0' ORDER BY id DESC LIMIT 1")
+      .prepare(
+        "SELECT unavailable FROM tier_run WHERE review_id = ? AND tier = 't0' AND finished_at IS NOT NULL ORDER BY id DESC LIMIT 1",
+      )
       .get(reviewId) as Record<string, string | null> | undefined;
     if (row === undefined) return undefined;
     return String(row["unavailable"] ?? "")

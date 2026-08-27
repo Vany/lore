@@ -273,7 +273,11 @@ export function vexGap(store: Store, reviewId: string, reviewType: string): stri
   const unavailable = store.latestT0Unavailable(reviewId);
   if (unavailable === undefined) return "no round has completed yet";
 
-  const relevant = unavailable.filter((l) => l.startsWith("osv:") || l.startsWith("sbom:"));
+  // lore-ok[4ca2c2a4]: `"t0:"` ADDED — review.ts's own catch block around
+  // `runT0` writes a whole-phase failure under that prefix (a throw before
+  // any engine even ran), which means osv/sbom did not run either, every bit
+  // as much as either naming itself individually would.
+  const relevant = unavailable.filter((l) => l.startsWith("osv:") || l.startsWith("sbom:") || l.startsWith("t0:"));
   return relevant.length > 0 ? relevant.join("; ") : undefined;
 }
 

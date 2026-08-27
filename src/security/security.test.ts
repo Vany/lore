@@ -140,6 +140,18 @@ describe("generateSbom", () => {
     expect(sbom.note).toMatch(/not installed/);
     expect(sbom.note).not.toMatch(/did not produce a usable SBOM/);
   });
+
+  // Fingerprint f4b810d9: exec.ts sets `r.unavailable` for BOTH a missing
+  // binary AND a run that hit its timeout — a cdxgen that is genuinely
+  // installed and just slow on a large tree is not "not installed" either.
+  // `cdxgenTimeoutMs` exists so this does not have to wait out a real 300s.
+  it("does not say 'not installed' when cdxgen times out", async () => {
+    writeFileSync(join(binDir, "npx"), "#!/bin/sh\nsleep 2\n");
+    chmodSync(join(binDir, "npx"), 0o755);
+    const sbom = await generateSbom(dir, 50);
+    expect(sbom.note).toMatch(/timed out/);
+    expect(sbom.note).not.toMatch(/^no SBOM could be produced — cdxgen is not installed/);
+  });
 });
 
 describe("severityOf", () => {
@@ -451,6 +463,30 @@ describe("vexGap", () => {
     const second = store.openTierRun(reviewId, "t0", 2, "2026-08-03T01:00:00.000Z");
     store.closeTierRun(second, "clean", []);
     expect(vexGap(store, reviewId, "security")).toBeUndefined();
+  });
+
+  // Fingerprints 287b1a76, 12255b33: openTierRun writes the row (unavailable
+  // NULL) at round START, before anything has run. Reading that row read
+  // exactly like a round that finished and found nothing unavailable.
+  it("does not read an in-flight round as a clean one", () => {
+    store.openTierRun(reviewId, "t0", 1, "2026-08-03T00:00:00.000Z"); // never closed
+    expect(vexGap(store, reviewId, "security")).toMatch(/no round has completed/);
+  });
+
+  it("falls back to the last CLOSED round while a newer one is still in flight", () => {
+    const first = store.openTierRun(reviewId, "t0", 1, "2026-08-03T00:00:00.000Z");
+    store.closeTierRun(first, "findings", ["osv: nothing to query"]);
+    store.openTierRun(reviewId, "t0", 2, "2026-08-03T01:00:00.000Z"); // never closed
+    expect(vexGap(store, reviewId, "security")).toContain("osv: nothing to query");
+  });
+
+  // Fingerprint 4ca2c2a4: review.ts's own catch block around runT0 used to
+  // close a thrown round as ("failed", []) — the whole phase never even
+  // attempted osv/sbom, and an empty unavailable list read as "ran clean".
+  it("treats a whole-phase t0 crash as a gap, not as clean", () => {
+    const id = store.openTierRun(reviewId, "t0", 1, "2026-08-03T00:00:00.000Z");
+    store.closeTierRun(id, "failed", ["t0: threw before completing — ECONNREFUSED"]);
+    expect(vexGap(store, reviewId, "security")).toContain("t0: threw before completing");
   });
 });
 
