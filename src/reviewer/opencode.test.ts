@@ -61,6 +61,8 @@ let destroyPrompt = false;
 let providersDown = false;
 /** Accept the prompt and never answer it, so a cancel has something real to interrupt. */
 let hangPrompt = false;
+/** `DELETE /session/:id`: how long `release`'s cleanup call takes to answer. */
+let deleteDelayMs = 0;
 /** Events the fake opencode will publish on `/event`, in order. */
 let pending: unknown[] = [];
 
@@ -197,6 +199,15 @@ function start(): Promise<void> {
           res.end(abortStatus >= 400 ? "" : "true");
           return;
         }
+        // `release`'s own `DELETE /session/:id` — delayable, so a test can prove what
+        // else happens WHILE it is still in flight rather than only after it settles.
+        if (req.method === "DELETE") {
+          setTimeout(() => {
+            res.writeHead(200, { "content-type": "application/json" });
+            res.end("true");
+          }, deleteDelayMs);
+          return;
+        }
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify({ id: "ses_test" }));
       });
@@ -239,6 +250,7 @@ beforeEach(async () => {
   destroyPrompt = false;
   providersDown = false;
   hangPrompt = false;
+  deleteDelayMs = 0;
   pending = [];
   await start();
 });
@@ -1178,6 +1190,39 @@ describe("cancelling a call that is still open", () => {
     // else's quota answering for a review a person deliberately ended.
     await expect(inFlight).rejects.toThrow(/stopped by lore/);
     expect(Date.now() - started, "the cancel ended it, not the 10s fixture deadline").toBeLessThan(5_000);
+  });
+
+  /**
+   * THE FAST LOCAL ABORT MUST NOT WAIT BEHIND A SLOW NETWORK CALL (found by lore's own
+   * review, fingerprint 4926151e). `cancel` used to await `release`'s `DELETE
+   * /session/:id` calls before aborting the in-flight request — so on a conversation
+   * tier (every tier in the deployed configuration) a slow or wedged opencode held a
+   * cancelling client behind that DELETE while the in-flight model call's own socket,
+   * and its spend, stayed open. The test above never exercised this: it uses a
+   * non-conversation tier, so `release` finds nothing and the ordering is free.
+   */
+  it("aborts the in-flight session without waiting on a slow release", async () => {
+    const KEPT: Tier = { ...TIER, conversation: true };
+    hangPrompt = true;
+    // Longer than the bound asserted below — if the abort waited behind this, the test
+    // would fail on time, not on a thrown assertion about ordering. `cancel` itself still
+    // fully awaits `release` (must not be skipped), so it is not the thing timed here.
+    deleteDelayMs = 3_000;
+    const r = reviewer();
+    const inFlight = r.review(KEPT, { initial: "A", continued: "B" }, "/tmp/wt", "rev_hung");
+    // Long enough for the session to be created and kept (D-80 registers it right after
+    // creation, before the prompt is ever sent) and for the prompt to be in flight.
+    await new Promise((res) => setTimeout(res, 200));
+
+    const started = Date.now();
+    const cancelling = r.cancel("rev_hung");
+    await expect(inFlight, "the in-flight request dies without waiting on release").rejects.toThrow(/stopped by lore/);
+    expect(Date.now() - started, "release's slow DELETE must not hold up the abort").toBeLessThan(deleteDelayMs);
+
+    // release() is still awaited inside cancel — must not be SKIPPED, only reordered —
+    // so let it finish and confirm it genuinely ran.
+    await expect(cancelling, "cancel itself still resolves once release catches up").resolves.toBe(true);
+    expect(captured.some((c) => c.method === "DELETE"), "release still ran, just not first").toBe(true);
   });
 
   it("still tells opencode to stop the model, which abandoning the socket does not", async () => {

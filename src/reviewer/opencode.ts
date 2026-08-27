@@ -524,28 +524,40 @@ export class Reviewer implements ReviewerLike {
   }
 
   async cancel(reviewId: string): Promise<boolean> {
+    // lore-ok[4926151e]: THE IN-FLIGHT ABORT GOES FIRST, not `release`. It used to be the
+    // other way round, on the reasoning that release must not be SKIPPED — true, but no
+    // reason to make it go first too. `abort`'s own comment states the invariant this
+    // violated: freeing our own socket is instant and must not wait behind a network call
+    // that can hang, and `release` below is exactly such a call — one `DELETE /session` per
+    // kept session, sequentially awaited. On a wedged opencode (the 2026-08-08 shape `abort`
+    // was built for) the old order held a cancelling client behind that DELETE while the
+    // in-flight model request's own socket — and its spend — stayed open toward the
+    // 45-minute deadline. Reordering costs nothing: `live` is read from `this.sessions`,
+    // untouched by `release` (which only ever touches `this.kept`), so which runs first
+    // changes nothing about what either one finds.
+    const live = this.sessions.get(reviewId);
+    const hadLive = live !== undefined && live.size > 0;
+    if (hadLive) {
+      // EVERY LIVE SESSION, not the first or the last — a rung can hold several at once
+      // (D-109), and each is a real model call spending real quota until it is told to
+      // stop. `Promise.allSettled` so one session's abort failing (`abort` is already
+      // best-effort and never throws, but nothing upstream should depend on that staying
+      // true) cannot skip the rest.
+      await Promise.allSettled([...live].map((id) => this.abort(id)));
+      this.sessions.delete(reviewId);
+    }
+
     // KEPT SESSIONS GO TOO, and this is the path that would otherwise leak them (D-80).
     //
     // `review_cancel` is terminal, but it does not come through the worker unless a round
     // happened to be in flight — a review sitting in `findings_ready` is cancelled with no
     // job running, so `releaseIfFinished` never fires and the sessions this review opened
-    // would live in opencode until opencode itself restarted. The early `return false`
-    // below made it worse: the one case that leaks is exactly the one that returned first.
-    //
-    // Before the abort, because the release is what must not be skipped: the abort below
-    // can find nothing and return, and this still has to have happened.
+    // would live in opencode until opencode itself restarted. UNCONDITIONAL, still: an
+    // early return here would recreate the exact leak this comment is about, so it runs
+    // whether or not anything was live to abort above.
     await this.release(reviewId);
 
-    const live = this.sessions.get(reviewId);
-    if (live === undefined || live.size === 0) return false;
-    // EVERY LIVE SESSION, not the first or the last — a rung can hold several at once
-    // (D-109), and each is a real model call spending real quota until it is told to
-    // stop. `Promise.allSettled` so one session's abort failing (`abort` is already
-    // best-effort and never throws, but nothing upstream should depend on that staying
-    // true) cannot skip the rest.
-    await Promise.allSettled([...live].map((id) => this.abort(id)));
-    this.sessions.delete(reviewId);
-    return true;
+    return hadLive;
   }
 
   /**

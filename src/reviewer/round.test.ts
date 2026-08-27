@@ -621,6 +621,27 @@ describe("runRound", () => {
       expect(again.decision.kind).not.toBe("findings");
     });
 
+    /**
+     * THE RATIFIED REASON REACHES A LATER PROMPT (found by lore's own review, fingerprint
+     * c8f3a31e). `settledForPrompt` looked a settled fingerprint up inside `openFindings`
+     * — its own provable complement (`settledFingerprints` requires a settling verdict,
+     * `openFindings` requires none) — so the lookup always failed and every review's
+     * "ALREADY CONSIDERED AND RESOLVED" block was empty from round one onward, silently.
+     */
+    it("carries a settled finding's claim into the next round's prompt", async () => {
+      const reviewer = new ScriptedReviewer([[HOLD_BUG], [], []]);
+      await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
+      fix();
+      await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
+      expect(store.settledFingerprints("r1"), "settled after round 2's silence over the fix").toContain(fingerprint(HOLD_BUG));
+
+      await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
+
+      const thirdPrompt = reviewer.prompts[2] ?? "";
+      expect(thirdPrompt, "the settled ledger reaches a later prompt").toContain("ALREADY CONSIDERED AND RESOLVED");
+      expect(thirdPrompt, "naming the claim that was settled").toContain(HOLD_BUG.claim);
+    });
+
     // A re-raise moves the goalposts, and both fields the rule reads must move with
     // it. Here the code changes WITHOUT the defect being fixed and t1 says so again;
     // testing the first raise's hunk would then find it absent and record a false
@@ -859,6 +880,47 @@ describe("runRound", () => {
 
     const row = store.db.prepare("SELECT steps FROM usage").get() as { steps: number | null };
     expect(row.steps).toBeNull();
+  });
+
+  /**
+   * A KEPT SESSION'S USAGE IS RECORDED AS A DELTA, NOT ITS RUNNING TOTAL (found by
+   * lore's own review, fingerprint 43cfcfbc). `conduct` (opencode.ts) reads a
+   * conversation:true tier's usage from its WHOLE message list, which for a session
+   * kept across rounds already includes every earlier round's messages — round 3's
+   * figure IS rounds 1+2+3. Recorded verbatim each round, `spendSince` and the
+   * per-tier board (both `SUM(cost_usd)` across every row) then add round 1's total
+   * in again on top of round 2's, and again on top of round 3's: the same n²/2
+   * over-count `runRound`'s own D-107 emission loop was fixed for within one round,
+   * reopened across the rounds of a kept one.
+   */
+  it("records a kept session's usage as a per-round delta, not a running total", async () => {
+    // ONLY t1 kept, and a FRESH finding every round: a kept tier that goes clean
+    // ESCALATES to the next one (D-31/32), which would ask three DIFFERENT tiers once
+    // each rather than the same one three times — not the shape this fix is about.
+    // `nthBug` keeps raising something new so t1 is asked again instead.
+    const KEPT = { ...TYPE, tiers: DEFAULT_TIERS.map((t) => (t.id === "t1" ? { ...t, conversation: true } : t)) };
+    let calls = 0;
+    const cumulative: ReviewerLike = {
+      review: async () => {
+        calls++;
+        // A kept session reports CUMULATIVE usage every round — exactly what `conduct`
+        // does for a conversation:true tier, summing the whole session each time.
+        return {
+          findings: [nthBug(calls)],
+          raw: "", inputTokens: 1000 * calls, cachedTokens: 0,
+          outputTokens: 100 * calls, costUsd: 0.01 * calls, latencyMs: 1,
+          discarded: [], retried: false, steps: 1,
+        };
+      },
+    };
+    await runRound({ store, reviewer: cumulative, reviewId: "r1", principal: "p", worktree: dir, type: KEPT });
+    await runRound({ store, reviewer: cumulative, reviewId: "r1", principal: "p", worktree: dir, type: KEPT });
+    await runRound({ store, reviewer: cumulative, reviewId: "r1", principal: "p", worktree: dir, type: KEPT });
+    expect(calls, "three rounds must each have asked t1").toBe(3);
+
+    const total = store.usageSoFar("r1", "t1");
+    expect(total.inputTokens, "the true total, not 1000+2000+3000").toBe(3000);
+    expect(total.costUsd, "the true total, not 0.01+0.02+0.03").toBeCloseTo(0.03, 6);
   });
 });
 

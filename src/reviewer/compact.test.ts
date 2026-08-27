@@ -81,6 +81,26 @@ describe("compactToFit", () => {
     expect(err?.message).toMatch(/smaller range/);
   });
 
+  /**
+   * BOTH NUMBERS IN THE SAME UNIT (found by lore's own review, fingerprint e22c2e1a).
+   * `contextLimit` used to be handed the raw CHARACTER budget while the message that
+   * prints it labels it "tokens" — so a prompt at roughly a quarter of the true token
+   * window was printed as though it were a quarter of a count that was actually chars,
+   * ~4x too large: the refusal read as self-contradictory rather than as the near-full
+   * window it actually was.
+   */
+  it("names promptTokens and contextLimit in the same unit", async () => {
+    const err = await compactToFit(sized(5_000), TIER, "D".repeat(500_000), build(4_900)).then(
+      () => undefined,
+      (e: unknown) => e as TooLargeForTier,
+    );
+    expect(err).toBeInstanceOf(TooLargeForTier);
+    // 5,000 CHARACTERS is ~1,250 tokens, not 5,000 of them.
+    expect(err?.contextLimit).toBe(1_250);
+    expect(err?.message).not.toMatch(/5,000-token/);
+    expect(err?.message).toMatch(/1,250-token/);
+  });
+
   // The boundary: a diff cut below this is a fragment, and a tier given a fragment
   // produces confident findings about code it mostly did not see.
   it("refuses rather than sending a scrap of diff", async () => {

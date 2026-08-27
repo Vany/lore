@@ -148,7 +148,16 @@ export async function compactToFit(
   // produces confident findings about code it mostly did not see. Better to say so.
   const MIN_USEFUL_DIFF = 4_000;
   if (room < MIN_USEFUL_DIFF) {
-    throw new TooLargeForTier(tier.id, tier.model ?? "", Math.round(floor / 4), budget);
+    // lore-ok[e22c2e1a]: BOTH ARGUMENTS IN TOKENS. `budget` is `promptBudgetChars`'
+    // output — CHARACTERS, per its own docblock — while the 3rd argument here is
+    // already chars÷4. Passed straight through as `contextLimit`, the constructor's
+    // own message ("about X tokens against a Y-token context window") named token and
+    // character counts as though both were tokens: a prompt at ~25% of the character
+    // budget it was refused against, printed as though it were 25% of a TOKEN window —
+    // which visibly fits, so the refusal reads as lore contradicting itself rather than
+    // as the near-full window it actually is. `/4` here matches the same conversion the
+    // 3rd argument already applies.
+    throw new TooLargeForTier(tier.id, tier.model ?? "", Math.round(floor / 4), Math.round(budget / 4));
   }
 
   const kept = diffText.slice(0, room);
@@ -355,6 +364,51 @@ function filterSuppressed(
     return false;
   });
   return { findings: kept, silenced, silencedForTier };
+}
+
+/**
+ * This round's OWN usage, never the session's running total.
+ *
+ * lore-ok[43cfcfbc]: a kept session (D-80, `conversation: true`) reports usage summed
+ * over its WHOLE message list (`conduct`, opencode.ts) — correct for a session that is
+ * fresh every round, wrong for one that persists across them: round N's "whole session"
+ * already contains rounds 1..N-1. Subtracting what earlier rounds already recorded turns
+ * the cumulative figure back into a delta, so `spendSince` and the per-tier board — both
+ * `SUM(cost_usd)` across every row — add up to the true total instead of counting round 1
+ * once for every round after it, the same n²/2 over-count `runRound`'s own emission loop
+ * was fixed for within one round (see the comment above `agg.inputTokens =`), reopened
+ * across rounds of a kept one.
+ *
+ * A non-conversation tier's session is fresh every round by construction, so its reported
+ * total already IS that round's own — this must be a no-op for it, not a subtraction
+ * against a baseline that does not describe its session at all.
+ *
+ * Floored at 0: a session recreated mid-review (D-80's `SessionGone` recovery) starts its
+ * own count over, and its first post-recovery figure can read BELOW what the old session
+ * had already banked. A negative delta would corrupt the very sum this exists to keep
+ * honest; zero undercounts one round, once — the same safe direction `usageFromMessages`
+ * itself takes when a read fails.
+ */
+function perRoundUsage(
+  store: Store,
+  reviewId: string,
+  member: Tier,
+  raw: { readonly inputTokens?: number; readonly cachedTokens?: number; readonly outputTokens?: number; readonly costUsd?: number },
+): { inputTokens: number; cachedTokens: number; outputTokens: number; costUsd: number } {
+  const whole = {
+    inputTokens: raw.inputTokens ?? 0,
+    cachedTokens: raw.cachedTokens ?? 0,
+    outputTokens: raw.outputTokens ?? 0,
+    costUsd: raw.costUsd ?? 0,
+  };
+  if (member.conversation !== true) return whole;
+  const before = store.usageSoFar(reviewId, member.id);
+  return {
+    inputTokens: Math.max(0, whole.inputTokens - before.inputTokens),
+    cachedTokens: Math.max(0, whole.cachedTokens - before.cachedTokens),
+    outputTokens: Math.max(0, whole.outputTokens - before.outputTokens),
+    costUsd: Math.max(0, whole.costUsd - before.costUsd),
+  };
 }
 
 export async function runRound(input: RoundInput): Promise<RoundResult> {
@@ -803,10 +857,20 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // finding may legitimately be raised again.
   const expired = await expireStaleVerdicts(store, reviewId, worktree);
 
+  // lore-ok[c8f3a31e]: LOOKED UP IN allFindings, not openFindings. A settled fingerprint
+  // is what this block exists to render — "ALREADY CONSIDERED AND RESOLVED" — and
+  // `openFindings` is its provable complement: `settledFingerprints` selects the latest
+  // verdict IN SETTLING_VERDICTS, `openFindings` selects NOT EXISTS one. Looking a settled
+  // fingerprint up inside openFindings could therefore never find it, so `settledForPrompt`
+  // was `[]` on every round of every review since this existed — the ratified reason never
+  // reached a tier again, silently, because an empty settled block and a review with
+  // nothing yet settled render identically. Read once, outside the loop, for the same
+  // reason `open` is a few lines up: two reads of the same rows in one round can disagree.
+  const allForPrompt = store.allFindings(reviewId);
   const settledForPrompt = store
     .settledFingerprints(reviewId)
     .map((fp) => {
-      const f = store.openFindings(reviewId).find((o) => o.fingerprint === fp);
+      const f = allForPrompt.find((o) => o.fingerprint === fp);
       const v = store.latestVerdict(reviewId, fp);
       return f === undefined ? undefined : { finding: f, rationale: v?.rationale };
     })
@@ -2150,6 +2214,13 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     }
     const spent = (e as { spent?: { input: number; cached: number; output: number; cost: number } }).spent;
     if (spent !== undefined) {
+      // PER-ROUND, not the kept session's running total — see `perRoundUsage`, fingerprint
+      // 43cfcfbc: a failed round on a conversation tier reads its usage from the same
+      // whole-session list a successful one does, and is cumulative for exactly the same
+      // reason.
+      const usage = perRoundUsage(store, reviewId, member, {
+        inputTokens: spent.input, cachedTokens: spent.cached, outputTokens: spent.output, costUsd: spent.cost,
+      });
       store.recordUsage({
         repoId: review.repoId,
         reviewId,
@@ -2161,12 +2232,12 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
         ...((fellBackTo ?? chosenRoute ?? member.model) !== undefined
           ? { model: (fellBackTo ?? chosenRoute ?? member.model) as string }
           : {}),
-        inputTokens: spent.input,
-        cachedTokens: spent.cached,
-        outputTokens: spent.output,
+        inputTokens: usage.inputTokens,
+        cachedTokens: usage.cachedTokens,
+        outputTokens: usage.outputTokens,
         // Whatever the provider reported, which is zero for every flat subscription and
         // real for a metered one — the number the daily ceiling sums.
-        costUsd: spent.cost,
+        costUsd: usage.costUsd,
         // The row says the call did NOT succeed, so a reader cannot mistake recovered
         // spend for a completed review.
         outcome: "failed",
@@ -2291,6 +2362,12 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     return { kind: "skipped", member, error: e, note: `${member.id}: ${e.message}` };
   }
 
+  // PER-ROUND, not the kept session's running total — see `perRoundUsage`, fingerprint
+  // 43cfcfbc: a conversation tier's session carries every earlier round's messages too,
+  // so its reported usage is cumulative-to-date, not this round's own.
+  const usage = perRoundUsage(store, reviewId, member, {
+    inputTokens: result.inputTokens, cachedTokens: result.cachedTokens, outputTokens: result.outputTokens, costUsd: result.costUsd,
+  });
   store.recordUsage({
     repoId: review.repoId,
     reviewId,
@@ -2303,10 +2380,10 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
         // pick, which makes spend per subscription untraceable exactly when two
         // subscriptions is the point.
         ...(fellBackTo ?? chosenRoute ?? member.model) !== undefined ? { model: (fellBackTo ?? chosenRoute ?? member.model) as string } : {},
-    inputTokens: result.inputTokens,
-    cachedTokens: result.cachedTokens,
-    outputTokens: result.outputTokens,
-    costUsd: result.costUsd,
+    inputTokens: usage.inputTokens,
+    cachedTokens: usage.cachedTokens,
+    outputTokens: usage.outputTokens,
+    costUsd: usage.costUsd,
     latencyMs: result.latencyMs,
     // Omitted rather than zeroed when the reviewer could not count its own turns:
     // the column exists to become a distribution of how far reviews explore (D-50),
