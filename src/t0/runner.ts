@@ -487,6 +487,11 @@ async function sandboxedCargo(
         }));
       }
 
+      // lore-ok[d269a60f]: fixed one file over, not by de-duplicating the
+      // combination here. `parseCargoJson` (engines.ts) now keeps only
+      // `clippy::`-prefixed codes for the clippy engine, so the two `checkCargo`
+      // results pushed below never carry the SAME diagnostic to begin with —
+      // nothing to de-duplicate at the point they are combined.
       const out: EngineOutcome[] = [];
       if (wanted.includes("cargo-check")) {
         out.push(await checkCargo(cfg, worktree, cacheDir, scratch, manifest, found.dir, "cargo-check", "check"));
@@ -528,6 +533,11 @@ async function checkCargo(
   engine: "cargo-check" | "cargo-clippy",
   subcommand: "check" | "clippy",
 ): Promise<EngineOutcome> {
+  // lore-ok[f2b0d6c3]: fixed further down in this same function, at the
+  // `no such command:` check right before the fallback to `scriptFinding` — a
+  // missing `cargo-clippy` binary is now told apart from a genuine lint failure
+  // before either can reach the opaque, high-severity "fails on this branch"
+  // framing.
   const r = await runInSandbox(
     cfg,
     worktree,

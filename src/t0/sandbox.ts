@@ -160,6 +160,14 @@ function baseArgs(cfg: SandboxConfig, worktree: string, cacheDir: string, scratc
     // at this mount. `CARGO_ENV` (runner.ts, exported at the front of every cargo
     // script string `sandboxedCargo`/`checkCargo` build) does that now; this mount
     // is the correct, necessary, but not sufficient other half.
+    //
+    // lore-ok[54900638]: fixed by the CALLER, not this line itself. This generic
+    // function mounts wherever `cacheMountPath` says; the bug was cargo's own
+    // caller passing `/work/.cargo`, a path `SYNC` also writes a reviewed repo's
+    // dotfiles into. Cargo's own call sites (`runner.ts`) now pass `CARGO_MOUNT`
+    // (`/cargo-cache`), a sibling of `/work` this function's `SYNC` step never
+    // touches — see this same file's `runInSandbox` doc comment for the full
+    // reasoning.
     "-v", `${cacheDir}:${cacheMountPath}`,
     "-w", "/work",
     "--memory", cfg.memory,
@@ -421,8 +429,12 @@ export async function detectEcosystems(worktree: string): Promise<readonly Ecosy
  * typecheck, or a lint — that reaches the internet is not a check of this change.
  * Everything else is the same container shape: sources read-only at /src, a
  * throwaway copy at /work, the shared cache mounted at `cacheMountPath` (default
- * `/work/node_modules`; cargo's own callers pass `/work/.cargo` — D-131), no
- * capabilities, no new privileges, bounded cpu/memory/pids, and a hard timeout.
+ * `/work/node_modules`; cargo's own callers pass `/cargo-cache` — D-131, a
+ * SIBLING of `/work` rather than nested under it — found by lore's own review,
+ * fingerprints a461dd72/54900638: `/work/.cargo` sits directly on cargo's own
+ * config-discovery path, and `SYNC` would copy a reviewed repo's own committed
+ * config into that same, persistent, cross-review mount), no capabilities, no
+ * new privileges, bounded cpu/memory/pids, and a hard timeout.
  */
 export async function runInSandbox(
   cfg: SandboxConfig,

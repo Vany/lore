@@ -947,8 +947,13 @@ rebuilds it.** Distinguished explicitly from a genuine dependency-fetch failure
 (`checkTypes`'s bare-tsc branch already drew the identical distinction once,
 fingerprint 1fa9229d: the likelier explanation for this shape of failure is the
 tool never being installed, not a defect in the branch's own dependencies) —
-`cargo fetch`'s own failure path checks for exit 127 / a "not found"-shaped
-message before falling into the generic "dependencies do not fetch" finding.
+`cargo fetch`'s own failure path checks exit 127 alone (found by lore's own
+review, fingerprint 01270153: a text match alongside it once caught a genuine
+dependency error too — a broken git dependency's own "not found" — discarding
+a real, high-severity finding as a false "no toolchain"; 127 needs no such
+hedge, since both sides of the fetch's own `||` fallback fail identically when
+the binary is genuinely missing) before falling into the generic "dependencies
+do not fetch" finding.
 
 Out of scope, named rather than silently dropped: multi-crate/true
 workspace-aware discovery beyond one level (`detectEcosystems` itself does not
