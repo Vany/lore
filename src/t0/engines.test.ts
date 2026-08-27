@@ -63,6 +63,16 @@ describe("an optional engine's absence is not a gap in the review", () => {
     expect(detect(dir, "osv")).toBe(true);
     expect(detect(dir, "sbom")).toBe(false);
   });
+
+  // Fingerprint 6b8b5c00: gating on package.json alone reported both sbom and
+  // osv "not configured" on a pure Go/PyPI/Rust/Maven/RubyGems repo — even with
+  // cdxgen installed, which is exactly the tool that enumerates those five other
+  // ecosystems.
+  it("runs sbom and osv for a non-npm ecosystem with no package.json", () => {
+    writeFileSync(join(dir, "go.mod"), "module example.com/x\n");
+    expect(detect(dir, "sbom")).toBe(true);
+    expect(detect(dir, "osv")).toBe(true);
+  });
 });
 
 /**

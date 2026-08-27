@@ -65,15 +65,25 @@ export interface VexStatement {
  * `not_affected`. Silence is not a clearance, and a VEX document that quietly
  * marks unexamined vulnerabilities as harmless is worse than no document — it is a
  * signed claim that nobody checked.
+ *
+ * lore-ok[494b2281]: `tier` ADDED. `expireStaleVerdicts` (reviewer/review.ts)
+ * writes verdict `"justified-rejected"` with `tier: "expiry"` when the code an
+ * ACCEPTED justification was about has since moved — a claim that the reason
+ * needs RE-EXAMINING, not that a reviewer looked and rejected it. Both used to
+ * map to `"exploitable"`, a specific, confident claim nobody actually made;
+ * meanwhile the same finding stays `openFindings` (SETTLING_VERDICTS excludes
+ * `justified-rejected` either way) and so is ALSO counted in `untriaged` —
+ * the same `review_vex` response asserting "confirmed exploitable" and "still
+ * needs triage" about the identical finding.
  */
-export function stateFor(verdict: VerdictKind | undefined): VexState {
+export function stateFor(verdict: VerdictKind | undefined, tier?: string): VexState {
   switch (verdict) {
     case "fixed":
       return "resolved";
     case "justified-accepted":
       return "not_affected";
     case "justified-rejected":
-      return "exploitable";
+      return tier === "expiry" ? "in_triage" : "exploitable";
     default:
       return "in_triage";
   }
@@ -104,11 +114,28 @@ export function justificationFor(reason: string): VexJustification {
   return "code_not_reachable";
 }
 
+/**
+ * lore-ok[f7cbff4c]: A REAL COMPONENT ENTRY per statement, `affects[].ref`'s
+ * required target — confirmed against CycloneDX's own JSON schema:
+ * `affects[].ref` is documented as "the bom-ref identifiers of the components
+ * or services... affected", a cross-reference INTO this same document's own
+ * `components[]`, not an arbitrary string. This document had no `components`
+ * at all, so every `ref` — a bare file path — pointed at nothing any
+ * spec-conformant consumer could resolve, in the one field whose entire job
+ * is naming the subject of the statement.
+ */
+export interface VexComponent {
+  readonly "bom-ref": string;
+  readonly type: "library";
+  readonly name: string;
+}
+
 export interface VexDocument {
   readonly bomFormat: "CycloneDX";
   readonly specVersion: "1.6";
   readonly version: 1;
   readonly metadata: { readonly timestamp: string; readonly component: { readonly name: string; readonly version: string } };
+  readonly components: readonly VexComponent[];
   readonly vulnerabilities: readonly VexStatement[];
 }
 
@@ -142,6 +169,7 @@ export function buildVex(
   // important one.
   const findings = store.findingRowsForReview(reviewId);
 
+  const components: VexComponent[] = [];
   const vulnerabilities: VexStatement[] = [];
 
   for (const row of findings) {
@@ -151,8 +179,18 @@ export function buildVex(
 
     const fingerprint = String(row["fingerprint"] ?? "");
     const verdict = store.latestVerdict(reviewId, fingerprint);
-    const state = stateFor(verdict?.verdict);
+    const state = stateFor(verdict?.verdict, verdict?.tier);
     const detail = verdict?.rationale ?? "not yet examined";
+
+    // One synthetic component per statement, keyed by fingerprint — the
+    // original Component (sbom.ts) this finding was raised from does not
+    // survive into the stored row, only `claim`/`evidence`/`file` do.
+    const bomRef = `component-${fingerprint}`;
+    components.push({
+      "bom-ref": bomRef,
+      type: "library",
+      name: componentNameFrom(String(row["claim"] ?? ""), String(row["file"] ?? "")),
+    });
 
     vulnerabilities.push({
       id,
@@ -165,7 +203,7 @@ export function buildVex(
         // about a tree hash rather than a branch name.
         response: state === "resolved" ? ["update"] : [],
       },
-      affects: [{ ref: String(row["file"] ?? "") }],
+      affects: [{ ref: bomRef }],
       ...(row["cwe"] !== null && row["cwe"] !== undefined
         ? { cwes: [Number(String(row["cwe"]).replace("CWE-", ""))] }
         : {}),
@@ -177,8 +215,19 @@ export function buildVex(
     specVersion: "1.6",
     version: 1,
     metadata: { timestamp, component: { name: project.name, version: project.version } },
+    components,
     vulnerabilities,
   };
+}
+
+/**
+ * `toFindings` (osv.ts) always writes a claim starting `${name}@${version} is
+ * affected by...`; `commitToFindings`' submodule claims do not (`submodule
+ * ${path} is pinned at...`), so this falls back to the finding's own `file` —
+ * still real, still resolvable, just less specific than a package coordinate.
+ */
+function componentNameFrom(claim: string, file: string): string {
+  return /^(\S+@\S+) is affected by\b/.exec(claim)?.[1] ?? file;
 }
 
 /**

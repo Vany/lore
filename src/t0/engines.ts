@@ -221,6 +221,14 @@ function sitesEvidence(tool: string, rule: string, file: string, lines: readonly
  */
 const OPT_IN = new Set<T0Engine>(["ast-grep"]);
 
+// lore-ok[6b8b5c00]: EVERY ECOSYSTEM sbom.ts CAN ENUMERATE, not just npm's. A
+// pure Go/PyPI/Rust/Maven/RubyGems repo has no package.json, so gating on it
+// alone reported both `sbom` and `osv` "not configured" — even with cdxgen
+// installed, which is exactly the tool sbom.ts builds to enumerate the other
+// five ecosystems. One manifest name per ecosystem, mirroring the set
+// `security/sbom.ts`'s own `Ecosystem` type names.
+const ECOSYSTEM_MANIFESTS = ["package.json", "go.mod", "Cargo.toml", "pom.xml", "requirements.txt", "pyproject.toml", "Gemfile"];
+
 export function detect(worktree: string, engine: T0Engine): boolean {
   switch (engine) {
     case "tsc":
@@ -244,16 +252,16 @@ export function detect(worktree: string, engine: T0Engine): boolean {
       // they carry CWE metadata that lands in the same namespace as model findings.
       return true;
     case "sbom":
-      return existsSync(join(worktree, "package.json"));
+      return ECOSYSTEM_MANIFESTS.some((f) => existsSync(join(worktree, f)));
     case "osv":
       // Not the same condition as `sbom`, though it was written as one.
       //
       // OSV queries packages FROM the SBOM and submodules by commit. A repository
-      // that vendors purely by gitlink has no `package.json`, so sharing the gate
+      // that vendors purely by gitlink has no manifest at all, so sharing the gate
       // skipped the whole engine — the vulnerability check declining to run on the
       // exact repository shape it was built for (D-36), and reporting nothing, which
       // is the reading INV-1 forbids.
-      return existsSync(join(worktree, "package.json")) || existsSync(join(worktree, ".gitmodules"));
+      return ECOSYSTEM_MANIFESTS.some((f) => existsSync(join(worktree, f))) || existsSync(join(worktree, ".gitmodules"));
     default:
       return false;
   }

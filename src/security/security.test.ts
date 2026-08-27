@@ -320,6 +320,16 @@ describe("stateFor", () => {
   it("never marks an unexamined vulnerability as not affected", () => {
     expect(stateFor(undefined)).toBe("in_triage");
   });
+
+  // Fingerprint 494b2281: expireStaleVerdicts (reviewer/review.ts) writes this
+  // exact verdict/tier pair when an ACCEPTED justification's code moved — a
+  // claim that needs re-examining, not a reviewer's own rejection. Both are
+  // VerdictKind "justified-rejected"; only `tier` tells them apart.
+  it("treats an expired justification as needing triage, not as confirmed exploitable", () => {
+    expect(stateFor("justified-rejected", "expiry")).toBe("in_triage");
+    expect(stateFor("justified-rejected", "t2")).toBe("exploitable");
+    expect(stateFor("justified-rejected")).toBe("exploitable");
+  });
 });
 
 describe("justificationFor", () => {
@@ -345,6 +355,7 @@ const emptyDoc = (): VexDocument => ({
   specVersion: "1.6",
   version: 1,
   metadata: { timestamp: "2026-08-03T00:00:00.000Z", component: { name: "demo", version: "0.0.0" } },
+  components: [],
   vulnerabilities: [],
 });
 
@@ -454,6 +465,17 @@ describe("buildVex", () => {
     const doc = buildVex(store, "r1", { name: "demo", version: "0.0.0" }, "2026-08-03T00:00:00.000Z");
     // Still just the one real, t0-origin statement from beforeEach.
     expect(doc.vulnerabilities).toHaveLength(1);
+  });
+
+  // Fingerprint f7cbff4c: CycloneDX's own schema requires affects[].ref to
+  // resolve to a bom-ref declared in this SAME document's components[] — a
+  // bare file path resolves to nothing a spec-conformant consumer can find.
+  it("points affects[].ref at a real bom-ref this document actually declares", () => {
+    const doc = buildVex(store, "r1", { name: "demo", version: "0.0.0" }, "2026-08-03T00:00:00.000Z");
+    const ref = doc.vulnerabilities[0]?.affects[0]?.ref;
+    expect(ref).toBeDefined();
+    expect(doc.components.some((c) => c["bom-ref"] === ref)).toBe(true);
+    expect(doc.components[0]?.name).toBe("lodash@4.17.20");
   });
 });
 
