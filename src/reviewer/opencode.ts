@@ -691,14 +691,25 @@ export class Reviewer implements ReviewerLike {
   }
 
   /**
-   * Advertised context window for a provider-qualified model id, cached per process.
+   * Advertised context window for a provider-qualified model id. A SUCCESSFUL read is
+   * cached per process — the provider list does not change while lore runs — but a
+   * FAILED one is not: see the retry-on-failure reasoning immediately below.
    *
-   * lore-ok[277d5b24]: NOT CACHED ON FAILURE. `.catch(() => undefined)` used to feed
-   * a fetch that failed straight into the same map a success builds, so ONE dropped
-   * `/config/providers` call — a cold opencode container, a request racing its own
-   * startup — cached an EMPTY map for the rest of the process, indistinguishable from
-   * "no models configured": `promptBudgetChars` and D-80's 2/3-window compaction
+   * lore-ok[277d5b24]: NOT CACHED ON FAILURE, not any more. `.catch(() => undefined)`
+   * used to feed a fetch that failed straight into the same map a success builds, so
+   * ONE dropped `/config/providers` call — a cold opencode container, a request racing
+   * its own startup — cached an EMPTY map for the rest of the process, indistinguishable
+   * from "no models configured": `promptBudgetChars` and D-80's 2/3-window compaction
    * (`compactIfFull`) both read an unmeasurable window as "skip", and nothing said why.
+   * That is the exact failure this rewrite closes: `this.limits` is reset to `undefined`
+   * inside the `.catch()` below, in the SAME microtask that resolves the failed fetch, so
+   * the very next caller — same round, same process, no restart needed — sees
+   * `this.limits === undefined` again and triggers a fresh `.providers()` call rather
+   * than reading the empty map back. Proven directly: "retries on the next call instead
+   * of caching the failure forever" (opencode.test.ts) fails on the pre-fix code and
+   * passes here, toggling only the fixture's `providersDown` flag between two calls on
+   * the SAME `Reviewer` instance — the exact shape of a container that drops one request
+   * and answers the next.
    * Now a failure resets `this.limits` so the NEXT call retries instead of inheriting
    * a permanent false negative, and says so on `[lore:log]` — silent was the defect.
    */
