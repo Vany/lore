@@ -133,13 +133,18 @@ export async function cargoLockKey(worktree: string, dir: string): Promise<strin
  * `node_modules` is mounted over the copy from the shared cache, so the copy is
  * source only and installs are shared across reviews with the same lockfile.
  *
- * `cacheMountPath` is where inside `/work` the cache lands — `/work/node_modules`
- * for every existing npm/pnpm/yarn call site (the default, so none of them change),
- * `/work/.cargo` for cargo's (D-131), which needs no `node_modules`-shaped mount at
- * all. `XDG_DATA_HOME` derives from it rather than being hardcoded, which is the
- * more honest generalisation: any tool that self-provisions should do so into
- * whichever mount is the PERSISTENT one, not the throwaway scratch copy, regardless
- * of which ecosystem is asking.
+ * `cacheMountPath` is where the cache lands — `/work/node_modules` for every
+ * existing npm/pnpm/yarn call site (the default, so none of them change), a SIBLING
+ * of `/work` entirely for cargo's (`/cargo-cache`, D-131 round 4 — not nested under
+ * `/work` at all, found by lore's own review, fingerprints a461dd72/54900638: `.cargo`
+ * is not just a directory name, it is cargo's OWN config-discovery convention, and
+ * mounting the shared cache there put it on a path `SYNC`'s dotfile copy would write
+ * a reviewed repo's own committed config into — surviving the review and silently
+ * configuring the next one sharing that Cargo.lock hash). `XDG_DATA_HOME` derives
+ * from it rather than being hardcoded, which is the more honest generalisation: any
+ * tool that self-provisions should do so into whichever mount is the PERSISTENT one,
+ * not the throwaway scratch copy, regardless of which ecosystem is asking or where
+ * exactly that mount happens to live.
  */
 function baseArgs(cfg: SandboxConfig, worktree: string, cacheDir: string, scratch: string, cacheMountPath = "/work/node_modules"): string[] {
   return [

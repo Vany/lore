@@ -878,7 +878,59 @@ bare string); `note`/`help` level diagnostics only ever nest inside a parent's
 `children`, never arriving as their own top-level entries, so filtering to
 `error`/`warning` at the top level is sufficient on its own. A whole-crate
 summary with no span ("aborting due to 2 previous errors") is dropped — no
-information beyond the individual diagnostics already reported.
+information beyond the individual diagnostics already reported. `file_name` in
+a span is relative to the MANIFEST's own directory, never the worktree root and
+never absolute — confirmed by actually running `cargo check --manifest-path`
+against a nested fixture, not assumed — so `parseCargoJson` rebases it onto the
+crate's own directory (found by lore's own review, fingerprint 47ddd7fa; a
+`teammater`-shaped repo would otherwise have gotten findings anchored to files
+that do not exist at the paths they claimed).
+
+**Three more rounds of lore's own review, each catching something the wiring
+above did not actually do despite being written to.** The cache mount at
+`baseArgs`' `cacheMountPath` was wired and nothing ever pointed cargo's own
+`$CARGO_HOME`/`$CARGO_TARGET_DIR` at it — every fetch silently used each
+container's own ephemeral `$HOME/.cargo` instead, so nothing was ever actually
+cached (fingerprint d341a76e; fixed by exporting both at the front of every
+cargo script string, `CARGO_ENV` in `runner.ts`). `CODE_ARCH.t0` listing
+cargo-check/cargo-clippy unconditionally meant every non-Rust review — most of
+what this deployment reviews — carried two permanent NOT RUN lines, the exact
+"ast-grep problem" D-71 already named (fingerprint c37f7c9b; `sandboxedCargo`
+now reports `skipped`, not `unavailable`, when no Cargo.toml is found at all).
+The missing-binary text heuristic also matched a genuine dependency error
+("fatal: repository … not found" from a broken git dependency) as though cargo
+itself were absent, discarding a real high-severity finding (fingerprint
+01270153; exit 127 alone decides now — reliable on its own, since both sides of
+the fetch's own `||` fallback fail identically when the binary is genuinely
+missing). The manifest path — a directory name from the branch under review,
+not a value this code chooses — was interpolated unquoted into a shell string;
+a one-level directory containing a space would word-split and break a healthy
+repo's own check (fingerprint 2b5a78f6; `shQuote` wraps it now, the same
+"paths from the branch are not values we choose" reasoning `scopePaths`
+already documents one file over).
+
+**The sharpest of the four: mounting the cache AT `/work/.cargo` put it
+directly on cargo's own config-discovery path.** Cargo walks up from its
+working directory (`/work`) looking for `.cargo/config.toml`; `SYNC`'s
+`cp -a /src/. /work/` copies dotfiles too, so a reviewed repo's own committed
+`.cargo/config.toml` landed inside the bind-mounted, cross-review, Cargo.lock-
+hash-keyed cache — and `cp -a` never removes what a later sync doesn't
+overwrite. A repo pinning a registry mirror or build target would silently
+configure every OTHER review sharing that lockfile hash: cross-branch,
+potentially cross-repository, contamination in lore's own voice (fingerprints
+a461dd72/54900638). Fixed by moving the mount entirely off `/work` — a sibling
+`/cargo-cache`, shared by nothing cargo's own discovery walks — with
+`CARGO_HOME`/`CARGO_TARGET_DIR` pointed inside it. A useful side effect: a ROOT
+crate's own `.cargo/config.toml` now reads correctly, from its natural,
+ephemeral, per-review location, once nothing is mounted over it. **A NESTED
+crate's own `.cargo/config.toml` is still not read, and this is now a
+confirmed limitation, not a guess** — verified by running real cargo with
+`--manifest-path` against a nested fixture and inspecting the actual `rustc`
+invocation: config discovery starts from the process's own working directory,
+never from the manifest's, so a crate one level down never has its own
+config file found regardless of where the shared cache lives. Fixing it needs
+the working directory itself to move per crate, which is bigger than this
+slice.
 
 **Deliberately does not touch `deploy/sandbox.Dockerfile`.** Asked Vany how the
 sandbox image should get a Rust toolchain — rustup (honours a target's own
@@ -902,7 +954,8 @@ Out of scope, named rather than silently dropped: multi-crate/true
 workspace-aware discovery beyond one level (`detectEcosystems` itself does not
 go deeper); honouring a project-pinned toolchain the image does not carry
 (`RUSTUP_HOME` is not cached/mounted); clippy-lint-group-aware severity finer
-than error→high/warning→medium.
+than error→high/warning→medium; a NESTED crate's own `.cargo/config.toml`,
+confirmed unreachable by this invocation shape (see above) and not fixed here.
 
 **D-128 — a finding that names its fields "title"/"detail" is a naming drift, not a
 malformed reply: repaired at the boundary rather than gambled on a retry. BUILT

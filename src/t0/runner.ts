@@ -323,6 +323,24 @@ function shQuote(s: string): string {
 }
 
 /**
+ * The cargo cache mount's container path — a SIBLING of `/work`, never nested
+ * inside it. Found by lore's own review, fingerprints a461dd72/54900638: mounting
+ * it at `/work/.cargo` put the shared, cross-review cache on cargo's OWN
+ * config-discovery path — cargo walks up from the current directory looking for
+ * `.cargo/config.toml`, and `SYNC`'s `cp -a /src/. /work/` (dotfiles included)
+ * copies a reviewed repo's own committed `.cargo/` INTO that exact mount, which
+ * `cp -a` never cleans back out. A repo pinning a registry mirror or build target
+ * in `.cargo/config.toml` would silently configure every OTHER review sharing its
+ * Cargo.lock hash — cross-branch, potentially cross-repository, contamination in
+ * lore's own voice. `/cargo-cache` shares nothing with any path cargo's own
+ * discovery walks, and as a side effect a root crate's own `.cargo/config.toml` now
+ * reads correctly from its natural, ephemeral, per-review location at
+ * `/work/.cargo/config.toml` — populated by `SYNC` like any other source file,
+ * once nothing is mounted over it.
+ */
+const CARGO_MOUNT = "/cargo-cache";
+
+/**
  * Where cargo keeps what it downloads and builds, redirected into the mounted cache
  * rather than each container's own ephemeral `$HOME/.cargo` — without this the
  * fetch's downloads die with the container that made them and `cargo check
@@ -333,7 +351,7 @@ function shQuote(s: string): string {
  * already generalises the MOUNT, and threading two more env pairs through it and
  * `baseArgs` for exactly one caller is more machinery than a two-line shell prefix.
  */
-const CARGO_ENV = "export CARGO_HOME=/work/.cargo/home CARGO_TARGET_DIR=/work/.cargo/target;";
+const CARGO_ENV = `export CARGO_HOME=${CARGO_MOUNT}/home CARGO_TARGET_DIR=${CARGO_MOUNT}/target;`;
 
 /**
  * Everything cargo needs, in its own sandboxed session (D-131) — separate from
@@ -397,7 +415,7 @@ async function sandboxedCargo(
         scratch,
         `${CARGO_ENV} cargo fetch --manifest-path ${quotedManifest} --locked || cargo fetch --manifest-path ${quotedManifest}`,
         true,
-        "/work/.cargo",
+        CARGO_MOUNT,
       );
       if (fetched.unavailable !== undefined) {
         return wanted.map((engine) => ({
@@ -487,8 +505,18 @@ async function sandboxedCargo(
  * `cargo check` or `cargo clippy --message-format=json`, offline — identical shape
  * for both, unlike `checkTypes`/`checkLint`'s deliberate split, because neither has
  * a "target declared a custom script" branch to choose between: cargo's own root
- * manifest is already the canonical, target's-own-config-respecting invocation
- * (D-8), workspace members included, with no monorepo-runner indirection needed.
+ * manifest is already the canonical invocation (D-8), workspace members included,
+ * with no monorepo-runner indirection needed.
+ *
+ * ONE HONEST GAP, not silently claimed away: a NESTED crate's own `.cargo/config.toml`
+ * is not read. Found by lore's own review, fingerprint 54900638, and confirmed by
+ * running real cargo: config discovery walks up from the process's own working
+ * directory (`/work`, set once for every engine in `baseArgs`), not from
+ * `--manifest-path`'s directory — a root crate's config is read correctly (nothing
+ * else sits between `/work` and its `.cargo/`), a nested one's is invisible to this
+ * invocation regardless of what it declares. Fixing it needs the working directory
+ * itself to move per crate, which is bigger than this slice — named here rather than
+ * discovered by a client wondering why a crate's own rustflags never applied.
  */
 async function checkCargo(
   cfg: SandboxConfig,
@@ -507,7 +535,7 @@ async function checkCargo(
     scratch,
     `${CARGO_ENV} cargo ${subcommand} --manifest-path ${shQuote(manifest)} --offline --message-format=json`,
     false,
-    "/work/.cargo",
+    CARGO_MOUNT,
   );
   if (r.unavailable !== undefined) return { engine, findings: [], unavailable: r.unavailable, interrupted: r.timedOut };
   if (ranOutOfMemory(r)) return scriptFinding(engine, `cargo ${subcommand}`, r);

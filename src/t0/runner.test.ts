@@ -462,9 +462,31 @@ describe("sandboxedCargo, through a fake docker", () => {
     // Fetch, plus one check invocation per requested engine.
     expect(calls.length, argv).toBe(3);
     for (const call of calls) {
-      expect(call, call).toMatch(/CARGO_HOME=\/work\/\.cargo\/home/);
-      expect(call, call).toMatch(/CARGO_TARGET_DIR=\/work\/\.cargo\/target/);
+      expect(call, call).toMatch(/CARGO_HOME=\/cargo-cache\/home/);
+      expect(call, call).toMatch(/CARGO_TARGET_DIR=\/cargo-cache\/target/);
+      // NOT nested under /work — see the dedicated test below for why: that path
+      // collides with cargo's own config-discovery convention.
+      expect(call, call).not.toMatch(/\/work\/\.cargo/);
     }
+  });
+
+  // THE CACHE MOUNT ITSELF, NOT JUST THE ENV VARS THAT POINT AT IT — found by
+  // lore's own review, fingerprints a461dd72/54900638: mounting the shared,
+  // cross-review cache at `/work/.cargo` puts it on cargo's OWN config-discovery
+  // path, and `SYNC`'s `cp -a /src/. /work/` (dotfiles included) copies a reviewed
+  // repo's own committed `.cargo/config.toml` INTO that exact, persistent,
+  // Cargo.lock-hash-keyed location — never cleaned back out, silently configuring
+  // the next review sharing that hash. The `-v` flag itself must target a path
+  // `SYNC` never writes to, not merely have the right env vars layered on top.
+  it("mounts the cache as a sibling of /work, never nested under /work/.cargo", async () => {
+    const script = join(dir, "fake-docker-mount-check.sh");
+    const captured = join(dir, "captured-mount.txt");
+    writeFileSync(script, `#!/bin/sh\nprintf '%s\\n---\\n' "$*" >> "${captured}"\nexit 0\n`);
+    chmodSync(script, 0o755);
+    await runT0(dir, { engines: ["cargo-check"], sandbox: baseSandbox(script) });
+    const argv = readFileSync(captured, "utf8");
+    expect(argv, argv).toMatch(/-v [^ ]+:\/cargo-cache\b/);
+    expect(argv, argv).not.toContain(":/work/.cargo");
   });
 
   // THE MANIFEST PATH IS REPO-CONTROLLED, NOT A VALUE THIS CODE CHOOSES — found by
