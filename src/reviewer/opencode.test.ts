@@ -65,6 +65,8 @@ let hangPrompt = false;
 let deleteDelayMs = 0;
 /** `POST /session`: how long session creation takes — so a test can land a cancel mid-create. */
 let createSessionDelayMs = 0;
+/** `GET /session/:id/message`: how long `compactIfFull`'s own read takes — same reason. */
+let messagesDelayMs = 0;
 /** Events the fake opencode will publish on `/event`, in order. */
 let pending: unknown[] = [];
 
@@ -123,8 +125,10 @@ function start(): Promise<void> {
         // message list on the same path and tells them apart by verb. Routing on the
         // path alone would feed the prompt reply to the step counter.
         if (path.endsWith("/message") && req.method === "GET") {
-          res.writeHead(messagesStatus, { "content-type": "application/json" });
-          res.end(JSON.stringify(messages ?? sessionMessages(3)));
+          setTimeout(() => {
+            res.writeHead(messagesStatus, { "content-type": "application/json" });
+            res.end(JSON.stringify(messages ?? sessionMessages(3)));
+          }, messagesDelayMs);
           return;
         }
         if (path.endsWith("/message") && destroyPrompt) {
@@ -256,6 +260,7 @@ beforeEach(async () => {
   hangPrompt = false;
   deleteDelayMs = 0;
   createSessionDelayMs = 0;
+  messagesDelayMs = 0;
   pending = [];
   await start();
 });
@@ -1110,6 +1115,49 @@ describe("a call that is no longer wanted", () => {
     expect(
       captured.some((c) => c.path.includes("/message") && c.method === "POST"),
       "quota was never spent on a review that had already ended",
+    ).toBe(false);
+  });
+
+  /**
+   * A KEPT SESSION'S OWN COMPACTION IS ANOTHER UN-ABORTABLE WINDOW (found by lore's own
+   * review, fingerprint d0eed5e8). `compactIfFull`'s own calls carry no signal, so a
+   * cancel landing during it cannot interrupt them directly — and `abort()` still
+   * deletes `aborters`' entry for the session UNCONDITIONALLY once it is called, whether
+   * or not the deletion actually stopped anything. Without a re-check here, `conduct`
+   * (called right after) reaches `ask`'s "has no abort controller" guard with the
+   * aborter genuinely gone — a state that guard's own comment calls a programming error,
+   * but here is the ordinary result of a legitimate cancel — and used to throw a plain
+   * `DidNotRun` that `runMember`'s catch (review.ts) cannot tell from a real failure.
+   */
+  it("still spends nothing when a kept session's own compaction is what's in flight", async () => {
+    const KEPT: Tier = { ...TIER, conversation: true };
+    const r = reviewer();
+    // First round: establishes the kept session normally — `continuing` is undefined,
+    // so this round never touches `compactIfFull` at all.
+    replies = [{ parts: [{ type: "text", text: '```json\n{"findings":[]}\n```' }] }];
+    await r.review(KEPT, { initial: "A", continued: "B" }, "/tmp/wt", "rev1", () => true);
+
+    // Second round: continuing the same session reaches `compactIfFull`'s own read.
+    // Long enough that the flip below lands WHILE it is still in flight.
+    replies = [{ parts: [{ type: "text", text: '```json\n{"findings":[]}\n```' }] }];
+    messagesDelayMs = 150;
+    let wanted = true;
+    setTimeout(() => {
+      wanted = false;
+    }, 30);
+
+    const before = captured.length;
+    const err = await r
+      .review(KEPT, { initial: "A", continued: "B" }, "/tmp/wt", "rev1", () => wanted)
+      .then(() => undefined, (e: unknown) => e);
+    expect((err as Error | undefined)?.message).toMatch(
+      /ended while tier t1's session was being compacted — nothing new was spent/,
+    );
+    expect(err, "a cancel must be classified as ours, not as the tier failing").toBeInstanceOf(CancelledByLore);
+
+    expect(
+      captured.slice(before).some((c) => c.path.includes("/message") && c.method === "POST"),
+      "no new prompt was sent for the round that had already ended",
     ).toBe(false);
   });
 });

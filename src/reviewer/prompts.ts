@@ -9,6 +9,7 @@
  */
 
 import { CLAIM_MAX, compareFindings } from "../core/finding.ts";
+import { unquoteGitPath } from "../git/diff.ts";
 import type { Tier } from "../core/ladder.ts";
 import type { ReviewType } from "../core/review-type.ts";
 import type { KnowledgeItem, RecordedFinding } from "../store/store.ts";
@@ -310,7 +311,14 @@ export function proseShare(diff: string): { readonly added: number; readonly pro
   for (const line of diff.split("\n")) {
     if (line.startsWith("+++ ")) {
       // `+++ b/spec/foo.md` — the file the following `+` lines belong to.
-      inProseFile = /\.(md|markdown|txt|rst)\s*$/i.test(line);
+      //
+      // lore-ok[bd4ba2bd]: UNQUOTED FIRST. Git quotes a path by default whenever it is
+      // non-ASCII (`core.quotePath`), so a header reads `+++ "b/docs/caf\303\251.md"` —
+      // testing the raw line for a trailing `.md` never matches (it ends in a quote),
+      // and every added line in that file was silently counted as CODE instead of prose.
+      // `unquoteGitPath` (git/diff.ts) is the same decode `filesInDiff` already applies
+      // to this same kind of header everywhere else in this codebase.
+      inProseFile = /\.(md|markdown|txt|rst)\s*$/i.test(unquoteGitPath(line.slice(4).trim()));
       continue;
     }
     if (line.startsWith("---") || line.startsWith("diff ") || !line.startsWith("+")) continue;

@@ -960,6 +960,21 @@ export class Reviewer implements ReviewerLike {
       // factor of thirty on a long round, and the sum would compact almost at once and
       // then on every turn after.
       if (continuing !== undefined) await this.compactIfFull(continuing, tier);
+      // lore-ok[d0eed5e8]: RE-CHECKED HERE, because `compactIfFull`'s own calls carry no
+      // signal and cannot be interrupted — a cancel landing during it still reaches
+      // `abort()`, which deletes `aborters`' entry for this session UNCONDITIONALLY
+      // (`abort` above), whether or not anything was actually using it to abort. Without
+      // this check, `conduct` below reaches `ask`'s "has no abort controller" guard with
+      // the aborter genuinely gone — a state that guard's own comment calls a programming
+      // error, but here is the ordinary result of a legitimate cancel — and throws a plain
+      // `DidNotRun` that `runMember`'s catch (review.ts) cannot tell from a real failure:
+      // booked `failed`, and on a second strike able to step the ladder and overwrite an
+      // already-`cancelled` review's state.
+      if (stillWanted?.() === false) {
+        throw new CancelledByLore(
+          `review ${reviewId ?? "?"} was ended while tier ${tier.id}'s session was being compacted — nothing new was spent on it.`,
+        );
+      }
       return await this.conduct(sessionId, tier, text, worktree, started, extract, contract);
     } catch (e) {
       // A SESSION OPENCODE NO LONGER HAS: forget it and start cold, exactly once.

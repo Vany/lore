@@ -402,6 +402,18 @@ describe("proseShare", () => {
     const d = ["diff --git a/x b/x", "--- a/x", "+++ b/src/a.ts", "+const a = 1;"].join("\n");
     expect(proseShare(d)).toStrictEqual({ added: 1, prose: 0 });
   });
+
+  // Found by lore's own review, fingerprint bd4ba2bd: git quotes a non-ASCII path by
+  // default (`core.quotePath`) — `+++ "b/docs/café.md"` becomes
+  // `+++ "b/docs/caf\303\251.md"`, verified against real git output in
+  // git/whole-tree-diff.test.ts. Testing the RAW header for a trailing `.md` never
+  // matched (it ends in a quote), so every added line in such a file was silently
+  // counted as CODE — a folder review (D-130) reads a whole tree's worth of filenames,
+  // which is exactly where a non-ASCII one is likely to appear.
+  it("still recognises a markdown file whose path git quoted", () => {
+    const d = ['+++ "b/docs/caf\\303\\251.md"', "+Some sentence.", "+Another one."].join("\n");
+    expect(proseShare(d)).toStrictEqual({ added: 2, prose: 2 });
+  });
 });
 
 /**

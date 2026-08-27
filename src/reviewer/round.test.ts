@@ -2331,6 +2331,50 @@ describe("a fallback that would walk onto a metered route", () => {
 
       expect(reviewer.asked, "the twin answers, because it was bought on purpose").toStrictEqual(["openrouter/z-ai/glm-5.2"]);
     });
+
+    /**
+     * A FAILED PRIMARY IS STILL A PAID PRIMARY, when the primary itself is the pool's
+     * metered member and there is no fallback to walk (found by lore's own review,
+     * fingerprint 39b5b427). f65306a0 moved this tier's own usage recording earlier,
+     * into the primary's own catch, and cleared `.spent` there so the outer catch would
+     * not double-record it — but the outer catch's paid-route alert lived inside that
+     * same `if (spent !== undefined)` block, and clearing `.spent` silently disarmed it
+     * for exactly this shape.
+     */
+    it("still alerts when a metered primary dies with no fallback to walk", async () => {
+      store.markRouteUnavailable("zai-coding-plan/glm-5.2", new Date(Date.now() + 86_400_000).toISOString(), "billing cycle", 1, true);
+      const sent: { condition: string; detail: string; severity: string }[] = [];
+      const alerter = {
+        send: (x: { condition: string; detail: string; severity: string }) => {
+          sent.push(x);
+          return Promise.resolve(true);
+        },
+      };
+      class DiesWithSpend implements ReviewerLike {
+        async review(): Promise<ReviewerResult> {
+          const e = new Error("provider dropped the connection") as Error & {
+            spent?: { input: number; cached: number; output: number; cost: number };
+          };
+          e.spent = { input: 400, cached: 0, output: 40, cost: 0.11 };
+          throw e;
+        }
+      }
+
+      await runRound({
+        store, reviewer: new DiesWithSpend(), reviewId: "r1", principal: "p", worktree: dir,
+        type: pooled, allowMetered: true, alerter,
+      }).catch(() => undefined);
+
+      const row = store.db
+        .prepare("SELECT model, input_tokens i, cost_usd c FROM usage WHERE review_id='r1' AND tier='t1'")
+        .get() as Record<string, string | number> | undefined;
+      expect(row?.["model"], "the metered pool route, the only one available").toBe("openrouter/z-ai/glm-5.2");
+      expect(row?.["i"], "the primary's own spend, recorded").toBe(400);
+      expect(row?.["c"]).toBeCloseTo(0.11);
+
+      expect(sent, "a paid route was reached and must still be reported").toHaveLength(1);
+      expect(sent[0]?.detail).toContain("openrouter/z-ai/glm-5.2");
+    });
   });
 
   /**

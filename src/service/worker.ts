@@ -422,6 +422,9 @@ export class Worker {
     // worktree, and consuming after finishJob raced the very round the decision
     // switch below enqueues — claimable the instant the row closes, reading a tree
     // mid-patch (raised by lore's own t2, twice, against two versions of this).
+    // Tracks whether the mismatch branch just below already wrote a decision this job's
+    // own ending must not override — see the `rungStillStale` block that follows it.
+    let mismatchHandled = false;
     {
       const st = this.store.repoAndStateOf(reviewId);
       if (st !== undefined && !decidedByPersonOrClock(st.state) && this.store.heldDiffs(reviewId).length > 0) {
@@ -429,6 +432,7 @@ export class Worker {
         if (consumed.mismatch !== undefined) {
           this.store.setFailureReason(reviewId, consumed.mismatch);
           this.store.updateReview(reviewId, { state: "awaiting_diff" });
+          mismatchHandled = true;
         } else if (consumed.applied > 0) {
           // The client-work signal for this diff was recorded inside `consumeHeldDiffs`,
           // which every held diff passes through — this sweep no longer has to remember
@@ -444,6 +448,24 @@ export class Worker {
           // is stale by construction.
           return;
         }
+      }
+    }
+
+    // A RUNG MEMBER'S SESSION STILL TRAILS THE TREE (D-109, fingerprint 83d84e62). The
+    // catch-up loop's own pass cap can leave this true with `heldDiffs` already EMPTY —
+    // the hold that left a member behind was consumed by a SIBLING's own boundary mid
+    // pass, so the sweep above finds nothing to apply and never fires. Requeued the
+    // identical way: a silent next round, reading whatever tree everyone is caught up to
+    // from a fresh pass 0, rather than the verdict this round just wrote standing over a
+    // tree one member never actually read. Skipped when the mismatch branch above already
+    // wrote `awaiting_diff` — that decision is the more urgent one and must not be
+    // overwritten by a staleness check that ran against the same stale round.
+    if (!mismatchHandled && result.rungStillStale) {
+      const st = this.store.repoAndStateOf(reviewId);
+      if (st !== undefined && !decidedByPersonOrClock(st.state)) {
+        this.store.updateReview(reviewId, { state: "queued" });
+        this.store.enqueue(reviewId, "fast");
+        return;
       }
     }
 

@@ -108,6 +108,14 @@ export interface RoundResult {
   /** Findings settled as `fixed`: not re-raised by a qualified tier, code moved (D-56). */
   readonly fixed: readonly string[];
   readonly t0Unavailable: readonly string[];
+  /**
+   * A rung member's session still trails the tree after the catch-up cap (D-109,
+   * fingerprint 83d84e62) — this round's own verdict may describe a tree not every
+   * member actually read. `store.heldDiffs` is empty (the gap this signals only
+   * arises once the hold IS consumed), so the worker's ordinary late-hold sweep
+   * cannot see it; the caller requeues on this instead, the same way.
+   */
+  readonly rungStillStale: boolean;
 }
 
 /**
@@ -1833,6 +1841,19 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
           costUsd: primaryUsage.costUsd,
           outcome: "failed",
         });
+        // lore-ok[39b5b427]: MOVED HERE, not left to the outer catch's own copy. That copy
+        // ("A FAILED PAID CALL IS STILL A PAID CALL", a few dozen lines down) is the ONLY
+        // place this alert used to fire for a primary that was itself a paid pool pick with
+        // no fallback configured — and it lives inside `if (spent !== undefined)`, gated on
+        // the SAME `.spent` the `delete` below removes. Found by lore's own review: deleting
+        // `.spent` to stop the no-fallback shape from being double-RECORDED also silently
+        // disarmed its only alert. Duplicated here instead of shared, because the outer
+        // check's `paidRoute` (`fellBackTo ?? chosenRoute`) is undefined on every path that
+        // still reaches it with spend attached to THIS error — `primaryRoute` is what that
+        // variable was standing in for.
+        if (primaryRoute !== member.model && isMeteredRoute(primaryRoute)) {
+          await tellPaidRoute(store, input.alerter, member.id, primaryRoute, primarySpent.cost);
+        }
         // RECORDED, under the right name — so the shape that DOES still reach the outer
         // catch with this same error (no fallback configured at all) does not also
         // attribute it a second time there.
@@ -2515,9 +2536,11 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // is told through the same channel as a skip.
   const gaveUp = new Set<string>();
   const lateSkipNotes: string[] = [];
-  for (let pass = 0; pass < 8; pass++) {
-    const current = await treeHash(worktree);
-    const stale = outcomes.filter((o): o is MemberRan => {
+  // NAMED SO THE CHECK CAN RUN A NINTH TIME WITHOUT SPENDING A NINTH PASS — see
+  // `rungStillStale` below (fingerprint 83d84e62). Reads `outcomes`/`gaveUp` by
+  // closure, so a call made after the loop sees whatever the last pass left behind.
+  const staleMembers = (current: string) =>
+    outcomes.filter((o): o is MemberRan => {
       if (o.kind !== "ok" || o.heldMismatch !== undefined || gaveUp.has(o.member.id)) return false;
       const saw = store.sessionTreeOf(
         reviewId,
@@ -2529,6 +2552,9 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       // every batch member up to the pass cap, burning its call to deliver nothing.
       return saw !== undefined && saw !== current;
     });
+  for (let pass = 0; pass < 8; pass++) {
+    const current = await treeHash(worktree);
+    const stale = staleMembers(current);
     if (stale.length === 0) break;
     // THE FLOOR, APPLIED BEFORE THE PASS RUNS. Whatever the round has left — and after a
     // long first pass it is routinely nothing — a catch-up gets enough to say "here is
@@ -2561,6 +2587,18 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       };
     });
   }
+  // lore-ok[83d84e62]: ONE LAST LOOK, never another pass — the cap stays a cap. Found
+  // by lore's own review: the loop's own comment promises "whatever the cap leaves
+  // behind, the worker's late-hold sweep turns into a next round" — but that sweep
+  // fires on `store.heldDiffs` being non-empty (service/worker.ts), and the specific
+  // gap here leaves nothing there to find. Two members stale entering the FINAL pass,
+  // one finishes quickly, the other's own boundary consumes a hold that lands in
+  // between: the hold is gone from the store (consumed, not lost) and the first
+  // member is freshly behind a tree the loop never gets to re-check, because there is
+  // no pass 9. Reported instead of silently reached past — the caller (worker.ts)
+  // requeues on it exactly as it already does for an unconsumed hold, rather than a
+  // verdict settling `passed`/`passed_partial` over a tree not everyone actually read.
+  const rungStillStale = staleMembers(await treeHash(worktree)).length > 0;
   const ranMembers = outcomes.filter((o): o is MemberRan => o.kind === "ok");
   const skippedMembers = outcomes.filter((o): o is MemberSkipped => o.kind === "skipped");
 
@@ -2596,6 +2634,9 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       expired,
       fixed: [],
       t0Unavailable: [...t0.unavailable, ...skippedMembers.map((s) => s.note)],
+      // Nobody ran, so nobody can be stale relative to a tree they never read at all —
+      // this path's own INV-1 refusal/skip handling is the answer to that question here.
+      rungStillStale: false,
     };
   }
 
@@ -3068,6 +3109,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     // A member skipped beside members that answered still reaches the client's channel
     // — a mixed rung is the one shape the single-tier ladder could never produce.
     t0Unavailable: [...t0.unavailable, ...skippedMembers.map((s) => s.note), ...lateSkipNotes],
+    rungStillStale,
   };
 }
 
