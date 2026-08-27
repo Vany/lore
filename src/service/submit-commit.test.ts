@@ -381,6 +381,63 @@ describe("review_submit with a pushed commit instead of a diff", () => {
     expect(JSON.stringify(body)).not.toMatch(/Push it to origin/);
   });
 
+  /**
+   * THE SAME LOCK MUST COVER THE ACTUAL MUTATION, NOT ONLY THE HOLD DECISION (found
+   * by lore's own review, fingerprint 13339892). The ORDINARY submit window — no
+   * round pending, `findings_ready` — never holds anything, so two overlapping
+   * commit-form submits both skip the hold branch entirely and go straight to
+   * applying. Without serializing THAT too, a losing submit's own `restoreTree`
+   * could rewind the worktree PAST a winning submit's already-recorded result:
+   * `review.treeHash` naming a tree the worktree no longer holds, silently — no
+   * console output, no `awaiting_diff`, D-40's authoritative record just stops
+   * describing reality.
+   */
+  it("keeps the record and the worktree in agreement when two commit-form submits overlap with no round pending", async () => {
+    const pinned = treeNow();
+    const repoId = store.upsertRepo("demo", "git@x:demo.git").id;
+    store.createReview({
+      id: "revApplyRace", repoId, principal: "alice",
+      branch: "feat/x", intoRef: "main", ticket: "t", type: "code-arch",
+      state: "findings_ready", ladder: { ...initialState(), round: 5 }, treeHash: pinned,
+    });
+    // NO store.enqueue — this is the ORDINARY window, nothing pending, so neither
+    // submit below ever reaches the hold branch at all.
+
+    // Two REAL, connected commits — fix 2 builds on fix 1's own result, so whichever
+    // order the lock actually processes them in, each one's OWN hash check still
+    // passes (treeDelta and git apply are exact inverses for any two real trees);
+    // what is at risk is only whether the RECORD ends up agreeing with whichever
+    // tree actually won.
+    writeFileSync(join(worktree, "f.txt"), "b\n");
+    g("add", "-A");
+    g("commit", "-qm", "fix 1");
+    const commit1 = g("rev-parse", "HEAD");
+    const tree1 = treeNow();
+
+    writeFileSync(join(worktree, "f.txt"), "c\n");
+    g("add", "-A");
+    g("commit", "-qm", "fix 2");
+    const commit2 = g("rev-parse", "HEAD");
+    const tree2 = treeNow();
+
+    g("reset", "--hard", "HEAD~2");
+    g("clean", "-fd");
+
+    const [respA, respB] = await Promise.all([
+      callTool("review_submit", { review_id: "revApplyRace", commit: commit1, tree_hash: tree1 }),
+      callTool("review_submit", { review_id: "revApplyRace", commit: commit2, tree_hash: tree2 }),
+    ]);
+
+    const bodies = [respA.body, respB.body];
+    expect(bodies.filter((b) => b["error"] !== undefined), JSON.stringify(bodies)).toHaveLength(0);
+
+    // THE RECORD AND THE WORKTREE MUST AGREE, whichever order actually won — the
+    // property an unserialized race could not guarantee.
+    const recordedTree = store.getReview("revApplyRace", "alice")?.treeHash;
+    const actualTree = treeNow();
+    expect(actualTree, "the worktree must match whatever review.treeHash claims").toBe(recordedTree);
+  });
+
   it("refuses cleanly rather than guessing when neither a stored tree nor a safe live one is available", async () => {
     const repoId = store.upsertRepo("demo", "git@x:demo.git").id;
     store.createReview({

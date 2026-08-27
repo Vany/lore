@@ -1348,7 +1348,10 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       // out — a discriminated union gives it that for free.
       const submitted = await withSubmitLock(
         review_id,
-        async (): Promise<{ readonly kind: "held" } | { readonly kind: "apply"; readonly patch: string }> => {
+        async (): Promise<
+          | { readonly kind: "held" }
+          | { readonly kind: "applied"; readonly patch: string; readonly appliedTreeHash: string }
+        > => {
           let patch = diff;
           if (commit !== undefined) {
             // RESOLVED TO A SHA BEFORE IT REACHES GIT'S ARGV, and this is not tidiness.
@@ -1470,9 +1473,19 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
                   "and already know the tree it targets, you can also send this fix as a raw `diff` built on that.",
               );
             }
+            // `mine(review_id)` AGAIN, not the outer `review` this handler captured before
+            // ever reaching the lock. Caught by this fix's own concurrent-submit test: two
+            // overlapping commit-form submits with nothing held both call `mine` at the
+            // very top of the handler, before either has its own lock turn — so the OUTER
+            // `review.treeHash` is a snapshot from BEFORE either submit applied anything,
+            // and the second one through the lock would still compute its delta from that
+            // stale value even though the first one's own apply, moments earlier in the
+            // SAME lock, already moved the real tree forward. `heldHead` above has no such
+            // problem — `store.heldDiffs` is read fresh, right here — this fallback needed
+            // the identical freshness for the case nothing is held at all.
             const at =
               heldHead?.treeHash ??
-              review.treeHash ??
+              mine(review_id).treeHash ??
               (store.hasPendingRound(review_id)
                 ? undefined
                 : await treeHash(worktree));
@@ -1570,7 +1583,94 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
             // file exists to refuse.
             store.clearHeldDiff(review_id, heldId);
           }
-          return { kind: "apply", patch };
+
+          // ONE MUTATION AT A TIME TOO, not only the hold decision — found by lore's own
+          // review, fingerprint 13339892. The lock used to end at the hold decision above,
+          // and everything from here on ran UNLOCKED: two overlapping submits that both
+          // found no round pending (the ORDINARY `findings_ready` window, not the rarer
+          // held one) could both apply and verify against the SAME shared worktree
+          // concurrently — a losing submit's own `restoreTree` could rewind the worktree
+          // PAST a winning submit's already-applied and already-RECORDED result, leaving
+          // `review.treeHash` naming a tree the worktree no longer holds, silently. Moved
+          // inside the same lock: whichever submit actually reaches this second, its own
+          // `before` (read fresh, right here, never carried from before the lock) already
+          // reflects the first one's write, so the existing hash-mismatch-and-restore
+          // logic below — unchanged — does its job honestly instead of being raced.
+
+          // Recorded BEFORE the patch, because the refusal below has to be able to undo it.
+          const before = await treeHash(worktree);
+          // lore-ok[8c09e43a]: found by lore's own review, the direct consequence of giving
+          // applyPatch a timeout (`lore-ok[40f980fe]`) — a killed mid-write used to be
+          // unreachable (a hang, not a throw), so a bare `await` here never needed to restore
+          // anything on failure: every OTHER applyPatch throw genuinely leaves the worktree
+          // untouched. A timeout kill does not — its own message says so explicitly — so this
+          // path now needs the identical restore-on-catch consumeHeldDiffs already has
+          // (review.ts:236-249) rather than leaving a partial apply sitting in the worktree
+          // for the next round's computeDiff (INV-3) to read as ratified work.
+          try {
+            await applyPatch(worktree, patch);
+          } catch (e) {
+            await restoreTree(worktree, before).catch((e2: unknown) => {
+              console.error(
+                `[lore:log] could not restore ${review_id}'s worktree after a failed apply — ` +
+                  `it is left at a tree nobody has seen: ${e2 instanceof Error ? e2.message : String(e2)}`,
+              );
+            });
+            throw e;
+          }
+
+          const applied = await treeHash(worktree);
+          if (applied !== tree_hash) {
+            // Without this check a fuzzy or partial apply leaves us reviewing a tree
+            // that exists nowhere — not in git, not on the client's disk — and
+            // reporting on it with full confidence (D-40).
+            //
+            // AND THE WORKTREE IS PUT BACK. It used to be left with the patch applied while
+            // the client was told "Nothing was reviewed" — true of the review and false of
+            // the worktree — so the re-send it was asked for landed on top of the partial
+            // apply, against a base that had silently moved. "Nothing was applied" is now a
+            // statement about the tree rather than a hope.
+            await restoreTree(worktree, before).catch((e: unknown) => {
+              // Loud, and the error says so: a worktree we could not restore is a base
+              // nobody can reason about, and the next submit would be reviewed against it.
+              console.error(
+                `[lore:log] could not restore ${review_id}'s worktree after a rejected patch — ` +
+                  `it is left at a tree nobody has seen: ${e instanceof Error ? e.message : String(e)}`,
+              );
+            });
+            throw new Error(
+              `tree hash mismatch after applying: you sent ${tree_hash}, the patch produced ${applied}. ` +
+                `Nothing was applied — the worktree is back at the tree it started this call with — and nothing ` +
+                `was reviewed. Re-send the full diff for the tree you actually have.`,
+            );
+          }
+
+          // NEW WORK, so the round bounds start counting again (D-114) — BUT ONLY IF THE TREE
+          // ACTUALLY MOVED.
+          //
+          // Resetting on any verified submit is an unbounded loop, and a loop a compliant
+          // client walks into: `applyPatch` no-ops on an empty diff, the tree hash still
+          // verifies, and lore's own texts tell a client with nothing to change to submit an
+          // empty diff. Each such nudge used to wipe the counters, advance the floor, move
+          // `updated_at` past the stale sweep's reach, and enqueue a full round — t0 plus a
+          // model tier, on the shared subscriptions, for ever. Before D-114 the global bound
+          // stopped that at twelve; D-114 removed the backstop without replacing it.
+          //
+          // `applied !== before` is the same test `pull_fresh` already makes before it counts
+          // origin as having moved. A submit that changes nothing is a client saying "I have
+          // no more to give", which is exactly when the bounds should keep counting.
+          // lore-ok[8bcf23f5]: the correction is right and the gate stays. The empty-diff
+          // path really is unreachable — the schema is `diff.min(1)` and `git apply` exits
+          // non-zero with no valid patches — and the residual it names, `holdDiff` resetting
+          // the bounds before verification, is gone because `holdDiff` no longer writes the
+          // ladder at all. The tree-moved test is kept regardless: it is the correct rule for
+          // "did the client give me new material", and keeping it does not depend on which
+          // of the two routes to a no-op submit happens to be open today.
+          if (applied !== before) store.noteClientWork(review_id);
+          store.updateReview(review_id, { state: "queued", treeHash: applied });
+          deps.enqueue(review_id, "fast");
+
+          return { kind: "applied", patch, appliedTreeHash: applied };
         },
       );
 
@@ -1594,80 +1694,7 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           ],
         };
       }
-      const patch = submitted.patch;
-
-      // Recorded BEFORE the patch, because the refusal below has to be able to undo it.
-      const before = await treeHash(worktree);
-      // lore-ok[8c09e43a]: found by lore's own review, the direct consequence of giving
-      // applyPatch a timeout (`lore-ok[40f980fe]`) — a killed mid-write used to be
-      // unreachable (a hang, not a throw), so a bare `await` here never needed to restore
-      // anything on failure: every OTHER applyPatch throw genuinely leaves the worktree
-      // untouched. A timeout kill does not — its own message says so explicitly — so this
-      // path now needs the identical restore-on-catch consumeHeldDiffs already has
-      // (review.ts:236-249) rather than leaving a partial apply sitting in the worktree
-      // for the next round's computeDiff (INV-3) to read as ratified work.
-      try {
-        await applyPatch(worktree, patch);
-      } catch (e) {
-        await restoreTree(worktree, before).catch((e2: unknown) => {
-          console.error(
-            `[lore:log] could not restore ${review_id}'s worktree after a failed apply — ` +
-              `it is left at a tree nobody has seen: ${e2 instanceof Error ? e2.message : String(e2)}`,
-          );
-        });
-        throw e;
-      }
-
-      const applied = await treeHash(worktree);
-      if (applied !== tree_hash) {
-        // Without this check a fuzzy or partial apply leaves us reviewing a tree
-        // that exists nowhere — not in git, not on the client's disk — and
-        // reporting on it with full confidence (D-40).
-        //
-        // AND THE WORKTREE IS PUT BACK. It used to be left with the patch applied while
-        // the client was told "Nothing was reviewed" — true of the review and false of
-        // the worktree — so the re-send it was asked for landed on top of the partial
-        // apply, against a base that had silently moved. "Nothing was applied" is now a
-        // statement about the tree rather than a hope.
-        await restoreTree(worktree, before).catch((e: unknown) => {
-          // Loud, and the error says so: a worktree we could not restore is a base
-          // nobody can reason about, and the next submit would be reviewed against it.
-          console.error(
-            `[lore:log] could not restore ${review_id}'s worktree after a rejected patch — ` +
-              `it is left at a tree nobody has seen: ${e instanceof Error ? e.message : String(e)}`,
-          );
-        });
-        throw new Error(
-          `tree hash mismatch after applying: you sent ${tree_hash}, the patch produced ${applied}. ` +
-            `Nothing was applied — the worktree is back at the tree it started this call with — and nothing ` +
-            `was reviewed. Re-send the full diff for the tree you actually have.`,
-        );
-      }
-
-      // NEW WORK, so the round bounds start counting again (D-114) — BUT ONLY IF THE TREE
-      // ACTUALLY MOVED.
-      //
-      // Resetting on any verified submit is an unbounded loop, and a loop a compliant
-      // client walks into: `applyPatch` no-ops on an empty diff, the tree hash still
-      // verifies, and lore's own texts tell a client with nothing to change to submit an
-      // empty diff. Each such nudge used to wipe the counters, advance the floor, move
-      // `updated_at` past the stale sweep's reach, and enqueue a full round — t0 plus a
-      // model tier, on the shared subscriptions, for ever. Before D-114 the global bound
-      // stopped that at twelve; D-114 removed the backstop without replacing it.
-      //
-      // `applied !== before` is the same test `pull_fresh` already makes before it counts
-      // origin as having moved. A submit that changes nothing is a client saying "I have
-      // no more to give", which is exactly when the bounds should keep counting.
-      // lore-ok[8bcf23f5]: the correction is right and the gate stays. The empty-diff
-      // path really is unreachable — the schema is `diff.min(1)` and `git apply` exits
-      // non-zero with no valid patches — and the residual it names, `holdDiff` resetting
-      // the bounds before verification, is gone because `holdDiff` no longer writes the
-      // ladder at all. The tree-moved test is kept regardless: it is the correct rule for
-      // "did the client give me new material", and keeping it does not depend on which
-      // of the two routes to a no-op submit happens to be open today.
-      if (applied !== before) store.noteClientWork(review_id);
-      store.updateReview(review_id, { state: "queued", treeHash: applied });
-      deps.enqueue(review_id, "fast");
+      const { patch, appliedTreeHash: applied } = submitted;
 
       // WHAT THIS DIFF CANNOT SETTLE, said now rather than in twenty minutes.
       //
