@@ -1589,6 +1589,12 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           // mismatch at that point surfaces on poll as awaiting_diff, never as a silently
           // dropped diff. The double-check below closes the race where the round finished
           // between the check and the hold — then nothing would ever consume it.
+          // lore-ok[109d9211]: fixed upstream, not here. `tree_hash` is no longer an
+          // unverified claim by the time it reaches this call — the synchronous check
+          // right after `resolved` is confirmed (search this file for "tree_hash
+          // mismatch") refuses a wrong claim before a round can even be pending, so
+          // whatever `holdDiff` stores here has already been checked against
+          // `resolved`'s own tree.
           if (store.hasPendingRound(review_id)) {
             const heldId = store.holdDiff(review_id, patch, tree_hash);
             if (store.hasPendingRound(review_id)) {
