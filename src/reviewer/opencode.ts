@@ -1012,8 +1012,9 @@ export class Reviewer implements ReviewerLike {
   /**
    * Which reviews still hold a kept session, for the reconcile that ends the orphans.
    *
-   * The map is keyed `<reviewId>:<tierId>` and split on the LAST colon, matching what
-   * `release` prefixes on, so the two cannot disagree about where the id ends.
+   * The map is keyed `<reviewId>:<tierId>:<model>` and split on the FIRST colon,
+   * matching what `release` prefixes on, so the two cannot disagree about where the
+   * review id ends — see the inline comment below for why FIRST and not LAST.
    */
   keptReviews(): readonly string[] {
     // MEMORY *AND* THE DURABLE RECORD. The cache alone is empty after a restart — the one
@@ -2071,8 +2072,14 @@ export function extractList<T>(text: string, key: string, parseOne: ItemParser<T
   // the survivor, not the casualty. Exactly that hole shipped once and lore's own t2
   // caught it: a truncated findings fence beside a valid done fence vanished without a
   // note, behind a comment claiming it could not.
-  const lost = allRejected ?? (fencedGarbled === undefined ? undefined : [fencedGarbled]);
-  return { ok: false, why, ...(lost === undefined ? {} : { rejected: lost }) };
+  //
+  // BOTH, NOT EITHER — found by lore's own review, fingerprint b2aef74f: `allRejected ??
+  // [fencedGarbled]` assumed the two loss kinds cannot coexist, but a reply can carry a
+  // truncated fence (JSON.parse fails, sets `fencedGarbled`) BESIDE a complete fence whose
+  // every item the schema refuses (sets `allRejected`) — and the `??` silently dropped
+  // the garbled one whenever a sibling landed in `allRejected`, with no note and no re-ask.
+  const lost = [...(allRejected ?? []), ...(fencedGarbled === undefined ? [] : [fencedGarbled])];
+  return { ok: false, why, ...(lost.length === 0 ? {} : { rejected: lost }) };
 }
 
 /**

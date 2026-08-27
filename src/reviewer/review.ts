@@ -319,6 +319,44 @@ async function tellPaidRoute(
   store.claimDailyNotice("metered-route", day);
 }
 
+/**
+ * Remove findings this project has appealed away, and say which (D-83).
+ *
+ * Shared between the round-open t0 and the boundary's own re-run inside the D-107
+ * streaming loop — a suppression is a fact about the RULE and the PATH, not about
+ * which of a round's several t0 runs produced the match. Filtering only the
+ * round-open read let a held fix's boundary t0 re-match a suppressed rule and hand
+ * it to `t0Seen`/`renderT0Delta` as a fresh NEW result — the round-open seen-record
+ * never contained it, so the delta could not recognise it as anything but new,
+ * directly contradicting the suppression notice already given at round open and
+ * inviting the model to re-raise the very finding its appeal just settled
+ * (fingerprint f68ace59).
+ */
+function filterSuppressed(
+  findings: readonly Finding[],
+  suppressed: ReturnType<Store["liveSuppressions"]>,
+): { findings: Finding[]; silenced: string[]; silencedForTier: string[] } {
+  const silenced: string[] = [];
+  const silencedForTier: string[] = [];
+  const kept = findings.filter((f) => {
+    const cls = engineRuleClass(f.claim);
+    const s = cls === undefined ? undefined : suppressed.find((x) => x.ruleClass === cls && x.path === f.file);
+    if (s === undefined) return true;
+    silenced.push(
+      `${cls ?? ""} ${SUPPRESSION_NOTICE} ${f.file} — ${s.tier} accepted an appeal to this project's ` +
+        `development rule ${s.policyShort} ("${s.statement}") on ${s.acceptedAt.slice(0, 10)}. Anything that ` +
+        "rule would have caught here is unexamined; retire the rule to switch it back on.",
+    );
+    silencedForTier.push(
+      `${cls ?? ""} ${SUPPRESSION_NOTICE} ${f.file} — a tier accepted an appeal to one of this project's ` +
+        "development rules. Nothing checked that rule's subject here; you are free to raise the underlying " +
+        "problem yourself if you see it, and a finding you raise cannot be silenced this way.",
+    );
+    return false;
+  });
+  return { findings: kept, silenced, silencedForTier };
+}
+
 export async function runRound(input: RoundInput): Promise<RoundResult> {
   const { store, reviewId, principal, worktree, type } = input;
   const startedAt = new Date().toISOString();
@@ -623,24 +661,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // for every later round: one accepted appeal would have injected its rule into every
   // review of that repository for ever, which is exactly the standing injection the
   // design refuses. The client's channel is the audit trail and wants the whole reason.
-  const silenced: string[] = [];
-  const silencedForTier: string[] = [];
-  const t0Findings = t0.findings.filter((f) => {
-    const cls = engineRuleClass(f.claim);
-    const s = cls === undefined ? undefined : suppressed.find((x) => x.ruleClass === cls && x.path === f.file);
-    if (s === undefined) return true;
-    silenced.push(
-      `${cls ?? ""} ${SUPPRESSION_NOTICE} ${f.file} — ${s.tier} accepted an appeal to this project's ` +
-        `development rule ${s.policyShort} ("${s.statement}") on ${s.acceptedAt.slice(0, 10)}. Anything that ` +
-        "rule would have caught here is unexamined; retire the rule to switch it back on.",
-    );
-    silencedForTier.push(
-      `${cls ?? ""} ${SUPPRESSION_NOTICE} ${f.file} — a tier accepted an appeal to one of this project's ` +
-        "development rules. Nothing checked that rule's subject here; you are free to raise the underlying " +
-        "problem yourself if you see it, and a finding you raise cannot be silenced this way.",
-    );
-    return false;
-  });
+  const { findings: t0Findings, silenced, silencedForTier } = filterSuppressed(t0.findings, suppressed);
   // `unavailable` reaches the CLIENT, through `unavailableChecks`; `t0ForTier` is what
   // `renderT0` turns into prompt text a few lines below.
   // THE REUSED ROUND MUST NOT HAND THE CLIENT'S TEXT TO A MODEL.
@@ -1301,10 +1322,17 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
           // Run once per apply and SHARED across the rung: the engines are
           // deterministic, so a sibling rendering its own delta from the same result
           // is the same answer without the second run.
-          hold.lastT0 = await (input.t0 ?? runT0)(worktree, {
+          const freshT0 = await (input.t0 ?? runT0)(worktree, {
             engines: type.t0,
             files: [...new Set([...diff.changedFiles, ...touched])],
           });
+          // lore-ok[f68ace59]: FILTERED THE SAME WAY ROUND-OPEN IS (D-83), or a rule an
+          // appeal silenced reappears the moment a held fix's boundary re-matches it: the
+          // round-open seen-record `t0Seen` diffs against never contained the suppressed
+          // fingerprint, so `renderT0Delta` below could only read it as NEW — undoing the
+          // suppression notice already given at round open and inviting a re-raise of a
+          // finding this project's appeal had just settled.
+          hold.lastT0 = { ...freshT0, findings: filterSuppressed(freshT0.findings, suppressed).findings };
         }
         return true;
       });

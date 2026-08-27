@@ -2989,6 +2989,54 @@ describe("a streamed tier-run", () => {
   });
 
   /**
+   * A SUPPRESSED RULE STAYS SUPPRESSED AT THE BOUNDARY TOO (D-83 × D-107). Found by
+   * lore's own review of this module, fingerprint f68ace59: round-open t0 filters a
+   * live suppression out of what the session is told AND out of the seen-record
+   * `t0Seen` diffs against — but the boundary's own t0 re-run, triggered by a held
+   * fix landing mid-stream, ran unfiltered. The suppressed fingerprint was absent
+   * from the seen-record and present in the fresh boundary read, so `renderT0Delta`
+   * could only read it as NEW, undoing the suppression notice already given at round
+   * open.
+   */
+  it("does not let a held fix's boundary t0 re-surface a suppressed finding as new", async () => {
+    const policy = store.addKnowledge({
+      repoId, kind: "policy", source: "taught",
+      statement: "This rule is noise on generated code.", why: "false positives every run",
+      path: undefined, cwe: undefined, provenance: "taught by vany", sourceBlob: undefined, confidence: 1,
+    });
+    store.recordSuppression({
+      repoId,
+      policyShort: policy.id.slice(0, 8),
+      ruleClass: "some.engine.rule",
+      path: "src/hold.ts",
+      reviewId: "r1",
+      tier: "t1",
+    });
+    // A real engine that keeps matching the file every time it is asked — round-open
+    // AND the boundary — so the test isolates whether the BOUNDARY filters it, rather
+    // than passing for the unrelated reason that it was only ever read once.
+    const SUPPRESSED: Finding = { ...HOLD_BUG, claim: "some.engine.rule: a rule this project has appealed away" };
+    const t0 = async () => ({ findings: [SUPPRESSED], outcomes: [], skipped: [], unavailable: [], interrupted: false });
+    const reviewer = new Streaming([emission([HOLD_BUG]), DONE]);
+
+    const file = join(dir, "src/hold.ts");
+    const original = readFileSync(file, "utf8");
+    writeFileSync(file, original.replace("return 1;", "return release();"));
+    const claimed = await treeHash(dir);
+    const diffText = execFileSync("git", ["diff", "HEAD"], { cwd: dir }).toString();
+    writeFileSync(file, original);
+    await treeHash(dir);
+    store.holdDiff("r1", diffText, claimed);
+
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: STREAM_TYPE, t0 });
+
+    const fixPrompt = reviewer.asked[1] ?? "";
+    expect(fixPrompt, "the held fix's boundary is where the bug reproduced").toContain("The author has answered");
+    expect(fixPrompt, "a suppressed rule must not come back as NEW").not.toContain("NEW src/hold.ts");
+    expect(fixPrompt, "nor by its claim text").not.toContain(SUPPRESSED.claim);
+  });
+
+  /**
    * POST-FIX SILENCE SETTLES A MID-STREAM FINDING. Raised by lore's own review of this
    * change: a finding emitted before the boundary and fixed by the held diff was in
    * NEITHER set the settle pass read — not in `open` (born mid-round) and present in

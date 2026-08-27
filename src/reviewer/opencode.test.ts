@@ -1838,6 +1838,29 @@ describe("emissionOf", () => {
     }
   });
 
+  /**
+   * NEITHER LOSS EVICTS THE OTHER (found by lore's own review, fingerprint b2aef74f).
+   * `allRejected ?? [fencedGarbled]` assumed the two loss kinds cannot coexist in one
+   * message, but a truncated fence (JSON.parse fails) and a complete fence whose every
+   * item the schema refuses are independent failures and can both be present — and the
+   * `??` silently dropped the garbled one whenever a sibling landed in `allRejected`.
+   */
+  it("carries a garbled block AND an all-rejected block through a done declaration", () => {
+    const bad = { file: "/etc/passwd", severity: "high", claim: "c", evidence: "e", failureScenario: "f" };
+    const r = emissionOf(
+      '```json\n{"findings": [{"file": "a.ts",\n```\n' +
+        '```json\n' + JSON.stringify({ findings: [bad] }) + '\n```\n' +
+        '```json\n{"done": true}\n```',
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.done).toBe(true);
+      expect(r.items).toHaveLength(0);
+      expect(r.rejected.some((x) => /did not parse/.test(x)), "the garbled fence is not dropped").toBe(true);
+      expect(r.rejected.some((x) => x.includes("/etc/passwd")), "the all-rejected fence survives too").toBe(true);
+    }
+  });
+
   it("keeps the findings when done arrives as its own second block", () => {
     const r = emissionOf('```json\n' + FINDING_JSON + '\n```\n```json\n{"done": true}\n```');
     expect(r.ok).toBe(true);
