@@ -266,6 +266,14 @@ export function vulnIdOf(evidence: string): string | undefined {
  * only `SECURITY.t0` has them, review-type.ts). Both silences read as "clean"
  * to a caller reading only `checksSkippedFor`'s absence of a line. `reviewType`
  * and `store.latestT0Unavailable` (the CURRENT round only) are checked instead.
+ *
+ * lore-ok[287b1a76,12255b33]: `store.latestT0Unavailable` had the SAME silent-
+ * as-clean shape one round-boundary deeper — an in-flight round's own row
+ * (`unavailable` still NULL, written at round START) read exactly like a
+ * closed round that found nothing unavailable. Fixed at the query itself
+ * (store.ts, `finished_at IS NOT NULL`), not here: this function only
+ * consumes what that method returns and has no round-open/closed state of
+ * its own to filter on.
  */
 export function vexGap(store: Store, reviewId: string, reviewType: string): string | undefined {
   if (reviewType !== "security") return "this review does not check dependencies (not a security review)";
