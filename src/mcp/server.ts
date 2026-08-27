@@ -1425,6 +1425,12 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
             // a mid-chain failure genuinely cannot trust anything queued after it). Refused
             // HERE instead, synchronously, naming the real reason, before a single row is
             // ever held.
+            //
+            // lore-ok[9d613649]: this check's timing contradicted every text that
+            // described when tree_hash is checked — fixed now, not here: the schema's own
+            // `.describe()` above splits `diff` (verified after applying) from `commit`
+            // (this check, synchronous), and TOOL_DOCS.submit and spec/mcp-api.md SS4.1
+            // both say the same split in prose.
             const claimedTree = await resolveTree(worktree, resolved);
             if (claimedTree !== tree_hash) {
               throw new Error(
@@ -1479,13 +1485,21 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
             // A RAW-DIFF HOLD'S TREE IS A CLIENT CLAIM, NOT YET AN OBJECT — found by
             // lore's own review, fingerprint 2889d85b, reading the fix above. The raw
             // `diff` form's `tree_hash` is the CALLER's own local `git write-tree`, never
-            // pushed anywhere lore can see (the schema says so: "verified after we apply
-            // or check out") — so using it as `at` here would send `treeDelta` an object
-            // that does not exist in this repository, and `git diff` dies "fatal: bad
-            // object" rather than the ordinary "commit not found" the ERROR MESSAGE below
-            // is written for. Refused by name instead: a commit-form submit genuinely
-            // cannot compute a safe delta until the round ahead of it actually applies
-            // that raw diff and `review.treeHash` catches up to reflect it for real.
+            // pushed anywhere lore can see (the schema says so: for `diff`, it is
+            // verified only after applying) — so using it as `at` here would send
+            // `treeDelta` an object that does not exist in this repository, and `git
+            // diff` dies "fatal: bad object" rather than the ordinary "commit not found"
+            // the ERROR MESSAGE below is written for. Refused by name instead: a
+            // commit-form submit genuinely cannot compute a safe delta until the round
+            // ahead of it actually applies that raw diff and `review.treeHash` catches up
+            // to reflect it for real.
+            //
+            // lore-ok[8f68d435]: this refusal existed before this round and had no
+            // matching client text — fixed now, not here: TOOL_DOCS.submit's "ONE
+            // EXCEPTION" paragraph, both workflow-loop copies' step 4, spec/mcp-api.md
+            // SS4.1's "cannot chain onto an outstanding diff hold" paragraph, and
+            // SPEC.md's new bullet beside "Held diffs chain deterministically" all state
+            // it now.
             if (heldHead !== undefined && (await resolveTree(worktree, heldHead.treeHash)) === undefined) {
               throw new Error(
                 `${review_id} has a HELD raw diff whose claimed tree lore has never fetched — that tree only ` +
@@ -1592,12 +1606,17 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           // mismatch at that point surfaces on poll as awaiting_diff, never as a silently
           // dropped diff. The double-check below closes the race where the round finished
           // between the check and the hold — then nothing would ever consume it.
-          // lore-ok[109d9211]: fixed upstream, not here. `tree_hash` is no longer an
-          // unverified claim by the time it reaches this call — the synchronous check
-          // right after `resolved` is confirmed (search this file for "tree_hash
-          // mismatch") refuses a wrong claim before a round can even be pending, so
-          // whatever `holdDiff` stores here has already been checked against
-          // `resolved`'s own tree.
+          // lore-ok[109d9211]: fixed upstream for the COMMIT form only, not here and
+          // not for `diff`. When `commit !== undefined`, the synchronous check right
+          // after `resolved` is confirmed (search this file for "tree_hash mismatch")
+          // already refused a wrong claim before a round could even be pending, so a
+          // commit-form `tree_hash` reaching this call has been checked against
+          // `resolved`'s own tree. A raw `diff` submit reaches this SAME call with no
+          // such check — its `tree_hash` is the caller's own local `git write-tree`,
+          // unverifiable without applying it, and D-107 accepts that claim on trust by
+          // design. Found by lore's own review, fingerprint b39f4f4a: the comment this
+          // replaced said "whatever holdDiff stores here", which read as both forms
+          // pre-verified.
           if (store.hasPendingRound(review_id)) {
             const heldId = store.holdDiff(review_id, patch, tree_hash);
             if (store.hasPendingRound(review_id)) {
