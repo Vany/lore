@@ -3,6 +3,127 @@
 Newest first. Updated at the end of each task: what changed, what I learned, what
 surprised me.
 
+## 2026-08-27 — D-131: cargo check/clippy join T0's sandboxed phase, eight rounds, and a local rustup toolchain I nearly left broken while verifying one of them
+
+**What changed.** D-129's own tracking task #2 — cargo execution, deliberately
+deferred when ecosystem detection landed — went through its own D-77 cycle
+(`rev_rFSJLQvou_gN967j3yEw49FS`), eight rounds (`2865838` through `1789291`),
+attested `passed_partial` at tree `408a01a` (round 7's — round 8 submitted after
+the review had already gone terminal and was dropped; more below).
+
+**The one design question that was actually mine to ask, not mine to decide.**
+Before writing any code: how should the sandbox image get a Rust toolchain —
+`rustup` (honours a target's own `rust-toolchain.toml`, the same fidelity
+principle D-8 already gives tsc/eslint/pnpm, at the cost of a real musl/Alpine
+target-triple complication) or Alpine's own `apk add cargo rust` (simpler,
+musl-native, no per-project version fidelity)? Asked Vany directly rather than
+picking one. Answer: *"nothing for now."* So `deploy/sandbox.Dockerfile` is
+untouched — every real review of a Rust repo currently sees `cargo-check`/
+`cargo-clippy` report `unavailable: "cargo is not available in the sandbox
+image"`, named as the explicit, practical consequence rather than discovered on
+the first real review. Mirrors D-129's own precedent exactly: land the
+mechanism fully wired and tested, leave the part with a real infrastructure
+cost as its own, separately-decided follow-up.
+
+**A real correctness fix fell out of the reading before any cargo code was
+even written.** Clippy's own rule ids are module-path-shaped
+(`clippy::needless_return`); `RULE_CLASS` (`engines.ts`) excluded `:` from its
+body character class, so every clippy finding would have read back with no
+D-83 suppression class at all — the identical gap already fixed once for
+scoped eslint plugins, reopened here for different punctuation. Traced by hand
+against every existing negative test case before shipping, not just assumed
+safe.
+
+**Empirical verification was the actual throughline of this whole cycle, not
+a nice-to-have.** cargo 1.97.1 is installed on this dev machine, and I used it
+directly, repeatedly, rather than trust memory or guesswork — training is
+stale and this project says so outright:
+- Confirmed the `--message-format=json` schema against the Cargo Book/rustc
+  docs *and* real output before writing `parseCargoJson`.
+- Built a real nested-crate fixture and ran `cargo check --manifest-path
+  server/Cargo.toml -v` from the parent directory to learn that `file_name` in
+  a span comes back relative to the MANIFEST's own directory, never the repo
+  root — confirming (round 2, fingerprint 47ddd7fa) that a nested crate's
+  findings needed rebasing, and that a lore review's own claim about this was
+  right, not just plausible.
+- Compared `cargo check`'s and `cargo clippy`'s own JSON for one identical
+  fixture and watched `unused_variables` come back byte-for-byte the same from
+  both (round 5, fingerprint d269a60f) — clippy-driver really is rustc with
+  extra lints layered on, not a separate, non-overlapping tool.
+- Actually **removed the clippy component from a real, already-installed local
+  rustup toolchain** (`rustup component remove clippy --toolchain
+  1.93-aarch64-apple-darwin`) to see rustup's own missing-component error text
+  (round 7, fingerprint c618f5cb) — a different message and exit code than a
+  plain missing binary, which no amount of reading documentation would have
+  told me as precisely as watching it happen.
+
+**The mishap inside that last check, worth recording because it could have
+mattered.** After removing clippy to observe the error, the restore command
+(`rustup component add clippy --toolchain … `) failed with *"Could not locate
+working directory"* — an `rm -rf "$D"` two commands earlier had deleted the
+directory my shell was still `cd`'d into, and the follow-up command inherited
+that dead cwd. Caught immediately by reading the command's own output rather
+than assuming success, fixed by re-running from a known-good directory, and
+verified with `rustup component list --installed` before moving on. The
+takeaway isn't the specific bug — it's that empirical verification against a
+*real, shared, already-in-use* environment (not a disposable fixture) carries
+a real obligation to check the environment is still intact afterward, not just
+that the test passed.
+
+**The sharpest bug of the whole cycle: the cache mount sat directly on
+cargo's own config-discovery path.** Round 3 wired the mounted, cross-review
+cache at `/work/.cargo` — a reasonable-looking choice, since it mirrored
+`node_modules`'s own pattern of "mount the shared cache where the tool expects
+its own files." The reasoning didn't transfer: `.cargo/` isn't a dependency-
+resolution convention the way `node_modules` is, it's cargo's own
+*project-local config override* mechanism, and `SYNC`'s `cp -a /src/. /work/`
+(dotfiles included) copies a reviewed repo's own committed `.cargo/
+config.toml` into that exact, persistent, Cargo.lock-hash-keyed location —
+never cleaned back out, silently configuring the *next* review sharing that
+hash (round 4, fingerprints a461dd72/54900638). A repo pinning a registry
+mirror or build target would have quietly reconfigured someone else's branch.
+Fixed by moving the mount entirely off `/work` — a sibling `/cargo-cache` —
+which also means a root crate's own `.cargo/config.toml` now reads correctly
+for the first time, from its natural per-review location, once nothing was
+mounted over it. A nested crate's still doesn't — confirmed, not guessed
+(config discovery walks from the process's own cwd, not `--manifest-path`'s
+directory) — and named as an explicit, honest gap rather than smoothed over.
+
+**Text heuristics kept needing a second look, and eventually got replaced
+with one structural check instead of patched a third time.** Round 2 found
+the fetch step's missing-binary text match too broad (a broken git
+dependency's own "not found" was swallowed as "no toolchain"). Round 5's
+clippy-missing check repeated the same shape narrower. Round 7 found it STILL
+too broad in a different way (a target's own `build.rs` could theoretically
+print colliding text) and too narrow in another (rustup's own error message
+for a missing component doesn't say "no such command" at all). Consolidated
+into one `cargoToolMissing()`, and the load-bearing insight wasn't the phrase
+list — it was requiring **empty stdout** alongside it: every confirmed
+missing-tool shape fails before cargo ever reaches the crate's own code, so
+nothing project-controlled has run yet, which a bare text match can never
+guarantee on its own.
+
+**The same mistake as the previous entry, twice, in the same cycle.** Editing
+an *existing* `lore-ok[X]` comment's prose to mention a *new* fingerprint `Y`
+in passing does not answer finding `Y` — the ladder looks for the tag, not a
+mention. Caught and fixed once in round 6 (d341a76e/c37f7c9b), then made
+*again* in round 7 for three different findings (874b52df/c618f5cb/57dea7e8),
+caught in round 8 — which submitted a few seconds too late: the review had
+already gone terminal on round 7's tree. `passed_partial`, 16 findings, 11
+fixed + 4 justified — one short of 16, the direct cost of round 8 not landing
+in time. Resolved the same way the previous entry's identical race was:
+finalized on the tree that was actually attested (round 7), round 8 (pure
+tag-only cleanup, zero behavioural change, already fully verified) dropped
+rather than pushed as though reviewed. The underlying fixes are all real and
+in round 7's own code; only the bookkeeping tags for three of them are
+imperfect in what shipped.
+
+**Deployed the same session.** `make sync-deployed && make deploy FORCE=1`,
+confirmed via `make status`. The service now lists `cargo-check`/
+`cargo-clippy` and reports them correctly — `skipped` when a repo isn't Rust,
+`unavailable: "cargo is not available in the sandbox image"` when it is —
+until a follow-up decides how the image gets a toolchain.
+
 ## 2026-08-27 — mcp/server.ts: the held-diff-chaining fix got its own review, found three more bugs in itself, and I pushed unreviewed code to `main` by accident along the way
 
 **What changed.** The commit-form held-diff-chaining fix the previous entry's
