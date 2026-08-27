@@ -918,9 +918,72 @@ describe("runRound", () => {
     await runRound({ store, reviewer: cumulative, reviewId: "r1", principal: "p", worktree: dir, type: KEPT });
     expect(calls, "three rounds must each have asked t1").toBe(3);
 
-    const total = store.usageSoFar("r1", "t1");
+    const total = store.usageSoFar("r1", "t1", "openrouter/z-ai/glm-5.2");
     expect(total.inputTokens, "the true total, not 1000+2000+3000").toBe(3000);
     expect(total.costUsd, "the true total, not 0.01+0.02+0.03").toBeCloseTo(0.03, 6);
+  });
+
+  /**
+   * A ROUTE FLIP STARTS A NEW SESSION WITH ITS OWN COUNTER — found by lore's own review
+   * of the first version of the 43cfcfbc fix, fingerprint 45fa213f. `sessionKey`
+   * (continuity.ts) addresses a session by `(review, tier, MODEL)` because a fallback
+   * keeps the tier's id and changes its model — so the twin's session is genuinely new
+   * and its own usage has nothing to do with what the primary's session had already
+   * banked. The first version of `perRoundUsage` summed a tier's usage across every
+   * model it had ever run on, so the twin's first, small report was floored to $0 by
+   * subtracting the primary's unrelated total.
+   */
+  it("does not floor a route flip's usage using the old route's unrelated total", async () => {
+    const type = {
+      ...TYPE,
+      tiers: DEFAULT_TIERS.map((t) => (t.id === "t1" ? { ...t, conversation: true, fallback: ["openrouter/twin"] } : t)),
+    };
+    const primary = type.tiers.find((t) => t.id === "t1")?.model ?? "";
+
+    class FallingBack implements ReviewerLike {
+      primaryCalls = 0;
+      twinCalls = 0;
+      async review(tier: Tier): Promise<ReviewerResult> {
+        if (tier.model === primary) {
+          this.primaryCalls++;
+          // Answers once, then goes out of quota — forcing round 2 onto the twin.
+          if (this.primaryCalls >= 2) throw new Exhausted("primary is out");
+          return {
+            findings: [nthBug(this.primaryCalls)], discarded: [], raw: "",
+            inputTokens: 500, cachedTokens: 0, outputTokens: 50, costUsd: 0.005,
+            latencyMs: 1, retried: false, steps: 1,
+          };
+        }
+        // The twin: a fresh session (D-80), its own first-ever report.
+        this.twinCalls++;
+        return {
+          findings: [nthBug(100 + this.twinCalls)], discarded: [], raw: "",
+          inputTokens: 500, cachedTokens: 0, outputTokens: 50, costUsd: 0.005,
+          latencyMs: 1, retried: false, steps: 1,
+        };
+      }
+    }
+    const reviewer = new FallingBack();
+
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type, allowMetered: true });
+    expect(store.usageSoFar("r1", "t1", primary).inputTokens, "the primary's own round 1").toBe(500);
+
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type, allowMetered: true });
+    expect(reviewer.twinCalls, "round 2 fell back to the twin").toBe(1);
+
+    // THE RAW ROW ITSELF, not `usageSoFar`'s aggregate: a tier-only baseline zeroing the
+    // twin's delta and a correctly model-scoped one summed to the SAME total by
+    // coincidence in an earlier version of this test (both models happened to report
+    // 500) — the aggregate could not tell a genuine 500 from a wrongly-floored 0 sitting
+    // beside the primary's untouched 500. The row `recordUsage` actually wrote can.
+    const twinRow = store.db
+      .prepare("SELECT input_tokens FROM usage WHERE review_id = 'r1' AND tier = 't1' AND model = 'openrouter/twin' ORDER BY id DESC LIMIT 1")
+      .get() as { input_tokens: number } | undefined;
+    expect(twinRow?.input_tokens, "the twin's own report, not zeroed by the primary's unrelated banked total").toBe(500);
+
+    // AND THE PRIMARY'S OWN TOTAL IS UNTOUCHED — a route flip must not retroactively
+    // change what an earlier, different session had already recorded.
+    expect(store.usageSoFar("r1", "t1", primary).inputTokens).toBe(500);
   });
 });
 

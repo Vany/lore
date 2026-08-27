@@ -453,17 +453,27 @@ function settledBlock(settled: PromptInput["settled"]): string {
   return [
     "",
     "ALREADY CONSIDERED AND RESOLVED",
-    "These were raised and settled, with reasons. Re-raise one ONLY with new evidence that the reason is wrong.",
-    "If you can show a recorded reason is wrong, say so explicitly — a mistaken justification matters more than a",
-    "fresh bug, because it means someone's reasoning was wrong and was trusted.",
-    // The client is TOLD this happens (TOOL_DOCS.submit), so it has to actually
-    // happen. Nothing in the code raises a severity: the fingerprint deliberately
-    // excludes severity so the same finding is recognised across the change, and the
-    // raising itself was left to a reviewer nobody had asked. A promise the system
-    // does not keep is worth less than no promise.
-    "When you re-raise something whose justification you are rejecting, raise its SEVERITY above what it was.",
-    "A defect that was argued away and is still there is worse than one nobody has looked at, because the",
-    "argument was believed. Keep the claim wording otherwise identical, so it is recognised as the same finding.",
+    "These were raised and settled, with reasons. Re-raise one ONLY with new evidence that the reason is wrong —",
+    "repeating the same claim is not new evidence.",
+    "",
+    // lore-ok[28198096]: SOFTENED, not wired up. Found by lore's own review: this used to
+    // say "raise its SEVERITY above what it was" and call a mistaken justification more
+    // important than a fresh bug — a promise nothing here keeps. `recordFinding` is `ON
+    // CONFLICT(review_id, fingerprint) DO NOTHING`, and `step` (core/ladder.ts) treats any
+    // re-raise of an already-settled fingerprint as clean BY DESIGN, to stop a review from
+    // arguing forever — so keeping the claim wording identical, as the line below still
+    // asks, makes an objection inert regardless of what severity the reply writes against
+    // it: no verdict reopens, nothing reaches the client or the attestation. What DOES
+    // work is the one path the fingerprint mechanism actually offers: state the objection
+    // as its own claim, in your own words, describing what is still wrong and why the
+    // recorded reason does not cover it. A claim that reads as a genuinely different
+    // finding gets a genuinely different fingerprint, which is fresh, open, and real.
+    "BE PLAIN IF YOU STILL DISAGREE — say so, and why. But say it as its OWN claim, in your own words: keeping the",
+    "wording identical to the settled finding below only re-raises something already closed, which changes",
+    "nothing here. A claim that actually describes what the justification gets wrong is a NEW finding.",
+    "",
+    "Keep the claim wording identical only when you mean the SAME defect and have nothing new to add about it —",
+    "that is what tells the reviewer this is a repeat, not a fresh look.",
     ...lines,
     // Truncation is stated, never silent. A reviewer that is shown 80 of 200 settled
     // findings and told nothing will treat the other 120 as never-raised.

@@ -379,9 +379,19 @@ function filterSuppressed(
  * was fixed for within one round (see the comment above `agg.inputTokens =`), reopened
  * across rounds of a kept one.
  *
+ * lore-ok[45fa213f]: TAKES THE MODEL THAT ACTUALLY ANSWERED, not just the tier — found by
+ * lore's own review of the first version of this function, which read `usageSoFar` keyed
+ * by tier alone. `sessionKey` (continuity.ts) addresses a session by `(review, tier,
+ * MODEL)` precisely because a fallback keeps the tier's id and changes its model, so a
+ * route flip starts a genuinely NEW session with its own counter at zero. Subtracting the
+ * OLD route's already-banked total from the new session's small, fresh figure floored
+ * every route-flip round to a false $0 — the caller must pass the concrete route this
+ * result came from, the same one it is about to write into the row's own `model` column.
+ *
  * A non-conversation tier's session is fresh every round by construction, so its reported
  * total already IS that round's own — this must be a no-op for it, not a subtraction
- * against a baseline that does not describe its session at all.
+ * against a baseline that does not describe its session at all. Likewise with no resolved
+ * model to key the baseline on: no other session's total can be safely assumed either.
  *
  * Floored at 0: a session recreated mid-review (D-80's `SessionGone` recovery) starts its
  * own count over, and its first post-recovery figure can read BELOW what the old session
@@ -393,6 +403,7 @@ function perRoundUsage(
   store: Store,
   reviewId: string,
   member: Tier,
+  model: string | undefined,
   raw: { readonly inputTokens?: number; readonly cachedTokens?: number; readonly outputTokens?: number; readonly costUsd?: number },
 ): { inputTokens: number; cachedTokens: number; outputTokens: number; costUsd: number } {
   const whole = {
@@ -401,8 +412,8 @@ function perRoundUsage(
     outputTokens: raw.outputTokens ?? 0,
     costUsd: raw.costUsd ?? 0,
   };
-  if (member.conversation !== true) return whole;
-  const before = store.usageSoFar(reviewId, member.id);
+  if (member.conversation !== true || model === undefined) return whole;
+  const before = store.usageSoFar(reviewId, member.id, model);
   return {
     inputTokens: Math.max(0, whole.inputTokens - before.inputTokens),
     cachedTokens: Math.max(0, whole.cachedTokens - before.cachedTokens),
@@ -2007,18 +2018,27 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
             await tellPaidRoute(store, input.alerter, member.id, twinModel, twinSpent?.cost ?? 0);
           }
           if (twinSpent !== undefined) {
+            // lore-ok[45fa213f]: PER-ROUND HERE TOO. `t` (built a few lines above as
+            // `{...member, model: route}`) inherits `member.conversation`, so a rung
+            // twin that keeps its session across rounds (D-80) is just as cumulative as
+            // the primary — and `usageSoFar` is now keyed on `twinModel`, its own route,
+            // never the primary's, so the two sessions' banked totals cannot cross-
+            // contaminate each other's baseline.
+            const twinUsage = perRoundUsage(store, reviewId, member, twinModel, {
+              inputTokens: twinSpent.input, cachedTokens: twinSpent.cached, outputTokens: twinSpent.output, costUsd: twinSpent.cost,
+            });
             store.recordUsage({
               repoId: review.repoId,
               reviewId,
               tier: member.id,
               model: twinModel,
-              inputTokens: twinSpent.input,
-              cachedTokens: twinSpent.cached,
-              outputTokens: twinSpent.output,
+              inputTokens: twinUsage.inputTokens,
+              cachedTokens: twinUsage.cachedTokens,
+              outputTokens: twinUsage.outputTokens,
               // WHAT THE PROVIDER SAID IT COST. Recorded as a hard zero, this row could
               // not move the ceiling that sums `cost_usd` — so the guard stayed blind to
               // the metered spend the row exists to expose.
-              costUsd: twinSpent.cost,
+              costUsd: twinUsage.costUsd,
               outcome: "failed",
             });
           }
@@ -2214,11 +2234,14 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     }
     const spent = (e as { spent?: { input: number; cached: number; output: number; cost: number } }).spent;
     if (spent !== undefined) {
-      // PER-ROUND, not the kept session's running total — see `perRoundUsage`, fingerprint
-      // 43cfcfbc: a failed round on a conversation tier reads its usage from the same
-      // whole-session list a successful one does, and is cumulative for exactly the same
-      // reason.
-      const usage = perRoundUsage(store, reviewId, member, {
+      // PER-ROUND, not the kept session's running total — see `perRoundUsage`, fingerprints
+      // 43cfcfbc and 45fa213f: a failed round on a conversation tier reads its usage from
+      // the same whole-session list a successful one does, and is cumulative for exactly
+      // the same reason. The model named here is the SAME one about to be written into this
+      // row's own `model` column below, so the baseline and the row always agree on whose
+      // session this figure describes.
+      const failedOn = fellBackTo ?? chosenRoute ?? member.model;
+      const usage = perRoundUsage(store, reviewId, member, failedOn, {
         inputTokens: spent.input, cachedTokens: spent.cached, outputTokens: spent.output, costUsd: spent.cost,
       });
       store.recordUsage({
@@ -2229,9 +2252,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
         // is what ran, and `throw twin` fires before the twin-attributed recording below —
         // so this row was the only one written, naming a flat-subscription model that
         // never ran while the dollars were the twin's.
-        ...((fellBackTo ?? chosenRoute ?? member.model) !== undefined
-          ? { model: (fellBackTo ?? chosenRoute ?? member.model) as string }
-          : {}),
+        ...(failedOn !== undefined ? { model: failedOn } : {}),
         inputTokens: usage.inputTokens,
         cachedTokens: usage.cachedTokens,
         outputTokens: usage.outputTokens,
@@ -2362,10 +2383,13 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     return { kind: "skipped", member, error: e, note: `${member.id}: ${e.message}` };
   }
 
-  // PER-ROUND, not the kept session's running total — see `perRoundUsage`, fingerprint
-  // 43cfcfbc: a conversation tier's session carries every earlier round's messages too,
-  // so its reported usage is cumulative-to-date, not this round's own.
-  const usage = perRoundUsage(store, reviewId, member, {
+  // PER-ROUND, not the kept session's running total — see `perRoundUsage`, fingerprints
+  // 43cfcfbc and 45fa213f: a conversation tier's session carries every earlier round's
+  // messages too, so its reported usage is cumulative-to-date, not this round's own — and
+  // the baseline is keyed on the SAME concrete route named below, not the tier alone,
+  // since a fallback keeps the tier's id and starts a genuinely new session on a new model.
+  const ranOnRoute = fellBackTo ?? chosenRoute ?? member.model;
+  const usage = perRoundUsage(store, reviewId, member, ranOnRoute, {
     inputTokens: result.inputTokens, cachedTokens: result.cachedTokens, outputTokens: result.outputTokens, costUsd: result.costUsd,
   });
   store.recordUsage({
@@ -2377,9 +2401,9 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     // to a flat-subscription model that never ran would make the only record of real
     // money name the wrong provider.
     // THE ROUTE THAT RAN, never the nickname. `usage.model` said `GLM5.2` for a pool
-        // pick, which makes spend per subscription untraceable exactly when two
-        // subscriptions is the point.
-        ...(fellBackTo ?? chosenRoute ?? member.model) !== undefined ? { model: (fellBackTo ?? chosenRoute ?? member.model) as string } : {},
+    // pick, which makes spend per subscription untraceable exactly when two
+    // subscriptions is the point.
+    ...(ranOnRoute !== undefined ? { model: ranOnRoute } : {}),
     inputTokens: usage.inputTokens,
     cachedTokens: usage.cachedTokens,
     outputTokens: usage.outputTokens,

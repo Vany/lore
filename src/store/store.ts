@@ -2701,27 +2701,39 @@ export class Store {
   }
 
   /**
-   * What this tier has already recorded for this review, summed across every prior round.
+   * What this tier's session on THIS model has already recorded for this review,
+   * summed across every prior round it answered on.
    *
-   * lore-ok[43cfcfbc]: EXISTS so a kept session's (D-80, `conversation: true`) usage row
-   * can be turned into a DELTA before it is recorded, not written cumulative. `conduct`
-   * (opencode.ts) reads a session's usage from its WHOLE message list, which for a fresh,
-   * one-round session is that round's own true total — but for a session a tier keeps
-   * across rounds, round N's "whole session" total already includes rounds 1..N-1. A round
-   * recorded VERBATIM on top of the rows before it means `spendSince` and the per-tier
-   * board (both `SUM(cost_usd)` across rows) add every earlier round's total again on top
-   * of the next one's — round 3 alone already contains 1 and 2, and summing all three counts
-   * round 1 three times, round 2 twice: the same n²/2 over-count `runRound`'s own emission
-   * loop was fixed for within one round, reopened across rounds of a kept one.
+   * lore-ok[43cfcfbc,45fa213f]: EXISTS so a kept session's (D-80, `conversation: true`)
+   * usage row can be turned into a DELTA before it is recorded, not written cumulative.
+   * `conduct` (opencode.ts) reads a session's usage from its WHOLE message list, which
+   * for a fresh, one-round session is that round's own true total — but for a session a
+   * tier keeps across rounds, round N's "whole session" total already includes rounds
+   * 1..N-1. A round recorded VERBATIM on top of the rows before it means `spendSince` and
+   * the per-tier board (both `SUM(cost_usd)` across rows) add every earlier round's total
+   * again on top of the next one's.
+   *
+   * SCOPED BY MODEL, not tier alone — found by lore's own review of the first version of
+   * this fix, fingerprint 45fa213f: `sessionKey` (continuity.ts) addresses a session by
+   * `(review, tier, MODEL)`, because a fallback keeps the tier's id and changes its model
+   * (D-80's own reasoning for including it). A tier-only sum summed a DIFFERENT session's
+   * already-banked total into the baseline, so a route flip's first round floored to a
+   * false $0 delta (subtracting a total that has nothing to do with the new session), and
+   * summing across every model a tier ever ran on undercounts anywhere the ladder tracks
+   * a route change, which the deployed configuration does on every conversation tier.
    */
-  usageSoFar(reviewId: string, tier: string): { inputTokens: number; cachedTokens: number; outputTokens: number; costUsd: number } {
+  usageSoFar(
+    reviewId: string,
+    tier: string,
+    model: string,
+  ): { inputTokens: number; cachedTokens: number; outputTokens: number; costUsd: number } {
     const row = this.db
       .prepare(
         `SELECT COALESCE(SUM(input_tokens), 0) AS i, COALESCE(SUM(cached_tokens), 0) AS c,
                 COALESCE(SUM(output_tokens), 0) AS o, COALESCE(SUM(cost_usd), 0) AS d
-         FROM usage WHERE review_id = ? AND tier = ?`,
+         FROM usage WHERE review_id = ? AND tier = ? AND model = ?`,
       )
-      .get(reviewId, tier) as Record<string, number | bigint> | undefined;
+      .get(reviewId, tier, model) as Record<string, number | bigint> | undefined;
     return {
       inputTokens: Number(row?.["i"] ?? 0),
       cachedTokens: Number(row?.["c"] ?? 0),

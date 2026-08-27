@@ -263,6 +263,54 @@ describe("what the ladder still guarantees", () => {
   });
 });
 
+/**
+ * THE SETTLED LEDGER DOES NOT PROMISE MACHINERY IT DOES NOT HAVE (found by lore's own
+ * review, fingerprint 28198096). This block used to tell a tier to "raise its SEVERITY
+ * above what it was" when re-raising a settled finding it disputes — but `recordFinding`
+ * is `ON CONFLICT DO NOTHING` and `step` (core/ladder.ts) treats any re-raise of an
+ * already-settled fingerprint as clean, by design, to stop a review arguing forever. Kept
+ * exactly as told, the old instruction produced a re-raise nothing ever acted on.
+ */
+describe("the settled ledger", () => {
+  const settledOne = {
+    finding: {
+      fingerprint: "a".repeat(64),
+      file: "src/hold.ts",
+      line: 3,
+      symbol: "capture",
+      severity: "high" as const,
+      claim: "decline path leaves the hold active",
+      evidence: "hold released only in the success branch",
+      failureScenario: "card declines and funds stay held",
+      origin: "t1",
+      round: 1,
+      firstSeen: "2026-08-01T00:00:00.000Z",
+    },
+    rationale: "bounded by the caller's own retry, per lore-ok[a1b2c3d4]",
+  };
+
+  it("does not promise that raising a severity changes anything", () => {
+    const p = promptAt(0, 3, CODE_ARCH, { settled: [settledOne] });
+    expect(p, "the false promise this fix removed").not.toMatch(/raise its SEVERITY/);
+    expect(p, "or the framing that leaned on it").not.toMatch(/matters more than a\s+fresh bug/);
+  });
+
+  // The one path that actually works: a claim different enough to get its own
+  // fingerprint is fresh and open, exactly like any other new finding.
+  it("tells a tier to raise a genuine objection as its own claim", () => {
+    const p = flat(promptAt(0, 3, CODE_ARCH, { settled: [settledOne] }));
+    expect(p).toMatch(/say it as its OWN claim, in your own words/);
+    expect(p).toMatch(/A claim that actually describes what the justification gets wrong is a NEW finding/);
+  });
+
+  it("still shows the settled finding and its rationale", () => {
+    const p = promptAt(0, 3, CODE_ARCH, { settled: [settledOne] });
+    expect(p).toContain("ALREADY CONSIDERED AND RESOLVED");
+    expect(p).toContain(settledOne.finding.claim);
+    expect(p).toContain(settledOne.rationale);
+  });
+});
+
 describe("proseShare", () => {
   it("counts added lines only, never deletions or context", () => {
     const d = ["+++ b/src/a.ts", "+const a = 1;", "-const b = 2;", " const c = 3;"].join("\n");
