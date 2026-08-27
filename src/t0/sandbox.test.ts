@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { scriptFinding } from "./runner.ts";
-import { commandsFor, detectEcosystems, lockfileKey } from "./sandbox.ts";
+import { cargoLockKey, commandsFor, detectEcosystems, lockfileKey } from "./sandbox.ts";
 
 let dir: string;
 
@@ -255,5 +255,33 @@ describe("the cache key follows the installer", () => {
 
   it("says no-lockfile rather than inventing a key", async () => {
     expect(await lockfileKey(dir)).toBe("no-lockfile");
+  });
+});
+
+describe("cargo's own cache key mirrors lockfileKey (D-131)", () => {
+  const write = (name: string, body: string) => writeFileSync(join(dir, name), body);
+
+  it("keys on Cargo.lock's content", async () => {
+    write("Cargo.toml", "[package]\nname = \"x\"\n");
+    write("Cargo.lock", "v1");
+    const before = await cargoLockKey(dir, ".");
+    write("Cargo.lock", "v2-completely-different");
+    expect(await cargoLockKey(dir, ".")).not.toBe(before);
+  });
+
+  it("says no-lockfile rather than inventing a key, same as lockfileKey", async () => {
+    write("Cargo.toml", "[package]\nname = \"x\"\n");
+    expect(await cargoLockKey(dir, ".")).toBe("no-lockfile");
+  });
+
+  // A nested crate (D-129's `teammater` shape: root is plain JS, `server/` is the
+  // real crate) keeps its own Cargo.lock in `dir`, not at the worktree root — the
+  // whole reason this takes `dir` as a parameter rather than assuming the root.
+  it("reads the lockfile from the manifest's own directory, not always the root", async () => {
+    mkdirSync(join(dir, "server"));
+    writeFileSync(join(dir, "server", "Cargo.toml"), "[package]\nname = \"x\"\n");
+    writeFileSync(join(dir, "server", "Cargo.lock"), "nested-lock");
+    expect(await cargoLockKey(dir, "server")).not.toBe("no-lockfile");
+    expect(await cargoLockKey(dir, ".")).toBe("no-lockfile");
   });
 });

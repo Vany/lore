@@ -945,7 +945,7 @@ decided. Only one of those says anything about a person.
     title: "Why escalation exists",
     priority: 0.5,
     text: `
-T0  the repo's own tsc, eslint, ast-grep and semgrep. Deterministic and free.
+T0  the repo's own tsc, eslint, cargo check/clippy, ast-grep and semgrep. Deterministic and free.
     lore READS your tests — coverage, and whether one asserts what its name claims —
     and never RUNS them. A failing suite is yours to find; CI already tells you.
 T1  a cheap, fast model — the gate.

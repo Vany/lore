@@ -23,7 +23,12 @@ import { runTool, type ToolResult } from "./exec.ts";
 export interface SandboxConfig {
   /** Container image. Must be arm64 on the deployment host (D-33). */
   readonly image: string;
-  /** Host directory holding per-lockfile `node_modules` caches (D-37). */
+  /**
+   * Host directory holding per-lockfile sandbox caches (D-37) — `node_modules` for
+   * npm/pnpm/yarn, and cargo's own registry+target cache under a `cargo-`-prefixed
+   * subdirectory (D-131), so the two ecosystems' hash buckets can never collide even
+   * though they share this one root.
+   */
   readonly cacheRoot: string;
   /**
    * Where the throwaway per-review copy lives.
@@ -80,6 +85,14 @@ export const DEFAULT_SANDBOX: SandboxConfig = {
   runtime: "docker",
 };
 
+/** The hash both `lockfileKey` and `cargoLockKey` key their cache on. */
+async function fileHashKey(worktree: string, relPath: string): Promise<string> {
+  const content = await readFile(join(worktree, relPath)).catch(() => undefined);
+  return content === undefined
+    ? "no-lockfile"
+    : createHash("sha256").update(content).digest("hex").slice(0, 16);
+}
+
 /**
  * Cache key: identical lockfiles share an install. Installs dominate T0 otherwise.
  *
@@ -89,11 +102,19 @@ export const DEFAULT_SANDBOX: SandboxConfig = {
 export async function lockfileKey(worktree: string): Promise<string> {
   const cmds = await commandsFor(worktree);
   const name = cmds.ok ? cmds.toolchain.lockfile : undefined;
-  if (name === undefined) return "no-lockfile";
-  const content = await readFile(join(worktree, name)).catch(() => undefined);
-  return content === undefined
-    ? "no-lockfile"
-    : createHash("sha256").update(content).digest("hex").slice(0, 16);
+  return name === undefined ? "no-lockfile" : fileHashKey(worktree, name);
+}
+
+/**
+ * Cargo's own cache key, mirroring `lockfileKey` above rather than sharing it — the
+ * two ecosystems have nothing else in common. Hashes `<dir>/Cargo.lock`, not always
+ * the worktree root: `dir` is wherever `detectEcosystems` found the manifest (root,
+ * or one level down per D-129 — `teammater`'s `server/` crate keeps its own lock
+ * there, not at the repo root). Falls back to `no-lockfile` the same way `lockfileKey`
+ * does: a library crate legitimately may not commit one.
+ */
+export async function cargoLockKey(worktree: string, dir: string): Promise<string> {
+  return fileHashKey(worktree, dir === "." ? "Cargo.lock" : join(dir, "Cargo.lock"));
 }
 
 /**
@@ -111,8 +132,16 @@ export async function lockfileKey(worktree: string): Promise<string> {
  *
  * `node_modules` is mounted over the copy from the shared cache, so the copy is
  * source only and installs are shared across reviews with the same lockfile.
+ *
+ * `cacheMountPath` is where inside `/work` the cache lands — `/work/node_modules`
+ * for every existing npm/pnpm/yarn call site (the default, so none of them change),
+ * `/work/.cargo` for cargo's (D-131), which needs no `node_modules`-shaped mount at
+ * all. `XDG_DATA_HOME` derives from it rather than being hardcoded, which is the
+ * more honest generalisation: any tool that self-provisions should do so into
+ * whichever mount is the PERSISTENT one, not the throwaway scratch copy, regardless
+ * of which ecosystem is asking.
  */
-function baseArgs(cfg: SandboxConfig, worktree: string, cacheDir: string, scratch: string): string[] {
+function baseArgs(cfg: SandboxConfig, worktree: string, cacheDir: string, scratch: string, cacheMountPath = "/work/node_modules"): string[] {
   return [
     "run",
     "--rm",
@@ -120,7 +149,7 @@ function baseArgs(cfg: SandboxConfig, worktree: string, cacheDir: string, scratc
     // particular: no signing key, no database, no tokens.
     "-v", `${worktree}:/src:ro`,
     "-v", `${scratch}:/work`,
-    "-v", `${cacheDir}:/work/node_modules`,
+    "-v", `${cacheDir}:${cacheMountPath}`,
     "-w", "/work",
     "--memory", cfg.memory,
     "--cpus", cfg.cpus,
@@ -152,7 +181,7 @@ function baseArgs(cfg: SandboxConfig, worktree: string, cacheDir: string, scratc
     // was thrown away with the container, and then failed under `--network none` —
     // reported as `pnpm run typecheck` FAILING. A false high-severity finding
     // against a branch whose typecheck passes is worse than not running it at all.
-    "-e", "XDG_DATA_HOME=/work/node_modules/.xdg",
+    "-e", `XDG_DATA_HOME=${cacheMountPath}/.xdg`,
   ];
 }
 
@@ -380,7 +409,8 @@ export async function detectEcosystems(worktree: string): Promise<readonly Ecosy
  * `network` is on ONLY for the install: a registry needs it, and a test — or a
  * typecheck, or a lint — that reaches the internet is not a check of this change.
  * Everything else is the same container shape: sources read-only at /src, a
- * throwaway copy at /work, the shared install at /work/node_modules, no
+ * throwaway copy at /work, the shared cache mounted at `cacheMountPath` (default
+ * `/work/node_modules`; cargo's own callers pass `/work/.cargo` — D-131), no
  * capabilities, no new privileges, bounded cpu/memory/pids, and a hard timeout.
  */
 export async function runInSandbox(
@@ -390,12 +420,13 @@ export async function runInSandbox(
   scratch: string,
   script: string,
   network: boolean,
+  cacheMountPath?: string,
 ): Promise<ToolResult> {
   return runTool(
     worktree,
     cfg.runtime,
     [
-      ...baseArgs(cfg, worktree, cacheDir, scratch),
+      ...baseArgs(cfg, worktree, cacheDir, scratch, cacheMountPath),
       ...(network ? [] : ["--network", "none"]),
       cfg.image,
       "sh",

@@ -16,7 +16,7 @@ always did.
 
 | Tier | Purpose | Engine | Int. | $/M in | $/M out | vendor |
 |---|---|---|---|---|---|---|
-| **T0** | deterministic | the **target repo's own** `tsc`, ESLint, `ast-grep`, semgrep | — | free | free | — |
+| **T0** | deterministic | the **target repo's own** `tsc`, ESLint, `cargo check`/`clippy`, `ast-grep`, semgrep | — | free | free | — |
 | **T1** | cheap gate | `openrouter/z-ai/glm-5.2` | 51 | 0.28 | 0.89 | Z.ai |
 | **T2** | main reviewer | `openrouter/moonshotai/kimi-k3` | 57 | 3.00 | 15.00 | Moonshot |
 | **T3** | adversarial | `openrouter/openai/gpt-5.6-sol-pro` | 59 | 5.00 | 30.00 | OpenAI |

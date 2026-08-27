@@ -82,7 +82,7 @@ describe("nothing the target controls runs in the service", () => {
     expect(CODE_ARCH.t0).not.toContain("tests");
   });
 
-  it.each([["tsc"], ["eslint"]])("refuses to run %s on the host", async (engine) => {
+  it.each([["tsc"], ["eslint"], ["cargo-check"], ["cargo-clippy"]])("refuses to run %s on the host", async (engine) => {
     const out = await runEngine(process.cwd(), engine as T0Engine);
     expect(out.findings).toStrictEqual([]);
     expect(out.unavailable).toMatch(/runs in the sandbox/);
@@ -371,6 +371,126 @@ describe("a run the sandbox itself killed is never mistaken for a clean or parti
     const tsc = out.outcomes.find((o) => o.engine === "tsc");
     expect(tsc?.unavailable).toMatch(/timed out/);
     expect(tsc?.interrupted, "a timeout withholds trust from this round the same as a kill").toBe(true);
+  });
+});
+
+/**
+ * `sandboxedCargo` (D-131), through the same fake-`docker` stand-in pattern the tsc
+ * suite above uses — no real Docker, no network, hermetic. Verified here: the
+ * orchestration (manifest-path plumbing, the fetch-then-check(-then-clippy)
+ * sequence, real JSON parsing end to end) and, deliberately first, the case every
+ * real review hits until a follow-up adds a Rust toolchain to the sandbox image —
+ * cargo genuinely not being there yet.
+ */
+describe("sandboxedCargo, through a fake docker", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "lore-t0-cargo-"));
+    writeFileSync(join(dir, "Cargo.toml"), '[package]\nname = "x"\nversion = "0.1.0"\n');
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  const baseSandbox = (runtime: string): SandboxConfig => ({
+    image: "unused",
+    cacheRoot: join(dir, "cache"),
+    scratchRoot: join(dir, "scratch"),
+    uid: 1000,
+    gid: 1000,
+    memory: "6g",
+    cpus: "2",
+    timeoutMs: 30_000,
+    runtime,
+  });
+
+  it("with no toolchain in the sandbox image, reports it plainly rather than 'dependencies do not fetch'", async () => {
+    const script = join(dir, "fake-docker-no-cargo.sh");
+    writeFileSync(script, "#!/bin/sh\necho 'sh: cargo: not found' >&2\nexit 127\n");
+    chmodSync(script, 0o755);
+    const out = await runT0(dir, { engines: ["cargo-check", "cargo-clippy"], sandbox: baseSandbox(script) });
+    for (const engine of ["cargo-check", "cargo-clippy"]) {
+      const o = out.outcomes.find((x) => x.engine === engine);
+      expect(o?.findings, engine).toStrictEqual([]);
+      expect(o?.unavailable, engine).toBe("cargo is not available in the sandbox image");
+    }
+  });
+
+  // Sequenced by call count — fetch (1) succeeds silently, cargo-check (2) and
+  // cargo-clippy (3) each answer with their own real-shaped JSON, one lint apiece,
+  // proving the full path (manifest-path plumbing, the mount, the parse) round-trips
+  // real cargo output rather than only the constructed fixtures in engines.test.ts.
+  it("a real check and a real clippy finding both come back through the full path", async () => {
+    const script = join(dir, "fake-docker-cargo-ok.sh");
+    const countFile = join(dir, ".count");
+    const checkOut = join(dir, "check-out.json");
+    const clippyOut = join(dir, "clippy-out.json");
+    writeFileSync(
+      checkOut,
+      JSON.stringify({
+        reason: "compiler-message",
+        message: {
+          message: "unused variable: `y`",
+          code: { code: "unused_variables" },
+          level: "warning",
+          spans: [{ file_name: "src/main.rs", line_start: 2, is_primary: true }],
+        },
+      }),
+    );
+    writeFileSync(
+      clippyOut,
+      JSON.stringify({
+        reason: "compiler-message",
+        message: {
+          message: "this returns unconditionally",
+          code: { code: "clippy::needless_return" },
+          level: "warning",
+          spans: [{ file_name: "src/main.rs", line_start: 5, is_primary: true }],
+        },
+      }),
+    );
+    writeFileSync(
+      script,
+      "#!/bin/sh\n" +
+        `N=$(cat "${countFile}" 2>/dev/null || echo 0)\n` +
+        `echo $((N+1)) > "${countFile}"\n` +
+        `if [ "$N" -eq 0 ]; then exit 0; ` +
+        `elif [ "$N" -eq 1 ]; then cat "${checkOut}"; exit 0; ` +
+        `else cat "${clippyOut}"; exit 0; fi\n`,
+    );
+    chmodSync(script, 0o755);
+    const out = await runT0(dir, { engines: ["cargo-check", "cargo-clippy"], sandbox: baseSandbox(script) });
+
+    const check = out.outcomes.find((o) => o.engine === "cargo-check");
+    expect(check?.unavailable).toBeUndefined();
+    expect(check?.findings).toHaveLength(1);
+    expect(check?.findings[0]).toMatchObject({ file: "src/main.rs", line: 2, severity: "medium" });
+
+    const clippy = out.outcomes.find((o) => o.engine === "cargo-clippy");
+    expect(clippy?.unavailable).toBeUndefined();
+    expect(clippy?.findings).toHaveLength(1);
+    expect(clippy?.findings[0]).toMatchObject({ file: "src/main.rs", line: 5, severity: "medium" });
+  });
+
+  it("reports absence honestly when there is no Cargo.toml at all", async () => {
+    const empty = mkdtempSync(join(tmpdir(), "lore-t0-nocargo-"));
+    try {
+      const sandbox: SandboxConfig = {
+        image: "unused",
+        cacheRoot: join(empty, "cache"),
+        scratchRoot: join(empty, "scratch"),
+        uid: 1000,
+        gid: 1000,
+        memory: "6g",
+        cpus: "2",
+        timeoutMs: 30_000,
+        runtime: "unused",
+      };
+      const out = await runT0(empty, { engines: ["cargo-check"], sandbox });
+      const o = out.outcomes.find((x) => x.engine === "cargo-check");
+      expect(o?.findings).toStrictEqual([]);
+      expect(o?.unavailable).toMatch(/no Cargo\.toml/);
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
+    }
   });
 });
 

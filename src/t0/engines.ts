@@ -111,8 +111,17 @@ function finding(f: {
  * It does not re-open the sentence hole. OSV writes `@scope/pkg@1.0.0 is affected by
  * CVE-…: summary`, and the second `@` is outside the character class, so the match ends
  * before the colon it would need.
+ *
+ * `:` IS IN THE BODY CLASS TOO, for the same reason `@` had to be: clippy's own rule
+ * ids are module-path-shaped (`clippy::needless_return`), and without this a clippy
+ * finding read back as no class at all — the identical D-83 failure the leading `@`
+ * was added to fix, reopened for a different punctuation mark. Traced by hand against
+ * every existing "gives no class to a claim that is a sentence" case in
+ * `engines.test.ts`: none of them regain a class, because each already fails the match
+ * before reaching where a `:` would matter — a leading backtick, a space, or a second
+ * `@` mid-string, none of which involve the newly-allowed character.
  */
-const RULE_CLASS = /^(@?[A-Za-z][A-Za-z0-9._/-]*):\s/;
+const RULE_CLASS = /^(@?[A-Za-z][A-Za-z0-9._/:-]*):\s/;
 
 /**
  * Write a claim so its rule id can be read back. The one definition of the convention.
@@ -220,6 +229,14 @@ export function detect(worktree: string, engine: T0Engine): boolean {
       return ["eslint.config.js", "eslint.config.mjs", "eslint.config.ts", ".eslintrc.json", ".eslintrc.cjs"].some(
         (f) => existsSync(join(worktree, f)),
       );
+    // ROOT-ONLY, like tsc's tsconfig.json check above — the same shallow signal
+    // detect() gives every engine. It is not where nested-crate awareness lives:
+    // `sandboxedCargo()` (runner.ts) uses `detectEcosystems`'s own one-level walk for
+    // the actual execution decision, the same way `commandsFor` already does for npm's
+    // nested-manifest case.
+    case "cargo-check":
+    case "cargo-clippy":
+      return existsSync(join(worktree, "Cargo.toml"));
     case "ast-grep":
       return existsSync(join(worktree, "sgconfig.yml")) || existsSync(join(worktree, "sgconfig.yaml"));
     case "semgrep":
@@ -299,11 +316,14 @@ export function scopePaths(scope: Scope): readonly string[] {
 }
 
 export async function runEngine(worktree: string, engine: T0Engine, scope?: Scope): Promise<EngineOutcome> {
-  // Refused rather than defaulted. These two resolve their binary out of the
-  // target's node_modules, so the service must never run them — `runner.ts` drives
-  // them inside the sandbox. Falling through to "has no runner" would read as a
-  // missing feature instead of a boundary.
-  if (engine === "tsc" || engine === "eslint") {
+  // Refused rather than defaulted. These resolve their binary out of the target's
+  // own dependency tree (tsc/eslint via node_modules) or fully compile and RUN
+  // target-controlled code (cargo-check/cargo-clippy: a build.rs or proc-macro
+  // executes natively during a check, not just a script) — so the service must
+  // never run any of them — `runner.ts` drives them inside the sandbox. Falling
+  // through to "has no runner" would read as a missing feature instead of a
+  // boundary (D-24).
+  if (engine === "tsc" || engine === "eslint" || engine === "cargo-check" || engine === "cargo-clippy") {
     return {
       engine,
       findings: [],
@@ -512,6 +532,83 @@ export function parseEslint(stdout: string, worktree: string): Finding[] | undef
       claim: ruleClaim(m.ruleId ?? undefined, m.message, "eslint"),
       evidence: sitesEvidence("eslint", m.ruleId ?? "", file, lines),
       failureScenario: "violates a rule this project has chosen to enforce",
+    });
+  });
+}
+
+// ---------------------------------------------------------------------- cargo
+
+/**
+ * One line of `cargo check --message-format=json` / `cargo clippy --message-format=json`.
+ *
+ * Schema verified against the Cargo Book and rustc's own JSON diagnostic docs, not
+ * assumed from memory: `reason: "compiler-message"` wraps a nested `message` object
+ * shaped like rustc's own diagnostic (`code: {code, explanation} | null`, not a bare
+ * string), and `spans[]` carries `is_primary`/`file_name`/`line_start`. `note`/`help`
+ * level diagnostics only ever appear nested inside a parent's `children` array — never
+ * as their own top-level `reason: "compiler-message"` entries — so filtering top-level
+ * entries to `level === "error" | "warning"` already excludes them without needing to
+ * read `children` at all.
+ */
+interface CargoSpan {
+  file_name: string;
+  line_start: number;
+  is_primary: boolean;
+}
+interface CargoMessage {
+  message: string;
+  code: { code: string } | null;
+  level: string;
+  spans: CargoSpan[];
+}
+interface CargoEntry {
+  reason: string;
+  message?: CargoMessage;
+}
+
+/** Parse `cargo check`/`cargo clippy --message-format=json`. Shared: both emit the same shape. */
+export function parseCargoJson(engine: "cargo-check" | "cargo-clippy", stdout: string, worktree: string): Finding[] {
+  const messages: CargoMessage[] = [];
+  for (const line of stdout.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("{")) continue;
+    let entry: CargoEntry;
+    try {
+      entry = JSON.parse(trimmed) as CargoEntry;
+    } catch {
+      continue;
+    }
+    if (entry.reason === "compiler-message" && entry.message !== undefined) messages.push(entry.message);
+  }
+
+  // ERROR/WARNING ONLY. A whole-crate summary ("aborting due to 2 previous errors")
+  // carries no span and no information beyond the individual diagnostics already
+  // reported — dropped rather than turned into a finding with no site, matching how
+  // every other engine here only ever produces site-anchored findings.
+  const diagnostics = messages.filter((m) => m.level === "error" || m.level === "warning");
+  const flat = diagnostics.flatMap((m) => {
+    const primary = m.spans.find((s) => s.is_primary);
+    return primary === undefined ? [] : [{ m, file: relativise(worktree, primary.file_name), line: primary.line_start }];
+  });
+
+  // GROUPED LIKE THE PATTERN ENGINES — see `bySite`. clippy in particular repeats one
+  // lint many times in one file at least as often as eslint does.
+  return bySite(flat, ({ m, file, line }) => ({
+    claim: ruleClaim(m.code?.code, m.message, engine),
+    file,
+    line,
+  })).map(({ match: { m }, file, lines }) => {
+    const first = lines[0];
+    return finding({
+      file,
+      ...(first !== undefined && first > 0 ? { line: first } : {}),
+      severity: m.level === "error" ? "high" : "medium",
+      claim: ruleClaim(m.code?.code, m.message, engine),
+      evidence: sitesEvidence(engine, m.code?.code ?? "", file, lines),
+      failureScenario:
+        m.level === "error"
+          ? "the project does not compile, so this cannot ship as-is"
+          : "violates a lint this project's own toolchain flags",
     });
   });
 }

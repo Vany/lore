@@ -13,10 +13,12 @@ import { mkdir, readFile, rm, utimes } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { compareFindings, type Finding } from "../core/finding.ts";
 import type { T0Engine } from "../core/review-type.ts";
-import { detect, parseEslint, parseTsc, runEngine, type EngineOutcome } from "./engines.ts";
+import { detect, parseCargoJson, parseEslint, parseTsc, runEngine, type EngineOutcome } from "./engines.ts";
 import {
+  cargoLockKey,
   commandsFor,
   DEFAULT_SANDBOX,
+  detectEcosystems,
   install,
   lockfileKey,
   runInSandbox,
@@ -121,21 +123,25 @@ export async function runT0(worktree: string, opts: T0Options): Promise<T0Result
   // and a caller computing a diff has no reason to know which engines read the disk.
   const files = opts.files?.filter((f) => existsSync(join(worktree, f)));
 
-  // HOST ENGINES RUN CONCURRENTLY WITH THE SANDBOX, not before it (D-127).
+  // HOST ENGINES RUN CONCURRENTLY WITH BOTH SANDBOXED PHASES, not before them (D-127).
   //
-  // The two share no state: host engines are lore's own binaries reading `worktree`
-  // read-only, and the sandbox works entirely inside its own `/work` copy and its own
-  // node_modules cache. Before this they ran one after the other, so a two-second
+  // All three share no state: host engines are lore's own binaries reading `worktree`
+  // read-only, and each sandboxed phase works entirely inside its OWN `/work` copy and
+  // its own cache (`sandboxed()`'s node_modules, `sandboxedCargo()`'s `.cargo` — D-131,
+  // separate scratch directories too, so their independent `SYNC` steps cannot race
+  // each other). Before D-127 host and sandbox ran one after the other, so a two-second
   // ast-grep/semgrep pair sat and waited for an unrelated multi-minute install for no
   // reason beyond the order they happened to be written in. Engines within each group
   // are independent of each other too — same reasoning, `Promise.all` rather than a
   // loop.
-  const hostEngines = opts.engines.filter((e) => e !== "tsc" && e !== "eslint");
-  const [hostOutcomes, sandboxOutcomes] = await Promise.all([
+  const sandboxedNames = new Set<T0Engine>(["tsc", "eslint", "cargo-check", "cargo-clippy"]);
+  const hostEngines = opts.engines.filter((e) => !sandboxedNames.has(e));
+  const [hostOutcomes, sandboxOutcomes, cargoOutcomes] = await Promise.all([
     Promise.all(hostEngines.map((engine) => runEngine(worktree, engine, files))),
     sandboxed(worktree, opts.sandbox ?? DEFAULT_SANDBOX, opts.engines),
+    sandboxedCargo(worktree, opts.sandbox ?? DEFAULT_SANDBOX, opts.engines),
   ]);
-  const outcomes = [...hostOutcomes, ...sandboxOutcomes];
+  const outcomes = [...hostOutcomes, ...sandboxOutcomes, ...cargoOutcomes];
 
   const skipped = outcomes.filter((o) => o.skipped !== undefined).map((o) => o.skipped ?? "");
   // Said once, to the operator's log, so an optional engine's absence is visible to
@@ -302,6 +308,171 @@ async function sandboxed(
   } finally {
     await rm(scratch, { recursive: true, force: true }).catch(() => undefined);
   }
+}
+
+/**
+ * Everything cargo needs, in its own sandboxed session (D-131) — separate from
+ * `sandboxed()` above in every dimension that matters: own cache (keyed by
+ * Cargo.lock, not a JS lockfile), own scratch directory (so its own `SYNC` step
+ * cannot race npm's when `runT0` runs both concurrently), no `Toolchain`-style
+ * choice to make since it is always cargo.
+ *
+ * `detectEcosystems`, not `detect()` — see `detect()`'s own comment in engines.ts.
+ * This is the nested-aware walk that finds a `teammater`-shaped repo (D-129: plain
+ * JS at the root, a real crate one level down), which `detect()`'s root-only check
+ * would miss entirely — exactly the case D-129's own `dir` field exists to answer.
+ */
+async function sandboxedCargo(
+  worktree: string,
+  cfg: SandboxConfig,
+  engines: readonly T0Engine[],
+): Promise<EngineOutcome[]> {
+  const wanted = engines.filter((e) => e === "cargo-check" || e === "cargo-clippy");
+  if (wanted.length === 0) return [];
+
+  // FIRST MATCH WINS — the same bounded choice `commandsFor` already makes for a
+  // repo carrying two lockfiles. True multi-crate awareness is out of scope for
+  // this slice; `detectEcosystems` itself only ever looks one level deep anyway.
+  const found = (await detectEcosystems(worktree)).find((f) => f.ecosystem === "cargo");
+  if (found === undefined) {
+    return wanted.map((engine) => ({
+      engine,
+      findings: [],
+      unavailable: "no Cargo.toml within one level of the worktree root — not a Rust project as far as this checked",
+    }));
+  }
+  const manifest = found.dir === "." ? "Cargo.toml" : `${found.dir}/Cargo.toml`;
+
+  const cacheDir = join(cfg.cacheRoot, `cargo-${await cargoLockKey(worktree, found.dir)}`);
+  await mkdir(cacheDir, { recursive: true });
+  // Same reasoning as the npm cache's own touch above: retention's sweep judges
+  // this directory abandoned by its own mtime, and a warm cargo cache legitimately
+  // may not rewrite every file on every use.
+  await utimes(cacheDir, new Date(), new Date()).catch(() => {
+    // Best-effort, same as npm's own — not worth failing the review over.
+  });
+  const scratch = join(cfg.scratchRoot, `${basename(worktree)}-cargo`);
+  await mkdir(scratch, { recursive: true });
+
+  try {
+    return await withInstallLock(cacheDir, async () => {
+      const fetched = await runInSandbox(
+        cfg,
+        worktree,
+        cacheDir,
+        scratch,
+        `cargo fetch --manifest-path ${manifest} --locked || cargo fetch --manifest-path ${manifest}`,
+        true,
+        "/work/.cargo",
+      );
+      if (fetched.unavailable !== undefined) {
+        return wanted.map((engine) => ({
+          engine,
+          findings: [],
+          unavailable: `cargo fetch could not run: ${fetched.unavailable ?? ""}`,
+          interrupted: fetched.timedOut,
+        }));
+      }
+      if (ranOutOfMemory(fetched)) {
+        return wanted.map((engine) => ({
+          engine,
+          findings: [],
+          unavailable:
+            `cargo fetch did not complete (${fetched.code === KILLED ? `killed, exit ${KILLED}` : "ran out of memory"}) — ` +
+            "almost always a memory limit, not a fault in the branch. Nothing that needs it is known either way.",
+          interrupted: true,
+        }));
+      }
+      if (!fetched.ok) {
+        const tail = `${fetched.stdout}\n${fetched.stderr}`;
+        // MISSING BINARY, NOT A BROKEN BRANCH — with no toolchain in the sandbox
+        // image yet (D-131's own explicit scope boundary), this is what every real
+        // review hits right now. `checkTypes`'s bare-tsc branch already drew this
+        // same distinction once, fingerprint 1fa9229d: the likelier explanation for
+        // this shape of failure is the tool never being installed to begin with,
+        // not a defect in this branch's own dependencies. `code === 127` is the
+        // POSIX "command not found" convention nearly every shell honours; the text
+        // check catches the common phrasing when a shell reports it some other way.
+        if (fetched.code === 127 || /\bnot found\b|no such file or directory/i.test(tail)) {
+          return wanted.map((engine) => ({
+            engine,
+            findings: [],
+            unavailable: "cargo is not available in the sandbox image",
+          }));
+        }
+        // One finding, not one per engine — it is a single fact about the branch.
+        const failTail = tail.trim().split("\n").slice(-30).join("\n").slice(0, 2000);
+        return wanted.map((engine, i) => ({
+          engine,
+          findings:
+            i > 0
+              ? []
+              : [
+                  {
+                    file: "Cargo.toml",
+                    severity: "high" as const,
+                    claim: "dependencies do not fetch with cargo, so nothing that needs them could run",
+                    evidence: failTail,
+                    failureScenario:
+                      "cargo check and cargo clippy both resolve through the fetched dependency tree — neither ran, so neither's claims exist",
+                  },
+                ],
+          unavailable: "dependencies failed to fetch with cargo",
+        }));
+      }
+
+      const out: EngineOutcome[] = [];
+      if (wanted.includes("cargo-check")) {
+        out.push(await checkCargo(cfg, worktree, cacheDir, scratch, manifest, "cargo-check", "check"));
+      }
+      if (wanted.includes("cargo-clippy")) {
+        out.push(await checkCargo(cfg, worktree, cacheDir, scratch, manifest, "cargo-clippy", "clippy"));
+      }
+      return out;
+    });
+  } finally {
+    await rm(scratch, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
+/**
+ * `cargo check` or `cargo clippy --message-format=json`, offline — identical shape
+ * for both, unlike `checkTypes`/`checkLint`'s deliberate split, because neither has
+ * a "target declared a custom script" branch to choose between: cargo's own root
+ * manifest is already the canonical, target's-own-config-respecting invocation
+ * (D-8), workspace members included, with no monorepo-runner indirection needed.
+ */
+async function checkCargo(
+  cfg: SandboxConfig,
+  worktree: string,
+  cacheDir: string,
+  scratch: string,
+  manifest: string,
+  engine: "cargo-check" | "cargo-clippy",
+  subcommand: "check" | "clippy",
+): Promise<EngineOutcome> {
+  const r = await runInSandbox(
+    cfg,
+    worktree,
+    cacheDir,
+    scratch,
+    `cargo ${subcommand} --manifest-path ${manifest} --offline --message-format=json`,
+    false,
+    "/work/.cargo",
+  );
+  if (r.unavailable !== undefined) return { engine, findings: [], unavailable: r.unavailable, interrupted: r.timedOut };
+  if (ranOutOfMemory(r)) return scriptFinding(engine, `cargo ${subcommand}`, r);
+  // PARSED FROM STDOUT ALONE — cargo's own `--message-format=json` contract keeps
+  // the JSONL there and human-readable progress on stderr, unlike tsc's murkier,
+  // wrapper-dependent convention `checkTypes` has to allow for. Parsed first: a
+  // compiler error is an EXPECTED non-zero exit, not a failure to hide.
+  const parsed = parseCargoJson(engine, r.stdout, worktree);
+  if (parsed.length > 0) return { engine, findings: parsed };
+  if (r.ok) return { engine, findings: [] };
+  // By this point `cargo fetch` already succeeded, so — unlike the fetch failure
+  // above — a missing binary is not the likely explanation here; this is a genuine,
+  // opaque failure of the project's own gate.
+  return scriptFinding(engine, `cargo ${subcommand}`, r);
 }
 
 /** The scripts a target declares, which are the ones it actually runs. */

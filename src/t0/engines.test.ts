@@ -6,7 +6,7 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { scopePaths, detect, engineRuleClass, parseEslint, parseSemgrep, parseTsc, ruleClaim, runEngine } from "./engines.ts";
+import { scopePaths, detect, engineRuleClass, parseCargoJson, parseEslint, parseSemgrep, parseTsc, ruleClaim, runEngine } from "./engines.ts";
 import { fingerprint } from "../core/fingerprint.ts";
 import type { Finding } from "../core/finding.ts";
 
@@ -137,6 +137,9 @@ describe("an engine finding says which rule fired", () => {
       // and nothing said why. D-83 quietly did not work for the common case.
       "@typescript-eslint/no-floating-promises",
       "@next/next/no-img-element",
+      // CLIPPY'S OWN IDS, module-path-shaped the same way — the identical D-83 gap,
+      // reopened for `:` instead of `@` until RULE_CLASS's body class allowed it too.
+      "clippy::needless_return",
     ]) {
       expect(engineRuleClass(ruleClaim(id, "some message", "fallback"))).toBe(id);
     }
@@ -158,6 +161,20 @@ describe("an engine finding says which rule fired", () => {
       { filePath: "/w/src/a.ts", messages: [{ ruleId: "no-unused-vars", severity: 2, message: "'x' is unused.", line: 4 }] },
     ]);
     expect((parseEslint(json, "/w") ?? []).map((f) => engineRuleClass(f.claim))).toStrictEqual(["no-unused-vars"]);
+  });
+
+  it("survives clippy's real output, colon-shaped id included", () => {
+    const line = JSON.stringify({
+      reason: "compiler-message",
+      message: {
+        message: "this returns unconditionally",
+        code: { code: "clippy::needless_return", explanation: null },
+        level: "warning",
+        spans: [{ file_name: "src/lib.rs", line_start: 8, is_primary: true }],
+      },
+    });
+    const findings = parseCargoJson("cargo-clippy", line, "/w");
+    expect(findings.map((f) => engineRuleClass(f.claim))).toStrictEqual(["clippy::needless_return"]);
   });
 
   /**
@@ -393,6 +410,110 @@ describe("eslint and tsc group only genuinely identical diagnostics", () => {
     expect(f).toHaveLength(1);
     expect(f[0]?.evidence).toBe(one);
     expect(f[0]?.line).toBe(3);
+  });
+});
+
+/**
+ * `cargo check`/`cargo clippy --message-format=json` (D-131). Schema verified
+ * against the Cargo Book and rustc's own JSON diagnostic docs before writing this —
+ * these fixtures are shaped the way those documents describe, not guessed at.
+ */
+describe("cargo's JSON is a different shape and needs its own parsing", () => {
+  const compilerMessage = (over: {
+    level: "error" | "warning";
+    code?: string | null;
+    message?: string;
+    file?: string;
+    line?: number;
+    primary?: boolean;
+  }): string =>
+    JSON.stringify({
+      reason: "compiler-message",
+      message: {
+        message: over.message ?? "diagnostic",
+        code: over.code === undefined ? { code: "some_lint" } : over.code === null ? null : { code: over.code },
+        level: over.level,
+        spans:
+          over.file === undefined
+            ? []
+            : [{ file_name: over.file, line_start: over.line ?? 1, is_primary: over.primary ?? true }],
+      },
+    });
+
+  it("error becomes high, warning becomes medium", () => {
+    const out = [
+      compilerMessage({ level: "error", file: "src/a.rs", code: "E0308" }),
+      compilerMessage({ level: "warning", file: "src/b.rs", code: "dead_code" }),
+    ].join("\n");
+    const f = parseCargoJson("cargo-check", out, "/w");
+    expect(f.find((x) => x.file === "src/a.rs")?.severity).toBe("high");
+    expect(f.find((x) => x.file === "src/b.rs")?.severity).toBe("medium");
+  });
+
+  // A whole-crate summary ("aborting due to 2 previous errors") carries no span at
+  // all — dropped rather than turned into a finding with no site, matching how every
+  // other engine here only ever produces site-anchored findings.
+  it("drops a whole-crate summary that names no site", () => {
+    const out = [
+      compilerMessage({ level: "error", file: "src/a.rs" }),
+      compilerMessage({ level: "error" }), // no `file`, so no spans at all
+    ].join("\n");
+    expect(parseCargoJson("cargo-check", out, "/w")).toHaveLength(1);
+  });
+
+  // note/help only ever appear NESTED inside a parent's own `children` array in
+  // cargo's real output, never as their own top-level `reason: "compiler-message"`
+  // entries — verified against the rustc JSON docs, not assumed. Filtering top-level
+  // entries to error/warning is enough on its own; nothing here needs to read
+  // `children` at all, and this fixture proves a bare note-shaped top-level entry
+  // (however it got there) does not leak through as a finding either.
+  it("does not surface note/help level as their own findings", () => {
+    const out = [
+      compilerMessage({ level: "error", file: "src/a.rs" }),
+      JSON.stringify({
+        reason: "compiler-message",
+        message: { message: "`#[warn(...)]` on by default", code: null, level: "note", spans: [] },
+      }),
+    ].join("\n");
+    expect(parseCargoJson("cargo-check", out, "/w")).toHaveLength(1);
+  });
+
+  // `compiler-artifact` and `build-finished` are the other real `reason` values
+  // cargo's own JSON stream carries — build progress, not diagnostics.
+  it("ignores every reason except compiler-message", () => {
+    const out = [
+      JSON.stringify({ reason: "compiler-artifact", package_id: "x" }),
+      JSON.stringify({ reason: "build-finished", success: false }),
+      "",
+      "not json at all",
+    ].join("\n");
+    expect(parseCargoJson("cargo-check", out, "/w")).toStrictEqual([]);
+  });
+
+  it("groups a clippy lint a file has many of, same as eslint's own", () => {
+    const out = [
+      compilerMessage({ level: "warning", code: "clippy::needless_return", file: "src/a.rs", line: 3 }),
+      compilerMessage({ level: "warning", code: "clippy::needless_return", file: "src/a.rs", line: 30 }),
+    ].join("\n");
+    const f = parseCargoJson("cargo-clippy", out, "/w");
+    expect(f).toHaveLength(1);
+    expect(f[0]?.line).toBe(3);
+    expect(f[0]?.evidence).toContain("src/a.rs:3");
+    expect(f[0]?.evidence).toContain("src/a.rs:30");
+    expect(f[0]?.evidence).toMatch(/2 SEPARATE SITES/);
+  });
+
+  it("detects a root Cargo.toml, and reports absence honestly", () => {
+    const dir = mkdtempSync(join(tmpdir(), "lore-cargo-detect-"));
+    try {
+      expect(detect(dir, "cargo-check")).toBe(false);
+      expect(detect(dir, "cargo-clippy")).toBe(false);
+      writeFileSync(join(dir, "Cargo.toml"), "[package]\nname = \"x\"\n");
+      expect(detect(dir, "cargo-check")).toBe(true);
+      expect(detect(dir, "cargo-clippy")).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

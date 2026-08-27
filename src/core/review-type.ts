@@ -26,7 +26,7 @@ import { loadTiers, type Tier } from "./ladder.ts";
  * running it here means executing an arbitrary dependency tree on the review host for
  * a result its owner already has.
  */
-export type T0Engine = "tsc" | "eslint" | "ast-grep" | "semgrep" | "sbom" | "osv";
+export type T0Engine = "tsc" | "eslint" | "cargo-check" | "cargo-clippy" | "ast-grep" | "semgrep" | "sbom" | "osv";
 
 export interface ReviewType {
   readonly id: string;
@@ -57,7 +57,7 @@ export interface ReviewType {
 export const CODE_ARCH: ReviewType = {
   id: "code-arch",
   description: "Correctness and design of a prepared merge, judged against its ticket and specs.",
-  t0: ["tsc", "eslint", "ast-grep", "semgrep"],
+  t0: ["tsc", "eslint", "cargo-check", "cargo-clippy", "ast-grep", "semgrep"],
   get tiers() {
     return loadTiers();
   },

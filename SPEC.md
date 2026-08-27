@@ -831,6 +831,79 @@ two levels deep (`apps/web/package.json`) is possible and unseen — the message
 says "as far as this checked" rather than asserting a fact about the whole
 repository that only one level of `readdir` was ever positioned to support.
 
+**D-131 — cargo check/clippy run in T0's sandboxed phase, alongside tsc/eslint.
+BUILT 2026-08-27.**
+
+D-129 taught T0 to detect a Rust project without acting on it, deliberately —
+"the next slice" its own entry named. This is that slice: `T0Engine` gains
+`cargo-check`/`cargo-clippy`, `CODE_ARCH.t0` lists both unconditionally the same
+way tsc/eslint already are, and `runEngine` refuses to run either on the host —
+the identical D-24 boundary tsc/eslint already draw, and for the identical
+reason: `cargo check` fully compiles and RUNS any `build.rs`/proc-macro
+dependency, arbitrary target-controlled code, not just a script.
+
+**A real correctness fix along the way, not a design choice.** Clippy's own rule
+ids are module-path-shaped (`clippy::needless_return`); `RULE_CLASS`
+(`engines.ts`) excluded `:` from its body character class, so every clippy
+finding read back with no class at all — the identical D-83 gap already fixed
+once for scoped eslint plugins (`@typescript-eslint/...`), reopened here for a
+different punctuation mark. Traced by hand against every existing negative test
+case before shipping: none regain a class, since each already fails the match
+before reaching where `:` would matter.
+
+**`sandboxedCargo()` (`runner.ts`) is its own function beside `sandboxed()`, not
+a branch inside it** — the two ecosystems share nothing real. Its own cache,
+keyed on `Cargo.lock`'s content the same way `lockfileKey` keys on a JS lockfile
+(`cargoLockKey`, new in `sandbox.ts`); its own scratch directory, so its `SYNC`
+step cannot race npm's when `runT0` runs both concurrently (extending D-127's
+existing host/sandbox split to three branches); no `Toolchain`-style choice to
+make, since it is always cargo. Detection for EXECUTION is `detectEcosystems`,
+not `detect()`'s root-only check — the nested-aware one-level walk D-129 already
+built, because `teammater` (plain JS at the root, the real crate in `server/`)
+is exactly the shape a root-only check misses, and it is the repository the
+whole `dir` field exists to answer for. `--manifest-path` threaded through every
+invocation accordingly; multiple cargo projects found (root plus nested, or
+several nested) take the first, the same bounded choice `commandsFor` already
+makes for multiple lockfiles — true multi-crate awareness stays out of scope.
+
+Three cargo invocations per round, all through `runInSandbox` directly rather
+than `install()` (which is genuinely npm/`Toolchain`-shaped and has nothing
+cargo needs): `cargo fetch --locked || cargo fetch` (network on, the same
+frozen-then-resolving fallback shape pnpm/yarn already use here), then `cargo
+check`/`cargo clippy --message-format=json` (network off). Parsing
+(`parseCargoJson`, `engines.ts`) is verified against the Cargo Book and rustc's
+own JSON diagnostic docs rather than assumed: `reason: "compiler-message"`
+wraps a nested rustc-shaped `message` (`code: {code, explanation} | null`, not a
+bare string); `note`/`help` level diagnostics only ever nest inside a parent's
+`children`, never arriving as their own top-level entries, so filtering to
+`error`/`warning` at the top level is sufficient on its own. A whole-crate
+summary with no span ("aborting due to 2 previous errors") is dropped — no
+information beyond the individual diagnostics already reported.
+
+**Deliberately does not touch `deploy/sandbox.Dockerfile`.** Asked Vany how the
+sandbox image should get a Rust toolchain — rustup (honours a target's own
+`rust-toolchain.toml`, the same "run the target's own configuration" principle
+D-8 already applies to tsc/eslint/pnpm, at the cost of a real musl/Alpine
+target-triple complication and image-size growth) versus Alpine's own `apk add
+cargo rust` (simpler, musl-native, no per-project version fidelity). Answer:
+"nothing for now." So the wiring above is complete and tested (the fake-`docker`
+mock pattern `runner.test.ts` already uses for tsc/eslint, extended — no real
+Docker, no network) but **every real review of a Rust repo reports
+`cargo-check`/`cargo-clippy` `unavailable: "cargo is not available in the
+sandbox image"` until a follow-up decides how the image gets a toolchain and
+rebuilds it.** Distinguished explicitly from a genuine dependency-fetch failure
+(`checkTypes`'s bare-tsc branch already drew the identical distinction once,
+fingerprint 1fa9229d: the likelier explanation for this shape of failure is the
+tool never being installed, not a defect in the branch's own dependencies) —
+`cargo fetch`'s own failure path checks for exit 127 / a "not found"-shaped
+message before falling into the generic "dependencies do not fetch" finding.
+
+Out of scope, named rather than silently dropped: multi-crate/true
+workspace-aware discovery beyond one level (`detectEcosystems` itself does not
+go deeper); honouring a project-pinned toolchain the image does not carry
+(`RUSTUP_HOME` is not cached/mounted); clippy-lint-group-aware severity finer
+than error→high/warning→medium.
+
 **D-128 — a finding that names its fields "title"/"detail" is a naming drift, not a
 malformed reply: repaired at the boundary rather than gambled on a retry. BUILT
 2026-08-20.**
