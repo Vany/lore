@@ -96,10 +96,17 @@ export async function generateSbom(worktree: string, cdxgenTimeoutMs = 300_000):
     source: "none",
     // Said out loud rather than returned as an empty list. "No components found"
     // and "we could not look" must never be the same answer.
+    //
+    // lore-ok[b03d0b1e]: NAMES THE READER'S OWN LIMIT, not npm's lockfile
+    // specifically. `detect()`'s own widening (engines.ts) means this path
+    // now runs on a pure Go/PyPI/Rust/Maven/RubyGems repo too, where "no
+    // package-lock.json was found" blames a file that ecosystem never had —
+    // this reader's OWN fallback only understands npm's lockfile is the
+    // honest claim, true regardless of which ecosystem `detect()` saw.
     note:
       viaCdxgen.crashed === undefined
-        ? "no SBOM could be produced — cdxgen is not installed and no package-lock.json was found"
-        : `no SBOM could be produced — cdxgen did not produce a usable SBOM (${viaCdxgen.crashed}), and no package-lock.json was found`,
+        ? "no SBOM could be produced — cdxgen is not installed, and this reader's own fallback only understands npm's package-lock.json (not found)"
+        : `no SBOM could be produced — cdxgen did not produce a usable SBOM (${viaCdxgen.crashed}), and this reader's own fallback only understands npm's package-lock.json (not found)`,
   };
 }
 

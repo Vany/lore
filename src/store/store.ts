@@ -3859,6 +3859,27 @@ export class Store {
   }
 
   /**
+   * The tree t0's most recent CLOSED round actually read — `undefined` when
+   * none has closed yet. Paired with `latestT0Unavailable` (same WHERE clause)
+   * so `vexGap` can tell its own fallback (the last closed round, while a
+   * newer one is still in flight) apart from a report about the CURRENT tree
+   * — lore-ok[118b5ec1]: `finished_at IS NOT NULL` alone stops an in-flight
+   * round from reading as clean, but its own fallback can still land on an
+   * EARLIER round's tree while a newer round (scanning a tree a submit
+   * already moved the review onto) has not finished — "ran clean" about a
+   * tree nobody has actually scanned yet, one layer further in than
+   * 287b1a76/12255b33 already found.
+   */
+  latestT0TreeHash(reviewId: string): string | undefined {
+    const row = this.db
+      .prepare(
+        "SELECT tree_hash FROM tier_run WHERE review_id = ? AND tier = 't0' AND finished_at IS NOT NULL ORDER BY id DESC LIMIT 1",
+      )
+      .get(reviewId) as Record<string, string | null> | undefined;
+    return row?.["tree_hash"] ?? undefined;
+  }
+
+  /**
    * When this review last had a finding raised against it, or `undefined` if never.
    *
    * Evidence of life that touches no other table: a tier can raise findings for twenty

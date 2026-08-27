@@ -394,7 +394,16 @@ async function sbom(worktree: string): Promise<EngineOutcome> {
       engine: "sbom",
       findings: [
         finding({
-          file: "package.json",
+          // lore-ok[b03d0b1e]: WHICHEVER MANIFEST ACTUALLY EXISTS, not a
+          // hardcoded npm path. `detect()`'s own widening above means this
+          // branch is now reachable on a pure Go/PyPI/Rust/Maven/RubyGems
+          // repo, where "package.json" names a file that was never there,
+          // violating Finding.file's own repo-relative-path contract the same
+          // way a sentence in this exact field already violated it once
+          // before. Re-checks the same list `detect()` gated on rather than
+          // threading which one matched through runEngine/EngineOutcome for
+          // this alone.
+          file: ECOSYSTEM_MANIFESTS.find((f) => existsSync(join(worktree, f))) ?? "package.json",
           severity: "medium",
           claim: "the dependency tree could not be enumerated, so it was not checked for known vulnerabilities",
           evidence: bom.note ?? "no SBOM produced",

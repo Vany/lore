@@ -132,6 +132,38 @@ describe("sbom: a fallback-path caveat is not the same claim as 'did not run'", 
 });
 
 /**
+ * Fingerprint b03d0b1e: `detect()`'s own widening made `sbom()`'s own
+ * "could not be enumerated" finding reachable on a repo with no package.json
+ * at all — the finding used to hardcode `file: "package.json"` regardless,
+ * a path that does not exist on a pure Go/PyPI/Rust/Maven/RubyGems repo.
+ */
+describe("sbom: the cannot-enumerate finding names a real manifest, not npm's", () => {
+  let dir: string;
+  let binDir: string;
+  let savedPath: string | undefined;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "lore-sbomfile-"));
+    binDir = mkdtempSync(join(tmpdir(), "lore-sbomfile-bin-"));
+    savedPath = process.env["PATH"];
+    process.env["PATH"] = `${binDir}:${savedPath ?? ""}`;
+    writeFileSync(join(binDir, "npx"), "#!/bin/sh\nexit 1\n"); // no cdxgen
+    chmodSync(join(binDir, "npx"), 0o755);
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(binDir, { recursive: true, force: true });
+    if (savedPath === undefined) delete process.env["PATH"];
+    else process.env["PATH"] = savedPath;
+  });
+
+  it("names go.mod, not package.json, on a Go repo with no fallback lockfile reader", async () => {
+    writeFileSync(join(dir, "go.mod"), "module example.com/x\n");
+    const out = await runEngine(dir, "sbom");
+    expect(out.findings[0]?.file).toBe("go.mod");
+  });
+});
+
+/**
  * A cdxgen SBOM that enumerated N components and dropped every one (a pure
  * Composer/NuGet tree, say) leaves `bom.components.length === 0` — the same
  * shape as a tree with genuinely nothing to enumerate. `osv()`'s early return

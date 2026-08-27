@@ -141,6 +141,17 @@ describe("generateSbom", () => {
     expect(sbom.note).not.toMatch(/did not produce a usable SBOM/);
   });
 
+  // Fingerprint b03d0b1e: detect()'s own widening means this "none" bucket
+  // is now reachable on repos that never had a package-lock.json to begin
+  // with — the note must blame this reader's own npm-only fallback, not the
+  // repo, for a file it never needed.
+  it("blames its own npm-only fallback, not the repo, when nothing is found", async () => {
+    writeFileSync(join(binDir, "npx"), "#!/bin/sh\nexit 1\n");
+    chmodSync(join(binDir, "npx"), 0o755);
+    const sbom = await generateSbom(dir);
+    expect(sbom.note).toMatch(/this reader's own fallback only understands npm/);
+  });
+
   // Fingerprint f4b810d9: exec.ts sets `r.unavailable` for BOTH a missing
   // binary AND a run that hit its timeout — a cdxgen that is genuinely
   // installed and just slow on a large tree is not "not installed" either.
@@ -487,6 +498,25 @@ describe("vexGap", () => {
     const id = store.openTierRun(reviewId, "t0", 1, "2026-08-03T00:00:00.000Z");
     store.closeTierRun(id, "failed", ["t0: threw before completing — ECONNREFUSED"]);
     expect(vexGap(store, reviewId, "security")).toContain("t0: threw before completing");
+  });
+
+  // Fingerprint 118b5ec1, one layer past 287b1a76: excluding an in-flight
+  // round is correct, but its OWN fallback — the last CLOSED round, while a
+  // newer one is still running — can be a report about an EARLIER tree than
+  // the one a submit already moved the review onto. "Ran clean" is only
+  // true of the tree that round actually read.
+  it("does not call an earlier tree's clean result current when a newer round is still running", () => {
+    const first = store.openTierRun(reviewId, "t0", 1, "2026-08-03T00:00:00.000Z");
+    store.closeTierRun(first, "clean", [], "tree-A");
+    store.openTierRun(reviewId, "t0", 2, "2026-08-03T01:00:00.000Z"); // scanning tree-B, still open
+    const gap = vexGap(store, reviewId, "security", "tree-B");
+    expect(gap).toMatch(/earlier tree/);
+  });
+
+  it("still reports clean when the latest completed round matches the current tree", () => {
+    const id = store.openTierRun(reviewId, "t0", 1, "2026-08-03T00:00:00.000Z");
+    store.closeTierRun(id, "clean", [], "tree-A");
+    expect(vexGap(store, reviewId, "security", "tree-A")).toBeUndefined();
   });
 });
 

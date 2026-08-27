@@ -2400,9 +2400,10 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       );
       return text(
         JSON.stringify({
-          // lore-ok[9b09e7c5,a9c12b7e]: `vexGap` PASSED THROUGH — see its own
-          // doc comment (vex.ts) for what this answers.
-          summary: renderVex(doc, vexGap(store, review_id, review.type)),
+          // lore-ok[9b09e7c5,a9c12b7e,118b5ec1]: `vexGap` PASSED THROUGH,
+          // `review.treeHash` ALONGSIDE reviewType now too — see vexGap's own
+          // doc comment (vex.ts) for what each answers.
+          summary: renderVex(doc, vexGap(store, review_id, review.type, review.treeHash)),
           untriaged: findingsNeedingTriage(store, review_id).length,
           document: doc,
         }),

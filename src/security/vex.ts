@@ -274,12 +274,25 @@ export function vulnIdOf(evidence: string): string | undefined {
  * (store.ts, `finished_at IS NOT NULL`), not here: this function only
  * consumes what that method returns and has no round-open/closed state of
  * its own to filter on.
+ *
+ * lore-ok[118b5ec1]: `currentTreeHash` ADDED, one layer past 287b1a76's own
+ * fix. Excluding an in-flight round is correct, but its OWN fallback — the
+ * last CLOSED round, while a newer one is still running — can be a report
+ * about an EARLIER tree than the one this document's metadata names
+ * (server.ts passes `review.treeHash`, which a submit already moves before
+ * the new round's t0 finishes reading it). "Ran clean" is only true of the
+ * tree that round actually read, not of whatever tree the review is on now.
  */
-export function vexGap(store: Store, reviewId: string, reviewType: string): string | undefined {
+export function vexGap(store: Store, reviewId: string, reviewType: string, currentTreeHash?: string): string | undefined {
   if (reviewType !== "security") return "this review does not check dependencies (not a security review)";
 
   const unavailable = store.latestT0Unavailable(reviewId);
   if (unavailable === undefined) return "no round has completed yet";
+
+  const scannedTree = store.latestT0TreeHash(reviewId);
+  if (currentTreeHash !== undefined && scannedTree !== undefined && scannedTree !== currentTreeHash) {
+    return "the most recently completed scan was of an earlier tree; a newer round has not finished yet";
+  }
 
   // lore-ok[4ca2c2a4]: `"t0:"` ADDED — review.ts's own catch block around
   // `runT0` writes a whole-phase failure under that prefix (a throw before
