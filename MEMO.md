@@ -3,6 +3,108 @@
 Newest first. Updated at the end of each task: what changed, what I learned, what
 surprised me.
 
+## 2026-08-28 — src/security folder review: twelve rounds, and the sharpest bug of
+the whole project so far was in a field nobody had looked at twice
+
+**What changed.** `rev_sf6-rWCYapHZMa_JBhdtWnND` (rounds 1–8, `passed_partial`,
+merged at `1d7cd12`) then `rev_-R1FZziTV5mItpMxg01V8T7c` (rounds 9–12,
+`passed_partial`, merged at `0d6acdf`) — two reviews, not one, because the first
+went terminal while I still had real, verified follow-up fixes queued (below).
+Across both: `sbom.ts`, `osv.ts`, `vex.ts`, `engines.ts`, `store.ts`, `review.ts`,
+`server.ts`. Roughly twenty distinct findings, every one git-stash-verified
+(revert, confirm the new/existing test fails for the stated reason, restore,
+confirm it passes again) before being counted fixed.
+
+**The single worst defect this project has found in itself, and it was hiding in
+plain sight.** `queryComponents` (osv.ts) posts to OSV's `POST /v1/querybatch` and
+was written as if the response were a full vulnerability record. Checked against
+OSV's own current API docs rather than assumed — they say outright: *"Returns
+vulnerability ids and modified field only."* Every other field a real finding
+needs — `severityOf`'s `database_specific.severity`, `fixedVersion`'s `affected`,
+`aliases`, `cweOf`'s `cwe_ids` — comes back `undefined` on every real call. In
+production, since this code shipped, that means every OSV finding this module has
+ever raised defaulted to medium severity and "no fixed version published"
+regardless of what the database actually says — confidently wrong in the one
+direction that gets a real vulnerability ignored. `queryCommit` (the sibling
+function, `POST /v1/query`) was already correct; the code was plainly written
+against *that* endpoint's shape and pointed at the batch one instead. Fixed by
+hydrating each distinct id through `GET /v1/vulns/{id}` (confirmed separately: the
+one endpoint that returns a full record) after batching, bounded by how many
+vulnerabilities actually matched rather than by the size of the dependency tree.
+The existing test suite had passed the whole time because every fake in it
+answered the identical body to any URL — the hydration call succeeded trivially
+against data shaped for the wrong endpoint, passing by accident. Rewritten around
+a URL-discriminating fake so a test that reads a hydrated field actually
+exercises hydration, not just its absence of a thrown error.
+
+**A pattern worth naming: fixing one thing honestly kept surfacing its own
+sibling.** Widening `detect()` to gate `sbom`/`osv` on any of six ecosystems'
+manifests (not just npm's `package.json`) made the fallback failure paths behind
+it reachable for the first time on a non-npm repo — where they turned out to
+still say "no package-lock.json was found," blaming a file that ecosystem never
+had. Fixing PyPI's own `TYPICAL_MANIFEST` ambiguity (a typical guess belongs in
+`evidence`, not asserted as the `file` path) left npm's identical ambiguity
+(`package-lock.json` vs `yarn.lock`/`pnpm-lock.yaml`/`bun.lock`) sitting right
+there unfixed, one field over. Neither of these was named by the finding that
+motivated the fix that exposed it — both were found by re-reading the surrounding
+code with the same question in mind, not by waiting for the ladder to ask.
+
+**The `lore-ok[X]` tag has to live at the site the finding actually named, even
+when the real fix moves somewhere else entirely — learned twice more this
+cycle.** Two findings (`a9c12b7e`, `12255b33`) came back `will_not_settle` even
+though I had genuinely fixed the underlying concern, because the fix landed in a
+function the finding's own `file`/`line` didn't point at (the logic had moved out
+of `renderVex` into a brand-new `vexGap`, and later into `store.ts`). A short,
+explicit pointer comment at the *original* site — "the fix moved to X, see its own
+doc comment" — is what settles it. Diagnosing WHY something didn't settle, rather
+than just re-tagging blindly, is the actual skill here; both times the honest
+answer was "I moved the code and forgot the old address still needed a forwarding
+note."
+
+**A design pattern that paid for itself repeatedly: splitting one overloaded
+optional string into two fields with different consumers.** `Sbom.note` (a
+blanket methodology caveat, true on every fallback-path run, never a reason to
+call an engine unavailable) vs `Sbom.incomplete` (a genuine per-review gap, always
+worth surfacing) started as the fix for one finding and ended up being the right
+shape for at least four more down the line — a malformed lockfile, a
+lockfileVersion-1 lockfile, a cdxgen crash vs. genuine absence. Same shape again,
+independently, for `checksSkippedFor` (a permanent whole-review-lifetime union,
+correct for a board line) vs. the new `latestT0Unavailable`/`latestT0TreeHash`
+(the CURRENT round only, correct for "is this VEX snapshot trustworthy right
+now") — a transient round-1 OSV outage must not keep marking round 3, which ran
+clean, as unproven forever, and the fix for that is a different query, not a
+different filter over the same one.
+
+**The terminal-race pattern from earlier sessions came back with a new wrinkle.**
+`review_submit` refused outright once the first review reached `passed_partial`
+("Start a fresh review for further work on this branch") — expected, matches
+precedent. New this time: the FRESH review's `review_start` pinned a worktree
+mirror that was still showing the tree from *before round 1 of the entire first
+review* — nine rounds of real fixes invisible to it — even though `origin/main`
+was, by then, correctly at round 8's merged tip. A `diff`-form submission against
+that stale mirror silently failed to apply and the review evaluated the
+unpatched tree, producing a (correct, but moot) finding about missing fixes.
+Recovered by resubmitting the *same* commit via the `commit` form instead of
+`diff` — which does not require guessing the mirror's base — and it read the
+right tree on the next round. The lesson: after `review_start` on a `branch`
+(not a scratch ref), don't assume the mirror is caught up just because the push
+that matters already landed: prefer `commit` over `diff` for the first
+submission against a brand-new review, since it does not depend on knowing what
+the reviewer's own base actually is.
+
+**Chose to keep going past a legitimate `passed_partial` rather than bank it.**
+The first review reached a mergeable terminal state with two findings the ladder
+itself had judged non-blocking (`118b5ec1`, `b03d0b1e` — a stale-tree race in the
+new `vexGap` fallback, and the npm-only-fallback-message gap described two
+paragraphs up). Both were real, both were security-relevant, and leaving them as
+"known gaps" in a module whose entire job is not doing that felt wrong given how
+cheap they were to actually close. Landed the terminal verdict first (so the
+already-reviewed work wasn't held hostage to more scrutiny), then opened a
+second, explicitly-scoped follow-up review for just the incremental commit. Four
+more rounds later, that second review is where `bfa2e44b` — the querybatch bug
+above — actually turned up. It would not have been found if "the ladder called it
+non-blocking" had been read as "done."
+
 ## 2026-08-27 — D-131: cargo check/clippy join T0's sandboxed phase, eight rounds, and a local rustup toolchain I nearly left broken while verifying one of them
 
 **What changed.** D-129's own tracking task #2 — cargo execution, deliberately
