@@ -12,7 +12,7 @@
 
 import { createServer, type Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { Exhausted, ProviderAuthFailed, ServiceUnreachable, TooLargeForTier } from "../core/errors.ts";
+import { CancelledByLore, Exhausted, ProviderAuthFailed, ServiceUnreachable, TooLargeForTier } from "../core/errors.ts";
 import { CLAIM_MAX } from "../core/finding.ts";
 import type { Tier } from "../core/ladder.ts";
 import { Reviewer, countStepParts, emissionOf, extractFindings, quotaRefusal, splitModel, toolsUsed, isTooLong, usageFromMessages } from "./opencode.ts";
@@ -1053,9 +1053,16 @@ describe("a call that is no longer wanted", () => {
     replies = [{ parts: [{ type: "text", text: '```json\n{"findings":[]}\n```' }] }];
     const before = captured.length;
 
-    await expect(
-      reviewer().review(TIER, "review this", "/tmp/wt", "rev1", () => false),
-    ).rejects.toThrow(/ended while this call waited for a provider slot — nothing was spent/);
+    const err = await reviewer()
+      .review(TIER, "review this", "/tmp/wt", "rev1", () => false)
+      .then(() => undefined, (e: unknown) => e);
+    expect((err as Error | undefined)?.message).toMatch(/ended while this call waited for a provider slot — nothing was spent/);
+    // WE STOPPED THIS (found by lore's own review, fingerprint b9319d46): a plain
+    // `DidNotRun` takes `runMember`'s ORDINARY failure path — closed `failed`, counted
+    // toward the tier's strikes — which on a second one can step the ladder and overwrite
+    // an already-`cancelled` review's state. `CancelledByLore` is the one class that
+    // path's own catch rethrows untouched.
+    expect(err, "a cancel must be classified as ours, not as the tier failing").toBeInstanceOf(CancelledByLore);
 
     expect(captured.slice(before)).toStrictEqual([]);
   });
@@ -1084,9 +1091,16 @@ describe("a call that is no longer wanted", () => {
       wanted = false;
     }, 30);
 
-    await expect(
-      reviewer().review(TIER, "review this", "/tmp/wt", "rev1", () => wanted),
-    ).rejects.toThrow(/ended while tier t1 was opening a session — nothing was spent/);
+    const err = await reviewer()
+      .review(TIER, "review this", "/tmp/wt", "rev1", () => wanted)
+      .then(() => undefined, (e: unknown) => e);
+    expect((err as Error | undefined)?.message).toMatch(/ended while tier t1 was opening a session — nothing was spent/);
+    // WE STOPPED THIS (found by lore's own review, fingerprint b9319d46): the first
+    // version of this check threw a plain `DidNotRun`, which takes `runMember`'s
+    // ORDINARY failure path in review.ts rather than the rethrow-untouched one
+    // `CancelledByLore` gets — on a second strike that path steps the ladder and can
+    // overwrite an already-`cancelled` review's state with a fresh one.
+    expect(err, "a cancel must be classified as ours, not as the tier failing").toBeInstanceOf(CancelledByLore);
 
     // THE SESSION OPENCODE ALREADY CREATED IS CLEANED UP, not leaked — it exists on
     // opencode's side by the time the cancel is noticed, even though lore never used it.

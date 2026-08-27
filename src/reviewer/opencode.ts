@@ -577,11 +577,18 @@ export class Reviewer implements ReviewerLike {
    * `sessions`/`kept`. That gap has its own check, at the one place it can act on a
    * fresh session it just opened; this one still guards the (now much narrower) window
    * it always could.
+   *
+   * lore-ok[b9319d46]: WE STOPPED THIS, same as `conductSession`'s own post-createSession
+   * check a few lines below (b9319d46's own report was about that one, and this is its
+   * identical twin, found reading the sibling it names). `CancelledByLore`, not a plain
+   * `DidNotRun` — `runMember`'s catch (review.ts) rethrows `CancelledByLore` untouched and
+   * would otherwise book this as the tier's own failure, and on a second strike step the
+   * ladder and overwrite an already-`cancelled` review's state.
    */
   private guard<T>(reviewId: string | undefined, stillWanted: (() => boolean) | undefined, run: () => Promise<T>) {
     return this.gate.run(() => {
       if (stillWanted?.() === false) {
-        throw new DidNotRun(
+        throw new CancelledByLore(
           `review ${reviewId ?? "?"} was ended while this call waited for a provider slot — nothing was spent on it.`,
         );
       }
@@ -835,9 +842,20 @@ export class Reviewer implements ReviewerLike {
     // on to spend a full prompt (up to the review's own deadline) that nobody will ever
     // read. Only for a FRESH session: `continuing !== undefined` spent no await getting
     // here, so `guard`'s own entry check is still current for it.
+    //
+    // lore-ok[b9319d46]: `CancelledByLore`, not a plain `DidNotRun`. WE stopped this — the
+    // review's own `stillWanted` reads terminal — and `runMember`'s catch (review.ts) has
+    // a rule for exactly that: rethrow `CancelledByLore` untouched, never book it as the
+    // tier's own failure. A plain `DidNotRun` takes the ORDINARY path instead — closed
+    // `failed`, counted by `tierFailureCount` — and on a second strike (a prior, unrelated
+    // failure already on record) `alreadyFailed` returns `{kind:"skipped"}`, which steps
+    // the ladder and overwrites the review's already-terminal `cancelled` state with
+    // whatever `settleState` computes next: the exact resurrection review.ts's own
+    // "A STOP LORE CAUSED IS NOT EVIDENCE ABOUT THE TIER" fix (D-109 era) exists to
+    // prevent, reopened here by naming the wrong class.
     if (continuing === undefined && stillWanted?.() === false) {
       await this.client.session.delete({ path: { id: sessionId } }).catch(() => undefined);
-      throw new DidNotRun(
+      throw new CancelledByLore(
         `review ${reviewId ?? "?"} was ended while tier ${tier.id} was opening a session — nothing was spent on it.`,
       );
     }
