@@ -341,6 +341,40 @@ function shQuote(s: string): string {
 const CARGO_MOUNT = "/cargo-cache";
 
 /**
+ * Whether a cargo (or rustup-proxied) invocation failed because the TOOL ITSELF
+ * is not fully available — a missing binary, a missing rustup component, or an
+ * unconfigured default toolchain — rather than a genuine failure of the
+ * branch's own gate. Shared by the fetch step and `checkCargo`, found by lore's
+ * own review across two rounds, fingerprints f2b0d6c3/c618f5cb/57dea7e8/874b52df.
+ *
+ * All these shapes fail before cargo/rustup ever reaches the crate's own
+ * `Cargo.toml` — dispatch itself is what is broken — so NOTHING project-controlled
+ * has run yet and stdout is always empty. Confirmed empirically for two of the
+ * three text shapes below (a plain missing subcommand: `cargo <name-that-does-not-
+ * exist>` on a real, working cargo, `error: no such command:`, exit 101, 0 stdout
+ * bytes; a rustup toolchain missing the clippy component specifically, by
+ * temporarily removing it from a real local toolchain and restoring it after:
+ * `error: 'cargo-clippy' is not installed for the toolchain '…'`, exit 1, 0
+ * stdout bytes). The third — rustup's own long-documented "no default toolchain
+ * configured" — was not separately reproduced but shares the identical shape:
+ * failing before any project code runs.
+ *
+ * The empty-stdout requirement is not incidental. A text match alone, on `r.stderr`
+ * by itself, would also match a target's own `build.rs` printing similar text as
+ * part of a REAL failure — a broken branch's own error swallowed and reported as
+ * "no toolchain" instead, the exact class fingerprint 01270153 already fixed once
+ * for the fetch step's own "not found" hedge. Empty stdout is not airtight — a
+ * contrived `build.rs` could theoretically fail before producing any JSON too —
+ * but it is the strongest structural signal available without a dedicated
+ * pre-check invocation, and it is the same signal every confirmed shape above
+ * actually has.
+ */
+function cargoToolMissing(r: { readonly code: number; readonly stdout: string; readonly stderr: string }): boolean {
+  if (r.stdout.trim() !== "") return false;
+  return r.code === 127 || /no such command:|is not installed for the toolchain|no default toolchain configured/i.test(r.stderr);
+}
+
+/**
  * Where cargo keeps what it downloads and builds, redirected into the mounted cache
  * rather than each container's own ephemeral `$HOME/.cargo` — without this the
  * fetch's downloads die with the container that made them and `cargo check
@@ -443,18 +477,11 @@ async function sandboxedCargo(
         // this shape of failure is the tool never being installed to begin with,
         // not a defect in this branch's own dependencies.
         //
-        // `code === 127` ALONE, not also a "not found" text match — found by lore's
-        // own review, fingerprint 01270153. The text check was meant to hedge
-        // against a shell phrasing the exit code alone might miss, but it is too
-        // broad in the direction that actually costs something: a broken git
-        // dependency prints "fatal: repository … not found" and a missing path
-        // dependency prints "No such file or directory" in cargo's OWN error chain
-        // — real, high-severity findings about the branch, both misreported as "no
-        // toolchain" by the text alone. 127 is the POSIX "command not found"
-        // convention nearly every shell honours, including both sides of the `||`
-        // fallback above (a missing binary fails identically twice), so it needs no
-        // hedge.
-        if (fetched.code === 127) {
+        // `cargoToolMissing`, not a bare `code === 127` check nor a bare text
+        // match on its own — see that function's own doc comment for the full
+        // reasoning (fingerprints 01270153, f2b0d6c3, c618f5cb, 57dea7e8,
+        // 874b52df, spanning both this step and `checkCargo`'s identical need).
+        if (cargoToolMissing(fetched)) {
           return wanted.map((engine) => ({
             engine,
             findings: [],
@@ -534,10 +561,11 @@ async function checkCargo(
   subcommand: "check" | "clippy",
 ): Promise<EngineOutcome> {
   // lore-ok[f2b0d6c3]: fixed further down in this same function, at the
-  // `no such command:` check right before the fallback to `scriptFinding` — a
+  // `cargoToolMissing(r)` check right before the fallback to `scriptFinding` — a
   // missing `cargo-clippy` binary is now told apart from a genuine lint failure
   // before either can reach the opaque, high-severity "fails on this branch"
-  // framing.
+  // framing. `cargoToolMissing` itself (defined above `sandboxedCargo`) carries
+  // the fuller reasoning, including the two rounds of findings that shaped it.
   const r = await runInSandbox(
     cfg,
     worktree,
@@ -571,12 +599,19 @@ async function checkCargo(
   // review, fingerprint f2b0d6c3: without this, an image with cargo but no
   // clippy component would report a false, high-severity "cargo clippy fails on
   // this branch" on every single review, forever, settleable by no code change.
-  // `code === 101` alone would false-positive on real clippy findings' own exit
-  // code for "diagnostics found" — checked against the real message instead
-  // (confirmed empirically: `cargo <missing-subcommand>` prints exactly `error:
-  // no such command:` to stderr and exits 101, the same generic code an ordinary
-  // lint failure also uses, so the exit code alone cannot tell the two apart).
-  if (/no such command:/i.test(r.stderr)) {
+  //
+  // `cargoToolMissing`, not a bare text match on its own — see that function's
+  // own doc comment. A rustup toolchain that HAS cargo but lacks the clippy
+  // component fails a different way than a plain missing binary does (found by
+  // lore's own review, fingerprint c618f5cb, and confirmed by actually removing
+  // the component from a real local toolchain: `error: 'cargo-clippy' is not
+  // installed for the toolchain '…'`, exit 1 — neither the exit code nor the
+  // message `cargoToolMissing`'s first version checked), and a text match with
+  // no other requirement would also match a target's own `build.rs` printing
+  // similar text as part of a genuine failure (fingerprint 57dea7e8) — the same
+  // class of over-broad hedge fingerprint 01270153 already fixed once for the
+  // fetch step above.
+  if (cargoToolMissing(r)) {
     return { engine, findings: [], unavailable: `${subcommand === "clippy" ? "clippy" : "cargo"} is not available in the sandbox image` };
   }
   // By this point `cargo fetch` already succeeded and the tool itself responded,

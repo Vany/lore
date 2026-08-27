@@ -464,6 +464,58 @@ describe("sandboxedCargo, through a fake docker", () => {
     expect(o?.unavailable).toBe("clippy is not available in the sandbox image");
   });
 
+  // A RUSTUP TOOLCHAIN THAT HAS CARGO BUT NOT THE CLIPPY COMPONENT FAILS A
+  // DIFFERENT WAY than a plain missing binary — found by lore's own review,
+  // fingerprint c618f5cb, and confirmed by actually removing the component from
+  // a real local toolchain and restoring it after: `error: 'cargo-clippy' is
+  // not installed for the toolchain '…'`, exit 1, zero stdout bytes — a message
+  // the earlier, narrower "no such command:" check would have missed entirely.
+  it("a rustup toolchain missing the clippy component is also reported plainly", async () => {
+    const script = join(dir, "fake-docker-rustup-no-clippy.sh");
+    const countFile = join(dir, ".count-rustup-noclippy");
+    writeFileSync(
+      script,
+      "#!/bin/sh\n" +
+        `N=$(cat "${countFile}" 2>/dev/null || echo 0)\n` +
+        `echo $((N+1)) > "${countFile}"\n` +
+        'if [ "$N" -eq 0 ]; then exit 0; ' +
+        "else echo \"error: 'cargo-clippy' is not installed for the toolchain 'stable-x86_64'.\" >&2; exit 1; fi\n",
+    );
+    chmodSync(script, 0o755);
+    const out = await runT0(dir, { engines: ["cargo-clippy"], sandbox: baseSandbox(script) });
+    const o = out.outcomes.find((x) => x.engine === "cargo-clippy");
+    expect(o?.findings).toStrictEqual([]);
+    expect(o?.unavailable).toBe("clippy is not available in the sandbox image");
+  });
+
+  // THE EMPTY-STDOUT REQUIREMENT IS LOAD-BEARING, NOT INCIDENTAL — found by
+  // lore's own review, fingerprint 57dea7e8: a text match on stderr ALONE would
+  // also match a target's own `build.rs` printing similar text as part of a
+  // REAL failure, swallowing it as a false "no toolchain" instead. Simulated
+  // here as a run that emits SOME cargo JSON on stdout (proving the build
+  // genuinely started, i.e. cargo itself dispatched fine) before failing with
+  // text that collides with the missing-tool phrase — this must NOT be
+  // classified as a missing tool.
+  it("does not classify a failure as a missing tool when stdout shows the build actually started", async () => {
+    const script = join(dir, "fake-docker-collision.sh");
+    const countFile = join(dir, ".count-collision");
+    writeFileSync(
+      script,
+      "#!/bin/sh\n" +
+        `N=$(cat "${countFile}" 2>/dev/null || echo 0)\n` +
+        `echo $((N+1)) > "${countFile}"\n` +
+        "if [ \"$N\" -eq 0 ]; then exit 0; " +
+        "else echo '{\"reason\":\"compiler-artifact\",\"package_id\":\"x\"}'; " +
+        "echo 'error: no such command: `something-a-build-script-shelled-out-to`' >&2; exit 1; fi\n",
+    );
+    chmodSync(script, 0o755);
+    const out = await runT0(dir, { engines: ["cargo-clippy"], sandbox: baseSandbox(script) });
+    const o = out.outcomes.find((x) => x.engine === "cargo-clippy");
+    expect(o?.unavailable, JSON.stringify(o)).toBeUndefined();
+    expect(o?.findings, JSON.stringify(o)).toHaveLength(1);
+    expect(o?.findings[0]?.claim).toMatch(/fails on this branch/);
+  });
+
   // CARGO_HOME/CARGO_TARGET_DIR MUST ACTUALLY REACH CARGO — found by lore's own
   // review, fingerprint d341a76e: the cache mount at /work/.cargo was wired but
   // nothing ever pointed cargo's OWN env vars at it, so every fetch silently used

@@ -900,9 +900,9 @@ now reports `skipped`, not `unavailable`, when no Cargo.toml is found at all).
 The missing-binary text heuristic also matched a genuine dependency error
 ("fatal: repository … not found" from a broken git dependency) as though cargo
 itself were absent, discarding a real high-severity finding (fingerprint
-01270153; exit 127 alone decides now — reliable on its own, since both sides of
-the fetch's own `||` fallback fail identically when the binary is genuinely
-missing). The manifest path — a directory name from the branch under review,
+01270153; exit 127 decides it now, structural rather than textual — widened
+again two rounds later into `cargoToolMissing`, see below). The manifest path
+— a directory name from the branch under review,
 not a value this code chooses — was interpolated unquoted into a shell string;
 a one-level directory containing a space would word-split and break a healthy
 repo's own check (fingerprint 2b5a78f6; `shQuote` wraps it now, the same
@@ -947,13 +947,30 @@ rebuilds it.** Distinguished explicitly from a genuine dependency-fetch failure
 (`checkTypes`'s bare-tsc branch already drew the identical distinction once,
 fingerprint 1fa9229d: the likelier explanation for this shape of failure is the
 tool never being installed, not a defect in the branch's own dependencies) —
-`cargo fetch`'s own failure path checks exit 127 alone (found by lore's own
-review, fingerprint 01270153: a text match alongside it once caught a genuine
-dependency error too — a broken git dependency's own "not found" — discarding
-a real, high-severity finding as a false "no toolchain"; 127 needs no such
-hedge, since both sides of the fetch's own `||` fallback fail identically when
-the binary is genuinely missing) before falling into the generic "dependencies
-do not fetch" finding.
+`cargo fetch`'s own failure path — and `checkCargo`'s identical need one call
+site over — both go through one shared `cargoToolMissing` (`runner.ts`) before
+falling into the generic "dependencies do not fetch"/"fails on this branch"
+findings. It grew across three more rounds of lore's own review, each finding
+a shape the one before did not cover: a bare `code === 127` (fingerprint
+01270153, replacing an earlier text-only hedge that caught a genuine
+dependency error — a broken git dependency's own "not found" — as a false "no
+toolchain") was not enough once `cargo-clippy` entered the picture, since it
+is its OWN binary — a separate rustup component or distro package from bare
+cargo — and can be absent when cargo itself works fine, exiting 101 with
+`error: no such command:` rather than 127 (fingerprint f2b0d6c3). Then a
+RUSTUP toolchain that HAS cargo but lacks specifically the clippy component
+fails a THIRD way — confirmed by removing the component from a real local
+toolchain and restoring it after: `error: 'cargo-clippy' is not installed for
+the toolchain '…'`, exit 1 (fingerprint c618f5cb). And the text match alone,
+with no other requirement, would also match a target's own `build.rs`
+printing similar text as part of a genuine failure (fingerprint 57dea7e8) —
+the identical over-broad-hedge class 01270153 already named once. All three
+confirmed shapes (and rustup's own long-documented "no default toolchain
+configured", the same shape though not separately reproduced) share one
+structural signature instead: dispatch itself is what failed, so nothing
+project-controlled has run yet and stdout is always empty — `cargoToolMissing`
+now requires that alongside the message/exit-code check, narrowing the
+`build.rs`-collision window without a dedicated pre-check invocation.
 
 Out of scope, named rather than silently dropped: multi-crate/true
 workspace-aware discovery beyond one level (`detectEcosystems` itself does not
