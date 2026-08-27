@@ -3822,10 +3822,15 @@ Three more things this half must get right:
 
 Four things the implementation must get right, none reopening the decision:
 
-- **A failed apply surfaces loudly, later.** The tree-hash check moves from submit time
-  (synchronous refusal) to apply time (asynchronous) — so a mismatch must land the
-  review in `awaiting_diff` with the reason on the next poll, never be a silently
-  dropped diff. This is INV-1's corner of the feature.
+- **A failed apply surfaces loudly, later — except the one claim lore can check without
+  applying.** The tree-hash check on a diff's RESULT moves from submit time (synchronous
+  refusal) to apply time (asynchronous) — so a mismatch must land the review in
+  `awaiting_diff` with the reason on the next poll, never be a silently dropped diff.
+  This is INV-1's corner of the feature. D-124's `commit` form gets one synchronous
+  check anyway: `resolved^{tree}` is knowable without applying anything, so a wrong
+  `tree_hash` CLAIM is refused immediately rather than accepted into a held chain and
+  discovered wrong at consume time (found live, fingerprint 109d9211). The claim is
+  checked early; the result is still checked late; those are not the same guarantee.
 - **Held diffs chain deterministically.** A second submit while one is held is built on
   top of the first, and lore's worktree moves only when lore applies — the review agent
   is read-only — so verify in arrival order; a mid-chain mismatch drops the tail with a
@@ -3841,6 +3846,13 @@ Four things the implementation must get right, none reopening the decision:
   commit-form submit landed. Fixed in `review_submit` (`src/mcp/server.ts`): `at` reads
   `store.heldDiffs(review_id)`'s last row's own claimed tree first, falling back to
   `review.treeHash` only when nothing is held.
+- **A `commit` cannot chain onto an outstanding raw `diff` hold.** That hold's claimed
+  tree is the CLIENT's own local `git write-tree`, never pushed anywhere lore can see —
+  resolving it before the round ahead applies it fails as a missing object, not the
+  ordinary not-found `review_submit`'s other refusals are written for. Refused by name
+  until the raw hold is consumed; unaffected: a second raw `diff` (chaining it is the
+  client's own job, per the bullet above) and a second `commit` once nothing raw is
+  outstanding.
 - **Crossing findings are stated in the client texts.** The round in flight will report
   findings the held diff may already fix; the next delivery settles them. An agent not
   told this will double-fix.

@@ -417,8 +417,11 @@ a pass means the tiers read the tree you had at that moment, so if you keep send
 after it, the pass describes what it read and not what you sent next.
 
 Applied to the review's private copy of your branch. Nothing is committed or pushed — your
-history stays yours. The tree_hash is verified after applying; a mismatch fails
-loudly rather than reviewing code that exists nowhere.
+history stays yours. For a \`diff\`, the tree_hash is verified after applying; a mismatch
+fails loudly rather than reviewing code that exists nowhere. For a \`commit\`, lore already
+knows what tree it names — no apply needed to find out — so a wrong tree_hash is refused
+immediately, before anything is applied or even held, naming the tree the commit actually
+has.
 
 SEND A PUSHED \`commit\` INSTEAD OF A \`diff\` IF YOU CANNOT BUILD ONE. Exactly one of the
 two, never both. This exists for the case that used to be a dead end: a review's tree is
@@ -442,6 +445,13 @@ before seeing your fix may already be answered by it (do not double-fix — the 
 emission settles them), and if the held diff cannot be verified when it is applied, the
 review lands in awaiting_diff with the reason, which means: diff against the tree as it
 stands and send again.
+
+ONE EXCEPTION: if a \`diff\` you already sent is still HELD and unconsumed, a \`commit\`
+sent next is REFUSED rather than held — that hold's claimed tree is your own local git
+write-tree, never pushed anywhere lore can see, so lore cannot yet compute a delta
+against it. Poll until the hold clears (the review leaves 'held'), or keep sending
+\`diff\` for the follow-up too — a second \`diff\` always chains fine, and a second
+\`commit\` chains fine once nothing raw is outstanding.
 
 PREFER PUSHING TO SENDING A DIFF, IF YOU CAN PUSH AT ALL.
 
@@ -821,7 +831,8 @@ export const RESOURCE_DOCS: Readonly<Record<string, { title: string; priority: n
 4. review_submit(review_id, diff | commit, tree_hash) — any time once findings exist, in ANY
    state including fast_clean. If reviewers are mid-read your diff is HELD and handed
    to each of them at its own next emission; you never wait for a state and never
-   resubmit.
+   resubmit. Exception: a \`commit\` is REFUSED, not held, while an unconsumed \`diff\`
+   hold is outstanding — send \`diff\` instead, or wait for that hold to clear.
 5. Return to 2. Repeat until the state is TERMINAL — \`passed\`, \`passed_partial\`,
    \`needs_human\`, \`failed\`, \`expired\` or \`cancelled\`.
 
@@ -1001,7 +1012,8 @@ The loop:
 4. review_submit(review_id, diff | commit, tree_hash) — any time once findings exist, in ANY
    state including fast_clean. If reviewers are mid-read your diff is HELD and handed
    to each of them at its own next emission; you never wait for a state and never
-   resubmit.
+   resubmit. Exception: a \`commit\` is REFUSED, not held, while an unconsumed \`diff\`
+   hold is outstanding — send \`diff\` instead, or wait for that hold to clear.
 5. Return to 2. Repeat until the state is TERMINAL — \`passed\`, \`passed_partial\`,
    \`needs_human\`, \`failed\`, \`expired\` or \`cancelled\`.
    Only \`passed\` and \`passed_partial\` are worth attesting, and only \`passed\` is clean.

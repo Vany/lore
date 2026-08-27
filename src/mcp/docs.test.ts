@@ -108,6 +108,14 @@ describe("the loop starts by asking what is already waiting", () => {
     expect(steps).toStrictEqual([0, 1, 2, 3, 4, 5]);
   });
 
+  // Found by lore's own review, fingerprint 8f68d435/485bdfd8: step 4 read as "you
+  // never wait for a state and never resubmit" with no exception stated, but a
+  // commit-form submit while a raw diff sits unconsumed is refused rather than held —
+  // the one case that sentence does not cover. Both loop copies now say so.
+  it.each(loops)("%s states the one case step 4 does not cover: commit onto an unconsumed diff", (_name, text) => {
+    expect(text).toContain("REFUSED, not held, while an unconsumed");
+  });
+
   // D-130: folder mode is the alternative to a diff, and the static reference doc is
   // the one place an agent following "the documented way" would look for it before it
   // has chosen a mode — found missing here once already, across the change that
@@ -238,6 +246,8 @@ describe("every behaviour a client must know about reaches the texts", () => {
     ["submit", "choose on truth, not on which answer is cheaper (D-73)", "CHOOSE ON WHETHER THE FINDING IS TRUE"],
     ["submit", "a marker at the site is safe now (D-73)", "safe to write at the site"],
     ["attest", "a folder review's line names its scope (D-130)", "scoped to"],
+    ["submit", "commit's tree_hash is checked before anything lands, not after", "before anything is applied or even held"],
+    ["submit", "a commit cannot chain onto an outstanding raw-diff hold", "sent next is REFUSED rather than held"],
   ])("%s tells the client: %s", (tool, _why, needle) => {
     expect(TOOL_DOCS[tool as keyof typeof TOOL_DOCS]).toContain(needle);
   });

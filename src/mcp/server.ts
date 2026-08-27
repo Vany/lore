@@ -1274,7 +1274,10 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           tree_hash: z
             .string()
             .min(1)
-            .describe("git write-tree of the tree you mean — verified after we apply or check out"),
+            .describe(
+              "git write-tree of the tree you mean — for `diff`, verified after we apply it; for `commit`, " +
+                "checked synchronously against the commit's own tree before anything is applied or held",
+            ),
         })
         // EXACTLY ONE, and it is refused here rather than downstream. Both would be two
         // descriptions of a tree that can disagree, and lore would have to pick; neither

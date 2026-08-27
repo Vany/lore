@@ -727,10 +727,11 @@ restated here because this is where a hosted service would be tempted to blur it
 `review_submit` applies the client's diff to the review's private worktree. Nothing
 is committed and nothing is pushed; the client remains the owner of its own history.
 
-**The client sends a `tree_hash` and the server verifies it after applying.** Without
-it, a partial or fuzzy apply leaves the server reviewing code that exists nowhere —
-not in git, not on the client's disk. A mismatch is a hard failure, never a warning:
-reviewing the wrong tree produces confident findings about code no one has.
+**The client sends a `tree_hash` and the server verifies it.** For a `diff`, that
+happens after applying — without it, a partial or fuzzy apply leaves the server
+reviewing code that exists nowhere, not in git, not on the client's disk. A mismatch
+is a hard failure, never a warning: reviewing the wrong tree produces confident
+findings about code no one has. `commit` checks earlier still — see §4.1.
 
 ### 4.1 `commit` — for a session that cannot diff (D-124)
 
@@ -747,8 +748,21 @@ to a sha server-side (`git rev-parse --verify --quiet <ref>^{commit}`) before it
 reach any git argv, and normalised to the equivalent diff exactly once, so every
 other path in this handler — the mid-round hold, the tree-hash check, the
 fix-elsewhere notice — still works on a diff and cannot tell the two shapes apart.
-`tree_hash*` is still required either way: it names the tree the caller means, and
-the server verifies it after applying regardless of which shape produced it.
+
+**`tree_hash*` is checked twice for `commit`, not once.** Unlike a `diff`, whose
+result tree genuinely cannot be known until it is actually applied, a commit's tree
+is knowable directly — `resolved^{tree}` — so a mismatched claim is refused
+synchronously, before anything is applied or held, naming the tree the commit
+actually has (fingerprint 109d9211). What lands after that still goes through the
+same after-applying check every `diff` gets: a verified claim and a verified result
+are not the same guarantee.
+
+**A `commit` cannot chain onto an outstanding `diff` hold.** A held raw diff's
+claimed tree is the client's own local `git write-tree`, never pushed anywhere lore
+can see — resolving it before the round ahead applies it fails as a missing object,
+not an ordinary not-found. Refused by name until that hold is consumed; a second
+`diff` is unaffected (chaining a raw diff is the client's own responsibility), and a
+second `commit` chains correctly once nothing raw is outstanding.
 
 ## 5. Concurrency
 
