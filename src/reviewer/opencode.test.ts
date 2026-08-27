@@ -63,6 +63,8 @@ let providersDown = false;
 let hangPrompt = false;
 /** `DELETE /session/:id`: how long `release`'s cleanup call takes to answer. */
 let deleteDelayMs = 0;
+/** `POST /session`: how long session creation takes — so a test can land a cancel mid-create. */
+let createSessionDelayMs = 0;
 /** Events the fake opencode will publish on `/event`, in order. */
 let pending: unknown[] = [];
 
@@ -143,8 +145,10 @@ function start(): Promise<void> {
           // A refusing opencode answers with a status and no body at all — verified
           // against a password-protected server, which sends a bare 401 with
           // Content-Length: 0.
-          res.writeHead(sessionStatus, { "content-type": "application/json" });
-          res.end(sessionStatus >= 400 ? "" : JSON.stringify(sessionBody));
+          setTimeout(() => {
+            res.writeHead(sessionStatus, { "content-type": "application/json" });
+            res.end(sessionStatus >= 400 ? "" : JSON.stringify(sessionBody));
+          }, createSessionDelayMs);
           return;
         }
         // THE CHANNEL D-91 READS. A real opencode narrates every session here while the
@@ -251,6 +255,7 @@ beforeEach(async () => {
   providersDown = false;
   hangPrompt = false;
   deleteDelayMs = 0;
+  createSessionDelayMs = 0;
   pending = [];
   await start();
 });
@@ -411,17 +416,39 @@ describe("Reviewer.review", () => {
   // characters and still landed 14 over the cap. Re-asking a refusal buys a second
   // refusal and a paid turn.
   it("does not re-ask when the block parsed and the schema refused an item", async () => {
-    const overCap = { ...JSON.parse(FINDING_JSON).findings[0], claim: "x".repeat(4000) };
+    // lore-ok[79bf1e31]: was a SINGLE over-long claim (`'x'.repeat(4000)`) — refused by the
+    // schema until D-116's `foldOverlongClaim` (core/finding.ts) started FOLDING an over-cap
+    // claim instead of refusing it, so this fixture stopped producing a schema refusal at
+    // all: the whole reply parsed and validated, the second scripted reply went unused, and
+    // the one assertion left ("discarded is defined") is true of an empty array too — nothing
+    // here could fail even if a re-ask silently happened.
+    //
+    // A single rejected item is not enough to replace it with, either: `extractList`'s
+    // `out.length === 0 && rejected.length > 0` branch treats a candidate with NOTHING
+    // usable as a whole-reply FAILURE ("a reply where nothing parsed is still a failed
+    // reply"), which DOES retry — the one item sent alone would exercise that branch, not
+    // the one this test names. The block has to parse AND yield something usable BESIDE
+    // the refused item, so it lands in the merge that keeps the good one and reports the
+    // bad one without asking again. The unknown key hits `.strict()` exactly as
+    // `finding.test.ts`'s own "rejects unknown keys rather than dropping them" fixture does.
+    const good = { ...JSON.parse(FINDING_JSON).findings[0], line: 99, claim: "a second, distinct claim" };
+    const stillRefused = { ...JSON.parse(FINDING_JSON).findings[0], confidence: 0.8 };
     replies = [
-      { parts: [{ type: "text", text: "```json\n" + JSON.stringify({ findings: [overCap] }) + "\n```" }] },
+      { parts: [{ type: "text", text: "```json\n" + JSON.stringify({ findings: [good, stillRefused] }) + "\n```" }] },
       { parts: [{ type: "text", text: "```json\n" + FINDING_JSON + "\n```" }] },
     ];
 
-    const result = await reviewer().review(TIER, "review this", "/tmp/wt").catch(() => undefined);
+    const result = await reviewer().review(TIER, "review this", "/tmp/wt");
 
-    // Whatever the outcome, it must not have been reached by the PARSE path: only one
-    // ask, or the ordinary all-rejected retry — never the garbled re-ask.
-    expect(result?.discarded ?? [], "the refusal is reported, not silently re-asked").toBeDefined();
+    expect(result.findings, "the good item is kept").toHaveLength(1);
+    expect(result.findings[0]?.claim).toBe("a second, distinct claim");
+    expect(result.discarded, "the refusal is reported").toHaveLength(1);
+    expect(result.discarded.join(" ")).toMatch(/confidence/);
+    expect(result.retried, "a schema refusal is not a parse failure — no re-ask").toBe(false);
+    expect(
+      captured.filter((c) => c.path.includes("/message") && c.method === "POST"),
+      "exactly one prompt POST — the second scripted reply must go unused",
+    ).toHaveLength(1);
   });
 
   /**
@@ -1037,6 +1064,39 @@ describe("a call that is no longer wanted", () => {
     replies = [{ parts: [{ type: "text", text: '```json\n{"findings":[]}\n```' }] }];
     const r = await reviewer().review(TIER, "review this", "/tmp/wt", "rev1", () => true);
     expect(r.findings).toStrictEqual([]);
+  });
+
+  /**
+   * THE ENTRY CHECK ABOVE ONLY COVERS THE MOMENT BEFORE `run` STARTS. Found by lore's
+   * own review, fingerprint 40b5d6e5: once `Gate.run` stopped queuing behind D-101's
+   * deleted worker pool, the real wait moved INSIDE `run` — `createSession` is a genuine
+   * HTTP round trip, awaited before anything is registered in `sessions`/`kept` — and
+   * nothing re-checked `stillWanted` once it returned. A cancel landing during that
+   * specific await had no session yet for `cancel()` to find, so the freshly-opened
+   * session went on to spend a full prompt nobody would ever read.
+   */
+  it("still spends nothing when the review ends WHILE the session is being created", async () => {
+    replies = [{ parts: [{ type: "text", text: '```json\n{"findings":[]}\n```' }] }];
+    // Long enough that the flip below lands WHILE `POST /session` is still in flight.
+    createSessionDelayMs = 150;
+    let wanted = true;
+    setTimeout(() => {
+      wanted = false;
+    }, 30);
+
+    await expect(
+      reviewer().review(TIER, "review this", "/tmp/wt", "rev1", () => wanted),
+    ).rejects.toThrow(/ended while tier t1 was opening a session — nothing was spent/);
+
+    // THE SESSION OPENCODE ALREADY CREATED IS CLEANED UP, not leaked — it exists on
+    // opencode's side by the time the cancel is noticed, even though lore never used it.
+    expect(captured.some((c) => c.method === "DELETE"), "the orphaned session is deleted").toBe(true);
+    // AND NO PROMPT WAS EVER SENT, which is the entire point of catching it here rather
+    // than only reporting the loss after a full round's worth of quota was already spent.
+    expect(
+      captured.some((c) => c.path.includes("/message") && c.method === "POST"),
+      "quota was never spent on a review that had already ended",
+    ).toBe(false);
   });
 });
 

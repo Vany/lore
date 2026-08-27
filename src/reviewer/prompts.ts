@@ -395,6 +395,17 @@ function knowledgeBlock(items: readonly KnowledgeItem[]): string {
     return `  [${k.source}] ${k.statement}${why}`;
   };
 
+  // lore-ok[cc3354a7]: THE CUT HAPPENS HERE, AND IS SAID HERE. `items` arrives from
+  // `relevantTo` (knowledge/enrich.ts) ranked best-first — taught outranks inferred,
+  // then confidence, then recency — and unsliced; this used to be sliced inside
+  // `relevantTo` itself with nothing said about it, which is the same silent-truncation
+  // shape `settledBlock` below already guards against for findings. This is the one
+  // place that knows both the cap and that a reader is about to receive the result, so
+  // the notice belongs here, in the same words `settledBlock` uses for the same reason.
+  const KNOWLEDGE_CAP = 60;
+  const dropped = Math.max(0, items.length - KNOWLEDGE_CAP);
+  const shown = items.slice(0, KNOWLEDGE_CAP);
+
   // lore-ok[70b88761]: `kind: "fact"` is written in exactly one place — bootstrap's
   // architecture survey, a model's ONE-TIME reading of whichever branch happened to
   // be a repo's first review, unconfirmed by anything (confidence 0.5, the lowest in
@@ -408,8 +419,8 @@ function knowledgeBlock(items: readonly KnowledgeItem[]): string {
   // not a decision — proportionate to what a `fact` actually is: unlike a `policy` or
   // `rule`, nothing can CITE it in an appeal to excuse a finding (D-83); it is
   // background a reviewer weighs, not a directive.
-  const facts = items.filter((k) => k.kind === "fact");
-  const rest = items.filter((k) => k.kind !== "fact");
+  const facts = shown.filter((k) => k.kind === "fact");
+  const rest = shown.filter((k) => k.kind !== "fact");
 
   const parts: string[] = [];
   if (rest.length > 0) {
@@ -417,7 +428,7 @@ function knowledgeBlock(items: readonly KnowledgeItem[]): string {
       "",
       "WHAT THIS CODEBASE ALREADY KNOWS ABOUT ITSELF",
       "Taught rules outrank inferred ones. Treat these as this team's decisions, not suggestions.",
-      ...rest.slice(0, 60).map(line),
+      ...rest.map(line),
     );
   }
   if (facts.length > 0) {
@@ -427,7 +438,14 @@ function knowledgeBlock(items: readonly KnowledgeItem[]): string {
       "A model's own reading of this repository, taken once, on whichever branch got reviewed first — not a" +
         " team decision and not corroborated by anything since. Weigh it, do not treat it as settled, and say so" +
         " if a finding turns on one of these being true.",
-      ...facts.slice(0, 60).map(line),
+      ...facts.map(line),
+    );
+  }
+  if (dropped > 0) {
+    parts.push(
+      "",
+      `  … and ${String(dropped)} more relevant item(s), not listed here. Ranked best-first — taught outranks` +
+        " inferred, then confidence, then recency — so these are the ones least likely to matter.",
     );
   }
   return parts.join("\n");

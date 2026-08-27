@@ -561,14 +561,22 @@ export class Reviewer implements ReviewerLike {
   }
 
   /**
-   * The last free moment: a slot has been won, nothing has been created or sent yet.
+   * The last free moment before the shared gate counts this call — which, since D-101
+   * deleted the worker pool `Gate.run` used to queue behind, is now a scheduling gap
+   * rather than a real wait: nothing here holds a session, because the session does not
+   * exist until `conductSession` runs, so a cancel landing in the moment between a
+   * round dispatching several calls (a rung, D-109) and this one's own turn reaching the
+   * gate is still worth catching before `run` spends anything.
    *
-   * A call can wait a long time at the provider gate — that is what the gate is for —
-   * and it holds no session while it waits, because the session does not exist until
-   * `conductSession` runs. So `cancel` finds nothing to abort and truthfully reports
-   * nothing in flight, and then the slot frees and the queued call spends anyway on a
-   * review somebody ended. Asking here closes that window for BOTH callers, which is why
-   * it lives at the one point they share rather than in each of them.
+   * lore-ok[40b5d6e5]: this docblock used to describe a LONGER wait — "a call can wait
+   * a long time at the provider gate, that is what the gate is for" — which was true
+   * before D-101 and is not now (`gate.ts`: "everything admitted STARTS AT ONCE").
+   * Found by lore's own review: the real remaining gap is not here at all, it is
+   * `createSession`'s own await inside `conductSession` — a genuine network round trip,
+   * checked nowhere between this entry check and the session's registration into
+   * `sessions`/`kept`. That gap has its own check, at the one place it can act on a
+   * fresh session it just opened; this one still guards the (now much narrower) window
+   * it always could.
    */
   private guard<T>(reviewId: string | undefined, stillWanted: (() => boolean) | undefined, run: () => Promise<T>) {
     return this.gate.run(() => {
@@ -612,7 +620,7 @@ export class Reviewer implements ReviewerLike {
     // would bound nothing. Waiting here queues the round instead of failing it, which
     // is the same trade as backpressure: a review that dies on a 429 did not run.
     const r = await this.guard(reviewId, stillWanted, () =>
-      this.conductSession<Finding>(tier, prompt, worktree, reviewId, findingsOf, OUTPUT_CONTRACT),
+      this.conductSession<Finding>(tier, prompt, worktree, reviewId, findingsOf, OUTPUT_CONTRACT, false, stillWanted),
     );
     return { ...r, findings: r.items, discarded: r.rejected };
   }
@@ -646,7 +654,7 @@ export class Reviewer implements ReviewerLike {
   ): Promise<SessionResult<T>> {
     if (tier.model === undefined) throw new DidNotRun(`tier ${tier.id} has no model`);
     return this.guard(reviewId, stillWanted, () =>
-      this.conductSession<T>(tier, prompt, worktree, reviewId, extract, contract),
+      this.conductSession<T>(tier, prompt, worktree, reviewId, extract, contract, false, stillWanted),
     );
   }
 
@@ -797,6 +805,8 @@ export class Reviewer implements ReviewerLike {
      * worse than the cold start it was avoiding. So: forget, start cold, once.
      */
     noResume = false,
+    /** Re-checked once `createSession` returns — see the `40b5d6e5` comment below. */
+    stillWanted?: () => boolean,
   ): Promise<SessionResult<T>> {
     const started = Date.now();
     // SUBSCRIBED BEFORE THE SESSION EXISTS, not after. The stream takes a moment to
@@ -818,6 +828,19 @@ export class Reviewer implements ReviewerLike {
       : (this.kept.get(keptKey) ?? this.cfg.keptSessions?.get(keptKey));
     const resumedFromStore = continuing !== undefined && !this.kept.has(keptKey ?? "");
     const sessionId = continuing ?? (await this.createSession(tier));
+    // lore-ok[40b5d6e5]: THE GAP `guard` NO LONGER COVERS. `createSession` is a real
+    // HTTP round trip to opencode, awaited above — and until this line returns, nothing
+    // is registered in `sessions`/`kept`, so a `cancel()` landing during that await finds
+    // nothing to abort and truthfully reports so, while the freshly-opened session goes
+    // on to spend a full prompt (up to the review's own deadline) that nobody will ever
+    // read. Only for a FRESH session: `continuing !== undefined` spent no await getting
+    // here, so `guard`'s own entry check is still current for it.
+    if (continuing === undefined && stillWanted?.() === false) {
+      await this.client.session.delete({ path: { id: sessionId } }).catch(() => undefined);
+      throw new DidNotRun(
+        `review ${reviewId ?? "?"} was ended while tier ${tier.id} was opening a session — nothing was spent on it.`,
+      );
+    }
     if (keptKey !== undefined && continuing === undefined) {
       this.kept.set(keptKey, sessionId);
       // WRITTEN WHEN THE SESSION IS OPENED, not when the round ends. A round that dies
@@ -943,7 +966,7 @@ export class Reviewer implements ReviewerLike {
         }
         this.aborters.delete(sessionId);
         this.watchers.delete(sessionId);
-        return await this.conductSession(tier, prompt, worktree, reviewId, extract, contract, true);
+        return await this.conductSession(tier, prompt, worktree, reviewId, extract, contract, true, stillWanted);
       }
       // UNRECOVERABLE, so it leaves as something the ladder has a rule for. `SessionGone`
       // is ours and nothing above knows it; `DidNotRun` says exactly what happened and is

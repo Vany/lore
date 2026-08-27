@@ -226,6 +226,35 @@ describe("a bootstrap fact is not a team decision", () => {
   });
 });
 
+// Found by lore's own review, fingerprint cc3354a7: `relevantTo` (knowledge/enrich.ts)
+// used to cap its result at 60 items INSIDE itself, silently — the tail past the cap
+// simply never reached the prompt, with nothing said about it, unlike every other cut
+// list in this file (`settledBlock`, below, announces its own). A folder review (D-130)
+// widens the candidate pool a lot further than a diff ever does, which is exactly where
+// a repo with a genuinely large rule set would run past 60 and lose the tail without a trace.
+describe("knowledgeBlock announces what it cuts", () => {
+  const items = (n: number): KnowledgeItem[] =>
+    Array.from({ length: n }, (_, i) => ({
+      id: `k${String(i)}`, repoId: "r", kind: "rule", source: "taught",
+      statement: `rule number ${String(i)}`, why: undefined, path: undefined,
+      cwe: undefined, provenance: undefined, sourceBlob: undefined, confidence: 1,
+      verifiedAt: "2026-08-01T00:00:00.000Z",
+    }));
+
+  it("says nothing about a cut when everything shown fits", () => {
+    const p = flat(promptAt(0, 3, CODE_ARCH, { knowledge: items(60) }));
+    expect(p, "the last of exactly 60 is still shown").toMatch(/rule number 59/);
+    expect(p, "nothing was left out, so nothing is announced").not.toMatch(/more relevant item/);
+  });
+
+  it("names how many were left out once the list runs past the cap", () => {
+    const p = flat(promptAt(0, 3, CODE_ARCH, { knowledge: items(65) }));
+    expect(p, "the first 60 are shown").toMatch(/rule number 59/);
+    expect(p, "the tail past the cap is not silently dropped").not.toMatch(/rule number 60/);
+    expect(p).toMatch(/and 5 more relevant item\(s\), not listed here/);
+  });
+});
+
 describe("what the ladder still guarantees", () => {
   // A tier's position is information (D-31) and reporting less must not blur it.
   it("still tells the last tier it is the last", () => {

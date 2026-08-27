@@ -187,18 +187,25 @@ export function relevantTo(
   store: Store,
   repoId: string,
   changedFiles: readonly string[],
-  limit = 60,
 ): readonly KnowledgeItem[] {
   // lore-ok[aa57c0f2]: was capped at 1000 with no ordering — found by lore's own
-  // review. `rank().slice(0, limit)` below already does the real narrowing (taught
-  // outranks inferred, then confidence, then recency); truncating the candidate pool
-  // BEFORE that by an arbitrary row count could drop the most relevant rule in a
-  // repo past the cap before ranking ever saw it.
+  // review. `rank()` below already does the real narrowing (taught outranks inferred,
+  // then confidence, then recency); truncating the candidate pool BEFORE that by an
+  // arbitrary row count could drop the most relevant rule in a repo past the cap
+  // before ranking ever saw it.
+  //
+  // lore-ok[cc3354a7]: UNSLICED, now — the cap used to be applied here, silently, which
+  // is what the finding actually named (the rendered prompt truncates without saying
+  // so; this function ranking-then-cutting internally is only how that silence reached
+  // here first). `knowledgeBlock` (reviewer/prompts.ts) is the one place a cut can be
+  // announced to the reader it is cut FOR, matching `settledBlock`'s own pattern in the
+  // same file — so this returns every ranked candidate, best-first, and the cap moved
+  // there with it.
   const all = store.knowledgeFor(repoId, undefined, NO_LIMIT);
   // lore-ok[372b6bf0,f9559e98]: was a raw `startsWith`, found wrong by lore's own
   // review — see `scopesOverlap`'s own docs (`conflict.ts`), which this now shares.
   // `"src/payroll/adapter.ts".startsWith("src/pay")` is true, so a rule scoped to
   // `src/pay` was handed to every review of `src/payroll/**` as a team decision.
   const chosen = all.filter((k) => k.kind !== "policy" && (k.path === undefined || changedFiles.some((f) => scopesOverlap(f, k.path))));
-  return rank(chosen).slice(0, limit);
+  return rank(chosen);
 }
