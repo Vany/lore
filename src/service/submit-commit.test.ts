@@ -27,6 +27,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { initialState } from "../core/ladder.ts";
+import { applyPatch } from "../git/repo.ts";
 import { grantToken } from "../mcp/auth.ts";
 import { DEFAULT_HEARTBEAT } from "../ops/heartbeat.ts";
 import { Store } from "../store/store.ts";
@@ -264,6 +265,120 @@ describe("review_submit with a pushed commit instead of a diff", () => {
     expect(held[1]?.diff, "diffed against fix 1's own result").toContain("-b");
     expect(held[1]?.diff).toContain("+c");
     expect(held[1]?.diff, "must not restate fix 1's own change too").not.toMatch(/^-a$/m);
+  });
+
+  /**
+   * TWO OVERLAPPING SUBMITS, not just two sequential ones — the narrower race the
+   * test above cannot see (found by lore's own review, fingerprint 015cd8d0).
+   * Reading the held chain's head and inserting the new hold are separated by real
+   * async work (`revParse`, `treeDelta`); without serializing commit-form submits
+   * per review, two requests that both start before either has held anything would
+   * both read an empty chain and both build from the same stale base — the
+   * identical silently-dropped-chain shape, reopened through concurrency instead
+   * of sequencing.
+   */
+  it("still chains correctly when two commit-form submits for the same review overlap", async () => {
+    const pinned = treeNow();
+    const repoId = store.upsertRepo("demo", "git@x:demo.git").id;
+    store.createReview({
+      id: "revRace", repoId, principal: "alice",
+      branch: "feat/x", intoRef: "main", ticket: "t", type: "code-arch",
+      state: "running", ladder: { ...initialState(), round: 5 }, treeHash: pinned,
+    });
+    store.enqueue("revRace", "fast");
+
+    // Two REAL, connected commits, kept linear exactly like the sequential test
+    // above — a chained hold only makes sense that way. What THIS test adds is
+    // firing both requests together, neither awaited before the other starts.
+    writeFileSync(join(worktree, "f.txt"), "b\n");
+    g("add", "-A");
+    g("commit", "-qm", "fix 1");
+    const commit1 = g("rev-parse", "HEAD");
+    const tree1 = treeNow();
+
+    writeFileSync(join(worktree, "f.txt"), "c\n");
+    g("add", "-A");
+    g("commit", "-qm", "fix 2");
+    const commit2 = g("rev-parse", "HEAD");
+    const tree2 = treeNow();
+
+    g("reset", "--hard", "HEAD~2");
+    g("clean", "-fd");
+
+    const [respA, respB] = await Promise.all([
+      callTool("review_submit", { review_id: "revRace", commit: commit1, tree_hash: tree1 }),
+      callTool("review_submit", { review_id: "revRace", commit: commit2, tree_hash: tree2 }),
+    ]);
+    expect(respA.body["status"], JSON.stringify(respA.body)).toBe("held");
+    expect(respB.body["status"], JSON.stringify(respB.body)).toBe("held");
+
+    const held = store.heldDiffs("revRace");
+    expect(held, "both held").toHaveLength(2);
+    const [row0, row1] = held;
+    if (row0 === undefined || row1 === undefined) throw new Error("unreachable: asserted length 2 above");
+
+    // THE CHAINING INVARIANT ITSELF, verified directly rather than assumed to hold
+    // in whichever order the lock actually processed the two requests: applying
+    // the SECOND row's own diff to a tree checked out at the FIRST row's own
+    // claimed tree must reproduce the second row's own claimed tree exactly. An
+    // unserialized race could not guarantee this regardless of which commit
+    // happened to reach the lock first.
+    g("read-tree", "--reset", "-u", row0.treeHash);
+    await applyPatch(worktree, row1.diff);
+    const resultTree = treeNow();
+    expect(resultTree, "row 2's diff, applied to row 1's own tree, reproduces row 2's own claimed tree").toBe(row1.treeHash);
+  });
+
+  /**
+   * A RAW-DIFF HOLD'S TREE IS A CLAIM, NOT AN OBJECT LORE CAN DIFF AGAINST (found by
+   * lore's own review, fingerprint 2889d85b). Its `tree_hash` is the CALLER's own
+   * local `git write-tree`, never pushed anywhere lore's repository can see — using
+   * it as a later commit-form submit's base would send `git diff` an object that does
+   * not exist, "fatal: bad object", which — unhandled — surfaces as the IDENTICAL
+   * "cannot see commit" message a genuinely-unpushed commit gets: a client told to
+   * push something that is already pushed, which it will retry forever.
+   */
+  it("refuses a commit-form submit rather than diffing against an unverified raw hold", async () => {
+    const pinned = treeNow();
+    const repoId = store.upsertRepo("demo", "git@x:demo.git").id;
+    store.createReview({
+      id: "revMixed", repoId, principal: "alice",
+      branch: "feat/x", intoRef: "main", ticket: "t", type: "code-arch",
+      state: "running", ladder: { ...initialState(), round: 5 }, treeHash: pinned,
+    });
+    store.enqueue("revMixed", "fast");
+
+    // A RAW diff, with a CLAIMED tree lore's own repository has genuinely never
+    // seen — matching a real client's `write-tree` on their OWN separate clone. NOT
+    // `treeNow()`: that runs `git write-tree` in this SAME repository the service
+    // itself reads, which would actually CREATE the object here and defeat the
+    // point — a syntactically valid hash (the right length, `OBJECT_ID`) that
+    // nothing in this test ever writes is what a genuinely unseen claim looks like.
+    writeFileSync(join(worktree, "f.txt"), "b\n");
+    const rawDiff = g("diff");
+    g("checkout", "--", "f.txt");
+    const rawTree = "b".repeat(40);
+
+    const heldRaw = await callTool("review_submit", { review_id: "revMixed", diff: rawDiff, tree_hash: rawTree });
+    expect(heldRaw.body["status"], JSON.stringify(heldRaw.body)).toBe("held");
+
+    // A commit-form submit arrives next, while the raw hold above is still unapplied.
+    writeFileSync(join(worktree, "g.txt"), "x\n");
+    g("add", "-A");
+    g("commit", "-qm", "fix 2");
+    const commit2 = g("rev-parse", "HEAD");
+    const tree2 = treeNow();
+    g("reset", "--hard", "HEAD~1");
+    g("clean", "-fd");
+
+    const { body, isError } = await callTool("review_submit", { review_id: "revMixed", commit: commit2, tree_hash: tree2 });
+
+    expect(isError || body["error"] !== undefined, JSON.stringify(body)).toBe(true);
+    expect(JSON.stringify(body)).toMatch(/HELD raw diff whose claimed tree lore has never fetched/);
+    // NEVER the misleading "push it to origin" message a genuinely-missing commit
+    // gets — commit2 IS reachable; the problem is what it would have to be diffed
+    // against, not whether lore can see commit2 itself.
+    expect(JSON.stringify(body)).not.toMatch(/Push it to origin/);
   });
 
   it("refuses cleanly rather than guessing when neither a stored tree nor a safe live one is available", async () => {

@@ -23,7 +23,7 @@ import { SHORT_LENGTH } from "../core/fingerprint.ts";
 import { isSuppressionNotice } from "../core/checks-skipped.ts";
 import { DEFAULT_TYPE, reviewType, reviewTypeIds } from "../core/review-type.ts";
 import { STALE_GRACE_DAYS, STALE_HOURS } from "../ops/retention.ts";
-import { applyPatch, restoreTree, revParse, treeDelta, treeHash } from "../git/repo.ts";
+import { applyPatch, restoreTree, revParse, treeDelta, treeHash, treeObjectExists } from "../git/repo.ts";
 import { filesInDiff } from "../git/diff.ts";
 import { requestMirrorRefresh, type RefreshOutcome } from "../git/mirror-request.ts";
 import { dataDir } from "../core/paths.ts";
@@ -68,6 +68,32 @@ export interface ServerDeps {
 }
 
 const text = (s: string) => ({ content: [{ type: "text" as const, text: s }] });
+
+/**
+ * ONE `review_submit` AT A TIME, PER REVIEW (found by lore's own review, fingerprint
+ * 015cd8d0). Deciding a commit-form submit's base (`store.heldDiffs`) and recording its
+ * own hold (`store.holdDiff`) are separated by real async work — `revParse`, sometimes a
+ * mirror refresh, `treeDelta` — so two OVERLAPPING submits for the SAME review could both
+ * read an empty held chain and both build from the same stale `review.treeHash`: the
+ * exact silently-dropped-chain shape this file's `at` fix exists to prevent, reopened
+ * through a wider window than the sequential-submit one it closed. Same promise-chained
+ * mutex shape `withHoldLock` (reviewer/review.ts) already uses for the identical class of
+ * problem — a `Map` here rather than a per-call local, because this lock has to outlive
+ * one `review_submit` call and be found again by the next one for the same review.
+ */
+const submitLocks = new Map<string, Promise<unknown>>();
+function withSubmitLock<T>(reviewId: string, fn: () => Promise<T>): Promise<T> {
+  const prior = submitLocks.get(reviewId) ?? Promise.resolve();
+  const next = prior.then(fn);
+  // ALWAYS RESOLVED, whatever `fn` did — the NEXT caller's own `prior.then(fn)` needs a
+  // settled promise to chain onto; storing a rejected one here would skip every later
+  // submit's `fn` entirely (`.then(onFulfilled)` with no rejection handler propagates a
+  // rejection through untouched), wedging this review's submits on the first failure.
+  // `next` itself is returned unwrapped below, so THIS call's own caller still sees
+  // whatever `fn` actually did.
+  submitLocks.set(reviewId, next.catch(() => undefined));
+  return next;
+}
 
 /**
  * What to tell a client that has nothing to do but wait, or `{}` when it does.
@@ -1313,222 +1339,262 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       // the retry ever refreshed anything. The doc text this shipped with said "lore syncs
       // with origin and works out the delta itself", which was true of the diff computed
       // AFTER resolution and false of the resolution itself.
-      let patch = diff;
-      if (commit !== undefined) {
-        // RESOLVED TO A SHA BEFORE IT REACHES GIT'S ARGV, and this is not tidiness.
-        //
-        // A client-supplied string went verbatim into `git diff <tree> <commit>`, and git
-        // parses an argument beginning with `-` as an OPTION rather than a ref. So
-        // a `--output=` pointed at the service's own database file made git write the diff
-        // straight over it — an arbitrary-file-write primitive handed to every token holder,
-        // from a review tool call, against the knowledge base that IS the product. (The
-        // path is not spelled here: `one-definition.test.ts` refuses a hand-built database
-        // path anywhere in the source, and it is right to refuse one in prose too.) It also breaks
-        // D-61 outright: git must never be aimed outside the directory it was given.
-        //
-        // `rev-parse --verify --quiet <ref>^{commit}` is the pattern `addWorktree` already
-        // uses for a client-supplied branch, and it answers both questions at once: an
-        // option is not a commit-ish, so it resolves to nothing and is refused by name;
-        // anything that does resolve comes back as a 40-character sha, which cannot be an
-        // option whatever the caller wrote. Everything downstream sees only that sha.
-        let resolved = await revParse(worktree, commit);
-        // MISSING → REFRESH → RE-RESOLVE, never the other order. Gated on `fetched` so a
-        // refresh that did not actually run (host busy, no daemon) does not spend a second
-        // git call re-asking a question that cannot have a new answer.
-        let refreshed: RefreshOutcome | undefined;
-        if (resolved === undefined) {
-          refreshed = await requestMirrorRefresh(dataDir()).catch(() => undefined);
-          if (refreshed?.fetched === true) resolved = await revParse(worktree, commit);
-        }
-        if (resolved === undefined) {
-          // NOT FETCHED IS NOT THE SAME CLAIM AS FETCHED-AND-STILL-ABSENT (D-100's
-          // pattern, `addWorktree`). Collapsing them into one sentence told a caller
-          // whose refresh never ran — daemon down, host busy — the same "it is
-          // genuinely not there" story as a caller whose refresh ran clean and found
-          // nothing; the first case means lore's view of origin may simply be stale,
-          // which `refreshed.why` says and this message used to discard.
+      // ONE SUBMIT AT A TIME FOR THIS REVIEW, from here through the hold decision —
+      // see `withSubmitLock`'s own docblock, fingerprint 015cd8d0. `patch` is decided
+      // inside the lock and returned out through the discriminated result below rather
+      // than left as an outer `let` a nested callback mutates by closure: TypeScript
+      // does not narrow a `let` across an `await` boundary reliably, and the
+      // "unreachable" check a few lines down needs `patch` provably defined on the way
+      // out — a discriminated union gives it that for free.
+      const submitted = await withSubmitLock(
+        review_id,
+        async (): Promise<{ readonly kind: "held" } | { readonly kind: "apply"; readonly patch: string }> => {
+          let patch = diff;
+          if (commit !== undefined) {
+            // RESOLVED TO A SHA BEFORE IT REACHES GIT'S ARGV, and this is not tidiness.
+            //
+            // A client-supplied string went verbatim into `git diff <tree> <commit>`, and git
+            // parses an argument beginning with `-` as an OPTION rather than a ref. So
+            // a `--output=` pointed at the service's own database file made git write the diff
+            // straight over it — an arbitrary-file-write primitive handed to every token holder,
+            // from a review tool call, against the knowledge base that IS the product. (The
+            // path is not spelled here: `one-definition.test.ts` refuses a hand-built database
+            // path anywhere in the source, and it is right to refuse one in prose too.) It also breaks
+            // D-61 outright: git must never be aimed outside the directory it was given.
+            //
+            // `rev-parse --verify --quiet <ref>^{commit}` is the pattern `addWorktree` already
+            // uses for a client-supplied branch, and it answers both questions at once: an
+            // option is not a commit-ish, so it resolves to nothing and is refused by name;
+            // anything that does resolve comes back as a 40-character sha, which cannot be an
+            // option whatever the caller wrote. Everything downstream sees only that sha.
+            let resolved = await revParse(worktree, commit);
+            // MISSING → REFRESH → RE-RESOLVE, never the other order. Gated on `fetched` so a
+            // refresh that did not actually run (host busy, no daemon) does not spend a second
+            // git call re-asking a question that cannot have a new answer.
+            let refreshed: RefreshOutcome | undefined;
+            if (resolved === undefined) {
+              refreshed = await requestMirrorRefresh(dataDir()).catch(() => undefined);
+              if (refreshed?.fetched === true) resolved = await revParse(worktree, commit);
+            }
+            if (resolved === undefined) {
+              // NOT FETCHED IS NOT THE SAME CLAIM AS FETCHED-AND-STILL-ABSENT (D-100's
+              // pattern, `addWorktree`). Collapsing them into one sentence told a caller
+              // whose refresh never ran — daemon down, host busy — the same "it is
+              // genuinely not there" story as a caller whose refresh ran clean and found
+              // nothing; the first case means lore's view of origin may simply be stale,
+              // which `refreshed.why` says and this message used to discard.
+              //
+              // AND `fetched: true` IS ITSELF NOT "SUCCEEDED" — found by lore's own t2 against
+              // this exact fix. `mirror-refresh.sh`'s `serve_requests` deletes the request (the
+              // only signal `fetched` reads) once `one_pass` RETURNS, whatever it returned: a
+              // per-repo fetch failure inside that pass — network down, an expired credential —
+              // is logged to `mirror.log` and nowhere else, discarded rather than threaded back
+              // through the file-based protocol. `RefreshOutcome` has no third state to carry
+              // it (TODO.md: needs the daemon to report per-repo, not per-pass). So `fetched:
+              // true` here means "a pass completed", not "this repository's fetch succeeded" —
+              // shared with `addWorktree`'s identical claim, softened there too, same commit.
+              throw new Error(
+                `lore cannot see commit ${commit} for ${review_id}. ` +
+                  (refreshed?.fetched === true
+                    ? "lore's mirror daemon completed a sync pass since asking. Most likely the string is not a real " +
+                      "commit-ish, or was not pushed to this repository — but a single repository's fetch CAN fail " +
+                      "inside a completed pass without lore seeing it (the daemon does not yet report per-repo results), " +
+                      "so if you are confident this was pushed here, check `mirror.log` on the lore host before assuming " +
+                      "the commit is wrong."
+                    : `lore could not confirm a fresh sync first (${refreshed?.why ?? "no sync was attempted"}), so its ` +
+                      "view of origin may be behind — report that rather than assuming the commit is wrong.") +
+                  " (If that string was not meant as a commit, it is refused for that reason too: only a commit-ish is " +
+                  "accepted here.)",
+              );
+            }
+            // THE STORED TREE, NOT A FRESH SNAPSHOT — raised by lore's own t2 at high, and the
+            // fix is not a lock, it is not needing one.
+            //
+            // `treeHash(worktree)` is `git add -A` followed by `write-tree`: it MUTATES the
+            // index, taking the same lock a round's own periodic re-hashing takes on this
+            // shared worktree (`withHoldLock` in `runRound`, D-107, D-109). Calling it HERE,
+            // before the pending-round check below has run, raced that lock — and when the
+            // round's own hash lost, it threw something that was not a route fault, so the
+            // tier's catch rethrew it and the WHOLE REVIEW failed. A submit that merely asked
+            // "what changed" was able to kill a round it never touched.
+            //
+            // `review.treeHash` is the review's OWN record of what its worktree currently
+            // represents, written back on every prior submit and round boundary — the same
+            // value D-40's pin discipline already treats as authoritative. Reading it is a
+            // SQLite query, not a filesystem write, so it cannot collide with anything the
+            // round is doing. `treeDelta` itself was never the hazard: `git diff <tree>
+            // <tree>` reads two committed objects and touches no index at all.
+            //
+            // Falls back to a live snapshot only when no tree has been recorded yet, which a
+            // review reaching `review_submit` should not be able to reach — `findings exist`
+            // is the tool's own precondition, and findings imply a completed round, which
+            // always writes this field. Guarded by the pending-round check that already exists
+            // below, so the rare fallback carries no less safety than the normal diff path did.
+            //
+            // THE HELD CHAIN'S OWN HEAD, FIRST — found live, not by a tier, when a second
+            // commit-form submit silently never landed. `heldDiffs`' own docblock states the
+            // assumption this violated: "each was built by the client on top of the one
+            // before" — true for the `diff` form, where the CLIENT computes each successive
+            // patch against their own prior one. False for this, the `commit` form (D-124):
+            // LORE computes the patch, from `review.treeHash` alone, which `holdDiff`
+            // deliberately does NOT advance ("NO BOUNDS RESET HERE" — a round applies it once,
+            // at its own boundary). A second commit-form submit arriving while the first is
+            // still held was therefore built from the SAME base as the first, not from what
+            // the first's own hold claims it will produce — so applying both in sequence
+            // (`consumeHeldDiffs`) landed the second on a tree it never diffed against, failed
+            // its hash check, and the whole held chain was dropped: `awaiting_diff`, with the
+            // review parked at whichever commit-form submit landed FIRST, silently discarding
+            // every one after it. Observed directly: a round-9 fix held, a round-10 fix
+            // submitted minutes later while it was still held, and round 10 never landed —
+            // `awaiting_diff` an hour later with no diagnosis anywhere in the response.
+            const heldChain = store.heldDiffs(review_id);
+            const heldHead = heldChain[heldChain.length - 1];
+            // A RAW-DIFF HOLD'S TREE IS A CLIENT CLAIM, NOT YET AN OBJECT — found by
+            // lore's own review, fingerprint 2889d85b, reading the fix above. The raw
+            // `diff` form's `tree_hash` is the CALLER's own local `git write-tree`, never
+            // pushed anywhere lore can see (the schema says so: "verified after we apply
+            // or check out") — so using it as `at` here would send `treeDelta` an object
+            // that does not exist in this repository, and `git diff` dies "fatal: bad
+            // object" rather than the ordinary "commit not found" the ERROR MESSAGE below
+            // is written for. Refused by name instead: a commit-form submit genuinely
+            // cannot compute a safe delta until the round ahead of it actually applies
+            // that raw diff and `review.treeHash` catches up to reflect it for real.
+            if (heldHead !== undefined && !(await treeObjectExists(worktree, heldHead.treeHash))) {
+              throw new Error(
+                `${review_id} has a HELD raw diff whose claimed tree lore has never fetched — that tree only ` +
+                  "becomes a real object once the round ahead of this submit actually applies it, which has not " +
+                  "happened yet. A commit-form submit cannot safely compute a delta against an unverified claim. " +
+                  "Poll until that hold is consumed (the review leaves 'held' — findings or a state change " +
+                  "arrives), then send this commit again; review.treeHash will then reflect the applied result " +
+                  "and the delta will resolve correctly. If you are the same session that submitted the raw diff " +
+                  "and already know the tree it targets, you can also send this fix as a raw `diff` built on that.",
+              );
+            }
+            const at =
+              heldHead?.treeHash ??
+              review.treeHash ??
+              (store.hasPendingRound(review_id)
+                ? undefined
+                : await treeHash(worktree));
+            if (at === undefined) {
+              throw new Error(
+                `${review_id} has no recorded tree yet and a round is currently reading its worktree, so the ` +
+                  "commit form cannot compute a delta safely right now. Poll and try again once the round parks, " +
+                  "or send `diff` instead.",
+              );
+            }
+            patch = await treeDelta(worktree, at, resolved).catch((e: unknown) => {
+              throw new Error(
+                `lore cannot see commit ${commit} for ${review_id}: ${e instanceof Error ? e.message : String(e)}. ` +
+                  "Push it to origin and call again — lore reviews what origin has, never a working copy.",
+              );
+            });
+            // AN EMPTY DELTA IS NOT A SUBMIT. The worktree already IS that tree, so there is
+            // nothing to review and the hash check below would pass trivially — a call that
+            // looked like work and did none, which is the shape D-114's bounds reset was
+            // abused by. Said plainly instead.
+            if (patch.trim() === "") {
+              throw new Error(
+                `commit ${commit} is the tree this review already has, so there is nothing to submit. If you meant ` +
+                  "to hand over new work, push it first; if you meant that you have no more to give, poll instead.",
+              );
+            }
+          }
+
+          // UNREACHABLE, and it says so rather than being typed away. The schema refuses a
+          // call carrying neither, so arriving here is a programming error — and this project
+          // does not let a scaffolded path continue quietly.
+          if (patch === undefined) {
+            throw new Error(
+              `internal: review_submit for ${review_id} reached the apply path with neither a diff nor a commit; ` +
+                "the input schema should have refused this call.",
+            );
+          }
+
+          // REFUSED while a round is pending, because the next line writes into the
+          // directory that round reads (D-55).
           //
-          // AND `fetched: true` IS ITSELF NOT "SUCCEEDED" — found by lore's own t2 against
-          // this exact fix. `mirror-refresh.sh`'s `serve_requests` deletes the request (the
-          // only signal `fetched` reads) once `one_pass` RETURNS, whatever it returned: a
-          // per-repo fetch failure inside that pass — network down, an expired credential —
-          // is logged to `mirror.log` and nowhere else, discarded rather than threaded back
-          // through the file-based protocol. `RefreshOutcome` has no third state to carry
-          // it (TODO.md: needs the daemon to report per-repo, not per-pass). So `fetched:
-          // true` here means "a pass completed", not "this repository's fetch succeeded" —
-          // shared with `addWorktree`'s identical claim, softened there too, same commit.
-          throw new Error(
-            `lore cannot see commit ${commit} for ${review_id}. ` +
-              (refreshed?.fetched === true
-                ? "lore's mirror daemon completed a sync pass since asking. Most likely the string is not a real " +
-                  "commit-ish, or was not pushed to this repository — but a single repository's fetch CAN fail " +
-                  "inside a completed pass without lore seeing it (the daemon does not yet report per-repo results), " +
-                  "so if you are confident this was pushed here, check `mirror.log` on the lore host before assuming " +
-                  "the commit is wrong."
-                : `lore could not confirm a fresh sync first (${refreshed?.why ?? "no sync was attempted"}), so its ` +
-                  "view of origin may be behind — report that rather than assuming the commit is wrong.") +
-              " (If that string was not meant as a commit, it is refused for that reason too: only a commit-ish is " +
-              "accepted here.)",
-          );
-        }
-        // THE STORED TREE, NOT A FRESH SNAPSHOT — raised by lore's own t2 at high, and the
-        // fix is not a lock, it is not needing one.
-        //
-        // `treeHash(worktree)` is `git add -A` followed by `write-tree`: it MUTATES the
-        // index, taking the same lock a round's own periodic re-hashing takes on this
-        // shared worktree (`withHoldLock` in `runRound`, D-107, D-109). Calling it HERE,
-        // before the pending-round check below has run, raced that lock — and when the
-        // round's own hash lost, it threw something that was not a route fault, so the
-        // tier's catch rethrew it and the WHOLE REVIEW failed. A submit that merely asked
-        // "what changed" was able to kill a round it never touched.
-        //
-        // `review.treeHash` is the review's OWN record of what its worktree currently
-        // represents, written back on every prior submit and round boundary — the same
-        // value D-40's pin discipline already treats as authoritative. Reading it is a
-        // SQLite query, not a filesystem write, so it cannot collide with anything the
-        // round is doing. `treeDelta` itself was never the hazard: `git diff <tree>
-        // <tree>` reads two committed objects and touches no index at all.
-        //
-        // Falls back to a live snapshot only when no tree has been recorded yet, which a
-        // review reaching `review_submit` should not be able to reach — `findings exist`
-        // is the tool's own precondition, and findings imply a completed round, which
-        // always writes this field. Guarded by the pending-round check that already exists
-        // below, so the rare fallback carries no less safety than the normal diff path did.
-        //
-        // THE HELD CHAIN'S OWN HEAD, FIRST — found live, not by a tier, when a second
-        // commit-form submit silently never landed. `heldDiffs`' own docblock states the
-        // assumption this violated: "each was built by the client on top of the one
-        // before" — true for the `diff` form, where the CLIENT computes each successive
-        // patch against their own prior one. False for this, the `commit` form (D-124):
-        // LORE computes the patch, from `review.treeHash` alone, which `holdDiff`
-        // deliberately does NOT advance ("NO BOUNDS RESET HERE" — a round applies it once,
-        // at its own boundary). A second commit-form submit arriving while the first is
-        // still held was therefore built from the SAME base as the first, not from what
-        // the first's own hold claims it will produce — so applying both in sequence
-        // (`consumeHeldDiffs`) landed the second on a tree it never diffed against, failed
-        // its hash check, and the whole held chain was dropped: `awaiting_diff`, with the
-        // review parked at whichever commit-form submit landed FIRST, silently discarding
-        // every one after it. Observed directly: a round-9 fix held, a round-10 fix
-        // submitted minutes later while it was still held, and round 10 never landed —
-        // `awaiting_diff` an hour later with no diagnosis anywhere in the response.
-        const heldChain = store.heldDiffs(review_id);
-        const at =
-          heldChain[heldChain.length - 1]?.treeHash ??
-          review.treeHash ??
-          (store.hasPendingRound(review_id)
-            ? undefined
-            : await treeHash(worktree));
-        if (at === undefined) {
-          throw new Error(
-            `${review_id} has no recorded tree yet and a round is currently reading its worktree, so the ` +
-              "commit form cannot compute a delta safely right now. Poll and try again once the round parks, " +
-              "or send `diff` instead.",
-          );
-        }
-        patch = await treeDelta(worktree, at, resolved).catch((e: unknown) => {
-          throw new Error(
-            `lore cannot see commit ${commit} for ${review_id}: ${e instanceof Error ? e.message : String(e)}. ` +
-              "Push it to origin and call again — lore reviews what origin has, never a working copy.",
-          );
-        });
-        // AN EMPTY DELTA IS NOT A SUBMIT. The worktree already IS that tree, so there is
-        // nothing to review and the hash check below would pass trivially — a call that
-        // looked like work and did none, which is the shape D-114's bounds reset was
-        // abused by. Said plainly instead.
-        if (patch.trim() === "") {
-          throw new Error(
-            `commit ${commit} is the tree this review already has, so there is nothing to submit. If you meant ` +
-              "to hand over new work, push it first; if you meant that you have no more to give, poll instead.",
-          );
-        }
-      }
+          // D-53 stopped two rounds running at once. It did not stop a writer from
+          // OUTSIDE the queue, and this is one: a tier computes its diff, starts
+          // exploring, and a submit rewrites the files under it. Its prompt and its
+          // tier_run row describe the old tree while its tools read a new or
+          // half-patched one, and a `clean` from that describes a tree that has never
+          // existed anywhere — which is the failure the tree-hash check below exists to
+          // prevent, arriving from the other side (D-40).
+          //
+          // Refusing rather than queueing the patch: the client already polls (D-34),
+          // the fix genuinely cannot be reviewed until the current round is done, and
+          // storing pending patches would add a second place where a review's tree
+          // lives. The error says what to wait for.
+          // The wait condition is stated POSITIVELY, as the states that accept a diff.
+          //
+          // Naming the states to wait past instead — "until it is not running or queued"
+          // — described the JOB while the client can only see the REVIEW, and the two
+          // disagree exactly where it matters: during `fast_clean` the deep round is
+          // already queued, so the submit is refused while the client's exit condition
+          // reads as met. It would poll, see `fast_clean`, submit, and be refused again,
+          // for ever, with no state named that it could actually wait for.
+          //
+          // lore-ok[d3021c5e]: correct, and deliberately not closed by this commit. The
+          // ticket asked for a submit at any time, fully async; this refusal is D-55 and it
+          // is half the ask. What it needs is D-80's conversation half — the diff applied
+          // at once and handed to the live session as its next message — which SPEC D-80 §6
+          // marks `[OPEN]` on two questions that must be answered first: whether a long
+          // conversation beats repeated cold rounds on COST, measured rather than argued
+          // (a session re-sends its accumulated context every turn, D-50, against a 97-99%
+          // cache hit on cold rounds), and how the deep tiers enter a conversation the
+          // cheap tier has been having. Both change which models are called and how much
+          // quota burns, which is the operator's decision, not a reviewer's or mine.
+          // The prerequisite landed today — D-6 revised, so a submit no longer resets the
+          // ladder, which is what made an interactive submit incoherent. This is the next
+          // commit, not a patch to one already ten rounds deep.
+          // HELD, NOT REFUSED (D-107). A reviewer is reading — or about to read — the tree
+          // this patch would rewrite, so the diff cannot land NOW; but making the client
+          // wait, poll and resubmit was the part IT paid for. The diff waits in the store
+          // and lands at the reviewer's next emission boundary, hash-verified there; a
+          // mismatch at that point surfaces on poll as awaiting_diff, never as a silently
+          // dropped diff. The double-check below closes the race where the round finished
+          // between the check and the hold — then nothing would ever consume it.
+          if (store.hasPendingRound(review_id)) {
+            const heldId = store.holdDiff(review_id, patch, tree_hash);
+            if (store.hasPendingRound(review_id)) {
+              return { kind: "held" };
+            }
+            // The round ended in the race window: nothing will consume the hold, so take it
+            // back and fall through to the synchronous path below.
+            //
+            // BY ID, not the bare form that clears every row this review has. A concurrent
+            // submit can land its OWN hold in this exact window — the check above only says
+            // whether a round is pending, not whether another caller is here too — and the
+            // bare form would discard that hold as well, silently, the same loss this whole
+            // file exists to refuse.
+            store.clearHeldDiff(review_id, heldId);
+          }
+          return { kind: "apply", patch };
+        },
+      );
 
-      // UNREACHABLE, and it says so rather than being typed away. The schema refuses a
-      // call carrying neither, so arriving here is a programming error — and this project
-      // does not let a scaffolded path continue quietly.
-      if (patch === undefined) {
-        throw new Error(
-          `internal: review_submit for ${review_id} reached the apply path with neither a diff nor a commit; ` +
-            "the input schema should have refused this call.",
-        );
+      if (submitted.kind === "held") {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                review_id,
+                status: "held",
+                note:
+                  "A reviewer is mid-read, so your diff is HELD and will be applied and put to it at its " +
+                  "next emission — you do not need to resubmit. Keep polling: the reviewer's ruling on this " +
+                  "fix arrives as ordinary findings (fixed things are not re-raised; still-broken things " +
+                  "return at higher severity). Findings it reports before seeing your fix may already be " +
+                  "fixed by it — expected, do not double-fix. If the tree hash cannot be verified when it " +
+                  "is applied, the review lands in awaiting_diff with the reason.",
+              }),
+            },
+          ],
+        };
       }
-
-      // REFUSED while a round is pending, because the next line writes into the
-      // directory that round reads (D-55).
-      //
-      // D-53 stopped two rounds running at once. It did not stop a writer from
-      // OUTSIDE the queue, and this is one: a tier computes its diff, starts
-      // exploring, and a submit rewrites the files under it. Its prompt and its
-      // tier_run row describe the old tree while its tools read a new or
-      // half-patched one, and a `clean` from that describes a tree that has never
-      // existed anywhere — which is the failure the tree-hash check below exists to
-      // prevent, arriving from the other side (D-40).
-      //
-      // Refusing rather than queueing the patch: the client already polls (D-34),
-      // the fix genuinely cannot be reviewed until the current round is done, and
-      // storing pending patches would add a second place where a review's tree
-      // lives. The error says what to wait for.
-      // The wait condition is stated POSITIVELY, as the states that accept a diff.
-      //
-      // Naming the states to wait past instead — "until it is not running or queued"
-      // — described the JOB while the client can only see the REVIEW, and the two
-      // disagree exactly where it matters: during `fast_clean` the deep round is
-      // already queued, so the submit is refused while the client's exit condition
-      // reads as met. It would poll, see `fast_clean`, submit, and be refused again,
-      // for ever, with no state named that it could actually wait for.
-      //
-      // lore-ok[d3021c5e]: correct, and deliberately not closed by this commit. The
-      // ticket asked for a submit at any time, fully async; this refusal is D-55 and it
-      // is half the ask. What it needs is D-80's conversation half — the diff applied
-      // at once and handed to the live session as its next message — which SPEC D-80 §6
-      // marks `[OPEN]` on two questions that must be answered first: whether a long
-      // conversation beats repeated cold rounds on COST, measured rather than argued
-      // (a session re-sends its accumulated context every turn, D-50, against a 97-99%
-      // cache hit on cold rounds), and how the deep tiers enter a conversation the
-      // cheap tier has been having. Both change which models are called and how much
-      // quota burns, which is the operator's decision, not a reviewer's or mine.
-      // The prerequisite landed today — D-6 revised, so a submit no longer resets the
-      // ladder, which is what made an interactive submit incoherent. This is the next
-      // commit, not a patch to one already ten rounds deep.
-      // HELD, NOT REFUSED (D-107). A reviewer is reading — or about to read — the tree
-      // this patch would rewrite, so the diff cannot land NOW; but making the client
-      // wait, poll and resubmit was the part IT paid for. The diff waits in the store
-      // and lands at the reviewer's next emission boundary, hash-verified there; a
-      // mismatch at that point surfaces on poll as awaiting_diff, never as a silently
-      // dropped diff. The double-check below closes the race where the round finished
-      // between the check and the hold — then nothing would ever consume it.
-      if (store.hasPendingRound(review_id)) {
-        const heldId = store.holdDiff(review_id, patch, tree_hash);
-        if (store.hasPendingRound(review_id)) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify({
-                  review_id,
-                  status: "held",
-                  note:
-                    "A reviewer is mid-read, so your diff is HELD and will be applied and put to it at its " +
-                    "next emission — you do not need to resubmit. Keep polling: the reviewer's ruling on this " +
-                    "fix arrives as ordinary findings (fixed things are not re-raised; still-broken things " +
-                    "return at higher severity). Findings it reports before seeing your fix may already be " +
-                    "fixed by it — expected, do not double-fix. If the tree hash cannot be verified when it " +
-                    "is applied, the review lands in awaiting_diff with the reason.",
-                }),
-              },
-            ],
-          };
-        }
-        // The round ended in the race window: nothing will consume the hold, so take it
-        // back and fall through to the synchronous path below.
-        //
-        // BY ID, not the bare form that clears every row this review has. A concurrent
-        // submit can land its OWN hold in this exact window — the check above only says
-        // whether a round is pending, not whether another caller is here too — and the
-        // bare form would discard that hold as well, silently, the same loss this whole
-        // file exists to refuse.
-        store.clearHeldDiff(review_id, heldId);
-      }
+      const patch = submitted.patch;
 
       // Recorded BEFORE the patch, because the refusal below has to be able to undo it.
       const before = await treeHash(worktree);
