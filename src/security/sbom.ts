@@ -223,6 +223,32 @@ async function fromPackageLock(worktree: string): Promise<Sbom | undefined> {
     };
   }
 
+  // lore-ok[fc100d52]: `doc` AND `doc.packages` VALIDATED AS PLAIN OBJECTS,
+  // not just "JSON.parse did not throw". JSON.parse succeeds on `null`,
+  // arrays, strings and numbers alike — none of which have a `.packages`
+  // to read, and reading one off `null` threw an uncaught TypeError this
+  // function's own try/catch never wrapped (it only wraps the parse call
+  // above), escaping all the way through runT0's Promise.all and failing
+  // the ENTIRE t0 round. `{"packages": null}` hits the identical TypeError
+  // one field deeper; `{"packages": [...]}` would not throw at all — `
+  // Object.entries` accepts an array — but silently iterates its indices as
+  // package paths instead, a false-empty result rather than a crash, no
+  // less wrong for being quieter.
+  if (
+    doc === null ||
+    typeof doc !== "object" ||
+    Array.isArray(doc) ||
+    doc.packages === null ||
+    (doc.packages !== undefined && (typeof doc.packages !== "object" || Array.isArray(doc.packages)))
+  ) {
+    return {
+      components: [],
+      source: "package-lock",
+      note: "cdxgen not available; read package-lock.json directly.",
+      incomplete: "package-lock.json parsed as JSON but is not the expected object shape — this reader could not enumerate it",
+    };
+  }
+
   if (doc.packages === undefined) {
     return {
       components: [],

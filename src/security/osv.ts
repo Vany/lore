@@ -189,7 +189,22 @@ export async function queryCommit(commit: string, fetchImpl: typeof fetch = fetc
     throw new DidNotRun(`OSV commit query failed — the check DID NOT RUN: ${String(e)}`, e);
   });
   if (!res.ok) throw new DidNotRun(`OSV returned ${res.status} for commit ${commit}`);
-  return ((await res.json()) as { vulns?: OsvVuln[] }).vulns ?? [];
+  const parsed = (await res.json()) as { vulns?: OsvVuln[]; next_page_token?: string };
+  // lore-ok[76bdeb0c]: SAME REFUSAL AS queryComponents' OWN, one endpoint
+  // over — /v1/query paginates identically to /v1/querybatch (confirmed
+  // separately against OSV's own docs: a top-level next_page_token, over
+  // 1000 vulnerabilities or 20s of processing), and this is the ONLY query
+  // this whole module makes with no batching to spread the load across —
+  // a single commit with a genuinely huge vulnerability history (an old
+  // vendored openssl/ffmpeg-class tree, exactly what submodule vendoring —
+  // D-36 — tends to pin) is a real shape, not a hypothetical one.
+  if (parsed.next_page_token !== undefined) {
+    throw new DidNotRun(
+      `OSV truncated the vulnerability list for commit ${commit} (over 1000 known vulnerabilities, ` +
+        "next_page_token present) — the vulnerability check DID NOT RUN",
+    );
+  }
+  return parsed.vulns ?? [];
 }
 
 /**

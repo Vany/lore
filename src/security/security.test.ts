@@ -78,6 +78,31 @@ describe("generateSbom", () => {
     expect(sbom.incomplete).toMatch(/did not parse as JSON/);
   });
 
+  // Fingerprint fc100d52: JSON.parse succeeds on `null` without throwing —
+  // the e10c3847 fix's own try/catch never sees it, and reading .packages
+  // off null used to throw an UNCAUGHT TypeError that escaped this function
+  // entirely, failing the whole t0 round instead of producing a disclosure.
+  it("discloses valid-JSON-but-not-an-object as unreadable, without crashing the round", async () => {
+    writeFileSync(join(binDir, "npx"), "#!/bin/sh\nexit 1\n");
+    chmodSync(join(binDir, "npx"), 0o755);
+    writeFileSync(join(dir, "package-lock.json"), "null");
+    const sbom = await generateSbom(dir);
+    expect(sbom.source).toBe("package-lock");
+    expect(sbom.incomplete).toMatch(/not the expected object shape/);
+  });
+
+  // `{"packages": null}` hits the identical TypeError one field deeper —
+  // JSON.parse succeeds, doc itself is a valid object, but .packages being
+  // explicitly null still throws on Object.entries(null).
+  it("discloses a null packages field as unreadable, without crashing the round", async () => {
+    writeFileSync(join(binDir, "npx"), "#!/bin/sh\nexit 1\n");
+    chmodSync(join(binDir, "npx"), 0o755);
+    writeFileSync(join(dir, "package-lock.json"), JSON.stringify({ lockfileVersion: 3, packages: null }));
+    const sbom = await generateSbom(dir);
+    expect(sbom.source).toBe("package-lock");
+    expect(sbom.incomplete).toMatch(/not the expected object shape/);
+  });
+
   // A real, empty v2/v3 lockfile (a project with genuinely zero dependencies)
   // must NOT trip the same disclosure — `packages: {}` is a known, complete
   // answer, not an unreadable one.
@@ -393,6 +418,16 @@ describe("submodules are queried by commit", () => {
       throw new Error("ECONNREFUSED");
     }) as unknown as typeof fetch;
     await expect(queryCommit(commit, dead)).rejects.toThrow(/DID NOT RUN/);
+  });
+
+  // Fingerprint 76bdeb0c: /v1/query paginates the same way /v1/querybatch
+  // does (bfa2e44b's own fix already refuses it there) — a top-level
+  // next_page_token means this commit's own vulnerability list was
+  // truncated, not complete.
+  it("refuses a truncated commit query rather than reporting it as complete", async () => {
+    const truncated = (async () =>
+      new Response(JSON.stringify({ vulns: [vuln], next_page_token: "abc" }), { status: 200 })) as unknown as typeof fetch;
+    await expect(queryCommit(commit, truncated)).rejects.toThrow(/DID NOT RUN/);
   });
 });
 
