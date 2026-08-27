@@ -519,6 +519,20 @@ export class Worker {
     this.reconciling = true;
     try {
       await this.reconcileSessions();
+    } catch (e) {
+      // lore-ok[f487b406]: found by lore's own review. The call site (dispatch,
+      // above) is `void this.maybeReconcile()` with no `.catch` — reconcileSessions
+      // reads and writes the store synchronously (keptSessionKeys by way of
+      // reviewer.keptReviews, repoAndStateOf, clearSessionTrees), and any of them
+      // throwing on a closed or corrupted database used to escape as an unhandled
+      // rejection and take the whole process down, the same shape already fixed
+      // this round for round()'s own catch block one function above and for
+      // board-stream's tick. `finally` below already reschedules the next
+      // attempt RECONCILE_EVERY_MS out regardless of success, so skipping here
+      // costs one cycle, not the backstop itself.
+      console.error(
+        `[lore:log] session reconcile faulted, skipping this cycle: ${e instanceof Error ? e.message : String(e)}`,
+      );
     } finally {
       // STAMPED AFTER, not before: a reconcile that took longer than the interval would
       // otherwise be eligible again the moment it finished, and under a slow opencode

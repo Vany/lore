@@ -268,3 +268,59 @@ describe("sessions kept by a review that ended without a job", () => {
     expect(reviewer.released).toStrictEqual(["rev1"]);
   });
 });
+
+// lore-ok[f487b406]: found by lore's own review. dispatch()'s own call site is
+// `void this.maybeReconcile()` with no `.catch` — the exact detached-promise
+// shape already fixed this round for round()'s own catch block, one function
+// above worker.ts's own maybeReconcile. A database that is merely CORRUPTED,
+// not closed, still answers isClosed() === false, and repoAndStateOf throws on
+// it exactly as finishJob did in that other fix. A Proxy stands in: nothing was
+// actually closed, but the very first store read a reconcile makes faults as
+// if it hit SQLITE_CORRUPT.
+describe("a store read that faults during reconcile does not crash the process", () => {
+  it("stops quietly instead of throwing out of the detached maybeReconcile call", async () => {
+    review("rev1", "expired");
+    const reviewer = new Keeping(["rev1"]);
+
+    let calls = 0;
+    const corrupted = new Proxy(store, {
+      get(target, prop, receiver) {
+        if (prop === "repoAndStateOf") {
+          return () => {
+            calls += 1;
+            throw new Error("simulated: SQLITE_CORRUPT");
+          };
+        }
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+
+    root = mkdtempSync(join(tmpdir(), "lore-reconcile-"));
+    const worker = new Worker(
+      corrupted,
+      { ...DEFAULT_WORKER, pollMs: 5, reposRoot: join(root, "repos") },
+      new Alerter({ timeoutMs: 10 }),
+      reviewer,
+    );
+
+    const rejections: unknown[] = [];
+    const onRejection = (e: unknown) => rejections.push(e);
+    process.on("unhandledRejection", onRejection);
+    const stop = worker.start();
+    try {
+      const deadline = Date.now() + 10_000;
+      while (calls === 0 && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 5));
+      }
+      // Long enough for a rejection to surface if it escapes past maybeReconcile's own catch.
+      await new Promise((r) => setTimeout(r, 300));
+    } finally {
+      stop();
+      process.off("unhandledRejection", onRejection);
+    }
+
+    expect(calls, "the corrupted read must actually have been reached").toBeGreaterThan(0);
+    expect(reviewer.released, "release must never be reached past a faulted read").toStrictEqual([]);
+    expect(rejections, "a corrupted reconcile read must not crash the process").toStrictEqual([]);
+  });
+});
