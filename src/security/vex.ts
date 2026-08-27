@@ -253,25 +253,38 @@ export function vulnIdOf(evidence: string): string | undefined {
 }
 
 /**
- * Human-facing summary. The machine form is the document above.
+ * Why `renderVex`'s clean-sounding zero-statement sentence might not mean what
+ * it looks like — `undefined` when there is no such reason, i.e. the tree was
+ * genuinely, currently checked.
  *
- * lore-ok[d7af16cf]: `uncheckedEngines` ADDED. `buildVex` reads only recorded
- * findings, so a tree the sbom/osv engines never queried (network down, cdxgen
- * absent with no lockfile either) and a tree they queried and found nothing in
- * produce the identical zero statements — and this summary used to say the
- * same clean-sounding sentence for both. Passed in rather than queried here:
- * this function stays pure, and the caller (server.ts) already calls
- * `store.checksSkippedFor` for the same review to answer the same question
- * elsewhere.
+ * lore-ok[9b09e7c5,a9c12b7e]: the round-3 fix (d7af16cf) keyed this entirely
+ * on `checksSkippedFor`, which has two gaps of its own: it unions every round
+ * of the review's WHOLE LIFETIME (so a transient round-1 OSV outage poisons
+ * the summary forever, past rounds that ran fine), and it is silent — not
+ * "clean", silent — for a review whose t0 has not completed a single round
+ * yet, or whose TYPE never runs sbom/osv at all (`CODE_ARCH.t0` omits both;
+ * only `SECURITY.t0` has them, review-type.ts). Both silences read as "clean"
+ * to a caller reading only `checksSkippedFor`'s absence of a line. `reviewType`
+ * and `store.latestT0Unavailable` (the CURRENT round only) are checked instead.
  */
-export function renderVex(doc: VexDocument, uncheckedEngines: readonly string[] = []): string {
+export function vexGap(store: Store, reviewId: string, reviewType: string): string | undefined {
+  if (reviewType !== "security") return "this review does not check dependencies (not a security review)";
+
+  const unavailable = store.latestT0Unavailable(reviewId);
+  if (unavailable === undefined) return "no round has completed yet";
+
+  const relevant = unavailable.filter((l) => l.startsWith("osv:") || l.startsWith("sbom:"));
+  return relevant.length > 0 ? relevant.join("; ") : undefined;
+}
+
+/** Human-facing summary. The machine form is the document above. */
+export function renderVex(doc: VexDocument, gap?: string): string {
   const rows = doc.vulnerabilities;
-  const gaps = uncheckedEngines.filter((e) => e.startsWith("osv:") || e.startsWith("sbom:"));
 
   if (rows.length === 0) {
-    return gaps.length === 0
+    return gap === undefined
       ? "No known vulnerabilities matched in this tree."
-      : `No vulnerability statements — but the check(s) that would produce them did not run (${gaps.join("; ")}). This is NOT a clean result.`;
+      : `No vulnerability statements — but ${gap}. This does not mean the tree is clean.`;
   }
 
   const byState = new Map<string, number>();
@@ -286,8 +299,8 @@ export function renderVex(doc: VexDocument, uncheckedEngines: readonly string[] 
       `${triage} are still in triage — nobody has judged whether they are reachable. Do not read that as safe.`,
     );
   }
-  if (gaps.length > 0) {
-    lines.push("", `Incomplete: ${gaps.join("; ")} — this document does not cover everything.`);
+  if (gap !== undefined) {
+    lines.push("", `Incomplete: ${gap} — this document does not cover everything.`);
   }
   return lines.join("\n");
 }

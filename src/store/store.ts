@@ -3828,6 +3828,29 @@ export class Store {
   }
 
   /**
+   * What t0 reported unavailable in its MOST RECENT round — `undefined` when t0
+   * has not completed a single round yet, distinct from `[]` (it ran, and
+   * reported nothing unavailable).
+   *
+   * lore-ok[9b09e7c5]: NOT `checksSkippedFor`. That method unions every round
+   * of the review's whole lifetime by design (its own doc comment, and
+   * `ops/board.ts`'s use of it as a permanent audit trail) — right for a board
+   * line, wrong for `vex.ts`'s `vexGap`, which asks "is THIS SNAPSHOT
+   * trustworthy": a transient round-1 OSV outage must not keep marking round
+   * 3, which ran fine, as unproven forever.
+   */
+  latestT0Unavailable(reviewId: string): readonly string[] | undefined {
+    const row = this.db
+      .prepare("SELECT unavailable FROM tier_run WHERE review_id = ? AND tier = 't0' ORDER BY id DESC LIMIT 1")
+      .get(reviewId) as Record<string, string | null> | undefined;
+    if (row === undefined) return undefined;
+    return String(row["unavailable"] ?? "")
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l !== "");
+  }
+
+  /**
    * When this review last had a finding raised against it, or `undefined` if never.
    *
    * Evidence of life that touches no other table: a tier can raise findings for twenty

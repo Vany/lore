@@ -15,7 +15,7 @@ import {
   type OsvVuln,
 } from "./osv.ts";
 import { generateSbom, type Component } from "./sbom.ts";
-import { buildVex, findingsNeedingTriage, justificationFor, stateFor, vulnIdOf, renderVex, type VexDocument } from "./vex.ts";
+import { buildVex, findingsNeedingTriage, justificationFor, stateFor, vulnIdOf, renderVex, vexGap, type VexDocument } from "./vex.ts";
 
 const component: Component = { name: "lodash", version: "4.17.20", ecosystem: "npm", transitive: true };
 
@@ -100,24 +100,45 @@ describe("generateSbom", () => {
     writeFileSync(join(binDir, "npx"), "#!/bin/sh\necho 'cdxgen: cannot parse pom.xml: bad token' >&2\nexit 1\n");
     chmodSync(join(binDir, "npx"), 0o755);
     const sbom = await generateSbom(dir);
-    expect(sbom.note).toMatch(/failed rather than being absent/);
+    expect(sbom.note).toMatch(/did not produce a usable SBOM/);
     expect(sbom.note).toMatch(/cannot parse pom\.xml/);
+    expect(sbom.note).not.toMatch(/not installed/);
+  });
+
+  // Fingerprint cab708e4: the af39c6f5 fix only split the `!r.ok` (non-zero
+  // exit) branch — a cdxgen that exits 0 but writes no JSON at all, or writes
+  // something that does not parse, is ALSO not "absent" and used to fall
+  // through to the identical false "not installed" sentence.
+  it("does not say 'not installed' when cdxgen exits 0 with no JSON on stdout", async () => {
+    writeFileSync(join(binDir, "npx"), "#!/bin/sh\necho 'unexpected warning, no bom emitted'\nexit 0\n");
+    chmodSync(join(binDir, "npx"), 0o755);
+    const sbom = await generateSbom(dir);
+    expect(sbom.note).toMatch(/did not produce a usable SBOM/);
+    expect(sbom.note).not.toMatch(/not installed/);
+  });
+
+  it("does not say 'not installed' when cdxgen's output does not parse as JSON", async () => {
+    writeFileSync(join(binDir, "npx"), "#!/bin/sh\necho '{not valid json'\nexit 0\n");
+    chmodSync(join(binDir, "npx"), 0o755);
+    const sbom = await generateSbom(dir);
+    expect(sbom.note).toMatch(/did not produce a usable SBOM/);
     expect(sbom.note).not.toMatch(/not installed/);
   });
 
   // `npx --no-install <real, existing package not locally cached>` was verified
   // empirically (this session, on a real npm install) to exit 0 with the npm
-  // error on stderr and nothing on stdout — not a non-zero exit — so this is
-  // the real shape "not installed" takes here, distinct from a crash.
-  it("still says 'not installed' when cdxgen produces no output", async () => {
-    writeFileSync(
-      join(binDir, "npx"),
-      "#!/bin/sh\necho 'npm error npx canceled due to missing packages' >&2\nexit 0\n",
-    );
-    chmodSync(join(binDir, "npx"), 0o755);
+  // error on stderr and nothing on stdout, the SAME shape cab708e4's fix
+  // above now (correctly) reports as "did not produce a usable SBOM" rather
+  // than presuming absence — genuine absence is a live possibility for that
+  // exact shape too, on a different npm version or network condition, and
+  // claiming to know which is exactly the guess INV-1 forbids. Only a true
+  // ENOENT (npx itself unresolvable) still says "not installed", since that
+  // is the one case this reader can actually confirm.
+  it("still says 'not installed' when npx itself cannot be found at all", async () => {
+    process.env["PATH"] = binDir; // no fallback: npx must not resolve anywhere
     const sbom = await generateSbom(dir);
     expect(sbom.note).toMatch(/not installed/);
-    expect(sbom.note).not.toMatch(/failed rather than being absent/);
+    expect(sbom.note).not.toMatch(/did not produce a usable SBOM/);
   });
 });
 
@@ -362,24 +383,74 @@ const emptyDoc = (): VexDocument => ({
 /**
  * Fingerprint d7af16cf: zero vulnerability statements reads as a clean tree —
  * but it is the identical shape a tree the sbom/osv engines never queried
- * produces. `buildVex` only ever sees recorded findings, so this distinction
- * has to be made by whoever also knows what `checksSkippedFor` says.
+ * produces. `vexGap` (below) computes WHY, if there is one; `renderVex` just
+ * says so plainly when there is.
  */
 describe("renderVex", () => {
-  it("reports a clean tree as clean when nothing was skipped", () => {
+  it("reports a clean tree as clean when there is no gap", () => {
     expect(renderVex(emptyDoc())).toBe("No known vulnerabilities matched in this tree.");
   });
 
-  it("does not claim a clean tree when the vulnerability check never ran", () => {
-    const summary = renderVex(emptyDoc(), ["osv: nothing to query", "eslint: not configured"]);
-    expect(summary).toMatch(/did not run/);
+  it("does not claim a clean tree when there is a gap", () => {
+    const summary = renderVex(emptyDoc(), "osv: nothing to query");
+    expect(summary).toContain("osv: nothing to query");
     expect(summary).not.toBe("No known vulnerabilities matched in this tree.");
   });
+});
 
-  // An unrelated skipped check (eslint here) must not itself trigger the
-  // caveat — only sbom/osv are what a VEX document's own claim depends on.
-  it("ignores a skipped check unrelated to the dependency scan", () => {
-    expect(renderVex(emptyDoc(), ["eslint: not configured"])).toBe("No known vulnerabilities matched in this tree.");
+/**
+ * Fingerprint 9b09e7c5, a9c12b7e: the first cut of this fix (d7af16cf) keyed
+ * the caveat entirely on `checksSkippedFor`, which unions every round of the
+ * review's WHOLE LIFETIME — so a transient round-1 outage poisoned the
+ * summary forever — and is silent (not "clean", silent) both before t0's
+ * first round completes and for a review TYPE that never runs sbom/osv at
+ * all (code-arch). Both silences read as clean to a caller checking only for
+ * an unavailable line.
+ */
+describe("vexGap", () => {
+  let store: Store;
+  let reviewId: string;
+
+  beforeEach(() => {
+    store = new Store(":memory:");
+    const repoId = store.upsertRepo("demo", "git@x:demo.git").id;
+    reviewId = "r1";
+    store.createReview({
+      id: reviewId, repoId, principal: "p", branch: "b", intoRef: "main", ticket: "t",
+      type: "security", state: "running", ladder: initialState(),
+    });
+  });
+
+  it("says a non-security review does not check dependencies, regardless of t0 state", () => {
+    expect(vexGap(store, reviewId, "code-arch")).toMatch(/not a security review/);
+  });
+
+  it("says no round has completed yet when t0 has never run", () => {
+    expect(vexGap(store, reviewId, "security")).toMatch(/no round has completed/);
+  });
+
+  it("reports the current round's osv/sbom gap", () => {
+    const id = store.openTierRun(reviewId, "t0", 1, "2026-08-03T00:00:00.000Z");
+    store.closeTierRun(id, "findings", ["osv: nothing to query", "eslint: not configured"]);
+    const gap = vexGap(store, reviewId, "security");
+    expect(gap).toContain("osv: nothing to query");
+    expect(gap).not.toContain("eslint");
+  });
+
+  it("reports no gap once t0's latest round ran clean", () => {
+    const id = store.openTierRun(reviewId, "t0", 1, "2026-08-03T00:00:00.000Z");
+    store.closeTierRun(id, "clean", []);
+    expect(vexGap(store, reviewId, "security")).toBeUndefined();
+  });
+
+  // The regression this fix exists for: a round-1 outage must not keep
+  // marking round 3 — which ran fine — as unproven forever.
+  it("does not let an earlier round's outage poison a later clean round", () => {
+    const first = store.openTierRun(reviewId, "t0", 1, "2026-08-03T00:00:00.000Z");
+    store.closeTierRun(first, "failed", ["osv: OSV enumeration or query failed: ECONNREFUSED"]);
+    const second = store.openTierRun(reviewId, "t0", 2, "2026-08-03T01:00:00.000Z");
+    store.closeTierRun(second, "clean", []);
+    expect(vexGap(store, reviewId, "security")).toBeUndefined();
   });
 });
 

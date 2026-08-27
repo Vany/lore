@@ -726,9 +726,11 @@ checked. The untriaged count is returned alongside for exactly that reason.
 
 Zero vulnerability statements is not automatically clean either: it is the same shape
 as "the check that would have found one never ran" — cdxgen absent with no lockfile
-to fall back to, OSV unreachable. \`summary\` says so explicitly when it applies
-("did not run", not "matched"); read the plain sentence rather than inferring from an
-empty \`document.vulnerabilities\` array alone.
+to fall back to, OSV unreachable, this review's most recent round not finished yet, or
+this being a code-arch review, which never runs the dependency scan at all. \`summary\`
+says so explicitly when it applies ("does not mean the tree is clean", not "matched");
+read the plain sentence rather than inferring from an empty \`document.vulnerabilities\`
+array alone.
 `.trim(),
 
   resolve: `

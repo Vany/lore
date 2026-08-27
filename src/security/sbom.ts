@@ -74,14 +74,19 @@ export async function generateSbom(worktree: string): Promise<Sbom> {
 
   const viaLock = await fromPackageLock(worktree);
   if (viaLock !== undefined) {
-    // lore-ok[af39c6f5]: a crash reason, when there is one, REPLACES
+    // lore-ok[af39c6f5,cab708e4]: a crash reason, when there is one, REPLACES
     // fromPackageLock's own static note rather than being silently lost —
-    // see cdxgen()'s own comment below for what this answers.
+    // see cdxgen()'s own comment below for what this answers. Worded as "did
+    // not produce a usable SBOM", not "installed but failed": for the two
+    // exit-0 triggers cab708e4 also fixed (no JSON on stdout, or JSON that
+    // did not parse), genuine absence — npx silently declining to fetch an
+    // uncached package — is still a live possibility this reader cannot rule
+    // out, unlike a non-zero exit with real stderr content.
     return viaCdxgen.crashed === undefined
       ? viaLock
       : {
           ...viaLock,
-          note: `cdxgen failed rather than being absent (${viaCdxgen.crashed}); fell back to reading package-lock.json directly. Dev/prod scope is not distinguished there.`,
+          note: `cdxgen did not produce a usable SBOM (${viaCdxgen.crashed}); fell back to reading package-lock.json directly. Dev/prod scope is not distinguished there.`,
         };
   }
 
@@ -93,7 +98,7 @@ export async function generateSbom(worktree: string): Promise<Sbom> {
     note:
       viaCdxgen.crashed === undefined
         ? "no SBOM could be produced — cdxgen is not installed and no package-lock.json was found"
-        : `no SBOM could be produced — cdxgen failed rather than being absent (${viaCdxgen.crashed}), and no package-lock.json was found`,
+        : `no SBOM could be produced — cdxgen did not produce a usable SBOM (${viaCdxgen.crashed}), and no package-lock.json was found`,
   };
 }
 
@@ -117,7 +122,14 @@ async function cdxgen(worktree: string): Promise<{ readonly sbom?: Sbom; readonl
   }
 
   const start = r.stdout.indexOf("{");
-  if (start < 0) return {};
+  // lore-ok[cab708e4]: SAME FIX, two more triggers — `af39c6f5`'s own fix only
+  // split the `!r.ok` branch above; a cdxgen that exits 0 but writes no `{` at
+  // all, or writes one that does not parse, is ALSO not "absent", and both
+  // used to fall silently through to the identical "not installed" sentence.
+  // Neither claims a specific cause the way the `!r.ok` branch's real stderr
+  // does — "ran (exit 0) but produced no parseable output" is what is
+  // actually known, not "installed and crashed" or "not installed" either.
+  if (start < 0) return { crashed: "exited 0 but produced no JSON on stdout" };
   try {
     const doc = JSON.parse(r.stdout.slice(start)) as CycloneDxDoc;
     const raw = doc.components ?? [];
@@ -148,7 +160,7 @@ async function cdxgen(worktree: string): Promise<{ readonly sbom?: Sbom; readonl
       },
     };
   } catch {
-    return {};
+    return { crashed: "exited 0 but its output did not parse as JSON" };
   }
 }
 

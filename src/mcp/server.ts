@@ -31,7 +31,7 @@ import { decide } from "../knowledge/decide.ts";
 import { enrich, renderEnrichment } from "../knowledge/enrich.ts";
 import { paceFor, paceNote } from "../ops/pace.ts";
 import { alreadyAnswered, codeMoved } from "../reviewer/review.ts";
-import { buildVex, findingsNeedingTriage, renderVex } from "../security/vex.ts";
+import { buildVex, findingsNeedingTriage, renderVex, vexGap } from "../security/vex.ts";
 import { NO_LIMIT, isSettled, type RecordedFinding, type Store } from "../store/store.ts";
 import type { Principal } from "./auth.ts";
 import { REVIEW_PROMPT_TEXT, RESOURCE_DOCS, TOOL_DOCS } from "./docs.ts";
@@ -2400,9 +2400,9 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       );
       return text(
         JSON.stringify({
-          // lore-ok[d7af16cf]: `checksSkippedFor` PASSED THROUGH — see
-          // renderVex's own doc comment (vex.ts) for what this answers.
-          summary: renderVex(doc, store.checksSkippedFor(review_id)),
+          // lore-ok[9b09e7c5,a9c12b7e]: `vexGap` PASSED THROUGH — see its own
+          // doc comment (vex.ts) for what this answers.
+          summary: renderVex(doc, vexGap(store, review_id, review.type)),
           untriaged: findingsNeedingTriage(store, review_id).length,
           document: doc,
         }),
