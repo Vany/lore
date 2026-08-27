@@ -142,6 +142,47 @@ describe("review_submit with a pushed commit instead of a diff", () => {
   });
 
   /**
+   * THE CLAIM, WRONG — AND A ROUND PENDING, so this submit is HELD rather than applied.
+   * Found by lore's own review, fingerprint 109d9211: a commit-form submit's `tree_hash`
+   * used to be trusted uncritically into the held row here, discovered wrong only much
+   * later at consume time (`consumeHeldDiffs`, review.ts) — which drops the WHOLE tail
+   * of the chain queued behind it, not just the one bad entry. The immediate-apply path
+   * (no round pending) already had a downstream safety net — apply, re-hash, compare,
+   * roll back on mismatch — so it was never the dangerous case; this one had none. The
+   * commit form can check this immediately instead of waiting to apply anything, because
+   * `resolved`'s own tree is not a claim, it is something lore can compute directly.
+   */
+  it("refuses a commit-form submit whose tree_hash does not match the commit's own tree, rather than holding it", async () => {
+    const pinned = treeNow();
+    store.createReview({
+      id: "revWrongTree", repoId: store.upsertRepo("demo", "git@x:demo.git").id, principal: "alice",
+      branch: "feat/x", intoRef: "main", ticket: "t", type: "code-arch",
+      state: "running", ladder: { ...initialState(), round: 5 }, treeHash: pinned,
+    });
+    // A round is pending — hasPendingRound(review_id) is true, so a correct submit here
+    // would be HELD, not applied. The wrong claim must be refused before that happens.
+    store.enqueue("revWrongTree", "fast");
+
+    writeFileSync(join(worktree, "f.txt"), "b\n");
+    g("add", "-A");
+    g("commit", "-qm", "fix");
+    const commitSha = g("rev-parse", "HEAD");
+    g("reset", "--hard", "HEAD~1");
+    g("clean", "-fd");
+
+    const { body, isError } = await callTool("review_submit", {
+      review_id: "revWrongTree",
+      commit: commitSha,
+      tree_hash: "b".repeat(40),
+    });
+
+    expect(isError || body["error"] !== undefined, JSON.stringify(body)).toBe(true);
+    expect(JSON.stringify(body)).toMatch(/tree_hash mismatch/);
+    // Nothing was held on the strength of the wrong claim.
+    expect(store.heldDiffs("revWrongTree")).toEqual([]);
+  });
+
+  /**
    * THE INJECTION, AS A TEST. Every one of these is a git option; each reached argv
    * verbatim before `revParse` existed. `--output=` alone is an arbitrary-file-write
    * primitive handed to any token holder.
@@ -452,10 +493,15 @@ describe("review_submit with a pushed commit instead of a diff", () => {
     g("add", "-A");
     g("commit", "-qm", "fix");
     const commitSha = g("rev-parse", "HEAD");
+    // The commit's REAL tree, not a placeholder — a wrong tree_hash now gets refused
+    // earlier, by the tree_hash-mismatch check itself (see the dedicated test for
+    // that). This fixture is after it: a CORRECT claim, still refused, because
+    // nothing safe to diff against is on record at all.
+    const commitTree = g("rev-parse", `${commitSha}^{tree}`);
     g("reset", "--hard", "HEAD~1");
     g("clean", "-fd");
 
-    const { body, isError } = await callTool("review_submit", { review_id: "revNoTree", commit: commitSha, tree_hash: "x".repeat(40) });
+    const { body, isError } = await callTool("review_submit", { review_id: "revNoTree", commit: commitSha, tree_hash: commitTree });
 
     expect(isError || body["error"] !== undefined, JSON.stringify(body)).toBe(true);
     expect(JSON.stringify(body)).toMatch(/cannot compute a delta safely/);

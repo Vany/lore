@@ -573,18 +573,22 @@ export async function revParse(worktree: string, ref: string): Promise<string | 
 }
 
 /**
- * DOES LORE'S OWN REPOSITORY ACTUALLY HAVE THIS TREE — not "is the string shaped like
- * one" (`OBJECT_ID`, above, already answers that). Found by lore's own review,
- * fingerprint 2889d85b: a raw-diff hold's `tree_hash` is the CLIENT's own local `git
- * write-tree`, sent as an unverified claim (`review_submit`'s schema says so —
- * "verified after we apply or check out") — the object it names was never pushed
- * anywhere lore can see, so `git diff <that hash> <anything>` dies "fatal: bad object",
- * not the ordinary "ref not found" `gitMaybe` already tells apart from a real fault
- * elsewhere. `^{tree}` peels either a bare tree or a commit to its tree, so a caller
- * holding either shape can ask the same way.
+ * THE TREE A HASH ACTUALLY RESOLVES TO IN LORE'S OWN REPOSITORY — `undefined` if it
+ * does not resolve at all, never "is the string shaped like one" (`OBJECT_ID`, above,
+ * already answers that). `^{tree}` peels either a bare tree or a commit to its tree, so
+ * a caller holding either shape can ask the same way — a tree hash peels to itself, a
+ * commit hash peels to what it points at, and this is the one function both existence
+ * checks (`!== undefined`) and value checks (`=== someExpectedTree`) need underneath.
+ *
+ * Found by lore's own review, fingerprint 2889d85b: a raw-diff hold's `tree_hash` is
+ * the CLIENT's own local `git write-tree`, sent as an unverified claim
+ * (`review_submit`'s schema says so — "verified after we apply or check out") — the
+ * object it names was never pushed anywhere lore can see, so `git diff <that hash>
+ * <anything>` dies "fatal: bad object", not the ordinary "ref not found" `gitMaybe`
+ * already tells apart from a real fault elsewhere.
  */
-export async function treeObjectExists(worktree: string, hash: string): Promise<boolean> {
-  return (await gitMaybe(worktree, ["rev-parse", "--verify", "--quiet", `${hash}^{tree}`])) !== undefined;
+export async function resolveTree(worktree: string, hash: string): Promise<string | undefined> {
+  return gitMaybe(worktree, ["rev-parse", "--verify", "--quiet", `${hash}^{tree}`]);
 }
 
 /**

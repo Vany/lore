@@ -23,7 +23,7 @@ import { SHORT_LENGTH } from "../core/fingerprint.ts";
 import { isSuppressionNotice } from "../core/checks-skipped.ts";
 import { DEFAULT_TYPE, reviewType, reviewTypeIds } from "../core/review-type.ts";
 import { STALE_GRACE_DAYS, STALE_HOURS } from "../ops/retention.ts";
-import { applyPatch, restoreTree, revParse, treeDelta, treeHash, treeObjectExists } from "../git/repo.ts";
+import { applyPatch, resolveTree, restoreTree, revParse, treeDelta, treeHash } from "../git/repo.ts";
 import { filesInDiff } from "../git/diff.ts";
 import { requestMirrorRefresh, type RefreshOutcome } from "../git/mirror-request.ts";
 import { dataDir } from "../core/paths.ts";
@@ -1410,6 +1410,27 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
                   "accepted here.)",
               );
             }
+            // THE CLIENT'S OWN CLAIM, CHECKED AGAINST WHAT LORE CAN COMPUTE DIRECTLY —
+            // found by lore's own review, fingerprint 109d9211. Unlike the raw-diff form,
+            // the commit form does not actually NEED `tree_hash` to know what applying it
+            // produces — `resolved`'s own tree already says so — so there is no reason to
+            // accept an unverified claim the way the raw-diff form has to. A wrong
+            // `tree_hash` (a typo, still the right hex length) used to be accepted as a
+            // HELD row regardless, inevitably fail its verification at consume time —
+            // minutes or hours later — and drop the WHOLE tail of the chain with it
+            // (`consumeHeldDiffs`, review.ts, `clearHeldDiff` with no id there, BY DESIGN:
+            // a mid-chain failure genuinely cannot trust anything queued after it). Refused
+            // HERE instead, synchronously, naming the real reason, before a single row is
+            // ever held.
+            const claimedTree = await resolveTree(worktree, resolved);
+            if (claimedTree !== tree_hash) {
+              throw new Error(
+                `tree_hash mismatch: you sent ${tree_hash}, but commit ${commit}'s own tree is ` +
+                  `${claimedTree ?? "unresolvable, which should not be reachable here"}. The commit form verifies ` +
+                  "against the commit's own tree rather than trusting the one you send — send that, or check " +
+                  "what you meant to submit.",
+              );
+            }
             // THE STORED TREE, NOT A FRESH SNAPSHOT — raised by lore's own t2 at high, and the
             // fix is not a lock, it is not needing one.
             //
@@ -1462,7 +1483,7 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
             // is written for. Refused by name instead: a commit-form submit genuinely
             // cannot compute a safe delta until the round ahead of it actually applies
             // that raw diff and `review.treeHash` catches up to reflect it for real.
-            if (heldHead !== undefined && !(await treeObjectExists(worktree, heldHead.treeHash))) {
+            if (heldHead !== undefined && (await resolveTree(worktree, heldHead.treeHash)) === undefined) {
               throw new Error(
                 `${review_id} has a HELD raw diff whose claimed tree lore has never fetched — that tree only ` +
                   "becomes a real object once the round ahead of this submit actually applies it, which has not " +
