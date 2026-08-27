@@ -173,7 +173,7 @@ describe("an engine finding says which rule fired", () => {
         spans: [{ file_name: "src/lib.rs", line_start: 8, is_primary: true }],
       },
     });
-    const findings = parseCargoJson("cargo-clippy", line, "/w");
+    const findings = parseCargoJson("cargo-clippy", line, ".");
     expect(findings.map((f) => engineRuleClass(f.claim))).toStrictEqual(["clippy::needless_return"]);
   });
 
@@ -445,7 +445,7 @@ describe("cargo's JSON is a different shape and needs its own parsing", () => {
       compilerMessage({ level: "error", file: "src/a.rs", code: "E0308" }),
       compilerMessage({ level: "warning", file: "src/b.rs", code: "dead_code" }),
     ].join("\n");
-    const f = parseCargoJson("cargo-check", out, "/w");
+    const f = parseCargoJson("cargo-check", out, ".");
     expect(f.find((x) => x.file === "src/a.rs")?.severity).toBe("high");
     expect(f.find((x) => x.file === "src/b.rs")?.severity).toBe("medium");
   });
@@ -458,7 +458,7 @@ describe("cargo's JSON is a different shape and needs its own parsing", () => {
       compilerMessage({ level: "error", file: "src/a.rs" }),
       compilerMessage({ level: "error" }), // no `file`, so no spans at all
     ].join("\n");
-    expect(parseCargoJson("cargo-check", out, "/w")).toHaveLength(1);
+    expect(parseCargoJson("cargo-check", out, ".")).toHaveLength(1);
   });
 
   // note/help only ever appear NESTED inside a parent's own `children` array in
@@ -475,7 +475,7 @@ describe("cargo's JSON is a different shape and needs its own parsing", () => {
         message: { message: "`#[warn(...)]` on by default", code: null, level: "note", spans: [] },
       }),
     ].join("\n");
-    expect(parseCargoJson("cargo-check", out, "/w")).toHaveLength(1);
+    expect(parseCargoJson("cargo-check", out, ".")).toHaveLength(1);
   });
 
   // `compiler-artifact` and `build-finished` are the other real `reason` values
@@ -487,7 +487,7 @@ describe("cargo's JSON is a different shape and needs its own parsing", () => {
       "",
       "not json at all",
     ].join("\n");
-    expect(parseCargoJson("cargo-check", out, "/w")).toStrictEqual([]);
+    expect(parseCargoJson("cargo-check", out, ".")).toStrictEqual([]);
   });
 
   it("groups a clippy lint a file has many of, same as eslint's own", () => {
@@ -495,12 +495,24 @@ describe("cargo's JSON is a different shape and needs its own parsing", () => {
       compilerMessage({ level: "warning", code: "clippy::needless_return", file: "src/a.rs", line: 3 }),
       compilerMessage({ level: "warning", code: "clippy::needless_return", file: "src/a.rs", line: 30 }),
     ].join("\n");
-    const f = parseCargoJson("cargo-clippy", out, "/w");
+    const f = parseCargoJson("cargo-clippy", out, ".");
     expect(f).toHaveLength(1);
     expect(f[0]?.line).toBe(3);
     expect(f[0]?.evidence).toContain("src/a.rs:3");
     expect(f[0]?.evidence).toContain("src/a.rs:30");
     expect(f[0]?.evidence).toMatch(/2 SEPARATE SITES/);
+  });
+
+  // THE REBASING FIX ITSELF, AS A TEST — found by lore's own review, fingerprint
+  // 47ddd7fa, and confirmed empirically against a real `cargo check --manifest-path
+  // server/Cargo.toml` run: cargo's own `file_name` is relative to the manifest's
+  // directory, not the repo root. A nested crate (D-129's `teammater` shape) must
+  // have that directory prefixed back on, or the finding names a file that is not
+  // where it claims.
+  it("rebases a nested crate's file_name onto its own directory", () => {
+    const out = compilerMessage({ level: "warning", file: "src/main.rs", line: 2 });
+    const f = parseCargoJson("cargo-check", out, "server");
+    expect(f[0]?.file).toBe("server/src/main.rs");
   });
 
   it("detects a root Cargo.toml, and reports absence honestly", () => {

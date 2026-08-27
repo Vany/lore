@@ -566,8 +566,20 @@ interface CargoEntry {
   message?: CargoMessage;
 }
 
-/** Parse `cargo check`/`cargo clippy --message-format=json`. Shared: both emit the same shape. */
-export function parseCargoJson(engine: "cargo-check" | "cargo-clippy", stdout: string, worktree: string): Finding[] {
+/**
+ * Parse `cargo check`/`cargo clippy --message-format=json`. Shared: both emit the
+ * same shape.
+ *
+ * `dir` is the crate's own directory relative to the worktree root ("." for a root
+ * crate, "server" for one found one level down — `detectEcosystems`' own shape) —
+ * NOT the worktree itself. Found by lore's own review, fingerprint 47ddd7fa, and
+ * confirmed empirically against a real `cargo check --manifest-path <nested>`
+ * invocation: `file_name` in a span comes back relative to the MANIFEST's own
+ * directory, never the worktree root and never absolute, so a nested crate's
+ * finding needs `dir` prefixed back on or it names a file that does not exist at
+ * the path it claims.
+ */
+export function parseCargoJson(engine: "cargo-check" | "cargo-clippy", stdout: string, dir: string): Finding[] {
   const messages: CargoMessage[] = [];
   for (const line of stdout.split("\n")) {
     const trimmed = line.trim();
@@ -588,7 +600,9 @@ export function parseCargoJson(engine: "cargo-check" | "cargo-clippy", stdout: s
   const diagnostics = messages.filter((m) => m.level === "error" || m.level === "warning");
   const flat = diagnostics.flatMap((m) => {
     const primary = m.spans.find((s) => s.is_primary);
-    return primary === undefined ? [] : [{ m, file: relativise(worktree, primary.file_name), line: primary.line_start }];
+    if (primary === undefined) return [];
+    const file = dir === "." ? primary.file_name : `${dir}/${primary.file_name}`;
+    return [{ m, file, line: primary.line_start }];
   });
 
   // GROUPED LIKE THE PATTERN ENGINES — see `bySite`. clippy in particular repeats one

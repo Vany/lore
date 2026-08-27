@@ -8,7 +8,7 @@
  * the code without knowing that.
  */
 
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -414,6 +414,86 @@ describe("sandboxedCargo, through a fake docker", () => {
     }
   });
 
+  // A GENUINE DEPENDENCY FAILURE THAT HAPPENS TO SAY "not found" MUST NOT BE
+  // MISREAD AS A MISSING TOOLCHAIN — found by lore's own review, fingerprint
+  // 01270153: a broken git dependency's own error ("repository … not found") or a
+  // missing path dependency's ("No such file or directory") used to trip the same
+  // text check the case above needs, discarding a real, high-severity finding about
+  // the branch's own dependencies as a false "cargo is not available". cargo itself
+  // is present here (exit 101, a plausible cargo failure code — not 127), so only
+  // the exit code decides now.
+  it("a genuine dependency-fetch failure is reported as one, even if its text says 'not found'", async () => {
+    const script = join(dir, "fake-docker-broken-dep.sh");
+    writeFileSync(
+      script,
+      "#!/bin/sh\necho 'error: failed to get `foo` as a dependency' >&2\n" +
+        "echo 'Caused by:' >&2\n  echo '  fatal: repository https://example.invalid/foo not found' >&2\nexit 101\n",
+    );
+    chmodSync(script, 0o755);
+    const out = await runT0(dir, { engines: ["cargo-check"], sandbox: baseSandbox(script) });
+    const o = out.outcomes.find((x) => x.engine === "cargo-check");
+    expect(o?.unavailable).toBe("dependencies failed to fetch with cargo");
+    expect(o?.findings).toHaveLength(1);
+    expect(o?.findings[0]?.severity).toBe("high");
+    expect(o?.findings[0]?.evidence).toMatch(/not found/);
+  });
+
+  // CARGO_HOME/CARGO_TARGET_DIR MUST ACTUALLY REACH CARGO — found by lore's own
+  // review, fingerprint d341a76e: the cache mount at /work/.cargo was wired but
+  // nothing ever pointed cargo's OWN env vars at it, so every fetch silently used
+  // each throwaway container's own ephemeral $HOME/.cargo instead — downloads that
+  // die with the container that made them, and an offline check next door with
+  // nothing to resolve from.
+  //
+  // Checked on the CONSTRUCTED COMMAND itself, not by trying to make a fake docker
+  // actually run cargo — the export lives inside the `sh -lc` script string
+  // `runInSandbox` builds, which this fake docker receives as an inert argument and
+  // was never going to execute; a fake that only pattern-matched its own live
+  // environment would see nothing regardless of whether the fix were present. This
+  // dumps the real argv it was called with and asserts on that instead.
+  it("sets CARGO_HOME and CARGO_TARGET_DIR in every cargo invocation it builds", async () => {
+    const script = join(dir, "fake-docker-cargo-env.sh");
+    const captured = join(dir, "captured-argv.txt");
+    writeFileSync(script, `#!/bin/sh\nprintf '%s\\n---\\n' "$*" >> "${captured}"\nexit 0\n`);
+    chmodSync(script, 0o755);
+    await runT0(dir, { engines: ["cargo-check", "cargo-clippy"], sandbox: baseSandbox(script) });
+    const argv = readFileSync(captured, "utf8");
+    const calls = argv.split("---\n").filter((s) => s.trim().length > 0);
+    // Fetch, plus one check invocation per requested engine.
+    expect(calls.length, argv).toBe(3);
+    for (const call of calls) {
+      expect(call, call).toMatch(/CARGO_HOME=\/work\/\.cargo\/home/);
+      expect(call, call).toMatch(/CARGO_TARGET_DIR=\/work\/\.cargo\/target/);
+    }
+  });
+
+  // THE MANIFEST PATH IS REPO-CONTROLLED, NOT A VALUE THIS CODE CHOOSES — found by
+  // lore's own review, fingerprint 2b5a78f6: a one-level directory containing a
+  // space, interpolated unquoted into the `sh -lc` string, would word-split and
+  // break `--manifest-path` for a perfectly healthy repo. A separate worktree here
+  // (not the outer `dir`, whose own `beforeEach` already wrote a ROOT Cargo.toml —
+  // `detectEcosystems`' first-match-wins would find that one first and never
+  // exercise the nested, space-containing path this test is about).
+  it("quotes a manifest path containing a space, rather than letting the shell word-split it", async () => {
+    const spaced = mkdtempSync(join(tmpdir(), "lore-t0-cargo-spaced-"));
+    try {
+      mkdirSync(join(spaced, "Rust Core"));
+      writeFileSync(join(spaced, "Rust Core", "Cargo.toml"), '[package]\nname = "x"\n');
+      const script = join(spaced, "fake-docker-spaced.sh");
+      const captured = join(spaced, "captured-argv.txt");
+      writeFileSync(script, `#!/bin/sh\nprintf '%s\\n---\\n' "$*" >> "${captured}"\nexit 0\n`);
+      chmodSync(script, 0o755);
+      await runT0(spaced, {
+        engines: ["cargo-check"],
+        sandbox: { ...baseSandbox(script), cacheRoot: join(spaced, "cache"), scratchRoot: join(spaced, "scratch") },
+      });
+      const argv = readFileSync(captured, "utf8");
+      expect(argv, argv).toContain("--manifest-path 'Rust Core/Cargo.toml'");
+    } finally {
+      rmSync(spaced, { recursive: true, force: true });
+    }
+  });
+
   // Sequenced by call count — fetch (1) succeeds silently, cargo-check (2) and
   // cargo-clippy (3) each answer with their own real-shaped JSON, one lint apiece,
   // proving the full path (manifest-path plumbing, the mount, the parse) round-trips
@@ -470,7 +550,7 @@ describe("sandboxedCargo, through a fake docker", () => {
     expect(clippy?.findings[0]).toMatchObject({ file: "src/main.rs", line: 5, severity: "medium" });
   });
 
-  it("reports absence honestly when there is no Cargo.toml at all", async () => {
+  it("reports absence as skipped, not unavailable, when there is no Cargo.toml at all", async () => {
     const empty = mkdtempSync(join(tmpdir(), "lore-t0-nocargo-"));
     try {
       const sandbox: SandboxConfig = {
@@ -487,7 +567,8 @@ describe("sandboxedCargo, through a fake docker", () => {
       const out = await runT0(empty, { engines: ["cargo-check"], sandbox });
       const o = out.outcomes.find((x) => x.engine === "cargo-check");
       expect(o?.findings).toStrictEqual([]);
-      expect(o?.unavailable).toMatch(/no Cargo\.toml/);
+      expect(o?.unavailable, "not a gap the client should be told about, same as ast-grep's own absence").toBeUndefined();
+      expect(o?.skipped).toMatch(/no Cargo\.toml/);
     } finally {
       rmSync(empty, { recursive: true, force: true });
     }

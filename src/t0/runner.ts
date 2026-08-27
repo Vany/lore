@@ -311,6 +311,31 @@ async function sandboxed(
 }
 
 /**
+ * Single-quote a value for safe embedding in a `sh -lc` string. The manifest path
+ * comes from the branch under review's own directory names — not a value this code
+ * chooses, the same reasoning `scopePaths` (engines.ts) already documents for argv
+ * paths, applied here because cargo's invocation is a shell STRING, not an argv
+ * array, so nothing else stands between an unlucky directory name and word-splitting
+ * or worse. Found by lore's own review, fingerprint 2b5a78f6.
+ */
+function shQuote(s: string): string {
+  return `'${s.replace(/'/g, `'"'"'`)}'`;
+}
+
+/**
+ * Where cargo keeps what it downloads and builds, redirected into the mounted cache
+ * rather than each container's own ephemeral `$HOME/.cargo` — without this the
+ * fetch's downloads die with the container that made them and `cargo check
+ * --offline` in the NEXT container has nothing to resolve from. Found by lore's own
+ * review, fingerprint d341a76e: `baseArgs`' cache mount was wired but nothing ever
+ * pointed cargo at it. Exported once at the front of every cargo script string,
+ * rather than as docker `-e` flags: `runInSandbox`'s `cacheMountPath` parameter
+ * already generalises the MOUNT, and threading two more env pairs through it and
+ * `baseArgs` for exactly one caller is more machinery than a two-line shell prefix.
+ */
+const CARGO_ENV = "export CARGO_HOME=/work/.cargo/home CARGO_TARGET_DIR=/work/.cargo/target;";
+
+/**
  * Everything cargo needs, in its own sandboxed session (D-131) — separate from
  * `sandboxed()` above in every dimension that matters: own cache (keyed by
  * Cargo.lock, not a JS lockfile), own scratch directory (so its own `SYNC` step
@@ -335,13 +360,22 @@ async function sandboxedCargo(
   // this slice; `detectEcosystems` itself only ever looks one level deep anyway.
   const found = (await detectEcosystems(worktree)).find((f) => f.ecosystem === "cargo");
   if (found === undefined) {
+    // SKIPPED, NOT UNAVAILABLE — found by lore's own review, fingerprint c37f7c9b.
+    // `CODE_ARCH.t0` lists cargo-check/cargo-clippy unconditionally, the same way
+    // tsc/eslint are — but unlike a JS repo missing its typechecker, "this is not a
+    // Rust project" is not a gap the model tiers need told every round; it is
+    // exactly ast-grep's own absent-by-nature case (`OPT_IN`'s own comment, above in
+    // this file's sibling engines.ts), and belongs in the operator's log, not
+    // repeated to the client on 100% of reviews of the JS repos this deployment
+    // mostly reviews.
     return wanted.map((engine) => ({
       engine,
       findings: [],
-      unavailable: "no Cargo.toml within one level of the worktree root — not a Rust project as far as this checked",
+      skipped: `${engine}: no Cargo.toml within one level of the worktree root (not a Rust project, optional)`,
     }));
   }
   const manifest = found.dir === "." ? "Cargo.toml" : `${found.dir}/Cargo.toml`;
+  const quotedManifest = shQuote(manifest);
 
   const cacheDir = join(cfg.cacheRoot, `cargo-${await cargoLockKey(worktree, found.dir)}`);
   await mkdir(cacheDir, { recursive: true });
@@ -361,7 +395,7 @@ async function sandboxedCargo(
         worktree,
         cacheDir,
         scratch,
-        `cargo fetch --manifest-path ${manifest} --locked || cargo fetch --manifest-path ${manifest}`,
+        `${CARGO_ENV} cargo fetch --manifest-path ${quotedManifest} --locked || cargo fetch --manifest-path ${quotedManifest}`,
         true,
         "/work/.cargo",
       );
@@ -384,16 +418,25 @@ async function sandboxedCargo(
         }));
       }
       if (!fetched.ok) {
-        const tail = `${fetched.stdout}\n${fetched.stderr}`;
         // MISSING BINARY, NOT A BROKEN BRANCH — with no toolchain in the sandbox
         // image yet (D-131's own explicit scope boundary), this is what every real
         // review hits right now. `checkTypes`'s bare-tsc branch already drew this
         // same distinction once, fingerprint 1fa9229d: the likelier explanation for
         // this shape of failure is the tool never being installed to begin with,
-        // not a defect in this branch's own dependencies. `code === 127` is the
-        // POSIX "command not found" convention nearly every shell honours; the text
-        // check catches the common phrasing when a shell reports it some other way.
-        if (fetched.code === 127 || /\bnot found\b|no such file or directory/i.test(tail)) {
+        // not a defect in this branch's own dependencies.
+        //
+        // `code === 127` ALONE, not also a "not found" text match — found by lore's
+        // own review, fingerprint 01270153. The text check was meant to hedge
+        // against a shell phrasing the exit code alone might miss, but it is too
+        // broad in the direction that actually costs something: a broken git
+        // dependency prints "fatal: repository … not found" and a missing path
+        // dependency prints "No such file or directory" in cargo's OWN error chain
+        // — real, high-severity findings about the branch, both misreported as "no
+        // toolchain" by the text alone. 127 is the POSIX "command not found"
+        // convention nearly every shell honours, including both sides of the `||`
+        // fallback above (a missing binary fails identically twice), so it needs no
+        // hedge.
+        if (fetched.code === 127) {
           return wanted.map((engine) => ({
             engine,
             findings: [],
@@ -401,6 +444,11 @@ async function sandboxedCargo(
           }));
         }
         // One finding, not one per engine — it is a single fact about the branch.
+        // `manifest`, not a hardcoded "Cargo.toml" — found by lore's own review as a
+        // sibling of fingerprint 47ddd7fa: a nested crate's own manifest is not at
+        // the worktree root, and naming the wrong file here is the same rebasing gap
+        // that finding is about, one call site over.
+        const tail = `${fetched.stdout}\n${fetched.stderr}`;
         const failTail = tail.trim().split("\n").slice(-30).join("\n").slice(0, 2000);
         return wanted.map((engine, i) => ({
           engine,
@@ -409,7 +457,7 @@ async function sandboxedCargo(
               ? []
               : [
                   {
-                    file: "Cargo.toml",
+                    file: manifest,
                     severity: "high" as const,
                     claim: "dependencies do not fetch with cargo, so nothing that needs them could run",
                     evidence: failTail,
@@ -423,10 +471,10 @@ async function sandboxedCargo(
 
       const out: EngineOutcome[] = [];
       if (wanted.includes("cargo-check")) {
-        out.push(await checkCargo(cfg, worktree, cacheDir, scratch, manifest, "cargo-check", "check"));
+        out.push(await checkCargo(cfg, worktree, cacheDir, scratch, manifest, found.dir, "cargo-check", "check"));
       }
       if (wanted.includes("cargo-clippy")) {
-        out.push(await checkCargo(cfg, worktree, cacheDir, scratch, manifest, "cargo-clippy", "clippy"));
+        out.push(await checkCargo(cfg, worktree, cacheDir, scratch, manifest, found.dir, "cargo-clippy", "clippy"));
       }
       return out;
     });
@@ -448,6 +496,7 @@ async function checkCargo(
   cacheDir: string,
   scratch: string,
   manifest: string,
+  dir: string,
   engine: "cargo-check" | "cargo-clippy",
   subcommand: "check" | "clippy",
 ): Promise<EngineOutcome> {
@@ -456,7 +505,7 @@ async function checkCargo(
     worktree,
     cacheDir,
     scratch,
-    `cargo ${subcommand} --manifest-path ${manifest} --offline --message-format=json`,
+    `${CARGO_ENV} cargo ${subcommand} --manifest-path ${shQuote(manifest)} --offline --message-format=json`,
     false,
     "/work/.cargo",
   );
@@ -466,7 +515,14 @@ async function checkCargo(
   // the JSONL there and human-readable progress on stderr, unlike tsc's murkier,
   // wrapper-dependent convention `checkTypes` has to allow for. Parsed first: a
   // compiler error is an EXPECTED non-zero exit, not a failure to hide.
-  const parsed = parseCargoJson(engine, r.stdout, worktree);
+  //
+  // `dir`, not `worktree` — found by lore's own review, fingerprint 47ddd7fa, and
+  // confirmed empirically (a real `cargo check --manifest-path server/Cargo.toml`
+  // run from the repo root, against a scratch fixture): cargo reports `file_name`
+  // relative to the MANIFEST's own directory, not the repo root and not absolute.
+  // `parseCargoJson` rebases onto `dir` itself now; passing the worktree here would
+  // have been not just unhelpful but actively wrong for any nested crate.
+  const parsed = parseCargoJson(engine, r.stdout, dir);
   if (parsed.length > 0) return { engine, findings: parsed };
   if (r.ok) return { engine, findings: [] };
   // By this point `cargo fetch` already succeeded, so — unlike the fetch failure
