@@ -277,7 +277,15 @@ export function vexGap(store: Store, reviewId: string, reviewType: string): stri
   return relevant.length > 0 ? relevant.join("; ") : undefined;
 }
 
-/** Human-facing summary. The machine form is the document above. */
+/**
+ * Human-facing summary. The machine form is the document above.
+ *
+ * lore-ok[a9c12b7e]: this function's own body used to compute the caveat
+ * directly from `checksSkippedFor` (round 3, d7af16cf) — the round/review-type
+ * blindness a9c12b7e named was IN that computation, which has since moved out
+ * entirely into `vexGap`, above. This function just prints whatever reason
+ * `vexGap` hands it now; see `vexGap`'s own doc comment for the actual fix.
+ */
 export function renderVex(doc: VexDocument, gap?: string): string {
   const rows = doc.vulnerabilities;
 
