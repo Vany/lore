@@ -1882,6 +1882,27 @@ describe("emissionOf", () => {
     }
   });
 
+  /**
+   * NOT JUST TWO KINDS — TWO OF THE SAME KIND (found by lore's own review, fingerprint
+   * 9857f644, against the b2aef74f fix directly above). Uniting `allRejected` and
+   * `fencedGarbled` still left each tracked as a single last-write-wins scalar, so two
+   * candidates failing the SAME way — here, two complete fences whose every item the
+   * schema refuses — still clobbered each other: only the second's reason survived.
+   */
+  it("carries losses from every all-rejected candidate, not just the last", () => {
+    const first = { file: "/etc/passwd", severity: "high", claim: "first", evidence: "e", failureScenario: "f" };
+    const second = { file: "/etc/shadow", severity: "high", claim: "second", evidence: "e", failureScenario: "f" };
+    const r = emissionOf(
+      '```json\n' + JSON.stringify({ findings: [first] }) + '\n```\n' +
+        '```json\n' + JSON.stringify({ findings: [second] }) + '\n```',
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect((r.rejected ?? []).some((x) => x.includes("/etc/passwd")), "the first candidate's loss is not evicted").toBe(true);
+      expect((r.rejected ?? []).some((x) => x.includes("/etc/shadow")), "the second candidate's loss survives too").toBe(true);
+    }
+  });
+
   it("keeps the findings when done arrives as its own second block", () => {
     const r = emissionOf('```json\n' + FINDING_JSON + '\n```\n```json\n{"done": true}\n```');
     expect(r.ok).toBe(true);

@@ -1013,6 +1013,41 @@ export class Store {
   }
 
   /**
+   * Add to a t0 row's disclosure AFTER it closed, touching only the two
+   * `unavailable` columns — never `outcome`, `finished_at`, `engines` or
+   * `tree_hash`, which `closeTierRun` owns and D-102's IN-FLIGHT/FINISHED/DIED
+   * reading depends on staying exactly as that call left them.
+   *
+   * lore-ok[d8e642af]: EXISTS BECAUSE D-107's held-diff boundary can discover a
+   * live D-83 suppression matches for the FIRST time in a round — new code the
+   * fix itself introduced, or a file round-open t0 never touched — after the
+   * round's one t0 row has already closed. Filtering the boundary's findings
+   * (the fix for f68ace59) correctly keeps the tier from seeing it, but without
+   * this, `checks_skipped` (`checksSkippedFor`, read from every `tier_run.unavailable`
+   * across the review) would never carry it if this review never independently
+   * matches it again — the suppression was appealed and accepted on SOME
+   * branch, but not necessarily this one.
+   *
+   * MERGED, deduped against what the row already has — a notice this round-open
+   * already recorded is a no-op here, not a duplicate line.
+   */
+  appendUnavailable(tierRunId: number, notices: readonly string[], forTier: readonly string[]): void {
+    if (notices.length === 0 && forTier.length === 0) return;
+    const row = this.db
+      .prepare("SELECT unavailable, unavailable_for_tier FROM tier_run WHERE id = ?")
+      .get(tierRunId) as { unavailable: string | null; unavailable_for_tier: string | null } | undefined;
+    if (row === undefined) return;
+    const merge = (existing: string | null, added: readonly string[]): string | null => {
+      const set = new Set(String(existing ?? "").split("\n").map((l) => l.trim()).filter((l) => l !== ""));
+      for (const a of added) set.add(a);
+      return set.size > 0 ? [...set].join("\n") : null;
+    };
+    this.db
+      .prepare("UPDATE tier_run SET unavailable = ?, unavailable_for_tier = ? WHERE id = ?")
+      .run(merge(row.unavailable, notices), merge(row.unavailable_for_tier, forTier), tierRunId);
+  }
+
+  /**
    * The tiers that read a particular tree, cheapest-first as recorded.
    *
    * Since a closed tier is no longer re-run after a fix, "tiers that ran" and "tiers

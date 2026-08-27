@@ -1970,18 +1970,21 @@ export function extractList<T>(text: string, key: string, parseOne: ItemParser<T
   const NO_LIST = 2;
   let got = NO_JSON;
   let why = `no JSON object containing a \`${key}\` array`;
-  /** The all-rejected candidate's losses, carried on the failure — see `Listed`. */
-  let allRejected: string[] | undefined;
-  /** A FENCED block that would not parse — an attempt the transport mangled. */
+  /** The MOST RECENT fenced block that would not parse — see `garbledAll` for every one. */
   let fencedGarbled: string | undefined;
+  // lore-ok[9857f644]: EVERY GARBLED CANDIDATE, not the last. `fencedGarbled` above is
+  // last-write-wins and stays that way — it feeds the single-block re-ask prompt, which
+  // can only usefully name one thing — but a reply with TWO truncated fences used to lose
+  // the first one's loss note entirely: nothing pushed it anywhere before the second
+  // overwrote the variable. Found by lore's own review of the b2aef74f fix, which united
+  // the two loss KINDS without noticing multiple candidates of the SAME kind still
+  // clobbered each other.
+  const garbledAll: string[] = [];
   const note = (rank: number, reason: string) => {
     if (rank < got) return;
     got = rank;
     why = reason;
   };
-  // lore-ok[b2aef74f]: fixed at the tail's `lost` computation, not here — this is the
-  // finding's anchor line inside `note`, but `allRejected` and `fencedGarbled` are not
-  // combined until the function's return, well below.
 
   // EVERY CANDIDATE THAT PARSES AND YIELDS A LIST CONTRIBUTES — not only the first.
   //
@@ -2010,7 +2013,11 @@ export function extractList<T>(text: string, key: string, parseOne: ItemParser<T
       parsed = JSON.parse(candidate.text.trim());
     } catch (e) {
       note(UNPARSEABLE, `JSON did not parse: ${detail(e)}`);
-      if (candidate.fenced) fencedGarbled = `a fenced JSON block did not parse: ${detail(e)}`;
+      if (candidate.fenced) {
+        const msg = `a fenced JSON block did not parse: ${detail(e)}`;
+        fencedGarbled = msg;
+        garbledAll.push(msg);
+      }
       continue;
     }
     const list = (parsed as Record<string, unknown> | null)?.[key];
@@ -2057,11 +2064,12 @@ export function extractList<T>(text: string, key: string, parseOne: ItemParser<T
     // rides out with `rejected` on `ok: true` too.
     if (out.length === 0 && rejected.length > 0) {
       note(NO_LIST, `all ${rejected.length} ${key.replace(/s$/, "")}(s) were rejected — ${rejected[0] ?? ""}`);
-      allRejected = rejected;
-      // MERGED TOO, once a sibling candidate has succeeded — a block that came back
-      // entirely rejected must not have its own diagnosable losses vanish only because
-      // it happened to sit beside one that produced survivors (D-66, extended across
-      // candidates rather than within one).
+      // MERGED, and EVERY all-rejected candidate's — not just this one's, and not a
+      // separate `allRejected` scalar that only the last such candidate would survive
+      // into, fingerprint 9857f644. `mergedRejected` already accumulates across every
+      // candidate that reaches here, which is also everything the failure arm below
+      // needs: when `sawSuccess` never becomes true, nothing but this branch ever
+      // pushed into it.
       mergedRejected.push(...rejected);
       continue;
     }
@@ -2079,7 +2087,7 @@ export function extractList<T>(text: string, key: string, parseOne: ItemParser<T
     return {
       ok: true,
       items: merged,
-      rejected: fencedGarbled === undefined ? mergedRejected : [...mergedRejected, fencedGarbled],
+      rejected: [...mergedRejected, ...garbledAll],
       // AND SEPARATELY, so the caller can ask for it again. It stays in `rejected` above:
       // if the re-ask fails, the loss must still be reported exactly as it was before.
       ...(fencedGarbled === undefined ? {} : { garbled: fencedGarbled }),
@@ -2093,12 +2101,16 @@ export function extractList<T>(text: string, key: string, parseOne: ItemParser<T
   // caught it: a truncated findings fence beside a valid done fence vanished without a
   // note, behind a comment claiming it could not.
   //
-  // BOTH, NOT EITHER — found by lore's own review, fingerprint b2aef74f: `allRejected ??
-  // [fencedGarbled]` assumed the two loss kinds cannot coexist, but a reply can carry a
-  // truncated fence (JSON.parse fails, sets `fencedGarbled`) BESIDE a complete fence whose
-  // every item the schema refuses (sets `allRejected`) — and the `??` silently dropped
-  // the garbled one whenever a sibling landed in `allRejected`, with no note and no re-ask.
-  const lost = [...(allRejected ?? []), ...(fencedGarbled === undefined ? [] : [fencedGarbled])];
+  // BOTH KINDS, AND EVERY CANDIDATE OF EACH — found by lore's own review across two
+  // rounds. First, fingerprint b2aef74f: a truncated fence (JSON.parse fails) and a
+  // complete fence whose every item the schema refuses are independent losses that can
+  // both be present in one reply, and a bare `allRejected ?? [fencedGarbled]` let the
+  // second evict the first. Then, fingerprint 9857f644: fixing that by uniting the two
+  // KINDS still left each one tracked as a single last-write-wins scalar, so two
+  // candidates failing the SAME way still clobbered each other. `mergedRejected` and
+  // `garbledAll` accumulate across every candidate of their kind, so nothing here can
+  // evict anything else.
+  const lost = [...mergedRejected, ...garbledAll];
   return { ok: false, why, ...(lost.length === 0 ? {} : { rejected: lost }) };
 }
 

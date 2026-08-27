@@ -1332,7 +1332,16 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
           // fingerprint, so `renderT0Delta` below could only read it as NEW — undoing the
           // suppression notice already given at round open and inviting a re-raise of a
           // finding this project's appeal had just settled.
-          hold.lastT0 = { ...freshT0, findings: filterSuppressed(freshT0.findings, suppressed).findings };
+          const boundaryFilter = filterSuppressed(freshT0.findings, suppressed);
+          hold.lastT0 = { ...freshT0, findings: boundaryFilter.findings };
+          // lore-ok[d8e642af]: DISCLOSED EVEN THOUGH t0's ROW FOR THIS ROUND ALREADY
+          // CLOSED. A suppression can match for the first time right here — new code the
+          // fix itself introduced, or a file round-open t0 never read — and this review
+          // may settle before any later round-open t0 gets a chance to re-discover and
+          // disclose it on its own. `appendUnavailable` touches only the two disclosure
+          // columns, never `outcome`/`finished_at`/`engines`/`tree_hash`, so D-102's
+          // IN-FLIGHT/FINISHED/DIED reading of this row is untouched.
+          store.appendUnavailable(t0RunId, boundaryFilter.silenced, boundaryFilter.silencedForTier);
         }
         return true;
       });
