@@ -723,6 +723,12 @@ Statuses: not_affected (with a justification), exploitable, resolved, in_triage.
 \`in_triage\` means nobody has ruled on it yet. It is NOT a clearance — a VEX document
 that marks unexamined vulnerabilities as harmless is a signed claim that nobody
 checked. The untriaged count is returned alongside for exactly that reason.
+
+Zero vulnerability statements is not automatically clean either: it is the same shape
+as "the check that would have found one never ran" — cdxgen absent with no lockfile
+to fall back to, OSV unreachable. \`summary\` says so explicitly when it applies
+("did not run", not "matched"); read the plain sentence rather than inferring from an
+empty \`document.vulnerabilities\` array alone.
 `.trim(),
 
   resolve: `

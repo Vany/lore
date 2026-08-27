@@ -2400,7 +2400,9 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       );
       return text(
         JSON.stringify({
-          summary: renderVex(doc),
+          // lore-ok[d7af16cf]: `checksSkippedFor` PASSED THROUGH — see
+          // renderVex's own doc comment (vex.ts) for what this answers.
+          summary: renderVex(doc, store.checksSkippedFor(review_id)),
           untriaged: findingsNeedingTriage(store, review_id).length,
           document: doc,
         }),

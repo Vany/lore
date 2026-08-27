@@ -70,31 +70,54 @@ interface CycloneDxDoc {
 
 export async function generateSbom(worktree: string): Promise<Sbom> {
   const viaCdxgen = await cdxgen(worktree);
-  if (viaCdxgen !== undefined) return viaCdxgen;
+  if (viaCdxgen.sbom !== undefined) return viaCdxgen.sbom;
 
   const viaLock = await fromPackageLock(worktree);
-  if (viaLock !== undefined) return viaLock;
+  if (viaLock !== undefined) {
+    // lore-ok[af39c6f5]: a crash reason, when there is one, REPLACES
+    // fromPackageLock's own static note rather than being silently lost —
+    // see cdxgen()'s own comment below for what this answers.
+    return viaCdxgen.crashed === undefined
+      ? viaLock
+      : {
+          ...viaLock,
+          note: `cdxgen failed rather than being absent (${viaCdxgen.crashed}); fell back to reading package-lock.json directly. Dev/prod scope is not distinguished there.`,
+        };
+  }
 
   return {
     components: [],
     source: "none",
     // Said out loud rather than returned as an empty list. "No components found"
     // and "we could not look" must never be the same answer.
-    note: "no SBOM could be produced — cdxgen is not installed and no package-lock.json was found",
+    note:
+      viaCdxgen.crashed === undefined
+        ? "no SBOM could be produced — cdxgen is not installed and no package-lock.json was found"
+        : `no SBOM could be produced — cdxgen failed rather than being absent (${viaCdxgen.crashed}), and no package-lock.json was found`,
   };
 }
 
-async function cdxgen(worktree: string): Promise<Sbom | undefined> {
+async function cdxgen(worktree: string): Promise<{ readonly sbom?: Sbom; readonly crashed?: string }> {
   const r = await runTool(
     worktree,
     "npx",
     ["--no-install", "@cyclonedx/cdxgen", "-o", "/dev/stdout", "--spec-version", "1.6"],
     300_000,
   );
-  if (r.unavailable !== undefined || !r.ok) return undefined;
+  if (r.unavailable !== undefined) return {};
+  // lore-ok[af39c6f5]: `!r.ok` ALONE used to read exactly like `r.unavailable`
+  // — both fell through to the same "cdxgen is not installed" sentence,
+  // discarding whatever cdxgen actually said on stderr. A cdxgen that IS
+  // present but crashes (a manifest it cannot parse, say) is a different,
+  // real diagnostic; a sentence telling an operator to reinstall a tool that
+  // is already there sends them looking in the wrong place.
+  if (!r.ok) {
+    const detail = (r.stderr || r.stdout || "no output").trim().replace(/\s+/g, " ").slice(0, 500);
+    return { crashed: `exited ${String(r.code)}: ${detail}` };
+  }
 
   const start = r.stdout.indexOf("{");
-  if (start < 0) return undefined;
+  if (start < 0) return {};
   try {
     const doc = JSON.parse(r.stdout.slice(start)) as CycloneDxDoc;
     const raw = doc.components ?? [];
@@ -111,23 +134,26 @@ async function cdxgen(worktree: string): Promise<Sbom | undefined> {
     // note — either way, it was not checked.
     const dropped = raw.length - components.length;
     return {
-      components,
-      source: "cdxgen",
-      ...(dropped > 0
-        ? {
-            incomplete:
-              `${String(dropped)} of ${String(raw.length)} component(s) had no name/version, or a purl naming an ` +
-              "ecosystem this module does not query (only npm, PyPI, Go, crates.io, Maven, RubyGems) — not checked " +
-              "against OSV.",
-          }
-        : {}),
+      sbom: {
+        components,
+        source: "cdxgen",
+        ...(dropped > 0
+          ? {
+              incomplete:
+                `${String(dropped)} of ${String(raw.length)} component(s) had no name/version, or a purl naming an ` +
+                "ecosystem this module does not query (only npm, PyPI, Go, crates.io, Maven, RubyGems) — not checked " +
+                "against OSV.",
+            }
+          : {}),
+      },
     };
   } catch {
-    return undefined;
+    return {};
   }
 }
 
 interface LockV3 {
+  lockfileVersion?: number;
   packages?: Record<string, { version?: string; dev?: boolean; link?: boolean }>;
 }
 
@@ -137,6 +163,15 @@ interface LockV3 {
  * Keys look like `node_modules/foo` or `node_modules/a/node_modules/b`; the last
  * segment after the final `node_modules/` is the package name, which is also how
  * scoped names survive intact.
+ *
+ * lore-ok[02811eb9]: `doc.packages === undefined` CHECKED FIRST and reported
+ * `incomplete`, distinctly from a v2/v3 lockfile that legitimately has zero
+ * entries. lockfileVersion 1 (npm ≤6) has no `packages` key at all — deps live
+ * under nested `dependencies` instead, a shape this reader was never written
+ * to walk — so `Object.entries(doc.packages ?? {})` silently produced zero
+ * components for a v1 lockfile exactly as it would for a real empty one, and
+ * this whole SBOM read back as a complete, clean enumeration of a tree that
+ * was in fact never examined.
  */
 async function fromPackageLock(worktree: string): Promise<Sbom | undefined> {
   const raw = await readFile(join(worktree, "package-lock.json"), "utf8").catch(() => undefined);
@@ -149,10 +184,19 @@ async function fromPackageLock(worktree: string): Promise<Sbom | undefined> {
     return undefined;
   }
 
+  if (doc.packages === undefined) {
+    return {
+      components: [],
+      source: "package-lock",
+      note: "cdxgen not available; read package-lock.json directly.",
+      incomplete: `package-lock.json has no "packages" key (lockfileVersion ${String(doc.lockfileVersion ?? 1)}) — this reader only understands the v2/v3 shape, so the dependency tree could not be enumerated at all`,
+    };
+  }
+
   const components: Component[] = [];
   const seen = new Set<string>();
 
-  for (const [path, entry] of Object.entries(doc.packages ?? {})) {
+  for (const [path, entry] of Object.entries(doc.packages)) {
     if (path === "" || entry.link === true || entry.version === undefined) continue;
     const marker = path.lastIndexOf("node_modules/");
     if (marker < 0) continue;
@@ -183,7 +227,7 @@ function toComponent(
   version: string | undefined,
   purl: string | undefined,
 ): Component | undefined {
-  if (name === undefined || version === undefined) return undefined;
+  if (name === undefined || version === undefined || purl === undefined) return undefined;
   // REFUSED, NOT DEFAULTED TO "npm" (see Component.transitive's own doc comment,
   // above, for the finding this answers). A purl naming an ecosystem this module
   // does not recognise (or carrying none at all) used to fall back to "npm", so
@@ -195,7 +239,18 @@ function toComponent(
   const ecosystem = ecosystemOf(purl);
   if (ecosystem === undefined) return undefined;
   return {
-    name,
+    // lore-ok[2fc96d80]: Maven's OWN `groupId:artifactId` form, confirmed
+    // against OSV's schema docs (package.name for Maven MUST be that compound
+    // form — a bare artifactId is a different, generally nonexistent OSV
+    // package). CycloneDX's own flat `components[]` here carries no separate
+    // group field this reader parses, but the purl already has it: the
+    // package-url spec's own Maven type puts the groupId in the purl's
+    // namespace segment (`pkg:maven/<groupId>/<artifactId>@...`) — read from
+    // there rather than adding a dependency on a CycloneDX field of unverified
+    // reliability. Every OTHER ecosystem here already used its own bare `name`
+    // correctly; Maven was the one where cdxgen's `name` and OSV's `name` are
+    // not the same string.
+    name: ecosystem === "Maven" ? (mavenGroupArtifact(purl) ?? name) : name,
     version,
     ecosystem,
     // `scope` (CycloneDX: required/optional/excluded, whether a component SHIPS)
@@ -204,6 +259,17 @@ function toComponent(
     // here is honest about not knowing, not a guess dressed as one.
     transitive: undefined,
   };
+}
+
+/** `groupId:artifactId` from a Maven purl's own namespace segment — see toComponent's own comment for why. */
+function mavenGroupArtifact(purl: string): string | undefined {
+  const m = /^pkg:maven\/([^/@]+)\/([^@/]+)/.exec(purl);
+  if (m?.[1] === undefined || m[2] === undefined) return undefined;
+  try {
+    return `${decodeURIComponent(m[1])}:${decodeURIComponent(m[2])}`;
+  } catch {
+    return undefined;
+  }
 }
 
 function ecosystemOf(purl: string | undefined): Ecosystem | undefined {

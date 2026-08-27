@@ -32,12 +32,30 @@ export type VexJustification =
   | "protected_by_perimeter"
   | "protected_by_mitigating_control";
 
+/**
+ * lore-ok[1c67ff0d]: MATCHES WHAT `buildVex` ACTUALLY EMITS, below — this
+ * exported type described a flat `{state, affects: string}` shape nothing in
+ * this module ever produced (the real emission nests `state` under
+ * `analysis` and `affects` is an array of refs), and was read by nothing —
+ * not even this module's own `renderVex`, which cast to a THIRD, separately
+ * inline-typed shape instead of using this one. A reader (or an editor of
+ * `buildVex`) trusting this type would write code that compiles and is wrong
+ * against every real document — the exported-type-nobody-checks-against
+ * defect this repo already named once for RULE_DIRS. Now the type `buildVex`
+ * and `renderVex` actually share, so the compiler catches the two drifting
+ * apart again.
+ */
 export interface VexStatement {
   readonly id: string;
-  readonly state: VexState;
-  readonly justification?: VexJustification;
-  readonly detail: string;
-  readonly affects: string;
+  readonly source: { readonly name: string; readonly url: string };
+  readonly analysis: {
+    readonly state: VexState;
+    readonly justification?: VexJustification;
+    readonly detail: string;
+    readonly response: readonly string[];
+  };
+  readonly affects: readonly { readonly ref: string }[];
+  readonly cwes?: readonly number[];
 }
 
 /**
@@ -91,7 +109,7 @@ export interface VexDocument {
   readonly specVersion: "1.6";
   readonly version: 1;
   readonly metadata: { readonly timestamp: string; readonly component: { readonly name: string; readonly version: string } };
-  readonly vulnerabilities: readonly unknown[];
+  readonly vulnerabilities: readonly VexStatement[];
 }
 
 /**
@@ -124,7 +142,7 @@ export function buildVex(
   // important one.
   const findings = store.findingRowsForReview(reviewId);
 
-  const vulnerabilities: unknown[] = [];
+  const vulnerabilities: VexStatement[] = [];
 
   for (const row of findings) {
     if (String(row["origin"] ?? "") !== "t0") continue;
@@ -172,15 +190,40 @@ export function buildVex(
  * excludes model-tier findings, but cannot tell osv apart from sbom/semgrep/etc
  * within t0 — a defect finding whose prose happens to cite a CVE by way of
  * explanation must not read as a scanner-verified vulnerability statement.
+ *
+ * lore-ok[f6b7d999]: `MAL` ADDED — confirmed against OSV's own schema docs:
+ * OSV federates the OpenSSF malicious-packages database under this prefix,
+ * a distinct id scheme from CVE/GHSA/PYSEC/RUSTSEC/GO. `osv.ts` writes
+ * whatever id OSV itself returns with no scheme filtering, so a MAL finding
+ * already existed and was already silently invisible to every VEX-subject
+ * check in this file — the one class this review type exists to surface,
+ * absent from its own output.
  */
 export function vulnIdOf(evidence: string): string | undefined {
-  return /^OSV ((?:CVE|GHSA|OSV|PYSEC|RUSTSEC|GO)-[A-Za-z0-9-]+)\b/.exec(evidence)?.[1];
+  return /^OSV ((?:CVE|GHSA|OSV|PYSEC|RUSTSEC|GO|MAL)-[A-Za-z0-9-]+)\b/.exec(evidence)?.[1];
 }
 
-/** Human-facing summary. The machine form is the document above. */
-export function renderVex(doc: VexDocument): string {
-  const rows = doc.vulnerabilities as { id: string; analysis: { state: string; detail: string } }[];
-  if (rows.length === 0) return "No known vulnerabilities matched in this tree.";
+/**
+ * Human-facing summary. The machine form is the document above.
+ *
+ * lore-ok[d7af16cf]: `uncheckedEngines` ADDED. `buildVex` reads only recorded
+ * findings, so a tree the sbom/osv engines never queried (network down, cdxgen
+ * absent with no lockfile either) and a tree they queried and found nothing in
+ * produce the identical zero statements — and this summary used to say the
+ * same clean-sounding sentence for both. Passed in rather than queried here:
+ * this function stays pure, and the caller (server.ts) already calls
+ * `store.checksSkippedFor` for the same review to answer the same question
+ * elsewhere.
+ */
+export function renderVex(doc: VexDocument, uncheckedEngines: readonly string[] = []): string {
+  const rows = doc.vulnerabilities;
+  const gaps = uncheckedEngines.filter((e) => e.startsWith("osv:") || e.startsWith("sbom:"));
+
+  if (rows.length === 0) {
+    return gaps.length === 0
+      ? "No known vulnerabilities matched in this tree."
+      : `No vulnerability statements — but the check(s) that would produce them did not run (${gaps.join("; ")}). This is NOT a clean result.`;
+  }
 
   const byState = new Map<string, number>();
   for (const r of rows) byState.set(r.analysis.state, (byState.get(r.analysis.state) ?? 0) + 1);
@@ -193,6 +236,9 @@ export function renderVex(doc: VexDocument): string {
       "",
       `${triage} are still in triage — nobody has judged whether they are reachable. Do not read that as safe.`,
     );
+  }
+  if (gaps.length > 0) {
+    lines.push("", `Incomplete: ${gaps.join("; ")} — this document does not cover everything.`);
   }
   return lines.join("\n");
 }

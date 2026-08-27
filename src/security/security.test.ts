@@ -1,5 +1,8 @@
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { CLAIM_MAX } from "../core/finding.ts";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { initialState } from "../core/ladder.ts";
 import { Store } from "../store/store.ts";
 import {
@@ -11,8 +14,8 @@ import {
   toFindings,
   type OsvVuln,
 } from "./osv.ts";
-import type { Component } from "./sbom.ts";
-import { buildVex, findingsNeedingTriage, justificationFor, stateFor, vulnIdOf, renderVex } from "./vex.ts";
+import { generateSbom, type Component } from "./sbom.ts";
+import { buildVex, findingsNeedingTriage, justificationFor, stateFor, vulnIdOf, renderVex, type VexDocument } from "./vex.ts";
 
 const component: Component = { name: "lodash", version: "4.17.20", ecosystem: "npm", transitive: true };
 
@@ -23,6 +26,100 @@ const vuln: OsvVuln = {
   database_specific: { severity: "HIGH", cwe_ids: ["CWE-1321"] },
   affected: [{ ranges: [{ events: [{ fixed: "4.17.21" }] }] }],
 };
+
+/**
+ * `generateSbom` prefers cdxgen and falls back to reading package-lock.json
+ * directly; `npx` is faked on PATH so these do not depend on cdxgen actually
+ * being installed on whatever machine runs the suite.
+ */
+describe("generateSbom", () => {
+  let dir: string;
+  let binDir: string;
+  let savedPath: string | undefined;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "lore-sbomgen-"));
+    binDir = mkdtempSync(join(tmpdir(), "lore-sbomgen-bin-"));
+    savedPath = process.env["PATH"];
+    process.env["PATH"] = `${binDir}:${savedPath ?? ""}`;
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(binDir, { recursive: true, force: true });
+    if (savedPath === undefined) delete process.env["PATH"];
+    else process.env["PATH"] = savedPath;
+  });
+
+  // Fingerprint 02811eb9: npm ≤6's package-lock.json (lockfileVersion 1) has no
+  // "packages" key at all — deps live under nested "dependencies" instead, a
+  // shape this reader was never written to walk. `Object.entries(undefined ??
+  // {})` used to read that identically to a real, empty v2/v3 lockfile.
+  it("discloses a lockfileVersion-1 lockfile as unread, not as zero dependencies", async () => {
+    writeFileSync(join(binDir, "npx"), "#!/bin/sh\nexit 1\n");
+    chmodSync(join(binDir, "npx"), 0o755);
+    writeFileSync(
+      join(dir, "package-lock.json"),
+      JSON.stringify({ lockfileVersion: 1, dependencies: { lodash: { version: "4.17.21" } } }),
+    );
+    const sbom = await generateSbom(dir);
+    expect(sbom.components).toStrictEqual([]);
+    expect(sbom.incomplete).toMatch(/lockfileVersion 1/);
+  });
+
+  // A real, empty v2/v3 lockfile (a project with genuinely zero dependencies)
+  // must NOT trip the same disclosure — `packages: {}` is a known, complete
+  // answer, not an unreadable one.
+  it("does not treat a genuinely empty v2/v3 lockfile as unread", async () => {
+    writeFileSync(join(binDir, "npx"), "#!/bin/sh\nexit 1\n");
+    chmodSync(join(binDir, "npx"), 0o755);
+    writeFileSync(join(dir, "package-lock.json"), JSON.stringify({ lockfileVersion: 3, packages: {} }));
+    const sbom = await generateSbom(dir);
+    expect(sbom.components).toStrictEqual([]);
+    expect(sbom.incomplete).toBeUndefined();
+  });
+
+  // Fingerprint 2fc96d80: OSV's own schema requires Maven package.name to be
+  // "groupId:artifactId" — a bare artifactId is generally not a package OSV
+  // has ever heard of, so every Maven query silently missed.
+  it("names a Maven component groupId:artifactId, not the bare artifactId", async () => {
+    const cdxgenOutput = JSON.stringify({
+      components: [
+        { name: "log4j-core", version: "2.17.1", purl: "pkg:maven/org.apache.logging.log4j/log4j-core@2.17.1" },
+      ],
+    });
+    writeFileSync(join(binDir, "npx"), `#!/bin/sh\necho '${cdxgenOutput}'\nexit 0\n`);
+    chmodSync(join(binDir, "npx"), 0o755);
+    const sbom = await generateSbom(dir);
+    expect(sbom.components[0]?.name).toBe("org.apache.logging.log4j:log4j-core");
+  });
+
+  // Fingerprint af39c6f5: a cdxgen that is genuinely absent and a cdxgen that
+  // is present but crashes on a manifest it cannot parse used to produce the
+  // identical "cdxgen is not installed" sentence — sending an operator to
+  // reinstall a tool that was never the problem.
+  it("reports a cdxgen crash as a crash, not as 'not installed'", async () => {
+    writeFileSync(join(binDir, "npx"), "#!/bin/sh\necho 'cdxgen: cannot parse pom.xml: bad token' >&2\nexit 1\n");
+    chmodSync(join(binDir, "npx"), 0o755);
+    const sbom = await generateSbom(dir);
+    expect(sbom.note).toMatch(/failed rather than being absent/);
+    expect(sbom.note).toMatch(/cannot parse pom\.xml/);
+    expect(sbom.note).not.toMatch(/not installed/);
+  });
+
+  // `npx --no-install <real, existing package not locally cached>` was verified
+  // empirically (this session, on a real npm install) to exit 0 with the npm
+  // error on stderr and nothing on stdout — not a non-zero exit — so this is
+  // the real shape "not installed" takes here, distinct from a crash.
+  it("still says 'not installed' when cdxgen produces no output", async () => {
+    writeFileSync(
+      join(binDir, "npx"),
+      "#!/bin/sh\necho 'npm error npx canceled due to missing packages' >&2\nexit 0\n",
+    );
+    chmodSync(join(binDir, "npx"), 0o755);
+    const sbom = await generateSbom(dir);
+    expect(sbom.note).toMatch(/not installed/);
+    expect(sbom.note).not.toMatch(/failed rather than being absent/);
+  });
+});
 
 describe("severityOf", () => {
   it("maps the database's own rating", () => {
@@ -192,6 +289,13 @@ describe("vulnIdOf", () => {
     expect(vulnIdOf("no identifier here")).toBeUndefined();
   });
 
+  // Fingerprint f6b7d999: OSV federates the OpenSSF malicious-packages database
+  // under a MAL- prefix, distinct from CVE/GHSA/PYSEC/RUSTSEC/GO — the one
+  // finding class a supply-chain review most exists to surface.
+  it("recognises OSV's own malicious-package id scheme", () => {
+    expect(vulnIdOf("OSV MAL-2024-1234\nnpm package evil-pkg@1.0.0")).toBe("MAL-2024-1234");
+  });
+
   // `origin === "t0"` (buildVex, vex.ts) only tells a scanner finding from a model
   // tier's — semgrep shares that same "t0" origin with osv, and a registry rule
   // legitimately cites a CVE by name to explain what pattern it detects. That is
@@ -233,6 +337,38 @@ describe("justificationFor", () => {
   // is carried verbatim in `detail` regardless.
   it("falls back to not-reachable for a reason it cannot place", () => {
     expect(justificationFor("we discussed it and it is fine")).toBe("code_not_reachable");
+  });
+});
+
+const emptyDoc = (): VexDocument => ({
+  bomFormat: "CycloneDX",
+  specVersion: "1.6",
+  version: 1,
+  metadata: { timestamp: "2026-08-03T00:00:00.000Z", component: { name: "demo", version: "0.0.0" } },
+  vulnerabilities: [],
+});
+
+/**
+ * Fingerprint d7af16cf: zero vulnerability statements reads as a clean tree —
+ * but it is the identical shape a tree the sbom/osv engines never queried
+ * produces. `buildVex` only ever sees recorded findings, so this distinction
+ * has to be made by whoever also knows what `checksSkippedFor` says.
+ */
+describe("renderVex", () => {
+  it("reports a clean tree as clean when nothing was skipped", () => {
+    expect(renderVex(emptyDoc())).toBe("No known vulnerabilities matched in this tree.");
+  });
+
+  it("does not claim a clean tree when the vulnerability check never ran", () => {
+    const summary = renderVex(emptyDoc(), ["osv: nothing to query", "eslint: not configured"]);
+    expect(summary).toMatch(/did not run/);
+    expect(summary).not.toBe("No known vulnerabilities matched in this tree.");
+  });
+
+  // An unrelated skipped check (eslint here) must not itself trigger the
+  // caveat — only sbom/osv are what a VEX document's own claim depends on.
+  it("ignores a skipped check unrelated to the dependency scan", () => {
+    expect(renderVex(emptyDoc(), ["eslint: not configured"])).toBe("No known vulnerabilities matched in this tree.");
   });
 });
 
