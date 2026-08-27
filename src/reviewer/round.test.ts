@@ -985,6 +985,74 @@ describe("runRound", () => {
     // change what an earlier, different session had already recorded.
     expect(store.usageSoFar("r1", "t1", primary).inputTokens).toBe(500);
   });
+
+  /**
+   * A CANCEL MID-TWIN-CALL STILL SPENT REAL MONEY, and it has to be attributed to the
+   * twin that spent it — not floored to zero against the PRIMARY's unrelated banked
+   * total.
+   *
+   * `if (!stillWanted()) throw twin` used to fire before the twin-attributed recording
+   * a few lines below it, so a cancel landing mid-twin-call skipped straight to the
+   * outer catch — which has no `twinModel` in scope and falls back to
+   * `fellBackTo ?? chosenRoute ?? member.model`, both of the first two undefined on
+   * this path. Once `usageSoFar` became model-scoped, by fingerprint 45fa213f, that meant
+   * the twin's spend was deltaed against the PRIMARY's own banked total and floored to
+   * zero, with no paid-route alert either — fingerprint 960cb2b7.
+   */
+  it("attributes a cancel-during-twin-call's spend to the twin, not the primary it floors against", async () => {
+    const type = {
+      ...TYPE,
+      tiers: DEFAULT_TIERS.map((t) => (t.id === "t1" ? { ...t, conversation: true, fallback: ["openrouter/twin"] } : t)),
+    };
+    const primary = type.tiers.find((t) => t.id === "t1")?.model ?? "";
+    const sent: { condition: string; detail: string; severity: string }[] = [];
+    const alerter = {
+      send: (x: { condition: string; detail: string; severity: string }) => {
+        sent.push(x);
+        return Promise.resolve(true);
+      },
+    };
+
+    class CancelMidTwin implements ReviewerLike {
+      primaryCalls = 0;
+      async review(tier: Tier): Promise<ReviewerResult> {
+        if (tier.model === primary) {
+          this.primaryCalls++;
+          if (this.primaryCalls >= 2) throw new Exhausted("primary is out");
+          // Round 1 banks a large baseline the twin's small delta must not be measured against.
+          return {
+            findings: [nthBug(this.primaryCalls)], discarded: [], raw: "",
+            inputTokens: 100_000, cachedTokens: 0, outputTokens: 5_000, costUsd: 0,
+            latencyMs: 1, retried: false, steps: 1,
+          };
+        }
+        // The twin: spends real metered money, then the client cancels while it is
+        // still mid-call — the review's own state turns terminal before the twin's
+        // promise settles, exactly as a live cancel would land.
+        store.updateReview("r1", { state: "cancelled" });
+        const e = new Error("review r1 ended while the twin was mid-call") as Error & { spent?: Record<string, number> };
+        e.spent = { input: 8_000, cached: 0, output: 800, cost: 1.9 };
+        throw e;
+      }
+    }
+    const reviewer = new CancelMidTwin();
+
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type, allowMetered: true, alerter });
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type, allowMetered: true, alerter }).catch(() => undefined);
+
+    const twinRow = store.db
+      .prepare("SELECT input_tokens i, cost_usd c FROM usage WHERE review_id = 'r1' AND tier = 't1' AND model = 'openrouter/twin' ORDER BY id DESC LIMIT 1")
+      .get() as { i: number; c: number } | undefined;
+    expect(twinRow?.i, "the twin's real spend, not floored against the primary's unrelated baseline").toBe(8_000);
+    expect(twinRow?.c, "the real dollar cost, not zeroed").toBeCloseTo(1.9);
+
+    // THE PRIMARY'S OWN BANKED TOTAL IS UNTOUCHED — a cancelled twin's spend must not
+    // land under the primary's name, zeroed or otherwise.
+    expect(store.usageSoFar("r1", "t1", primary).inputTokens, "round 1's banked total, unchanged").toBe(100_000);
+
+    expect(sent, "a paid route was actually reached and must still be reported").toHaveLength(1);
+    expect(sent[0]?.detail).toContain("openrouter/twin");
+  });
 });
 
 // D-51 carries an accepted justification into a later review. The carry wrapped the

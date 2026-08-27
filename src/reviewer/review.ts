@@ -1981,39 +1981,27 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
           store.clearRouteUnavailable(twinModel);
           break;
         } catch (twin) {
-          // A CANCEL IS NOT A PROVIDER FAULT, and must not be laundered into one.
+          // WHAT THIS TWIN SPENT BEFORE IT DIED, recorded against the model that spent it —
+          // AHEAD of the cancel check below, on purpose.
           //
-          // "Never worse than no fallback" is a rule about the PROVIDER failing. When a
-          // cancel lands while a twin is in flight — or queued at the gate — the twin
-          // throws because the review ended, and rethrowing the primary's `Exhausted`
-          // instead sent that through D-48's step-over, which writes the ladder's state
-          // over the `cancelled` the client was just told it got. The review came back to
-          // life and the worker enqueued its next round.
-          if (!stillWanted()) throw twin;
-          const why = twin instanceof Error ? twin.message : String(twin);
-          if (routeFault(twin)) {
-            const seen = store.routeUnavailable(twinModel)?.failures ?? 0;
-            const at = retryAt(Date.now(), seen + 1, resetOf(twin));
-            store.markRouteUnavailable(twinModel, at.until, why, seen + 1, at.stated);
-          }
-          console.error(`[lore:log] ${reviewId}: the fallback ${twinModel} failed too — ${why}`);
-          refused.push(`${twinModel}: ${why}`);
-
-          // WHAT THIS TWIN SPENT BEFORE IT DIED, recorded against the model that spent it.
-          //
-          // The outer catch recovers spend from the error it receives — and this path
-          // rethrows the PRIMARY's `Exhausted`, whose session spent nothing, so a twin's
-          // tokens were dropped entirely. The twins are the metered ones: a failed
-          // fallback burned real money that no `usage` row recorded, which left the
-          // round-boundary ceiling blind to exactly the runaway shape it is the only
-          // guard against.
+          // lore-ok[960cb2b7]: this used to sit after `if (!stillWanted()) throw twin`, so a
+          // cancel landing mid-twin-call skipped straight to the outer catch — which has no
+          // `twinModel` in scope (it is block-scoped to this `for` loop) and so falls back to
+          // `failedOn = fellBackTo ?? chosenRoute ?? member.model`, both undefined on this
+          // path. That named the PRIMARY's model, and once `usageSoFar` became model-scoped by
+          // fingerprint 45fa213f, the twin's real spend was then deltaed against the PRIMARY's
+          // unrelated banked total and floored to zero — real metered dollars recorded as nothing, under
+          // the wrong name, with no paid-route alert either (its `paidRoute` is the same
+          // undefined pair). Recording here, before the throw, is the only place `twinModel`
+          // is ever in scope for this error.
           const twinSpent = (twin as { spent?: { input: number; cached: number; output: number; cost: number } }).spent;
           // AND THE OPERATOR HEARS ABOUT IT HERE, where a paid call is known to have been
           // attempted. The failure-path notice I added first read `fellBackTo ?? chosenRoute`
           // — and `fellBackTo` is assigned only AFTER a twin succeeds, `chosenRoute` only for
           // a pool pick, so on the ordinary shape (a configured fallback that times out
           // after spending) both were undefined and nothing was ever sent. The money left
-          // and the alert did not. `twinModel` is the route that was actually asked.
+          // and the alert did not. `twinModel` is the route that was actually asked — true
+          // whether the twin died to a provider fault or to a cancel landing mid-call.
           if (isMeteredRoute(twinModel)) {
             await tellPaidRoute(store, input.alerter, member.id, twinModel, twinSpent?.cost ?? 0);
           }
@@ -2041,7 +2029,30 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
               costUsd: twinUsage.costUsd,
               outcome: "failed",
             });
+            // RECORDED, under the right name. `twin` is the exact object the outer catch
+            // receives on the cancel path below (`throw twin` rethrows this reference, not a
+            // copy) — left alone, its `.spent` would be read there too and attributed a
+            // second time, to `member.model`, deltaed against that model's own baseline.
+            delete (twin as { spent?: unknown }).spent;
           }
+
+          // A CANCEL IS NOT A PROVIDER FAULT, and must not be laundered into one.
+          //
+          // "Never worse than no fallback" is a rule about the PROVIDER failing. When a
+          // cancel lands while a twin is in flight — or queued at the gate — the twin
+          // throws because the review ended, and rethrowing the primary's `Exhausted`
+          // instead sent that through D-48's step-over, which writes the ladder's state
+          // over the `cancelled` the client was just told it got. The review came back to
+          // life and the worker enqueued its next round.
+          if (!stillWanted()) throw twin;
+          const why = twin instanceof Error ? twin.message : String(twin);
+          if (routeFault(twin)) {
+            const seen = store.routeUnavailable(twinModel)?.failures ?? 0;
+            const at = retryAt(Date.now(), seen + 1, resetOf(twin));
+            store.markRouteUnavailable(twinModel, at.until, why, seen + 1, at.stated);
+          }
+          console.error(`[lore:log] ${reviewId}: the fallback ${twinModel} failed too — ${why}`);
+          refused.push(`${twinModel}: ${why}`);
 
           // ONWARD ONLY ON A ROUTE FAULT — quota, or a rejected credential. The next
           // entry is a different subscription, so "this door is locked" is a reason to
@@ -2248,10 +2259,11 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
         repoId: review.repoId,
         reviewId,
         tier: member.id,
-        // THE MODEL THAT ACTUALLY BURNED IT. On the cancel-during-fallback path the twin
-        // is what ran, and `throw twin` fires before the twin-attributed recording below —
-        // so this row was the only one written, naming a flat-subscription model that
-        // never ran while the dollars were the twin's.
+        // THE MODEL THAT ACTUALLY BURNED IT — which by the time this block runs is always
+        // the PRIMARY's. A twin's own catch above records its spend under ITS route and
+        // clears `.spent` before ever rethrowing, per fingerprint 960cb2b7, specifically
+        // because this generic fallback recording has no `twinModel` in scope to name
+        // correctly — so a twin's error never reaches here still carrying spend to attribute.
         ...(failedOn !== undefined ? { model: failedOn } : {}),
         inputTokens: usage.inputTokens,
         cachedTokens: usage.cachedTokens,
