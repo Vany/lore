@@ -251,6 +251,20 @@ export class Worker {
         // the deploy window this whole guard exists for.
         if (this.store.isClosed()) return;
 
+        // lore-ok[441a6bc1]: EVERYTHING BELOW, WRAPPED AGAIN — found by lore's
+        // own review. `isClosed()` above catches only the CLOSED flavour of
+        // this window (a flag `close()` sets); a database that is merely
+        // CORRUPTED — SQLITE_CORRUPT mid-life, the same event this file's own
+        // history names above — still reports `isClosed() === false` and every
+        // one of `requeueJob`/`repoAndStateOf`/`finishJob`/`stateOf`/
+        // `setFailureReason` below throws on it exactly as the success path's
+        // reads did before `88ca976`/this comment's own fix. A second store
+        // fault while already handling the first is the identical unhandled-
+        // rejection shape out of the same detached `void this.round(...)`
+        // (line 189) — swallowed here rather than escaping, on the same
+        // reasoning `isClosed()` already accepts: the job row stays `running`
+        // and startup requeues it.
+        try {
         // LORE WENT AWAY MID-ROUND — requeue, do not end the review (D-104).
         //
         // "Drop the sessions and restore after restart" only restored half of them. A
@@ -338,6 +352,12 @@ export class Worker {
           condition: "review round failed",
           detail: `${job.reviewId}: ${message}`,
         });
+        } catch (inner) {
+          console.error(
+            `[lore:log] ${job.reviewId}: round's own failure handling faulted, leaving the job for startup reclaim: ` +
+              (inner instanceof Error ? inner.message : String(inner)),
+          );
+        }
       }
     }
   }

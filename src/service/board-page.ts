@@ -529,9 +529,18 @@ function run(r, t) {
   // INTERRUPTED run with zero findings is the same overclaim from a different
   // trigger (fingerprint d767498a) — an engine that was killed or ran out of
   // memory is not one that looked and found nothing.
+  //
+  // lore-ok[3e1abbb4]: FAILED/UNPAYABLE/STOPPED JOIN INTERRUPTED HERE, the same
+  // overclaim one outcome-value over. store.ts's own DID_NOT_LOOK_SQL only
+  // covers failed/unpayable (stopped is deliberately excluded THERE — it is not
+  // evidence about the tier, for the different, narrower purpose of counting
+  // provider failures), but for THIS row's own claim — did a sweep happen? —
+  // all four mean it did not complete, exactly as ops/status.ts's own
+  // didNotRun already treats unpayable/failed/stopped alike.
+  const didNotComplete = t.outcome === "interrupted" || t.outcome === "failed" || t.outcome === "unpayable" || t.outcome === "stopped";
   const count = t.outcome === "reused"
     ? '<span class="dim">not re-run — the tree was unchanged, so the earlier sweep still stands</span>'
-    : t.outcome === "interrupted" && t.findings.length === 0
+    : didNotComplete && t.findings.length === 0
       ? '<span class="skip">did not finish — see below, not a clean sweep</span>'
       : t.findings.length > 0
         ? '<span class="dim">' + t.findings.length + " finding(s)</span>"

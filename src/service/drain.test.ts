@@ -346,6 +346,62 @@ describe("a round whose store closes under it", () => {
     }
     expect(rejections, "a closed store must not crash the process").toStrictEqual([]);
   }, WAITING);
+
+  // lore-ok[441a6bc1]: same shape one layer deeper, found by lore's own review.
+  // isClosed() catches only the CLOSED flavour of this window — a database
+  // that is merely CORRUPTED still answers isClosed() === false, and every
+  // store call the catch block makes after that check (finishJob among them)
+  // throws on it exactly as a closed handle does. A Proxy stands in for that:
+  // isClosed() answers truthfully (nothing was actually closed), finishJob
+  // throws as if the row write hit SQLITE_CORRUPT.
+  it("stops quietly instead of throwing out of a detached promise when the store is corrupted, not closed", async () => {
+    const repoId = store.upsertRepo("r", join(root2, "src")).id;
+    const src = join(root2, "src");
+    makeRepo(src);
+    const bare = join(root2, "repos", repoId, "bare.git");
+    mkdirSync(join(bare, ".."), { recursive: true });
+    execFileSync("git", ["clone", "--bare", src, bare], { stdio: "ignore" });
+    writeFileSync(join(bare, "FETCH_HEAD"), "");
+    store.createReview({
+      id: "revZ", repoId, principal: "p", branch: "main", intoRef: "main",
+      ticket: "t", type: "code-arch", state: "queued", ladder: initialState(),
+    });
+    store.enqueue("revZ", "fast");
+
+    let finishJobCalls = 0;
+    const corrupted = new Proxy(store, {
+      get(target, prop, receiver) {
+        if (prop === "finishJob") {
+          return () => {
+            finishJobCalls += 1;
+            throw new Error("simulated: SQLITE_CORRUPT");
+          };
+        }
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+
+    const w = new Worker(
+      corrupted,
+      { ...DEFAULT_WORKER, pollMs: 5, reposRoot: join(root2, "repos") },
+      new Alerter({ timeoutMs: 10 }),
+      { review: () => Promise.reject(new DidNotRun("tier t1 failed: provider 500")) },
+    );
+
+    const rejections: unknown[] = [];
+    const onRejection = (e: unknown) => rejections.push(e);
+    process.on("unhandledRejection", onRejection);
+    const stop = w.start();
+    try {
+      await until("the round to hit the corrupted finishJob call", () => finishJobCalls > 0);
+      // Long enough for a rejection to surface if the round throws past its own catch.
+      await new Promise((r) => setTimeout(r, 300));
+    } finally {
+      stop();
+      process.off("unhandledRejection", onRejection);
+    }
+    expect(rejections, "a corrupted store must not crash the process").toStrictEqual([]);
+  }, WAITING);
 });
 
 // A SERVICE THAT HAS STOPPED WORKING AND SAYS IT IS FINE.

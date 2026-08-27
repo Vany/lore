@@ -75,3 +75,48 @@ describe("an idle board transfers nothing", () => {
     s.close();
   });
 });
+
+// lore-ok[9a9dc489]: found by lore's own review. A raw `setInterval` callback
+// has nothing catching it by default — unlike `add`'s own `snapshot()` call,
+// which runs inside http.ts's request handler and is already caught there. A
+// throwing tick used to become an UNCAUGHT EXCEPTION (tick is synchronous, so
+// there is no promise for `unhandledRejection` to name), which by Node's
+// default kills the whole process. Real timers here, not the file's usual
+// fake ones: only a real event loop actually emits `uncaughtException`.
+describe("a tick that throws does not crash the process", () => {
+  it("does not let a snapshot fault escape as an uncaught exception", async () => {
+    vi.useRealTimers();
+    let calls = 0;
+    const flaky = new Proxy(store, {
+      get(target, prop, receiver) {
+        if (prop === "boardReviews") {
+          // The FIRST call is `add`'s own — let it through so the stream
+          // actually starts. Every call after that is a `tick`, and that is
+          // the one this test is about.
+          return (...args: unknown[]) => {
+            calls += 1;
+            if (calls > 1) throw new Error("simulated: SQLITE_CORRUPT");
+            return target.boardReviews(...(args as Parameters<typeof target.boardReviews>));
+          };
+        }
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+
+    const s = startBoardStream(flaky, 10, 15_000);
+    const w = fakeRes();
+    const exceptions: unknown[] = [];
+    const onException = (e: unknown) => exceptions.push(e);
+    process.on("uncaughtException", onException);
+    try {
+      s.add(w.res);
+      // Several ticks, every one after the first throwing inside snapshot().
+      await new Promise((r) => setTimeout(r, 100));
+    } finally {
+      process.off("uncaughtException", onException);
+      s.close();
+    }
+    expect(calls, "the flaky tick must actually have been reached").toBeGreaterThan(1);
+    expect(exceptions, "a throwing tick must not crash the process").toStrictEqual([]);
+  });
+});

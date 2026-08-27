@@ -97,7 +97,25 @@ export function startBoardStream(
   };
 
   const tick = (): void => {
-    const payload = snapshot();
+    // lore-ok[9a9dc489]: WRAPPED — found by lore's own review. A raw
+    // `setInterval` callback has nothing catching it by default (`start`,
+    // below), unlike `add`'s own `snapshot()` call, which runs inside
+    // `http.ts`'s request handler and is already caught there. The identical
+    // shape has already been fixed four times over in this service —
+    // heartbeat's own beat, board.ts's tick, main.ts's screening and
+    // fallback-check IIFEs — for the same reason each time: an uncaught
+    // throw from a store read (a malformed database mid-life) takes the
+    // WHOLE PROCESS down, every in-flight round with it, not just this one
+    // board. Skipped rather than retried: the next tick tries again in
+    // `pollMs`, and a fault that persists is what the heartbeat's own
+    // DATABASE UNREADABLE page already exists to catch.
+    let payload: string;
+    try {
+      payload = snapshot();
+    } catch (e) {
+      console.error(`[lore:log] board stream tick faulted, skipping this cycle: ${e instanceof Error ? e.message : String(e)}`);
+      return;
+    }
     sinceHeartbeat += pollMs;
     if (unchanged(payload, last)) {
       if (sinceHeartbeat < heartbeatMs) return;

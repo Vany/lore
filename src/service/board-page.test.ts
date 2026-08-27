@@ -217,6 +217,42 @@ describe("the board's own script runs", () => {
     expect(html, "the exact overclaim this fix removes").not.toContain("raised nothing");
   });
 
+  // Fingerprint 3e1abbb4: the d767498a fix above special-cased 'interrupted'
+  // and missed that failed/unpayable/stopped are the SAME overclaim from a
+  // different trigger — each means the sweep did not complete, exactly as
+  // ops/status.ts's own didNotRun already treats all three alike. UNLIKE
+  // interrupted, these three keep the red s-failed mark (ops/status.ts's own
+  // precedent again) — only the "raised nothing" TEXT is the overclaim.
+  it.each(["failed", "unpayable", "stopped"] as const)(
+    "renders a %s t0 round with zero findings as unfinished, not as a clean sweep",
+    (outcome) => {
+      const { render, byId } = loadPage();
+      const base = snapshot();
+      render({
+        ...base,
+        reviews: [
+          {
+            ...(base.reviews[0] as Record<string, unknown>),
+            tiers: [
+              {
+                tier: "t0",
+                round: 2,
+                outcome,
+                startedAt: new Date(Date.now() - 90_000).toISOString(),
+                finishedAt: new Date(Date.now() - 60_000).toISOString(),
+                findings: [],
+              },
+            ],
+          },
+        ],
+      });
+
+      const html = String(byId.get("board")?.innerHTML ?? "");
+      expect(html, "the row must exist to make either claim below meaningful").toContain(outcome);
+      expect(html, "the exact overclaim this fix removes").not.toContain("raised nothing");
+    },
+  );
+
   it("renders the states that have their own shapes", () => {
     const { render } = loadPage();
     const base = snapshot();
