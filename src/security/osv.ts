@@ -55,6 +55,22 @@ export interface Vulnerable {
  * A failed query throws. An empty result and an unreachable database must never
  * look alike: one means "nothing known", the other means "we did not look", and
  * only one of them is safe to ship on.
+ *
+ * lore-ok[bfa2e44b]: HYDRATED, NOT TRUSTED BARE. Confirmed against OSV's own
+ * current API docs, not assumed: `/v1/querybatch` "returns vulnerability ids
+ * and modified field only" — every OTHER field this module reads
+ * (`severityOf`'s `database_specific.severity`, `fixedVersion`'s `affected`,
+ * `aliases`, `cweOf`'s `database_specific.cwe_ids`) comes back `undefined` on
+ * every real call, so every finding this module has ever produced defaulted
+ * to medium severity and "no fixed version published" regardless of the
+ * database's real answer — confident, wrong, in the direction that gets a
+ * vulnerability ignored. `/v1/vulns/{id}` (confirmed separately: a full
+ * record) is queried once per DISTINCT vulnerability id found, after
+ * batching — bounded by how many vulnerabilities actually matched, usually
+ * far fewer than the components queried, not by the dependency tree's size.
+ * A hydration failure for any one id throws, same as a failed query: partial
+ * hydration is the identical partial-trust shape the batch-mismatch check
+ * below already refuses.
  */
 export async function queryComponents(
   components: readonly Component[],
@@ -84,7 +100,7 @@ export async function queryComponents(
       throw new DidNotRun(`OSV returned ${res.status} — the vulnerability check DID NOT RUN`);
     }
 
-    const parsed = (await res.json()) as { results?: { vulns?: OsvVuln[] }[] };
+    const parsed = (await res.json()) as { results?: { vulns?: OsvVuln[]; next_page_token?: string }[] };
     const results = parsed.results ?? [];
 
     // THE ANSWERS ARE MATCHED TO THE QUESTIONS BY POSITION AND NOTHING ELSE. OSV's
@@ -108,10 +124,45 @@ export async function queryComponents(
     for (const [j, result] of results.entries()) {
       const component = chunk[j];
       if (component === undefined) continue;
+      // lore-ok[bfa2e44b]: TRUNCATION REFUSED, NOT SILENT. OSV's own docs: a
+      // `next_page_token` on a result means over 1000 known vulnerabilities
+      // exist for that one query and this page did not carry all of them —
+      // the same silent-partial-result shape the batch-length check above
+      // already refuses, one level in: THIS component would otherwise be
+      // reported with an incomplete vulnerability list read as a complete one.
+      if (result.next_page_token !== undefined) {
+        throw new DidNotRun(
+          `OSV truncated the vulnerability list for ${component.name}@${component.version} (over 1000 known ` +
+            "vulnerabilities, next_page_token present) — the vulnerability check DID NOT RUN",
+        );
+      }
       const vulns = result.vulns ?? [];
       if (vulns.length > 0) out.push({ component, vulns });
     }
   }
+
+  const ids = new Set<string>();
+  for (const { vulns } of out) for (const v of vulns) ids.add(v.id);
+  const hydrated = await hydrateVulns(ids, fetchImpl);
+  return out.map(({ component, vulns }) => ({ component, vulns: vulns.map((v) => hydrated.get(v.id) ?? v) }));
+}
+
+/** `/v1/vulns/{id}` is the one OSV endpoint that returns a full record — see `queryComponents`' own doc comment for why this exists. */
+async function hydrateVulns(ids: ReadonlySet<string>, fetchImpl: typeof fetch): Promise<ReadonlyMap<string, OsvVuln>> {
+  const out = new Map<string, OsvVuln>();
+  await Promise.all(
+    [...ids].map(async (id) => {
+      const res = await fetchImpl(`${OSV_API}/vulns/${encodeURIComponent(id)}`, {
+        signal: AbortSignal.timeout(60_000),
+      }).catch((e: unknown) => {
+        throw new DidNotRun(`OSV vulnerability lookup failed for ${id} — the vulnerability check DID NOT RUN: ${String(e)}`, e);
+      });
+      if (!res.ok) {
+        throw new DidNotRun(`OSV returned ${String(res.status)} looking up ${id} — the vulnerability check DID NOT RUN`);
+      }
+      out.set(id, (await res.json()) as OsvVuln);
+    }),
+  );
   return out;
 }
 

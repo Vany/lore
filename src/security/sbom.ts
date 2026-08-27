@@ -207,8 +207,20 @@ async function fromPackageLock(worktree: string): Promise<Sbom | undefined> {
   let doc: LockV3;
   try {
     doc = JSON.parse(raw) as LockV3;
-  } catch {
-    return undefined;
+  } catch (e) {
+    // lore-ok[e10c3847]: A REAL Sbom, NOT `undefined`. `undefined` here read
+    // identically to the file not existing at all (the check just above),
+    // discarding the one fact that would tell an operator the file IS
+    // present and malformed — a merge conflict left unresolved, most likely,
+    // on a branch this tool exists to gate — rather than simply missing.
+    // Same shape as the no-"packages"-key case just below: zero components,
+    // `incomplete` naming what actually went wrong.
+    return {
+      components: [],
+      source: "package-lock",
+      note: "cdxgen not available; read package-lock.json directly.",
+      incomplete: `package-lock.json exists but did not parse as JSON (${e instanceof Error ? e.message : String(e)}) — this reader could not enumerate it`,
+    };
   }
 
   if (doc.packages === undefined) {

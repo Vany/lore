@@ -65,6 +65,19 @@ describe("generateSbom", () => {
     expect(sbom.incomplete).toMatch(/lockfileVersion 1/);
   });
 
+  // Fingerprint e10c3847: a present-but-malformed package-lock.json (a merge
+  // conflict left unresolved is routine input for a review tool) used to
+  // return the same `undefined` as the file not existing at all, so the
+  // note said "(not found)" about a file that is right there.
+  it("discloses a malformed package-lock.json as unparseable, not as missing", async () => {
+    writeFileSync(join(binDir, "npx"), "#!/bin/sh\nexit 1\n");
+    chmodSync(join(binDir, "npx"), 0o755);
+    writeFileSync(join(dir, "package-lock.json"), "<<<<<<< HEAD\nnot json\n=======\n");
+    const sbom = await generateSbom(dir);
+    expect(sbom.source).toBe("package-lock");
+    expect(sbom.incomplete).toMatch(/did not parse as JSON/);
+  });
+
   // A real, empty v2/v3 lockfile (a project with genuinely zero dependencies)
   // must NOT trip the same disclosure — `packages: {}` is a known, complete
   // answer, not an unreadable one.
@@ -266,10 +279,28 @@ describe("toFindings", () => {
   });
 });
 
+/**
+ * Real OSV separates matching from reading: `/querybatch` answers bare
+ * `{id, modified}` per vuln, `/vulns/{id}` is the one endpoint with the full
+ * record. A fake that answers the same body to both hides exactly the bug
+ * fingerprint bfa2e44b named — this discriminates by URL so a test that
+ * cares about hydrated content actually exercises it, rather than passing
+ * by accident because a blanket fake answered anything successfully.
+ */
+function fakeOsvApi(querybatchBody: unknown, hydrate: (id: string) => OsvVuln = (id) => ({ id })): typeof fetch {
+  return (async (url: string | URL) => {
+    const href = typeof url === "string" ? url : url.href;
+    const vulnsMatch = /\/vulns\/([^/?]+)/.exec(href);
+    if (vulnsMatch?.[1] !== undefined) {
+      return new Response(JSON.stringify(hydrate(decodeURIComponent(vulnsMatch[1]))), { status: 200 });
+    }
+    return new Response(JSON.stringify(querybatchBody), { status: 200 });
+  }) as unknown as typeof fetch;
+}
+
 describe("queryComponents", () => {
   it("returns only the components that matched", async () => {
-    const fake = (async () =>
-      new Response(JSON.stringify({ results: [{ vulns: [vuln] }, {}] }), { status: 200 })) as unknown as typeof fetch;
+    const fake = fakeOsvApi({ results: [{ vulns: [{ id: vuln.id }] }, {}] }, () => vuln);
     const out = await queryComponents([component, { ...component, name: "safe-pkg" }], fake);
     expect(out).toHaveLength(1);
     expect(out[0]?.component.name).toBe("lodash");
@@ -280,15 +311,14 @@ describe("queryComponents", () => {
   // CLEAN — not "we could not check" — in a security review, for packages nobody
   // looked at. INV-1 inside the scanner.
   it("refuses a batch whose answers do not line up with its questions", async () => {
-    const short = (async () =>
-      new Response(JSON.stringify({ results: [{ vulns: [vuln] }] }), { status: 200 })) as unknown as typeof fetch;
+    const short = fakeOsvApi({ results: [{ vulns: [{ id: vuln.id }] }] });
     await expect(
       queryComponents([component, { ...component, name: "unchecked-pkg" }], short),
     ).rejects.toThrow(/DID NOT RUN/);
   });
 
   it("says how many answers it got for how many questions", async () => {
-    const short = (async () => new Response(JSON.stringify({ results: [] }), { status: 200 })) as unknown as typeof fetch;
+    const short = fakeOsvApi({ results: [] });
     await expect(queryComponents([component], short)).rejects.toThrow(/0 result\(s\) for 1 component\(s\)/);
   });
 
@@ -304,6 +334,36 @@ describe("queryComponents", () => {
   it("throws on a non-200 rather than treating the body as a result", async () => {
     const bad = (async () => new Response("upstream error", { status: 503 })) as unknown as typeof fetch;
     await expect(queryComponents([component], bad)).rejects.toThrow(/DID NOT RUN/);
+  });
+
+  // Fingerprint bfa2e44b: /v1/querybatch's own docs say it "returns
+  // vulnerability ids and modified field only" — every OTHER field a real
+  // finding needs (summary, database_specific.severity, affected, aliases)
+  // comes back undefined unless a caller separately hydrates each id.
+  it("hydrates querybatch's bare {id, modified} results into full records", async () => {
+    const fake = fakeOsvApi({ results: [{ vulns: [{ id: vuln.id, modified: "2024-01-01T00:00:00Z" }] }] }, () => vuln);
+    const out = await queryComponents([component], fake);
+    expect(out[0]?.vulns[0]?.summary).toBe(vuln.summary);
+    expect(out[0]?.vulns[0]?.database_specific?.severity).toBe("HIGH");
+    expect(out[0]?.vulns[0]?.aliases).toEqual(vuln.aliases);
+  });
+
+  it("throws rather than reporting a partially-hydrated result when hydration fails", async () => {
+    const fake = (async (url: string | URL) => {
+      const href = typeof url === "string" ? url : url.href;
+      if (/\/vulns\//.test(href)) return new Response("upstream error", { status: 503 });
+      return new Response(JSON.stringify({ results: [{ vulns: [{ id: vuln.id }] }] }), { status: 200 });
+    }) as unknown as typeof fetch;
+    await expect(queryComponents([component], fake)).rejects.toThrow(/DID NOT RUN/);
+  });
+
+  // Fingerprint bfa2e44b: a `next_page_token` on a result means OSV
+  // truncated that component's own vulnerability list (over 1000 known
+  // vulnerabilities) — the same silent-partial-result shape the
+  // batch-length check already refuses, one component deeper.
+  it("refuses a truncated per-component result rather than reporting it as complete", async () => {
+    const fake = fakeOsvApi({ results: [{ vulns: [{ id: vuln.id }], next_page_token: "abc" }] });
+    await expect(queryComponents([component], fake)).rejects.toThrow(/DID NOT RUN/);
   });
 });
 
