@@ -778,8 +778,19 @@ export function streamFix(i: {
     "WHAT CHANGED",
     i.diff,
     "",
-    "A finding that is actually fixed: do not re-raise it. Still broken, or broken differently:",
-    "re-raise with the same claim wording and RAISED severity. The fix itself is new code —",
-    "review it too. Then continue: next finding, or done.",
+    // lore-ok[924989e3]: SOFTENED, same as the settled ledger below (28198096) and for the
+    // identical reason — found by lore's own review, having missed this sibling the first
+    // time. "RAISED severity" promised machinery `recordFinding`'s `ON CONFLICT(review_id,
+    // fingerprint) DO NOTHING` does not have: the fingerprint is `claim`+`file`+`symbol`
+    // only (core/fingerprint.ts), so a re-raise with unchanged wording writes nothing new —
+    // severity included — however this line ends. Identical wording is still what keeps a
+    // still-open finding tracked as the SAME one rather than a fresh discovery, so that
+    // part stays; what changes is only the false promise that a severity word moves
+    // anything on its own.
+    "A finding that is actually fixed: do not re-raise it. Still the SAME defect: re-raise with the",
+    "same claim wording — that is what keeps it tracked as the one you already raised, not a new one.",
+    "Broken WORSE, or differently, than you first said: say what changed, in the claim itself. A",
+    "severity word alone changes nothing on a re-raise; the wording is what carries it. The fix",
+    "itself is new code — review it too. Then continue: next finding, or done.",
   ].join("\n");
 }

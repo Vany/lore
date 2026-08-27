@@ -43,7 +43,7 @@ import { type Alert, CONDITIONS } from "../ops/alerts.ts";
 import { startOfDayIso } from "../ops/spend.ts";
 import { ServiceUnreachable, CancelledByLore, DidNotRun, Exhausted, ProviderAuthFailed, TierUnavailable, TooLargeForTier } from "../core/errors.ts";
 import { hunkAround, hunkStillPresent, makeScope, type Scope } from "../core/scope.ts";
-import { baseCommitFor, blobSha, computeDiff, renderDiff, resolveInto, wholeTreeDiff } from "../git/diff.ts";
+import { baseCommitFor, blobSha, computeDiff, filesInDiff, renderDiff, resolveInto, wholeTreeDiff } from "../git/diff.ts";
 import { applyPatch, restoreTree, treeDelta, treeHash } from "../git/repo.ts";
 import { detectAndRecord, renderConflicts } from "../knowledge/conflict.ts";
 import { promoteRecurring } from "../knowledge/derive.ts";
@@ -1391,9 +1391,15 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
         }
         if (consumed.applied > 0) {
           hold.chain.push(...consumed.diffs);
-          const touched = consumed.diffs.flatMap((d) =>
-            [...d.matchAll(/^\+\+\+ b\/(.+)$/gm)].map((m) => m[1] ?? "").filter((x) => x !== ""),
-          );
+          // lore-ok[eab161bc]: was a hand-rolled `/^\+\+\+ b\/(.+)$/` here, which reads a
+          // git-quoted path (non-ASCII, or any name `core.quotePath` wraps in `"…"` with
+          // C-style escapes) literally instead of decoding it — the quote character sits
+          // between the space and `b/`, so the anchored pattern never matches such a line
+          // at all, and the file is silently absent from `touched`. `filesInDiff`
+          // (git/diff.ts) is the same parse this file's own diffs already go through
+          // everywhere else, unquoting first — moved out of this file for D-130 without
+          // this one call site being pointed at the mover.
+          const touched = consumed.diffs.flatMap((d) => filesInDiff(d));
           // Run once per apply and SHARED across the rung: the engines are
           // deterministic, so a sibling rendering its own delta from the same result
           // is the same answer without the second run.
@@ -1800,6 +1806,38 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       // levels or the pool shrinks permanently on a bad afternoon.
       store.clearRouteUnavailable(primaryRoute);
     } catch (e) {
+      // WHAT THE PRIMARY SPENT BEFORE IT DIED, recorded under its OWN route — here,
+      // before any fallback is even attempted, for the same reason the twin's own spend
+      // moved earlier in its catch, fingerprint 960cb2b7: a chain that goes on to RESCUE this round
+      // never reaches the outer catch at all (falls through having set `result`, no
+      // throw), and a chain that EXHAUSTS every twin replaces this error with a brand-new
+      // synthesized `Exhausted`/`ProviderAuthFailed` before it gets there either — so in
+      // both shapes the primary's own `.spent` was simply never looked at again. Only the
+      // "no fallback configured, `throw e` unchanged a few lines down" shape reached the
+      // outer catch with THIS SAME error object, which is why that one case already
+      // recorded correctly and this looked fixed until a fallback was configured.
+      // lore-ok[f65306a0]: fixed here.
+      const primarySpent = (e as { spent?: { input: number; cached: number; output: number; cost: number } }).spent;
+      if (primaryAsked && primarySpent !== undefined) {
+        const primaryUsage = perRoundUsage(store, reviewId, member, primaryRoute, {
+          inputTokens: primarySpent.input, cachedTokens: primarySpent.cached, outputTokens: primarySpent.output, costUsd: primarySpent.cost,
+        });
+        store.recordUsage({
+          repoId: review.repoId,
+          reviewId,
+          tier: member.id,
+          model: primaryRoute,
+          inputTokens: primaryUsage.inputTokens,
+          cachedTokens: primaryUsage.cachedTokens,
+          outputTokens: primaryUsage.outputTokens,
+          costUsd: primaryUsage.costUsd,
+          outcome: "failed",
+        });
+        // RECORDED, under the right name — so the shape that DOES still reach the outer
+        // catch with this same error (no fallback configured at all) does not also
+        // attribute it a second time there.
+        delete (e as { spent?: unknown }).spent;
+      }
       // THE SAME MODEL, SOMEWHERE THAT IS NOT OUT (D-93).
       //
       // An exhausted subscription used to cost the review this tier entirely: its work

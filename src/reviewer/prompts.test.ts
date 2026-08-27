@@ -15,7 +15,7 @@ import { describe, expect, it } from "vitest";
 import { CODE_ARCH, SECURITY } from "../core/review-type.ts";
 import type { Tier } from "../core/ladder.ts";
 import type { KnowledgeItem } from "../store/store.ts";
-import { OUTPUT_CONTRACT, continuedPrompt, proseShare, reviewPrompt } from "./prompts.ts";
+import { OUTPUT_CONTRACT, continuedPrompt, proseShare, reviewPrompt, streamFix } from "./prompts.ts";
 
 const TIER: Tier = { id: "t1", kind: "model", model: "v/m", stage: "fast" };
 
@@ -337,6 +337,38 @@ describe("the settled ledger", () => {
     expect(p).toContain("ALREADY CONSIDERED AND RESOLVED");
     expect(p).toContain(settledOne.finding.claim);
     expect(p).toContain(settledOne.rationale);
+  });
+});
+
+// THE STREAMED SIBLING MADE THE SAME PROMISE (found by lore's own review, fingerprint
+// 924989e3, minutes after 28198096 fixed `settledBlock` and missed this one): "re-raise
+// with the same claim wording and RAISED severity" is the identical instruction, on a
+// member's own still-open findings rather than another tier's settled ones — and
+// `recordFinding`'s `ON CONFLICT DO NOTHING` does not care which of the two it is. A
+// severity word written on a re-raise changes nothing here either.
+describe("streamFix", () => {
+  const held = (open: readonly string[] = []) => streamFix({ diff: "DIFF", t0: "T0", open });
+
+  it("does not promise that a severity word changes anything on its own", () => {
+    const p = flat(held(["decline path leaves the hold active"]));
+    expect(p, "the false promise this fix removed").not.toMatch(/RAISED severity/);
+  });
+
+  it("still tells a member to keep wording identical for the SAME defect", () => {
+    const p = flat(held(["decline path leaves the hold active"]));
+    expect(p).toMatch(/[Ss]ame claim wording/);
+    expect(p).toMatch(/tracked as the one you already raised/);
+  });
+
+  it("tells a member to say what changed when the defect is worse or different", () => {
+    const p = flat(held(["decline path leaves the hold active"]));
+    expect(p).toMatch(/say what changed, in the claim itself/);
+  });
+
+  it("still lists the member's own open findings", () => {
+    const p = flat(held(["decline path leaves the hold active"]));
+    expect(p).toMatch(/YOUR OPEN FINDINGS/);
+    expect(p).toContain("decline path leaves the hold active");
   });
 });
 

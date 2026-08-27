@@ -1932,6 +1932,48 @@ describe("falling back to a metered twin", () => {
     expect(row?.["cost_usd"], "the ceiling sums this column").toBe(0.42);
   });
 
+  /**
+   * A RESCUED FALLBACK MUST NOT DROP THE PRIMARY'S OWN RECOVERED SPEND (found by lore's
+   * own review, fingerprint f65306a0). The primary's `.spent` is only ever read in the
+   * OUTER catch — reached when no fallback runs at all, or when the whole chain is
+   * exhausted and replaced by a brand-new synthesized error. When a twin RESCUES the
+   * round instead, the primary's own catch falls through having set `result`/`fellBackTo`
+   * without ever throwing, so the outer catch — and the only place that read `.spent` —
+   * is never reached, and whatever the primary burned before dying vanished.
+   */
+  it("records what the primary spent even when a fallback rescues the round", async () => {
+    const type = withFallback("openrouter/twin");
+    const primary = type.tiers.find((t) => t.id === "t1")?.model ?? "";
+    class PrimaryBurnsThenRescued implements ReviewerLike {
+      async review(tier: Tier): Promise<ReviewerResult> {
+        if (tier.model === primary) {
+          const e = new Exhausted("primary is out") as Exhausted & {
+            spent?: { input: number; cached: number; output: number; cost: number };
+          };
+          e.spent = { input: 300, cached: 0, output: 30, cost: 0.02 };
+          throw e;
+        }
+        return { findings: [], discarded: [], raw: "", inputTokens: 500, cachedTokens: 0, outputTokens: 50, costUsd: 0.01, latencyMs: 1, retried: false, steps: 1 };
+      }
+    }
+
+    await runRound({ store, reviewer: new PrimaryBurnsThenRescued(), reviewId: "r1", principal: "p", worktree: dir, allowMetered: true, type });
+
+    const primaryRow = store.db
+      .prepare("SELECT input_tokens i, cost_usd c, outcome FROM usage WHERE review_id='r1' AND tier='t1' AND model = ?")
+      .get(primary) as { i: number; c: number; outcome: string } | undefined;
+    expect(primaryRow?.i, "the primary's own spend, not dropped because a fallback rescued it").toBe(300);
+    expect(primaryRow?.c).toBeCloseTo(0.02);
+    expect(primaryRow?.outcome, "the PRIMARY itself did not complete, even though the round did").toBe("failed");
+
+    // AND THE TWIN'S OWN SUCCESSFUL SPEND IS RECORDED SEPARATELY, under its own name —
+    // the round overall succeeded, and both routes' real costs are kept, not merged.
+    const twinRow = store.db
+      .prepare("SELECT input_tokens i FROM usage WHERE review_id='r1' AND tier='t1' AND model = 'openrouter/twin'")
+      .get() as { i: number } | undefined;
+    expect(twinRow?.i, "the rescuing twin's own spend, unaffected").toBe(500);
+  });
+
   // No fallback for the fallback. If the metered provider refuses too, the ladder's own
   // answer is the right one — a chain of retries is how a bounded cost becomes unbounded.
   it("gives up when the twin is out too, rather than chaining", async () => {
@@ -3227,6 +3269,46 @@ describe("a streamed tier-run", () => {
     expect(fixPrompt, "the held fix's boundary is where the bug reproduced").toContain("The author has answered");
     expect(fixPrompt, "a suppressed rule must not come back as NEW").not.toContain("NEW src/hold.ts");
     expect(fixPrompt, "nor by its claim text").not.toContain(SUPPRESSED.claim);
+  });
+
+  /**
+   * A QUOTED PATH MUST STILL REACH THE BOUNDARY'S T0 RE-SCAN (found by lore's own
+   * review, fingerprint eab161bc). The old `/^\+\+\+ b\/(.+)$/` regex requires `b/`
+   * immediately after the space — but git quotes any non-ASCII name by default
+   * (`+++ "b/caf\303\251.ts"`), putting a `"` there instead, so the anchored pattern
+   * never matched such a line at all and the touched file was silently absent from
+   * `files`, exactly the gap `filesInDiff` (git/diff.ts) already closes elsewhere.
+   */
+  it("re-scans a fix that touches only a quoted, non-ASCII path", async () => {
+    // NEW, and never committed or landed on either branch — `feat/holds` already
+    // differs from `main` by `hold.ts` (the fixture's own setup), and committing this
+    // file too would make it part of THAT branch-vs-into diff, reaching `files` via
+    // `diff.changedFiles` regardless of whether the boundary's own re-scan works. Kept
+    // out of history entirely, the only way it can reach `files` is through the held
+    // fix's own boundary re-scan, which is the one path this test means to isolate.
+    // `git diff HEAD` still quotes it exactly as a client's own committed diff would —
+    // core.quotePath's default, not a fixture faking it.
+    const file = join(dir, "src/café.ts");
+    writeFileSync(file, "export const x = 1;\n");
+    execFileSync("git", ["add", "-A"], { cwd: dir });
+    const claimed = await treeHash(dir);
+    const diffText = execFileSync("git", ["diff", "HEAD"], { cwd: dir }).toString();
+    expect(diffText, "this test means to exercise the quoted form").toContain("caf\\303\\251.ts");
+    execFileSync("git", ["reset", "--", "."], { cwd: dir });
+    rmSync(file, { force: true });
+    await treeHash(dir);
+    store.holdDiff("r1", diffText, claimed);
+
+    let boundaryFiles: readonly string[] | undefined;
+    const t0: NonNullable<Parameters<typeof runRound>[0]["t0"]> = async (_worktree, opts) => {
+      boundaryFiles = opts.files;
+      return { findings: [], outcomes: [], skipped: [], unavailable: [], interrupted: false };
+    };
+    const reviewer = new Streaming([emission([HOLD_BUG]), DONE]);
+
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: STREAM_TYPE, t0 });
+
+    expect(boundaryFiles, "the quoted path, decoded to its real name, not dropped").toContain("src/café.ts");
   });
 
   /**
