@@ -57,6 +57,15 @@ export interface ReviewType {
 export const CODE_ARCH: ReviewType = {
   id: "code-arch",
   description: "Correctness and design of a prepared merge, judged against its ticket and specs.",
+  // lore-ok[c37f7c9b]: fixed downstream, not by removing this listing. The finding
+  // is right that "not a Rust project" must not read as a gap the same way "no
+  // typechecker" does for tsc/eslint — but the fix is in WHAT a missing Cargo.toml
+  // reports, not in whether cargo-check/cargo-clippy are asked for. `detect()`
+  // (engines.ts) already keeps `runEngine`'s own dispatch consistent with tsc/eslint
+  // for the engines it gates; `sandboxedCargo` (runner.ts) is where absence is
+  // actually classified now, and it reports `skipped` — ast-grep's own treatment,
+  // logged to the operator rather than repeated to the client — when no Cargo.toml
+  // exists at all, keeping this list unconditional the same way tsc/eslint's is.
   t0: ["tsc", "eslint", "cargo-check", "cargo-clippy", "ast-grep", "semgrep"],
   get tiers() {
     return loadTiers();

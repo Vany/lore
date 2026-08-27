@@ -149,6 +149,12 @@ function baseArgs(cfg: SandboxConfig, worktree: string, cacheDir: string, scratc
     // particular: no signing key, no database, no tokens.
     "-v", `${worktree}:/src:ro`,
     "-v", `${scratch}:/work`,
+    // lore-ok[d341a76e]: fixed in runner.ts, not here. The mount alone was never
+    // going to be enough — cargo does not read `cacheMountPath` off the filesystem
+    // layout, it reads `$CARGO_HOME`/`$CARGO_TARGET_DIR`, and nothing pointed those
+    // at this mount. `CARGO_ENV` (runner.ts, exported at the front of every cargo
+    // script string `sandboxedCargo`/`checkCargo` build) does that now; this mount
+    // is the correct, necessary, but not sufficient other half.
     "-v", `${cacheDir}:${cacheMountPath}`,
     "-w", "/work",
     "--memory", cfg.memory,
