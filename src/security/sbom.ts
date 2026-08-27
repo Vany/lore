@@ -24,18 +24,48 @@ export interface Component {
   readonly name: string;
   readonly version: string;
   readonly ecosystem: Ecosystem;
-  /** True when nothing in the project imports it directly. */
-  readonly transitive: boolean;
+  /**
+   * lore-ok[c0b4887e]: True when nothing in the project imports it directly,
+   * false when something does, `undefined` when depth genuinely is not known.
+   *
+   * `cdxgen`'s own flat `components[]` list carries no depth signal — CycloneDX's
+   * `scope` field (`required`/`optional`/`excluded`) describes whether a component
+   * SHIPS, not whether it is direct or transitive, and the real answer lives in a
+   * separate `dependencies` graph this reader does not parse (unverified whether
+   * `cdxgen` reliably populates it at all, and there is no local instance of the
+   * tool to check against). `undefined` here says so rather than guessing from a
+   * field that means something else. `fromPackageLock` below has a REAL signal
+   * (path depth in the lockfile) and keeps reporting a true boolean. The same
+   * finding also covers two related but separate misreadings: `toComponent`
+   * defaulting an unrecognised purl to npm instead of refusing it (below), and
+   * `TYPICAL_MANIFEST` (osv.ts) hardcoding one lockfile name for every ecosystem.
+   */
+  readonly transitive: boolean | undefined;
 }
 
 export interface Sbom {
   readonly components: readonly Component[];
   readonly source: "cdxgen" | "package-lock" | "none";
+  /**
+   * Informational — a caveat about the METHOD, true on every run that used it
+   * (e.g. "cdxgen not available; read package-lock.json directly"). Never a
+   * completeness signal: `fromPackageLock` sets it unconditionally, so a caller
+   * that surfaced it as `unavailable` would report every single fallback-path
+   * review as "NOT RUN" — the exact ast-grep-shaped noise this module's own
+   * caller (`engines.ts`) exists to avoid, except actively false here since the
+   * enumeration did run. See `incomplete` for the signal that means that.
+   */
   readonly note?: string;
+  /**
+   * Set only when some real, specific subset of what should have been enumerated
+   * was not — count varies per review, same shape as semgrep's `unread`
+   * (engines.ts). This one IS worth a caller surfacing as a gap.
+   */
+  readonly incomplete?: string;
 }
 
 interface CycloneDxDoc {
-  components?: { name?: string; version?: string; purl?: string; scope?: string }[];
+  components?: { name?: string; version?: string; purl?: string }[];
 }
 
 export async function generateSbom(worktree: string): Promise<Sbom> {
@@ -67,10 +97,31 @@ async function cdxgen(worktree: string): Promise<Sbom | undefined> {
   if (start < 0) return undefined;
   try {
     const doc = JSON.parse(r.stdout.slice(start)) as CycloneDxDoc;
-    const components = (doc.components ?? [])
-      .map((c) => toComponent(c.name, c.version, c.purl, c.scope))
+    const raw = doc.components ?? [];
+    const components = raw
+      .map((c) => toComponent(c.name, c.version, c.purl))
       .filter((c): c is Component => c !== undefined);
-    return { components, source: "cdxgen" };
+    // DROPPED, NOT MISQUERIED (see Component.transitive's own doc comment, above,
+    // for the finding this answers). `toComponent` now refuses a component whose
+    // purl names an ecosystem outside the six this module queries (or one it
+    // cannot parse at all), rather than defaulting it to "npm" and having OSV
+    // answer an authoritative-looking "nothing known" for a package it was never
+    // actually asked about. Disclosed by count here, since which of the two
+    // reasons applied to which entry is not worth carrying further than this
+    // note — either way, it was not checked.
+    const dropped = raw.length - components.length;
+    return {
+      components,
+      source: "cdxgen",
+      ...(dropped > 0
+        ? {
+            incomplete:
+              `${String(dropped)} of ${String(raw.length)} component(s) had no name/version, or a purl naming an ` +
+              "ecosystem this module does not query (only npm, PyPI, Go, crates.io, Maven, RubyGems) — not checked " +
+              "against OSV.",
+          }
+        : {}),
+    };
   } catch {
     return undefined;
   }
@@ -131,14 +182,27 @@ function toComponent(
   name: string | undefined,
   version: string | undefined,
   purl: string | undefined,
-  scope: string | undefined,
 ): Component | undefined {
   if (name === undefined || version === undefined) return undefined;
+  // REFUSED, NOT DEFAULTED TO "npm" (see Component.transitive's own doc comment,
+  // above, for the finding this answers). A purl naming an ecosystem this module
+  // does not recognise (or carrying none at all) used to fall back to "npm", so
+  // `queryComponents` (osv.ts) asked OSV about, say, a Composer package under
+  // the npm ecosystem — a query OSV answers with an authoritative-looking
+  // "nothing known", which is not the same claim as "not checked" and is
+  // exactly the confident-false-clean INV-1 exists to name. The caller
+  // (`cdxgen`, above) counts and discloses drops.
+  const ecosystem = ecosystemOf(purl);
+  if (ecosystem === undefined) return undefined;
   return {
     name,
     version,
-    ecosystem: ecosystemOf(purl) ?? "npm",
-    transitive: scope === "optional" || scope === undefined,
+    ecosystem,
+    // `scope` (CycloneDX: required/optional/excluded, whether a component SHIPS)
+    // is not a depth signal and was never a sound way to answer "direct or
+    // transitive" — see `Component.transitive`'s own doc comment. `undefined`
+    // here is honest about not knowing, not a guess dressed as one.
+    transitive: undefined,
   };
 }
 

@@ -65,6 +65,62 @@ describe("an optional engine's absence is not a gap in the review", () => {
 });
 
 /**
+ * `Sbom.note` and `Sbom.incomplete` (security/sbom.ts) look alike — both are optional
+ * strings on the same object — and reading the wrong one for "should this engine be
+ * reported unavailable" is easy to get backwards without a test pinning it down.
+ * `note` is a blanket methodology caveat `fromPackageLock` sets on EVERY fallback run,
+ * cdxgen or not installed; `incomplete` is a genuine per-review count of components
+ * cdxgen could not place in a queryable ecosystem. Only the second is a gap.
+ */
+describe("sbom: a fallback-path caveat is not the same claim as 'did not run'", () => {
+  let dir: string;
+  let binDir: string;
+  let savedPath: string | undefined;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "lore-sbomnote-"));
+    binDir = mkdtempSync(join(tmpdir(), "lore-sbomnote-bin-"));
+    savedPath = process.env["PATH"];
+    process.env["PATH"] = `${binDir}:${savedPath ?? ""}`;
+    writeFileSync(join(dir, "package.json"), "{}\n");
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(binDir, { recursive: true, force: true });
+    if (savedPath === undefined) delete process.env["PATH"];
+    else process.env["PATH"] = savedPath;
+  });
+
+  // `npx` is faked to fail regardless of what actually happens to be cached on
+  // whatever machine runs this test — the point under test is what `sbom()` does
+  // with the fallback's note, not whether cdxgen is installed here.
+  it("does not report a lockfile-fallback SBOM as unavailable", async () => {
+    writeFileSync(join(binDir, "npx"), "#!/bin/sh\nexit 1\n");
+    chmodSync(join(binDir, "npx"), 0o755);
+    writeFileSync(
+      join(dir, "package-lock.json"),
+      JSON.stringify({ packages: { "node_modules/lodash": { version: "4.17.21" } } }),
+    );
+    const out = await runEngine(dir, "sbom");
+    expect(out.unavailable).toBeUndefined();
+  });
+
+  // The genuine gap DOES need to reach the reader, the same way semgrep's `unread`
+  // does (below).
+  it("reports a cdxgen component drop as unavailable", async () => {
+    const cdxgenOutput = JSON.stringify({
+      components: [
+        { name: "lodash", version: "4.17.21", purl: "pkg:npm/lodash@4.17.21" },
+        { name: "weird", version: "1.0.0", purl: "pkg:carthage/weird@1.0.0" },
+      ],
+    });
+    writeFileSync(join(binDir, "npx"), `#!/bin/sh\necho '${cdxgenOutput}'\nexit 0\n`);
+    chmodSync(join(binDir, "npx"), 0o755);
+    const out = await runEngine(dir, "sbom");
+    expect(out.unavailable).toMatch(/1 of 2 component/);
+  });
+});
+
+/**
  * Fingerprint 10986564, found by lore's own review of the t0/runner.ts OOM fix: the
  * same wrong-reason defect removed from checkTypes/checkLint was still here. semgrep
  * and ast-grep run on the HOST via `runTool`, resolving a bare command name through

@@ -31,6 +31,15 @@ export interface OsvVuln {
   readonly severity?: readonly { type?: string; score?: string }[];
   readonly database_specific?: { severity?: string; cwe_ids?: readonly string[] };
   readonly affected?: readonly {
+    /**
+     * Which package this ENTRY is about — confirmed against OSV's own schema
+     * docs: one record can name several `affected` entries, each with its own
+     * `package`, when one advisory covers multiple packages. `fixedVersion`
+     * (below) matches on this; without it, the first `fixed` event found by
+     * walking the whole record in document order can belong to an entirely
+     * different package than the component being reported on.
+     */
+    package?: { name?: string; ecosystem?: string };
     ranges?: readonly { events?: readonly { fixed?: string }[] }[];
   }[];
 }
@@ -151,15 +160,39 @@ export function severityOf(v: OsvVuln): Severity {
   return "medium";
 }
 
-export function fixedVersion(v: OsvVuln): string | undefined {
+/**
+ * lore-ok[47df1c30]: Every distinct "fixed in" version OSV records for THIS
+ * component specifically — not the first one found anywhere in the record.
+ *
+ * Confirmed against OSV's own schema docs, not assumed: one record can carry
+ * several `affected` entries (a multi-package advisory — a fix version from the
+ * wrong package can name a version that does not exist for this component at
+ * all), and one entry's own `ranges[]` can carry several ranges (a package
+ * vulnerable in `[1.0.0, 1.0.2)` AND, separately, `[3.0.0, 3.2.5)` — introduced,
+ * fixed, reintroduced, fixed again). Matched on `affected[].package` first, so a
+ * fix from a different package is excluded entirely; entries silent about which
+ * package they name (no `package` field at all) are kept rather than dropped,
+ * since excluding everything on a record OSV itself did not bother to disambiguate
+ * would be worse than the ambiguity it is trying to avoid. Deliberately not
+ * collapsed to one range's own fix within the matched package: without a real,
+ * per-ecosystem version comparator to decide which range the component's
+ * installed version actually falls into, picking one silently would be exactly
+ * the confident-guess this rewrite exists to stop making — every candidate is
+ * returned instead, and the reader is told there is more than one when there is.
+ */
+export function fixedVersion(v: OsvVuln, component: Component): readonly string[] {
+  const fixed = new Set<string>();
   for (const a of v.affected ?? []) {
+    if (a.package !== undefined && (a.package.name !== component.name || a.package.ecosystem !== component.ecosystem)) {
+      continue;
+    }
     for (const r of a.ranges ?? []) {
       for (const e of r.events ?? []) {
-        if (e.fixed !== undefined) return e.fixed;
+        if (e.fixed !== undefined) fixed.add(e.fixed);
       }
     }
   }
-  return undefined;
+  return [...fixed];
 }
 
 function cweOf(v: OsvVuln): string | undefined {
@@ -168,23 +201,37 @@ function cweOf(v: OsvVuln): string | undefined {
 }
 
 /**
- * Turn vulnerable components into findings.
- *
- * The lockfile is the `file`, because that is where the decision to ship this
- * version actually lives — and it is where a fix would be applied.
+ * Where the decision to ship this version actually lives, per ecosystem — a best
+ * effort, not a fact this reader has checked (see sbom.ts's Component.transitive
+ * doc comment for the finding this answers: a hardcoded `"package-lock.json"`
+ * default used to point every non-npm finding — PyPI, Go, Rust, Maven, Ruby
+ * components `cdxgen` genuinely enumerated — at a file that never mentions
+ * them). This module never opens the worktree, so for ecosystems with more than
+ * one common manifest shape (PyPI especially) the name is a typical one, named
+ * as such, not a confirmed path.
  */
-export function toFindings(vulnerable: readonly Vulnerable[], lockfile = "package-lock.json"): readonly Finding[] {
+const TYPICAL_MANIFEST: Record<Component["ecosystem"], string> = {
+  npm: "package-lock.json",
+  PyPI: "requirements.txt (or poetry.lock/Pipfile.lock — not itself checked)",
+  Go: "go.sum",
+  "crates.io": "Cargo.lock",
+  Maven: "pom.xml",
+  RubyGems: "Gemfile.lock",
+};
+
+/** Turn vulnerable components into findings. */
+export function toFindings(vulnerable: readonly Vulnerable[]): readonly Finding[] {
   const out: Finding[] = [];
 
   for (const { component, vulns } of vulnerable) {
     for (const v of vulns) {
-      const fixed = fixedVersion(v);
+      const fixed = fixedVersion(v, component);
       const cwe = cweOf(v);
       const aliases = (v.aliases ?? []).filter((a) => a.startsWith("CVE-"));
       const label = aliases[0] ?? v.id;
 
       out.push({
-        file: lockfile,
+        file: TYPICAL_MANIFEST[component.ecosystem],
         severity: severityOf(v),
         claim: cap(
           `${component.name}@${component.version} is affected by ${label}${v.summary === undefined ? "" : `: ${v.summary}`}`,
@@ -194,8 +241,16 @@ export function toFindings(vulnerable: readonly Vulnerable[], lockfile = "packag
           [
             `OSV ${v.id}${aliases.length > 0 ? ` (${aliases.join(", ")})` : ""}`,
             `${component.ecosystem} package ${component.name}@${component.version}`,
-            component.transitive ? "reached transitively, not a direct dependency" : "a direct dependency",
-            fixed === undefined ? "no fixed version published" : `fixed in ${fixed}`,
+            component.transitive === undefined
+              ? "direct vs. transitive not determined for this component"
+              : component.transitive
+                ? "reached transitively, not a direct dependency"
+                : "a direct dependency",
+            fixed.length === 0
+              ? "no fixed version published"
+              : fixed.length === 1
+                ? `fixed in ${fixed[0] ?? ""}`
+                : `fixed in one of: ${fixed.join(", ")} — depending on which range applies to the installed version`,
           ].join("\n"),
           2000,
         ),

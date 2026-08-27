@@ -100,6 +100,18 @@ export interface VexDocument {
  * Only findings that name a vulnerability get a statement. A code-review finding is
  * not a VEX subject, and inventing an identifier for one would put fiction into a
  * document other tools are meant to trust.
+ *
+ * lore-ok[8a8ec642]: `origin === "t0"` is checked FIRST, before `vulnIdOf` ever
+ * looks at the evidence text. A model tier's commentary can mention a CVE id in
+ * passing ("this looks related to CVE-2021-44228") without that finding being
+ * about a scanned, present vulnerability at all — `vulnIdOf` alone could not tell
+ * the difference, and a signed VEX statement built from that would assert a
+ * scanner-verified state (`in_triage`, `not_affected`, ...) for something no
+ * scanner ever looked at. `origin` only discriminates t0-vs-tier, not which t0
+ * ENGINE (`review.ts` writes the literal `"t0"` for every one of them — sbom,
+ * semgrep, osv alike — never a per-engine value, despite this field's own name),
+ * so `vulnIdOf`'s anchor to osv.ts's own `"OSV <id>"` evidence prefix (below)
+ * still carries the rest of the precision this filter cannot.
  */
 export function buildVex(
   store: Store,
@@ -115,6 +127,7 @@ export function buildVex(
   const vulnerabilities: unknown[] = [];
 
   for (const row of findings) {
+    if (String(row["origin"] ?? "") !== "t0") continue;
     const id = vulnIdOf(String(row["evidence"] ?? ""));
     if (id === undefined) continue;
 
@@ -150,9 +163,18 @@ export function buildVex(
   };
 }
 
-/** OSV and CVE identifiers, as written into a finding's evidence by osv.ts. */
+/**
+ * OSV and CVE identifiers, as written into a finding's evidence by osv.ts.
+ *
+ * Anchored to the exact `"OSV <id>"` prefix `toFindings`/`commitToFindings`
+ * (osv.ts) always write as evidence's first line, not just a bare id-shaped
+ * substring found anywhere in the text. `origin` (buildVex, above) already
+ * excludes model-tier findings, but cannot tell osv apart from sbom/semgrep/etc
+ * within t0 — a defect finding whose prose happens to cite a CVE by way of
+ * explanation must not read as a scanner-verified vulnerability statement.
+ */
 export function vulnIdOf(evidence: string): string | undefined {
-  return /\b((?:CVE|GHSA|OSV|PYSEC|RUSTSEC|GO)-[A-Za-z0-9-]+)\b/.exec(evidence)?.[1];
+  return /^OSV ((?:CVE|GHSA|OSV|PYSEC|RUSTSEC|GO)-[A-Za-z0-9-]+)\b/.exec(evidence)?.[1];
 }
 
 /** Human-facing summary. The machine form is the document above. */
@@ -176,5 +198,5 @@ export function renderVex(doc: VexDocument): string {
 }
 
 export function findingsNeedingTriage(store: Store, reviewId: string): readonly RecordedFinding[] {
-  return store.openFindings(reviewId).filter((f) => vulnIdOf(f.evidence) !== undefined);
+  return store.openFindings(reviewId).filter((f) => f.origin === "t0" && vulnIdOf(f.evidence) !== undefined);
 }

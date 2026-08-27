@@ -12,7 +12,7 @@ import {
   type OsvVuln,
 } from "./osv.ts";
 import type { Component } from "./sbom.ts";
-import { buildVex, justificationFor, stateFor, vulnIdOf, renderVex } from "./vex.ts";
+import { buildVex, findingsNeedingTriage, justificationFor, stateFor, vulnIdOf, renderVex } from "./vex.ts";
 
 const component: Component = { name: "lodash", version: "4.17.20", ecosystem: "npm", transitive: true };
 
@@ -40,11 +40,37 @@ describe("severityOf", () => {
 
 describe("fixedVersion", () => {
   it("finds the fix when one is published", () => {
-    expect(fixedVersion(vuln)).toBe("4.17.21");
+    expect(fixedVersion(vuln, component)).toStrictEqual(["4.17.21"]);
   });
 
   it("returns nothing when no fix exists, rather than inventing one", () => {
-    expect(fixedVersion({ id: "a", affected: [{ ranges: [{ events: [] }] }] })).toBeUndefined();
+    expect(fixedVersion({ id: "a", affected: [{ ranges: [{ events: [] }] }] }, component)).toStrictEqual([]);
+  });
+
+  // Multi-package advisories are real (OSV schema §affected[]) — an entry naming a
+  // DIFFERENT package must not contribute its fix version to this one.
+  it("ignores an affected entry naming a different package", () => {
+    const other: OsvVuln = {
+      id: "a",
+      affected: [{ package: { name: "not-lodash", ecosystem: "npm" }, ranges: [{ events: [{ fixed: "9.9.9" }] }] }],
+    };
+    expect(fixedVersion(other, component)).toStrictEqual([]);
+  });
+
+  // A vulnerability with two separate vulnerable ranges (e.g. an old 1.x line and a
+  // newer 3.x line) can have two distinct fixes, and picking one arbitrarily hides
+  // the other from whichever range the installed version is actually in.
+  it("returns every distinct fix when a vulnerability has multiple ranges", () => {
+    const multi: OsvVuln = {
+      id: "a",
+      affected: [
+        {
+          package: { name: component.name, ecosystem: component.ecosystem },
+          ranges: [{ events: [{ fixed: "1.0.2" }] }, { events: [{ fixed: "3.2.5" }] }],
+        },
+      ],
+    };
+    expect(fixedVersion(multi, component)).toStrictEqual(["1.0.2", "3.2.5"]);
   });
 });
 
@@ -147,10 +173,20 @@ describe("submodules are queried by commit", () => {
 });
 
 describe("vulnIdOf", () => {
-  it("recognises the identifier schemes OSV federates", () => {
+  it("recognises the identifier schemes OSV federates, anchored to its own evidence shape", () => {
     expect(vulnIdOf("OSV GHSA-xxxx-yyyy-zzzz (CVE-2020-8203)")).toBe("GHSA-xxxx-yyyy-zzzz");
-    expect(vulnIdOf("see CVE-2021-1234 for details")).toBe("CVE-2021-1234");
+    expect(vulnIdOf("OSV CVE-2021-1234\nnpm package foo@1.0.0")).toBe("CVE-2021-1234");
     expect(vulnIdOf("no identifier here")).toBeUndefined();
+  });
+
+  // `origin === "t0"` (buildVex, vex.ts) only tells a scanner finding from a model
+  // tier's — semgrep shares that same "t0" origin with osv, and a registry rule
+  // legitimately cites a CVE by name to explain what pattern it detects. That is
+  // prose, not osv.ts's own structured evidence, and matching it anyway is the
+  // same defect fingerprint 8a8ec642 named, one engine deeper.
+  it("does not match a vuln id mentioned in unstructured prose", () => {
+    expect(vulnIdOf("see CVE-2021-1234 for details")).toBeUndefined();
+    expect(vulnIdOf("this pattern was exploited in CVE-2017-5638 (Apache Struts)")).toBeUndefined();
   });
 });
 
@@ -200,7 +236,9 @@ describe("buildVex", () => {
     store.recordFinding("r1", {
       ...toFindings([{ component, vulns: [vuln] }])[0]!,
       fingerprint: "aaaa1111",
-      origin: "osv",
+      // The literal value every T0 engine writes (review.ts) — never a per-engine
+      // name, "osv" included. See RecordedFinding.origin's own doc comment.
+      origin: "t0",
       round: 1,
       firstSeen: "2026-08-03T00:00:00.000Z",
     });
@@ -246,5 +284,67 @@ describe("buildVex", () => {
   it("says plainly when statements are still untriaged", () => {
     const doc = buildVex(store, "r1", { name: "demo", version: "0.0.0" }, "2026-08-03T00:00:00.000Z");
     expect(renderVex(doc)).toContain("Do not read that as safe");
+  });
+
+  // Fingerprint 8a8ec642: a model tier's commentary can cite a CVE id in passing
+  // without the finding being a scanner-verified vulnerability statement at all.
+  // This evidence is shaped exactly like osv.ts's own output — `vulnIdOf` alone
+  // cannot tell these apart, only `origin` can.
+  it("ignores a model-tier finding even when its evidence is OSV-shaped", () => {
+    store.recordFinding("r1", {
+      fingerprint: "cccc3333",
+      file: "src/a.ts",
+      severity: "low",
+      claim: "this looks related to a known CVE",
+      evidence: "OSV CVE-2021-44228 (Log4Shell) was the closest precedent we found for this shape",
+      failureScenario: "n/a",
+      origin: "t2",
+      round: 1,
+      firstSeen: "2026-08-03T00:00:00.000Z",
+    });
+    const doc = buildVex(store, "r1", { name: "demo", version: "0.0.0" }, "2026-08-03T00:00:00.000Z");
+    // Still just the one real, t0-origin statement from beforeEach.
+    expect(doc.vulnerabilities).toHaveLength(1);
+  });
+});
+
+describe("findingsNeedingTriage", () => {
+  let store: Store;
+
+  beforeEach(() => {
+    store = new Store(":memory:");
+    const repoId = store.upsertRepo("demo", "git@x:demo.git").id;
+    store.createReview({
+      id: "r1", repoId, principal: "p", branch: "b", intoRef: "main", ticket: "t",
+      type: "security", state: "running", ladder: initialState(),
+    });
+  });
+
+  it("finds an untriaged OSV finding", () => {
+    store.recordFinding("r1", {
+      ...toFindings([{ component, vulns: [vuln] }])[0]!,
+      fingerprint: "aaaa1111",
+      origin: "t0",
+      round: 1,
+      firstSeen: "2026-08-03T00:00:00.000Z",
+    });
+    expect(findingsNeedingTriage(store, "r1")).toHaveLength(1);
+  });
+
+  // The same distinction buildVex draws, above: model-tier commentary that cites
+  // a CVE is not a scanner finding.
+  it("excludes a model-tier finding even when its evidence names a CVE", () => {
+    store.recordFinding("r1", {
+      fingerprint: "bbbb2222",
+      file: "src/a.ts",
+      severity: "low",
+      claim: "this pattern resembles the Log4Shell class of bug",
+      evidence: "OSV CVE-2021-44228 was the closest public precedent we found for this shape",
+      failureScenario: "n/a",
+      origin: "t2",
+      round: 1,
+      firstSeen: "2026-08-03T00:00:00.000Z",
+    });
+    expect(findingsNeedingTriage(store, "r1")).toHaveLength(0);
   });
 });

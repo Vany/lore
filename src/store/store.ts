@@ -110,7 +110,14 @@ export interface RecordedFinding extends Finding {
    * attestation.
    */
   readonly scope?: Scope | undefined;
-  /** Tier id or T0 engine name that raised it. */
+  /**
+   * A tier id (e.g. `"t1"`) for a model finding, or the literal string `"t0"`
+   * for EVERY deterministic engine — `review.ts` writes `"t0"` unconditionally
+   * for sbom, osv, semgrep, tsc, eslint and ast-grep alike, never a per-engine
+   * name (checked against `review.ts`'s own write site; this comment previously
+   * claimed otherwise). Enough to tell "any t0 engine" from "a model tier"; not
+   * enough to tell t0's engines apart from each other.
+   */
   readonly origin: string;
   /**
    * True when this finding is about code THIS BRANCH DOES NOT TOUCH (D-68).

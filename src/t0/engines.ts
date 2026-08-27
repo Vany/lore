@@ -397,7 +397,15 @@ async function sbom(worktree: string): Promise<EngineOutcome> {
       unavailable: bom.note ?? "no SBOM produced",
     };
   }
-  return { engine: "sbom", findings: [] };
+  // `bom.incomplete` READ HERE TOO, not only above — a SBOM that mostly enumerated
+  // fine can still carry it, when some components were dropped (an unrecognised
+  // ecosystem, a malformed entry — see `generateSbom`'s own callers), and gating
+  // this read on `source === "none"` discarded it silently: a partial enumeration
+  // read as a complete one, the same INV-1 shape the whole-tree case above already
+  // refuses to make. Deliberately not `bom.note`: that field is a methodology
+  // caveat true on EVERY fallback-path run (see its own doc comment in sbom.ts),
+  // and surfacing it here would report "NOT RUN" on a SBOM that did run.
+  return { engine: "sbom", findings: [], ...(bom.incomplete !== undefined ? { unavailable: bom.incomplete } : {}) };
 }
 
 /**
@@ -442,7 +450,13 @@ async function osv(worktree: string): Promise<EngineOutcome> {
     for (const link of links) {
       findings.push(...commitToFindings(link.path, link.commit, await queryCommit(link.commit)));
     }
-    return { engine: "osv", findings };
+    // `bom.incomplete` READ HERE TOO — the same gap as `sbom()`'s own above: a
+    // SBOM that mostly enumerated fine can still carry it (some components
+    // dropped for an unrecognised ecosystem or a malformed entry), and the direct
+    // return below used to discard it whenever ANY component existed to query —
+    // a partial enumeration read as a complete one. Deliberately not `bom.note`:
+    // see `sbom()`'s own comment on this, just above.
+    return { engine: "osv", findings, ...(bom.incomplete !== undefined ? { unavailable: bom.incomplete } : {}) };
   } catch (e) {
     // A database we could not reach is not a database that said "clean", and a tree we
     // could not enumerate is not a tree with nothing in it.
