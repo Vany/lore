@@ -61,7 +61,7 @@ nothing.
 |---|---|---|
 | `review_start` | `branch*`, `into*`, `ticket*`, `pull_request`, `type` | `{review_id, state: "queued", note}` — returns immediately |
 | `review_poll` | `review_id*` | `{state, clean, note, new_findings[], open_count, human_decision?}` — §2.1.1 |
-| `review_submit` | `review_id*`, `tree_hash*`, exactly one of `diff` / `commit` | `{review_id, state, tree_hash}` |
+| `review_submit` | `review_id*`, `tree_hash*`, exactly one of `diff` / `commit`, `fixed_elsewhere` | `{review_id, state, tree_hash, fixed_elsewhere_skipped?}` — §4.2 |
 | `review_cancel` | `review_id*`, `reason` | `{state: "cancelled", stopped_in_flight, findings[], note}` — §2.5 |
 | `review_attest` | `review_id*` | the signed line, with its tree hash |
 | `review_inbox` | — | `{reviews[], needs_human, note}` — every OPEN review of the caller's, each with `waiting_on` and `expires_at` — §2.4.1 |
@@ -763,6 +763,45 @@ can see — resolving it before the round ahead applies it fails as a missing ob
 not an ordinary not-found. Refused by name until that hold is consumed; a second
 `diff` is unaffected (chaining a raw diff is the client's own responsibility), and a
 second `commit` chains correctly once nothing raw is outstanding.
+
+### 4.2 `fixed_elsewhere` — a structured justification (D-133)
+
+`review_submit` accepts an optional `fixed_elsewhere: {fingerprint, file, reason,
+line?}[]`, answering a finding by pointing at where the fix actually landed instead
+of writing a `// lore-ok[<fingerprint>]: ...` comment at the finding's own line. It
+is ruled on exactly like a text marker — merged into the same `pending` set
+`collectJustifications` builds, so the prompt, the silence-based ruling loop and
+`settleFixed`'s exclusion set all see it identically. Silence next round records
+`justified-accepted`; a re-raise records `justified-rejected`. No new verdict kind.
+
+Validated synchronously, outside `withSubmitLock`, before the held/applied fork —
+applies uniformly whether this submit is consumed immediately or held for a
+reviewer mid-read:
+
+- `fingerprint` must resolve against this review (`resolveShort`); if it does not,
+  the **whole call** is refused. A fresh RPC argument naming a fingerprint this
+  review never raised is a client mistake, not silently ignored data.
+- `file` must be part of **this submission's own** diff or commit
+  (`filesInDiff`); otherwise the whole call is refused. Silence over a file the
+  tier was never shown is not evidence of anything — a `fixed_elsewhere` claim
+  needs the same kind of evidence an ordinary `lore-ok` carries inline as prose.
+- A fingerprint that resolves but names a finding already settled by an earlier
+  round is not an error: it is silently skipped and named in the reply's
+  `fixed_elsewhere_skipped`, since the claim simply arrived after it stopped
+  being needed.
+
+`Pending.scope` for a `fixed_elsewhere` entry is taken from the **finding's own**
+file/line, never the claim's — `expireStaleVerdicts` looks the hunk up at the
+finding's original location, so a scope taken from wherever the fix actually
+landed would expire on the wrong edit. The verdict therefore only expires if the
+originally flagged code later changes, not if the "elsewhere" fix is later
+reverted — an existing limitation the `lore-ok`-at-the-original-line form already
+has, not a new one.
+
+The reply's `will_not_settle` preview excludes any finding this same call's
+`fixed_elsewhere` validly claimed — otherwise the preview would tell a client its
+own just-submitted answer "will not settle", the exact fires-on-the-correct-answer
+false alarm the preview exists to avoid.
 
 ## 5. Concurrency
 

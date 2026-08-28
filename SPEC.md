@@ -1073,6 +1073,71 @@ classifier, and not what was decided. Two named consequences, not hidden:
   The global bound is deliberately NOT given `docsOnly`: `ladder.ts`'s global
   check stays unconditional.
 
+**D-133 — `fixed_elsewhere` on `review_submit`: a structured alternative to a
+`lore-ok` comment at the finding's own line. BUILT 2026-08-29.**
+
+The correct fix for a finding is routinely not at the line it was raised on — a
+caller, a shared helper — and the only way to say so was a
+`// lore-ok[<fingerprint>]: fixed elsewhere, see X` comment planted AT THE
+ORIGINAL line: a synthetic edit to a file the real fix never touched, purely to
+carry a marker. `review_submit` now also accepts `fixed_elsewhere:
+{fingerprint, file, reason, line?}[]`, ruled on identically — merged into the
+same `pending` array `collectJustifications`'s text markers already populate
+(`review.ts`, new `collectFixedElsewhere`), so the prompt, the silence-based
+ruling loop and `settleFixed`'s exclusion set all see it for free. No new
+verdict kind: silence next round records `justified-accepted`, a re-raise
+records `justified-rejected`, exactly like any other justification.
+
+**Persisted, not passed through memory.** `runRound` executes off the job
+queue, disconnected from `review_submit`'s synchronous handler — a claim
+living only in the request would be gone before any round read it. New table
+`fixed_elsewhere_claim` (`schema.ts`, `SCHEMA_VERSION` 20), written at submit
+time by `store.recordFixedElsewhere`, read back by `collectFixedElsewhere` the
+same way `collectJustifications` reads marker text off disk.
+
+**Validated synchronously, before the held/applied fork, refusing the whole
+call on a real client mistake.** An unresolvable `fingerprint`
+(`resolveShort` finds nothing) or a `file` outside `filesInDiff` of THIS
+submission both throw — a fresh RPC argument naming a fingerprint this review
+never raised, or claiming evidence for a file the tier was never shown, is a
+client mistake to fail loudly on, not silently swallow. A fingerprint that
+resolves but names an already-settled finding is not an error: silently
+skipped, named in the reply's `fixed_elsewhere_skipped`, since the claim
+simply arrived after it stopped being needed.
+
+**`will_not_settle` excludes a fingerprint this same call's `fixed_elsewhere`
+just recorded — found while writing this feature's own tests, before it ever
+reached a review round.** The preview (`server.ts`, computed after the
+apply/hold fork) only ever checked `codeMoved`/`alreadyAnswered`, neither of
+which reads the new store table, so a finding validly claimed via
+`fixed_elsewhere` in this exact call still showed up as "will not settle" —
+telling a client its own just-submitted answer had failed. Fixed by threading
+the set of fingerprints this call recorded (`justClaimedElsewhere`) into the
+same preview loop.
+
+**`Pending.scope` is the finding's own file/line, never the claim's.**
+`expireStaleVerdicts` looks the hunk up at the finding's ORIGINAL location, so
+a scope taken from wherever the fix actually landed would expire on the wrong
+edit — matching `collectJustifications`'s own reasoning exactly. This means
+the verdict only expires if the originally flagged code later changes, not if
+the "elsewhere" fix is later reverted — an existing limitation the
+`lore-ok`-at-the-original-line form already has, not a new one. `citedRule` is
+never set on a `fixed_elsewhere` entry: it is not a D-83 rule appeal, and
+setting it would wrongly buy a class suppression for an ordinary "I fixed it,
+here's where" claim.
+
+**Known, accepted gap: a refused claim does not roll back the diff it rode in
+on.** Validation runs after `withSubmitLock` resolves — by the time an
+unresolvable fingerprint or wrong-file claim throws, the diff has already
+applied (or the hold has already been recorded) and the round is already
+enqueued. A client reading only `isError: true` could reasonably believe
+nothing happened, when in fact the code landed and only the claim was
+refused. Not fixed here: the file-in-diff check inherently needs the
+RESOLVED patch, which for the `commit` form is not known until inside the
+lock, so a fully pre-effect refusal would need asymmetric handling between
+the two forms. A future fix could at least move the cheap, dependency-free
+half — the fingerprint-resolution check — ahead of the lock.
+
 **D-128 — a finding that names its fields "title"/"detail" is a naming drift, not a
 malformed reply: repaired at the boundary rather than gambled on a retry. BUILT
 2026-08-20.**
@@ -3704,8 +3769,8 @@ Three things it collides with, all of which need answers first:
 actually read that tree. Incremental delivery changes WHEN the ladder runs and what the
 model already knows; it changes nothing about what a verdict may assert.
 
-**D-111 — the client loop's own defects, found by DRIVING it. Two built 2026-08-15, two
-`[OPEN]`.**
+**D-111 — the client loop's own defects, found by DRIVING it. Two built 2026-08-15, a
+third (D-133) 2026-08-29, one `[OPEN]`.**
 
 Vany: *"is it convenient to use our service right now, or do you have good ideas how to
 improve user experience?"* Answered from a day spent as the client rather than reading the
@@ -3734,15 +3799,16 @@ again. Driving the loop by hand, the only recovery was a SQL query inside the co
 which no client can run on a machine it is not on. It now carries `fingerprint` and a
 ready-to-paste `justify_with`.
 
-**3. `[OPEN]` — A FIX HAS NO WAY TO SAY WHERE IT WENT.** D-56 settles a finding only when
-the code AT THE NAMED LINE moved, and the right fix is routinely elsewhere: a caller, a
-writer that never existed, a shared predicate. The protocol's answer is a `lore-ok` at the
-original line explaining the fix is elsewhere — which works and costs a full deep round
-each time. The `pull_fresh` seam took FOUR rounds this way, each a genuine defect, each
-correctly raised. A `fixed_elsewhere` field on submit — naming the finding and where it
-went, ruled on like any justification — would collapse that. Not built: it widens what a
-client may assert about its own fix, which is D-10's boundary, and deserves its own
-argument.
+**3. BUILT — see D-133.** A FIX HAS NO WAY TO SAY WHERE IT WENT. D-56 settles a finding
+only when the code AT THE NAMED LINE moved, and the right fix is routinely elsewhere: a
+caller, a writer that never existed, a shared predicate. The protocol's answer is a
+`lore-ok` at the original line explaining the fix is elsewhere — which works and costs a
+full deep round each time. The `pull_fresh` seam took FOUR rounds this way, each a
+genuine defect, each correctly raised. `fixed_elsewhere` on `review_submit` — naming the
+finding and where it went, ruled on like any justification — collapses that. D-10's
+boundary held: the reviewer still ratifies or rejects it, exactly as a comment-form
+justification does, so this widens the CHANNEL a client may assert through, not what its
+assertion is worth.
 
 **4. `[OPEN]` — THE PARAPHRASE TAX, and §3.1.1's evidence has now arrived.** The same
 defect arrives twice under two fingerprints when a tier rewords its claim between rounds,

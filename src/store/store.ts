@@ -2814,6 +2814,42 @@ export class Store {
     }));
   }
 
+  // ---------------------------------------------------------- fixed elsewhere
+
+  /**
+   * A client's claim that `fingerprint` was fixed at `file`/`line`, not the line
+   * it was raised on (D-133). Never ruled on here — `collectFixedElsewhere`
+   * (`review.ts`) turns it into the same `Pending` shape a text `lore-ok` marker
+   * becomes, and the ordinary silence-based ruling loop judges it.
+   */
+  recordFixedElsewhere(reviewId: string, fingerprint: string, file: string, line: number | undefined, reason: string): void {
+    this.db
+      .prepare(
+        `INSERT INTO fixed_elsewhere_claim(review_id, fingerprint, file, line, reason, created_at)
+         VALUES(?, ?, ?, ?, ?, ?)`,
+      )
+      .run(reviewId, fingerprint, file, line ?? null, reason, now());
+  }
+
+  /**
+   * Every claim on this review, whichever finding it names — the caller
+   * correlates against its own currently-open findings. Not scoped to open
+   * fingerprints here: once a finding settles it stops appearing in
+   * `openFindings`, which is what actually silences a ruled-on claim, so this
+   * read has no settled/unsettled distinction of its own to make.
+   */
+  fixedElsewhereFor(reviewId: string): readonly { fingerprint: string; file: string; line: number | undefined; reason: string }[] {
+    const rows = this.db
+      .prepare("SELECT fingerprint, file, line, reason FROM fixed_elsewhere_claim WHERE review_id = ?")
+      .all(reviewId) as Record<string, string | number | null>[];
+    return rows.map((r) => ({
+      fingerprint: String(r["fingerprint"] ?? ""),
+      file: String(r["file"] ?? ""),
+      line: typeof r["line"] === "number" ? r["line"] : undefined,
+      reason: String(r["reason"] ?? ""),
+    }));
+  }
+
   // ----------------------------------------------------------------- usage
 
   recordUsage(u: UsageRecord): void {

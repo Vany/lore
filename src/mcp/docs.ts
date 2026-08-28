@@ -316,13 +316,14 @@ not an answer is silence — an unanswered finding stops the review advancing, f
 
 Then ONE of three shapes, and they are the whole instruction:
 
-  * \`justify_with\` present, nothing else — open, nobody has argued about it. Fix it,
-    or answer it with the lore-ok line given. \`fixed_elsewhere\` rides along with it and
-    is the case people get wrong: repairing the CAUSE in other code is often the right
-    repair, and it leaves the named line untouched — which the next round reads as a
-    finding nobody answered, so it cannot settle however it goes. Fixing elsewhere is
-    fine; fixing elsewhere WITHOUT the lore-ok comment at the named line costs you a
-    whole round.
+  * \`justify_with\` present, nothing else — open, nobody has argued about it. Fix it, or
+    say why not. If the real repair belongs elsewhere — often the right call, since the
+    CAUSE is rarely at the line the symptom was flagged on — say so either with the
+    lore-ok line given, written at this named line, or more directly with
+    \`fixed_elsewhere\` on your next review_submit (fingerprint, file, reason — no edit to
+    this named line needed). Either way, SAY IT: leaving the named line untouched with
+    nothing pointing at where you actually fixed it reads as a finding nobody answered,
+    and costs you a whole round it did not have to.
 
   * \`justify_with\` AND \`justification_rejected\` — open, and you already tried. A
     reviewer read your reason and refused it, so this is worse than a finding nobody
@@ -504,11 +505,28 @@ did not change. Those CANNOT be settled by the next round however it goes — a 
 stops raising something it never saw move has changed its mind, not been satisfied.
 
 FIXING THE CAUSE ELSEWHERE IS OFTEN RIGHT, AND IT COSTS NOTHING EXTRA IF YOU SAY SO IN
-THE SAME DIFF. Put the lore-ok in with the fix — one submit, one round, ruled on
-together. You do not have to fix, submit, read \`will_not_settle\`, then submit a second
-time: that is a whole deep-tier round bought to learn something you already knew when you
-chose where to fix it. \`will_not_settle\` exists to catch what you MISSED, not to make
-you take two turns over what you meant.
+THE SAME SUBMIT — one submit, one round, ruled on together either way. You do not have
+to fix, submit, read \`will_not_settle\`, then submit a second time: that is a whole
+deep-tier round bought to learn something you already knew when you chose where to fix
+it. \`will_not_settle\` exists to catch what you MISSED, not to make you take two turns
+over what you meant.
+
+Two ways to say it, ruled on identically — silence next round accepts it, a re-raise
+rejects it at higher severity, exactly like any other justification:
+
+  * \`fixed_elsewhere\`: an array of \`{fingerprint, file, reason, line?}\`. \`fingerprint\`
+    is the short id \`review_poll\` gave you; \`file\` is wherever the real fix landed and
+    MUST be part of THIS diff or commit — silence over a file the tier was never shown is
+    not evidence of anything, so lore refuses the whole call rather than record a claim
+    with nothing behind it. No edit to the originally flagged line needed. A fingerprint
+    that does not resolve, or names a file outside this submission, fails the call
+    outright — a real mistake worth failing loudly on, not a shortcut around review, only
+    around re-explaining it in a second place. A fingerprint some earlier round already
+    settled is silently skipped and named in \`fixed_elsewhere_skipped\`, since it is not
+    a mistake, just a claim that arrived after it stopped being needed.
+  * A \`// lore-ok[<fingerprint>]: fixed elsewhere, see X\` comment AT THE ORIGINAL line —
+    still fully supported, and the only option when prose reads better than naming a
+    file, or the finding predates this field.
 
 If the named line no longer exists — you deleted the code, or the fix removed the very
 lines the finding pointed at — there is nowhere to write the marker, so put it in

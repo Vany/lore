@@ -1153,6 +1153,30 @@ describe("knowledge", () => {
     expect(store.resolveConflict(repoId, "nope-a", "nope-b", "because")).toBe(false);
   });
 
+  it("round-trips a fixed_elsewhere claim (D-133)", () => {
+    newReview("rev1");
+    store.recordFixedElsewhere("rev1", "aaaa1111", "src/other.ts", 42, "moved the release call here");
+    expect(store.fixedElsewhereFor("rev1")).toStrictEqual([
+      { fingerprint: "aaaa1111", file: "src/other.ts", line: 42, reason: "moved the release call here" },
+    ]);
+  });
+
+  it("stores a fixed_elsewhere claim with no line as undefined, not null", () => {
+    newReview("rev1");
+    store.recordFixedElsewhere("rev1", "aaaa1111", "src/other.ts", undefined, "file-level fix");
+    expect(store.fixedElsewhereFor("rev1")).toHaveLength(1);
+    expect(store.fixedElsewhereFor("rev1")[0]?.line).toBeUndefined();
+  });
+
+  it("scopes fixed_elsewhere claims to their own review", () => {
+    newReview("rev1");
+    newReview("rev2");
+    store.recordFixedElsewhere("rev1", "aaaa1111", "src/other.ts", 1, "for rev1");
+    store.recordFixedElsewhere("rev2", "bbbb2222", "src/another.ts", 2, "for rev2");
+    expect(store.fixedElsewhereFor("rev1").map((c) => c.fingerprint)).toStrictEqual(["aaaa1111"]);
+    expect(store.fixedElsewhereFor("rev2").map((c) => c.fingerprint)).toStrictEqual(["bbbb2222"]);
+  });
+
   // b1a9841c, found by lore's own review: every OTHER id-comparison path in this
   // file (retirePolicy, policyByShort, the appeal grammar) resolves a prefix;
   // resolveConflict matched keep/retire with exact `=`. A client naturally holds

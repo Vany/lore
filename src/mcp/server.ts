@@ -1278,6 +1278,24 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
               "git write-tree of the tree you mean — for `diff`, verified after we apply it; for `commit`, " +
                 "checked synchronously against the commit's own tree before anything is applied or held",
             ),
+          // D-133: the same thing a `// lore-ok[fp]: fixed elsewhere, see X` comment at
+          // the ORIGINAL line already says — offered as a field because writing that
+          // comment costs nothing extra when you already know where the fix went, and
+          // ruled on exactly the same way (this is not a shortcut around review, only
+          // around re-explaining it in a second place).
+          fixed_elsewhere: absent(
+            z.array(
+              z.object({
+                fingerprint: z.string().min(1).describe("the finding's fingerprint, from review_poll"),
+                file: z.string().min(1).describe("where the fix actually landed — must be part of THIS submission"),
+                line: absent(z.number().int().positive()),
+                reason: z.string().min(1).describe("what you changed there, and why it answers the finding"),
+              }),
+            ),
+          ).describe(
+            "findings you are answering by pointing at a fix elsewhere in this same diff/commit, instead of " +
+              "a lore-ok comment at the original line",
+          ),
         })
         // EXACTLY ONE, and it is refused here rather than downstream. Both would be two
         // descriptions of a tree that can disagree, and lore would have to pick; neither
@@ -1288,7 +1306,7 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           message: "send exactly one of `diff` or `commit` — not both, and not neither",
         }),
     },
-    async ({ review_id, diff, commit, tree_hash }) => {
+    async ({ review_id, diff, commit, tree_hash, fixed_elsewhere }) => {
       const review = mine(review_id);
 
       // A FINISHED REVIEW TAKES NO MORE WORK.
@@ -1352,7 +1370,11 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       const submitted = await withSubmitLock(
         review_id,
         async (): Promise<
-          | { readonly kind: "held" }
+          // `patch` on BOTH variants (D-133): it is fully resolved — commit normalized
+          // to a diff — before the held/applied fork below, so `fixed_elsewhere`'s own
+          // filesInDiff check can run uniformly after this call returns, regardless of
+          // which branch was taken, instead of duplicating commit-resolution to get it.
+          | { readonly kind: "held"; readonly patch: string }
           | { readonly kind: "applied"; readonly patch: string; readonly appliedTreeHash: string }
         > => {
           let patch = diff;
@@ -1620,7 +1642,7 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           if (store.hasPendingRound(review_id)) {
             const heldId = store.holdDiff(review_id, patch, tree_hash);
             if (store.hasPendingRound(review_id)) {
-              return { kind: "held" };
+              return { kind: "held", patch };
             }
             // The round ended in the race window: nothing will consume the hold, so take it
             // back and fall through to the synchronous path below.
@@ -1723,6 +1745,50 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
         },
       );
 
+      // D-133: validated and persisted here, OUTSIDE the lock and before the
+      // held/applied fork — a claim is independent of whether ITS diff landed on
+      // the worktree yet or is queued, because all it needs is to exist by the time
+      // some later round reads store.openFindings and correlates it. Refuses the
+      // WHOLE call on a real client mistake (an unresolvable fingerprint, or a file
+      // this submission never touched — silence over a file the tier was never
+      // shown is evidence of nothing); silently skips, but reports, a fingerprint
+      // that resolves to a finding already settled by an earlier round.
+      const fixedElsewhereSkipped: string[] = [];
+      // Read below at the `will_not_settle` preview (D-133): a fingerprint validly
+      // claimed HERE must not also appear in that list — it would tell a client its
+      // own just-submitted answer "will not settle", the exact fires-on-the-correct-
+      // answer nag `alreadyAnswered`'s own doc comment says trains clients to skip
+      // warnings entirely.
+      const justClaimedElsewhere = new Set<string>();
+      if (fixed_elsewhere !== undefined && fixed_elsewhere.length > 0) {
+        const filesTouched = new Set(filesInDiff(submitted.patch));
+        const stillOpen = new Set(store.openFindings(review_id).map((f) => f.fingerprint));
+        const toRecord: { fingerprint: string; file: string; line: number | undefined; reason: string }[] = [];
+        for (const entry of fixed_elsewhere) {
+          const fp = store.resolveShort(review_id, entry.fingerprint);
+          if (fp === undefined) {
+            throw new Error(
+              `fixed_elsewhere names fingerprint ${entry.fingerprint}, which this review has never raised. ` +
+                "Use the fingerprint review_poll gave you, not one remembered or guessed.",
+            );
+          }
+          if (!filesTouched.has(entry.file)) {
+            throw new Error(
+              `fixed_elsewhere for ${entry.fingerprint} names ${entry.file}, which is not part of this ` +
+                "submission. A tier's silence over a file it was never shown is not evidence of anything -- " +
+                "include the fix in this same diff/commit, or leave a lore-ok at the finding's own line instead.",
+            );
+          }
+          if (!stillOpen.has(fp)) {
+            fixedElsewhereSkipped.push(entry.fingerprint);
+            continue;
+          }
+          toRecord.push({ fingerprint: fp, file: entry.file, line: entry.line, reason: entry.reason });
+          justClaimedElsewhere.add(fp);
+        }
+        for (const r of toRecord) store.recordFixedElsewhere(review_id, r.fingerprint, r.file, r.line, r.reason);
+      }
+
       if (submitted.kind === "held") {
         return {
           content: [
@@ -1738,6 +1804,7 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
                   "return at higher severity). Findings it reports before seeing your fix may already be " +
                   "fixed by it — expected, do not double-fix. If the tree hash cannot be verified when it " +
                   "is applied, the review lands in awaiting_diff with the reason.",
+                ...(fixedElsewhereSkipped.length === 0 ? {} : { fixed_elsewhere_skipped: fixedElsewhereSkipped }),
               }),
             },
           ],
@@ -1783,6 +1850,7 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
         unmoved = (
           await Promise.all(
             store.openFindings(review_id).map(async (f) => {
+              if (justClaimedElsewhere.has(f.fingerprint)) return undefined;
               if (await codeMoved(worktree, f)) return undefined;
               // EVERY FILE THE DIFF TOUCHED, not just the finding's own. The round reads
               // markers from every changed file, so a `lore-ok` written where the fix
@@ -1809,6 +1877,7 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           review_id,
           state: "queued",
           tree_hash: applied,
+          ...(fixedElsewhereSkipped.length === 0 ? {} : { fixed_elsewhere_skipped: fixedElsewhereSkipped }),
           ...(unmoved === undefined
             ? {
                 will_not_settle_note:

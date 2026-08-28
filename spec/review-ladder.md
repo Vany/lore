@@ -516,6 +516,24 @@ The provenance does not accumulate. A justification surviving many reviews keeps
 line, not one per hop: the value of the field is the reason, and a wall of nested
 provenance buries it.
 
+### 4.3 A structured alternative: `fixed_elsewhere` (D-133)
+
+The comment forms above all require a site: something at the finding's own line to
+attach the reason to. That is often exactly wrong for the most common real
+justification — *the cause was fixed elsewhere, this line never needed to change* —
+which otherwise costs a synthetic edit to a file the fix never actually touched, purely
+to plant a marker.
+
+`review_submit` accepts `fixed_elsewhere: {fingerprint, file, reason, line?}[]` as a
+structured alternative: `file` names wherever the real fix landed, and must be part of
+the same submission. It is not a second mechanism — it is collected into the same
+`pending` set the comment markers are, ratified by the same reviewer read, on the same
+silence-accepts/re-raise-rejects rule as §4 and §4.1's staleness rule both apply
+unchanged. The only difference from a comment is where the claim lives (a request
+field, not source text) and that its evidence is checked once, mechanically, at submit
+time: an unresolvable fingerprint or a file outside the submission refuses the whole
+call, rather than surfacing as a silently-never-collected marker.
+
 ## 5. Escalation and termination
 
 - Tier produced **new** findings → report; the next pass runs **the same tier**, so the

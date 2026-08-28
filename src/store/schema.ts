@@ -16,12 +16,13 @@
 import type { DatabaseSync } from "node:sqlite";
 import { SEVERITIES } from "../core/finding.ts";
 
+// 20: fixed_elsewhere_claim (D-133).
 // 4: usage.diff_chars (D-58).
 // 3: finding.scope_blob / finding.scope_hunk (D-56). Bumped in the same change that
 // adds the columns, because this number is what `assertNotDowngrade` compares — left
 // behind, it says a database written by this build is identical to one written before
 // the columns existed.
-export const SCHEMA_VERSION = 19;
+export const SCHEMA_VERSION = 20;
 
 /**
  * How findings are ordered wherever the service hands them out: worst first.
@@ -310,6 +311,25 @@ CREATE TABLE IF NOT EXISTS knowledge_conflict (
   resolved_at TEXT
 );
 CREATE INDEX IF NOT EXISTS conflict_open ON knowledge_conflict(repo_id, state);
+
+-- D-133: a client's claim that a finding was fixed somewhere other than the line
+-- it was raised on. Persisted, not held in memory -- review_submit's handler and
+-- the round that actually rules on the claim are different invocations (the round
+-- runs off the job queue), so a claim that only lived in the request would be gone
+-- before anything read it. Never deleted: once its finding settles it drops out of
+-- openFindings, which is what fixedElsewhereFor joins against, so a ruled-on claim
+-- simply stops being fed in -- the same re-scan-and-let-settlement-silence-it shape
+-- collectJustifications already uses for text markers.
+CREATE TABLE IF NOT EXISTS fixed_elsewhere_claim (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  review_id   TEXT NOT NULL REFERENCES review(id),
+  fingerprint TEXT NOT NULL,
+  file        TEXT NOT NULL,
+  line        INTEGER,
+  reason      TEXT NOT NULL,
+  created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS fixed_elsewhere_by_review ON fixed_elsewhere_claim(review_id, fingerprint);
 
 CREATE TABLE IF NOT EXISTS usage (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,

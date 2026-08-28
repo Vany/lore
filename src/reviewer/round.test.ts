@@ -413,6 +413,34 @@ describe("runRound", () => {
     expect(store.settledFingerprints("r1")).not.toContain(fingerprint(HOLD_BUG));
   });
 
+  // D-133, the same silence-based ruling loop a text lore-ok already goes through —
+  // reached by a stored claim instead of a file comment.
+  it("accepts a fixed_elsewhere claim the reviewer declines to re-raise", async () => {
+    const reviewer = new ScriptedReviewer([[HOLD_BUG], []]);
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
+
+    store.recordFixedElsewhere("r1", fingerprint(HOLD_BUG), "src/hold.ts", 3, "released in a shared helper now");
+    const second = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
+
+    expect(second.accepted).toStrictEqual([fingerprint(HOLD_BUG)]);
+    expect(store.latestVerdict("r1", fingerprint(HOLD_BUG))?.verdict).toBe("justified-accepted");
+    expect(store.latestVerdict("r1", fingerprint(HOLD_BUG))?.rationale).toContain("shared helper");
+  });
+
+  it("rejects a fixed_elsewhere claim when the reviewer raises the finding anyway", async () => {
+    const reviewer = new ScriptedReviewer([[HOLD_BUG], [HOLD_BUG]]);
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
+
+    store.recordFixedElsewhere("r1", fingerprint(HOLD_BUG), "src/hold.ts", 3, "moved it, trust me");
+    const second = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
+
+    expect(second.rejected).toStrictEqual([fingerprint(HOLD_BUG)]);
+    // NOT "fixed" -- silence over a fixed_elsewhere claim is justified-accepted, the
+    // same verdict kind an ordinary lore-ok gets, not a new kind of its own.
+    expect(store.latestVerdict("r1", fingerprint(HOLD_BUG))?.verdict).toBe("justified-rejected");
+    expect(store.settledFingerprints("r1")).not.toContain(fingerprint(HOLD_BUG));
+  });
+
   // The bug this exists for: a semgrep false positive on lore's own test suite could
   // NEVER be justified. T0 is deterministic — it re-matches every round — so counting
   // it as "the reviewer looked and raised it anyway" rejected the reason forever, the

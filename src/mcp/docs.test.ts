@@ -277,6 +277,9 @@ describe("every behaviour a client must know about reaches the texts", () => {
     ["submit", "commit's tree_hash is checked before anything lands, not after", "before anything is applied or even held"],
     ["submit", "a commit cannot chain onto an outstanding raw-diff hold", "sent next is REFUSED rather than held"],
     ["poll", "a passed review closes the review, not the client's whole task", "not your task"],
+    ["poll", "fixed_elsewhere is the direct alternative to a lore-ok comment (D-133)", "on your next review_submit (fingerprint, file, reason"],
+    ["submit", "fixed_elsewhere needs the fix's file in this same submission (D-133)", "MUST be part of THIS diff or commit"],
+    ["submit", "an unresolvable fixed_elsewhere fingerprint fails the whole call (D-133)", "or names a file outside this submission"],
   ])("%s tells the client: %s", (tool, _why, needle) => {
     expect(TOOL_DOCS[tool as keyof typeof TOOL_DOCS]).toContain(needle);
   });

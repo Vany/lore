@@ -873,7 +873,14 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // findings the collector never saw.
   const open = store.openFindings(reviewId);
   const justifiableFiles = [...new Set([...diff.changedFiles, ...open.map((f) => f.file)])];
-  const pending = await collectJustifications(store, reviewId, review.repoId, worktree, justifiableFiles, open);
+  // D-133: merged into `pending` itself, not applied at a single downstream
+  // consumer — the prompt, the silence-ruling loop and `settleFixed`'s own
+  // exclusion set all read `pending`, and a `fixed_elsewhere` claim needs all
+  // three, exactly as a text `lore-ok` marker already does.
+  const pending = [
+    ...(await collectJustifications(store, reviewId, review.repoId, worktree, justifiableFiles, open)),
+    ...(await collectFixedElsewhere(store, reviewId, worktree, open)),
+  ];
 
   // 4. Expire justifications whose code has changed, BEFORE the model tier runs.
   //
@@ -3603,6 +3610,41 @@ async function collectJustifications(
         "repository and matched nothing open here. That is normal — a marker is permanent in the source — " +
         "and they were ignored.",
     );
+  }
+  return out;
+}
+
+/**
+ * D-133's collector, parallel to `collectJustifications` but reading structured
+ * claims from the store instead of `lore-ok` markers from file text — the same
+ * `Pending` shape either way, ruled on by the same silence loop.
+ *
+ * `scope` is taken from the FINDING's own file/line, never the claim's — matching
+ * `collectJustifications`'s own reasoning exactly: `expireStaleVerdicts` looks the
+ * hunk up at the finding's location, so a scope taken from wherever the fix
+ * actually landed would expire on the wrong edit. `citedRule` is never set: a
+ * `fixed_elsewhere` claim is not a D-83 rule appeal, and setting it would wrongly
+ * buy a class suppression for an ordinary "I fixed it, here's where" claim.
+ */
+async function collectFixedElsewhere(
+  store: Store,
+  reviewId: string,
+  worktree: string,
+  open: readonly RecordedFinding[],
+): Promise<readonly Pending[]> {
+  const claims = store.fixedElsewhereFor(reviewId);
+  if (claims.length === 0) return [];
+  const byFingerprint = new Map(open.map((f) => [f.fingerprint, f]));
+
+  const out: Pending[] = [];
+  for (const claim of claims) {
+    const finding = byFingerprint.get(claim.fingerprint);
+    if (finding === undefined) continue; // already settled in an earlier round
+    out.push({
+      finding,
+      reason: claim.reason,
+      scope: await scopeOf(worktree, finding.file, finding.line),
+    });
   }
   return out;
 }
