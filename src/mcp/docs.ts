@@ -27,6 +27,8 @@ import { REVIEW_STATES } from "../core/review-state.ts";
  *  7. Reads `fast_clean` as `passed`.
  *  8. Answers a `needs_human` question itself, because stopping feels like failing.
  *  9. Summarises the ticket instead of pasting it.
+ * 10. Reads `passed`/`passed_partial` as the end of its whole task and stops
+ *     there, not just the end of this one review.
  */
 
 export const TOOL_DOCS = {
@@ -864,9 +866,11 @@ Rules that decide whether this works:
 - \`fast_clean\` is not \`passed\` either — the deep tiers have not run.
 - \`passed_partial\` is terminal and will NEVER become \`passed\`, so waiting for that
   never returns. Attest it, and say plainly that the evidence is weaker than a pass.
-- Reaching \`passed\`/\`passed_partial\` closes THIS review, not your task. Attest,
-  merge, and carry on with whatever else you were asked to do — lore has no opinion
-  on when your session ends, only on whether this branch was reviewed.
+- Reaching \`passed\`/\`passed_partial\` closes THIS review, not your task. Attest it
+  either way; merge on a full pass, but a partial one is your user's call, not yours
+  (the bullet above). Once that is settled, carry on with whatever else you were
+  asked to do — lore has no opinion on when your session ends, only on whether this
+  branch was reviewed.
 - Expect several rounds. A fix does NOT send the review back down the ladder: the tier
   that raised a finding is the one that judges your answer, and a tier already satisfied
   stays satisfied for the rest of this review.

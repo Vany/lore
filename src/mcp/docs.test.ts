@@ -133,6 +133,29 @@ describe("the loop starts by asking what is already waiting", () => {
   });
 });
 
+// A PASSED REVIEW CLOSES THIS REVIEW, NOT THE CLIENT'S WHOLE TASK — and the first
+// attempt to say so (fingerprint 7c044bae) got it wrong: "attest, merge, and carry
+// on" collapsed into one unconditional instruction for both terminal states, silently
+// dropping the rule two lines up that a partial pass's merge decision belongs to the
+// user, not the agent. Both loop documents have to keep saying both things at once,
+// for the same reason the inbox-first rule above is pinned rather than trusted to
+// prose: a sentence this project already fixed wrong once by hand is a sentence it
+// has already watched drift back out once by hand too.
+describe("a passed review closes the review, not the client's task", () => {
+  const loops: readonly [string, string][] = [
+    ["RESOURCE_DOCS[lore://docs/workflow]", RESOURCE_DOCS["lore://docs/workflow"]?.text ?? ""],
+    ["REVIEW_PROMPT_TEXT", REVIEW_PROMPT_TEXT({ branch: "b", into: "i" }, "t")],
+  ];
+
+  it.each(loops)("%s says reaching a terminal state closes THIS review", (_name, text) => {
+    expect(text).toMatch(/closes THIS review/);
+  });
+
+  it.each(loops)("%s still leaves a partial pass's merge decision to the user, not the agent", (_name, text) => {
+    expect(text).toMatch(/not yours/);
+  });
+});
+
 describe("the docs name tools that exist", () => {
   it.each(ALL_DOCS)("%s uses no dotted tool name", (_name, text) => {
     // `review.poll` is what SPEC calls it in prose and is not callable. Matching the

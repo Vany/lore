@@ -282,7 +282,9 @@ Arguments: `branch` (required); `into` (required unless `mode` is `"folder"`);
 `mode` (default `"diff"`; D-130's folder mode, mirroring `review_start` §2.3.3);
 `path` (required when `mode` is `"folder"`, refused otherwise).
 
-Draft returned message:
+Draft returned message (branches on `mode` — shown here for `mode: "diff"`; a
+folder-mode call opens differently, naming `path` instead of `into`, per
+`REVIEW_PROMPT_TEXT`'s own source):
 
 > You are shepherding `<branch>` through an independent review before it merges
 > into `<into>`.
@@ -292,24 +294,40 @@ Draft returned message:
 > investigate, not as opinions to argue with.
 >
 > **The loop**
-> 1. `review_start(branch, into)` → `review_id`
-> 2. `review_poll(review_id)` until findings arrive or the state is terminal
+> 0. `review_inbox()` — FIRST. A review from an earlier session is still open and
+>    still yours, and nothing but this call will tell you.
+> 1. `review_start(branch, into, ticket)` → `review_id`
+> 2. `review_poll(review_id)` — ONE call, then leave and do something else. Come
+>    back when `check_back_note` says.
 > 3. For each finding: fix it, or justify it with `// lore-ok[fp]: <reason>`
-> 4. `review_submit(review_id, diff, tree_hash)`
-> 5. Return to 2. Repeat until the state is `passed`.
+> 4. `review_submit(review_id, diff | commit, tree_hash)` — any time once findings
+>    exist, in ANY state including `fast_clean`. A submit while a reviewer is
+>    mid-read is HELD, not refused, and handed to it at its next emission.
+> 5. Return to 2. Repeat until the state is TERMINAL — `passed`, `passed_partial`,
+>    `needs_human`, `failed`, `expired` or `cancelled`. Only `passed` and
+>    `passed_partial` are worth attesting, and only `passed` is clean.
 >
 > **Rules**
 > - Polls return only new findings. Never re-fix what is not in the response.
-> - `failed` and `expired` are not `passed`. Report and stop; do not merge.
-> - Expect several rounds. A fix does NOT send the review back down the ladder: the
->   tier that raised a finding judges your answer to it.
-> - Do not use `lore-ok` to make an inconvenient finding go away. The reviewer rules
->   on it, and a rejected justification returns worse than it left.
+> - `failed`, `expired` and `fast_clean` are not `passed`. Do not merge on them.
+> - `passed_partial` is TERMINAL: it will never become `passed`, so looping for
+>   that never ends. Attest it, and tell your user the evidence is weaker than a
+>   pass, so the decision to merge is theirs.
+> - Expect several rounds. A fix does NOT send the review back down the ladder:
+>   the tier that raised a finding judges your answer to it.
+> - Do not use `lore-ok` to make an inconvenient finding go away. The reviewer
+>   rules on it, and a rejected justification returns worse than it left.
 > - Before fixing in unfamiliar code, `knowledge_query` it — someone may have
 >   already decided this, for a reason.
 > - When you learn something durable, `knowledge_teach` it.
+> - If the state is `needs_human`, STOP and ask a person. Do not answer it
+>   yourself.
 >
-> When the state is `passed`, call `review_attest` and give the user that line.
+> When the state is `passed` — or `passed_partial` — call `review_attest` and
+> give the user that line. On a partial one, say which tiers were skipped and
+> that the evidence is weaker than a pass; the decision to merge on it is theirs,
+> not yours. Either way, attesting and merging closes THIS review — carry on
+> with whatever else your task needs.
 
 ### 5.1 Other prompts
 
