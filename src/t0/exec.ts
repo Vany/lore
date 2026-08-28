@@ -96,6 +96,31 @@ export async function runTool(
     if (err.code === "ENOENT") {
       return { ok: false, code: -1, stdout: "", stderr: "", timedOut: false, unavailable: `${cmd} not found` };
     }
+    // A run OUR OWN maxBuffer cap cut off is the third way a process does not
+    // finish, alongside a kill and a timeout — found by lore's own review,
+    // fingerprint 2d852614, confirmed empirically against this repo's own Node
+    // (exceeding maxBuffer rejects with `code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER"`,
+    // `killed: undefined`, `signal: undefined` — none of which `timedOut`'s own
+    // check below recognises, so this read as an ordinary exit 1 with no
+    // `unavailable` at all). `stdout`/`stderr` ARE present on the error (also
+    // confirmed empirically) but discarded here rather than returned, same as the
+    // ENOENT branch above and same reasoning `checkTypes`'s own OOM handling
+    // already applies: a truncated partial result parsed as if it were complete
+    // is worse than no result, because the reader cannot tell it is partial.
+    // `timedOut: true` — reused, not a new field, because every existing caller
+    // already reads it for exactly this meaning ("this round's silence proves
+    // nothing"), never for its literal name; see `EngineOutcome.interrupted`'s own
+    // doc comment.
+    if (err.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
+      return {
+        ok: false,
+        code: 1,
+        stdout: "",
+        stderr: "",
+        timedOut: true,
+        unavailable: `${cmd} produced more output than this service will buffer (own limit, not a fault in the branch) — nothing it would have found past that point is known either way`,
+      };
+    }
     const timedOut = err.killed === true;
     return {
       ok: false,

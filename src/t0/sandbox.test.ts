@@ -311,7 +311,10 @@ describe("a timed-out sandboxed run is killed explicitly, not left to a signal t
    * between its own subcommands — unlike `runner.test.ts`'s `fakeDocker`, which
    * ignores argv entirely and cannot tell `run` from `kill` apart. Every
    * invocation's full argv is appended to `log` first, so a test can assert
-   * exactly what this code actually ran, not just what it returned.
+   * exactly what this code actually ran, not just what it returned. `rm` (the
+   * pre-run `clearStaleContainer` call, fingerprint bfc4e055) exits clean like a
+   * real one against a name not in use — logged like every other call, since
+   * these tests assert on its presence too now.
    */
   const fakeDockerBinary = (): string => {
     const script = join(dir, "fake-docker.sh");
@@ -322,6 +325,7 @@ describe("a timed-out sandboxed run is killed explicitly, not left to a signal t
         'case "$1" in\n' +
         "  run) sleep 5 ;;\n" +
         "  kill) exit 0 ;;\n" +
+        "  rm) exit 0 ;;\n" +
         "esac\n",
     );
     chmodSync(script, 0o755);
@@ -345,22 +349,26 @@ describe("a timed-out sandboxed run is killed explicitly, not left to a signal t
     return script;
   };
 
-  it("runInSandbox: issues an explicit kill naming this run's own container, after a timeout", async () => {
+  it("runInSandbox: clears any stale container, then issues an explicit kill after a timeout", async () => {
     fakeDockerBinary();
     const result = await runInSandbox(baseSandbox, dir, cache, scratch, "echo hi", false);
     expect(result.timedOut).toBe(true);
 
     const calls = readFileSync(log, "utf8").trim().split("\n");
-    expect(calls[0]?.startsWith("run ")).toBe(true);
+    const runCall = calls.find((c) => c.startsWith("run "));
+    expect(runCall, `expected a run call among: ${JSON.stringify(calls)}`).toBeDefined();
     const killCall = calls.find((c) => c.startsWith("kill "));
     expect(killCall, `expected a kill call among: ${JSON.stringify(calls)}`).toBeDefined();
-    // The SAME name the timed-out `run` was given — otherwise this kills nothing.
-    const nameInRun = calls[0]?.match(/--name (\S+)/)?.[1];
+    // The SAME name every step used — otherwise the kill (or the clear) targets
+    // a container that was never this run's own.
+    const nameInRun = runCall?.match(/--name (\S+)/)?.[1];
     expect(nameInRun).toBeDefined();
+    // clearStaleContainer, ahead of the run it is clearing the way for.
+    expect(calls[0]).toBe(`rm -f ${nameInRun}`);
     expect(killCall).toBe(`kill ${nameInRun}`);
   });
 
-  it("install: also issues an explicit kill after a timeout, the same as runInSandbox", async () => {
+  it("install: also clears stale state and issues an explicit kill, the same as runInSandbox", async () => {
     fakeDockerBinary();
     const result = await install(baseSandbox, dir, cache, scratch, {
       name: "npm",
@@ -369,7 +377,9 @@ describe("a timed-out sandboxed run is killed explicitly, not left to a signal t
       run: (s) => `npm run ${s}`,
     });
     expect(result.timedOut).toBe(true);
-    expect(readFileSync(log, "utf8")).toMatch(/^kill /m);
+    const log_ = readFileSync(log, "utf8");
+    expect(log_).toMatch(/^rm -f /m);
+    expect(log_).toMatch(/^kill /m);
   });
 
   it("does not attempt a kill when the run finishes on its own", async () => {

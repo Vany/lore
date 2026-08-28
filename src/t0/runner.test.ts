@@ -202,6 +202,11 @@ describe("a run the sandbox itself killed is never mistaken for a clean or parti
     writeFileSync(
       script,
       "#!/bin/sh\n" +
+        // `clearStaleContainer`'s own `rm -f` (fingerprint bfc4e055), transparent
+        // here the same way a real one is against a name not in use — succeeds,
+        // untouched by and untouching the marker file every OTHER assertion below
+        // depends on counting.
+        'if [ "$1" = "rm" ]; then exit 0; fi\n' +
         `if [ -f "${called}" ]; then\n` +
         `  cat "${output}"\n` +
         `  exit ${String(exitCode)}\n` +
@@ -312,6 +317,7 @@ describe("a run the sandbox itself killed is never mistaken for a clean or parti
     writeFileSync(
       script,
       "#!/bin/sh\n" +
+        'if [ "$1" = "rm" ]; then exit 0; fi\n' +
         `if [ -f "${called}" ]; then\n` +
         "  echo 'sh: 1: tsc: not found' >&2\n" +
         "  exit 127\n" +
@@ -382,6 +388,13 @@ describe("a run the sandbox itself killed is never mistaken for a clean or parti
     writeFileSync(
       script,
       "#!/bin/sh\n" +
+        'if [ "$1" = "rm" ]; then exit 0; fi\n' +
+        // `killIfTimedOut`'s own explicit kill (fingerprint 0b55733a) reaches
+        // this same script with `$1 = "kill"` after the `run` below hangs —
+        // without this, "kill" falls into the marker-file branch same as any
+        // other second call and sleeps another real 5s, well past this test's
+        // own default timeout.
+        'if [ "$1" = "kill" ]; then exit 0; fi\n' +
         `if [ -f "${called}" ]; then\n` +
         "  sleep 5\n" +
         "else\n" +
@@ -476,6 +489,7 @@ describe("sandboxedCargo, through a fake docker", () => {
     writeFileSync(
       script,
       "#!/bin/sh\n" +
+        'if [ "$1" = "rm" ]; then exit 0; fi\n' +
         `N=$(cat "${countFile}" 2>/dev/null || echo 0)\n` +
         `echo $((N+1)) > "${countFile}"\n` +
         'if [ "$N" -eq 0 ]; then exit 0; ' +
@@ -500,6 +514,7 @@ describe("sandboxedCargo, through a fake docker", () => {
     writeFileSync(
       script,
       "#!/bin/sh\n" +
+        'if [ "$1" = "rm" ]; then exit 0; fi\n' +
         `N=$(cat "${countFile}" 2>/dev/null || echo 0)\n` +
         `echo $((N+1)) > "${countFile}"\n` +
         'if [ "$N" -eq 0 ]; then exit 0; ' +
@@ -526,6 +541,7 @@ describe("sandboxedCargo, through a fake docker", () => {
     writeFileSync(
       script,
       "#!/bin/sh\n" +
+        'if [ "$1" = "rm" ]; then exit 0; fi\n' +
         `N=$(cat "${countFile}" 2>/dev/null || echo 0)\n` +
         `echo $((N+1)) > "${countFile}"\n` +
         "if [ \"$N\" -eq 0 ]; then exit 0; " +
@@ -562,7 +578,9 @@ describe("sandboxedCargo, through a fake docker", () => {
   it("sets CARGO_HOME and CARGO_TARGET_DIR in every cargo invocation it builds", async () => {
     const script = join(dir, "fake-docker-cargo-env.sh");
     const captured = join(dir, "captured-argv.txt");
-    writeFileSync(script, `#!/bin/sh\nprintf '%s\\n---\\n' "$*" >> "${captured}"\nexit 0\n`);
+    // `clearStaleContainer`'s own `rm -f` (fingerprint bfc4e055) is real but not
+    // what this test counts — excluded from the capture, not merely tolerated.
+    writeFileSync(script, `#!/bin/sh\nif [ "$1" = "rm" ]; then exit 0; fi\nprintf '%s\\n---\\n' "$*" >> "${captured}"\nexit 0\n`);
     chmodSync(script, 0o755);
     await runT0(dir, { engines: ["cargo-check", "cargo-clippy"], sandbox: baseSandbox(script) });
     const argv = readFileSync(captured, "utf8");
@@ -589,7 +607,7 @@ describe("sandboxedCargo, through a fake docker", () => {
   it("mounts the cache as a sibling of /work, never nested under /work/.cargo", async () => {
     const script = join(dir, "fake-docker-mount-check.sh");
     const captured = join(dir, "captured-mount.txt");
-    writeFileSync(script, `#!/bin/sh\nprintf '%s\\n---\\n' "$*" >> "${captured}"\nexit 0\n`);
+    writeFileSync(script, `#!/bin/sh\nif [ "$1" = "rm" ]; then exit 0; fi\nprintf '%s\\n---\\n' "$*" >> "${captured}"\nexit 0\n`);
     chmodSync(script, 0o755);
     await runT0(dir, { engines: ["cargo-check"], sandbox: baseSandbox(script) });
     const argv = readFileSync(captured, "utf8");
@@ -611,7 +629,7 @@ describe("sandboxedCargo, through a fake docker", () => {
       writeFileSync(join(spaced, "Rust Core", "Cargo.toml"), '[package]\nname = "x"\n');
       const script = join(spaced, "fake-docker-spaced.sh");
       const captured = join(spaced, "captured-argv.txt");
-      writeFileSync(script, `#!/bin/sh\nprintf '%s\\n---\\n' "$*" >> "${captured}"\nexit 0\n`);
+      writeFileSync(script, `#!/bin/sh\nif [ "$1" = "rm" ]; then exit 0; fi\nprintf '%s\\n---\\n' "$*" >> "${captured}"\nexit 0\n`);
       chmodSync(script, 0o755);
       await runT0(spaced, {
         engines: ["cargo-check"],
@@ -660,6 +678,7 @@ describe("sandboxedCargo, through a fake docker", () => {
     writeFileSync(
       script,
       "#!/bin/sh\n" +
+        'if [ "$1" = "rm" ]; then exit 0; fi\n' +
         `N=$(cat "${countFile}" 2>/dev/null || echo 0)\n` +
         `echo $((N+1)) > "${countFile}"\n` +
         `if [ "$N" -eq 0 ]; then exit 0; ` +
@@ -701,6 +720,50 @@ describe("sandboxedCargo, through a fake docker", () => {
       expect(o?.skipped).toMatch(/no Cargo\.toml/);
     } finally {
       rmSync(empty, { recursive: true, force: true });
+    }
+  });
+
+  // Fingerprints 0691f313/6eae08da: this was `unavailable` — the client-facing
+  // NOT RUN list, on EVERY round of every review of a pure Rust/Go/Python repo
+  // forever — until lore's own review asked why tsc/eslint never got the same
+  // fix cargo did, right above, for the identical shape.
+  it("reports absence as skipped, not unavailable, when there is no package.json at all", async () => {
+    const empty = mkdtempSync(join(tmpdir(), "lore-t0-nopkg-"));
+    try {
+      const sandbox: SandboxConfig = {
+        image: "unused", cacheRoot: join(empty, "cache"), scratchRoot: join(empty, "scratch"),
+        uid: 1000, gid: 1000, memory: "6g", cpus: "2", timeoutMs: 30_000, runtime: "unused",
+      };
+      const out = await runT0(empty, { engines: ["tsc", "eslint"], sandbox });
+      for (const engineName of ["tsc", "eslint"] as const) {
+        const o = out.outcomes.find((x) => x.engine === engineName);
+        expect(o?.findings).toStrictEqual([]);
+        expect(o?.unavailable, "not a gap the client should be told about, same as cargo's own absence").toBeUndefined();
+        expect(o?.skipped).toMatch(/no package\.json/);
+      }
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
+    }
+  });
+
+  // The distinction the fix has to preserve: a REAL JS/TS repo whose specific
+  // shape genuinely cannot be handled yet must still say so — never silently
+  // folded into the same "not a project at all" skip.
+  it("still reports a genuine gap as unavailable when a package.json exists but this cannot install from it", async () => {
+    const nested = mkdtempSync(join(tmpdir(), "lore-t0-nested-"));
+    try {
+      mkdirSync(join(nested, "infra"));
+      writeFileSync(join(nested, "infra", "package.json"), "{}");
+      const sandbox: SandboxConfig = {
+        image: "unused", cacheRoot: join(nested, "cache"), scratchRoot: join(nested, "scratch"),
+        uid: 1000, gid: 1000, memory: "6g", cpus: "2", timeoutMs: 30_000, runtime: "unused",
+      };
+      const out = await runT0(nested, { engines: ["tsc"], sandbox });
+      const o = out.outcomes.find((x) => x.engine === "tsc");
+      expect(o?.skipped, "this repo IS JS/TS-shaped, the gap is real and worth telling the client").toBeUndefined();
+      expect(o?.unavailable).toMatch(/infra\//);
+    } finally {
+      rmSync(nested, { recursive: true, force: true });
     }
   });
 });

@@ -93,3 +93,33 @@ describe("a tool run against untrusted content inherits no ambient credential", 
     }
   });
 });
+
+/**
+ * Fingerprint 2d852614: a run OUR OWN maxBuffer cap cut off used to read as an
+ * ordinary exit 1 — confirmed empirically first (see exec.ts's own comment) that
+ * exceeding it rejects with `code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER"`,
+ * `killed: undefined`, `signal: undefined`, none of which the kill/timeout check
+ * recognised. Real output past `runTool`'s internal 64MB cap, not a mock — the
+ * exact shape a `head -c N /dev/zero` script produces near-instantly.
+ */
+describe("a run this service's own output cap cut off is not mistaken for an ordinary failure", () => {
+  it("is reported unavailable and interrupted, not a bare exit 1", async () => {
+    const script = join(dir, "flood.sh");
+    // One byte past 64MB, the cap runTool itself sets.
+    writeFileSync(script, "#!/bin/sh\nhead -c 67108865 /dev/zero | tr '\\0' 'a'\n");
+    chmodSync(script, 0o755);
+    const out = await runTool(dir, script, []);
+    expect(out.ok).toBe(false);
+    expect(out.timedOut, "withholds trust from this round the same as a kill or a timeout").toBe(true);
+    expect(out.unavailable).toMatch(/more output than this service will buffer/);
+    expect(out.unavailable).toMatch(/not a fault in the branch/);
+  });
+
+  it("discards the truncated partial output rather than returning it as if complete", async () => {
+    const script = join(dir, "flood2.sh");
+    writeFileSync(script, "#!/bin/sh\nhead -c 67108865 /dev/zero | tr '\\0' 'a'\n");
+    chmodSync(script, 0o755);
+    const out = await runTool(dir, script, []);
+    expect(out.stdout).toBe("");
+  });
+});

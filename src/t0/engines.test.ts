@@ -447,6 +447,29 @@ describe("a rule matching twice in one file reports both sites", () => {
     expect(f[0]?.line).toBe(32);
   });
 
+  // Fingerprint 2aae6ed2: with the warning written AFTER the site list, evidence's
+  // own 2000-char tail-clamp (finding()'s `cap()`) silently dropped the count and
+  // the warning on any file with enough matches — exactly the files where it
+  // matters most. 300 sites, a realistic single-file count for a rule like
+  // no-console or eqeqeq in a vendored bundle, comfortably exceeds what 2000
+  // chars of "path:line, " entries can hold.
+  it("keeps the SEPARATE SITES warning even when the site list itself would overflow the evidence cap", () => {
+    const many = JSON.stringify({
+      results: Array.from({ length: 300 }, (_, i) => ({
+        path: "/w/vendor/bundle.js",
+        start: { line: i + 1 },
+        check_id: "no-console",
+        extra: { message: "Unexpected console statement", severity: "WARNING" },
+      })),
+    });
+    const f = semgrepFindings(many, "/w");
+    expect(f).toHaveLength(1);
+    expect(f[0]?.evidence.length).toBeLessThanOrEqual(2000);
+    expect(f[0]?.evidence, "the warning must survive the tail-clamp, not just exist before it").toMatch(/300 SEPARATE SITES/);
+    // Written first, not merely present — the point of the fix.
+    expect(f[0]?.evidence.indexOf("SEPARATE SITES")).toBeLessThan(f[0]?.evidence.indexOf("vendor/bundle.js") ?? -1);
+  });
+
   /**
    * AND NOTHING ABOUT THE SITES REACHES THE CLAIM, which is the fingerprint.
    *

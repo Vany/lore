@@ -200,16 +200,26 @@ function bySite<T>(
  *
  * The client is who acts on this and the client gets the evidence, so nothing is lost
  * that matters. A stable identity is worth more than a denser summary line.
+ *
+ * THE WARNING GOES FIRST, THE SITE LIST SECOND — found by lore's own review,
+ * fingerprint 2aae6ed2. `finding()` caps evidence at 2000 chars from the tail
+ * (`cap()`), so whichever half is written second is what a rule with enough
+ * matches in one file loses — and the ORIGINAL order put the unbounded site
+ * list first, meaning the count and the "fixing the first does not fix the
+ * rest" warning silently disappeared exactly on the files with the most sites,
+ * where losing it matters most. Same rule this file's own sibling
+ * (`core/finding.ts`, the note-before-evidence fix) already states: "whatever a
+ * later tail-clamp must not lose goes first, and the sacrificial content goes
+ * last" — the individual `file:line` entries are the sacrificial content here,
+ * not the warning.
  */
 function sitesEvidence(tool: string, rule: string, file: string, lines: readonly number[]): string {
   const at = lines.map((l) => `${file}:${String(l)}`).join(", ");
+  if (lines.length < 2) return `${tool} ${rule} at ${at}`;
   return (
-    `${tool} ${rule} at ${at}` +
-    (lines.length < 2
-      ? ""
-      : `\n${String(lines.length)} SEPARATE SITES IN THIS FILE. Fixing the first does not fix the rest — ` +
-        "answer the whole set, and prefer a change that makes the pattern safe by construction over arguing " +
-        "each site's inputs.")
+    `${String(lines.length)} SEPARATE SITES IN THIS FILE. Fixing the first does not fix the rest — ` +
+    "answer the whole set, and prefer a change that makes the pattern safe by construction over arguing " +
+    `each site's inputs.\n${tool} ${rule} at ${at}`
   );
 }
 
@@ -775,6 +785,22 @@ export function parseCargoJson(engine: "cargo-check" | "cargo-clippy", stdout: s
   const flat = diagnostics.flatMap((m) => {
     const primary = m.spans.find((s) => s.is_primary);
     if (primary === undefined) return [];
+    // lore-ok[eaea5664]: plausible, and I could not settle it — not fixed. The
+    // 47ddd7fa verification above is real but narrower than this rebase: it ran
+    // `cargo check --manifest-path` against a SINGLE nested crate, never a
+    // WORKSPACE manifest (one Cargo.toml, members below it). Whether a member's
+    // own `file_name` comes back relative to the workspace root (this rebase is
+    // already correct) or relative to the MEMBER's own directory (it is not, and
+    // `message.package_id` — present in the schema, read by nothing here — would
+    // be the fix, itself needing either a `cargo metadata` call to resolve it to
+    // a path or correct parsing of its own format, both unverified here too) is
+    // genuinely unclear to me without running real cargo against a real
+    // workspace, which this sandbox cannot do yet (D-131's own scope: no
+    // toolchain in the image). Guessing at a rebase I cannot test risks trading
+    // a real bug for an equally untested wrong one. Named here, not fixed here,
+    // for the same reason SPEC.md's own D-131 entry already gives this whole
+    // function's verification: "deferred to whichever follow-up adds the
+    // toolchain... this repo's own D-77 verification step for that change."
     const file = dir === "." ? primary.file_name : `${dir}/${primary.file_name}`;
     return [{ m, file, line: primary.line_start }];
   });

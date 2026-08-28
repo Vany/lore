@@ -886,6 +886,18 @@ crate's own directory (found by lore's own review, fingerprint 47ddd7fa; a
 `teammater`-shaped repo would otherwise have gotten findings anchored to files
 that do not exist at the paths they claimed).
 
+**[OPEN] That rebase is verified for a single nested crate, not for a workspace
+manifest (one Cargo.toml, members below it) — left unresolved, not fixed
+blind.** Lore's own review raised it (fingerprint eaea5664): a workspace
+member's `file_name` may come back relative to the WORKSPACE ROOT (this
+rebase already correct) or relative to the MEMBER's own directory (it is
+not — `message.package_id`, present in the schema and read by nothing here,
+would be the fix, itself needing either a `cargo metadata` call to resolve it
+to a path or correct parsing of its own format). Genuinely unclear without
+running real cargo against a real workspace, which nothing here can do until
+the toolchain lands — named as a specific item for that follow-up's own
+verification pass to check, rather than guessed at now.
+
 **Three more rounds of lore's own review, each catching something the wiring
 above did not actually do despite being written to.** The cache mount at
 `baseArgs`' `cacheMountPath` was wired and nothing ever pointed cargo's own

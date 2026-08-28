@@ -487,6 +487,28 @@ async function killIfTimedOut(cfg: SandboxConfig, worktree: string, scratch: str
 }
 
 /**
+ * Clears any container already holding this run's name, before starting a new
+ * one — `--rm` frees the name once a container fully stops, but two real gaps
+ * sit before "fully stops": a lore process that dies mid-run leaves an ATTACHED
+ * container running under the daemon with no timeout of its own, holding the
+ * name until something explicit stops it (the review is requeued with the same
+ * scratch path, hence the same name, on restart); and `killIfTimedOut`'s own
+ * `docker kill` returns once the signal lands, not once `--rm`'s async removal
+ * has actually finished, so the NEXT phase in the same round can start before
+ * the previous one's name is free. Either way `docker run --name X` while any
+ * container X exists exits 125 ("Conflict… already in use") — an ORDINARY
+ * non-zero exit, so a caller downstream reads it as a genuine branch failure
+ * with no idea a name collision, not the branch, is what actually happened.
+ * `docker rm -f` on a name that is not in use errors harmlessly; discarded the
+ * same way every other best-effort cleanup in this file already is. Found by
+ * lore's own review of the fix that introduced named containers in the first
+ * place, fingerprint bfc4e055.
+ */
+async function clearStaleContainer(cfg: SandboxConfig, worktree: string, scratch: string): Promise<void> {
+  await runTool(worktree, cfg.runtime, ["rm", "-f", containerName(scratch)], 10_000, true).catch(() => {});
+}
+
+/**
  * Run one command in the sandbox.
  *
  * `network` is on ONLY for the install: a registry needs it, and a test — or a
@@ -509,6 +531,7 @@ export async function runInSandbox(
   network: boolean,
   cacheMountPath?: string,
 ): Promise<ToolResult> {
+  await clearStaleContainer(cfg, worktree, scratch);
   const result = await runTool(
     worktree,
     cfg.runtime,
@@ -546,6 +569,7 @@ export async function install(
   scratch: string,
   cmds: Toolchain,
 ): Promise<ToolResult> {
+  await clearStaleContainer(cfg, worktree, scratch);
   const result = await runTool(
     worktree,
     cfg.runtime,

@@ -187,6 +187,27 @@ async function sandboxed(
   const wanted = engines.filter((e) => e === "tsc" || e === "eslint");
   if (wanted.length === 0) return [];
 
+  // SKIPPED, NOT UNAVAILABLE, when there is no npm-family manifest anywhere
+  // within one level — the exact mirror of `sandboxedCargo`'s own "not a Rust
+  // project" case (fingerprint c37f7c9b), unfixed here until lore's own review
+  // asked why: a pure Rust/Go/Python repo told "tsc: not a JS/TS project" on
+  // every single round forever is precisely the always-identical noise that
+  // fix moved to the operator's log for cargo, and the client-facing NOT RUN
+  // list only stays worth reading while it does not carry that (fingerprints
+  // 0691f313, 6eae08da). Checked with `detectEcosystems` DIRECTLY, before ever
+  // calling `commandsFor`, so every OTHER `ok: false` reason `commandsFor` can
+  // still give from here on — a nested, unsupported package.json; bun, which
+  // the sandbox image does not carry — is now guaranteed to be a genuine gap
+  // about a REAL JS/TS repo, correctly staying `unavailable`.
+  const hasNpmManifest = (await detectEcosystems(worktree)).some((f) => f.ecosystem === "npm");
+  if (!hasNpmManifest) {
+    return wanted.map((engine) => ({
+      engine,
+      findings: [],
+      skipped: `${engine}: no package.json within one level of the worktree root (not a JS/TS project, optional)`,
+    }));
+  }
+
   const outcome = await commandsFor(worktree);
   if (!outcome.ok) {
     return wanted.map((engine) => ({ engine, findings: [], unavailable: outcome.why }));
