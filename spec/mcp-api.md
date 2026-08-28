@@ -814,10 +814,15 @@ originally flagged code later changes, not if the "elsewhere" fix is later
 reverted — an existing limitation the `lore-ok`-at-the-original-line form already
 has, not a new one.
 
-The reply's `will_not_settle` preview excludes any finding this same call's
-`fixed_elsewhere` validly claimed — otherwise the preview would tell a client its
-own just-submitted answer "will not settle", the exact fires-on-the-correct-answer
-false alarm the preview exists to avoid.
+The reply's `will_not_settle` preview excludes any finding with a `fixed_elsewhere`
+claim on record AT ALL — not only one this same call made. A HELD submission's
+claims are not promoted into `fixed_elsewhere_claim` until `consumeHeldDiffs`
+confirms that diff landed, which happens mid-round, after that round's own pending
+set was already collected — so a claim promoted that way is not ruled on until the
+NEXT round, and a later, unrelated submit's preview must still exclude it (that
+next round is exactly what the later submit enqueues). Otherwise the preview would
+tell a client an answer already on file "will not settle", the exact
+fires-on-the-correct-answer false alarm the preview exists to avoid.
 
 ## 5. Concurrency
 

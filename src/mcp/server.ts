@@ -1376,18 +1376,16 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           // filesInDiff check runs INSIDE this callback, once, regardless of which
           // branch is taken, instead of duplicating commit-resolution to get it.
           //
-          // `fixedElsewhereSkipped` (and, applied-only, `justClaimedElsewhere`) travel
-          // out through this return rather than an outer `let` a nested callback
-          // mutates by closure — this file's own established reason (see `patch`
-          // above): TypeScript does not narrow a `let` mutated inside an `await`
-          // boundary reliably, and both fields are needed on the way out.
+          // `fixedElsewhereSkipped` travels out through this return rather than an
+          // outer `let` a nested callback mutates by closure — this file's own
+          // established reason (see `patch` above): TypeScript does not narrow a
+          // `let` mutated inside an `await` boundary reliably.
           | { readonly kind: "held"; readonly patch: string; readonly fixedElsewhereSkipped: readonly string[] }
           | {
               readonly kind: "applied";
               readonly patch: string;
               readonly appliedTreeHash: string;
               readonly fixedElsewhereSkipped: readonly string[];
-              readonly justClaimedElsewhere: readonly string[];
             }
         > => {
           let patch = diff;
@@ -1622,7 +1620,6 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           // was true here, so this check exists only to give the client an early,
           // honest-effort signal, not to gate correctness.
           const fixedElsewhereSkipped: string[] = [];
-          const justClaimedElsewhere: string[] = [];
           const validatedFixedElsewhere: { fingerprint: string; file: string; line: number | undefined; reason: string }[] =
             [];
           if (fixed_elsewhere !== undefined && fixed_elsewhere.length > 0) {
@@ -1668,7 +1665,6 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
                 continue;
               }
               validatedFixedElsewhere.push({ fingerprint: fp, file: entry.file, line: entry.line, reason: entry.reason });
-              justClaimedElsewhere.push(fp);
             }
           }
 
@@ -1839,7 +1835,6 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
             patch,
             appliedTreeHash: applied,
             fixedElsewhereSkipped,
-            justClaimedElsewhere,
           };
         },
       );
@@ -1867,14 +1862,7 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           ],
         };
       }
-      const { patch, appliedTreeHash: applied, fixedElsewhereSkipped, justClaimedElsewhere: justClaimedElsewhereList } =
-        submitted;
-      // Read below at the `will_not_settle` preview (D-133): a fingerprint validly
-      // claimed at submit time must not also appear in that list — it would tell a
-      // client its own just-submitted answer "will not settle", the exact fires-on-
-      // the-correct-answer nag `alreadyAnswered`'s own doc comment says trains
-      // clients to skip warnings entirely.
-      const justClaimedElsewhere = new Set(justClaimedElsewhereList);
+      const { patch, appliedTreeHash: applied, fixedElsewhereSkipped } = submitted;
 
       // WHAT THIS DIFF CANNOT SETTLE, said now rather than in twenty minutes.
       //
@@ -1911,10 +1899,25 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       // settle", which is the opposite of "I could not tell".
       let unmoved: RecordedFinding[] | undefined;
       try {
+        // ANY CLAIM ON RECORD, not only this call's own — found by lore's own review,
+        // fingerprint a5bc9f62. A HELD submission's fixed_elsewhere claims are not
+        // promoted into this table until `consumeHeldDiffs` confirms that diff landed
+        // (D-133, above), which happens MID-ROUND, after that round's own `pending`
+        // was already collected (`review.ts`: pending is built near the top of
+        // `runRound`, `consumeHeldDiffs` runs much later, at an emission boundary) —
+        // so a claim promoted that way sits unruled until the NEXT round. If this
+        // preview only excluded fingerprints THIS call just claimed, that finding
+        // still showed up here as "cannot settle however it goes", even though the
+        // round this very submit enqueues will collect the stored claim and rule on
+        // it. `fixedElsewhereFor` has no settled/unsettled distinction of its own
+        // (its own doc comment says so), which is exactly right here too: an OPEN
+        // finding (the only kind this loop sees) with any claim on file has one
+        // still waiting to be ruled on, whichever round recorded it.
+        const claimed = new Set(store.fixedElsewhereFor(review_id).map((c) => c.fingerprint));
         unmoved = (
           await Promise.all(
             store.openFindings(review_id).map(async (f) => {
-              if (justClaimedElsewhere.has(f.fingerprint)) return undefined;
+              if (claimed.has(f.fingerprint)) return undefined;
               if (await codeMoved(worktree, f)) return undefined;
               // EVERY FILE THE DIFF TOUCHED, not just the finding's own. The round reads
               // markers from every changed file, so a `lore-ok` written where the fix

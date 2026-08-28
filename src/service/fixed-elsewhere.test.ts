@@ -279,4 +279,29 @@ describe("review_submit fixed_elsewhere (D-133)", () => {
     expect(store.fixedElsewhereFor("revFix")).toStrictEqual([]);
     expect(store.heldDiffs("revFix")).toStrictEqual([]);
   });
+
+  // Regression for fingerprint a5bc9f62: a claim recorded by an EARLIER submission
+  // (here stood in for directly — the sibling test above already covers a held diff
+  // actually reaching this table via consumeHeldDiffs) must still exclude its finding
+  // from will_not_settle on a LATER, unrelated submit that says nothing about it. The
+  // first version only ever excluded fingerprints THIS call's own fixed_elsewhere
+  // named, so a claim promoted mid-round by an earlier held diff — which this round's
+  // own pending was already built before the promotion, so it is not ruled on until
+  // the NEXT round — read as "cannot settle however it goes", false: the round this
+  // very submit enqueues is exactly the one that will rule on it.
+  it("excludes a finding from will_not_settle when an earlier submission already claimed it", async () => {
+    store.recordFixedElsewhere("revFix", FP, "other.ts", undefined, "claimed by an earlier submission");
+    const after = afterApplyTreeHash();
+
+    const { body, isError } = await callTool("review_submit", {
+      review_id: "revFix",
+      diff: DIFF,
+      tree_hash: after,
+      // No fixed_elsewhere in THIS call — the claim is already on file from before.
+    });
+
+    expect(isError, JSON.stringify(body)).toBe(false);
+    const willNotSettle = (body["will_not_settle"] as { fingerprint: string }[] | undefined) ?? [];
+    expect(willNotSettle.map((f) => f.fingerprint)).not.toContain(FP.slice(0, 8));
+  });
 });

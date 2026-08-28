@@ -1131,15 +1131,28 @@ it wait can itself settle findings before the hold is consumed, but that is
 harmless: `collectFixedElsewhere` re-filters against `store.openFindings` at
 the point it actually rules, regardless of what was true at submit time.
 
-**`will_not_settle` excludes a fingerprint this same call's `fixed_elsewhere`
-just recorded — found while writing this feature's own tests, before it ever
-reached a review round.** The preview (`server.ts`, computed after the
-apply/hold fork) only ever checked `codeMoved`/`alreadyAnswered`, neither of
-which reads the new store table, so a finding validly claimed via
-`fixed_elsewhere` in this exact call still showed up as "will not settle" —
-telling a client its own just-submitted answer had failed. Fixed by threading
-the set of fingerprints this call recorded (`justClaimedElsewhere`) into the
-same preview loop.
+**`will_not_settle` excludes ANY finding with a `fixed_elsewhere` claim on
+record, not only one THIS call just made — the first version got half of this
+right and lore's own review found the other half, fingerprint a5bc9f62, same
+round it named cf48ccb1/d2c5ca38.** The preview (`server.ts`, computed after
+the apply/hold fork) only ever checked `codeMoved`/`alreadyAnswered`, neither
+of which reads the new store table, so a finding validly claimed via
+`fixed_elsewhere` still showed up as "will not settle" — telling a client its
+own just-submitted answer had failed. The first fix threaded a
+`justClaimedElsewhere` set (this call's own claims) into the preview loop,
+which covers the ordinary case but misses one: a HELD submission's claims are
+not promoted into `fixed_elsewhere_claim` until `consumeHeldDiffs` confirms
+that diff landed, and that happens MID-ROUND — after that round's own
+`pending` was already collected near the top of `runRound`. So a claim
+promoted that way sits unruled until the NEXT round, and a LATER, unrelated
+submit's preview (whose own `fixed_elsewhere` says nothing about that
+fingerprint) still listed it as unsettleable, even though the round that very
+submit enqueues is exactly the one that will rule on it. Fixed by reading
+`store.fixedElsewhereFor(review_id)` directly instead — every claim on
+record, regardless of which call made it — which made `justClaimedElsewhere`
+fully redundant (by the time the applied path returns, its own claims are
+already written to that same table) and it was deleted rather than left
+beside its replacement.
 
 **`Pending.scope` is the finding's own file/line, never the claim's.**
 `expireStaleVerdicts` looks the hunk up at the finding's ORIGINAL location, so
