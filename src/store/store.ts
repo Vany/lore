@@ -266,6 +266,19 @@ export interface PriorFinding {
 }
 
 /**
+ * A client's `fixed_elsewhere` claim (D-133) — the shape both the eventual
+ * `fixed_elsewhere_claim` row and a claim still riding along with an unconsumed
+ * `held_diff` share, so `holdDiff`/`heldDiffs` and `recordFixedElsewhere`/
+ * `fixedElsewhereFor` all read and write the same thing.
+ */
+export interface FixedElsewhereClaim {
+  readonly fingerprint: string;
+  readonly file: string;
+  readonly line: number | undefined;
+  readonly reason: string;
+}
+
+/**
  * `policy` is a DEVELOPMENT RULE a client can appeal to (D-83).
  *
  * The others describe the codebase; a policy describes what this project has decided to
@@ -2838,7 +2851,7 @@ export class Store {
    * `openFindings`, which is what actually silences a ruled-on claim, so this
    * read has no settled/unsettled distinction of its own to make.
    */
-  fixedElsewhereFor(reviewId: string): readonly { fingerprint: string; file: string; line: number | undefined; reason: string }[] {
+  fixedElsewhereFor(reviewId: string): readonly FixedElsewhereClaim[] {
     const rows = this.db
       .prepare("SELECT fingerprint, file, line, reason FROM fixed_elsewhere_claim WHERE review_id = ?")
       .all(reviewId) as Record<string, string | number | null>[];
@@ -3236,11 +3249,20 @@ export class Store {
    * (a race window closed, nothing will ever consume it) can clear exactly the row it
    * inserted rather than every row this review happens to have — a concurrent submit's
    * own hold, landed in the same narrow window, is not this caller's to discard.
+   *
+   * `fixedElsewhere` rides WITH the diff rather than being written to
+   * `fixed_elsewhere_claim` directly (D-133) — found by lore's own review, fingerprint
+   * d2c5ca38: a claim written immediately survives a held diff that later fails to
+   * verify (`consumeHeldDiffs` drops a fuzzy/partial apply or a tree-hash mismatch),
+   * leaving a claim with nothing behind it. `consumeHeldDiffs` promotes it to a real
+   * claim only once THIS diff is confirmed to have actually landed.
    */
-  holdDiff(reviewId: string, diff: string, treeHash: string): number {
+  holdDiff(reviewId: string, diff: string, treeHash: string, fixedElsewhere: readonly FixedElsewhereClaim[] = []): number {
     const res = this.db
-      .prepare("INSERT INTO held_diff(review_id, diff, tree_hash, created_at) VALUES(?, ?, ?, ?)")
-      .run(reviewId, diff, treeHash, now());
+      .prepare(
+        "INSERT INTO held_diff(review_id, diff, tree_hash, fixed_elsewhere, created_at) VALUES(?, ?, ?, ?, ?)",
+      )
+      .run(reviewId, diff, treeHash, fixedElsewhere.length === 0 ? null : JSON.stringify(fixedElsewhere), now());
     // NO BOUNDS RESET HERE, though a held diff IS client work.
     //
     // It was here, and it was silently thrown away: this is a read-modify-write of the
@@ -3308,11 +3330,26 @@ export class Store {
   }
 
   /** In arrival order — each was built by the client on top of the one before. */
-  heldDiffs(reviewId: string): readonly { readonly id: number; readonly diff: string; readonly treeHash: string }[] {
+  heldDiffs(
+    reviewId: string,
+  ): readonly { readonly id: number; readonly diff: string; readonly treeHash: string; readonly fixedElsewhere: readonly FixedElsewhereClaim[] }[] {
     const rows = this.db
-      .prepare("SELECT id, diff, tree_hash FROM held_diff WHERE review_id = ? ORDER BY id")
+      .prepare("SELECT id, diff, tree_hash, fixed_elsewhere FROM held_diff WHERE review_id = ? ORDER BY id")
       .all(reviewId) as Record<string, unknown>[];
-    return rows.map((r) => ({ id: Number(r["id"]), diff: String(r["diff"]), treeHash: String(r["tree_hash"]) }));
+    return rows.map((r) => ({
+      id: Number(r["id"]),
+      diff: String(r["diff"]),
+      treeHash: String(r["tree_hash"]),
+      // `line` NORMALIZED BACK IN, explicitly. `JSON.stringify` drops an
+      // `undefined`-valued key entirely rather than writing `null`, so a claim with
+      // no line survives the round trip missing the key altogether — silently
+      // satisfying `FixedElsewhereClaim`'s type (a bare cast, not checked) while
+      // disagreeing with `fixedElsewhereFor`'s own reader, which always includes it.
+      fixedElsewhere:
+        typeof r["fixed_elsewhere"] === "string"
+          ? (JSON.parse(r["fixed_elsewhere"]) as FixedElsewhereClaim[]).map((c) => ({ ...c, line: c.line ?? undefined }))
+          : [],
+    }));
   }
 
   /** One consumed row, or — on a mid-chain mismatch — everything still queued. */

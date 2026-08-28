@@ -281,6 +281,13 @@ export async function consumeHeldDiffs(
     store.updateReview(reviewId, { treeHash: after });
     diffs.push(h.diff);
     applied += 1;
+    // PROMOTED HERE, NOT AT SUBMIT TIME (D-133): this is the first point THIS
+    // diff is known to have actually landed — see `holdDiff`'s own comment. A
+    // claim carried by a diff that instead hits one of the two returns above is
+    // simply never promoted, which is correct: that diff, and everything queued
+    // after it, was dropped, so there is nothing left for the claim to be evidence
+    // of.
+    for (const c of h.fixedElsewhere) store.recordFixedElsewhere(reviewId, c.fingerprint, c.file, c.line, c.reason);
     // RECORDED PER DIFF, WHERE THAT DIFF VERIFIES (D-114).
     //
     // This is the single point every held diff passes through — the round's emission

@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { initialState } from "../core/ladder.ts";
 import { grantToken } from "../mcp/auth.ts";
 import { DEFAULT_HEARTBEAT } from "../ops/heartbeat.ts";
+import { consumeHeldDiffs } from "../reviewer/review.ts";
 import { Store, type RecordedFinding } from "../store/store.ts";
 import { startHttp } from "./http.ts";
 
@@ -216,5 +217,66 @@ describe("review_submit fixed_elsewhere (D-133)", () => {
     expect(isError, JSON.stringify(body)).toBe(false);
     expect(body["fixed_elsewhere_skipped"]).toStrictEqual([FP]);
     expect(store.fixedElsewhereFor("revFix")).toStrictEqual([]);
+  });
+
+  // Regression for fingerprint cf48ccb1: `resolveShort` has a THIRD outcome besides
+  // "resolves" and "does not resolve" — it throws when the short prefix matches more
+  // than one finding (spec/review-ladder.md §3.1.2). Left uncaught, that exception
+  // still refuses the call (any throw in the handler becomes isError:true), but with
+  // no D-133 framing and no mention that the diff itself may already have applied.
+  it("names the ambiguity clearly when the fingerprint prefix matches two findings", async () => {
+    store.recordFinding("revFix", { ...OPEN_FINDING, fingerprint: "beef22221", file: "src/a.ts" });
+    store.recordFinding("revFix", { ...OPEN_FINDING, fingerprint: "beef22222", file: "src/b.ts" });
+    const after = afterApplyTreeHash();
+
+    const { body, isError } = await callTool("review_submit", {
+      review_id: "revFix",
+      diff: DIFF,
+      tree_hash: after,
+      fixed_elsewhere: [{ fingerprint: "beef2222", file: "other.ts", reason: "which one?" }],
+    });
+
+    expect(isError, JSON.stringify(body)).toBe(true);
+    // NOT JUST /ambiguous/i: the raw, uncaught AmbiguousFingerprint already says that
+    // ("fingerprint 'X' is ambiguous — N findings share it: ..."), so that alone would
+    // pass whether or not the catch below exists. What the fix actually adds is the
+    // D-133 framing — naming the field — which the raw message never does.
+    expect(String(body["error"])).toMatch(/ambiguous/i);
+    expect(String(body["error"])).toMatch(/fixed_elsewhere/i);
+    expect(store.fixedElsewhereFor("revFix")).toStrictEqual([]);
+  });
+
+  // Regression for fingerprint d2c5ca38: a claim recorded immediately, regardless of
+  // whether its diff is applied or held, survives a held diff that later fails to
+  // verify — a claim with nothing behind it, exactly what the file-in-diff check
+  // exists to refuse. The fix defers persistence: the claim rides with the held_diff
+  // row and is promoted only once consumeHeldDiffs confirms THAT diff actually landed.
+  it("does not promote a fixed_elsewhere claim carried by a held diff that fails to verify at consume time", async () => {
+    store.enqueue("revFix", "fast"); // hasPendingRound("revFix") -> true
+
+    const { body, isError } = await callTool("review_submit", {
+      review_id: "revFix",
+      diff: DIFF,
+      // Deliberately wrong: the raw-diff form is not verified against tree_hash until
+      // consume time (D-107), so this reaches consumeHeldDiffs unexamined.
+      tree_hash: "0".repeat(40),
+      fixed_elsewhere: [{ fingerprint: FP, file: "other.ts", reason: "moved it" }],
+    });
+    expect(isError, JSON.stringify(body)).toBe(false);
+    expect(body["status"]).toBe("held");
+
+    // Carried, not yet promoted.
+    expect(store.fixedElsewhereFor("revFix")).toStrictEqual([]);
+    const held = store.heldDiffs("revFix");
+    expect(held).toHaveLength(1);
+    expect(held[0]?.fixedElsewhere).toStrictEqual([{ fingerprint: FP, file: "other.ts", line: undefined, reason: "moved it" }]);
+
+    const result = await consumeHeldDiffs(store, "revFix", worktree);
+    expect(result.mismatch, "the claimed tree_hash cannot match what DIFF actually produces").toBeDefined();
+
+    // THE FIX: the claim is discarded along with the diff it rode in on, not silently
+    // promoted against evidence that never actually landed in the tree.
+    expect(store.fixedElsewhereFor("revFix")).toStrictEqual([]);
+    expect(store.heldDiffs("revFix")).toStrictEqual([]);
   });
 });

@@ -519,11 +519,12 @@ rejects it at higher severity, exactly like any other justification:
     MUST be part of THIS diff or commit — silence over a file the tier was never shown is
     not evidence of anything, so lore refuses the whole call rather than record a claim
     with nothing behind it. No edit to the originally flagged line needed. A fingerprint
-    that does not resolve, or names a file outside this submission, fails the call
-    outright — a real mistake worth failing loudly on, not a shortcut around review, only
-    around re-explaining it in a second place. A fingerprint some earlier round already
-    settled is silently skipped and named in \`fixed_elsewhere_skipped\`, since it is not
-    a mistake, just a claim that arrived after it stopped being needed.
+    that does not resolve, is AMBIGUOUS (two findings share the prefix — send more of
+    it), or names a file outside this submission, fails the call outright — a real
+    mistake worth failing loudly on, not a shortcut around review, only around
+    re-explaining it in a second place. A fingerprint some earlier round already settled
+    is silently skipped and named in \`fixed_elsewhere_skipped\`, since it is not a
+    mistake, just a claim that arrived after it stopped being needed.
   * A \`// lore-ok[<fingerprint>]: fixed elsewhere, see X\` comment AT THE ORIGINAL line —
     still fully supported, and the only option when prose reads better than naming a
     file, or the finding predates this field.

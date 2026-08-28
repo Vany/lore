@@ -774,13 +774,18 @@ is ruled on exactly like a text marker — merged into the same `pending` set
 `settleFixed`'s exclusion set all see it identically. Silence next round records
 `justified-accepted`; a re-raise records `justified-rejected`. No new verdict kind.
 
-Validated synchronously, outside `withSubmitLock`, before the held/applied fork —
-applies uniformly whether this submit is consumed immediately or held for a
-reviewer mid-read:
+Validated INSIDE `withSubmitLock`'s callback, right where `patch` is finally known
+for both `diff` and `commit` alike, and strictly before the held/applied fork,
+`holdDiff`, and the apply itself all run — so a refusal here lands before anything
+is applied or held, for either form:
 
 - `fingerprint` must resolve against this review (`resolveShort`); if it does not,
   the **whole call** is refused. A fresh RPC argument naming a fingerprint this
   review never raised is a client mistake, not silently ignored data.
+- `fingerprint` must not be AMBIGUOUS either — `resolveShort` throws when a short
+  prefix matches more than one finding (§3.1.2 of `spec/review-ladder.md`), and
+  this is caught and rephrased with the same D-133 framing rather than left to
+  escape as a generic error.
 - `file` must be part of **this submission's own** diff or commit
   (`filesInDiff`); otherwise the whole call is refused. Silence over a file the
   tier was never shown is not evidence of anything — a `fixed_elsewhere` claim
@@ -788,7 +793,18 @@ reviewer mid-read:
 - A fingerprint that resolves but names a finding already settled by an earlier
   round is not an error: it is silently skipped and named in the reply's
   `fixed_elsewhere_skipped`, since the claim simply arrived after it stopped
-  being needed.
+  being needed. Best-effort for a submission that ends up held — see below.
+
+**Persistence itself is deferred for a HELD submission.** A claim recorded
+immediately, regardless of outcome, would survive a held diff that later fails to
+verify at consume time (`consumeHeldDiffs`: a fuzzy/partial apply, or a tree-hash
+mismatch) — a claim with nothing behind it, exactly what the file-in-diff check
+above exists to refuse. So a validated claim travels WITH the held diff
+(`held_diff.fixed_elsewhere`) and is written to `fixed_elsewhere_claim` only once
+`consumeHeldDiffs` confirms that SPECIFIC diff actually landed; a diff that is
+instead dropped takes its claims with it, unpromoted. On the applied path the diff
+is already verified by the time this callback returns, so recording immediately
+remains correct.
 
 `Pending.scope` for a `fixed_elsewhere` entry is taken from the **finding's own**
 file/line, never the claim's — `expireStaleVerdicts` looks the hunk up at the

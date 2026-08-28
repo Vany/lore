@@ -20,6 +20,7 @@ import { worstSeverity } from "../core/finding.ts";
 import { initialState, ladderFingerprint, type LadderState } from "../core/ladder.ts";
 import { isAttestable, isClean, isTerminal, needsClient, type ReviewState } from "../core/review-state.ts";
 import { SHORT_LENGTH } from "../core/fingerprint.ts";
+import { AmbiguousFingerprint } from "../core/errors.ts";
 import { isSuppressionNotice } from "../core/checks-skipped.ts";
 import { DEFAULT_TYPE, reviewType, reviewTypeIds } from "../core/review-type.ts";
 import { STALE_GRACE_DAYS, STALE_HOURS } from "../ops/retention.ts";
@@ -1372,10 +1373,22 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
         async (): Promise<
           // `patch` on BOTH variants (D-133): it is fully resolved — commit normalized
           // to a diff — before the held/applied fork below, so `fixed_elsewhere`'s own
-          // filesInDiff check can run uniformly after this call returns, regardless of
-          // which branch was taken, instead of duplicating commit-resolution to get it.
-          | { readonly kind: "held"; readonly patch: string }
-          | { readonly kind: "applied"; readonly patch: string; readonly appliedTreeHash: string }
+          // filesInDiff check runs INSIDE this callback, once, regardless of which
+          // branch is taken, instead of duplicating commit-resolution to get it.
+          //
+          // `fixedElsewhereSkipped` (and, applied-only, `justClaimedElsewhere`) travel
+          // out through this return rather than an outer `let` a nested callback
+          // mutates by closure — this file's own established reason (see `patch`
+          // above): TypeScript does not narrow a `let` mutated inside an `await`
+          // boundary reliably, and both fields are needed on the way out.
+          | { readonly kind: "held"; readonly patch: string; readonly fixedElsewhereSkipped: readonly string[] }
+          | {
+              readonly kind: "applied";
+              readonly patch: string;
+              readonly appliedTreeHash: string;
+              readonly fixedElsewhereSkipped: readonly string[];
+              readonly justClaimedElsewhere: readonly string[];
+            }
         > => {
           let patch = diff;
           if (commit !== undefined) {
@@ -1584,6 +1597,81 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
             );
           }
 
+          // D-133: validated here, where `patch` is finally known regardless of
+          // diff/commit form, and BEFORE the held/applied fork — file-in-diff is a
+          // fact about the SUBMISSION, unaffected by whether it applies now or later.
+          //
+          // PERSISTENCE ITSELF IS NOT DECIDED HERE — found by lore's own review,
+          // fingerprint d2c5ca38: a claim recorded immediately and unconditionally
+          // survives a HELD diff that later fails to verify (`consumeHeldDiffs` drops
+          // a fuzzy/partial apply or a tree-hash mismatch, and everything queued
+          // after it, without knowing anything about `fixed_elsewhere_claim`),
+          // leaving a claim with nothing behind it — exactly what the file-in-diff
+          // check below exists to refuse. So the validated claims travel WITH the
+          // held diff (`holdDiff`'s own new parameter) and are written to
+          // `fixed_elsewhere_claim` only once `consumeHeldDiffs` confirms that
+          // SPECIFIC diff actually landed; on the applied path the diff is already
+          // verified by the time this callback returns, so recording immediately,
+          // right before that return, is safe.
+          //
+          // "Already settled" is checked here too, best-effort — it is NOT
+          // authoritative for a diff that ends up held, since the in-flight round
+          // that made this one wait can itself settle findings before the hold is
+          // ever consumed. That is fine: `collectFixedElsewhere` re-filters against
+          // `store.openFindings` at the point it actually rules, regardless of what
+          // was true here, so this check exists only to give the client an early,
+          // honest-effort signal, not to gate correctness.
+          const fixedElsewhereSkipped: string[] = [];
+          const justClaimedElsewhere: string[] = [];
+          const validatedFixedElsewhere: { fingerprint: string; file: string; line: number | undefined; reason: string }[] =
+            [];
+          if (fixed_elsewhere !== undefined && fixed_elsewhere.length > 0) {
+            const filesTouched = new Set(filesInDiff(patch));
+            const stillOpen = new Set(store.openFindings(review_id).map((f) => f.fingerprint));
+            for (const entry of fixed_elsewhere) {
+              let fp: string | undefined;
+              try {
+                fp = store.resolveShort(review_id, entry.fingerprint);
+              } catch (e) {
+                // A SHORT PREFIX SHARED BY TWO FINDINGS is a real, if rare, third
+                // outcome `resolveShort` has always had (spec/review-ladder.md
+                // §3.1.2) — found by lore's own review, fingerprint cf48ccb1: this
+                // loop checked only `fp === undefined` and left the throw to escape
+                // uncaught, an unenumerated case none of the surrounding text (this
+                // schema's own `.describe()`, TOOL_DOCS.submit, spec/mcp-api.md
+                // §4.2) says anything about, for a client that used exactly the id
+                // review_poll gave it.
+                if (e instanceof AmbiguousFingerprint) {
+                  throw new Error(
+                    `fixed_elsewhere's fingerprint ${entry.fingerprint} is ambiguous: ${String(e.matches.length)} ` +
+                      `findings share this prefix (${e.matches.join(", ")}). Use more of the fingerprint from ` +
+                      "review_poll to name exactly one.",
+                  );
+                }
+                throw e;
+              }
+              if (fp === undefined) {
+                throw new Error(
+                  `fixed_elsewhere names fingerprint ${entry.fingerprint}, which this review has never raised. ` +
+                    "Use the fingerprint review_poll gave you, not one remembered or guessed.",
+                );
+              }
+              if (!filesTouched.has(entry.file)) {
+                throw new Error(
+                  `fixed_elsewhere for ${entry.fingerprint} names ${entry.file}, which is not part of this ` +
+                    "submission. A tier's silence over a file it was never shown is not evidence of anything -- " +
+                    "include the fix in this same diff/commit, or leave a lore-ok at the finding's own line instead.",
+                );
+              }
+              if (!stillOpen.has(fp)) {
+                fixedElsewhereSkipped.push(entry.fingerprint);
+                continue;
+              }
+              validatedFixedElsewhere.push({ fingerprint: fp, file: entry.file, line: entry.line, reason: entry.reason });
+              justClaimedElsewhere.push(fp);
+            }
+          }
+
           // REFUSED while a round is pending, because the next line writes into the
           // directory that round reads (D-55).
           //
@@ -1640,9 +1728,9 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           // replaced said "whatever holdDiff stores here", which read as both forms
           // pre-verified.
           if (store.hasPendingRound(review_id)) {
-            const heldId = store.holdDiff(review_id, patch, tree_hash);
+            const heldId = store.holdDiff(review_id, patch, tree_hash, validatedFixedElsewhere);
             if (store.hasPendingRound(review_id)) {
-              return { kind: "held", patch };
+              return { kind: "held", patch, fixedElsewhereSkipped };
             }
             // The round ended in the race window: nothing will consume the hold, so take it
             // back and fall through to the synchronous path below.
@@ -1741,53 +1829,20 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           store.updateReview(review_id, { state: "queued", treeHash: applied });
           deps.enqueue(review_id, "fast");
 
-          return { kind: "applied", patch, appliedTreeHash: applied };
+          // Safe to record NOW, unconditionally: this path is reached only once the
+          // apply above is already verified against `tree_hash` — there is no later
+          // failure that could still discard the diff these claims are evidence for.
+          for (const c of validatedFixedElsewhere) store.recordFixedElsewhere(review_id, c.fingerprint, c.file, c.line, c.reason);
+
+          return {
+            kind: "applied",
+            patch,
+            appliedTreeHash: applied,
+            fixedElsewhereSkipped,
+            justClaimedElsewhere,
+          };
         },
       );
-
-      // D-133: validated and persisted here, OUTSIDE the lock and before the
-      // held/applied fork — a claim is independent of whether ITS diff landed on
-      // the worktree yet or is queued, because all it needs is to exist by the time
-      // some later round reads store.openFindings and correlates it. Refuses the
-      // WHOLE call on a real client mistake (an unresolvable fingerprint, or a file
-      // this submission never touched — silence over a file the tier was never
-      // shown is evidence of nothing); silently skips, but reports, a fingerprint
-      // that resolves to a finding already settled by an earlier round.
-      const fixedElsewhereSkipped: string[] = [];
-      // Read below at the `will_not_settle` preview (D-133): a fingerprint validly
-      // claimed HERE must not also appear in that list — it would tell a client its
-      // own just-submitted answer "will not settle", the exact fires-on-the-correct-
-      // answer nag `alreadyAnswered`'s own doc comment says trains clients to skip
-      // warnings entirely.
-      const justClaimedElsewhere = new Set<string>();
-      if (fixed_elsewhere !== undefined && fixed_elsewhere.length > 0) {
-        const filesTouched = new Set(filesInDiff(submitted.patch));
-        const stillOpen = new Set(store.openFindings(review_id).map((f) => f.fingerprint));
-        const toRecord: { fingerprint: string; file: string; line: number | undefined; reason: string }[] = [];
-        for (const entry of fixed_elsewhere) {
-          const fp = store.resolveShort(review_id, entry.fingerprint);
-          if (fp === undefined) {
-            throw new Error(
-              `fixed_elsewhere names fingerprint ${entry.fingerprint}, which this review has never raised. ` +
-                "Use the fingerprint review_poll gave you, not one remembered or guessed.",
-            );
-          }
-          if (!filesTouched.has(entry.file)) {
-            throw new Error(
-              `fixed_elsewhere for ${entry.fingerprint} names ${entry.file}, which is not part of this ` +
-                "submission. A tier's silence over a file it was never shown is not evidence of anything -- " +
-                "include the fix in this same diff/commit, or leave a lore-ok at the finding's own line instead.",
-            );
-          }
-          if (!stillOpen.has(fp)) {
-            fixedElsewhereSkipped.push(entry.fingerprint);
-            continue;
-          }
-          toRecord.push({ fingerprint: fp, file: entry.file, line: entry.line, reason: entry.reason });
-          justClaimedElsewhere.add(fp);
-        }
-        for (const r of toRecord) store.recordFixedElsewhere(review_id, r.fingerprint, r.file, r.line, r.reason);
-      }
 
       if (submitted.kind === "held") {
         return {
@@ -1804,13 +1859,22 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
                   "return at higher severity). Findings it reports before seeing your fix may already be " +
                   "fixed by it — expected, do not double-fix. If the tree hash cannot be verified when it " +
                   "is applied, the review lands in awaiting_diff with the reason.",
-                ...(fixedElsewhereSkipped.length === 0 ? {} : { fixed_elsewhere_skipped: fixedElsewhereSkipped }),
+                ...(submitted.fixedElsewhereSkipped.length === 0
+                  ? {}
+                  : { fixed_elsewhere_skipped: submitted.fixedElsewhereSkipped }),
               }),
             },
           ],
         };
       }
-      const { patch, appliedTreeHash: applied } = submitted;
+      const { patch, appliedTreeHash: applied, fixedElsewhereSkipped, justClaimedElsewhere: justClaimedElsewhereList } =
+        submitted;
+      // Read below at the `will_not_settle` preview (D-133): a fingerprint validly
+      // claimed at submit time must not also appear in that list — it would tell a
+      // client its own just-submitted answer "will not settle", the exact fires-on-
+      // the-correct-answer nag `alreadyAnswered`'s own doc comment says trains
+      // clients to skip warnings entirely.
+      const justClaimedElsewhere = new Set(justClaimedElsewhereList);
 
       // WHAT THIS DIFF CANNOT SETTLE, said now rather than in twenty minutes.
       //

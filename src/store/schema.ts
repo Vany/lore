@@ -16,13 +16,14 @@
 import type { DatabaseSync } from "node:sqlite";
 import { SEVERITIES } from "../core/finding.ts";
 
+// 21: held_diff.fixed_elsewhere (D-133).
 // 20: fixed_elsewhere_claim (D-133).
 // 4: usage.diff_chars (D-58).
 // 3: finding.scope_blob / finding.scope_hunk (D-56). Bumped in the same change that
 // adds the columns, because this number is what `assertNotDowngrade` compares — left
 // behind, it says a database written by this build is identical to one written before
 // the columns existed.
-export const SCHEMA_VERSION = 20;
+export const SCHEMA_VERSION = 21;
 
 /**
  * How findings are ordered wherever the service hands them out: worst first.
@@ -482,6 +483,12 @@ export const MIGRATIONS: readonly { readonly table: string; readonly column: str
   // an existing constraint). NULL is every review before this column existed, and
   // every ordinary branch-vs-`into` review from here on — nearly all of them.
   { table: "review", column: "review_path", sql: "ALTER TABLE review ADD COLUMN review_path TEXT" },
+  // D-133: claims a HELD diff carries, JSON-encoded, promoted to real
+  // fixed_elsewhere_claim rows only once consumeHeldDiffs confirms THIS diff
+  // actually applied — see holdDiff's own comment for why immediate persistence is
+  // wrong. NULL for a diff with no claims and for every row written before this
+  // column existed; both read back as "no claims", which is correct either way.
+  { table: "held_diff", column: "fixed_elsewhere", sql: "ALTER TABLE held_diff ADD COLUMN fixed_elsewhere TEXT" },
 ];
 
 /**

@@ -1088,22 +1088,48 @@ ruling loop and `settleFixed`'s exclusion set all see it for free. No new
 verdict kind: silence next round records `justified-accepted`, a re-raise
 records `justified-rejected`, exactly like any other justification.
 
-**Persisted, not passed through memory.** `runRound` executes off the job
-queue, disconnected from `review_submit`'s synchronous handler — a claim
-living only in the request would be gone before any round read it. New table
-`fixed_elsewhere_claim` (`schema.ts`, `SCHEMA_VERSION` 20), written at submit
-time by `store.recordFixedElsewhere`, read back by `collectFixedElsewhere` the
-same way `collectJustifications` reads marker text off disk.
+**Persisted, not passed through memory — but not always IMMEDIATELY, corrected
+in this same round by lore's own review, fingerprint d2c5ca38.** `runRound`
+executes off the job queue, disconnected from `review_submit`'s synchronous
+handler — a claim living only in the request would be gone before any round
+read it. New table `fixed_elsewhere_claim` (`schema.ts`, `SCHEMA_VERSION` 21),
+read back by `collectFixedElsewhere` the same way `collectJustifications`
+reads marker text off disk. The first version wrote a claim to that table
+unconditionally, at submit time, for both the applied AND held paths — and a
+HELD diff can still fail LATER, at consume time (`consumeHeldDiffs`: a fuzzy
+or partial apply, or a tree-hash mismatch), dropping that diff and everything
+queued after it. The claim survived regardless, ratified in a later round
+against a fix that never actually landed — exactly the "claim with nothing
+behind it" the file-in-diff check exists to refuse. Fixed by deferring
+persistence for the held path: the validated claims ride WITH the held diff
+(`held_diff.fixed_elsewhere`, JSON, migration-only column, `holdDiff`'s new
+parameter) and are promoted to real `fixed_elsewhere_claim` rows only once
+`consumeHeldDiffs` confirms that SPECIFIC diff actually verified — never for
+one that hits either mismatch return, where the claim is simply never
+promoted, same as the diff it rode in on. The applied path is unaffected: by
+the time that path's callback returns, the diff is already verified, so
+recording immediately remains correct.
 
-**Validated synchronously, before the held/applied fork, refusing the whole
-call on a real client mistake.** An unresolvable `fingerprint`
-(`resolveShort` finds nothing) or a `file` outside `filesInDiff` of THIS
-submission both throw — a fresh RPC argument naming a fingerprint this review
-never raised, or claiming evidence for a file the tier was never shown, is a
-client mistake to fail loudly on, not silently swallow. A fingerprint that
-resolves but names an already-settled finding is not an error: silently
-skipped, named in the reply's `fixed_elsewhere_skipped`, since the claim
-simply arrived after it stopped being needed.
+**Validated inside the submit lock, before the held/applied fork — including a
+THIRD refusal outcome missed on the first pass, also found by lore's own
+review, fingerprint cf48ccb1.** An unresolvable `fingerprint` (`resolveShort`
+returns `undefined`) or a `file` outside `filesInDiff` of THIS submission both
+throw — a fresh RPC argument naming a fingerprint this review never raised, or
+claiming evidence for a file the tier was never shown, is a client mistake to
+fail loudly on, not silently swallow. `resolveShort` has a third outcome
+besides "resolves" and "does not resolve": it THROWS `AmbiguousFingerprint`
+when the short prefix matches more than one finding (spec/review-ladder.md
+§3.1.2) — a real, if rare, case the first version left uncaught, an
+unenumerated third path none of the surrounding text described. Caught now
+and rephrased with the same D-133 framing the other two refusals carry,
+naming which findings collide so the client can send more of the fingerprint.
+A fingerprint that resolves but names an already-settled finding is not an
+error: silently skipped, named in the reply's `fixed_elsewhere_skipped`,
+since the claim simply arrived after it stopped being needed — this check is
+best-effort for a diff that ends up held, since the in-flight round that made
+it wait can itself settle findings before the hold is consumed, but that is
+harmless: `collectFixedElsewhere` re-filters against `store.openFindings` at
+the point it actually rules, regardless of what was true at submit time.
 
 **`will_not_settle` excludes a fingerprint this same call's `fixed_elsewhere`
 just recorded — found while writing this feature's own tests, before it ever
@@ -1126,17 +1152,17 @@ never set on a `fixed_elsewhere` entry: it is not a D-83 rule appeal, and
 setting it would wrongly buy a class suppression for an ordinary "I fixed it,
 here's where" claim.
 
-**Known, accepted gap: a refused claim does not roll back the diff it rode in
-on.** Validation runs after `withSubmitLock` resolves — by the time an
-unresolvable fingerprint or wrong-file claim throws, the diff has already
-applied (or the hold has already been recorded) and the round is already
-enqueued. A client reading only `isError: true` could reasonably believe
-nothing happened, when in fact the code landed and only the claim was
-refused. Not fixed here: the file-in-diff check inherently needs the
-RESOLVED patch, which for the `commit` form is not known until inside the
-lock, so a fully pre-effect refusal would need asymmetric handling between
-the two forms. A future fix could at least move the cheap, dependency-free
-half — the fingerprint-resolution check — ahead of the lock.
+**The "refused claim rolls back nothing" gap named in an earlier draft of this
+entry is CLOSED, incidentally, by the same restructuring that fixed
+d2c5ca38.** Validation moved from after `withSubmitLock` resolves to INSIDE
+its callback, right where `patch` is finally known (both forms) and strictly
+BEFORE the held/applied fork, `holdDiff`, and `applyPatch` all run — needed
+regardless, because the held path's claims must be validated before they can
+ride along with `holdDiff`'s new parameter. So every `fixed_elsewhere` throw
+(unresolvable fingerprint, wrong file, ambiguous fingerprint) now refuses the
+WHOLE call before anything lands or is held, for both `diff` and `commit`
+alike — no asymmetric handling needed, because `patch` was already uniform by
+the point validation runs.
 
 **D-128 — a finding that names its fields "title"/"detail" is a naming drift, not a
 malformed reply: repaired at the boundary rather than gambled on a retry. BUILT
