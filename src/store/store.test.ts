@@ -1060,6 +1060,21 @@ describe("priorLike", () => {
     const priors = store.priorLike(repoId, "rev2", "bb", "the hold is never released on decline", undefined);
     expect(priors.map((p) => p.claim)).toContain("the hold is  never released on decline");
   });
+
+  // lore-ok[6f0e17d0]: found by lore's own review, one round after 54d77a41's own
+  // fix — SQLite's bare TRIM strips only ASCII space, never a tab or a newline, and
+  // a chained REPLACE only collapses a literal double-space, not an embedded
+  // newline or a longer run. Ordinary in free-text model output, and normalizeClaim
+  // (core/finding.ts) already collapses ALL of `\s+` to one space. Matching in JS
+  // against the same function the caller used, rather than a second SQL dialect of
+  // it, closes this the way it cannot reopen a third time.
+  it("matches a stored claim differing only by an embedded newline", () => {
+    store.recordFinding("rev1", finding("aa", { claim: "the hold is never\nreleased on decline" }));
+    newReview("rev2");
+
+    const priors = store.priorLike(repoId, "rev2", "bb", "the hold is never released on decline", undefined);
+    expect(priors.map((p) => p.claim)).toContain("the hold is never\nreleased on decline");
+  });
 });
 
 describe("knowledge", () => {

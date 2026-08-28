@@ -14,7 +14,7 @@
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { AmbiguousFingerprint } from "../core/errors.ts";
-import type { Finding, Severity } from "../core/finding.ts";
+import { normalizeClaim, type Finding, type Severity } from "../core/finding.ts";
 import { clientDeliveredWork, type LadderState } from "../core/ladder.ts";
 import { isTerminal, TERMINAL_SQL, PERSON_OR_CLOCK_DECIDED_SQL, type ReviewState, FINDINGS_SQL } from "../core/review-state.ts";
 import type { Scope } from "../core/scope.ts";
@@ -1557,31 +1557,41 @@ export class Store {
    * bare value excluded exactly the prior sightings this method exists to surface,
    * not just the current finding's own row. `reviewId` is new for this reason alone.
    *
-   * lore-ok[54d77a41]: THE STORED SIDE NOW NORMALISES TOO, not only trims and
-   * lower-cases — found by lore's own review. The caller passes `normalizeClaim`'s
-   * full output (trim, lower-case, collapse internal whitespace runs, strip trailing
-   * `.`/`!`), so a stored claim differing only by a trailing period or a doubled space
-   * — exactly the no-meaning variation `normalizeClaim` exists to erase — never
-   * matched. `REPLACE(..., '  ', ' ')` twice collapses runs up to four spaces, which
-   * is every realistic case; `RTRIM(..., '.!')` matches the trailing-punctuation strip
-   * exactly, SQLite's own semantics for "strip any of these chars, repeated."
+   * lore-ok[54d77a41]/[6f0e17d0]: THE COMPARISON MOVED TO JS, not reimplemented in
+   * SQL a second time — found by lore's own review, twice over the same line. The
+   * first attempt matched `normalizeClaim`'s trim/lower-case/collapse-whitespace/
+   * strip-trailing-punctuation with SQL's `TRIM`/`LOWER`/chained `REPLACE`/`RTRIM` —
+   * closer, but SQLite's bare `TRIM` strips only ASCII space (never a tab or a
+   * newline, both ordinary in free-text model output) and a chained `REPLACE` only
+   * collapses literal double-spaces, not an arbitrary run. Reimplementing a JS
+   * function's exact semantics in SQL is a second copy free to disagree with the
+   * first, which is exactly what happened twice in one round. `normalizeClaim` is
+   * now called on the SQL side of the comparison too, in JS, so there is one
+   * definition instead of two dialects of it — this is the same principle
+   * `TERMINAL_SQL`/`UNTRUSTED_READ_SQL` already apply to state/outcome lists,
+   * applied to a string transform instead of a set membership test. The query
+   * fetches every OTHER finding in the repo rather than pre-filtering on the claim,
+   * which is a wider read than before; `priorLike`'s own doc already treats
+   * over-fetching as the deliberate trade for not missing a real match (see the
+   * CWE branch above), and a repo's whole finding history is not the scale this
+   * runs at a hot-path frequency against.
    */
   priorLike(repoId: string, reviewId: string, fingerprint: string, normalizedClaim: string, cwe: string | undefined): readonly PriorFinding[] {
     const rows = this.db
       .prepare(
-        `SELECT fi.claim AS claim,
+        `SELECT fi.claim AS claim, fi.cwe AS cwe,
                 (SELECT v.verdict FROM verdict v
                  WHERE v.fingerprint = fi.fingerprint AND v.review_id = fi.review_id
                  ORDER BY v.id DESC LIMIT 1) AS verdict
          FROM finding fi
          JOIN review r ON r.id = fi.review_id
          WHERE r.repo_id = ?
-           AND NOT (fi.review_id = ? AND fi.fingerprint = ?)
-           AND (RTRIM(LOWER(TRIM(REPLACE(REPLACE(fi.claim, '  ', ' '), '  ', ' '))), '.!') = ?
-                OR (fi.cwe IS NOT NULL AND fi.cwe = ?))`,
+           AND NOT (fi.review_id = ? AND fi.fingerprint = ?)`,
       )
-      .all(repoId, reviewId, fingerprint, normalizedClaim, cwe ?? " ") as { claim: string; verdict: string | null }[];
-    return rows.map((r) => ({ claim: r.claim, verdict: r.verdict ?? undefined }));
+      .all(repoId, reviewId, fingerprint) as { claim: string; cwe: string | null; verdict: string | null }[];
+    return rows
+      .filter((r) => normalizeClaim(r.claim) === normalizedClaim || (cwe !== undefined && r.cwe === cwe))
+      .map((r) => ({ claim: r.claim, verdict: r.verdict ?? undefined }));
   }
 
   /**
