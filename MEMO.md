@@ -3,7 +3,63 @@
 Newest first. Updated at the end of each task: what changed, what I learned, what
 surprised me.
 
-## 2026-08-28 — a fix for a bug that never existed, caught by the thing it was
+## 2026-08-28 — D-132, docs-only rounds and the per-tier bound: five rounds, four
+distinct real defects, none of them where the first version looked
+
+**What changed.** `rev_b9CPqxrCLB_xsEdfF6KEwbjj`, `passed_partial`, attested at
+`564fc4e28d0d7eaa56fc30f05dc92db9a7d96849` (4 findings, 4 fixed) — merged as five
+commits. First of three features from Vany's "does lore have anything unimplemented
+from its own specs?" audit: a documentation-only round should not trip the per-tier
+round bound, the same way a clean round already doesn't. Planned properly first —
+two Explore passes plus a Plan-agent validation before any code — because it's a
+ladder-and-diff-touching change, not a docs fix.
+
+**Round 1 shipped, and every subsequent round found the SAME class of mistake: a
+signal that looked right because it was named right.**
+
+1. **`docsOnly` read the branch's whole cumulative diff, not what was still
+   open (fingerprint 6a6ae919).** Both incidents this decision cites were code branches whose
+   `.ts` finding settled early and then argued only about `SPEC.md` for the rest of
+   the review. `computeDiff` recomputes the same whole-branch diff every round, so
+   that branch's `docsOnly` was `false` for its entire life — the fix never fired on
+   the shape it was built for, and the one test written for round 1 only exercised a
+   branch whose sole commit was a `.md` edit. Fixed: read `store.openFindings`'
+   files fresh, right before `step()`, not the diff. Caught a genuine gap in my own
+   test design too — the new mixed-branch test (one code finding fixed, doc findings
+   recurring) is the one that actually reproduces the incident; the original test
+   would have passed on either the buggy or the correct code, discriminating
+   nothing.
+2. **Kept `ReviewDiff.docsOnly`/`changedDocs` around after fixing #1, "for
+   independent value" — with no production reader (fingerprint 8456d656).** The exact
+   RULE_DIRS-shaped trap this project's own `one-definition.test.ts` polices for a
+   bare constant, invisible to that check on an interface field. Worse: it was the
+   SAME field, under the SAME tempting name, that caused #1 in the first place —
+   wired in because it existed and was named right, not because it was correct.
+   Deleted rather than wired up for its own sake.
+3. **The decision's own justification was stale before it shipped (fingerprint 3407e345).**
+   D-114 (built 2026-08-16, ten days after both cited incidents) already resets the
+   per-tier counter on every tree-moving MCP submit — traced end to end
+   (`noteClientWork` → `withClientWork` → `clientDeliveredWork`, applied at the top
+   of every round) and independently confirmed by this session's own history: dozens
+   of multi-round D-77 cycles, this bound never once fired. Both incidents were D-77
+   (MCP) reviews. What D-132 actually protects today is narrower and still real:
+   `cli.ts`'s `lore review`, which reuses a review row across invocations and never
+   calls `noteClientWork`. The mechanism and every test were already exercising
+   exactly that CLI-shaped scenario without my realizing it — only the SPEC
+   narrative was wrong, and needed correcting rather than the code.
+4. **A stale paragraph, straggling from #2** — a caveat about `changedDocs`'
+   own blind spot, in a decision that no longer has a `changedDocs`.
+
+**The pattern across all four, worth keeping separate from the fixes
+themselves.** Every one of them was correct-looking in isolation and wrong about
+scope: the right-shaped field computed at the wrong granularity, the right
+field kept for a reason that stopped being true the moment nothing read it, a
+justification that was true when written and stale by the time it shipped. None
+of these were caught by reading my own diff harder before submitting — they were
+caught by a reviewer reading the SAME code with no attachment to having just
+written it, on the SAME day, sometimes minutes after the previous round landed.
+That is the product working on itself, which is the only kind of proof this
+project trusts.
 trying to improve, then caught AGAIN for leaving a false commit message behind
 
 **What changed.** `rev_WI0iJq46BLYuyUQrMhomuJJS`, driven from a genuinely different
