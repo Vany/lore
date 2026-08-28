@@ -3,6 +3,117 @@
 Newest first. Updated at the end of each task: what changed, what I learned, what
 surprised me.
 
+## 2026-08-28 — src/t0: the last unreviewed module, four rounds, and a fix that
+needed a second fix before the tier that would have found it got the chance
+
+**What changed.** `rev_lfaizbAHpr47yUtXmj9RVXgq`, `passed_partial`, attested at
+`6c23f41d884302930aab0f01d4855d693db6ec8e` (scoped to `src/t0`) — 17 findings, 12
+fixed, 2 justified, 3 left open by a terminal race (see below) — merged at
+`7492470` (four commits: `fe4ea22`, `cb211ed`, `177e262`, `7492470`). This closes
+the systematic src/* sweep this whole session has been driving: every top-level
+module now has a verdict.
+
+**The sharpest finding was on my OWN fix, one round after I shipped it.** Round 2
+fixed `execFile`'s timeout not actually being able to stop a hung sandboxed
+container (verified against current Docker docs and a live `docker/cli` issue:
+signal-forwarding on `docker run` was removed in 27.0.3+, which is what this
+image's own pinned docker is; even on an older CLI, PID 1 without an installed
+handler ignores the signal by kernel design regardless) by giving every container
+a stable, predictable name and issuing an explicit `docker kill <name>` on
+timeout. Round 3's own tier read THAT fix and found the gap in it immediately: a
+STATIC name with no collision handling means a lore crash mid-run, or
+`killIfTimedOut`'s own kill racing `--rm`'s async removal, leaves a same-named
+container around — and `docker run --name X` while any container X exists exits
+125, which the existing script-failure paths report as a confident, false,
+high-severity "fails on this branch." Fixed with `clearStaleContainer`: an
+explicit `docker rm -f <name>` before every run, discarding its own failure the
+same way every other best-effort cleanup in that file already does. **The lesson
+isn't "I made a mistake" — it's that this is exactly what the review ladder is
+for, and it worked in one round, not five.**
+
+**Verifying that fix required actually reading `execFile`'s error shape, not
+assuming it.** Two separate points this cycle: (1) whether `docker run` forwards
+a received SIGTERM to its container, and whether the sandbox's own docker CLI
+version still does — verified via web search rather than trained-in assumption,
+since Docker's own CLI changed this behavior in 27.0.3 and the training cutoff
+predates knowing which side of that line this deployment's pinned 27.5.1 falls
+on (past it). (2) Node's own `execFile` rejection shape when `maxBuffer` is
+exceeded — rather than guess, ran it for real, right here on this host:
+`code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER"`, `killed: undefined`,
+`signal: undefined`, none of which `runTool`'s existing kill/timeout check
+recognised, so a run our own 64MB cap cut off silently read as an ordinary exit
+1. Both verifications took under a minute and turned a plausible-sounding finding
+into a confirmed one (or, for the cargo-workspace question below, an honestly
+unconfirmed one) — cheaper than trusting or dismissing a claim from memory either
+way.
+
+**Declined to fix one finding blind, for the first time this session in this
+specific shape.** `parseCargoJson` rebases a cargo diagnostic's `file_name` onto
+the manifest's own directory — verified correct, in an earlier round, for a
+single NESTED crate, by actually running `cargo check --manifest-path` against
+one. A new finding asked whether the SAME rebase is still correct for a
+WORKSPACE manifest (one Cargo.toml, members below it) — plausible, and I could
+not settle it: no toolchain in this sandbox to test against a real workspace,
+and the actual fix (`message.package_id`, present in the schema and read by
+nothing here) needs either a `cargo metadata` call or correct parsing of its own
+format, both equally unverified. Wrote an honest `lore-ok` and an `[OPEN]` item
+in SPEC.md's own D-131 entry instead of guessing at a rebase I could not test —
+guessing wrong would have traded a real, named bug for an equally-invisible
+wrong "fix," which is worse than leaving it named. Matches this project's own
+established precedent (the cargo-check plan's own verification section) for
+exactly this shape of gap.
+
+**A second justified-not-fixed finding, on my OWN round-2 fix again:** setting
+`interrupted: true` whenever semgrep hits an unparseable file is architecturally
+correct (it reuses `T0Result.interrupted`'s existing round-level mechanism,
+already true for a rare OOM or timeout) but a PERMANENTLY unparseable file
+(checked-in minified vendor code) trips it every round for the life of a review,
+not the "rare round" cost the field's own doc prices. A real fix needs
+per-finding interrupted tracking or cross-round file-stability memory — real
+future work, not a same-round patch worth shipping unverified for a low-severity
+finding. The current cost is real but safe: more manual settling, never a false
+auto-settle.
+
+**Made the exact doc-orphaning mistake from the `src/store` cycle AGAIN, in the
+SAME file, within the same round.** Inserting a new exported constant's doc
+comment directly above `baseArgs` displaced "Mounts shared by both phases" onto
+the wrong subject — twice, once for `SANDBOX_CWD` and once for `containerName`,
+both times in `sandbox.ts`. `one-definition.test.ts` caught both before they
+reached a commit. The pattern is now: when adding a new top-level declaration
+directly before an existing one that has its OWN doc comment, put the new one
+ABOVE the previous unrelated declaration, never between an existing doc block
+and the code it describes — and run the full suite before trusting a "looks
+right" diff, since this is exactly the kind of thing that reads fine in an
+editor and fails a mechanical check.
+
+**Learned the hard way, a second time this session: don't hand-transcribe a
+large diff into a tool call.** Round 1's `diff`-form submission failed with a
+tree-hash mismatch for reasons that took real effort to diagnose (see the
+`src/store` entry above — this was the SAME lesson, encountered again before it
+had fully sunk in). This time, recognized the risk immediately and used
+`commit`-form via a push to a scratch branch under `refs/heads/` instead — the
+`refs/review/*` convention this project prescribes doesn't work (mirror-refspec
+gap, filed in TODO.md during the `src/store` cycle), but ANY branch under
+`refs/heads/` mirrors correctly, so `review-scratch/<sha>` under that namespace
+gets `commit`-form's byte-exact reliability without needing the broken
+convention fixed first. Used for all four rounds this cycle; zero transcription
+failures. Worth making this the default for any diff over ~100 lines.
+
+**One near-miss caught before it became a mistake:** typed a commit's full SHA
+from memory (extending a known short prefix) rather than reading it, and
+`review_submit` correctly refused it as unresolvable. Re-ran `git rev-parse`
+and got the real one. Costless here because the tool verifies before acting;
+worth remembering that "I know the first 7 characters" is not "I know the SHA."
+
+**Terminal race, again, same shape as `src/store`'s.** Three findings
+(`0b55733a`, `14b6df61`, `bfc4e055` — all three, on inspection, the same
+underlying container-collision concern, raised by different tiers/rounds against
+code that had already been fixed) never got a fresh tier read before the ladder
+concluded `passed_partial`. Attested honestly (17 findings, 12 fixed, 2
+justified — 14 accounted, matching `open_count: 3`) rather than treating the
+non-zero open count as a reason to distrust an attestation that was itself
+telling the truth about what it covered.
+
 ## 2026-08-28 — src/store follow-up: a clean review, and two infrastructure bugs in
 lore's own submission path that had nothing to do with the code under review
 
