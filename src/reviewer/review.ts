@@ -2668,12 +2668,22 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // lore-ok[e5ca0c9a]: the same finding, reported twice. Same answer.
   // Which member raised a fingerprint, at the highest rank — a REJECTED justification
   // is stamped by the member that actually contested it (D-10: the tier that asked).
-  const raisedRank = new Map<string, Tier>();
+  //
+  // lore-ok[6aa59cb5]: CARRIES THE ANSWERED MODEL TOO, not only the member — found
+  // by lore's own review. `o.member.model` is the tier's CONFIGURED model; a
+  // fallback or a twin keeps the member's id and answers on a different route
+  // (`continuity.ts`'s own history), so stamping `o.member.model` here would just
+  // move the same misattribution into the new column. `o.fellBackTo ?? o.chosenRoute
+  // ?? o.member.model` is the pattern this file already uses everywhere else a
+  // verdict needs to name who actually spoke (`ranOnRoute`, `failedOn`, `paidRoute`).
+  const raisedRank = new Map<string, { readonly member: Tier; readonly model: string | undefined }>();
   for (const o of ranMembers) {
     for (const f of o.result.findings) {
       const fp = fingerprint(f);
       const cur = raisedRank.get(fp);
-      if (cur === undefined || tierRank(tiers, o.member.id) > tierRank(tiers, cur.id)) raisedRank.set(fp, o.member);
+      if (cur === undefined || tierRank(tiers, o.member.id) > tierRank(tiers, cur.member.id)) {
+        raisedRank.set(fp, { member: o.member, model: o.fellBackTo ?? o.chosenRoute ?? o.member.model });
+      }
     }
   }
   const rungMismatch = ranMembers.map((o) => o.heldMismatch).find((m) => m !== undefined);
@@ -2837,6 +2847,11 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       rationale: `carried forward from an earlier review of this repo (${origin.at}): ${origin.reason}`,
       scope: prior.scope,
       tier: CARRIED_TIER,
+      // lore-ok[6aa59cb5]: found by lore's own review. No model ruled on THIS round
+      // — the whole point of a carry is that nothing was re-asked — so this names
+      // the ORIGINAL decision's model, the same provenance the rationale above
+      // already carries forward for the reason and the date.
+      model: prior.model,
       round,
       // The provenance travels with the carry, or the chain breaks at the first hop: a
       // carried row with no `via_rule` looks like an ordinary justification to the NEXT
@@ -2859,14 +2874,18 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       // `modelRaised`, never `raisedFingerprints` — only something that can read the
       // reason is entitled to reject it. See the note where the two sets are built.
       rejected.push(p.finding.fingerprint);
+      // The member that actually re-raised it, at the highest rank that did — a
+      // rejection is a contest, and the record must name the contestant (D-10).
+      const rejectedBy = raisedRank.get(p.finding.fingerprint);
       store.recordVerdict(reviewId, {
         fingerprint: p.finding.fingerprint,
         verdict: "justified-rejected",
         rationale: p.reason,
         scope: undefined,
-        // The member that actually re-raised it, at the highest rank that did — a
-        // rejection is a contest, and the record must name the contestant (D-10).
-        tier: (raisedRank.get(p.finding.fingerprint) ?? strongest.member).id,
+        tier: (rejectedBy?.member ?? strongest.member).id,
+        // lore-ok[6aa59cb5]: found by lore's own review. See raisedRank's own comment
+        // a few dozen lines up for why this is not `.member.model`.
+        model: rejectedBy?.model ?? (strongest.fellBackTo ?? strongest.chosenRoute ?? strongest.member.model),
         round,
       });
     } else {
@@ -2879,6 +2898,11 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
         // Acceptance is silence, and only the STRONGEST present silence carries it —
         // a weaker member ratifying a stronger one's questions is what D-10 forbids.
         tier: strongest.member.id,
+        // lore-ok[6aa59cb5]: found by lore's own review — same reasoning as the
+        // rejection branch above: `strongest.member.model` is the CONFIGURED model,
+        // and a fallback answers on a different route without changing the member's
+        // own id.
+        model: strongest.fellBackTo ?? strongest.chosenRoute ?? strongest.member.model,
         round,
         // WHAT THIS ACCEPTANCE RESTS ON. NULL for an ordinary justification, which is
         // the load-bearing distinction: an ordinary reason was argued on its own words
@@ -2998,6 +3022,10 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   const fixed = await settleFixed(
     store, reviewId, worktree, tiers, strongest.member, [...open, ...rungFixCandidates], settleRaised, answeredOtherwise, round,
     hold.lastT0.interrupted,
+    // lore-ok[6aa59cb5]: found by lore's own review — same reasoning as the
+    // rejection/acceptance verdicts a few dozen lines up: `strongest.member.model`
+    // is the CONFIGURED model, not necessarily the one that answered.
+    strongest.fellBackTo ?? strongest.chosenRoute ?? strongest.member.model,
   );
 
   // 7. A defect that keeps recurring is a missing rule, not N unrelated bugs.
@@ -3314,6 +3342,12 @@ async function settleFixed(
    * (`expireStaleVerdicts` only reopens justifications, never a settled fix).
    */
   t0Interrupted: boolean,
+  /**
+   * The route that actually answered this round, when it differs from `tier.model`
+   * — a fallback or a twin keeps the tier's id (`continuity.ts`). `undefined` for
+   * `t0`, which has no model at all.
+   */
+  answeredModel: string | undefined,
 ): Promise<readonly string[]> {
   const rank = (id: string) => tierRank(tiers, id);
   const here = rank(tier.id);
@@ -3340,6 +3374,9 @@ async function settleFixed(
       rationale: `not re-raised by ${tier.id} and the code it named has changed`,
       scope: undefined,
       tier: tier.id,
+      // lore-ok[6aa59cb5]: found by lore's own review. See this parameter's own doc
+      // comment above for why it is not `tier.model`.
+      model: answeredModel,
       round,
     });
     fixed.push(f.fingerprint);
@@ -3384,6 +3421,10 @@ async function expireStaleVerdicts(
       rationale: `expired: the code this reason was about has changed. Previously: ${verdict.rationale ?? "(no reason recorded)"}`,
       scope: undefined,
       tier: "expiry",
+      // lore-ok[6aa59cb5]: deliberately absent, found by lore's own review alongside
+      // the fix that added this field. This is the sweep UNDOING a prior verdict
+      // because its code moved — no model ruled on anything here, so naming one
+      // would invent an answer nobody gave.
       round: 0,
     });
     gone.push(fingerprint);

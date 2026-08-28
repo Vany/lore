@@ -415,6 +415,33 @@ describe("verdicts", () => {
     expect([...settled].sort()).toStrictEqual(SETTLING_VERDICTS.map((_, i) => `f${i}`));
   });
 
+  // lore-ok[6aa59cb5]: found by lore's own review. `model` existed on the schema
+  // and was published by verdictsFor/lore://review/<id> since before this file's
+  // own history begins, but recordVerdict had nowhere to put a caller's value and
+  // no reader ever pulled the column back out — so every verdict read `model: null`
+  // for ever, in the one field that says which route actually decided.
+  it("carries the model through recordVerdict, latestVerdict and priorAcceptedVerdict", () => {
+    store.recordFinding("rev1", finding("aa"));
+    store.recordVerdict("rev1", {
+      fingerprint: "aa", verdict: "justified-accepted", rationale: "bounded upstream",
+      scope: { blob: "b1", hunk: "h1" }, tier: "t1", model: "openrouter/twin", round: 1,
+    });
+
+    expect(store.latestVerdict("rev1", "aa")?.model).toBe("openrouter/twin");
+    expect(store.priorAcceptedVerdict(repoId, "aa", "rev2")?.model).toBe("openrouter/twin");
+  });
+
+  // A carried verdict, an expiry sweep and t0's own "fixed" silence never had a
+  // model to name — leaving the field absent must not throw or silently invent one.
+  it("leaves model absent when nothing ruled on it", () => {
+    store.recordFinding("rev1", finding("bb"));
+    store.recordVerdict("rev1", {
+      fingerprint: "bb", verdict: "fixed", rationale: undefined, scope: undefined, tier: "t0", round: 1,
+    });
+
+    expect(store.latestVerdict("rev1", "bb")?.model).toBeUndefined();
+  });
+
   // Verdicts are append-only, so the two views must agree on the LATEST row — and
   // the test above only proved they agree for findings with exactly one. That gap
   // was named by t2, in a reply the 300-character claim cap then discarded; the
@@ -1145,6 +1172,27 @@ describe("knowledge", () => {
     expect(store.knowledgeFor(repoId, "src/payroll/adapter.ts").map((k) => k.statement)).toStrictEqual([]);
     expect(store.knowledgeFor(repoId, "src/pay/hold.ts").map((k) => k.statement)).toStrictEqual(["payments retry on timeout"]);
     expect(store.knowledgeFor(repoId, "src/pay").map((k) => k.statement)).toStrictEqual(["payments retry on timeout"]);
+  });
+
+  // lore-ok[9cdd2299]: found by lore's own review. The prefix check used SQL LIKE,
+  // which case-folds ASCII by default — so a rule scoped to "src/pay" was ALSO
+  // served for a query naming "src/PAY", agreeing with neither the exact-match
+  // branch beside it nor scopesOverlap (knowledge/conflict.ts), both case-sensitive.
+  it("does not scope a path query case-insensitively", () => {
+    store.addKnowledge({ repoId, kind: "rule", source: "taught", statement: "payments retry on timeout", why: undefined, path: "src/pay", cwe: undefined, provenance: undefined, sourceBlob: undefined, confidence: undefined });
+    expect(store.knowledgeFor(repoId, "src/PAY/hold.ts").map((k) => k.statement)).toStrictEqual([]);
+    expect(store.knowledgeFor(repoId, "SRC/pay/hold.ts").map((k) => k.statement)).toStrictEqual([]);
+  });
+
+  // lore-ok[9cdd2299]: found by lore's own review, the same fix as the case test
+  // above. `%`/`_` in a taught path used to be live SQL wildcards in the LIKE
+  // pattern (the same class already fixed for id lookups, a6a4b832) — a rule
+  // scoped to "src/pay_v2" matched the unrelated sibling "src/payXv2" too, since
+  // `_` matches any one character.
+  it("does not treat wildcard characters in a taught path as patterns", () => {
+    store.addKnowledge({ repoId, kind: "rule", source: "taught", statement: "v2 payments rule", why: undefined, path: "src/pay_v2", cwe: undefined, provenance: undefined, sourceBlob: undefined, confidence: undefined });
+    expect(store.knowledgeFor(repoId, "src/payXv2/hold.ts").map((k) => k.statement)).toStrictEqual([]);
+    expect(store.knowledgeFor(repoId, "src/pay_v2/hold.ts").map((k) => k.statement)).toStrictEqual(["v2 payments rule"]);
   });
 
   // Found by lore's own review (592cd49f): nothing that retires a rule for a reason

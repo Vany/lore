@@ -761,6 +761,50 @@ describe("runRound", () => {
     });
   });
 
+  // lore-ok[6aa59cb5]: found by lore's own review. `verdict.model` existed in the
+  // schema and was published by the audit trail, but no code path ever wrote it —
+  // and the one thing it exists to answer is exactly this: a fallback keeps the
+  // tier's id and changes its model (`continuity.ts`, observed on rev_8ZM1XT7), so
+  // naming `tier.model` there would have recorded the PRIMARY that never answered.
+  describe("a settled verdict names the route that actually answered", () => {
+    const fix = () => writeFileSync(join(dir, "src/hold.ts"), "export function capture() {\n  return release();\n}\n");
+
+    it("records the twin's route on a fix settled while the tier is running on its fallback", async () => {
+      const type = {
+        ...TYPE,
+        tiers: DEFAULT_TIERS.map((t) => (t.id === "t1" ? { ...t, fallback: ["openrouter/twin"] } : t)),
+      };
+      const primary = type.tiers.find((t) => t.id === "t1")?.model ?? "";
+
+      /** Answers once as the primary, then goes out of quota — forcing round 2 onto the twin. */
+      class FallsBackOnSecondCall implements ReviewerLike {
+        primaryCalls = 0;
+        async review(tier: Tier): Promise<ReviewerResult> {
+          const empty = { discarded: [], raw: "", inputTokens: 1, cachedTokens: 0, outputTokens: 1, costUsd: 0, latencyMs: 1, retried: false, steps: 1 };
+          if (tier.model === primary) {
+            this.primaryCalls++;
+            if (this.primaryCalls >= 2) throw new Exhausted("primary is out");
+            return { ...empty, findings: [HOLD_BUG] };
+          }
+          // The twin: silent about HOLD_BUG, which — once the code has moved — is
+          // what settles it.
+          return { ...empty, findings: [] };
+        }
+      }
+      const reviewer = new FallsBackOnSecondCall();
+
+      await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type, allowMetered: true });
+      fix();
+      const after = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type, allowMetered: true });
+
+      expect(after.fixed, "the fallback's silence over moved code must still settle it").toStrictEqual([fingerprint(HOLD_BUG)]);
+      expect(
+        store.latestVerdict("r1", fingerprint(HOLD_BUG))?.model,
+        "the twin's own route, not t1's configured primary — the whole point of the fix",
+      ).toBe("openrouter/twin");
+    });
+  });
+
   // D-57. A lore-ok is a comment, and JSON has none — so a finding raised against a
   // config file had nowhere to put its reason and could never settle.
   it("reads a justification from the repo-root ledger for a file that cannot hold one", async () => {

@@ -232,6 +232,20 @@ export interface VerdictRow {
   readonly rationale: string | undefined;
   readonly scope: Scope | undefined;
   readonly tier: string | undefined;
+  /**
+   * The route that actually answered, when `tier` alone would mislead — a fallback
+   * or a twin keeps the tier's id and changes its model (`reviewer/continuity.ts`,
+   * observed on `rev_8ZM1XT7`). `undefined` for a verdict no model ruled on this
+   * round at all: a carried-forward acceptance names the ORIGINAL decision's model
+   * instead (see the call site), and a sweep's expiry names none.
+   *
+   * lore-ok[6aa59cb5]: NEW — found by lore's own review. The schema column existed
+   * and was published by `verdictsFor`/`lore://review/<id>` since before this file's
+   * own history begins, but nothing ever wrote it, so every verdict read `model:
+   * null` for ever — a published field nothing writes is believed, the exact shape
+   * this codebase's own recurring-rule check already names.
+   */
+  readonly model?: string | undefined;
   readonly round: number | undefined;
   /** The development rule this acceptance rested on, when it was an appeal (D-83). */
   readonly viaRule?: string | undefined;
@@ -1830,9 +1844,9 @@ export class Store {
   recordVerdict(reviewId: string, v: Omit<VerdictRow, "createdAt">): void {
     this.db
       .prepare(
-        `INSERT INTO verdict(review_id, fingerprint, verdict, rationale, scope_blob, scope_hunk, tier, round,
+        `INSERT INTO verdict(review_id, fingerprint, verdict, rationale, scope_blob, scope_hunk, tier, model, round,
                              via_rule, created_at)
-         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         reviewId,
@@ -1842,6 +1856,7 @@ export class Store {
         n(v.scope?.blob),
         n(v.scope?.hunk),
         n(v.tier),
+        n(v.model),
         n(v.round),
         n(v.viaRule),
         now(),
@@ -1864,6 +1879,7 @@ export class Store {
       scope:
         typeof blob === "string" && typeof hunk === "string" ? { blob, hunk } : undefined,
       tier: un(row["tier"] as string | null) ?? undefined,
+      model: un(row["model"] as string | null) ?? undefined,
       round: un(row["round"] as number | null) ?? undefined,
       viaRule: un(row["via_rule"] as string | null) ?? undefined,
       createdAt: String(row["created_at"] ?? ""),
@@ -1911,6 +1927,7 @@ export class Store {
       rationale: un(row["rationale"] as string | null) ?? undefined,
       scope: typeof blob === "string" && typeof hunk === "string" ? { blob, hunk } : undefined,
       tier: un(row["tier"] as string | null) ?? undefined,
+      model: un(row["model"] as string | null) ?? undefined,
       round: un(row["round"] as number | null) ?? undefined,
       viaRule: un(row["via_rule"] as string | null) ?? undefined,
       createdAt: String(row["created_at"] ?? ""),
@@ -2462,9 +2479,21 @@ export class Store {
             .prepare("SELECT * FROM knowledge WHERE repo_id = ? AND retired_at IS NULL ORDER BY verified_at DESC LIMIT ?")
             .all(repoId, limit)
         : this.db
+            // lore-ok[9cdd2299]: was `? LIKE path || '/%'` — found by lore's own
+            // review. `LIKE` case-folds ASCII by default (no `case_sensitive_like`
+            // pragma in schema.ts), while the exact-match branch beside it and
+            // `scopesOverlap` (knowledge/conflict.ts, case-sensitive startsWith)
+            // are both case-sensitive — so a rule scoped to "src/pay" was ALSO
+            // served for "src/PAY/x.ts" here alone, disagreeing with every other
+            // path check in the system. `%`/`_` inside a taught `path` were also
+            // live SQL wildcards, the same class already fixed for `retirePolicy`'s
+            // id lookups. `substr(...) = ...` is a plain case-sensitive BINARY
+            // comparison — no pattern, so nothing to escape, and it now agrees
+            // with `scopesOverlap` by construction rather than by coincidence.
             .prepare(
               `SELECT * FROM knowledge WHERE repo_id = ? AND retired_at IS NULL
-               AND (path IS NULL OR ? = path OR ? LIKE path || '/%') ORDER BY verified_at DESC LIMIT ?`,
+               AND (path IS NULL OR path = ? OR substr(?, 1, length(path) + 1) = path || '/')
+               ORDER BY verified_at DESC LIMIT ?`,
             )
             .all(repoId, pathPrefix, pathPrefix, limit)
     ) as Record<string, string | number | null>[];
