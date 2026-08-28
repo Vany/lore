@@ -198,8 +198,12 @@ to review.
 
 ### `review_attest`
 
-> Available once state is `passed`. Returns one signed line recording what was
-> done: tiers run, findings raised, fixed and justified, at a tree hash.
+> Available once state is `passed` **or** `passed_partial` — the partial case is
+> the one that most needs a record: the line names which tiers were skipped and
+> how many distinct vendors actually read the code. Refusing to attest a partial
+> would leave no account of it at all, which is worse than an honest incomplete
+> one. Returns one signed line recording what was done: tiers run, findings
+> raised, fixed and justified, at a tree hash.
 >
 > It asserts what was checked. It does not assert the code is correct.
 
