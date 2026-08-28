@@ -1042,9 +1042,20 @@ tested. **The corrected signal**: right before the round's `step()` call
 `isDoc`. `tierRounds` itself still increments unconditionally regardless, a
 truthful count of how many rounds a tier has run; only whether that count
 STOPS the review is affected, exactly mirroring the clean-round exemption's
-own shape. `ReviewDiff.docsOnly`/`changedDocs` are kept — a real,
-independently useful fact about the whole branch — just not what the bound
-reads.
+own shape.
+
+**`ReviewDiff` itself carries no `docsOnly`/`changedDocs` — found by lore's
+own review a second time, same day (fingerprint 8456d656).** The first
+correction (above) left them on the interface anyway, computed at both
+construction sites, justified as "a real, independently useful fact." Nothing
+in production ever read them; only this change's own tests did, which made
+them look load-bearing to the next reader without being it. That is the exact
+shape `one-definition.test.ts`'s `RULE_DIRS` rule polices for a bare exported
+constant and cannot see on an interface field — and it is the same field,
+under the same tempting name, that baited fingerprint 6a6ae919's bug one
+correction earlier: wired in because it existed and was named right, not
+because it was correct. Removed rather than wired up for its own sake; `isDoc`
+stays exported, with `review.ts` as its one production reader.
 
 **Deliberately scoped to file extension/path, not diff content.** No attempt
 to detect a comment-only change inside a `.ts` file (a docstring, a

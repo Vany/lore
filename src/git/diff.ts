@@ -22,9 +22,13 @@ const MAX_COMMITS_PER_FILE = 4;
 /**
  * File extension/path only (D-132) — not diff content, so a comment-only change
  * inside a `.ts` file (a docstring, a `TOOL_DOCS` string) is invisible to this and
- * is never a doc. Exported: `review.ts` reuses it against a finding's own `file`,
- * not just a `ReviewDiff`'s `changedFiles` — see `docsOnly`'s own doc comment on
- * why the two are not the same question.
+ * is never a doc. Exported: `review.ts` is the only production reader, applying it
+ * to a finding's own `file` — deliberately NOT also exposed on `ReviewDiff` (a
+ * `changedDocs`/`docsOnly` pair lived here once and had no production reader,
+ * which is exactly what baited fingerprint 6a6ae919: the per-tier bound was wired
+ * to the branch's whole diff instead of what was still open, because that field
+ * existed, was named right, and was wrong. Removed rather than wired up for its
+ * own sake — see D-132's SPEC entry.
  */
 export const isDoc = (f: string) => /\.md$/.test(f) || /^(spec|docs)\//.test(f);
 const MAX_DIFF_CHARS = 600_000;
@@ -131,23 +135,6 @@ export interface ReviewDiff {
   /** Changed files that look like tests, and those that do not. */
   readonly changedTests: number;
   readonly changedSource: number;
-  /**
-   * File extension/path only (`.md`, `spec/`, `docs/`) — not diff content, so a
-   * comment-only change inside a `.ts` file is invisible to this and counts as
-   * source, not doc (D-132, a named and accepted gap, not an oversight).
-   */
-  readonly changedDocs: number;
-  /**
-   * Every file the BRANCH has changed since its pinned base is a doc file, and
-   * there is at least one. A real, independently useful fact — but NOT what the
-   * per-tier round bound reads (D-132, fingerprint 6a6ae919): `diff` here is the
-   * cumulative branch diff, recomputed the same way every round, so a branch that
-   * changed one `.ts` file in round 1 and only argues about `SPEC.md` from round 3
-   * onward has `docsOnly: false` for its entire life — exactly backwards for a
-   * bound meant to stop a live PROSE loop. `review.ts` computes the bound's own
-   * signal from `store.openFindings`' files instead; see its call to `step()`.
-   */
-  readonly docsOnly: boolean;
 }
 
 /**
@@ -436,7 +423,6 @@ export async function computeDiff(
   // file changed only INSIDE a submodule is not invisible to this count either.
   const isTest = (f: string) => /(\.test\.|\.spec\.|(^|\/)tests?\/|__tests__)/.test(f);
   const changedTests = changedFiles.filter(isTest).length;
-  const changedDocs = changedFiles.filter(isDoc).length;
 
   const truncated = rawPatch.length > MAX_DIFF_CHARS;
   const patch = truncated
@@ -452,8 +438,6 @@ export async function computeDiff(
     overlap,
     changedTests,
     changedSource: changedFiles.length - changedTests,
-    changedDocs,
-    docsOnly: changedFiles.length > 0 && changedDocs === changedFiles.length,
     stat: stat.trim(),
     patch,
     truncated,
@@ -519,7 +503,6 @@ export async function wholeTreeDiff(worktree: string, path: string): Promise<Rev
 
   const isTest = (f: string) => /(\.test\.|\.spec\.|(^|\/)tests?\/|__tests__)/.test(f);
   const changedTests = changedFiles.filter(isTest).length;
-  const changedDocs = changedFiles.filter(isDoc).length;
 
   const truncated = rawPatch.length > MAX_DIFF_CHARS;
   const patch = truncated
@@ -536,8 +519,6 @@ export async function wholeTreeDiff(worktree: string, path: string): Promise<Rev
     overlap: [],
     changedTests,
     changedSource: changedFiles.length - changedTests,
-    changedDocs,
-    docsOnly: changedFiles.length > 0 && changedDocs === changedFiles.length,
     stat: stat.trim(),
     patch,
     truncated,

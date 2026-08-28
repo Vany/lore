@@ -12,7 +12,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { computeDiff, filesInDiff, renderDiff, wholeTreeDiff } from "./diff.ts";
+import { computeDiff, filesInDiff, isDoc, renderDiff, wholeTreeDiff } from "./diff.ts";
 
 let root: string;
 let repo: string;
@@ -70,39 +70,21 @@ describe("wholeTreeDiff", () => {
   });
 
   // D-132: file extension/path only, not diff content — the classifier a
-  // documentation-only round is judged by.
-  it("is docsOnly when every changed file is a doc", async () => {
-    mkdirSync(join(repo, "spec"), { recursive: true });
-    writeFileSync(join(repo, "SPEC.md"), "x\n");
-    writeFileSync(join(repo, "spec", "notes.txt"), "y\n");
-    g("add", "-A");
-    g("commit", "-qm", "docs only");
-
-    const d = await wholeTreeDiff(repo, ".");
-    expect(d.changedDocs).toBe(2);
-    expect(d.docsOnly).toBe(true);
+  // documentation-only round is judged by. Tested directly as a pure function,
+  // not through a `ReviewDiff` — nothing in production reads a whole-diff
+  // docsOnly/changedDocs pair (fingerprint 8456d656: an earlier version of this
+  // field existed on `ReviewDiff` with no production reader, and its tempting
+  // name is exactly what baited fingerprint 6a6ae919's bug); `review.ts` applies
+  // `isDoc` to a finding's own `file` instead, covered in `reviewer/round.test.ts`.
+  it("classifies a doc by extension or path", () => {
+    expect(isDoc("SPEC.md")).toBe(true);
+    expect(isDoc("spec/notes.txt")).toBe(true);
+    expect(isDoc("docs/guide.txt")).toBe(true);
   });
 
-  it("is not docsOnly when a source file is also changed", async () => {
-    writeFileSync(join(repo, "SPEC.md"), "x\n");
-    writeFileSync(join(repo, "a.ts"), "export const x = 1;\n");
-    g("add", "-A");
-    g("commit", "-qm", "mixed");
-
-    const d = await wholeTreeDiff(repo, ".");
-    expect(d.changedDocs).toBe(1);
-    expect(d.docsOnly).toBe(false);
-  });
-
-  it("does not classify a test file as a doc", async () => {
-    writeFileSync(join(repo, "a.test.ts"), "export const x = 1;\n");
-    g("add", "-A");
-    g("commit", "-qm", "test only");
-
-    const d = await wholeTreeDiff(repo, ".");
-    expect(d.changedDocs).toBe(0);
-    expect(d.changedTests).toBe(1);
-    expect(d.docsOnly).toBe(false);
+  it("does not classify a test file as a doc", () => {
+    expect(isDoc("a.test.ts")).toBe(false);
+    expect(isDoc("src/hold.ts")).toBe(false);
   });
 
   // INV-3: the diff includes uncommitted work in the review worktree. A single-ref
