@@ -3,6 +3,58 @@
 Newest first. Updated at the end of each task: what changed, what I learned, what
 surprised me.
 
+## 2026-08-28 — a fix for a bug that never existed, caught by the thing it was
+trying to improve, then caught AGAIN for leaving a false commit message behind
+
+**What changed.** `rev_WI0iJq46BLYuyUQrMhomuJJS`, driven from a genuinely different
+starting point than every other cycle this session: not a folder sweep, but Vany
+asking what friction this session had found using lore, then "do we have idea how
+to make it more convenient and fast?", then "all in one pr" once I'd named four
+candidates. Two of the four turned out to need nothing — the "make t2/t3 run
+concurrently" idea was already deployed (`deploy/tiers.zai-kimi-openai.json`'s
+rung, confirmed by querying `tier_run`'s real timestamps rather than trusting the
+board's cosmetic `→` rendering), and two were agent discipline, not lore code. The
+fourth — TODO.md's 2026-08-28 mirror-refspec entry — looked like the one real,
+buildable item.
+
+**It wasn't. There was no bug.** The entry (and this session's own MEMO, twice)
+believed D-77's scratch ref was a top-level `refs/review/<sha>` the mirror
+structurally could not fetch. SPEC.md says otherwise, explicitly, with a worked
+example: `refs/heads/review/<sha>` — a BRANCH. The one refspec
+`mirror-refresh.sh` has always had already covers it. `grep -rn refs/review src`
+returns nothing anywhere in the codebase. The first version of this commit added a
+second refspec, verified working end-to-end against real throwaway repos — a
+solid piece of engineering aimed entirely at the wrong target, caught by lore's
+own review of it (`92a8cd5a`, `9931a89b`) rather than by re-reading my own work
+closely enough. Reverted; `CLAUDE.md`'s own prose was the actual defect (it never
+spelled out `refs/heads/`, close enough to invite the misreading, apparently
+twice before this round caught it) and is now precise.
+
+**Then the review caught the cleanup's own residue.** With the code reverted,
+`4937496f` pointed at something I hadn't considered: the FIRST commit's message —
+still sitting in git history, describing the wrong fix as built and verified —
+would outlive the code revert unless history itself was corrected, not just the
+tree. Squashed the four rounds into one honest commit before any of it reached
+`origin/main` (safe: nothing had been pushed anywhere but disposable scratch
+refs). Two more findings followed from a slower tier that had been reading the
+ORIGINAL, unsquashed commit the whole time — `d742850b` is, unusually, a tier
+correcting an earlier finding's OWN evidence (right conclusion, wrong detail: it
+said the bad commit's tree carried no refspec, when at the time it looked the
+refspec was very much still there — my squash was local and uncommitted-to-history
+at that exact moment it read). Both settled once a real, clean-ancestry commit
+— this entry — actually reached the review instead of being refused as
+tree-identical to what it already had.
+
+**The lesson, plainly: reverting code is not reverting a claim.** A commit
+message is a permanent, first-class part of what a future `git log` search
+returns, checked by this project's own reviewer with exactly the seriousness
+`git blame` archaeology deserves. Getting the code right and leaving the message
+describing the wrong thing is its own, separate defect — and a comment placed 26
+lines above a finding's cited line, however correct, does not mechanically settle
+a tracker that checks the named line itself; three separate rounds this cycle
+were pure bookkeeping for exactly that reason, the identical friction named in
+the conversation that started this whole cycle.
+
 ## 2026-08-28 — clients were reading "then merge" as the end of their whole task,
 not just this review; six rounds, and five of them were the review catching its
 own prior round
