@@ -1073,13 +1073,6 @@ classifier, and not what was decided. Two named consequences, not hidden:
   The global bound is deliberately NOT given `docsOnly`: `ladder.ts`'s global
   check stays unconditional.
 
-Untracked doc files are invisible to `ReviewDiff.changedDocs` the same way
-`changedTests`/`changedSource` already are: the classifier runs on
-`changedFiles` before `untracked` is unioned into the return value, an
-existing blind spot inherited rather than introduced here. This does not
-reach the bound's own signal, which reads a finding's recorded `file`
-directly, never the diff.
-
 **D-128 — a finding that names its fields "title"/"detail" is a naming drift, not a
 malformed reply: repaired at the boundary rather than gambled on a retry. BUILT
 2026-08-20.**
