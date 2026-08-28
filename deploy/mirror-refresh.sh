@@ -190,12 +190,15 @@ one_pass() {
       # the moment it read, the revert existed only in a local, uncommitted working
       # tree, so b76f581's committed tree genuinely still carried the refspec it
       # described — right conclusion (the message would drift), wrong detail (which
-      # tree state proved it). Both are moot now: b76f581 is no longer reachable from
-      # `main` at all. `git log c8b2e70..HEAD --oneline` shows two commits, neither
-      # of them it — the four rounds that carried it were squashed into one honest
-      # commit before any reached `origin/main`, which is why this fix, unlike the
-      # code above, has no separate "what was tried" paragraph: nothing here still
-      # asserts the wrong diagnosis anywhere a reader — human or tier — can find it.
+      # tree state proved it). Both are moot now: the four rounds that carried
+      # b76f581 forward were squashed into one honest commit before any reached
+      # `origin/main`, so it is not an ancestor of whatever lands there — the durable
+      # claim, not a specific `git log` count, which is a moving target that goes
+      # stale with the next commit (an earlier version of this comment cited one and
+      # was already wrong again by the time it was pushed). The scratch branch that
+      # still names it directly (`review-scratch/b76f581`) is deleted in the same
+      # cleanup as every other scratch ref this cycle used, once the review concludes
+      # — same as always, not special-cased for this.
       #
       # lore-ok[d2a6f083]: a real category of concern — a config mutation an earlier
       # pass made can outlive the code that made it — but checked, not assumed, and it
