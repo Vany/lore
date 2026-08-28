@@ -554,6 +554,45 @@ describe("jobs of a review that has ended", () => {
   });
 });
 
+// lore-ok[1b056160]: found by lore's own review. `runJob` used to write `state:
+// "running"` unconditionally after `worktreeFor` — a real git operation with
+// nothing holding the review row for the whole time it ran. A `review_cancel`
+// landing in that window wrote `cancelled`, and the unconditional write then
+// overwrote it back to `running`, one write before `runRound`'s own TOCTOU check
+// ever got to read it. `startRunning` closes the window with a single atomic
+// `UPDATE ... WHERE`, the same shape `claimJob` already uses for its own
+// terminal check.
+describe("starting a claimed review", () => {
+  beforeEach(() => {
+    newReview("rev1");
+    store.updateReview("rev1", { state: "queued" });
+  });
+
+  it("moves a live review into running", () => {
+    expect(store.startRunning("rev1")).toBe(true);
+    expect(store.getReview("rev1", PRINCIPAL)?.state).toBe("running");
+  });
+
+  it("refuses a review that was cancelled while its worktree was being cut, and leaves the cancel standing", () => {
+    // Simulates the exact race: `review_cancel` wins before this write is attempted.
+    store.updateReview("rev1", { state: "cancelled" });
+
+    expect(store.startRunning("rev1"), "the write must not go through").toBe(false);
+    expect(store.getReview("rev1", PRINCIPAL)?.state, "cancelled must not be clobbered back to running").toBe(
+      "cancelled",
+    );
+  });
+
+  it.each(["passed", "passed_partial", "failed", "expired"] as const)(
+    "refuses a review that reached '%s' in the same window",
+    (state) => {
+      store.updateReview("rev1", { state });
+      expect(store.startRunning("rev1")).toBe(false);
+      expect(store.getReview("rev1", PRINCIPAL)?.state).toBe(state);
+    },
+  );
+});
+
 // A worker that dies between claiming a job and finishing it leaves the row
 // `running` for ever. Nothing reclaimed it, nothing said so, and `queueDepth` counts
 // only `queued` — so the operator view showed an idle service with work stranded

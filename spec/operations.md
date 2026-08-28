@@ -249,13 +249,14 @@ and the scheme is re-checked before rendering, because an `href` on a page that 
 credential is somewhere `javascript:` must never reach.
 
 **Each step carries its findings, collapsed.** Three levels: review → tier attempt →
-finding. A finding opens to everything the tier said about it — claim, evidence, failure
-scenario, CWE, the symbol, and the verdict that settled it where one exists. Grouping is
-by `(origin, round)`, which is exactly how a `tier_run` is identified, so it is a join
-rather than a guess; it was checked against the live database first, where every finding
-matches. **A finding that matches nothing is shown as an orphan rather than dropped** —
-the grouping is a presentation choice, and a presentation choice must never decide what
-exists.
+finding. A finding opens to severity, file, line, symbol, CWE, and the verdict that
+settled it where one exists — never to claim, evidence or failure scenario (D-96,
+revised 2026-08-28: those travelled here once, and `service/http.ts`'s own route
+comment never agreed that they should). Grouping is by `(origin, round)`, which is
+exactly how a `tier_run` is identified, so it is a join rather than a guess; it was
+checked against the live database first, where every finding matches. **A finding
+that matches nothing is shown as an orphan rather than dropped** — the grouping is a
+presentation choice, and a presentation choice must never decide what exists.
 
 Two distinctions the list would otherwise lose:
 
@@ -264,16 +265,14 @@ Two distinctions the list would otherwise lose:
 - **a tier that ran and raised nothing says "raised nothing"**, rather than showing an
   empty space that a tier whose findings are missing would also show (INV-1).
 
-Full text is in the snapshot, not fetched on expansion — measured at 240/351/341
-characters for claim/evidence/scenario and 7 KB for a whole active board, so a second
-route could only add a way to fail while somebody is reading. Forty findings per review,
-with the remainder **counted and stated**.
+Forty findings per review, with the remainder **counted and stated**.
 
 **Unauthenticated, on the MCP interface, on Vany's explicit call** knowing `LORE_BIND` is
-`0.0.0.0`, and **so is the finding text** — asked for directly after the first version
-shipped without it. That is a real widening: a claim names a defect in somebody's unmerged
-branch, and it is now readable by anything that can reach the port. `/status` already
-published the branch names; this publishes what is wrong inside them.
+`0.0.0.0`. `/status` already published the same branch names and counts to the same
+audience, so this widens who can see THOSE comfortably rather than who can see anything at
+all. **Finding TEXT is not part of that widening** — a claim names a defect in somebody's
+unmerged branch, and that is theirs to hand out, not this board's to publish. What a client
+with a bearer token can still read in full: `review_poll`, or `lore://review/<id>`.
 
 ### 2.5 Disk is not lore's to alert on — none of it
 

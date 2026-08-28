@@ -482,6 +482,31 @@ describe("the operator board", () => {
     expect(unread(f), "per-finding fields the page never mentions").toStrictEqual([]);
   });
 
+  // lore-ok[240a9efa]: found by lore's own review. The route comment two screens up
+  // claims the unauthenticated board "deliberately does NOT carry finding TEXT" —
+  // this repository's OWN development rule is that a claim about behaviour must be
+  // checked mechanically where one is possible, so this pins it: /board.json, which
+  // answers with no token, must never carry the fields that would make that claim
+  // false, however the store itself records them.
+  it("never carries finding text on the unauthenticated board", async () => {
+    review("revBoardText", "running", "feat/board-text");
+    const run = store.openTierRun("revBoardText", "t1", 1, new Date().toISOString());
+    store.closeTierRun(run, "findings", []);
+    store.recordFinding("revBoardText", {
+      fingerprint: "bf2", file: "secret.ts", line: 3, symbol: "s", severity: "high",
+      claim: "a defect nobody but the branch owner should read",
+      evidence: "the proof that would leak", failureScenario: "the scenario that would leak",
+      cwe: "CWE-89", origin: "t1", round: 1, firstSeen: new Date().toISOString(),
+    });
+
+    const text = await (await fetch(`${base}/board.json`)).text();
+
+    expect(text, "the finding must actually be in the response to make this check meaningful").toContain("bf2");
+    expect(text).not.toContain("a defect nobody but the branch owner should read");
+    expect(text).not.toContain("the proof that would leak");
+    expect(text).not.toContain("the scenario that would leak");
+  });
+
   /**
    * The branch links to the pull request, which is the whole reason to ask for it: a
    * branch name is not clickable and does not say which forge it lives on.

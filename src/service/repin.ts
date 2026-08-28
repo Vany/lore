@@ -109,9 +109,16 @@ export async function repinReview(
   // there was none, so a submit landing during this wait applies straight to the
   // worktree we are about to destroy and enqueues a round that will never read what it
   // wrote. `removeWorktree` below is the one irreversible step; this is the last
-  // possible moment to refuse instead of silently discarding that diff. The residual
-  // window between this check and the fs-level remove is synchronous and the same kind
-  // of gap `review_submit`'s own double hold-check already accepts as good enough.
+  // possible moment to refuse instead of silently discarding that diff.
+  //
+  // lore-ok[e9224678]: "the residual window ... is synchronous" USED TO END this
+  // comment, and it was false — found by lore's own review. `originTree` a few lines
+  // down spawns a real `git rev-parse`, an await wide enough for the exact
+  // `review_submit` race this check exists to close: applyPatch, `state: "queued"`,
+  // `deps.enqueue` (server.ts) — all of it fits inside one subprocess round trip. A
+  // second `hasPendingRound` check now sits right before `removeWorktree`, after
+  // that await closes rather than only before it opens, so the SAME question is
+  // asked again at the actual last moment rather than merely near it.
   if (store.hasPendingRound(reviewId)) {
     throw new Error(
       `a round started for ${reviewId} while lore was syncing with origin — nothing was re-pinned. Poll it, ` +
@@ -139,6 +146,18 @@ export async function repinReview(
       treeHash: expectTree,
       synced: refreshed.fetched,
     };
+  }
+  // lore-ok[e9224678]: the check named above, asked again. `originTree` just above is
+  // the async gap this closes — a `review_submit` that lands inside it is already
+  // acknowledged "applied" to the caller by the time we get here, and `removeWorktree`
+  // next would destroy that acknowledgment silently. Not needed on the early-return
+  // branch above: nothing is destroyed there, so a round landing during `originTree`
+  // costs that round a requeue at worst, not a client's already-applied diff.
+  if (store.hasPendingRound(reviewId)) {
+    throw new Error(
+      `a round started for ${reviewId} while lore was checking origin — nothing was re-pinned. Poll it, ` +
+        `and call pull_fresh again once it parks.`,
+    );
   }
   await removeWorktree(paths, reviewId);
   const worktree = await worktreeFor(paths, reviewId, at.branch, at.gitUrl);

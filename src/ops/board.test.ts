@@ -263,16 +263,24 @@ describe("findings under the step that raised them", () => {
     expect(tiers[0]?.tier).toBe("t1");
   });
 
-  it("carries the whole finding, because the point is to read it here", () => {
+  // lore-ok[240a9efa]: was "carries the whole finding, because the point is to read
+  // it here" — found by lore's own review, against http.ts's own route comment,
+  // which already claimed (falsely, until this fix) that the unauthenticated board
+  // does not carry finding text. This board answers /board.json and /board/events
+  // with no token to anyone on the tailnet, so claim/evidence/failureScenario no
+  // longer travel here — what is kept is enough to say a tier is unhappy and where,
+  // not what it is unhappy about.
+  it("carries enough to place a finding, not what it claims", () => {
     review("r1", "findings_ready");
     const a = store.openTierRun("r1", "t1", 1, ago(600_000));
     store.closeTierRun(a, "findings", []);
     raise("r1", "f1", "t1", 1, "high");
 
     const f = find("r1")?.tiers[0]?.findings[0];
-    expect(f?.claim).toBe("claim f1");
-    expect(f?.evidence).toBe("the proof");
-    expect(f?.failureScenario).toBe("given x, y happens");
+    expect(f, "the finding must still be found at all").toBeDefined();
+    expect(f && "claim" in f, "the text this fix removes").toBe(false);
+    expect(f && "evidence" in f, "the text this fix removes").toBe(false);
+    expect(f && "failureScenario" in f, "the text this fix removes").toBe(false);
     expect(f?.severity).toBe("high");
     expect(f?.file).toBe("src/a.ts");
     expect(f?.line).toBe(12);

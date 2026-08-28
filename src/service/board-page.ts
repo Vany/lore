@@ -94,8 +94,8 @@ export const BOARD_PAGE = `<!doctype html>
   .f > summary:hover { background: #151b23; }
   .f[open] { border-left-color: var(--dim); }
   .f .where { color: var(--fg); white-space: nowrap; }
-  .f .claim { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dim); }
-  .f[open] .claim { white-space: normal; color: var(--fg); }
+  .f .meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dim); }
+  .f[open] .meta { white-space: normal; color: var(--fg); }
   .fbody { padding: 4px 0 8px 26px; max-width: 110ch; }
   .fbody .label { color: var(--dim); }
   .fbody p { margin: 3px 0; white-space: pre-wrap; }
@@ -558,7 +558,15 @@ function run(r, t) {
 }
 
 /**
- * One finding: a line collapsed, everything the tier said when opened.
+ * One finding: severity, where, and enough to say a tier is unhappy — not what it
+ * actually said.
+ *
+ * lore-ok[240a9efa]: claim/evidence/failureScenario removed — found by lore's own
+ * review. This board answers with no token to anyone on the tailnet; a defect's full
+ * description in someone else's unmerged branch is theirs to hand out, not this
+ * page's to publish. Fingerprint/symbol/cwe took the claim's old spot in the
+ * summary line, so a collapsed row still says WHAT KIND of finding this is, just not
+ * what it claims.
  *
  * The id is review + fingerprint, so the open-set restores it across a push exactly as it
  * does for a review — reading a finding while the board updates must not close it.
@@ -573,21 +581,20 @@ function finding(r, f) {
   const tags =
     (f.settled ? '<span class="settled">' + esc(f.settled) + "</span> " : "") +
     (f.preexisting ? '<span class="pre">pre-existing</span> ' : "");
+  const meta = esc(f.fingerprint.slice(0, 8)) +
+    (f.symbol ? " · " + esc(f.symbol) : "") +
+    (f.cwe ? " · " + esc(f.cwe) : "");
   return '<details class="f" data-id="' + esc(r.id + ":" + f.fingerprint) + '">' +
     "<summary>" +
       '<span class="sev-' + esc(f.severity) + '">●</span>' +
       '<span class="sev-' + esc(f.severity) + '">' + esc(f.severity) + "</span>" +
       '<span class="where">' + where + "</span>" +
       tags +
-      '<span class="claim">' + esc(f.claim) + "</span>" +
+      '<span class="meta">' + meta + "</span>" +
     "</summary>" +
     '<div class="fbody">' +
-      '<p><span class="label">evidence </span>' + esc(f.evidence) + "</p>" +
-      '<p><span class="label">fails when </span>' + esc(f.failureScenario) + "</p>" +
       (f.settledBecause ? '<p><span class="label">settled </span>' + esc(f.settledBecause) + "</p>" : "") +
-      '<p class="dim">' + esc(f.fingerprint.slice(0, 8)) +
-        (f.symbol ? " · " + esc(f.symbol) : "") +
-        (f.cwe ? " · " + esc(f.cwe) : "") +
+      '<p class="dim">what this claims is not shown on this unauthenticated board — read the review itself for the full finding' +
         (f.preexisting ? " · the branch did not touch this file" : "") +
       "</p>" +
     "</div>" +

@@ -7,11 +7,33 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { initialState } from "../core/ladder.ts";
 import { worktreeFor, repoPaths, treeHash } from "../git/repo.ts";
 import { Store } from "../store/store.ts";
 import { repinReview } from "./repin.ts";
+
+// lore-ok[e9224678]: `originTree` (repin.ts, unexported) is the async gap this file's
+// own second race test needs to land INSIDE — a real git subprocess, too fast to race
+// honestly with a real sleep. `gitMaybe` is wrapped rather than the whole module: every
+// OTHER call this codebase routes through it (worktreeFor and removeWorktree both use
+// it internally) must behave exactly as before, so the hook only fires for the one
+// argument shape `originTree` actually calls with.
+const race = vi.hoisted(() => ({ fn: undefined as (() => void) | undefined }));
+vi.mock("../git/exec.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../git/exec.ts")>();
+  return {
+    ...actual,
+    gitMaybe: async (cwd: string, args: readonly string[]) => {
+      if (race.fn !== undefined && args[3] === "origin/main^{tree}") {
+        const fn = race.fn;
+        race.fn = undefined;
+        fn();
+      }
+      return actual.gitMaybe(cwd, args);
+    },
+  };
+});
 
 let root: string;
 let store: Store;
@@ -137,5 +159,41 @@ describe("repinReview", () => {
     // of catching it before `removeWorktree`, not after.
     expect(existsSync(cut)).toBe(true);
     expect(readFileSync(join(cut, "a.txt"), "utf8")).toBe("submitted mid-sync\n");
+  });
+
+  // lore-ok[e9224678]: the gap one level deeper — found by lore's own review. The
+  // test above pins the FIRST hasPendingRound check, covering the sync's own wait;
+  // this pins the SECOND, covering `originTree`'s own await (a real `git rev-parse`)
+  // between that check and `removeWorktree`. The comment above the first check used
+  // to call this window synchronous — it never was.
+  it("refuses to destroy the worktree if a round became pending while checking origin", async () => {
+    const reposRoot = join(root, "repos");
+    const paths = repoPaths(reposRoot, repoId);
+    const src = join(root, "src");
+    const cut = await worktreeFor(paths, "rev1", "main", src);
+    const pinnedAt = await treeHash(cut);
+    // The diff a `review_submit` landing during originTree's own subprocess call
+    // would have applied — stands in for the write repin must not clobber.
+    writeFileSync(join(cut, "a.txt"), "submitted mid-origin-check\n");
+
+    // Origin moves, so repinReview takes the destructive recut path (the branch the
+    // second check actually guards) rather than the "nothing changed" early return.
+    writeFileSync(join(src, "a.txt"), "origin moved\n");
+    g(src, "add", "-A");
+    g(src, "commit", "-qm", "origin moved");
+    g(paths.bare, "fetch", "-q", "origin", "+refs/heads/*:refs/remotes/origin/*");
+    writeFileSync(join(paths.bare, "FETCH_HEAD"), "");
+
+    // Fires exactly once, the instant originTree's own git call is reached — the
+    // real window a review_submit landing there would occupy, made deterministic
+    // instead of raced with a sleep.
+    race.fn = () => store.enqueue("rev1", "fast");
+
+    await expect(repinReview(store, reposRoot, reposRoot, "rev1", pinnedAt)).rejects.toThrow(
+      /a round started for rev1/,
+    );
+    // The worktree from before the refused repin is untouched.
+    expect(existsSync(cut)).toBe(true);
+    expect(readFileSync(join(cut, "a.txt"), "utf8")).toBe("submitted mid-origin-check\n");
   });
 });

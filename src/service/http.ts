@@ -171,6 +171,13 @@ async function handle(
   // this widens who can see it comfortably rather than who can see it at all. What it
   // deliberately does NOT carry is finding TEXT: a claim names a defect in somebody's
   // unmerged branch, and that is theirs to hand out, not ours to publish.
+  //
+  // lore-ok[240a9efa]: was FALSE when this said it — found by lore's own review.
+  // `BoardFinding` carried claim/evidence/failureScenario in full until this fix, so
+  // this paragraph described the intent rather than the code. Fixed at the source
+  // instead of here: `ops/board.ts`'s `BoardFinding`/`withFindings` no longer put
+  // those three fields on the wire at all, and `board-page.ts`'s `finding()` no
+  // longer renders them — so the claim this comment makes is now what the code does.
   if (url.pathname === "/" || url.pathname === "/board") {
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
     res.end(BOARD_PAGE);

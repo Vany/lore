@@ -4340,7 +4340,7 @@ the scheduler did, and `last_error` is where a reader learns the round never ran
 `running` job is left alone — it belongs to the worker aborting it, which is the code that
 reports what the abort cost.
 
-**D-96 — a board at `/`, because "what is running?" was being answered with SQL.**
+**D-96, revised 2026-08-28 — a board at `/`, because "what is running?" was being answered with SQL.**
 
 Vany asked *"what is running right now?"* four times in one week. Every time the answer
 needed a shell into the container and three queries, and twice the thing I found that way
@@ -4381,9 +4381,9 @@ only, checked at the boundary and again before rendering: this is an `href` on a
 needs no credential, so `javascript:` there would be a script chosen by whoever started
 the review, running in the operator's browser.
 
-**Findings hang under the tier attempt that raised them**, collapsed, and open to their
-full text — claim, evidence, failure scenario, CWE, and the verdict that settled them if
-one did. The nesting is what makes "which tier said this" need no label. It is a join and
+**Findings hang under the tier attempt that raised them**, collapsed, and open to
+severity, file, line, symbol, CWE, and the verdict that settled them if one did —
+never to claim, evidence or failure scenario (revised below). The nesting is what makes "which tier said this" need no label. It is a join and
 not a heuristic: `finding.origin` is the tier id and `finding.round` the round, exactly
 the pair a `tier_run` is identified by, verified against the live database as matching
 every finding it holds. Anything that fails to match is still shown, as an orphan — where
@@ -4393,14 +4393,24 @@ A settled finding says so and is not counted as work, because a board where answ
 reads as outstanding work is one whose reader learns to discount it.
 
 Unauthenticated on the MCP interface, **Vany's call**, made knowing `LORE_BIND` is
-`0.0.0.0`. **So is showing finding text**, asked for directly after the first version
-shipped without it — which means a claim describing a defect in somebody's unmerged branch
-is readable by anything that can reach the port. `/status` already exposed the branch
-names; this goes further, deliberately.
+`0.0.0.0`. `/status` already exposed the same branch names and counts to the same
+audience, so this widens who can see THOSE comfortably rather than who can see
+anything at all.
 
-Full text travels in the snapshot rather than being fetched on expansion. Measured first:
-240 characters of claim, 351 of evidence, 341 of scenario on average, and a whole active
-board at 7 KB — so the extra route could only add a way to fail while somebody is reading.
+**REVISED 2026-08-28 — finding TEXT is not part of that widening.** A version
+shipped that also put claim, evidence and failure scenario into the same
+unauthenticated snapshot — reasoned about at the time as a further deliberate
+widening — and `service/http.ts`'s own route comment never agreed: it kept saying
+the board "deliberately does NOT carry finding TEXT... theirs to hand out, not ours
+to publish" while the code did exactly that, until lore's own review of this module
+caught the two disagreeing. The comment was right about what should be true. A
+claim describing a defect in somebody's unmerged branch is theirs to hand out, and
+the tailnet is wider than the people entitled to read it. What stays unauthenticated:
+severity, file, line, symbol, CWE, fingerprint, the verdict that settled it — enough
+to say a tier is unhappy and where. What moved behind the same bearer token every
+other finding-bearing route already needs: what it is unhappy about, read back
+through `review_poll` or `lore://review/<id>`.
+
 Capped at forty findings per review with the remainder **counted and stated**, because a
 list that silently stops at forty reads as a complete list of forty.
 

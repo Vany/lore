@@ -25,7 +25,7 @@ import { bootstrap } from "../knowledge/bootstrap.ts";
 import type { Store } from "../store/store.ts";
 import { Alerter, CONDITIONS } from "../ops/alerts.ts";
 import { Reviewer, type ReviewerLike } from "../reviewer/opencode.ts";
-import { CancelledByLore, ServiceUnreachable } from "../core/errors.ts";
+import { CancelledByLore, DidNotRun, ServiceUnreachable } from "../core/errors.ts";
 import { consumeHeldDiffs, runRound } from "../reviewer/review.ts";
 export interface WorkerConfig {
   readonly reposRoot: string;
@@ -375,7 +375,18 @@ export class Worker {
     // lived in two, they disagreed and the disagreement was reachable.
     const worktree = await worktreeFor(paths, reviewId, review.branch, gitUrl ?? "");
 
-    this.store.updateReview(reviewId, { state: "running" });
+    // lore-ok[1b056160]: was unconditional `updateReview(reviewId, { state:
+    // "running" })` — found by lore's own review. `worktreeFor` above is a real git
+    // operation with nothing holding the review row for the whole time it runs; a
+    // `review_cancel` landing in that window wrote `cancelled`, and this write then
+    // overwrote it back to `running` one write BEFORE `runRound`'s own TOCTOU check
+    // ever got to read it — so that check saw the state THIS write produced and
+    // found nothing wrong. `startRunning` is atomic and refuses to write over a
+    // state that already ended the review; a lost race here means stopping now,
+    // the same way `runRound`'s own check stops, just one call site earlier.
+    if (!this.store.startRunning(reviewId)) {
+      throw new DidNotRun(`review ${reviewId} ended while its worktree was being prepared — no further rounds. Nothing was spent on this one.`);
+    }
 
     // Bootstrap on first mirror, not at provisioning (D-35).
     //

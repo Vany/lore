@@ -143,9 +143,6 @@ const snapshot = (over: Record<string, unknown> = {}) => ({
               file: "a.ts",
               line: 4,
               symbol: "f",
-              claim: "c",
-              evidence: "e",
-              failureScenario: "s",
               cwe: "CWE-89",
               preexisting: false,
               settled: undefined,
@@ -181,6 +178,25 @@ describe("the board's own script runs", () => {
     render(snapshot());
     render(snapshot({ spendTodayUsd: 4 }));
     expect(() => render(snapshot({ spendTodayUsd: 9 }))).not.toThrow();
+  });
+
+  // lore-ok[240a9efa]: found by lore's own review, against http.ts's own route
+  // comment, which already claimed (falsely, until this fix) that the
+  // unauthenticated board does not carry finding text. claim/evidence/
+  // failureScenario no longer reach the page at all (ops/board.ts's own fix) —
+  // this pins that the render still shows enough to place a finding
+  // (fingerprint/symbol/cwe, promoted into the summary's old claim slot) and
+  // says plainly, rather than silently, that the text itself is withheld.
+  it("shows enough to place a finding, never what it claims", () => {
+    const { render, byId } = loadPage();
+    render(snapshot());
+
+    const html = String(byId.get("board")?.innerHTML ?? "");
+    expect(html, "the finding row must exist to make the checks below meaningful").toContain("abcd1234");
+    expect(html, "fingerprint/symbol/cwe took the claim's old spot in the summary").toContain("abcd1234 · f · CWE-89");
+    expect(html, "the board says plainly that it withholds the text").toContain(
+      "what this claims is not shown on this unauthenticated board",
+    );
   });
 
   // Fingerprint d767498a, found by lore's own review of the OOM-kill fix: this

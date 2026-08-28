@@ -30,10 +30,16 @@ type Row = Record<string, string | number | null>;
 /**
  * A finding, under the tier attempt that raised it.
  *
- * The full text travels. Measured on this deployment before deciding: 240 characters of
- * claim, 351 of evidence and 341 of scenario on average, and every review on an active
- * board together came to 20 KB — small enough that fetching detail on expansion would buy
- * nothing and cost a route that can fail while a person is reading.
+ * lore-ok[240a9efa]: claim/evidence/failureScenario used to travel here too — found
+ * by lore's own review, against http.ts's own route comment, which already claimed
+ * (falsely, until this fix) that the unauthenticated board "deliberately does NOT
+ * carry finding TEXT... theirs to hand out, not ours to publish". `/board.json` and
+ * `/board/events` answer to anyone on the tailnet with no token, so a defect's full
+ * description in someone else's unmerged branch was one `curl` away from any machine
+ * on it. What is kept — severity, file, line, symbol, cwe, fingerprint — is enough to
+ * say a tier is unhappy and where; what it is actually unhappy ABOUT now lives behind
+ * the same bearer token every other finding-bearing route already requires
+ * (`review_poll`, `lore://review/<id>`).
  */
 export interface BoardFinding {
   readonly fingerprint: string;
@@ -41,9 +47,6 @@ export interface BoardFinding {
   readonly file: string;
   readonly line: number | undefined;
   readonly symbol: string | undefined;
-  readonly claim: string;
-  readonly evidence: string;
-  readonly failureScenario: string;
   readonly cwe: string | undefined;
   /**
    * The branch did not cause this one (D-68) — a pattern engine matched code that was
@@ -442,9 +445,6 @@ function withFindings(
       file: f.file,
       line: f.line,
       symbol: f.symbol,
-      claim: f.claim,
-      evidence: f.evidence,
-      failureScenario: f.failureScenario,
       cwe: f.cwe,
       preexisting: f.preexisting === true,
       ...(settled === undefined ? {} : { settled: settled.verdict, settledBecause: settled.rationale }),

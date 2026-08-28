@@ -691,6 +691,39 @@ export class Store {
   }
 
   /**
+   * Move a review into `running`, but never over a state that already ended it.
+   *
+   * lore-ok[1b056160]: NEW — found by lore's own review. `runJob` used to call plain
+   * `updateReview(id, { state: "running" })` after `worktreeFor` (a real git worktree
+   * add, seconds long) with nothing holding the review row for that whole window. A
+   * `review_cancel` landing there wrote `cancelled`, and `runJob`'s own write then
+   * overwrote it back to `running` — erasing the cancel one write BEFORE
+   * `runRound`'s own TOCTOU check (`review.ts`, "closed at the last moment before
+   * anything is spent") ever got to read it, so that check saw the state this write
+   * produced and found nothing wrong. A read-then-write here would only move the
+   * race, not close it; this is atomic, the same `UPDATE ... WHERE` shape `claimJob`
+   * already uses for its own terminal check.
+   *
+   * Returns whether the write actually happened, so the caller can stop rather than
+   * spend on a review it just lost the race for.
+   */
+  startRunning(id: string): boolean {
+    if (this.refusedByClose(`starting ${id}`)) return false;
+    // Read first, PURELY for the wake decision below — `updateReview`'s own reasoning
+    // (a round boundary writing `running` over `running` must not wake a subscriber
+    // twice a tier for nothing to report). Safety does not depend on this read: the
+    // WHERE clause below is what makes the write itself race-free.
+    const before = this.db.prepare("SELECT state FROM review WHERE id = ?").get(id) as
+      | Record<string, string>
+      | undefined;
+    const res = this.db
+      .prepare(`UPDATE review SET state = 'running', updated_at = ? WHERE id = ? AND state NOT IN (${TERMINAL_SQL})`)
+      .run(now(), id);
+    if (res.changes > 0 && before?.["state"] !== "running") this.events.changed(id);
+    return res.changes > 0;
+  }
+
+  /**
    * Expire every review that has not moved since `cutoff`, and wake whoever waited.
    *
    * The SQL used to live in `ops/retention.ts` and wrote `state` directly, which made
