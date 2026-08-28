@@ -313,6 +313,8 @@ folder-mode call opens differently, naming `path` instead of `into`, per
 > 4. `review_submit(review_id, diff | commit, tree_hash)` — any time once findings
 >    exist, in ANY state including `fast_clean`. A submit while a reviewer is
 >    mid-read is HELD, not refused, and handed to it at its next emission.
+>    Exception: a `commit` is REFUSED, not held, while an unconsumed `diff` hold
+>    is outstanding — send `diff` instead, or wait for that hold to clear.
 > 5. Return to 2. Repeat until the state is TERMINAL — `passed`, `passed_partial`,
 >    `needs_human`, `failed`, `expired` or `cancelled`. Only `passed` and
 >    `passed_partial` are worth attesting, and only `passed` is clean.
