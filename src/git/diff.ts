@@ -595,16 +595,17 @@ export function filesInDiff(diff: string): readonly string[] {
 }
 
 /**
- * Every file a diff MENTIONS, including one it deletes — unlike `filesInDiff`, which
- * excludes a deletion by design (no marker left to scan in a file that no longer
- * exists, correct for every existing caller). Found by lore's own review, fingerprint
- * 23c8b393: `review_submit`'s `fixed_elsewhere` reused `filesInDiff` to check a claim's
- * `file` was part of the submission, and a claim naming a file the fix DELETED — often
- * the strongest evidence there is, "I removed the whole buggy module" — was refused as
- * "not part of this submission". A separate function rather than a flag on
- * `filesInDiff`: the two callers want genuinely different things (files worth reading
- * for a marker vs. files this diff is evidence about), not one behaviour with an
- * exception.
+ * Every file a diff MENTIONS, including one it deletes or renames — unlike
+ * `filesInDiff`, which excludes both by design (no marker left to scan in a file
+ * that no longer exists at that name, correct for every existing caller). Found by
+ * lore's own review, fingerprint 23c8b393 (deletion) then 10617a99 (pure rename,
+ * the same class one git format rarer): `review_submit`'s `fixed_elsewhere` reused
+ * `filesInDiff` to check a claim's `file` was part of the submission, and a claim
+ * naming a file the fix DELETED or RENAMED — often the strongest evidence there is
+ * — was refused as "not part of this submission". A separate function rather than
+ * a flag on `filesInDiff`: the two callers want genuinely different things (files
+ * worth reading for a marker vs. files this diff is evidence about), not one
+ * behaviour with an exception.
  */
 export function filesTouchedByDiff(diff: string): readonly string[] {
   const out = new Set<string>();
@@ -615,6 +616,16 @@ export function filesTouchedByDiff(diff: string): readonly string[] {
   for (const m of diff.matchAll(/^--- (.+)$/gm)) {
     const path = unquoteGitPath((m[1] ?? "").trim());
     if (path.startsWith("a/") && path.length > 2) out.add(path.slice(2));
+  }
+  // A PURE RENAME (100% similarity, no content change) emits neither +++ nor --- —
+  // there is no hunk, so nothing above ever sees it — only `rename from <path>` /
+  // `rename to <path>`, each on its own line, no a/ b/ prefix to strip. Found by
+  // lore's own review, fingerprint 10617a99: the same defect class as the deletion
+  // case above, one git format rarer — naming EITHER side of a pure rename was
+  // refused as "not part of this submission" even though the rename IS the
+  // submission (`git mv`, no content change, e.g. moving a misplaced module).
+  for (const m of diff.matchAll(/^rename (?:from|to) (.+)$/gm)) {
+    out.add(unquoteGitPath((m[1] ?? "").trim()));
   }
   return [...out];
 }

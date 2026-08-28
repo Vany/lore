@@ -788,10 +788,11 @@ is applied or held, for either form:
   escape as a generic error.
 - `file` must be part of **this submission's own** diff or commit
   (`filesTouchedByDiff`, which — unlike `filesInDiff` — also counts a file the
-  diff DELETES: removing the whole buggy file is often the strongest evidence a
-  claim can offer); otherwise the whole call is refused. Silence over a file the
-  tier was never shown is not evidence of anything — a `fixed_elsewhere` claim
-  needs the same kind of evidence an ordinary `lore-ok` carries inline as prose.
+  diff DELETES or RENAMES with no content change: removing the whole buggy file,
+  or moving a misplaced one, is often the strongest evidence a claim can offer);
+  otherwise the whole call is refused. Silence over a file the tier was never
+  shown is not evidence of anything — a `fixed_elsewhere` claim needs the same
+  kind of evidence an ordinary `lore-ok` carries inline as prose.
 - A fingerprint that resolves but names a finding already settled by an earlier
   round is not an error: it is silently skipped and named in the reply's
   `fixed_elsewhere_skipped`, since the claim simply arrived after it stopped

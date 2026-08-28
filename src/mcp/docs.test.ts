@@ -156,6 +156,23 @@ describe("a passed review closes the review, not the client's task", () => {
   });
 });
 
+// Found by lore's own review, fingerprint 39cf990a: the will_not_settle reply text
+// was fixed to mention fixed_elsewhere (fingerprint 20f24c95), but the two documents that
+// actually drive a client's loop step by step — the ones a prompt-driven client
+// learns the whole thing FROM — still taught only the lore-ok comment. A client
+// that never reaches the will_not_settle nag (because it always says so up front)
+// never sees the fix either.
+describe("the loop's own step 3 teaches fixed_elsewhere, not only lore-ok", () => {
+  const loops: readonly [string, string][] = [
+    ["RESOURCE_DOCS[lore://docs/workflow]", RESOURCE_DOCS["lore://docs/workflow"]?.text ?? ""],
+    ["REVIEW_PROMPT_TEXT", REVIEW_PROMPT_TEXT({ branch: "b", into: "i" }, "t")],
+  ];
+
+  it.each(loops)("%s mentions fixed_elsewhere", (_name, text) => {
+    expect(text).toMatch(/fixed_elsewhere/);
+  });
+});
+
 describe("the docs name tools that exist", () => {
   it.each(ALL_DOCS)("%s uses no dotted tool name", (_name, text) => {
     // `review.poll` is what SPEC calls it in prose and is not callable. Matching the

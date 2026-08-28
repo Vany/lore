@@ -864,7 +864,8 @@ export const RESOURCE_DOCS: Readonly<Record<string, { title: string; priority: n
    wait; AT the cap it stays put for several calls and the note says so.
    Each poll returns only what is NEW. A tight retry loop is the most expensive thing
    you can do here: every attempt is a turn that learns nothing.
-3. For each finding: fix it, or justify it with // lore-ok[fp]: <reason>
+3. For each finding: fix it, or justify it — \`fixed_elsewhere\` on your next submit if
+   the fix landed elsewhere, or \`// lore-ok[fp]: <reason>\` at the named line otherwise.
 4. review_submit(review_id, diff | commit, tree_hash) — any time once findings exist, in ANY
    state including fast_clean. If reviewers are mid-read your diff is HELD and handed
    to each of them at its own next emission; you never wait for a state and never
@@ -1050,7 +1051,8 @@ The loop:
    wait; AT the cap it stays put for several calls and the note says so.
    Each poll returns only what is NEW. A tight retry loop is the most expensive thing
    you can do here: every attempt is a turn that learns nothing.
-3. For each finding: fix it, or justify it with // lore-ok[fp]: <reason>
+3. For each finding: fix it, or justify it — \`fixed_elsewhere\` on your next submit if
+   the fix landed elsewhere, or \`// lore-ok[fp]: <reason>\` at the named line otherwise.
 4. review_submit(review_id, diff | commit, tree_hash) — any time once findings exist, in ANY
    state including fast_clean. If reviewers are mid-read your diff is HELD and handed
    to each of them at its own next emission; you never wait for a state and never

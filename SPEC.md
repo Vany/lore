@@ -1218,6 +1218,27 @@ it.**
   never read location, only the prompt does, and it already renders `reason`
   verbatim.
 
+**Two more, next round: the deletion fix repeated for a rename, and the two
+documents that actually drive a client's loop never caught up.**
+
+- **`filesTouchedByDiff` still missed a PURE rename — fingerprint 10617a99.** A
+  100%-similarity rename (`git mv` with no content change) emits neither `+++`
+  nor `---` at all — no hunk to show — only `rename from <path>` / `rename to
+  <path>` lines, which nothing in the function read. The same defect class as
+  23c8b393, one git format rarer: naming either side of a rename-only fix (moving
+  a misplaced module) was refused. Fixed by also matching `^rename (?:from|to)
+  (.+)$`.
+- **The two documents that actually drive the client loop step by step never
+  learned the field at all — fingerprint 39cf990a.** `will_not_settle_note` was
+  fixed (20f24c95, above) to mention `fixed_elsewhere`, but `RESOURCE_DOCS["lore
+  ://docs/workflow"]` and `REVIEW_PROMPT_TEXT` — the texts a prompt-driven client
+  actually learns the loop FROM, both named in CLAUDE.md's texts-move-with-the-
+  behaviour rule — still taught step 3 as "fix it, or justify it with `//
+  lore-ok[fp]: <reason>`" with no mention of the field. A client that never hits
+  the nag (because its own step 3 already told it what to do) never learns the
+  field exists. Fixed in both; a new mechanical pin (`docs.test.ts`) checks both
+  documents mention `fixed_elsewhere`.
+
 **D-128 — a finding that names its fields "title"/"detail" is a naming drift, not a
 malformed reply: repaired at the boundary rather than gambled on a retry. BUILT
 2026-08-20.**

@@ -332,6 +332,34 @@ describe("review_submit fixed_elsewhere (D-133)", () => {
     ]);
   });
 
+  // Regression for fingerprint 10617a99: the same defect class as 23c8b393, one git
+  // format rarer. A PURE rename (100% similarity, no content change) emits neither
+  // +++ nor --- at all — no hunk to show — only `rename from`/`rename to` lines, so
+  // naming either side of a rename-only fix was refused too.
+  it("accepts a fixed_elsewhere claim naming a file the fix renamed with no content change", async () => {
+    writeFileSync(join(worktree, "f.txt"), "b\n");
+    g("mv", "other.ts", "moved.ts");
+    const after = treeNow();
+    g("reset", "--hard", "HEAD");
+    g("clean", "-fd");
+
+    const renameDiff =
+      "diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-a\n+b\n" +
+      "diff --git a/other.ts b/moved.ts\nsimilarity index 100%\nrename from other.ts\nrename to moved.ts\n";
+
+    const { body, isError } = await callTool("review_submit", {
+      review_id: "revFix",
+      diff: renameDiff,
+      tree_hash: after,
+      fixed_elsewhere: [{ fingerprint: FP, file: "moved.ts", reason: "moved to the right module" }],
+    });
+
+    expect(isError, JSON.stringify(body)).toBe(false);
+    expect(store.fixedElsewhereFor("revFix")).toStrictEqual([
+      { fingerprint: FP, file: "moved.ts", line: undefined, reason: "moved to the right module" },
+    ]);
+  });
+
   // Regression for fingerprint 20f24c95: will_not_settle_note — the text shown at
   // exactly the moment a client learns its fix-elsewhere did not settle — named only
   // the lore-ok comment and never mentioned fixed_elsewhere, the field this whole
