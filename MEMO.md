@@ -3,8 +3,88 @@
 Newest first. Updated at the end of each task: what changed, what I learned, what
 surprised me.
 
-## 2026-08-28 — src/store folder review: five rounds, a fix that reopened its own
-justification, and a review that went terminal before I could tell it
+## 2026-08-28 — src/store follow-up: a clean review, and two infrastructure bugs in
+lore's own submission path that had nothing to do with the code under review
+
+**What changed.** `rev_QQFYaL7bJKgGrOJG3xilFzSh`, `passed_partial`, attested at
+`b397fa5ee13e2e41944ad7b570ccdce4a86d8490` — 6 findings, 6 fixed, 0 justified —
+merged at `e22f7c7` (two commits: `042d830`, `e22f7c7`) on top of the prior cycle's
+`74d49dd`. Opened specifically to get an independent tier read on whether `3d90d9a0`
+and `54d77a41` — reopened by the prior review's own staleness sweep after it had
+already gone `passed_partial` and could take no more submissions — were genuinely
+resolved by the code already on `main`. **Confirmed: neither was re-raised.** The
+fresh review instead found four real, previously-unseen defects: a D-23 doc comment
+correctly describing `getReview`'s ownership check sitting above `openReviewFor`
+(deliberately repo-scoped, no principal) instead — repeated at three more sites,
+each an orphaned doc left behind by an earlier edit with the RIGHT doc already
+sitting right below it; two sibling `describe("repo", ...)` blocks in
+`store.test.ts`; `latenciesFor` blocklisting only the literal string `'failed'`
+instead of allowlisting success like its own neighbor `largestCompletedDiff`
+already does; and `recordTierRun` surviving as a public `Store` method with zero
+production callers (moved into `attest.test.ts` as a local fixture instead, next to
+that file's existing `review`/`folderReview` helpers); plus `hasOpenJob` and
+`hasPendingRound` running the byte-identical query under two names, merged into
+one. All fixed in one round, verified against real code before touching anything —
+`latenciesFor`'s own fix needed `ops/pace.test.ts`'s fixture default corrected too
+(`"clean"` was never a real `usage.outcome` value; only `"failed"`/`"ok"`/
+`"ok-after-retry"` are, for a review-ladder tier).
+
+**Getting the SECOND round submitted took longer than fixing the code, and taught
+two lessons worth remembering.**
+
+1. **`commit`-form submission cannot currently work for a scratch `review/<sha>`
+   ref, structurally, not transiently.** `mirror-refresh.sh` clones each repo with
+   `git clone --bare` then sets `remote.origin.fetch` to
+   `+refs/heads/*:refs/remotes/origin/*` explicitly (its own comment: "clone --bare
+   populates refs/heads/* and NOT refs/remotes/origin/*... The refspec and the
+   fetch are what finish the job") — every periodic and on-demand refresh since
+   then, however many times it "completes," only ever pulls `refs/heads/*`. A
+   commit pushed to `refs/review/<sha>` (this project's own CLAUDE.md-prescribed
+   scratch-ref convention) is therefore **never** fetched by lore's mirror, no
+   matter how long you wait — confirmed directly by inspecting the bare mirror on
+   this host (`data/repos/<id>/bare.git`) after several "fetched" log lines: `git
+   cat-file -t <sha>` failed every time, `for-each-ref refs/review/*` was always
+   empty. The error message's own wording ("a single repository's fetch CAN fail
+   inside a completed pass without lore seeing it") reads like a timing problem;
+   it is not one here — it is a refspec that structurally excludes the whole
+   namespace this workflow depends on. Filed in `TODO.md` rather than fixed here,
+   matching this project's own established precedent for this exact file
+   ("shell-script surgery on mirror-refresh.sh deserves its own deliberate
+   change"). Recovered by using `diff`-form instead, which never touches the
+   mirror — it applies straight to the review's own private worktree.
+2. **A ~330-line diff composed by hand as a tool-call argument is not reliably
+   byte-identical to its source file, and `git apply`'s `--recount` flag does not
+   catch a wrong WORD the way it catches a wrong LINE COUNT.** Two consecutive
+   `diff`-form submissions failed with "tree hash mismatch... produced
+   8b3a9b7f," both times — reproducible, not random — while a local `git apply`
+   of the exact same saved file, with the server's own `--recount --index` flags,
+   against the exact same worktree, produced the correct tree every time. Wrote
+   out what I had actually SENT (from my own prior tool call, visible earlier in
+   the same conversation) and diffed it against the source file: every blank
+   context line had lost its single leading space in transit (harmless — git
+   still resolves an empty line as blank context) and one added comment line read
+   "in-flight RUN" where the source said "in-flight ROW" — a single substituted
+   word, inside content being ADDED rather than matched, so `git apply --check`
+   had nothing to object to. **The fix that actually worked was not "try again
+   more carefully" — it was writing the sent text to a file and running `diff`
+   against the source, which finds a one-word substitution in seconds that
+   proofreading a 330-line diff by eye does not reliably catch.** Worth doing
+   BEFORE submitting a large hand-composed diff next time, not after the first
+   failure.
+
+**A mistake made and fixed while diagnosing #1 above:** inspecting lore's own
+private worktree for this review directly (`data/repos/<id>/wt/<reviewId>` — a
+real git checkout on this host, found by reading `worktreeFor`'s source rather than
+guessing a path), I ran `git reset --hard HEAD` to "clean up" after a manual test —
+forgetting that the review's own tree there was a STAGED, uncommitted modification
+on top of `HEAD` (the origin pin), never a commit. `--hard` discarded it. Recovered
+immediately: the exact content was still available byte-for-byte from my own local
+`042d830` commit (`git show 042d830:src/store/store.ts` into the worktree, `git
+add -A`, tree hash matched again). Stated here because it is exactly the class of
+mistake `CLAUDE.md`'s own git-safety section warns about — a destructive command
+run without first checking whether the state it was about to discard was reversible
+— and it was only harmless because a byte-identical copy happened to exist
+elsewhere.
 
 **What changed.** `rev_N9TmkGVAjk_VdPk5A4frkLwa`, `passed_partial`, attested at
 `a601ba4d0d77b8ca36706c55461cc3ee1adb9291` — 9 findings, 2 fixed, 5 justified —

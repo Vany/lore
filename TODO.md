@@ -39,6 +39,47 @@ that part is pulled out into its own open item rather than hidden inside a tick.
 
 ## Now — nothing here is about writing more features
 
+### 2026-08-28 — argued deferral: `mirror-refresh.sh`'s refspec never covers a scratch `review/*` ref
+
+- [ ] **THE D-77 SCRATCH-REF WORKFLOW CANNOT WORK AS WRITTEN, structurally, not
+      transiently.** `mirror-refresh.sh` clones each repo with `git clone --bare`
+      then sets `remote.origin.fetch` to `+refs/heads/*:refs/remotes/origin/*`
+      explicitly (its own comment: "clone --bare populates refs/heads/* and NOT
+      refs/remotes/origin/*... The refspec and the fetch are what finish the
+      job") — every periodic and on-demand refresh since then, however many times
+      it "completes" and logs `fetched`, only ever pulls `refs/heads/*`. A commit
+      pushed to `refs/review/<sha>` (CLAUDE.md's own prescribed scratch-ref
+      convention, "push and delete it in one command; nothing sweeps `review/*`")
+      is therefore **never** fetched by lore's mirror, no matter how long a client
+      waits or how many refreshes run. Confirmed directly on the deployment host
+      (this machine): `git cat-file -t <sha>` against the bare mirror at
+      `data/repos/<id>/bare.git` failed after several confirmed-successful
+      `mirror.log` fetch lines; `git for-each-ref refs/review/*` there was always
+      empty. `review_submit`'s own refusal message ("a single repository's fetch
+      CAN fail inside a completed pass without lore seeing it") reads like a
+      timing problem and sent me chasing one for the better part of an hour before
+      I read `mirror-refresh.sh` and found the refspec — it is not a timing
+      problem here, it is a namespace the fetch never asks for.
+
+      **What this means today:** `commit`-form `review_submit` against a scratch
+      `review/<sha>` ref cannot succeed, ever, until this is fixed. `diff`-form
+      still works (it applies straight to the review's own private worktree and
+      never touches the mirror), and is the only reliable path for a submission
+      that was not already pushed to a branch the mirror actually tracks.
+
+      **What is deliberately NOT fixed here:** the fix is either widening
+      `remote.origin.fetch` to `+refs/*:refs/*` (mirrors everything, simplest, but
+      changes what a stale/abandoned scratch ref costs to keep around — nothing
+      currently sweeps `refs/review/*`, per CLAUDE.md's own text, so this needs
+      that swept too or the bare mirror accumulates them forever) or teaching
+      `review_submit`'s commit-resolution to do a targeted `git fetch origin
+      <sha-or-ref>` outside the configured refspec when the ordinary fetch comes
+      up empty (narrower, but a second fetch code path beside `mirror-refresh.sh`'s
+      own, with its own failure modes to get right). Either is real shell/git
+      surgery on the exact file `TODO.md`'s 2026-08-20 entry above already argued
+      deserves its own deliberate change, not a same-day bolt-on. Vany's call
+      which shape, and whether `refs/review/*` needs its own sweep either way.
+
 ### 2026-08-20 — argued deferral: `mirror-refresh.sh` can't say WHICH repo failed
 
 - [ ] **A COMPLETED SYNC PASS IS NOT A PER-REPO GUARANTEE, and nothing threads the gap
