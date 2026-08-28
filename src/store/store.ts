@@ -505,24 +505,13 @@ export class Store {
   }
 
   /**
-   * Fetch a review, enforcing that it belongs to the caller.
-   *
-   * Possession of a `review_id` is never authentication (D-23). A valid id from
-   * another principal must fail exactly as a forged one does — which is why the
-   * principal is a parameter here rather than something callers remember to check.
-   */
-  /**
-   * The review of this branch that is still going, if there is one.
+   * The open review on this branch, if there is one.
    *
    * Scoped to the repo rather than the principal: two teammates reviewing one branch
    * are duplicating the same work and paying twice for it, and the second should be
-   * told about the first rather than quietly starting a parallel ladder.
-   *
-   * Newest first, because if several are somehow open the useful one to continue is
-   * the one that has got furthest.
-   */
-  /**
-   * The open review on this branch, if there is one.
+   * told about the first rather than quietly starting a parallel ladder. Newest
+   * first, because if several are somehow open the useful one to continue is the one
+   * that has got furthest.
    *
    * Carries its AGE because the refusal built on it is read by someone deciding
    * whether to continue or restart, and that decision turns entirely on how stale the
@@ -578,6 +567,13 @@ export class Store {
     };
   }
 
+  /**
+   * Fetch a review, enforcing that it belongs to the caller.
+   *
+   * Possession of a `review_id` is never authentication (D-23). A valid id from
+   * another principal must fail exactly as a forged one does — which is why the
+   * principal is a parameter here rather than something callers remember to check.
+   */
   getReview(id: string, principal: string): ReviewRow | undefined {
     const row = this.db
       .prepare("SELECT * FROM review WHERE id = ? AND principal = ?")
@@ -1004,13 +1000,6 @@ export class Store {
   // -------------------------------------------------------------- tier runs
 
   /**
-   * Record that a tier ran.
-   *
-   * The attestation counts distinct tiers from this table, so without it the
-   * signed line would claim "0 tiers" — a false statement in the one output the
-   * whole service exists to produce.
-   */
-  /**
    * Open a tier run BEFORE the tier is asked anything, and return its row id.
    *
    * Runs used to be written only on completion, so a tier that threw left no trace
@@ -1153,11 +1142,6 @@ export class Store {
   }
 
   /**
-  /**
-   * Every engine that could not run in this review, deduplicated, worst-case first
-   * seen. Empty means everything the review type asks for actually executed.
-   */
-  /**
    * Add to what a tier run says it did NOT cover, after the row is closed.
    *
    * `closeTierRun` happens when the tier answers; some facts about what the round did not
@@ -1281,6 +1265,10 @@ export class Store {
     };
   }
 
+  /**
+   * Every engine that could not run in this review, deduplicated, worst-case first
+   * seen. Empty means everything the review type asks for actually executed.
+   */
   unavailableChecks(reviewId: string): readonly string[] {
     const rows = this.db
       .prepare("SELECT unavailable FROM tier_run WHERE review_id = ? AND unavailable IS NOT NULL ORDER BY id")
@@ -1288,6 +1276,13 @@ export class Store {
     return [...new Set(rows.flatMap((r) => r.unavailable.split("\n")).filter((l) => l.length > 0))];
   }
 
+  /**
+   * Record that a tier ran.
+   *
+   * The attestation counts distinct tiers from this table, so without it the
+   * signed line would claim "0 tiers" — a false statement in the one output the
+   * whole service exists to produce.
+   */
   recordTierRun(
     reviewId: string,
     tier: string,
@@ -3049,21 +3044,6 @@ export class Store {
   }
 
   /**
-   * Does this review have a round that has not finished — queued OR running?
-   *
-   * For callers that must not touch the review's WORKTREE (D-55). D-53 stopped two
-   * rounds running at once; it did nothing about a writer outside the queue, and
-   * `review_submit` is exactly that — it patches the worktree a tier is reading.
-   *
-   * QUEUED COUNTS, and that is the whole point. Asking only about `running` left a
-   * TOCTOU that t2 found: a job sits queued, the check says no round is
-   * in flight, the handler yields on the next `await`, a worker loop claims that
-   * job and `computeDiff` starts reading — and the handler resumes and patches the
-   * files underneath it. The tree hash then matches a tree the findings never
-   * described. Counting queued closes it by leaving nothing for a worker to claim,
-   * rather than by making the window smaller and hoping.
-   */
-  /**
    * The tree a tier's kept session last SAW (D-108) — written at the end of each
    * streamed run, read at the start of the next. When the review's tree has moved in
    * between (a submit, a held diff, a pull_fresh re-pin), the difference between this
@@ -3318,6 +3298,21 @@ export class Store {
     else this.db.prepare("DELETE FROM held_diff WHERE review_id = ? AND id = ?").run(reviewId, id);
   }
 
+  /**
+   * Does this review have a round that has not finished — queued OR running?
+   *
+   * For callers that must not touch the review's WORKTREE (D-55). D-53 stopped two
+   * rounds running at once; it did nothing about a writer outside the queue, and
+   * `review_submit` is exactly that — it patches the worktree a tier is reading.
+   *
+   * QUEUED COUNTS, and that is the whole point. Asking only about `running` left a
+   * TOCTOU that t2 found: a job sits queued, the check says no round is
+   * in flight, the handler yields on the next `await`, a worker loop claims that
+   * job and `computeDiff` starts reading — and the handler resumes and patches the
+   * files underneath it. The tree hash then matches a tree the findings never
+   * described. Counting queued closes it by leaving nothing for a worker to claim,
+   * rather than by making the window smaller and hoping.
+   */
   hasPendingRound(reviewId: string): boolean {
     const row = this.db
       .prepare("SELECT 1 AS x FROM job WHERE review_id = ? AND state IN ('queued', 'running') LIMIT 1")
