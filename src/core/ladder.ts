@@ -1125,11 +1125,17 @@ export interface StepInput {
    */
   readonly ran?: readonly string[];
   /**
-   * The whole round's diff was documentation only (D-132) — `git/diff.ts`'s
-   * `ReviewDiff.docsOnly`, file extension/path only. Suppresses the per-tier bound's
-   * TRIP, the same way a clean round already does: `tierRounds` still increments
-   * below, truthfully, so the count stays a real fact about how many rounds a tier
-   * has run. Only whether that count STOPS the review is affected.
+   * Every OPEN finding on this review, right now, is anchored to a doc file
+   * (D-132; `git/diff.ts`'s `isDoc`, file extension/path only) — the caller's job,
+   * not this function's, since `step()` has no access to a finding's file, only
+   * its fingerprint. Deliberately NOT "the branch's whole diff is doc-only": a
+   * branch that changed one `.ts` file in round 1 and has argued only about
+   * `SPEC.md` since round 3 must still get the exemption from round 3 onward
+   * (fingerprint 6a6ae919 — the first version of this field read the wrong diff
+   * and never fired on the exact shape it was built for). Suppresses the per-tier
+   * bound's TRIP, the same way a clean round already does: `tierRounds` still
+   * increments below, truthfully, so the count stays a real fact about how many
+   * rounds a tier has run. Only whether that count STOPS the review is affected.
    */
   readonly docsOnly?: boolean;
 }

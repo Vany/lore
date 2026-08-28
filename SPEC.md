@@ -999,13 +999,31 @@ answering nearly everything asked, both on rounds that kept raising fresh
 FINDINGS about their own prose — a genuinely converging review, stopped by a
 counter that cannot tell "still arguing" from "still fixing." A clean round
 already does not trip this bound (`ladder.ts`, the 2026-08-03 fix); a
-docs-only round now behaves the same way: `git/diff.ts` gains `isDoc` beside
-the existing `isTest` (file extension `.md`, or paths under `spec/`/`docs/`),
-and `ReviewDiff.docsOnly` is true when every changed file matches it.
-`core/ladder.ts`'s `StepInput` carries `docsOnly` through to the trip check —
-`tierRounds` itself still increments unconditionally, a truthful count of how
-many rounds a tier has run; only whether that count STOPS the review is
-affected, exactly mirroring the clean-round exemption's own shape.
+docs-only round now behaves the same way. `git/diff.ts` gains an exported
+`isDoc` beside the existing (still private) `isTest` — file extension `.md`,
+or paths under `spec/`/`docs/`.
+
+**What actually gates the bound is NOT the branch's diff — found by lore's
+own review of the first version of this fix (fingerprint 6a6ae919), same
+day.** The obvious-looking implementation read `ReviewDiff.docsOnly` (every
+file the BRANCH has changed since its pinned base is a doc file) straight
+into `StepInput.docsOnly`. Both MEMO-recorded incidents this decision cites
+were CODE branches that also touched prose — a `.ts` finding settled early,
+then every later round argued only about `SPEC.md`. `computeDiff` recomputes
+the same cumulative, whole-branch diff every round, so that branch's
+`docsOnly` was `false` for its entire life: the fix never fired on the exact
+shape it was built for, and the one test written for it only ever exercised
+a branch whose sole commit was a `.md` edit — the motivating shape was never
+tested. **The corrected signal**: right before the round's `step()` call
+— by which point this round's own findings and verdicts are already written
+(`store.recordFinding`/`recordVerdict` both run earlier in `runRound`) — read
+`store.openFindings(reviewId)` fresh and check every one's OWN `file` against
+`isDoc`. `tierRounds` itself still increments unconditionally regardless, a
+truthful count of how many rounds a tier has run; only whether that count
+STOPS the review is affected, exactly mirroring the clean-round exemption's
+own shape. `ReviewDiff.docsOnly`/`changedDocs` are kept — a real,
+independently useful fact about the whole branch — just not what the bound
+reads.
 
 **Deliberately scoped to file extension/path, not diff content.** No attempt
 to detect a comment-only change inside a `.ts` file (a docstring, a
@@ -1023,10 +1041,12 @@ classifier, and not what was decided. Two named consequences, not hidden:
   The global bound is deliberately NOT given `docsOnly`: `ladder.ts`'s global
   check stays unconditional.
 
-Untracked doc files are invisible to this the same way `changedTests`/
-`changedSource` already are: the classifier runs on `changedFiles` before
-`untracked` is unioned into the return value, an existing blind spot
-inherited rather than introduced here.
+Untracked doc files are invisible to `ReviewDiff.changedDocs` the same way
+`changedTests`/`changedSource` already are: the classifier runs on
+`changedFiles` before `untracked` is unioned into the return value, an
+existing blind spot inherited rather than introduced here. This does not
+reach the bound's own signal, which reads a finding's recorded `file`
+directly, never the diff.
 
 **D-128 — a finding that names its fields "title"/"detail" is a naming drift, not a
 malformed reply: repaired at the boundary rather than gambled on a retry. BUILT

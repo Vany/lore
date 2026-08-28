@@ -43,7 +43,7 @@ import { type Alert, CONDITIONS } from "../ops/alerts.ts";
 import { startOfDayIso } from "../ops/spend.ts";
 import { ServiceUnreachable, CancelledByLore, DidNotRun, Exhausted, ProviderAuthFailed, TierUnavailable, TooLargeForTier } from "../core/errors.ts";
 import { hunkAround, hunkStillPresent, makeScope, type Scope } from "../core/scope.ts";
-import { baseCommitFor, blobSha, computeDiff, filesInDiff, renderDiff, resolveInto, wholeTreeDiff } from "../git/diff.ts";
+import { baseCommitFor, blobSha, computeDiff, filesInDiff, isDoc, renderDiff, resolveInto, wholeTreeDiff } from "../git/diff.ts";
 import { applyPatch, restoreTree, treeDelta, treeHash } from "../git/repo.ts";
 import { detectAndRecord, renderConflicts } from "../knowledge/conflict.ts";
 import { promoteRecurring } from "../knowledge/derive.ts";
@@ -3074,6 +3074,16 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     const ranOn = o.fellBackTo ?? o.chosenRoute ?? o.member.model;
     if (ranOn !== undefined) answered = markAnsweredBy(answered, o.member.id, ranOn);
   }
+  // D-132: NOT `diff.docsOnly` (fingerprint 6a6ae919) — that is the BRANCH's whole
+  // cumulative diff since its pinned base, so a branch that changed one `.ts` file
+  // in round 1 would never get the exemption no matter how many rounds afterward
+  // argued only about `SPEC.md`, which is exactly the shape this bound exists to
+  // fix. The live signal is what is still OPEN right now, freshly read — every
+  // finding recorded or settled this round has already been written to the store
+  // above (`store.recordFinding`/`recordVerdict`), so this reflects the round's
+  // actual, current outcome, not a stale pre-round snapshot.
+  const stillOpen = store.openFindings(reviewId);
+  const docsOnly = stillOpen.length > 0 && stillOpen.every((f) => isDoc(f.file));
   const stepped = step({
     state: answered,
     raised: [...raisedFingerprints],
@@ -3081,8 +3091,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     needsHuman: store.openConflicts(review.repoId).length > 0,
     // Every member that RAN is billed a round; a skipped sibling is not (D-109).
     ran: ranMembers.map((o) => o.member.id),
-    // D-132: a documentation-only round doesn't trip the per-tier bound.
-    docsOnly: diff.docsOnly,
+    docsOnly,
   });
 
   // The model tier's row is ALREADY closed — on the success path above, or in the

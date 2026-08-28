@@ -99,6 +99,9 @@ const HOLD_BUG: Finding = {
 /** Distinct findings, so each round raises something FRESH and the bound can be hit. */
 const nthBug = (n: number): Finding => ({ ...HOLD_BUG, line: 100 + n, claim: `distinct defect ${String(n)}` });
 
+/** Same shape, anchored to a doc file — the D-132 prose-loop shape. */
+const nthDocBug = (n: number): Finding => ({ ...HOLD_BUG, file: "TODO.md", line: n, claim: `wording issue ${String(n)}` });
+
 let dir: string;
 let store: Store;
 let repoId: string;
@@ -200,7 +203,7 @@ describe("runRound", () => {
   // D-132: the same bound, the opposite outcome — a branch whose diff against its
   // base is documentation only must not be stopped by the per-tier round bound,
   // even raising a fresh finding every round exactly as the test above does.
-  it("does not stop on the per-tier bound when the branch's diff is docs only", async () => {
+  it("does not stop on the per-tier bound when every open finding is doc-anchored", async () => {
     // Explicitly off `main`, not whatever `beforeEach` left checked out
     // (`feat/holds`) — branching from there would carry src/hold.ts into this
     // diff too and defeat the whole point of the test.
@@ -221,7 +224,7 @@ describe("runRound", () => {
       ladder: initialState(CODE_ARCH.tiers),
     });
 
-    const reviewer = new ScriptedReviewer([[nthBug(1)], [nthBug(2)], [nthBug(3)], [nthBug(4)]]);
+    const reviewer = new ScriptedReviewer([[nthDocBug(1)], [nthDocBug(2)], [nthDocBug(3)], [nthDocBug(4)]]);
     let last;
     for (let i = 0; i < 4; i++) {
       last = await runRound({ store, reviewer, reviewId: "r3", principal: "p", worktree: dir, type: TYPE });
@@ -229,6 +232,55 @@ describe("runRound", () => {
 
     expect(last?.decision.kind).not.toBe("stopped");
     expect(store.getReview("r3", "p")?.state).not.toBe("failed");
+  });
+
+  // THE ACTUAL MOTIVATING SHAPE (fingerprint 6a6ae919): both MEMO-recorded
+  // incidents were CODE branches that also touched prose — a `.ts` finding
+  // settled early, then every later round argued only about `SPEC.md`. The
+  // branch's cumulative diff is therefore NEVER docs-only for its whole life;
+  // what must go doc-only is which findings are still OPEN, round by round.
+  it("does not stop once the only findings still open are doc-anchored, even though the branch also touched code", async () => {
+    git("checkout", "-qb", "mixed/holds-and-docs", "main");
+    execFileSync("mkdir", ["-p", join(dir, "src")]);
+    writeFileSync(join(dir, "src/hold.ts"), "export function capture() {\n  // work\n  return 1;\n}\n");
+    writeFileSync(join(dir, "TODO.md"), "- [ ] a real task\n");
+    git("add", "-A");
+    git("commit", "-qm", "add capture, update todo");
+
+    store.createReview({
+      id: "r4",
+      repoId,
+      principal: "p",
+      branch: "mixed/holds-and-docs",
+      intoRef: "main",
+      ticket: "Add capture() and update TODO.md.",
+      type: CODE_ARCH.id,
+      state: "running",
+      ladder: initialState(CODE_ARCH.tiers),
+    });
+
+    // Round 1 raises both; the code finding is fixed before round 2, so every
+    // round after that only ever has doc findings still open — the code
+    // finding's own presence in the branch's diff must not matter from here on.
+    const reviewer = new ScriptedReviewer([
+      [HOLD_BUG, nthDocBug(1)],
+      [nthDocBug(2)],
+      [nthDocBug(3)],
+      [nthDocBug(4)],
+    ]);
+    let last = await runRound({ store, reviewer, reviewId: "r4", principal: "p", worktree: dir, type: TYPE });
+    writeFileSync(join(dir, "src/hold.ts"), "export function capture() {\n  return release();\n}\n");
+    for (let i = 0; i < 3; i++) {
+      last = await runRound({ store, reviewer, reviewId: "r4", principal: "p", worktree: dir, type: TYPE });
+    }
+
+    expect(store.latestVerdict("r4", fingerprint(HOLD_BUG))?.verdict).toBe("fixed");
+    expect(
+      store.openFindings("r4").every((f) => f.file === "TODO.md"),
+      "every finding still open by the last round is doc-anchored",
+    ).toBe(true);
+    expect(last.decision.kind).not.toBe("stopped");
+    expect(store.getReview("r4", "p")?.state).not.toBe("failed");
   });
 
   it("gives the reviewer the ticket and the diff", async () => {

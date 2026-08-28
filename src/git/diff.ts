@@ -18,6 +18,15 @@ import { git, gitLines, gitMaybe } from "./exec.ts";
  */
 const MAX_OVERLAP = 10;
 const MAX_COMMITS_PER_FILE = 4;
+
+/**
+ * File extension/path only (D-132) — not diff content, so a comment-only change
+ * inside a `.ts` file (a docstring, a `TOOL_DOCS` string) is invisible to this and
+ * is never a doc. Exported: `review.ts` reuses it against a finding's own `file`,
+ * not just a `ReviewDiff`'s `changedFiles` — see `docsOnly`'s own doc comment on
+ * why the two are not the same question.
+ */
+export const isDoc = (f: string) => /\.md$/.test(f) || /^(spec|docs)\//.test(f);
 const MAX_DIFF_CHARS = 600_000;
 
 /**
@@ -128,7 +137,16 @@ export interface ReviewDiff {
    * source, not doc (D-132, a named and accepted gap, not an oversight).
    */
   readonly changedDocs: number;
-  /** Every changed file is a doc file, and there is at least one. See `changedDocs`. */
+  /**
+   * Every file the BRANCH has changed since its pinned base is a doc file, and
+   * there is at least one. A real, independently useful fact — but NOT what the
+   * per-tier round bound reads (D-132, fingerprint 6a6ae919): `diff` here is the
+   * cumulative branch diff, recomputed the same way every round, so a branch that
+   * changed one `.ts` file in round 1 and only argues about `SPEC.md` from round 3
+   * onward has `docsOnly: false` for its entire life — exactly backwards for a
+   * bound meant to stop a live PROSE loop. `review.ts` computes the bound's own
+   * signal from `store.openFindings`' files instead; see its call to `step()`.
+   */
   readonly docsOnly: boolean;
 }
 
@@ -418,10 +436,6 @@ export async function computeDiff(
   // file changed only INSIDE a submodule is not invisible to this count either.
   const isTest = (f: string) => /(\.test\.|\.spec\.|(^|\/)tests?\/|__tests__)/.test(f);
   const changedTests = changedFiles.filter(isTest).length;
-  // File extension/path only — not diff content. A comment-only change inside a
-  // `.ts` file (a docstring, a `TOOL_DOCS` string) is invisible to this and stays
-  // "source"; that is a named, accepted gap (D-132), not an oversight.
-  const isDoc = (f: string) => /\.md$/.test(f) || /^(spec|docs)\//.test(f);
   const changedDocs = changedFiles.filter(isDoc).length;
 
   const truncated = rawPatch.length > MAX_DIFF_CHARS;
@@ -505,9 +519,6 @@ export async function wholeTreeDiff(worktree: string, path: string): Promise<Rev
 
   const isTest = (f: string) => /(\.test\.|\.spec\.|(^|\/)tests?\/|__tests__)/.test(f);
   const changedTests = changedFiles.filter(isTest).length;
-  // File extension/path only — not diff content. See the matching comment in
-  // `computeDiff` (D-132): a comment-only change inside a `.ts` file stays "source".
-  const isDoc = (f: string) => /\.md$/.test(f) || /^(spec|docs)\//.test(f);
   const changedDocs = changedFiles.filter(isDoc).length;
 
   const truncated = rawPatch.length > MAX_DIFF_CHARS;

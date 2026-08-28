@@ -569,11 +569,15 @@ every member is clean, and clean is terminal for the rung exactly as it was for 
 "New" means a fingerprint not already settled, not a raw count. A tier that
 re-raises three closed findings and nothing else is clean.
 
-**A documentation-only round does not trip the per-tier cap either (D-132).** File
-extension/path only (`.md`, `spec/`, `docs/`) — not diff content, so a comment-only
-change inside a `.ts` file still counts toward the cap. The global bound is
-deliberately still unconditional: a non-convergent `SPEC.md` argument stops there
-instead, later and at real quota cost, rather than never.
+**A documentation-only round does not trip the per-tier cap either (D-132).**
+"Documentation-only" means every finding still OPEN right now is anchored to a doc
+file (`.md`, `spec/`, `docs/`) — not that the branch's own diff is doc-only, which
+would miss the exact motivating shape: a code branch whose one `.ts` finding
+settled early and has argued only about `SPEC.md` since. File extension/path only,
+not diff content, so a comment-only change inside a `.ts` file still counts toward
+the cap. The global bound is deliberately still unconditional: a non-convergent
+`SPEC.md` argument stops there instead, later and at real quota cost, rather than
+never.
 
 **A closed tier stays closed** (D-6, revised 2026-08-07). It used to reset to T1 on
 every change, which meant the cheapest model ruled on the dearest model's findings —
