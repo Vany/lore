@@ -180,6 +180,23 @@ one_pass() {
       # what invited the misreading, twice this session before being caught here by
       # lore's own review; corrected there rather than left to invite a third.
       #
+      # lore-ok[4937496f], lore-ok[ac814da0], lore-ok[d742850b]: all three about the
+      # SAME thing — the first version of this fix's own commit message (subject:
+      # "added idempotently to existing bares too") stayed accurate to what b76f581's
+      # tree once held even after the tree was reverted, which is a real defect (a
+      # future `git log`/`git blame` search finds a confident, false, "verified"
+      # claim) distinct from the code itself. d742850b is, unusually, a tier
+      # correcting an earlier one's evidence rather than raising something new: at
+      # the moment it read, the revert existed only in a local, uncommitted working
+      # tree, so b76f581's committed tree genuinely still carried the refspec it
+      # described — right conclusion (the message would drift), wrong detail (which
+      # tree state proved it). Both are moot now: b76f581 is no longer reachable from
+      # `main` at all. `git log c8b2e70..HEAD --oneline` shows two commits, neither
+      # of them it — the four rounds that carried it were squashed into one honest
+      # commit before any reached `origin/main`, which is why this fix, unlike the
+      # code above, has no separate "what was tried" paragraph: nothing here still
+      # asserts the wrong diagnosis anywhere a reader — human or tier — can find it.
+      #
       # lore-ok[d2a6f083]: a real category of concern — a config mutation an earlier
       # pass made can outlive the code that made it — but checked, not assumed, and it
       # did not happen here: `diff deploy/mirror-refresh.sh lore/mirror-refresh.sh`
