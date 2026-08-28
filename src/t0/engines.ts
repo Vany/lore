@@ -922,6 +922,22 @@ async function semgrep(worktree: string, scope?: Scope): Promise<EngineOutcome> 
   // claim the OOM-kill fix (fingerprints dd98f788/4a39ae0d) exists to prevent, for
   // a second way a file can go unread. Found by lore's own review, fingerprint
   // 3acaef31.
+  //
+  // lore-ok[f30f0b2f]: real cost, correctly reused mechanism, not fixed here. A
+  // permanently-unparseable file (checked-in minified vendor code) makes this
+  // TRUE on every round for the life of that review, not the "rare round" T0Result
+  // .interrupted's own doc prices — round-level is `interrupted`'s EXISTING
+  // architecture (`runT0`'s `outcomes.some(...)`, already true for a rare OOM/
+  // timeout before this fix ever touched semgrep), and this fix correctly reuses
+  // it rather than inventing a second mechanism; what changed is FREQUENCY, not
+  // correctness — a stable fact now trips a flag priced for a transient one. A
+  // real fix needs one of two bigger changes than this finding's own severity
+  // (low) warrants rushing: per-finding rather than round-level interrupted
+  // tracking, or persisting which files were ALREADY known-unparseable last round
+  // so an unchanged set stops re-tripping it. Both are real future work; neither
+  // is a same-round patch I am confident enough in to ship blind. The cost is
+  // real but SAFE — more manual settling, never a false auto-settle — which is
+  // the same trade every other `interrupted` cause in this file already makes.
   return {
     engine: "semgrep",
     findings,
