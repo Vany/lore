@@ -16,8 +16,14 @@ let store: Store;
 /** The repository under test. One `lore.db` serves many, and the median is per repo. */
 const REPO = "repo-under-test";
 
-/** `n` runs of `tier` on `repo`, latencies spread evenly between `lo` and `hi` seconds. */
-function runs(tier: string, n: number, lo: number, hi: number, outcome = "clean", repo = REPO): void {
+/**
+ * `n` runs of `tier` on `repo`, latencies spread evenly between `lo` and `hi` seconds.
+ *
+ * `outcome` defaults to `"ok"` — what `recordUsage`'s own callers actually write for a
+ * review-ladder tier that answered (never `"clean"`, a `tier_run`-only value that never
+ * reaches this table; see `latenciesFor`'s doc).
+ */
+function runs(tier: string, n: number, lo: number, hi: number, outcome = "ok", repo = REPO): void {
   for (let i = 0; i < n; i++) {
     const ms = Math.round((lo + ((hi - lo) * i) / Math.max(1, n - 1)) * 1000);
     store.db
@@ -142,6 +148,16 @@ describe("paceFor", () => {
     expect(Math.round((pace?.ms ?? 0) / 1000)).toBe(119);
   });
 
+  // Allowlisted, not merely not-"failed" — a row under any OTHER non-answer outcome
+  // (this deployment has never written one for a review-ladder tier, but nothing stops
+  // a future caller) must be excluded the same way a "failed" one already is.
+  it("ignores a non-answer outcome that is not literally 'failed' either", () => {
+    runs("t1", 30, 300, 400);
+    runs("t1", 30, 1, 3, "interrupted");
+    const pace = paceFor(store, "t1", REPO);
+    expect(pace?.runs).toBe(30);
+  });
+
   it("says nothing about a tier that has never run", () => {
     expect(paceFor(store, "t9", REPO)).toBeUndefined();
   });
@@ -156,7 +172,7 @@ describe("paceFor", () => {
     // telling apart — capped at 119 they would be identical and this test would pass
     // while measuring nothing.
     runs("t1", 40, 35, 45);
-    runs("t1", 40, 100, 110, "clean", "some-other-repo");
+    runs("t1", 40, 100, 110, "ok", "some-other-repo");
 
     const mine = paceFor(store, "t1", REPO);
     expect(mine?.runs).toBe(40);
@@ -196,7 +212,7 @@ describe("paceFor", () => {
   // is the honest cost of scoping and the same rule the thin-sample refusal already makes.
   it("refuses for a repository with too few runs of its own", () => {
     runs("t1", 40, 200, 400);
-    runs("t1", 5, 200, 400, "clean", "barely-used-repo");
+    runs("t1", 5, 200, 400, "ok", "barely-used-repo");
     expect(paceFor(store, "t1", "barely-used-repo")).toBeUndefined();
   });
 

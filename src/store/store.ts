@@ -921,12 +921,22 @@ export class Store {
    * The honest cost is that scoping shrinks the sample, and a tier below `MIN_RUNS`
    * for a repository now gets no interval rather than another repository's. That is
    * the trade this file already makes everywhere else: no number beats a wrong one.
+   *
+   * ALLOWLISTS SUCCESS RATHER THAN BLOCKLISTING ONE FAILURE, matching
+   * `largestCompletedDiff` just below — a `usage` row's `outcome` is a SEPARATE,
+   * narrower vocabulary from `tier_run.outcome`'s (`recordUsage`'s own callers write
+   * only `ok`, `ok-after-retry` or `failed` for a review-ladder tier), so `!= 'failed'`
+   * happens to admit the same rows as `LIKE 'ok%'` today. It stops being the same the
+   * first time a caller records a new non-answer outcome under any other name: the
+   * blocklist would silently start feeding that latency into the median, exactly what
+   * `largestCompletedDiff`'s own doc says a timed-out run must never do to a capacity
+   * ceiling. Closed by default, the way that method already is.
    */
   latenciesFor(tier: string, repoId: string): readonly number[] {
     const rows = this.db
       .prepare(
         "SELECT latency_ms FROM usage WHERE tier = ? AND repo_id = ? AND latency_ms IS NOT NULL" +
-          " AND outcome != 'failed' ORDER BY latency_ms",
+          " AND outcome LIKE 'ok%' ORDER BY latency_ms",
       )
       .all(tier, repoId) as { latency_ms: number }[];
     return rows.map((r) => r.latency_ms);
@@ -1274,29 +1284,6 @@ export class Store {
       .prepare("SELECT unavailable FROM tier_run WHERE review_id = ? AND unavailable IS NOT NULL ORDER BY id")
       .all(reviewId) as { unavailable: string }[];
     return [...new Set(rows.flatMap((r) => r.unavailable.split("\n")).filter((l) => l.length > 0))];
-  }
-
-  /**
-   * Record that a tier ran.
-   *
-   * The attestation counts distinct tiers from this table, so without it the
-   * signed line would claim "0 tiers" — a false statement in the one output the
-   * whole service exists to produce.
-   */
-  recordTierRun(
-    reviewId: string,
-    tier: string,
-    round: number,
-    outcome: TierOutcome,
-    startedAt: string,
-    treeHash?: string,
-  ): void {
-    this.db
-      .prepare(
-        "INSERT INTO tier_run(review_id, tier, round, outcome, tree_hash, started_at, finished_at)" +
-          " VALUES(?, ?, ?, ?, ?, ?, ?)",
-      )
-      .run(reviewId, tier, round, outcome, n(treeHash), startedAt, now());
   }
 
   // --------------------------------------------------------------- finding
@@ -3312,6 +3299,12 @@ export class Store {
    * files underneath it. The tree hash then matches a tree the findings never
    * described. Counting queued closes it by leaving nothing for a worker to claim,
    * rather than by making the window smaller and hoping.
+   *
+   * ALSO the worker's post-close look at late-held diffs: an open job means a round
+   * exists that will consume them itself, and enqueueing another would only make the
+   * ladder walk an empty extra round. Two callers, one predicate — this used to be two
+   * methods (`hasOpenJob` ran the byte-identical query under a different alias) until
+   * lore's own review asked why.
    */
   hasPendingRound(reviewId: string): boolean {
     const row = this.db
@@ -3768,20 +3761,6 @@ export class Store {
     this.db
       .prepare("UPDATE job SET state = ?, last_error = ?, updated_at = ? WHERE id = ?")
       .run(state, n(error), now(), id);
-  }
-
-  /**
-   * Is any job for this review queued or running right now?
-   *
-   * For the worker's post-close look at late-held diffs: an open job means a round
-   * exists that will consume them itself, and enqueueing another would only make the
-   * ladder walk an empty extra round.
-   */
-  hasOpenJob(reviewId: string): boolean {
-    const row = this.db
-      .prepare("SELECT 1 AS one FROM job WHERE review_id = ? AND state IN ('queued', 'running') LIMIT 1")
-      .get(reviewId) as { one?: number } | undefined;
-    return row !== undefined;
   }
 
   /**

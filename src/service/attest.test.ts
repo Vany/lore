@@ -46,6 +46,32 @@ function folderReview(state: string): void {
   store.db.prepare("UPDATE review SET state = ? WHERE id = 'r1'").run(state);
 }
 
+/**
+ * A tier run already closed, for fixtures that only need its outcome on record.
+ *
+ * Not `Store.recordTierRun` — that method had no production caller (every real tier
+ * run is opened before it is asked anything and closed after, via `openTierRun`/
+ * `closeTierRun`, precisely so an in-flight row is never confused with one that died);
+ * it stayed on `Store` as a name a future production caller could pick and reintroduce
+ * the exact born-closed bug those two exist to prevent. This is the same one-shot
+ * insert, kept as a local fixture instead.
+ */
+function recordTierRun(
+  reviewId: string,
+  tier: string,
+  round: number,
+  outcome: string,
+  startedAt: string,
+  treeHash?: string,
+): void {
+  store.db
+    .prepare(
+      "INSERT INTO tier_run(review_id, tier, round, outcome, tree_hash, started_at, finished_at)" +
+        " VALUES(?, ?, ?, ?, ?, ?, ?)",
+    )
+    .run(reviewId, tier, round, outcome, treeHash ?? null, startedAt, new Date().toISOString());
+}
+
 describe("attest", () => {
   it("refuses anything that has not passed", async () => {
     for (const state of ["running", "fast_clean", "needs_human", "failed", "expired", "findings_ready"]) {
@@ -76,10 +102,10 @@ describe("attest", () => {
     review("passed");
     const at = "2026-08-03T00:00:00.000Z";
     for (const [tier, round] of [["t0", 1], ["t1", 1], ["t2", 2], ["t3", 3]] as const) {
-      store.recordTierRun("r1", tier, round, "clean", at, "4f2a9c1");
+      recordTierRun("r1", tier, round, "clean", at, "4f2a9c1");
     }
     // Repeats of the same tier are one tier, not four.
-    store.recordTierRun("r1", "t1", 4, "clean", at, "4f2a9c1");
+    recordTierRun("r1", "t1", 4, "clean", at, "4f2a9c1");
 
     const a = await attest(store, "r1", "p", keyPath);
     expect(a.line).toContain("4 tiers (t0, t1, t2, t3)");
@@ -91,7 +117,7 @@ describe("attest", () => {
   // takes only the signed line, never the unsigned audit trail.
   it("names the scoped path for a folder review, right beside the tree it signs", async () => {
     folderReview("passed");
-    store.recordTierRun("r1", "t0", 1, "clean", "2026-08-03T00:00:00.000Z", "4f2a9c1");
+    recordTierRun("r1", "t0", 1, "clean", "2026-08-03T00:00:00.000Z", "4f2a9c1");
 
     const a = await attest(store, "r1", "p", keyPath);
     expect(a.line).toContain("reviewed tree 4f2a9c1 (scoped to src/payments)");
@@ -99,7 +125,7 @@ describe("attest", () => {
 
   it("says nothing about scope for an ordinary diff review", async () => {
     review("passed");
-    store.recordTierRun("r1", "t0", 1, "clean", "2026-08-03T00:00:00.000Z", "4f2a9c1");
+    recordTierRun("r1", "t0", 1, "clean", "2026-08-03T00:00:00.000Z", "4f2a9c1");
 
     const a = await attest(store, "r1", "p", keyPath);
     expect(a.line).not.toContain("scoped to");
@@ -112,10 +138,10 @@ describe("attest", () => {
   it("does not claim a tier that only read an earlier tree", async () => {
     review("passed");
     const at = "2026-08-03T00:00:00.000Z";
-    store.recordTierRun("r1", "t0", 1, "clean", at, "older-tree");
-    store.recordTierRun("r1", "t1", 1, "findings", at, "older-tree");
-    store.recordTierRun("r1", "t0", 2, "clean", at, "4f2a9c1");
-    store.recordTierRun("r1", "t2", 2, "clean", at, "4f2a9c1");
+    recordTierRun("r1", "t0", 1, "clean", at, "older-tree");
+    recordTierRun("r1", "t1", 1, "findings", at, "older-tree");
+    recordTierRun("r1", "t0", 2, "clean", at, "4f2a9c1");
+    recordTierRun("r1", "t2", 2, "clean", at, "4f2a9c1");
 
     const a = await attest(store, "r1", "p", keyPath);
     expect(a.line).toContain("2 tiers (t0, t2)");
@@ -127,7 +153,7 @@ describe("attest", () => {
   // that cannot say must not be counted as having read this one.
   it("does not count a run that never recorded its tree", async () => {
     review("passed");
-    store.recordTierRun("r1", "t1", 1, "clean", "2026-08-03T00:00:00.000Z");
+    recordTierRun("r1", "t1", 1, "clean", "2026-08-03T00:00:00.000Z");
     const a = await attest(store, "r1", "p", keyPath);
     expect(a.line).toContain("0 tiers (no tier)");
   });
@@ -256,7 +282,7 @@ describe("what a signed line calls PARTIAL", () => {
   /** Every tier read the signed tree, so the only question left is the ladder's. */
   const allOnTree = (...tiers: readonly string[]) => {
     const at = "2026-08-03T00:00:00.000Z";
-    for (const t of tiers) store.recordTierRun("r1", t, 1, "clean", at, "4f2a9c1");
+    for (const t of tiers) recordTierRun("r1", t, 1, "clean", at, "4f2a9c1");
   };
   const skip = (...ids: readonly string[]) => {
     const s2 = { ...initialState(), unavailable: [...ids] };
@@ -299,10 +325,10 @@ describe("what a signed line calls PARTIAL", () => {
   it("calls a full pass PARTIAL when a closed tier never re-read the signed tree", async () => {
     review("passed");
     const at = "2026-08-03T00:00:00.000Z";
-    store.recordTierRun("r1", "t1", 1, "clean", at, "an-earlier-tree");
-    store.recordTierRun("r1", "t0", 2, "clean", at, "4f2a9c1");
-    store.recordTierRun("r1", "t2", 2, "clean", at, "4f2a9c1");
-    store.recordTierRun("r1", "t3", 2, "clean", at, "4f2a9c1");
+    recordTierRun("r1", "t1", 1, "clean", at, "an-earlier-tree");
+    recordTierRun("r1", "t0", 2, "clean", at, "4f2a9c1");
+    recordTierRun("r1", "t2", 2, "clean", at, "4f2a9c1");
+    recordTierRun("r1", "t3", 2, "clean", at, "4f2a9c1");
 
     const a = await attest(store, "r1", "p", keyPath);
 
@@ -322,10 +348,10 @@ describe("what a signed line calls PARTIAL", () => {
   it("calls a full pass PARTIAL when this round's t0 was interrupted on the signed tree", async () => {
     review("passed");
     const at = "2026-08-03T00:00:00.000Z";
-    store.recordTierRun("r1", "t0", 1, "interrupted", at, "4f2a9c1");
-    store.recordTierRun("r1", "t1", 1, "clean", at, "4f2a9c1");
-    store.recordTierRun("r1", "t2", 1, "clean", at, "4f2a9c1");
-    store.recordTierRun("r1", "t3", 1, "clean", at, "4f2a9c1");
+    recordTierRun("r1", "t0", 1, "interrupted", at, "4f2a9c1");
+    recordTierRun("r1", "t1", 1, "clean", at, "4f2a9c1");
+    recordTierRun("r1", "t2", 1, "clean", at, "4f2a9c1");
+    recordTierRun("r1", "t3", 1, "clean", at, "4f2a9c1");
 
     const a = await attest(store, "r1", "p", keyPath);
 

@@ -207,7 +207,7 @@ export class Worker {
         // THE STORE IS GONE — STOP, rather than pick through it write by write.
         //
         // `88ca976` guarded three WRITES and missed that everything around them READS:
-        // `repoAndStateOf` below, `stateOf` in the catch, `heldDiffs`, `hasOpenJob`. A
+        // `repoAndStateOf` below, `stateOf` in the catch, `heldDiffs`, `hasPendingRound`. A
         // closed handle throws on those exactly as it did on the writes, so the crash it
         // was written to remove survived it — and on the failure path the throw comes
         // from INSIDE the catch, escaping a promise that is detached by `void this.round`
@@ -235,7 +235,7 @@ export class Worker {
             st !== undefined &&
             !decidedByPersonOrClock(st.state) &&
             this.store.heldDiffs(job.reviewId).length > 0 &&
-            !this.store.hasOpenJob(job.reviewId)
+            !this.store.hasPendingRound(job.reviewId)
           ) {
             this.store.updateReview(job.reviewId, { state: "queued" });
             this.store.enqueue(job.reviewId, "fast");

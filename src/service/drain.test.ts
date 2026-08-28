@@ -280,7 +280,7 @@ describe("a worker does not overwrite an ending somebody chose", () => {
  *
  * The first attempt at this guarded three store WRITES and was proven useless by lore's
  * own review: everything around them READS — `repoAndStateOf`, `stateOf`, `heldDiffs`,
- * `hasOpenJob` — and a closed handle throws on those exactly as it did on the writes. On
+ * `hasPendingRound` — and a closed handle throws on those exactly as it did on the writes. On
  * the failure path the throw comes from INSIDE the catch, so it escapes a promise that is
  * detached by `void this.round(job)` with no `unhandledRejection` handler anywhere: an
  * unhandled rejection, in exactly the window the guard existed for.

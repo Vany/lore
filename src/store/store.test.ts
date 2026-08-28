@@ -51,9 +51,7 @@ describe("repo", () => {
     const again = store.upsertRepo("demo-renamed", "git@github.com:acme/demo.git");
     expect(again.id).toBe(repoId);
   });
-});
 
-describe("repo", () => {
   // CHECK-THEN-ACT WITH NO LOCK. `upsertRepo` reads by git_url and inserts when it finds
   // nothing; two provisions of one repository racing both find nothing and both insert.
   // Tokens, reviews and knowledge then split across two rows for one repository — the
