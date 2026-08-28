@@ -47,8 +47,8 @@ export interface Enrichment {
  */
 const RELATED_THRESHOLD = 0.35;
 
-export function enrich(store: Store, repoId: string, finding: RecordedFinding): Enrichment {
-  const prior = sameDefectPriors(store, repoId, finding);
+export function enrich(store: Store, repoId: string, reviewId: string, finding: RecordedFinding): Enrichment {
+  const prior = sameDefectPriors(store, repoId, reviewId, finding);
   let fixed = 0;
   let justified = 0;
   for (const p of prior) {
@@ -81,11 +81,18 @@ export function enrich(store: Store, repoId: string, finding: RecordedFinding): 
  * `priorJustified` into an escalation ("the check itself may be wrong here — TELL
  * YOUR USER"), so an inflated count was not cosmetic: it told a client to escalate a
  * misfire that never happened, on any finding tagged with a common CWE.
+ *
+ * lore-ok[3d90d9a0]: `reviewId` is new — found by lore's own review, against
+ * `store.priorLike`'s own docs for the full reasoning. A fingerprint is
+ * content-derived, so the identical defect raised in an earlier review of this
+ * repo carries the same fingerprint; excluding on the bare value excluded the
+ * very prior sightings this function exists to find, not just this finding's own
+ * row in this review.
  */
-function sameDefectPriors(store: Store, repoId: string, f: RecordedFinding): readonly PriorFinding[] {
+function sameDefectPriors(store: Store, repoId: string, reviewId: string, f: RecordedFinding): readonly PriorFinding[] {
   const needle = subjectTokens(f.claim);
   return store
-    .priorLike(repoId, f.fingerprint, normalizeClaim(f.claim), f.cwe)
+    .priorLike(repoId, reviewId, f.fingerprint, normalizeClaim(f.claim), f.cwe)
     .filter((p) => jaccard(subjectTokens(p.claim), needle) >= RELATED_THRESHOLD);
 }
 

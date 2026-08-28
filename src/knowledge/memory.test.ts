@@ -116,7 +116,7 @@ describe("what one review learns, the next one knows", () => {
     }
     review("r4");
     const current = finding("fp9");
-    const e = enrich(store, repoId, current);
+    const e = enrich(store, repoId, "r4", current);
 
     expect(e.priorOccurrences).toBe(3);
     expect(renderEnrichment(e)).toContain("a pattern rather than an incident");
@@ -139,7 +139,7 @@ describe("what one review learns, the next one knows", () => {
       settle("j1", "jfp1", "justified-accepted");
       settle("j2", "jfp2", "justified-accepted");
       review("now");
-      const out = renderEnrichment(enrich(store, repoId, finding("jfp9"))) ?? "";
+      const out = renderEnrichment(enrich(store, repoId, "now", finding("jfp9"))) ?? "";
       expect(out).toMatch(/check itself may be wrong/);
       // The part that was missing: escalate it, because the author cannot settle this
       // by editing the line again.
@@ -150,7 +150,7 @@ describe("what one review learns, the next one knows", () => {
       settle("f1", "ffp1", "fixed");
       settle("f2", "ffp2", "fixed");
       review("now2");
-      const out = renderEnrichment(enrich(store, repoId, finding("ffp9"))) ?? "";
+      const out = renderEnrichment(enrich(store, repoId, "now2", finding("ffp9"))) ?? "";
       expect(out).toMatch(/what keeps producing it/);
       expect(out).toMatch(/an Nth manual fix is not/);
     });

@@ -522,7 +522,7 @@ export async function main(argv: readonly string[]): Promise<ExitCode> {
       // History is what turns a defect into a pattern: "seen 4x, and the rule from
       // 2026-07-11 says X" is a different object from the same finding raised cold.
       const history = new Map(
-        undelivered.map((f) => [f.fingerprint, renderEnrichment(enrich(store, repo.id, f))]),
+        undelivered.map((f) => [f.fingerprint, renderEnrichment(enrich(store, repo.id, reviewId, f))]),
       );
       process.stdout.write(
         render(reviewId, result.decision.kind, undelivered, result.t0Unavailable, result.accepted, result.rejected, result.expired, history),

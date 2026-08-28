@@ -1026,7 +1026,7 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
                   }),
               // A finding with history is far more actionable than the same finding
               // raised cold: it says whether to fix the line or fix the habit.
-              history: renderEnrichment(enrich(store, who.repoId, f)),
+              history: renderEnrichment(enrich(store, who.repoId, review_id, f)),
               // Not this branch's doing, and every other branch inherits it too.
               ...(f.preexisting === true
                 ? {

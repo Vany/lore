@@ -1014,6 +1014,54 @@ describe("tier runs are opened before the tier is asked anything", () => {
   });
 });
 
+describe("priorLike", () => {
+  beforeEach(() => newReview("rev1"));
+
+  // lore-ok[3d90d9a0]: found by lore's own review. fingerprint() (core/fingerprint.ts)
+  // is content-derived — claim, file, symbol, nothing review-specific — so the SAME
+  // defect raised in an earlier review carries the IDENTICAL fingerprint. Excluding
+  // on the bare value excluded exactly the prior sightings this method exists to
+  // surface, not just the current finding's own row.
+  it("finds an earlier sighting of the same fingerprint in a DIFFERENT review", () => {
+    store.recordFinding("rev1", finding("aa", { claim: "the hold is never released on decline" }));
+    newReview("rev2");
+    // The genuinely same defect: a second review's t1 raises the identical claim,
+    // which is exactly why `fingerprint()` gives it the identical value.
+    store.recordFinding("rev2", finding("aa", { claim: "a different but unrelated claim" }));
+
+    const priors = store.priorLike(repoId, "rev2", "aa", "the hold is never released on decline", undefined);
+    expect(priors.map((p) => p.claim)).toContain("the hold is never released on decline");
+  });
+
+  // The property the exclusion still has to keep: a finding is never its own prior.
+  it("still excludes this exact finding's own row", () => {
+    store.recordFinding("rev1", finding("aa", { claim: "the hold is never released on decline" }));
+
+    const priors = store.priorLike(repoId, "rev1", "aa", "the hold is never released on decline", undefined);
+    expect(priors).toStrictEqual([]);
+  });
+
+  // lore-ok[54d77a41]: found by lore's own review. The caller passes normalizeClaim's
+  // full output (trim, lower-case, collapse whitespace, strip trailing `.`/`!`); the
+  // stored side used to apply only LOWER(TRIM(...)), so a stored claim differing by
+  // exactly the variation normalizeClaim exists to erase never matched.
+  it("matches a stored claim differing only by trailing punctuation", () => {
+    store.recordFinding("rev1", finding("aa", { claim: "The hold is never released on decline." }));
+    newReview("rev2");
+
+    const priors = store.priorLike(repoId, "rev2", "bb", "the hold is never released on decline", undefined);
+    expect(priors.map((p) => p.claim)).toContain("The hold is never released on decline.");
+  });
+
+  it("matches a stored claim differing only by a doubled internal space", () => {
+    store.recordFinding("rev1", finding("aa", { claim: "the hold is  never released on decline" }));
+    newReview("rev2");
+
+    const priors = store.priorLike(repoId, "rev2", "bb", "the hold is never released on decline", undefined);
+    expect(priors.map((p) => p.claim)).toContain("the hold is  never released on decline");
+  });
+});
+
 describe("knowledge", () => {
   it("retires rules whose source document changed", () => {
     // The single guard against the knowledge base rotting: a stale doc must never

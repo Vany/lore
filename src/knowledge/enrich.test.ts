@@ -62,8 +62,8 @@ describe("enrich (4029f8b3: a shared CWE alone is not a shared defect)", () => {
       claim: "a released hold's timer is never cancelled, so it can fire twice",
       cwe: "CWE-754",
     });
-    review();
-    const e = enrich(store, repoId, brandNew);
+    const probeReview = review();
+    const e = enrich(store, repoId, probeReview, brandNew);
 
     expect(e.priorOccurrences, "40 unrelated same-CWE findings must not read as 40 priors").toBe(0);
     expect(e.priorJustified).toBe(0);
@@ -98,8 +98,8 @@ describe("enrich (4029f8b3: a shared CWE alone is not a shared defect)", () => {
       claim: "hold amount is stored as a float instead of an integer number of minor units",
       cwe: "CWE-1339",
     });
-    review();
-    const e = enrich(store, repoId, again);
+    const probeReview = review();
+    const e = enrich(store, repoId, probeReview, again);
 
     expect(e.priorOccurrences, "a real recurring paraphrase must still be caught").toBeGreaterThanOrEqual(2);
     expect(e.priorJustified).toBeGreaterThanOrEqual(2);
@@ -127,7 +127,7 @@ describe("enrich (10bb335b: relatedTo's path boost is a sibling-directory bug to
       file: "src/payroll/adapter.ts",
       claim: "The payroll adapter must retry declined captures on timeout",
     });
-    const e = enrich(store, repoId, f);
+    const e = enrich(store, repoId, review(), f);
 
     expect(
       e.related.some((k) => k.statement.includes("retry on timeout")),
@@ -148,7 +148,7 @@ describe("enrich (10bb335b: relatedTo's path boost is a sibling-directory bug to
       file: "src/pay/adapter.ts",
       claim: "The pay adapter must retry declined captures on timeout",
     });
-    const e = enrich(store, repoId, f);
+    const e = enrich(store, repoId, review(), f);
 
     expect(e.related.some((k) => k.statement.includes("retry on timeout"))).toBe(true);
   });
@@ -174,7 +174,7 @@ describe("enrich (652bb58d: a related fact is not a related rule)", () => {
       file: "src/scheduler/invoker.ts",
       claim: "the invoker is called only by the scheduler with pre-validated input",
     });
-    const e = enrich(store, repoId, f);
+    const e = enrich(store, repoId, review(), f);
     expect(e.related.some((k) => k.kind === "fact"), "fixture sanity: the fact must actually be related").toBe(true);
 
     const rendered = renderEnrichment(e);
@@ -195,7 +195,7 @@ describe("enrich (652bb58d: a related fact is not a related rule)", () => {
       file: "src/scheduler/invoker.ts",
       claim: "the invoker is called only by the scheduler with pre-validated input",
     });
-    const rendered = renderEnrichment(enrich(store, repoId, f));
+    const rendered = renderEnrichment(enrich(store, repoId, review(), f));
 
     expect(rendered).toMatch(/taught rule/);
   });

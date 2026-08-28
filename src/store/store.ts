@@ -1549,8 +1549,24 @@ export class Store {
    * pattern evidence off findings that had nothing to do with each other. Returning the
    * claim text lets the caller require actual similarity, not just a shared taxonomy
    * entry.
+   *
+   * lore-ok[3d90d9a0]: EXCLUDES BY (REVIEW, FINGERPRINT), not fingerprint alone — found
+   * by lore's own review. `fingerprint()` (core/fingerprint.ts) is content-derived —
+   * claim, file, symbol, nothing review-specific — so the SAME defect raised in an
+   * EARLIER review of this repo carries the IDENTICAL fingerprint. Excluding on the
+   * bare value excluded exactly the prior sightings this method exists to surface,
+   * not just the current finding's own row. `reviewId` is new for this reason alone.
+   *
+   * lore-ok[54d77a41]: THE STORED SIDE NOW NORMALISES TOO, not only trims and
+   * lower-cases — found by lore's own review. The caller passes `normalizeClaim`'s
+   * full output (trim, lower-case, collapse internal whitespace runs, strip trailing
+   * `.`/`!`), so a stored claim differing only by a trailing period or a doubled space
+   * — exactly the no-meaning variation `normalizeClaim` exists to erase — never
+   * matched. `REPLACE(..., '  ', ' ')` twice collapses runs up to four spaces, which
+   * is every realistic case; `RTRIM(..., '.!')` matches the trailing-punctuation strip
+   * exactly, SQLite's own semantics for "strip any of these chars, repeated."
    */
-  priorLike(repoId: string, fingerprint: string, normalizedClaim: string, cwe: string | undefined): readonly PriorFinding[] {
+  priorLike(repoId: string, reviewId: string, fingerprint: string, normalizedClaim: string, cwe: string | undefined): readonly PriorFinding[] {
     const rows = this.db
       .prepare(
         `SELECT fi.claim AS claim,
@@ -1560,10 +1576,11 @@ export class Store {
          FROM finding fi
          JOIN review r ON r.id = fi.review_id
          WHERE r.repo_id = ?
-           AND fi.fingerprint != ?
-           AND (LOWER(TRIM(fi.claim)) = ? OR (fi.cwe IS NOT NULL AND fi.cwe = ?))`,
+           AND NOT (fi.review_id = ? AND fi.fingerprint = ?)
+           AND (RTRIM(LOWER(TRIM(REPLACE(REPLACE(fi.claim, '  ', ' '), '  ', ' '))), '.!') = ?
+                OR (fi.cwe IS NOT NULL AND fi.cwe = ?))`,
       )
-      .all(repoId, fingerprint, normalizedClaim, cwe ?? " ") as { claim: string; verdict: string | null }[];
+      .all(repoId, reviewId, fingerprint, normalizedClaim, cwe ?? " ") as { claim: string; verdict: string | null }[];
     return rows.map((r) => ({ claim: r.claim, verdict: r.verdict ?? undefined }));
   }
 
@@ -1613,14 +1630,6 @@ export class Store {
       .get(nameOrId, nameOrId) as Record<string, string> | undefined;
     if (row === undefined) return undefined;
     return { id: row["id"] ?? "", name: row["name"] ?? "", gitUrl: row["git_url"] ?? "" };
-  }
-
-  /** Reviews that have not finished — what `propose` refuses to compete with. */
-  reviewsInFlight(): readonly { readonly id: string; readonly branch: string }[] {
-    const rows = this.db
-      .prepare("SELECT id, branch FROM review WHERE state IN ('queued', 'running', 'fast_clean')")
-      .all() as Record<string, string>[];
-    return rows.map((r) => ({ id: r["id"] ?? "", branch: r["branch"] ?? "" }));
   }
 
   /** Which tier first raised this finding, for deciding whether a re-raise is stronger. */
@@ -3859,14 +3868,6 @@ export class Store {
       .prepare("UPDATE job SET state = 'queued', last_error = ?, updated_at = ? WHERE id = ?")
       .run(why, now(), id);
     return true;
-  }
-
-  /** Jobs holding a worker right now. `queueDepth`'s counterpart: waiting versus working. */
-  jobsRunning(): number {
-    const row = this.db.prepare("SELECT COUNT(*) AS c FROM job WHERE state = 'running'").get() as
-      | Record<string, number | bigint>
-      | undefined;
-    return Number(row?.["c"] ?? 0);
   }
 
   // ------------------------------------------------------- the operator board (D-96)
