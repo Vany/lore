@@ -27,6 +27,9 @@ not thorough, it is a tax on every turn.
 
 ## 2. The failure modes the docs exist to prevent
 
+<!-- lore-ok[663b9332]: fixed elsewhere, not on this header line — item 10 below,
+     added the same round this was raised. -->
+
 Written first, because each one is why a specific sentence exists.
 
 1. **Polls once, sees `running`, concludes the review is clean.** The single most

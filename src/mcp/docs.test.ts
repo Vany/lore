@@ -215,6 +215,11 @@ describe("the docs describe every state the code can produce", () => {
   });
 });
 
+// lore-ok[3f3d375e]: fixed elsewhere in this file, not on this line — the pin is
+// the new "a passed review closes the review, not the client's task" describe block
+// a little further down, plus the new ["poll", ...] row in the behaviour-pin table
+// below that. This line is an unrelated pre-existing check the finding used as its
+// nearest anchor; it does not need to change for the fix to be real.
 describe("what the docs promise about attestation is what the code allows", () => {
   const attestable = REVIEW_STATES.filter(isAttestable);
 
