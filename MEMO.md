@@ -3,8 +3,76 @@
 Newest first. Updated at the end of each task: what changed, what I learned, what
 surprised me.
 
-## 2026-08-28 — src/t0: the last unreviewed module, four rounds, and a fix that
-needed a second fix before the tier that would have found it got the chance
+## 2026-08-28 — clients were reading "then merge" as the end of their whole task,
+not just this review; six rounds, and five of them were the review catching its
+own prior round
+
+**What changed.** `rev_IaR87a0i5sSz15lc3pov3faf`, `passed_partial`, attested at
+`6bc6f706dee5a98901a01436eabc103ea7395b8f` — 7 findings, 6 fixed, 1 justified —
+merged as six commits (`e06c5b4` … `84dad20`). Vany: *"clients stop working when
+review is passed, we asked them to stop. It is [a] strong behavior we do not need,
+ask them to stop or anything, let's allow them do what they need."* `nextStep()`'s
+`passed`/`passed_partial` text said "then merge." and stopped, with nothing telling
+an agent client that this closed the review and not its session — so it read as
+the end of the task and quit, mid-instruction, whatever else it had been asked to
+do. Fixed in all four places a client can learn this: `nextStep()`
+(`server.ts`), the workflow resource, `REVIEW_PROMPT_TEXT`, and — the surface this
+round's own review insisted on — `TOOL_DOCS.poll` itself, the one layer that is in
+every session's context whether or not a client ever reads a resource.
+
+**Round 2 fixed the bug and shipped a smaller one in the fix.** "Attest, merge, and
+carry on" collapsed `passed` and `passed_partial` into one unconditional
+instruction, silently dropping the adjacent rule that a partial pass's merge
+decision belongs to the user, not the agent. Caught by the review one round later
+(`7c044bae`) — the second time this exact session has watched a hand-written fix
+for one bug quietly reopen a different, already-settled one nearby, this time in
+prose instead of code.
+
+**Round 3 was the review asking "pinned where?" and getting a real answer: nowhere
+you said, mostly.** `3f3d375e` named three ledgers a failure mode this severe
+should reach — `docs.ts`'s own header list, `spec/agent-docs.md` §2, and the
+behaviour-pin table in `docs.test.ts` — and only the first had it. Reading `docs.ts`
+closely to answer this turned up a fourth, worse gap on its own: `TOOL_DOCS.poll`,
+the *only* one of these four surfaces that is loaded into every session whether or
+not a resource or prompt is ever read, said nothing about this at all. Fixed all
+four in one round; the on-demand layers had been carrying the whole load while the
+permanent one was silent.
+
+**Rounds 4 through 6 were the mechanical tracker and the review's own thoroughness,
+each teaching something different.** Round 4: `review_submit`'s `will_not_settle`
+check is syntactic — it asks whether the EXACT line a finding named has moved or
+now carries a `lore-ok[fp]`, not whether the substance was addressed nearby. Fixing
+content three lines away from a finding's anchor and resubmitting does not settle
+it; a `lore-ok[fp]: fixed elsewhere, see X` comment AT the named line does, exactly
+as `TOOL_DOCS.poll`'s own `fixed_elsewhere` paragraph already says and I had only
+ever read passively before this round. Round 5 (`a762a84e`): my own round-2 resync
+of `spec/agent-docs.md`'s §5 draft — done to close a *different* finding
+(`2d4266b5`) — had silently dropped the commit-vs-diff-hold refusal exception both
+live texts it was copied from still carry. Round 6 (`da2a3551`): §3's
+`review_attest` draft, untouched by any of this, still said "available once state
+is `passed`" with no mention of `passed_partial` — pre-existing, but this round's
+own new sentences ("attest it either way") now sit two sections above a paragraph
+that contradicts them, which is what made a long-standing gap suddenly
+load-bearing.
+
+**The pattern worth keeping, not just the fixes.** Five of six rounds were the
+review finding a defect in the PREVIOUS round's own fix, not in the original bug —
+a hand-edit to prose is exactly as capable of reopening an adjacent rule as a
+hand-edit to code, and `spec/agent-docs.md`'s "draft text, not a summary" framing
+means it is checked by the same ladder as everything else here, just never by a
+compiler. Nothing in this cycle was a re-run of an old finding; each round was a
+new, real defect the previous round's honest attempt had introduced or exposed.
+That is the review ladder working exactly as this project is built to test, on its
+own documentation about itself.
+
+**Deliberately not fixed here.** `spec/agent-docs.md` §3's `review_poll` draft
+carries much deeper, pre-existing drift than the one sentence this cycle needed —
+missing states (`findings_stale`, `cancelled`), the exact "back off to 60s" wording
+`docs.test.ts`'s own "MOST EXPENSIVE INSTRUCTION" test exists to keep out of every
+*live* document, and no mention at all of the retry-cap, `human_decision`, or "seen
+N×" sections. Filed in `TODO.md` as a named, argued deferral — real, sized (a
+full transcription of a ~150-line tool description, not a two-line fix), and out
+of scope for the round that found it.
 
 **What changed.** `rev_lfaizbAHpr47yUtXmj9RVXgq`, `passed_partial`, attested at
 `6c23f41d884302930aab0f01d4855d693db6ec8e` (scoped to `src/t0`) — 17 findings, 12
