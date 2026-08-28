@@ -3,6 +3,96 @@
 Newest first. Updated at the end of each task: what changed, what I learned, what
 surprised me.
 
+## 2026-08-28 — src/store folder review: five rounds, a fix that reopened its own
+justification, and a review that went terminal before I could tell it
+
+**What changed.** `rev_N9TmkGVAjk_VdPk5A4frkLwa`, `passed_partial`, attested at
+`a601ba4d0d77b8ca36706c55461cc3ee1adb9291` — 9 findings, 2 fixed, 5 justified —
+merged at `4be1231` (five commits: `ed0795a`, `78a0a04`, `4bd690e`, `0ca5d1b`,
+`4be1231`). Touched `store.ts`, `store.test.ts`, `enrich.ts` + its two test files,
+`server.ts`, `cli.ts`, `deploy/Makefile`, `src/mcp/docs.ts`. Nine distinct findings
+across the module's persistence layer.
+
+**The same "list claims to be complete, isn't" bug hit `lastWriteAt` a third time,
+and the fix has a second surface that is easy to forget.** Its own comment already
+names two prior incidents; this round added `held_diff.created_at` (the ONLY
+durable write `review_submit`'s held path makes, D-107 — can be the sole write for
+the rest of a ~30-minute round) and `tier_run.finished_at` (a tier CLOSING, not
+just opening, is when its outcome and findings actually record). Audited every
+timestamp column in `schema.ts` against the query by hand rather than trusting the
+finding's own citation, since `one-definition.test.ts` already proves this list
+drifts. The second surface: `deploy/Makefile`'s `replica-state` target
+reimplements the identical SQL in shell, specifically so `make status` still
+answers while the service is down — and a mechanical test (`one-definition.test.ts`)
+already pins the two lists to match exactly. Forgetting the Makefile half would
+have failed that test, not shipped silently, but it is still a second file to
+remember every time this list moves.
+
+**The recurring-defect detector was excluding the one case its own motivating
+incident was about.** `priorLike` excluded candidates by bare fingerprint value —
+but `fingerprint()` is content-derived (claim, file, symbol, nothing
+review-specific), so the SAME defect raised in an earlier review of the SAME repo
+carries the IDENTICAL fingerprint, and was being excluded from its own recurrence
+count. The 63-times-raised-and-justified-away incident this whole enrichment
+feature was built to surface is exactly the same-fingerprint case — the one the
+bug excluded. Fixed by excluding on (review, fingerprint) together, threading a
+new `reviewId` parameter three layers up to two MCP/CLI call sites.
+
+**Chased the same SQL-vs-JS normalization mismatch through three rounds before
+accepting the actual fix.** `priorLike`'s stored-side claim comparison used only
+`LOWER(TRIM(...))` while the caller's needle came from `normalizeClaim` (trim,
+lower-case, collapse whitespace, strip trailing `.`/`!`) — so a period or a
+doubled space defeated a real match. First attempt: reimplement `normalizeClaim`'s
+exact semantics in SQL (`RTRIM`, chained `REPLACE`). The review caught, correctly,
+that SQLite's bare `TRIM` strips only ASCII space — never a tab or a newline, both
+ordinary in free-text model output — and a chained `REPLACE` only collapses a
+literal double-space, not an arbitrary run. **The lesson that should have been
+applied the first time: don't reimplement a function's semantics in a second
+language, call the function.** Rewrote to fetch every other finding in the repo
+and call `normalizeClaim` itself, in JS, on both sides — one definition instead of
+two dialects free to disagree, the same principle `TERMINAL_SQL` already applies
+to set-membership tests, here applied to a string transform. Should have reached
+for this shape immediately instead of iterating the SQL twice.
+
+**Two methods with zero callers, both explained by an integration that was later,
+explicitly removed elsewhere.** `reviewsInFlight`'s doc said "what propose refuses
+to compete with" — `propose/run.ts`'s own header says that refusal was overruled
+and removed (D-98/D-93). `jobsRunning` implied an operator surface that actually
+reads `reviewer.gateState()` instead. Both the RULE_DIRS shape this codebase has
+now named explicitly enough times that it is worth watching for on sight: a
+method whose doc describes what it is FOR, with zero callers, is not evidence the
+integration exists — it is evidence it used to. Deleted rather than left to look
+used.
+
+**Learned the hard way: a review can go terminal mid-conversation, and there is no
+way to ask it to wait.** Round 4's fix (moving `priorLike`'s comparison into JS)
+rewrote enough of the method body that the STORE's own `expireStaleVerdicts` sweep
+— correctly — decided the justifications for `3d90d9a0` and `54d77a41` no longer
+matched their originally-scoped code hunks, and reopened both as unsettled findings
+one round later. I tried to submit a docstring-only fix consolidating the history
+onto a fresh hunk; the review had ALREADY reached `passed_partial` from the
+ladder's own tier-progression logic (independent of the reopening) and refused the
+submission outright: *"Its base is gone and cannot be recreated... Start a fresh
+review."* The attestation itself stayed honest about this — "9 findings, 2 fixed,
+5 justified" is 7, not 9, and it says so rather than rounding up. Verified by my
+own tests (still green, still passing after the git-stash discipline) that the
+code is correct regardless of what the ledger says; pushed the docstring
+consolidation directly rather than spin up a second full ladder cycle (hours per
+round on this module) for a zero-behavior-change comment reorganization, stated
+here rather than silently. **The actionable lesson for next time: once a fix
+rewrites enough of a function that an EARLIER round's justification might no
+longer anchor to real code, resettle it in THAT SAME submission** — don't let a
+docstring cleanup wait for its own round; a review's terminal state can arrive
+without warning between one submission and the next.
+
+**Surprised me.** How thoroughly the `will_not_settle` warning on `review_submit`
+does its job across this whole cycle — every round after the first arrived with
+findings already raised mid-read, before the reviewer had seen the previous
+submission's fix, and every time the answer was confirming the existing `lore-ok`
+tag was already in place rather than double-fixing. The mechanism worked exactly
+as documented, repeatedly, without needing to think hard about it — which is what
+a design correctly holding its own weight looks like from the inside.
+
 ## 2026-08-28 — src/service folder review: five rounds, a design question that
 needed Vany rather than a guess, and a fix that caught its own gap one round later
 
