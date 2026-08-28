@@ -2624,6 +2624,8 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     const first = skippedMembers[0];
     if (first === undefined) throw new Error("unreachable: a rung round with no members");
     if (!anyTierRan(tiers, ladderNow.unavailable)) throw first.error;
+    // No `docsOnly` here, deliberately: `raised: []` already means `fresh.length` is 0,
+    // so the per-tier trip this would suppress never runs on this path anyway (D-132).
     const skipped = step({ state: ladderNow, raised: [], tiers, needsHuman: false, ran: [] });
     const skippedWhy = stoppedBecause(skipped.decision, skipped.state);
     if (skippedWhy !== undefined) store.setFailureReason(reviewId, skippedWhy);
@@ -3079,6 +3081,8 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     needsHuman: store.openConflicts(review.repoId).length > 0,
     // Every member that RAN is billed a round; a skipped sibling is not (D-109).
     ran: ranMembers.map((o) => o.member.id),
+    // D-132: a documentation-only round doesn't trip the per-tier bound.
+    docsOnly: diff.docsOnly,
   });
 
   // The model tier's row is ALREADY closed — on the success path above, or in the

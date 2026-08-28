@@ -122,6 +122,14 @@ export interface ReviewDiff {
   /** Changed files that look like tests, and those that do not. */
   readonly changedTests: number;
   readonly changedSource: number;
+  /**
+   * File extension/path only (`.md`, `spec/`, `docs/`) — not diff content, so a
+   * comment-only change inside a `.ts` file is invisible to this and counts as
+   * source, not doc (D-132, a named and accepted gap, not an oversight).
+   */
+  readonly changedDocs: number;
+  /** Every changed file is a doc file, and there is at least one. See `changedDocs`. */
+  readonly docsOnly: boolean;
 }
 
 /**
@@ -410,6 +418,11 @@ export async function computeDiff(
   // file changed only INSIDE a submodule is not invisible to this count either.
   const isTest = (f: string) => /(\.test\.|\.spec\.|(^|\/)tests?\/|__tests__)/.test(f);
   const changedTests = changedFiles.filter(isTest).length;
+  // File extension/path only — not diff content. A comment-only change inside a
+  // `.ts` file (a docstring, a `TOOL_DOCS` string) is invisible to this and stays
+  // "source"; that is a named, accepted gap (D-132), not an oversight.
+  const isDoc = (f: string) => /\.md$/.test(f) || /^(spec|docs)\//.test(f);
+  const changedDocs = changedFiles.filter(isDoc).length;
 
   const truncated = rawPatch.length > MAX_DIFF_CHARS;
   const patch = truncated
@@ -425,6 +438,8 @@ export async function computeDiff(
     overlap,
     changedTests,
     changedSource: changedFiles.length - changedTests,
+    changedDocs,
+    docsOnly: changedFiles.length > 0 && changedDocs === changedFiles.length,
     stat: stat.trim(),
     patch,
     truncated,
@@ -490,6 +505,10 @@ export async function wholeTreeDiff(worktree: string, path: string): Promise<Rev
 
   const isTest = (f: string) => /(\.test\.|\.spec\.|(^|\/)tests?\/|__tests__)/.test(f);
   const changedTests = changedFiles.filter(isTest).length;
+  // File extension/path only — not diff content. See the matching comment in
+  // `computeDiff` (D-132): a comment-only change inside a `.ts` file stays "source".
+  const isDoc = (f: string) => /\.md$/.test(f) || /^(spec|docs)\//.test(f);
+  const changedDocs = changedFiles.filter(isDoc).length;
 
   const truncated = rawPatch.length > MAX_DIFF_CHARS;
   const patch = truncated
@@ -506,6 +525,8 @@ export async function wholeTreeDiff(worktree: string, path: string): Promise<Rev
     overlap: [],
     changedTests,
     changedSource: changedFiles.length - changedTests,
+    changedDocs,
+    docsOnly: changedFiles.length > 0 && changedDocs === changedFiles.length,
     stat: stat.trim(),
     patch,
     truncated,

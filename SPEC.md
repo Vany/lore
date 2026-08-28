@@ -991,6 +991,43 @@ go deeper); honouring a project-pinned toolchain the image does not carry
 than error→high/warning→medium; a NESTED crate's own `.cargo/config.toml`,
 confirmed unreachable by this invocation shape (see above) and not fixed here.
 
+**D-132 — a documentation-only round does not trip the per-tier bound. BUILT
+2026-08-28.**
+
+Two real reviews were killed by the per-tier round bound (default 3) while
+answering nearly everything asked, both on rounds that kept raising fresh
+FINDINGS about their own prose — a genuinely converging review, stopped by a
+counter that cannot tell "still arguing" from "still fixing." A clean round
+already does not trip this bound (`ladder.ts`, the 2026-08-03 fix); a
+docs-only round now behaves the same way: `git/diff.ts` gains `isDoc` beside
+the existing `isTest` (file extension `.md`, or paths under `spec/`/`docs/`),
+and `ReviewDiff.docsOnly` is true when every changed file matches it.
+`core/ladder.ts`'s `StepInput` carries `docsOnly` through to the trip check —
+`tierRounds` itself still increments unconditionally, a truthful count of how
+many rounds a tier has run; only whether that count STOPS the review is
+affected, exactly mirroring the clean-round exemption's own shape.
+
+**Deliberately scoped to file extension/path, not diff content.** No attempt
+to detect a comment-only change inside a `.ts` file (a docstring, a
+`TOOL_DOCS` string) — that is a materially harder, more error-prone
+classifier, and not what was decided. Two named consequences, not hidden:
+
+- if the original prose-loop incidents that motivated this bound were
+  themselves in `.ts` docstrings rather than `.md` files, this classifier does
+  not catch them — TODO.md's own alternative, bounding on *rounds that settled
+  nothing* rather than file type, would cover that case too and remains a real,
+  not-yet-built option;
+- exempting `docsOnly` rounds from the fast per-tier bound leaves only the
+  global bound (default 12) as backstop for a genuinely non-convergent
+  `SPEC.md` argument — four times the cost before it stops, accepted knowingly.
+  The global bound is deliberately NOT given `docsOnly`: `ladder.ts`'s global
+  check stays unconditional.
+
+Untracked doc files are invisible to this the same way `changedTests`/
+`changedSource` already are: the classifier runs on `changedFiles` before
+`untracked` is unioned into the return value, an existing blind spot
+inherited rather than introduced here.
+
 **D-128 — a finding that names its fields "title"/"detail" is a naming drift, not a
 malformed reply: repaired at the boundary rather than gambled on a retry. BUILT
 2026-08-20.**

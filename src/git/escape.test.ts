@@ -415,6 +415,27 @@ describe("the base's own work on the files that overlap", () => {
     expect(d.changedTests).toBe(0);
     expect(renderDiff(d)).toContain("NO test file changed");
   });
+
+  // D-132: computeDiff's own site for the same classifier wholeTreeDiff.test.ts
+  // covers — file extension/path only, not diff content.
+  it("is docsOnly when a branch only touched .md files", async () => {
+    const src = join(root, "src-docs");
+    const g = makeRepo(src);
+    const paths = { bare: join(root, "repos/rD/bare.git"), worktrees: join(root, "repos/rD/wt") };
+    mirror(src, paths.bare);
+    execFileSync("git", ["-C", paths.bare, "config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"]);
+    execFileSync("git", ["-C", paths.bare, "fetch", "-q", "origin"]);
+
+    g("checkout", "-qb", "docs/only");
+    writeFileSync(join(src, "TODO.md"), "- [ ] a\n");
+    g("add", "-A");
+    g("commit", "-qm", "update todo");
+    execFileSync("git", ["-C", paths.bare, "fetch", "-q", "origin"]);
+
+    const d = await computeDiff(await worktreeFor(paths, "rev_h", "docs/only", src), "main");
+    expect(d.changedDocs).toBe(1);
+    expect(d.docsOnly).toBe(true);
+  });
 });
 
 /**

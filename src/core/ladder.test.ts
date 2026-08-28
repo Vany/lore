@@ -105,6 +105,31 @@ describe("step", () => {
     expect(r.decision).toStrictEqual({ kind: "stopped", bound: "global" });
   });
 
+  // D-132: two real reviews were killed by the per-tier bound while answering
+  // nearly everything asked, both on rounds that kept raising fresh FINDINGS about
+  // their own prose — unlike the clean-round exemption above (raised: []), a
+  // docs-only round can keep raising fresh fingerprints and still must not trip.
+  it("does not stop on the per-tier bound when the round is docs-only", () => {
+    let s = initialState();
+    for (let i = 0; i < 3; i++) s = step({ state: s, raised: [`f${i}`], docsOnly: true }).state;
+    expect(s.tierRounds["t1"]).toBe(3); // the next round is the one that used to stop
+
+    const r = step({ state: s, raised: ["f9"], docsOnly: true });
+    expect(r.decision.kind).not.toBe("stopped");
+    expect(r.state.tierRounds["t1"]).toBe(4); // over the cap, and that is fine
+  });
+
+  // The global bound is deliberately NOT read `docsOnly` (spec/review-ladder.md §5):
+  // a genuinely non-convergent doc argument stops there instead, later and at real
+  // quota cost, accepted knowingly rather than left unbounded.
+  it("still stops on the global bound when the round is docs-only", () => {
+    let s = initialState();
+    const limits = { perTierRounds: 99, globalRounds: 3 };
+    for (let i = 0; i < 3; i++) s = step({ state: s, raised: [`f${i}`], limits, docsOnly: true }).state;
+    const r = step({ state: s, raised: ["f9"], limits, docsOnly: true });
+    expect(r.decision).toStrictEqual({ kind: "stopped", bound: "global" });
+  });
+
   /**
    * THE BOUNDS COUNT ARGUING, NOT WORKING (D-114).
    *

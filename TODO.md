@@ -1125,8 +1125,16 @@ are what that session's own numbers say is in the way, not what reading suggeste
       is what to diff FROM next time. Getting that wrong is a foot-gun I hit once today;
       the refusal message caught it perfectly, which is the expensive way to learn it.
 
-- [ ] **The per-tier bound counts rounds, not progress — and it has now killed two
-      CONVERGING reviews.** `TODO.md` already argued the bound is the wrong instrument
+- [x] **The per-tier bound counts rounds, not progress — and it has now killed two
+      CONVERGING reviews.** DECIDED 2026-08-28 (D-132): a documentation-only round
+      (file extension/path — `.md`, `spec/`, `docs/`) does not trip the per-tier
+      bound, the same shape as the existing clean-round exemption. The
+      progress-based alternative named below — bounding on *rounds that settled
+      nothing* rather than file type — is real and NOT what was built; it would
+      also cover a prose loop happening inside `.ts` docstrings, which the shipped
+      classifier cannot see. Left as a named, not-yet-built option rather than
+      silently dropped.
+      ORIGINALLY: `TODO.md` already argued the bound is the wrong instrument
       from a prose loop that never converged. Today is the opposite case, which is what
       makes it decidable:
 
@@ -1844,8 +1852,15 @@ grows sideways is the one nobody can review.
       `research/mcp-subscriptions.md` §3 so the choice stays a decision rather than a
       default. What is left is the item below.
 
-- [ ] **The per-tier round bound is doing its job, and it is the wrong instrument.**
-      Two reviews of this repository have now ended `failed` on it — five rounds in
+- [x] **The per-tier round bound is doing its job, and it is the wrong instrument.**
+      DECIDED 2026-08-28 (D-132), same decision as the entry above: a
+      documentation-only round does not trip the per-tier bound. "Documentation-only"
+      is classified by file extension/path (`.md`, `spec/`, `docs/`), not by whether
+      the model's ANSWER was wording versus behaviour — the measurement this entry
+      asked for (wording vs. behaviour split of the findings that hit the bound) was
+      not taken; the classifier shipped is a coarser, cheaper proxy for the same
+      distinction, chosen without it.
+      ORIGINALLY: Two reviews of this repository have now ended `failed` on it — five rounds in
       session 34, nine on 2026-08-06 — and both for the same reason: every answer to a
       prose finding is new prose for the next round to fault. The bound is a real
       terminal answer and stopping is right; what it cannot say is *why* the loop

@@ -1124,6 +1124,14 @@ export interface StepInput {
    * round it never saw.
    */
   readonly ran?: readonly string[];
+  /**
+   * The whole round's diff was documentation only (D-132) — `git/diff.ts`'s
+   * `ReviewDiff.docsOnly`, file extension/path only. Suppresses the per-tier bound's
+   * TRIP, the same way a clean round already does: `tierRounds` still increments
+   * below, truthfully, so the count stays a real fact about how many rounds a tier
+   * has run. Only whether that count STOPS the review is affected.
+   */
+  readonly docsOnly?: boolean;
 }
 
 /**
@@ -1199,7 +1207,15 @@ export function step(input: StepInput): { readonly state: LadderState; readonly 
     // ANY member that ran, on a rung (D-109): the members run every round together,
     // so their counters move together and this is the rung's own iteration count —
     // the same bound it has always been, worn by however many tiers share the round.
-    if (ran.some((id) => (tierRounds[id] ?? 0) > limits.perTierRounds)) {
+    //
+    // NOT WHEN docsOnly (D-132): two real reviews were killed by this bound while
+    // answering nearly everything asked, both on rounds that kept raising fresh
+    // wording findings on their own prose. `tierRounds` above still incremented —
+    // this is the trip alone, same shape as the clean-round exemption. The GLOBAL
+    // bound just below is deliberately still unconditional: a genuinely
+    // non-convergent doc argument stops there instead, later and at real quota
+    // cost, accepted knowingly rather than left unbounded (spec/review-ladder.md §5).
+    if (!input.docsOnly && ran.some((id) => (tierRounds[id] ?? 0) > limits.perTierRounds)) {
       return { state: base, decision: { kind: "stopped", bound: "perTier" } };
     }
 

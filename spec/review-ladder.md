@@ -569,6 +569,12 @@ every member is clean, and clean is terminal for the rung exactly as it was for 
 "New" means a fingerprint not already settled, not a raw count. A tier that
 re-raises three closed findings and nothing else is clean.
 
+**A documentation-only round does not trip the per-tier cap either (D-132).** File
+extension/path only (`.md`, `spec/`, `docs/`) — not diff content, so a comment-only
+change inside a `.ts` file still counts toward the cap. The global bound is
+deliberately still unconditional: a non-convergent `SPEC.md` argument stops there
+instead, later and at real quota cost, rather than never.
+
 **A closed tier stays closed** (D-6, revised 2026-08-07). It used to reset to T1 on
 every change, which meant the cheapest model ruled on the dearest model's findings —
 four times in one review of this repository — and cost two rounds per deep finding.

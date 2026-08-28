@@ -197,6 +197,40 @@ describe("runRound", () => {
     expect(why).toContain("NOT a pass");
   });
 
+  // D-132: the same bound, the opposite outcome — a branch whose diff against its
+  // base is documentation only must not be stopped by the per-tier round bound,
+  // even raising a fresh finding every round exactly as the test above does.
+  it("does not stop on the per-tier bound when the branch's diff is docs only", async () => {
+    // Explicitly off `main`, not whatever `beforeEach` left checked out
+    // (`feat/holds`) — branching from there would carry src/hold.ts into this
+    // diff too and defeat the whole point of the test.
+    git("checkout", "-qb", "docs/only", "main");
+    writeFileSync(join(dir, "TODO.md"), "- [ ] a real task\n");
+    git("add", "-A");
+    git("commit", "-qm", "update todo");
+
+    store.createReview({
+      id: "r3",
+      repoId,
+      principal: "p",
+      branch: "docs/only",
+      intoRef: "main",
+      ticket: "Update TODO.md.",
+      type: CODE_ARCH.id,
+      state: "running",
+      ladder: initialState(CODE_ARCH.tiers),
+    });
+
+    const reviewer = new ScriptedReviewer([[nthBug(1)], [nthBug(2)], [nthBug(3)], [nthBug(4)]]);
+    let last;
+    for (let i = 0; i < 4; i++) {
+      last = await runRound({ store, reviewer, reviewId: "r3", principal: "p", worktree: dir, type: TYPE });
+    }
+
+    expect(last?.decision.kind).not.toBe("stopped");
+    expect(store.getReview("r3", "p")?.state).not.toBe("failed");
+  });
+
   it("gives the reviewer the ticket and the diff", async () => {
     const reviewer = new ScriptedReviewer([[]]);
     await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
