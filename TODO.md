@@ -39,6 +39,45 @@ that part is pulled out into its own open item rather than hidden inside a tick.
 
 ## Now — nothing here is about writing more features
 
+### 2026-08-28 — argued deferral: `spec/agent-docs.md`'s `review_poll` draft is stale well beyond the one sentence this round fixed
+
+- [ ] **THE DRAFT UNDER §3 `review_poll` HAS NOT MOVED WITH `TOOL_DOCS.poll` FOR SEVERAL
+      FEATURES, not just the one this round added.** Found while adding a mechanical pin
+      for fingerprint `3f3d375e` (a passed review must not read as the end of the
+      client's whole task) — the fix that round needed reached three ledgers
+      (`docs.ts`'s failure-mode list, `spec/agent-docs.md` §2, the behaviour-pin table in
+      `docs.test.ts`) plus `TOOL_DOCS.poll` and this same file's §3 draft, and only the
+      last one turned out to hide a much bigger, pre-existing gap once I read it closely
+      against the live text.
+
+      Confirmed by direct comparison, not guessed: the draft's state list (`queued`,
+      `running`, `findings_ready`, `awaiting_diff`, `fast_clean`, `needs_human`, `passed`,
+      `passed_partial`, `failed`, `expired`) is missing `findings_stale` and `cancelled`,
+      both live in `REVIEW_STATES` (`src/core/review-state.ts`). It still says "wait and
+      poll again — start at 10s, back off to 60s" — the EXACT wording
+      `docs.test.ts`'s own "THE MOST EXPENSIVE INSTRUCTION THIS SERVICE EVER SHIPPED"
+      test exists to keep out of every live document, replaced everywhere else by
+      `check_back_note`'s shrinking-interval mechanism. It has no mention of
+      `check_back_after_ms`, the retry-at-most-once-on-`failed` rule (arguably the
+      single most consequential sentence in the live doc — the one tied to a client
+      that retried an unwinnable review five times over two days), `human_decision`, or
+      the "seen N×" two-different-problems guidance, and its `checks_skipped` paragraph
+      names only one of the three cases the live text distinguishes.
+
+      **What is fixed here, same round:** the one sentence this round's fix actually
+      added to `TOOL_DOCS.poll` ("closes THIS review, not your task") is now in the
+      draft too, in the right place.
+
+      **What is deliberately NOT fixed here:** the rest of the above. `review_start`'s
+      own draft two sections up got a dedicated, verified pass under D-130 (it still
+      carries the `lore-ok[45d7c573]` marking exactly that); `review_poll`'s draft
+      apparently never got the equivalent pass and has been quietly accumulating drift
+      since. A full resync is a careful, from-scratch transcription of a ~150-line live
+      tool description into the same condensed prose style the rest of §3 already uses —
+      real work, not a two-line fix, and not what the round that found it was for.
+      Argued deferral in the same shape as the two entries below: real, named, not
+      silently absorbed into an unrelated change.
+
 ### 2026-08-28 — argued deferral: `mirror-refresh.sh`'s refspec never covers a scratch `review/*` ref
 
 - [ ] **THE D-77 SCRATCH-REF WORKFLOW CANNOT WORK AS WRITTEN, structurally, not

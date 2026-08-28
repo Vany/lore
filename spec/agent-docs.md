@@ -47,6 +47,9 @@ Written first, because each one is why a specific sentence exists.
 9. **Summarises the ticket instead of pasting it**, or substitutes its own account
    of what it built — which destroys the only independent statement of intent the
    reviewers have.
+10. **Treats `passed`/`passed_partial` as the end of its whole task and stops
+    there**, not just the end of this one review — the exact opposite of what a
+    clean or partial verdict should prompt.
 
 ---
 
@@ -111,10 +114,14 @@ Draft text. These are the deliverable, not a summary of it.
 > pattern was already there — every other branch gets it too. Real, worth a ticket,
 > not yours to answer here. These sort last on purpose; do not re-sort by severity.
 >
-> **Only `passed` means the branch is clean.** `failed` and `expired` mean the
-> review did not complete; they are not "nothing found". Never merge on them.
-> `failed_because` carries the reason — repeat it verbatim rather than inferring a
-> cause from the word `failed`. Most reasons are operational and name their own fix.
+> **Only `passed` means the branch is clean.** Reaching it, or `passed_partial`,
+> closes THIS review, not your task — attest it, then carry on with whatever else
+> you were asked to do.
+>
+> `failed` and `expired` mean the review did not complete; they are not "nothing
+> found". Never merge on them. `failed_because` carries the reason — repeat it
+> verbatim rather than inferring a cause from the word `failed`. Most reasons are
+> operational and name their own fix.
 >
 > `fast_clean` means only the cheap tiers have finished. The deep tiers are still
 > running. It is **not** a pass.

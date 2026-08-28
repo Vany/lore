@@ -271,6 +271,7 @@ describe("every behaviour a client must know about reaches the texts", () => {
     ["attest", "a folder review's line names its scope (D-130)", "scoped to"],
     ["submit", "commit's tree_hash is checked before anything lands, not after", "before anything is applied or even held"],
     ["submit", "a commit cannot chain onto an outstanding raw-diff hold", "sent next is REFUSED rather than held"],
+    ["poll", "a passed review closes the review, not the client's whole task", "not your task"],
   ])("%s tells the client: %s", (tool, _why, needle) => {
     expect(TOOL_DOCS[tool as keyof typeof TOOL_DOCS]).toContain(needle);
   });

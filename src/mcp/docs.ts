@@ -195,7 +195,9 @@ LLM turn that learns nothing, and the round finishes when it finishes.
 
 States: ${REVIEW_STATES.join(", ")}.
 
-ONLY \`passed\` means the branch is clean.
+ONLY \`passed\` means the branch is clean. Reaching it, or \`passed_partial\`,
+closes THIS review, not your task — call review_attest, then carry on with
+whatever else you were asked to do.
 
 - \`passed_partial\` means every tier that COULD run agreed, but the evidence is
   weaker than a pass, for either or both of two reasons:
