@@ -3649,7 +3649,14 @@ async function collectFixedElsewhere(
     if (finding === undefined) continue; // already settled in an earlier round
     out.push({
       finding,
-      reason: claim.reason,
+      // THE CLAIM'S OWN file/line, folded into `reason` — found by lore's own
+      // review, fingerprint c380dbe9: `Pending` has no location field of its own,
+      // and the prompt renders exactly one string per entry (`rationale: p.reason`,
+      // above). Without this, the one structured datum a `fixed_elsewhere` claim
+      // supplies beyond a text `lore-ok` — WHERE the fix landed — never reached the
+      // tier that is supposed to ratify it: it saw only free prose, indistinguishable
+      // from a claim naming nowhere at all, and silence accepts either way.
+      reason: `${claim.reason} (fixed at ${claim.file}${claim.line === undefined ? "" : `:${String(claim.line)}`})`,
       scope: await scopeOf(worktree, finding.file, finding.line),
     });
   }

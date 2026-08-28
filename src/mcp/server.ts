@@ -25,7 +25,7 @@ import { isSuppressionNotice } from "../core/checks-skipped.ts";
 import { DEFAULT_TYPE, reviewType, reviewTypeIds } from "../core/review-type.ts";
 import { STALE_GRACE_DAYS, STALE_HOURS } from "../ops/retention.ts";
 import { applyPatch, resolveTree, restoreTree, revParse, treeDelta, treeHash } from "../git/repo.ts";
-import { filesInDiff } from "../git/diff.ts";
+import { filesInDiff, filesTouchedByDiff } from "../git/diff.ts";
 import { requestMirrorRefresh, type RefreshOutcome } from "../git/mirror-request.ts";
 import { dataDir } from "../core/paths.ts";
 import { decide } from "../knowledge/decide.ts";
@@ -1623,7 +1623,15 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           const validatedFixedElsewhere: { fingerprint: string; file: string; line: number | undefined; reason: string }[] =
             [];
           if (fixed_elsewhere !== undefined && fixed_elsewhere.length > 0) {
-            const filesTouched = new Set(filesInDiff(patch));
+            // `filesTouchedByDiff`, NOT `filesInDiff` — found by lore's own review,
+            // fingerprint 23c8b393: `filesInDiff` deliberately excludes a deletion
+            // (no marker left to scan in a file that no longer exists), but a
+            // `fixed_elsewhere` claim naming a file the fix DELETED is often the
+            // strongest evidence there is ("I removed the whole buggy module"), and
+            // was refused here as "not part of this submission" — wrong, and the
+            // refusal's own suggested fallback (a lore-ok at the original line) can
+            // be equally impossible when that line is what got deleted.
+            const filesTouched = new Set(filesTouchedByDiff(patch));
             const stillOpen = new Set(store.openFindings(review_id).map((f) => f.fingerprint));
             for (const entry of fixed_elsewhere) {
               let fp: string | undefined;
@@ -1978,13 +1986,13 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
                   justify_with: `// lore-ok[${f.fingerprint.slice(0, 8)}]: <why this code is correct, or where it was fixed>`,
                 })),
                 will_not_settle_note:
-                  `${String(unmoved.length)} open finding(s) name code that has NOT moved and carry no lore-ok, so ` +
-                  "the next " +
-                  "round CANNOT settle them however it goes: a tier that stops raising something it never saw " +
-                  "move has changed its mind, not been satisfied. If you fixed the cause somewhere else — which " +
-                  "is often the right place — say so AT THE NAMED LINE with a `lore-ok[<fingerprint>]: <why>` " +
-                  "comment and submit again; the tier ratifies that by not raising it. Otherwise they will come " +
-                  "back, and each round costs you the deep tier's full time.",
+                  `${String(unmoved.length)} open finding(s) name code that has NOT moved and carry no lore-ok or ` +
+                  "fixed_elsewhere claim, so the next round CANNOT settle them however it goes: a tier that stops " +
+                  "raising something it never saw move has changed its mind, not been satisfied. If you fixed the " +
+                  "cause somewhere else — which is often the right place — say so: pass `fixed_elsewhere` " +
+                  "(fingerprint, file, reason) on your next submit, or leave a `lore-ok[<fingerprint>]: <why>` " +
+                  "comment AT THE NAMED LINE instead. Either settles it by silence. Otherwise they will come back, " +
+                  "and each round costs you the deep tier's full time.",
               }),
         }),
       );

@@ -441,6 +441,22 @@ describe("runRound", () => {
     expect(store.settledFingerprints("r1")).not.toContain(fingerprint(HOLD_BUG));
   });
 
+  // Regression for fingerprint c380dbe9: collectFixedElsewhere built a Pending from
+  // `claim.reason` alone -- the ONE structured datum a fixed_elsewhere claim supplies
+  // beyond an ordinary lore-ok, WHERE the fix landed, never reached the tier that is
+  // meant to ratify it, which saw only free prose indistinguishable from a claim
+  // naming nowhere at all. Uses a DIFFERENT file than HOLD_BUG's own ("src/hold.ts"),
+  // so its appearance in the prompt can only come from the claim, not the finding.
+  it("tells the reviewer WHERE a fixed_elsewhere claim's fix landed, not only why", async () => {
+    const reviewer = new ScriptedReviewer([[HOLD_BUG], []]);
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
+
+    store.recordFixedElsewhere("r1", fingerprint(HOLD_BUG), "src/shared/release.ts", 9, "released in a shared helper now");
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
+
+    expect(reviewer.prompts[1]).toContain("src/shared/release.ts");
+  });
+
   // The bug this exists for: a semgrep false positive on lore's own test suite could
   // NEVER be justified. T0 is deterministic — it re-matches every round — so counting
   // it as "the reviewer looked and raised it anyway" rejected the reason forever, the

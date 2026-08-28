@@ -1177,6 +1177,23 @@ describe("knowledge", () => {
     expect(store.fixedElsewhereFor("rev2").map((c) => c.fingerprint)).toStrictEqual(["bbbb2222"]);
   });
 
+  // Regression for fingerprint f83d72a1: `fixed_elsewhere_claim` was created WITHOUT
+  // `ON DELETE CASCADE` on its review_id FK, the one thing `deleteReviewsBefore`'s own
+  // docblock already names as fatal — a child row with no cascade makes the retention
+  // sweep's plain `DELETE FROM review` violate the FK and roll back the WHOLE
+  // transaction, forever, the first time any review carrying a claim ages past
+  // retention. This asserts the sweep survives a terminal review that has one.
+  it("cascades a fixed_elsewhere claim when retention sweeps its review (D-133)", () => {
+    newReview("rev1");
+    store.recordFixedElsewhere("rev1", "aaaa1111", "src/other.ts", 1, "reason");
+    store.db.prepare("UPDATE review SET state = 'passed', updated_at = '2020-01-01T00:00:00.000Z' WHERE id = 'rev1'").run();
+
+    const deleted = store.deleteReviewsBefore("2099-01-01T00:00:00.000Z");
+
+    expect(deleted).toBe(1);
+    expect(store.fixedElsewhereFor("rev1")).toStrictEqual([]);
+  });
+
   // b1a9841c, found by lore's own review: every OTHER id-comparison path in this
   // file (retirePolicy, policyByShort, the appeal grammar) resolves a prefix;
   // resolveConflict matched keep/retire with exact `=`. A client naturally holds

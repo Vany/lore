@@ -1177,6 +1177,47 @@ WHOLE call before anything lands or is held, for both `diff` and `commit`
 alike — no asymmetric handling needed, because `patch` was already uniform by
 the point validation runs.
 
+**Four more, same review, later same day: retention, deletion-as-evidence, a
+stale reply, and a claim's location never reaching the tier that rules on
+it.**
+
+- **`fixed_elsewhere_claim` was created WITHOUT `ON DELETE CASCADE` — fingerprint
+  f83d72a1.** The one thing `deleteReviewsBefore`'s own docblock already names as
+  fatal: a review-child row with no cascade makes the retention sweep's plain
+  `DELETE FROM review` violate the FK and roll back the WHOLE transaction, every
+  hour, for ever, from the first terminal review that carries a claim. `held_diff`
+  has this exact shape and is pre-deleted by hand for exactly that reason — this
+  table repeated it one row down in the same file, in the same feature that had
+  the lesson sitting right beside it. Unlike `held_diff`, this table had never
+  been deployed, so there was no existing database to be stuck with: fixed by
+  adding the cascade directly rather than a migration.
+- **The file-in-diff check refused a claim naming a file the fix DELETED —
+  fingerprint 23c8b393.** It reused `filesInDiff`, which excludes a deletion by
+  design (no marker left to scan in a file that no longer exists) — correct for
+  its other three callers, wrong here: deleting the whole buggy file is often the
+  strongest evidence a claim can offer, and the refusal's own suggested fallback
+  (a `lore-ok` at the original line) can be equally impossible when that line is
+  what got deleted. Fixed with a sibling function, `filesTouchedByDiff`
+  (`git/diff.ts`), reading both `+++ b/` and `--- a/` — a new function rather than
+  a flag on `filesInDiff`, since the two callers want genuinely different things.
+- **`will_not_settle_note` still named only the `lore-ok` comment — fingerprint
+  20f24c95.** The reply text shown at the exact moment a client learns its
+  fix-elsewhere did not settle never mentioned `fixed_elsewhere`, the field this
+  whole change exists to offer — CLAUDE.md's rule that client-facing strings ARE
+  the interface, missed for the one string surfaced at the decision point itself.
+  Fixed in place.
+- **The claim's own `file`/`line` never reached the tier that rules on it —
+  fingerprint c380dbe9.** `collectFixedElsewhere` built each `Pending` from
+  `claim.reason` alone; `Pending` has no location field, and the prompt renders
+  exactly one string per entry. So the one structured datum a `fixed_elsewhere`
+  claim supplies beyond an ordinary `lore-ok` — WHERE the fix landed — was invisible
+  to the model deciding whether to ratify it, which saw free prose indistinguishable
+  from a claim naming nowhere at all. Fixed by folding `claim.file`/`claim.line`
+  into the `reason` string itself, rather than widening `Pending` for a field only
+  one of its two producers has: the ruling loop and `settleFixed`'s exclusion set
+  never read location, only the prompt does, and it already renders `reason`
+  verbatim.
+
 **D-128 — a finding that names its fields "title"/"detail" is a naming drift, not a
 malformed reply: repaired at the boundary rather than gambled on a retry. BUILT
 2026-08-20.**

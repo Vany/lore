@@ -321,9 +321,19 @@ CREATE INDEX IF NOT EXISTS conflict_open ON knowledge_conflict(repo_id, state);
 -- openFindings, which is what fixedElsewhereFor joins against, so a ruled-on claim
 -- simply stops being fed in -- the same re-scan-and-let-settlement-silence-it shape
 -- collectJustifications already uses for text markers.
+-- ON DELETE CASCADE, unlike held_diff right above it in this file's history --
+-- found by lore's own review, fingerprint f83d72a1: held_diff predates this table
+-- and cannot retrofit the constraint onto an already-deployed database (CREATE
+-- TABLE IF NOT EXISTS does nothing to an existing table), which is why
+-- deleteReviewsBefore pre-deletes it by hand instead. fixed_elsewhere_claim has
+-- never been deployed, so there is no old database to be stuck with -- the
+-- correct constraint from the start avoids the exact incident deleteReviewsBefore's
+-- own docblock describes: one child row with no cascade makes the retention
+-- sweep's DELETE FROM review violate the FK, roll back the WHOLE transaction, and
+-- repeat that failure every hour for ever, silently, with nothing old ever deleted.
 CREATE TABLE IF NOT EXISTS fixed_elsewhere_claim (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
-  review_id   TEXT NOT NULL REFERENCES review(id),
+  review_id   TEXT NOT NULL REFERENCES review(id) ON DELETE CASCADE,
   fingerprint TEXT NOT NULL,
   file        TEXT NOT NULL,
   line        INTEGER,

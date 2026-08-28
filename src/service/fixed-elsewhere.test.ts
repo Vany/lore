@@ -304,4 +304,52 @@ describe("review_submit fixed_elsewhere (D-133)", () => {
     const willNotSettle = (body["will_not_settle"] as { fingerprint: string }[] | undefined) ?? [];
     expect(willNotSettle.map((f) => f.fingerprint)).not.toContain(FP.slice(0, 8));
   });
+
+  // Regression for fingerprint 23c8b393: the file-in-diff check used to reuse
+  // filesInDiff, which deliberately excludes a deletion (`+++ /dev/null` never
+  // starts with `b/`) — correct for marker-scanning, wrong here, since deleting the
+  // buggy file entirely is often the strongest possible evidence for a claim.
+  it("accepts a fixed_elsewhere claim naming a file the fix deleted", async () => {
+    writeFileSync(join(worktree, "f.txt"), "b\n");
+    g("rm", "other.ts");
+    const after = treeNow();
+    g("reset", "--hard", "HEAD");
+
+    const deletionDiff =
+      "diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-a\n+b\n" +
+      "diff --git a/other.ts b/other.ts\ndeleted file mode 100644\n--- a/other.ts\n+++ /dev/null\n@@ -1 +0,0 @@\n-x\n";
+
+    const { body, isError } = await callTool("review_submit", {
+      review_id: "revFix",
+      diff: deletionDiff,
+      tree_hash: after,
+      fixed_elsewhere: [{ fingerprint: FP, file: "other.ts", reason: "module removed entirely" }],
+    });
+
+    expect(isError, JSON.stringify(body)).toBe(false);
+    expect(store.fixedElsewhereFor("revFix")).toStrictEqual([
+      { fingerprint: FP, file: "other.ts", line: undefined, reason: "module removed entirely" },
+    ]);
+  });
+
+  // Regression for fingerprint 20f24c95: will_not_settle_note — the text shown at
+  // exactly the moment a client learns its fix-elsewhere did not settle — named only
+  // the lore-ok comment and never mentioned fixed_elsewhere, the field this whole
+  // change exists to offer, despite CLAUDE.md's rule that client-facing strings ARE
+  // the interface and move with the behaviour.
+  it("mentions fixed_elsewhere in the will_not_settle_note, not only lore-ok", async () => {
+    const after = afterApplyTreeHash();
+
+    const { body, isError } = await callTool("review_submit", {
+      review_id: "revFix",
+      diff: DIFF,
+      tree_hash: after,
+      // No fixed_elsewhere and no lore-ok anywhere: FP genuinely will not settle.
+    });
+
+    expect(isError, JSON.stringify(body)).toBe(false);
+    const willNotSettle = (body["will_not_settle"] as { fingerprint: string }[] | undefined) ?? [];
+    expect(willNotSettle.map((f) => f.fingerprint)).toContain(FP.slice(0, 8));
+    expect(String(body["will_not_settle_note"])).toMatch(/fixed_elsewhere/);
+  });
 });

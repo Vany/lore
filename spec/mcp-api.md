@@ -787,7 +787,9 @@ is applied or held, for either form:
   this is caught and rephrased with the same D-133 framing rather than left to
   escape as a generic error.
 - `file` must be part of **this submission's own** diff or commit
-  (`filesInDiff`); otherwise the whole call is refused. Silence over a file the
+  (`filesTouchedByDiff`, which — unlike `filesInDiff` — also counts a file the
+  diff DELETES: removing the whole buggy file is often the strongest evidence a
+  claim can offer); otherwise the whole call is refused. Silence over a file the
   tier was never shown is not evidence of anything — a `fixed_elsewhere` claim
   needs the same kind of evidence an ordinary `lore-ok` carries inline as prose.
 - A fingerprint that resolves but names a finding already settled by an earlier
@@ -813,6 +815,19 @@ landed would expire on the wrong edit. The verdict therefore only expires if the
 originally flagged code later changes, not if the "elsewhere" fix is later
 reverted — an existing limitation the `lore-ok`-at-the-original-line form already
 has, not a new one.
+
+The claim's `file`/`line` are folded into the `Pending`'s `reason` text
+(`collectFixedElsewhere`), not carried as a separate field — `Pending` has none,
+and the prompt renders exactly one string per entry. Without this the tier ruling
+on a claim saw only free prose with no location, unable to tell it apart from a
+claim naming nowhere at all.
+
+`fixed_elsewhere_claim` cascades on its review (`ON DELETE CASCADE`), matching
+every review-child table except `held_diff` (which predates the convention and is
+pre-deleted by hand instead — see its own schema comment). Without it, the
+retention sweep's `DELETE FROM review` would violate the FK the first time any
+review carrying a claim aged past retention, rolling back the whole sweep, every
+hour, for ever.
 
 The reply's `will_not_settle` preview excludes any finding with a `fixed_elsewhere`
 claim on record AT ALL — not only one this same call made. A HELD submission's

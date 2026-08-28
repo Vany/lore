@@ -518,7 +518,9 @@ rejects it at higher severity, exactly like any other justification:
     is the short id \`review_poll\` gave you; \`file\` is wherever the real fix landed and
     MUST be part of THIS diff or commit — silence over a file the tier was never shown is
     not evidence of anything, so lore refuses the whole call rather than record a claim
-    with nothing behind it. No edit to the originally flagged line needed. A fingerprint
+    with nothing behind it. Deleting the file counts: naming one this diff REMOVES is
+    valid, often the strongest evidence there is. No edit to the originally flagged line
+    needed. A fingerprint
     that does not resolve, is AMBIGUOUS (two findings share the prefix — send more of
     it), or names a file outside this submission, fails the call outright — a real
     mistake worth failing loudly on, not a shortcut around review, only around

@@ -594,6 +594,31 @@ export function filesInDiff(diff: string): readonly string[] {
   return out;
 }
 
+/**
+ * Every file a diff MENTIONS, including one it deletes — unlike `filesInDiff`, which
+ * excludes a deletion by design (no marker left to scan in a file that no longer
+ * exists, correct for every existing caller). Found by lore's own review, fingerprint
+ * 23c8b393: `review_submit`'s `fixed_elsewhere` reused `filesInDiff` to check a claim's
+ * `file` was part of the submission, and a claim naming a file the fix DELETED — often
+ * the strongest evidence there is, "I removed the whole buggy module" — was refused as
+ * "not part of this submission". A separate function rather than a flag on
+ * `filesInDiff`: the two callers want genuinely different things (files worth reading
+ * for a marker vs. files this diff is evidence about), not one behaviour with an
+ * exception.
+ */
+export function filesTouchedByDiff(diff: string): readonly string[] {
+  const out = new Set<string>();
+  for (const m of diff.matchAll(/^\+\+\+ (.+)$/gm)) {
+    const path = unquoteGitPath((m[1] ?? "").trim());
+    if (path.startsWith("b/") && path.length > 2) out.add(path.slice(2));
+  }
+  for (const m of diff.matchAll(/^--- (.+)$/gm)) {
+    const path = unquoteGitPath((m[1] ?? "").trim());
+    if (path.startsWith("a/") && path.length > 2) out.add(path.slice(2));
+  }
+  return [...out];
+}
+
 /** git blob sha of a working-tree file — the coarse half of a verdict's scope. */
 export async function blobSha(worktree: string, path: string): Promise<string | undefined> {
   return gitMaybe(worktree, ["hash-object", "--", path]);
