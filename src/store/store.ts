@@ -1550,31 +1550,38 @@ export class Store {
    * claim text lets the caller require actual similarity, not just a shared taxonomy
    * entry.
    *
-   * lore-ok[3d90d9a0]: EXCLUDES BY (REVIEW, FINGERPRINT), not fingerprint alone — found
-   * by lore's own review. `fingerprint()` (core/fingerprint.ts) is content-derived —
-   * claim, file, symbol, nothing review-specific — so the SAME defect raised in an
-   * EARLIER review of this repo carries the IDENTICAL fingerprint. Excluding on the
-   * bare value excluded exactly the prior sightings this method exists to surface,
-   * not just the current finding's own row. `reviewId` is new for this reason alone.
+   * FOUR ROUNDS OF THE SAME REVIEW ON THIS ONE QUERY, kept together rather than as
+   * four separate notes, because they are one story: every attempt at a SQL-side
+   * shortcut for "the same finding, differently expressed" turned out to disagree
+   * with the JS-side rule it was standing in for, in a way that only surfaced once
+   * someone tried a real edge case.
    *
-   * lore-ok[54d77a41]/[6f0e17d0]: THE COMPARISON MOVED TO JS, not reimplemented in
-   * SQL a second time — found by lore's own review, twice over the same line. The
-   * first attempt matched `normalizeClaim`'s trim/lower-case/collapse-whitespace/
-   * strip-trailing-punctuation with SQL's `TRIM`/`LOWER`/chained `REPLACE`/`RTRIM` —
-   * closer, but SQLite's bare `TRIM` strips only ASCII space (never a tab or a
-   * newline, both ordinary in free-text model output) and a chained `REPLACE` only
-   * collapses literal double-spaces, not an arbitrary run. Reimplementing a JS
-   * function's exact semantics in SQL is a second copy free to disagree with the
-   * first, which is exactly what happened twice in one round. `normalizeClaim` is
-   * now called on the SQL side of the comparison too, in JS, so there is one
-   * definition instead of two dialects of it — this is the same principle
-   * `TERMINAL_SQL`/`UNTRUSTED_READ_SQL` already apply to state/outcome lists,
-   * applied to a string transform instead of a set membership test. The query
-   * fetches every OTHER finding in the repo rather than pre-filtering on the claim,
-   * which is a wider read than before; `priorLike`'s own doc already treats
-   * over-fetching as the deliberate trade for not missing a real match (see the
-   * CWE branch above), and a repo's whole finding history is not the scale this
-   * runs at a hot-path frequency against.
+   * lore-ok[3d90d9a0]: EXCLUDES BY (REVIEW, FINGERPRINT), not fingerprint alone —
+   * found by lore's own review. `fingerprint()` (core/fingerprint.ts) is
+   * content-derived — claim, file, symbol, nothing review-specific — so the SAME
+   * defect raised in an EARLIER review of this repo carries the IDENTICAL
+   * fingerprint. Excluding on the bare value excluded exactly the prior sightings
+   * this method exists to surface, not just the current finding's own row.
+   * `reviewId` is a parameter for this reason alone.
+   *
+   * lore-ok[54d77a41]/[6f0e17d0]: THE CLAIM COMPARISON MOVED TO JS, not
+   * reimplemented in SQL a second time — found by lore's own review, twice over the
+   * same line. The first attempt matched `normalizeClaim`'s
+   * trim/lower-case/collapse-whitespace/strip-trailing-punctuation with SQL's
+   * `TRIM`/`LOWER`/chained `REPLACE`/`RTRIM` — closer, but SQLite's bare `TRIM`
+   * strips only ASCII space (never a tab or a newline, both ordinary in free-text
+   * model output) and a chained `REPLACE` only collapses a literal double-space,
+   * not an arbitrary run. Reimplementing a JS function's exact semantics in SQL is
+   * a second copy free to disagree with the first, which is what happened twice on
+   * this one line. `normalizeClaim` is now called directly, in JS, on both sides of
+   * the comparison, so there is one definition instead of two dialects of it — the
+   * same principle `TERMINAL_SQL`/`UNTRUSTED_READ_SQL` already apply to
+   * state/outcome lists, applied here to a string transform instead of a set
+   * membership test. The query now fetches every OTHER finding in the repo rather
+   * than pre-filtering on the claim in SQL, which is a wider read than before;
+   * `priorLike`'s own doc above already treats over-fetching as the deliberate
+   * trade for not missing a real match, and a repo's whole finding history is not
+   * the scale this runs at a hot-path frequency against.
    */
   priorLike(repoId: string, reviewId: string, fingerprint: string, normalizedClaim: string, cwe: string | undefined): readonly PriorFinding[] {
     const rows = this.db
