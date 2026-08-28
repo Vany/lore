@@ -290,7 +290,7 @@ describe("findings under the step that raised them", () => {
    * A SETTLED FINDING MUST NOT LOOK LIKE AN OPEN ONE. A board where answered work reads
    * as outstanding work is a board whose reader learns to discount it.
    */
-  it("says which findings have been answered, and how", () => {
+  it("says which findings have been answered", () => {
     review("r1", "findings_ready");
     const a = store.openTierRun("r1", "t1", 1, ago(600_000));
     store.closeTierRun(a, "findings", []);
@@ -303,8 +303,28 @@ describe("findings under the step that raised them", () => {
 
     const byFp = Object.fromEntries((find("r1")?.tiers[0]?.findings ?? []).map((f) => [f.fingerprint, f]));
     expect(byFp["f1"]?.settled).toBe("justified-accepted");
-    expect(byFp["f1"]?.settledBecause).toContain("bounded upstream");
     expect(byFp["f2"]?.settled, "still work").toBeUndefined();
+  });
+
+  // lore-ok[969fa523]: was "and how", asserting settledBecause carried the rationale —
+  // found by lore's own review, one field past the 240a9efa fix above. A justification's
+  // rationale is the developer's own words about why a claim does not need fixing,
+  // which routinely restates the claim; that is the same disclosure claim/evidence/
+  // failureScenario were removed for, on the same unauthenticated route.
+  it("never says WHY a finding was settled, only that it was", () => {
+    review("r1", "findings_ready");
+    const a = store.openTierRun("r1", "t1", 1, ago(600_000));
+    store.closeTierRun(a, "findings", []);
+    raise("r1", "f1", "t1", 1);
+    store.recordVerdict("r1", {
+      fingerprint: "f1", verdict: "justified-accepted",
+      rationale: "bounded upstream — the caller already validates this before it reaches here",
+      scope: undefined, tier: "t1", round: 2,
+    });
+
+    const f = find("r1")?.tiers[0]?.findings[0];
+    expect(f?.settled).toBe("justified-accepted");
+    expect(f && "settledBecause" in f, "the text this fix removes").toBe(false);
   });
 
   /**

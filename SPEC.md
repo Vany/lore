@@ -4411,6 +4411,15 @@ to say a tier is unhappy and where. What moved behind the same bearer token ever
 other finding-bearing route already needs: what it is unhappy about, read back
 through `review_poll` or `lore://review/<id>`.
 
+**The rationale behind a settled verdict moved with it, one round later (fingerprint
+969fa523).** The first pass of this revision named three fields and missed a fourth:
+a `justified-accepted` rationale is the developer's own words about why a claim does
+not need fixing, and those words routinely restate the claim — the identical
+disclosure, carried in the verdict's text instead of the finding's.
+`justified-rejected` never reaches this at all: the ladder rejecting a justification
+leaves the finding open, not settled. The verdict KIND stays (a status, not a
+description); the rationale behind it does not.
+
 Capped at forty findings per review with the remainder **counted and stated**, because a
 list that silently stops at forty reads as a complete list of forty.
 

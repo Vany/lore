@@ -59,9 +59,19 @@ export interface BoardFinding {
    *
    * Shown because a settled finding that looks identical to an open one turns a board
    * into a list of things already dealt with, and a reader who learns that stops reading.
+   *
+   * lore-ok[969fa523]: the RATIONALE that used to travel beside this (`settledBecause`)
+   * does not — found by lore's own review, one field past the 240a9efa fix above. A
+   * `justified-accepted` rationale is the developer's own words explaining WHY a
+   * claim does not need fixing, which routinely restates what the claim was; that is
+   * the same disclosure the three fields above were removed for, on the same
+   * unauthenticated route, just carried in the VERDICT'S text instead of the
+   * FINDING'S. `justified-rejected` never reaches this field at all — the ladder
+   * rejecting a justification leaves the finding OPEN (`openFindings`), not settled.
+   * The verdict KIND (`settled` itself — only ever `fixed` or `justified-accepted`,
+   * per `SETTLING_VERDICTS`) stays: it is a status label, not a description.
    */
   readonly settled: string | undefined;
-  readonly settledBecause: string | undefined;
 }
 
 /** One tier's attempt, open or closed. No `finishedAt` means it is running now. */
@@ -424,12 +434,18 @@ function withFindings(
   // Worst first already (`FINDING_ORDER_SQL`), so a cap keeps the ones worth seeing.
   const kept = all.slice(0, MAX_FINDINGS_PER_REVIEW);
   const openFps = new Set(store.openFindings(reviewId).map((f) => f.fingerprint));
-  const verdicts = new Map<string, { verdict: string; rationale: string }>();
+  // lore-ok[969fa523]: rationale dropped from this map — found by lore's own review.
+  // It fed only `settledBecause`, which no longer exists (see BoardFinding's own
+  // comment): a rejection rationale is tier-authored text describing the finding it
+  // argues about, the same disclosure the board no longer carries for the finding
+  // itself. Keeping the field here after nothing reads it is exactly the
+  // looks-used-but-is-not shape this codebase's own tests exist to catch.
+  const verdicts = new Map<string, string>();
   for (const v of store.verdictsFor(reviewId)) {
     const fp = String(v["fingerprint"] ?? "");
     // The LAST verdict wins: `verdictsFor` is ordered by id, and a finding argued twice
     // is settled by the ruling that came second.
-    verdicts.set(fp, { verdict: String(v["verdict"] ?? ""), rationale: String(v["rationale"] ?? "") });
+    verdicts.set(fp, String(v["verdict"] ?? ""));
   }
 
   const key = (tier: string, round: number) => `${tier}:${round}`;
@@ -447,7 +463,7 @@ function withFindings(
       symbol: f.symbol,
       cwe: f.cwe,
       preexisting: f.preexisting === true,
-      ...(settled === undefined ? {} : { settled: settled.verdict, settledBecause: settled.rationale }),
+      ...(settled === undefined ? {} : { settled }),
     } as BoardFinding;
     const k = key(f.origin, f.round);
     if (!runKeys.has(k)) {

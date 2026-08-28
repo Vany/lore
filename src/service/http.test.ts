@@ -507,6 +507,32 @@ describe("the operator board", () => {
     expect(text).not.toContain("the scenario that would leak");
   });
 
+  // lore-ok[969fa523]: found by lore's own review, one field past the 240a9efa fix
+  // just above. A justification's rationale is the developer's own words about why a
+  // claim does not need fixing — it routinely restates the claim, the same disclosure
+  // the fix above removed, just carried in the verdict's text instead of the finding's.
+  it("never carries a settled finding's rationale on the unauthenticated board", async () => {
+    review("revBoardRationale", "running", "feat/board-rationale");
+    const run = store.openTierRun("revBoardRationale", "t1", 1, new Date().toISOString());
+    store.closeTierRun(run, "findings", []);
+    store.recordFinding("revBoardRationale", {
+      fingerprint: "bf3", file: "gate.ts", line: 7, symbol: "s", severity: "high",
+      claim: "c", evidence: "e", failureScenario: "f", cwe: undefined,
+      origin: "t1", round: 1, firstSeen: new Date().toISOString(),
+    });
+    store.recordVerdict("revBoardRationale", {
+      fingerprint: "bf3", verdict: "justified-accepted",
+      rationale: "bounded upstream — the caller already validates this before it reaches here",
+      scope: undefined, tier: "t1", round: 1,
+    });
+
+    const text = await (await fetch(`${base}/board.json`)).text();
+
+    expect(text, "the finding must actually be in the response to make this check meaningful").toContain("bf3");
+    expect(text, "the verdict KIND still reaches an unauthenticated reader").toContain("justified-accepted");
+    expect(text).not.toContain("bounded upstream — the caller already validates this before it reaches here");
+  });
+
   /**
    * The branch links to the pull request, which is the whole reason to ask for it: a
    * branch name is not clickable and does not say which forge it lives on.

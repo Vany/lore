@@ -568,6 +568,13 @@ function run(r, t) {
  * summary line, so a collapsed row still says WHAT KIND of finding this is, just not
  * what it claims.
  *
+ * lore-ok[969fa523]: settledBecause removed too, one round later. The rationale
+ * behind a justified-accepted verdict is the developer's own words about why a claim
+ * does not need fixing, which routinely restates the claim — the same disclosure the
+ * fields above were removed for, missed the first time because the finding that
+ * found it named only three fields. The verdict KIND (settled itself) stays; it is a
+ * status label, not a description.
+ *
  * The id is review + fingerprint, so the open-set restores it across a push exactly as it
  * does for a review — reading a finding while the board updates must not close it.
  *
@@ -593,7 +600,6 @@ function finding(r, f) {
       '<span class="meta">' + meta + "</span>" +
     "</summary>" +
     '<div class="fbody">' +
-      (f.settledBecause ? '<p><span class="label">settled </span>' + esc(f.settledBecause) + "</p>" : "") +
       '<p class="dim">what this claims is not shown on this unauthenticated board — read the review itself for the full finding' +
         (f.preexisting ? " · the branch did not touch this file" : "") +
       "</p>" +

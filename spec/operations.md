@@ -249,10 +249,15 @@ and the scheme is re-checked before rendering, because an `href` on a page that 
 credential is somewhere `javascript:` must never reach.
 
 **Each step carries its findings, collapsed.** Three levels: review → tier attempt →
-finding. A finding opens to severity, file, line, symbol, CWE, and the verdict that
-settled it where one exists — never to claim, evidence or failure scenario (D-96,
-revised 2026-08-28: those travelled here once, and `service/http.ts`'s own route
-comment never agreed that they should). Grouping is by `(origin, round)`, which is
+finding. A finding opens to severity, file, line, symbol, CWE, and the verdict KIND
+that settled it where one exists — never to claim, evidence, failure scenario, or the
+rationale behind that verdict (D-96, revised 2026-08-28: the first three travelled
+here once, and `service/http.ts`'s own route comment never agreed that they should;
+the rationale is fingerprint 969fa523, caught a round later — a `justified-accepted`
+rationale is the developer's own words about why a claim does not need fixing, which
+routinely restates the claim, the same disclosure one field over;
+`justified-rejected` never reaches this row at all, since a rejected justification
+leaves the finding open rather than settled). Grouping is by `(origin, round)`, which is
 exactly how a `tier_run` is identified, so it is a join rather than a guess; it was
 checked against the live database first, where every finding matches. **A finding
 that matches nothing is shown as an orphan rather than dropped** — the grouping is a

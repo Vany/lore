@@ -146,7 +146,6 @@ const snapshot = (over: Record<string, unknown> = {}) => ({
               cwe: "CWE-89",
               preexisting: false,
               settled: undefined,
-              settledBecause: undefined,
             },
           ],
         },
@@ -197,6 +196,49 @@ describe("the board's own script runs", () => {
     expect(html, "the board says plainly that it withholds the text").toContain(
       "what this claims is not shown on this unauthenticated board",
     );
+  });
+
+  // lore-ok[969fa523]: found by lore's own review, one field past the 240a9efa fix
+  // just above. A justification's rationale is the developer's own words about why a
+  // claim does not need fixing — it routinely restates the claim, the same disclosure
+  // the fix above removed, just carried in the VERDICT text instead of the finding's own.
+  // The verdict KIND still shows; the reasoning behind it does not.
+  it("shows that a finding was settled, never the reasoning why", () => {
+    const { render, byId } = loadPage();
+    const base = snapshot();
+    render({
+      ...base,
+      reviews: [
+        {
+          ...(base.reviews[0] as Record<string, unknown>),
+          tiers: [
+            {
+              tier: "t1",
+              round: 1,
+              outcome: "findings",
+              startedAt: new Date(Date.now() - 500_000).toISOString(),
+              finishedAt: new Date(Date.now() - 400_000).toISOString(),
+              findings: [
+                {
+                  fingerprint: "beef5678",
+                  severity: "medium",
+                  file: "b.ts",
+                  line: 9,
+                  symbol: "g",
+                  cwe: undefined,
+                  preexisting: false,
+                  settled: "justified-accepted",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+
+    const html = String(byId.get("board")?.innerHTML ?? "");
+    expect(html, "the row must exist to make the checks below meaningful").toContain("beef5678");
+    expect(html, "the verdict KIND still reaches an unauthenticated reader").toContain("justified-accepted");
   });
 
   // Fingerprint d767498a, found by lore's own review of the OOM-kill fix: this
