@@ -1003,6 +1003,27 @@ docs-only round now behaves the same way. `git/diff.ts` gains an exported
 `isDoc` beside the existing (still private) `isTest` — file extension `.md`,
 or paths under `spec/`/`docs/`.
 
+**The two cited incidents predate D-114 (built 2026-08-16, ten days later)
+and cannot recur via the MCP flow they happened on — found by lore's own
+review of this decision (fingerprint 3407e345), same day.** D-114 resets
+`tierRounds` to `{}` the moment the client delivers real work (a submitted
+diff or `pull_fresh` whose tree genuinely moved), applied at the top of
+EVERY round (`review.ts`, `store.withClientWork`) — traced end to end:
+`server.ts`'s `review_submit` handler calls `store.noteClientWork` whenever
+the applied tree hash actually changes, and the very next round consumes
+that signal before anything else runs. Both incidents were driven over MCP
+(the D-77 workflow, "as a client, not through the CLI" — D-76) and answered
+nearly every finding each round, meaning nearly every round moved the tree
+— exactly the condition that resets the counter today. Independently
+confirmed by this session's own history: dozens of multi-round D-77 cycles,
+this bound never once fired. **What D-132 actually protects today is
+narrower: `cli.ts`'s `lore review`**, which reuses the same review row
+across repeated invocations (`existingReview`, `cli.ts:440`) and never calls
+`noteClientWork` — a developer iterating locally with the CLI hits exactly
+the bound the two cited incidents describe, D-114 or not. Kept for that
+reason, not the one first written down; the mechanism and its tests are
+unaffected, only the justification was wrong.
+
 **What actually gates the bound is NOT the branch's diff — found by lore's
 own review of the first version of this fix (fingerprint 6a6ae919), same
 day.** The obvious-looking implementation read `ReviewDiff.docsOnly` (every

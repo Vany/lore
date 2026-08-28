@@ -579,6 +579,10 @@ the cap. The global bound is deliberately still unconditional: a non-convergent
 `SPEC.md` argument stops there instead, later and at real quota cost, rather than
 never.
 
+Mainly load-bearing for repeated `lore review` (CLI) invocations against the same
+worktree — D-114 already resets this bound on every tree-moving MCP submit, so a
+client driving the documented submit/resubmit loop rarely reaches it regardless.
+
 **A closed tier stays closed** (D-6, revised 2026-08-07). It used to reset to T1 on
 every change, which meant the cheapest model ruled on the dearest model's findings —
 four times in one review of this repository — and cost two rounds per deep finding.

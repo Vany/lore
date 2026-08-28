@@ -1134,6 +1134,12 @@ are what that session's own numbers say is in the way, not what reading suggeste
       also cover a prose loop happening inside `.ts` docstrings, which the shipped
       classifier cannot see. Left as a named, not-yet-built option rather than
       silently dropped.
+      **CORRECTED same day (fingerprint 3407e345): the two reviews below predate
+      D-114 (2026-08-16) and cannot recur via MCP the way they happened — D-114
+      already resets this bound's counter on every tree-moving submit. What D-132
+      actually protects today is `cli.ts`'s `lore review`, which reuses a review row
+      across invocations without D-114's reset. Kept for that reason, not the one
+      the table below was originally read as.**
       ORIGINALLY: `TODO.md` already argued the bound is the wrong instrument
       from a prose loop that never converged. Today is the opposite case, which is what
       makes it decidable:
@@ -1860,6 +1866,10 @@ grows sideways is the one nobody can review.
       asked for (wording vs. behaviour split of the findings that hit the bound) was
       not taken; the classifier shipped is a coarser, cheaper proxy for the same
       distinction, chosen without it.
+      **CORRECTED same day: the session-34 and 2026-08-06 reviews below predate
+      D-114 (2026-08-16), which already resets this bound on every tree-moving MCP
+      submit — they cannot recur that way today. See the entry above for what D-132
+      actually protects now.**
       ORIGINALLY: Two reviews of this repository have now ended `failed` on it — five rounds in
       session 34, nine on 2026-08-06 — and both for the same reason: every answer to a
       prose finding is new prose for the next round to fault. The bound is a real
