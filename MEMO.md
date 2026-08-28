@@ -3,6 +3,115 @@
 Newest first. Updated at the end of each task: what changed, what I learned, what
 surprised me.
 
+## 2026-08-29 — D-133, fixed_elsewhere on review_submit: five rounds, nine
+findings, and my own fixes needing fixing twice
+
+**What changed.** `rev_o5yYjnhfydCQkyrj8p7WF9PK`, `passed_partial`, attested at
+`e02ff81a6e5c4ba912ab4b8f9bc91a58bc3e8fc8` (9 findings, 8 fixed, 0 justified) —
+merged as five commits. Second of three features from Vany's "does lore have
+anything unimplemented from its own specs?" audit (D-132 was the first): a
+structured `fixed_elsewhere` field on `review_submit`, closing D-111 item 3, open
+since 2026-08-15 — the only way to settle a finding fixed elsewhere used to be a
+synthetic `lore-ok` comment planted at the ORIGINAL line, purely to carry a
+marker.
+
+**Round 1 never reached a reviewer at all.** Writing this feature's own
+end-to-end test caught a real bug first: `will_not_settle`'s preview only ever
+checked `codeMoved`/`alreadyAnswered`, neither of which reads the new store
+table, so a finding validly claimed in the SAME submit call still showed up as
+"will not settle" — telling a client its own just-submitted answer had failed.
+Fixed and git-stash-verified before the first commit existed. The SPEC entry
+also disclosed a gap honestly rather than hiding it: a refused claim didn't roll
+back the diff it rode in on, since validation ran after the diff had already
+applied or held.
+
+**Round 2 found a THIRD `resolveShort` outcome nothing enumerated, and a claim
+that could outlive the diff carrying it.**
+
+1. **An uncaught `AmbiguousFingerprint` throw (fingerprint cf48ccb1).**
+   `resolveShort` has always had three outcomes — resolves, doesn't resolve, or
+   THROWS when a short prefix matches two findings — and the validation loop
+   only ever checked the first two. Not a crash (any throw in an MCP handler
+   becomes `isError: true`), but an unenumerated case with none of the D-133
+   framing its siblings carry.
+2. **A claim recorded immediately survived a held diff that later failed to
+   verify (fingerprint d2c5ca38).** `consumeHeldDiffs` can still drop a fuzzy
+   apply or a tree-hash mismatch AFTER the claim was already written — a claim
+   with nothing behind it, exactly what the file-in-diff check exists to
+   refuse. Fixed by deferring persistence: a held submission's claims now ride
+   with the `held_diff` row (new JSON column) and are promoted only once that
+   SPECIFIC diff verifies.
+
+Fixing #2 required moving validation from after `withSubmitLock` resolves to
+INSIDE its callback, ahead of the held/applied fork — which, as a side effect,
+**closed round 1's own disclosed gap**: every `fixed_elsewhere` refusal now
+lands before anything is applied or held, for both `diff` and `commit` alike.
+An honestly-written limitation disappeared because something else needed
+fixing, not because anyone chased it directly.
+
+**Round 3 found that round 2's own fix was still incomplete (fingerprint
+a5bc9f62).** `justClaimedElsewhere` (round 2's fix) only excluded fingerprints
+THIS call's own `fixed_elsewhere` named — but a claim promoted mid-round by an
+EARLIER held diff is invisible to that round's own `pending`, which was already
+collected before the promotion runs. So a LATER, unrelated submit's preview
+still called it unsettleable, even though the round that very submit enqueues
+is exactly the one that rules on it. Fixed by reading `store.fixedElsewhereFor`
+directly — every claim on record, not only this call's — which made
+`justClaimedElsewhere` fully redundant and it was deleted rather than left
+beside its replacement.
+
+**Round 4 found four more, one of them severe.**
+
+1. **`fixed_elsewhere_claim` had no `ON DELETE CASCADE` (fingerprint f83d72a1,
+   high).** The exact incident `held_diff`'s OWN schema comment already
+   documents as fatal — a review-child row with no cascade makes the retention
+   sweep's `DELETE FROM review` violate the FK and roll back the whole
+   transaction, every hour, forever — repeated one table over, in the same
+   feature that had the lesson sitting right beside it in the same file. Fixed
+   directly (never deployed, so no migration needed), unlike `held_diff`, which
+   is stuck without one.
+2. **Deletion didn't count as evidence (fingerprint 23c8b393).** The file-in-
+   diff check reused `filesInDiff`, which deliberately excludes a deletion —
+   correct for its marker-scanning callers, wrong for a claim whose fix WAS
+   deleting the whole buggy file. New sibling function, `filesTouchedByDiff`.
+3. **The reply text never caught up with the feature it was announcing
+   (fingerprint 20f24c95).** `will_not_settle_note` still named only the
+   `lore-ok` comment.
+4. **The claim's own location never reached the tier ruling on it (fingerprint
+   c380dbe9).** `collectFixedElsewhere` built each `Pending` from `claim.reason`
+   alone — the one structured datum beyond an ordinary `lore-ok` was invisible
+   to the model deciding whether to ratify it. Folded into `reason` rather than
+   widening `Pending`, since only the prompt render reads location.
+
+**Round 5 found that round 4's own fixes were, again, incomplete.**
+
+1. **The deletion fix missed a PURE rename (fingerprint 10617a99).** Same
+   defect class as 23c8b393, one git format rarer: a 100%-similarity rename
+   emits neither `+++` nor `---`, only `rename from`/`rename to` lines.
+2. **The loop's own driving documents never learned the field (fingerprint
+   39cf990a).** 20f24c95 fixed the nag text, but `lore://docs/workflow` and
+   `REVIEW_PROMPT_TEXT` — the two texts a prompt-driven client actually learns
+   the loop FROM — still taught step 3 as lore-ok only. A client whose own step
+   3 already told it what to do never reaches the nag that was fixed.
+
+Round 6 passed clean.
+
+**The pattern, and why this one took nine findings against D-132's four.**
+Twice in this cycle, a fix from one round was itself corrected the NEXT round
+for being incomplete in the same direction (round 2's `justClaimedElsewhere`
+missing the mid-round-promotion case; round 4's deletion fix missing renames) —
+not a new class of mistake each time, the SAME shape recurring within one
+feature. The likely reason: this is a genuinely new I/O surface — new schema
+table, new persistence-timing question, new evidence format to parse — rather
+than a refinement of something already exercised, so a single pass reliably
+covers the case that motivated the field (an ordinary file edit) and reliably
+misses the neighbors (deletion, rename, a claim's fate tied to a diff that
+never lands). None of the nine were caught by re-reading my own diff harder;
+all nine were caught by a reviewer with no attachment to having just written
+it, several within minutes of the previous round landing. Same conclusion
+D-132 already reached, restated because it held again: that is the product
+working on itself, which is the only kind of proof this project trusts.
+
 ## 2026-08-28 — D-132, docs-only rounds and the per-tier bound: five rounds, four
 distinct real defects, none of them where the first version looked
 
