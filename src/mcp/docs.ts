@@ -773,6 +773,10 @@ Say that a contradiction needs a person.
 Use this when you have genuinely tried to settle a conflict and cannot — not as the
 first move. Record what you tried and what a person needs to decide.
 
+\`left\`/\`right\` take either length, exactly as \`resolve\`'s \`keep\`/\`retire\` do — the
+full id \`open_questions\` renders, or an 8-char short form like \`cite_as\`, and you may
+mix them.
+
 This still blocks the review from passing, which is the point: an unresolved
 contradiction poisons every future session that reads the wrong rule. Tell your user
 plainly that a human decision is required; do not answer it yourself and do not close

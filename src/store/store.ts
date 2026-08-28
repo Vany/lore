@@ -2051,6 +2051,20 @@ export class Store {
     // but answering findings — all verdicts — and this would not move, so a dead
     // replicator would read as level throughout. The monitor's whole job is to notice
     // that, and it was blind to the writes a review actually produces most of.
+    //
+    // lore-ok[ad96016b]: A THIRD TIME — found by lore's own review. `held_diff.created_at`
+    // was missing outright: the ONLY durable write `review_submit`'s held path makes
+    // (D-107) when a round is in flight, which can be the sole write for the rest of a
+    // round up to ~30 minutes long — exactly the window a dead replicator most needs
+    // caught in. `tier_run.finished_at` was missing beside `started_at`, which IS here:
+    // unlike `created_at`/`updated_at` pairs elsewhere in this list (redundant on
+    // purpose — every row's `updated_at` starts equal to its `created_at` and only moves
+    // forward, so `MAX(updated_at)` alone already dominates), `started_at` is written
+    // ONCE at open and never touched again, so a tier CLOSING minutes later — the
+    // moment `closeTierRun` actually records outcome/findings — was invisible. Verified
+    // by auditing every `_at`/timestamp column in schema.ts against this list: these two
+    // were the only genuine gaps: everything else is either already named or provably
+    // redundant with a sibling that is.
     const row = this.db
       .prepare(
         `SELECT MAX(t) AS t FROM (
@@ -2068,7 +2082,9 @@ export class Store {
            UNION ALL SELECT MAX(resolved_at) FROM knowledge_conflict
            UNION ALL SELECT MAX(accepted_at) FROM suppression
            UNION ALL SELECT MAX(started_at) FROM tier_run
+           UNION ALL SELECT MAX(finished_at) FROM tier_run
            UNION ALL SELECT MAX(created_at) FROM repo
+           UNION ALL SELECT MAX(created_at) FROM held_diff
          )`,
       )
       .get() as { t: string | null } | undefined;
@@ -2697,15 +2713,29 @@ export class Store {
    * `needs-human` — and the caller (`knowledge_escalate`) reported "Recorded"
    * regardless, so an author's note calling for a human decision could vanish while
    * the reply said it was written down.
+   *
+   * lore-ok[457ef530]: `leftId`/`rightId` now resolve through `knowledgeByShort`
+   * first, same as `keepId`/`retireId` a few methods up — found by lore's own
+   * review, one method past the b1a9841c fix, whose own comment claimed "every
+   * OTHER id path in this file now resolves a prefix" while this one still did
+   * not. `docs.ts`'s `escalate` text says nothing about id length, but its sibling
+   * `resolve` — offered right beside it as the other thing to do with the same
+   * conflict — explicitly blesses mixing a full id with an 8-char `cite_as`; a
+   * client has no reason to expect the two tools to disagree about the same pair
+   * of ids. A full id resolves through unchanged, so this changes nothing for an
+   * already-full pair.
    */
   escalateConflict(repoId: string, leftId: string, rightId: string, note: string): boolean {
+    const left = this.knowledgeByShort(repoId, leftId);
+    const right = this.knowledgeByShort(repoId, rightId);
+    if (left === undefined || right === undefined) return false;
     const res = this.db
       .prepare(
         `UPDATE knowledge_conflict SET state = 'needs-human', resolution = ?
          WHERE repo_id = ? AND state = 'open'
            AND ((left_id = ? AND right_id = ?) OR (left_id = ? AND right_id = ?))`,
       )
-      .run(note, repoId, leftId, rightId, rightId, leftId);
+      .run(note, repoId, left, right, right, left);
     return res.changes > 0;
   }
 

@@ -1120,6 +1120,23 @@ describe("knowledge", () => {
     ).toBe(false);
   });
 
+  // 457ef530, found by lore's own review, one method past b1a9841c's own fix for
+  // resolveConflict's identical shape: escalateConflict still matched left/right
+  // with exact `=`, while docs.ts's `resolve` text — offered right beside
+  // `escalate` as the other thing to do with the same conflict — explicitly
+  // blesses mixing a full id with an 8-char cite_as. A client has no reason to
+  // expect the two tools to disagree about the same pair of ids.
+  it("escalates a conflict named with a mix of full and short ids, not only two full ones", () => {
+    const a = store.addKnowledge({ repoId, kind: "rule", source: "taught", statement: "always X", why: undefined, path: undefined, cwe: undefined, provenance: undefined, sourceBlob: undefined, confidence: undefined });
+    const b = store.addKnowledge({ repoId, kind: "rule", source: "taught", statement: "never X", why: undefined, path: undefined, cwe: undefined, provenance: undefined, sourceBlob: undefined, confidence: undefined });
+    store.recordConflict(repoId, a.id, b.id);
+
+    // Full id for one side (as open_questions would render it), short cite_as
+    // form for the other (as knowledge_teach's reply would have given it).
+    expect(store.escalateConflict(repoId, a.id, b.id.slice(0, 8), "cannot decide")).toBe(true);
+    expect(store.openConflicts(repoId)).toStrictEqual([{ left: a.id, right: b.id, state: "needs-human" }]);
+  });
+
   // Found by lore's own review (372b6bf0, f9559e98): the path filter was a raw
   // `? LIKE path || '%'`, so a query for one directory pulled in a sibling one
   // sharing its text prefix — "src/payroll/x.ts" matched a rule scoped to "src/pay".
@@ -1556,6 +1573,44 @@ describe("held diffs", () => {
     // The mismatch path drops the whole remaining chain at once.
     store.clearHeldDiff("rh");
     expect(store.heldDiffs("rh")).toStrictEqual([]);
+  });
+});
+
+// lore-ok[ad96016b]: found by lore's own review, a third time against the same
+// column list — `finding.delivered_at` was the first miss this file's own comment
+// names. `held_diff.created_at` and `tier_run.finished_at` were the second and
+// third: the held path is the ONLY durable write a review_submit held mid-round
+// makes (D-107), and a tier CLOSING (not just opening) is the moment its own
+// outcome and findings are recorded — both invisible to the replica monitor before
+// this fix, exactly the kind of silent gap `lastWriteAt`'s own doc comment already
+// warns is easy to reintroduce.
+describe("lastWriteAt", () => {
+  const old = "2020-01-01T00:00:00.000Z";
+  /** Pins every OTHER covered write to something unambiguously in the past. */
+  const pinPast = (reviewId: string) => {
+    store.db.prepare("UPDATE review SET updated_at = ? WHERE id = ?").run(old, reviewId);
+    store.db.prepare("UPDATE repo SET created_at = ? WHERE id = ?").run(old, repoId);
+  };
+
+  it("counts a held diff, even when nothing else has moved since", () => {
+    newReview("rev1");
+    pinPast("rev1");
+    expect(store.lastWriteAt()).toBe(old);
+
+    store.holdDiff("rev1", "diff text", "treehash123");
+
+    expect(store.lastWriteAt(), "the held diff's own write must move the clock").not.toBe(old);
+  });
+
+  it("counts a tier run closing, not only opening", () => {
+    newReview("rev1");
+    pinPast("rev1");
+    const id = store.openTierRun("rev1", "t1", 1, old);
+    expect(store.lastWriteAt(), "an old started_at alone must not move the clock").toBe(old);
+
+    store.closeTierRun(id, "clean", []);
+
+    expect(store.lastWriteAt(), "closing the tier run must move the clock").not.toBe(old);
   });
 });
 
