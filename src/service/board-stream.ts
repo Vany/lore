@@ -22,7 +22,7 @@
  */
 
 import type { ServerResponse } from "node:http";
-import { board } from "../ops/board.ts";
+import { board, type Board } from "../ops/board.ts";
 import type { GateState } from "../reviewer/gate.ts";
 import type { Store } from "../store/store.ts";
 
@@ -40,7 +40,8 @@ export const BOARD_POLL_MS = 2_000;
 export const BOARD_HEARTBEAT_MS = 15_000;
 
 /**
- * Two snapshots that differ only in when they were taken are the same picture.
+ * Two snapshots that differ only in when they were taken, or in the load average moving
+ * within noise the page could never show, are the same picture.
  *
  * `board()` stamps `at` on every call, so a plain string comparison NEVER matched and the
  * stream pushed a full snapshot every two seconds for ever — while the docblock above it
@@ -50,14 +51,24 @@ export const BOARD_HEARTBEAT_MS = 15_000;
  *
  * `at` is still sent: it is what tells a reader how old the picture is. It is only
  * excluded from the question "did anything happen".
+ *
+ * lore-ok[b02a8b91]: LOAD ROUNDED TOO — found by lore's own review. `board()`'s
+ * `load: loadavg()` is a raw, essentially continuously-moving kernel reading
+ * (measured on the deployment host: 0.75 -> 0.64 in six seconds) — left alone, it
+ * broke the exact promise this function exists to keep, on every live machine,
+ * for the same structural reason `at` did before the fix this function's own
+ * history is about. Rounded to board-page.ts's own tooltip precision (2
+ * decimals — a superset of the 1-decimal headline it actually renders), so a
+ * difference here only counts as "changed" if the page could ever show it.
  */
 function unchanged(a: string, b: string): boolean {
-  return withoutAt(a) === withoutAt(b);
+  return comparable(a) === comparable(b);
 }
 
-// Anchored to the very start, where `board()` puts it. An unanchored match could in
-// principle find the same four characters inside a finding's evidence text.
-const withoutAt = (s: string): string => s.replace(/^\{"at":"[^"]*",/, "{");
+const comparable = (s: string): string => {
+  const parsed = JSON.parse(s) as Board;
+  return JSON.stringify({ ...parsed, at: undefined, load: parsed.load.map((n) => Number(n.toFixed(2))) });
+};
 
 export interface BoardStream {
   /** Attach a watcher. The response is left open until the client goes away. */

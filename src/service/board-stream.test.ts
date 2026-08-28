@@ -17,11 +17,21 @@ import { initialState } from "../core/ladder.ts";
 import { Store } from "../store/store.ts";
 import { startBoardStream } from "./board-stream.ts";
 
+// `board()` reads the real kernel load average, which this file's own change-detection
+// test (below, fingerprint b02a8b91) needs to move by controlled, exact amounts — not
+// whatever the test host happens to be doing at the time.
+const load = vi.hoisted(() => ({ value: [0.5, 0.5, 0.5] as number[] }));
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  return { ...actual, loadavg: () => load.value };
+});
+
 let dir: string;
 let store: Store;
 
 beforeEach(() => {
   vi.useFakeTimers();
+  load.value = [0.5, 0.5, 0.5];
   dir = mkdtempSync(join(tmpdir(), "lore-stream-"));
   store = new Store(join(dir, "lore.db"));
 });
@@ -118,5 +128,45 @@ describe("a tick that throws does not crash the process", () => {
     }
     expect(calls, "the flaky tick must actually have been reached").toBeGreaterThan(1);
     expect(exceptions, "a throwing tick must not crash the process").toStrictEqual([]);
+  });
+});
+
+// lore-ok[b02a8b91]: found by lore's own review. `board()`'s `load: loadavg()` is a
+// raw kernel reading that moves on any live machine — untouched, EVERY tick differed
+// from the last in that one field alone, so the idle-board promise the first describe
+// block above tests never actually held outside this suite's own fake timers (all ten
+// ticks there execute within one real-time instant, so `loadavg()` returns the same
+// sample every time and the bug was invisible to it). `node:os` is mocked at module
+// scope so this test controls the exact values rather than racing the test host's own
+// load.
+describe("a moving load average alone is not a changed picture", () => {
+  it("does not push a frame when load only moves within what the page would round away", () => {
+    // Set before `add`'s own snapshot, so the first frame's baseline is 0.75/1.00/1.20 —
+    // not `beforeEach`'s default, which this pair of values was not chosen to match.
+    load.value = [0.751, 1.001, 1.201];
+    const s = startBoardStream(store, 2_000, 15_000);
+    const w = fakeRes();
+    s.add(w.res);
+    expect(w.frames().length).toBe(1);
+
+    // 0.751 -> 0.754 and 1.001 -> 1.004 both round to the same 2-decimal value
+    // board-page.ts's own tooltip displays (toFixed(2)) — no visible change.
+    load.value = [0.754, 1.004, 1.204];
+    vi.advanceTimersByTime(2_000);
+    expect(w.frames().length, "noise the page cannot show must not push a frame").toBe(1);
+    s.close();
+  });
+
+  it("still pushes a frame when load moves enough for the page to show it", () => {
+    const s = startBoardStream(store, 2_000, 15_000);
+    const w = fakeRes();
+    s.add(w.res);
+    expect(w.frames().length).toBe(1);
+
+    // 0.50 -> 0.86 crosses the 2-decimal bucket the comparison rounds to.
+    load.value = [0.86, 0.5, 0.5];
+    vi.advanceTimersByTime(2_000);
+    expect(w.frames().length, "a change the page WOULD show must still push").toBe(2);
+    s.close();
   });
 });

@@ -33,8 +33,13 @@ afterEach(() => {
 });
 
 describe("a variable set to nothing is not set", () => {
+  // lore-ok[12ce5424]: found by lore's own review. This test set the env var and
+  // asserted nothing, so the property in its own name — a blank LORE_CONCURRENCY
+  // must not trip the D-101 refusal below, the same way `env()`'s own doc block
+  // above says every blank setting should read as absent — had no test anywhere.
   it("never starts zero workers", () => {
     process.env["LORE_CONCURRENCY"] = "";
+    expect(() => configFromEnv()).not.toThrow();
   });
 
   it.each([[""], ["   "]])("treats %j as an absent webhook and heartbeat", (blank) => {

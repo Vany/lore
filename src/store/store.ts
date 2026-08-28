@@ -205,6 +205,27 @@ const DID_NOT_LOOK_SQL = TIER_OUTCOMES.filter((o) => o === "failed" || o === "un
   .map((o) => `'${o}'`)
   .join(", ");
 
+/**
+ * The outcomes that mean a row's `tree_hash` cannot be trusted as a genuine read of
+ * that tree, as a SQL list. Derived, never spelled out — `one-definition.test.ts`
+ * bans review states spelled out in a SQL membership test, and `failed`/`unpayable`
+ * collide with that vocabulary exactly as the comment above `TIER_OUTCOMES` warns.
+ *
+ * A WIDER set than `DID_NOT_LOOK_SQL` above, and for a different question. That one
+ * asks "should this count as a strike toward skipping the tier's vendor" and
+ * deliberately excludes `stopped` (a lore-caused end, not evidence about the tier)
+ * and `interrupted` (t0 partially ran and may hold real findings). This one asks
+ * "did this row leave a read of the tree worth signing" — `stopped` and
+ * `interrupted` answer no to THAT question even though they answer differently to
+ * the skip question: a cancelled or cut-short run's tree_hash is not a tier that
+ * looked, whatever it should cost the vendor.
+ */
+const UNTRUSTED_READ_SQL = TIER_OUTCOMES.filter(
+  (o) => o === "failed" || o === "unpayable" || o === "stopped" || o === "interrupted",
+)
+  .map((o) => `'${o}'`)
+  .join(", ");
+
 export interface VerdictRow {
   readonly fingerprint: string;
   readonly verdict: VerdictKind;
@@ -1064,8 +1085,22 @@ export class Store {
    * read this one.
    */
   tiersOnTree(reviewId: string, treeHash: string): readonly string[] {
+    // lore-ok[20310406]: OUTCOME-FILTERED — found by lore's own review. A row's
+    // tree_hash matching the signed tree used to be treated as proof the tier
+    // trustworthily read it, but `interrupted` (t0 cut short mid-sweep) is closed
+    // WITH the real tree it was reading (runRound in reviewer/review.ts), and this
+    // codebase's own settleFixed already refuses to trust an interrupted t0's
+    // silence for exactly that reason — attest() was the one place still counting
+    // it as full coverage, with no caveat and no PARTIAL. `failed`/`unpayable`/
+    // `stopped` did not complete at all, the same three outcomes board-page.ts and
+    // ops/status.ts already treat alike for their own "did this finish" question.
+    // `reused` stays IN: it means the tree did not change, so the last trustworthy
+    // read still stands for it.
     const rows = this.db
-      .prepare("SELECT DISTINCT tier FROM tier_run WHERE review_id = ? AND tree_hash = ? ORDER BY tier")
+      .prepare(
+        "SELECT DISTINCT tier FROM tier_run WHERE review_id = ? AND tree_hash = ? " +
+          `AND outcome NOT IN (${UNTRUSTED_READ_SQL}) ORDER BY tier`,
+      )
       .all(reviewId, treeHash) as Record<string, string>[];
     return rows.map((r) => r["tier"] ?? "");
   }

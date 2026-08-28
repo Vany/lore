@@ -520,6 +520,12 @@ export class Worker {
     try {
       await this.reconcileSessions();
     } catch (e) {
+      // lore-ok[2054347b]: same finding as f487b406 immediately below, re-raised
+      // because the reviewer read this file before the submission carrying that
+      // fix had been applied — the round's own held-diff note says findings
+      // reported before it sees a fix may already be answered by it. This catch
+      // block is that fix.
+      //
       // lore-ok[f487b406]: found by lore's own review. The call site (dispatch,
       // above) is `void this.maybeReconcile()` with no `.catch` — reconcileSessions
       // reads and writes the store synchronously (keptSessionKeys by way of

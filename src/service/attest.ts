@@ -117,10 +117,19 @@ export async function attest(store: Store, reviewId: string, principal: string, 
       : `every tier that ran was ${sole}, so these are not independent opinions`,
     // Named, not merely subtracted. A reader comparing "2 tiers" here against a trail
     // showing three would otherwise think the line was wrong; it is the trail that
-    // includes tiers which read an earlier tree.
+    // includes tiers with no trusted read of THIS tree.
+    //
+    // lore-ok[20310406]: worded outcome-neutral on purpose. The gap covers three
+    // different reasons now, not one: a tier that read a genuinely earlier tree and
+    // was never re-run (D-6), a tier whose only run against this exact tree was
+    // interrupted/failed/unpayable/stopped (tiersOnTree excludes all four), and a
+    // tier whose run failed outright with no tree recorded at all. "Read an earlier
+    // tree" was false for the second and third cases — this line no longer claims
+    // to know which of the three happened, only that none of them left a read worth
+    // trusting.
     tiers >= everyTier
       ? undefined
-      : `${String(everyTier - tiers)} earlier tier(s) read an earlier tree and did not re-read this one`,
+      : `${String(everyTier - tiers)} tier(s) never left a trusted read of this tree`,
   ].filter((c) => c !== undefined);
 
   const named = onTree.length === 0 ? "no tier" : onTree.join(", ");
@@ -144,9 +153,12 @@ export async function attest(store: Store, reviewId: string, principal: string, 
   //
   //   * the LADDER's verdict — a tier above the one that answered never ran, or every
   //     tier that ran was one vendor. That is `passed_partial`, and D-88 decides it.
-  //   * the SIGNED TREE — a tier that ran read an EARLIER tree and, since a closed tier
-  //     is not re-run after a fix (D-6), never re-read this one. That is a fact about
-  //     what this signature covers, it is true on a full `passed`, and no ladder state
+  //   * the SIGNED TREE — a tier's only read of THIS tree was not one worth trusting:
+  //     it may have read a genuinely EARLIER tree and, since a closed tier is not
+  //     re-run after a fix (D-6), never re-read this one; or it ran against this
+  //     exact tree but was interrupted, failed, unpayable, or stopped, which
+  //     `tiersOnTree` now excludes. Either way that is a fact about what this
+  //     signature covers, it is true on a full `passed`, and no ladder state
   //     records it.
   //
   // The second is why this cannot simply read the state: a `passed` whose t1 verdict was

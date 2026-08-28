@@ -119,7 +119,7 @@ describe("attest", () => {
 
     const a = await attest(store, "r1", "p", keyPath);
     expect(a.line).toContain("2 tiers (t0, t2)");
-    expect(a.line).toContain("1 earlier tier(s) read an earlier tree");
+    expect(a.line).toContain("1 tier(s) never left a trusted read of this tree");
     expect(a.line).toContain("PARTIAL");
   });
 
@@ -308,8 +308,43 @@ describe("what a signed line calls PARTIAL", () => {
 
     expect(a.line, "no tier is unavailable, nothing was skipped").not.toContain("could not run");
     expect(a.line, "but t1's approval does not cover this tree").toContain(
-      "1 earlier tier(s) read an earlier tree and did not re-read this one",
+      "1 tier(s) never left a trusted read of this tree",
     );
     expect(a.line, "so the signed line still says so").toContain("PARTIAL");
+  });
+
+  // lore-ok[20310406]: found by lore's own review. tiersOnTree matched on tree_hash
+  // alone with no outcome check, so an `interrupted` t0 — closed WITH the real tree
+  // it was cut short reading (runRound in reviewer/review.ts) — counted as full
+  // trustworthy coverage: no caveat, no PARTIAL, exactly the shape settleFixed
+  // already refuses to trust for the ladder's own fixed-verdict logic. This is the
+  // case that produced NO caveat at all before the fix, unlike the two tests above.
+  it("calls a full pass PARTIAL when this round's t0 was interrupted on the signed tree", async () => {
+    review("passed");
+    const at = "2026-08-03T00:00:00.000Z";
+    store.recordTierRun("r1", "t0", 1, "interrupted", at, "4f2a9c1");
+    store.recordTierRun("r1", "t1", 1, "clean", at, "4f2a9c1");
+    store.recordTierRun("r1", "t2", 1, "clean", at, "4f2a9c1");
+    store.recordTierRun("r1", "t3", 1, "clean", at, "4f2a9c1");
+
+    const a = await attest(store, "r1", "p", keyPath);
+
+    expect(a.line, "the interrupted tier must not be claimed as coverage").toContain("3 tiers (t1, t2, t3)");
+    expect(a.line, "an engine cut short is not a trusted read of this tree").toContain(
+      "1 tier(s) never left a trusted read of this tree",
+    );
+    expect(a.line, "the overclaim this fix removes").toContain("PARTIAL");
+  });
+
+  // The counterpart: an outcome that DID complete must keep counting, or this fix
+  // would trade one overclaim for an underclaim in the far more common case.
+  it("still counts a tier that finished cleanly on the signed tree", async () => {
+    review("passed");
+    allOnTree("t0", "t1", "t2", "t3");
+
+    const a = await attest(store, "r1", "p", keyPath);
+
+    expect(a.line).toContain("4 tiers (t0, t1, t2, t3)");
+    expect(a.line).not.toContain("PARTIAL");
   });
 });
