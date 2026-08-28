@@ -86,6 +86,33 @@ run without first checking whether the state it was about to discard was reversi
 — and it was only harmless because a byte-identical copy happened to exist
 elsewhere.
 
+**A second mistake, more serious, found only because `make status` turned every
+mirror red right after deploying.** Diagnosing #1 above, before finding
+`worktreeFor`'s real registry path, I ran a throwaway `node -e "new
+DatabaseSync('$DATA/lore.db')..."` directly against the HOST bind-mount path — no
+`{ readOnly: true }`. That path had never existed as a real file (the service reads
+`LORE_DB_DIR=/var/lib/lore/db`, a separate Docker volume; `docker-compose.yml`'s own
+comment says so: "The database, in the volume it shares with lore. No host bind
+here at all"). A default read-write `DatabaseSync` open against a missing path
+creates one — and `mirror-refresh.sh`'s own `read_registry()` checks that exact
+host path FIRST, falling back to the volume only when it is absent (its own comment
+names the reason: "the database moved into a volume and this went on reading the
+host path... until a customer's review was refused for a mirror 1026 minutes old" —
+the fallback exists for an UNMIGRATED deployment, not for a migrated one where a
+stray file reappears). From the moment that 0-byte file existed, every mirror
+refresh — for every repo, not just this one — started failing
+`no such table: repo` and every future review start would have been refused for
+staleness. The real, volume-backed database was never touched (`make status`'s own
+review/knowledge listings stayed correct throughout, read via `docker compose exec`
+against the volume) — but the daemon that keeps every repo's mirror fresh was
+broken for roughly forty minutes before `make status` surfaced it as five red
+lines. Fixed by deleting the accidentally-created file (confirmed nothing else
+references that path — `grep` across the whole deploy directory), confirmed
+recovered on the daemon's next cycle. **The lesson: a one-off diagnostic query
+against a live deployment's own paths needs `{ readOnly: true }` even when it looks
+like "just a SELECT" — the open mode, not the query, is what did the damage, and it
+did it before the query ever ran.**
+
 **What changed.** `rev_N9TmkGVAjk_VdPk5A4frkLwa`, `passed_partial`, attested at
 `a601ba4d0d77b8ca36706c55461cc3ee1adb9291` — 9 findings, 2 fixed, 5 justified —
 merged at `4be1231` (five commits: `ed0795a`, `78a0a04`, `4bd690e`, `0ca5d1b`,
