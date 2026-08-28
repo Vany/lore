@@ -3,6 +3,114 @@
 Newest first. Updated at the end of each task: what changed, what I learned, what
 surprised me.
 
+## 2026-08-28 — src/service folder review: five rounds, a design question that
+needed Vany rather than a guess, and a fix that caught its own gap one round later
+
+**What changed.** `rev_TBVG6LWtj-dleRn2C8rmyeHf`, rounds 1–5, `passed_partial`,
+merged at `b9af5ce` (five commits, one per round: `712e5db`, `11367ee`, `b57096d`,
+`1e71f04`, `b9af5ce`). Touched `worker.ts`, `board-stream.ts`, `board-page.ts`,
+`attest.ts`, `http.ts`, `repin.ts`, `config.test.ts`, `store.ts`, `ops/board.ts`,
+plus `SPEC.md` and `spec/operations.md`. Thirteen distinct findings, one fixed,
+twelve justified, every genuine behavioral fix git-stash-verified (revert, confirm
+the new/existing test fails for the stated reason, restore, confirm it passes).
+
+**The unguarded-timer/detached-promise class hit its seventh and eighth instance in
+this one file.** Already fixed five times elsewhere in this service (heartbeat's
+`beat`, `board.ts`'s own tick, `main.ts`'s screening and fallback-check IIFEs,
+`worker.ts`'s `round()` for a closed store) — this round added `board-stream.ts`'s
+`tick()` (a raw `setInterval` callback, so the escape is `uncaughtException` rather
+than `unhandledRejection` — no promise involved at all), `round()`'s catch block a
+second time for a *corrupted-but-not-closed* database (the `isClosed()` guard from
+the fifth fix only catches the flag `close()` sets, not SQLITE_CORRUPT mid-life),
+and — found by a still-reading tier in round 2, after I'd just submitted the first
+two — `dispatch()`'s own `void this.maybeReconcile()`, completely unguarded, three
+synchronous store calls deep. Naming the pattern in the finding's own history
+(`derived rule: seen N times, check for it explicitly`) is working as intended:
+CWE-248/CWE-754 findings in this file now arrive with the sibling fixes already
+cited, and the fix is always the same shape — wrap, log, swallow, let the natural
+retry cadence (the next tick, the next poll) handle it rather than crash the whole
+process over one bad read.
+
+**A security/privacy trade-off is Vany's call, not mine to infer from a finding's
+wording — and asking was right twice over.** `http.ts`'s own route comment claimed
+the unauthenticated operator board "deliberately does NOT carry finding TEXT... theirs
+to hand out, not ours to publish," but `board()` actually embedded every finding's
+claim/evidence/failureScenario in full, served with no token to anyone on the
+tailnet. Two honest fixes existed — redact the code to match the comment, or fix the
+comment to match the code — and only one person could weigh "small trusted tailnet"
+against "a colleague's WIP defect, published." Asked; Vany chose redaction. Fixed at
+the source (`BoardFinding` no longer carries those three fields at all, not a
+serialization-time filter) so it can't silently regrow. **Then the same review cycle
+caught my own fix's gap**: I'd left `settledBecause` — a `justified-accepted`
+verdict's rationale, which routinely restates the claim it argues about — on the
+wire, reasoning at the time that Vany's instruction named three specific fields and
+this wasn't one of them. The review disagreed, correctly: the instruction's *intent*
+covered any tier-authored defect-description, and a rationale is exactly that. Fixed
+one round later (`969fa523`), and the fix itself surfaced a second, smaller
+inaccuracy — my own new comments illustrated the leak with `justified-rejected`,
+which (per `SETTLING_VERDICTS = ["fixed", "justified-accepted"]`) can never actually
+reach `settled`/`settledBecause` at all, since a rejected justification leaves the
+finding open rather than settled. A design decision correctly escalated, and a
+review that kept working on its own output rather than stopping at "looks done."
+
+**Two TOCTOU races, both hiding behind a comment that overstated its own guarantee.**
+`worker.ts`'s `runJob` wrote `state: "running"` unconditionally right after
+`worktreeFor` (a real `git worktree add`) with nothing holding the review row for
+that whole async gap — a `review_cancel` landing there wrote `cancelled`, and this
+write silently overwrote it back, one write *before* `runRound`'s own carefully
+already-existing TOCTOU check ever got to see it. Fixed with `store.startRunning`,
+a single atomic `UPDATE ... WHERE state NOT IN (terminal)` rather than a
+read-then-write (which would only have moved the race). `repin.ts` had the same
+class one level in: its own comment said the window between its `hasPendingRound`
+recheck and `removeWorktree` "is synchronous" — false, and disprovable by reading
+three lines further, where `originTree()` spawns a real `git rev-parse`. A
+`review_submit` landing in exactly that gap is told "applied," then silently
+destroyed by the recut. Fixed with a second `hasPendingRound` check positioned
+after the gap closes rather than only before it opens. Both needed a way to inject
+a real async operation's completion deterministically to test — `vi.mock` on the
+git module, wrapping only the one function/argument-shape that mattered, letting
+every other call through to the real implementation unchanged. Used a third time
+this round for `board-stream.ts`'s load-average test (mocking `node:os`'s
+`loadavg`), and worth remembering as the general answer to "this real subprocess
+call is too fast to race honestly with a sleep."
+
+**`attest.ts` could overclaim coverage with no caveat at all, not just an imprecise
+one.** `tiersOnTree` matched on `tree_hash` alone with no outcome check, so an
+`interrupted` t0 run — closed *with* the real tree it was cut short reading — counted
+as full trustworthy coverage: no PARTIAL, no caveat, in the one output whose entire
+value is that it can be trusted. The codebase already knew better one file over
+(`settleFixed` already refuses to trust an interrupted t0's silence) — `attest.ts`
+was the one place that hadn't caught up. Fixed by excluding
+failed/unpayable/stopped/interrupted from `tiersOnTree` via a new derived
+`UNTRUSTED_READ_SQL`, matching the existing `DID_NOT_LOOK_SQL` precedent exactly
+(same file, same "derived, never spelled out" convention — confirmed necessary by
+`one-definition.test.ts` actually catching the first draft, which spelled the four
+outcomes out inline and collided with the SQL-membership-test ban because `failed`
+happens to be a valid string in both the review-state and tier-outcome vocabularies).
+Also reworded the caveat itself from "read an earlier tree" to "never left a trusted
+read of this tree" — the old wording was factually wrong for a tier whose only
+attempt failed outright with no tree recorded at all, a case the fix's own
+investigation surfaced as a second, real (if minor) instance of the same seam.
+
+**A test can be named for the exact property it fails to test, and only running it
+against a broken implementation proves the gap is real.** `config.test.ts`'s
+`"never starts zero workers"` set `LORE_CONCURRENCY=""` and asserted nothing — named
+for this file's own founding incident, guarding nothing. Fixed by adding the missing
+assertion, then verified with the same discipline as every behavioral fix: broke
+`env()`'s blank-handling on purpose, confirmed the now-real test caught it, restored.
+A vacuous test and a missing test are the same failure from the reviewer's
+perspective; this project's own rules already say the vacuous one is worse, because
+it *looks* like coverage.
+
+**Surprised me.** How much of this round's substance came from re-reading a
+finding's own evidence citation critically rather than trusting it at face value —
+`20310406`'s citation of `store.ts:204`'s `DID_NOT_LOOK_SQL` as covering three
+outcomes when it only covers two was imprecise, but the core claim underneath it
+was still right, confirmed independently against `ops/status.ts`'s own precedent.
+Same discipline, different direction, for `969fa523`: the finding was right and I
+argued myself out of acting on it fully the first time by reading Vany's instruction
+too literally instead of reading its intent.
+
 ## 2026-08-28 — src/security folder review: twelve rounds, and the sharpest bug of
 the whole project so far was in a field nobody had looked at twice
 
