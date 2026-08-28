@@ -186,9 +186,9 @@ function nextStep(state: ReviewState, freshFindings: number, reviewId: string): 
     case "needs_human":
       return "STOP and ask a person. `open_questions` is the question — take both statements to your user verbatim. Do not answer it yourself and do not close it with lore-ok. When they decide, call knowledge_resolve; that resumes this review.";
     case "passed":
-      return "Every tier agrees. Call review_attest for the signed line, then merge.";
+      return "Every tier agrees. Call review_attest for the signed line, then merge — and carry on. This closes the review, not your task.";
     case "passed_partial":
-      return "Every tier that COULD run agrees — weaker evidence than `passed`, honestly labelled. Tell your user which tiers were skipped and why (the attestation names them) before deciding to merge.";
+      return "Every tier that COULD run agrees — weaker evidence than `passed`, honestly labelled. Tell your user which tiers were skipped and why (the attestation names them) before deciding to merge. Same after that: this closes the review, not your task.";
     case "failed":
       return "The review DID NOT RUN — this is not 'nothing found' and you must not merge. Read `failed_because` and repeat it to your user verbatim. Retry AT MOST ONCE; if it fails the same way, stop and report it rather than diagnosing lore yourself.";
     case "expired":

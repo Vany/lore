@@ -2053,6 +2053,22 @@ describe("one review per branch", () => {
     expect(JSON.parse(next.result?.content?.[0]?.text ?? "{}").review_id).toMatch(/^rev_/);
   });
 
+  // Vany: clients were reading "then merge." as the end of their whole task, not
+  // just this review, and stopping there — the exact opposite of what a passed
+  // review should prompt. Pinned so the "carry on" framing cannot quietly drop
+  // back out in a later wording pass.
+  it.each([["passed"], ["passed_partial"]] as const)(
+    "tells the client %s closes the review, not its task",
+    async (state) => {
+      const first = await start();
+      const id = JSON.parse(first.result?.content?.[0]?.text ?? "{}").review_id as string;
+      store.updateReview(id, { state });
+
+      const poll = await callTool("review_poll", { review_id: id });
+      expect(String(poll["note"])).toMatch(/not your task/);
+    },
+  );
+
   it("does not confuse one branch's open review with another's", async () => {
     await start();
     const other = await start({ branch: "feat/y" });

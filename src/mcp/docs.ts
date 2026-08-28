@@ -864,6 +864,9 @@ Rules that decide whether this works:
 - \`fast_clean\` is not \`passed\` either — the deep tiers have not run.
 - \`passed_partial\` is terminal and will NEVER become \`passed\`, so waiting for that
   never returns. Attest it, and say plainly that the evidence is weaker than a pass.
+- Reaching \`passed\`/\`passed_partial\` closes THIS review, not your task. Attest,
+  merge, and carry on with whatever else you were asked to do — lore has no opinion
+  on when your session ends, only on whether this branch was reviewed.
 - Expect several rounds. A fix does NOT send the review back down the ladder: the tier
   that raised a finding is the one that judges your answer, and a tier already satisfied
   stays satisfied for the rest of this review.
@@ -1049,7 +1052,8 @@ ${ticket.trim()}
 
 When the state is \`passed\` — or \`passed_partial\` — call review_attest and give the
 user that line. On a partial one, say which tiers were skipped and that the evidence
-is weaker than a pass; the decision to merge on it is theirs, not yours.
+is weaker than a pass; the decision to merge on it is theirs, not yours. Either way,
+attesting and merging closes THIS review — carry on with whatever else your task needs.
 `.trim();
 };
 
