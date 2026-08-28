@@ -3,7 +3,7 @@
  */
 
 import { execSync } from "node:child_process";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -72,6 +72,24 @@ describe("an optional engine's absence is not a gap in the review", () => {
     writeFileSync(join(dir, "go.mod"), "module example.com/x\n");
     expect(detect(dir, "sbom")).toBe(true);
     expect(detect(dir, "osv")).toBe(true);
+  });
+
+  // Fingerprint 89c15f09: root-only was the whole check, so `acdc` — this
+  // deployment's own repository whose only manifest sits at infra/package.json,
+  // no root one — was told sbom/osv were "not configured", false: cdxgen scans
+  // recursively from cwd and would find it. Same fixture shape `commandsFor`'s
+  // own D-129 test uses for the identical repository.
+  it("runs sbom and osv for a manifest one level down, root has none", () => {
+    mkdirSync(join(dir, "infra"));
+    writeFileSync(join(dir, "infra", "package.json"), "{}");
+    expect(detect(dir, "sbom")).toBe(true);
+    expect(detect(dir, "osv")).toBe(true);
+  });
+
+  it("does not walk into node_modules looking for a nested manifest", () => {
+    mkdirSync(join(dir, "node_modules"));
+    writeFileSync(join(dir, "node_modules", "package.json"), "{}");
+    expect(detect(dir, "sbom")).toBe(false);
   });
 });
 
@@ -547,6 +565,23 @@ describe("eslint and tsc group only genuinely identical diagnostics", () => {
     expect(f).toHaveLength(1);
     expect(f[0]?.evidence).toBe(one);
     expect(f[0]?.line).toBe(3);
+  });
+
+  // Fingerprint 25327c6b: `checkTypes`'s scripts["typecheck"] branch feeds a
+  // monorepo runner's own stdout straight through, and Turborepo prefixes every
+  // line `<package>:<task>:` by default on piped output — which docker's own
+  // stdout always is. The file capture is unanchored, so without the strip this
+  // swallowed the prefix whole.
+  it("strips a monorepo runner's own package:task: prefix from the file", () => {
+    const out = "web:typecheck: src/a.ts(3,7): error TS2345: Argument of type 'x' is not assignable.";
+    const f = parseTsc(out);
+    expect(f).toHaveLength(1);
+    expect(f[0]?.file).toBe("src/a.ts");
+  });
+
+  it("leaves an ordinary tsc file untouched when there is no runner prefix to strip", () => {
+    const out = "src/a.ts(3,7): error TS2345: Argument of type 'x' is not assignable.";
+    expect(parseTsc(out)[0]?.file).toBe("src/a.ts");
   });
 });
 

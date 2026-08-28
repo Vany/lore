@@ -118,6 +118,17 @@ export async function cargoLockKey(worktree: string, dir: string): Promise<strin
 }
 
 /**
+ * The container's cwd, exported so a parser reading a sandboxed engine's OWN
+ * report of its paths — as opposed to relative output like `tsc`'s, which never
+ * mentions it — knows which prefix is actually on disk in there. `parseEslint`'s
+ * own fix (D-131 review, fingerprint 6af88f4d) is the reason this needed a name at
+ * all: eslint's JSON formatter reports paths absolute, so `/work/src/foo.ts` is
+ * what a sandboxed run actually produces, never the HOST worktree path a naive
+ * caller reaches for.
+ */
+export const SANDBOX_CWD = "/work";
+
+/**
  * Mounts shared by both phases.
  *
  * **The reviewed worktree goes in read-only, at `/src`, and the run happens in a
@@ -153,7 +164,7 @@ function baseArgs(cfg: SandboxConfig, worktree: string, cacheDir: string, scratc
     // Nothing from the host beyond the sources, a scratch copy and the cache. In
     // particular: no signing key, no database, no tokens.
     "-v", `${worktree}:/src:ro`,
-    "-v", `${scratch}:/work`,
+    "-v", `${scratch}:${SANDBOX_CWD}`,
     // lore-ok[d341a76e]: fixed in runner.ts, not here. The mount alone was never
     // going to be enough — cargo does not read `cacheMountPath` off the filesystem
     // layout, it reads `$CARGO_HOME`/`$CARGO_TARGET_DIR`, and nothing pointed those
@@ -169,7 +180,7 @@ function baseArgs(cfg: SandboxConfig, worktree: string, cacheDir: string, scratc
     // touches — see this same file's `runInSandbox` doc comment for the full
     // reasoning.
     "-v", `${cacheDir}:${cacheMountPath}`,
-    "-w", "/work",
+    "-w", SANDBOX_CWD,
     "--memory", cfg.memory,
     "--cpus", cfg.cpus,
     // Fork bombs are a denial of service against every other review on the box.
@@ -380,8 +391,14 @@ export interface EcosystemFound {
   readonly dir: string;
 }
 
-/** Noise a one-level walk should not report as a project root in its own right. */
-const SKIP_DIRS = new Set(["node_modules", "target", "dist", "build", "vendor"]);
+/**
+ * Noise a one-level walk should not report as a project root in its own right.
+ *
+ * Exported so `engines.ts`'s own one-level manifest walk (`detect()`'s `sbom`/
+ * `osv` cases) skips exactly the same noise this one does, rather than a second,
+ * separately-maintained copy of the same five names.
+ */
+export const SKIP_DIRS = new Set(["node_modules", "target", "dist", "build", "vendor"]);
 
 /**
  * Every ecosystem T0 finds evidence of in this worktree, and WHERE — not exactly
@@ -459,6 +476,9 @@ export async function runInSandbox(
       `${SYNC} && ${script}`,
     ],
     cfg.timeoutMs,
+    // This runs `docker` itself, not the reviewed content — see `runTool`'s own
+    // doc comment for why that earns the one exception to its default minimal env.
+    true,
   );
 }
 
@@ -489,6 +509,9 @@ export async function install(
       `${SYNC} && (${cmds.install})`,
     ],
     cfg.timeoutMs,
+    // This runs `docker` itself, not the reviewed content — see `runTool`'s own
+    // doc comment for why that earns the one exception to its default minimal env.
+    true,
   );
 }
 

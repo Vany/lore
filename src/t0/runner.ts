@@ -22,6 +22,7 @@ import {
   install,
   lockfileKey,
   runInSandbox,
+  SANDBOX_CWD,
   type SandboxConfig,
   type Toolchain,
 } from "./sandbox.ts";
@@ -834,7 +835,14 @@ async function checkLint(
   // wrong REASON reported. "Unparseable" reads as an eslint or config problem; a
   // memory limit is the honest one and points at the right place to fix it.
   if (ranOutOfMemory(r)) return scriptFinding("eslint", "npx eslint .", r);
-  const parsed = parseEslint(r.stdout, worktree);
+  // SANDBOX_CWD, NOT `worktree` — eslint's JSON formatter reports `filePath`
+  // absolute, and this process ran inside the container with its cwd (and every
+  // file it can see) under SANDBOX_CWD, never under the host worktree path.
+  // Passing `worktree` here left every sandboxed eslint finding's `file` as the
+  // container path verbatim (`/work/src/foo.ts`) — resolvable nowhere on the host,
+  // so `scopeOf` could never read it and the finding could never settle. Found by
+  // lore's own review, fingerprint 6af88f4d.
+  const parsed = parseEslint(r.stdout, SANDBOX_CWD);
   return parsed === undefined
     ? { engine: "eslint", findings: [], unavailable: "eslint produced unparseable output" }
     : { engine: "eslint", findings: parsed };

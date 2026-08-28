@@ -48,21 +48,39 @@ export interface ToolResult {
  * The timeout is mandatory, not defensive: on the deployment host T0 is the
  * throughput bottleneck (D-37), and a hung tool holding a review slot forever
  * looks like a slow review rather than a stuck one.
+ *
+ * TOOLS INHERIT NO AMBIENT CREDENTIALS BY DEFAULT — now actually true, not just
+ * claimed. `env: { ...process.env, ... }` used to hand semgrep, ast-grep and
+ * `cdxgen` (invoked via `npx` from `security/sbom.ts`) the SERVICE's full
+ * environment, `LORE_WEBHOOK_URL` (a credential per SPEC.md §"never rendered")
+ * included, while those processes parsed a reviewed repository's own untrusted
+ * config and dependency tree. Found by lore's own review, fingerprint 72871cca.
+ *
+ * `inheritHostEnv: true` is the one deliberate exception: `runInSandbox`/`install`
+ * (`sandbox.ts`) call this to run `docker` ITSELF, a trusted host binary that
+ * orchestrates the sandbox rather than reading the reviewed content — it
+ * genuinely needs the ambient environment to reach the daemon (`DOCKER_HOST`, its
+ * own `HOME`-relative config), and the CONTAINER it launches gets its own
+ * separately-constructed, already-minimal `-e` list regardless (`baseArgs`), so
+ * this exception never reaches the untrusted target's own execution environment.
  */
 export async function runTool(
   cwd: string,
   cmd: string,
   args: readonly string[],
   timeoutMs = 300_000,
+  inheritHostEnv = false,
 ): Promise<ToolResult> {
   try {
+    const base = inheritHostEnv
+      ? process.env
+      : { PATH: process.env["PATH"], HOME: process.env["HOME"] };
     const { stdout, stderr } = await run(cmd, [...args], {
       cwd,
       timeout: timeoutMs,
       maxBuffer: 64 * 1024 * 1024,
       encoding: "utf8",
-      // Tools inherit no ambient credentials. T0 runs untrusted project config.
-      env: { ...process.env, CI: "1", NO_COLOR: "1", FORCE_COLOR: "0" },
+      env: { ...base, CI: "1", NO_COLOR: "1", FORCE_COLOR: "0" },
     });
     return { ok: true, code: 0, stdout, stderr, timedOut: false };
   } catch (e) {

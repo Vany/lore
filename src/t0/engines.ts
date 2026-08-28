@@ -13,7 +13,7 @@
  */
 
 import { CLAIM_MAX } from "../core/finding.ts";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import type { Finding, Severity } from "../core/finding.ts";
 import type { T0Engine } from "../core/review-type.ts";
@@ -21,6 +21,7 @@ import { gitlinks } from "../git/repo.ts";
 import { commitToFindings, queryCommit, queryComponents, toFindings } from "../security/osv.ts";
 import { generateSbom } from "../security/sbom.ts";
 import { runTool } from "./exec.ts";
+import { SKIP_DIRS } from "./sandbox.ts";
 
 export interface EngineOutcome {
   readonly engine: T0Engine;
@@ -229,6 +230,37 @@ const OPT_IN = new Set<T0Engine>(["ast-grep"]);
 // `security/sbom.ts`'s own `Ecosystem` type names.
 const ECOSYSTEM_MANIFESTS = ["package.json", "go.mod", "Cargo.toml", "pom.xml", "requirements.txt", "pyproject.toml", "Gemfile"];
 
+/**
+ * Any `ECOSYSTEM_MANIFESTS` name at the root OR one level down — the same shallow
+ * walk `detectEcosystems` (`sandbox.ts`) already does for cargo/npm's execution
+ * routing, applied here to the FULL manifest list `sbom`/`osv` actually care
+ * about (that function only ever checks npm and cargo, so it cannot answer this
+ * question directly). Synchronous, unlike `detectEcosystems`, so `detect()` — a
+ * plain boolean predicate every caller already treats as free — does not need to
+ * become async just to gain this.
+ *
+ * ROOT-ONLY used to be the whole check, so a repo whose only manifest sits one
+ * level down (this deployment's own `acdc`, `infra/package.json`, no root
+ * manifest at all — `sandbox.test.ts`'s own fixture for exactly this shape) was
+ * told sbom/osv were "not configured", false: `cdxgen` scans recursively from cwd
+ * and would have found it. Found by lore's own review, fingerprint 89c15f09.
+ */
+function hasManifestNearby(worktree: string): boolean {
+  if (ECOSYSTEM_MANIFESTS.some((f) => existsSync(join(worktree, f)))) return true;
+  const entries = (() => {
+    try {
+      return readdirSync(worktree, { withFileTypes: true });
+    } catch {
+      return [];
+    }
+  })();
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name.startsWith(".") || SKIP_DIRS.has(entry.name)) continue;
+    if (ECOSYSTEM_MANIFESTS.some((f) => existsSync(join(worktree, entry.name, f)))) return true;
+  }
+  return false;
+}
+
 export function detect(worktree: string, engine: T0Engine): boolean {
   switch (engine) {
     case "tsc":
@@ -252,7 +284,7 @@ export function detect(worktree: string, engine: T0Engine): boolean {
       // they carry CWE metadata that lands in the same namespace as model findings.
       return true;
     case "sbom":
-      return ECOSYSTEM_MANIFESTS.some((f) => existsSync(join(worktree, f)));
+      return hasManifestNearby(worktree);
     case "osv":
       // Not the same condition as `sbom`, though it was written as one.
       //
@@ -261,7 +293,7 @@ export function detect(worktree: string, engine: T0Engine): boolean {
       // skipped the whole engine — the vulnerability check declining to run on the
       // exact repository shape it was built for (D-36), and reporting nothing, which
       // is the reading INV-1 forbids.
-      return ECOSYSTEM_MANIFESTS.some((f) => existsSync(join(worktree, f))) || existsSync(join(worktree, ".gitmodules"));
+      return hasManifestNearby(worktree) || existsSync(join(worktree, ".gitmodules"));
     default:
       return false;
   }
@@ -359,9 +391,14 @@ export async function runEngine(worktree: string, engine: T0Engine, scope?: Scop
     // tsc and eslint are NOT here. Both resolve their binary out of the target's
     // `node_modules`, so running them means executing code from the dependency tree
     // — which D-24 says happens in the sandbox and never in the service. They are
-    // driven by `runner.ts` inside the same container the suite uses. `semgrep`,
-    // `ast-grep`, `sbom` and `osv` stay: those are lore's own binaries reading
-    // files, and they need no install.
+    // driven by `runner.ts` inside the same container the suite uses. `semgrep` and
+    // `ast-grep` stay: those genuinely are lore's own binaries reading files, no
+    // install needed. `sbom`'s PRIMARY path is not the same shape — it runs
+    // `cdxgen`, third-party code from npm, via `runTool` in `security/sbom.ts` —
+    // but it needs no INSTALL either (`npx` resolves it on demand), and `runTool`'s
+    // own default env is what keeps this safe now rather than the identity of the
+    // binary (fingerprint 72871cca: this comment used to be the false half of that
+    // claim). `osv` queries a database directly and runs no external tool at all.
     case "semgrep":
       return semgrep(worktree, scope);
     case "ast-grep":
@@ -501,6 +538,27 @@ async function osv(worktree: string): Promise<EngineOutcome> {
 
 const TSC_LINE = /^(.+?)\((\d+),(\d+)\):\s+error\s+(TS\d+):\s+(.*)$/;
 
+/**
+ * A monorepo runner's own per-line prefix, stripped from a captured file.
+ *
+ * `TSC_LINE`'s file capture is unanchored — it takes whatever precedes the first
+ * `(line,col):`, which is correct for tsc's OWN plain output but not for what
+ * reaches this parser in practice: `checkTypes`'s `scripts["typecheck"]` branch
+ * feeds a monorepo task runner's stdout straight through (its own comment says so
+ * — "a monorepo runner usually forwards tsc's own lines"), and Turborepo prefixes
+ * every line with `<package>:<task>:` by default (`--log-prefix=auto`, active on
+ * piped/non-TTY output — which `docker run`'s stdout always is here). Unstripped,
+ * `web:typecheck: src/a.ts(3,7): error TS2322: ...` records `finding.file` as
+ * `"web:typecheck: src/a.ts"` — resolvable nowhere, so `scopeOf` can never read it
+ * and the finding can never settle. General rather than turbo-specific: strips ANY
+ * number of leading `label:` segments followed by whitespace, so pnpm's `-r`
+ * prefix or nx's own task-runner prefix are handled the same way without needing
+ * to name each one. Found by lore's own review, fingerprint 25327c6b.
+ */
+function stripRunnerPrefix(file: string): string {
+  return file.replace(/^(?:[\w@./-]+:)+\s+/, "");
+}
+
 /** Parse `tsc --noEmit --pretty false` output. Exported so the sandbox can use it. */
 export function parseTsc(output: string): Finding[] {
   // GROUPED LIKE THE PATTERN ENGINES, and for the same reason — see `bySite`. The
@@ -517,7 +575,7 @@ export function parseTsc(output: string): Finding[] {
 
   return bySite(matched, ({ m }) => ({
     claim: ruleClaim(m[4], m[5] ?? "", "tsc"),
-    file: m[1] ?? "",
+    file: stripRunnerPrefix(m[1] ?? ""),
     line: Number(m[2]),
   })).map(({ match: { m, raw }, file, lines }) => {
     const first = lines[0];

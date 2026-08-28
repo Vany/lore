@@ -56,3 +56,40 @@ describe("a process a signal killed reports the POSIX exit code, not the raw sig
     expect(out.code).toBe(1);
   });
 });
+
+// Fingerprint 72871cca: semgrep, ast-grep and cdxgen all run here on a reviewed
+// repository's own untrusted content — a comment claiming "no ambient
+// credentials" while spreading `process.env` verbatim was the opposite of true.
+describe("a tool run against untrusted content inherits no ambient credential", () => {
+  const echoEnv = (name: string): string => {
+    const script = join(dir, "echo-env.sh");
+    writeFileSync(script, `#!/bin/sh\nprintenv ${name}\n`);
+    chmodSync(script, 0o755);
+    return script;
+  };
+
+  it("does not see a var set only in this process's own environment, by default", async () => {
+    process.env["LORE_TEST_SECRET"] = "top-secret";
+    try {
+      const out = await runTool(dir, echoEnv("LORE_TEST_SECRET"), []);
+      expect(out.stdout.trim()).toBe("");
+    } finally {
+      delete process.env["LORE_TEST_SECRET"];
+    }
+  });
+
+  it("still sees PATH, so a bare command name keeps resolving", async () => {
+    const out = await runTool(dir, echoEnv("PATH"), []);
+    expect(out.stdout.trim()).not.toBe("");
+  });
+
+  it("sees the full environment only when a caller explicitly opts in (docker itself, not the reviewed content)", async () => {
+    process.env["LORE_TEST_SECRET"] = "top-secret";
+    try {
+      const out = await runTool(dir, echoEnv("LORE_TEST_SECRET"), [], 300_000, true);
+      expect(out.stdout.trim()).toBe("top-secret");
+    } finally {
+      delete process.env["LORE_TEST_SECRET"];
+    }
+  });
+});

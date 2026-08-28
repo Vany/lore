@@ -344,6 +344,30 @@ describe("a run the sandbox itself killed is never mistaken for a clean or parti
     expect(eslint?.unavailable).toMatch(/not a fault in the branch/);
   });
 
+  // Fingerprint 6af88f4d: eslint's OWN JSON formatter reports `filePath` absolute,
+  // and this run happened inside the sandbox where the only files on disk sit under
+  // SANDBOX_CWD (`/work`) — never under the HOST worktree path (`dir`, here). A
+  // fake `filePath` built from `dir` (as the killed-run test above uses, harmlessly,
+  // since a kill discards it before parsing) would silently hide this: it must be
+  // built from the container's own path, exactly as a real sandboxed eslint run
+  // would report it.
+  it("checkLint: a real eslint finding's file is the repo-relative path, not the container's absolute one", async () => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: {} }));
+    writeFileSync(join(dir, "eslint.config.js"), "module.exports = [];\n");
+    const eslintJson = JSON.stringify([
+      {
+        filePath: "/work/src/foo.ts",
+        messages: [{ ruleId: "no-unused-vars", message: "'x' is defined but never used", line: 3, severity: 2 }],
+      },
+    ]);
+    // Exit 1: eslint's own real exit code when it found something, not a kill.
+    const sandbox = fakeDocker(eslintJson, 1);
+    const out = await runT0(dir, { engines: ["eslint"], sandbox });
+    const eslint = out.outcomes.find((o) => o.engine === "eslint");
+    expect(eslint?.findings).toHaveLength(1);
+    expect(eslint?.findings?.[0]?.file).toBe("src/foo.ts");
+  });
+
   // Fingerprint dd36a31b, found by lore's own review: a timeout is the THIRD way
   // a run does not finish, alongside a kill and OOM, and it reaches `runInSandbox`
   // as `r.unavailable` set with `r.timedOut` true — a structured signal `ToolResult`
