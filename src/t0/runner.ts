@@ -577,7 +577,7 @@ async function checkCargo(
     CARGO_MOUNT,
   );
   if (r.unavailable !== undefined) return { engine, findings: [], unavailable: r.unavailable, interrupted: r.timedOut };
-  if (ranOutOfMemory(r)) return scriptFinding(engine, `cargo ${subcommand}`, r);
+  if (ranOutOfMemory(r)) return scriptFinding(engine, `cargo ${subcommand}`, r, manifest);
   // PARSED FROM STDOUT ALONE — cargo's own `--message-format=json` contract keeps
   // the JSONL there and human-readable progress on stderr, unlike tsc's murkier,
   // wrapper-dependent convention `checkTypes` has to allow for. Parsed first: a
@@ -617,7 +617,7 @@ async function checkCargo(
   }
   // By this point `cargo fetch` already succeeded and the tool itself responded,
   // so this is a genuine, opaque failure of the project's own gate.
-  return scriptFinding(engine, `cargo ${subcommand}`, r);
+  return scriptFinding(engine, `cargo ${subcommand}`, r, manifest);
 }
 
 /** The scripts a target declares, which are the ones it actually runs. */
@@ -678,11 +678,22 @@ function ranOutOfMemory(r: { ok: boolean; code: number; stdout: string; stderr: 
   return !r.ok && (r.code === KILLED || `${r.stdout}\n${r.stderr}`.includes("Allocation failed - JavaScript heap out of memory"));
 }
 
-/** A failed script becomes one finding carrying its tail. Its output is not a format. */
+/**
+ * A failed script becomes one finding carrying its tail. Its output is not a format.
+ *
+ * `file` defaults to `package.json` — right for every npm-family caller (tsc,
+ * eslint), which is what every call site but `checkCargo`'s is. Fingerprint
+ * 2060d1f6: `checkCargo`'s own genuine-failure call sites left it at the default,
+ * so an opaque cargo failure on a Rust repo with no root `package.json` at all
+ * (this module's own named shape, `teammater`) named a file that resolves nowhere
+ * — the same never-settles defect the FETCH-failure arm two functions up was
+ * already fixed for (fingerprint 47ddd7fa) and this shared helper was missed by.
+ */
 export function scriptFinding(
   engine: string,
   script: string,
   r: { ok: boolean; stdout: string; stderr: string; code: number },
+  file = "package.json",
 ): EngineOutcome {
   if (ranOutOfMemory(r)) {
     return {
@@ -698,7 +709,7 @@ export function scriptFinding(
     engine: engine as T0Engine,
     findings: [
       {
-        file: "package.json",
+        file,
         severity: "high",
         claim: `\`${script}\` fails on this branch`,
         evidence: `${r.stdout}\n${r.stderr}`.trim().split("\n").slice(-40).join("\n").slice(0, 2000),

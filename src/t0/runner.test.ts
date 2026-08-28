@@ -538,6 +538,12 @@ describe("sandboxedCargo, through a fake docker", () => {
     expect(o?.unavailable, JSON.stringify(o)).toBeUndefined();
     expect(o?.findings, JSON.stringify(o)).toHaveLength(1);
     expect(o?.findings[0]?.claim).toMatch(/fails on this branch/);
+    // Fingerprint 2060d1f6: this fixture's own root has no package.json anywhere
+    // (see beforeEach — only Cargo.toml) — `scriptFinding`'s old hardcoded
+    // default named a file that does not exist in this repo at all. Must be the
+    // real manifest, exactly as the sibling fetch-failure test below already
+    // asserts for the fetch-failure arm (fingerprint 47ddd7fa).
+    expect(o?.findings[0]?.file).toBe("Cargo.toml");
   });
 
   // CARGO_HOME/CARGO_TARGET_DIR MUST ACTUALLY REACH CARGO — found by lore's own

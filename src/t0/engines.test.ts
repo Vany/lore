@@ -93,6 +93,51 @@ describe("an optional engine's absence is not a gap in the review", () => {
   });
 });
 
+// Fingerprint 78c3f83f: no test pinned this list at all before, and it was
+// missing more real config names than it recognised.
+describe("detect recognises every real eslint config location, not just two", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "lore-eslint-detect-"));
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it("says no config for an unconfigured repo", () => {
+    expect(detect(dir, "eslint")).toBe(false);
+  });
+
+  it.each([
+    "eslint.config.js",
+    "eslint.config.mjs",
+    "eslint.config.cjs",
+    "eslint.config.ts",
+    ".eslintrc.js",
+    ".eslintrc.cjs",
+    ".eslintrc.json",
+    ".eslintrc.yaml",
+    ".eslintrc.yml",
+    ".eslintrc",
+  ])("recognises %s", (name) => {
+    writeFileSync(join(dir, name), "");
+    expect(detect(dir, "eslint")).toBe(true);
+  });
+
+  it("recognises an eslintConfig key in package.json, with no separate config file", () => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ eslintConfig: { rules: {} } }));
+    expect(detect(dir, "eslint")).toBe(true);
+  });
+
+  it("does not treat an ordinary package.json with no eslintConfig key as configured", () => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "x" }));
+    expect(detect(dir, "eslint")).toBe(false);
+  });
+
+  it("does not throw on a package.json that is not valid JSON", () => {
+    writeFileSync(join(dir, "package.json"), "{not json");
+    expect(detect(dir, "eslint")).toBe(false);
+  });
+});
+
 /**
  * `Sbom.note` and `Sbom.incomplete` (security/sbom.ts) look alike — both are optional
  * strings on the same object — and reading the wrong one for "should this engine be
@@ -178,6 +223,16 @@ describe("sbom: the cannot-enumerate finding names a real manifest, not npm's", 
     writeFileSync(join(dir, "go.mod"), "module example.com/x\n");
     const out = await runEngine(dir, "sbom");
     expect(out.findings[0]?.file).toBe("go.mod");
+  });
+
+  // Fingerprint 049efb31: this finding's own file lookup re-checked the root
+  // only, disagreeing with `detect()`'s own one-level walk (fingerprint
+  // 89c15f09) that is the reason this branch runs at all on the acdc shape.
+  it("names a nested manifest, root-only re-check disagreeing with the gate that let this run", async () => {
+    mkdirSync(join(dir, "infra"));
+    writeFileSync(join(dir, "infra", "package.json"), "{}");
+    const out = await runEngine(dir, "sbom");
+    expect(out.findings[0]?.file).toBe(join("infra", "package.json"));
   });
 });
 

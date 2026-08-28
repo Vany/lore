@@ -9,12 +9,12 @@
  * out of `node_modules`. Three of T0's engines produced nothing from one wrong verb.
  */
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { scriptFinding } from "./runner.ts";
-import { cargoLockKey, commandsFor, detectEcosystems, lockfileKey } from "./sandbox.ts";
+import { cargoLockKey, commandsFor, detectEcosystems, install, lockfileKey, runInSandbox, type SandboxConfig } from "./sandbox.ts";
 
 let dir: string;
 
@@ -283,5 +283,105 @@ describe("cargo's own cache key mirrors lockfileKey (D-131)", () => {
     writeFileSync(join(dir, "server", "Cargo.lock"), "nested-lock");
     expect(await cargoLockKey(dir, "server")).not.toBe("no-lockfile");
     expect(await cargoLockKey(dir, ".")).toBe("no-lockfile");
+  });
+});
+
+// Fingerprint 0b55733a: `execFile`'s own timeout cannot be trusted to actually
+// stop a hung container — verified against current Docker CLI behaviour (the
+// signal-forwarding this would have relied on was removed in 27.0.3+, and this
+// image's own docker is 27.5.1) and confirmed kernel PID-1 semantics, neither of
+// which a plain (non-namespaced) fake process can reproduce. What CAN be verified
+// without real Docker: that a timeout makes this code issue an explicit, separate
+// `kill <container-name>` — not that a real container actually dies from it.
+describe("a timed-out sandboxed run is killed explicitly, not left to a signal that may not arrive", () => {
+  let scratch: string;
+  let cache: string;
+  let log: string;
+  let baseSandbox: SandboxConfig;
+
+  beforeEach(() => {
+    scratch = join(dir, "scratch-abc123");
+    cache = join(dir, "cache");
+    log = join(dir, "calls.log");
+    writeFileSync(log, "");
+  });
+
+  /**
+   * `$1` decides the behaviour, the same distinction a real `docker` binary makes
+   * between its own subcommands — unlike `runner.test.ts`'s `fakeDocker`, which
+   * ignores argv entirely and cannot tell `run` from `kill` apart. Every
+   * invocation's full argv is appended to `log` first, so a test can assert
+   * exactly what this code actually ran, not just what it returned.
+   */
+  const fakeDockerBinary = (): string => {
+    const script = join(dir, "fake-docker.sh");
+    writeFileSync(
+      script,
+      "#!/bin/sh\n" +
+        `printf '%s\\n' "$*" >> "${log}"\n` +
+        'case "$1" in\n' +
+        "  run) sleep 5 ;;\n" +
+        "  kill) exit 0 ;;\n" +
+        "esac\n",
+    );
+    chmodSync(script, 0o755);
+    baseSandbox = {
+      image: "unused",
+      cacheRoot: cache,
+      scratchRoot: dir,
+      uid: 1000,
+      gid: 1000,
+      memory: "6g",
+      cpus: "2",
+      // Long enough for the fake script's OWN process to start and log its argv
+      // before being killed — a too-tight timeout races the shell's own startup
+      // (fork+exec+parse) rather than testing anything about this code, and that
+      // race is worse than it sounds under load: 800ms was reliable run alone,
+      // then flaked in the full suite (many other files' own child processes
+      // competing for the same CPU). 2s costs one slow test and buys real margin.
+      timeoutMs: 2_000,
+      runtime: script,
+    };
+    return script;
+  };
+
+  it("runInSandbox: issues an explicit kill naming this run's own container, after a timeout", async () => {
+    fakeDockerBinary();
+    const result = await runInSandbox(baseSandbox, dir, cache, scratch, "echo hi", false);
+    expect(result.timedOut).toBe(true);
+
+    const calls = readFileSync(log, "utf8").trim().split("\n");
+    expect(calls[0]?.startsWith("run ")).toBe(true);
+    const killCall = calls.find((c) => c.startsWith("kill "));
+    expect(killCall, `expected a kill call among: ${JSON.stringify(calls)}`).toBeDefined();
+    // The SAME name the timed-out `run` was given — otherwise this kills nothing.
+    const nameInRun = calls[0]?.match(/--name (\S+)/)?.[1];
+    expect(nameInRun).toBeDefined();
+    expect(killCall).toBe(`kill ${nameInRun}`);
+  });
+
+  it("install: also issues an explicit kill after a timeout, the same as runInSandbox", async () => {
+    fakeDockerBinary();
+    const result = await install(baseSandbox, dir, cache, scratch, {
+      name: "npm",
+      lockfile: "package-lock.json",
+      install: "npm ci",
+      run: (s) => `npm run ${s}`,
+    });
+    expect(result.timedOut).toBe(true);
+    expect(readFileSync(log, "utf8")).toMatch(/^kill /m);
+  });
+
+  it("does not attempt a kill when the run finishes on its own", async () => {
+    const script = join(dir, "fake-docker-fast.sh");
+    writeFileSync(script, `#!/bin/sh\nprintf '%s\\n' "$*" >> "${log}"\nexit 0\n`);
+    chmodSync(script, 0o755);
+    const sandbox: SandboxConfig = {
+      image: "unused", cacheRoot: cache, scratchRoot: dir, uid: 1000, gid: 1000,
+      memory: "6g", cpus: "2", timeoutMs: 30_000, runtime: script,
+    };
+    const result = await runInSandbox(sandbox, dir, cache, scratch, "echo hi", false);
+    expect(result.timedOut).toBe(false);
+    expect(readFileSync(log, "utf8")).not.toMatch(/^kill /m);
   });
 });

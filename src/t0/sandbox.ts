@@ -16,7 +16,7 @@
 
 import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { dataDir } from "../core/paths.ts";
 import { runTool, type ToolResult } from "./exec.ts";
 
@@ -129,6 +129,36 @@ export async function cargoLockKey(worktree: string, dir: string): Promise<strin
 export const SANDBOX_CWD = "/work";
 
 /**
+ * A stable, unique name for this run's container — `scratch`'s own basename,
+ * already unique per invocation (it is the throwaway per-review scratch
+ * directory), sanitised to what `docker run --name` accepts.
+ *
+ * WHY THIS EXISTS: fingerprint 0b55733a, found by lore's own review. The mandatory
+ * timeout (`cfg.timeoutMs`, `runTool`) cannot actually stop a hung run without it.
+ * `execFile`'s timeout sends SIGTERM to its direct child — the `docker` CLI
+ * process, not the container — and whether that signal ever reaches the
+ * container's own PID 1 is NOT something this can rely on: verified against
+ * current documentation and a live `docker/cli` issue, `docker run` (attached, no
+ * `-d`) forwarded a received SIGTERM to the container through Docker 26.1.x, but
+ * that forwarding was REMOVED in 27.0.3+ — the CLI now exits on "context
+ * canceled" without signalling the container at all. This image's own `docker`
+ * (`deploy/Dockerfile`, pinned 27.5.1) is past that break. And even on an older
+ * CLI that still forwards it, PID 1 inside a container gets no signal's default
+ * disposition unless it explicitly installs a handler (confirmed kernel
+ * behaviour, not Docker-specific) — `sh -lc "..."`, this module's own entrypoint,
+ * installs none. Either way the container survives whatever `execFile`'s timeout
+ * sends.
+ *
+ * So this does not depend on that signal path at all: a name, and an EXPLICIT
+ * `docker kill <name>` issued directly (see the two call sites below) the moment
+ * `ToolResult.timedOut` comes back true — a second, independent command, not a
+ * hope that the first one's signal landed.
+ */
+function containerName(scratch: string): string {
+  return `lore-t0-${basename(scratch).replace(/[^a-zA-Z0-9_.-]/g, "-")}`;
+}
+
+/**
  * Mounts shared by both phases.
  *
  * **The reviewed worktree goes in read-only, at `/src`, and the run happens in a
@@ -161,6 +191,7 @@ function baseArgs(cfg: SandboxConfig, worktree: string, cacheDir: string, scratc
   return [
     "run",
     "--rm",
+    "--name", containerName(scratch),
     // Nothing from the host beyond the sources, a scratch copy and the cache. In
     // particular: no signing key, no database, no tokens.
     "-v", `${worktree}:/src:ro`,
@@ -440,6 +471,22 @@ export async function detectEcosystems(worktree: string): Promise<readonly Ecosy
 }
 
 /**
+ * Explicitly kills the named container after a timed-out run, rather than
+ * trusting that `execFile`'s own SIGTERM reached it — see `containerName`'s doc
+ * comment for why that trust would be misplaced. Best-effort: the container may
+ * already be gone (`--rm`, or it exited on its own the instant after the timeout
+ * fired), and a kill racing that exit is not a new problem — `docker kill` on an
+ * already-stopped container just errors, which this discards the same way a
+ * failed cleanup already does elsewhere in this file.
+ */
+async function killIfTimedOut(cfg: SandboxConfig, worktree: string, scratch: string, result: ToolResult): Promise<ToolResult> {
+  if (result.timedOut) {
+    await runTool(worktree, cfg.runtime, ["kill", containerName(scratch)], 10_000, true).catch(() => {});
+  }
+  return result;
+}
+
+/**
  * Run one command in the sandbox.
  *
  * `network` is on ONLY for the install: a registry needs it, and a test — or a
@@ -462,7 +509,7 @@ export async function runInSandbox(
   network: boolean,
   cacheMountPath?: string,
 ): Promise<ToolResult> {
-  return runTool(
+  const result = await runTool(
     worktree,
     cfg.runtime,
     [
@@ -480,6 +527,7 @@ export async function runInSandbox(
     // doc comment for why that earns the one exception to its default minimal env.
     true,
   );
+  return killIfTimedOut(cfg, worktree, scratch, result);
 }
 
 /**
@@ -498,7 +546,7 @@ export async function install(
   scratch: string,
   cmds: Toolchain,
 ): Promise<ToolResult> {
-  return runTool(
+  const result = await runTool(
     worktree,
     cfg.runtime,
     [
@@ -513,5 +561,6 @@ export async function install(
     // doc comment for why that earns the one exception to its default minimal env.
     true,
   );
+  return killIfTimedOut(cfg, worktree, scratch, result);
 }
 

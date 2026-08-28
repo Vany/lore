@@ -13,7 +13,7 @@
  */
 
 import { CLAIM_MAX } from "../core/finding.ts";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Finding, Severity } from "../core/finding.ts";
 import type { T0Engine } from "../core/review-type.ts";
@@ -230,23 +230,74 @@ const OPT_IN = new Set<T0Engine>(["ast-grep"]);
 // `security/sbom.ts`'s own `Ecosystem` type names.
 const ECOSYSTEM_MANIFESTS = ["package.json", "go.mod", "Cargo.toml", "pom.xml", "requirements.txt", "pyproject.toml", "Gemfile"];
 
+// Both config systems, because a target's OWN eslint version — never checked
+// here, only ITS config files — decides which one actually applies. Flat config
+// (`eslint.config.*`) is the default since ESLint 9 and the only one ESLint 10+
+// understands without the `@eslint/eslintrc` compat package; eslintrc mode
+// (`.eslintrc.*`, `eslintConfig` in package.json) is deprecated but still what a
+// great many real repos, pinned to ESLint 8/9, actually run. `detect()` cannot
+// know which; it can at least stop missing the legacy names it already claims to
+// recognise two of. Verified against ESLint's own current docs and the VS Code
+// ESLint extension's own supported-file list, not assumed from memory.
+const ESLINT_CONFIG_FILES = [
+  "eslint.config.js",
+  "eslint.config.mjs",
+  "eslint.config.cjs",
+  "eslint.config.ts",
+  ".eslintrc.js",
+  ".eslintrc.cjs",
+  ".eslintrc.json",
+  ".eslintrc.yaml",
+  ".eslintrc.yml",
+  ".eslintrc",
+];
+
 /**
- * Any `ECOSYSTEM_MANIFESTS` name at the root OR one level down — the same shallow
- * walk `detectEcosystems` (`sandbox.ts`) already does for cargo/npm's execution
- * routing, applied here to the FULL manifest list `sbom`/`osv` actually care
- * about (that function only ever checks npm and cargo, so it cannot answer this
- * question directly). Synchronous, unlike `detectEcosystems`, so `detect()` — a
- * plain boolean predicate every caller already treats as free — does not need to
- * become async just to gain this.
+ * Fingerprint 78c3f83f: the file-name list above was missing `.eslintrc.js` —
+ * the FIRST name in eslint's own eslintrc-mode resolution order and the most
+ * common legacy config in the wild — plus its `.yml`/`.yaml`/bare siblings and
+ * flat config's `.cjs` variant. A repo configured only through one of those was
+ * told "no eslint config", false, and eslint never ran. `package.json`'s
+ * `eslintConfig` key is the other legal location this list cannot express as a
+ * bare filename; checked here by actually reading the one file every JS/TS repo
+ * already has, not by adding a new file-existence check that would still miss it.
+ */
+function hasEslintConfig(worktree: string): boolean {
+  if (ESLINT_CONFIG_FILES.some((f) => existsSync(join(worktree, f)))) return true;
+  try {
+    const pkg = JSON.parse(readFileSync(join(worktree, "package.json"), "utf8")) as { eslintConfig?: unknown };
+    return pkg.eslintConfig !== undefined;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The repo-relative path of the first `ECOSYSTEM_MANIFESTS` name found at the
+ * root OR one level down — the same shallow walk `detectEcosystems`
+ * (`sandbox.ts`) already does for cargo/npm's execution routing, applied here to
+ * the FULL manifest list `sbom`/`osv` actually care about (that function only
+ * ever checks npm and cargo, so it cannot answer this question directly).
+ * Synchronous, unlike `detectEcosystems`, so `detect()` — a plain boolean
+ * predicate every caller already treats as free — does not need to become async
+ * just to gain this.
  *
  * ROOT-ONLY used to be the whole check, so a repo whose only manifest sits one
  * level down (this deployment's own `acdc`, `infra/package.json`, no root
  * manifest at all — `sandbox.test.ts`'s own fixture for exactly this shape) was
  * told sbom/osv were "not configured", false: `cdxgen` scans recursively from cwd
  * and would have found it. Found by lore's own review, fingerprint 89c15f09.
+ *
+ * Returns the PATH rather than a bare boolean so `sbom()`'s own "could not
+ * enumerate" finding (fingerprint 049efb31, a direct follow-on this same
+ * one-level walk exposed: its own file fallback re-checked the root only,
+ * disagreeing with the gate that just decided to run it) can name whichever
+ * manifest actually exists instead of re-deriving — and re-narrowing — the
+ * same answer a second, inconsistent way.
  */
-function hasManifestNearby(worktree: string): boolean {
-  if (ECOSYSTEM_MANIFESTS.some((f) => existsSync(join(worktree, f)))) return true;
+function findManifestNearby(worktree: string): string | undefined {
+  const root = ECOSYSTEM_MANIFESTS.find((f) => existsSync(join(worktree, f)));
+  if (root !== undefined) return root;
   const entries = (() => {
     try {
       return readdirSync(worktree, { withFileTypes: true });
@@ -256,9 +307,14 @@ function hasManifestNearby(worktree: string): boolean {
   })();
   for (const entry of entries) {
     if (!entry.isDirectory() || entry.name.startsWith(".") || SKIP_DIRS.has(entry.name)) continue;
-    if (ECOSYSTEM_MANIFESTS.some((f) => existsSync(join(worktree, entry.name, f)))) return true;
+    const nested = ECOSYSTEM_MANIFESTS.find((f) => existsSync(join(worktree, entry.name, f)));
+    if (nested !== undefined) return join(entry.name, nested);
   }
-  return false;
+  return undefined;
+}
+
+function hasManifestNearby(worktree: string): boolean {
+  return findManifestNearby(worktree) !== undefined;
 }
 
 export function detect(worktree: string, engine: T0Engine): boolean {
@@ -266,9 +322,7 @@ export function detect(worktree: string, engine: T0Engine): boolean {
     case "tsc":
       return existsSync(join(worktree, "tsconfig.json"));
     case "eslint":
-      return ["eslint.config.js", "eslint.config.mjs", "eslint.config.ts", ".eslintrc.json", ".eslintrc.cjs"].some(
-        (f) => existsSync(join(worktree, f)),
-      );
+      return hasEslintConfig(worktree);
     // ROOT-ONLY, like tsc's tsconfig.json check above — the same shallow signal
     // detect() gives every engine. It is not where nested-crate awareness lives:
     // `sandboxedCargo()` (runner.ts) uses `detectEcosystems`'s own one-level walk for
@@ -437,10 +491,14 @@ async function sbom(worktree: string): Promise<EngineOutcome> {
           // repo, where "package.json" names a file that was never there,
           // violating Finding.file's own repo-relative-path contract the same
           // way a sentence in this exact field already violated it once
-          // before. Re-checks the same list `detect()` gated on rather than
-          // threading which one matched through runEngine/EngineOutcome for
-          // this alone.
-          file: ECOSYSTEM_MANIFESTS.find((f) => existsSync(join(worktree, f))) ?? "package.json",
+          // before.
+          //
+          // `findManifestNearby`, not a bare root-only re-check — fingerprint
+          // 049efb31: `detect()` gates this engine on `hasManifestNearby`'s
+          // one-level walk, so a root-only re-check here disagreed with the
+          // very gate that let this branch run, on the exact repo shape
+          // (`acdc`) that gate was fixed for.
+          file: findManifestNearby(worktree) ?? "package.json",
           severity: "medium",
           claim: "the dependency tree could not be enumerated, so it was not checked for known vulnerabilities",
           evidence: bom.note ?? "no SBOM produced",
@@ -829,7 +887,20 @@ async function semgrep(worktree: string, scope?: Scope): Promise<EngineOutcome> 
     return { engine: "semgrep", findings: [], unavailable: "semgrep produced unparseable output" };
   }
   const { findings, unread } = parsed;
-  return { engine: "semgrep", findings, ...(unread.length === 0 ? {} : { unavailable: unread.join("\n") }) };
+  // `interrupted: unread.length > 0` — a file semgrep could not parse is a site it
+  // did not finish reading, the same fact `interrupted`'s own doc comment names
+  // for a kill or a timeout, and `parseSemgrep`'s own comment already says so
+  // ("the same fact"). Without it, `settleFixed`/`renderT0Delta` (both gate on
+  // `interrupted`, never on `unavailable`) treated this round's silence about the
+  // skipped file as proof any finding there was fixed — the exact false-resolved
+  // claim the OOM-kill fix (fingerprints dd98f788/4a39ae0d) exists to prevent, for
+  // a second way a file can go unread. Found by lore's own review, fingerprint
+  // 3acaef31.
+  return {
+    engine: "semgrep",
+    findings,
+    ...(unread.length === 0 ? {} : { unavailable: unread.join("\n"), interrupted: true }),
+  };
 }
 
 /**
