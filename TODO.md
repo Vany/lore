@@ -78,10 +78,29 @@ that part is pulled out into its own open item rather than hidden inside a tick.
       Argued deferral in the same shape as the two entries below: real, named, not
       silently absorbed into an unrelated change.
 
-### 2026-08-28 — argued deferral: `mirror-refresh.sh`'s refspec never covers a scratch `review/*` ref
+### 2026-08-28 — there was never a mirror bug: `refs/review/<sha>` misread a branch name as a top-level ref
 
-- [ ] **THE D-77 SCRATCH-REF WORKFLOW CANNOT WORK AS WRITTEN, structurally, not
-      transiently.** `mirror-refresh.sh` clones each repo with `git clone --bare`
+- [x] **THE DIAGNOSIS BELOW WAS WRONG, not just the first fix for it.** CORRECTED same
+      day, by lore's own review of the "fix": D-77's scratch ref is
+      `refs/heads/review/<sha>` — a BRANCH under `refs/heads/*`, per SPEC.md's own
+      worked example (`git push origin HEAD:refs/heads/review/<sha>`) — not a
+      top-level `refs/review/*` namespace. The ONE refspec `mirror-refresh.sh` has
+      always had, `+refs/heads/*:refs/remotes/origin/*`, already covers it and always
+      has; `grep -rn refs/review src` returns nothing, confirming no code anywhere
+      treats the top-level namespace as meaningful. A same-day fix that added a
+      second `+refs/review/*:refs/review/*` refspec — verified working, against the
+      wrong problem — was reverted; both `mirror-refresh.sh` and `deploy/Makefile`'s
+      `mirror` target now carry `lore-ok` comments naming this so the same misreading
+      does not recur a third time. What was real: CLAUDE.md's own prose ("a scratch
+      `review/<sha>` ref") never spelled out `refs/heads/`, unlike SPEC.md — close
+      enough to invite exactly this misreading, twice this session before being
+      caught. CLAUDE.md corrected in the same change to say `refs/heads/review/<sha>`
+      explicitly. The scratch-ref workflow has therefore worked correctly this whole
+      time, via any `refs/heads/*`-scoped branch — which is exactly why this
+      session's `refs/heads/review-scratch/<sha>` workaround succeeded on every
+      single submission despite the believed-broken convention: it was never using
+      the broken namespace to begin with, because it was never broken.
+      ORIGINALLY (the wrong diagnosis, kept for the record): `mirror-refresh.sh` clones each repo with `git clone --bare`
       then sets `remote.origin.fetch` to `+refs/heads/*:refs/remotes/origin/*`
       explicitly (its own comment: "clone --bare populates refs/heads/* and NOT
       refs/remotes/origin/*... The refspec and the fetch are what finish the

@@ -631,6 +631,13 @@ mirror-daemon-log:
 	@if [ "$$(uname)" = "Darwin" ]; then tail -40 ./mirror.log 2>/dev/null || echo "nothing logged yet"; \
 	else journalctl --user -u lore-mirror.service -n 40 --no-pager; fi
 
+## lore-ok[9931a89b]: the single refspec below is enough. D-77's scratch ref is
+## `refs/heads/review/<sha>` — a BRANCH under `refs/heads/*` (SPEC.md's own worked
+## example, `git push origin HEAD:refs/heads/review/<sha>`), not a top-level
+## `refs/review/*` this refspec would need widening to reach. A same-day attempt to
+## add one to `mirror-refresh.sh`, on the belief that it would, was reverted after
+## checking: no code anywhere (`grep -rn refs/review src`) treats that namespace as
+## meaningful. See that file's own matching comment for the fuller account.
 mirror:
 	$(wrong-directory)
 	@test -n "$(REPO)$(ALL)" || { \
@@ -654,7 +661,7 @@ mirror:
 		printf '%-48s ' "$$url"; \
 		if [ -d "$$b/objects" ]; then \
 			git -C "$$b" fetch --prune --tags origin >/dev/null 2>&1 && echo "fetched" || echo "FETCH FAILED"; \
-		else \
+		else : "lore-ok[9931a89b]: refs/heads/*:refs/remotes/origin/* below already covers refs/heads/review/<sha> (a branch, per SPEC.md) -- see the comment above this target"; \
 			mkdir -p "$$(dirname $$b)"; \
 			git clone --bare --recurse-submodules "$$url" "$$b" >/dev/null 2>&1 \
 				&& git -C "$$b" config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*' \

@@ -159,13 +159,16 @@ large diff into a tool call.** Round 1's `diff`-form submission failed with a
 tree-hash mismatch for reasons that took real effort to diagnose (see the
 `src/store` entry above — this was the SAME lesson, encountered again before it
 had fully sunk in). This time, recognized the risk immediately and used
-`commit`-form via a push to a scratch branch under `refs/heads/` instead — the
-`refs/review/*` convention this project prescribes doesn't work (mirror-refspec
-gap, filed in TODO.md during the `src/store` cycle), but ANY branch under
+`commit`-form via a push to a scratch branch under `refs/heads/` instead —
+[CORRECTED 2026-08-28: what follows names the wrong cause. There never was a
+mirror-refspec gap; `refs/heads/review/<sha>` (the actual D-77 convention, a
+BRANCH, per SPEC.md — CLAUDE.md's shorter prose just didn't spell out
+`refs/heads/`) was fetchable the whole time, same as `review-scratch/<sha>`
+below. See TODO.md's 2026-08-28 correction.] but ANY branch under
 `refs/heads/` mirrors correctly, so `review-scratch/<sha>` under that namespace
-gets `commit`-form's byte-exact reliability without needing the broken
-convention fixed first. Used for all four rounds this cycle; zero transcription
-failures. Worth making this the default for any diff over ~100 lines.
+gets `commit`-form's byte-exact reliability. Used for all four rounds this
+cycle; zero transcription failures. Worth making this the default for any diff
+over ~100 lines.
 
 **One near-miss caught before it became a mistake:** typed a commit's full SHA
 from memory (extending a known short prefix) rather than reading it, and
@@ -212,7 +215,13 @@ one. All fixed in one round, verified against real code before touching anything
 two lessons worth remembering.**
 
 1. **`commit`-form submission cannot currently work for a scratch `review/<sha>`
-   ref, structurally, not transiently.** `mirror-refresh.sh` clones each repo with
+   ref, structurally, not transiently.** [CORRECTED 2026-08-28: this diagnosis
+   was wrong, not just unfixed. D-77's ref is `refs/heads/review/<sha>` — a
+   BRANCH — per SPEC.md's own worked example; the checks below all tested a
+   top-level `refs/review/*` that no code has ever used. `mirror-refresh.sh`'s
+   one refspec covered the real convention the entire time. Full account in
+   TODO.md's 2026-08-28 correction; kept below verbatim as the record of what
+   was believed, not as something to act on.] `mirror-refresh.sh` clones each repo with
    `git clone --bare` then sets `remote.origin.fetch` to
    `+refs/heads/*:refs/remotes/origin/*` explicitly (its own comment: "clone --bare
    populates refs/heads/* and NOT refs/remotes/origin/*... The refspec and the

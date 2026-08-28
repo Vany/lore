@@ -169,6 +169,25 @@ one_pass() {
     bare="$DATA/repos/$id/bare.git"
 
     if [ -d "$bare/objects" ]; then
+      # lore-ok[92a8cd5a]: NOT ADDED. A same-day attempt lived here briefly: a second
+      # `+refs/review/*:refs/review/*` refspec, on the belief that D-77's scratch ref
+      # was a top-level `refs/review/<sha>` this mirror structurally could not fetch.
+      # It was wrong. SPEC.md is explicit and the code agrees — `git push origin
+      # HEAD:refs/heads/review/<sha>` (SPEC.md ~4865) — a BRANCH under `refs/heads/*`,
+      # which the ONE refspec below has always covered. `grep -rn refs/review src`
+      # returns nothing: no code anywhere treats a top-level `refs/review/*` as
+      # meaningful. CLAUDE.md's own shorter prose ("a scratch `review/<sha>` ref") is
+      # what invited the misreading, twice this session before being caught here by
+      # lore's own review; corrected there rather than left to invite a third.
+      #
+      # lore-ok[d2a6f083]: a real category of concern — a config mutation an earlier
+      # pass made can outlive the code that made it — but checked, not assumed, and it
+      # did not happen here: `diff deploy/mirror-refresh.sh lore/mirror-refresh.sh`
+      # (the deployed copy the running daemon actually reads) shows the wrong version
+      # never reached it — `grep refs/review lore/mirror-refresh.sh` is empty. This
+      # source file was never synced (`make sync-deployed`) or the daemon restarted
+      # (`make mirror-daemon`) while the wrong refspec briefly existed in git history,
+      # so no bare mirror on this host was ever touched by it.
       if err=$(cd "$bare" && $LIMIT git fetch --prune --tags origin 2>&1); then
         log "fetched  $name"
       else

@@ -34,11 +34,15 @@ silent failures in one day are the reason this project exists in this shape.
   indefinitely, and every override says so in its own commit. Nothing reaches a VERDICT
   that a ladder has not read — `main`, not `origin`,
   because a review is cut from the mirror, so getting an unpushed commit reviewed needs
-  a scratch `review/<sha>` ref that is by definition unreviewed when it lands. Push and
-  delete it in one command; nothing sweeps `review/*`. SPEC D-77 has the shape and the
-  open questions, including what this costs in quota.
-  **A batch needs TWO refs: `review-base/<sha>` at the commit before the batch, and
-  `review/<sha>` at its tip, reviewed base-ref into tip.** `into: main` cannot name
+  a scratch `refs/heads/review/<sha>` branch that is by definition unreviewed when it
+  lands — a BRANCH under `refs/heads/*`, spelled out in full here because the shorter
+  "`review/<sha>` ref" once read as a top-level ref of its own, sent a fix at the mirror
+  for a bug the mirror never had, and cost a review round catching it. Push and
+  delete it in one command; nothing sweeps `refs/heads/review/*`. SPEC D-77 has the
+  shape and the open questions, including what this costs in quota.
+  **A batch needs TWO refs: `refs/heads/review-base/<sha>` at the commit before the
+  batch, and `refs/heads/review/<sha>` at its tip, reviewed base-ref into tip.**
+  `into: main` cannot name
   "before this batch" once any of the batch is on `main` — and under this gate some of it
   always is. The merge-base then slides forward and the ladder silently reviews a
   fraction of the work, then none of it (D-113).
