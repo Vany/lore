@@ -740,6 +740,32 @@ export function scriptFinding(
   };
 }
 
+/**
+ * Whether the target's OWN installed TypeScript accepts `--incremental` together
+ * with `--noEmit` on the same invocation — a hard option error before TypeScript
+ * 4.0 (Aug 2020; `TS5053: Option 'noEmit' cannot be specified with option
+ * 'incremental'`, allowed together starting 4.0). Read from `cacheDir` directly
+ * on the HOST side, not shelled into the container: `cacheDir` IS the bind
+ * mount's host half of what the sandbox sees as `node_modules`, so this is the
+ * exact file `require("typescript/package.json")` would resolve to inside it,
+ * with no extra container round-trip. Anything that stops this from resolving a
+ * usable major version — `typescript` not installed, an unreadable or malformed
+ * `package.json`, a `version` field that is not a plain string — is treated as
+ * NOT supporting it, the safe default: a full, uncached typecheck is strictly
+ * better than a hard option-error misdiagnosed as a missing tool.
+ */
+async function tsSupportsIncremental(cacheDir: string): Promise<boolean> {
+  try {
+    const raw = await readFile(join(cacheDir, "typescript", "package.json"), "utf8");
+    const version = (JSON.parse(raw) as { version?: unknown }).version;
+    if (typeof version !== "string") return false;
+    const major = Number(version.split(".")[0]);
+    return Number.isFinite(major) && major >= 4;
+  } catch {
+    return false;
+  }
+}
+
 async function checkTypes(
   cfg: SandboxConfig,
   worktree: string,
@@ -838,25 +864,34 @@ async function checkTypes(
   // NAMES already are — the 14-day-idle sweep in `ops/retention.ts` iterates
   // every subdirectory of `scratchRoot` generically, so a new sibling needs no
   // changes there.
-  const tscCache = join(cfg.scratchRoot, `${basename(worktree)}-tsc`);
-  await mkdir(tscCache, { recursive: true });
-  // Same reasoning as `cacheDir`'s own touch elsewhere in this file: retention
-  // judges a directory abandoned by its own mtime, and tsc overwriting an
-  // existing `.tsbuildinfo` in place does not necessarily change the PARENT
-  // directory's own mtime the way adding or removing an entry would.
-  await utimes(tscCache, new Date(), new Date()).catch(() => {
-    // Best-effort — not worth failing the review over.
-  });
-  const r = await runInSandbox(
-    cfg,
-    worktree,
-    cacheDir,
-    scratch,
-    "npx --no-install tsc --noEmit --pretty false --incremental --tsBuildInfoFile /tsc-cache/tsc.tsbuildinfo",
-    false,
-    undefined,
-    { hostDir: tscCache, containerPath: "/tsc-cache" },
-  );
+  //
+  // ONLY WHEN THE TARGET'S OWN TypeScript ACTUALLY SUPPORTS THE COMBINATION —
+  // found by lore's own review, fingerprint b6650506, against the first version
+  // of this fix, which added the flags unconditionally. `--incremental` together
+  // with `--noEmit` is a hard OPTION ERROR before TypeScript 4.0 (Aug 2020):
+  // `error TS5053: Option 'noEmit' cannot be specified with option 'incremental'`
+  // (verified against TypeScript's own PR #36483 and the 4.0 release notes) —
+  // no `file(line,col):` prefix, so `TSC_LINE` never matches it, `parsed.length`
+  // is 0, and it silently falls through to "did not exit cleanly... most likely
+  // not installed" below, misdiagnosing a real, working typecheck this change
+  // broke as a missing tool. `npx --no-install` runs the TARGET's own pinned
+  // `tsc`, not lore's, so this cannot be assumed away.
+  let command = "npx --no-install tsc --noEmit --pretty false";
+  let extraMount: { readonly hostDir: string; readonly containerPath: string } | undefined;
+  if (await tsSupportsIncremental(cacheDir)) {
+    const tscCache = join(cfg.scratchRoot, `${basename(worktree)}-tsc`);
+    await mkdir(tscCache, { recursive: true });
+    // Same reasoning as `cacheDir`'s own touch elsewhere in this file: retention
+    // judges a directory abandoned by its own mtime, and tsc overwriting an
+    // existing `.tsbuildinfo` in place does not necessarily change the PARENT
+    // directory's own mtime the way adding or removing an entry would.
+    await utimes(tscCache, new Date(), new Date()).catch(() => {
+      // Best-effort — not worth failing the review over.
+    });
+    extraMount = { hostDir: tscCache, containerPath: "/tsc-cache" };
+    command += " --incremental --tsBuildInfoFile /tsc-cache/tsc.tsbuildinfo";
+  }
+  const r = await runInSandbox(cfg, worktree, cacheDir, scratch, command, false, undefined, extraMount);
   // `interrupted: r.timedOut`, fingerprint dd36a31b.
   if (r.unavailable !== undefined) return { engine: "tsc", findings: [], unavailable: r.unavailable, interrupted: r.timedOut };
   // This branch never routed through `scriptFinding` at all, for ANY non-zero exit

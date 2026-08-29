@@ -1297,7 +1297,30 @@ distinguish a working cache from a no-op: the mount's host directory still
 exists after the round returns, and a second call reuses the identical path
 rather than a fresh one.
 
-**Verified directly before shipping, not assumed — the stakes of getting this
+**Round 3: `--incremental` unconditionally is unsafe on legacy TypeScript,
+fingerprint b6650506.** `--incremental` together with `--noEmit` is a hard
+OPTION ERROR before TypeScript 4.0 (Aug 2020) — `TS5053: Option 'noEmit'
+cannot be specified with option 'incremental'`, no `file(line,col):` prefix, so
+`TSC_LINE` never matches it and it fell through to a false "did not exit
+cleanly... most likely not installed," misdiagnosing a real, previously-working
+typecheck this change broke as a missing tool. `npx --no-install` runs the
+TARGET's own pinned compiler, so this could not be assumed away. Fixed with
+`tsSupportsIncremental(cacheDir)`: reads the target's actual installed
+TypeScript version straight from `cacheDir` on the HOST side (the exact bind-
+mount host path the sandbox exposes as `node_modules` — no extra container
+round-trip needed) and adds the incremental flags and mount only when the
+major version is 4 or above; anything that stops the version from resolving
+(not installed, unreadable, malformed) is treated as NOT supporting it, since
+a full uncached typecheck is strictly better than a misdiagnosed hard failure.
+
+**The same round also raised a finding against the round-2 test that was
+already stale when it was raised, fingerprint dc0503f2 — rejected with a
+`lore-ok`, not fixed.** Its evidence quoted the NAME and BODY of round 1's
+test (a single `runT0` call, bare flag-presence assertions) as if it were
+still current; round 2, landed in the SAME batch this finding was raised
+against, had already replaced it with the two-call, existence-and-reuse
+version described two paragraphs up. Checked directly against the actual tree
+before rejecting: no test by the name the finding quotes exists in it.
 wrong are a silent, ongoing false pass.** A bare `tsc --noEmit --incremental`
 genuinely persists and correctly re-reads a `.tsbuildinfo`: confirmed with
 `--extendedDiagnostics`, which reported a real "BuildInfo read time" on the

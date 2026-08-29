@@ -98,9 +98,11 @@ So T0 is engineered for this host rather than merely invoked:
 round count.
 
 **The `tsc --incremental` row was aspirational until 2026-08-29 — the command
-carried no such flag (D-134, which also has the two-round story of getting the
-persistence location right: the obvious first choice, `/work`, turned out to be
-torn down at the end of every single call).** `checkTypes`'s bare `tsc --noEmit`
+carried no such flag (D-134, which also has the three-round story: getting the
+persistence location right — the obvious first choice, `/work`, turned out to
+be torn down at the end of every single call — and then gating the flag on the
+target's own TypeScript version, since `--incremental` with `--noEmit` is a
+hard option error before TypeScript 4.0).** `checkTypes`'s bare `tsc --noEmit`
 fallback (used when the target declares no `"typecheck"` script of its own) got
 a full, uncached check every round regardless of the target's own
 `tsconfig.json`, since `"incremental": true` is not TypeScript's default. Fixed
@@ -118,10 +120,14 @@ source content. Verified directly, not assumed: a bare `tsc --noEmit
 run), an unchanged-but-still-broken file's error is RE-REPORTED every run rather
 than suppressed as already-known, and a genuine fix correctly clears the cached
 error on the next run — the one direction that would have silently weakened the
-check. Scoped to the bare fallback only: when the target declares its own
-`"typecheck"` script, lore has no safe way to inject flags into an arbitrary
-target-defined command and does not try — a monorepo's `turbo run typecheck`
-gets whatever incrementality IT already has, nothing added. Cargo already had
+check. Gated on the target's own installed TypeScript version — read straight
+from `cacheDir` on the host side, no container round-trip — since the flag
+combination is a hard error before TypeScript 4.0 and `npx --no-install` runs
+whatever the target has pinned, not lore's own. Scoped to the bare fallback
+only: when the target declares its own `"typecheck"` script, lore has no safe
+way to inject flags into an arbitrary target-defined command and does not try
+— a monorepo's `turbo run typecheck` gets whatever incrementality IT already
+has, nothing added. Cargo already had
 the equivalent for free (`CARGO_ENV` points `CARGO_TARGET_DIR` at a persistent
 mount that was never subject to `scratch`'s own teardown); this closes the same
 gap for the one engine that did not already have it.

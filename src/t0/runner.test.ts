@@ -353,9 +353,31 @@ describe("a run the sandbox itself killed is never mistaken for a clean or parti
   // gets cleared), and a SECOND call reuses the identical path rather than a
   // fresh one — the two properties an incremental cache needs and a bare
   // flag-presence check cannot distinguish from a no-op.
+  //
+  // lore-ok[dc0503f2]: this IS the rewrite the finding is asking for, already
+  // landed — its own evidence quotes the name and body of the version this
+  // paragraph names above ("asserted exactly that", a single `runT0` call,
+  // `toContain` on captured argv only), which round 2 of D-134 already
+  // replaced with exactly the two cross-round assertions immediately below
+  // (`existsSync` on the mount's host directory, and a second call's argv
+  // containing the same path). Checked directly against this file at the tree
+  // the finding was raised against: no test named "asks for a persisted
+  // incremental buildinfo, not a full check every round" exists in it. Stale
+  // evidence, not a live gap.
+  // `cacheDir` for this fixture is `<dir>/cache/no-lockfile` (no real lockfile
+  // present, so `lockfileKey` falls back to that literal name) — the exact host
+  // path `sandbox.ts` mounts as `/work/node_modules`, so a `typescript/package.
+  // json` written here is what `tsSupportsIncremental` reads.
+  const writeTsVersion = (version: string): void => {
+    const tsDir = join(dir, "cache", "no-lockfile", "typescript");
+    mkdirSync(tsDir, { recursive: true });
+    writeFileSync(join(tsDir, "package.json"), JSON.stringify({ name: "typescript", version }));
+  };
+
   it("checkTypes: a bare tsc run's incremental buildinfo directory survives the round and is reused by the next one", async () => {
     writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: {} }));
     writeFileSync(join(dir, "tsconfig.json"), "{}");
+    writeTsVersion("5.4.2");
     const script = join(dir, "fake-docker-capture-argv.sh");
     const argsLog = join(dir, "captured-args.txt");
     const called = join(dir, ".called-capture");
@@ -387,6 +409,38 @@ describe("a run the sandbox itself killed is never mistaken for a clean or parti
     await runT0(dir, { engines: ["tsc"], sandbox });
     const capturedRound2 = readFileSync(argsLog, "utf8");
     expect(capturedRound2, "round 2 must mount the SAME cache directory, not a fresh one").toContain(tscCacheDir);
+  });
+
+  // Regression for fingerprint b6650506: `--incremental` together with
+  // `--noEmit` is a hard OPTION ERROR before TypeScript 4.0 (`TS5053: Option
+  // 'noEmit' cannot be specified with option 'incremental'`) — `npx --no-
+  // install` runs the TARGET's own pinned compiler, so a legacy repo on 3.8/3.9
+  // must not get flags its own tsc refuses to accept together.
+  it("checkTypes: a target on TypeScript < 4.0 gets no --incremental flag at all", async () => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: {} }));
+    writeFileSync(join(dir, "tsconfig.json"), "{}");
+    writeTsVersion("3.9.7");
+    const script = join(dir, "fake-docker-capture-argv-legacy.sh");
+    const argsLog = join(dir, "captured-args-legacy.txt");
+    const called = join(dir, ".called-capture-legacy");
+    writeFileSync(
+      script,
+      "#!/bin/sh\n" +
+        'if [ "$1" = "rm" ]; then exit 0; fi\n' +
+        `echo "$@" >> "${argsLog}"\n` +
+        `if [ -f "${called}" ]; then\n` +
+        "  exit 0\n" +
+        "else\n" +
+        `  touch "${called}"\n` +
+        "  exit 0\n" +
+        "fi\n",
+    );
+    chmodSync(script, 0o755);
+    await runT0(dir, { engines: ["tsc"], sandbox: baseSandbox(script) });
+    const captured = readFileSync(argsLog, "utf8");
+    expect(captured).not.toContain("--incremental");
+    expect(captured).not.toContain("--tsBuildInfoFile");
+    expect(captured).not.toContain("/tsc-cache");
   });
 
   it("checkLint: a killed bare eslint run is reported killed, not its partial output", async () => {
