@@ -1256,19 +1256,46 @@ on every single round, contradicting `spec/deployment.md`'s own "T0 is
 engineered for this host" table, which had listed `tsc --incremental` as one of
 the reasons the local bottleneck stays affordable.
 
-**Fixed with `--incremental --tsBuildInfoFile .lore-tsc.tsbuildinfo`, a path
-relative to `/work` (`SANDBOX_CWD`).** That lands the buildinfo directly in the
-per-review `scratch` directory — not inside the separately-mounted
-`node_modules` cache — which is exactly where it needs to be: `scratch` is keyed
-by `reviewId` (`worktreeFor`, `git/repo.ts`), so it is never shared across
-repos, branches or even two different reviews of the same branch, and nothing
-clears it between rounds of the SAME review — only the 14-day-idle sweep in
-`ops/retention.ts` ever removes it. `SYNC`'s `cp -a /src/. /work/` (`t0/
-sandbox.ts`) only overlays files present in `/src`; a build artifact that was
-never part of the source tree survives every sync untouched, and `cp -a`'s own
-mtime preservation — already there, and already commented as being for exactly
-this reason — is what keeps `tsc`'s change detection honest across that copy
-rather than seeing every file as freshly touched.
+**Round 1 shipped with the buildinfo in `/work` (`scratch`) — and lore's own
+review caught that this is a no-op, fingerprint e6ad293d, same day.** The
+reasoning for that placement was wrong on the one fact that mattered:
+`sandboxed()`'s own `finally` block `rm -rf`s the WHOLE `scratch` directory at
+the end of every single call, so nothing written there is ever read back by a
+later round. Round 1's `.lore-tsc.tsbuildinfo` was written, then deleted before
+the review's next round could exist — every claim in this entry's first
+version (that `scratch` "survives between rounds," cleared only by the
+14-day-idle sweep) was simply false, checked against the wrong code. `cacheDir`
+(`/work/node_modules`) was the other candidate and is no better, for a
+different reason: verified directly that `npm ci` itself deletes a stray file
+placed there before it runs, independent of lore's own teardown — so even a
+target using `npm ci` with `scratch`'s bug fixed would still lose the buildinfo
+every round.
+
+**Round 2: a THIRD, dedicated mount, `tscCache` (`t0/runner.ts`), mirroring
+cargo's own `CARGO_MOUNT` (`/cargo-cache`) pattern exactly.** Neither existing
+mount can carry a value that must outlive one call, so this is a new
+`${scratchRoot}/${basename(worktree)}-tsc` directory — a sibling of both
+`scratch` and the lockfile-hash cache, created once, mounted at a fixed
+`/tsc-cache`, and never touched by either teardown. Keyed by `reviewId`
+(`basename(worktree)`), not by lockfile hash: a `.tsbuildinfo` is a claim about
+SOURCE content, and sharing one across different branches that merely happen
+to share a dependency tree would be a correctness risk, not just a missed
+optimization. Cleanup needs no new code: the 14-day-idle sweep in
+`ops/retention.ts` already iterates every subdirectory of `scratchRoot`
+generically. `baseArgs`/`runInSandbox` (`t0/sandbox.ts`) gained an optional
+second mount to carry it, since `checkTypes`'s npm/tsc path needs BOTH
+`node_modules` and this new cache simultaneously — unlike cargo, which replaces
+the node_modules mount rather than adding to it.
+
+**The regression test was rewritten too, not just the code — the first
+version would not have caught this.** It asserted only that `--incremental`
+and `--tsBuildInfoFile` appeared in the constructed command, which round 1's
+actual (broken) code also satisfied; a flag can be present and correctly
+spelled while writing into a directory that is deleted before anything reads
+it back. The rewritten test instead asserts the two properties that actually
+distinguish a working cache from a no-op: the mount's host directory still
+exists after the round returns, and a second call reuses the identical path
+rather than a fresh one.
 
 **Verified directly before shipping, not assumed — the stakes of getting this
 wrong are a silent, ongoing false pass.** A bare `tsc --noEmit --incremental`
@@ -1280,11 +1307,7 @@ it up: an unchanged file whose error was never fixed is RE-REPORTED, identically
 on every subsequent run — `--incremental` skips re-verifying what has not
 changed, it does not skip re-reporting what is still broken — and a genuinely
 fixed error correctly clears on the next run. Both confirmed with a real `tsc`
-invocation in a throwaway directory before any code changed, and the flag's
-actual presence in the constructed sandbox command is now a git-stash-verified
-regression test (`t0/runner.test.ts`, a bespoke fake-docker script that captures
-its own argv, matching this file's own established pattern for a fake docker
-double that does not fit the shared `fakeDocker` helper).
+invocation in a throwaway directory before any code changed.
 
 **Cargo already had the equivalent, for a different reason.** `CARGO_ENV`
 (`t0/runner.ts`) points `CARGO_TARGET_DIR` at a persistent mount, which is all

@@ -807,7 +807,7 @@ async function checkTypes(
   if (!existsSync(join(worktree, "tsconfig.json"))) {
     return { engine: "tsc", findings: [], unavailable: "no `typecheck` script and no root tsconfig.json" };
   }
-  // --incremental --tsBuildInfoFile, RELATIVE TO /work (SANDBOX_CWD) — a full,
+  // --incremental --tsBuildInfoFile, IN A DEDICATED MOUNT OF ITS OWN — a full,
   // uncached typecheck ran on every single round, for every target without its
   // OWN tsconfig already opting into `"incremental": true` (most of them; it is
   // not TypeScript's default). Verified directly rather than assumed: a bare
@@ -816,24 +816,46 @@ async function checkTypes(
   // time" line), an unchanged-but-still-broken file's error is RE-REPORTED every
   // run rather than suppressed as "already told you" (the one way this could have
   // silently weakened the check), and a genuine fix correctly clears the cached
-  // error on the next run. Safe to place directly in `/work`: that IS `scratch`
-  // (`-v ${scratch}:${SANDBOX_CWD}`, `runner.ts`'s own `scratch` var, keyed by
-  // `reviewId` via `worktreeFor` — never shared across repos, branches or
-  // reviews), it survives between rounds of the SAME review (nothing clears it
-  // but the 14-day-idle sweep in `ops/retention.ts`), and `SYNC`'s `cp -a
-  // /src/. /work/` only overlays files present in `/src` — a build artifact that
-  // is never part of the source tree is untouched by it, and `-a`'s own
-  // mtime-preservation is what keeps tsc's change detection honest across that
-  // copy (see `SYNC`'s own comment). Cargo already has the equivalent for free —
-  // `CARGO_ENV` points `CARGO_TARGET_DIR` at a persistent mount — this closes the
-  // same gap for the one engine that did not have it.
+  // error on the next run.
+  //
+  // NEITHER EXISTING MOUNT CAN CARRY IT — found by lore's own review, fingerprint
+  // e6ad293d, against the first version of this fix, which placed it in `/work`
+  // (== `scratch`) on the reasoning that `scratch` survives between rounds. It
+  // does not: `sandboxed()`'s own `finally` block `rm -rf`s the whole directory
+  // at the end of EVERY call, so nothing written there is ever read back by a
+  // later round — the fix as first written was a pure no-op, and the SPEC/doc
+  // prose claiming otherwise was simply wrong. `cacheDir` (`/work/node_modules`)
+  // is no better, for a different reason: verified directly that `npm ci` itself
+  // wipes a stray file placed there before it runs, regardless of lore's own
+  // teardown. So this is a THIRD, dedicated directory — `tscCache`, below,
+  // mirroring cargo's own `CARGO_MOUNT` (`/cargo-cache`) pattern exactly, a
+  // sibling of both `/work` and the lockfile-hash cache that neither teardown
+  // reaches. Keyed by `reviewId` (`basename(worktree)`, matching `scratch`
+  // itself), not by lockfile hash: a `.tsbuildinfo` is a claim about SOURCE
+  // content, and sharing one across different branches that merely happen to
+  // have the same dependencies would be a correctness risk, not just a missed
+  // optimization. Cleaned up the same way `scratch`/the cargo scratch dir's
+  // NAMES already are — the 14-day-idle sweep in `ops/retention.ts` iterates
+  // every subdirectory of `scratchRoot` generically, so a new sibling needs no
+  // changes there.
+  const tscCache = join(cfg.scratchRoot, `${basename(worktree)}-tsc`);
+  await mkdir(tscCache, { recursive: true });
+  // Same reasoning as `cacheDir`'s own touch elsewhere in this file: retention
+  // judges a directory abandoned by its own mtime, and tsc overwriting an
+  // existing `.tsbuildinfo` in place does not necessarily change the PARENT
+  // directory's own mtime the way adding or removing an entry would.
+  await utimes(tscCache, new Date(), new Date()).catch(() => {
+    // Best-effort — not worth failing the review over.
+  });
   const r = await runInSandbox(
     cfg,
     worktree,
     cacheDir,
     scratch,
-    "npx --no-install tsc --noEmit --pretty false --incremental --tsBuildInfoFile .lore-tsc.tsbuildinfo",
+    "npx --no-install tsc --noEmit --pretty false --incremental --tsBuildInfoFile /tsc-cache/tsc.tsbuildinfo",
     false,
+    undefined,
+    { hostDir: tscCache, containerPath: "/tsc-cache" },
   );
   // `interrupted: r.timedOut`, fingerprint dd36a31b.
   if (r.unavailable !== undefined) return { engine: "tsc", findings: [], unavailable: r.unavailable, interrupted: r.timedOut };

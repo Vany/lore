@@ -187,7 +187,25 @@ function containerName(scratch: string): string {
  * not the throwaway scratch copy, regardless of which ecosystem is asking or where
  * exactly that mount happens to live.
  */
-function baseArgs(cfg: SandboxConfig, worktree: string, cacheDir: string, scratch: string, cacheMountPath = "/work/node_modules"): string[] {
+function baseArgs(
+  cfg: SandboxConfig,
+  worktree: string,
+  cacheDir: string,
+  scratch: string,
+  cacheMountPath = "/work/node_modules",
+  // A SECOND, INDEPENDENT persistent mount, for a caller that needs one cache
+  // ADDITIONAL to `cacheDir` rather than instead of it (D-134) — `checkTypes`'s
+  // bare `tsc --incremental` needs its own `.tsbuildinfo` to survive between
+  // rounds, and neither existing mount can carry it: `scratch` (`/work`) is
+  // `rm -rf`'d at the end of every `sandboxed()` call (see that function's own
+  // `finally`), and `cacheDir` (`/work/node_modules` for npm) is wiped by
+  // `npm ci` itself on every invocation — verified directly, not assumed: a
+  // stray file placed in `node_modules` before `npm ci` runs does not survive
+  // it. A directory of its own, mirroring cargo's `CARGO_MOUNT` (a sibling of
+  // `/work` this function's `SYNC` step never touches, for the identical
+  // reason), is the only mount neither teardown reaches.
+  extraMount?: { readonly hostDir: string; readonly containerPath: string },
+): string[] {
   return [
     "run",
     "--rm",
@@ -211,6 +229,7 @@ function baseArgs(cfg: SandboxConfig, worktree: string, cacheDir: string, scratc
     // touches — see this same file's `runInSandbox` doc comment for the full
     // reasoning.
     "-v", `${cacheDir}:${cacheMountPath}`,
+    ...(extraMount === undefined ? [] : ["-v", `${extraMount.hostDir}:${extraMount.containerPath}`]),
     "-w", SANDBOX_CWD,
     "--memory", cfg.memory,
     "--cpus", cfg.cpus,
@@ -530,13 +549,14 @@ export async function runInSandbox(
   script: string,
   network: boolean,
   cacheMountPath?: string,
+  extraMount?: { readonly hostDir: string; readonly containerPath: string },
 ): Promise<ToolResult> {
   await clearStaleContainer(cfg, worktree, scratch);
   const result = await runTool(
     worktree,
     cfg.runtime,
     [
-      ...baseArgs(cfg, worktree, cacheDir, scratch, cacheMountPath),
+      ...baseArgs(cfg, worktree, cacheDir, scratch, cacheMountPath, extraMount),
       ...(network ? [] : ["--network", "none"]),
       cfg.image,
       "sh",

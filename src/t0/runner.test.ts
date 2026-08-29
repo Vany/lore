@@ -8,9 +8,9 @@
  * the code without knowing that.
  */
 
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Finding } from "../core/finding.ts";
 import { renderT0, renderT0Delta, runT0 } from "./runner.ts";
@@ -341,7 +341,19 @@ describe("a run the sandbox itself killed is never mistaken for a clean or parti
   // `.tsbuildinfo`, an unchanged-but-still-broken file's error is RE-REPORTED
   // every run rather than suppressed, and a real fix correctly clears the cached
   // error — the one direction that would have silently weakened the check.
-  it("checkTypes: a bare tsc run asks for a persisted incremental buildinfo, not a full check every round", async () => {
+  //
+  // NOT JUST "the flag is present" — found by lore's own review, fingerprint
+  // e6ad293d, against the first version of this test: it asserted exactly that,
+  // passed, and would have kept passing against a fix that constructed the flag
+  // correctly while writing it into a directory `sandboxed()`'s own `finally`
+  // deletes before any later round could read it back — which is precisely what
+  // shipped. So this asserts the thing that actually matters: the host
+  // directory the buildinfo mount points at still EXISTS after the call
+  // returns (unlike `scratch`, which this same fake docker's `rm` branch proves
+  // gets cleared), and a SECOND call reuses the identical path rather than a
+  // fresh one — the two properties an incremental cache needs and a bare
+  // flag-presence check cannot distinguish from a no-op.
+  it("checkTypes: a bare tsc run's incremental buildinfo directory survives the round and is reused by the next one", async () => {
     writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: {} }));
     writeFileSync(join(dir, "tsconfig.json"), "{}");
     const script = join(dir, "fake-docker-capture-argv.sh");
@@ -360,10 +372,21 @@ describe("a run the sandbox itself killed is never mistaken for a clean or parti
         "fi\n",
     );
     chmodSync(script, 0o755);
-    await runT0(dir, { engines: ["tsc"], sandbox: baseSandbox(script) });
-    const captured = readFileSync(argsLog, "utf8");
-    expect(captured).toContain("--incremental");
-    expect(captured).toContain("--tsBuildInfoFile");
+    const sandbox = baseSandbox(script);
+
+    await runT0(dir, { engines: ["tsc"], sandbox });
+    const capturedRound1 = readFileSync(argsLog, "utf8");
+    expect(capturedRound1).toContain("--incremental");
+    expect(capturedRound1).toContain("--tsBuildInfoFile");
+
+    const tscCacheDir = join(sandbox.scratchRoot ?? "", `${basename(dir)}-tsc`);
+    expect(existsSync(tscCacheDir), "the buildinfo's own host directory must survive the round").toBe(true);
+
+    rmSync(argsLog);
+    rmSync(called);
+    await runT0(dir, { engines: ["tsc"], sandbox });
+    const capturedRound2 = readFileSync(argsLog, "utf8");
+    expect(capturedRound2, "round 2 must mount the SAME cache directory, not a fresh one").toContain(tscCacheDir);
   });
 
   it("checkLint: a killed bare eslint run is reported killed, not its partial output", async () => {
