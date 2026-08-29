@@ -3,6 +3,93 @@
 Newest first. Updated at the end of each task: what changed, what I learned, what
 surprised me.
 
+## 2026-08-29 — D-134, tsc --incremental actually incremental: four rounds, and my
+own fix broke twice before it was real
+
+**What changed.** `rev_SRNj5drMfydaAOXUHQI4bSNs`, `passed_partial`, attested at
+`66968873f506f7748c39466738a3ce13a4859e00` (4 findings, 3 fixed, 1 justified) —
+merged as four commits. Not from the audit that produced D-132/D-133: Vany asked
+whether T0 runs its engines in parallel, then what dominates a round's timing,
+then — after I answered from the code and a live experiment rather than memory —
+pushed on one specific claim until it turned out to be false: `checkTypes`'s bare
+`tsc --noEmit` fallback (used when a target has no `"typecheck"` script of its
+own) never actually passed `--incremental`, contradicting `spec/deployment.md`'s
+own claim that it did. Closing that gap took four rounds, and the first TWO of
+my own fixes were each wrong in a way the next round's review caught same-day.
+
+**Round 1 (mine, before any review): added `--incremental --tsBuildInfoFile`,
+verified the mechanism itself carefully — and still shipped a fix that did
+nothing.** Before touching code, ran a real `tsc --noEmit --incremental` in a
+throwaway directory and confirmed with `--extendedDiagnostics` that it
+genuinely persists and re-reads a `.tsbuildinfo`, and — the one direction that
+mattered most — that an unchanged, still-broken file's error is RE-REPORTED
+every run rather than silently suppressed as "already told you." That part was
+right. What was wrong was WHERE I put the file: `/work`, on the reasoning that
+`scratch` "survives between rounds, cleared only by the 14-day-idle sweep" —
+read from `ops/retention.ts`'s comment about the SWEEP without checking
+whether anything ELSE cleared it sooner. Lore's own review found it same day,
+fingerprint e6ad293d: `sandboxed()`'s own `finally` block `rm -rf`s the whole
+`scratch` directory at the end of EVERY call. The buildinfo was written, then
+deleted before any later round could exist. A verification discipline aimed
+entirely at the mechanism I was most worried about (tsc's own correctness) and
+none at the infrastructure claim I was most confident of (this directory
+persists) — confidence and correctness pointed in opposite directions.
+
+**Round 2: the real persistence location needed a THIRD mount, not a
+different path in an existing one — and `cacheDir` was ALSO a trap, for an
+unrelated reason.** My first instinct for the fix was `cacheDir`
+(`node_modules`) instead of `scratch`. Checked before writing any code, since
+round 1 had just taught me not to trust the obvious answer: `npm ci` itself
+deletes a stray file placed in `node_modules` before it runs, confirmed with a
+real `npm ci` against a directory holding nothing but a marker file. Neither
+existing mount could carry a value that needs to outlive one round. Built a
+third, dedicated one — `tscCache`, mirroring cargo's own `CARGO_MOUNT`
+pattern, which turned out to already be correct (it points at `cacheDir`, not
+`scratch` — the one persistence claim in the ORIGINAL entry that was actually
+true). Also rewrote the regression test, because the round-1 version — which
+only checked that `--incremental` appeared in the constructed command string
+— would have kept passing against the exact bug that shipped: a flag can be
+spelled correctly while writing into a directory nothing ever reads again.
+Git-stash-verified the new test specifically against that shape of bug, not
+just against "does it pass now."
+
+**Round 3: fixed the mount, and only then found the fix was unsafe on its own
+terms.** `--incremental` together with `--noEmit` is a hard TypeScript OPTION
+ERROR before version 4.0 (`TS5053`, no `file(line,col):` prefix, so this
+codebase's own tsc parser never matches it and mis-files the failure as "not
+installed") — and `npx --no-install` runs whatever TypeScript version the
+TARGET has pinned, not lore's own. A repo still on 3.8/3.9 would have had a
+working, real typecheck turned into a permanently wrong diagnosis by this
+exact change. Fixed by reading the target's actual installed version straight
+from `cacheDir` on the host side — no container round-trip — and gating the
+flag on major ≥ 4, defaulting to "no" whenever the version can't be resolved
+at all. The same round also raised a finding against the round-2 test that
+was, itself, already stale: its evidence quoted round 1's test by name and
+body, not round 2's rewrite that had already landed in the same batch.
+Checked directly against the actual file before answering — genuinely wrong,
+not merely inconvenient — and rejected with a `lore-ok` rather than "fixed"
+again.
+
+**Round 4: my own SPEC.md edit, correcting round 3's finding, orphaned a
+sentence.** An `Edit` call anchored its insertion point on a trailing partial
+line to place new paragraphs right before it, and the replacement text did
+not carry that anchor back — deleting a paragraph's own lead-in and leaving
+its continuation dangling under the wrong heading, with markdown's bolding
+broken from that point on. Caught by the SAME review, same day. Fixed, then
+reread the entire D-134 entry end to end before resubmitting, rather than
+trusting that one visible symptom was the only casualty.
+
+**The pattern, restated a third time this week because it held a third time.**
+Every one of the first three rounds was a genuine, distinct defect, each
+caught same-day by a reviewer with no attachment to having just written the
+code — not by re-reading my own diff harder. Two of the three (round 1's
+directory choice, round 3's own initial confidence) were cases where I
+verified the part I was MOST unsure about carefully and skipped verifying the
+part I was MOST sure about at all. The lesson isn't "verify more" — round 1's
+tsc-mechanism verification was real and thorough — it's that confidence is not
+correlated with correctness, and the review process exists precisely for the
+part a self-review would skip BECAUSE it feels settled.
+
 ## 2026-08-29 — D-133, fixed_elsewhere on review_submit: five rounds, nine
 findings, and my own fixes needing fixing twice
 
