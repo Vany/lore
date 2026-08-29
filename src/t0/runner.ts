@@ -807,7 +807,34 @@ async function checkTypes(
   if (!existsSync(join(worktree, "tsconfig.json"))) {
     return { engine: "tsc", findings: [], unavailable: "no `typecheck` script and no root tsconfig.json" };
   }
-  const r = await runInSandbox(cfg, worktree, cacheDir, scratch, "npx --no-install tsc --noEmit --pretty false", false);
+  // --incremental --tsBuildInfoFile, RELATIVE TO /work (SANDBOX_CWD) — a full,
+  // uncached typecheck ran on every single round, for every target without its
+  // OWN tsconfig already opting into `"incremental": true` (most of them; it is
+  // not TypeScript's default). Verified directly rather than assumed: a bare
+  // `tsc --noEmit --incremental` DOES persist and correctly re-read a
+  // `.tsbuildinfo` (confirmed with `--extendedDiagnostics`'s own "BuildInfo read
+  // time" line), an unchanged-but-still-broken file's error is RE-REPORTED every
+  // run rather than suppressed as "already told you" (the one way this could have
+  // silently weakened the check), and a genuine fix correctly clears the cached
+  // error on the next run. Safe to place directly in `/work`: that IS `scratch`
+  // (`-v ${scratch}:${SANDBOX_CWD}`, `runner.ts`'s own `scratch` var, keyed by
+  // `reviewId` via `worktreeFor` — never shared across repos, branches or
+  // reviews), it survives between rounds of the SAME review (nothing clears it
+  // but the 14-day-idle sweep in `ops/retention.ts`), and `SYNC`'s `cp -a
+  // /src/. /work/` only overlays files present in `/src` — a build artifact that
+  // is never part of the source tree is untouched by it, and `-a`'s own
+  // mtime-preservation is what keeps tsc's change detection honest across that
+  // copy (see `SYNC`'s own comment). Cargo already has the equivalent for free —
+  // `CARGO_ENV` points `CARGO_TARGET_DIR` at a persistent mount — this closes the
+  // same gap for the one engine that did not have it.
+  const r = await runInSandbox(
+    cfg,
+    worktree,
+    cacheDir,
+    scratch,
+    "npx --no-install tsc --noEmit --pretty false --incremental --tsBuildInfoFile .lore-tsc.tsbuildinfo",
+    false,
+  );
   // `interrupted: r.timedOut`, fingerprint dd36a31b.
   if (r.unavailable !== undefined) return { engine: "tsc", findings: [], unavailable: r.unavailable, interrupted: r.timedOut };
   // This branch never routed through `scriptFinding` at all, for ANY non-zero exit

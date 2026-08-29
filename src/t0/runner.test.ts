@@ -333,6 +333,39 @@ describe("a run the sandbox itself killed is never mistaken for a clean or parti
     expect(tsc?.unavailable).toMatch(/not installed/);
   });
 
+  // Without this, a bare `tsc --noEmit` (no target-declared typecheck script) did
+  // a full, uncached project check on EVERY round — for any target whose own
+  // tsconfig did not already opt into `"incremental": true`, which is most of
+  // them. Verified directly (not assumed) that `--incremental` is safe here: a
+  // bare `tsc --noEmit --incremental` genuinely persists and re-reads a
+  // `.tsbuildinfo`, an unchanged-but-still-broken file's error is RE-REPORTED
+  // every run rather than suppressed, and a real fix correctly clears the cached
+  // error — the one direction that would have silently weakened the check.
+  it("checkTypes: a bare tsc run asks for a persisted incremental buildinfo, not a full check every round", async () => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: {} }));
+    writeFileSync(join(dir, "tsconfig.json"), "{}");
+    const script = join(dir, "fake-docker-capture-argv.sh");
+    const argsLog = join(dir, "captured-args.txt");
+    const called = join(dir, ".called-capture");
+    writeFileSync(
+      script,
+      "#!/bin/sh\n" +
+        'if [ "$1" = "rm" ]; then exit 0; fi\n' +
+        `echo "$@" >> "${argsLog}"\n` +
+        `if [ -f "${called}" ]; then\n` +
+        "  exit 0\n" +
+        "else\n" +
+        `  touch "${called}"\n` +
+        "  exit 0\n" +
+        "fi\n",
+    );
+    chmodSync(script, 0o755);
+    await runT0(dir, { engines: ["tsc"], sandbox: baseSandbox(script) });
+    const captured = readFileSync(argsLog, "utf8");
+    expect(captured).toContain("--incremental");
+    expect(captured).toContain("--tsBuildInfoFile");
+  });
+
   it("checkLint: a killed bare eslint run is reported killed, not its partial output", async () => {
     writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: {} }));
     writeFileSync(join(dir, "eslint.config.js"), "module.exports = [];\n");

@@ -97,6 +97,29 @@ So T0 is engineered for this host rather than merely invoked:
 "reset to T1 after every fix" (D-6) multiplies the most expensive local work by the
 round count.
 
+**The `tsc --incremental` row was aspirational until 2026-08-29 — the command
+carried no such flag.** `checkTypes`'s bare `tsc --noEmit` fallback (used when the
+target declares no `"typecheck"` script of its own) got a full, uncached check
+every round regardless of the target's own `tsconfig.json`, since `"incremental":
+true` is not TypeScript's default. Fixed with `--incremental --tsBuildInfoFile
+.lore-tsc.tsbuildinfo`, relative to `/work` — landing in the per-review `scratch`
+dir, which survives between rounds of the SAME review (`scratch` is keyed by
+`reviewId` via `worktreeFor`, never shared across repos or branches; nothing
+clears it but the 14-day-idle sweep in `ops/retention.ts`) and is untouched by
+`SYNC`'s `cp -a /src/. /work/`, which only overlays files present in `/src`.
+Verified directly, not assumed: a bare `tsc --noEmit --incremental` persists and
+correctly re-reads a `.tsbuildinfo` (`--extendedDiagnostics` reports a non-zero
+"BuildInfo read time" on the second run), an unchanged-but-still-broken file's
+error is RE-REPORTED every run rather than suppressed as already-known, and a
+genuine fix correctly clears the cached error on the next run — the one direction
+that would have silently weakened the check. Scoped to the bare fallback only:
+when the target declares its own `"typecheck"` script, lore has no safe way to
+inject flags into an arbitrary target-defined command and does not try — a
+monorepo's `turbo run typecheck` gets whatever incrementality IT already has,
+nothing added. Cargo already had the equivalent for free (`CARGO_ENV` points
+`CARGO_TARGET_DIR` at a persistent mount); this closes the same gap for the one
+engine that did not have it.
+
 The install is itself arbitrary code execution (lifecycle scripts, with network), so
 it belongs inside the sandboxed container (D-24), not in the service. That is true
 even though nothing runs the tests: turning test execution off narrows the exposure

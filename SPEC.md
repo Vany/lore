@@ -1239,6 +1239,65 @@ documents that actually drive a client's loop never caught up.**
   field exists. Fixed in both; a new mechanical pin (`docs.test.ts`) checks both
   documents mention `fixed_elsewhere`.
 
+**D-134 — `checkTypes`'s bare `tsc` fallback actually uses `--incremental` now;
+`spec/deployment.md` had claimed this since before it was true. BUILT
+2026-08-29.**
+
+Surfaced by Vany asking about T0's timing, not by a review round. `checkTypes`
+(`t0/runner.ts`) has two paths: when the target declares its own `"typecheck"`
+script, lore runs that unmodified (a monorepo's `turbo run typecheck` gets
+whatever incrementality it already has — lore has no safe way to inject flags
+into an arbitrary target-defined command and does not try); otherwise, when a
+root `tsconfig.json` exists with no script, lore runs `tsc` itself, directly.
+That second, lore-controlled path carried no `--incremental` flag at all, so a
+target without its OWN `tsconfig.json` opting into `"incremental": true` — most
+of them, since it is not TypeScript's default — got a full, uncached typecheck
+on every single round, contradicting `spec/deployment.md`'s own "T0 is
+engineered for this host" table, which had listed `tsc --incremental` as one of
+the reasons the local bottleneck stays affordable.
+
+**Fixed with `--incremental --tsBuildInfoFile .lore-tsc.tsbuildinfo`, a path
+relative to `/work` (`SANDBOX_CWD`).** That lands the buildinfo directly in the
+per-review `scratch` directory — not inside the separately-mounted
+`node_modules` cache — which is exactly where it needs to be: `scratch` is keyed
+by `reviewId` (`worktreeFor`, `git/repo.ts`), so it is never shared across
+repos, branches or even two different reviews of the same branch, and nothing
+clears it between rounds of the SAME review — only the 14-day-idle sweep in
+`ops/retention.ts` ever removes it. `SYNC`'s `cp -a /src/. /work/` (`t0/
+sandbox.ts`) only overlays files present in `/src`; a build artifact that was
+never part of the source tree survives every sync untouched, and `cp -a`'s own
+mtime preservation — already there, and already commented as being for exactly
+this reason — is what keeps `tsc`'s change detection honest across that copy
+rather than seeing every file as freshly touched.
+
+**Verified directly before shipping, not assumed — the stakes of getting this
+wrong are a silent, ongoing false pass.** A bare `tsc --noEmit --incremental`
+genuinely persists and correctly re-reads a `.tsbuildinfo`: confirmed with
+`--extendedDiagnostics`, which reported a real "BuildInfo read time" on the
+second run rather than a stale zero. More important, checked BOTH directions of
+the one way this could have silently weakened the check rather than only sped
+it up: an unchanged file whose error was never fixed is RE-REPORTED, identically,
+on every subsequent run — `--incremental` skips re-verifying what has not
+changed, it does not skip re-reporting what is still broken — and a genuinely
+fixed error correctly clears on the next run. Both confirmed with a real `tsc`
+invocation in a throwaway directory before any code changed, and the flag's
+actual presence in the constructed sandbox command is now a git-stash-verified
+regression test (`t0/runner.test.ts`, a bespoke fake-docker script that captures
+its own argv, matching this file's own established pattern for a fake docker
+double that does not fit the shared `fakeDocker` helper).
+
+**Cargo already had the equivalent, for a different reason.** `CARGO_ENV`
+(`t0/runner.ts`) points `CARGO_TARGET_DIR` at a persistent mount, which is all
+Cargo's own incremental compilation needs — no flag required, unlike `tsc`. This
+closes the same class of gap for the one sandboxed engine that did not already
+have it for free.
+
+**Not extended to eslint in this change.** ESLint has an analogous `--cache
+--cache-location` pair with a similar safety shape, but it was out of scope for
+what was actually asked and investigated here; a future change doing the same
+for eslint should verify its own re-report-vs-suppress behavior the same way,
+not assume the tsc result transfers.
+
 **D-128 — a finding that names its fields "title"/"detail" is a naming drift, not a
 malformed reply: repaired at the boundary rather than gambled on a retry. BUILT
 2026-08-20.**
