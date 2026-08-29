@@ -1321,6 +1321,8 @@ still current; round 2, landed in the SAME batch this finding was raised
 against, had already replaced it with the two-call, existence-and-reuse
 version described two paragraphs up. Checked directly against the actual tree
 before rejecting: no test by the name the finding quotes exists in it.
+
+**Verified directly before shipping, not assumed — the stakes of getting this
 wrong are a silent, ongoing false pass.** A bare `tsc --noEmit --incremental`
 genuinely persists and correctly re-reads a `.tsbuildinfo`: confirmed with
 `--extendedDiagnostics`, which reported a real "BuildInfo read time" on the
