@@ -248,11 +248,26 @@ export async function main(argv: readonly string[]): Promise<ExitCode> {
     await mkdir(dirname(out), { recursive: true });
     await writeFile(out, `${JSON.stringify(result.tiers, null, 2)}\n`);
     if (args.json) {
-      process.stdout.write(`${JSON.stringify({ out, tiers: result.tiers, picks: result.picks })}\n`);
+      process.stdout.write(
+        `${JSON.stringify({
+          out,
+          tiers: result.tiers,
+          picks: result.picks,
+          costUsd: result.costUsd,
+          inputTokens: result.inputTokens,
+          cachedTokens: result.cachedTokens,
+          outputTokens: result.outputTokens,
+        })}\n`,
+      );
     } else {
       process.stdout.write(
         [
           `wrote ${out} — ${String(result.candidateCount)} candidate model(s) considered.`,
+          // WHAT THIS COST. Found missing by lore's own review, fingerprint e3ed9214:
+          // this spends real money on a metered-only install and the first version
+          // reported none of it, contradicting D-121's "lore reports what each call cost".
+          `cost: $${result.costUsd.toFixed(4)} (${String(result.inputTokens)} in / ` +
+            `${String(result.cachedTokens)} cached / ${String(result.outputTokens)} out)`,
           "",
           ...result.picks.map((p) => `  ${p.role}  ${p.model}  (${p.effort}) — ${p.why}`),
           "",

@@ -28,9 +28,12 @@ export function ladderPrompt(catalog: readonly CatalogModel[]): string {
     "that has ONLY an OpenRouter credential — no direct subscription to any single vendor.",
     "",
     "THE LADDER: t0 is deterministic (lint/typecheck/tests, not your concern). t1 runs on",
-    "EVERY review, first — cheap and fast is what matters most here, since it carries the",
-    "bulk of the volume. t2 and t3 run only when t1 finds something, reading more deeply;",
-    "t3 is the last line of defence, so pick the strongest of the three for it.",
+    "EVERY review, first. ESCALATION IS ON CLEAN, NOT ON FINDINGS — t1 raising something",
+    "stops the round right there for a person to fix; t2 runs next only once t1 comes back",
+    "with NOTHING wrong, which is the common case for maintained code, not a rare one. t3",
+    "runs only once BOTH t1 and t2 come back clean — rarer than t2, but still the ordinary",
+    "path for code that already passes the first two reads, and the last independent look",
+    "before a review can fully pass.",
     "",
     "THE ONE RULE THAT MATTERS MOST: t1, t2 and t3 must come from THREE DIFFERENT",
     "underlying organisations (the \"vendor\" column below — z-ai, moonshotai, openai,",
@@ -38,13 +41,19 @@ export function ladderPrompt(catalog: readonly CatalogModel[]): string {
     "them here. Two tiers from the same organisation are not two opinions; they are one",
     "opinion asked twice, and this tool's entire premise is that reviewers must be",
     "independent of each other. This is not a preference — a review run on a ladder that",
-    "fails this can never fully pass, however good the individual models are.",
+    "fails this can never fully pass, however good the individual models are. WATCH FOR",
+    "NEAR-DUPLICATE VENDOR NAMES IN THE TABLE — the same real company sometimes publishes",
+    "under two different prefixes (for example \"meta\" and \"meta-llama\" are almost",
+    "certainly the same organisation despite reading as different vendor strings); use",
+    "your own knowledge of who actually owns what, not just string equality, when judging",
+    "whether two candidates are genuinely independent.",
     "",
     "Prefer models with a track record of following instructions precisely: reviews depend",
     "on structured JSON replies, and a model that drifts into prose loses the review, not",
-    "just this one answer. Prefer lower cost at t1 (it runs constantly) and prioritise",
-    "capability over cost at t2 and t3 (they run rarely, only when there is already",
-    "something worth a second look).",
+    "just this one answer. Cost matters at all three tiers, since t2 and t3 run on most",
+    "reviews of code that is already in good shape, not only the rare exceptional one — t1",
+    "still deserves the most weight toward cheap and fast, since every review pays for it",
+    "at least once, but do not treat t2/t3 as occasional splurges.",
     "",
     "THE CANDIDATES — every model this deployment's OpenRouter key can actually reach,",
     "tool-call-capable, not deprecated or alpha. Pick ONLY from this list; a model id not",
@@ -59,11 +68,16 @@ Reply with ONE fenced json block and nothing else. No preamble, no commentary af
 
 \`\`\`json
 {"tiers": [
-  {"role": "t1", "model": "openrouter/z-ai/glm-5.2", "effort": "medium", "why": "cheap, fast, follows the finding contract reliably"},
-  {"role": "t2", "model": "openrouter/moonshotai/kimi-k3", "effort": "high", "why": "a genuinely different organisation from t1 and t3"},
-  {"role": "t3", "model": "openrouter/openai/gpt-5.6-sol-pro", "effort": "high", "why": "strongest available, last line of defence"}
+  {"role": "t1", "model": "<copy an id column value from the candidates table above>", "effort": "medium", "why": "one sentence"},
+  {"role": "t2", "model": "<a DIFFERENT candidate id, from a different vendor than t1>", "effort": "high", "why": "one sentence"},
+  {"role": "t3", "model": "<a DIFFERENT candidate id again, from a third vendor>", "effort": "high", "why": "one sentence"}
 ]}
 \`\`\`
+
+The angle-bracketed text above is a PLACEHOLDER, not an example to copy — every "model"
+value must be a real id you copied from the candidates table's own id column, for a
+candidate that actually appeared in it. Nothing named in this contract itself is a
+valid answer.
 
 Rules:
 - Exactly three entries, one each for "t1", "t2", "t3" — no more, no fewer.

@@ -57,4 +57,19 @@ describe("filterCatalog", () => {
     expect(out[0]?.costOutput).toBe(0.0000022);
     expect(out[0]?.contextTokens).toBe(128_000);
   });
+
+  /**
+   * THE TILDE PREFIX — found live against the real deployment, fingerprint fc9e8468:
+   * OpenRouter's own catalog carries a "-latest" pointer-alias namespace for at least
+   * seven vendors (`~z-ai/glm-5.2-latest` alongside `z-ai/glm-5.2`, and six more), and
+   * left unstripped it would count as an EIGHTH, independent vendor — exactly the
+   * miscount the one-vendor-per-tier rule (D-32/D-49) exists to catch.
+   */
+  it("normalises a tilde-prefixed vendor to its real organisation, same as the untilded one", () => {
+    const out = filterCatalog({
+      "~z-ai/glm-5.2-latest": base,
+      "z-ai/glm-5.2": base,
+    });
+    expect(out.map((m) => m.vendor)).toEqual(["z-ai", "z-ai"]);
+  });
 });

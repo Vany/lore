@@ -64,6 +64,21 @@ export function makeTierPickParser(knownIds: ReadonlySet<string>): ItemParser<Ti
  * DIFFERENT underlying vendors. A count or a role check alone would accept three t1s or
  * three z-ai models under different route names — the failure this whole feature exists
  * to prevent, just moved one level up from where the old hardcoded ladder made it by hand.
+ *
+ * lore-ok[fc9e8468]: found by lore's own review — `vendorOf` compares ID STRINGS, not
+ * corporate identity, on purpose (its own doc comment in `core/ladder.ts`: "guessing
+ * that two ids are one company because they look alike is how a rule that must be
+ * exactly right becomes approximately right"), so it cannot by itself tell two
+ * different route prefixes for the same real organisation apart. Checked against the
+ * live catalog, not just argued about: `catalog.ts`'s own fix strips the ONE confirmed,
+ * systematic case (a `~`-prefixed "-latest" pointer alias exists for at least seven
+ * vendors — z-ai, anthropic, openai, x-ai, google, moonshotai, deepseek — and would
+ * otherwise count as an eighth, independent vendor). Beyond that confirmed case, this
+ * codebase's own considered position — an unaliased id stands for itself rather than
+ * being heuristically merged — is kept rather than overridden with a guess `vendorOf`'s
+ * own author already argued against; `prompt.ts`'s own instructions ask the model to
+ * use its broader knowledge of real corporate ownership instead, which a hardcoded
+ * string table cannot do as well or as current.
  */
 export function validatePicks(picks: readonly TierPick[]): string | undefined {
   if (picks.length !== 3) return `expected exactly 3 picks, got ${String(picks.length)}`;

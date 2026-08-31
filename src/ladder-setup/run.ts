@@ -9,20 +9,41 @@
 
 import { extractList, type Listed, type SessionResult } from "../reviewer/opencode.ts";
 import { DidNotRun } from "../core/errors.ts";
-import type { Tier } from "../core/ladder.ts";
+import { DEFAULT_TIERS, type Tier } from "../core/ladder.ts";
 import { fetchCatalog, type CatalogModel } from "./catalog.ts";
 import { ladderPrompt, LADDER_CONTRACT } from "./prompt.ts";
 import { makeTierPickParser, validatePicks, type TierPick } from "./suggestion.ts";
 
-/** The model that makes the pick. Reuses `DEFAULT_TIERS[1]`'s own choice (`core/ladder.ts`)
- *  rather than inventing a new default: already the proven zero-config gate model. */
-export const BOOTSTRAP_CALLER: Tier = {
-  id: "ladder-setup",
-  kind: "model",
-  model: "openrouter/z-ai/glm-5.2",
-  effort: "medium",
-  stage: "fast",
-};
+/** The id every bootstrap-caller tier carries, whichever model it ends up naming. */
+export const BOOTSTRAP_CALLER_ID = "ladder-setup";
+
+/**
+ * The model that makes the pick, chosen from the SAME live catalog it is about to hand
+ * the picker — never a second hardcoded guess. Prefers `DEFAULT_TIERS[1]`'s own values
+ * (`core/ladder.ts`), spread rather than re-typed so the two cannot silently drift apart,
+ * but only when that model is actually IN the catalog: found by lore's own review,
+ * fingerprint 9a97bb77 — a tool that exists to replace a stale hardcoded guess must not
+ * share DEFAULT_TIERS' single point of failure with no way out when OpenRouter withdraws
+ * it. Falls back to the catalog's own cheapest priced candidate, since the bootstrap call
+ * is a short JSON-generation task, not a task that benefits from spending more.
+ */
+function pickCaller(catalog: readonly CatalogModel[]): Tier {
+  const preferred = DEFAULT_TIERS[1];
+  if (preferred?.model !== undefined && catalog.some((c) => c.id === preferred.model)) {
+    return { ...preferred, id: BOOTSTRAP_CALLER_ID };
+  }
+  const priced = [...catalog]
+    .filter((c) => c.costInput !== undefined)
+    .sort((a, b) => (a.costInput ?? 0) - (b.costInput ?? 0));
+  const fallback = priced[0] ?? catalog[0];
+  if (fallback === undefined) {
+    // Unreachable once suggestLadder's own catalog.length < 3 guard has run first (it
+    // always does — this is the only caller) — kept as a real throw rather than a
+    // silent default, since skipping the guard deserves a loud error, not a made-up id.
+    throw new DidNotRun("no candidate model available to make the ladder pick itself");
+  }
+  return { id: BOOTSTRAP_CALLER_ID, kind: "model", model: fallback.id, effort: "medium", stage: "fast" };
+}
 
 export interface LadderSetupDeps {
   readonly fetchCatalog: () => Promise<readonly CatalogModel[]>;
@@ -46,6 +67,16 @@ export interface LadderSetupResult {
   /** The same three, with their model's own stated reasoning, for the printed summary. */
   readonly picks: readonly TierPick[];
   readonly candidateCount: number;
+  /**
+   * What the bootstrap call itself cost — found missing by lore's own review,
+   * fingerprint e3ed9214: on a metered-only install this spends real money and the
+   * first version reported none of it, contradicting D-121's "lore reports what each
+   * call cost". `SessionResult`'s own fields, carried through rather than discarded.
+   */
+  readonly costUsd: number;
+  readonly inputTokens: number;
+  readonly cachedTokens: number;
+  readonly outputTokens: number;
 }
 
 const ROLE_ORDER: Record<TierPick["role"], number> = { t1: 0, t2: 1, t3: 2 };
@@ -66,7 +97,20 @@ export async function suggestLadder(deps: LadderSetupDeps, worktree = process.cw
   const parseOne = makeTierPickParser(knownIds);
   const extract = (text: string): Listed<TierPick> => extractList<TierPick>(text, "tiers", parseOne);
 
-  const result = await deps.ask(BOOTSTRAP_CALLER, ladderPrompt(catalog), worktree, extract, LADDER_CONTRACT);
+  let result: SessionResult<TierPick>;
+  try {
+    result = await deps.ask(pickCaller(catalog), ladderPrompt(catalog), worktree, extract, LADDER_CONTRACT);
+  } catch (e) {
+    // A failed call is still a paid one — surfaced in the message since there is no
+    // `Store` here to record it against, mirroring `refactor/run.ts`'s own
+    // `recordFailedUsage` shape (`.spent` recovered onto a thrown error) one door down.
+    const spent = (e as { spent?: { input: number; cached: number; output: number; cost: number } }).spent;
+    const spentNote =
+      spent === undefined
+        ? ""
+        : ` (spent before failing: $${spent.cost.toFixed(4)}, ${String(spent.input)} in / ${String(spent.output)} out)`;
+    throw new DidNotRun(`the bootstrap call failed: ${e instanceof Error ? e.message : String(e)}${spentNote}`);
+  }
 
   const err = validatePicks(result.items);
   if (err !== undefined) {
@@ -86,5 +130,13 @@ export async function suggestLadder(deps: LadderSetupDeps, worktree = process.cw
     })),
   ];
 
-  return { tiers, picks, candidateCount: catalog.length };
+  return {
+    tiers,
+    picks,
+    candidateCount: catalog.length,
+    costUsd: result.costUsd,
+    inputTokens: result.inputTokens,
+    cachedTokens: result.cachedTokens,
+    outputTokens: result.outputTokens,
+  };
 }

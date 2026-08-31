@@ -21,11 +21,7 @@ always did.
 | **T2** | main reviewer | `openrouter/moonshotai/kimi-k3` | 57 | 3.00 | 15.00 | Moonshot |
 | **T3** | adversarial | `openrouter/openai/gpt-5.6-sol-pro` | 59 | 5.00 | 30.00 | OpenAI |
 
-**This table is the DEFAULT ladder, and a deployment usually replaces it.** `LORE_TIERS`
-points at a tiers file that overrides every row (`core/ladder.ts`, `loadTiers`), and
-what is deployed today is `deploy/tiers.zai-kimi-openai.json`:
-
-**A fresh install with only an OpenRouter key gets this table, unchanged, until
+**A fresh install with only an OpenRouter key gets the table above, unchanged, until
 someone writes a better one.** `DEFAULT_TIERS` is a hardcoded guess, frozen at
 whatever OpenRouter offered when it was written — prices move, models are
 deprecated, new ones ship, and nothing here notices. `lore ladder-suggest`
@@ -33,12 +29,16 @@ deprecated, new ones ship, and nothing here notices. `lore ladder-suggest`
 OpenRouter's *live* catalog (fetched through opencode's own `provider.list()`, the
 same call `doctor.ts` already uses to validate a ladder after the fact — never
 OpenRouter's raw API directly, so every candidate is something this deployment's
-opencode can actually reach), to pick t1/t2/t3 fresh. The three-vendor rule two
-paragraphs down is not relaxed for this: the model is told explicitly, and a reply
-naming two models from one organisation, or a model id it was not shown, is
-refused rather than written out. Run any time after `make up` — it needs `opencode
-serve` already reachable, which is why it cannot be part of first boot — and it
-never edits `.env` itself, only prints the line to paste in.
+opencode can actually reach), to pick t1/t2/t3 fresh. The three-vendor rule below
+is not relaxed for this: the model is told explicitly, and a reply naming two
+models from one organisation, or a model id it was not shown, is refused rather
+than written out. Run any time after `make up` — it needs `opencode serve` already
+reachable, which is why it cannot be part of first boot — and it never edits
+`.env` itself, only prints the line to paste in.
+
+**The table above is the DEFAULT ladder, and a deployment usually replaces it.**
+`LORE_TIERS` points at a tiers file that overrides every row (`core/ladder.ts`,
+`loadTiers`), and what is deployed today is `deploy/tiers.zai-kimi-openai.json`:
 
 | Tier | Model | Effort | Vendor | Paid by |
 |---|---|---|---|---|

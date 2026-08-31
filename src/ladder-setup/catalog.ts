@@ -72,7 +72,16 @@ export function filterCatalog(models: Readonly<Record<string, RawModel>>): reado
     const id = `openrouter/${modelId}`;
     out.push({
       id,
-      vendor: vendorOf(id),
+      // `~` STRIPPED FIRST — found live against the real deployment, fingerprint
+      // fc9e8468: OpenRouter's own catalog carries a SECOND namespace for at least
+      // seven vendors (`~anthropic/claude-opus-latest` alongside `anthropic/claude-
+      // opus-5`, and six more — `~x-ai`, `~z-ai`, `~openai`, `~google`,
+      // `~moonshotai`, `~deepseek`) — a "-latest" pointer alias for the SAME real
+      // organisation, not a second one. Left unstripped, `vendorOf` (which compares
+      // strings, not corporate identity, on purpose — see its own doc comment)
+      // would count `~z-ai` and `z-ai` as two independent vendors, exactly the
+      // miscount the one-vendor-per-tier rule (D-32/D-49) exists to catch.
+      vendor: vendorOf(id).replace(/^~/, ""),
       costInput: m.cost?.input,
       costOutput: m.cost?.output,
       contextTokens: m.limit.context,
