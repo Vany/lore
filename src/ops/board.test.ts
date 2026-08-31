@@ -643,4 +643,37 @@ describe("a refactor run on the board", () => {
     refactorRun("solo", "running");
     expect(board(store).refactorRunsNotShown).toBe(0);
   });
+
+  /**
+   * QUEUEDNOTE'S OWN DRAIN BRANCH — the entire reason it exists (fingerprint 2e972f8c) —
+   * had NO test anywhere: board.test.ts never asserted on it, and board-page.test.ts's
+   * DOM test builds its own hand-written queuedNote string rather than reading one
+   * board.ts actually computed. Found by lore's own review, fingerprint 8152c987, against
+   * exactly the failure `stepNote`'s own drain test (above) already exists to catch for
+   * reviews: collapsing the ternary to the static string, or inverting the flag, would
+   * have left every test green while a draining board told an operator to go hunt for
+   * worker capacity that was never the problem.
+   */
+  it("explains a queued run without blaming a gate that no longer exists", () => {
+    refactorRun("r1", "queued");
+    const note = findRefactor("r1")?.queuedNote ?? "";
+    expect(note, "the honest fact: nothing has run").toMatch(/no worker has claimed it/i);
+    expect(note).not.toMatch(/DRAINING/);
+  });
+
+  it("names DRAINING as the reason when that is the reason", () => {
+    refactorRun("r1", "queued");
+    store.setDraining(true);
+
+    const note = findRefactor("r1")?.queuedNote ?? "";
+    expect(note).toMatch(/DRAINING/);
+    expect(note, "and what to do about it").toMatch(/drain-off/);
+  });
+
+  it("gives a running or terminal run no queuedNote at all", () => {
+    refactorRun("running1", "running");
+    refactorRun("done1", "done");
+    expect(findRefactor("running1")?.queuedNote).toBeUndefined();
+    expect(findRefactor("done1")?.queuedNote).toBeUndefined();
+  });
 });

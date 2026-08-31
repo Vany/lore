@@ -759,6 +759,11 @@ function stepNote(state: ReviewState, runs: readonly BoardTierRun[], draining: b
  */
 function refactorQueuedNote(state: RefactorState, draining: boolean): string | undefined {
   if (state !== "queued") return undefined;
+  // lore-ok[8152c987]: found by lore's own review — this ternary's draining arm is the
+  // entire reason refactorQueuedNote exists (fingerprint 2e972f8c) and had no test anywhere. Now
+  // held by board.test.ts's "names DRAINING as the reason when that is the reason" and
+  // "explains a queued run without blaming a gate that no longer exists", mirroring the
+  // review-side stepNote pair of the same names exactly.
   return draining
     ? "NOTHING IS BEING CLAIMED — the service is DRAINING, so no worker will pick this up. " +
       "A deploy is in progress, or a drain was left set by one that did not finish. " +
