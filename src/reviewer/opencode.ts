@@ -26,7 +26,7 @@
 
 import type * as z from "zod";
 import { createOpencodeClient } from "@opencode-ai/sdk";
-import { CancelledByLore, DidNotRun, Exhausted, ProviderAuthFailed, ServiceUnreachable, TierUnavailable, TooLargeForTier } from "../core/errors.ts";
+import { CancelledByLore, DidNotRun, Exhausted, ProbeInconclusive, ProviderAuthFailed, ServiceUnreachable, TierUnavailable, TooLargeForTier } from "../core/errors.ts";
 import { FindingSchema, type Finding } from "../core/finding.ts";
 import type { Tier } from "../core/ladder.ts";
 import { loadPools, routesFor } from "../core/ladder.ts";
@@ -126,6 +126,26 @@ export interface ReviewerConfig {
    */
   readonly retryStormMs?: number;
   /**
+   * How long a PROBE (D-94) may wait before it counts as still unknown.
+   *
+   * A probe exists to re-test a route lore already believes is down, on the assumption
+   * that asking costs about twelve seconds (D-91's own measured figure) — cheap insurance,
+   * paid every `PROBE_INTERVAL_MS`. Kimi broke that assumption on 2026-08-31: a weekly
+   * quota refusal took ~21.5 minutes to arrive, with no retry event on the stream for
+   * `quotaRefusal` to catch early and no storm for `retryStormMs` to bound — a single
+   * request, silent until it finally answered. Unbounded, that cost repeats every 15
+   * minutes for as long as any review needs the tier, for the rest of the week the quota
+   * does not reset.
+   *
+   * Short on purpose, and shorter than `retryStormMs`: a probe is strictly more
+   * speculative than an active storm — we do not even know the route is trying — so it
+   * must not itself become a source of long waits. A route that times out here is
+   * reported as still unknown, not as freshly refused: `ProbeInconclusive` carries no
+   * new information, so the existing backoff is left exactly as it was and the next
+   * probe is simply due again in another `PROBE_INTERVAL_MS`.
+   */
+  readonly probeTimeoutMs?: number;
+  /**
    * Where kept sessions survive a restart (D-80).
    *
    * Absent means the old behaviour exactly — sessions live and die with the process,
@@ -139,6 +159,11 @@ export const DEFAULT_REVIEWER: ReviewerConfig = {
   baseUrl: process.env["OPENCODE_SERVER"] ?? "http://127.0.0.1:4096",
   agent: "readonly",
   retryStormMs: 5 * 60_000,
+  // MEASURED FROM ONE INCIDENT, NOT COMFORT — see the field's own doc comment. Kept as
+  // an explicit default (mirroring `retryStormMs` above) rather than only the `?? 90_000`
+  // fallback at the one call site, so a reader of this object sees every bound this
+  // client enforces in one place.
+  probeTimeoutMs: 90_000,
   // ONE timeout, not two. This was 20 minutes while `longFetch`'s own default was
   // 30, and the shorter silently won — an invisible default nobody chose, which is
   // the shape of nearly every bug this project has found in itself.
@@ -187,6 +212,15 @@ export interface ReviewerLike {
     reviewId?: string,
     /** Asked once a provider slot is won: `false` means do not spend it. */
     stillWanted?: () => boolean,
+    /**
+     * This call exists only to re-test a route lore already believes is down (D-94).
+     *
+     * Bounds the call at `ReviewerConfig.probeTimeoutMs` instead of the ordinary
+     * `timeoutMs` — a probe that goes quiet must not itself become a long wait, repeated
+     * every `PROBE_INTERVAL_MS`. Optional so a fake reviewer need not model it; absent
+     * means the ordinary bound applies, unchanged.
+     */
+    probing?: boolean,
   ): Promise<ReviewerResult>;
   /**
    * Stop this review's in-flight model call, and stop paying for it.
@@ -225,6 +259,8 @@ export interface ReviewerLike {
     reviewId?: string,
     /** Asked once a provider slot is won: `false` means do not spend it. */
     stillWanted?: () => boolean,
+    /** Same meaning as `review()`'s own `probing` — see there. */
+    probing?: boolean,
   ): Promise<SessionResult<T>>;
   /**
    * Characters of prompt this tier can hold, or `undefined` if unknown.
@@ -620,6 +656,7 @@ export class Reviewer implements ReviewerLike {
     worktree: string,
     reviewId?: string,
     stillWanted?: () => boolean,
+    probing?: boolean,
   ): Promise<ReviewerResult> {
     if (tier.model === undefined) throw new DidNotRun(`tier ${tier.id} has no model`);
     // The gate wraps the SESSION, not the request. What loads a provider is the
@@ -627,7 +664,9 @@ export class Reviewer implements ReviewerLike {
     // would bound nothing. Waiting here queues the round instead of failing it, which
     // is the same trade as backpressure: a review that dies on a 429 did not run.
     const r = await this.guard(reviewId, stillWanted, () =>
-      this.conductSession<Finding>(tier, prompt, worktree, reviewId, findingsOf, OUTPUT_CONTRACT, false, stillWanted),
+      this.conductSession<Finding>(
+        tier, prompt, worktree, reviewId, findingsOf, OUTPUT_CONTRACT, false, stillWanted, probing,
+      ),
     );
     return { ...r, findings: r.items, discarded: r.rejected };
   }
@@ -658,10 +697,11 @@ export class Reviewer implements ReviewerLike {
     reviewId?: string,
     /** Asked once a gate slot is won: `false` means do not spend it. See `guard`. */
     stillWanted?: () => boolean,
+    probing?: boolean,
   ): Promise<SessionResult<T>> {
     if (tier.model === undefined) throw new DidNotRun(`tier ${tier.id} has no model`);
     return this.guard(reviewId, stillWanted, () =>
-      this.conductSession<T>(tier, prompt, worktree, reviewId, extract, contract, false, stillWanted),
+      this.conductSession<T>(tier, prompt, worktree, reviewId, extract, contract, false, stillWanted, probing),
     );
   }
 
@@ -814,6 +854,8 @@ export class Reviewer implements ReviewerLike {
     noResume = false,
     /** Re-checked once `createSession` returns — see the `40b5d6e5` comment below. */
     stillWanted?: () => boolean,
+    /** Same meaning as `ReviewerLike.review`'s own `probing` — see there. */
+    probing?: boolean,
   ): Promise<SessionResult<T>> {
     const started = Date.now();
     // SUBSCRIBED BEFORE THE SESSION EXISTS, not after. The stream takes a moment to
@@ -946,6 +988,32 @@ export class Reviewer implements ReviewerLike {
       }
     });
 
+    // A PROBE'S OWN, SHORTER DEADLINE (D-94) — see `ReviewerConfig.probeTimeoutMs`.
+    //
+    // The storm clock above and `quotaRefusal` both need a STATUS EVENT to act on; Kimi's
+    // 2026-08-31 weekly-quota refusal produced neither — one request, no retry on the
+    // stream, silent for ~21.5 minutes before the final reply arrived. Nothing above this
+    // line would have caught that, because nothing above this line reacts to silence
+    // itself. This does: a probe is only ever asking a route lore already believes is
+    // down, so it is bounded independently of the ordinary `timeoutMs` deadline below.
+    //
+    // `unref`'d for the same reason `long-fetch.ts`'s own deadline is: a pending timer
+    // must not hold the process open past its work. Cleared in `finally`, alongside the
+    // aborter and watcher, so it cannot fire after a call that already finished.
+    let probeTimer: ReturnType<typeof setTimeout> | undefined;
+    if (probing === true) {
+      const probeMs = this.cfg.probeTimeoutMs ?? 90_000;
+      probeTimer = setTimeout(() => {
+        aborter.abort(
+          new ProbeInconclusive(
+            `tier ${tier.id} (${tier.model ?? "?"}) probe did not answer within ${String(Math.round(probeMs / 1000))}s — ` +
+              "still treating it as unavailable, not as freshly refused.",
+          ),
+        );
+      }, probeMs);
+      probeTimer.unref?.();
+    }
+
     try {
       // WHICH PROMPT: the full one for a session being initialised, the round's message
       // for one being continued. A caller that passes a bare string gets it either way,
@@ -999,7 +1067,9 @@ export class Reviewer implements ReviewerLike {
         }
         this.aborters.delete(sessionId);
         this.watchers.delete(sessionId);
-        return await this.conductSession(tier, prompt, worktree, reviewId, extract, contract, true, stillWanted);
+        return await this.conductSession(
+          tier, prompt, worktree, reviewId, extract, contract, true, stillWanted, probing,
+        );
       }
       // UNRECOVERABLE, so it leaves as something the ladder has a rule for. `SessionGone`
       // is ours and nothing above knows it; `DidNotRun` says exactly what happened and is
@@ -1054,6 +1124,12 @@ export class Reviewer implements ReviewerLike {
       // longer fuse — the stream outlives every call on it.
       this.aborters.delete(sessionId);
       this.watchers.delete(sessionId);
+      // ALWAYS, regardless of which branch above returned or threw — the one thing every
+      // exit path shares. Left unset, a probe that succeeded (or failed for some other
+      // reason) at, say, 4 seconds would still fire at `probeMs`, aborting a NEW call that
+      // has since reused this same `sessionId` slot with an error about a request that
+      // finished long ago.
+      if (probeTimer !== undefined) clearTimeout(probeTimer);
     }
   }
 

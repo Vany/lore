@@ -16,7 +16,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { CancelledByLore, DidNotRun, Exhausted, ProviderAuthFailed, ServiceUnreachable } from "../core/errors.ts";
+import { CancelledByLore, DidNotRun, Exhausted, ProbeInconclusive, ProviderAuthFailed, ServiceUnreachable } from "../core/errors.ts";
 import type { Tier } from "../core/ladder.ts";
 import { fingerprint } from "../core/fingerprint.ts";
 import { DEFAULT_TIERS, initialState, ladderFingerprint } from "../core/ladder.ts";
@@ -3051,6 +3051,60 @@ describe("a pool of routes to one model", () => {
     // bound rests on: the catch rewrites the mark, and a write that does not name a stamp
     // must keep the stored one.
     expect(store.routeUnavailable("kimi/k3")?.probedAt, "the probe is remembered").toBeDefined();
+  });
+
+  /**
+   * A PROBE THAT GOES QUIET LEARNS NOTHING (D-137).
+   *
+   * Kimi's real weekly-quota refusal on 2026-08-31 took ~21.5 minutes to arrive on a
+   * single, silent call — bounded now by `opencode.ts`'s own `probeTimeoutMs`, which
+   * surfaces here as `ProbeInconclusive`. What THIS round has to get right: the existing
+   * mark must come through unread, not overwritten with a generic timeout reason and a
+   * failure count that climbed on a non-answer, and the chain must still walk to the
+   * fallback exactly as it would for a real refusal.
+   */
+  it("leaves an existing route mark untouched when its probe is inconclusive", async () => {
+    const type = {
+      ...CODE_ARCH,
+      t0: [] as const,
+      tiers: CODE_ARCH.tiers.map((t) => (t.id === "t1" ? { ...t, model: "kimi/k3", fallback: ["GLM5.2"] } : t)),
+    };
+    store.markRouteUnavailable(
+      "kimi/k3", "2126-01-01T00:00:00.000Z", "You've reached your weekly usage limit", 3, false,
+    );
+    class ProbeTimesOut implements ReviewerLike {
+      readonly asked: { model: string; probing: boolean | undefined }[] = [];
+      async review(
+        tier: Tier,
+        _prompt: unknown,
+        _worktree: string,
+        _reviewId?: string,
+        _stillWanted?: () => boolean,
+        probing?: boolean,
+      ): Promise<ReviewerResult> {
+        this.asked.push({ model: tier.model ?? "?", probing });
+        if (tier.model === "kimi/k3") throw new ProbeInconclusive(`tier ${tier.id} probe did not answer in time`);
+        return {
+          findings: [], discarded: [], raw: "", inputTokens: 0, cachedTokens: 0, outputTokens: 0, costUsd: 0,
+          latencyMs: 1, retried: false, steps: 1,
+        };
+      }
+    }
+    const reviewer = new ProbeTimesOut();
+
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type, allowMetered: true });
+
+    expect(reviewer.asked.find((a) => a.model === "kimi/k3")?.probing, "asked BECAUSE it was due a probe").toBe(true);
+    expect(
+      reviewer.asked.some((a) => a.model === "zai-coding-plan/glm-5.2" || a.model === "zai-coding-plan2/glm-5.2"),
+      "the chain still walks to the fallback pool",
+    ).toBe(true);
+    const mark = store.routeUnavailable("kimi/k3");
+    expect(mark?.why, "unchanged — a probe that went quiet learned nothing new").toBe(
+      "You've reached your weekly usage limit",
+    );
+    expect(mark?.failures, "the failure count must not climb on a non-answer").toBe(3);
+    expect(mark?.probedAt, "only the probe stamp may move").toBeDefined();
   });
 
   it("goes straight past a lone primary inside its backoff, without calling it", async () => {

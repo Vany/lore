@@ -41,7 +41,7 @@ import { exemptLiteral, vendorOf } from "../core/ladder.ts";
 import { RAN_ON_OTHER_ROUTE, SUPPRESSION_NOTICE, isSuppressionNotice } from "../core/checks-skipped.ts";
 import { type Alert, CONDITIONS } from "../ops/alerts.ts";
 import { startOfDayIso } from "../ops/spend.ts";
-import { ServiceUnreachable, CancelledByLore, DidNotRun, Exhausted, ProviderAuthFailed, TierUnavailable, TooLargeForTier } from "../core/errors.ts";
+import { ServiceUnreachable, CancelledByLore, DidNotRun, Exhausted, ProbeInconclusive, ProviderAuthFailed, TierUnavailable, TooLargeForTier } from "../core/errors.ts";
 import { hunkAround, hunkStillPresent, makeScope, type Scope } from "../core/scope.ts";
 import { baseCommitFor, blobSha, computeDiff, filesInDiff, isDoc, renderDiff, resolveInto, wholeTreeDiff } from "../git/diff.ts";
 import { applyPatch, restoreTree, treeDelta, treeHash } from "../git/repo.ts";
@@ -1200,7 +1200,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     } else store.refreshFinding(reviewId, fp, scope, undefined);
   };
 
-  const streamRun = async (route: Tier): Promise<ReviewerResult> => {
+  const streamRun = async (route: Tier, asProbe = false): Promise<ReviewerResult> => {
     const ask = input.reviewer.askFor?.bind(input.reviewer);
     if (ask === undefined) throw new DidNotRun(`tier ${route.id} is set to stream but this reviewer cannot converse`);
     // The orientation, with the one instruction that overrides the batch habit. The
@@ -1378,6 +1378,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
         STREAM_CONTRACT,
         reviewId,
         stillWanted,
+        asProbe,
       );
       agg.raw = res.raw;
       agg.retried = agg.retried || res.retried;
@@ -1535,9 +1536,11 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     };
   };
   const canStream = member.conversation === true && input.reviewer.askFor !== undefined;
-  const callRoute = (route: string): Promise<ReviewerResult> => {
+  const callRoute = (route: string, asProbe = false): Promise<ReviewerResult> => {
     const t = { ...member, model: route };
-    return canStream ? streamRun(t) : input.reviewer.review(t, prompt, worktree, reviewId, stillWanted);
+    return canStream
+      ? streamRun(t, asProbe)
+      : input.reviewer.review(t, prompt, worktree, reviewId, stillWanted, asProbe);
   };
 
   // Opened BEFORE the model is asked, so the row exists no matter how this ends.
@@ -1824,7 +1827,12 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
         );
       }
       primaryAsked = true;
-      result = await callRoute(primaryRoute);
+      // BOUNDED WHEN THE ONLY REASON THIS ROUTE IS BEING ASKED IS D-94 (see
+      // `ReviewerConfig.probeTimeoutMs`): either the whole tier is probing its cool-off, or
+      // this specific route is due its own re-test despite being parked. Neither call is
+      // believed to have quota — it exists purely to check — so neither may cost this round
+      // the ~21.5 minutes Kimi's weekly-quota refusal took to arrive on 2026-08-31.
+      result = await callRoute(primaryRoute, probing || dueProbe.has(primaryRoute));
       // IT ANSWERED, so whatever we believed about it being down is over. The operator
       // banner has promised "one success clears this" since D-90 shipped, and only the
       // background screen ever delivered it — a review could prove a tier alive and the
@@ -1918,7 +1926,13 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       // shape: a re-login heals it at an hour nobody can predict, and the D-94 probe
       // is what discovers the recovery. The mark is also what turns the status line
       // red, which is how the operator learns a credential died without reading logs.
-      if (routeFault(e) && primaryAsked) {
+      // NOT ON `ProbeInconclusive` — it is `routeFault` (walks the chain, correctly) but
+      // it is not a refusal: nothing about the route's own quota was learned, only that
+      // this one bounded attempt did not resolve in time. Writing a mark here would
+      // overwrite whatever the route's EXISTING mark already says — Kimi's actual "weekly
+      // usage limit" reason, for instance — with a generic probe-timeout message, and
+      // reset its failure count from a fact that is not a new failure.
+      if (routeFault(e) && primaryAsked && !(e instanceof ProbeInconclusive)) {
         const seen = store.routeUnavailable(primaryRoute)?.failures ?? 0;
         const { until, stated } = retryAt(Date.now(), seen + 1, resetOf(e));
         store.markRouteUnavailable(primaryRoute, until, e.message, seen + 1, stated);
@@ -2056,7 +2070,9 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
         try {
           answered = {
             model: twinModel,
-            result: await callRoute(twinModel),
+            // Same reasoning as the primary's own call, one screen up: a twin reached only
+            // because it is due its D-94 re-test is unconfirmed, not believed available.
+            result: await callRoute(twinModel, dueProbe.has(twinModel)),
           };
           store.clearRouteUnavailable(twinModel);
           break;
@@ -2126,7 +2142,10 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
           // life and the worker enqueued its next round.
           if (!stillWanted()) throw twin;
           const why = twin instanceof Error ? twin.message : String(twin);
-          if (routeFault(twin)) {
+          // Same reasoning as the primary's own guard, one screen up: a probe that went
+          // quiet learned nothing about this twin's quota, so it must not overwrite the
+          // twin's existing mark.
+          if (routeFault(twin) && !(twin instanceof ProbeInconclusive)) {
             const seen = store.routeUnavailable(twinModel)?.failures ?? 0;
             const at = retryAt(Date.now(), seen + 1, resetOf(twin));
             store.markRouteUnavailable(twinModel, at.until, why, seen + 1, at.stated);

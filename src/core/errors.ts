@@ -222,6 +222,22 @@ export class TooLargeForTier extends TierUnavailable {
   }
 }
 
+/**
+ * A bounded probe (D-94) did not answer within its bound — not a refusal, an unknown.
+ *
+ * `extends Exhausted` on purpose: `routeFault`/`resetOf` already recognise `Exhausted` via
+ * `instanceof`, so a probe that goes quiet still sends the round down the fallback chain
+ * exactly as a real refusal would — the review still needs an answer from whatever comes
+ * next. What must NOT happen is the inverse: nothing was learned about the route's own
+ * quota, so a caller about to write a route or tier mark must check
+ * `instanceof ProbeInconclusive` first and skip the write. The existing mark, whatever it
+ * already said, stands exactly as it was — only `probedAt` (stamped before the call) may
+ * move.
+ *
+ * No `resetAt`: a bound that fired says nothing about when the route might answer.
+ */
+export class ProbeInconclusive extends Exhausted {}
+
 /** Bad arguments or configuration. */
 export class UsageError extends LoreError {
   constructor(message: string) {

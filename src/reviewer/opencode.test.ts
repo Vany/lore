@@ -12,7 +12,7 @@
 
 import { createServer, type Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { CancelledByLore, Exhausted, ProviderAuthFailed, ServiceUnreachable, TooLargeForTier } from "../core/errors.ts";
+import { CancelledByLore, Exhausted, ProbeInconclusive, ProviderAuthFailed, ServiceUnreachable, TooLargeForTier } from "../core/errors.ts";
 import { CLAIM_MAX } from "../core/finding.ts";
 import type { Tier } from "../core/ladder.ts";
 import { Reviewer, countStepParts, emissionOf, extractFindings, quotaRefusal, splitModel, toolsUsed, isTooLong, usageFromMessages } from "./opencode.ts";
@@ -1861,6 +1861,51 @@ describe("a retry storm on the event stream", () => {
     ]);
     expect(settled, "two short storms are not one long one").toBe("open");
     await r.cancel("rev_recover");
+    await inFlight.catch(() => undefined);
+    r.close();
+  });
+});
+
+/**
+ * A BOUNDED PROBE (D-94) — Kimi's 2026-08-31 weekly-quota refusal, reproduced.
+ *
+ * Neither mechanism above helps here: no retry ever hits the event stream, so there is
+ * no storm for `retryStormMs` to bound and no message for `quotaRefusal` to recognise —
+ * `hangPrompt` is exactly that shape, a request accepted and never answered. A probe
+ * exists only to re-test a route lore already believes is down, so it must not itself
+ * become a multi-minute wait repeated every `PROBE_INTERVAL_MS`.
+ */
+describe("a bounded probe on a silent call", () => {
+  it("treats silence past the bound as inconclusive, not as a refusal", async () => {
+    hangPrompt = true;
+    const r = new Reviewer({ baseUrl, agent: "readonly", timeoutMs: 10_000, probeTimeoutMs: 200 });
+    const started = Date.now();
+    const err = await r.review(TIER, "review this", "/tmp/wt", "rev_probe", undefined, true)
+      .then(() => undefined, (e: unknown) => e);
+    expect(err).toBeInstanceOf(ProbeInconclusive);
+    // A SUBCLASS OF Exhausted ON PURPOSE — `routeFault`/`resetOf` in review.ts recognise
+    // `Exhausted` by `instanceof`, so the fallback chain walks exactly as it would for a
+    // real refusal; only a caller checking for `ProbeInconclusive` specifically sees the
+    // difference.
+    expect(err).toBeInstanceOf(Exhausted);
+    expect((err as Exhausted).resetAt, "a bound firing says nothing about when the route returns").toBeUndefined();
+    expect(Date.now() - started, "the probe bound, never the 10s ordinary deadline").toBeLessThan(2_000);
+    r.close();
+  });
+
+  it("does not bound an ordinary call that never asked to probe", async () => {
+    hangPrompt = true;
+    // The same short bound as above — if it applied unconditionally, this would settle
+    // just as fast. It must not: an ordinary call is believed to have quota, and cutting
+    // it at 200ms would turn every merely-slow-to-start real answer into a false refusal.
+    const r = new Reviewer({ baseUrl, agent: "readonly", timeoutMs: 10_000, probeTimeoutMs: 200 });
+    const inFlight = r.review(TIER, "review this", "/tmp/wt", "rev_noprobe");
+    const settled = await Promise.race([
+      inFlight.then(() => "settled", () => "settled"),
+      new Promise((res) => setTimeout(() => res("open"), 500)),
+    ]);
+    expect(settled, "no `probing` flag, no bound").toBe("open");
+    await r.cancel("rev_noprobe");
     await inFlight.catch(() => undefined);
     r.close();
   });

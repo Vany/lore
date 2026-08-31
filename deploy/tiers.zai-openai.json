@@ -12,7 +12,7 @@
     "stage": "fast",
     "skip_if_quota": true,
     "fallback": [
-      "openrouter/z-ai/glm-5-turbo"
+      "zai-coding-plan2/glm-5.2"
     ],
     "conversation": true
   },
@@ -23,7 +23,7 @@
     "effort": "medium",
     "stage": "deep",
     "fallback": [
-      "openrouter/z-ai/glm-5.2"
+      "zai-coding-plan2/glm-5.2"
     ],
     "conversation": true,
     "refactor": true

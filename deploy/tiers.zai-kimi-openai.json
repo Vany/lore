@@ -14,8 +14,7 @@
       "stage": "fast",
       "skip_if_quota": true,
       "fallback": [
-        "zai-coding-plan2/glm-5.2",
-        "openrouter/z-ai/glm-5.2"
+        "zai-coding-plan2/glm-5.2"
       ],
       "conversation": true
     },

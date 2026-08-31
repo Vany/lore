@@ -3492,6 +3492,11 @@ zai-coding-plan/glm."*
 | t2 | `kimi-for-coding/k3` | `openrouter/moonshotai/kimi-k3`, then `zai-coding-plan/glm-4.7` |
 | t3 | `openai/gpt-5.6-terra` | `openrouter/openai/gpt-5.6-terra`, then `zai-coding-plan/glm-4.7` |
 
+*This table is the shape the array-fallback decision shipped in, kept for that reasoning
+— not the current chain. Models, the second Z.ai plan, and the 2026-08-31 removal below
+have all moved since. `spec/review-ladder.md` tracks what is actually deployed today;
+this table does not.*
+
 **t1 moved off `glm-5-turbo` on 2026-08-12, and the reason is the window, not the price.**
 Turbo advertises 200K of context, which `promptBudgetChars` turns into 280K characters of
 prompt — and measured over 161 t1 rounds in the preceding week, **32 of them (20%) carried
@@ -3595,6 +3600,33 @@ looks like the provider being down, and gets diagnosed as anything but a typo in
 file. Not fatal — a ladder without a fallback is the one lore ran for its whole life — so
 it tickets, names the model, and starts.
 
+**D-137 — OpenRouter's GLM route is gone from every tiers file, in favour of the second
+Z.ai subscription already sitting in the same chain (2026-08-31).**
+
+Vany: *"we are using openrouter glm for something, but we have both z.ai subscriptions,
+let's not use openrouter's glm at all."* `deploy/tiers.zai-kimi-openai.json`'s t1 carried
+`openrouter/z-ai/glm-5.2` as a second fallback hop behind `zai-coding-plan2/glm-5.2`;
+`deploy/tiers.zai-openai.json`'s t1 and t2 each named an OpenRouter GLM route as their
+only fallback. All three are gone. T1 across both files now falls back to
+`zai-coding-plan2/glm-5.2` alone — the second plan already carrying t2's own fallback in
+the deployed config, so this adds no new route, only removes ones that duplicated it at a
+metered price.
+
+**Checked before it was changed, not assumed: the hop being removed was never reachable
+in practice.** `LORE_ALLOW_METERED` is `"0"` on this deployment (confirmed live against
+`/config.json`), and `withoutMetered` (D-117) strips every `openrouter/` entry from the
+walkable fallback chain unless that flag is `1`. So the entry sat in the config as
+insurance a person would have to switch on, never as a route the ladder walked by itself
+— removing it changes no deployed behaviour today. What it removes is the FUTURE
+surprise: an operator flipping `LORE_ALLOW_METERED=1` for some other reason (D-117's own
+purpose) would also, silently, have re-armed a GLM route the two Z.ai subscriptions
+already made redundant.
+
+**Narrowly scoped to GLM.** T2's and T3's other `openrouter/` fallbacks —
+`openrouter/moonshotai/kimi-k3` (T2, kimi's own metered twin) and
+`openrouter/openai/gpt-5.6-terra` (T3) — are untouched. Neither is Z.ai, so neither is
+what "both z.ai subscriptions" was about.
+
 **D-94 — a cooled-off tier is asked again every fifteen minutes.**
 
 Vany: *"our z.ai subscription is unfrozen, did lore realize this?"* It had not, and could
@@ -3638,6 +3670,72 @@ and the mark stood until its clock ran out.
 backlog can wait — so the strict reading of *"if t1 is skipped, it must not even initiate"*
 stays exactly where it was asked for. Only the path a person is waiting on, and that spends
 metered money, buys information with twelve seconds.
+
+**D-138 — a probe (D-94) is now bounded on its own, shorter clock, because "the ordinary
+call" stopped being a safe description of one (2026-08-31).**
+
+Vany: *"we have problem, seems like kimi run out in the middle of review. and we
+hanged. We need to do something to avoid it in the future."* The review had not, in fact,
+hung forever — `rev_5HzuI3SzXDgOfni-HebKyoVt` reached `passed_partial` — but round 3 took
+44 minutes, one short of the board's own 45-minute red line, and 21.5 of those minutes
+were `tier_run`-silent: `kimi-for-coding/k3` was probed (its route mark had never been
+probed before, per D-94's own mechanism), the call was genuinely dispatched, and nothing
+— no retry event, no log line, at any layer — said anything until a
+`403: "You've reached your weekly (7-day) usage limit"` finally arrived. Then the fallback
+answered in another ~10.5 minutes, correctly, exactly as D-93 says it should.
+
+**D-94's own arithmetic — "twelve seconds" — is a measurement, not a guarantee, and
+nothing enforced it.** A probe "is not special-cased: it is simply the ordinary call" (D-94's
+own words), sharing the ordinary 45-minute deadline. That is fine when a refusal is fast,
+which is what every probe seen before this one was. It is not fine here: `PROBE_INTERVAL_MS`
+re-tests a `stated: false` mark every fifteen minutes **regardless of the mark's own
+`until`**, on the assumption that re-testing costs about twelve seconds. Unbounded, the same
+~21.5-minute wait was due to repeat every fifteen minutes, for as long as any review needed
+t2, for the rest of the week the quota does not reset — the exact multiplication D-93's own
+metered-fallback pricing exists to catch, wearing a different provider's clothes: no money
+this time, only silence, repeated.
+
+**The fix bounds the PROBE, not the ordinary call.** `ReviewerConfig.probeTimeoutMs`
+(`src/reviewer/opencode.ts`, default 90s) arms a second, shorter deadline alongside the
+existing retry-storm clock, only when the caller says this attempt exists purely to
+re-test a route already believed down (`review()`/`askFor()`'s new `probing` parameter,
+threaded from `runMember`'s own `probing`/`dueProbe` flags in `review.ts`). A bound firing
+aborts through the SAME `this.abort(sessionId)` path every other failure already uses — so
+this does not repeat the 2026-08-14 lesson recorded against `conductSession`'s own comment,
+*"abandoning the request does not stop the model"*: opencode is actually told to stop, not
+merely stopped listening to.
+
+**`ProbeInconclusive extends Exhausted`, deliberately.** A bound firing must still send the
+round down the fallback chain — the review needs an answer from whatever comes next, exactly
+as for a real refusal — so it inherits every place `routeFault`/`resetOf` already recognise
+`Exhausted` by `instanceof`, for free. What must NOT happen is the inverse: nothing was
+learned about the route's own quota, only that this one bounded attempt did not resolve in
+time. Both places `review.ts` writes a route mark (the primary's own catch, and the
+fallback-chain's twin loop) now skip the write on `instanceof ProbeInconclusive` — the
+existing mark, Kimi's actual *"weekly usage limit"* reason and its failure count included,
+stands exactly as it was. Only `probedAt`, stamped before the call as D-94 always has, may
+move.
+
+**90 seconds is a judgement call from ONE incident, stated as one.** D-91's own measured
+baseline for a refusal the classifier recognises is about twelve seconds; 90s gives roughly
+7.5× headroom over that while stopping nowhere near the ~21.5 minutes that made this a
+production problem. Deliberately shorter than `retryStormMs` (5 minutes): a probe is more
+speculative than an active storm — lore does not even know the route is trying — so it must
+not itself become a source of long waits. Unlike `long-fetch.ts`'s own `DEFAULT_TIMEOUT_MS`,
+which is measured against a real distribution (`usage.latency_ms`, D-6 era), this number has
+exactly one data point behind it and should be revisited once a second one exists.
+
+**"Know about problems immediately" is bigger than this fix, and is not this fix.** Vany
+also asked for an event model over polling so the team learns about trouble immediately
+rather than by noticing a stalled review and asking. The bound above is a deadline, the same
+class of mechanism as the storm clock and `long-fetch.ts`'s own deadline — not polling in
+the sense he meant. The sense he meant is `ops/alerts.ts`'s own `Alerter`, fully built,
+generic ("Slack, Alertmanager, Plane, or a shell script" — its own doc comment), and
+CONFIRMED UNCONFIGURED on the live deployment: `LORE_WEBHOOK_URL` and `LORE_HEARTBEAT_URL`
+are both empty in `lore-lore-1`'s own environment. Every page and ticket `spec/operations.md`
+§2 describes is computed and then printed to a log nobody is paged by. `[OPEN]` — a
+destination is Vany's to name, not mine to guess, and this entry does not close until one is
+wired.
 
 Vany, after a day of it: *"we fix bugs in this project immediately."*
 

@@ -31,11 +31,15 @@ what is deployed today is `deploy/tiers.zai-kimi-openai.json`:
 | **T2** | `kimi-for-coding/k3` | high | Moonshot | subscription |
 | **T3** | `openai/gpt-5.6-terra` | high | OpenAI | subscription |
 
-T1's fallback is `zai-coding-plan2/glm-5.2` (the smaller plan), then OpenRouter — **and
-the OpenRouter step is only taken when `LORE_ALLOW_METERED=1`** (D-117), which this
-deployment does not set. Under the default, a tier whose subscription routes are all out
-is SKIPPED and named in `checks_skipped` rather than bought at per-call rates; the
-`openrouter/` entries are insurance a person switches on, not a chain lore walks by
+T1's fallback is `zai-coding-plan2/glm-5.2` (the smaller plan), full stop — **revised
+2026-08-31**: it used to carry a third hop to OpenRouter, gated behind
+`LORE_ALLOW_METERED=1` (D-117), which this deployment has never set. Vany's call: with
+two Z.ai subscriptions already in the chain, that third hop was never reachable in
+practice and had no reason to exist — removed rather than left as unused insurance. The
+general point still holds elsewhere in this file: under the metered default, a tier whose
+subscription routes are all out is SKIPPED and named in `checks_skipped` rather than
+bought at per-call rates; the remaining `openrouter/` entries (T2 → Kimi, T3 → OpenAI,
+neither GLM) are insurance a person switches on, not a chain lore walks by
 itself. The
 `GLM5.2` POOL IS GONE: 5.3 exists on plan 1 and not on plan 2, and a pool is one model
 reachable several ways, so it could not simply be repointed. The deep tiers' last resort
