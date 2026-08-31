@@ -25,6 +25,21 @@ always did.
 points at a tiers file that overrides every row (`core/ladder.ts`, `loadTiers`), and
 what is deployed today is `deploy/tiers.zai-kimi-openai.json`:
 
+**A fresh install with only an OpenRouter key gets this table, unchanged, until
+someone writes a better one.** `DEFAULT_TIERS` is a hardcoded guess, frozen at
+whatever OpenRouter offered when it was written — prices move, models are
+deprecated, new ones ship, and nothing here notices. `lore ladder-suggest`
+(`src/ladder-setup/`) replaces the guess with a current one: it asks a model, using
+OpenRouter's *live* catalog (fetched through opencode's own `provider.list()`, the
+same call `doctor.ts` already uses to validate a ladder after the fact — never
+OpenRouter's raw API directly, so every candidate is something this deployment's
+opencode can actually reach), to pick t1/t2/t3 fresh. The three-vendor rule two
+paragraphs down is not relaxed for this: the model is told explicitly, and a reply
+naming two models from one organisation, or a model id it was not shown, is
+refused rather than written out. Run any time after `make up` — it needs `opencode
+serve` already reachable, which is why it cannot be part of first boot — and it
+never edits `.env` itself, only prints the line to paste in.
+
 | Tier | Model | Effort | Vendor | Paid by |
 |---|---|---|---|---|
 | **T1** | `zai-coding-plan/glm-5.3` | medium | Z.ai | subscription |

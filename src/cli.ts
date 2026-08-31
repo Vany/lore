@@ -8,9 +8,9 @@
  */
 
 import { allowMeteredFromEnv } from "./core/metered.ts";
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { EXIT, LoreError, UsageError, type ExitCode } from "./core/errors.ts";
 import { dataDir, dbPath } from "./core/paths.ts";
@@ -38,6 +38,7 @@ lore — an independent reviewer that remembers the codebase
   lore revoke --token <short>                  turn one off, by its short hash
   lore doctor                                  check tiers, auth and model ids
   lore propose --repo <name> --budget <n>      ideas for improving a folder (D-75)
+  lore ladder-suggest [--out <path>]           pick t1/t2/t3 from a live catalog
 
   --branch <name>    branch under review (default: current branch)
   --into <name>      branch it will merge into (default: main)
@@ -64,6 +65,17 @@ idea taken goes through the ladder like any other change.
 
 It runs even while reviews are in flight — --budget is the only bound, which is why
 the flag is required.
+
+lore ladder-suggest is for a fresh install with only an OpenRouter credential and
+none of the three named subscriptions: DEFAULT_TIERS is a static, zero-config guess,
+and this asks a model to pick t1/t2/t3 from OpenRouter's LIVE catalog instead — real
+prices, real context windows, models that did not exist when the guess was written.
+Requires 'opencode serve' already reachable and authenticated (run after 'make up',
+not before it — opencode itself has to be up first). Never edits .env; prints the
+LORE_TIERS= line to paste in yourself.
+
+  --out <path>       where to write the generated ladder (default: under the data
+                     directory, same place --db defaults to — never inside the repo)
 
 Exit codes: 0 passed · 1 findings · 2 usage · 3 partial (some tiers unpayable)
             70 did not run · 75 no tier could run at all
@@ -224,6 +236,34 @@ export async function main(argv: readonly string[]): Promise<ExitCode> {
     } finally {
       store.close();
     }
+  }
+
+  if (args.command === "ladder-suggest") {
+    const { suggestLadder, defaultDeps } = await import("./ladder-setup/run.ts");
+    const { Reviewer, DEFAULT_REVIEWER } = await import("./reviewer/opencode.ts");
+    // Anchored via dataDir(), same reasoning as `propose`'s own --out default a few
+    // lines up (fingerprint 9c6f2a60): never inside the repo, never cwd-relative.
+    const out = flagOf(argv, "out") ?? join(dataDir(), "tiers.generated.json");
+    const result = await suggestLadder(defaultDeps(new Reviewer(DEFAULT_REVIEWER)));
+    await mkdir(dirname(out), { recursive: true });
+    await writeFile(out, `${JSON.stringify(result.tiers, null, 2)}\n`);
+    if (args.json) {
+      process.stdout.write(`${JSON.stringify({ out, tiers: result.tiers, picks: result.picks })}\n`);
+    } else {
+      process.stdout.write(
+        [
+          `wrote ${out} — ${String(result.candidateCount)} candidate model(s) considered.`,
+          "",
+          ...result.picks.map((p) => `  ${p.role}  ${p.model}  (${p.effort}) — ${p.why}`),
+          "",
+          // NEVER auto-edited. A setup step silently rewriting a credentials file is
+          // exactly the kind of action this project's own working agreement says to
+          // confirm rather than assume.
+          `Set LORE_TIERS=${out} in .env and restart to use it.`,
+        ].join("\n") + "\n",
+      );
+    }
+    return EXIT.PASS;
   }
 
   // THE PRODUCT HAD NO OPERATOR VIEW. `lore` could list tokens, repositories and tiers;

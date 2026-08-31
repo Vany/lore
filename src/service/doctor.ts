@@ -22,7 +22,8 @@ export interface Check {
   readonly warning?: boolean;
 }
 
-function client(cfg: ReviewerConfig) {
+/** Shared with `ladder-setup/catalog.ts` — the same authenticated client both need. */
+export function client(cfg: ReviewerConfig) {
   const basic =
     cfg.password === undefined
       ? undefined

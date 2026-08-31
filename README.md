@@ -140,6 +140,14 @@ Then point any MCP client at it. `lore` ships its own documentation — tool
 descriptions, `lore://docs/*` resources, and a `/lore:review` prompt that drives
 the whole loop — because **the client is an agent, so the docs are the interface**.
 
+**Only one metered key, nothing else?** `.env.example`'s default ladder needs three
+named subscriptions. With just `OPENROUTER_API_KEY` set, `make up` still works — it
+falls back to a hardcoded three-model guess (`DEFAULT_TIERS`) — but that guess is
+static and can go stale. `make ladder-suggest` asks a model to pick t1/t2/t3 from
+OpenRouter's *live* catalog instead: real prices, real context windows, models the
+guess did not know about. Run it any time after `make up` (opencode itself has to be
+reachable first); it never edits `.env`, only prints the `LORE_TIERS=` line to paste in.
+
 ---
 
 ## Architecture

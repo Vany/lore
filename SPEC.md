@@ -3945,6 +3945,72 @@ Un-fixed, the failure mode was not merely a wrong number: `reclaimOrphanedRefact
 would mark a service restart's own healthy, still-paying-for-itself run FAILED,
 exactly as a false stall reading invites — a person "fixing" what was never broken.
 
+**D-140 — `lore ladder-suggest`: a fresh install's static guess replaced by a live
+catalog (2026-08-31).**
+
+Vany: *"we have configured already models. But let's imagine here is new
+installation, with just openrouter somehow configured. So, we need to take any model
+in it and ask it to create config file for us..."* `DEFAULT_TIERS` (`core/ladder.ts`)
+is the zero-config fallback for exactly this deployment shape — a hardcoded
+three-model guess, written once and never re-checked against what OpenRouter
+actually offers; prices move, models are deprecated, new ones ship.
+
+**Scope, confirmed before writing: the tiers ladder file only, not the whole
+`.env`.** Host/infra fields (`LORE_HOST_DATA`, `LORE_UID`, `LORE_BIND`, bearer
+tokens) have no model-routing content for a model to sensibly choose.
+
+**No `Store`, no Docker required to run it.** `Reviewer`'s constructor takes only a
+`ReviewerConfig`; usage bookkeeping is the caller's own job, exactly as
+`refactor/run.ts`'s `askOneTier` already established. `lore ladder-suggest`
+(`src/ladder-setup/`) is CLI-only, standalone, the same way `lore review`/`lore
+propose` already run without a service — the only requirement is `opencode serve`
+reachable and authenticated, which means this cannot run before `make up`'s first
+boot (opencode itself has to be up first) and is an optional upgrade step after it,
+not a gate before it.
+
+**The live catalog comes from opencode's own `provider.list()`, not OpenRouter's raw
+API.** `doctor.ts` already asks this question to validate an operator-written ladder
+after the fact (its `client(cfg)` construction is now exported and shared with
+`ladder-setup/catalog.ts` rather than duplicated); reusing it here guarantees every
+candidate offered to the model is something THIS deployment's opencode can actually
+reach, filtered to `capabilities.toolcall: true` (an agentic reviewer cannot function
+without it) and excluding `deprecated`/`alpha` status — both optional on the wire, so
+absence is not treated as exclusion, only an explicit bad value is.
+
+**The field is `capabilities.toolcall`, not the flat `tool_call` the SDK's own
+generated types claim for this endpoint — found live, not in review.** The first
+version trusted `node_modules/@opencode-ai/sdk`'s `types.gen.d.ts` for
+`ProviderListResponses`, which names a flat, snake_case `tool_call`; every one of the
+real deployment's 353 OpenRouter models filtered to zero under it, because the live
+server's actual response nests it under `capabilities` and camel-cases it — the
+generated file carries two disagreeing shapes for what is nominally the same "model"
+concept, and the wrong one was the one that happened to match this endpoint's own
+declared type. Caught only by running `lore ladder-suggest` against the real
+deployment before committing, not by anything static — the exact reason this
+project's own live-check step exists. Fixed the same way `doctor.ts`'s own
+`client()` caller already does at the response-shape boundary one line up: a cast at
+the one crossing point, not trust in the generated type.
+
+**The one-vendor-per-tier rule (D-32/D-49) is enforced twice, not trusted once.**
+The prompt states it explicitly — three different underlying organisations, never
+the `openrouter/` route prefix, which is identical for every candidate — and the
+reply is rejected outright (`suggestion.ts`'s `validatePicks`) if it names fewer
+than three distinct vendors, independent of whatever the model said it was doing.
+
+**A hallucinated model id is refused, not silently written out.** The parser checks
+every picked `model` against the exact candidate set the prompt showed — not the
+wider universe `doctor.ts` would separately accept — so a plausible-looking id
+remembered from training but never actually offered is caught before it reaches a
+config file a deployment would load.
+
+**Never edits `.env`.** Prints the exact `LORE_TIERS=` line to paste in. A setup step
+silently rewriting a credentials file is exactly the kind of action this project's
+working agreement says to confirm rather than assume.
+
+**Output lands under `dataDir()`, matching `propose`'s own `--out` default
+(fingerprint 9c6f2a60) — never inside the repository**, so nothing needs a new
+`.gitignore` rule.
+
 **D-116 — an over-long claim folds; it never costs the finding either. BUILT 2026-08-16.**
 
 D-115 fixed `severity` and wrote the rule beside it: *validation at the reviewer boundary

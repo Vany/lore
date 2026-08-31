@@ -95,7 +95,7 @@ define wrong-directory
 endef
 
 .DEFAULT_GOAL := help
-.PHONY: help preflight sync-opencode push build drain drain-off deploy up down down-hard restart logs status status-json status-local doctor new relocate tokens revoke replica-state db-check mirror mirror-daemon mirror-daemon-off mirror-daemon-log backup-on backup-check backup-drill restore sweep shell
+.PHONY: help preflight sync-opencode push build drain drain-off deploy up down down-hard restart logs status status-json status-local doctor ladder-suggest new relocate tokens revoke replica-state db-check mirror mirror-daemon mirror-daemon-off mirror-daemon-log backup-on backup-check backup-drill restore sweep shell
 
 help:
 	@sed -n '2,14p' $(MAKEFILE_LIST) | sed 's/^# \{0,1\}//'
@@ -468,6 +468,15 @@ relocate:
 doctor:
 	$(wrong-directory)
 	$(COMPOSE) exec -T lore node /app/src/index.ts doctor
+
+## For a deployment with only an OpenRouter credential: ask a model to pick t1/t2/t3
+## from OpenRouter's LIVE catalog rather than running forever on the static zero-config
+## guess (DEFAULT_TIERS). Run any time after `make up` — opencode itself must already
+## be reachable and authenticated, which is why this cannot be part of first boot.
+## Never edits .env; prints the LORE_TIERS= line to paste in yourself.
+ladder-suggest:
+	$(wrong-directory)
+	$(COMPOSE) exec -T lore node /app/src/index.ts ladder-suggest
 
 ## What is happening right now, coloured, for a person.
 ##
