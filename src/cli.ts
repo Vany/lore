@@ -245,8 +245,33 @@ export async function main(argv: readonly string[]): Promise<ExitCode> {
     // lines up (fingerprint 9c6f2a60): never inside the repo, never cwd-relative.
     const out = flagOf(argv, "out") ?? join(dataDir(), "tiers.generated.json");
     const result = await suggestLadder(defaultDeps(new Reviewer(DEFAULT_REVIEWER)));
-    await mkdir(dirname(out), { recursive: true });
-    await writeFile(out, `${JSON.stringify(result.tiers, null, 2)}\n`);
+
+    const summary = [
+      // WHAT THIS COST. Found missing by lore's own review, fingerprint e3ed9214:
+      // this spends real money on a metered-only install and the first version
+      // reported none of it, contradicting D-121's "lore reports what each call cost".
+      `cost: $${result.costUsd.toFixed(4)} (${String(result.inputTokens)} in / ` +
+        `${String(result.cachedTokens)} cached / ${String(result.outputTokens)} out)`,
+      "",
+      ...result.picks.map((p) => `  ${p.role}  ${p.model}  (${p.effort}) — ${p.why}`),
+    ].join("\n");
+
+    // A FAILED WRITE MUST NOT LOSE A RESULT ALREADY PAID FOR — found by lore's own
+    // review, fingerprint a2618882: the bootstrap call above is real money spent the
+    // instant it returns; an unwritable --out or a full disk used to throw before
+    // anything was printed, so the only way to see what was paid for was to pay for
+    // it again. The picks and cost are printed BEFORE the write is even attempted.
+    try {
+      await mkdir(dirname(out), { recursive: true });
+      await writeFile(out, `${JSON.stringify(result.tiers, null, 2)}\n`);
+    } catch (e) {
+      process.stderr.write(
+        `${summary}\n\ncould not write ${out}: ${e instanceof Error ? e.message : String(e)}\n` +
+          "the picks above were paid for and are NOT lost, but nothing was written to disk.\n",
+      );
+      throw e;
+    }
+
     if (args.json) {
       process.stdout.write(
         `${JSON.stringify({
@@ -263,18 +288,21 @@ export async function main(argv: readonly string[]): Promise<ExitCode> {
       process.stdout.write(
         [
           `wrote ${out} — ${String(result.candidateCount)} candidate model(s) considered.`,
-          // WHAT THIS COST. Found missing by lore's own review, fingerprint e3ed9214:
-          // this spends real money on a metered-only install and the first version
-          // reported none of it, contradicting D-121's "lore reports what each call cost".
-          `cost: $${result.costUsd.toFixed(4)} (${String(result.inputTokens)} in / ` +
-            `${String(result.cachedTokens)} cached / ${String(result.outputTokens)} out)`,
-          "",
-          ...result.picks.map((p) => `  ${p.role}  ${p.model}  (${p.effort}) — ${p.why}`),
+          summary,
           "",
           // NEVER auto-edited. A setup step silently rewriting a credentials file is
           // exactly the kind of action this project's own working agreement says to
           // confirm rather than assume.
-          `Set LORE_TIERS=${out} in .env and restart to use it.`,
+          //
+          // 'make up', NOT 'make restart' — found by lore's own review, fingerprint
+          // 27a142b3: `docker compose restart` (deploy/Makefile's own `restart` target)
+          // keeps the container's creation-time environment and never re-reads .env,
+          // so an operator following "restart" literally would see this command
+          // report success while the service kept running on the old (usually empty)
+          // LORE_TIERS — the exact silent no-op this feature exists to prevent, one
+          // step later. Only 'up'/'deploy' recreate the container.
+          `Set LORE_TIERS=${out} in .env, then 'make up' (not 'make restart' — that`,
+          "keeps the old environment) to pick it up.",
         ].join("\n") + "\n",
       );
     }

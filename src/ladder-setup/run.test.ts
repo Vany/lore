@@ -183,4 +183,50 @@ describe("suggestLadder", () => {
     expect(asked).toHaveLength(1);
     expect(asked[0]?.model).toBe("openrouter/cheapest/model");
   });
+
+  /**
+   * THE FALLBACK MUST BE ABLE TO HOLD ITS OWN PROMPT — found by lore's own review,
+   * fingerprints db8dedc2/a9bed880: sorting the fallback by price alone can pick a
+   * model whose context window is too small for the candidate table it is being asked
+   * to read, failing on the exact day (preferred model withdrawn) the fallback exists
+   * for. A large, padded catalog here stands in for a realistic hundreds-of-models
+   * table; the cheapest candidate's tiny window must be skipped in favour of a larger,
+   * pricier one that can actually hold the prompt.
+   */
+  it("skips a too-cheap-but-too-small fallback candidate for one that can hold the prompt", async () => {
+    const padding = Array.from({ length: 200 }, (_, i) => ({
+      id: `openrouter/pad-vendor-${String(i)}/model`,
+      vendor: `pad-vendor-${String(i)}`,
+      costInput: 0.00001,
+      costOutput: 0.00002,
+      contextTokens: 1_000_000,
+    }));
+    const withTinyFallback: readonly CatalogModel[] = [
+      ...padding,
+      { id: "openrouter/moonshotai/kimi-k3", vendor: "moonshotai", costInput: 0.000003, costOutput: 0.000015, contextTokens: 1_048_576 },
+      { id: "openrouter/openai/gpt-5.6-sol-pro", vendor: "openai", costInput: 0.000005, costOutput: 0.00003, contextTokens: 400_000 },
+      // Cheapest by far, but its window cannot hold a 200+ row candidate table.
+      { id: "openrouter/too-cheap/tiny-context", vendor: "too-cheap", costInput: 0.0000001, costOutput: 0.0000004, contextTokens: 500 },
+    ];
+    const reply = [
+      { role: "t1", model: "openrouter/pad-vendor-0/model", effort: "low", why: "" },
+      { role: "t2", model: "openrouter/moonshotai/kimi-k3", effort: "high", why: "" },
+      { role: "t3", model: "openrouter/openai/gpt-5.6-sol-pro", effort: "high", why: "" },
+    ];
+    await suggestLadder(deps(withTinyFallback, reply));
+    expect(asked).toHaveLength(1);
+    expect(asked[0]?.model, "the tiny-context model must be skipped despite being cheapest").not.toBe(
+      "openrouter/too-cheap/tiny-context",
+    );
+  });
+
+  it("refuses loudly when no candidate's context can hold the prompt, rather than guessing", async () => {
+    const allTooSmall: readonly CatalogModel[] = [
+      { id: "openrouter/a/tiny", vendor: "a", costInput: 0.0000001, costOutput: 0.0000002, contextTokens: 100 },
+      { id: "openrouter/b/tiny", vendor: "b", costInput: 0.0000001, costOutput: 0.0000002, contextTokens: 100 },
+      { id: "openrouter/c/tiny", vendor: "c", costInput: 0.0000001, costOutput: 0.0000002, contextTokens: 100 },
+    ];
+    await expect(suggestLadder(deps(allTooSmall, GOOD_REPLY))).rejects.toThrow(/enough context/);
+    expect(asked, "must not spend a session asking a model to read a prompt it cannot hold").toHaveLength(0);
+  });
 });

@@ -78,4 +78,28 @@ describe("filterCatalog", () => {
     });
     expect(out.map((m) => m.id)).toEqual(["openrouter/z-ai/glm-5.2"]);
   });
+
+  /**
+   * ONE MALFORMED ENTRY MUST NOT CRASH THE WHOLE CATALOG — found by lore's own
+   * review, fingerprint 707e8388: `fetchCatalog`'s own cast (`as unknown as
+   * Record<string, RawModel>`) explicitly does not trust this wire data
+   * structurally, so a locally-defined custom model missing `capabilities` or
+   * `limit` entirely — a real, reachable shape via `make sync-opencode`'s own
+   * host-config derivation — used to throw a bare TypeError and take every OTHER
+   * candidate down with it.
+   */
+  it("skips an entry missing capabilities entirely, rather than throwing", () => {
+    const malformed = { "custom/no-capabilities": {} as RawModel };
+    expect(() => filterCatalog({ ...malformed, "z-ai/glm-5.2": base })).not.toThrow();
+    expect(filterCatalog({ ...malformed, "z-ai/glm-5.2": base }).map((m) => m.id)).toEqual([
+      "openrouter/z-ai/glm-5.2",
+    ]);
+  });
+
+  it("skips an entry missing limit.context, rather than fabricating a window size", () => {
+    const { limit, ...noLimit } = base;
+    void limit;
+    const out = filterCatalog({ "custom/no-limit": noLimit as RawModel, "z-ai/glm-5.2": base });
+    expect(out.map((m) => m.id)).toEqual(["openrouter/z-ai/glm-5.2"]);
+  });
 });

@@ -43,10 +43,18 @@ export interface CatalogModel {
  * either static type on its own.
  */
 export interface RawModel {
-  readonly capabilities: { readonly toolcall: boolean };
+  // `capabilities` and `limit` marked optional too — found by lore's own review,
+  // fingerprint 707e8388: this cast data is explicitly NOT trusted structurally (see
+  // `fetchCatalog`'s own comment), and a locally-defined custom model in opencode's own
+  // config (`make sync-opencode` derives it from the host's `~/.config/opencode`) can
+  // legitimately reach `provider.list()` with neither field, matching how this
+  // codebase's other two readers of the same map already treat them (`opencode.ts`'s
+  // `contextLimit` reads `limit?.context`; `doctor.ts` never dereferences into a model
+  // at all). One malformed entry must not crash the whole catalog fetch.
+  readonly capabilities?: { readonly toolcall?: boolean };
   readonly status?: "alpha" | "beta" | "deprecated" | "active";
   readonly cost?: { readonly input: number; readonly output: number };
-  readonly limit: { readonly context: number };
+  readonly limit?: { readonly context: number };
 }
 
 /**
@@ -97,15 +105,20 @@ export function filterCatalog(models: Readonly<Record<string, RawModel>>): reado
   const out: CatalogModel[] = [];
   for (const [modelId, m] of Object.entries(models)) {
     if (modelId.startsWith("~")) continue;
-    if (!m.capabilities.toolcall) continue;
+    if (!m.capabilities?.toolcall) continue;
     if (m.status !== undefined && EXCLUDED_STATUS.has(m.status)) continue;
+    // Skipped, not fabricated as 0 — CatalogModel.contextTokens is a real field the
+    // prompt table shows a reader; a model with no reported window is one this run
+    // cannot vouch for, same reasoning as the cost fields staying `undefined` above.
+    const contextTokens = m.limit?.context;
+    if (contextTokens === undefined) continue;
     const id = `openrouter/${modelId}`;
     out.push({
       id,
       vendor: vendorOfCandidate(id),
       costInput: m.cost?.input,
       costOutput: m.cost?.output,
-      contextTokens: m.limit.context,
+      contextTokens,
     });
   }
   return out;

@@ -7,15 +7,35 @@
  * SPEC: spec/review-ladder.md
  */
 
+import { join } from "node:path";
 import { extractList, type Listed, type SessionResult } from "../reviewer/opencode.ts";
 import { DidNotRun } from "../core/errors.ts";
 import { DEFAULT_TIERS, type Tier } from "../core/ladder.ts";
+import { dataDir } from "../core/paths.ts";
 import { fetchCatalog, type CatalogModel } from "./catalog.ts";
 import { ladderPrompt, LADDER_CONTRACT } from "./prompt.ts";
 import { makeTierPickParser, validatePicks, type TierPick } from "./suggestion.ts";
 
+/**
+ * Anchored at `dataDir()/repos`, NEVER `process.cwd()` — found by lore's own review,
+ * fingerprint 476c87c6: this session runs inside the `lore` container, where
+ * `process.cwd()` is `/app`, a path that does not exist inside the SEPARATE `opencode`
+ * container the SDK actually resolves `directory` against (`docker-compose.yml`'s
+ * `opencode` service mounts only `${LORE_HOST_DATA}/repos`, read-only — nothing else
+ * lore's own filesystem has is shared with it, on purpose). An unresolvable directory
+ * has been reported upstream to fall back to opencode's own "global" project rooted at
+ * "/" — the opencode CONTAINER's own root, where `auth.json` (the actual OpenRouter/
+ * Z.ai/OpenAI credentials) lives on disk. `repos` is the one path guaranteed to exist
+ * on both sides, exactly the reasoning `propose`'s own `reposRoot` (`cli.ts`) already
+ * uses for the same two-container split.
+ */
+const DEFAULT_WORKTREE = join(dataDir(), "repos");
+
 /** The id every bootstrap-caller tier carries, whichever model it ends up naming. */
 export const BOOTSTRAP_CALLER_ID = "ladder-setup";
+
+/** ~4 chars/token, English or code — rough, deliberately: this bounds a fallback pick, it does not budget a real call. */
+const CHARS_PER_TOKEN = 4;
 
 /**
  * The model that makes the pick, chosen from the SAME live catalog it is about to hand
@@ -24,23 +44,33 @@ export const BOOTSTRAP_CALLER_ID = "ladder-setup";
  * but only when that model is actually IN the catalog: found by lore's own review,
  * fingerprint 9a97bb77 — a tool that exists to replace a stale hardcoded guess must not
  * share DEFAULT_TIERS' single point of failure with no way out when OpenRouter withdraws
- * it. Falls back to the catalog's own cheapest priced candidate, since the bootstrap call
- * is a short JSON-generation task, not a task that benefits from spending more.
+ * it. Falls back to the cheapest priced candidate WITH ROOM FOR THE PROMPT IT WILL BE
+ * ASKED — found by lore's own review, fingerprints db8dedc2/a9bed880: the first version
+ * sorted by price alone, and the candidate table itself grows with the catalog (a few
+ * hundred rows is tens of thousands of characters) — so on the exact day the fallback
+ * exists for (the preferred model withdrawn), the cheapest candidate could easily be a
+ * model whose own context window cannot hold the prompt asking it to choose, failing the
+ * one path that has no larger tier to step to. `contextTokens` was already in hand.
  */
-function pickCaller(catalog: readonly CatalogModel[]): Tier {
+function pickCaller(catalog: readonly CatalogModel[], promptChars: number): Tier {
+  // Doubled for headroom — the contract text, the reply itself, and whatever system
+  // overhead opencode adds are all real but not measured here.
+  const minContext = Math.ceil((promptChars / CHARS_PER_TOKEN) * 2);
+  const fitsPrompt = (c: CatalogModel): boolean => c.contextTokens >= minContext;
+
   const preferred = DEFAULT_TIERS[1];
-  if (preferred?.model !== undefined && catalog.some((c) => c.id === preferred.model)) {
-    return { ...preferred, id: BOOTSTRAP_CALLER_ID };
+  if (preferred?.model !== undefined) {
+    const p = catalog.find((c) => c.id === preferred.model);
+    if (p !== undefined && fitsPrompt(p)) return { ...preferred, id: BOOTSTRAP_CALLER_ID };
   }
-  const priced = [...catalog]
-    .filter((c) => c.costInput !== undefined)
-    .sort((a, b) => (a.costInput ?? 0) - (b.costInput ?? 0));
-  const fallback = priced[0] ?? catalog[0];
+
+  const priced = catalog.filter((c) => c.costInput !== undefined && fitsPrompt(c)).sort((a, b) => (a.costInput ?? 0) - (b.costInput ?? 0));
+  const fallback = priced[0] ?? [...catalog].filter(fitsPrompt).sort((a, b) => b.contextTokens - a.contextTokens)[0];
   if (fallback === undefined) {
-    // Unreachable once suggestLadder's own catalog.length < 3 guard has run first (it
-    // always does — this is the only caller) — kept as a real throw rather than a
-    // silent default, since skipping the guard deserves a loud error, not a made-up id.
-    throw new DidNotRun("no candidate model available to make the ladder pick itself");
+    throw new DidNotRun(
+      `no candidate model has enough context to hold its own prompt (~${String(minContext)} tokens estimated ` +
+        `for ${String(catalog.length)} candidates) — every usable model's window is too small for this catalog.`,
+    );
   }
   return { id: BOOTSTRAP_CALLER_ID, kind: "model", model: fallback.id, effort: "medium", stage: "fast" };
 }
@@ -81,7 +111,7 @@ export interface LadderSetupResult {
 
 const ROLE_ORDER: Record<TierPick["role"], number> = { t1: 0, t2: 1, t3: 2 };
 
-export async function suggestLadder(deps: LadderSetupDeps, worktree = process.cwd()): Promise<LadderSetupResult> {
+export async function suggestLadder(deps: LadderSetupDeps, worktree = DEFAULT_WORKTREE): Promise<LadderSetupResult> {
   const catalog = await deps.fetchCatalog();
   // Fewer than 3 usable models cannot possibly satisfy the three-distinct-vendor rule —
   // refused here, loudly, rather than spending a session asking the impossible.
@@ -97,9 +127,12 @@ export async function suggestLadder(deps: LadderSetupDeps, worktree = process.cw
   const parseOne = makeTierPickParser(knownIds);
   const extract = (text: string): Listed<TierPick> => extractList<TierPick>(text, "tiers", parseOne);
 
+  const prompt = ladderPrompt(catalog);
+  const caller = pickCaller(catalog, prompt.length + LADDER_CONTRACT.length);
+
   let result: SessionResult<TierPick>;
   try {
-    result = await deps.ask(pickCaller(catalog), ladderPrompt(catalog), worktree, extract, LADDER_CONTRACT);
+    result = await deps.ask(caller, prompt, worktree, extract, LADDER_CONTRACT);
   } catch (e) {
     // A failed call is still a paid one — surfaced in the message since there is no
     // `Store` here to record it against, mirroring `refactor/run.ts`'s own
