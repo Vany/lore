@@ -134,6 +134,18 @@ export class RefactorWorker {
           { store: this.store, repoId: run.repoId, ask: this.ask },
           { folder: run.folder, commit: resolvedSha === "" ? run.commitSha : resolvedSha, worktree, tiers: loadTiers() },
         );
+        // lore-ok[7565fe66]: found by lore's own review — `finishRefactorRun(done)`
+        // used to run BEFORE `recordRefactorSuggestions`, inverting this codebase's
+        // own stated invariant (review.ts: data written before the state that
+        // announces it, so a reader woken by the state change can already read what
+        // it describes). A crash (or a store fault) between the two writes left a
+        // TERMINAL `done` row — `reclaimOrphanedRefactorRuns` only touches
+        // `running` — whose `sources` claimed real counts while zero suggestions
+        // existed to back them: indistinguishable from the genuine "every tier
+        // looked and found nothing" answer `spec/mcp-api.md` §8 defines for an
+        // empty list. Suggestions land first now; the state that says they exist
+        // is the last write, not the first.
+        this.store.recordRefactorSuggestions(run.id, result.suggestions);
         this.store.finishRefactorRun(run.id, {
           state: "done",
           combined: result.combined,
@@ -145,7 +157,6 @@ export class RefactorWorker {
             count: s.suggestions.length,
           })),
         });
-        this.store.recordRefactorSuggestions(run.id, result.suggestions);
       } finally {
         await removeWorktree(paths, run.id).catch((e: unknown) => {
           console.error(`[lore:log] ${run.id}: refactor worktree not released: ${e instanceof Error ? e.message : String(e)}`);

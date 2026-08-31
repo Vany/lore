@@ -5,8 +5,13 @@
  * (its own dispatch behavior) already have.
  */
 
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ReviewerLike } from "../reviewer/opencode.ts";
+import type { RefactorSuggestion } from "../refactor/suggestion.ts";
 import { Store } from "../store/store.ts";
 import { RefactorWorker } from "./refactor-worker.ts";
 
@@ -99,5 +104,103 @@ describe("a store fault must not escape the detached execute() as an unhandled r
     // reclaim is what recovers this, not this call, which is the whole point of
     // logging rather than throwing.
     expect(store.refactorRun("refactor_r1")?.state).toBe("running");
+  });
+});
+
+/**
+ * lore-ok[7565fe66]: found by lore's own review — `finishRefactorRun(done)` used to
+ * run BEFORE `recordRefactorSuggestions`, so a crash (or store fault) between the two
+ * left a TERMINAL `done` row — `reclaimOrphanedRefactorRuns` only revisits `running` —
+ * whose `sources` claimed real counts while zero suggestions existed to back them,
+ * indistinguishable from a genuine "nothing worth changing" answer. A real worktree is
+ * needed here (`execute` must actually reach the write pair), mirrored on
+ * `drain.test.ts`'s own `makeRepo`/`withMirror` fixtures.
+ */
+describe("suggestions are written before the state that announces them", () => {
+  let root: string;
+  let savedTiers: string | undefined;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "lore-refactor-worker-"));
+    savedTiers = process.env["LORE_TIERS"];
+    // ONE tier marked suitable, and no t1 — `execute` only needs to REACH the write
+    // pair this test is about; the "no usable t1 to combine" fallback still produces
+    // a real, non-empty `result.suggestions` (the raw union), which is all this needs.
+    process.env["LORE_TIERS"] = JSON.stringify([
+      { id: "t2", kind: "model", model: "kimi-for-coding/k3", stage: "deep", refactor: true },
+    ]);
+  });
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+    if (savedTiers === undefined) delete process.env["LORE_TIERS"];
+    else process.env["LORE_TIERS"] = savedTiers;
+  });
+
+  const withMirror = (repo: string) => {
+    const src = join(root, "src");
+    mkdirSync(src, { recursive: true });
+    const g = (...a: string[]) => execFileSync("git", a, { cwd: src, stdio: "ignore" });
+    g("init", "-q", "-b", "main");
+    g("config", "user.email", "t@e.com");
+    g("config", "user.name", "t");
+    writeFileSync(join(src, "a.txt"), "a\n");
+    g("add", "-A");
+    g("commit", "-qm", "x");
+    const bare = join(root, "repos", repo, "bare.git");
+    mkdirSync(join(bare, ".."), { recursive: true });
+    execFileSync("git", ["clone", "--bare", src, bare], { stdio: "ignore" });
+    // A remote with no FETCH_HEAD is a clone whose fetch failed — `make mirror` always
+    // leaves one behind, and `worktreeFor` refuses a mirror without it (D-65).
+    writeFileSync(join(bare, "FETCH_HEAD"), "");
+  };
+
+  const ONE_SUGGESTION = [{ title: "t", area: ["a.txt"], rationale: "r" }];
+
+  it("keeps recorded suggestions even when the write that announces them fails", async () => {
+    withMirror(repoId);
+    store.createRefactorRun({ id: "refactor_r1", repoId, principal: "alice", commitSha: "main", folder: "." });
+
+    const reviewer: ReviewerLike = {
+      review: () => {
+        throw new Error("not used here");
+      },
+      askFor: async <T>() => ({
+        items: ONE_SUGGESTION as unknown as readonly T[],
+        raw: "",
+        inputTokens: 1,
+        cachedTokens: 0,
+        outputTokens: 1,
+        costUsd: 0,
+        latencyMs: 1,
+        retried: false,
+        steps: 1,
+        rejected: [],
+      }),
+    };
+
+    let sawSuggestionsBeforeFinish: readonly RefactorSuggestion[] | undefined;
+    const faultingStore = new Proxy(store, {
+      get(target, prop, receiver) {
+        if (prop === "finishRefactorRun") {
+          // The exact moment the pre-fix code would already have written `done` —
+          // read what recordRefactorSuggestions left behind BEFORE letting this throw.
+          sawSuggestionsBeforeFinish = target.refactorRun("refactor_r1")?.suggestions;
+          return () => {
+            throw new Error("simulated: fault writing the terminal state");
+          };
+        }
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+
+    const worker = new RefactorWorker(faultingStore, { reposRoot: join(root, "repos"), pollMs: 10 }, reviewer);
+    const stop = worker.start();
+    try {
+      await new Promise((r) => setTimeout(r, 300));
+    } finally {
+      stop();
+    }
+
+    expect(sawSuggestionsBeforeFinish, "recordRefactorSuggestions must have already committed").toStrictEqual(ONE_SUGGESTION);
   });
 });
