@@ -93,6 +93,17 @@ describe("the fan-out", () => {
     expect(asked.filter((a) => a.tier === "t1")).toHaveLength(1);
   });
 
+  // lore-ok[6253e066]: found by lore's own review — a folder that stays inside the
+  // tree but does not exist there used to reach the fan-out prompt anyway, burning two
+  // full sessions on a subject that was never in the worktree. `worktree: process.cwd()`
+  // is a real directory (this repo) — real enough for `existsSync` to be meaningful.
+  it("refuses loudly when the folder does not exist in the worktree, before spending anything", async () => {
+    await expect(
+      suggestRefactors(deps(scripted({ t2: [SUGGESTION_A], t3: [SUGGESTION_B] })), input({ folder: "this-does-not-exist-anywhere-xyz" })),
+    ).rejects.toThrow(DidNotRun);
+    expect(asked).toStrictEqual([]);
+  });
+
   it("refuses loudly when no tier is configured for refactor suggestions", async () => {
     await expect(
       suggestRefactors(deps(scripted({})), input({ tiers: [T1] })),

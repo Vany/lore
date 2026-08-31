@@ -12,6 +12,7 @@
  */
 
 import { loadTiers } from "../core/ladder.ts";
+import { git } from "../git/exec.ts";
 import { removeWorktree, repoPaths, worktreeFor } from "../git/repo.ts";
 import type { ReviewerLike } from "../reviewer/opencode.ts";
 import { suggestRefactors } from "../refactor/run.ts";
@@ -41,6 +42,21 @@ export class RefactorWorker {
   }
 
   start(): () => void {
+    // lore-ok[54aff246]: found by lore's own review — whatever is still marked
+    // `running` belongs to a process that is gone (mirrors `Worker.start`'s own
+    // reclaim). A refactor run has no rounds, so `running` at startup can only mean
+    // "interrupted", never "resumable" — reclaimed as `failed`, and its worktree
+    // (which was mid-cut or mid-read and will never be finished or cleaned by the
+    // `finally` in `execute` that died with the process) removed here instead.
+    const reclaimed = this.store.reclaimOrphanedRefactorRuns();
+    if (reclaimed.length > 0) {
+      console.error(`[lore:log] startup: ${String(reclaimed.length)} refactor run(s) failed — left mid-run by a worker that stopped`);
+      for (const r of reclaimed) {
+        void removeWorktree(repoPaths(this.cfg.reposRoot, r.repoId), r.id).catch((e: unknown) => {
+          console.error(`[lore:log] ${r.id}: reclaimed refactor worktree not removed: ${e instanceof Error ? e.message : String(e)}`);
+        });
+      }
+    }
     this.running = true;
     void this.dispatch().catch((e: unknown) => {
       console.error(`[lore:log] the refactor dispatcher stopped: ${e instanceof Error ? (e.stack ?? e.message) : String(e)}`);
@@ -79,10 +95,16 @@ export class RefactorWorker {
       // prefix, minted once at `refactor_start`), so it cannot collide with a review's
       // own worktree even though both live under the same `paths.worktrees` root.
       const worktree = await worktreeFor(paths, run.id, run.commitSha, gitUrl ?? "");
+      // lore-ok[2f329d31]: found by lore's own review — `worktreeFor` resolves
+      // `run.commitSha` (a branch name, routinely) to a real SHA to cut the worktree,
+      // then discards it; read back here and stored, so the row says what was actually
+      // read rather than what it was asked for.
+      const resolvedSha = (await git(worktree, ["rev-parse", "HEAD"])).stdout.trim();
+      if (resolvedSha !== "") this.store.setRefactorRunCommit(run.id, resolvedSha);
       try {
         const result = await suggestRefactors(
           { store: this.store, repoId: run.repoId, ask: this.ask },
-          { folder: run.folder, commit: run.commitSha, worktree, tiers: loadTiers() },
+          { folder: run.folder, commit: resolvedSha === "" ? run.commitSha : resolvedSha, worktree, tiers: loadTiers() },
         );
         this.store.finishRefactorRun(run.id, {
           state: "done",

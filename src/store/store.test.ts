@@ -1758,13 +1758,26 @@ describe("refactor runs", () => {
     ]);
   });
 
-  it("claims one queued run at a time, atomically, in creation order", () => {
-    store.createRefactorRun({ id: "rf1", repoId, principal: PRINCIPAL, commitSha: "a", folder: "." });
-    store.createRefactorRun({ id: "rf2", repoId, principal: PRINCIPAL, commitSha: "b", folder: "." });
+  /**
+   * IDS ARE `refactor_<random>` (`newRefactorRunId`, mcp/server.ts) — NOT an
+   * autoincrement integer the way `job.id` is, so `refactor_zzz` created first and
+   * `refactor_aaa` created second is a real, ordinary case, not a contrived one. Chosen
+   * exactly that way (second-created sorts first alphabetically) so a claim ordered by
+   * `id` would pass this test for the wrong reason — this asserts creation order under
+   * the one arrangement where id-order and creation-order actively disagree.
+   */
+  it("claims one queued run at a time, atomically, in creation order — not id order", () => {
+    store.createRefactorRun({ id: "refactor_zzz_first", repoId, principal: PRINCIPAL, commitSha: "a", folder: "." });
+    store.createRefactorRun({ id: "refactor_aaa_second", repoId, principal: PRINCIPAL, commitSha: "b", folder: "." });
+    // Both land in the same test tick and could share a millisecond `created_at`
+    // (`now()`'s own precision) — spread deliberately so the ordering this test checks
+    // is unambiguous rather than resting on real-clock luck.
+    store.db.prepare("UPDATE refactor_run SET created_at = '2026-08-01T00:00:00.000Z' WHERE id = 'refactor_zzz_first'").run();
+    store.db.prepare("UPDATE refactor_run SET created_at = '2026-08-01T00:00:01.000Z' WHERE id = 'refactor_aaa_second'").run();
 
-    expect(store.claimRefactorRun()?.id).toBe("rf1");
-    // rf1 is now 'running', not 'queued' — a second claim must not return it again.
-    expect(store.claimRefactorRun()?.id).toBe("rf2");
+    expect(store.claimRefactorRun()?.id).toBe("refactor_zzz_first");
+    // Now 'running', not 'queued' — a second claim must not return it again.
+    expect(store.claimRefactorRun()?.id).toBe("refactor_aaa_second");
     expect(store.claimRefactorRun()).toBeUndefined();
   });
 

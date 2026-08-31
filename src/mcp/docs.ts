@@ -869,6 +869,10 @@ says which you got.
 
 Refused up front if no tier is configured for this at all, before anything is queued or
 spent — not a doomed run you would have to poll to find out about.
+
+Lost your \`run_id\`? \`refactor_list\` returns every run on this repository, newest
+first — suggestions are stored, not one-shot, so nothing here needs it held in your
+own context to stay reachable.
 `.trim(),
 
   refactorPoll: `
@@ -886,6 +890,18 @@ asked failed, and the run could not run at all.
 UNLIKE \`review_poll\`, THIS CONSUMES NOTHING. A refactor run answers once and keeps its
 answer; polling it twice, or from two sessions, returns the same thing both times. There
 is no undelivered-findings state to mark and no colleague to accidentally take it from.
+`.trim(),
+
+  refactorList: `
+Every refactor run on this repository, newest first — id, commit, folder, state, and
+(once settled) whether it combined. No arguments: scoped to the repository your token
+is bound to, the same way \`knowledge_query\` is, not filtered to runs you personally
+started.
+
+Suggestions are STORED, not one-shot (D-136) — this is how you find a \`run_id\` again
+once it has left your own context, or see what has already been asked about a folder
+before spending quota asking again. It does not carry each run's full \`suggestions\`
+list; call \`refactor_poll\` with the \`run_id\` this returns for that.
 `.trim(),
 } as const;
 

@@ -12,6 +12,8 @@
  * SPEC: spec/refactor.md
  */
 
+import { existsSync, statSync } from "node:fs";
+import { join } from "node:path";
 import type { Tier } from "../core/ladder.ts";
 import { DidNotRun } from "../core/errors.ts";
 import type { Listed, SessionResult } from "../reviewer/opencode.ts";
@@ -115,6 +117,18 @@ async function askOneTier(deps: RefactorDeps, tier: Tier, input: RefactorInput):
 }
 
 export async function suggestRefactors(deps: RefactorDeps, input: RefactorInput): Promise<RefactorRunResult> {
+  // lore-ok[6253e066]: found by lore's own review, against `refactor_start`'s own
+  // door checks — the escape check runs there (no worktree exists yet to check
+  // against), but a folder that stays inside the tree and still does not EXIST is
+  // only knowable here, mirroring `propose/run.ts`'s own guard against exactly this:
+  // "the whole budget burns on lenses that produce ideas nobody will ever see."
+  if (input.folder !== "" && input.folder !== ".") {
+    const folderPath = join(input.worktree, input.folder);
+    if (!existsSync(folderPath) || !statSync(folderPath).isDirectory()) {
+      throw new DidNotRun(`folder "${input.folder}" does not exist at commit ${input.commit} — check the spelling.`);
+    }
+  }
+
   const fanOut = input.tiers.filter((t) => t.kind === "model" && t.model !== undefined && t.refactor === true);
   if (fanOut.length === 0) {
     throw new DidNotRun('no tier is configured for refactor suggestions — LORE_TIERS needs "refactor": true on at least one model tier');

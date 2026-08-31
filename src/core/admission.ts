@@ -31,6 +31,23 @@
  */
 export const MAX_OPEN_REVIEWS = 128;
 
+/**
+ * Refactor runs (D-136) that may be open at once, service-wide — found missing by
+ * lore's own review, fingerprint 43ba939c: `refactor_start` had no admission check of
+ * any kind, so a burst of calls fires every one of them concurrently
+ * (`RefactorWorker.dispatch` claims and fires without awaiting, same as `Worker`'s own
+ * review dispatcher) through the one shared model-call gate every open review also
+ * depends on — the exact provider-overload incident `gate.ts` itself was built against,
+ * on 2026-08-05.
+ *
+ * Far smaller than `MAX_OPEN_REVIEWS`: a refactor run spends two to three FULL sessions
+ * up front rather than one per round, and unlike review it is explicitly, individually
+ * triggered rather than something a client polls into existence over many small calls —
+ * there is no routine traffic this could throttle. 16 is deliberately conservative
+ * until real usage says otherwise, the same reasoning D-98's own number rests on.
+ */
+export const MAX_OPEN_REFACTOR_RUNS = 16;
+
 export interface AdmissionVerdict {
   readonly allowed: boolean;
   readonly open: number;

@@ -121,6 +121,57 @@ describe("refactor_start", () => {
     expect(isError).toBe(true);
     expect(JSON.stringify(body)).toContain("no tier is configured");
   });
+
+  // lore-ok[6253e066]: found by lore's own review, HIGH — an absolute path or one
+  // escaping the repository (onto the shared reposRoot every tenant's mirror lives
+  // under) used to reach the fan-out prompt with only a NUL-byte check standing in
+  // the way. Same functions `review_start`'s own `path` is checked with.
+  it("refuses a folder that escapes the repository, same as review_start's path", async () => {
+    for (const bad of ["../secret", "/etc/passwd", "../../other-repo"]) {
+      const { isError, body } = await callTool("refactor_start", { commit: "abc1234", folder: bad });
+      expect(isError, `${bad} should have been refused`).toBe(true);
+      expect(JSON.stringify(body)).toContain("must stay inside the repository");
+    }
+  });
+
+  it("normalizes the stored folder the same way review_start's path is", async () => {
+    const { body } = await callTool("refactor_start", { commit: "abc1234", folder: "src//store/" });
+    const row = store.refactorRun(body["run_id"] as string);
+    expect(row?.folder).toBe("src/store");
+  });
+
+  // lore-ok[43ba939c]: found by lore's own review, MEDIUM — no admission bound at all,
+  // while RefactorWorker.dispatch fires every claimed run concurrently through the one
+  // shared model-call gate. Inserted directly rather than via 16 real HTTP round trips.
+  it("refuses once MAX_OPEN_REFACTOR_RUNS are already open", async () => {
+    for (let i = 0; i < 16; i++) {
+      store.createRefactorRun({ id: `refactor_fill_${String(i)}`, repoId, principal: "alice", commitSha: "a", folder: "." });
+    }
+    const { isError, body } = await callTool("refactor_start", { commit: "abc1234", folder: "." });
+    expect(isError).toBe(true);
+    expect(JSON.stringify(body)).toContain("lore is full");
+  });
+});
+
+describe("refactor_list", () => {
+  it("lists this repository's runs, newest first, without the full suggestions", async () => {
+    const { body: a } = await callTool("refactor_start", { commit: "abc1234", folder: "src" });
+    const { body: b } = await callTool("refactor_start", { commit: "def5678", folder: "." });
+
+    const { body } = await callTool("refactor_list", {});
+    const runs = body["runs"] as { id: string; folder: string }[];
+    expect(runs.map((r) => r.id)).toStrictEqual([b["run_id"], a["run_id"]]);
+    expect(runs.every((r) => !("suggestions" in r))).toBe(true);
+  });
+
+  it("does not list another repository's runs", async () => {
+    await callTool("refactor_start", { commit: "abc1234", folder: "." });
+
+    const otherRepo = store.upsertRepo("other", "git@x:other.git");
+    const otherToken = grantToken(store, otherRepo.id, "bob");
+    const { body } = await callTool("refactor_list", {}, otherToken);
+    expect(body["runs"]).toStrictEqual([]);
+  });
 });
 
 describe("refactor_poll", () => {

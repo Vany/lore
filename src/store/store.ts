@@ -3982,6 +3982,16 @@ export class Store {
   // reaches no attestation, and its own queue must not compete with or be swept by
   // anything review-shaped. `claimRefactorRun` mirrors `claimJob`'s atomic claim.
 
+  /** OPEN means queued or running — a refactor run has no "waiting on a client" state
+   * to also count the way `openReviewCount` counts `findings_ready`; it is either not
+   * yet started, in flight, or over. */
+  openRefactorRunCount(): number {
+    const row = this.db
+      .prepare("SELECT COUNT(*) AS c FROM refactor_run WHERE state IN ('queued', 'running')")
+      .get() as Record<string, number | bigint> | undefined;
+    return Number(row?.["c"] ?? 0);
+  }
+
   createRefactorRun(r: RefactorRunCreate): void {
     const t = now();
     this.db
@@ -3992,11 +4002,62 @@ export class Store {
       .run(r.id, r.repoId, r.principal, r.commitSha, r.folder, t, t);
   }
 
-  /** The next queued run, claimed atomically so two dispatch loops cannot both take it. */
+  /**
+   * lore-ok[54aff246]: found by lore's own review, HIGH — nothing reclaimed a run left
+   * `running` by a process that died mid-execution: the row stayed `running` for ever
+   * (a customer's `refactor_poll` never resolves) and its worktree was never removed
+   * (the D-70 disk incident, one dispatcher over). Mirrors `reclaimOrphanedJobs`'
+   * reasoning exactly, simplified because a refactor run has no rounds to retry — it
+   * runs once, in one call, so `running` at startup can only mean "was interrupted",
+   * never "mid-round and resumable". Returns enough to let the caller (`RefactorWorker
+   * .start`) remove each one's worktree, which is a filesystem concern this store layer
+   * does not reach into.
+   */
+  reclaimOrphanedRefactorRuns(): readonly { readonly id: string; readonly repoId: string }[] {
+    return this.tx(() => {
+      const orphans = this.db.prepare("SELECT id, repo_id FROM refactor_run WHERE state = 'running'").all() as Record<
+        string,
+        string
+      >[];
+      const at = now();
+      for (const o of orphans) {
+        this.db
+          .prepare("UPDATE refactor_run SET state = 'failed', last_error = ?, updated_at = ? WHERE id = ?")
+          .run("abandoned by a process that stopped mid-run — nothing was returned, nothing is retried", at, String(o["id"]));
+      }
+      return orphans.map((o) => ({ id: String(o["id"]), repoId: String(o["repo_id"]) }));
+    });
+  }
+
+  /**
+   * lore-ok[2f329d31]: found by lore's own review — `commit_sha` was the caller's raw
+   * string (a branch name, routinely) even though this row's own doc comment already
+   * claimed "the resolved SHA, never the ref". `worktreeFor` resolves the real SHA when
+   * it cuts the worktree and then discards it; `RefactorWorker.execute` reads it back
+   * with `git rev-parse HEAD` and writes it here, once, right after — so two runs of
+   * `"main"` a week apart are told apart by what tree each one actually read.
+   */
+  setRefactorRunCommit(id: string, sha: string): void {
+    this.db.prepare("UPDATE refactor_run SET commit_sha = ?, updated_at = ? WHERE id = ?").run(sha, now(), id);
+  }
+
+  /**
+   * The next queued run, claimed atomically so two dispatch loops cannot both take it.
+   *
+   * lore-ok[28be6b5c]: found by lore's own review — this ordered `BY id`, copied from
+   * `claimJob`'s own claim, where it is correct because `job.id` is an
+   * `INTEGER PRIMARY KEY AUTOINCREMENT` and creation order IS id order. `refactor_run.id`
+   * is `refactor_<random>` (`newRefactorRunId`, mcp/server.ts) — id order there is
+   * lexicographic on randomness, not creation order at all. `created_at` is what
+   * actually carries creation order; `id` stays only as a deterministic tiebreaker for
+   * two rows minted in the same millisecond.
+   */
   claimRefactorRun(): { readonly id: string; readonly repoId: string; readonly commitSha: string; readonly folder: string } | undefined {
     return this.tx(() => {
       const row = this.db
-        .prepare("SELECT id, repo_id, commit_sha, folder FROM refactor_run WHERE state = 'queued' ORDER BY id LIMIT 1")
+        .prepare(
+          "SELECT id, repo_id, commit_sha, folder FROM refactor_run WHERE state = 'queued' ORDER BY created_at, id LIMIT 1",
+        )
         .get() as Record<string, string> | undefined;
       if (row === undefined) return undefined;
       const id = String(row["id"]);
@@ -4027,6 +4088,39 @@ export class Store {
     for (const s of suggestions) {
       insert.run(runId, s.title, JSON.stringify(s.area), s.rationale, n(s.roughSize), t);
     }
+  }
+
+  /**
+   * lore-ok[cc9d46fd]: found by lore's own review, MEDIUM — "stored and queryable"
+   * (spec/refactor.md §4) had no way to actually list what was stored: `refactor_poll`
+   * needs a `run_id` a client may no longer have, `refactor_run_by_principal`
+   * (schema.ts) was an index for a query nothing ran. This is that query, repo-scoped
+   * like every other repo-wide read here (`knowledge_query`) rather than filtered to
+   * one principal — a colleague sharing this repo's token scope can see what has
+   * already been asked, the same transparency `review_inbox`'s own repo-wide reads have.
+   * No suggestions in the row: this is a list to pick a `run_id` FROM, not a second way
+   * to read one's full result — `refactor_poll` stays the one place for that.
+   */
+  recentRefactorRuns(repoId: string, limit = 20): readonly Omit<RefactorRunRow, "suggestions">[] {
+    const rows = this.db
+      .prepare(
+        `SELECT id, repo_id, principal, commit_sha, folder, state, combined, combiner_note, last_error, created_at, updated_at
+         FROM refactor_run WHERE repo_id = ? ORDER BY created_at DESC LIMIT ?`,
+      )
+      .all(repoId, limit) as Record<string, unknown>[];
+    return rows.map((row) => ({
+      id: String(row["id"]),
+      repoId: String(row["repo_id"]),
+      principal: String(row["principal"]),
+      commitSha: String(row["commit_sha"]),
+      folder: String(row["folder"]),
+      state: String(row["state"]) as RefactorRunRow["state"],
+      ...(row["combined"] === null ? {} : { combined: row["combined"] === 1 }),
+      ...(row["combiner_note"] === null ? {} : { combinerNote: String(row["combiner_note"]) }),
+      ...(row["last_error"] === null ? {} : { lastError: String(row["last_error"]) }),
+      createdAt: String(row["created_at"]),
+      updatedAt: String(row["updated_at"]),
+    }));
   }
 
   refactorRun(id: string): RefactorRunRow | undefined {

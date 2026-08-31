@@ -53,7 +53,7 @@ pushed first. *Push, then review.*
 
 ## 2. Tools
 
-Fourteen, registered with **underscores**. The dotted form is prose, not an address —
+Fifteen, registered with **underscores**. The dotted form is prose, not an address —
 every document here once used it and an agent following them literally called
 nothing.
 
@@ -73,6 +73,7 @@ nothing.
 | `knowledge_escalate` | `left*`, `right*`, `note*` | the conflict, raised for a person |
 | `refactor_start` | `commit*`, `folder*` | `{run_id, state: "queued"}` — returns immediately, separate from review (D-136) |
 | `refactor_poll` | `run_id*` | `{state, suggestions[]?, combined?, combiner_note?, sources[]?, error?}` — §8 |
+| `refactor_list` | — | `{runs[]}` — every run on this repository, newest first — §8 |
 
 `kind: "policy"` records a **development rule**, which a finding can be appealed to:
 `lore-ok[<fingerprint>]: rule <cite_as> — <why it covers this code>`. Reviewers are told
@@ -898,10 +899,22 @@ merged list. Detail in `spec/refactor.md`; this section is the wire shape only.
 `refactor_start(commit, folder)` → `{run_id, state: "queued"}`, returning immediately —
 the fan-out and the merge take the same several minutes a deep review tier does.
 `commit` is any committish, cut from lore's mirror exactly as a review's branch is
-(D-65); `folder` is what the suggestions must be about, `"."` for the whole tree, with
-no default for the same reason `review_start`'s folder mode has none — an unscoped ask
-spends real quota on a mostly-cut prompt. Refused before anything is queued if no tier
-in `LORE_TIERS` carries `"refactor": true`.
+(D-65) — the row is updated with the resolved SHA once the worktree is actually cut, so
+two runs of `"main"` a week apart are told apart by what they actually read, not by the
+ref name both were asked with. `folder` is what the suggestions must be about, `"."`
+for the whole tree, with no default for the same reason `review_start`'s folder mode
+has none — an unscoped ask spends real quota on a mostly-cut prompt. Checked the same
+way `review_start`'s own `path` is (`normalizeReviewPath`/`pathEscapesWorktree`): an
+absolute path or one escaping the repository (`"../.."`, onto the shared `reposRoot`
+every tenant's mirror lives under) is refused before a row exists, and a folder that
+stays inside the tree but does not exist there fails the run once the worktree confirms
+it, rather than spending three sessions on a subject that was never there.
+
+Refused before anything is queued if no tier in `LORE_TIERS` carries `"refactor": true`,
+or if `MAX_OPEN_REFACTOR_RUNS` (`core/admission.ts`) are already open — the same
+door-refusal shape `review_start` uses against `MAX_OPEN_REVIEWS` (D-98), smaller
+because `RefactorWorker` fires every claimed run concurrently through the one model-call
+gate every open review also depends on.
 
 `refactor_poll(run_id)` → `{state, ...}`. `state` is `queued`, `running`, `done`, or
 `failed` — no richer state machine than that, because there are no rounds to escalate
@@ -929,3 +942,10 @@ Once `failed`, `error` says why — every tier that was asked failed, so there w
 nothing to combine. Unlike `review_poll`, **polling this consumes nothing**: no
 delta, no delivered-marking, safe to call twice or from two sessions and see the
 same answer both times.
+
+`refactor_list()` → `{runs[]}`, every run on the caller's repository, newest first, no
+arguments — id, commit, folder, state and (once settled) `combined`, but not the
+`suggestions` themselves; `refactor_poll` is still where those are read. Exists because
+"stored and queryable" needs a way to find a `run_id` again once it has left whatever
+context first held it — repo-scoped like `knowledge_query`, not filtered to the caller's
+own runs, the same transparency `review_inbox`'s repo-wide reads already have.

@@ -14,7 +14,7 @@ import { posix } from "node:path";
 import { forClient } from "./plain.ts";
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/server";
 import * as z from "zod";
-import { mayAdmit } from "../core/admission.ts";
+import { mayAdmit, MAX_OPEN_REFACTOR_RUNS } from "../core/admission.ts";
 import { absent } from "../core/optional.ts";
 import { worstSeverity } from "../core/finding.ts";
 import { initialState, ladderFingerprint, loadTiers, type LadderState } from "../core/ladder.ts";
@@ -2682,6 +2682,21 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       if (commit.includes("\0") || folder.includes("\0")) {
         throw new Error("commit and folder must not contain a NUL byte.");
       }
+      // lore-ok[6253e066]: found by lore's own review, HIGH — `folder` reached the
+      // fan-out prompt with no escape check at all, unlike both siblings this file
+      // already protects the same way: `review_start`'s own `path` (normalizeReviewPath
+      // + pathEscapesWorktree, this file) and `propose`'s `--folder` (`propose/run.ts`).
+      // `"../.."` from a worktree lands on the shared `reposRoot` — every repo this
+      // deployment mirrors, for a token scoped to exactly one (D-23). Same functions,
+      // same normalization `review_start` already applies, so the STORED folder is
+      // canonical the same way the stored `path` is.
+      const scopedFolder = normalizeReviewPath(folder);
+      if (pathEscapesWorktree(folder, scopedFolder)) {
+        throw new Error(
+          `folder must stay inside the repository, relative to its root — "${folder}" does not. Pass a path ` +
+            'like "src" or "src/payments", not an absolute one or one starting with "..".',
+        );
+      }
       // REFUSED AT THE DOOR. A config with no tier marked refactor: true cannot answer
       // this, ever — finding that out only after a run is queued and claimed would
       // waste a claim (and the worktree it cuts) on a request doomed from the start.
@@ -2690,8 +2705,21 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           'no tier is configured for refactor suggestions — LORE_TIERS needs "refactor": true on at least one model tier',
         );
       }
+      // lore-ok[43ba939c]: found by lore's own review, MEDIUM — no admission bound at
+      // all. `review_start` refuses past `MAX_OPEN_REVIEWS` (D-98) for exactly this
+      // reason: `RefactorWorker.dispatch` claims and fires every run WITHOUT awaiting,
+      // same as `Worker`'s own dispatcher, straight through the one shared model-call
+      // gate every in-flight review also depends on. Same `mayAdmit`, a smaller limit
+      // (`core/admission.ts`).
+      const refactorAdmission = mayAdmit(store.openRefactorRunCount(), MAX_OPEN_REFACTOR_RUNS);
+      if (!refactorAdmission.allowed) {
+        throw new Error(
+          `lore is full: ${refactorAdmission.open} refactor runs are already open, and the limit is ` +
+            `${refactorAdmission.limit}. NOTHING WAS STARTED. Try again once one finishes.`,
+        );
+      }
       const id = newRefactorRunId();
-      store.createRefactorRun({ id, repoId: who.repoId, principal: who.principal, commitSha: commit, folder });
+      store.createRefactorRun({ id, repoId: who.repoId, principal: who.principal, commitSha: commit, folder: scopedFolder });
       return text(JSON.stringify({ run_id: id, state: "queued" }));
     },
   );
@@ -2718,6 +2746,25 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       }
       return text(JSON.stringify(body));
     },
+  );
+
+  // ------------------------------------------------------------ refactor.list (D-136)
+  //
+  // lore-ok[cc9d46fd]: found by lore's own review, MEDIUM — "stored and queryable" had
+  // no way to actually list what was stored: a run_id lost from a client's context made
+  // its suggestions unreachable, exactly the "looks used, is not" shape this project's
+  // own rules warn about (`refactor_run_by_principal`, an index nothing read). Mirrors
+  // `review_inbox`'s own no-args, repo-scoped shape.
+
+  server.registerTool(
+    "refactor_list",
+    { description: TOOL_DOCS.refactorList, inputSchema: z.object({}) },
+    () =>
+      text(
+        JSON.stringify({
+          runs: store.recentRefactorRuns(who.repoId),
+        }),
+      ),
   );
 
   // ------------------------------------------------------------- resources
