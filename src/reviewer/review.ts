@@ -2098,7 +2098,15 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
             model: twinModel,
             // Same reasoning as the primary's own call, one screen up: a twin reached only
             // because it is due its D-94 re-test is unconfirmed, not believed available.
-            result: await callRoute(twinModel, dueProbe.has(twinModel)),
+            //
+            // `probing ||` MATTERS HERE TOO — found by lore's own review, fingerprint
+            // 093456fe: under a TIER-level probe, `dueProbe` is deliberately EMPTY
+            // (`believed = {usable: all}` un-parks every route without needing per-route
+            // re-tests), so a pool spare reached as this twin, itself carrying an unstated
+            // route mark, would otherwise run with NO bound at all — the exact unbounded
+            // wait D-138 exists to remove, re-entering through the one call site that
+            // copied `dueProbe.has` alone without the primary's own `probing ||` prefix.
+            result: await callRoute(twinModel, probing || dueProbe.has(twinModel)),
           };
           store.clearRouteUnavailable(twinModel);
           break;

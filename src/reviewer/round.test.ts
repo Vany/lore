@@ -3321,6 +3321,54 @@ describe("a pool of routes to one model", () => {
     expect(note).toContain("zai-coding-plan2/glm-5.2");
     expect(note).toContain("openrouter/z-ai/glm-5.2");
   });
+
+  /**
+   * A TIER-LEVEL PROBE MUST BOUND THE TWIN TOO (D-138, found by lore's own review,
+   * fingerprint 093456fe).
+   *
+   * `dueProbe` is deliberately EMPTY while the tier itself is probing (`believed =
+   * {usable: all}` already un-parks every route without a per-route re-test), so a twin
+   * reached via `dueProbe.has(twinModel)` alone — the first version of this fix — got NO
+   * bound at all: a pool spare carrying its own unstated route mark would run completely
+   * unbounded, the exact failure this whole entry exists to remove, re-entering through
+   * the twin.
+   */
+  it("bounds the twin too under a tier-level probe, not only a route-level one", async () => {
+    const type = nicknamed();
+    // Never probed (no probedAt) — `shouldProbe` fires, so this whole round is a
+    // TIER-level probe: `probing` is true and `dueProbe` stays empty.
+    store.markTierUnavailable("t1", "2126-01-01T00:00:00.000Z", "guessed cool-off", 3, false);
+    class ProbeAware implements ReviewerLike {
+      readonly asked: { model: string; probing: boolean | undefined }[] = [];
+      async review(
+        tier: Tier,
+        _prompt: unknown,
+        _worktree: string,
+        _reviewId?: string,
+        _stillWanted?: () => boolean,
+        probing?: boolean,
+      ): Promise<ReviewerResult> {
+        this.asked.push({ model: tier.model ?? "?", probing });
+        // The PRIMARY (whichever pool member the shuffle picked) goes inconclusive, so
+        // the walk reaches the pool's other member as a twin.
+        if (this.asked.length === 1) throw new ProbeInconclusive(`tier ${tier.id} probe did not answer in time`);
+        return {
+          findings: [], discarded: [], raw: "", inputTokens: 0, cachedTokens: 0, outputTokens: 0, costUsd: 0,
+          latencyMs: 1, retried: false, steps: 1,
+        };
+      }
+    }
+    const reviewer = new ProbeAware();
+
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type, allowMetered: true });
+
+    expect(reviewer.asked).toHaveLength(2);
+    expect(reviewer.asked[0]?.probing, "the primary, forced by the tier-level probe").toBe(true);
+    expect(
+      reviewer.asked[1]?.probing,
+      "the twin too -- dueProbe is empty while tier-probing, but the bound must still apply",
+    ).toBe(true);
+  });
 });
 
 /**

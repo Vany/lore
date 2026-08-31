@@ -3789,6 +3789,26 @@ are both empty in `lore-lore-1`'s own environment. Every page and ticket `spec/o
 destination is Vany's to name, not mine to guess, and this entry does not close until one is
 wired.
 
+**Three smaller catches from the same review round, worth naming because two are the shape
+of mistake this whole entry is about.** The twin-loop's own `dueProbe.has(twinModel)` copied
+the primary's probe check without its `probing ||` prefix (fingerprint 093456fe) — under a
+TIER-level probe, `dueProbe` is deliberately empty, so a pool spare reached as a twin would
+have run completely unbounded, the exact failure this entry exists to remove, re-entering
+through the one call site that did not match its sibling. And a THIRD "is out of quota"
+notice, inside the chain-walk loop itself, fires first and on every hop — the fd3a5283 fix
+above corrected two siblings and missed this one (fingerprint 446eda98/31e8f996, found
+independently by two tiers in the same round). Separately, `deploy/.env.example`'s
+`ZAI2_API_KEY` comment scoped that credential to the kimi ladder alone, silently stale the
+moment D-137 made the two-vendor file depend on it too (fingerprint 185e5d2f) — a documentation
+drift D-137 itself introduced, caught here rather than at the next Z.ai outage.
+
+**And one left as a named, bounded uncertainty rather than a guessed number (fingerprints
+8f9e95c6/afaad779).** Re-arm-on-narration protects a healthy probe's silence WITHIN a round;
+nothing measures whether a recovered tier's FIRST event reliably arrives inside `probeMs` at
+all. No fix, because I have no data to size one against and D-138's own text already says the
+figure is one incident's, not a distribution — `lore-ok` at `armProbeTimer` records the
+reasoning and what would resolve it.
+
 Vany, after a day of it: *"we fix bugs in this project immediately."*
 
 **The evidence is that deferral here has a specific, repeating cost: the note goes

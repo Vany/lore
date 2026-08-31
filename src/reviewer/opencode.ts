@@ -1030,6 +1030,21 @@ export class Reviewer implements ReviewerLike {
     // run under the same deadline as one. What the bound still catches is Kimi's actual
     // shape: a request accepted and then silent — no narration of any kind — for `probeMs`
     // at a stretch.
+    // lore-ok[8f9e95c6]: real, and left open rather than guessed shut.
+    // lore-ok[afaad779]: same finding, restated — both name the same gap: the clock
+    // starts before dispatch, so a healthy call whose
+    // FIRST narration (not just its total round) takes longer than `probeMs` to arrive
+    // would also die inconclusive, and I have no measured time-to-first-event for a
+    // recovered deep tier to size the bound against — SPEC D-138 already says the 90s
+    // figure is one incident's data, not a distribution. Left as a judgement rather than a
+    // fabricated fix because two things bound the damage while it stands: D-94's own
+    // `PROBE_INTERVAL_MS` re-tries every 15 minutes regardless, so a wrongly-killed probe
+    // is a DELAYED recovery, not a lost one, matching this project's own tolerance for the
+    // 81-minutes-late case D-94's history already accepts; and `session.status: busy` is a
+    // state transition fired at dispatch, not content-dependent, so the common case is
+    // almost certainly bounded well under 90s even without a measurement to cite. If a
+    // real deployment shows probes dying inconclusive on a route that later turns out
+    // healthy, that is the measurement this number has been waiting for.
     let probeTimer: ReturnType<typeof setTimeout> | undefined;
     const armProbeTimer = (): void => {
       if (probing !== true) return;
