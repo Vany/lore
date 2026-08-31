@@ -164,6 +164,18 @@ STAMP = LORE_COMMIT="$$(git -C .. rev-parse --short HEAD 2>/dev/null || echo unk
 ## own table, RefactorWorker) claimed moments before the drain flag was set stayed
 ## invisible to it: "drained — nothing in flight" could print, and print truthfully
 ## about reviews, while a refactor run was still mid-call. Now counts both.
+##
+## lore-ok[2a6d47f9]: found by lore's own review, same round — the first fix queried
+## `refactor_run` unconditionally, and this loop runs against the OLD container BEFORE
+## the rebuild (drain-then-rebuild is the whole point). On the very first deploy
+## carrying D-136, that table does not exist yet in the running schema — `no such
+## table` — with nothing catching it, so the guard itself failed on its own first
+## real use, spun for the full `DRAIN_TIMEOUT`, and reported "STILL RUNNING" about a
+## service that was already idle. Checked via `sqlite_master` first, the same
+## fails-safely-not-silently shape `guard-idle`'s own `-1` sentinel uses two targets
+## up — a missing TABLE is a real, expected, positively-identified case ("this schema
+## predates refactor_run, so it has none"), not swallowed the way an arbitrary
+## try/catch would swallow a genuinely ambiguous fault too.
 drain:
 	$(wrong-directory)
 	@$(COMPOSE) exec -T lore node -e "\
@@ -178,7 +190,8 @@ drain:
 		const d=new DatabaseSync(process.env.LORE_DB_DIR+'/lore.db',{readOnly:true}); \
 		const rows=d.prepare(\"SELECT j.review_id id, r.branch b, j.updated_at u FROM job j JOIN review r ON r.id=j.review_id WHERE j.state='running'\").all(); \
 		for (const x of rows) console.log('  '+x.id.slice(4,16)+'  '+x.b.slice(0,38)+'  '+Math.round((Date.now()-Date.parse(x.u))/1000)+'s'); \
-		const rf=d.prepare(\"SELECT id, folder, updated_at u FROM refactor_run WHERE state='running'\").all(); \
+		const hasRf=d.prepare(\"SELECT 1 FROM sqlite_master WHERE type='table' AND name='refactor_run'\").get()!==undefined; \
+		const rf=hasRf?d.prepare(\"SELECT id, folder, updated_at u FROM refactor_run WHERE state='running'\").all():[]; \
 		for (const x of rf) console.log('  '+x.id.slice(9,21)+'  refactor:'+x.folder.slice(0,28)+'  '+Math.round((Date.now()-Date.parse(x.u))/1000)+'s'); \
 		console.log('COUNT '+(rows.length+rf.length));"); \
 		n=$$(printf '%s' "$$out" | sed -n 's/^COUNT //p'); \
