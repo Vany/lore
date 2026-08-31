@@ -461,6 +461,12 @@ export function board(store: Store, now = Date.now(), modelGate?: () => GateStat
     refactorRuns: refactorRuns.map((r) => {
       const state = String(r["state"] ?? "failed") as BoardRefactorRun["state"];
       const terminal = state === "done" || state === "failed";
+      // lore-ok[fe6d4318]: found by lore's own review — this line reads `updated_at`
+      // unchanged, correctly, but the FACT it reads used to be stale for the whole
+      // fan-out. Fixed one layer down, not here: `store.touchRefactorRun`, called from
+      // `src/refactor/run.ts` as each fan-out tier and the combine step complete, is
+      // what makes `updated_at` itself move during the run. See `BoardRefactorRun
+      // .movedAt`'s own doc comment for the full incident.
       const updatedAt = String(r["updated_at"] ?? "");
       return {
         id: String(r["id"] ?? ""),

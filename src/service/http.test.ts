@@ -462,6 +462,12 @@ describe("the operator board", () => {
       claim: "c", evidence: "e", failureScenario: "f", cwe: "CWE-89",
       origin: "t1", round: 1, firstSeen: new Date().toISOString(),
     });
+    // D-139, fingerprint a489f1d7: this net existed for `reviews` alone — a whole
+    // second top-level array (`refactorRuns`, D-136/D-139) shipped with none of its
+    // ten fields ever checked against the page that is supposed to read them.
+    store.createRefactorRun({ id: "refBoard", repoId, principal: "alice", commitSha: "abc123", folder: "src/x" });
+    store.db.prepare("UPDATE refactor_run SET combiner_note = ?, last_error = ? WHERE id = 'refBoard'")
+      .run("t1 combined 3 into 2", "a tier failed");
     const body = (await (await fetch(`${base}/board.json`)).json()) as Record<string, unknown>;
 
     const unread = (o: Record<string, unknown>) => Object.keys(o).filter((k) => !BOARD_PAGE.includes(k));
@@ -480,6 +486,10 @@ describe("the operator board", () => {
     const f = ((tier["findings"] as Record<string, unknown>[]) ?? [])[0] ?? {};
     expect(Object.keys(f).length, "no finding to check").toBeGreaterThan(0);
     expect(unread(f), "per-finding fields the page never mentions").toStrictEqual([]);
+
+    const refRun = (body["refactorRuns"] as Record<string, unknown>[])[0] ?? {};
+    expect(Object.keys(refRun).length, "no refactor run to check").toBeGreaterThan(0);
+    expect(unread(refRun), "per-refactor-run fields the page never mentions").toStrictEqual([]);
   });
 
   // D-135: reverses D-96's 2026-08-28 revision (fingerprint 240a9efa's original fix),

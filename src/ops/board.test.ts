@@ -625,11 +625,22 @@ describe("a refactor run on the board", () => {
     expect(findRefactor("cross-repo"), "the board watches the whole deployment").toBeDefined();
   });
 
+  // Found by lore's own review, fingerprint 09ba5f4a: the first version created 3
+  // runs against a limit of 60 and asserted refactorRunsNotShown was 0 — true, but
+  // the trivial complement, never crossing the cap its own name claimed to test.
+  // Mirrors "says how many reviews the row cap left out" (above) exactly: 63 rows
+  // against the same default 60-row limit `boardRefactorRuns` shares with
+  // `boardReviews`.
   it("says how many refactor runs the row cap left out, same as reviews do", () => {
-    for (let i = 0; i < 3; i++) refactorRun("rr" + String(i), "running");
+    for (let i = 0; i < 63; i++) refactorRun("rr" + String(i).padStart(3, "0"), "running");
 
     const b = board(store);
-    expect(b.refactorRuns).toHaveLength(3);
-    expect(b.refactorRunsNotShown).toBe(0);
+    expect(b.refactorRuns).toHaveLength(60);
+    expect(b.refactorRunsNotShown).toBe(3);
+  });
+
+  it("says nothing was left out when nothing was", () => {
+    refactorRun("solo", "running");
+    expect(board(store).refactorRunsNotShown).toBe(0);
   });
 });
