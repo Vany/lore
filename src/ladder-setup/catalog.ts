@@ -60,12 +60,10 @@ const EXCLUDED_STATUS = new Set(["deprecated", "alpha"]);
 /**
  * `vendorOf`, with the one normalisation this module needs on top of it — the SINGLE
  * place that happens, exported so every caller uses the same answer rather than each
- * recomputing it. Found missing from `suggestion.ts`'s own enforcement path by lore's
- * own review, fingerprints 119dcfd0/992002a4: the first fix (`~` stripped here, for the
- * table the model reads) never reached `validatePicks`, which called bare `vendorOf` on
- * the picked id — so a reply naming both `z-ai` and `~z-ai` still passed the very check
- * this exists to be. Two definitions of "the vendor" is how that happened; there is
- * now one.
+ * recomputing it. Kept as defence in depth after `filterCatalog` (below) stopped
+ * offering tilde-prefixed ids at all — `validatePicks` still runs it on whatever a
+ * reply names, so a tilde id reaching it by any other path is still caught, not just
+ * the one this module controls.
  */
 export function vendorOfCandidate(id: string): string {
   return vendorOf(id).replace(/^~/, "");
@@ -73,28 +71,37 @@ export function vendorOfCandidate(id: string): string {
 
 /**
  * The pure half: what a provider's own `models` map reduces to once filtered to what a
- * review session can actually use. Tool-call support is not optional for an agentic
- * reviewer, and a deprecated or alpha model is not a bet worth a fresh install making by
- * default. Separated from `fetchCatalog` so this — the part with real branches worth
- * testing — needs no network, no opencode, no `ReviewerConfig` to exercise.
+ * review session can actually use and WRITE OUT. Tool-call support is not optional for
+ * an agentic reviewer, and a deprecated or alpha model is not a bet worth a fresh
+ * install making by default. Separated from `fetchCatalog` so this — the part with
+ * real branches worth testing — needs no network, no opencode, no `ReviewerConfig` to
+ * exercise.
+ *
+ * `~`-PREFIXED IDS ARE EXCLUDED ENTIRELY, not merely vendor-normalised — widened from
+ * an earlier version that only fixed the DISPLAY column and the in-run vendor check
+ * (fc9e8468, then 119dcfd0/992002a4 for the check itself) after lore's own review,
+ * fingerprint 4f56d47a, found the deeper problem: a tilde id that PASSES those checks
+ * can still be WRITTEN into a real `LORE_TIERS` file, and every review-time consumer of
+ * vendor identity — `core/ladder.ts`'s `vendorSpread` (the actual `passed`/
+ * `passed_partial` decision and signed attestation), `reviewer/review.ts`'s fallback
+ * prose, `doctor.ts`'s own check — calls bare `vendorOf` with no tilde awareness at
+ * all, a blind spot that was harmless before this feature because nothing had reason to
+ * hand-write a `~`-prefixed "-latest" pointer id into a ladder file. Excluding the shape
+ * at the source closes that for good, rather than teaching three more call sites (most
+ * outside this module's own scope) about a normalisation only this feature needed.
+ * OpenRouter's own catalog carries this namespace for at least seven vendors — z-ai,
+ * anthropic, openai, x-ai, google, moonshotai, deepseek — none of it lost: the real,
+ * pinnable id (`z-ai/glm-5.2`, not `~z-ai/glm-5.2-latest`) is offered either way.
  */
 export function filterCatalog(models: Readonly<Record<string, RawModel>>): readonly CatalogModel[] {
   const out: CatalogModel[] = [];
   for (const [modelId, m] of Object.entries(models)) {
+    if (modelId.startsWith("~")) continue;
     if (!m.capabilities.toolcall) continue;
     if (m.status !== undefined && EXCLUDED_STATUS.has(m.status)) continue;
     const id = `openrouter/${modelId}`;
     out.push({
       id,
-      // `~` STRIPPED FIRST (via `vendorOfCandidate`, below) — found live against the
-      // real deployment, fingerprint fc9e8468: OpenRouter's own catalog carries a
-      // SECOND namespace for at least seven vendors (`~anthropic/claude-opus-latest`
-      // alongside `anthropic/claude-opus-5`, and six more — `~x-ai`, `~z-ai`,
-      // `~openai`, `~google`, `~moonshotai`, `~deepseek`) — a "-latest" pointer alias
-      // for the SAME real organisation, not a second one. Left unstripped, `vendorOf`
-      // (which compares strings, not corporate identity, on purpose — see its own
-      // doc comment) would count `~z-ai` and `z-ai` as two independent vendors,
-      // exactly the miscount the one-vendor-per-tier rule (D-32/D-49) exists to catch.
       vendor: vendorOfCandidate(id),
       costInput: m.cost?.input,
       costOutput: m.cost?.output,

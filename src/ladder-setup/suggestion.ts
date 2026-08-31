@@ -84,6 +84,12 @@ export function makeTierPickParser(knownIds: ReadonlySet<string>): ItemParser<Ti
  * against; `prompt.ts`'s own instructions ask the model to use its broader knowledge of
  * real corporate ownership instead, which a hardcoded string table cannot do as well or
  * as current.
+ *
+ * WIDENED AGAIN, fingerprint 4f56d47a: `catalog.ts`'s `filterCatalog` now excludes
+ * tilde ids from the candidate pool entirely, so this check never actually SEES one in
+ * ordinary use — offering it here anyway is deliberate defence in depth, not dead code,
+ * since a reply is still checked against exactly what it named, whatever that turns out
+ * to be.
  */
 export function validatePicks(picks: readonly TierPick[]): string | undefined {
   if (picks.length !== 3) return `expected exactly 3 picks, got ${String(picks.length)}`;

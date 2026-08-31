@@ -59,17 +59,23 @@ describe("filterCatalog", () => {
   });
 
   /**
-   * THE TILDE PREFIX — found live against the real deployment, fingerprint fc9e8468:
+   * THE TILDE PREFIX IS EXCLUDED ENTIRELY, NOT MERELY NORMALISED — found live against
+   * the real deployment, fingerprint fc9e8468, then widened by fingerprint 4f56d47a:
    * OpenRouter's own catalog carries a "-latest" pointer-alias namespace for at least
-   * seven vendors (`~z-ai/glm-5.2-latest` alongside `z-ai/glm-5.2`, and six more), and
-   * left unstripped it would count as an EIGHTH, independent vendor — exactly the
-   * miscount the one-vendor-per-tier rule (D-32/D-49) exists to catch.
+   * seven vendors (`~z-ai/glm-5.2-latest` alongside `z-ai/glm-5.2`, and six more). A
+   * normalised vendor COLUMN was not enough — every review-time consumer of vendor
+   * identity (`core/ladder.ts`'s `vendorSpread`, which decides `passed`/
+   * `passed_partial` and feeds the signed attestation; `reviewer/review.ts`'s
+   * fallback prose; `doctor.ts`'s own check) calls bare `vendorOf` with no tilde
+   * awareness, a blind spot harmless until this feature could legitimately WRITE a
+   * tilde id into a real `LORE_TIERS` file. Excluding the shape here means one never
+   * can.
    */
-  it("normalises a tilde-prefixed vendor to its real organisation, same as the untilded one", () => {
+  it("excludes a tilde-prefixed id from the catalog entirely, offering only the real one", () => {
     const out = filterCatalog({
       "~z-ai/glm-5.2-latest": base,
       "z-ai/glm-5.2": base,
     });
-    expect(out.map((m) => m.vendor)).toEqual(["z-ai", "z-ai"]);
+    expect(out.map((m) => m.id)).toEqual(["openrouter/z-ai/glm-5.2"]);
   });
 });
