@@ -1947,6 +1947,42 @@ describe("a bounded probe on a silent call", () => {
     expect(Date.now() - started, "bounded by silence since the last event, not by total elapsed time").toBeLessThan(1_000);
     r.close();
   });
+
+  /**
+   * A STATE MACHINE IS NOT A PROGRESS METER (found by lore's own review, fingerprint
+   * a2ea8a61, against the version above that listened only to `session.status`).
+   *
+   * `session.status` is idle/busy/retry — three states, not a per-token stream — so a
+   * healthy session can sit on ONE `busy` for the whole of a long turn and never narrate
+   * again on that channel. `message.part.updated` is opencode's actual streaming-content
+   * event (a `delta` per token, per the SDK's own `EventMessagePartUpdated` type), nested
+   * under `properties.part.sessionID` rather than the flat `properties.sessionID` every
+   * other recognised type uses. A call that is truly stuck cannot produce either kind.
+   */
+  it("re-arms the probe bound on message.part.updated, not only session.status", async () => {
+    hangPrompt = true;
+    const r = new Reviewer({ baseUrl, agent: "readonly", timeoutMs: 10_000, probeTimeoutMs: 200 });
+    const started = Date.now();
+    const inFlight = r.review(TIER, "review this", "/tmp/wt", "rev_parts", undefined, true);
+
+    await new Promise((res) => setTimeout(res, 120));
+    pending.push({
+      type: "message.part.updated",
+      properties: { part: { sessionID: "ses_test", id: "prt_1", messageID: "msg_1" }, delta: "some streamed text" },
+    });
+
+    const stillOpenPastOriginalBound = await Promise.race([
+      inFlight.then(() => "settled", () => "settled"),
+      new Promise((res) => setTimeout(() => res("open"), 250 - (Date.now() - started))),
+    ]);
+    expect(stillOpenPastOriginalBound, "a streamed delta re-arms the clock exactly as session.status does").toBe(
+      "open",
+    );
+
+    const err = await inFlight.then(() => undefined, (e: unknown) => e);
+    expect(err).toBeInstanceOf(ProbeInconclusive);
+    r.close();
+  });
 });
 
 /**

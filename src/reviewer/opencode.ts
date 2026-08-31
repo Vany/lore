@@ -449,6 +449,21 @@ export class Reviewer implements ReviewerLike {
    * during an exhausted-plan hang the narration is the only place the answer exists.
    */
   private readonly watchers = new Map<string, (status: OpencodeStatus) => void>();
+  /**
+   * session id -> "something happened for this session," for whoever only needs to know
+   * a call is alive rather than what it said (D-138's probe bound).
+   *
+   * NOT folded into `watchers` above: that map is typed to `SessionStatus` — idle, busy,
+   * retry — a STATE-TRANSITION channel, not a progress one. `message.part.updated`
+   * streams a `delta` per token and carries no `SessionStatus` at all; forcing it through
+   * `watchers`'s callback shape would mean inventing a fake status for it or widening what
+   * every OTHER watcher has to handle. Found by lore's own review, fingerprint a2ea8a61:
+   * the first version of the probe re-arm listened only to `session.status`, which is a
+   * busy/idle/retry state machine that can sit on ONE state for the whole of a long turn
+   * — so a healthy session generating for minutes past a turn's opening `busy` narrated
+   * nothing the re-arm could see, and was killed exactly as the flat timer had been.
+   */
+  private readonly activity = new Map<string, () => void>();
   /** The subscription, started on first use and never restarted twice at once. */
   private listening?: Promise<void>;
   private closed = false;
@@ -523,7 +538,30 @@ export class Reviewer implements ReviewerLike {
           const res = await this.client.event.subscribe({ signal: this.listener.signal });
           for await (const ev of res.stream) {
             if (this.closed) break;
-            const e = ev as { type?: string; properties?: { sessionID?: string; status?: OpencodeStatus } };
+            const e = ev as {
+              type?: string;
+              properties?: { sessionID?: string; status?: OpencodeStatus; part?: { sessionID?: string } };
+            };
+            // ACTIVITY, FROM WHICHEVER EVENT SHAPE CARRIES A SESSION ID — checked before the
+            // `session.status`-only filter below, not folded into it (fingerprint a2ea8a61).
+            // `message.part.updated` streams a `delta` per token and nests its id in
+            // `properties.part.sessionID` rather than `properties.sessionID` directly; every
+            // other type this loop recognises a session by uses the flat field. Both are
+            // genuine narration that a truly stuck call cannot produce, so both count.
+            const activityId = e.properties?.sessionID ?? e.properties?.part?.sessionID;
+            if (
+              activityId !== undefined &&
+              (e.type === "session.status" || e.type === "session.idle" || e.type === "message.part.updated" ||
+                e.type === "message.updated")
+            ) {
+              // Same isolation as the watcher call below: one session's callback must not
+              // be able to blind the stream for every other session's events.
+              try {
+                this.activity.get(activityId)?.();
+              } catch (e) {
+                console.error(`[lore:log] an activity callback threw: ${e instanceof Error ? e.message : String(e)}`);
+              }
+            }
             if (e.type !== "session.status") continue;
             const id = e.properties?.sessionID;
             const status = e.properties?.status;
@@ -970,13 +1008,19 @@ export class Reviewer implements ReviewerLike {
     // could never again do the one thing it exists for, on any tier whose real work
     // outruns the bound, which is every deep tier, always.
     //
-    // So the timer is RE-ARMED, not merely started, on every narrated status — any type,
-    // not only the ones the storm clock and `quotaRefusal` already act on. Narration is
-    // opencode telling us something about THIS session, which a call that is truly stuck
-    // producing nothing cannot do; a session that keeps narrating is exactly as alive as
-    // an ordinary call and is left to run under the same deadline as one. What the bound
-    // still catches is Kimi's actual shape: a request accepted and then silent — no
-    // narration at all — for `probeMs` at a stretch.
+    // So the timer is RE-ARMED, not merely started, on `this.activity` (see its own doc
+    // comment) — ANY narrated event for this session, not only `session.status`. A STATE
+    // MACHINE (idle/busy/retry) is not a progress meter: found by lore's own review,
+    // fingerprint a2ea8a61, against the first version of this re-arm, which listened to
+    // `session.status` alone. That channel can sit on a single `busy` for the whole of a
+    // long turn, so a healthy session generating for minutes past its opening `busy`
+    // narrated nothing THAT channel could see, and was killed exactly as the original flat
+    // timer had been — `message.part.updated`'s own streamed `delta` is what a call that is
+    // truly producing nothing cannot fake. A session that keeps narrating, on any of the
+    // types `activity` recognises, is exactly as alive as an ordinary call and is left to
+    // run under the same deadline as one. What the bound still catches is Kimi's actual
+    // shape: a request accepted and then silent — no narration of any kind — for `probeMs`
+    // at a stretch.
     let probeTimer: ReturnType<typeof setTimeout> | undefined;
     const armProbeTimer = (): void => {
       if (probing !== true) return;
@@ -994,12 +1038,15 @@ export class Reviewer implements ReviewerLike {
       probeTimer.unref?.();
     };
     armProbeTimer();
-
-    this.watchers.set(sessionId, (status) => {
-      if (probeTimer !== undefined) {
+    if (probing === true) {
+      this.activity.set(sessionId, () => {
+        if (probeTimer === undefined) return;
         clearTimeout(probeTimer);
         armProbeTimer();
-      }
+      });
+    }
+
+    this.watchers.set(sessionId, (status) => {
       const refusal = quotaRefusal(status);
       if (refusal !== undefined) {
         aborter.abort(
@@ -1138,6 +1185,7 @@ export class Reviewer implements ReviewerLike {
       // longer fuse — the stream outlives every call on it.
       this.aborters.delete(sessionId);
       this.watchers.delete(sessionId);
+      this.activity.delete(sessionId);
       // ALWAYS, regardless of which branch above returned or threw — the one thing every
       // exit path shares. Left unset, a probe that succeeded (or failed for some other
       // reason) at, say, 4 seconds would still fire at `probeMs`, aborting a NEW call that

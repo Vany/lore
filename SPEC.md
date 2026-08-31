@@ -3712,13 +3712,27 @@ measured t2 average is 766s. A timer that fires at 90s regardless of activity ki
 genuine recovery before it can finish, and only a COMPLETED call ever clears a mark ("one
 success clears this," D-90). So the first version could never again do the one thing a
 probe exists for, on any tier whose real work outruns 90 seconds — which is every deep
-tier, always: not a rare edge case, a permanent one. The bound is instead RE-ARMED on every
-narrated status event, of any type, not only the ones the storm clock and `quotaRefusal`
-already act on — narration is opencode telling us something about this specific session,
-which a call that is truly producing nothing cannot do. A session that keeps narrating is
-left to run under the ordinary deadline, exactly as if it were never a probe; what the bound
-still catches is Kimi's actual shape, silence with no narration at all, for a full
-`probeMs` at a stretch.
+tier, always: not a rare edge case, a permanent one. The bound is instead RE-ARMED on
+narration — opencode telling us something about this specific session, which a call that
+is truly producing nothing cannot do. A session that keeps narrating is left to run under
+the ordinary deadline, exactly as if it were never a probe; what the bound still catches
+is Kimi's actual shape, silence with no narration at all, for a full `probeMs` at a stretch.
+
+**AND "NARRATION" MEANT `session.status` ALONE, WHICH WAS STILL WRONG — found by the SAME
+review round, fingerprint a2ea8a61, before either version shipped.** `session.status` is a
+STATE MACHINE — idle, busy, retry, per the opencode SDK's own three-member union — not a
+progress meter. It can sit on one `busy` for the whole of a long turn, so a healthy session
+generating for minutes past its opening `busy` narrated nothing on that one channel and was
+killed exactly as the original flat timer had been: the fix rescued only the shapes where
+`session.status` itself repeats (retry chatter, turn boundaries), which is not what a single
+long turn looks like. `this.activity` (`src/reviewer/opencode.ts`) is the correction: a
+second, smaller map, session id to a bare re-arm callback, fed from the SAME event dispatch
+loop but not folded into the `session.status`-typed `watchers` map — deliberately, since
+`message.part.updated` (opencode's actual streaming-content event, a `delta` per token, per
+the SDK's `EventMessagePartUpdated` type) carries no `SessionStatus` at all and nests its
+session id under `properties.part.sessionID` rather than the flat field every other
+recognised type uses. Both `session.status` and `message.part.updated` now ping `activity`;
+only `session.status` still drives the storm clock and `quotaRefusal`, unchanged.
 
 **`ProbeInconclusive extends Exhausted`, deliberately.** A bound firing must still send the
 round down the fallback chain — the review needs an answer from whatever comes next, exactly
