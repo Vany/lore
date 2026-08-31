@@ -48,7 +48,16 @@ DBVOL   = $(PROJECT)_lore-db
 # NEW deployment reads before anything else.
 DEPLOY_FILES = Makefile docker-compose.yml litestream.yml Dockerfile opencode.Dockerfile \
                sandbox.Dockerfile smoke.mjs mirror-refresh.sh sync-opencode.sh .env.example \
-               tiers.zai-kimi-openai.json tiers.zai-openai.json
+               tiers.kimi.json tiers.zai-kimi-openai.json tiers.zai-openai.json
+# lore-ok[ac0f7ec3]: found by lore's own review — tiers.kimi.json's name stays here even
+# though the repository no longer has the file (deleted the same commit this line was
+# almost edited in). Removing the name here too would have disarmed check-deployed's own
+# "deleted-upstream" arm (below) for the one file it needed to fire for, leaving a stray
+# copy on any deployment that had it, permanently unflagged and unfixable by
+# sync-deployed. Left named on purpose: `check-deployed`/`sync-deployed` now catch and
+# clean a leftover copy on ANY deployment, including the local one beside this repo,
+# whose copy was ALSO removed by hand as part of this same change (`../lore/`,
+# gitignored, not this list's concern) — verified clean by running both after.
 DBIMG   = $(PROJECT)-lore:latest
 DBRUN   = docker run --rm -v $(DBVOL):$(DB) -e LORE_DB_DIR=$(DB) --entrypoint node $(DBIMG)
 BACKUP  ?= $(shell grep -E '^LORE_HOST_BACKUP=' .env 2>/dev/null | cut -d= -f2)
