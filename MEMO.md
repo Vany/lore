@@ -3,6 +3,109 @@
 Newest first. Updated at the end of each task: what changed, what I learned, what
 surprised me.
 
+## 2026-08-31 — D-136, the refactor suggestor: seven rounds, eighteen findings, and
+the cost of shipping a whole new subsystem with no review until it was all written
+
+**What changed.** `rev_I2-wzmdlq9vLgFOr5215_S7G`, `passed_partial`, attested at
+`77784995150ac5babfdaa1660cc652e998b1c93c` (18 findings, 7 fixed, 9 justified) —
+merged as nine commits. Vany's request: a new capability, explicitly separate from
+review, that asks several models what in a folder is worth restructuring and hands
+back suggestions rather than findings — t2 and t3 marked suitable, run in parallel,
+merged by t1. Planned in full (research, `src/propose/`'s precedent, an approved plan
+document) before any code, then implemented and reviewed as one large batch: new tier
+config field, a new `src/refactor/` module, two new store tables, a whole second
+dispatcher (`RefactorWorker`), two new MCP tools, and the docs/spec/SPEC.md entries —
+about 1,700 lines, all written before the first review round ever ran.
+
+**That ordering is the lesson.** Every one of D-133/D-134/D-135 this week was small
+enough to git-stash-verify as it was built and reach `passed_partial` in three to five
+rounds. This one was reviewed only after the whole thing existed, and it took seven
+rounds and eighteen findings — most of them real, and several in exactly the class of
+defect this project's own doctrine exists to catch (a guard with no guard, a claim the
+code did not back, data written in the wrong order). Building an entire subsystem
+before showing it to the ladder even once is not what "commit, review in BATCHES"
+means, and the batch this produced was too large to reason about completely by hand
+before submitting it — which the review then proved, seven times.
+
+**Round 1 (HIGH, HIGH, MEDIUM, MEDIUM, LOW, LOW, LOW) — the parts of `review_start`'s
+own hardening I did not carry over.** `folder` reached the fan-out prompt with no
+escape check at all (`6253e066`) — `review_start`'s own `path` has had
+`normalizeReviewPath`/`pathEscapesWorktree` since D-130, and I built a sibling
+endpoint next to it without reusing either, so `folder: "../.."` would have read
+another tenant's checked-out tree straight into a paid model prompt. No startup
+reclaim and no worktree cleanup for a run interrupted mid-execution (`54aff246`) —
+`Worker.start` has carried this since before this session, for the identical reason
+(D-70's sixteen stale worktrees), and the new dispatcher simply did not have the
+equivalent call. No admission bound at all (`43ba939c`), while the new dispatcher
+fires every claimed run concurrently through the one shared model-call gate every
+open review also depends on. "Stored and queryable" had no way to actually list what
+was stored (`cc9d46fd`) — I built the index and never built the query to use it.
+`commit_sha` stored the caller's raw ref, contradicting my own doc comment two lines
+away that said it wouldn't (`2f329d31`). The combine prompt hardcoded "two independent
+models" in a config-driven fan-out that can legally be one (`f63ec425`). And
+`claimRefactorRun` ordered by `id` — copied from `claimJob`, where it is correct
+because a job's id is an autoincrement integer; a refactor run's id is
+`refactor_<random>`, so the copy claimed in lexicographic-on-randomness order while a
+passing test asserted "creation order" using fixture ids that could never occur in
+production (`28be6b5c`).
+
+**Round 2 finding (MEDIUM) — the fix for round 1's drain gap only closed half of
+it.** `RefactorWorker.dispatch` learned to check `isDraining()` (matching D-121's own
+reasoning for `Worker`), but `make drain`'s wait loop still polled only the `job`
+table — a refactor run claimed moments before the flag was set stayed invisible to
+it, so a deploy could report "drained — nothing in flight" while one was still
+mid-call and get killed by the rebuild anyway (`49519bd1`).
+
+**Round 2 also found (MEDIUM, MEDIUM) what `Worker.round` was already carrying
+insurance against.** `execute()`'s detached `void this.execute(run)` had `gitUrlOf`
+sitting outside any try and a bare `finishRefactorRun` in the catch — a second store
+fault while handling the first would have escaped as an unhandled rejection with no
+process-level handler anywhere in this service, taking every open review down with
+it (`5348bfb3`/`bebf7a5b`). `Worker.round`'s own header and its `lore-ok[441a6bc1]`
+comment describe this exact shape and exactly why the double-wrap exists; I had read
+that file this session and still wrote the simpler, unguarded version next to it.
+
+**Round 5 (MEDIUM) — my own round-2 fix broke the deploy it was written to protect.**
+The Makefile fix for `49519bd1` queried `refactor_run` unconditionally in the drain
+wait loop — which runs against the OLD, still-running container, before the rebuild,
+on the exact deploy that FIRST introduces the table. `no such table: refactor_run`,
+uncaught, meant the guard spun for the full 30-minute timeout and reported "STILL
+RUNNING" about a service that was already idle (`2a6d47f9`). Fixed with a
+`sqlite_master` existence check rather than a broad try/catch, on the same "fails
+closed, not open" reasoning `guard-idle`'s own `-1` sentinel already uses two targets
+up in the same file — a missing TABLE is a positively-identified, expected case, not
+an ambiguous fault to swallow.
+
+**Round 6 (MEDIUM) — a real ordering bug, caught by name.** `finishRefactorRun(done)`
+ran BEFORE `recordRefactorSuggestions`, inverting `review.ts`'s own stated invariant
+(data written before the state that announces it). A crash between the two left a
+TERMINAL `done` row — startup reclaim only revisits `running` — whose `sources`
+claimed real counts while zero suggestions existed, indistinguishable from the
+genuine "every tier looked and found nothing" answer the docs define for an empty
+list (`7565fe66`). Simple fix, two lines swapped; verified with a real git fixture and
+a Proxy that faults exactly at the old write point, showing the suggestions already
+committed.
+
+**Round 7 (MEDIUM, LOW) — the newest tool never got the mapping every sibling has.**
+`refactor_list` passed the store's raw camelCase rows straight to the wire, so its own
+docs promised `run_id`/`commit`/`combiner_note` while the actual response spoke
+`id`/`commitSha`/`combinerNote` — the documented recovery path (list, then poll the
+`run_id` you find) was unreachable by construction (`e6387cc0`). And the two indexes
+on `refactor_run` backed queries that no longer existed once earlier rounds changed
+the actual `WHERE`/`ORDER BY` shapes — `refactor_run_by_principal` for a query that
+was always repo-scoped, `refactor_run_queue(state, id)` for a claim that now orders by
+`created_at, id` — confirmed dead and then fixed with `EXPLAIN QUERY PLAN` against a
+real schema, not just by reading the SQL (`10f8e818`).
+
+**What I'd do differently:** review in batches sized like this week's other three
+changes, not sized like the whole feature. Every one of these seven rounds' findings
+was real, and several were in code that directly mirrors a working, already-reviewed
+pattern elsewhere in this codebase (`Worker.round`'s double-wrapped catch,
+`review_start`'s path validation, `guard-idle`'s fails-closed sentinel) — meaning the
+answer was already sitting in the repository each time, and writing the new code
+without checking it against its own sibling first is what cost seven rounds instead
+of two or three.
+
 ## 2026-08-31 — D-135, un-redacting the board: three rounds, all three my own
 follow-up fix missing a corner of the same sentence
 
