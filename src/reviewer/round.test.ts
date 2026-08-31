@@ -3054,7 +3054,7 @@ describe("a pool of routes to one model", () => {
   });
 
   /**
-   * A PROBE THAT GOES QUIET LEARNS NOTHING (D-137).
+   * A PROBE THAT GOES QUIET LEARNS NOTHING (D-138).
    *
    * Kimi's real weekly-quota refusal on 2026-08-31 took ~21.5 minutes to arrive on a
    * single, silent call — bounded now by `opencode.ts`'s own `probeTimeoutMs`, which

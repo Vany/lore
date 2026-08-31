@@ -959,7 +959,47 @@ export class Reviewer implements ReviewerLike {
     // advances on exactly that type, and an unstated time becomes the doubling backoff
     // rather than a fact nobody stated.
     let stormStart: number | undefined;
+    // A PROBE'S OWN, SHORTER DEADLINE (D-94/D-138) — see `ReviewerConfig.probeTimeoutMs`.
+    //
+    // BOUNDS SILENCE, NOT THE CALL. The first version killed the call outright at
+    // `probeMs` regardless of what opencode was doing — found by lore's own review,
+    // fingerprint 9835adfe: D-94's whole premise is "a live tier just works," and a
+    // recovered route's real round routinely takes MINUTES (this file's own measured
+    // t2 average is 766s), so a flat kill at 90s aborted every genuine recovery before it
+    // could finish, and only a completed call ever clears a mark — the probe feature
+    // could never again do the one thing it exists for, on any tier whose real work
+    // outruns the bound, which is every deep tier, always.
+    //
+    // So the timer is RE-ARMED, not merely started, on every narrated status — any type,
+    // not only the ones the storm clock and `quotaRefusal` already act on. Narration is
+    // opencode telling us something about THIS session, which a call that is truly stuck
+    // producing nothing cannot do; a session that keeps narrating is exactly as alive as
+    // an ordinary call and is left to run under the same deadline as one. What the bound
+    // still catches is Kimi's actual shape: a request accepted and then silent — no
+    // narration at all — for `probeMs` at a stretch.
+    let probeTimer: ReturnType<typeof setTimeout> | undefined;
+    const armProbeTimer = (): void => {
+      if (probing !== true) return;
+      const probeMs = this.cfg.probeTimeoutMs ?? 90_000;
+      probeTimer = setTimeout(() => {
+        aborter.abort(
+          new ProbeInconclusive(
+            `tier ${tier.id} (${tier.model ?? "?"}) probe was silent for ${String(Math.round(probeMs / 1000))}s — ` +
+              "still treating it as unavailable, not as freshly refused.",
+          ),
+        );
+      }, probeMs);
+      // `unref`'d for the same reason `long-fetch.ts`'s own deadline is: a pending timer
+      // must not hold the process open past its work.
+      probeTimer.unref?.();
+    };
+    armProbeTimer();
+
     this.watchers.set(sessionId, (status) => {
+      if (probeTimer !== undefined) {
+        clearTimeout(probeTimer);
+        armProbeTimer();
+      }
       const refusal = quotaRefusal(status);
       if (refusal !== undefined) {
         aborter.abort(
@@ -987,32 +1027,6 @@ export class Reviewer implements ReviewerLike {
         );
       }
     });
-
-    // A PROBE'S OWN, SHORTER DEADLINE (D-94) — see `ReviewerConfig.probeTimeoutMs`.
-    //
-    // The storm clock above and `quotaRefusal` both need a STATUS EVENT to act on; Kimi's
-    // 2026-08-31 weekly-quota refusal produced neither — one request, no retry on the
-    // stream, silent for ~21.5 minutes before the final reply arrived. Nothing above this
-    // line would have caught that, because nothing above this line reacts to silence
-    // itself. This does: a probe is only ever asking a route lore already believes is
-    // down, so it is bounded independently of the ordinary `timeoutMs` deadline below.
-    //
-    // `unref`'d for the same reason `long-fetch.ts`'s own deadline is: a pending timer
-    // must not hold the process open past its work. Cleared in `finally`, alongside the
-    // aborter and watcher, so it cannot fire after a call that already finished.
-    let probeTimer: ReturnType<typeof setTimeout> | undefined;
-    if (probing === true) {
-      const probeMs = this.cfg.probeTimeoutMs ?? 90_000;
-      probeTimer = setTimeout(() => {
-        aborter.abort(
-          new ProbeInconclusive(
-            `tier ${tier.id} (${tier.model ?? "?"}) probe did not answer within ${String(Math.round(probeMs / 1000))}s — ` +
-              "still treating it as unavailable, not as freshly refused.",
-          ),
-        );
-      }, probeMs);
-      probeTimer.unref?.();
-    }
 
     try {
       // WHICH PROMPT: the full one for a session being initialised, the round's message

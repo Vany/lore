@@ -1599,6 +1599,13 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   let chosenRoute: string | undefined;
   /** Whether the primary was actually CALLED — a synthetic refusal must not mark anything. */
   let primaryAsked = false;
+  /**
+   * Whether the PRIMARY's own failure was a bounded probe going silent, not a refusal —
+   * read after the catch block that alone holds `e`, by the one notice below it that
+   * needs to say so and runs whether or not the primary threw (D-138, fingerprint
+   * fd3a5283).
+   */
+  let primaryProbeInconclusive = false;
   try {
     // NOT ASKED AT ALL, when the PROVIDER has said it is out (D-90 widened).
     //
@@ -1843,6 +1850,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       // levels or the pool shrinks permanently on a bad afternoon.
       store.clearRouteUnavailable(primaryRoute);
     } catch (e) {
+      primaryProbeInconclusive = e instanceof ProbeInconclusive;
       // WHAT THE PRIMARY SPENT BEFORE IT DIED, recorded under its OWN route — here,
       // before any fallback is even attempted, for the same reason the twin's own spend
       // moved earlier in its catch, fingerprint 960cb2b7: a chain that goes on to RESCUE this round
@@ -2002,10 +2010,21 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
         // says the tier did not run and what that costs the verdict, which is theirs; that
         // it was a MONEY decision is ours, and it is the line that tells somebody a toggle
         // is the only thing between them and a full review.
+        //
+        // NOT "IS OUT OF QUOTA" WHEN NOTHING CONFIRMED THAT — found by lore's own review,
+        // fingerprint fd3a5283, against this file's own fd0f65d5 precedent two screens up:
+        // `ProbeInconclusive` also satisfies `routeFault` (it must, to walk the chain), but
+        // it means a bounded D-94 probe was silent, not that a provider refused. Stating
+        // quota as fact here is the exact false-cause-on-the-money-channel that comment
+        // exists to prevent, wearing D-138's error type instead of a hang's.
         console.error(
-          `[lore:log] ${reviewId}: ${member.id} (${member.model ?? "?"}) is out of quota and every remaining route ` +
-            `is metered (${reachable.join(", ")}) — skipping the tier rather than paying. ` +
-            "Set LORE_ALLOW_METERED=1 to buy the coverage instead.",
+          e instanceof ProbeInconclusive
+            ? `[lore:log] ${reviewId}: ${member.id} (${member.model ?? "?"}) could not be confirmed within its ` +
+                `probe bound, and every remaining route is metered (${reachable.join(", ")}) — skipping rather ` +
+                "than paying for what may be a false alarm. Set LORE_ALLOW_METERED=1 to buy the coverage instead."
+            : `[lore:log] ${reviewId}: ${member.id} (${member.model ?? "?"}) is out of quota and every remaining route ` +
+                `is metered (${reachable.join(", ")}) — skipping the tier rather than paying. ` +
+                "Set LORE_ALLOW_METERED=1 to buy the coverage instead.",
         );
       }
       if (!routeFault(e) || chain.length === 0) throw e;
@@ -2222,10 +2241,20 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     // is a cost event, and a cost event is lore's to notice and lore's to act on. The
     // client's copy of this, below, names the ROUTE and stops there.
     if (fellBackTo !== undefined && (result.costUsd ?? 0) > 0) {
+      // SAME CARE AS THE SIBLING NOTICE ABOVE (fingerprint fd3a5283): the primary's
+      // `ProbeInconclusive` reached the chain, which is correct, but that does not make
+      // "is out of quota" a fact about it — only that a bounded probe stayed silent.
+      // Read from `primaryProbeInconclusive`, not `e`: this notice runs whether or not the
+      // primary threw (a POOL member can reach here too), so the catch block's own binding
+      // is not in scope.
       console.error(
-        `[lore:log] ${member.id} fell back to ${fellBackTo} and THIS CALL COST $${(result.costUsd ?? 0).toFixed(2)} ` +
-          `— ${member.model ?? "?"} is out of quota, and every call costs this until it refreshes. ` +
-          "Nothing about this reaches the client, deliberately.",
+        primaryProbeInconclusive
+          ? `[lore:log] ${member.id} fell back to ${fellBackTo} and THIS CALL COST $${(result.costUsd ?? 0).toFixed(2)} ` +
+              `— ${member.model ?? "?"}'s probe went unconfirmed, not refused; the fallback ran anyway and cost this. ` +
+              "Nothing about this reaches the client, deliberately."
+          : `[lore:log] ${member.id} fell back to ${fellBackTo} and THIS CALL COST $${(result.costUsd ?? 0).toFixed(2)} ` +
+              `— ${member.model ?? "?"} is out of quota, and every call costs this until it refreshes. ` +
+              "Nothing about this reaches the client, deliberately.",
       );
     }
     // AND ONCE A DAY IT REACHES A PERSON, not only the log (D-117's second shape, which

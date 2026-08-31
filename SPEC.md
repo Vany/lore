@@ -3695,7 +3695,7 @@ t2, for the rest of the week the quota does not reset — the exact multiplicati
 metered-fallback pricing exists to catch, wearing a different provider's clothes: no money
 this time, only silence, repeated.
 
-**The fix bounds the PROBE, not the ordinary call.** `ReviewerConfig.probeTimeoutMs`
+**The fix bounds the PROBE's SILENCE, not the call itself.** `ReviewerConfig.probeTimeoutMs`
 (`src/reviewer/opencode.ts`, default 90s) arms a second, shorter deadline alongside the
 existing retry-storm clock, only when the caller says this attempt exists purely to
 re-test a route already believed down (`review()`/`askFor()`'s new `probing` parameter,
@@ -3704,6 +3704,21 @@ aborts through the SAME `this.abort(sessionId)` path every other failure already
 this does not repeat the 2026-08-14 lesson recorded against `conductSession`'s own comment,
 *"abandoning the request does not stop the model"*: opencode is actually told to stop, not
 merely stopped listening to.
+
+**A FLAT KILL AT 90s WAS THE FIRST VERSION, AND IT WAS WRONG — found by lore's own review,
+fingerprint 9835adfe, before this ever shipped.** D-94's entire premise is *"a live tier
+just works"*, and a recovered route's real round routinely takes MINUTES — this file's own
+measured t2 average is 766s. A timer that fires at 90s regardless of activity kills every
+genuine recovery before it can finish, and only a COMPLETED call ever clears a mark ("one
+success clears this," D-90). So the first version could never again do the one thing a
+probe exists for, on any tier whose real work outruns 90 seconds — which is every deep
+tier, always: not a rare edge case, a permanent one. The bound is instead RE-ARMED on every
+narrated status event, of any type, not only the ones the storm clock and `quotaRefusal`
+already act on — narration is opencode telling us something about this specific session,
+which a call that is truly producing nothing cannot do. A session that keeps narrating is
+left to run under the ordinary deadline, exactly as if it were never a probe; what the bound
+still catches is Kimi's actual shape, silence with no narration at all, for a full
+`probeMs` at a stretch.
 
 **`ProbeInconclusive extends Exhausted`, deliberately.** A bound firing must still send the
 round down the fallback chain — the review needs an answer from whatever comes next, exactly
@@ -3715,6 +3730,17 @@ fallback-chain's twin loop) now skip the write on `instanceof ProbeInconclusive`
 existing mark, Kimi's actual *"weekly usage limit"* reason and its failure count included,
 stands exactly as it was. Only `probedAt`, stamped before the call as D-94 always has, may
 move.
+
+**And `ProbeInconclusive` satisfying `routeFault` cuts both ways — found by the same review
+round, fingerprint fd3a5283.** The D-120 operator notices that fire when a chain runs out
+into an all-metered remainder both said *"is out of quota"* as fact, unconditionally,
+whenever `routeFault(e)` was true — which a bounded probe now also is, on purpose, so the
+chain walks. But nothing about a bounded probe confirmed quota, and stating it as settled
+is exactly the false-cause-on-the-money-channel this file's own `fd0f65d5` precedent (two
+paragraphs above D-120 in `review.ts`) says must never happen — an operator reading it would
+flip `LORE_ALLOW_METERED=1` to buy coverage for an alarm that may be false. Both sites
+(`runMember`'s own catch, and the fallback's cost notice) now branch on
+`instanceof ProbeInconclusive` and say so plainly instead.
 
 **90 seconds is a judgement call from ONE incident, stated as one.** D-91's own measured
 baseline for a refusal the classifier recognises is about twelve seconds; 90s gives roughly

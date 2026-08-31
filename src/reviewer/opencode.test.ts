@@ -1909,6 +1909,44 @@ describe("a bounded probe on a silent call", () => {
     await inFlight.catch(() => undefined);
     r.close();
   });
+
+  /**
+   * THE BOUND MUST NOT KILL A RECOVERED ROUTE'S REAL WORK (found by lore's own review,
+   * fingerprint 9835adfe, against the first version of this fix).
+   *
+   * A flat kill at `probeMs` regardless of activity would abort a probe that turned out to
+   * be a genuine, healthy, MINUTES-long round — and since only a completed call clears a
+   * mark (D-90's "one success clears this"), a route that can never finish a call within
+   * the bound could never come back via D-94 at all. Narration (ANY status event, not only
+   * the ones the storm clock and `quotaRefusal` act on) proves the session is alive and
+   * re-arms the clock; only silence is bounded.
+   */
+  it("re-arms the probe bound on narration, and still catches silence that resumes", async () => {
+    hangPrompt = true;
+    const r = new Reviewer({ baseUrl, agent: "readonly", timeoutMs: 10_000, probeTimeoutMs: 200 });
+    const started = Date.now();
+    const inFlight = r.review(TIER, "review this", "/tmp/wt", "rev_busy", undefined, true);
+
+    // Narration arrives WELL inside the bound — a live session telling us it is working,
+    // not a quota refusal and not a retry.
+    await new Promise((res) => setTimeout(res, 120));
+    pending.push({ type: "session.status", properties: { sessionID: "ses_test", status: { type: "busy" } } });
+
+    // Past the ORIGINAL 200ms bound (measured from the start), still open: the narration
+    // re-armed the clock rather than merely delaying an unconditional kill.
+    const stillOpenPastOriginalBound = await Promise.race([
+      inFlight.then(() => "settled", () => "settled"),
+      new Promise((res) => setTimeout(() => res("open"), 250 - (Date.now() - started))),
+    ]);
+    expect(stillOpenPastOriginalBound, "narration re-armed the clock, not merely delayed the kill").toBe("open");
+
+    // AND SILENCE STILL COUNTS: no further narration after this — the re-armed clock
+    // must still fire once the session goes properly quiet again.
+    const err = await inFlight.then(() => undefined, (e: unknown) => e);
+    expect(err).toBeInstanceOf(ProbeInconclusive);
+    expect(Date.now() - started, "bounded by silence since the last event, not by total elapsed time").toBeLessThan(1_000);
+    r.close();
+  });
 });
 
 /**
