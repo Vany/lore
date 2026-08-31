@@ -3,6 +3,91 @@
 Newest first. Updated at the end of each task: what changed, what I learned, what
 surprised me.
 
+## 2026-08-31 — D-139: a running refactor session shows up on the board, and six
+rounds finding what "shows up" actually required
+
+**What changed.** `rev_DS-KoFNzYSVeqmgf0nd4ojqL`, `passed_partial`, attested at
+`50da47a1b572d4841247562198105362c8f5ce8d` (12 findings, 7 fixed, 5 justified) —
+merged as seven commits (the feature, then six review-answer rounds). Vany: *"let's
+show running refactor session as REFACTOR in the web."* D-136 shipped a whole second
+dispatcher and its own table three weeks earlier, and the board (D-96) never learned
+it existed.
+
+**Round 1 (MEDIUM) — the first version's own stall clock would have painted every
+healthy fan-out red.** `movedAt` moved exactly twice in a refactor run's life — the
+worktree cut and the terminal write — and nothing in between, which is where the
+actual work is: every tier marked `refactor: true` runs in PARALLEL, each a full
+paid folder-read, plus a t1 combine after. A healthy run legitimately outlasts the
+board's own 45-minute red threshold, the same number this whole project is shaped
+around. Fixed with `store.touchRefactorRun`, called on every fan-out tier's
+completion and after the combine step, success or failure — the same narration a
+review's own `tier_run` rows give for free, rebuilt at the one point a refactor run
+actually has: the row itself.
+
+**Round 2 — my own test for the fix asserted the trivial case.** The row-cap test
+created 3 runs against a 60-row limit and checked the overflow count was 0 — true,
+and useless, since it never crossed the cap its own name claimed to test. And the
+field-drift net (`http.test.ts`'s "emits no field the page does not read") covered
+reviews only; all ten `BoardRefactorRun` fields sat outside it. Fixed both; the
+drift-net fix needed a second git-stash-verify attempt after the first "break"
+(renaming a label string) didn't actually touch the property access the test reads.
+
+**Round 3 (MEDIUM×2, LOW×4) — the state-list bug this project has already been
+burned by once, found again in the change meant to be genuinely new work.** Four
+independent hand-copied copies of `queued`/`running`/`done`/`failed` — two SQL
+strings, one TypeScript comparison in `board.ts`, one client-side `Set` — the exact
+shape that lost `passed_partial` from three of six review-state copies months ago.
+Only three of the four could actually be fixed: `core/refactor-state.ts` (new file,
+mirrors `review-state.ts` exactly) is now the shared source for the SQL and the TS
+comparison; the client-side `Set` in `board-page.ts` cannot import it (that file is
+one giant template literal of plain JS shipped to a browser) and is justified with a
+`lore-ok`, matching the review-side `TERMINAL` set's own identical, already-accepted
+constraint. Alongside it: `queuedNote` moved server-side (`board.ts`'s
+`refactorQueuedNote`, mirroring `stepNote`'s own draining-awareness) so a queued row
+explains *why* it hasn't started, instead of the client guessing a static sentence
+regardless of cause — the same mistake `stepNote` itself had already been fixed for
+once, on the review side, months earlier. Two coverage gaps closed too: a test
+proving `askOneTier`'s own touches are load-bearing independent of the combine
+step's (script both fan-out tiers empty, confirm the row still moved before t1 is
+ever asked to combine nothing), and the first test in `board-page.test.ts`'s whole
+refactor-run describe block that reads actual `render()` DOM content instead of
+`.not.toThrow()`.
+
+**Round 4 (LOW) — the fix for round 3's `queuedNote` had no test for the one branch
+it existed to add.** Every existing test used the non-draining sentence; nothing
+asserted the DRAINING branch — the entire reason `queuedNote` was written in the
+first place. Mirrors `stepNote`'s own drain test exactly, added as its sibling.
+
+**Round 5 (LOW) — the mechanical net this project built specifically to catch
+hand-copied state lists never learned a second family existed.**
+`one-definition.test.ts` exists because "found two more the next day" happened once
+already; round 3 fixed four hand-copied refactor-state lists without teaching that
+file's `SPELLED_OUT` regex or its derive-check about the new family, so a *fifth*
+one — the exact recurrence the file's own opening comment is about — would have
+passed every check in it. Not a simple copy of the review-side check: `refactor_run
+.state` and `job.state` are both `queued`/`running`/`done`/`failed`, the same four
+words for two unrelated tables, so a bare literal match would have flagged `job`'s
+own legitimate, already-correct query. Anchored on the token `refactor_run` actually
+preceding the `IN (...)` clause instead, which `job`'s own query never contains.
+
+**Round 6 (LOW) — a doc comment that survived its own code moving out from under
+it.** `boardRefactorRuns`'s comment still said "there is no shared TERMINAL_SQL...
+which matches `openRefactorRunCount`'s own inline literal" two rounds after round 3
+deleted that literal and gave the table exactly the shared SQL the comment said
+didn't exist. One sentence, never updated when the code it described changed.
+
+**What I'd do differently.** Round 3 alone found six real things in one pass — more
+than any single round of D-136 or D-138 — because it was the first review pass over
+a genuinely new UI surface, with nothing earlier to have caught the state-list
+duplication, the guessed client-side note, or the untested-in-isolation touch calls
+at the point they were written. Rounds 4 through 6 were each one gap in the
+*previous* round's own fix: round 3's `queuedNote` fix untested on the one branch it
+added; round 3's `refactor-state.ts` fix not taught to the mechanical net that
+exists for exactly this class of bug; a comment left behind by round 3's own code
+motion. The pattern across all three: a fix that changes behavior needs its own test
+of that specific behavior, and a fix that moves code out from under a comment needs
+its own grep for prose that still describes the old location.
+
 ## 2026-08-31 — D-137/D-138: a live "hang" report, and the four rounds it took to
 learn my own fix was breaking the thing it existed to protect
 
