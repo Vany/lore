@@ -68,12 +68,15 @@ export class RefactorWorker {
 
   private async dispatch(): Promise<void> {
     while (this.running) {
-      // lore-ok[9d364d2a]: found by lore's own review — `Worker.dispatch` declines to
-      // claim while draining (D-121: "DRAINING IS THE ONLY REASON THIS LOOP DECLINES
-      // WORK"), and this dispatcher never asked. A deploy that believed a drain had
-      // quieted the service would still see fresh refactor runs claimed, paid for and
-      // written to the store straight through it. Checked before claiming, same as
-      // there — draining is policy about when to accept new work, not the store's.
+      // lore-ok[9d364d2a,99512285]: found by lore's own review (the second fingerprint
+      // a stale re-raise of the same tree, same finding) — `Worker.dispatch` declines
+      // to claim while draining (D-121: "DRAINING IS THE ONLY REASON THIS LOOP
+      // DECLINES WORK"), and this dispatcher never asked. A deploy that believed a
+      // drain had quieted the service would still see fresh refactor runs claimed,
+      // paid for and written to the store straight through it. Checked before
+      // claiming, same as there — draining is policy about when to accept new work,
+      // not the store's. The other half of the promise — waiting for one already in
+      // flight — is `deploy/Makefile`'s own fix, lore-ok[49519bd1] there.
       if (this.store.isDraining()) {
         await sleep(this.cfg.pollMs);
         continue;

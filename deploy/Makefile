@@ -158,6 +158,12 @@ STAMP = LORE_COMMIT="$$(git -C .. rev-parse --short HEAD 2>/dev/null || echo unk
 ##
 ## The flag does not survive the restart it was for: the starting process clears it,
 ## so a forgotten drain cannot leave a service that answers ok while doing nothing.
+##
+## lore-ok[49519bd1]: found by lore's own review — the wait loop below used to poll
+## only `job` (review rounds), so a refactor run (D-136, its own dispatcher and its
+## own table, RefactorWorker) claimed moments before the drain flag was set stayed
+## invisible to it: "drained — nothing in flight" could print, and print truthfully
+## about reviews, while a refactor run was still mid-call. Now counts both.
 drain:
 	$(wrong-directory)
 	@$(COMPOSE) exec -T lore node -e "\
