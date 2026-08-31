@@ -192,6 +192,15 @@ describe("suggestLadder", () => {
    * for. A large, padded catalog here stands in for a realistic hundreds-of-models
    * table; the cheapest candidate's tiny window must be skipped in favour of a larger,
    * pricier one that can actually hold the prompt.
+   *
+   * NEITHER `moonshotai/kimi-k3` NOR ANY `pad-vendor-N` entry is `DEFAULT_TIERS[1]`'s
+   * own model — that is `openrouter/z-ai/glm-5.2` (`core/ladder.ts:148`, index 1;
+   * `kimi-k3` sits at index 2), which appears nowhere in this catalog — so this test
+   * genuinely takes the FALLBACK branch, not the preferred one. Asserted precisely
+   * (the exact expected winner, not merely "not the tiny one") after a false claim to
+   * the contrary (fingerprint e025dd4b) was checked and disproved by reproducing its
+   * own cited mutation: dropping the context filter from the fallback sort DOES fail
+   * this test, confirming the fallback branch is what runs here.
    */
   it("skips a too-cheap-but-too-small fallback candidate for one that can hold the prompt", async () => {
     const padding = Array.from({ length: 200 }, (_, i) => ({
@@ -203,6 +212,8 @@ describe("suggestLadder", () => {
     }));
     const withTinyFallback: readonly CatalogModel[] = [
       ...padding,
+      // Cheaper than every padding entry, and large enough to hold the prompt — the
+      // expected winner once the too-small one below is correctly excluded.
       { id: "openrouter/moonshotai/kimi-k3", vendor: "moonshotai", costInput: 0.000003, costOutput: 0.000015, contextTokens: 1_048_576 },
       { id: "openrouter/openai/gpt-5.6-sol-pro", vendor: "openai", costInput: 0.000005, costOutput: 0.00003, contextTokens: 400_000 },
       // Cheapest by far, but its window cannot hold a 200+ row candidate table.
@@ -215,9 +226,8 @@ describe("suggestLadder", () => {
     ];
     await suggestLadder(deps(withTinyFallback, reply));
     expect(asked).toHaveLength(1);
-    expect(asked[0]?.model, "the tiny-context model must be skipped despite being cheapest").not.toBe(
-      "openrouter/too-cheap/tiny-context",
-    );
+    // Precise, not merely "not the tiny one": the cheapest candidate THAT FITS.
+    expect(asked[0]?.model).toBe("openrouter/moonshotai/kimi-k3");
   });
 
   it("refuses loudly when no candidate's context can hold the prompt, rather than guessing", async () => {
