@@ -395,6 +395,16 @@ export function splitModel(id: string): { providerID: string; modelID: string } 
   return { providerID: id.slice(0, slash), modelID: id.slice(slash + 1) };
 }
 
+/**
+ * ~4 characters per token. Rough, and only ever used with a wide margin — module-level
+ * so `src/ladder-setup/`'s own fallback-caller sizing (a different rough estimate, same
+ * factor) can share this one rather than keeping its own copy: found by lore's own
+ * review, fingerprint 30e50116, before the second copy had drifted, but exactly the
+ * shape ("one thing defined twice always disagrees eventually") this codebase keeps
+ * being burned by once it does.
+ */
+export const CHARS_PER_TOKEN = 4;
+
 export class Reviewer implements ReviewerLike {
   private readonly client: ReturnType<typeof createOpencodeClient>;
   private readonly cfg: ReviewerConfig;
@@ -772,9 +782,6 @@ export class Reviewer implements ReviewerLike {
    */
   private static readonly PROMPT_SHARE = 0.35;
 
-  /** ~4 characters per token. Rough, and only ever used with a wide margin. */
-  private static readonly CHARS_PER_TOKEN = 4;
-
   /**
    * How many characters of prompt this tier can be given.
    *
@@ -801,7 +808,7 @@ export class Reviewer implements ReviewerLike {
       (l): l is number => l !== undefined,
     );
     const limit = limits.length === 0 ? undefined : Math.min(...limits);
-    return limit === undefined ? undefined : Math.floor(limit * Reviewer.PROMPT_SHARE * Reviewer.CHARS_PER_TOKEN);
+    return limit === undefined ? undefined : Math.floor(limit * Reviewer.PROMPT_SHARE * CHARS_PER_TOKEN);
   }
 
   /**

@@ -8,7 +8,7 @@
  */
 
 import { join } from "node:path";
-import { extractList, type Listed, type SessionResult } from "../reviewer/opencode.ts";
+import { CHARS_PER_TOKEN, extractList, type Listed, type SessionResult } from "../reviewer/opencode.ts";
 import { DidNotRun } from "../core/errors.ts";
 import { DEFAULT_TIERS, type Tier } from "../core/ladder.ts";
 import { dataDir } from "../core/paths.ts";
@@ -28,14 +28,30 @@ import { makeTierPickParser, validatePicks, type TierPick } from "./suggestion.t
  * Z.ai/OpenAI credentials) lives on disk. `repos` is the one path guaranteed to exist
  * on both sides, exactly the reasoning `propose`'s own `reposRoot` (`cli.ts`) already
  * uses for the same two-container split.
+ *
+ * lore-ok[b532a942]: found by lore's own review — `repos` EXISTS, but is not itself a
+ * git repository (its children, one per mirrored customer repo, are); the upstream
+ * fallback this fix cites has not been confirmed to key on existence specifically
+ * rather than "no VCS root found here", and a fresh install's `repos/` starts empty,
+ * so the residual case this fix may not fully close is real and NOT verified shut —
+ * stated plainly rather than claimed fixed, since confirming opencode's own exact
+ * resolution rule needs either its source or a live session-scope experiment, and the
+ * one attempted here was stopped before it ran. Two things bound the actual risk in
+ * the meantime, not removed by this fix but already true regardless of it: every
+ * `askFor` caller in this codebase — `propose`, `refactor`, this one — runs under the
+ * SAME read-only agent (`DEFAULT_REVIEWER.agent = "readonly"`, `opencode.ts:160`;
+ * verified present at boot, INV-8), so a worse-than-intended scope is not a NEW
+ * capability this feature grants, only a possibly-wider read scope under a policy
+ * that already denies writes; and this session's own prompt (`prompt.ts`) never asks
+ * the model to explore, read files, or use any tool — it asks for one JSON reply
+ * about a candidate table already IN the prompt. `repos` existing is a real, verified
+ * improvement over the prior bug (`process.cwd()`, which was guaranteed not to exist
+ * at all); whether it is also sufficient on its own is the part left open here.
  */
 const DEFAULT_WORKTREE = join(dataDir(), "repos");
 
 /** The id every bootstrap-caller tier carries, whichever model it ends up naming. */
 export const BOOTSTRAP_CALLER_ID = "ladder-setup";
-
-/** ~4 chars/token, English or code — rough, deliberately: this bounds a fallback pick, it does not budget a real call. */
-const CHARS_PER_TOKEN = 4;
 
 /**
  * The model that makes the pick, chosen from the SAME live catalog it is about to hand
