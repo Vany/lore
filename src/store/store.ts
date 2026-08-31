@@ -4042,6 +4042,29 @@ export class Store {
   }
 
   /**
+   * A run is still alive — bump `updated_at` with nothing else changing (D-139,
+   * fingerprint fe6d4318).
+   *
+   * Found by lore's own review of the board-visibility change: between
+   * `setRefactorRunCommit` (the worktree cut) and `finishRefactorRun` (the terminal
+   * write), NOTHING touched this row — so `BoardRefactorRun.movedAt`, which reads
+   * `updated_at` alone because a refactor run has no `tier_run` table to fold in the
+   * way a review's own `movedAt` does, sat frozen for the whole fan-out, however long
+   * it legitimately ran. The board would have painted a healthy multi-tier fan-out
+   * exactly the colour of the 45-minute hang this whole project exists to catch —
+   * an operator "fixing" it by restarting the service mid-run, which
+   * `reclaimOrphanedRefactorRuns` would then mark FAILED for real. Called once per
+   * fan-out tier's own completion (`src/refactor/run.ts`'s `askOneTier`, success or
+   * failure — a tier finishing at all is movement, same reasoning
+   * `perRoundUsage`-adjacent code elsewhere in this file already applies) and once
+   * after the combine step, so `updated_at` narrates the run instead of only
+   * bookending it.
+   */
+  touchRefactorRun(id: string): void {
+    this.db.prepare("UPDATE refactor_run SET updated_at = ? WHERE id = ?").run(now(), id);
+  }
+
+  /**
    * The next queued run, claimed atomically so two dispatch loops cannot both take it.
    *
    * lore-ok[28be6b5c]: found by lore's own review — this ordered `BY id`, copied from

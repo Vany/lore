@@ -67,6 +67,7 @@ function scripted(replies: Record<string, readonly unknown[] | null>) {
 }
 
 const input = (over: Partial<RefactorInput> = {}): RefactorInput => ({
+  runId: "refactor_test1",
   folder: "src/store",
   commit: "abc1234",
   worktree: process.cwd(),
@@ -191,5 +192,59 @@ describe("a tier that could not run is reported, never silently absent (INV-1)",
     const t2 = r.sources.find((s) => s.tier === "t2");
     expect(t2?.ok).toBe(false);
     expect(t2?.error).toBeDefined();
+  });
+});
+
+/**
+ * THE ROW MOVES WHILE THE RUN IS WORKING (D-139, fingerprint fe6d4318) — found by
+ * lore's own review of the board-visibility change: between the worktree cut and the
+ * terminal write nothing touched `refactor_run.updated_at`, so the board's stall
+ * clock — which has no tier_run table to fold in, unlike a review's own — sat frozen
+ * for the whole fan-out however long it legitimately ran, and would have painted a
+ * healthy multi-tier fan-out exactly the colour of the hang this whole project exists
+ * to catch.
+ */
+describe("the row's own updated_at moves as the run works", () => {
+  const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
+
+  it("touches the row on every fan-out tier's completion, success or failure", async () => {
+    const id = "refactor_moveTest1";
+    store.createRefactorRun({ id, repoId, principal: "p", commitSha: "abc1234", folder: "src/store" });
+    store.db.prepare("UPDATE refactor_run SET updated_at = ? WHERE id = ?").run(ago(60_000), id);
+    const before = store.refactorRun(id)?.updatedAt;
+
+    await suggestRefactors(
+      deps(scripted({ t2: null, t3: [SUGGESTION_A], t1: [SUGGESTION_A] })),
+      input({ runId: id }),
+    );
+
+    const after = store.refactorRun(id)?.updatedAt;
+    expect(after, "the row moved even though t2 refused").toBeDefined();
+    expect(after !== before, "a stale updated_at would leave the board's stall clock frozen").toBe(true);
+  });
+
+  it("touches the row after the combine step too", async () => {
+    const id = "refactor_moveTest2";
+    store.createRefactorRun({ id, repoId, principal: "p", commitSha: "abc1234", folder: "src/store" });
+    store.db.prepare("UPDATE refactor_run SET updated_at = ? WHERE id = ?").run(ago(60_000), id);
+    const before = store.refactorRun(id)?.updatedAt;
+
+    await suggestRefactors(
+      deps(scripted({ t2: [SUGGESTION_A], t3: [SUGGESTION_B], t1: [SUGGESTION_A, SUGGESTION_B] })),
+      input({ runId: id }),
+    );
+
+    const after = store.refactorRun(id)?.updatedAt;
+    expect(after !== before).toBe(true);
+  });
+
+  // A run whose id matches no row is not this function's problem to notice — the
+  // worker created the row before ever calling suggestRefactors, so a mismatch here
+  // would mean a bug in the caller, not something to guard against with a throw that
+  // would turn a bookkeeping touch into a reason to lose real, paid-for suggestions.
+  it("does not throw when the row does not exist", async () => {
+    await expect(
+      suggestRefactors(deps(scripted({ t2: [SUGGESTION_A], t3: null })), input({ runId: "refactor_never_created" })),
+    ).resolves.toBeDefined();
   });
 });

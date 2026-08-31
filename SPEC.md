@@ -3918,6 +3918,22 @@ column beside it still says RUNNING, QUEUED, DONE or FAILED, reusing three of
 review's own four state colours (`done` alone needed a new one, `.s-done`, green
 like `passed`) rather than inventing a parallel palette for a second kind of row.
 
+**The first version's `movedAt` would have painted every healthy fan-out red — found
+by lore's own review, fingerprint fe6d4318.** `updated_at` moved exactly twice in a
+refactor run's life: the worktree cut and the terminal write. Nothing in between —
+and "in between" is where the actual work is: every tier marked `refactor: true` runs
+in PARALLEL (D-136), each session a full paid folder-read comparable to a deep review
+round, plus a t1 combine after. A healthy run legitimately takes as long as the
+slowest of those, easily past this board's own 45-minute red threshold — the exact
+number this whole line of work is named for. `store.touchRefactorRun` (called from
+`src/refactor/run.ts`'s `askOneTier`, on every fan-out tier's completion whether it
+succeeded or not, and again after the combine step) is the fix: the same mechanism a
+review's own tier_run rows provide, rebuilt at the one point a refactor run actually
+has — the row itself, since there is no per-tier table to fold values in from.
+Un-fixed, the failure mode was not merely a wrong number: `reclaimOrphanedRefactorRuns`
+would mark a service restart's own healthy, still-paying-for-itself run FAILED,
+exactly as a false stall reading invites — a person "fixing" what was never broken.
+
 **D-116 — an over-long claim folds; it never costs the finding either. BUILT 2026-08-16.**
 
 D-115 fixed `severity` and wrote the rule beside it: *validation at the reviewer boundary

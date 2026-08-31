@@ -229,8 +229,15 @@ export interface BoardRefactorRun {
   readonly endedAt: string | undefined;
   /**
    * A refactor run has no tier-run rows and no findings to fold in, unlike a review's own
-   * `movedAt` (`ops/board.ts`'s own `movedAt` function) — so this is simply `updated_at`,
-   * the only timeline this row has.
+   * `movedAt` (`ops/board.ts`'s own `movedAt` function) — so this is simply `updated_at`.
+   *
+   * Not just the worktree cut and the terminal write, though — found by lore's own
+   * review, fingerprint fe6d4318: the first version only had those two, so a healthy
+   * multi-tier fan-out sat looking frozen for the whole time it was actually working,
+   * long enough to paint this board's own stall alarm. `store.touchRefactorRun` (called
+   * from `src/refactor/run.ts` as each fan-out tier and the combine step complete,
+   * success or failure) is what makes `updated_at` narrate the run instead of only
+   * bookending it — this field needed no further change once that existed.
    */
   readonly movedAt: string;
   readonly combinerNote: string | undefined;

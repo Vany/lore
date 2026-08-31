@@ -132,7 +132,13 @@ export class RefactorWorker {
         if (resolvedSha !== "") this.store.setRefactorRunCommit(run.id, resolvedSha);
         const result = await suggestRefactors(
           { store: this.store, repoId: run.repoId, ask: this.ask },
-          { folder: run.folder, commit: resolvedSha === "" ? run.commitSha : resolvedSha, worktree, tiers: loadTiers() },
+          {
+            runId: run.id,
+            folder: run.folder,
+            commit: resolvedSha === "" ? run.commitSha : resolvedSha,
+            worktree,
+            tiers: loadTiers(),
+          },
         );
         // lore-ok[7565fe66]: found by lore's own review — `finishRefactorRun(done)`
         // used to run BEFORE `recordRefactorSuggestions`, inverting this codebase's

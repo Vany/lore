@@ -207,10 +207,16 @@ moment it arrives is the one you were watching for.
 underneath the reviews (D-139).** It has no branch, no pull request, no tiers and no
 findings — a different shape entirely — but the same two questions apply: is it running,
 and how long since it moved. `movedAt` for a refactor run is simply its own `updated_at`;
-there is no tier-run timeline to fold in, because a refactor run makes one call and
-combines it, not a ladder of rounds. Both terminal windows and both row caps work
-identically to a review's own (two hours kept, the overflow counted and said out loud) —
-one definition, reused, rather than a second one to keep in step with the first.
+there is no separate tier-run TABLE to fold values in from the way a review's own
+`movedAt` does. That is narrower than it first sounds, and it cost a review round to get
+right: a refactor run is every tier marked `refactor: true` running IN PARALLEL plus a
+t1 combine (D-136), not one call — each session is its own paid folder-read, comparably
+sized to a deep review round — so `updated_at` has to move as each one finishes
+(`store.touchRefactorRun`, called from `src/refactor/run.ts`) or the row sits looking
+frozen for the whole fan-out, however long it legitimately runs, and paints a healthy
+multi-tier run exactly the colour of a hang. Both terminal windows and both row caps
+work identically to a review's own (two hours kept, the overflow counted and said out
+loud) — one definition, reused, rather than a second one to keep in step with the first.
 
 **It is pushed, and only when something changed.** A timer recomputes the snapshot every
 two seconds while at least one board is open and writes nothing if the payload is

@@ -40,6 +40,14 @@ export interface RefactorDeps {
 }
 
 export interface RefactorInput {
+  /**
+   * The row this run belongs to — used only to call `store.touchRefactorRun` as each
+   * fan-out tier completes (D-139), so the board's stall clock has real movement to
+   * read during a long fan-out instead of sitting frozen between the worktree cut and
+   * the terminal write. Nothing else here reads or writes the row by id; that is
+   * `RefactorWorker.execute`'s job.
+   */
+  readonly runId: string;
   readonly folder: string;
   /** The resolved SHA, never the ref — a stored run has to be reconstructable. */
   readonly commit: string;
@@ -109,9 +117,13 @@ async function askOneTier(deps: RefactorDeps, tier: Tier, input: RefactorInput):
       ...(r.steps === undefined ? {} : { steps: r.steps }),
       outcome: r.items.length > 0 ? "findings" : "clean",
     });
+    // D-139, fingerprint fe6d4318: a tier finishing IS movement, whether it succeeded
+    // or not — see touchRefactorRun's own doc comment for the incident this answers.
+    deps.store.touchRefactorRun(input.runId);
     return { tier: tier.id, suggestions: r.items, ok: true };
   } catch (e) {
     recordFailedUsage(deps.store, deps.repoId, `refactor:${tier.id}`, tier.model, e);
+    deps.store.touchRefactorRun(input.runId);
     return { tier: tier.id, suggestions: [], ok: false, error: e instanceof Error ? e.message : String(e) };
   }
 }
@@ -181,6 +193,7 @@ export async function suggestRefactors(deps: RefactorDeps, input: RefactorInput)
       ...(c.steps === undefined ? {} : { steps: c.steps }),
       outcome: c.items.length > 0 ? "findings" : "clean",
     });
+    deps.store.touchRefactorRun(input.runId);
     // The prompt explicitly forbids dropping a suggestion to zero unless the input
     // already was zero (handled above) — an empty reply here means t1 did not follow
     // the merge instruction, not that it looked and rejected everything, so this reports
@@ -199,6 +212,7 @@ export async function suggestRefactors(deps: RefactorDeps, input: RefactorInput)
     return { suggestions: c.items, sources, combined: true };
   } catch (e) {
     recordFailedUsage(deps.store, deps.repoId, "refactor-combine:t1", combiner.model, e);
+    deps.store.touchRefactorRun(input.runId);
     return {
       suggestions: raw,
       sources,
