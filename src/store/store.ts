@@ -4241,10 +4241,12 @@ export class Store {
    * Deliberately NOT `recentRefactorRuns` widened: that query is repo-scoped, matching
    * `refactor_list`'s own client-facing contract (a token sees its own repository); the
    * board is repo-agnostic like `boardReviews` itself, because an operator watching "what
-   * is running right now" is watching the whole deployment, not one tenant. `'done'` and
-   * `'failed'` are this table's own terminal pair — there is no shared `TERMINAL_SQL`
-   * for it because nothing before this needed one outside `openRefactorRunCount`'s own
-   * inline literal, which this matches.
+   * is running right now" is watching the whole deployment, not one tenant.
+   * `REFACTOR_OPEN_SQL`/`REFACTOR_TERMINAL_SQL` (`core/refactor-state.ts`) name this
+   * table's own open/terminal pairs — the shared source `TERMINAL_SQL` is for review's
+   * own, found missing here by lore's own review (fingerprints ad809772/ba0d19b8) after
+   * `'queued'`/`'running'`/`'done'`/`'failed'` had been hand-copied four times, this
+   * query among them.
    */
   boardRefactorRuns(finishedSinceIso: string, limit = 60): readonly Record<string, string | null>[] {
     return this.db
