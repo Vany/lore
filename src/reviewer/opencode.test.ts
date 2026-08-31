@@ -1983,6 +1983,35 @@ describe("a bounded probe on a silent call", () => {
     expect(err).toBeInstanceOf(ProbeInconclusive);
     r.close();
   });
+
+  /**
+   * `message.updated`'S SESSION ID LIVES SOMEWHERE ELSE (found by lore's own review,
+   * fingerprint 8cf1109a): `properties.info.sessionID`, not the flat field or `part`. Listed
+   * as a recognised type without reading the right path, it was dead weight that looked
+   * like coverage.
+   */
+  it("re-arms the probe bound on message.updated, read from properties.info.sessionID", async () => {
+    hangPrompt = true;
+    const r = new Reviewer({ baseUrl, agent: "readonly", timeoutMs: 10_000, probeTimeoutMs: 200 });
+    const started = Date.now();
+    const inFlight = r.review(TIER, "review this", "/tmp/wt", "rev_msg", undefined, true);
+
+    await new Promise((res) => setTimeout(res, 120));
+    pending.push({
+      type: "message.updated",
+      properties: { info: { id: "msg_1", sessionID: "ses_test", role: "assistant", time: { created: Date.now() } } },
+    });
+
+    const stillOpenPastOriginalBound = await Promise.race([
+      inFlight.then(() => "settled", () => "settled"),
+      new Promise((res) => setTimeout(() => res("open"), 250 - (Date.now() - started))),
+    ]);
+    expect(stillOpenPastOriginalBound, "message.updated re-arms the clock too").toBe("open");
+
+    const err = await inFlight.then(() => undefined, (e: unknown) => e);
+    expect(err).toBeInstanceOf(ProbeInconclusive);
+    r.close();
+  });
 });
 
 /**

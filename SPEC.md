@@ -3600,8 +3600,8 @@ looks like the provider being down, and gets diagnosed as anything but a typo in
 file. Not fatal — a ladder without a fallback is the one lore ran for its whole life — so
 it tickets, names the model, and starts.
 
-**D-137 — OpenRouter's GLM route is gone from every tiers file, in favour of the second
-Z.ai subscription already sitting in the same chain (2026-08-31).**
+**D-137 — OpenRouter's GLM route is gone from both DEPLOYED tiers files, in favour of the
+second Z.ai subscription already sitting in the same chain (2026-08-31).**
 
 Vany: *"we are using openrouter glm for something, but we have both z.ai subscriptions,
 let's not use openrouter's glm at all."* `deploy/tiers.zai-kimi-openai.json`'s t1 carried
@@ -3626,6 +3626,18 @@ already made redundant.
 `openrouter/moonshotai/kimi-k3` (T2, kimi's own metered twin) and
 `openrouter/openai/gpt-5.6-terra` (T3) — are untouched. Neither is Z.ai, so neither is
 what "both z.ai subscriptions" was about.
+
+**And narrowly scoped to the DEPLOYED files, not `core/ladder.ts`'s own `DEFAULT_TIERS`
+— found by lore's own review, fingerprint 1a8a6694, against this entry's first title,
+which overclaimed "every tiers file."** `DEFAULT_TIERS` is a different thing: the
+zero-config ladder `loadTiers` falls back to when `LORE_TIERS` names nothing, and all
+THREE of its tiers are `openrouter/` — t2 and t3 as much as t1's GLM. "We have both z.ai
+subscriptions" has no purchase there, because a genuinely unconfigured install has no
+Z.ai subscription to prefer either; OpenRouter is the one thing that can answer with
+nothing set up beyond a key. Changing t1 alone would not even be internally consistent
+with its own t2/t3. `spec/review-ladder.md`'s own default-ladder table (§1) already says
+so plainly — "a deployment usually replaces it" — this entry's title just claimed more
+than that table does.
 
 **D-94 — a cooled-off tier is asked again every fifteen minutes.**
 

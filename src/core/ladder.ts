@@ -138,6 +138,11 @@ export interface Tier {
  * independent vendor, and two tiers from one model family are not two opinions.
  * Independence is the premise of the whole design (D-1), so it is worth the money.
  */
+// lore-ok[1a8a6694]: D-137 removed OpenRouter's GLM route from the DEPLOYED tiers files
+// specifically, because those have real Z.ai subscriptions to prefer instead. This
+// zero-config default has none — all three tiers here are `openrouter/`, t2 and t3 as
+// much as t1 — so there is nothing for "we have both z.ai subscriptions" to apply to.
+// SPEC.md's own D-137 entry now says so explicitly.
 export const DEFAULT_TIERS: readonly Tier[] = [
   { id: "t0", kind: "deterministic", stage: "fast" },
   { id: "t1", kind: "model", model: "openrouter/z-ai/glm-5.2", effort: "medium", stage: "fast" },

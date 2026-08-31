@@ -2083,8 +2083,15 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       // which did not throw had produced a result.
       let answered: { readonly model: string; readonly result: ReviewerResult } | undefined;
       for (const twinModel of chain) {
+        // A THIRD SITE WITH THE SAME HOLE fd3a5283 FIXED TWICE — found by lore's own
+        // review, fingerprint 446eda98: this one fires FIRST, on every hop, before either
+        // corrected notice is ever reached, so an operator reading the log in order saw
+        // the false "is out of quota" cause before the honest one further down existed.
         console.error(
-          `[lore:log] ${reviewId}: ${member.id} (${member.model ?? "?"}) is out of quota — asking ${twinModel} instead`,
+          primaryProbeInconclusive
+            ? `[lore:log] ${reviewId}: ${member.id} (${member.model ?? "?"})'s probe went unconfirmed — asking ` +
+                `${twinModel} instead`
+            : `[lore:log] ${reviewId}: ${member.id} (${member.model ?? "?"}) is out of quota — asking ${twinModel} instead`,
         );
         try {
           answered = {

@@ -540,15 +540,24 @@ export class Reviewer implements ReviewerLike {
             if (this.closed) break;
             const e = ev as {
               type?: string;
-              properties?: { sessionID?: string; status?: OpencodeStatus; part?: { sessionID?: string } };
+              properties?: {
+                sessionID?: string;
+                status?: OpencodeStatus;
+                part?: { sessionID?: string };
+                info?: { sessionID?: string };
+              };
             };
             // ACTIVITY, FROM WHICHEVER EVENT SHAPE CARRIES A SESSION ID — checked before the
             // `session.status`-only filter below, not folded into it (fingerprint a2ea8a61).
-            // `message.part.updated` streams a `delta` per token and nests its id in
-            // `properties.part.sessionID` rather than `properties.sessionID` directly; every
-            // other type this loop recognises a session by uses the flat field. Both are
-            // genuine narration that a truly stuck call cannot produce, so both count.
-            const activityId = e.properties?.sessionID ?? e.properties?.part?.sessionID;
+            // THREE SHAPES, NOT ONE, and the mismatch is exactly what fingerprint 8cf1109a
+            // caught: `message.updated` was already in the type list below but its id lives
+            // at `properties.info.sessionID` (opencode SDK `EventMessageUpdated`), which
+            // neither of the other two paths would ever have read — so it was listed as
+            // recognised and silently never fired. `message.part.updated` streams a `delta`
+            // per token and nests its id in `properties.part.sessionID`; every other type
+            // this loop recognises uses the flat field. All three are genuine narration a
+            // truly stuck call cannot produce.
+            const activityId = e.properties?.sessionID ?? e.properties?.part?.sessionID ?? e.properties?.info?.sessionID;
             if (
               activityId !== undefined &&
               (e.type === "session.status" || e.type === "session.idle" || e.type === "message.part.updated" ||
