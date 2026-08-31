@@ -20,6 +20,7 @@ import { isTerminal, TERMINAL_SQL, PERSON_OR_CLOCK_DECIDED_SQL, type ReviewState
 import type { Scope } from "../core/scope.ts";
 import { DDL, FINDING_ORDER_SQL, PRAGMAS, SCHEMA_VERSION, applyMigrations, assertNotDowngrade } from "./schema.ts";
 import { NO_EVENTS, type ReviewEvents } from "../mcp/events.ts";
+import type { RefactorSuggestion, RoughSize } from "../refactor/suggestion.ts";
 
 export interface RepoRow {
   readonly id: string;
@@ -329,6 +330,47 @@ export interface UsageRecord {
   /** Diff size in characters before truncation, so the ceiling is observed (D-58). */
   readonly diffChars?: number;
   readonly outcome: string;
+}
+
+export interface RefactorRunCreate {
+  readonly id: string;
+  readonly repoId: string;
+  readonly principal: string;
+  readonly commitSha: string;
+  readonly folder: string;
+}
+
+/** One fan-out tier's own outcome — never silently absent, same reasoning as `tier_run.unavailable`. */
+export interface RefactorSourceRecord {
+  readonly tier: string;
+  readonly ok: boolean;
+  readonly error?: string;
+  readonly count: number;
+}
+
+export type RefactorRunOutcome =
+  | {
+      readonly state: "done";
+      readonly combined: boolean;
+      readonly combinerNote?: string;
+      readonly sources: readonly RefactorSourceRecord[];
+    }
+  | { readonly state: "failed"; readonly lastError: string };
+
+export interface RefactorRunRow {
+  readonly id: string;
+  readonly repoId: string;
+  readonly principal: string;
+  readonly commitSha: string;
+  readonly folder: string;
+  readonly state: "queued" | "running" | "done" | "failed";
+  readonly combined?: boolean;
+  readonly combinerNote?: string;
+  readonly sources?: readonly RefactorSourceRecord[];
+  readonly lastError?: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly suggestions: readonly RefactorSuggestion[];
 }
 
 /** node:sqlite rejects `undefined` as a bound parameter; SQL wants NULL. */
@@ -3932,6 +3974,87 @@ export class Store {
       .prepare("UPDATE job SET state = 'queued', last_error = ?, updated_at = ? WHERE id = ?")
       .run(why, now(), id);
     return true;
+  }
+
+  // --------------------------------------------------------------- refactor (D-136)
+  //
+  // Separate from `review`/`job` throughout, on purpose: a refactor run gates nothing,
+  // reaches no attestation, and its own queue must not compete with or be swept by
+  // anything review-shaped. `claimRefactorRun` mirrors `claimJob`'s atomic claim.
+
+  createRefactorRun(r: RefactorRunCreate): void {
+    const t = now();
+    this.db
+      .prepare(
+        `INSERT INTO refactor_run(id, repo_id, principal, commit_sha, folder, state, created_at, updated_at)
+         VALUES(?, ?, ?, ?, ?, 'queued', ?, ?)`,
+      )
+      .run(r.id, r.repoId, r.principal, r.commitSha, r.folder, t, t);
+  }
+
+  /** The next queued run, claimed atomically so two dispatch loops cannot both take it. */
+  claimRefactorRun(): { readonly id: string; readonly repoId: string; readonly commitSha: string; readonly folder: string } | undefined {
+    return this.tx(() => {
+      const row = this.db
+        .prepare("SELECT id, repo_id, commit_sha, folder FROM refactor_run WHERE state = 'queued' ORDER BY id LIMIT 1")
+        .get() as Record<string, string> | undefined;
+      if (row === undefined) return undefined;
+      const id = String(row["id"]);
+      this.db.prepare("UPDATE refactor_run SET state = 'running', updated_at = ? WHERE id = ?").run(now(), id);
+      return { id, repoId: String(row["repo_id"]), commitSha: String(row["commit_sha"]), folder: String(row["folder"]) };
+    });
+  }
+
+  finishRefactorRun(id: string, outcome: RefactorRunOutcome): void {
+    if (outcome.state === "done") {
+      this.db
+        .prepare(
+          "UPDATE refactor_run SET state = 'done', combined = ?, combiner_note = ?, sources = ?, updated_at = ? WHERE id = ?",
+        )
+        .run(outcome.combined ? 1 : 0, n(outcome.combinerNote), JSON.stringify(outcome.sources), now(), id);
+    } else {
+      this.db
+        .prepare("UPDATE refactor_run SET state = 'failed', last_error = ?, updated_at = ? WHERE id = ?")
+        .run(outcome.lastError, now(), id);
+    }
+  }
+
+  recordRefactorSuggestions(runId: string, suggestions: readonly RefactorSuggestion[]): void {
+    const t = now();
+    const insert = this.db.prepare(
+      "INSERT INTO refactor_suggestion(run_id, title, area, rationale, rough_size, created_at) VALUES(?, ?, ?, ?, ?, ?)",
+    );
+    for (const s of suggestions) {
+      insert.run(runId, s.title, JSON.stringify(s.area), s.rationale, n(s.roughSize), t);
+    }
+  }
+
+  refactorRun(id: string): RefactorRunRow | undefined {
+    const row = this.db.prepare("SELECT * FROM refactor_run WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+    if (row === undefined) return undefined;
+    const suggestionRows = this.db
+      .prepare("SELECT title, area, rationale, rough_size FROM refactor_suggestion WHERE run_id = ? ORDER BY id")
+      .all(id) as Record<string, unknown>[];
+    return {
+      id: String(row["id"]),
+      repoId: String(row["repo_id"]),
+      principal: String(row["principal"]),
+      commitSha: String(row["commit_sha"]),
+      folder: String(row["folder"]),
+      state: String(row["state"]) as RefactorRunRow["state"],
+      ...(row["combined"] === null ? {} : { combined: row["combined"] === 1 }),
+      ...(row["combiner_note"] === null ? {} : { combinerNote: String(row["combiner_note"]) }),
+      ...(row["sources"] === null ? {} : { sources: JSON.parse(String(row["sources"])) as readonly RefactorSourceRecord[] }),
+      ...(row["last_error"] === null ? {} : { lastError: String(row["last_error"]) }),
+      createdAt: String(row["created_at"]),
+      updatedAt: String(row["updated_at"]),
+      suggestions: suggestionRows.map((s) => ({
+        title: String(s["title"]),
+        area: JSON.parse(String(s["area"])) as readonly string[],
+        rationale: String(s["rationale"]),
+        ...(s["rough_size"] === null ? {} : { roughSize: String(s["rough_size"]) as RoughSize }),
+      })),
+    };
   }
 
   // ------------------------------------------------------- the operator board (D-96)

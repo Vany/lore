@@ -17,7 +17,7 @@ import * as z from "zod";
 import { mayAdmit } from "../core/admission.ts";
 import { absent } from "../core/optional.ts";
 import { worstSeverity } from "../core/finding.ts";
-import { initialState, ladderFingerprint, type LadderState } from "../core/ladder.ts";
+import { initialState, ladderFingerprint, loadTiers, type LadderState } from "../core/ladder.ts";
 import { isAttestable, isClean, isTerminal, needsClient, type ReviewState } from "../core/review-state.ts";
 import { SHORT_LENGTH } from "../core/fingerprint.ts";
 import { AmbiguousFingerprint } from "../core/errors.ts";
@@ -272,6 +272,10 @@ function newReviewId(): string {
   return `rev_${randomBytes(18).toString("base64url")}`;
 }
 
+function newRefactorRunId(): string {
+  return `refactor_${randomBytes(18).toString("base64url")}`;
+}
+
 // lore-ok[b53881c1]: same finding as e393b46f below (an absolute root path — "/"
 // and its variants — normalizing to "." here before the escape check could see it
 // was absolute), raised twice with different wording. See that comment for the fix
@@ -399,6 +403,21 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
     if (bound !== undefined && bound !== who.tokenHash && store.tokenLive(bound)) {
       throw new Error(`review ${reviewId} not found`);
     }
+    return r;
+  };
+
+  /**
+   * Fetch a refactor run or refuse, same reasoning as `mine` — repository scope, and
+   * "not found" rather than "forbidden" so a guessed id learns nothing.
+   *
+   * No token-binding half: unlike `review_poll`, `refactor_poll` marks nothing
+   * delivered and consumes nothing — it is safe for anybody holding this repo's token
+   * to read the same run twice, so there is no colleague-loses-their-findings accident
+   * to guard against here (D-136).
+   */
+  const myRefactorRun = (runId: string) => {
+    const r = store.refactorRun(runId);
+    if (r === undefined || r.repoId !== who.repoId) throw new Error(`refactor run ${runId} not found`);
     return r;
   };
 
@@ -2637,6 +2656,67 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           note: "Recorded. This still blocks the review from passing — tell your user a person must decide it.",
         }),
       );
+    },
+  );
+
+  // ----------------------------------------------------------- refactor.start (D-136)
+  //
+  // SEPARATE FROM REVIEW THROUGHOUT: no review row, no ladder, no finding, no
+  // attestation. `commit`+`folder` are read exactly as `review_start`'s folder mode
+  // reads `path` — a githash is not new plumbing here, `worktreeFor` (git/repo.ts)
+  // already resolves any committish, branch tip or raw SHA alike.
+
+  server.registerTool(
+    "refactor_start",
+    {
+      description: TOOL_DOCS.refactorStart,
+      inputSchema: z.object({
+        commit: z.string().min(1).describe("the commit to read — a branch tip or a raw SHA, cut from lore's mirror exactly as a review is"),
+        folder: z.string().min(1).describe('the folder the suggestions must be ABOUT, relative to the repository root — "." for the whole tree'),
+      }),
+    },
+    async ({ commit, folder }) => {
+      // Same fault as review_start's own path guard: a NUL byte reaches `execFile` and
+      // throws from Node itself, after a row already exists and a claim is already
+      // possible — refused here instead, before anything is created.
+      if (commit.includes("\0") || folder.includes("\0")) {
+        throw new Error("commit and folder must not contain a NUL byte.");
+      }
+      // REFUSED AT THE DOOR. A config with no tier marked refactor: true cannot answer
+      // this, ever — finding that out only after a run is queued and claimed would
+      // waste a claim (and the worktree it cuts) on a request doomed from the start.
+      if (!loadTiers().some((t) => t.kind === "model" && t.refactor === true)) {
+        throw new Error(
+          'no tier is configured for refactor suggestions — LORE_TIERS needs "refactor": true on at least one model tier',
+        );
+      }
+      const id = newRefactorRunId();
+      store.createRefactorRun({ id, repoId: who.repoId, principal: who.principal, commitSha: commit, folder });
+      return text(JSON.stringify({ run_id: id, state: "queued" }));
+    },
+  );
+
+  // ------------------------------------------------------------ refactor.poll (D-136)
+
+  server.registerTool(
+    "refactor_poll",
+    {
+      description: TOOL_DOCS.refactorPoll,
+      inputSchema: z.object({ run_id: z.string().min(1) }),
+    },
+    async ({ run_id }) => {
+      const run = myRefactorRun(run_id);
+      const body: Record<string, unknown> = { run_id, state: run.state };
+      if (run.state === "done") {
+        body["suggestions"] = run.suggestions;
+        body["combined"] = run.combined ?? false;
+        if (run.combinerNote !== undefined) body["combiner_note"] = run.combinerNote;
+        body["sources"] = run.sources ?? [];
+      }
+      if (run.state === "failed" && run.lastError !== undefined) {
+        body["error"] = run.lastError;
+      }
+      return text(JSON.stringify(body));
     },
   );
 

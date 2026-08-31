@@ -1726,6 +1726,78 @@ describe("held diffs", () => {
   });
 });
 
+/**
+ * Refactor runs (D-136) — separate from `review` throughout: no `review_id` anywhere,
+ * its own queue, its own state machine. Weighted toward the same INV-1 shape review's
+ * own tests are: a run that could not be claimed twice, a failure that says why.
+ */
+describe("refactor runs", () => {
+  it("round-trips create, claim, finish and the suggestions it recorded", () => {
+    store.createRefactorRun({ id: "rf1", repoId, principal: PRINCIPAL, commitSha: "abc1234", folder: "src/store" });
+    expect(store.refactorRun("rf1")?.state).toBe("queued");
+
+    const claimed = store.claimRefactorRun();
+    expect(claimed).toStrictEqual({ id: "rf1", repoId, commitSha: "abc1234", folder: "src/store" });
+    expect(store.refactorRun("rf1")?.state).toBe("running");
+
+    store.finishRefactorRun("rf1", {
+      state: "done",
+      combined: true,
+      sources: [{ tier: "t2", ok: true, count: 1 }, { tier: "t3", ok: true, count: 1 }],
+    });
+    store.recordRefactorSuggestions("rf1", [
+      { title: "Split the store's query surface", area: ["src/store/store.ts"], rationale: "read by different callers", roughSize: "medium" },
+    ]);
+
+    const row = store.refactorRun("rf1");
+    expect(row?.state).toBe("done");
+    expect(row?.combined).toBe(true);
+    expect(row?.sources).toStrictEqual([{ tier: "t2", ok: true, count: 1 }, { tier: "t3", ok: true, count: 1 }]);
+    expect(row?.suggestions).toStrictEqual([
+      { title: "Split the store's query surface", area: ["src/store/store.ts"], rationale: "read by different callers", roughSize: "medium" },
+    ]);
+  });
+
+  it("claims one queued run at a time, atomically, in creation order", () => {
+    store.createRefactorRun({ id: "rf1", repoId, principal: PRINCIPAL, commitSha: "a", folder: "." });
+    store.createRefactorRun({ id: "rf2", repoId, principal: PRINCIPAL, commitSha: "b", folder: "." });
+
+    expect(store.claimRefactorRun()?.id).toBe("rf1");
+    // rf1 is now 'running', not 'queued' — a second claim must not return it again.
+    expect(store.claimRefactorRun()?.id).toBe("rf2");
+    expect(store.claimRefactorRun()).toBeUndefined();
+  });
+
+  it("records why a run failed, distinctly from a run that never started", () => {
+    store.createRefactorRun({ id: "rf1", repoId, principal: PRINCIPAL, commitSha: "a", folder: "." });
+    store.claimRefactorRun();
+    store.finishRefactorRun("rf1", { state: "failed", lastError: "every tier failed: t2: quota exhausted" });
+
+    const row = store.refactorRun("rf1");
+    expect(row?.state).toBe("failed");
+    expect(row?.lastError).toBe("every tier failed: t2: quota exhausted");
+    expect(row?.combined).toBeUndefined();
+  });
+
+  it("says a run that did not combine why, rather than leaving the field ambiguous", () => {
+    store.createRefactorRun({ id: "rf1", repoId, principal: PRINCIPAL, commitSha: "a", folder: "." });
+    store.finishRefactorRun("rf1", {
+      state: "done",
+      combined: false,
+      combinerNote: "no usable t1 tier is configured to combine — showing the uncombined sets",
+      sources: [{ tier: "t2", ok: true, count: 2 }],
+    });
+
+    const row = store.refactorRun("rf1");
+    expect(row?.combined).toBe(false);
+    expect(row?.combinerNote).toContain("no usable t1");
+  });
+
+  it("returns undefined for a run that was never created", () => {
+    expect(store.refactorRun("nope")).toBeUndefined();
+  });
+});
+
 // lore-ok[ad96016b]: found by lore's own review, a third time against the same
 // column list — `finding.delivered_at` was the first miss this file's own comment
 // names. `held_diff.created_at` and `tier_run.finished_at` were the second and

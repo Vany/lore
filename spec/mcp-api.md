@@ -53,7 +53,7 @@ pushed first. *Push, then review.*
 
 ## 2. Tools
 
-Twelve, registered with **underscores**. The dotted form is prose, not an address —
+Fourteen, registered with **underscores**. The dotted form is prose, not an address —
 every document here once used it and an agent following them literally called
 nothing.
 
@@ -71,6 +71,8 @@ nothing.
 | `knowledge_retire` | `rule*`, `why*` | `{retired}` — withdraw a development rule (D-83) |
 | `knowledge_resolve` | `keep*`, `retire*`, `reason*` | `{resolved, retired, note}` |
 | `knowledge_escalate` | `left*`, `right*`, `note*` | the conflict, raised for a person |
+| `refactor_start` | `commit*`, `folder*` | `{run_id, state: "queued"}` — returns immediately, separate from review (D-136) |
+| `refactor_poll` | `run_id*` | `{state, suggestions[]?, combined?, combiner_note?, sources[]?, error?}` — §8 |
 
 `kind: "policy"` records a **development rule**, which a finding can be appealed to:
 `lore-ok[<fingerprint>]: rule <cite_as> — <why it covers this code>`. Reviewers are told
@@ -885,3 +887,45 @@ but the tiers read only `path`, and asserting "reviewed tree X" with no further
 word would claim more than that. The line instead reads `reviewed tree <hash>
 (scoped to <path>)`, so a reader who takes only the signed line — never the
 unsigned audit trail — cannot mistake a scoped read for a full one.
+
+## 8. Refactor suggestions (D-136)
+
+**Not a review** — `refactor_start`/`refactor_poll` share no state with anything above
+this section. Nothing here gates, produces a finding, or reaches an attestation; it asks
+several models what in a folder, at a commit, is worth restructuring, and hands back a
+merged list. Detail in `spec/refactor.md`; this section is the wire shape only.
+
+`refactor_start(commit, folder)` → `{run_id, state: "queued"}`, returning immediately —
+the fan-out and the merge take the same several minutes a deep review tier does.
+`commit` is any committish, cut from lore's mirror exactly as a review's branch is
+(D-65); `folder` is what the suggestions must be about, `"."` for the whole tree, with
+no default for the same reason `review_start`'s folder mode has none — an unscoped ask
+spends real quota on a mostly-cut prompt. Refused before anything is queued if no tier
+in `LORE_TIERS` carries `"refactor": true`.
+
+`refactor_poll(run_id)` → `{state, ...}`. `state` is `queued`, `running`, `done`, or
+`failed` — no richer state machine than that, because there are no rounds to escalate
+through. Once `done`:
+
+```
+{
+  "run_id": "refactor_...",
+  "state": "done",
+  "suggestions": [{ "title": "...", "area": ["src/store/store.ts"], "rationale": "...", "roughSize": "medium" }],
+  "combined": true,
+  "sources": [{ "tier": "t2", "ok": true, "count": 3 }, { "tier": "t3", "ok": true, "count": 2 }]
+}
+```
+
+`combined: false` means `suggestions` is the raw union of every tier's own answer
+rather than a deduplicated merge — `combiner_note` is present exactly then, and says
+why (no `t1` configured, `t1` failed, or `t1` replied with nothing from a non-empty
+input). `sources` names every fan-out tier's own outcome, including a failed one and
+why — never silently absent, the same reasoning `checks_skipped` carries for a review.
+`done` with an empty `suggestions` array is a real, complete answer: every tier looked
+and found nothing worth changing.
+
+Once `failed`, `error` says why — every tier that was asked failed, so there was
+nothing to combine. Unlike `review_poll`, **polling this consumes nothing**: no
+delta, no delivered-marking, safe to call twice or from two sessions and see the
+same answer both times.

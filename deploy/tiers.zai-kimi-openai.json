@@ -30,7 +30,8 @@
           "openrouter/moonshotai/kimi-k3",
           "zai-coding-plan2/glm-5.2"
         ],
-        "conversation": true
+        "conversation": true,
+        "refactor": true
       },
       {
         "id": "t3",
@@ -42,7 +43,8 @@
           "openrouter/openai/gpt-5.6-terra",
           "zai-coding-plan2/glm-5.2"
         ],
-        "conversation": true
+        "conversation": true,
+        "refactor": true
       }
     ]
   ]

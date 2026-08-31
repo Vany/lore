@@ -4832,6 +4832,71 @@ dated, rather than deleted — this project narrates decisions rather than erasi
 trail, and a reader hitting the 2026-08-28 paragraph without this note would be reading
 something that flatly contradicts the shipped code (D-11).
 
+**D-136, 2026-08-31 — a refactor suggestor: two new tools, separate from review, that
+ask what is worth restructuring rather than what is wrong.**
+
+Vany's request, close to verbatim: mark t2 and t3 as suitable for refactor suggestions;
+add a new tool that takes a git commit and a folder and returns suggestions rather than
+findings; run every suitable tier in parallel; have a model from t1 combine every set
+into one. Confirmed independent of review entirely — a customer starts it explicitly,
+it is new functionality, never triggered by or blocking a review.
+
+**Close to `propose` (D-75) in spirit, different in shape.** Both spend real quota
+asking a model what it would change about a folder's code rather than what is wrong
+with it; both stay outside the review ladder. `propose` runs one tier through four
+adversarial lenses in sequence, with a cross-vendor critic that can reject an idea
+outright, and writes a document for a person to read later — deliberately CLI-only
+(D-16), because its output had not yet earned an MCP surface. This is the opposite
+shape on every axis that matters here: a fixed, named set of tiers run CONCURRENTLY,
+no lens, no critic, a third tier merges what came back, and the result is an MCP tool
+returning a structured, stored answer to an agent client — which is what "add a new
+tool" asked for, not a wrapper around `propose`'s own CLI. Full comparison and the
+wire shape: `spec/refactor.md`, `spec/mcp-api.md` §8.
+
+**What was already there, reused rather than rebuilt:** `worktreeFor` (`src/git/repo.ts`)
+already cuts an arbitrary commit — not only a branch tip — into a throwaway worktree,
+since `propose` already calls it that way for its own `--commit` flag; "a githash and a
+folder" needed no new git-layer code. `ReviewerLike.askFor` (`src/reviewer/opencode.ts`)
+— "ask a tier for something that is not findings" — is the exact seam both the fan-out
+and the merge call through, already proven by `propose` and the knowledge screen.
+
+**Tier suitability is config, not a hardcoded pair.** `Tier` (`src/core/ladder.ts`)
+gained an optional `refactor` boolean, set on t2 and t3 in the deployed `tiers.*.json`
+configs; whichever tiers carry it fan out in parallel, however many that turns out to
+be. `t1` is not marked — its role here is fixed by id (the combiner), not by the flag,
+matching how t1 is already treated as a specific, known tier everywhere else in this
+codebase.
+
+**One tier failing is reported, never fatal to the other's paid-for answer** — the same
+INV-1 reasoning `checks_skipped` and `propose`'s own `uncriticised` both apply
+elsewhere, applied here to a genuinely new orchestration shape (`src/refactor/run.ts`).
+Only every fan-out tier failing refuses the run. If the combiner itself fails, is
+unconfigured, or replies with nothing from a non-empty input, the run still completes
+with the raw, undeduplicated union and says plainly that it did not combine, rather
+than discarding suggestions that were already paid for.
+
+**Stored and queryable, unlike `propose`'s fire-and-forget document** — Vany's explicit
+call, on this project's own stated purpose: the shared memory is the product. New
+tables `refactor_run`/`refactor_suggestion` (`src/store/schema.ts`, `SCHEMA_VERSION`
+21 → 22), deliberately not folded into `knowledge`: a suggestion is an opinion, not a
+settled fact the way a `fixed` finding's derived lesson is. Its own small dispatcher
+(`RefactorWorker`, `src/service/refactor-worker.ts`) shares this process and the one
+shared `Reviewer` gate every model call already goes through, but claims from its own
+table rather than `job` — `job` is review-round-shaped (a `review_id` foreign key,
+fast/deep stage escalation) and a refactor run has neither a round nor an escalation.
+
+**Cost, stated plainly.** Each call spends `(tiers marked suitable) + 1` sessions —
+three today. Comparable to one lens of `propose` or a deep review round: a whole
+folder is read, not a diff. No new cost control introduced — same subscriptions, same
+fallback chains (D-93), same quota accounting review and `propose` already have; this
+is a new caller of existing machinery, not a new way to spend.
+
+**Deliberately not built in this pass:** recurrence tracking across runs (matching two
+runs' suggestions needs its own design, since neither is keyed by a stable fingerprint
+the way a finding is), and any automatic application of a suggestion — the same line
+`propose` draws for itself, for the same reason: a suggestion applied without review
+would be this project's own defining failure, self-inflicted.
+
 **D-95 — the inbox lists every OPEN review, not only the ones with something fresh.**
 
 `review_inbox` filtered on *has undelivered findings, or is `needs_human`*. So the review

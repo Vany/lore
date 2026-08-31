@@ -118,6 +118,16 @@ export interface Tier {
    * promoted (D-48), which is right for a deployment with no spare capacity to reach for.
    */
   readonly fallback?: readonly string[];
+  /**
+   * This tier is asked for refactor suggestions (D-136), fanned out to alongside every
+   * other tier that also carries the flag, in parallel — separate from review, which
+   * this field plays no part in. Absent means "not asked": the flag opts a tier IN,
+   * unlike a review tier which every model tier joins by default. `t1` is not marked
+   * here even where it is well suited to the work, because `t1`'s role in this feature
+   * is fixed by id (the combiner, never a fan-out member) rather than by config — see
+   * `src/refactor/run.ts`.
+   */
+  readonly refactor?: boolean;
 }
 
 /**
@@ -144,6 +154,7 @@ const TierSchema = z
     stage: z.enum(["fast", "deep"]),
     skip_if_quota: absent(z.boolean()),
     conversation: absent(z.boolean()),
+    refactor: absent(z.boolean()),
     // A BARE STRING IS STILL ACCEPTED and normalised to a one-entry list. The array is
     // the shape we write; the string is the shape deployed configs had until 2026-08-12,
     // and `loadTiers` THROWS on anything malformed — so refusing it outright would turn

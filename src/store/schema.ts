@@ -16,6 +16,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { SEVERITIES } from "../core/finding.ts";
 
+// 22: refactor_run / refactor_suggestion (D-136).
 // 21: held_diff.fixed_elsewhere (D-133).
 // 20: fixed_elsewhere_claim (D-133).
 // 4: usage.diff_chars (D-58).
@@ -23,7 +24,7 @@ import { SEVERITIES } from "../core/finding.ts";
 // adds the columns, because this number is what `assertNotDowngrade` compares — left
 // behind, it says a database written by this build is identical to one written before
 // the columns existed.
-export const SCHEMA_VERSION = 21;
+export const SCHEMA_VERSION = 22;
 
 /**
  * How findings are ordered wherever the service hands them out: worst first.
@@ -404,6 +405,50 @@ CREATE INDEX IF NOT EXISTS job_queue ON job(state, id);
 -- stray one ends it -- the same self-closing-delimiter bug as a */ in a block
 -- comment, which happened the same night.)
 CREATE INDEX IF NOT EXISTS job_by_review ON job(review_id, state);
+
+-- Refactor suggestions (D-136): separate from review start to finish. No review_id
+-- anywhere in either table, on purpose — a refactor run gates nothing and settles no
+-- finding, so folding it under 'review' would let the retention sweep's own
+-- ON DELETE CASCADE reach rows a review's lifecycle has no business governing.
+-- (No backticks in this string: the whole DDL is one template literal, and a stray one
+-- ends it early -- the same self-closing-delimiter bug as a */ in a block comment.)
+CREATE TABLE IF NOT EXISTS refactor_run (
+  id            TEXT PRIMARY KEY,
+  repo_id       TEXT NOT NULL REFERENCES repo(id),
+  principal     TEXT NOT NULL,
+  commit_sha    TEXT NOT NULL,
+  folder        TEXT NOT NULL,
+  -- queued | running | done | failed
+  state         TEXT NOT NULL,
+  -- Whether t1 actually merged the fan-out sets, once done — 0 means 'suggestion' below
+  -- holds the raw union instead, because t1 was unavailable, failed, or misbehaved.
+  -- Never silently indistinguishable from a real merge (INV-1, applied here as
+  -- everywhere else): a client reading a done run must be able to tell which it got.
+  combined      INTEGER,
+  combiner_note TEXT,
+  -- Every fan-out tier's own outcome, JSON-encoded ({tier, ok, error?, count}[]) — the
+  -- same "a tier that could not run is reported" record tier_run's own 'unavailable'
+  -- column keeps for review, kept here as one small blob rather than a third table since nothing
+  -- queries a single tier's row on its own.
+  sources       TEXT,
+  last_error    TEXT,
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS refactor_run_queue ON refactor_run(state, id);
+CREATE INDEX IF NOT EXISTS refactor_run_by_principal ON refactor_run(principal, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS refactor_suggestion (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id     TEXT NOT NULL REFERENCES refactor_run(id) ON DELETE CASCADE,
+  title      TEXT NOT NULL,
+  -- JSON array of repo-relative paths — folder-scoped, never a line number.
+  area       TEXT NOT NULL,
+  rationale  TEXT NOT NULL,
+  rough_size TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS refactor_suggestion_by_run ON refactor_suggestion(run_id, id);
 `;
 
 /**

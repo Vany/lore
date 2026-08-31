@@ -23,6 +23,7 @@ import { startHttp } from "./http.ts";
 import { serveRefusing } from "./refusing.ts";
 import { METERED_YES } from "../core/metered.ts";
 import { DEFAULT_WORKER, Worker } from "./worker.ts";
+import { RefactorWorker } from "./refactor-worker.ts";
 
 export interface ServiceConfig {
   readonly dataDir: string;
@@ -312,6 +313,11 @@ export async function serve(cfg: ServiceConfig): Promise<() => void> {
   );
   const stopWorker = worker.start();
 
+  // ITS OWN DISPATCHER (D-136), sharing this process and `reviewer`'s gate rather than
+  // `Worker`'s review-shaped queue — see refactor-worker.ts's own header for why.
+  const refactorWorker = new RefactorWorker(store, { reposRoot, pollMs: DEFAULT_WORKER.pollMs }, reviewer);
+  const stopRefactorWorker = refactorWorker.start();
+
   // ONE heartbeat config, used by both readers.
   //
   // It was built twice in this function — once for `startHeartbeat` and once for the
@@ -530,6 +536,7 @@ export async function serve(cfg: ServiceConfig): Promise<() => void> {
     reviewer.close();
     stopBeat();
     stopWorker();
+    stopRefactorWorker();
     store.close();
   };
 }

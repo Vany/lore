@@ -841,6 +841,52 @@ are the evidence of what earlier reviews did not cover.
 Refused when the id matches more than one rule. Retiring the wrong one switches checks
 back on somewhere nobody is looking, and lore cannot tell which you meant.
 `.trim(),
+
+  refactorStart: `
+Ask what in a folder is worth refactoring — NOT a review (D-136). Nothing here gates a
+merge, produces a finding, or reaches an attestation. It spends real quota asking
+several models what they would restructure, and hands you back suggestions to read or
+pass along, the way \`knowledge_query\` hands back facts rather than a verdict.
+
+Independent of review entirely: not triggered by one, not blocked by one, and starting
+this does nothing to any open review of the same branch.
+
+\`commit\` — a branch tip or a raw SHA, cut from lore's mirror exactly as \`review_start\`
+resolves a branch: a stale mirror refuses and refreshes before failing for real.
+\`folder\` — what the suggestions must be ABOUT, relative to the repository root. \`"."\`
+for the whole tree; there is no default, the same reasoning \`review_start\`'s folder mode
+already gives — an unscoped whole-repo ask spends real quota on a mostly-cut prompt.
+
+ASYNC, LIKE REVIEW: returns \`run_id\` immediately, in \`queued\` state. Poll with
+\`refactor_poll\` — this does not block for the several minutes the actual work takes.
+
+What happens behind it: every tier this deployment has marked suitable runs in
+parallel, each reading the folder cold and independently — neither sees the other's
+answer. One tier failing does not sink the other's answer; if every tier fails, the run
+ends \`failed\` and says why. What comes back is then merged by a smaller, cheaper tier
+into one list, unless nothing could be merged — \`refactor_poll\`'s own \`combined\` field
+says which you got.
+
+Refused up front if no tier is configured for this at all, before anything is queued or
+spent — not a doomed run you would have to poll to find out about.
+`.trim(),
+
+  refactorPoll: `
+Check a run started with \`refactor_start\`.
+
+\`state\`: \`queued\`, \`running\`, \`done\`, or \`failed\`. Once \`done\`: \`suggestions\` (the
+list — merged into one by a combining tier when that succeeded, the raw union of every
+tier's own answer when it did not), \`combined\` (true only for the merged case — read it
+before trusting the list is deduplicated), \`combiner_note\` (present exactly when
+\`combined\` is false, saying why), and \`sources\` (what each fan-out tier itself produced
+or why it could not — a tier that failed is named, never silently absent, same reasoning
+as \`checks_skipped\` on a review). Once \`failed\`: \`error\` says why — every tier that was
+asked failed, and the run could not run at all.
+
+UNLIKE \`review_poll\`, THIS CONSUMES NOTHING. A refactor run answers once and keeps its
+answer; polling it twice, or from two sessions, returns the same thing both times. There
+is no undelivered-findings state to mark and no colleague to accidentally take it from.
+`.trim(),
 } as const;
 
 export const RESOURCE_DOCS: Readonly<Record<string, { title: string; priority: number; text: string }>> = {
