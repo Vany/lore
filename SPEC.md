@@ -3966,7 +3966,17 @@ tokens) have no model-routing content for a model to sensibly choose.
 propose` already run without a service — the only requirement is `opencode serve`
 reachable and authenticated, which means this cannot run before `make up`'s first
 boot (opencode itself has to be up first) and is an optional upgrade step after it,
-not a gate before it.
+not a gate before it — PROVIDED `DEFAULT_TIERS` is actually what first boot runs on.
+
+**It is not, on the documented `cp .env.example .env` path — found by lore's own
+review, fingerprint 90df3320.** `.env.example`'s own `LORE_TIERS` line already names
+the three-subscription file, not nothing, so an OpenRouter-only install that follows
+the quick start literally boots onto three unauthenticated routes, not the built-in
+guess — `DEFAULT_TIERS` only applies once that line is removed or commented out by
+hand. This diff does not change `.env.example`'s own default (a decision with its
+own cost and blast radius, outside this one's scope); README.md and
+`spec/review-ladder.md` both name the manual step explicitly rather than implying
+first boot degrades to `DEFAULT_TIERS` on its own.
 
 **The live catalog comes from opencode's own `provider.list()`, not OpenRouter's raw
 API.** `doctor.ts` already asks this question to validate an operator-written ladder

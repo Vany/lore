@@ -140,9 +140,11 @@ Then point any MCP client at it. `lore` ships its own documentation — tool
 descriptions, `lore://docs/*` resources, and a `/lore:review` prompt that drives
 the whole loop — because **the client is an agent, so the docs are the interface**.
 
-**Only one metered key, nothing else?** `.env.example`'s default ladder needs three
-named subscriptions. With just `OPENROUTER_API_KEY` set, `make up` still works — it
-falls back to a hardcoded three-model guess (`DEFAULT_TIERS`) — but that guess is
+**Only one metered key, nothing else?** `.env.example`'s `LORE_TIERS` line points at
+the three-subscription ladder by default — found by lore's own review, fingerprint
+90df3320: it does NOT fall back to anything on its own, so an install with only
+`OPENROUTER_API_KEY` set needs that line removed (or commented out) before `make up`
+runs on the built-in zero-config guess (`DEFAULT_TIERS`) instead. That guess is
 static and can go stale. `make ladder-suggest` asks a model to pick t1/t2/t3 from
 OpenRouter's *live* catalog instead: real prices, real context windows, models the
 guess did not know about. Run it any time after `make up` (opencode itself has to be

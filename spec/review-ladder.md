@@ -21,11 +21,19 @@ always did.
 | **T2** | main reviewer | `openrouter/moonshotai/kimi-k3` | 57 | 3.00 | 15.00 | Moonshot |
 | **T3** | adversarial | `openrouter/openai/gpt-5.6-sol-pro` | 59 | 5.00 | 30.00 | OpenAI |
 
-**A fresh install with only an OpenRouter key gets the table above, unchanged, until
-someone writes a better one.** `DEFAULT_TIERS` is a hardcoded guess, frozen at
-whatever OpenRouter offered when it was written — prices move, models are
-deprecated, new ones ship, and nothing here notices. `lore ladder-suggest`
-(`src/ladder-setup/`) replaces the guess with a current one: it asks a model, using
+**A fresh install with only an OpenRouter key needs `LORE_TIERS` cleared before it
+gets the table above — `.env.example` ships that variable already pointed at the
+three-subscription file below, and nothing falls back on its own.** Found by lore's
+own review, fingerprint 90df3320: the first version of this paragraph claimed
+`make up` degrades to `DEFAULT_TIERS` automatically on an OpenRouter-only install,
+which is false for the documented `cp .env.example .env` path — the copied file
+already names the subscription ladder, so that install runs on three unauthenticated
+routes until the operator removes or comments out the `LORE_TIERS` line by hand.
+Only once `DEFAULT_TIERS` is what is actually running does the rest of this apply:
+it is a hardcoded guess, frozen at whatever OpenRouter offered when it was written —
+prices move, models are deprecated, new ones ship, and nothing here notices.
+`lore ladder-suggest` (`src/ladder-setup/`) replaces the guess with a current one,
+once it is what is running: it asks a model, using
 OpenRouter's *live* catalog (fetched through opencode's own `provider.list()`, the
 same call `doctor.ts` already uses to validate a ladder after the fact — never
 OpenRouter's raw API directly, so every candidate is something this deployment's
