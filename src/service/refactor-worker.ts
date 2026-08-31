@@ -68,6 +68,16 @@ export class RefactorWorker {
 
   private async dispatch(): Promise<void> {
     while (this.running) {
+      // lore-ok[9d364d2a]: found by lore's own review — `Worker.dispatch` declines to
+      // claim while draining (D-121: "DRAINING IS THE ONLY REASON THIS LOOP DECLINES
+      // WORK"), and this dispatcher never asked. A deploy that believed a drain had
+      // quieted the service would still see fresh refactor runs claimed, paid for and
+      // written to the store straight through it. Checked before claiming, same as
+      // there — draining is policy about when to accept new work, not the store's.
+      if (this.store.isDraining()) {
+        await sleep(this.cfg.pollMs);
+        continue;
+      }
       let run;
       try {
         run = this.store.claimRefactorRun();
