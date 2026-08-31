@@ -822,6 +822,18 @@ export function vendorSpread(
     // is the fallback for a review recorded before `readBy` existed, and for a tier that
     // never left its configured model — where the two agree by construction.
     const routes = readBy[t.id] ?? [answeredBy[t.id] ?? t.model ?? ""];
+    // lore-ok[4f56d47a]: found by lore's own review, against src/ladder-setup/ — a
+    // tilde-prefixed "-latest" pointer-alias id (openrouter/~z-ai/glm-5.2-latest, an
+    // alias for openrouter/z-ai/glm-5.2, not a second vendor) would read as an
+    // independent vendor here, since this reducer compares id strings by design (see
+    // vendorOf's own doc comment). Left as-is rather than teaching this general,
+    // widely-used function about one gateway's alias convention: ladder-setup's own
+    // candidate pool excludes the whole shape at the source, so a tilde id can no
+    // longer reach a written LORE_TIERS file through that tool. A ladder file
+    // hand-written to include one directly would still be undercounted here — a
+    // pre-existing possibility this diff neither created nor closes, and vanishingly
+    // unlikely by hand (nobody previously had reason to pick a "-latest" pointer over
+    // the real id it points at).
     for (const r of routes) vendors.add(vendorOf(r));
   }
   return { distinct: vendors.size, tiers: ran.length, vendors: [...vendors] };
