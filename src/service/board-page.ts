@@ -558,22 +558,17 @@ function run(r, t) {
 }
 
 /**
- * One finding: severity, where, and enough to say a tier is unhappy — not what it
- * actually said.
+ * One finding: severity, where, and what it actually said (D-135, reversing D-96's
+ * 2026-08-28 revision, which had removed claim/evidence/failureScenario/rationale from
+ * this unauthenticated board after a real leak — see BoardFinding's own comment in
+ * ops/board.ts for the full history). Restored on Vany's explicit instruction: a
+ * pre-production finding is a defect that will be fixed regardless, not secret data,
+ * and every tenant this deployment reviews gets the same wider board, not just lore's
+ * own repository.
  *
- * lore-ok[240a9efa]: claim/evidence/failureScenario removed — found by lore's own
- * review. This board answers with no token to anyone on the tailnet; a defect's full
- * description in someone else's unmerged branch is theirs to hand out, not this
- * page's to publish. Fingerprint/symbol/cwe took the claim's old spot in the
- * summary line, so a collapsed row still says WHAT KIND of finding this is, just not
- * what it claims.
- *
- * lore-ok[969fa523]: settledBecause removed too, one round later. The rationale
- * behind a justified-accepted verdict is the developer's own words about why a claim
- * does not need fixing, which routinely restates the claim — the same disclosure the
- * fields above were removed for, missed the first time because the finding that
- * found it named only three fields. The verdict KIND (settled itself) stays; it is a
- * status label, not a description.
+ * Every restored field is esc()'d exactly like every other untrusted string already on
+ * this page (branch names, PR URLs) — T0 evidence routinely quotes source code, so it
+ * WILL contain "<", "&" and quotes.
  *
  * The id is review + fingerprint, so the open-set restores it across a push exactly as it
  * does for a review — reading a finding while the board updates must not close it.
@@ -600,9 +595,13 @@ function finding(r, f) {
       '<span class="meta">' + meta + "</span>" +
     "</summary>" +
     '<div class="fbody">' +
-      '<p class="dim">what this claims is not shown on this unauthenticated board — read the review itself for the full finding' +
-        (f.preexisting ? " · the branch did not touch this file" : "") +
-      "</p>" +
+      '<p><span class="label">claim: </span>' + esc(f.claim) + "</p>" +
+      '<p><span class="label">evidence: </span>' + esc(f.evidence) + "</p>" +
+      '<p><span class="label">failure scenario: </span>' + esc(f.failureScenario) + "</p>" +
+      (f.settledRationale
+        ? '<p><span class="label">rationale: </span>' + esc(f.settledRationale) + "</p>"
+        : "") +
+      (f.preexisting ? '<p class="dim">the branch did not touch this file</p>' : "") +
     "</div>" +
   "</details>";
 }

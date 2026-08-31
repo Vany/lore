@@ -28,18 +28,18 @@ import { NO_LIMIT, type Store } from "../store/store.ts";
 type Row = Record<string, string | number | null>;
 
 /**
- * A finding, under the tier attempt that raised it.
+ * A finding, under the tier attempt that raised it — the FULL finding, claim and all
+ * (D-135, reversing D-96's 2026-08-28 revision).
  *
- * lore-ok[240a9efa]: claim/evidence/failureScenario used to travel here too — found
- * by lore's own review, against http.ts's own route comment, which already claimed
- * (falsely, until this fix) that the unauthenticated board "deliberately does NOT
- * carry finding TEXT... theirs to hand out, not ours to publish". `/board.json` and
- * `/board/events` answer to anyone on the tailnet with no token, so a defect's full
- * description in someone else's unmerged branch was one `curl` away from any machine
- * on it. What is kept — severity, file, line, symbol, cwe, fingerprint — is enough to
- * say a tier is unhappy and where; what it is actually unhappy ABOUT now lives behind
- * the same bearer token every other finding-bearing route already requires
- * (`review_poll`, `lore://review/<id>`).
+ * That revision removed claim/evidence/failureScenario and a settled verdict's
+ * rationale from this unauthenticated route after a real leak: a version had shipped
+ * that put them here, exposing a defect described in full in someone else's unmerged
+ * branch to anyone on the tailnet with no token — this deployment serves several
+ * people's repositories, not only lore's own. D-135 puts them back, on Vany's explicit
+ * instruction, given knowing that trade-off again: a pre-production finding is not
+ * secret data, it is a defect that will be fixed one way or another, and treating it as
+ * confidential costs more than it protects. Confirmed deliberately wider than lore's
+ * own repository — every finding this deployment produces, for every tenant.
  */
 export interface BoardFinding {
   readonly fingerprint: string;
@@ -48,6 +48,9 @@ export interface BoardFinding {
   readonly line: number | undefined;
   readonly symbol: string | undefined;
   readonly cwe: string | undefined;
+  readonly claim: string;
+  readonly evidence: string;
+  readonly failureScenario: string;
   /**
    * The branch did not cause this one (D-68) — a pattern engine matched code that was
    * already there. It sorts below the branch's own findings everywhere else for the same
@@ -59,19 +62,17 @@ export interface BoardFinding {
    *
    * Shown because a settled finding that looks identical to an open one turns a board
    * into a list of things already dealt with, and a reader who learns that stops reading.
-   *
-   * lore-ok[969fa523]: the RATIONALE that used to travel beside this (`settledBecause`)
-   * does not — found by lore's own review, one field past the 240a9efa fix above. A
-   * `justified-accepted` rationale is the developer's own words explaining WHY a
-   * claim does not need fixing, which routinely restates what the claim was; that is
-   * the same disclosure the three fields above were removed for, on the same
-   * unauthenticated route, just carried in the VERDICT'S text instead of the
-   * FINDING'S. `justified-rejected` never reaches this field at all — the ladder
-   * rejecting a justification leaves the finding OPEN (`openFindings`), not settled.
-   * The verdict KIND (`settled` itself — only ever `fixed` or `justified-accepted`,
-   * per `SETTLING_VERDICTS`) stays: it is a status label, not a description.
    */
   readonly settled: string | undefined;
+  /**
+   * The reasoning behind a `settled` verdict — the developer's own words, restored
+   * alongside `settled` by D-135, for the same reason and at the same time as
+   * claim/evidence/failureScenario above. `justified-rejected` never reaches this: the
+   * ladder rejecting a justification leaves the finding OPEN (`openFindings`), not
+   * settled, so there is no verdict here to explain in the first place — that gap is
+   * shaped by what "settled" means, not by a redaction.
+   */
+  readonly settledRationale: string | undefined;
 }
 
 /** One tier's attempt, open or closed. No `finishedAt` means it is running now. */
@@ -434,18 +435,19 @@ function withFindings(
   // Worst first already (`FINDING_ORDER_SQL`), so a cap keeps the ones worth seeing.
   const kept = all.slice(0, MAX_FINDINGS_PER_REVIEW);
   const openFps = new Set(store.openFindings(reviewId).map((f) => f.fingerprint));
-  // lore-ok[969fa523]: rationale dropped from this map — found by lore's own review.
-  // It fed only `settledBecause`, which no longer exists (see BoardFinding's own
-  // comment): a rejection rationale is tier-authored text describing the finding it
-  // argues about, the same disclosure the board no longer carries for the finding
-  // itself. Keeping the field here after nothing reads it is exactly the
-  // looks-used-but-is-not shape this codebase's own tests exist to catch.
-  const verdicts = new Map<string, string>();
+  // D-135: rationale restored to this map, alongside the finding text itself — see
+  // BoardFinding's own comment for why. `verdictsFor`'s query already selects it
+  // (store.ts, `SELECT ... rationale ...`); this just reads the column back.
+  const verdicts = new Map<string, { verdict: string; rationale: string | undefined }>();
   for (const v of store.verdictsFor(reviewId)) {
     const fp = String(v["fingerprint"] ?? "");
     // The LAST verdict wins: `verdictsFor` is ordered by id, and a finding argued twice
     // is settled by the ruling that came second.
-    verdicts.set(fp, String(v["verdict"] ?? ""));
+    const rationale = v["rationale"];
+    verdicts.set(fp, {
+      verdict: String(v["verdict"] ?? ""),
+      rationale: typeof rationale === "string" && rationale.length > 0 ? rationale : undefined,
+    });
   }
 
   const key = (tier: string, round: number) => `${tier}:${round}`;
@@ -454,7 +456,7 @@ function withFindings(
   const runKeys = new Set(runs.map((t) => key(t.tier, t.round)));
 
   for (const f of kept) {
-    const settled = openFps.has(f.fingerprint) ? undefined : verdicts.get(f.fingerprint);
+    const v = openFps.has(f.fingerprint) ? undefined : verdicts.get(f.fingerprint);
     const out: BoardFinding = {
       fingerprint: f.fingerprint,
       severity: f.severity,
@@ -462,9 +464,13 @@ function withFindings(
       line: f.line,
       symbol: f.symbol,
       cwe: f.cwe,
+      claim: f.claim,
+      evidence: f.evidence,
+      failureScenario: f.failureScenario,
       preexisting: f.preexisting === true,
-      ...(settled === undefined ? {} : { settled }),
-    } as BoardFinding;
+      settled: v?.verdict,
+      settledRationale: v?.rationale,
+    };
     const k = key(f.origin, f.round);
     if (!runKeys.has(k)) {
       orphans.push(out);

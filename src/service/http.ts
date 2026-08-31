@@ -168,16 +168,17 @@ async function handle(
   // UNAUTHENTICATED, ON THE SAME INTERFACE AS MCP, ON PURPOSE — Vany's call, made knowing
   // that `LORE_BIND` is `0.0.0.0` and this therefore answers to everyone on the tailnet.
   // `/status` has always exposed the same branch names and counts to the same audience, so
-  // this widens who can see it comfortably rather than who can see it at all. What it
-  // deliberately does NOT carry is finding TEXT: a claim names a defect in somebody's
-  // unmerged branch, and that is theirs to hand out, not ours to publish.
+  // this widens who can see it comfortably rather than who can see it at all.
   //
-  // lore-ok[240a9efa]: was FALSE when this said it — found by lore's own review.
-  // `BoardFinding` carried claim/evidence/failureScenario in full until this fix, so
-  // this paragraph described the intent rather than the code. Fixed at the source
-  // instead of here: `ops/board.ts`'s `BoardFinding`/`withFindings` no longer put
-  // those three fields on the wire at all, and `board-page.ts`'s `finding()` no
-  // longer renders them — so the claim this comment makes is now what the code does.
+  // IT NOW ALSO CARRIES FINDING TEXT — claim, evidence, failure scenario, and a settled
+  // verdict's rationale — reversing a 2026-08-28 revision that had stripped them (D-135).
+  // That revision existed because a version had shipped putting them here before this
+  // route comment agreed it should, caught by lore's own review (fingerprints 240a9efa,
+  // 969fa523: a claim names a defect in somebody's unmerged branch, and the tailnet is
+  // wider than the people entitled to read it). D-135 puts them back on Vany's explicit
+  // instruction: a pre-production finding is a defect that will be fixed regardless, not
+  // secret data, and the reversal is deliberately as wide as the redaction was — every
+  // tenant this deployment reviews, not only lore's own.
   if (url.pathname === "/" || url.pathname === "/board") {
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
     res.end(BOARD_PAGE);

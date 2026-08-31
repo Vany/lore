@@ -4765,7 +4765,8 @@ Unauthenticated on the MCP interface, **Vany's call**, made knowing `LORE_BIND` 
 audience, so this widens who can see THOSE comfortably rather than who can see
 anything at all.
 
-**REVISED 2026-08-28 — finding TEXT is not part of that widening.** A version
+**REVISED 2026-08-28 — finding TEXT is not part of that widening** (superseded
+2026-08-31 by D-135, below — kept as history, not current behavior). A version
 shipped that also put claim, evidence and failure scenario into the same
 unauthenticated snapshot — reasoned about at the time as a further deliberate
 widening — and `service/http.ts`'s own route comment never agreed: it kept saying
@@ -4780,18 +4781,55 @@ other finding-bearing route already needs: what it is unhappy about, read back
 through `review_poll` or `lore://review/<id>`.
 
 **The rationale behind a settled verdict moved with it, one round later (fingerprint
-969fa523).** The first pass of this revision named three fields and missed a fourth:
-a `justified-accepted` rationale is the developer's own words about why a claim does
-not need fixing, and those words routinely restate the claim — the identical
-disclosure, carried in the verdict's text instead of the finding's.
-`justified-rejected` never reaches this at all: the ladder rejecting a justification
-leaves the finding open, not settled. The verdict KIND stays (a status, not a
-description); the rationale behind it does not.
+969fa523)** — also superseded 2026-08-31 by D-135. The first pass of this revision
+named three fields and missed a fourth: a `justified-accepted` rationale is the
+developer's own words about why a claim does not need fixing, and those words
+routinely restate the claim — the identical disclosure, carried in the verdict's
+text instead of the finding's. `justified-rejected` never reaches this at all: the
+ladder rejecting a justification leaves the finding open, not settled. The verdict
+KIND stays (a status, not a description); at the time of this revision the rationale
+behind it did not — see D-135 for why that changed back.
 
 Capped at forty findings per review with the remainder **counted and stated**, because a
 list that silently stops at forty reads as a complete list of forty.
 
 Detail in `spec/operations.md` §2.4.3.
+
+**D-135, 2026-08-31 — the board's finding text comes back, reversing D-96's
+2026-08-28 revision, on Vany's explicit instruction.**
+
+Vany's reasoning, verbatim in substance: findings are not in production and will be
+fixed one way or another, so they should not be treated as secret data — show them on
+the web interface. Asked to confirm the exact trade-off the 2026-08-28 revision was
+written to avoid — this widens exposure for every repository this deployment reviews,
+not only lore's own; `rigid-monorepo` alone carries separate live tokens for Vany,
+koray and max — and told explicitly that this reversal was not being offered scoped to
+lore alone. Confirmed: full reversal, every tenant, same board shape for all of them.
+
+**What comes back:** `claim`, `evidence`, `failureScenario`, and a settled verdict's
+`rationale` — the same four fields the 2026-08-28 revision removed, restored the same
+way they were removed, together, not staged. `justified-rejected` still never reaches
+`rationale`, unchanged from before: that gap was always shaped by what "settled" means
+(a rejected justification leaves the finding open), never by the redaction, so D-135
+has nothing to do there.
+
+**What this is not:** a new interface. The board, its SSE push, `/board.json`, and the
+tier-attempt grouping already existed and already worked; D-135 un-redacts four fields
+in `withFindings()` (`src/ops/board.ts`) and renders them where a placeholder sentence
+sat in `finding()` (`src/service/board-page.ts`), reusing the page's own `esc()` for
+every field exactly as every other untrusted string on the page already is escaped —
+T0 evidence routinely quotes source code, so it will contain `<`, `&` and quotes.
+
+**Why reverse rather than scope down** (e.g., an auth token just for finding text):
+asked and answered directly — Vany's call was that pre-production findings are not the
+kind of thing worth an access-control mechanism, not that the existing mechanism was
+merely inconvenient. Building a narrower gate nobody asked for would have been the
+unrequested abstraction this project's own rules warn against.
+
+The original D-96 revision's reasoning is kept in place above, marked superseded and
+dated, rather than deleted — this project narrates decisions rather than erasing their
+trail, and a reader hitting the 2026-08-28 paragraph without this note would be reading
+something that flatly contradicts the shipped code (D-11).
 
 **D-95 — the inbox lists every OPEN review, not only the ones with something fresh.**
 

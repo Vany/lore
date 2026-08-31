@@ -263,14 +263,10 @@ describe("findings under the step that raised them", () => {
     expect(tiers[0]?.tier).toBe("t1");
   });
 
-  // lore-ok[240a9efa]: was "carries the whole finding, because the point is to read
-  // it here" — found by lore's own review, against http.ts's own route comment,
-  // which already claimed (falsely, until this fix) that the unauthenticated board
-  // does not carry finding text. This board answers /board.json and /board/events
-  // with no token to anyone on the tailnet, so claim/evidence/failureScenario no
-  // longer travel here — what is kept is enough to say a tier is unhappy and where,
-  // not what it is unhappy about.
-  it("carries enough to place a finding, not what it claims", () => {
+  // D-135: claim/evidence/failureScenario travel here again, reversing D-96's
+  // 2026-08-28 revision — Vany's explicit call that a pre-production finding is not
+  // secret data. See BoardFinding's own doc comment (src/ops/board.ts) for the history.
+  it("carries the whole finding, because the point is to read it here", () => {
     review("r1", "findings_ready");
     const a = store.openTierRun("r1", "t1", 1, ago(600_000));
     store.closeTierRun(a, "findings", []);
@@ -278,9 +274,9 @@ describe("findings under the step that raised them", () => {
 
     const f = find("r1")?.tiers[0]?.findings[0];
     expect(f, "the finding must still be found at all").toBeDefined();
-    expect(f && "claim" in f, "the text this fix removes").toBe(false);
-    expect(f && "evidence" in f, "the text this fix removes").toBe(false);
-    expect(f && "failureScenario" in f, "the text this fix removes").toBe(false);
+    expect(f?.claim).toBe("claim f1");
+    expect(f?.evidence).toBe("the proof");
+    expect(f?.failureScenario).toBe("given x, y happens");
     expect(f?.severity).toBe("high");
     expect(f?.file).toBe("src/a.ts");
     expect(f?.line).toBe(12);
@@ -306,25 +302,34 @@ describe("findings under the step that raised them", () => {
     expect(byFp["f2"]?.settled, "still work").toBeUndefined();
   });
 
-  // lore-ok[969fa523]: was "and how", asserting settledBecause carried the rationale —
-  // found by lore's own review, one field past the 240a9efa fix above. A justification's
-  // rationale is the developer's own words about why a claim does not need fixing,
-  // which routinely restates the claim; that is the same disclosure claim/evidence/
-  // failureScenario were removed for, on the same unauthenticated route.
-  it("never says WHY a finding was settled, only that it was", () => {
+  // D-135: the rationale behind a settled verdict travels here again too, same
+  // reversal, same reasoning as the fix above.
+  it("says WHY a finding was settled, once it was", () => {
     review("r1", "findings_ready");
     const a = store.openTierRun("r1", "t1", 1, ago(600_000));
     store.closeTierRun(a, "findings", []);
     raise("r1", "f1", "t1", 1);
+    raise("r1", "f2", "t1", 1);
     store.recordVerdict("r1", {
       fingerprint: "f1", verdict: "justified-accepted",
       rationale: "bounded upstream — the caller already validates this before it reaches here",
       scope: undefined, tier: "t1", round: 2,
     });
+    // A rejected justification leaves the finding OPEN, not settled (SETTLING_VERDICTS
+    // excludes it) — so there is nothing here to explain. Undefined because nothing
+    // settled f2, not because the text was withheld.
+    store.recordVerdict("r1", {
+      fingerprint: "f2", verdict: "justified-rejected", rationale: "not convinced",
+      scope: undefined, tier: "t1", round: 2,
+    });
 
-    const f = find("r1")?.tiers[0]?.findings[0];
-    expect(f?.settled).toBe("justified-accepted");
-    expect(f && "settledBecause" in f, "the text this fix removes").toBe(false);
+    const byFp = Object.fromEntries((find("r1")?.tiers[0]?.findings ?? []).map((f) => [f.fingerprint, f]));
+    expect(byFp["f1"]?.settled).toBe("justified-accepted");
+    expect(byFp["f1"]?.settledRationale).toBe(
+      "bounded upstream — the caller already validates this before it reaches here",
+    );
+    expect(byFp["f2"]?.settled, "a rejected justification does not settle the finding").toBeUndefined();
+    expect(byFp["f2"]?.settledRationale, "nothing settled it, so nothing to explain").toBeUndefined();
   });
 
   /**

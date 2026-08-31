@@ -482,36 +482,32 @@ describe("the operator board", () => {
     expect(unread(f), "per-finding fields the page never mentions").toStrictEqual([]);
   });
 
-  // lore-ok[240a9efa]: found by lore's own review. The route comment two screens up
-  // claims the unauthenticated board "deliberately does NOT carry finding TEXT" —
-  // this repository's OWN development rule is that a claim about behaviour must be
-  // checked mechanically where one is possible, so this pins it: /board.json, which
-  // answers with no token, must never carry the fields that would make that claim
-  // false, however the store itself records them.
-  it("never carries finding text on the unauthenticated board", async () => {
+  // D-135: reverses D-96's 2026-08-28 revision (fingerprint 240a9efa's original fix),
+  // on Vany's explicit instruction — a pre-production finding is a defect that will be
+  // fixed regardless, not secret data, and the reversal is deliberately as wide as the
+  // redaction was: every tenant this deployment reviews, not only lore's own repository.
+  it("carries finding text on the unauthenticated board", async () => {
     review("revBoardText", "running", "feat/board-text");
     const run = store.openTierRun("revBoardText", "t1", 1, new Date().toISOString());
     store.closeTierRun(run, "findings", []);
     store.recordFinding("revBoardText", {
       fingerprint: "bf2", file: "secret.ts", line: 3, symbol: "s", severity: "high",
-      claim: "a defect nobody but the branch owner should read",
-      evidence: "the proof that would leak", failureScenario: "the scenario that would leak",
+      claim: "a defect the board now shows in full",
+      evidence: "the proof that now travels with it", failureScenario: "the scenario that now travels with it",
       cwe: "CWE-89", origin: "t1", round: 1, firstSeen: new Date().toISOString(),
     });
 
     const text = await (await fetch(`${base}/board.json`)).text();
 
     expect(text, "the finding must actually be in the response to make this check meaningful").toContain("bf2");
-    expect(text).not.toContain("a defect nobody but the branch owner should read");
-    expect(text).not.toContain("the proof that would leak");
-    expect(text).not.toContain("the scenario that would leak");
+    expect(text).toContain("a defect the board now shows in full");
+    expect(text).toContain("the proof that now travels with it");
+    expect(text).toContain("the scenario that now travels with it");
   });
 
-  // lore-ok[969fa523]: found by lore's own review, one field past the 240a9efa fix
-  // just above. A justification's rationale is the developer's own words about why a
-  // claim does not need fixing — it routinely restates the claim, the same disclosure
-  // the fix above removed, just carried in the verdict's text instead of the finding's.
-  it("never carries a settled finding's rationale on the unauthenticated board", async () => {
+  // D-135: reverses D-96's 2026-08-28 revision (fingerprint 969fa523's original fix),
+  // same reasoning and same commit as the fix above.
+  it("carries a settled finding's rationale on the unauthenticated board", async () => {
     review("revBoardRationale", "running", "feat/board-rationale");
     const run = store.openTierRun("revBoardRationale", "t1", 1, new Date().toISOString());
     store.closeTierRun(run, "findings", []);
@@ -530,7 +526,7 @@ describe("the operator board", () => {
 
     expect(text, "the finding must actually be in the response to make this check meaningful").toContain("bf3");
     expect(text, "the verdict KIND still reaches an unauthenticated reader").toContain("justified-accepted");
-    expect(text).not.toContain("bounded upstream — the caller already validates this before it reaches here");
+    expect(text).toContain("bounded upstream — the caller already validates this before it reaches here");
   });
 
   /**

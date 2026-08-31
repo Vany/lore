@@ -249,19 +249,28 @@ and the scheme is re-checked before rendering, because an `href` on a page that 
 credential is somewhere `javascript:` must never reach.
 
 **Each step carries its findings, collapsed.** Three levels: review → tier attempt →
-finding. A finding opens to severity, file, line, symbol, CWE, and the verdict KIND
-that settled it where one exists — never to claim, evidence, failure scenario, or the
-rationale behind that verdict (D-96, revised 2026-08-28: the first three travelled
-here once, and `service/http.ts`'s own route comment never agreed that they should;
-the rationale is fingerprint 969fa523, caught a round later — a `justified-accepted`
-rationale is the developer's own words about why a claim does not need fixing, which
-routinely restates the claim, the same disclosure one field over;
-`justified-rejected` never reaches this row at all, since a rejected justification
-leaves the finding open rather than settled). Grouping is by `(origin, round)`, which is
-exactly how a `tier_run` is identified, so it is a join rather than a guess; it was
-checked against the live database first, where every finding matches. **A finding
-that matches nothing is shown as an orphan rather than dropped** — the grouping is a
-presentation choice, and a presentation choice must never decide what exists.
+finding. A finding opens to severity, file, line, symbol, CWE, the verdict KIND that
+settled it where one exists, and — D-135 — the full claim, evidence, failure scenario,
+and (once settled) the rationale behind that verdict. `justified-rejected` never reaches
+the rationale field at all, since a rejected justification leaves the finding open
+rather than settled; that gap is shaped by what "settled" means, not by anything held
+back. Grouping is by `(origin, round)`, which is exactly how a `tier_run` is identified,
+so it is a join rather than a guess; it was checked against the live database first,
+where every finding matches. **A finding that matches nothing is shown as an orphan
+rather than dropped** — the grouping is a presentation choice, and a presentation
+choice must never decide what exists.
+
+*History, kept rather than erased (D-11): D-96 shipped this row with claim, evidence and
+failure scenario on it. A later review caught that against `service/http.ts`'s own route
+comment, which never agreed they should travel here (fingerprint 240a9efa) — this board
+answers with no token to anyone on the tailnet, so a defect's full description in
+someone else's unmerged branch was one `curl` away from any machine on it. A round
+later the same reasoning caught the rationale behind a `justified-accepted` verdict too
+(fingerprint 969fa523), which routinely restates the claim it argues about. D-96 was
+revised 2026-08-28 to strip all four. D-135 reverses that revision, on Vany's explicit
+instruction, confirmed knowing the trade-off applies to every repository this deployment
+reviews and not only lore's own: a pre-production finding is a defect that will be fixed
+regardless, not secret data, and treating it as confidential cost more than it protected.*
 
 Two distinctions the list would otherwise lose:
 
@@ -275,9 +284,12 @@ Forty findings per review, with the remainder **counted and stated**.
 **Unauthenticated, on the MCP interface, on Vany's explicit call** knowing `LORE_BIND` is
 `0.0.0.0`. `/status` already published the same branch names and counts to the same
 audience, so this widens who can see THOSE comfortably rather than who can see anything at
-all. **Finding TEXT is not part of that widening** — a claim names a defect in somebody's
-unmerged branch, and that is theirs to hand out, not this board's to publish. What a client
-with a bearer token can still read in full: `review_poll`, or `lore://review/<id>`.
+all. **Finding TEXT is part of that widening too, since D-135** — a claim names a defect
+in somebody's unmerged branch; from 2026-08-28 to D-135 that was reserved for a client
+holding that repository's bearer token (`review_poll`, `lore://review/<id>`), and now the
+board says the same thing to anyone on the tailnet, deliberately, because a pre-production
+finding is not secret data by Vany's own call and a board that only says something is
+wrong, never what, is not the point of having one.
 
 ### 2.5 Disk is not lore's to alert on — none of it
 

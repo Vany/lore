@@ -144,8 +144,14 @@ const snapshot = (over: Record<string, unknown> = {}) => ({
               line: 4,
               symbol: "f",
               cwe: "CWE-89",
+              // The "<script>&boom" is deliberate: evidence routinely quotes source code,
+              // so a real finding's text WILL contain "<", ">", "&" and quotes.
+              claim: "reads x < y without a bound",
+              evidence: 'const s = "<script>&boom</script>";',
+              failureScenario: "given x=1 & y=0, it throws",
               preexisting: false,
               settled: undefined,
+              settledRationale: undefined,
             },
           ],
         },
@@ -179,31 +185,32 @@ describe("the board's own script runs", () => {
     expect(() => render(snapshot({ spendTodayUsd: 9 }))).not.toThrow();
   });
 
-  // lore-ok[240a9efa]: found by lore's own review, against http.ts's own route
-  // comment, which already claimed (falsely, until this fix) that the
-  // unauthenticated board does not carry finding text. claim/evidence/
-  // failureScenario no longer reach the page at all (ops/board.ts's own fix) —
-  // this pins that the render still shows enough to place a finding
-  // (fingerprint/symbol/cwe, promoted into the summary's old claim slot) and
-  // says plainly, rather than silently, that the text itself is withheld.
-  it("shows enough to place a finding, never what it claims", () => {
+  // D-135: claim/evidence/failureScenario reach the page again, reversing D-96's
+  // 2026-08-28 revision (fingerprint 240a9efa's original fix) — Vany's explicit call
+  // that a pre-production finding is not secret data. Escaped exactly like every other
+  // untrusted string on this page: the fixture's evidence deliberately contains
+  // "<script>&boom</script>", because real T0 evidence routinely quotes source code.
+  it("shows the whole finding, claim and all", () => {
     const { render, byId } = loadPage();
     render(snapshot());
 
     const html = String(byId.get("board")?.innerHTML ?? "");
     expect(html, "the finding row must exist to make the checks below meaningful").toContain("abcd1234");
-    expect(html, "fingerprint/symbol/cwe took the claim's old spot in the summary").toContain("abcd1234 · f · CWE-89");
-    expect(html, "the board says plainly that it withholds the text").toContain(
+    expect(html, "fingerprint/symbol/cwe still lead the summary").toContain("abcd1234 · f · CWE-89");
+    expect(html, "the claim is rendered").toContain("reads x &lt; y without a bound");
+    expect(html, "evidence is escaped, not stripped").toContain(
+      "const s = &quot;&lt;script&gt;&amp;boom&lt;/script&gt;&quot;;",
+    );
+    expect(html, "raw markup must never reach the DOM unescaped").not.toContain("<script>&boom</script>");
+    expect(html, "the failure scenario is rendered").toContain("given x=1 &amp; y=0, it throws");
+    expect(html, "the old placeholder sentence is gone").not.toContain(
       "what this claims is not shown on this unauthenticated board",
     );
   });
 
-  // lore-ok[969fa523]: found by lore's own review, one field past the 240a9efa fix
-  // just above. A justification's rationale is the developer's own words about why a
-  // claim does not need fixing — it routinely restates the claim, the same disclosure
-  // the fix above removed, just carried in the VERDICT text instead of the finding's own.
-  // The verdict KIND still shows; the reasoning behind it does not.
-  it("shows that a finding was settled, never the reasoning why", () => {
+  // D-135: the reasoning behind a settled verdict reaches the page again too, same
+  // reversal, same reasoning as the fix above (fingerprint 969fa523's original fix).
+  it("shows that a finding was settled, and why", () => {
     const { render, byId } = loadPage();
     const base = snapshot();
     render({
@@ -226,8 +233,10 @@ describe("the board's own script runs", () => {
                   line: 9,
                   symbol: "g",
                   cwe: undefined,
+                  claim: "c", evidence: "e", failureScenario: "s",
                   preexisting: false,
                   settled: "justified-accepted",
+                  settledRationale: "bounded upstream — the caller already validates this before it reaches here",
                 },
               ],
             },
@@ -239,6 +248,9 @@ describe("the board's own script runs", () => {
     const html = String(byId.get("board")?.innerHTML ?? "");
     expect(html, "the row must exist to make the checks below meaningful").toContain("beef5678");
     expect(html, "the verdict KIND still reaches an unauthenticated reader").toContain("justified-accepted");
+    expect(html, "the rationale behind it reaches the reader too").toContain(
+      "bounded upstream — the caller already validates this before it reaches here",
+    );
   });
 
   // Fingerprint d767498a, found by lore's own review of the OOM-kill fix: this
