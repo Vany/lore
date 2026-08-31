@@ -3,6 +3,95 @@
 Newest first. Updated at the end of each task: what changed, what I learned, what
 surprised me.
 
+## 2026-08-31 — D-137/D-138: a live "hang" report, and the four rounds it took to
+learn my own fix was breaking the thing it existed to protect
+
+**What changed.** `rev_0T1ndgZdg5K9F7ZM0KWoEEt2`, `passed_partial`, attested at
+`47fe4c9f7d1f97a55334836b4c155cefe72540cb` (12 findings, 9 fixed, 3 justified) —
+merged as five commits (D-137's config removal, then four review-answer rounds
+for D-138). Two requests, handled together: drop OpenRouter's GLM fallback now that
+two Z.ai subscriptions cover the same ground (D-137, small, clean, one round), and
+"seems like kimi run out in the middle of review, and we hanged — we need to do
+something to avoid it in the future" (D-138, the substance of this entry).
+
+**The investigation mattered more than it looked like it would.** The review had not
+actually hung forever — it reached `passed_partial` — but round 3 took 44 minutes,
+one short of the board's own 45-minute red line, because `kimi-for-coding/k3`'s route
+mark had never been probed before (D-94) and the probe call sat completely silent for
+~21.5 minutes before a weekly-quota refusal finally arrived. The real defect wasn't
+the wait itself: D-94's own `PROBE_INTERVAL_MS` re-tests a guessed-backoff mark every
+15 minutes **regardless of the mark's own `until`**, on the documented assumption that
+re-testing costs about twelve seconds. Unbounded, the same 21.5-minute wait was due to
+repeat every 15 minutes for the rest of the week the quota didn't reset — D-93's own
+metered-fallback multiplication, wearing silence instead of money.
+
+**Round 1 (HIGH) — my own first fix would have permanently broken D-94's whole
+purpose.** A flat 90-second kill, unconditional, on any probe. D-94's entire premise
+is "a live tier just works," and a recovered route's real round routinely takes
+*minutes* — only a COMPLETED call ever clears a mark. A timer that fires at 90s no
+matter what kills every genuine recovery before it can finish, for any tier whose
+real work outruns 90 seconds, which is every deep tier, always: not an edge case, a
+permanent one. Found before I'd even finished believing the fix was done — I had
+built and tested the flat-kill version, written it up in SPEC as measured and
+reasoned, and it was wrong in a way none of my own tests caught, because every test
+I'd written modelled a server that never answers at all, never one that answers
+*late*. Fixed by re-arming the bound on narration instead of firing it unconditionally.
+
+**Round 2 (HIGH) — narration meant `session.status`, and that channel is not what I
+thought it was.** `session.status` is a three-state machine — idle, busy, retry — not
+a progress meter, and it can sit on one `busy` for the whole of a long turn. My
+"fix" for round 1 would have rescued only the shapes where `session.status` itself
+repeats (retry chatter, turn boundaries) and changed nothing for a single long turn,
+which is exactly the shape a recovering deep tier's first probe would take. Settled
+by reading the actual `@opencode-ai/sdk` type definitions in `node_modules` rather
+than reasoning further in the abstract — `EventMessagePartUpdated` (`message.part.
+updated`) is the real per-token streaming event, confirming the review's claim
+precisely, down to the nested `properties.part.sessionID` path the flat field
+doesn't have. A second `activity` map, fed from a wider event-dispatch filter,
+fixed it — deliberately not folded into the `session.status`-typed `watchers` map,
+since forcing a `delta`-carrying event through a `SessionStatus`-shaped callback
+would have meant inventing a fake status for it.
+
+**Round 3 (MEDIUM, LOW, LOW) — the same money-notice hole, missed twice, by me.**
+`ProbeInconclusive` satisfying `routeFault` (correctly, so the chain still walks) also
+meant it satisfied every OTHER `routeFault(e)` check I hadn't looked at — two D-120
+operator notices stated "is out of quota" as settled fact over an error whose own
+message said the opposite. I fixed both cited sites. A third, unguarded, identical
+site (`is out of quota — asking X instead`, printed on *every* fallback hop, first
+and most prominent in the log) survived that same round, found independently by two
+different tiers in round 4 — I had fixed the pattern's two *named* instances without
+grepping for the pattern itself. Also: D-137's own title overclaimed ("gone from
+every tiers file") against `core/ladder.ts`'s `DEFAULT_TIERS`, a genuinely different
+thing — the zero-config bootstrap ladder, all-OpenRouter by design, with no Z.ai
+subscription to prefer either. Narrowed the claim rather than changing a default that
+was correct as it stood.
+
+**Round 4 (MEDIUM, LOW, LOW, LOW×2) — the third money-notice site round 3 should
+have caught, plus a second copy-paste of my own asymmetry.** The twin loop's probe
+check was `dueProbe.has(twinModel)` alone, missing the primary's own `probing ||`
+prefix — under a TIER-level probe (rare, but real) `dueProbe` is deliberately empty,
+so a pool spare reached as a twin would have run with **no bound at all**, the exact
+unbounded wait this whole entry exists to remove, re-entering through the one call
+site that didn't match its own sibling three lines up. `deploy/.env.example`'s
+`ZAI2_API_KEY` comment scoped that credential to the kimi ladder alone — stale the
+moment D-137's own diff made the two-vendor file depend on it too, a defect D-137
+introduced and D-138's review caught. And one pair I did NOT fix: whether a healthy
+probe's *first* narration reliably arrives inside 90s at all — nothing measures it,
+and D-138's own SPEC text already says the number is one incident's data, not a
+distribution. Justified rather than guessed a second number, with the reasoning
+(D-94's 15-minute retry bounds the damage to a delay, not a loss) left at the site
+for whoever has the measurement someday.
+
+**What I'd do differently.** Three of these four rounds were me being *sure* the
+previous round's fix was complete and specific — and being wrong in a way my own
+tests didn't catch because I kept testing the failure mode I already understood
+(total silence) rather than the one the fix was supposed to newly tolerate (real,
+slow, legitimate work). The thing that actually ended the guessing in round 2 wasn't
+more reasoning about what opencode "probably" does — it was reading the SDK's own
+type definitions, which I had available the entire time and reached for only after
+being told directly that my assumption was unverified. Read the types first, next
+time, before writing the comment that says what a channel "tells us."
+
 ## 2026-08-31 — D-136, the refactor suggestor: seven rounds, eighteen findings, and
 the cost of shipping a whole new subsystem with no review until it was all written
 
