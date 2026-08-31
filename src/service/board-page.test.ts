@@ -66,6 +66,8 @@ function element(tag = "div") {
 function loadPage(): {
   render: (b: unknown) => void;
   prLink: (r: unknown) => string;
+  refactorRow: (r: unknown) => string;
+  combinedRows: (reviews: unknown[], refactorRuns: unknown[]) => { kind: string }[];
   byId: Map<string, ReturnType<typeof element>>;
 } {
   const script = BOARD_PAGE.slice(BOARD_PAGE.indexOf("<script>") + 8, BOARD_PAGE.lastIndexOf("</script>"));
@@ -100,6 +102,8 @@ function loadPage(): {
   return {
     render: sandbox["render"] as (b: unknown) => void,
     prLink: sandbox["prLink"] as (r: unknown) => string,
+    refactorRow: sandbox["refactorRow"] as (r: unknown) => string,
+    combinedRows: sandbox["combinedRows"] as (reviews: unknown[], refactorRuns: unknown[]) => { kind: string }[],
     byId,
   };
 }
@@ -163,6 +167,21 @@ const snapshot = (over: Record<string, unknown> = {}) => ({
       openQuestions: [],
     },
   ],
+  ...over,
+});
+
+/** A refactor run (D-136), for the board-visibility tests (D-139). */
+const refactorRunFixture = (over: Record<string, unknown> = {}) => ({
+  id: "refactor_abc123",
+  folder: "src/reviewer",
+  commitSha: "0fc40047ed8931bb095eb66575937bf8cf62fa0a",
+  principal: "vany",
+  state: "running",
+  createdAt: new Date(Date.now() - 300_000).toISOString(),
+  endedAt: undefined,
+  movedAt: new Date(Date.now() - 30_000).toISOString(),
+  combinerNote: undefined,
+  lastError: undefined,
   ...over,
 });
 
@@ -480,6 +499,121 @@ describe("the PR column on a review row", () => {
     const html = prLink({ branch: "b", pullRequest: "https://forge.example/x/changes/abc" });
     expect(html).toContain("<a");
     expect(html).not.toContain("#");
+  });
+});
+
+/**
+ * A REFACTOR RUN ON THE SAME BOARD, LABELLED SO IT CANNOT BE MISTAKEN FOR A REVIEW
+ * (D-136's own feature, board visibility D-139) — Vany: *"let's show running refactor
+ * session as REFACTOR in the web."*
+ */
+describe("a refactor run on the board", () => {
+  it("renders without throwing, alongside reviews", () => {
+    const { render } = loadPage();
+    expect(() =>
+      render(snapshot({ refactorRuns: [refactorRunFixture()], refactorRunsNotShown: 0 })),
+    ).not.toThrow();
+  });
+
+  it("carries the REFACTOR tag, the folder, a short commit and the state", () => {
+    const { refactorRow } = loadPage();
+    const html = refactorRow(refactorRunFixture({ state: "running", folder: "src/reviewer" }));
+    expect(html).toContain("REFACTOR");
+    expect(html).toContain("src/reviewer");
+    // Full sha in the title (hover), short sha in the visible text.
+    expect(html).toContain("0fc40047ed8931bb095eb66575937bf8cf62fa0a");
+    expect(html).toContain("@0fc40047");
+    expect(html).toContain(">RUNNING<");
+  });
+
+  it("renders every state a refactor run can be in", () => {
+    const { refactorRow } = loadPage();
+    for (const state of ["queued", "running", "done", "failed"]) {
+      expect(() => refactorRow(refactorRunFixture({ state }))).not.toThrow();
+      expect(refactorRow(refactorRunFixture({ state }))).toContain(">" + state.toUpperCase() + "<");
+    }
+  });
+
+  it("freezes the used clock once terminal, exactly like a review row", () => {
+    const { refactorRow } = loadPage();
+    const started = new Date(Date.now() - 600_000).toISOString();
+    const ended = new Date(Date.now() - 60_000).toISOString();
+    const html = refactorRow(refactorRunFixture({ state: "done", createdAt: started, endedAt: ended }));
+    // A fixed duration, not a data-used timestamp the browser would keep counting up.
+    expect(html).not.toContain("data-used=");
+    expect(html).toContain("9m");
+  });
+
+  /**
+   * THE STALL CLOCK MUST WORK FOR A REFACTOR RUN TOO — it is the whole reason this
+   * board exists (ops/board.ts's own opening comment: "why has that been going forty
+   * minutes"), and a refactor run can wedge exactly as a review can.
+   */
+  it("carries data-stall from movedAt, so the page's own clock can tick it", () => {
+    const { refactorRow } = loadPage();
+    const movedAt = new Date(Date.now() - 120_000).toISOString();
+    const html = refactorRow(refactorRunFixture({ state: "running", movedAt }));
+    expect(html).toContain('data-stall="' + movedAt + '"');
+    expect(html).toContain('data-terminal="false"');
+  });
+
+  /**
+   * A RUNNING REFACTOR SITS AMONG RUNNING REVIEWS, NOT BELOW THEM — the merge is by
+   * recency and unfinished-first, the same rule ops/board.ts's own SQL already applies
+   * within reviews alone (see "puts unfinished work above finished work" above).
+   */
+  it("interleaves with reviews by recency, unfinished work first", () => {
+    const { combinedRows } = loadPage();
+    // The FINISHED review is the more recently updated of the two — isolating the
+    // terminal-first rule from plain recency, the same way board.test.ts's own "puts
+    // unfinished work above finished work" does for reviews alone.
+    const freshButDoneReview = { state: "passed", movedAt: new Date(Date.now() - 1_000).toISOString() };
+    const olderButRunningRefactor = { state: "running", movedAt: new Date(Date.now() - 3_600_000).toISOString() };
+    const rows = combinedRows([freshButDoneReview], [olderButRunningRefactor]);
+    // toEqual, not toStrictEqual: `combinedRows` runs inside the vm sandbox (a separate
+    // realm), so the array and its elements are that realm's own Array/Object — content-
+    // equal to a plain literal built out here, but never prototype-identical to one.
+    expect(rows.map((r) => r.kind)).toEqual(["refactor", "review"]);
+  });
+
+  it("says out loud what the row cap left out, same as it does for reviews", () => {
+    const { render } = loadPage();
+    expect(() =>
+      render(snapshot({ refactorRuns: [refactorRunFixture()], refactorRunsNotShown: 4 })),
+    ).not.toThrow();
+  });
+
+  it("shows a combiner note and a last error when the run has them", () => {
+    const { render } = loadPage();
+    expect(() =>
+      render(
+        snapshot({
+          refactorRuns: [
+            refactorRunFixture({
+              state: "done",
+              endedAt: new Date().toISOString(),
+              combinerNote: "t1 was unconfigured; showing the raw union of both sets",
+            }),
+          ],
+        }),
+      ),
+    ).not.toThrow();
+    expect(() =>
+      render(
+        snapshot({
+          refactorRuns: [refactorRunFixture({ state: "failed", lastError: "worktree checkout failed" })],
+        }),
+      ),
+    ).not.toThrow();
+  });
+
+  // A board built before D-139 sends no refactorRuns field at all — must degrade to
+  // "none", never throw on the missing array.
+  it("copes with a snapshot that predates refactorRuns entirely", () => {
+    const { render } = loadPage();
+    const s = snapshot();
+    delete (s as Record<string, unknown>)["refactorRuns"];
+    expect(() => render(s)).not.toThrow();
   });
 });
 

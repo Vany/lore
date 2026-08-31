@@ -3879,6 +3879,45 @@ D-77 still holds and nothing skips the ladder. What changes is that batching is 
 DEFAULT rather than a compromise: fix everything found, review it together, push it
 together.
 
+**D-139 — a refactor run (D-136) shows up on the operator board, tagged REFACTOR
+(2026-08-31).**
+
+Vany: *"let's show running refactor session as REFACTOR in the web."* D-136 shipped a
+whole second dispatcher and its own table (`refactor_run`) three weeks ago, and the
+board (D-96) never learned it existed — the same "what is running right now" question
+D-96 was built to answer, blind to half the things now capable of running.
+
+**A separate shape, not a field bolted onto a review's own.** `BoardRefactorRun`
+(`src/ops/board.ts`) carries `id`, `folder`, `commitSha`, `principal`, `state`
+(`queued`/`running`/`done`/`failed`), `createdAt`/`endedAt`, `movedAt`,
+`combinerNote` and `lastError` — no `branch`, no `pullRequest`, no `tiers`, no
+`findings`. Giving it `BoardReview`'s own fields, mostly `undefined`, would have been
+the wrong kind of honesty: a refactor run genuinely does not have a branch, and a
+reader should not have to learn that from an empty cell. `Board.refactorRuns` sits
+beside `Board.reviews` as its own array on the wire; the two are merged into one
+sorted list only in the browser (`combinedRows`, `board-page.ts`), which is where a
+display choice belongs and a wire contract should not have to know about it.
+
+**`boardRefactorRuns` mirrors `boardReviews` exactly — repo-agnostic, not
+repo-scoped.** `recentRefactorRuns` (the query behind `refactor_list`) is
+deliberately scoped to one repository, matching a client's own token; the board
+answers for the whole deployment, every tenant at once, exactly as `boardReviews`
+already does for reviews. Reusing that query's SHAPE (unfinished, or finished within
+the same two-hour `KEEP_FINISHED_MS` window; capped, with the overflow counted and
+said out loud) rather than inventing a second policy was deliberate — one definition
+of "what belongs on the board," applied to a second table.
+
+**One list, sorted by the same rule reviews already use among themselves:
+unfinished first, then most recently moved.** A refactor run that has been running
+for ten minutes sits above a review that passed thirty seconds ago, on the same
+"why has that one been going" logic D-96's own board exists for — a stall is a
+stall regardless of which dispatcher is stuck. The REFACTOR tag itself is
+deliberately coloured differently from every review state (magenta, otherwise only
+`needs_human`'s) so it reads as a KIND, never mistaken for a STATE — the state
+column beside it still says RUNNING, QUEUED, DONE or FAILED, reusing three of
+review's own four state colours (`done` alone needed a new one, `.s-done`, green
+like `passed`) rather than inventing a parallel palette for a second kind of row.
+
 **D-116 — an over-long claim folds; it never costs the finding either. BUILT 2026-08-16.**
 
 D-115 fixed `severity` and wrote the rule beside it: *validation at the reviewer boundary

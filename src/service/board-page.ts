@@ -145,6 +145,17 @@ export const BOARD_PAGE = `<!doctype html>
   .s-fast_clean { color: var(--blue); }
   .s-failed, .s-expired { color: var(--red); }
   .s-cancelled { color: var(--dim); }
+  /* D-139: a refactor run's own terminal state — "done" is not a review state, so it has
+     no s-passed to fall into; everything else it can be (queued/running/failed) already
+     has a rule above and is reused as-is. */
+  .s-done { color: var(--green); }
+  /* The one thing on a refactor row that is not a state: which KIND of row this is,
+     deliberately a different colour from every s-* state class so it cannot be misread
+     as one — magenta is otherwise only needs_human's, the other place this board marks
+     "not an ordinary review". */
+  /* 10px and no letter-spacing: at 11px+.4px REFACTOR clipped against the same 52px
+     column a PR number fits easily — eight characters is a longer word than #395. */
+  .refactor-tag { color: var(--mag); font-weight: 700; font-size: 10px; white-space: nowrap; }
   .empty { color: var(--dim); padding: 30px 4px; }
 </style>
 </head>
@@ -285,18 +296,25 @@ function render(b) {
   document.getElementById("banners").innerHTML = banners.join("");
 
   const main = document.getElementById("board");
-  document.getElementById("head").hidden = b.reviews.length === 0;
-  if (b.reviews.length === 0) {
-    main.innerHTML = '<div class="empty">no reviews in the last two hours — lore is idle.</div>';
+  const refactorRuns = b.refactorRuns || [];
+  const rows = combinedRows(b.reviews, refactorRuns);
+  document.getElementById("head").hidden = rows.length === 0;
+  if (rows.length === 0) {
+    main.innerHTML = '<div class="empty">nothing in the last two hours — lore is idle.</div>';
     return;
   }
-  main.innerHTML = b.reviews.map(row).join("") +
+  main.innerHTML = rows.map((x) => (x.kind === "refactor" ? refactorRow(x.r) : row(x.r))).join("") +
     // Never a silent cap. Someone hunting a wedged review must not be shown a partial
     // list that looks complete.
     (b.reviewsNotShown > 0
       ? '<div class="banner down">' + b.reviewsNotShown +
         " more review(s) exist and are NOT listed here — this board shows the most recent " +
         b.reviews.length + ", unfinished work first.</div>"
+      : "") +
+    (b.refactorRunsNotShown > 0
+      ? '<div class="banner down">' + b.refactorRunsNotShown +
+        " more refactor run(s) exist and are NOT listed here — this board shows the most recent " +
+        refactorRuns.length + ", unfinished work first.</div>"
       : "");
   for (const d of main.querySelectorAll("details")) {
     d.open = open.has(d.dataset.id);
@@ -306,6 +324,27 @@ function render(b) {
   }
   for (const btn of main.querySelectorAll("button.pick")) btn.addEventListener("click", pick);
   tick();
+}
+
+const REFACTOR_TERMINAL = new Set(["done", "failed"]);
+
+/**
+ * Reviews and refactor runs, ONE list, sorted the same way the server sorts reviews
+ * alone: unfinished first, then most recently moved. D-139 — Vany wants a running
+ * refactor visible AS a running thing, sitting among the reviews it is concurrent
+ * with, not filed underneath them regardless of how recent it is.
+ *
+ * Kept as two separate arrays over the wire (BoardRefactorRun is its own shape,
+ * ops/board.ts's own doc comment says why) and merged only here, for display —
+ * so a "kind" tag exists nowhere except this one function's own output.
+ */
+function combinedRows(reviews, refactorRuns) {
+  const a = reviews.map((r) => ({ kind: "review", moved: r.movedAt, terminal: TERMINAL.has(r.state), r }));
+  const b = refactorRuns.map((r) => ({ kind: "refactor", moved: r.movedAt, terminal: REFACTOR_TERMINAL.has(r.state), r }));
+  return [...a, ...b].sort((x, y) => {
+    if (x.terminal !== y.terminal) return x.terminal ? 1 : -1;
+    return x.moved < y.moved ? 1 : x.moved > y.moved ? -1 : 0;
+  });
 }
 
 function row(r) {
@@ -412,6 +451,50 @@ function detail(r) {
         "</div>",
     );
   }
+  return out.join("");
+}
+
+/**
+ * A refactor run's collapsed row (D-136, board visibility D-139).
+ *
+ * Reuses row()'s own .grid columns rather than a shape of its own — caret, state,
+ * PR, branch, step, used, stalled — because that alignment is what lets a reader scan
+ * one column down the whole list regardless of what kind of row is in it. Two of the
+ * seven have no review meaning here: the PR slot carries the REFACTOR tag instead of a
+ * link (a refactor run has no pull request), and the branch slot carries the folder and
+ * a short commit (a refactor run has no branch). Step is always a dash — there is no
+ * tier ladder to be mid-way through.
+ */
+function refactorRow(r) {
+  const terminal = REFACTOR_TERMINAL.has(r.state);
+  const used = terminal && r.endedAt
+    ? '<span class="clock dim">' + dur(Date.parse(r.endedAt) - Date.parse(r.createdAt)) + "</span>"
+    : '<span class="clock dim" data-used="' + esc(r.createdAt) + '">—</span>';
+  const short = r.commitSha ? esc(r.commitSha.slice(0, 8)) : "?";
+  return '<details class="rev" data-id="' + esc(r.id) + '">' +
+    '<summary class="grid">' +
+      '<span class="caret">›</span>' +
+      '<span class="state s-' + esc(r.state) + '">' + esc(r.state.toUpperCase()) + "</span>" +
+      '<span class="pr-cell"><span class="refactor-tag">REFACTOR</span></span>' +
+      '<span class="branch" title="' + esc(r.folder) + " @ " + esc(r.commitSha) + '">' +
+        esc(r.folder) + '<span class="dim"> @' + short + "</span></span>" +
+      '<span class="step-cell"><span class="dim">—</span></span>' +
+      used +
+      '<span class="clock" data-stall="' + esc(r.movedAt) + '" data-terminal="' + terminal + '">—</span>' +
+    "</summary>" +
+    '<div class="body">' + refactorDetail(r) + "</div>" +
+  "</details>";
+}
+
+function refactorDetail(r) {
+  const out = [];
+  if (r.state === "queued") {
+    out.push('<div class="note">queued — no worker has claimed it yet.</div>');
+  }
+  out.push('<div class="dim">' + esc(r.id) + " · refactor · " + esc(r.folder) + " @ " + esc(r.commitSha) +
+    " · principal " + esc(r.principal) + " · started " + esc(r.createdAt.slice(0, 19).replace("T", " ")) + "Z</div>");
+  if (r.combinerNote) out.push('<div class="skip">' + esc(r.combinerNote) + "</div>");
+  if (r.lastError) out.push('<div class="skip">' + esc(r.lastError) + "</div>");
   return out.join("");
 }
 

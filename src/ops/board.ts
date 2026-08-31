@@ -207,6 +207,36 @@ export interface BoardReview {
   readonly findingsNotShown: number;
 }
 
+/**
+ * A refactor run (D-136), on the same board a review is — Vany: *"let's show running
+ * refactor session as REFACTOR in the web"* (D-139).
+ *
+ * Deliberately a SEPARATE, smaller shape rather than a field bolted onto `BoardReview`:
+ * a refactor run has no branch, no pull request, no tiers, no findings, no vendor
+ * spread — every one of those is a review-specific concept, and giving this interface
+ * the same fields as that one, mostly `undefined`, would be the wrong kind of honesty
+ * for a reader trying to tell the two apart. The page merges both lists for display;
+ * the wire shape stays two shapes, matching what they actually are.
+ */
+export interface BoardRefactorRun {
+  readonly id: string;
+  readonly folder: string;
+  readonly commitSha: string;
+  readonly principal: string;
+  readonly state: "queued" | "running" | "done" | "failed";
+  readonly createdAt: string;
+  /** Mirrors `BoardReview.endedAt` — present only once the run is terminal, so the used clock stops. */
+  readonly endedAt: string | undefined;
+  /**
+   * A refactor run has no tier-run rows and no findings to fold in, unlike a review's own
+   * `movedAt` (`ops/board.ts`'s own `movedAt` function) — so this is simply `updated_at`,
+   * the only timeline this row has.
+   */
+  readonly movedAt: string;
+  readonly combinerNote: string | undefined;
+  readonly lastError: string | undefined;
+}
+
 export interface Board {
   readonly at: string;
   readonly build: { readonly commit: string; readonly builtAt: string };
@@ -278,6 +308,10 @@ export interface Board {
    * that looks complete.
    */
   readonly reviewsNotShown: number;
+  /** D-139 — see `BoardRefactorRun`'s own doc comment for why this is not folded into `reviews`. */
+  readonly refactorRuns: readonly BoardRefactorRun[];
+  /** Same meaning as `reviewsNotShown`, for `refactorRuns` — see there. */
+  readonly refactorRunsNotShown: number;
 }
 
 /**
@@ -301,6 +335,7 @@ const MAX_FINDINGS_PER_REVIEW = 40;
 export function board(store: Store, now = Date.now(), modelGate?: () => GateState): Board {
   const since = new Date(now - KEEP_FINISHED_MS).toISOString();
   const reviews = store.boardReviews(since) as Row[];
+  const refactorRuns = store.boardRefactorRuns(since) as Row[];
 
   // Three grouped queries rather than three per review: this runs on a timer for as long
   // as a browser is open, and a per-review loop would turn one idle tab into 60 queries a
@@ -363,6 +398,7 @@ export function board(store: Store, now = Date.now(), modelGate?: () => GateStat
     modelCalls: modelGate === undefined ? undefined : modelGate(),
     openReviews: (() => { const a = mayAdmit(store.openReviewCount()); return { open: a.open, limit: a.limit }; })(),
     reviewsNotShown: Math.max(0, store.boardReviewCount(since) - reviews.length),
+    refactorRunsNotShown: Math.max(0, store.boardRefactorRunCount(since) - refactorRuns.length),
     spendTodayUsd: spendByTier(store, startOfDayIso()).reduce((a, t) => a + t.usd, 0),
     tiersDown: store.unavailableTiers(new Date(now).toISOString()).map((t) => ({
       tier: t.tier,
@@ -413,6 +449,29 @@ export function board(store: Store, now = Date.now(), modelGate?: () => GateStat
         openQuestions: state === "needs_human" ? questionsFor(store, String(r["repo_id"] ?? ""), byRepo) : [],
         orphanFindings: orphans,
         findingsNotShown: notShown,
+      };
+    }),
+    refactorRuns: refactorRuns.map((r) => {
+      const state = String(r["state"] ?? "failed") as BoardRefactorRun["state"];
+      const terminal = state === "done" || state === "failed";
+      const updatedAt = String(r["updated_at"] ?? "");
+      return {
+        id: String(r["id"] ?? ""),
+        folder: String(r["folder"] ?? ""),
+        commitSha: String(r["commit_sha"] ?? ""),
+        principal: String(r["principal"] ?? ""),
+        state,
+        createdAt: String(r["created_at"] ?? ""),
+        endedAt: terminal ? updatedAt : undefined,
+        // No tier runs, no findings — `updated_at` is the only timeline this row has,
+        // see `BoardRefactorRun.movedAt`'s own doc comment.
+        movedAt: updatedAt,
+        combinerNote: r["combiner_note"] === null || r["combiner_note"] === undefined
+          ? undefined
+          : String(r["combiner_note"]),
+        lastError: r["last_error"] === null || r["last_error"] === undefined
+          ? undefined
+          : String(r["last_error"]),
       };
     }),
   };

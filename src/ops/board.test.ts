@@ -40,6 +40,16 @@ const review = (id: string, state: ReviewState, branch = "feat/x") =>
 
 const find = (id: string) => board(store).reviews.find((r) => r.id === id);
 
+/** A refactor run (D-136), created queued then moved to whatever state the test wants. */
+const refactorRun = (id: string, state: "queued" | "running" | "done" | "failed", folder = "src/x") => {
+  store.createRefactorRun({ id, repoId, principal: "p", commitSha: "abc123", folder });
+  if (state !== "queued") {
+    store.db.prepare("UPDATE refactor_run SET state = ? WHERE id = ?").run(state, id);
+  }
+};
+
+const findRefactor = (id: string) => board(store).refactorRuns.find((r) => r.id === id);
+
 describe("what a review is doing right now", () => {
   it("names the tier that is working, and no note", () => {
     review("r1", "running");
@@ -553,5 +563,73 @@ describe("the service facts above the list", () => {
       if (saved === undefined) delete process.env["LORE_TIERS"];
       else process.env["LORE_TIERS"] = saved;
     }
+  });
+});
+
+/**
+ * A REFACTOR RUN (D-136) ON THE SAME BOARD A REVIEW IS (D-139) — Vany: *"let's show
+ * running refactor session as REFACTOR in the web."*
+ *
+ * `boardRefactorRuns` mirrors `boardReviews` exactly (unfinished, or finished within
+ * `KEEP_FINISHED_MS`) but is REPO-AGNOSTIC like that query, not scoped like
+ * `recentRefactorRuns` — the board is one operator watching every tenant, not one
+ * client reading its own repository's history.
+ */
+describe("a refactor run on the board", () => {
+  it("carries the fields a refactor run actually has, not a review's own shape", () => {
+    refactorRun("r1", "running", "src/reviewer");
+    const r = findRefactor("r1");
+    expect(r?.folder).toBe("src/reviewer");
+    expect(r?.commitSha).toBe("abc123");
+    expect(r?.principal).toBe("p");
+    expect(r?.state).toBe("running");
+    expect(r?.endedAt, "not terminal yet").toBeUndefined();
+  });
+
+  it("keeps a finished run for a couple of hours, then drops it — same rule as a review", () => {
+    refactorRun("done-recent", "done");
+    refactorRun("done-old", "done");
+    store.db.prepare("UPDATE refactor_run SET updated_at = ? WHERE id = 'done-old'").run(ago(3 * 3_600_000));
+
+    expect(findRefactor("done-recent")).toBeDefined();
+    expect(findRefactor("done-old")).toBeUndefined();
+  });
+
+  it("keeps an unfinished run however old it is", () => {
+    refactorRun("stuck", "running");
+    store.db.prepare("UPDATE refactor_run SET updated_at = ? WHERE id = 'stuck'").run(ago(6 * 3_600_000));
+
+    expect(findRefactor("stuck")).toBeDefined();
+  });
+
+  it("puts unfinished work above finished work, same as reviews", () => {
+    refactorRun("rdone", "done");
+    refactorRun("rlive", "running");
+    // `rdone` was updated most recently, so a plain recency sort would put it first.
+    store.db.prepare("UPDATE refactor_run SET updated_at = ? WHERE id = 'rlive'").run(ago(60_000));
+
+    expect(board(store).refactorRuns[0]?.id).toBe("rlive");
+  });
+
+  it("freezes endedAt only once terminal — done and failed both count", () => {
+    refactorRun("d1", "done");
+    refactorRun("f1", "failed");
+    expect(findRefactor("d1")?.endedAt).toBeDefined();
+    expect(findRefactor("f1")?.endedAt).toBeDefined();
+  });
+
+  it("spans every repository, unlike recentRefactorRuns' own repo-scoped query", () => {
+    const otherRepo = store.upsertRepo("other", "git@example.com:o/other.git").id;
+    store.createRefactorRun({ id: "cross-repo", repoId: otherRepo, principal: "p", commitSha: "def456", folder: "lib" });
+
+    expect(findRefactor("cross-repo"), "the board watches the whole deployment").toBeDefined();
+  });
+
+  it("says how many refactor runs the row cap left out, same as reviews do", () => {
+    for (let i = 0; i < 3; i++) refactorRun("rr" + String(i), "running");
+
+    const b = board(store);
+    expect(b.refactorRuns).toHaveLength(3);
+    expect(b.refactorRunsNotShown).toBe(0);
   });
 });

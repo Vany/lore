@@ -203,6 +203,15 @@ because a number that grows while nothing happens is this project's own failure 
 rendered in a table. Finished reviews stay for two hours: a verdict that vanishes at the
 moment it arrives is the one you were watching for.
 
+**A refactor run (D-136) sits on the same list, tagged `REFACTOR` rather than filed
+underneath the reviews (D-139).** It has no branch, no pull request, no tiers and no
+findings — a different shape entirely — but the same two questions apply: is it running,
+and how long since it moved. `movedAt` for a refactor run is simply its own `updated_at`;
+there is no tier-run timeline to fold in, because a refactor run makes one call and
+combines it, not a ladder of rounds. Both terminal windows and both row caps work
+identically to a review's own (two hours kept, the overflow counted and said out loud) —
+one definition, reused, rather than a second one to keep in step with the first.
+
 **It is pushed, and only when something changed.** A timer recomputes the snapshot every
 two seconds while at least one board is open and writes nothing if the payload is
 identical, so an idle board transfers nothing and every message means the picture really

@@ -4212,6 +4212,39 @@ export class Store {
   }
 
   /**
+   * The same shape as `boardReviews`, for `refactor_run` (D-139).
+   *
+   * Deliberately NOT `recentRefactorRuns` widened: that query is repo-scoped, matching
+   * `refactor_list`'s own client-facing contract (a token sees its own repository); the
+   * board is repo-agnostic like `boardReviews` itself, because an operator watching "what
+   * is running right now" is watching the whole deployment, not one tenant. `'done'` and
+   * `'failed'` are this table's own terminal pair — there is no shared `TERMINAL_SQL`
+   * for it because nothing before this needed one outside `openRefactorRunCount`'s own
+   * inline literal, which this matches.
+   */
+  boardRefactorRuns(finishedSinceIso: string, limit = 60): readonly Record<string, string | null>[] {
+    return this.db
+      .prepare(
+        `SELECT id, repo_id, principal, commit_sha, folder, state, combiner_note, last_error, created_at, updated_at
+         FROM refactor_run
+         WHERE state IN ('queued', 'running') OR updated_at > ?
+         ORDER BY (state IN ('done', 'failed')), updated_at DESC
+         LIMIT ?`,
+      )
+      .all(finishedSinceIso, limit) as Record<string, string | null>[];
+  }
+
+  /** How many `boardRefactorRuns` would return if it had no limit — see `boardReviewCount`. */
+  boardRefactorRunCount(finishedSinceIso: string): number {
+    const row = this.db
+      .prepare(
+        "SELECT COUNT(*) AS c FROM refactor_run WHERE state IN ('queued', 'running') OR updated_at > ?",
+      )
+      .get(finishedSinceIso) as Record<string, number | bigint> | undefined;
+    return Number(row?.["c"] ?? 0);
+  }
+
+  /**
    * Every tier attempt across MANY reviews, oldest first, open runs included.
    *
    * Deliberately not named `tierRunsFor`: that already exists one screen up, takes a
