@@ -48,7 +48,7 @@ DBVOL   = $(PROJECT)_lore-db
 # NEW deployment reads before anything else.
 DEPLOY_FILES = Makefile docker-compose.yml litestream.yml Dockerfile opencode.Dockerfile \
                sandbox.Dockerfile smoke.mjs mirror-refresh.sh sync-opencode.sh .env.example \
-               tiers.kimi.json tiers.zai-kimi-openai.json tiers.zai-openai.json
+               tiers.zai-kimi-openai.json tiers.zai-openai.json
 DBIMG   = $(PROJECT)-lore:latest
 DBRUN   = docker run --rm -v $(DBVOL):$(DB) -e LORE_DB_DIR=$(DB) --entrypoint node $(DBIMG)
 BACKUP  ?= $(shell grep -E '^LORE_HOST_BACKUP=' .env 2>/dev/null | cut -d= -f2)
