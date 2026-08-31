@@ -3,6 +3,40 @@
 Newest first. Updated at the end of each task: what changed, what I learned, what
 surprised me.
 
+## 2026-08-31 — deploy/tiers.kimi.json removed: a dead config file the repo's own
+docs had already declared didn't exist
+
+**What changed.** `rev_TPCd3l3R7vc4zIKOPBzUgE1s`, `passed_partial`, attested at
+`66da11fe43da3a935fc3087d45ffa021e6a450fc` (2 findings, 2 fixed) — merged as two
+commits. Vany: *"we have several config files, let's remove unused."* Audited all
+three `deploy/tiers.*.json` files; only one was actually dead — `tiers.zai-openai.json`
+is the documented one-key fallback, `tiers.zai-kimi-openai.json` is the active
+default, and `tiers.kimi.json` (a single-vendor kimi-only experiment, last touched
+2026-08-09) was pointed to by nothing. `.env.example`'s own comment, written
+2026-08-26 — seventeen days after that last touch — already claimed *"there is
+deliberately NO single-vendor tier file in the repo any more,"* which had been false
+the whole time; this file was simply overlooked when whatever it describes was
+cleaned up.
+
+**Round 1 (LOW) — deleting the file and dropping its name from `DEPLOY_FILES` in the
+same commit disarmed the exact mechanism built to catch this.** `check-deployed`'s
+own "DELETION IS DRIFT TOO" arm and `sync-deployed`'s matching cleanup both iterate
+`DEPLOY_FILES` by name — remove the name and the file at once, and any deployment
+still carrying a stray copy (mine included, until I'd hand-cleaned it) is never
+flagged and never reconciled again, forever. Fixed by leaving `tiers.kimi.json`
+named in `DEPLOY_FILES` (a permanent, harmless no-op once every real deployment has
+reconciled) while only the file itself is gone. Verified both directions by hand:
+recreated a stray local copy and confirmed the check's "(deleted-upstream)" arm
+flags it, then removed it and confirmed the check passes clean.
+
+**What I'd do differently.** Nothing structurally — this is exactly what
+`git-stash-verify` looks like applied to a Makefile instead of a test: simulate the
+broken state, confirm the guard reacts correctly, restore. Worth remembering
+generally: a file that ships via a name-driven list (`DEPLOY_FILES`, `EXEMPT`,
+`MAY_SPAWN` — this codebase has several) needs its *name* removed on a different
+schedule than its *content*, when the list is also what a deletion-detection
+mechanism walks.
+
 ## 2026-08-31 — D-139: a running refactor session shows up on the board, and six
 rounds finding what "shows up" actually required
 
