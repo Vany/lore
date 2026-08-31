@@ -2753,8 +2753,8 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
   // lore-ok[cc9d46fd]: found by lore's own review, MEDIUM — "stored and queryable" had
   // no way to actually list what was stored: a run_id lost from a client's context made
   // its suggestions unreachable, exactly the "looks used, is not" shape this project's
-  // own rules warn about (`refactor_run_by_principal`, an index nothing read). Mirrors
-  // `review_inbox`'s own no-args, repo-scoped shape.
+  // own rules warn about (`store.recentRefactorRuns`'s own doc names the index this
+  // query actually needed). Mirrors `review_inbox`'s own no-args, repo-scoped shape.
 
   server.registerTool(
     "refactor_list",
@@ -2763,7 +2763,34 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
     // this list was silent while every doc describing it said "every run". `notShown`
     // is the honest remainder, the same "counted and stated" shape `findingsNotShown`
     // (board.ts) already uses for the same reason.
-    () => text(JSON.stringify(store.recentRefactorRuns(who.repoId))),
+    //
+    // lore-ok[e6387cc0]: found by lore's own review — this used to pass the store's
+    // raw camelCase rows straight through, so the wire spoke `id`/`commitSha`/
+    // `combinerNote`/`lastError` while both this tool's own docs and `refactor_poll`'s
+    // real response speak `run_id`/`commit`/`combiner_note`/`error`. Mapped now the
+    // same way every sibling tool maps a store row at this boundary
+    // (`knowledge_query`'s `verified_at`, `review_inbox`'s `review_id`) — this file had
+    // exactly one exception to that rule, and it was this one.
+    () => {
+      const { runs, notShown } = store.recentRefactorRuns(who.repoId);
+      return text(
+        JSON.stringify({
+          runs: runs.map((r) => ({
+            run_id: r.id,
+            commit: r.commitSha,
+            folder: r.folder,
+            state: r.state,
+            principal: r.principal,
+            ...(r.combined === undefined ? {} : { combined: r.combined }),
+            ...(r.combinerNote === undefined ? {} : { combiner_note: r.combinerNote }),
+            ...(r.lastError === undefined ? {} : { error: r.lastError }),
+            created_at: r.createdAt,
+            updated_at: r.updatedAt,
+          })),
+          notShown,
+        }),
+      );
+    },
   );
 
   // ------------------------------------------------------------- resources

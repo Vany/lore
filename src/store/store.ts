@@ -4093,13 +4093,14 @@ export class Store {
   /**
    * lore-ok[cc9d46fd]: found by lore's own review, MEDIUM — "stored and queryable"
    * (spec/refactor.md §4) had no way to actually list what was stored: `refactor_poll`
-   * needs a `run_id` a client may no longer have, `refactor_run_by_principal`
-   * (schema.ts) was an index for a query nothing ran. This is that query, repo-scoped
-   * like every other repo-wide read here (`knowledge_query`) rather than filtered to
-   * one principal — a colleague sharing this repo's token scope can see what has
-   * already been asked, the same transparency `review_inbox`'s own repo-wide reads have.
-   * No suggestions in the row: this is a list to pick a `run_id` FROM, not a second way
-   * to read one's full result — `refactor_poll` stays the one place for that.
+   * needs a `run_id` a client may no longer have, and nothing ran the query this is.
+   * Repo-scoped like every other repo-wide read here (`knowledge_query`) rather than
+   * filtered to one principal — a colleague sharing this repo's token scope can see
+   * what has already been asked, the same transparency `review_inbox`'s own repo-wide
+   * reads have. No suggestions in the row: this is a list to pick a `run_id` FROM, not
+   * a second way to read one's full result — `refactor_poll` stays the one place for
+   * that. Indexed by `refactor_run_by_repo` (schema.ts) — lore-ok[10f8e818] renamed it
+   * from `refactor_run_by_principal`, an index for a query that never matched this one.
    *
    * lore-ok[f60ebe42,c892422d]: found by lore's own review, twice — the cap was
    * silent. Every doc this feeds (`spec/mcp-api.md` §8, `TOOL_DOCS.refactorList`) said

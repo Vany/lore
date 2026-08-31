@@ -435,8 +435,14 @@ CREATE TABLE IF NOT EXISTS refactor_run (
   created_at    TEXT NOT NULL,
   updated_at    TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS refactor_run_queue ON refactor_run(state, id);
-CREATE INDEX IF NOT EXISTS refactor_run_by_principal ON refactor_run(principal, updated_at DESC);
+-- lore-ok[10f8e818]: found by lore's own review — both indexes below back no
+-- query that actually runs. claimRefactorRun orders 'state = queued' by
+-- created_at, id (lore-ok[28be6b5c], store.ts) once id stopped being creation
+-- order, not by id alone; recentRefactorRuns filters repo_id and orders
+-- created_at DESC (lore-ok[cc9d46fd]), never principal or updated_at. Matched
+-- to the queries that exist now instead of the ones that no longer do.
+CREATE INDEX IF NOT EXISTS refactor_run_queue ON refactor_run(state, created_at, id);
+CREATE INDEX IF NOT EXISTS refactor_run_by_repo ON refactor_run(repo_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS refactor_suggestion (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,

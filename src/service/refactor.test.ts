@@ -159,10 +159,29 @@ describe("refactor_list", () => {
     const { body: b } = await callTool("refactor_start", { commit: "def5678", folder: "." });
 
     const { body } = await callTool("refactor_list", {});
-    const runs = body["runs"] as { id: string; folder: string }[];
-    expect(runs.map((r) => r.id)).toStrictEqual([b["run_id"], a["run_id"]]);
+    const runs = body["runs"] as Record<string, unknown>[];
+    expect(runs.map((r) => r["run_id"])).toStrictEqual([b["run_id"], a["run_id"]]);
     expect(runs.every((r) => !("suggestions" in r))).toBe(true);
     expect(body["notShown"]).toBe(0);
+  });
+
+  // lore-ok[e6387cc0]: found by lore's own review — this used to pass raw store rows
+  // straight through, so the wire spoke `id`/`commitSha` while the docs (and
+  // refactor_poll's own real response) promise `run_id`/`commit`. Asserts the actual
+  // field names, not just that SOME shape came back.
+  it("speaks the same wire field names its own docs and refactor_poll promise", async () => {
+    const { body: started } = await callTool("refactor_start", { commit: "abc1234", folder: "src/store" });
+    const { body } = await callTool("refactor_list", {});
+    const run = (body["runs"] as Record<string, unknown>[])[0];
+    expect(run).toMatchObject({
+      run_id: started["run_id"],
+      commit: "abc1234",
+      folder: "src/store",
+      state: "queued",
+      principal: "alice",
+    });
+    expect(run).not.toHaveProperty("id");
+    expect(run).not.toHaveProperty("commitSha");
   });
 
   it("does not list another repository's runs", async () => {
@@ -173,6 +192,32 @@ describe("refactor_list", () => {
     const { body } = await callTool("refactor_list", {}, otherToken);
     expect(body["runs"]).toStrictEqual([]);
     expect(body["notShown"]).toBe(0);
+  });
+
+  it("maps a settled run's combiner_note and a failed run's error the same way refactor_poll does", async () => {
+    const { body: started } = await callTool("refactor_start", { commit: "abc1234", folder: "." });
+    const runId = started["run_id"] as string;
+    store.claimRefactorRun();
+    store.finishRefactorRun(runId, {
+      state: "done",
+      combined: false,
+      combinerNote: "no usable t1 tier is configured to combine — showing the uncombined sets",
+      sources: [],
+    });
+
+    const { body: started2 } = await callTool("refactor_start", { commit: "abc1234", folder: "." });
+    const runId2 = started2["run_id"] as string;
+    store.claimRefactorRun();
+    store.finishRefactorRun(runId2, { state: "failed", lastError: "every tier failed: t2: quota exhausted" });
+
+    const { body } = await callTool("refactor_list", {});
+    const runs = body["runs"] as Record<string, unknown>[];
+    const done = runs.find((r) => r["run_id"] === runId);
+    const failed = runs.find((r) => r["run_id"] === runId2);
+    expect(done?.["combiner_note"]).toBe("no usable t1 tier is configured to combine — showing the uncombined sets");
+    expect(done).not.toHaveProperty("combinerNote");
+    expect(failed?.["error"]).toBe("every tier failed: t2: quota exhausted");
+    expect(failed).not.toHaveProperty("lastError");
   });
 
   // lore-ok[f60ebe42,c892422d]: found by lore's own review, twice — the cap used to
