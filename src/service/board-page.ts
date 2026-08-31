@@ -326,6 +326,12 @@ function render(b) {
   tick();
 }
 
+// lore-ok[ad809772,ba0d19b8]: found by lore's own review as a fourth hand-copied state
+// list (core/refactor-state.ts's own doc comment tells the other three's story) —
+// the other three now read isRefactorTerminal/REFACTOR_OPEN_SQL/REFACTOR_TERMINAL_SQL
+// from that one shared file, but this one cannot: board-page.ts is a plain-JS template
+// literal shipped to the browser, no module system, nothing to import. Same constraint,
+// same acceptance, as the review-side TERMINAL set two sections above this one.
 const REFACTOR_TERMINAL = new Set(["done", "failed"]);
 
 /**
@@ -488,8 +494,8 @@ function refactorRow(r) {
 
 function refactorDetail(r) {
   const out = [];
-  if (r.state === "queued") {
-    out.push('<div class="note">queued — no worker has claimed it yet.</div>');
+  if (r.queuedNote) {
+    out.push('<div class="note">' + esc(r.queuedNote) + "</div>");
   }
   out.push('<div class="dim">' + esc(r.id) + " · refactor · " + esc(r.folder) + " @ " + esc(r.commitSha) +
     " · principal " + esc(r.principal) + " · started " + esc(r.createdAt.slice(0, 19).replace("T", " ")) + "Z</div>");

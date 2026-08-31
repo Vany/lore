@@ -17,6 +17,7 @@ import { AmbiguousFingerprint } from "../core/errors.ts";
 import { normalizeClaim, type Finding, type Severity } from "../core/finding.ts";
 import { clientDeliveredWork, type LadderState } from "../core/ladder.ts";
 import { isTerminal, TERMINAL_SQL, PERSON_OR_CLOCK_DECIDED_SQL, type ReviewState, FINDINGS_SQL } from "../core/review-state.ts";
+import { REFACTOR_OPEN_SQL, REFACTOR_TERMINAL_SQL, type RefactorState } from "../core/refactor-state.ts";
 import type { Scope } from "../core/scope.ts";
 import { DDL, FINDING_ORDER_SQL, PRAGMAS, SCHEMA_VERSION, applyMigrations, assertNotDowngrade } from "./schema.ts";
 import { NO_EVENTS, type ReviewEvents } from "../mcp/events.ts";
@@ -363,7 +364,7 @@ export interface RefactorRunRow {
   readonly principal: string;
   readonly commitSha: string;
   readonly folder: string;
-  readonly state: "queued" | "running" | "done" | "failed";
+  readonly state: RefactorState;
   readonly combined?: boolean;
   readonly combinerNote?: string;
   readonly sources?: readonly RefactorSourceRecord[];
@@ -3987,7 +3988,7 @@ export class Store {
    * yet started, in flight, or over. */
   openRefactorRunCount(): number {
     const row = this.db
-      .prepare("SELECT COUNT(*) AS c FROM refactor_run WHERE state IN ('queued', 'running')")
+      .prepare(`SELECT COUNT(*) AS c FROM refactor_run WHERE state IN (${REFACTOR_OPEN_SQL})`)
       .get() as Record<string, number | bigint> | undefined;
     return Number(row?.["c"] ?? 0);
   }
@@ -4250,8 +4251,8 @@ export class Store {
       .prepare(
         `SELECT id, repo_id, principal, commit_sha, folder, state, combiner_note, last_error, created_at, updated_at
          FROM refactor_run
-         WHERE state IN ('queued', 'running') OR updated_at > ?
-         ORDER BY (state IN ('done', 'failed')), updated_at DESC
+         WHERE state IN (${REFACTOR_OPEN_SQL}) OR updated_at > ?
+         ORDER BY (state IN (${REFACTOR_TERMINAL_SQL})), updated_at DESC
          LIMIT ?`,
       )
       .all(finishedSinceIso, limit) as Record<string, string | null>[];
@@ -4261,7 +4262,7 @@ export class Store {
   boardRefactorRunCount(finishedSinceIso: string): number {
     const row = this.db
       .prepare(
-        "SELECT COUNT(*) AS c FROM refactor_run WHERE state IN ('queued', 'running') OR updated_at > ?",
+        `SELECT COUNT(*) AS c FROM refactor_run WHERE state IN (${REFACTOR_OPEN_SQL}) OR updated_at > ?`,
       )
       .get(finishedSinceIso) as Record<string, number | bigint> | undefined;
     return Number(row?.["c"] ?? 0);

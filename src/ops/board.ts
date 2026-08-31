@@ -21,6 +21,7 @@ import { loadavg } from "node:os";
 import { fallbackRoutes, loadPools, loadTiers, routesFor, type VendorSpread } from "../core/ladder.ts";
 import { isCoverageLoss } from "../core/checks-skipped.ts";
 import { isTerminal, type ReviewState } from "../core/review-state.ts";
+import { isRefactorTerminal, type RefactorState } from "../core/refactor-state.ts";
 import type { GateState } from "../reviewer/gate.ts";
 import { spendByTier, startOfDayIso } from "./spend.ts";
 import { NO_LIMIT, type Store } from "../store/store.ts";
@@ -223,7 +224,7 @@ export interface BoardRefactorRun {
   readonly folder: string;
   readonly commitSha: string;
   readonly principal: string;
-  readonly state: "queued" | "running" | "done" | "failed";
+  readonly state: RefactorState;
   readonly createdAt: string;
   /** Mirrors `BoardReview.endedAt` — present only once the run is terminal, so the used clock stops. */
   readonly endedAt: string | undefined;
@@ -242,6 +243,17 @@ export interface BoardRefactorRun {
   readonly movedAt: string;
   readonly combinerNote: string | undefined;
   readonly lastError: string | undefined;
+  /**
+   * Why a `queued` run has not started, when it has not — `undefined` for every other
+   * state. Mirrors `BoardReview.stepNote`'s own reasoning exactly, found missing here
+   * by lore's own review, fingerprint 2e972f8c: `RefactorWorker.dispatch` declines to
+   * claim while draining (`lore-ok[9d364d2a]`, `src/service/refactor-worker.ts`), and a
+   * static "no worker has claimed it yet" note would repeat the review-side queued
+   * note's own mistake, fixed once already after it sent an operator hunting for
+   * capacity that was never the problem while the actual cause sat in this same
+   * payload's `draining` field.
+   */
+  readonly queuedNote: string | undefined;
 }
 
 export interface Board {
@@ -459,8 +471,12 @@ export function board(store: Store, now = Date.now(), modelGate?: () => GateStat
       };
     }),
     refactorRuns: refactorRuns.map((r) => {
+      // lore-ok[ad809772,ba0d19b8]: found by lore's own review — hand-copied state
+      // lists are this codebase's own repeat offender (review-side `passed_partial`
+      // went missing from three of six copies, 2026-08-06); `isRefactorTerminal`
+      // (`core/refactor-state.ts`) is the one place this comparison is written now.
       const state = String(r["state"] ?? "failed") as BoardRefactorRun["state"];
-      const terminal = state === "done" || state === "failed";
+      const terminal = isRefactorTerminal(state);
       // lore-ok[fe6d4318]: found by lore's own review — this line reads `updated_at`
       // unchanged, correctly, but the FACT it reads used to be stale for the whole
       // fan-out. Fixed one layer down, not here: `store.touchRefactorRun`, called from
@@ -485,6 +501,7 @@ export function board(store: Store, now = Date.now(), modelGate?: () => GateStat
         lastError: r["last_error"] === null || r["last_error"] === undefined
           ? undefined
           : String(r["last_error"]),
+        queuedNote: refactorQueuedNote(state, draining),
       };
     }),
   };
@@ -730,4 +747,21 @@ function stepNote(state: ReviewState, runs: readonly BoardTierRun[], draining: b
     "NO TIER IS WORKING — between the deterministic sweep and the next tier " +
     "(reading the diff and this repo's documents). No model call happens in this window"
   );
+}
+
+/**
+ * `stepNote`'s own `queued`-state reasoning, for a refactor run — same `draining` fact,
+ * same board-level source, same reason it belongs here rather than as a client-side
+ * guess: `board-page.ts` cannot see `draining` for a row unless the server says so
+ * (lore-ok[2e972f8c], found by lore's own review — the client previously hardcoded
+ * "queued — no worker has claimed it yet" regardless of why, the exact class of
+ * unverified-cause mistake `stepNote`'s comment above already tells this story about).
+ */
+function refactorQueuedNote(state: RefactorState, draining: boolean): string | undefined {
+  if (state !== "queued") return undefined;
+  return draining
+    ? "NOTHING IS BEING CLAIMED — the service is DRAINING, so no worker will pick this up. " +
+      "A deploy is in progress, or a drain was left set by one that did not finish. " +
+      "Until it is cleared this run will not start: `make drain-off` on the lore host"
+    : "queued — no worker has claimed it yet, so NOTHING has run.";
 }

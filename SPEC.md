@@ -3890,13 +3890,24 @@ D-96 was built to answer, blind to half the things now capable of running.
 **A separate shape, not a field bolted onto a review's own.** `BoardRefactorRun`
 (`src/ops/board.ts`) carries `id`, `folder`, `commitSha`, `principal`, `state`
 (`queued`/`running`/`done`/`failed`), `createdAt`/`endedAt`, `movedAt`,
-`combinerNote` and `lastError` — no `branch`, no `pullRequest`, no `tiers`, no
-`findings`. Giving it `BoardReview`'s own fields, mostly `undefined`, would have been
-the wrong kind of honesty: a refactor run genuinely does not have a branch, and a
-reader should not have to learn that from an empty cell. `Board.refactorRuns` sits
-beside `Board.reviews` as its own array on the wire; the two are merged into one
+`combinerNote`, `lastError` and `queuedNote` — no `branch`, no `pullRequest`, no
+`tiers`, no `findings`. Giving it `BoardReview`'s own fields, mostly `undefined`, would
+have been the wrong kind of honesty: a refactor run genuinely does not have a branch,
+and a reader should not have to learn that from an empty cell. `Board.refactorRuns`
+sits beside `Board.reviews` as its own array on the wire; the two are merged into one
 sorted list only in the browser (`combinedRows`, `board-page.ts`), which is where a
 display choice belongs and a wire contract should not have to know about it.
+
+**`queuedNote` is computed server-side, not guessed client-side — found by lore's own
+review, fingerprint 2e972f8c.** The first version hardcoded "queued — no worker has
+claimed it yet" in `board-page.ts` regardless of why, repeating a mistake `BoardReview
+.stepNote` (D-96) already paid for once: a review sat `queued` while eleven of twelve
+worker loops were idle, and the true cause — `draining` — sat unread in the same
+payload while the note sent an operator hunting for capacity that was never the
+problem. `board.ts`'s new `refactorQueuedNote(state, draining)` mirrors `stepNote`'s
+own reasoning for the same state, for the same reason: the client cannot see
+`draining` for a row unless the server says so in words, and a static guess is exactly
+the failure this board exists to refuse.
 
 **`boardRefactorRuns` mirrors `boardReviews` exactly — repo-agnostic, not
 repo-scoped.** `recentRefactorRuns` (the query behind `refactor_list`) is

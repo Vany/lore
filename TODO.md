@@ -1,3 +1,10 @@
+we have configured already models.
+But let's imagine here is new installation, with just openrouter somehow configured.
+So, we need to take any model in it and ask it to create config file for us, develop requirements (may be whole prompt for this)
+delete from git and add to gitignore config, fill it at setup.
+
+--- 
+
 # TODO — `lore`
 
 Phases, rationale and done-criteria live in **`PLAN.md`**. This is the working

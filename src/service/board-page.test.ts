@@ -182,6 +182,7 @@ const refactorRunFixture = (over: Record<string, unknown> = {}) => ({
   movedAt: new Date(Date.now() - 30_000).toISOString(),
   combinerNote: undefined,
   lastError: undefined,
+  queuedNote: undefined,
   ...over,
 });
 
@@ -605,6 +606,39 @@ describe("a refactor run on the board", () => {
         }),
       ),
     ).not.toThrow();
+  });
+
+  // lore-ok[0e86f2d0]: found by lore's own review — every test above this one either
+  // asserts `.not.toThrow()` or calls `refactorRow`/`combinedRows` directly, so none of
+  // them prove the REFACTOR tag, the folder, the state or a note ever reach the actual
+  // `#board` element's innerHTML the way `render()` assembles it (join, notShown banner,
+  // and all) — the exact gap "shows the whole finding, claim and all" (above, for
+  // reviews) closes for findings. This closes it for refactor runs.
+  it("reaches the real DOM: REFACTOR tag, folder, state, queued note, and the row-cap banner", () => {
+    const { render, byId } = loadPage();
+    render(
+      snapshot({
+        reviews: [],
+        refactorRuns: [
+          refactorRunFixture({
+            state: "queued",
+            folder: "src/reviewer",
+            queuedNote: "queued — no worker has claimed it yet, so NOTHING has run.",
+          }),
+        ],
+        refactorRunsNotShown: 4,
+      }),
+    );
+    const html = String(byId.get("board")?.innerHTML ?? "");
+    expect(html, "the REFACTOR tag must reach the DOM, not just refactorRow's own return value").toContain("REFACTOR");
+    expect(html, "the folder must reach the DOM").toContain("src/reviewer");
+    expect(html, "the state must reach the DOM").toContain(">QUEUED<");
+    expect(html, "the server-computed queuedNote must reach the DOM (fingerprint 2e972f8c)").toContain(
+      "queued — no worker has claimed it yet, so NOTHING has run.",
+    );
+    expect(html, "the row-cap banner must render for refactor runs too, not just log .not.toThrow()").toContain(
+      "4 more refactor run(s) exist and are NOT listed here",
+    );
   });
 
   // A board built before D-139 sends no refactorRuns field at all — must degrade to

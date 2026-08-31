@@ -238,6 +238,26 @@ describe("the row's own updated_at moves as the run works", () => {
     expect(after !== before).toBe(true);
   });
 
+  // lore-ok[77cd14ff]: found by lore's own review — the two tests above both end up
+  // combining, so a reader could not tell whether askOneTier's own touch calls do
+  // anything, or whether the combine step's touch is silently the only one that
+  // matters. Scripting both fan-out tiers to answer with an empty list takes the
+  // `raw.length === 0` early return (run.ts line 164) BEFORE t1 is ever asked to
+  // combine — isolating askOneTier's touches as the only ones that could have moved it.
+  it("touches the row from the fan-out alone, when there is nothing to combine", async () => {
+    const id = "refactor_moveTest3";
+    store.createRefactorRun({ id, repoId, principal: "p", commitSha: "abc1234", folder: "src/store" });
+    store.db.prepare("UPDATE refactor_run SET updated_at = ? WHERE id = ?").run(ago(60_000), id);
+    const before = store.refactorRun(id)?.updatedAt;
+
+    const result = await suggestRefactors(deps(scripted({ t2: [], t3: [] })), input({ runId: id }));
+
+    expect(result.suggestions, "an empty union should skip the combine call entirely").toEqual([]);
+    expect(asked.some((a) => a.tier === "t1"), "t1 must not have been asked to combine nothing").toBe(false);
+    const after = store.refactorRun(id)?.updatedAt;
+    expect(after !== before, "askOneTier's own touches must be load-bearing on their own").toBe(true);
+  });
+
   // A run whose id matches no row is not this function's problem to notice — the
   // worker created the row before ever calling suggestRefactors, so a mismatch here
   // would mean a bug in the caller, not something to guard against with a throw that

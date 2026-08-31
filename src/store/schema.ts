@@ -443,6 +443,15 @@ CREATE TABLE IF NOT EXISTS refactor_run (
 -- to the queries that exist now instead of the ones that no longer do.
 CREATE INDEX IF NOT EXISTS refactor_run_queue ON refactor_run(state, created_at, id);
 CREATE INDEX IF NOT EXISTS refactor_run_by_repo ON refactor_run(repo_id, created_at DESC);
+-- lore-ok[b09e98cb]: found by lore's own review of the SAME change that added
+-- boardRefactorRuns/boardRefactorRunCount (D-139) — neither index above serves
+-- WHERE state IN (...) OR updated_at > ? ORDER BY (...), updated_at DESC, and
+-- unlike review (bounded by 90-day retention), nothing ever deletes a
+-- refactor_run row: the scan this pair backs grows without bound. A plain
+-- updated_at index lets SQLite's OR-optimisation combine it with the existing
+-- (state, ...) index above — one branch of the OR each — instead of falling
+-- back to a full scan on a table with no ceiling.
+CREATE INDEX IF NOT EXISTS refactor_run_by_updated ON refactor_run(updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS refactor_suggestion (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
