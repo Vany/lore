@@ -3,6 +3,120 @@
 Newest first. Updated at the end of each task: what changed, what I learned, what
 surprised me.
 
+## 2026-09-01 — D-140, `lore ladder-suggest`: a fresh install's static guess
+replaced by a live catalog, eight rounds
+
+**What changed.** `rev_zhDJJrtcVpLEbjEK-91XYebB`, `passed_partial`, attested at
+`60fca615df5166b09efca47ab68122198a8098f6` (21 findings, 18 fixed, 3 justified) —
+merged as nine commits (the feature, then eight review-answer rounds). Vany's own
+`TODO.md` note, quoted verbatim: *"we have configured already models. But let's
+imagine here is new installation, with just openrouter somehow configured. So, we
+need to take any model in it and ask it to create config file for us, develop
+requirements... delete from git and add to gitignore config, fill it at setup."*
+Scope confirmed before writing (AskUserQuestion): the tiers ladder file only, not
+the whole `.env` — host/infra fields stay human-filled, a model has no basis for
+choosing those. New module `src/ladder-setup/` (`catalog.ts`, `prompt.ts`,
+`suggestion.ts`, `run.ts`) plus a `lore ladder-suggest` CLI subcommand, replacing
+`DEFAULT_TIERS`' static three-model guess with a live pick from opencode's own
+`provider.list()`.
+
+**Round 1 (6 findings) — the usual first-pass richness, one thread of it not
+hypothetical.** Escalation semantics were backwards in the prompt (t2/t3 firing
+when t1 finds something, not — the common case for maintained code — when t1
+comes back clean); the bootstrap caller was a second, untethered copy of
+`DEFAULT_TIERS[1]`'s own model with no fallback if OpenRouter withdraws it; and
+`vendorOf`'s bare string comparison would miscount a live `~`-prefixed "-latest"
+pointer alias as an eighth independent vendor — checked against the real catalog,
+not hypothesised, and the first round of a bug that took four rounds total to
+actually close.
+
+**Round 2 — the docs claimed a fallback that was never there.** `.env.example`'s
+own `LORE_TIERS` line already points at the three-subscription file; an
+OpenRouter-only install following `cp .env.example .env` literally boots onto
+three unauthenticated routes, not `DEFAULT_TIERS`, contradicting what README and
+spec said would happen.
+
+**Rounds 3–4 — the tilde-vendor bug from round 1 needed two more passes, each one
+finding the previous fix was shallower than it looked.** Round 1's fix normalised
+only the DISPLAY column in `catalog.ts`; `validatePicks`, the function that
+actually enforces one-vendor-per-tier, still called bare `vendorOf` and would have
+accepted `z-ai` and `~z-ai` as two independent vendors — the exact miscount the
+fix was named for, surviving in the one place it had to not survive (round 3).
+Even that was insufficient: a tilde id could still be WRITTEN into a real
+`LORE_TIERS` file, and every review-TIME consumer of vendor identity —
+`vendorSpread` (the actual `passed`/`passed_partial` decision), `review.ts`'s
+fallback prose, `doctor.ts` — has no tilde awareness at all, a blind spot this
+feature could newly trigger even though none of those three call sites are its
+own code. Closed by excluding the whole shape from the candidate pool at the
+source instead of teaching three more call sites a normalisation only this
+feature needed — live-reverified against the real catalog (288 → 276 candidates,
+exactly the 12 tilde entries).
+
+**Round 5 — justified, not fixed: the one consumer left with a bare
+`vendorOf`.** `vendorSpread` itself, re-raised as `will_not_settle` against the
+round 1 finding. Answered with a `lore-ok`: the source-level exclusion means a
+tilde id can no longer reach this general, widely-shared reducer through this
+tool at all, so teaching it one gateway's alias convention isn't warranted by
+this diff; the residual hand-written-ladder case is real but pre-existing and
+unrelated.
+
+**Round 6 (6 findings, one HIGH) — found only by reading infrastructure files
+directly rather than assuming.** The printed restart instruction named `make
+restart`, which is `docker compose restart` — it does not re-read `.env`, only
+`up`/`deploy` recreate the container, so the pasted `LORE_TIERS` line would
+silently never take effect (confirmed against `deploy/Makefile` and
+`docker-compose.yml` directly, HIGH). `process.cwd()` (`/app`, valid only inside
+the `lore` container) was being sent as the session directory; the SEPARATE
+`opencode` container the SDK actually resolves against mounts only `repos/`,
+read-only — an unresolvable directory risked opencode falling back to its own
+container root, where `auth.json` lives. Confirmed by reading
+`docker-compose.yml`'s volume mounts directly, not assumed. `filterCatalog`
+dereferenced explicitly-untrusted wire data unguarded, so one malformed opencode
+custom-model entry crashed the whole catalog instead of being skipped. The
+fallback caller was chosen by price alone, ignoring context size — on the exact
+day the fallback exists for, the cheapest model could be physically unable to
+hold the prompt asking it to choose. A write failure after the paid call
+succeeded lost the picks entirely.
+
+**Round 7 — a finding I checked and disproved, not just answered.** `e025dd4b`
+claimed my own regression test for the context-fit fallback never exercised that
+branch, because the model it used (`kimi-k3`) was supposedly `DEFAULT_TIERS[1]`'s
+own preferred model, short-circuiting before the fallback ever ran. Checked
+directly: `DEFAULT_TIERS[1]` is `z-ai/glm-5.2`, not `kimi-k3` — that's `[2]` — and
+the test's catalog never contained `glm-5.2` at all. Reproduced the finding's own
+cited mutation (dropping the context filter from the fallback sort) and the test
+correctly failed, the opposite of what the claim predicted. Answered by
+strengthening the assertion to the exact expected winner anyway, rather than just
+asserting the claim was wrong and moving on — the ambiguity about which branch
+ran was real even if the specific claim wasn't.
+
+**Round 8 — one dedup, one honest non-fix.** `CHARS_PER_TOKEN` existed as a
+private static on `Reviewer` and, independently, as a second copy of the same
+constant in `run.ts` — caught before the second copy had drifted, but exactly
+the "one thing defined twice always disagrees eventually" shape this project
+keeps being burned by; exported it module-level and had `run.ts` import the one
+definition. The `repos/`-anchored worktree fix from round 6 was re-raised
+`will_not_settle`: it changes the directory's EXISTENCE, not necessarily its
+RESOLUTION, and the upstream behaviour the fix's own comment cites was never
+confirmed live — a diagnostic session to check it directly was set up and then
+denied. Rather than guess further or retry a denied tool call, answered with a
+`lore-ok` that says plainly the risk is not verified shut, and states what
+bounds it in the meantime (every `askFor` caller already runs under the same
+read-only agent; this session's own prompt never invites file exploration) — a
+real improvement stated as exactly that, not inflated into a claimed fix.
+
+**What I'd do differently.** The tilde-vendor bug (rounds 1, 3, 4, 5) and
+`CHARS_PER_TOKEN` (round 8) are the same lesson twice in one review: a fix at the
+first place a bug is visible is not the same as a fix at its source, and this
+project's own most-repeated lesson is worth checking for on purpose before a
+review has to find it. Separately, and not code-related: mid-round-8,
+live-testing this feature's own `make deploy FORCE=1` against the shared local
+Docker Desktop deployment killed another review's in-flight tier runs — proven by
+an exact timestamp match between my own redeploy and that review's simultaneous
+failures. The local deployment is not a private sandbox; it is serving whoever
+else is reviewing at the same time, and a redeploy for live-testing needs a check
+for in-flight work first, not just a green build.
+
 ## 2026-08-31 — deploy/tiers.kimi.json removed: a dead config file the repo's own
 docs had already declared didn't exist
 
