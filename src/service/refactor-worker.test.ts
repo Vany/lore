@@ -52,3 +52,52 @@ describe("draining (D-121, applied to the refactor dispatcher)", () => {
     }
   });
 });
+
+/**
+ * lore-ok[5348bfb3,bebf7a5b]: found by lore's own review, twice — `execute` is called
+ * through a detached `void this.execute(run)` with no process-level
+ * `unhandledRejection` handler anywhere in this service, so a store fault reaching
+ * either `gitUrlOf` (which used to sit outside any try) or the catch's own
+ * `finishRefactorRun` (which was bare) would have taken the whole process down.
+ * A Proxy stands in for "the store faults, truthfully reporting it is not closed" —
+ * the same technique `drain.test.ts`'s own `lore-ok[441a6bc1]` test uses for
+ * `Worker.round`'s identical shape.
+ */
+describe("a store fault must not escape the detached execute() as an unhandled rejection", () => {
+  it("logs and stops quietly when the failure-handling write itself throws", async () => {
+    store.createRefactorRun({ id: "refactor_r1", repoId, principal: "alice", commitSha: "a", folder: "." });
+
+    const faultingStore = new Proxy(store, {
+      get(target, prop, receiver) {
+        // `gitUrlOf` throws — simulating a store fault reached from OUTSIDE the
+        // inner try in the pre-fix code — and the catch's own `finishRefactorRun`
+        // throws too, so BOTH halves this fix guards are exercised in one run.
+        if (prop === "gitUrlOf") return () => {
+          throw new Error("simulated: SQLITE_CORRUPT reading repo");
+        };
+        if (prop === "finishRefactorRun") return () => {
+          throw new Error("simulated: SQLITE_CORRUPT writing the failure");
+        };
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+
+    const rejections: unknown[] = [];
+    const onRejection = (e: unknown) => rejections.push(e);
+    process.on("unhandledRejection", onRejection);
+
+    const worker = new RefactorWorker(faultingStore, { reposRoot: "/tmp/does-not-matter", pollMs: 10 }, FAKE_REVIEWER);
+    const stop = worker.start();
+    try {
+      await new Promise((r) => setTimeout(r, 100));
+    } finally {
+      stop();
+      process.off("unhandledRejection", onRejection);
+    }
+    expect(rejections, "a second store fault while handling the first must not crash the process").toStrictEqual([]);
+    // The row is left exactly where the real crash-mid-write case leaves it — startup
+    // reclaim is what recovers this, not this call, which is the whole point of
+    // logging rather than throwing.
+    expect(store.refactorRun("refactor_r1")?.state).toBe("running");
+  });
+});

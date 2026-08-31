@@ -2759,12 +2759,11 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
   server.registerTool(
     "refactor_list",
     { description: TOOL_DOCS.refactorList, inputSchema: z.object({}) },
-    () =>
-      text(
-        JSON.stringify({
-          runs: store.recentRefactorRuns(who.repoId),
-        }),
-      ),
+    // lore-ok[f60ebe42,c892422d]: found by lore's own review, twice — the cap on
+    // this list was silent while every doc describing it said "every run". `notShown`
+    // is the honest remainder, the same "counted and stated" shape `findingsNotShown`
+    // (board.ts) already uses for the same reason.
+    () => text(JSON.stringify(store.recentRefactorRuns(who.repoId))),
   );
 
   // ------------------------------------------------------------- resources

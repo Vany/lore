@@ -162,6 +162,7 @@ describe("refactor_list", () => {
     const runs = body["runs"] as { id: string; folder: string }[];
     expect(runs.map((r) => r.id)).toStrictEqual([b["run_id"], a["run_id"]]);
     expect(runs.every((r) => !("suggestions" in r))).toBe(true);
+    expect(body["notShown"]).toBe(0);
   });
 
   it("does not list another repository's runs", async () => {
@@ -171,6 +172,19 @@ describe("refactor_list", () => {
     const otherToken = grantToken(store, otherRepo.id, "bob");
     const { body } = await callTool("refactor_list", {}, otherToken);
     expect(body["runs"]).toStrictEqual([]);
+    expect(body["notShown"]).toBe(0);
+  });
+
+  // lore-ok[f60ebe42,c892422d]: found by lore's own review, twice — the cap used to
+  // be silent while every doc claimed "every run". Inserted directly rather than via
+  // 25 real HTTP round trips.
+  it("says how many older runs were not shown, rather than truncating silently", async () => {
+    for (let i = 0; i < 25; i++) {
+      store.createRefactorRun({ id: `refactor_hist_${String(i)}`, repoId, principal: "alice", commitSha: "a", folder: "." });
+    }
+    const { body } = await callTool("refactor_list", {});
+    expect((body["runs"] as unknown[]).length).toBe(20);
+    expect(body["notShown"]).toBe(5);
   });
 });
 

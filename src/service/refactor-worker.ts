@@ -97,21 +97,36 @@ export class RefactorWorker {
     }
   }
 
+  /**
+   * One run, start to finish, with nothing allowed to escape — mirrors `Worker.round`'s
+   * own header exactly, for the identical reason.
+   *
+   * lore-ok[5348bfb3,bebf7a5b]: found by lore's own review, twice (a stale re-raise
+   * and the live one — same code, same finding) — `gitUrlOf` used to sit OUTSIDE any
+   * try, and the catch's own `finishRefactorRun` was bare. `execute` is called through
+   * `void this.execute(run)` (dispatch, above), detached, with no process-level
+   * `unhandledRejection` handler anywhere in this service — so a store fault reaching
+   * either (SQLITE_CORRUPT mid-life, or `store.close()` racing a run during shutdown,
+   * the exact two `Worker.round`'s own `lore-ok[441a6bc1]` was written against) would
+   * have taken the whole process down, every open review included. One outer try
+   * around everything; the catch checks `isClosed()` first and wraps its own write
+   * again, so a SECOND fault while already handling the first is logged, not thrown.
+   */
   private async execute(run: { readonly id: string; readonly repoId: string; readonly commitSha: string; readonly folder: string }): Promise<void> {
-    const gitUrl = this.store.gitUrlOf(run.repoId);
     const paths = repoPaths(this.cfg.reposRoot, run.repoId);
     try {
+      const gitUrl = this.store.gitUrlOf(run.repoId);
       // `run.id` doubles as the worktree key — unique by construction (`refactor_`
       // prefix, minted once at `refactor_start`), so it cannot collide with a review's
       // own worktree even though both live under the same `paths.worktrees` root.
       const worktree = await worktreeFor(paths, run.id, run.commitSha, gitUrl ?? "");
-      // lore-ok[2f329d31]: found by lore's own review — `worktreeFor` resolves
-      // `run.commitSha` (a branch name, routinely) to a real SHA to cut the worktree,
-      // then discards it; read back here and stored, so the row says what was actually
-      // read rather than what it was asked for.
-      const resolvedSha = (await git(worktree, ["rev-parse", "HEAD"])).stdout.trim();
-      if (resolvedSha !== "") this.store.setRefactorRunCommit(run.id, resolvedSha);
       try {
+        // lore-ok[2f329d31]: found by lore's own review — `worktreeFor` resolves
+        // `run.commitSha` (a branch name, routinely) to a real SHA to cut the worktree,
+        // then discards it; read back here and stored, so the row says what was
+        // actually read rather than what it was asked for.
+        const resolvedSha = (await git(worktree, ["rev-parse", "HEAD"])).stdout.trim();
+        if (resolvedSha !== "") this.store.setRefactorRunCommit(run.id, resolvedSha);
         const result = await suggestRefactors(
           { store: this.store, repoId: run.repoId, ask: this.ask },
           { folder: run.folder, commit: resolvedSha === "" ? run.commitSha : resolvedSha, worktree, tiers: loadTiers() },
@@ -134,7 +149,16 @@ export class RefactorWorker {
         });
       }
     } catch (e) {
-      this.store.finishRefactorRun(run.id, { state: "failed", lastError: e instanceof Error ? e.message : String(e) });
+      const message = e instanceof Error ? e.message : String(e);
+      if (this.store.isClosed()) return;
+      try {
+        this.store.finishRefactorRun(run.id, { state: "failed", lastError: message });
+      } catch (inner) {
+        console.error(
+          `[lore:log] ${run.id}: refactor run's own failure handling faulted, leaving it 'running' for startup reclaim: ` +
+            (inner instanceof Error ? inner.message : String(inner)),
+        );
+      }
     }
   }
 }

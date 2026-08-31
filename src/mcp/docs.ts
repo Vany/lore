@@ -870,9 +870,9 @@ says which you got.
 Refused up front if no tier is configured for this at all, before anything is queued or
 spent — not a doomed run you would have to poll to find out about.
 
-Lost your \`run_id\`? \`refactor_list\` returns every run on this repository, newest
-first — suggestions are stored, not one-shot, so nothing here needs it held in your
-own context to stay reachable.
+Lost your \`run_id\`? \`refactor_list\` returns the most recent runs on this repository —
+suggestions are stored, not one-shot, so nothing here needs it held in your own context
+to stay reachable.
 `.trim(),
 
   refactorPoll: `
@@ -893,10 +893,15 @@ is no undelivered-findings state to mark and no colleague to accidentally take i
 `.trim(),
 
   refactorList: `
-Every refactor run on this repository, newest first — id, commit, folder, state, and
-(once settled) whether it combined. No arguments: scoped to the repository your token
-is bound to, the same way \`knowledge_query\` is, not filtered to runs you personally
-started.
+The most recent refactor runs on this repository, newest first — id, commit, folder,
+state, and (once settled) whether it combined. No arguments: scoped to the repository
+your token is bound to, the same way \`knowledge_query\` is, not filtered to runs you
+personally started.
+
+CAPPED, AND \`notShown\` SAYS BY HOW MUCH — the same "counted and stated" shape a
+review's own capped finding list uses. A non-zero \`notShown\` means older runs exist
+that this call did not return; nothing here deletes a run, so on a repository with real
+history that will happen.
 
 Suggestions are STORED, not one-shot (D-136) — this is how you find a \`run_id\` again
 once it has left your own context, or see what has already been asked about a folder

@@ -4100,15 +4100,31 @@ export class Store {
    * already been asked, the same transparency `review_inbox`'s own repo-wide reads have.
    * No suggestions in the row: this is a list to pick a `run_id` FROM, not a second way
    * to read one's full result — `refactor_poll` stays the one place for that.
+   *
+   * lore-ok[f60ebe42,c892422d]: found by lore's own review, twice — the cap was
+   * silent. Every doc this feeds (`spec/mcp-api.md` §8, `TOOL_DOCS.refactorList`) said
+   * "every run on this repository" while nothing ever deletes a `refactor_run` row, so
+   * crossing `limit` was a when, not an if, and a caller had no way to tell a complete
+   * answer from a truncated one — the exact shape `findingsNotShown` (board.ts) and
+   * `checks_skipped` both exist to refuse elsewhere in this codebase. `notShown` is the
+   * remainder, not just a boolean, matching that precedent: "and it says so" (D-96).
    */
-  recentRefactorRuns(repoId: string, limit = 20): readonly Omit<RefactorRunRow, "suggestions">[] {
+  recentRefactorRuns(
+    repoId: string,
+    limit = 20,
+  ): { readonly runs: readonly Omit<RefactorRunRow, "suggestions">[]; readonly notShown: number } {
+    const total = Number(
+      (this.db.prepare("SELECT COUNT(*) AS c FROM refactor_run WHERE repo_id = ?").get(repoId) as
+        | Record<string, number | bigint>
+        | undefined)?.["c"] ?? 0,
+    );
     const rows = this.db
       .prepare(
         `SELECT id, repo_id, principal, commit_sha, folder, state, combined, combiner_note, last_error, created_at, updated_at
          FROM refactor_run WHERE repo_id = ? ORDER BY created_at DESC LIMIT ?`,
       )
       .all(repoId, limit) as Record<string, unknown>[];
-    return rows.map((row) => ({
+    const runs = rows.map((row) => ({
       id: String(row["id"]),
       repoId: String(row["repo_id"]),
       principal: String(row["principal"]),
@@ -4121,6 +4137,7 @@ export class Store {
       createdAt: String(row["created_at"]),
       updatedAt: String(row["updated_at"]),
     }));
+    return { runs, notShown: Math.max(0, total - runs.length) };
   }
 
   refactorRun(id: string): RefactorRunRow | undefined {

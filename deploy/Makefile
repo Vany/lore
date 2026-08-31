@@ -172,7 +172,9 @@ drain:
 		const d=new DatabaseSync(process.env.LORE_DB_DIR+'/lore.db',{readOnly:true}); \
 		const rows=d.prepare(\"SELECT j.review_id id, r.branch b, j.updated_at u FROM job j JOIN review r ON r.id=j.review_id WHERE j.state='running'\").all(); \
 		for (const x of rows) console.log('  '+x.id.slice(4,16)+'  '+x.b.slice(0,38)+'  '+Math.round((Date.now()-Date.parse(x.u))/1000)+'s'); \
-		console.log('COUNT '+rows.length);"); \
+		const rf=d.prepare(\"SELECT id, folder, updated_at u FROM refactor_run WHERE state='running'\").all(); \
+		for (const x of rf) console.log('  '+x.id.slice(9,21)+'  refactor:'+x.folder.slice(0,28)+'  '+Math.round((Date.now()-Date.parse(x.u))/1000)+'s'); \
+		console.log('COUNT '+(rows.length+rf.length));"); \
 		n=$$(printf '%s' "$$out" | sed -n 's/^COUNT //p'); \
 		printf '%s' "$$out" | grep -v '^COUNT ' || true; \
 		test "$$n" = "0" && { echo "  drained — nothing in flight."; break; }; \

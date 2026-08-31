@@ -73,7 +73,7 @@ nothing.
 | `knowledge_escalate` | `left*`, `right*`, `note*` | the conflict, raised for a person |
 | `refactor_start` | `commit*`, `folder*` | `{run_id, state: "queued"}` — returns immediately, separate from review (D-136) |
 | `refactor_poll` | `run_id*` | `{state, suggestions[]?, combined?, combiner_note?, sources[]?, error?}` — §8 |
-| `refactor_list` | — | `{runs[]}` — every run on this repository, newest first — §8 |
+| `refactor_list` | — | `{runs[], notShown}` — most recent runs on this repository, newest first — §8 |
 
 `kind: "policy"` records a **development rule**, which a finding can be appealed to:
 `lore-ok[<fingerprint>]: rule <cite_as> — <why it covers this code>`. Reviewers are told
@@ -943,9 +943,12 @@ nothing to combine. Unlike `review_poll`, **polling this consumes nothing**: no
 delta, no delivered-marking, safe to call twice or from two sessions and see the
 same answer both times.
 
-`refactor_list()` → `{runs[]}`, every run on the caller's repository, newest first, no
-arguments — id, commit, folder, state and (once settled) `combined`, but not the
-`suggestions` themselves; `refactor_poll` is still where those are read. Exists because
-"stored and queryable" needs a way to find a `run_id` again once it has left whatever
-context first held it — repo-scoped like `knowledge_query`, not filtered to the caller's
-own runs, the same transparency `review_inbox`'s repo-wide reads already have.
+`refactor_list()` → `{runs[], notShown}`, the most recent runs on the caller's
+repository, newest first, no arguments — id, commit, folder, state and (once settled)
+`combined`, but not the `suggestions` themselves; `refactor_poll` is still where those
+are read. Capped, like a review's own finding list, and `notShown` says by how much
+rather than truncating silently — nothing deletes a `refactor_run` row, so a repository
+with real history will cross the cap. Exists because "stored and queryable" needs a way
+to find a `run_id` again once it has left whatever context first held it — repo-scoped
+like `knowledge_query`, not filtered to the caller's own runs, the same transparency
+`review_inbox`'s repo-wide reads already have.
