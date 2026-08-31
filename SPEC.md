@@ -4751,8 +4751,8 @@ the review, running in the operator's browser.
 
 **Findings hang under the tier attempt that raised them**, collapsed, and open to
 severity, file, line, symbol, CWE, and the verdict that settled them if one did — and,
-as of D-135 reversing the redaction described below, to claim, evidence and failure
-scenario too. The nesting is what makes "which tier said this" need no label. It is a join and
+as of D-135 reversing the redaction described below, to claim, evidence, failure
+scenario, and — once settled — the rationale behind that verdict too. The nesting is what makes "which tier said this" need no label. It is a join and
 not a heuristic: `finding.origin` is the tier id and `finding.round` the round, exactly
 the pair a `tier_run` is identified by, verified against the live database as matching
 every finding it holds. Anything that fails to match is still shown, as an orphan — where
