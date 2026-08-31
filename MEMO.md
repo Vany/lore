@@ -3,6 +3,63 @@
 Newest first. Updated at the end of each task: what changed, what I learned, what
 surprised me.
 
+## 2026-08-31 — D-135, un-redacting the board: three rounds, all three my own
+follow-up fix missing a corner of the same sentence
+
+**What changed.** `rev_duePHIichyGQQZUEoWxSXnhv`, `passed_partial`, attested at
+`b55b2bbb40a00ee319e180cb6fe5433b5ad6b33e` (2 findings, 2 fixed, 0 justified) —
+merged as three commits. Reverses D-96's 2026-08-28 revision: Vany asked directly
+to un-redact `claim`/`evidence`/`failureScenario`/rationale on the unauthenticated
+operator board, reasoning that a pre-production finding will be fixed regardless
+and is not secret data. Confirmed via AskUserQuestion, twice — once on the access
+model, once explicitly on reversing yesterday's incident-driven decision, shown the
+exact multi-tenant tradeoff first (this widens exposure for every repo lore
+reviews, not only lore's own).
+
+**The implementation itself was routine and clean: one round, zero findings.**
+Un-redact four fields in `ops/board.ts`'s `BoardFinding`/`withFindings`, render
+them in `board-page.ts`'s `finding()` in place of the old placeholder paragraph
+(reusing the already-defined, previously-unused `.fbody .label` CSS), update the
+route comment in `http.ts`. Every inverted test (`board.test.ts`,
+`board-page.test.ts`, and a third file the plan had not enumerated —
+`http.test.ts`, which pins the same redaction as a field-level drift check)
+git-stash-verified clean against the old redacting code first. One in-flight
+mistake, caught by nothing but rereading my own writing before submitting: an
+early draft of `board-page.ts`'s new doc comment used a backtick around
+`` `esc()` `` — the exact trap its own neighboring comment names ("NO BACKTICKS
+ANYWHERE IN THIS FILE'S PAGE SOURCE... the whole page is one TS template
+literal"), caught immediately by `vitest`'s parse error rather than by care.
+
+**All three review rounds were the SAME sentence in `SPEC.md`'s D-96 entry,
+each fix uncovering the next gap in it.** The two paragraphs I deliberately
+rewrote (the "REVISED 2026-08-28" one and the rationale one) were marked
+superseded correctly on the first pass. What I explicitly chose NOT to touch —
+reasoning at the time that "(revised below)" was a generic-enough pointer — was
+D-96's ORIGINAL body sentence, three screens earlier: *"open to severity, file,
+line, symbol, CWE, and the verdict that settled them if one did — never to
+claim, evidence or failure scenario (revised below)."* Round 1 (fingerprint
+882f0658) caught that in isolation — someone grepping SPEC.md and reading only
+that sentence — it flatly asserts the still-redacted claim, exactly the
+document-claims-X-while-code-does-Y shape this project treats as its defining
+defect (240a9efa, the finding that started D-96's OWN 2026-08-28 revision in the
+first place). Fixed it by naming the three restored fields inline. **Round 2
+(7b529e74) caught that MY OWN fix repeated the exact mistake it was describing**:
+I named claim/evidence/failureScenario and dropped the fourth field —
+`settledRationale` — the same one-field miss D-96's own entry documents TWICE
+happening to the original redaction (969fa523, "the first pass of this revision
+named three fields and missed a fourth"). The pattern the entry warns about, in
+miniature, in the sentence fixing it. Fixed by adding the rationale clause.
+Round 3 found nothing — `passed_partial` (t0–t3, z-ai and moonshotai across 3
+tiers, so not 3 independent vendor opinions, hence partial rather than full).
+
+**What I'd do differently:** the "don't touch it, the pointer already covers it"
+call in the plan was exactly backwards — a sentence stating a now-false claim,
+however many disclaimers point away from it, is still a sentence stating a false
+claim to a reader who stops at it. When reversing a redaction, grep for every
+sentence that asserted the ORIGINAL behavior, not just the paragraphs that
+explained the decision — the assertion and its justification drift independently,
+and this entry had three separate assertions of the same fact across ~40 lines.
+
 ## 2026-08-29 — D-134, tsc --incremental actually incremental: four rounds, and my
 own fix broke twice before it was real
 
