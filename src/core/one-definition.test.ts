@@ -83,6 +83,47 @@ describe("review states have one definition", () => {
   });
 });
 
+/**
+ * 49a8e6d2, found by lore's own review: the check above was built for review's own
+ * five states and named them by spelling — so when `core/refactor-state.ts` gave a
+ * SECOND family the same shape (D-139, itself written to fix four hand-copied
+ * `queued`/`running`/`done`/`failed` lists), nothing here learned that a new family
+ * existed. A future hand-written refactor state list in SQL would pass every check
+ * in this file, the exact recurrence this file's own opening comment is about.
+ *
+ * NOT folded into `SPELLED_OUT` above: `refactor_run.state` and `job.state`
+ * (`schema.ts`) are both literally `queued | running | done | failed` — the same four
+ * words for two unrelated tables (`core/refactor-state.ts`'s own doc comment says why
+ * they are not one definition) — so a bare word match would flag `job`'s own
+ * legitimate, already-correct `state IN ('queued', 'running')` query. Anchored on
+ * `refactor_run` actually appearing first instead, which `job`'s query never does.
+ */
+describe("refactor states have one definition", () => {
+  const SPELLED_OUT_REFACTOR =
+    /refactor_run\b[\s\S]{0,400}?(?:NOT\s+)?IN\s*\(\s*'(?:queued|running|done|failed)'[^)]*\)/i;
+
+  it("is never spelled out in a SQL membership test", () => {
+    const offenders = FILES.filter((f) => SPELLED_OUT_REFACTOR.test(f.text)).map((f) => f.path);
+    expect(
+      offenders,
+      `use REFACTOR_OPEN_SQL/REFACTOR_TERMINAL_SQL instead of writing refactor_run's states out:\n  ${offenders.join("\n  ")}`,
+    ).toStrictEqual([]);
+  });
+
+  // The guard above only helps while the derived lists are the real ones, and only
+  // together — unlike review, refactor has no single TERMINAL_SQL a reader could
+  // check alone, so this also confirms the open/terminal split covers every state
+  // exactly once rather than each half merely being a subset.
+  it("derives the SQL form from the same set the type checker sees", async () => {
+    const { REFACTOR_STATES, REFACTOR_OPEN_SQL, REFACTOR_TERMINAL_SQL } = await import("./refactor-state.ts");
+    const open = REFACTOR_OPEN_SQL.split(",").map((s) => s.trim().replaceAll("'", ""));
+    const terminal = REFACTOR_TERMINAL_SQL.split(",").map((s) => s.trim().replaceAll("'", ""));
+    expect(terminal).toContain("done");
+    expect(open).toContain("queued");
+    expect([...open, ...terminal].sort()).toStrictEqual([...REFACTOR_STATES].sort());
+  });
+});
+
 describe("an exported constant has a reader", () => {
   /**
    * A constant nothing consumes is worse than one that is absent: it reads as a
