@@ -58,6 +58,20 @@ export interface RawModel {
 const EXCLUDED_STATUS = new Set(["deprecated", "alpha"]);
 
 /**
+ * `vendorOf`, with the one normalisation this module needs on top of it — the SINGLE
+ * place that happens, exported so every caller uses the same answer rather than each
+ * recomputing it. Found missing from `suggestion.ts`'s own enforcement path by lore's
+ * own review, fingerprints 119dcfd0/992002a4: the first fix (`~` stripped here, for the
+ * table the model reads) never reached `validatePicks`, which called bare `vendorOf` on
+ * the picked id — so a reply naming both `z-ai` and `~z-ai` still passed the very check
+ * this exists to be. Two definitions of "the vendor" is how that happened; there is
+ * now one.
+ */
+export function vendorOfCandidate(id: string): string {
+  return vendorOf(id).replace(/^~/, "");
+}
+
+/**
  * The pure half: what a provider's own `models` map reduces to once filtered to what a
  * review session can actually use. Tool-call support is not optional for an agentic
  * reviewer, and a deprecated or alpha model is not a bet worth a fresh install making by
@@ -72,16 +86,16 @@ export function filterCatalog(models: Readonly<Record<string, RawModel>>): reado
     const id = `openrouter/${modelId}`;
     out.push({
       id,
-      // `~` STRIPPED FIRST — found live against the real deployment, fingerprint
-      // fc9e8468: OpenRouter's own catalog carries a SECOND namespace for at least
-      // seven vendors (`~anthropic/claude-opus-latest` alongside `anthropic/claude-
-      // opus-5`, and six more — `~x-ai`, `~z-ai`, `~openai`, `~google`,
-      // `~moonshotai`, `~deepseek`) — a "-latest" pointer alias for the SAME real
-      // organisation, not a second one. Left unstripped, `vendorOf` (which compares
-      // strings, not corporate identity, on purpose — see its own doc comment)
-      // would count `~z-ai` and `z-ai` as two independent vendors, exactly the
-      // miscount the one-vendor-per-tier rule (D-32/D-49) exists to catch.
-      vendor: vendorOf(id).replace(/^~/, ""),
+      // `~` STRIPPED FIRST (via `vendorOfCandidate`, below) — found live against the
+      // real deployment, fingerprint fc9e8468: OpenRouter's own catalog carries a
+      // SECOND namespace for at least seven vendors (`~anthropic/claude-opus-latest`
+      // alongside `anthropic/claude-opus-5`, and six more — `~x-ai`, `~z-ai`,
+      // `~openai`, `~google`, `~moonshotai`, `~deepseek`) — a "-latest" pointer alias
+      // for the SAME real organisation, not a second one. Left unstripped, `vendorOf`
+      // (which compares strings, not corporate identity, on purpose — see its own
+      // doc comment) would count `~z-ai` and `z-ai` as two independent vendors,
+      // exactly the miscount the one-vendor-per-tier rule (D-32/D-49) exists to catch.
+      vendor: vendorOfCandidate(id),
       costInput: m.cost?.input,
       costOutput: m.cost?.output,
       contextTokens: m.limit.context,

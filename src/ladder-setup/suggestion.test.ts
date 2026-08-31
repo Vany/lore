@@ -90,4 +90,19 @@ describe("validatePicks", () => {
     expect(err).toMatch(/three different vendors/);
     expect(err).toMatch(/D-32\/D-49/);
   });
+
+  /**
+   * THE ENFORCEMENT PATH ITSELF, NOT JUST THE DISPLAYED TABLE — found by lore's own
+   * review, fingerprints 119dcfd0/992002a4: the first tilde-alias fix landed only in
+   * `catalog.ts`'s own display column, so THIS check — the thing that actually
+   * decides whether a ladder gets written — still called bare `vendorOf` and would have
+   * accepted `z-ai` alongside `~z-ai` as two independent vendors. Picking a live
+   * "-latest" pointer alias id directly (not the catalog's own precomputed field)
+   * proves the check itself, not just the table, now treats them as one.
+   */
+  it("rejects a tilde-aliased pointer route as a distinct vendor from its own real organisation", () => {
+    const tildeT2: TierPick = { ...t2, model: "openrouter/~z-ai/glm-5.2-latest" };
+    const err = validatePicks([t1, tildeT2, t3]);
+    expect(err, "z-ai and ~z-ai must count as the same vendor, not two").toMatch(/three different vendors/);
+  });
 });
