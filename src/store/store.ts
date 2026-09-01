@@ -402,6 +402,45 @@ function now(): string {
   return new Date().toISOString();
 }
 
+/**
+ * `meta` is a general key-value store under eight different key prefixes
+ * (`session-tree:`, `session-t0:`, `session-id:`, `told:`, `client-work:`,
+ * `draining`, `tier-unavailable:`, `route-unavailable:`, plus the fixed
+ * `schema_version` row) — these four are the ONE place the raw get/set/parse
+ * shell is written, found duplicated across 9 write sites and 8 read sites by
+ * lore's own refactor-suggestor. `routeUnavailable`/`tierUnavailable` each layer
+ * real per-field defaulting on top of `getJson` — that logic is domain shape, not
+ * generic parsing, and stays at the call site rather than folding in here.
+ * `claimDailyNotice`'s `INSERT OR IGNORE` is a genuinely different statement (its
+ * whole point is letting SQLite decide who won a race) and is not built from these.
+ */
+function metaGet(db: DatabaseSync, key: string): string | undefined {
+  const row = db.prepare("SELECT value FROM meta WHERE key = ?").get(key) as { value?: string } | undefined;
+  return row?.value;
+}
+
+function metaSet(db: DatabaseSync, key: string, value: string): void {
+  db.prepare("INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(
+    key,
+    value,
+  );
+}
+
+/** `metaGet` plus a parse that degrades to `undefined` — a row we cannot read is a row we wrote wrong, and treating it as "no record" costs one cold path rather than crashing whatever asked. */
+function getJson<T>(db: DatabaseSync, key: string): T | undefined {
+  const raw = metaGet(db, key);
+  if (raw === undefined) return undefined;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return undefined;
+  }
+}
+
+function setJson(db: DatabaseSync, key: string, value: unknown): void {
+  metaSet(db, key, JSON.stringify(value));
+}
+
 export class Store {
   readonly db: DatabaseSync;
   /** Where this database lives, so `integrityFault` can ask a FRESH reader about it. */
@@ -439,9 +478,7 @@ export class Store {
     applyMigrations(this.db);
     // Written after the migrations and UPDATED, not left alone: the row is only
     // worth having if it describes the tables that are actually there.
-    this.db
-      .prepare("INSERT INTO meta(key, value) VALUES('schema_version', ?) ON CONFLICT(key) DO UPDATE SET value = ?")
-      .run(String(SCHEMA_VERSION), String(SCHEMA_VERSION));
+    metaSet(this.db, "schema_version", String(SCHEMA_VERSION));
   }
 
   close(): void {
@@ -3102,16 +3139,11 @@ export class Store {
    * `clearSessionTrees`.
    */
   sessionTreeOf(reviewId: string, tierId: string, route: string): string | undefined {
-    const row = this.db.prepare("SELECT value FROM meta WHERE key = ?").get(`session-tree:${reviewId}:${tierId}:${route}`) as
-      | { value?: string }
-      | undefined;
-    return row?.value;
+    return metaGet(this.db, `session-tree:${reviewId}:${tierId}:${route}`);
   }
 
   setSessionTree(reviewId: string, tierId: string, route: string, tree: string): void {
-    this.db
-      .prepare("INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
-      .run(`session-tree:${reviewId}:${tierId}:${route}`, tree);
+    metaSet(this.db, `session-tree:${reviewId}:${tierId}:${route}`, tree);
   }
 
   /**
@@ -3120,21 +3152,14 @@ export class Store {
    * session-tree record.
    */
   sessionT0Of(reviewId: string, tierId: string, route: string): readonly { fingerprint: string; file: string; line?: number; severity: string; claim: string }[] | undefined {
-    const row = this.db.prepare("SELECT value FROM meta WHERE key = ?").get(`session-t0:${reviewId}:${tierId}:${route}`) as
-      | { value?: string }
-      | undefined;
-    if (row?.value === undefined) return undefined;
-    try {
-      return JSON.parse(row.value) as { fingerprint: string; file: string; line?: number; severity: string; claim: string }[];
-    } catch {
-      return undefined;
-    }
+    return getJson<{ fingerprint: string; file: string; line?: number; severity: string; claim: string }[]>(
+      this.db,
+      `session-t0:${reviewId}:${tierId}:${route}`,
+    );
   }
 
   setSessionT0(reviewId: string, tierId: string, route: string, seen: readonly { fingerprint: string; file: string; line?: number | undefined; severity: string; claim: string }[]): void {
-    this.db
-      .prepare("INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
-      .run(`session-t0:${reviewId}:${tierId}:${route}`, JSON.stringify(seen));
+    setJson(this.db, `session-t0:${reviewId}:${tierId}:${route}`, seen);
   }
 
   /**
@@ -3158,16 +3183,11 @@ export class Store {
    * below it: one tier can hold several sessions when a pool or a fallback is in play.
    */
   keptSessionOf(key: string): string | undefined {
-    const row = this.db.prepare("SELECT value FROM meta WHERE key = ?").get(`session-id:${key}`) as
-      | { value?: string }
-      | undefined;
-    return row?.value;
+    return metaGet(this.db, `session-id:${key}`);
   }
 
   setKeptSession(key: string, sessionId: string): void {
-    this.db
-      .prepare("INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
-      .run(`session-id:${key}`, sessionId);
+    metaSet(this.db, `session-id:${key}`, sessionId);
   }
 
   /**
@@ -3193,10 +3213,7 @@ export class Store {
    * alert came to suppress every later one for a day.
    */
   dailyNoticeGiven(kind: string, dayIso: string): boolean {
-    const row = this.db.prepare("SELECT 1 AS present FROM meta WHERE key = ?").get(`told:${kind}:${dayIso}`) as
-      | Record<string, number>
-      | undefined;
-    return row !== undefined;
+    return metaGet(this.db, `told:${kind}:${dayIso}`) !== undefined;
   }
 
   /**
@@ -3304,9 +3321,7 @@ export class Store {
    * not a fact about the review, and it is deleted as it is read.
    */
   noteClientWork(reviewId: string): void {
-    this.db
-      .prepare("INSERT INTO meta(key, value) VALUES(?, '1') ON CONFLICT(key) DO UPDATE SET value = '1'")
-      .run(`client-work:${reviewId}`);
+    metaSet(this.db, `client-work:${reviewId}`, "1");
   }
 
   /**
@@ -3317,10 +3332,7 @@ export class Store {
    */
   takeClientWork(reviewId: string): boolean {
     const key = `client-work:${reviewId}`;
-    const row = this.db.prepare("SELECT value FROM meta WHERE key = ?").get(key) as
-      | Record<string, string>
-      | undefined;
-    if (row === undefined) return false;
+    if (metaGet(this.db, key) === undefined) return false;
     this.db.prepare("DELETE FROM meta WHERE key = ?").run(key);
     return true;
   }
@@ -3492,16 +3504,11 @@ export class Store {
    * MCP keeps serving, new reviews still queue, and the next process runs them.
    */
   setDraining(on: boolean): void {
-    this.db
-      .prepare("INSERT INTO meta(key, value) VALUES('draining', ?) ON CONFLICT(key) DO UPDATE SET value = ?")
-      .run(on ? "1" : "0", on ? "1" : "0");
+    metaSet(this.db, "draining", on ? "1" : "0");
   }
 
   isDraining(): boolean {
-    const row = this.db.prepare("SELECT value FROM meta WHERE key = 'draining'").get() as
-      | Record<string, string>
-      | undefined;
-    return row?.["value"] === "1";
+    return metaGet(this.db, "draining") === "1";
   }
 
   /**
@@ -3553,9 +3560,7 @@ export class Store {
     // and D-94 would never probe at all under steady load. The store keeps what it knows;
     // only a real call names a new time. `clearTierUnavailable` is what forgets.
     const kept = probedAt ?? this.tierUnavailable(tierId)?.probedAt;
-    this.db
-      .prepare("INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
-      .run(`tier-unavailable:${tierId}`, JSON.stringify({ until: untilIso, why, failures, stated, probedAt: kept }));
+    setJson(this.db, `tier-unavailable:${tierId}`, { until: untilIso, why, failures, stated, probedAt: kept });
   }
 
   /**
@@ -3589,12 +3594,13 @@ export class Store {
     // looking fixed. Caught by watching the live deployment rather than by the test I wrote
     // for it, which passed for an unrelated reason.
     const kept = this.routeUnavailable(model)?.probedAt;
-    this.db
-      .prepare("INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
-      .run(
-        `route-unavailable:${model}`,
-        JSON.stringify({ until: untilIso, why, failures, stated, ...(kept === undefined ? {} : { probedAt: kept }) }),
-      );
+    setJson(this.db, `route-unavailable:${model}`, {
+      until: untilIso,
+      why,
+      failures,
+      stated,
+      ...(kept === undefined ? {} : { probedAt: kept }),
+    });
   }
 
   /**
@@ -3609,9 +3615,7 @@ export class Store {
   markRouteProbed(model: string): void {
     const mark = this.routeUnavailable(model);
     if (mark === undefined) return;
-    this.db
-      .prepare("INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
-      .run(`route-unavailable:${model}`, JSON.stringify({ ...mark, probedAt: new Date().toISOString() }));
+    setJson(this.db, `route-unavailable:${model}`, { ...mark, probedAt: new Date().toISOString() });
   }
 
   /** Forgotten the moment the route answers, exactly as for a tier. */
@@ -3627,27 +3631,24 @@ export class Store {
    * at all rather than only that it is failing now.
    */
   routeUnavailable(model: string): { readonly until: string; readonly why: string; readonly failures: number; readonly stated: boolean; readonly probedAt?: string } | undefined {
-    const row = this.db.prepare("SELECT value FROM meta WHERE key = ?").get(`route-unavailable:${model}`) as
-      | Record<string, string>
-      | undefined;
-    if (row?.["value"] === undefined) return undefined;
-    try {
-      const v = JSON.parse(row["value"]) as { until?: string; why?: string; failures?: number; stated?: boolean; probedAt?: string };
-      return {
-        until: v.until ?? "",
-        why: v.why ?? "",
-        failures: v.failures ?? 1,
-        stated: v.stated === true,
-        // Absent means never probed, which `shouldProbe` reads as "due now" — so the first
-        // review after this shipped re-tests every route parked on a guess, which is
-        // exactly right for marks written before probing existed.
-        ...(v.probedAt === undefined ? {} : { probedAt: v.probedAt }),
-      };
-    } catch {
-      // Unreadable is not "out of quota". A row we cannot parse must not silently strike
-      // a paid-for route out of every ladder that names it.
-      return undefined;
-    }
+    // getJson's degrade-on-parse-failure is exactly right here: unreadable is not "out
+    // of quota", and a row we cannot parse must not silently strike a paid-for route
+    // out of every ladder that names it.
+    const v = getJson<{ until?: string; why?: string; failures?: number; stated?: boolean; probedAt?: string }>(
+      this.db,
+      `route-unavailable:${model}`,
+    );
+    if (v === undefined) return undefined;
+    return {
+      until: v.until ?? "",
+      why: v.why ?? "",
+      failures: v.failures ?? 1,
+      stated: v.stated === true,
+      // Absent means never probed, which `shouldProbe` reads as "due now" — so the first
+      // review after this shipped re-tests every route parked on a guess, which is
+      // exactly right for marks written before probing existed.
+      ...(v.probedAt === undefined ? {} : { probedAt: v.probedAt }),
+    };
   }
 
   /** Forgotten the moment the tier answers — a stale mark is a tier we stop using for nothing. */
@@ -3671,28 +3672,22 @@ export class Store {
     /** When a review last probed it, absent if never (D-94). */
     readonly probedAt?: string;
   } | undefined {
-    const row = this.db.prepare("SELECT value FROM meta WHERE key = ?").get(`tier-unavailable:${tierId}`) as
-      | Record<string, string>
-      | undefined;
-    if (row?.["value"] === undefined) return undefined;
-    try {
-      const v = JSON.parse(row["value"]) as {
-        until?: string; why?: string; failures?: number; stated?: boolean; probedAt?: string;
-      };
-      // Defaults to FALSE, which is the conservative reading: a row written before this
-      // field existed is treated as a guess, so it bounds the screen and never a review.
-      return {
-        until: v.until ?? "",
-        why: v.why ?? "",
-        failures: v.failures ?? 1,
-        stated: v.stated === true,
-        ...(v.probedAt === undefined ? {} : { probedAt: v.probedAt }),
-      };
-    } catch {
-      // A meta row we cannot parse is a row we wrote wrong; treating it as "no record"
-      // costs one hang and self-heals, where throwing would take down whatever read it.
-      return undefined;
-    }
+    // A meta row we cannot parse is a row we wrote wrong; getJson's degrade-to-undefined
+    // costs one hang and self-heals, where throwing would take down whatever read it.
+    const v = getJson<{ until?: string; why?: string; failures?: number; stated?: boolean; probedAt?: string }>(
+      this.db,
+      `tier-unavailable:${tierId}`,
+    );
+    if (v === undefined) return undefined;
+    // Defaults to FALSE, which is the conservative reading: a row written before this
+    // field existed is treated as a guess, so it bounds the screen and never a review.
+    return {
+      until: v.until ?? "",
+      why: v.why ?? "",
+      failures: v.failures ?? 1,
+      stated: v.stated === true,
+      ...(v.probedAt === undefined ? {} : { probedAt: v.probedAt }),
+    };
   }
 
   /** Every tier currently in a cool-off, for the operator view. */

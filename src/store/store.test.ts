@@ -1727,6 +1727,68 @@ describe("held diffs", () => {
 });
 
 /**
+ * D-114's flag: set the moment a held diff applies and hash-verifies, taken (and
+ * cleared) by the next round that owns the ladder. Neither `noteClientWork` nor
+ * `takeClientWork` had ANY test anywhere in this suite before this — found while
+ * routing both through the new `metaSet`/`metaGet` helpers (this file's own
+ * refactor-suggestor pass), in exactly the area D-114's own comment says produced
+ * the same defect three times over. Closing the gap here rather than trusting the
+ * refactor not to have reopened one of those three shapes.
+ */
+describe("client work (D-114)", () => {
+  it("is false until noted, true once, then false again — read-and-clear", () => {
+    expect(store.takeClientWork("rev1")).toBe(false);
+
+    store.noteClientWork("rev1");
+    expect(store.takeClientWork("rev1"), "the note must be seen the first time it is taken").toBe(true);
+    expect(store.takeClientWork("rev1"), "and cleared by taking it, not reusable").toBe(false);
+  });
+
+  it("is keyed per review — one review's work does not leak into another's", () => {
+    store.noteClientWork("rev1");
+    expect(store.takeClientWork("rev2"), "rev2 never had work noted").toBe(false);
+    expect(store.takeClientWork("rev1"), "rev1's own note is unaffected by rev2 being checked").toBe(true);
+  });
+
+  it("noting twice before it is taken is still one signal, not two", () => {
+    store.noteClientWork("rev1");
+    store.noteClientWork("rev1");
+    expect(store.takeClientWork("rev1")).toBe(true);
+    expect(store.takeClientWork("rev1"), "one note or two, taking it once exhausts it").toBe(false);
+  });
+});
+
+/**
+ * The daily-notice split (D-121-adjacent): `dailyNoticeGiven` is the check,
+ * `claimDailyNotice` is claimed AFTER delivery succeeds, deliberately two calls
+ * rather than one check-and-claim — this file's own comment on `claimDailyNotice`
+ * names the incident (an undelivered alert suppressing every later one for the
+ * day) that shape exists to prevent. Neither had a test anywhere in this suite
+ * before this, found the same way the client-work gap above was.
+ */
+describe("daily notices", () => {
+  it("is not given until claimed, and stays given for the same kind and day", () => {
+    expect(store.dailyNoticeGiven("quota", "2026-09-01")).toBe(false);
+
+    store.claimDailyNotice("quota", "2026-09-01");
+    expect(store.dailyNoticeGiven("quota", "2026-09-01")).toBe(true);
+  });
+
+  it("claims once — the winner of a race, not both", () => {
+    expect(store.claimDailyNotice("quota", "2026-09-01"), "first claim wins").toBe(true);
+    expect(store.claimDailyNotice("quota", "2026-09-01"), "second claim for the same day finds it already taken").toBe(
+      false,
+    );
+  });
+
+  it("is independent per kind and per day", () => {
+    store.claimDailyNotice("quota", "2026-09-01");
+    expect(store.dailyNoticeGiven("quota", "2026-09-02"), "a different day is a different claim").toBe(false);
+    expect(store.dailyNoticeGiven("heartbeat", "2026-09-01"), "a different kind is a different claim").toBe(false);
+  });
+});
+
+/**
  * Refactor runs (D-136) — separate from `review` throughout: no `review_id` anywhere,
  * its own queue, its own state machine. Weighted toward the same INV-1 shape review's
  * own tests are: a run that could not be claimed twice, a failure that says why.
