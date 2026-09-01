@@ -1789,6 +1789,31 @@ describe("daily notices", () => {
 });
 
 /**
+ * Found by lore's own review, fingerprint e195cb7c: `getJson`'s old shape returned
+ * `JSON.parse`'s result unchanged, and `JSON.parse("null")` SUCCEEDS — no caller
+ * writes a literal `null` today, but nothing forbade a hand-repaired row, a restore,
+ * or a future writer from holding one, and `v.until ?? ""` on a `null` `v` throws,
+ * uncaught, straight out of `routeUnavailable`/`tierUnavailable` — contradicting
+ * both functions' own comments ("must not silently strike a paid-for route out of
+ * every ladder", "costs one hang and self-heals, where throwing would take down
+ * whatever read it"). No normal call path produces this value, so the row is
+ * written directly, standing in for a hand-repair or an old dump restored as-is.
+ */
+describe("a meta row holding the JSON literal null", () => {
+  it("routeUnavailable treats it as no record, not a crash", () => {
+    store.db.prepare("INSERT INTO meta(key, value) VALUES(?, 'null')").run("route-unavailable:kimi/k3");
+    expect(() => store.routeUnavailable("kimi/k3")).not.toThrow();
+    expect(store.routeUnavailable("kimi/k3")).toBeUndefined();
+  });
+
+  it("tierUnavailable treats it as no record, not a crash", () => {
+    store.db.prepare("INSERT INTO meta(key, value) VALUES(?, 'null')").run("tier-unavailable:t1");
+    expect(() => store.tierUnavailable("t1")).not.toThrow();
+    expect(store.tierUnavailable("t1")).toBeUndefined();
+  });
+});
+
+/**
  * Refactor runs (D-136) — separate from `review` throughout: no `review_id` anywhere,
  * its own queue, its own state machine. Weighted toward the same INV-1 shape review's
  * own tests are: a run that could not be claimed twice, a failure that says why.

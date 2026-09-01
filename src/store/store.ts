@@ -426,12 +426,31 @@ function metaSet(db: DatabaseSync, key: string, value: string): void {
   );
 }
 
-/** `metaGet` plus a parse that degrades to `undefined` — a row we cannot read is a row we wrote wrong, and treating it as "no record" costs one cold path rather than crashing whatever asked. */
+/**
+ * `metaGet` plus a parse that degrades to `undefined` — a row we cannot read is a row
+ * we wrote wrong, and treating it as "no record" costs one cold path rather than
+ * crashing whatever asked.
+ *
+ * A PARSED `null` DEGRADES TO `undefined` TOO, not just a parse throw — found by
+ * lore's own review, fingerprint e195cb7c: `JSON.parse("null")` SUCCEEDS (`null` is
+ * valid JSON), so it never reached the `catch` below, and every caller so far treats
+ * its `T` as a non-null shape it destructures immediately (`v.until ?? ""` and
+ * siblings in `routeUnavailable`/`tierUnavailable`) — `null.until` throws, uncaught,
+ * out of this function's callers. The OLD, pre-extraction code caught this by
+ * accident: its `try` wrapped the destructuring too, in the same block as the parse,
+ * so a `null` value threw INSIDE the try and was caught same as a malformed string.
+ * Splitting "parse" from "use" (this extraction's whole point) moved the destructuring
+ * outside any try, and nothing here already forbids the one JSON value that parses
+ * cleanly but is not an object — `undefined` and `null` are the same fact for every
+ * caller of a JSON-backed optional record: nothing here ever needs to tell "no row"
+ * from "a row holding the JSON literal null" apart.
+ */
 function getJson<T>(db: DatabaseSync, key: string): T | undefined {
   const raw = metaGet(db, key);
   if (raw === undefined) return undefined;
   try {
-    return JSON.parse(raw) as T;
+    const parsed: unknown = JSON.parse(raw);
+    return parsed === null ? undefined : (parsed as T);
   } catch {
     return undefined;
   }
