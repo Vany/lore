@@ -572,9 +572,22 @@ describe("the write clock agrees with the shell that reimplements it", () => {
  * `updated_at` alone, matching `WRITE_TIMESTAMPS`'s own stated rule exactly (a table
  * with two independent timestamps under OTHER names, like `tier_run`'s
  * `started_at`/`finished_at`, gets no such exemption — neither dominates the other).
+ *
+ * NOT "every timestamp column" — found by lore's own review, fingerprint b684699e,
+ * on this check's own first round: `finding.first_seen` is a real timestamp DDL
+ * creates and `WRITE_TIMESTAMPS` already carries, entirely by hand, because SQLite's
+ * TEXT type carries no distinction between a timestamp and any other string and a
+ * `_at`/`at` suffix is a naming CONVENTION, not a schema fact — this codebase has
+ * already broken it once. `KNOWN_NON_AT_TIMESTAMP_COLUMNS` below is the explicit,
+ * short list of the exceptions to that convention this schema actually contains
+ * today; a future table naming its own timestamp outside both the convention AND
+ * this list is the one gap that stays a human's to catch, same as it always was —
+ * narrower than the check's original claim, but true.
  */
 describe("WRITE_TIMESTAMPS agrees with the schema it claims to describe", () => {
-  it("accounts for every timestamp column DDL actually creates", async () => {
+  const KNOWN_NON_AT_TIMESTAMP_COLUMNS = new Set(["finding.first_seen"]);
+
+  it("accounts for every conventionally-named timestamp column DDL creates", async () => {
     const { DatabaseSync } = await import("node:sqlite");
     const { DDL, PRAGMAS, WRITE_TIMESTAMPS } = await import("../store/schema.ts");
     const db = new DatabaseSync(":memory:");
@@ -587,9 +600,10 @@ describe("WRITE_TIMESTAMPS agrees with the schema it claims to describe", () => 
     );
     const missing: string[] = [];
     for (const table of tables) {
-      const cols = (db.prepare("SELECT name, type FROM pragma_table_info(?)").all(table) as { name: string; type: string }[])
-        .filter((c) => c.type === "TEXT" && (c.name === "at" || c.name.endsWith("_at")))
+      const allCols = (db.prepare("SELECT name, type FROM pragma_table_info(?)").all(table) as { name: string; type: string }[])
+        .filter((c) => c.type === "TEXT")
         .map((c) => c.name);
+      const cols = allCols.filter((n) => n === "at" || n.endsWith("_at") || KNOWN_NON_AT_TIMESTAMP_COLUMNS.has(`${table}.${n}`));
       const isCreatedUpdatedPair = cols.includes("created_at") && cols.includes("updated_at");
       for (const col of cols) {
         if (col === "created_at" && isCreatedUpdatedPair) continue;
