@@ -470,14 +470,22 @@ CREATE INDEX IF NOT EXISTS refactor_suggestion_by_run ON refactor_suggestion(run
  * Every column `Store.lastWriteAt` needs to answer "when did this database last
  * record anything" correctly — listed here, beside `DDL`, instead of living only in
  * that one method three thousand lines away in `store.ts`. The same gap happened
- * FOUR times running before this: `delivered_at`, then `held_diff.created_at`, then
- * `tier_run.finished_at` (each found by lore's own review, each a table whose
- * timestamp `lastWriteAt` had simply never been told about), and then
- * `refactor_run`/`refactor_suggestion` were added to `DDL` above for D-136 with
- * neither table ever reaching `lastWriteAt` at all — a workgroup running only
- * refactor suggestions read as a dead replicator while real, billed work was
- * happening. A new table's own author sees this list right where they are already
- * writing `CREATE TABLE`, rather than needing to know a distant method exists.
+ * FOUR times running before this array existed: `delivered_at`, then
+ * `held_diff.created_at`, then `tier_run.finished_at` (each found by lore's own
+ * review, each a table whose timestamp `lastWriteAt` had simply never been told
+ * about), and then `refactor_run`/`refactor_suggestion` were added to `DDL` above
+ * for D-136 with neither table ever reaching `lastWriteAt` at all. Moving the list
+ * here did not end the pattern by itself — lore's own review found a FIFTH gap in
+ * this very array on its first read of it: `fixed_elsewhere_claim.created_at`
+ * (D-133) was missing, an insert-only table this array's own stated rule (below)
+ * already covers, simply never added. Not a live bug today (both write sites also
+ * touch `review.updated_at` in the same call), but the completeness claim above was
+ * false as written, and `one-definition.test.ts`'s own cross-check only compared
+ * this array against `deploy/Makefile`, never against `DDL` itself — nothing
+ * mechanical could have caught it. That test now also derives every table's real
+ * timestamp columns from `DDL` via SQLite's own introspection and checks each is
+ * accounted for here, rather than trusting a human re-reading this comment's rules
+ * to apply them correctly a sixth time.
  *
  * ORDERED TO MATCH `DDL` ABOVE, table for table, so adding a table at the end of
  * `DDL` has an obvious place to add its own entry at the end of this list too.
@@ -487,7 +495,10 @@ CREATE INDEX IF NOT EXISTS refactor_suggestion_by_run ON refactor_suggestion(run
  * `MAX(updated_at)` alone already dominates (`review`, `job`, `refactor_run` below
  * all rely on this). A genuinely insert-only table, with no `updated_at` column at
  * all, lists `created_at` instead (`verdict`, `usage`, `held_diff`,
- * `refactor_suggestion`, ...).
+ * `fixed_elsewhere_claim`, `refactor_suggestion`, ...) — and a table with two
+ * INDEPENDENT timestamps that are not a created/touched pair (`tier_run`'s
+ * `started_at`/`finished_at`, `knowledge_conflict`'s `created_at`/`resolved_at`)
+ * lists both, since neither dominates the other.
  */
 export const WRITE_TIMESTAMPS: readonly { readonly table: string; readonly column: string }[] = [
   { table: "repo", column: "created_at" },
@@ -504,6 +515,7 @@ export const WRITE_TIMESTAMPS: readonly { readonly table: string; readonly colum
   { table: "suppression", column: "accepted_at" },
   { table: "knowledge_conflict", column: "created_at" },
   { table: "knowledge_conflict", column: "resolved_at" },
+  { table: "fixed_elsewhere_claim", column: "created_at" },
   { table: "usage", column: "at" },
   { table: "held_diff", column: "created_at" },
   { table: "job", column: "updated_at" },

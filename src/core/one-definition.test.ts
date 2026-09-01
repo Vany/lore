@@ -554,6 +554,52 @@ describe("the write clock agrees with the shell that reimplements it", () => {
   });
 });
 
+/**
+ * ...AND WRITE_TIMESTAMPS ITSELF AGREES WITH THE SCHEMA IT CLAIMS TO DESCRIBE.
+ *
+ * Found by lore's own review, on the array's own first round: `fixed_elsewhere_claim
+ * .created_at` (D-133) was missing from `WRITE_TIMESTAMPS`, the FIFTH time this
+ * project has shipped a table whose timestamp `lastWriteAt` never learned about —
+ * this time inside the very array built to end the pattern. The check above only
+ * ever compared `WRITE_TIMESTAMPS` against `deploy/Makefile`'s independent
+ * reimplementation; two lists agreeing with each other proves nothing about either
+ * agreeing with `DDL`; the same gap could ship into both losing the same column.
+ *
+ * Builds a REAL, in-memory database from `DDL` and asks SQLite's own
+ * `pragma_table_info` what each table's columns actually are — not a second regex
+ * over the DDL text, which would just be a third place this exact class of
+ * duplication could drift. A `created_at`/`updated_at` PAIR is exempted down to
+ * `updated_at` alone, matching `WRITE_TIMESTAMPS`'s own stated rule exactly (a table
+ * with two independent timestamps under OTHER names, like `tier_run`'s
+ * `started_at`/`finished_at`, gets no such exemption — neither dominates the other).
+ */
+describe("WRITE_TIMESTAMPS agrees with the schema it claims to describe", () => {
+  it("accounts for every timestamp column DDL actually creates", async () => {
+    const { DatabaseSync } = await import("node:sqlite");
+    const { DDL, PRAGMAS, WRITE_TIMESTAMPS } = await import("../store/schema.ts");
+    const db = new DatabaseSync(":memory:");
+    for (const p of PRAGMAS) db.exec(p);
+    db.exec(DDL);
+
+    const listed = new Set(WRITE_TIMESTAMPS.map((w) => `${w.table}.${w.column}`));
+    const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]).map(
+      (r) => r.name,
+    );
+    const missing: string[] = [];
+    for (const table of tables) {
+      const cols = (db.prepare("SELECT name, type FROM pragma_table_info(?)").all(table) as { name: string; type: string }[])
+        .filter((c) => c.type === "TEXT" && (c.name === "at" || c.name.endsWith("_at")))
+        .map((c) => c.name);
+      const isCreatedUpdatedPair = cols.includes("created_at") && cols.includes("updated_at");
+      for (const col of cols) {
+        if (col === "created_at" && isCreatedUpdatedPair) continue;
+        if (!listed.has(`${table}.${col}`)) missing.push(`${table}.${col}`);
+      }
+    }
+    expect(missing, "WRITE_TIMESTAMPS is missing columns lastWriteAt would then never see").toStrictEqual([]);
+  });
+});
+
 describe("the replica threshold agrees with the shell that reimplements it", () => {
   it("matches deploy/Makefile's replica-state", async () => {
     const { REPLICA_BEHIND_SEC } = await import("../ops/heartbeat.ts");
