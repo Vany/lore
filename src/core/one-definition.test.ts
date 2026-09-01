@@ -511,6 +511,14 @@ describe("every target that touches the deployment is guarded", () => {
  * five, so the monitor a person runs and the monitor that pages disagreed about what
  * counts as a write — and the shell one, the one used in an incident, was the blind one.
  *
+ * READS `WRITE_TIMESTAMPS` (schema.ts) DIRECTLY, not `lastWriteAt`'s generated SQL text —
+ * a fourth drift (`refactor_run`/`refactor_suggestion` missing from `lastWriteAt`
+ * entirely) moved the column list out of `store.ts` and into that one array, so parsing
+ * `lastWriteAt`'s own source for `MAX(col) FROM table` text now finds nothing: the method
+ * builds its query from the array at runtime rather than spelling the union out. The
+ * array IS the source of truth this check exists to protect either side from drifting
+ * from, so reading it directly is more honest than re-deriving it from generated text.
+ *
  * IT COMPARES THE COLUMN LIST AND NOTHING ELSE, which is worth saying because the two
  * halves drifted again immediately in a way this cannot see: on a database that exists
  * and has never been written to, `lastWriteAt` answers `undefined` and the heartbeat says
@@ -521,7 +529,7 @@ describe("every target that touches the deployment is guarded", () => {
  */
 describe("the write clock agrees with the shell that reimplements it", () => {
   it("names the same timestamp columns on both sides", async () => {
-    const store = readFileSync(join(SRC, "store", "store.ts"), "utf8");
+    const { WRITE_TIMESTAMPS } = await import("../store/schema.ts");
     const makefile = readFileSync(join(SRC, "..", "deploy", "Makefile"), "utf8");
     // Bounded by the surrounding CODE, not by brackets: the union's own `MAX(col)`
     // parentheses close before the subquery's does, so any attempt to match the group
@@ -537,8 +545,8 @@ describe("the write clock agrees with the shell that reimplements it", () => {
       [...region.matchAll(/MAX\((\w+)\)\s+(?:t\s+)?FROM\s+(\w+)/g)]
         .map((m) => `${m[2] ?? ""}.${m[1] ?? ""}`)
         .sort();
-    const inStore = columns(between(store, "lastWriteAt(", "return row?.t"));
-    expect(inStore.length, "did not find lastWriteAt's union — update this check").toBeGreaterThan(5);
+    const inStore = WRITE_TIMESTAMPS.map((w) => `${w.table}.${w.column}`).sort();
+    expect(inStore.length, "WRITE_TIMESTAMPS is empty — update this check").toBeGreaterThan(5);
     expect(
       columns(between(makefile, "replica-state:", "\nrept=")),
       "deploy/Makefile's replica-state is blind to writes lastWriteAt counts",

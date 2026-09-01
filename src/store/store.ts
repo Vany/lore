@@ -19,7 +19,7 @@ import { clientDeliveredWork, type LadderState } from "../core/ladder.ts";
 import { isTerminal, TERMINAL_SQL, PERSON_OR_CLOCK_DECIDED_SQL, type ReviewState, FINDINGS_SQL } from "../core/review-state.ts";
 import { REFACTOR_OPEN_SQL, REFACTOR_TERMINAL_SQL, type RefactorState } from "../core/refactor-state.ts";
 import type { Scope } from "../core/scope.ts";
-import { DDL, FINDING_ORDER_SQL, PRAGMAS, SCHEMA_VERSION, applyMigrations, assertNotDowngrade } from "./schema.ts";
+import { DDL, FINDING_ORDER_SQL, PRAGMAS, SCHEMA_VERSION, WRITE_TIMESTAMPS, applyMigrations, assertNotDowngrade } from "./schema.ts";
 import { NO_EVENTS, type ReviewEvents } from "../mcp/events.ts";
 import type { RefactorSuggestion, RoughSize } from "../refactor/suggestion.ts";
 
@@ -206,6 +206,21 @@ export type TierOutcome = (typeof TIER_OUTCOMES)[number];
 const DID_NOT_LOOK_SQL = TIER_OUTCOMES.filter((o) => o === "failed" || o === "unpayable")
   .map((o) => `'${o}'`)
   .join(", ");
+
+/**
+ * A verdict row `v` (already joined/aliased as `v`) IS the latest one for its
+ * fingerprint. Derived once — found duplicated identically across four call sites by
+ * lore's own refactor-suggestor, fingerprint-worthy the same way `SETTLING_VERDICTS`
+ * already was: `openFindings`' own comment records that getting this ONE condition
+ * wrong (matching any historical row instead of the latest) produced a livelock,
+ * a justification accepted and later rejected staying "open" forever. One definition
+ * means that fix can only be un-made in one place, not silently missed in a sibling
+ * copy. `findingsWithVerdict` asks the same question through a different query shape
+ * (a scalar `ORDER BY id DESC LIMIT 1`, not a WHERE-clause filter on an existing join)
+ * and is deliberately not folded in here — same idea, genuinely different use.
+ */
+const LATEST_VERDICT_SQL =
+  "v.id = (SELECT MAX(id) FROM verdict w WHERE w.review_id = v.review_id AND w.fingerprint = v.fingerprint)";
 
 /**
  * The outcomes that mean a row's `tree_hash` cannot be trusted as a genuine read of
@@ -1452,8 +1467,7 @@ export class Store {
                -- when the code moves — still excluded the finding here while
                -- settledFingerprints correctly stopped counting it settled. Neither
                -- open nor settled: the livelock review.ts:427 describes.
-               AND v.id = (SELECT MAX(id) FROM verdict w
-                           WHERE w.review_id = v.review_id AND w.fingerprint = v.fingerprint)
+               AND ${LATEST_VERDICT_SQL}
                AND v.verdict IN (${SETTLING_VERDICTS.map((v) => `'${v}'`).join(", ")})
            )
          ORDER BY ${FINDING_ORDER_SQL}`,
@@ -1716,7 +1730,7 @@ export class Store {
       .prepare(
         `SELECT v.verdict, COUNT(*) AS c FROM verdict v
          WHERE v.review_id = ?
-           AND v.id = (SELECT MAX(id) FROM verdict w WHERE w.review_id = v.review_id AND w.fingerprint = v.fingerprint)
+           AND ${LATEST_VERDICT_SQL}
          GROUP BY v.verdict`,
       )
       .all(reviewId) as Record<string, string | number | bigint>[];
@@ -1934,20 +1948,7 @@ export class Store {
       )
       .get(reviewId, fingerprint) as Record<string, string | number | null> | undefined;
     if (row === undefined) return undefined;
-    const blob = row["scope_blob"];
-    const hunk = row["scope_hunk"];
-    return {
-      fingerprint: String(row["fingerprint"] ?? ""),
-      verdict: String(row["verdict"] ?? "fixed") as VerdictKind,
-      rationale: un(row["rationale"] as string | null) ?? undefined,
-      scope:
-        typeof blob === "string" && typeof hunk === "string" ? { blob, hunk } : undefined,
-      tier: un(row["tier"] as string | null) ?? undefined,
-      model: un(row["model"] as string | null) ?? undefined,
-      round: un(row["round"] as number | null) ?? undefined,
-      viaRule: un(row["via_rule"] as string | null) ?? undefined,
-      createdAt: String(row["created_at"] ?? ""),
-    };
+    return toVerdict(row, "fixed");
   }
 
   /**
@@ -1977,25 +1978,13 @@ export class Store {
         `SELECT v.* FROM verdict v
          JOIN review r ON r.id = v.review_id
          WHERE r.repo_id = ? AND v.fingerprint = ? AND v.review_id <> ?
-           AND v.id = (SELECT MAX(id) FROM verdict w WHERE w.review_id = v.review_id AND w.fingerprint = v.fingerprint)
+           AND ${LATEST_VERDICT_SQL}
            AND v.verdict = 'justified-accepted'
          ORDER BY v.id DESC LIMIT 1`,
       )
       .get(repoId, fingerprint, exceptReviewId) as Record<string, string | number | null> | undefined;
     if (row === undefined) return undefined;
-    const blob = row["scope_blob"];
-    const hunk = row["scope_hunk"];
-    return {
-      fingerprint: String(row["fingerprint"] ?? ""),
-      verdict: String(row["verdict"] ?? "justified-accepted") as VerdictKind,
-      rationale: un(row["rationale"] as string | null) ?? undefined,
-      scope: typeof blob === "string" && typeof hunk === "string" ? { blob, hunk } : undefined,
-      tier: un(row["tier"] as string | null) ?? undefined,
-      model: un(row["model"] as string | null) ?? undefined,
-      round: un(row["round"] as number | null) ?? undefined,
-      viaRule: un(row["via_rule"] as string | null) ?? undefined,
-      createdAt: String(row["created_at"] ?? ""),
-    };
+    return toVerdict(row, "justified-accepted");
   }
 
   /**
@@ -2011,7 +2000,7 @@ export class Store {
       .prepare(
         `SELECT v.fingerprint FROM verdict v
          WHERE v.review_id = ?
-           AND v.id = (SELECT MAX(id) FROM verdict w WHERE w.review_id = v.review_id AND w.fingerprint = v.fingerprint)
+           AND ${LATEST_VERDICT_SQL}
            AND v.verdict IN (${SETTLING_VERDICTS.map((v) => `'${v}'`).join(", ")})`,
       )
       .all(reviewId) as Record<string, string>[];
@@ -2124,51 +2113,20 @@ export class Store {
    */
   lastWriteAt(): string | undefined {
     // EVERY TIMESTAMP COLUMN, because the claim above is only true if the list is
-    // complete — and a TABLE-shaped list is not the same thing. `finding` was named and
-    // `delivered_at` still missed, which is the column `markDelivered` writes on every
-    // poll: the single most frequent write this service makes. It named five and missed five kinds of write outright: issuing or
-    // revoking a token, retiring knowledge, opening or resolving a conflict, recording a
-    // verdict, and accepting an appeal. A workgroup can spend an afternoon doing nothing
-    // but answering findings — all verdicts — and this would not move, so a dead
-    // replicator would read as level throughout. The monitor's whole job is to notice
-    // that, and it was blind to the writes a review actually produces most of.
-    //
-    // lore-ok[ad96016b]: A THIRD TIME — found by lore's own review. `held_diff.created_at`
-    // was missing outright: the ONLY durable write `review_submit`'s held path makes
-    // (D-107) when a round is in flight, which can be the sole write for the rest of a
-    // round up to ~30 minutes long — exactly the window a dead replicator most needs
-    // caught in. `tier_run.finished_at` was missing beside `started_at`, which IS here:
-    // unlike `created_at`/`updated_at` pairs elsewhere in this list (redundant on
-    // purpose — every row's `updated_at` starts equal to its `created_at` and only moves
-    // forward, so `MAX(updated_at)` alone already dominates), `started_at` is written
-    // ONCE at open and never touched again, so a tier CLOSING minutes later — the
-    // moment `closeTierRun` actually records outcome/findings — was invisible. Verified
-    // by auditing every `_at`/timestamp column in schema.ts against this list: these two
-    // were the only genuine gaps: everything else is either already named or provably
-    // redundant with a sibling that is.
-    const row = this.db
-      .prepare(
-        `SELECT MAX(t) AS t FROM (
-           SELECT MAX(updated_at) t FROM review
-           UNION ALL SELECT MAX(updated_at) FROM job
-           UNION ALL SELECT MAX(verified_at) FROM knowledge
-           UNION ALL SELECT MAX(retired_at) FROM knowledge
-           UNION ALL SELECT MAX(at) FROM usage
-           UNION ALL SELECT MAX(first_seen) FROM finding
-           UNION ALL SELECT MAX(delivered_at) FROM finding
-           UNION ALL SELECT MAX(created_at) FROM verdict
-           UNION ALL SELECT MAX(created_at) FROM token
-           UNION ALL SELECT MAX(revoked_at) FROM token
-           UNION ALL SELECT MAX(created_at) FROM knowledge_conflict
-           UNION ALL SELECT MAX(resolved_at) FROM knowledge_conflict
-           UNION ALL SELECT MAX(accepted_at) FROM suppression
-           UNION ALL SELECT MAX(started_at) FROM tier_run
-           UNION ALL SELECT MAX(finished_at) FROM tier_run
-           UNION ALL SELECT MAX(created_at) FROM repo
-           UNION ALL SELECT MAX(created_at) FROM held_diff
-         )`,
-      )
-      .get() as { t: string | null } | undefined;
+    // complete — and a TABLE-shaped list is not the same thing. Missed three times
+    // running before this became structural: `finding.delivered_at` (the single most
+    // frequent write this service makes — issuing/revoking a token, retiring
+    // knowledge, opening/resolving a conflict, recording a verdict and accepting an
+    // appeal were ALSO missing outright, the same round), then `held_diff.created_at`
+    // (the only durable write a round in flight makes, for up to ~30 minutes), then
+    // `tier_run.finished_at` beside `started_at` (a tier CLOSING is a write
+    // `started_at` alone cannot see). A FOURTH TIME — `refactor_run`/
+    // `refactor_suggestion`, added to `DDL` for D-136 and never added here — is what
+    // moved this list out of this method entirely: `WRITE_TIMESTAMPS` (schema.ts) is
+    // now the one place it lives, beside the DDL a new table is already being added
+    // to, rather than a fifth chance to add a table there and forget it here.
+    const union = WRITE_TIMESTAMPS.map((w) => `SELECT MAX(${w.column}) AS t FROM ${w.table}`).join(" UNION ALL ");
+    const row = this.db.prepare(`SELECT MAX(t) AS t FROM (${union})`).get() as { t: string | null } | undefined;
     return row?.t ?? undefined;
   }
 
@@ -4149,19 +4107,7 @@ export class Store {
          FROM refactor_run WHERE repo_id = ? ORDER BY created_at DESC LIMIT ?`,
       )
       .all(repoId, limit) as Record<string, unknown>[];
-    const runs = rows.map((row) => ({
-      id: String(row["id"]),
-      repoId: String(row["repo_id"]),
-      principal: String(row["principal"]),
-      commitSha: String(row["commit_sha"]),
-      folder: String(row["folder"]),
-      state: String(row["state"]) as RefactorRunRow["state"],
-      ...(row["combined"] === null ? {} : { combined: row["combined"] === 1 }),
-      ...(row["combiner_note"] === null ? {} : { combinerNote: String(row["combiner_note"]) }),
-      ...(row["last_error"] === null ? {} : { lastError: String(row["last_error"]) }),
-      createdAt: String(row["created_at"]),
-      updatedAt: String(row["updated_at"]),
-    }));
+    const runs = rows.map(toRefactorRun);
     return { runs, notShown: Math.max(0, total - runs.length) };
   }
 
@@ -4172,18 +4118,8 @@ export class Store {
       .prepare("SELECT title, area, rationale, rough_size FROM refactor_suggestion WHERE run_id = ? ORDER BY id")
       .all(id) as Record<string, unknown>[];
     return {
-      id: String(row["id"]),
-      repoId: String(row["repo_id"]),
-      principal: String(row["principal"]),
-      commitSha: String(row["commit_sha"]),
-      folder: String(row["folder"]),
-      state: String(row["state"]) as RefactorRunRow["state"],
-      ...(row["combined"] === null ? {} : { combined: row["combined"] === 1 }),
-      ...(row["combiner_note"] === null ? {} : { combinerNote: String(row["combiner_note"]) }),
+      ...toRefactorRun(row),
       ...(row["sources"] === null ? {} : { sources: JSON.parse(String(row["sources"])) as readonly RefactorSourceRecord[] }),
-      ...(row["last_error"] === null ? {} : { lastError: String(row["last_error"]) }),
-      createdAt: String(row["created_at"]),
-      updatedAt: String(row["updated_at"]),
       suggestions: suggestionRows.map((s) => ({
         title: String(s["title"]),
         area: JSON.parse(String(s["area"])) as readonly string[],
@@ -4543,6 +4479,58 @@ function toFinding(row: Record<string, string | number | null>): RecordedFinding
     ...(typeof scopeBlob === "string" && typeof scopeHunk === "string"
       ? { scope: { blob: scopeBlob, hunk: scopeHunk } }
       : {}),
+  };
+}
+
+/**
+ * `latestVerdict` and `priorAcceptedVerdict` shared this mapping byte-for-byte except
+ * one thing: the fallback verdict when the column somehow reads back empty is
+ * `"fixed"` for the first, `"justified-accepted"` for the second — each caller's own
+ * most-likely-correct guess for a row it already filtered to. Folding the two into one
+ * function without a parameter would have silently picked one caller's default for
+ * the other; `fallback` carries the difference instead of erasing it. Found duplicated
+ * by lore's own refactor-suggestor.
+ */
+function toVerdict(row: Record<string, string | number | null>, fallback: VerdictKind): VerdictRow {
+  const blob = row["scope_blob"];
+  const hunk = row["scope_hunk"];
+  return {
+    fingerprint: String(row["fingerprint"] ?? ""),
+    verdict: String(row["verdict"] ?? fallback) as VerdictKind,
+    rationale: un(row["rationale"] as string | null) ?? undefined,
+    scope: typeof blob === "string" && typeof hunk === "string" ? { blob, hunk } : undefined,
+    tier: un(row["tier"] as string | null) ?? undefined,
+    model: un(row["model"] as string | null) ?? undefined,
+    round: un(row["round"] as number | null) ?? undefined,
+    viaRule: un(row["via_rule"] as string | null) ?? undefined,
+    createdAt: String(row["created_at"] ?? ""),
+  };
+}
+
+/**
+ * The field set `recentRefactorRuns` and `refactorRun` agree on. `sources` and
+ * `suggestions` deliberately stay OUTSIDE this function: `recentRefactorRuns`'s own
+ * `SELECT` never fetches `sources` at all (its own doc comment — "no suggestions in
+ * the row"), so `row["sources"]` is an ABSENT key there, not SQL `NULL` the way it is
+ * in `refactorRun`'s `SELECT *`. A shared mapper checking `=== null` would read
+ * `undefined === null` as false and fall into `JSON.parse(String(undefined))` for
+ * every row `recentRefactorRuns` produces — folding that field in here would have
+ * broken the caller that does not select it. Found duplicated by lore's own
+ * refactor-suggestor.
+ */
+function toRefactorRun(row: Record<string, unknown>): Omit<RefactorRunRow, "sources" | "suggestions"> {
+  return {
+    id: String(row["id"]),
+    repoId: String(row["repo_id"]),
+    principal: String(row["principal"]),
+    commitSha: String(row["commit_sha"]),
+    folder: String(row["folder"]),
+    state: String(row["state"]) as RefactorRunRow["state"],
+    ...(row["combined"] === null ? {} : { combined: row["combined"] === 1 }),
+    ...(row["combiner_note"] === null ? {} : { combinerNote: String(row["combiner_note"]) }),
+    ...(row["last_error"] === null ? {} : { lastError: String(row["last_error"]) }),
+    createdAt: String(row["created_at"]),
+    updatedAt: String(row["updated_at"]),
   };
 }
 

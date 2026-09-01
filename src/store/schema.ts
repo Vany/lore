@@ -467,6 +467,51 @@ CREATE INDEX IF NOT EXISTS refactor_suggestion_by_run ON refactor_suggestion(run
 `;
 
 /**
+ * Every column `Store.lastWriteAt` needs to answer "when did this database last
+ * record anything" correctly — listed here, beside `DDL`, instead of living only in
+ * that one method three thousand lines away in `store.ts`. The same gap happened
+ * FOUR times running before this: `delivered_at`, then `held_diff.created_at`, then
+ * `tier_run.finished_at` (each found by lore's own review, each a table whose
+ * timestamp `lastWriteAt` had simply never been told about), and then
+ * `refactor_run`/`refactor_suggestion` were added to `DDL` above for D-136 with
+ * neither table ever reaching `lastWriteAt` at all — a workgroup running only
+ * refactor suggestions read as a dead replicator while real, billed work was
+ * happening. A new table's own author sees this list right where they are already
+ * writing `CREATE TABLE`, rather than needing to know a distant method exists.
+ *
+ * ORDERED TO MATCH `DDL` ABOVE, table for table, so adding a table at the end of
+ * `DDL` has an obvious place to add its own entry at the end of this list too.
+ *
+ * A table with a `created_at`/`updated_at` PAIR lists only `updated_at`: every row's
+ * `updated_at` starts equal to its `created_at` and only moves forward, so
+ * `MAX(updated_at)` alone already dominates (`review`, `job`, `refactor_run` below
+ * all rely on this). A genuinely insert-only table, with no `updated_at` column at
+ * all, lists `created_at` instead (`verdict`, `usage`, `held_diff`,
+ * `refactor_suggestion`, ...).
+ */
+export const WRITE_TIMESTAMPS: readonly { readonly table: string; readonly column: string }[] = [
+  { table: "repo", column: "created_at" },
+  { table: "token", column: "created_at" },
+  { table: "token", column: "revoked_at" },
+  { table: "review", column: "updated_at" },
+  { table: "tier_run", column: "started_at" },
+  { table: "tier_run", column: "finished_at" },
+  { table: "finding", column: "first_seen" },
+  { table: "finding", column: "delivered_at" },
+  { table: "verdict", column: "created_at" },
+  { table: "knowledge", column: "verified_at" },
+  { table: "knowledge", column: "retired_at" },
+  { table: "suppression", column: "accepted_at" },
+  { table: "knowledge_conflict", column: "created_at" },
+  { table: "knowledge_conflict", column: "resolved_at" },
+  { table: "usage", column: "at" },
+  { table: "held_diff", column: "created_at" },
+  { table: "job", column: "updated_at" },
+  { table: "refactor_run", column: "updated_at" },
+  { table: "refactor_suggestion", column: "created_at" },
+];
+
+/**
  * Columns added to `DDL` after a database already existed somewhere.
  *
  * `CREATE TABLE IF NOT EXISTS` does nothing at all to a table that is already there,

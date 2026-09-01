@@ -1809,6 +1809,44 @@ describe("refactor runs", () => {
   it("returns undefined for a run that was never created", () => {
     expect(store.refactorRun("nope")).toBeUndefined();
   });
+
+  /**
+   * `recentRefactorRuns`' own `SELECT` never fetches `sources` (its own doc comment:
+   * "no suggestions in the row") — so a row recorded with `sources` at ALL, via the
+   * exact same `finishRefactorRun` a `refactorRun` reader would see it through, must
+   * still come back with no `sources` key here. `toRefactorRun`, the mapper shared
+   * with `refactorRun`, distinguishes an absent key from `NULL` internally — this is
+   * the regression test for getting that distinction right, not merely for the field
+   * being unset on a run that never recorded one.
+   */
+  it("never carries sources, even for a run that recorded some", () => {
+    store.createRefactorRun({ id: "rf1", repoId, principal: PRINCIPAL, commitSha: "abc1234", folder: "src/store" });
+    store.finishRefactorRun("rf1", {
+      state: "done",
+      combined: true,
+      sources: [{ tier: "t2", ok: true, count: 1 }],
+    });
+
+    expect(store.refactorRun("rf1")?.sources).toStrictEqual([{ tier: "t2", ok: true, count: 1 }]);
+
+    const { runs } = store.recentRefactorRuns(repoId);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).not.toHaveProperty("sources");
+    expect(runs[0]?.combined).toBe(true);
+  });
+
+  it("lists runs repo-scoped, newest first, and says how many older ones it did not show", () => {
+    store.createRefactorRun({ id: "rf-old", repoId, principal: PRINCIPAL, commitSha: "a", folder: "." });
+    store.createRefactorRun({ id: "rf-new", repoId, principal: PRINCIPAL, commitSha: "b", folder: "." });
+    store.db.prepare("UPDATE refactor_run SET created_at = '2026-08-01T00:00:00.000Z' WHERE id = 'rf-old'").run();
+    store.db.prepare("UPDATE refactor_run SET created_at = '2026-08-01T00:00:01.000Z' WHERE id = 'rf-new'").run();
+    const otherRepoId = store.upsertRepo("other", "git@x:other.git").id;
+    store.createRefactorRun({ id: "rf-elsewhere", repoId: otherRepoId, principal: PRINCIPAL, commitSha: "c", folder: "." });
+
+    const { runs, notShown } = store.recentRefactorRuns(repoId, 1);
+    expect(runs.map((r) => r.id)).toStrictEqual(["rf-new"]);
+    expect(notShown).toBe(1);
+  });
 });
 
 // lore-ok[ad96016b]: found by lore's own review, a third time against the same
@@ -1846,6 +1884,31 @@ describe("lastWriteAt", () => {
     store.closeTierRun(id, "clean", []);
 
     expect(store.lastWriteAt(), "closing the tier run must move the clock").not.toBe(old);
+  });
+
+  /**
+   * A FOURTH gap, found reading this method against `schema.ts` rather than by a
+   * review round — `refactor_run`/`refactor_suggestion` (D-136) never reached this
+   * list at all, so a workgroup running only refactor suggestions (no reviews, no
+   * knowledge writes) would have read as a dead replicator throughout.
+   * `recordRefactorSuggestions` covers `refactor_suggestion.created_at`;
+   * `finishRefactorRun` alone (no later `recordRefactorSuggestions` call) would
+   * still leave `refactor_run.updated_at` as the only mover, so this checks both
+   * paths independently rather than only the common one where both fire together.
+   */
+  it("counts a refactor run, and its suggestions, not only a review", () => {
+    newReview("rev1");
+    pinPast("rev1");
+    store.createRefactorRun({ id: "rf1", repoId, principal: PRINCIPAL, commitSha: "abc1234", folder: "." });
+    store.db.prepare("UPDATE refactor_run SET updated_at = ? WHERE id = 'rf1'").run(old);
+    expect(store.lastWriteAt(), "an old refactor_run alone must not move the clock").toBe(old);
+
+    store.finishRefactorRun("rf1", { state: "done", combined: true, sources: [{ tier: "t2", ok: true, count: 1 }] });
+    expect(store.lastWriteAt(), "finishing the refactor run must move the clock").not.toBe(old);
+
+    store.db.prepare("UPDATE refactor_run SET updated_at = ? WHERE id = 'rf1'").run(old);
+    store.recordRefactorSuggestions("rf1", [{ title: "x", area: ["src/x.ts"], rationale: "y", roughSize: "small" }]);
+    expect(store.lastWriteAt(), "recording a suggestion must move the clock too").not.toBe(old);
   });
 });
 
