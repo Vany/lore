@@ -3653,6 +3653,13 @@ export class Store {
     // getJson's degrade-on-parse-failure is exactly right here: unreadable is not "out
     // of quota", and a row we cannot parse must not silently strike a paid-for route
     // out of every ladder that names it.
+    //
+    // lore-ok[e195cb7c]: found by lore's own review — a value that parses to the JSON
+    // literal null used to be caught here by accident (the old code's try wrapped this
+    // destructuring too), and splitting getJson out moved this below any try. Fixed
+    // at getJson itself, not here: it now treats a parsed null the same as an absent
+    // key, so `v === undefined` below is enough on its own — a null row never reaches
+    // the `v.until` access two lines down.
     const v = getJson<{ until?: string; why?: string; failures?: number; stated?: boolean; probedAt?: string }>(
       this.db,
       `route-unavailable:${model}`,
