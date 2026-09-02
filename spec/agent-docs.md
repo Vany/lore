@@ -14,6 +14,7 @@ Protocol facts: `research/mcp-service-design.md` and the MCP spec revision
 
 | layer | when read | cost | carries |
 |---|---|---|---|
+| **standing instructions** | at connect, before any tool is chosen | **permanent context** | what a session must know before it decides anything |
 | **tool descriptions** | always, every session | **permanent context** | what an agent must not get wrong |
 | **resources** | on demand | free until read | reference detail, audit trails |
 | **prompts** | user invokes | free until invoked | whole workflows, as slash commands |
@@ -22,6 +23,20 @@ The split follows the cost. A tool description is in the context window for the
 entire session whether or not the tool is called, so it carries only the
 **must-know**; everything else moves to a resource. A 400-word tool description is
 not thorough, it is a tax on every turn.
+
+**The top layer is new (D-141) and it answers a reader the other three never had.**
+A tool description is written for a model that has already decided to call that tool.
+That leaves the two most expensive readers unserved: the session that never asks what
+an earlier session left open, and the session that submits a fix and treats the
+acceptance as the ruling. `InitializeResult.instructions` is the only string that
+arrives before a tool is chosen, so it holds exactly the facts that cannot be looked
+up by a reader who does not know they are missing — ask the inbox first, a submit
+starts a round rather than answering one, and `review_cancel` is the honest exit for a
+session that cannot stay. It is `SERVER_INSTRUCTIONS` in `src/mcp/docs.ts`, part of
+`everyClientDocument()` so that every drift guard reads it too, and its delivery is
+asserted against a real `initialize` in `src/service/http.test.ts` — a standing
+instruction the server does not send breaks nothing visible, which is why the wire is
+what gets tested rather than the constant.
 
 ---
 
@@ -53,6 +68,14 @@ Written first, because each one is why a specific sentence exists.
 10. **Treats `passed`/`passed_partial` as the end of its whole task and stops
     there**, not just the end of this one review — the exact opposite of what a
     clean or partial verdict should prompt.
+11. **Treats `review_submit` as the answer rather than as the start of another
+    round** — sends the fix, reports it as reviewed, and never returns for the
+    ruling. Measured 2026-09-02: of the reviews left abandoned on the deployment,
+    most had been driven correctly for three to six rounds and then stopped
+    mid-loop, three of them within three minutes of each other — one session
+    ending, not three clients giving up — and three more were started and never
+    collected at all. No document any of them read said the thing they needed,
+    because none of them is read unasked (§1).
 
 ---
 

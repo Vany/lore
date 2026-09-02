@@ -15,7 +15,7 @@ import { BOARD_PAGE } from "./board-page.ts";
 import { DEFAULT_HEARTBEAT } from "../ops/heartbeat.ts";
 import { grantToken, hashToken, revokeByPrefix } from "../mcp/auth.ts";
 import { Store } from "../store/store.ts";
-import { everyClientDocument, TOOL_DOCS } from "../mcp/docs.ts";
+import { everyClientDocument, SERVER_INSTRUCTIONS, TOOL_DOCS } from "../mcp/docs.ts";
 import { startHttp } from "./http.ts";
 
 let store: Store;
@@ -652,6 +652,55 @@ function frames(res: Response): () => Promise<{ reviews: { id: string; state: st
 }
 
 const firstFrame = async (res: Response) => await frames(res)();
+
+/**
+ * THE STANDING INSTRUCTIONS HAVE TO CROSS THE WIRE, not merely exist.
+ *
+ * `SERVER_INSTRUCTIONS` is the only text a session receives before it has chosen a tool,
+ * and it is the one document whose absence breaks nothing visible: every tool call still
+ * works, every other test still passes, and the client is simply never told the facts it
+ * cannot look up — which is precisely the failure it was written for (D-141). So the
+ * assertion is made against a real `initialize`, the same frame any client's connect
+ * produces, rather than against the constant.
+ */
+describe("a connecting client is told how this service is driven", () => {
+  const initialize = async (): Promise<Record<string, unknown>> => {
+    const res = await mcp(
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2026-07-28",
+          capabilities: {},
+          clientInfo: { name: "test", version: "0" },
+        },
+      },
+      token,
+    );
+    const line = (await res.text()).split("\n").find((l) => l.startsWith("data:"));
+    expect(line, "initialize returned no SSE data frame").toBeDefined();
+    const rpc = JSON.parse((line ?? "").slice("data:".length)) as { result?: Record<string, unknown> };
+    expect(rpc.result, "initialize returned no result").toBeDefined();
+    return rpc.result ?? {};
+  };
+
+  it("hands back the standing instructions at connect", async () => {
+    expect(await initialize()).toHaveProperty("instructions", SERVER_INSTRUCTIONS);
+  });
+
+  // The three facts that must arrive unasked, asserted on what the WIRE carried rather
+  // than on the constant — a serialiser that dropped the field would leave the
+  // docs.test.ts pins passing while every client got nothing.
+  it("carries the facts a session cannot look up, on the wire", async () => {
+    const text = (await initialize())["instructions"];
+    expect(typeof text).toBe("string");
+    const flat = String(text);
+    expect(flat, "ask what is already open").toContain("review_inbox");
+    expect(flat, "a submit starts a round, it does not answer one").toContain("A SUBMIT IS NOT AN ENDING");
+    expect(flat, "the honest exit for a session that cannot stay").toContain("review_cancel");
+  });
+});
 
 describe("MCP surface", () => {
   /** What the wire actually offers — the only list that cannot be stale. */

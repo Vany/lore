@@ -96,6 +96,15 @@ Tools are not the whole surface. `spec/agent-docs.md` §1 — the docs **are** t
 interface — is why these are shipped by the server rather than written in a README
 the agent never reads.
 
+**Above all of them sits one string the client is handed at connect**:
+`InitializeResult.instructions`, `SERVER_INSTRUCTIONS` in `src/mcp/docs.ts` (D-141).
+Every other document here is read by an agent that has already chosen a tool; this one
+reaches a session that has chosen nothing, which is the only reader who can be told
+that a review it started in a previous session is still waiting, and that a submit
+starts a round rather than answering one. It is deliberately short — it is charged
+against every session's context whether or not lore is called — and it delegates
+everything else to the tool texts.
+
 | resource | subject |
 |---|---|
 | `lore://docs/workflow` | the review loop, end to end |

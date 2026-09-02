@@ -11,7 +11,81 @@
  * SPEC: spec/agent-docs.md
  */
 
-import { REVIEW_STATES } from "../core/review-state.ts";
+import { REVIEW_STATES, decidedByPersonOrClock, isTerminal, type ReviewState } from "../core/review-state.ts";
+
+/**
+ * The endings a CLIENT can drive a review to.
+ *
+ * Not `isTerminal`: that set includes `expired` (nobody came back) and `cancelled`
+ * (somebody stopped it), which are the two endings the instructions argue against — the
+ * first draft interpolated it and told a client to drive its review to `expired` in the
+ * same paragraph warning about abandonment. `decidedByPersonOrClock` is the existing
+ * predicate for that distinction, so what is left is the verdict the round itself
+ * reaches. Exported so the pin in `docs.test.ts` asserts this set rather than
+ * re-deriving it beside the test, where the two could drift apart.
+ */
+export const DRIVABLE_VERDICTS: readonly ReviewState[] = REVIEW_STATES.filter(
+  (s) => isTerminal(s) && !decidedByPersonOrClock(s),
+);
+
+/**
+ * THE ONE TEXT THAT REACHES A SESSION THAT NEVER MEANT TO USE LORE.
+ *
+ * Everything else here is a tool description, and a tool description is read by a
+ * model that has already decided to call that tool. That leaves the most expensive
+ * reader unserved: the session that connects, works on something else, and never
+ * looks — or the one that submits a fix and considers the matter closed. Both were
+ * measured on 2026-09-02, and the second is the larger loss: of the reviews left
+ * open on this deployment, most had been polled and answered for three to six rounds
+ * before they stopped, three of them inside three minutes of one another. That is one
+ * session ending mid-loop, not a client that misread anything.
+ *
+ * `InitializeResult.instructions` is the only channel that lands in a session's
+ * context before it has chosen a tool, so the facts that must arrive unasked live
+ * here and nowhere else. It is deliberately short: it is charged against every
+ * session's context whether or not lore is ever called, so it carries what changes
+ * behaviour and delegates the rest to the tool texts.
+ *
+ * It is part of `everyClientDocument()`, which is what subjects it to every
+ * mechanical check the other documents get. A standing instruction exempt from the
+ * drift guards would be the one text nobody could see rot.
+ */
+export const SERVER_INSTRUCTIONS = `
+lore reviews a branch with models that did not write the code, and remembers what it
+learns about this repository between sessions. The review is the mechanism; the memory
+is the product.
+
+NOTHING HERE REACHES YOU ON ITS OWN. lore cannot notify you, your user or your
+terminal. Every fact about a review — that a round finished, that your answer was
+accepted, that a person is blocked on a question — arrives ONLY in the reply to a call
+you make. Stop calling and everything stops, silently, with the branch still unreviewed.
+
+CALL review_inbox FIRST, IN EVERY SESSION, BEFORE STARTING ANYTHING. A review outlives
+the session that started it. An earlier session — usually an earlier you — may have left
+one open, holding a pinned copy of the branch and waiting for an answer only its owner
+can give. Nothing else will finish it, and nothing is going to tell you it is there.
+
+A REVIEW IS A LOOP, NOT A REQUEST, AND A SUBMIT IS NOT AN ENDING. review_start and
+review_submit both return the moment your input is accepted, and accepted is not judged:
+the work happens after they return, over minutes, and you learn what came of it by
+polling. A fix you submit and walk away from is never ruled on, and the branch it was
+meant to clear stays unreviewed.
+
+BUDGET FOR IT. A round takes tens of minutes and a review usually needs several, so
+driving one to a verdict can span your whole session. That is the ordinary cost of an
+independent review, not a fault — and it is why the endings below matter.
+
+TWO HONEST ENDINGS, AND ONE THAT IS NOT. Either drive it to the verdict the review
+itself reaches — ${DRIVABLE_VERDICTS.join(", ")} — and review_attest a pass, stopping at
+needs_human, which is a question only a person can settle. Or, if you cannot stay,
+review_cancel, which records that somebody decided to stop and releases everything the
+review is holding. What you must not do is simply stop: an abandoned review is swept as
+expired, concludes NOTHING about the code, holds its worktree for days, and is the
+largest measured source of wasted reviews here.
+
+The tool descriptions are the contract. They are long because each paragraph is a
+failure that has already happened — read the one for the tool you are about to call.
+`.trim();
 
 /**
  * The failure modes these texts exist to prevent, kept beside them so neither
@@ -29,6 +103,12 @@ import { REVIEW_STATES } from "../core/review-state.ts";
  *  9. Summarises the ticket instead of pasting it.
  * 10. Reads `passed`/`passed_partial` as the end of its whole task and stops
  *     there, not just the end of this one review.
+ * 11. Treats `review_submit` as the answer rather than as the start of another
+ *     round: sends a fix, reports it as reviewed, and never comes back for the
+ *     ruling. Measured 2026-09-02 — of the reviews abandoned on this deployment,
+ *     most had been driven correctly for several rounds and then simply stopped,
+ *     three of them within three minutes of each other, which is one session
+ *     ending rather than three clients losing interest.
  */
 
 export const TOOL_DOCS = {
@@ -402,6 +482,20 @@ answers are checked, findings you settled stay settled, and the ladder escalates
 deeper tier when it should. This — not review_start — is the loop. Starting a new
 review instead abandons every justification already ratified and re-runs the cheap
 tiers from the beginning.
+
+A SUBMIT IS NOT AN ENDING, AND THIS IS THE MOST COMMON WAY A REVIEW IS LOST. This call
+returns as soon as your diff is ACCEPTED, and accepted is not judged. It starts a round;
+the ruling on your answers arrives minutes later, on a later review_poll, and only if you
+come back for it. So a fix is not reviewed because you submitted it, and reporting it to
+your user as reviewed is a false statement about work nobody has done yet.
+
+Measured here on 2026-09-02: of the reviews sitting abandoned on this deployment, most
+had been driven correctly — polled, fixed, submitted, for three to six rounds — and then
+simply stopped, three of them within three minutes of each other, which is one session
+ending rather than three clients giving up. Nothing outlives a session to finish the job.
+If you cannot stay for this round, review_cancel says so honestly and frees what the
+review holds; leaving it concludes nothing about the code and holds your branch's pinned
+copy for days.
 
 SEND YOUR WORK, NOT ONLY YOUR ANSWERS. A review is INCREMENTAL: the reviewer keeps one
 conversation per tier for the whole review and is given only what CHANGED since it last
@@ -1175,6 +1269,7 @@ attesting and merging closes THIS review — carry on with whatever else your ta
  */
 export function everyClientDocument(): readonly (readonly [string, string])[] {
   return [
+    ["SERVER_INSTRUCTIONS", SERVER_INSTRUCTIONS] as const,
     ...Object.entries(TOOL_DOCS).map(([k, v]) => [`TOOL_DOCS.${k}`, v] as const),
     ...Object.entries(RESOURCE_DOCS).map(([k, v]) => [`RESOURCE_DOCS[${k}]`, v.text] as const),
     ["REVIEW_PROMPT_TEXT (diff mode)", REVIEW_PROMPT_TEXT({ branch: "b", into: "i" }, "t")] as const,

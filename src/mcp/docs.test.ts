@@ -23,7 +23,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { REVIEW_STATES, isAttestable, isTerminal } from "../core/review-state.ts";
-import { everyClientDocument, RESOURCE_DOCS, REVIEW_PROMPT_TEXT, TOOL_DOCS } from "./docs.ts";
+import { DRIVABLE_VERDICTS, everyClientDocument, RESOURCE_DOCS, REVIEW_PROMPT_TEXT, SERVER_INSTRUCTIONS, TOOL_DOCS } from "./docs.ts";
 
 /**
  * Every string a client is ever shown, from the module that owns them.
@@ -130,6 +130,78 @@ describe("the loop starts by asking what is already waiting", () => {
     const text = REVIEW_PROMPT_TEXT({ branch: "b", mode: "folder", path: "src" }, "t");
     expect(text).toMatch(/mode: "folder"/);
     expect(text).toContain('path: "src"');
+  });
+});
+
+// THE STANDING TEXT, AND WHY IT IS CHECKED HARDER THAN THE REST.
+//
+// `InitializeResult.instructions` is the only string that reaches a session before it
+// has chosen a tool. Every other document here is read by a model that already decided
+// to call something — which is exactly the reader who was never the problem. Measured
+// 2026-09-02: of the reviews abandoned on this deployment most had been polled, fixed
+// and submitted for three to six rounds and then stopped mid-loop, three of them inside
+// three minutes of one another (one session ending, not three clients giving up), and
+// three more were started and never collected at all. Nothing any of those sessions read
+// would have told them, because nothing is read unasked.
+//
+// So the three facts that have to arrive without being asked for are pinned, and so is
+// the wiring: a standing instruction the server does not actually send is worse than
+// none, because this file would go on asserting its contents for ever.
+describe("the standing instructions carry what a session cannot be expected to look up", () => {
+  it("is part of the corpus every other guard reads", () => {
+    // Outside `everyClientDocument()` it would be the one text exempt from the
+    // hard-coded-interval ban, the dotted-tool-name check and the rest — an unguarded
+    // document is how each of those defects shipped the first time.
+    expect(ALL_DOCS.map(([name]) => name)).toContain("SERVER_INSTRUCTIONS");
+  });
+
+  it("says the inbox comes first, before anything is started", () => {
+    const inbox = SERVER_INSTRUCTIONS.indexOf("review_inbox");
+    const start = SERVER_INSTRUCTIONS.indexOf("review_start");
+    expect(inbox).toBeGreaterThan(-1);
+    expect(inbox).toBeLessThan(start);
+  });
+
+  // The failure this whole text exists for: a client that reads `review_submit`'s
+  // acceptance as the review's answer, reports the fix as reviewed, and leaves.
+  it("says a submit is not an ending", () => {
+    expect(SERVER_INSTRUCTIONS).toContain("A SUBMIT IS NOT AN ENDING");
+    expect(SERVER_INSTRUCTIONS, "and that accepted is not judged").toMatch(/accepted is not judged/);
+  });
+
+  // Abandonment is what actually happens, so the text must offer the honest exit rather
+  // than only forbidding the dishonest one. A session that cannot stay needs somewhere
+  // to go; told only "do not stop", it stops anyway and the review rots for a week.
+  it("offers review_cancel as the way out for a session that cannot stay", () => {
+    expect(SERVER_INSTRUCTIONS).toContain("review_cancel");
+  });
+
+  // DERIVED FROM THE PREDICATES, NEVER TYPED OUT AGAIN — six places once wrote a state
+  // list by hand and three were missing `passed_partial`.
+  //
+  // And the derivation has to be the RIGHT set, which the first version was not: a list
+  // of every terminal state told the client to drive the review to `expired` or
+  // `cancelled`, the two endings the same paragraph argues against. What a client can
+  // drive to is the verdict the round itself concludes with — `decidedByPersonOrClock`
+  // is the existing predicate for the difference, and its own docblock says so.
+  it("names the verdicts a client can actually drive to, from the code", () => {
+    for (const state of DRIVABLE_VERDICTS) expect(SERVER_INSTRUCTIONS).toContain(state);
+    // The set itself, asserted rather than re-derived here: `expired` and `cancelled` are
+    // endings that happen TO a review, and naming them as goals is the defect this
+    // replaced.
+    expect([...DRIVABLE_VERDICTS]).toStrictEqual(["passed", "passed_partial", "failed"]);
+    // needs_human is not terminal, and it still stops the client's driving: a question
+    // only a person can settle. Left out of the loop above, said explicitly instead.
+    expect(SERVER_INSTRUCTIONS).toContain("needs_human");
+  });
+
+  // AN EXPORTED CONSTANT NOTHING READS IS WORSE THAN ONE THAT IS ABSENT (PROG.md), and
+  // this one is invisible from the outside: no tool call fails if it is never sent. The
+  // wire itself is asserted in `http.test.ts`, against a real `initialize`; this is the
+  // cheap half that fails in the same file as the text.
+  it("is actually handed to the server", () => {
+    const src = readFileSync(new URL("./server.ts", import.meta.url), "utf8");
+    expect(src).toContain("instructions: SERVER_INSTRUCTIONS");
   });
 });
 
@@ -297,6 +369,7 @@ describe("every behaviour a client must know about reaches the texts", () => {
     ["poll", "fixed_elsewhere is the direct alternative to a lore-ok comment (D-133)", "on your next review_submit (fingerprint, file, reason"],
     ["submit", "fixed_elsewhere needs the fix's file in this same submission (D-133)", "MUST be part of THIS diff or commit"],
     ["submit", "an unresolvable fixed_elsewhere fingerprint fails the whole call (D-133)", "or names a file outside this submission"],
+    ["submit", "a submit starts a round and does not answer one (D-141)", "A SUBMIT IS NOT AN ENDING"],
   ])("%s tells the client: %s", (tool, _why, needle) => {
     expect(TOOL_DOCS[tool as keyof typeof TOOL_DOCS]).toContain(needle);
   });

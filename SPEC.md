@@ -4021,6 +4021,63 @@ working agreement says to confirm rather than assume.
 (fingerprint 9c6f2a60) — never inside the repository**, so nothing needs a new
 `.gitignore` rule.
 
+**D-141 — the server hands every connecting session a standing instruction, because a
+tool description is only read by a client that already chose the tool. BUILT
+2026-09-02.**
+
+Measured on the live deployment, not reasoned about: 14 open reviews, 9 of them dimmed
+to `findings_stale` and one already swept `expired`. Since 2026-08-20 the deployment
+took 159 reviews, of which 140 produced findings and only 6 were never collected at
+all — so the clients are not confused about the protocol. A client that is alive
+collects its findings with a median lag of zero minutes.
+
+**They abandon mid-loop, and the shape says why.** The nine open on `rigid-monorepo`
+had reached rounds 3, 3, 3, 4, 6 and 6 before they stopped; three of them stopped
+within three minutes of one another (12:55, 12:55, 12:58 on 2026-08-28), which is one
+session driving three reviews and ending, not three clients losing interest. A round
+takes a median of 19 minutes to produce collectable findings (p90 32), so a review
+answered over six rounds spans two to three hours — longer than the session driving
+it. Nothing outlives a session to finish the job, and until now nothing told the NEXT
+session there was a job.
+
+**Why no existing document could fix it.** `TOOL_DOCS.inbox` already opens with *"THE
+FIRST CALL OF EVERY SESSION"* and `TOOL_DOCS.start` already says *"FINISH WHAT YOU
+START"*. Both are correct and both are unreachable: a tool description is read by a
+model that has already decided to call that tool, and the session that abandons a
+review is precisely the one that never opens the inbox. The texts were right; the
+channel was missing.
+
+**`InitializeResult.instructions` is that channel**, and lore was not using it —
+`buildServer` passed `capabilities` and `cacheHints` and nothing else. It is the only
+string that reaches a session before it has chosen a tool. `SERVER_INSTRUCTIONS`
+(`src/mcp/docs.ts`) now carries the four facts that cannot be looked up by a reader who
+does not know they are missing: nothing here notifies anyone, so only your next call
+learns anything; call `review_inbox` first, in every session; **a submit is not an
+ending** — it starts a round, and a fix nobody comes back for is never ruled on; and
+`review_cancel` is the honest exit for a session that cannot stay, against an
+abandonment that concludes nothing and holds a worktree for days.
+
+**Short on purpose.** It is charged against every session's context whether or not lore
+is ever called, so it carries only what changes behaviour and delegates the rest to the
+tool texts — the same cost argument `spec/agent-docs.md` §1 makes about tool
+descriptions, one layer up. Its terminal-state list is derived from `isTerminal` rather
+than typed out, because a list written twice in this repository has disagreed with
+itself five times.
+
+**It is guarded like a document, not like a constant.** `SERVER_INSTRUCTIONS` joins
+`everyClientDocument()`, so every existing drift check reads it — including the ban on
+hard-coded polling intervals that seven strings once carried. Its delivery is asserted
+against a real `initialize` in `src/service/http.test.ts`, not against the export: a
+standing instruction the server never sends breaks no tool call, fails no other test,
+and leaves this file describing a channel that does not exist.
+
+**What this does not do.** It cannot make a session outlive the review it started, and
+it does not shorten a round. It gives the next session the one instruction that closes
+the loop, and gives a departing one an ending that is not silence. Whether the
+abandonment rate actually moves is measurable on this deployment — 15 abandoned out of
+108 on `rigid-monorepo` since 2026-08-20 is the baseline — and unproven until it is
+measured.
+
 **D-116 — an over-long claim folds; it never costs the finding either. BUILT 2026-08-16.**
 
 D-115 fixed `severity` and wrote the rule beside it: *validation at the reviewer boundary

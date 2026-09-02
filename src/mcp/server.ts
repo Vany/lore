@@ -35,7 +35,7 @@ import { alreadyAnswered, codeMoved } from "../reviewer/review.ts";
 import { buildVex, findingsNeedingTriage, renderVex, vexGap } from "../security/vex.ts";
 import { NO_LIMIT, isSettled, type RecordedFinding, type Store } from "../store/store.ts";
 import type { Principal } from "./auth.ts";
-import { REVIEW_PROMPT_TEXT, RESOURCE_DOCS, TOOL_DOCS } from "./docs.ts";
+import { REVIEW_PROMPT_TEXT, RESOURCE_DOCS, SERVER_INSTRUCTIONS, TOOL_DOCS } from "./docs.ts";
 import { reviewUri } from "./events.ts";
 
 export interface ServerDeps {
@@ -342,6 +342,18 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
     { name: "lore", version: "0.1.0" },
     {
       capabilities: { resources: { subscribe: true } },
+      // THE ONLY TEXT THAT REACHES A SESSION BEFORE IT PICKS A TOOL.
+      //
+      // Tool descriptions are read by a model that has already decided to call that
+      // tool, which leaves the two most expensive readers unserved: the session that
+      // never asks what it left open, and the session that submits a fix and treats
+      // the submit as the answer. Both were measured on 2026-09-02 — most of the
+      // reviews abandoned on this deployment had been driven properly for three to six
+      // rounds and then stopped mid-loop, three of them inside three minutes of one
+      // another, which is one session ending rather than several clients misreading
+      // anything. No document said the thing they needed, because none of them is read
+      // unasked.
+      instructions: SERVER_INSTRUCTIONS,
       // ONE MINUTE ON THE TOOL LIST, AND NOTHING ELSE CACHED AT ALL.
       //
       // 2026-07-28 added `CacheableResult` (`ttlMs`, `cacheScope`) to the list and read
