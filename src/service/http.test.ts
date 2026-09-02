@@ -656,8 +656,9 @@ const firstFrame = async (res: Response) => await frames(res)();
 /**
  * THE STANDING INSTRUCTIONS HAVE TO CROSS THE WIRE, not merely exist.
  *
- * `SERVER_INSTRUCTIONS` is the only text a session receives before it has chosen a tool,
- * and it is the one document whose absence breaks nothing visible: every tool call still
+ * `SERVER_INSTRUCTIONS` is the only text addressed to the session rather than to a call
+ * it is deciding to make, and it is the one document whose absence breaks nothing
+ * visible: every tool call still
  * works, every other test still passes, and the client is simply never told the facts it
  * cannot look up — which is precisely the failure it was written for (D-141). So the
  * assertion is made against a real `initialize`, the same frame any client's connect

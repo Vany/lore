@@ -135,14 +135,17 @@ describe("the loop starts by asking what is already waiting", () => {
 
 // THE STANDING TEXT, AND WHY IT IS CHECKED HARDER THAN THE REST.
 //
-// `InitializeResult.instructions` is the only string that reaches a session before it
-// has chosen a tool. Every other document here is read by a model that already decided
-// to call something — which is exactly the reader who was never the problem. Measured
-// 2026-09-02: of the reviews abandoned on this deployment most had been polled, fixed
-// and submitted for three to six rounds and then stopped mid-loop, three of them inside
-// three minutes of one another (one session ending, not three clients giving up), and
-// three more were started and never collected at all. Nothing any of those sessions read
-// would have told them, because nothing is read unasked.
+// `InitializeResult.instructions` is the only string addressed to the SESSION rather than
+// to a call it is deciding to make. Every other document here is consulted while choosing
+// a tool — they are all in context from connect, `tools/list` included, and an earlier
+// version of this very comment claimed otherwise. Measured 2026-09-02: of the reviews
+// abandoned on this deployment most had been polled, fixed and submitted for three to six
+// rounds and then stopped mid-loop, three of them inside three minutes of one another
+// (one session ending, not three clients giving up), and three more were started and
+// never collected at all. Those sessions HAD `TOOL_DOCS.inbox`'s "THE FIRST CALL OF EVERY
+// SESSION" and `TOOL_DOCS.start`'s "FINISH WHAT YOU START" in context the whole time; a
+// paragraph deep in two of a dozen tool descriptions did not change what they did. Being
+// in context is not being read as a rule, and that difference is the whole bet.
 //
 // So the three facts that have to arrive without being asked for are pinned, and so is
 // the wiring: a standing instruction the server does not actually send is worse than
