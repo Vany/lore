@@ -98,10 +98,13 @@ the agent never reads.
 
 **Above all of them sits one string the client is handed at connect**:
 `InitializeResult.instructions`, `SERVER_INSTRUCTIONS` in `src/mcp/docs.ts` (D-141).
-Every other document here is read by an agent that has already chosen a tool; this one
-reaches a session that has chosen nothing, which is the only reader who can be told
-that a review it started in a previous session is still waiting, and that a submit
-starts a round rather than answering one. It is deliberately short — it is charged
+Every other document here is consulted while an agent chooses a tool; this one is
+addressed to the session itself, before it has chosen anything — which is what lets it
+say that a review started in a previous session is still waiting, and that a submit
+starts a round rather than answering one. The difference is salience rather than reach:
+tool descriptions are in context the whole session (`spec/agent-docs.md` §1), and the
+sessions that abandoned reviews had the relevant sentences among them and stopped
+anyway. It is deliberately short — it is charged
 against every session's context whether or not lore is called — and it delegates
 everything else to the tool texts.
 

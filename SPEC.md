@@ -4040,16 +4040,27 @@ answered over six rounds spans two to three hours — longer than the session dr
 it. Nothing outlives a session to finish the job, and until now nothing told the NEXT
 session there was a job.
 
-**Why no existing document could fix it.** `TOOL_DOCS.inbox` already opens with *"THE
-FIRST CALL OF EVERY SESSION"* and `TOOL_DOCS.start` already says *"FINISH WHAT YOU
-START"*. Both are correct and both are unreachable: a tool description is read by a
-model that has already decided to call that tool, and the session that abandons a
-review is precisely the one that never opens the inbox. The texts were right; the
-channel was missing.
+**Why the existing documents did not fix it, and the first draft of this decision got
+the reason wrong.** `TOOL_DOCS.inbox` already opens with *"THE FIRST CALL OF EVERY
+SESSION"* and `TOOL_DOCS.start` already says *"FINISH WHAT YOU START"*. This entry
+claimed both were *unreachable*, on the ground that a tool description is read only by a
+model that has already chosen that tool — which contradicts `spec/agent-docs.md` §1's own
+table six lines from where the claim was written into it. **The table is right**: a tool
+description sits in context for the whole session whether or not the tool is called, and
+that is exactly why §1 calls it a tax on every turn.
+
+**The real difference is salience, and the measurement says so.** A tool description is
+consulted while CHOOSING a tool, so a rule inside one arrives as a reason to call that
+tool rather than as something to check before deciding what to do at all. The sessions
+that abandoned reviews had both sentences in context throughout, one paragraph deep in
+two of a dozen descriptions, and stopped mid-loop anyway. Being in context is not being
+read as a rule, and the remedy that follows is a SHORT text, first, addressed to the
+session rather than to a call — not a longer tool description, which is the remedy the
+false premise would have ruled out. Caught by this change's own review (`535e9830`).
 
 **`InitializeResult.instructions` is that channel**, and lore was not using it —
 `buildServer` passed `capabilities` and `cacheHints` and nothing else. It is the only
-string that reaches a session before it has chosen a tool. `SERVER_INSTRUCTIONS`
+string addressed to the session itself rather than to a call it is about to make. `SERVER_INSTRUCTIONS`
 (`src/mcp/docs.ts`) now carries the four facts that cannot be looked up by a reader who
 does not know they are missing: nothing here notifies anyone, so only your next call
 learns anything; call `review_inbox` first, in every session; **a submit is not an

@@ -211,6 +211,31 @@ describe("the standing instructions carry what a session cannot be expected to l
     expect(SERVER_INSTRUCTIONS).toContain("needs_human");
   });
 
+  // A DOCUMENT MAY NOT DENY A MECHANISM THE SAME CONNECTION DECLARES.
+  //
+  // D-103 keeps the wake mechanism HIDDEN — no client is told to open a stream it
+  // probably cannot open, and the vocabulary ban further down enforces that. Hiding is
+  // not denying: the first draft of this text said "lore cannot notify you" and "every
+  // fact arrives ONLY in the reply to a call you make", while the very same initialize
+  // frame declares `resources: { subscribe: true }` and a 2026-07-28 client's next reply
+  // carries a hint saying lore will wake it. Two server-authored texts, contradicting
+  // each other on one connection — and the absence-guard below cannot see it, because
+  // the offending sentence names nothing.
+  //
+  // What is true whatever the connection supports is that nothing survives the session,
+  // so that is what the text claims now.
+  it("does not deny a wake this server may actually send", () => {
+    const src = readFileSync(new URL("./server.ts", import.meta.url), "utf8");
+    if (!src.includes("resources: { subscribe: true }")) return;
+    for (const [name, text] of ALL_DOCS) {
+      const flat = text.replace(/\s+/g, " ");
+      expect(flat, `${name} denies a push this server declares it can make`)
+        .not.toMatch(/cannot notify you|never notifies you|nothing here reaches you on its own/i);
+      expect(flat, `${name} claims every fact needs a call, on a connection that can be woken`)
+        .not.toMatch(/arrives ONLY in the reply to a call/i);
+    }
+  });
+
   // AN EXPORTED CONSTANT NOTHING READS IS WORSE THAN ONE THAT IS ABSENT (PROG.md), and
   // this one is invisible from the outside: no tool call fails if it is never sent. The
   // wire itself is asserted in `http.test.ts`, against a real `initialize`; this is the

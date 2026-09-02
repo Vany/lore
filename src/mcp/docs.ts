@@ -31,14 +31,20 @@ export const DRIVABLE_VERDICTS: readonly ReviewState[] = REVIEW_STATES.filter(
 /**
  * THE ONE TEXT THAT REACHES A SESSION THAT NEVER MEANT TO USE LORE.
  *
- * Everything else here is a tool description, and a tool description is read by a
- * model that has already decided to call that tool. That leaves the most expensive
- * reader unserved: the session that connects, works on something else, and never
- * looks — or the one that submits a fix and considers the matter closed. Both were
- * measured on 2026-09-02, and the second is the larger loss: of the reviews left
- * open on this deployment, most had been polled and answered for three to six rounds
- * before they stopped, three of them inside three minutes of one another. That is one
- * session ending mid-loop, not a client that misread anything.
+ * Everything else here is a tool description, and a tool description is in every
+ * session's context from the start — `spec/agent-docs.md` §1 is right that it is a tax
+ * on every turn, and an earlier draft of this comment claimed the opposite. What a tool
+ * description is NOT is a standing instruction: it is written to be consulted while
+ * CHOOSING a tool, so a rule inside one arrives as a reason to call that tool rather
+ * than as something to check before deciding what to do at all.
+ *
+ * The distinction is salience, and it is measurable rather than theoretical. The
+ * sessions that abandoned reviews on 2026-09-02 had `TOOL_DOCS.inbox`'s "THE FIRST CALL
+ * OF EVERY SESSION" and `TOOL_DOCS.start`'s "FINISH WHAT YOU START" in context the whole
+ * time, one paragraph deep in two of a dozen descriptions, and it changed nothing they
+ * did: most had been polled and answered for three to six rounds before they stopped,
+ * three of them inside three minutes of one another. Having the words in context is not
+ * the same as their being read as a rule.
  *
  * `InitializeResult.instructions` is the only channel that lands in a session's
  * context before it has chosen a tool, so the facts that must arrive unasked live
@@ -55,10 +61,12 @@ lore reviews a branch with models that did not write the code, and remembers wha
 learns about this repository between sessions. The review is the mechanism; the memory
 is the product.
 
-NOTHING HERE REACHES YOU ON ITS OWN. lore cannot notify you, your user or your
-terminal. Every fact about a review — that a round finished, that your answer was
-accepted, that a person is blocked on a question — arrives ONLY in the reply to a call
-you make. Stop calling and everything stops, silently, with the branch still unreviewed.
+NOTHING HERE OUTLIVES YOUR SESSION. lore cannot reach your user or your terminal, and
+once this connection is gone no message about a review waits for you anywhere — not that
+a round finished, not that your answer was accepted, not that a person is blocked on a
+question. While you are here you learn those from what you call and from what this
+connection hands you. When you end, that stops and the review does not: it sits where you
+left it, with the branch still unreviewed.
 
 CALL review_inbox FIRST, IN EVERY SESSION, BEFORE STARTING ANYTHING. A review outlives
 the session that started it. An earlier session — usually an earlier you — may have left

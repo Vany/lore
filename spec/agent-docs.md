@@ -24,11 +24,17 @@ entire session whether or not the tool is called, so it carries only the
 **must-know**; everything else moves to a resource. A 400-word tool description is
 not thorough, it is a tax on every turn.
 
-**The top layer is new (D-141) and it answers a reader the other three never had.**
-A tool description is written for a model that has already decided to call that tool.
-That leaves the two most expensive readers unserved: the session that never asks what
-an earlier session left open, and the session that submits a fix and treats the
-acceptance as the ruling. `InitializeResult.instructions` is the only string that
+**The top layer is new (D-141), and what separates it from the row below is SALIENCE,
+not reach.** The table above is right: a tool description is in context for the whole
+session whether or not the tool is called. What it is not is a standing instruction —
+it is consulted while CHOOSING a tool, so a rule inside one arrives as a reason to call
+that tool rather than as something to check before deciding what to do at all. The
+sessions that abandoned reviews on 2026-09-02 had `review_inbox`'s "THE FIRST CALL OF
+EVERY SESSION" and `review_start`'s "FINISH WHAT YOU START" in context throughout, a
+paragraph deep in two of a dozen descriptions, and stopped mid-loop anyway. That leaves
+two expensive readers unserved in practice: the session that never asks what an earlier
+session left open, and the session that submits a fix and treats the acceptance as the
+ruling. `InitializeResult.instructions` is the only string that
 arrives before a tool is chosen, so it holds exactly the facts that cannot be looked
 up by a reader who does not know they are missing — ask the inbox first, a submit
 starts a round rather than answering one, and `review_cancel` is the honest exit for a
@@ -74,8 +80,9 @@ Written first, because each one is why a specific sentence exists.
     most had been driven correctly for three to six rounds and then stopped
     mid-loop, three of them within three minutes of each other — one session
     ending, not three clients giving up — and three more were started and never
-    collected at all. No document any of them read said the thing they needed,
-    because none of them is read unasked (§1).
+    collected at all. The sentences that would have told them were in context the
+    whole time, one paragraph deep in two of a dozen tool descriptions; being in
+    context is not being read as a rule (§1).
 
 ---
 

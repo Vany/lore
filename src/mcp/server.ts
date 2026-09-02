@@ -344,15 +344,15 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       capabilities: { resources: { subscribe: true } },
       // THE ONLY TEXT THAT REACHES A SESSION BEFORE IT PICKS A TOOL.
       //
-      // Tool descriptions are read by a model that has already decided to call that
-      // tool, which leaves the two most expensive readers unserved: the session that
-      // never asks what it left open, and the session that submits a fix and treats
-      // the submit as the answer. Both were measured on 2026-09-02 — most of the
-      // reviews abandoned on this deployment had been driven properly for three to six
-      // rounds and then stopped mid-loop, three of them inside three minutes of one
-      // another, which is one session ending rather than several clients misreading
-      // anything. No document said the thing they needed, because none of them is read
-      // unasked.
+      // Tool descriptions are in context from the start — that is not the gap. What
+      // they are not is a STANDING instruction: each is consulted while choosing a tool,
+      // so a rule inside one arrives as a reason to call that tool, not as something to
+      // check before deciding what to do at all. Measured 2026-09-02: the sessions that
+      // abandoned reviews had `inbox`'s "THE FIRST CALL OF EVERY SESSION" and `start`'s
+      // "FINISH WHAT YOU START" in context throughout, and stopped mid-loop anyway —
+      // most after three to six answered rounds, three of them inside three minutes of
+      // one another. This string is short, first, and addressed to the session rather
+      // than to a call, which is the whole difference it is betting on.
       instructions: SERVER_INSTRUCTIONS,
       // ONE MINUTE ON THE TOOL LIST, AND NOTHING ELSE CACHED AT ALL.
       //
