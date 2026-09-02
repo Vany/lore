@@ -2475,12 +2475,25 @@ describe("a fallback that would walk onto a metered route", () => {
     // A FRESH REVIEW EACH TIME, not twenty rounds of one. Twenty rounds walk the LADDER
     // forward — round 2 is the deep rung, not a second draw for t1 — so the loop would have
     // measured the shuffle once and the ladder nineteen times.
+    // lore-ok[8f6cc723]: the headroom half of this is fixed directly above — 15s, three
+    // times the measurement, not six. The scope half does not hold: this change is
+    // already its own commit, separate from the one it was raised against, and nothing
+    // here squashes. The batch procedure reviews a base ref into a tip precisely so that
+    // several commits are read together and land as themselves, so the history says which
+    // commit carried the timeout and which carried the texts.
+    //
     // EXPLICIT TIMEOUT, because twenty real rounds cost ~5.1s and the default is 5s.
     // It failed on the clock rather than on the property — measured at 5063-5170ms across
     // runs, in isolation and in the full file alike. A test that fails for a reason
     // unrelated to what it guards gets disabled rather than fixed, and the twenty draws
     // are not negotiable: one draw proves nothing about a route picked at random.
-    it("never runs the metered pool route as the primary", { timeout: 30_000 }, async () => {
+    //
+    // THREE TIMES THE MEASUREMENT, NOT SIX. The first version said 30s, and a reviewer was
+    // right that the headroom itself is a claim: vitest's 5s default was never chosen as a
+    // latency budget here, but it was the only thing that would have noticed these loops
+    // getting slower, and 6x hands that away for nothing. 15s absorbs a loaded CI box and
+    // still breaks if a round's real cost triples.
+    it("never runs the metered pool route as the primary", { timeout: 15_000 }, async () => {
       for (let i = 0; i < 20; i++) {
         const id = `rPool${String(i)}`;
         store.createReview({
@@ -2644,8 +2657,8 @@ describe("a fallback that would walk onto a metered route", () => {
      * exhaustion hours later was silent: the benign case eating the alarm meant for the
      * dangerous one. Fixing the alert's WORDING did not fix that; the condition had to.
      */
-    // Same clock, same reason as the twenty-draw test above.
-    it("says nothing when a free sibling was available and the shuffle picked the paid one", { timeout: 30_000 }, async () => {
+    // Same clock, same budget, same reason as the twenty-draw test above.
+    it("says nothing when a free sibling was available and the shuffle picked the paid one", { timeout: 15_000 }, async () => {
       const a = spy();
       const MIXED = JSON.stringify({
         models: { GLM: ["zai-coding-plan/glm-5.2", "openrouter/z-ai/glm-5.2"] },

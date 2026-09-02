@@ -176,6 +176,22 @@ describe("the standing instructions carry what a session cannot be expected to l
     expect(SERVER_INSTRUCTIONS).toContain("review_cancel");
   });
 
+  // AND THE OFFER MUST BE SCOPED, because the first draft's was not and the unscoped
+  // version destroys verdicts. `review_submit` sets the review `queued` and enqueues a
+  // round (`server.ts`), and a clean top tier decides `passed` (`ladder.ts`) with no
+  // client involved — so a session that submits a complete fix and then follows "if you
+  // cannot stay, review_cancel" stops a round that was about to pass, and buys a full
+  // re-review from round 1. Both texts now say cancel is for findings nobody can answer,
+  // which is the scoping `TOOL_DOCS.inbox` always had and these two dropped.
+  it.each([
+    ["SERVER_INSTRUCTIONS", SERVER_INSTRUCTIONS],
+    ["TOOL_DOCS.submit", TOOL_DOCS.submit],
+  ])("%s does not offer cancel to a session that has just submitted", (_name, text) => {
+    const flat = text.replace(/\s+/g, " ");
+    expect(flat, "the round concludes on its own").toMatch(/reaches (a|its) verdict on (its own|your)|reaches its verdict on its own|reaches a verdict without you/i);
+    expect(flat, "cancel is for findings nobody can answer").toMatch(/NEVER ON A ROUND YOU HAVE JUST FED|do NOT review_cancel a review you have just fed/);
+  });
+
   // DERIVED FROM THE PREDICATES, NEVER TYPED OUT AGAIN — six places once wrote a state
   // list by hand and three were missing `passed_partial`.
   //

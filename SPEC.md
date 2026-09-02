@@ -4053,16 +4053,31 @@ string that reaches a session before it has chosen a tool. `SERVER_INSTRUCTIONS`
 (`src/mcp/docs.ts`) now carries the four facts that cannot be looked up by a reader who
 does not know they are missing: nothing here notifies anyone, so only your next call
 learns anything; call `review_inbox` first, in every session; **a submit is not an
-ending** — it starts a round, and a fix nobody comes back for is never ruled on; and
-`review_cancel` is the honest exit for a session that cannot stay, against an
-abandonment that concludes nothing and holds a worktree for days.
+ending** — it starts a round, and you do not learn what the round decided unless you come
+back; and `review_cancel` is the honest exit **for findings you cannot answer**, against
+an abandonment that concludes nothing and holds a worktree for days.
+
+**The cancel advice is scoped, and the first draft's was not — caught by this change's own
+review (`a783de1e`).** `review_submit` sets the review `queued` and enqueues a round
+(`src/mcp/server.ts`), and a clean top tier decides `passed` (`src/core/ladder.ts`) with
+no client involved: a submission that settles everything reaches a verdict while its
+author is gone. So *"a fix you submit and walk away from is never ruled on"* was false,
+and the unscoped *"if you cannot stay, review_cancel"* it justified would have stopped a
+round that was about to pass — costing the verdict and a re-review from round 1, on the
+advice of the text written to prevent waste. What actually has no substitute is the NEXT
+answer: a round that comes back with one more finding stops in `findings_ready` and
+nothing but a client ever moves it again. `TOOL_DOCS.inbox` had the correct scoping all
+along; both new texts had dropped it.
 
 **Short on purpose.** It is charged against every session's context whether or not lore
 is ever called, so it carries only what changes behaviour and delegates the rest to the
 tool texts — the same cost argument `spec/agent-docs.md` §1 makes about tool
-descriptions, one layer up. Its terminal-state list is derived from `isTerminal` rather
-than typed out, because a list written twice in this repository has disagreed with
-itself five times.
+descriptions, one layer up. Its verdict list is derived rather than typed out, because a
+list written twice in this repository has disagreed with itself five times — and the
+predicate is `DRIVABLE_VERDICTS`, `isTerminal` MINUS `decidedByPersonOrClock`, never
+`isTerminal` alone. Bare `isTerminal` is what the first draft interpolated, and it names
+`expired` and `cancelled`: the text then told a client to drive its review to the two
+endings the same paragraph warns against.
 
 **It is guarded like a document, not like a constant.** `SERVER_INSTRUCTIONS` joins
 `everyClientDocument()`, so every existing drift check reads it — including the ban on

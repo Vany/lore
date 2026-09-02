@@ -67,9 +67,11 @@ can give. Nothing else will finish it, and nothing is going to tell you it is th
 
 A REVIEW IS A LOOP, NOT A REQUEST, AND A SUBMIT IS NOT AN ENDING. review_start and
 review_submit both return the moment your input is accepted, and accepted is not judged:
-the work happens after they return, over minutes, and you learn what came of it by
-polling. A fix you submit and walk away from is never ruled on, and the branch it was
-meant to clear stays unreviewed.
+the round runs after they return, over minutes. It reaches a verdict without you — what
+it cannot do without you is ANSWER what it finds. So a submission that settles everything
+can pass while you are gone, and one that leaves a single finding open stops in
+findings_ready with nobody to move it. You do not learn which of the two happened unless
+you come back and poll.
 
 BUDGET FOR IT. A round takes tens of minutes and a review usually needs several, so
 driving one to a verdict can span your whole session. That is the ordinary cost of an
@@ -77,11 +79,15 @@ independent review, not a fault — and it is why the endings below matter.
 
 TWO HONEST ENDINGS, AND ONE THAT IS NOT. Either drive it to the verdict the review
 itself reaches — ${DRIVABLE_VERDICTS.join(", ")} — and review_attest a pass, stopping at
-needs_human, which is a question only a person can settle. Or, if you cannot stay,
-review_cancel, which records that somebody decided to stop and releases everything the
-review is holding. What you must not do is simply stop: an abandoned review is swept as
-expired, concludes NOTHING about the code, holds its worktree for days, and is the
-largest measured source of wasted reviews here.
+needs_human, which is a question only a person can settle. Or, when findings are open and
+you cannot answer them, review_cancel: it records that somebody decided to stop and
+releases everything the review is holding.
+
+CANCEL ON FINDINGS YOU CANNOT ANSWER, NEVER ON A ROUND YOU HAVE JUST FED. A round already
+reading your fix may be about to pass; cancelling it throws that verdict away and costs a
+re-review from round 1. What you must not do is stop with findings open and say nothing:
+that review is swept as expired, concludes NOTHING about the code, holds its worktree for
+days, and is the largest measured source of wasted reviews here.
 
 The tool descriptions are the contract. They are long because each paragraph is a
 failure that has already happened — read the one for the tool you are about to call.
@@ -493,9 +499,16 @@ Measured here on 2026-09-02: of the reviews sitting abandoned on this deployment
 had been driven correctly — polled, fixed, submitted, for three to six rounds — and then
 simply stopped, three of them within three minutes of each other, which is one session
 ending rather than three clients giving up. Nothing outlives a session to finish the job.
-If you cannot stay for this round, review_cancel says so honestly and frees what the
-review holds; leaving it concludes nothing about the code and holds your branch's pinned
-copy for days.
+
+THE ROUND DOES NOT NEED YOU; ANSWERING WHAT IT FINDS DOES. It is queued the moment this
+call returns and reaches its verdict on its own, so a submission that settles every open
+finding can reach \`passed\` while you are gone. What has no substitute is the NEXT answer:
+a round that comes back with one more finding stops in findings_ready, and nothing but a
+client ever moves it again.
+
+So do NOT review_cancel a review you have just fed — the round reading your fix may be
+about to pass, and cancelling throws that verdict away and buys a re-review from round 1.
+Cancel when findings are open and you cannot answer them. That case is what it is for.
 
 SEND YOUR WORK, NOT ONLY YOUR ANSWERS. A review is INCREMENTAL: the reviewer keeps one
 conversation per tier for the whole review and is given only what CHANGED since it last
