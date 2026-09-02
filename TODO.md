@@ -39,6 +39,29 @@ that part is pulled out into its own open item rather than hidden inside a tick.
 
 ## Now — nothing here is about writing more features
 
+### 2026-09-02 — waiting on evidence: does the standing instruction actually change anything?
+
+- [ ] **D-141 SHIPPED A TEXT AND CLAIMS NOTHING ABOUT ITS EFFECT.** `SERVER_INSTRUCTIONS`
+      reaches every connecting session now, saying: ask the inbox first, a submit starts a
+      round rather than answering one, cancel is the honest exit for findings you cannot
+      answer. Whether that moves the abandonment rate is unproven and only measurable in
+      use.
+
+      **The baseline, taken the day it shipped, so nobody has to reconstruct it:** on
+      `rigid-monorepo` since 2026-08-20, 108 reviews started, 71 reached a verdict, 15
+      abandoned (`findings_stale` or `expired`), 11 cancelled, 9 failed. Across all repos:
+      159 started, 140 reached findings, 6 never collected at all. A round takes a median
+      19 minutes to produce collectable findings (p90 32).
+
+      **What would count as working:** the abandoned share falling, or — just as good and
+      more likely first — `cancelled` rising against `findings_stale`, because a session
+      that stops deliberately instead of walking away is the honest ending the text
+      actually asks for. Re-measure after a week of real use with the same queries.
+
+      **NOT MEASURABLE UNTIL IT IS DEPLOYED (Vany's call).** The instruction only reaches
+      clients on a container recreate; `make restart` does not re-read anything. As of
+      shipping it is on `main` and not on the deployment.
+
 ### 2026-08-28 — argued deferral: `spec/agent-docs.md`'s `review_poll` draft is stale well beyond the one sentence this round fixed
 
 - [ ] **THE DRAFT UNDER §3 `review_poll` HAS NOT MOVED WITH `TOOL_DOCS.poll` FOR SEVERAL

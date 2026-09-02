@@ -3,6 +3,80 @@
 Newest first. Updated at the end of each task: what changed, what I learned, what
 surprised me.
 
+## 2026-09-02 — D-141: the channel was missing, not the words
+
+**What changed.** `rev_RTM6EYyn2ImQJ2XuwZiah3NU`, `passed_partial`, attested at tree
+`f987183b7cf25c56db2866bb68a41505223a7d28` (11 findings, 10 fixed, 1 justified) — merged
+as six commits, the feature then four review-answer rounds plus an unrelated flake fix.
+Vany, looking at the board: *"why does the web show a lot of findings_ready? was it
+requested?"*, then *"seems like an unprepared AI coder does not understand that it needs
+to connect to learn what happened with its diff submission. let's improve our mcp texts."*
+
+**The measurement came first, and it changed the diagnosis.** 14 open reviews, 9 dimmed to
+`findings_stale`. But since 2026-08-20: 159 reviews started, 140 reached findings, only 6
+never collected anything, and a live client collects with a median lag of ZERO minutes —
+so nobody is confused about the protocol. They abandon MID-LOOP. The nine open on
+`rigid-monorepo` had reached rounds 3, 3, 3, 4, 6 and 6; three stopped within three
+minutes of one another (12:55, 12:55, 12:58 on 08-28), which is one session driving three
+reviews and ending. A round is a median 19 minutes to collectable findings, so six rounds
+spans two to three hours — longer than the session driving it.
+
+**`TOOL_DOCS.inbox` already said the right thing, and it did not help.** "THE FIRST CALL
+OF EVERY SESSION" has been in it for weeks; `TOOL_DOCS.start` has "FINISH WHAT YOU START".
+`InitializeResult.instructions` — the only text addressed to the session rather than to a
+call it is choosing — was simply not set: `buildServer` passed `capabilities` and
+`cacheHints` and nothing else.
+
+**Four rounds, twelve findings, and not one was about the feature being wrong.** Every
+single one was a false or stale statement ABOUT the system, in the change whose whole
+purpose is to stop a client believing a false statement about the system.
+
+* **Round 1 (`a783de1e`, medium) — the worst of them, and I shipped it.** I wrote *"a fix
+  you submit and walk away from is never ruled on"* and, on that premise, offered an
+  UNSCOPED *"if you cannot stay, review_cancel"*. `review_submit` sets the review `queued`
+  and enqueues a round; a clean top tier decides `passed` with no client involved. So a
+  session that submitted a complete fix and followed my advice would have stopped a round
+  about to pass, destroyed the verdict and bought a re-review from round 1 — waste caused
+  by the text written to prevent waste. `TOOL_DOCS.inbox` had the correct scoping all
+  along; both new texts dropped it.
+* **Round 2 (`535e9830`, medium) — the premise contradicted a sentence six lines above
+  where I wrote it.** I claimed tool descriptions are "read by a model that has already
+  decided to call that tool". `spec/agent-docs.md` §1's own table says they sit in context
+  all session — that is why it calls them a tax on every turn. The table is right. The real
+  difference is SALIENCE: a tool description is consulted while CHOOSING a tool, so a rule
+  inside one arrives as a reason to call it rather than as something to check first. The
+  corrected argument is stronger — it is why the remedy is a short text, first, addressed
+  to the session, which the false premise would have ruled out.
+* **Round 2 (`39439729`, medium):** the text said "lore cannot notify you" while the same
+  `initialize` frame declares `resources: { subscribe: true }` and the next reply hands a
+  2026-07-28 client a hint saying lore will wake it. D-103 HIDES that mechanism; it does
+  not license denying it exists, and the vocabulary ban cannot catch a sentence that names
+  nothing. Now: nothing outlives the session — true whatever the connection supports.
+* **Rounds 3 and 4 (five findings, then one):** the retracted premise survived in six more
+  copies. Round 3's grep swept it — and ran `| grep -v "\.test\.ts"`, so it structurally
+  could not see the two copies in test comments, one of them the rationale directly above
+  the pins that enforce what the standing text may claim. Round 3 also caught my own new
+  guard twice: its capability gate was `if (!src.includes(...)) return;` (silence that
+  cannot be distinguished from "cannot fire" — PROG.md's rule verbatim), and its regex
+  named only "cannot notify YOU" while the one live offender in the corpus said "cannot
+  notify ANYONE", so it passed green over the exact sentence it forbids.
+
+**What I would do differently.** Twice I fixed a thing at the first place it was visible
+rather than at its source, and twice the reviewer had to come back for the rest — the same
+lesson as D-140's tilde bug, one batch later. The mechanical version: a sweep for a
+retracted claim greps EVERYTHING, and an exclusion filter in that grep is itself a defect.
+Separately: `git checkout <file>` to undo a deliberate test mutation reverted two unrelated
+fixes in the same file; caught and reapplied, but a stash would have been the right tool.
+
+**`passed_partial`, honestly: every tier that ran was z-ai**, and one tier never left a
+trusted read of the tree. Kimi and OpenAI have been refusing every probe since 08-18, so
+t2 and t3 were both answered by same-vendor stand-ins — real coverage, not the
+independence the ladder is meant to provide.
+
+**Not deployed.** The instructions only take effect on a container recreate, which drops
+rounds in flight, and there were four teammater reviews at rounds 3-4 plus this one. That
+is Vany's call, and the D-140 session already paid for learning it.
+
 ## 2026-09-01 — store.ts: lore's own refactor-suggestor, acted on for the first time
 
 **What changed.** `rev_Q7OdAwl_Wdzmja_KD4v4T2Nq`, `passed_partial`, attested at
