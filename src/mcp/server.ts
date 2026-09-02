@@ -342,7 +342,7 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
     { name: "lore", version: "0.1.0" },
     {
       capabilities: { resources: { subscribe: true } },
-      // THE ONLY TEXT THAT REACHES A SESSION BEFORE IT PICKS A TOOL.
+      // THE ONLY TEXT ADDRESSED TO THE SESSION RATHER THAN TO A CALL.
       //
       // Tool descriptions are in context from the start — that is not the gap. What
       // they are not is a STANDING instruction: each is consulted while choosing a tool,

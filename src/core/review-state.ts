@@ -123,8 +123,8 @@ export const FINDINGS_SQL: string = (["findings_ready", "findings_stale"] as con
  * hours after the client last touched it.
  *
  * `needs_human` is here because the client's move is real even though it is not a code
- * change: get a person. Nothing else in the system can do that, and lore cannot notify
- * anyone.
+ * change: get a person. Nothing else in the system can do that, and lore cannot reach
+ * one.
  */
 const CLIENT_MOVE = new Set<ReviewState>(["findings_ready", "findings_stale", "awaiting_diff", "needs_human"]);
 

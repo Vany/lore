@@ -226,11 +226,20 @@ describe("the standing instructions carry what a session cannot be expected to l
   // so that is what the text claims now.
   it("does not deny a wake this server may actually send", () => {
     const src = readFileSync(new URL("./server.ts", import.meta.url), "utf8");
-    if (!src.includes("resources: { subscribe: true }")) return;
+    // ASSERTED, NEVER GATED. The first version of this guard read
+    // `if (!src.includes(...)) return;` — so a reformat of that line, a second
+    // capability key, or a refactor to a constant would turn the whole check into a
+    // vacuous pass while its comment above went on claiming the property. "Not capable
+    // of firing" and "fired and found nothing" must not look identical (PROG.md); the
+    // sibling check further down already used the loud form.
+    expect(src, "the capability this guard is predicated on").toContain("resources: { subscribe: true }");
     for (const [name, text] of ALL_DOCS) {
       const flat = text.replace(/\s+/g, " ");
+      // `anyone` and `you` both, because the first regex named only `you` and the one
+      // live offender in the corpus said "lore cannot notify anyone" — the guard passed
+      // green over the exact sentence it was written to forbid.
       expect(flat, `${name} denies a push this server declares it can make`)
-        .not.toMatch(/cannot notify you|never notifies you|nothing here reaches you on its own/i);
+        .not.toMatch(/cannot notify (you|anyone)|never notifies (you|anyone)|nothing here reaches you on its own/i);
       expect(flat, `${name} claims every fact needs a call, on a connection that can be woken`)
         .not.toMatch(/arrives ONLY in the reply to a call/i);
     }

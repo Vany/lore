@@ -34,9 +34,11 @@ EVERY SESSION" and `review_start`'s "FINISH WHAT YOU START" in context throughou
 paragraph deep in two of a dozen descriptions, and stopped mid-loop anyway. That leaves
 two expensive readers unserved in practice: the session that never asks what an earlier
 session left open, and the session that submits a fix and treats the acceptance as the
-ruling. `InitializeResult.instructions` is the only string that
-arrives before a tool is chosen, so it holds exactly the facts that cannot be looked
-up by a reader who does not know they are missing — ask the inbox first, a submit
+ruling. `InitializeResult.instructions` is the only string
+addressed to the session itself rather than to a call it is deciding to make — NOT the
+only one that arrives first, since `tools/list` arrives at connect as well — so it holds
+exactly the facts that have to be read as rules rather than as reasons to reach for one
+particular tool — ask the inbox first, a submit
 starts a round rather than answering one, and `review_cancel` is the honest exit for a
 session that cannot stay. It is `SERVER_INSTRUCTIONS` in `src/mcp/docs.ts`, part of
 `everyClientDocument()` so that every drift guard reads it too, and its delivery is
@@ -222,9 +224,10 @@ to review.
 > rather than polling each review individually once you have several in flight.
 >
 > **Surface `needs_human` and high-severity findings to your user through whatever
-> alerting you have.** Do not merely log them. `lore` cannot notify anyone — it
-> returns information and you decide what deserves attention. A finding nobody sees
-> is a finding nobody found.
+> alerting you have.** Do not merely log them. `lore` cannot reach a PERSON — no mail,
+> no pager, no chat, and nothing that survives your session — so it returns information
+> and you decide what deserves attention. A finding nobody sees is a finding nobody
+> found.
 
 ### `review_attest`
 

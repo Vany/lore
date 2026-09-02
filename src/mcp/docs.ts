@@ -46,9 +46,11 @@ export const DRIVABLE_VERDICTS: readonly ReviewState[] = REVIEW_STATES.filter(
  * three of them inside three minutes of one another. Having the words in context is not
  * the same as their being read as a rule.
  *
- * `InitializeResult.instructions` is the only channel that lands in a session's
- * context before it has chosen a tool, so the facts that must arrive unasked live
- * here and nowhere else. It is deliberately short: it is charged against every
+ * `InitializeResult.instructions` is the only text addressed to the SESSION rather
+ * than to a call it is deciding to make, so the facts that must be read as rules — not
+ * as reasons to reach for one tool — live here and nowhere else. Not "the only thing
+ * that arrives first": `tools/list` arrives at connect too, which is the premise this
+ * block spent a review round retracting. It is deliberately short: it is charged against every
  * session's context whether or not lore is ever called, so it carries what changes
  * behaviour and delegates the rest to the tool texts.
  *
@@ -810,9 +812,9 @@ the honest ending and the one that frees everything the review was holding — i
 its slot, immediately, which waiting out the sweep would not do for another nine days.
 
 Surface \`needs_human\` and high-severity findings to your user through whatever
-alerting you have. Do not merely log them. lore cannot notify anyone — it returns
-information and you decide what deserves attention. A finding nobody sees is a
-finding nobody found.
+alerting you have. Do not merely log them. lore cannot reach a PERSON — no mail, no
+pager, no chat, and nothing that survives your session — so it returns information and
+you decide what deserves attention. A finding nobody sees is a finding nobody found.
 
 IT CONSUMES NOTHING. Counts and a preview, not a handover: the findings stay queued and
 you still collect them with review_poll, which is the only call that takes deltas off the

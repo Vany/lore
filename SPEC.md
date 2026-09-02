@@ -4062,8 +4062,9 @@ false premise would have ruled out. Caught by this change's own review (`535e983
 `buildServer` passed `capabilities` and `cacheHints` and nothing else. It is the only
 string addressed to the session itself rather than to a call it is about to make. `SERVER_INSTRUCTIONS`
 (`src/mcp/docs.ts`) now carries the four facts that cannot be looked up by a reader who
-does not know they are missing: nothing here notifies anyone, so only your next call
-learns anything; call `review_inbox` first, in every session; **a submit is not an
+does not know they are missing: **nothing here outlives the session** — no message about
+a review waits anywhere once the connection is gone, whatever this one could do while it
+was open; call `review_inbox` first, in every session; **a submit is not an
 ending** — it starts a round, and you do not learn what the round decided unless you come
 back; and `review_cancel` is the honest exit **for findings you cannot answer**, against
 an abandonment that concludes nothing and holds a worktree for days.
