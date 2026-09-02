@@ -3,6 +3,75 @@
 Newest first. Updated at the end of each task: what changed, what I learned, what
 surprised me.
 
+## 2026-09-01 — store.ts: lore's own refactor-suggestor, acted on for the first time
+
+**What changed.** `rev_Q7OdAwl_Wdzmja_KD4v4T2Nq`, `passed_partial`, attested at
+`e36673a874da61af29039621d1dade04105036d6` (3 findings, 2 fixed, 1 justified) —
+merged as six commits. `refactor_start` (D-136) had been run against `src/store`
+back on 2026-08-31, as that feature's own live-check smoke test, and never acted
+on. Polled it: five suggestions, all inside `store.ts` (4,582 lines). Verified
+each by hand before touching anything, rather than trusting the summary — two
+turned out imprecise (the "latest verdict" subquery was duplicated 4 times
+identically, not 5 as claimed; the meta-table read pattern had 7–8 sites, not 3,
+in two genuinely different shapes). Did the four small/medium suggestions as one
+batch (`LATEST_VERDICT_SQL`, `toVerdict`/`toRefactorRun` mappers, `lastWriteAt` +
+`WRITE_TIMESTAMPS`, the meta KV helper), the fifth — splitting `Store` into
+per-domain modules — left as a separate, later decision per Vany's own call.
+`lastWriteAt`'s fix included a live bug, not just hygiene: `refactor_run`/
+`refactor_suggestion` (D-136) had never been added to its column list at all, so
+a workgroup running only refactor suggestions read as a dead replicator.
+
+**The array built to end the duplication had the duplication's own bug, once.**
+Round 1 (89e9b7cb): `WRITE_TIMESTAMPS` itself — the new source of truth —was
+missing `fixed_elsewhere_claim.created_at`, a fifth instance of the exact gap it
+exists to close, present on its own first read. Fixed, and added the check that
+was actually missing (a real in-memory DB built from `DDL`, cross-checked via
+SQLite's own `pragma_table_info` rather than a second regex over the same text).
+Round 2 (b684699e): that new check's own filter (`_at`/`at` suffix) missed
+`finding.first_seen`, a real timestamp column outside the naming convention —
+the check's claim of "every timestamp column" was broader than what it verified.
+Fixed with an explicit, small, named exception list rather than pretending a
+naming convention is a schema fact.
+
+**A try/catch extraction narrowed what it protected, and nobody would have
+noticed until a corrupted row hit it.** Round 3 (e195cb7c): the old
+`routeUnavailable`/`tierUnavailable` code's `try` wrapped both the JSON parse
+AND the immediate field destructuring, so a meta value holding the JSON literal
+`null` (`JSON.parse("null")` succeeds — valid JSON) threw on `v.until` *inside*
+the try and was caught by accident, same as malformed JSON. Extracting `getJson`
+split "parse" from "use," and the destructuring moved outside any try without a
+replacement guard — a latent crash (no current write path produces a literal
+`null`, but a hand-repair or restore could) directly contradicting both
+functions' own "must not crash whatever called it" comments. Fixed at `getJson`
+itself — a parsed `null` now degrades to `undefined`, same as an absent key —
+rather than patching the two call sites separately, since the same latent gap
+existed for every current and future `getJson` caller.
+
+**Verified, not assumed, at every step.** Each extraction git-stash-verified
+individually: reverted, confirmed the new test failed for the stated reason
+(missing column, or the exact uncaught `TypeError`), restored, confirmed passed.
+The store test suite had zero coverage for `noteClientWork`/`takeClientWork` and
+`dailyNoticeGiven`/`claimDailyNotice` anywhere in the whole repo before this —
+added six tests closing that gap, in exactly the two areas this file's own
+history says are riskiest (D-114's held-diff reset, three windows of the same
+defect before its current shape; the daily-notice suppression bug).
+
+**`passed_partial`, honestly: every tier that ran was z-ai.** t2 and t3 were both
+answered by same-vendor stand-ins for their configured routes this round, and one
+tier never left a trusted read of the tree at all — D-32/D-49's own rule
+(a ladder whose reachable tiers share one vendor reaches `passed_partial` at
+best) doing exactly what it is for. Real coverage, not the independence the
+ladder is meant to provide.
+
+**Surprised me, and shouldn't have.** This project's most-repeated lesson — "one
+thing defined twice always disagrees eventually" — recurred a fifth time inside
+the very artifact built specifically to end the pattern, found on that artifact's
+own first review round. The lesson was not "remember to check the new list";
+it was that a new central list is exactly as fallible as what it replaces until
+something mechanical reads the real schema instead of trusting a comment's
+restated rules — which is what round 1's fix actually added, not just the one
+missing entry.
+
 ## 2026-09-01 — D-140, `lore ladder-suggest`: a fresh install's static guess
 replaced by a live catalog, eight rounds
 
