@@ -2475,7 +2475,12 @@ describe("a fallback that would walk onto a metered route", () => {
     // A FRESH REVIEW EACH TIME, not twenty rounds of one. Twenty rounds walk the LADDER
     // forward — round 2 is the deep rung, not a second draw for t1 — so the loop would have
     // measured the shuffle once and the ladder nineteen times.
-    it("never runs the metered pool route as the primary", async () => {
+    // EXPLICIT TIMEOUT, because twenty real rounds cost ~5.1s and the default is 5s.
+    // It failed on the clock rather than on the property — measured at 5063-5170ms across
+    // runs, in isolation and in the full file alike. A test that fails for a reason
+    // unrelated to what it guards gets disabled rather than fixed, and the twenty draws
+    // are not negotiable: one draw proves nothing about a route picked at random.
+    it("never runs the metered pool route as the primary", { timeout: 30_000 }, async () => {
       for (let i = 0; i < 20; i++) {
         const id = `rPool${String(i)}`;
         store.createReview({
@@ -2639,7 +2644,8 @@ describe("a fallback that would walk onto a metered route", () => {
      * exhaustion hours later was silent: the benign case eating the alarm meant for the
      * dangerous one. Fixing the alert's WORDING did not fix that; the condition had to.
      */
-    it("says nothing when a free sibling was available and the shuffle picked the paid one", async () => {
+    // Same clock, same reason as the twenty-draw test above.
+    it("says nothing when a free sibling was available and the shuffle picked the paid one", { timeout: 30_000 }, async () => {
       const a = spy();
       const MIXED = JSON.stringify({
         models: { GLM: ["zai-coding-plan/glm-5.2", "openrouter/z-ai/glm-5.2"] },
