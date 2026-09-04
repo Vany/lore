@@ -1282,6 +1282,109 @@ describe("the inbox lists what is waiting, not only what is fresh", () => {
     ).toBeUndefined();
   });
 
+  /**
+   * `new_findings: 0` MUST NOT BE READABLE AS "SOMEBODY IS ON IT".
+   *
+   * 2026-09-03, verbatim from a client asked whether everything was ready: *"Those three
+   * findings_ready entries have new_findings: 0, which means the agents already collected
+   * them and are working the fixes — not the rot state we hit earlier."* Every word after
+   * "which means" was invented. All three were stopped and unanswered, and lore cannot
+   * see sessions at all — a caller mid-fix and one that ended days ago produce identical
+   * rows. The client had every fact except the meaning, so it supplied one, and a person
+   * was told the opposite of the truth.
+   *
+   * `TOOL_DOCS.inbox` had already said "THIS IS THE STATE THAT ROTS" for weeks. Saying it
+   * only in the tool text is what failed, so the meaning now travels in the payload, at
+   * the field that was misread.
+   */
+  it("says what new_findings: 0 means on a review that is waiting on the caller", async () => {
+    open("revQuiet", "findings_ready", "feat/collected-then-left");
+    const out = await callTool("review_inbox", {});
+    const quiet = (out["reviews"] as Record<string, unknown>[]).find((r) => r["review_id"] === "revQuiet");
+
+    expect(quiet?.["new_findings"], "nothing left to collect — the misread case exactly").toBe(0);
+    const note = String(quiet?.["waiting_note"]);
+    expect(note, "the inference the client made, refused in the payload").toContain("does NOT mean anybody is working on it");
+    expect(note, "and why lore cannot know").toContain("cannot see sessions");
+    expect(note, "the honest ending, so a caller who cannot answer has somewhere to go").toContain("review_cancel");
+    expect(quiet?.["last_moved_at"], "the one fact that separates mid-fix from abandoned").toBe(
+      store.getReview("revQuiet", "alice")?.updatedAt,
+    );
+  });
+
+  /** A review with something to collect is NOT stalled — the note would be false there. */
+  it("does not call a review stalled while it still has findings to hand over", async () => {
+    open("revFresh", "findings_ready", "feat/uncollected");
+    store.recordFinding("revFresh", {
+      fingerprint: "q1", file: "a.ts", line: 1, symbol: "f", severity: "high",
+      claim: "not yet collected", evidence: "e", failureScenario: "x", origin: "t1", round: 1,
+      firstSeen: new Date().toISOString(),
+    });
+
+    const out = await callTool("review_inbox", {});
+    const fresh = (out["reviews"] as Record<string, unknown>[]).find((r) => r["review_id"] === "revFresh");
+    expect(fresh?.["new_findings"]).toBe(1);
+    expect(fresh, "there is something to do and it is visible; nothing is rotting").not.toHaveProperty("waiting_note");
+    expect(out["stalled"], "only the collected-and-left review counts").toBe(0);
+  });
+
+  /** Waiting on LORE is not stalled either: a running round needs nothing from anyone. */
+  it("does not call a running review stalled", async () => {
+    open("revRunning", "running", "feat/mid-round-inbox");
+    const out = await callTool("review_inbox", {});
+    const running = (out["reviews"] as Record<string, unknown>[]).find((r) => r["review_id"] === "revRunning");
+    expect(running?.["waiting_on"]).toBe("lore");
+    expect(running).not.toHaveProperty("waiting_note");
+    expect(out["stalled"]).toBe(0);
+  });
+
+  /**
+   * `needs_human` IS STOPPED TOO, AND ITS MOVE IS A DIFFERENT ONE.
+   *
+   * The waiting_note offers review_submit and review_cancel. Both are wrong for a review
+   * parked on a question only a person can settle — and the inbox already answers that
+   * case louder, with `open_questions` carrying the question itself and a note saying not
+   * to answer it yourself. Two server-authored instructions over one review is how a
+   * client ends up choosing the cheaper one.
+   */
+  it("leaves needs_human to its own louder mechanism", async () => {
+    // A REAL OPEN CONFLICT, or the inbox resumes it before we can look (D-99): a review
+    // parked on a question nobody is asking any more is not parked, and the first draft
+    // of this test asserted `waiting_on: "you"` against a review lore had correctly
+    // already restarted.
+    const claim = (statement: string) =>
+      store.addKnowledge({
+        repoId, kind: "rule", source: "taught", statement, why: "because",
+        path: undefined, cwe: undefined, provenance: undefined,
+        sourceBlob: undefined, confidence: undefined,
+      }).id;
+    store.recordConflict(repoId, claim("holds expire") as string, claim("holds never expire") as string);
+    open("revAsk", "needs_human", "feat/contradiction");
+    const out = await callTool("review_inbox", {});
+    const ask = (out["reviews"] as Record<string, unknown>[]).find((r) => r["review_id"] === "revAsk");
+
+    expect(ask?.["waiting_on"], "still the caller's move").toBe("you");
+    expect(ask, "but not with review_submit as the instruction").not.toHaveProperty("waiting_note");
+    expect(out["stalled"], "counted by needs_human, not by stalled").toBe(0);
+    expect(out["needs_human"]).toBe(1);
+  });
+
+  /**
+   * THE HEADLINE NUMBER, because the client answered "is everything ready" by reading
+   * rows one at a time and getting each one wrong. `stalled` cannot be misread the same
+   * way, and the note says out loud what it means for that question.
+   */
+  it("counts stalled reviews at the top and says nothing is done while it is above zero", async () => {
+    open("revQ1", "findings_ready", "feat/one");
+    open("revQ2", "findings_stale", "feat/two");
+    open("revQ3", "running", "feat/three");
+
+    const out = await callTool("review_inbox", {});
+    expect(out["stalled"], "both stopped ones, not the running one").toBe(2);
+    expect(String(out["note"])).toContain("the honest answer to \"is everything done\" is NO");
+    expect(String(out["note"]), "and it points at the per-review detail").toContain("waiting_note");
+  });
+
   // The docs ARE the interface, so a field the inbox emits and TOOL_DOCS.inbox never
   // mentions is a client acting on a contract it cannot read (spec/agent-docs.md §1).
   it("emits no inbox field the docs do not name", async () => {

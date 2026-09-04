@@ -4021,6 +4021,64 @@ working agreement says to confirm rather than assume.
 (fingerprint 9c6f2a60) — never inside the repository**, so nothing needs a new
 `.gitignore` rule.
 
+**D-142 — the inbox says what `new_findings: 0` MEANS, because a client read the number
+and invented the meaning. BUILT 2026-09-03.**
+
+Vany, relaying what his client had just told him when he asked whether everything was
+ready:
+
+> *"Those three findings_ready entries have new_findings: 0, which means the agents
+> already collected them and are working the fixes — not the rot state we hit earlier
+> (that one had a nonzero open count with nothing visible)."*
+
+Every word after *"which means"* was invented, and it was invented confidently, to a
+person, about whether work was done. All three reviews were stopped and unanswered.
+The client also produced a discriminator lore has never offered — *"rot is a nonzero
+open count with nothing visible"* — and reasoned from it.
+
+**Nothing lore returns could have told it, and the missing fact is not a detail:
+`review_inbox` cannot see sessions.** A caller who is mid-fix this second and one that
+ended four days ago produce byte-identical rows. So `new_findings: 0` genuinely admits
+two readings, and the payload offered only the number. The client took the comfortable
+one.
+
+**The lesson is where the meaning lived, not whether it was written down.**
+`TOOL_DOCS.inbox` has opened with *"THIS IS THE STATE THAT ROTS"* for weeks, naming this
+exact case — `waiting_on: "you"` with nothing to collect — and saying the common way to
+reach it is to poll, start fixing, and end the session. It was right, it was there, and
+it lost to a number in the payload. This is D-141's finding one layer down: a text is not
+read as a rule merely by being in context, and the closer it sits to the thing being
+misread, the better it works.
+
+**So the meaning travels with the number.** Three additions, all of them text in the
+place the client was actually reading:
+
+* **`waiting_note`**, on every entry waiting on the caller with nothing to collect. It
+  says the zero means nothing NEW arrived, that it does not mean anybody is working, that
+  lore cannot see sessions and so cannot tell you which case this is, how long the review
+  has been quiet, and the two ways out — `review_submit` if you hold the findings,
+  `lore://review/{id}` if you lost them, `review_cancel` if nobody will answer.
+* **`last_moved_at`**, on every non-terminal entry: the one fact that separates the two
+  readings. Derived from the same `updated_at` that feeds `expires_at`, so they cannot
+  disagree. `elapsedWords` (`src/core/elapsed.ts`) renders it into the note — pure,
+  tested without a clock, and deliberately coarse, because the buckets exist to drive a
+  decision rather than to be precise: under an hour is probably still there, days is not.
+* **`stalled`**, one number at the top: how many reviews are stopped, waiting on this
+  caller, with nothing left to collect. The client answered *"is everything ready"* by
+  reading rows one at a time and getting each one wrong; a count cannot be misread that
+  way, and the note says out loud that while it is above zero the answer is no.
+
+**`needs_human` is deliberately outside all three.** It is equally stopped and equally
+the caller's move, but its move is to get a PERSON, and `waiting_note`'s two exits —
+`review_submit` and `review_cancel` — are both wrong there. The inbox already answers
+that case louder, with `open_questions` carrying the question itself and a note saying
+not to answer it yourself; a second instruction over the same review is how a client
+comes to pick the cheaper one.
+
+**What this does NOT do.** It cannot tell whether a session is alive — that is the
+missing capability, and inventing an answer for it is the defect being fixed, not the
+remedy. It hands over the only fact lore has and refuses the inference lore cannot make.
+
 **D-141 — the server hands every connecting session a standing instruction, because a
 tool description is only read by a client that already chose the tool. BUILT
 2026-09-02.**

@@ -15,6 +15,7 @@ import { forClient } from "./plain.ts";
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/server";
 import * as z from "zod";
 import { mayAdmit, MAX_OPEN_REFACTOR_RUNS } from "../core/admission.ts";
+import { elapsedWords } from "../core/elapsed.ts";
 import { absent } from "../core/optional.ts";
 import { worstSeverity } from "../core/finding.ts";
 import { initialState, ladderFingerprint, loadTiers, type LadderState } from "../core/ladder.ts";
@@ -2260,6 +2261,43 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
                 ).toISOString(),
               }),
           new_findings: fresh.length,
+          // WHAT `new_findings: 0` MEANS, said here rather than left to be inferred.
+          //
+          // 2026-09-03: a client asked whether everything was ready, read three reviews
+          // in `findings_ready` carrying `new_findings: 0`, and told its user "the
+          // agents already collected them and are working the fixes — not the rot
+          // state". Nothing in this reply said that or could have. It is the rot state:
+          // everything was handed over and nobody came back. The client had a number
+          // and no meaning, so it supplied the more comfortable of the two readings and
+          // a person was told the work was in hand.
+          //
+          // lore cannot see sessions. A caller mid-fix and one that ended days ago
+          // produce identical rows, and the ONLY fact here that separates them is how
+          // long nothing has moved — so that is what is handed over, in words, at the
+          // field that was misread. `TOOL_DOCS.inbox` has said "THIS IS THE STATE THAT
+          // ROTS" for weeks; saying it only there is what failed.
+          // NOT `needs_human`, though it is equally stopped and equally the caller's
+          // move. Its move is to get a PERSON, and this note's two exits — review_submit
+          // and review_cancel — are both wrong there: the inbox already answers it
+          // louder, with `open_questions` carrying the question itself and a top-level
+          // note saying not to answer it yourself. Two instructions competing over one
+          // review is how a client picks the cheaper one.
+          ...(yours && fresh.length === 0 && r.state !== "needs_human"
+            ? {
+                waiting_note:
+                  "Everything this review found has ALREADY been handed over. `new_findings: 0` means nothing " +
+                  "NEW has arrived since — it does NOT mean anybody is working on it, and lore has no way to " +
+                  "know whether anyone is: it cannot see sessions. Nothing has moved here for " +
+                  elapsedWords(r.updatedAt) +
+                  ". If you hold these findings, answer them with review_submit. If you do not — a session " +
+                  "that collected them ended, or it was never you — read lore://review/" + r.id +
+                  ", which returns all of them and consumes nothing; polling cannot replay them. If nobody " +
+                  "is going to answer, review_cancel is the honest ending.",
+              }
+            : {}),
+          // The raw fact behind the sentence above, for a caller that wants to compare
+          // it itself. Same source as `expires_at`, so the two cannot disagree.
+          ...(isTerminal(r.state) ? {} : { last_moved_at: r.updatedAt }),
           // This is the field a client triages on, so it is computed, not read off
           // the front of the list. It used to be `fresh[0].severity` with "high"
           // special-cased — and since the query sorted severity as text, a review
@@ -2312,14 +2350,32 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           // a cancelled review hands its findings over and they are real; they drop out
           // once collected, which is correct — there is nothing left to come back to.
           reviews: items.filter((i) => i.new_findings > 0 || !isTerminal(i.state)),
+          // THE HEADLINE COUNT, because a client asked "is everything ready" and answered
+          // it from three rows it had misread one at a time. A number it cannot get wrong
+          // sits above the rows: how many reviews are stopped, waiting on this caller,
+          // with nothing left to collect. That is the count of things that will rot.
+          stalled: items.filter((i) => i.waiting_note !== undefined).length,
           needs_human: needsHuman.length,
           ...(needsHuman.length > 0 ? { open_questions: questions } : {}),
-          note:
+          note: [
             needsHuman.length === 0
               ? "Surface high-severity findings to your user rather than only logging them."
               : "Some reviews need a PERSON. `open_questions` IS the question — two things this repository " +
                 "believes that cannot both be true. Take both statements to your user verbatim; do not answer " +
                 "them yourself. Then call knowledge_resolve with the id to keep, or knowledge_escalate.",
+            // Said whenever there is one, and never implied by silence. NOTHING IS READY
+            // while this is above zero, and that is the sentence a client relays to the
+            // person who asked.
+            ...(items.some((i) => i.waiting_note !== undefined)
+              ? [
+                  "`stalled` counts reviews STOPPED and waiting on you with nothing left to collect — read " +
+                    "each one's `waiting_note`. They are not in progress: lore cannot see whether anyone is " +
+                    "working, so `new_findings: 0` says only that nothing new arrived. While `stalled` is " +
+                    "above zero, the honest answer to \"is everything done\" is NO, and each one is either " +
+                    "yours to answer with review_submit or yours to end with review_cancel.",
+                ]
+              : []),
+          ].join(" "),
         }),
       );
     },

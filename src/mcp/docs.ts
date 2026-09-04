@@ -793,6 +793,26 @@ READ \`waiting_on\` FIRST. It is "you" or "lore", and it is the whole triage:
     which means it is waiting on a review_submit or on a person. THIS IS THE STATE THAT
     ROTS. It listed nothing to collect and so used to be omitted here entirely — the
     common way to reach it is to poll, start fixing, and end the session.
+
+\`new_findings: 0\` NEVER MEANS SOMEBODY IS WORKING ON IT. It means nothing NEW has
+arrived since the last handover, and that is all it can mean: **lore cannot see
+sessions.** A caller who is mid-fix right now and one that ended four days ago produce
+the same row, byte for byte, and lore has no way to tell you which you are looking at.
+Every such review carries a \`waiting_note\` saying so, and a \`last_moved_at\` — the
+one fact that actually separates the two. Read it. Quiet for minutes is somebody
+probably still there; quiet for days is nobody coming back.
+
+This is not hypothetical and it is why the fields exist. Asked "is everything ready",
+a client read three reviews sitting in findings_ready with \`new_findings: 0\` and
+answered that the agents had "already collected them and are working the fixes". Nothing
+in the reply said that. All three were stopped, unanswered, and rotting, and a person
+was told the opposite by an agent that had every fact except the meaning.
+
+\`stalled\` AT THE TOP IS THE ANSWER TO "IS EVERYTHING DONE", and it is one number
+rather than rows you have to interpret one at a time: how many reviews are stopped,
+waiting on YOU, with nothing left to collect. **While it is above zero the answer is
+NO** — each one is yours to answer with review_submit, or yours to end with
+review_cancel.
   * "lore" — queued, running, or fast_clean with the deep tiers still going. Nothing to
     do. review_start naming the same branch AND the same scope (a folder review's
     \`path\`, or bare diff mode) as this open review is REFUSED, not destructive — it

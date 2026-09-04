@@ -538,6 +538,23 @@ so for two days. A terminal review still appears while it holds undelivered find
 a cancelled review hands its findings over and they are real — and drops out once they
 are taken, because then there is nothing to come back to.
 
+**`new_findings: 0` is the number this service has watched a client get wrong, so the
+payload now carries its meaning (D-142).** Asked whether everything was ready, a client
+read three reviews in `findings_ready` with nothing left to collect and reported that
+*"the agents already collected them and are working the fixes — not the rot state"*.
+Nothing in the reply said that. It is precisely the rot state, and **lore cannot see
+sessions**: a caller mid-fix and one that ended four days ago produce identical rows.
+`TOOL_DOCS.inbox` had said "THIS IS THE STATE THAT ROTS" for weeks, which is the whole
+lesson — a meaning that lives only in the tool text loses to a number in the payload.
+
+So every entry that is waiting on the caller with nothing to collect carries a
+`waiting_note` saying what the zero does and does not mean, and every non-terminal entry
+carries `last_moved_at`, which is the only fact lore holds that separates the two
+readings: quiet for minutes is somebody probably still there, quiet for days is nobody
+coming back. `stalled` at the top level counts them — one number, above the rows, for the
+question the client was actually asked, and while it is above zero the honest answer to
+*is everything done* is no.
+
 Each entry carries `highest`, the worst severity among its new findings, so a client
 can triage 30 reviews without reading 30 lists. It is **computed over the whole set**,
 not taken from the first row — reading position 0 was how it came to report `low` for

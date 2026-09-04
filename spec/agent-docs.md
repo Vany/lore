@@ -228,6 +228,19 @@ to review.
 > no pager, no chat, and nothing that survives your session — so it returns information
 > and you decide what deserves attention. A finding nobody sees is a finding nobody
 > found.
+>
+> **`new_findings: 0` never means somebody is working on it.** It means nothing NEW
+> arrived since the last handover, and that is all it can mean: lore cannot see
+> sessions, so a caller mid-fix and one that ended days ago produce the same row. Such
+> an entry carries a `waiting_note` saying so and a `last_moved_at`, which is the one
+> fact that separates the two. `stalled` at the top counts them, and while it is above
+> zero the answer to "is everything done" is no.
+
+Written after a client answered exactly that question with *"they have new_findings: 0,
+which means the agents already collected them and are working the fixes"* — about three
+reviews that were stopped and rotting (D-142). The tool text had named this case for
+weeks and lost to a number in the payload, which is §1's salience argument one layer
+down: put the meaning where the misreading happens.
 
 ### `review_attest`
 
