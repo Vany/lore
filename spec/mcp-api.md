@@ -556,10 +556,14 @@ quiet for minutes is somebody probably still there, quiet for days is nobody com
 `quiet_since` is deliberately **not** `updated_at` — the retention sweep's graying write
 touches that column, so it would report a two-day-old review as having moved minutes ago
 (`lastClientTouch` in `src/ops/retention.ts` reaches back through the dim, and takes a collect into account as well — `review_poll` records one on the finding rather than on the review). A review started by
-another live token of the same principal says so in its `waiting_note` instead of
-prescribing exits that would answer NOT FOUND (D-78) — and that warning fires whether or
-not the row still has findings to collect, because the standing instruction for an
-uncollected finding is to call `review_poll`, which is one of the calls that refuses. `stalled` at the top level counts them — one number, above the rows, for the
+another live token of the same principal carries a separate `not_yours_note` rather than
+prescribing exits that would answer NOT FOUND (D-78). Separate, because reachability and
+rot are independent claims: it fires whatever the state and whether or not findings are
+waiting — the standing instruction for an uncollected finding is to call `review_poll`,
+one of the calls that refuses — while `waiting_note` and `stalled` stay about a review
+that is stopped. On `needs_human` it says the opposite of "wait for that session":
+`knowledge_resolve` is repo-scoped, so this caller can settle the question and resume the
+review itself. `stalled` at the top level counts them — one number, above the rows, for the
 question the client was actually asked, and while it is above zero the honest answer to
 *is everything done* is no.
 

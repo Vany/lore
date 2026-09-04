@@ -2301,27 +2301,20 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           // louder, with `open_questions` carrying the question itself and a top-level
           // note saying not to answer it yourself. Two instructions competing over one
           // review is how a client picks the cheaper one.
-          // TWO REASONS TO SPEAK, AND THEY HAVE DIFFERENT TRIGGERS.
+          // TWO FACTS, TWO FIELDS — and the round that merged them into one broke both.
           //
-          // The stalled note fires when there is nothing left to collect. The "not yours"
-          // warning has to fire whenever the row is bound elsewhere, INCLUDING when it
-          // still has findings — the first version gated both on `fresh.length === 0`,
-          // so a sibling-token row with three uncollected findings got no warning at all
-          // while the standing text told the client to collect them, and `review_poll`
-          // answered NOT FOUND. That is the D-23 confusion the warning exists to prevent,
-          // reached by the shorter path.
-          ...(elsewhere || (yours && fresh.length === 0 && r.state !== "needs_human")
+          // "This is rotting" and "you cannot reach this" are independent: a sibling row
+          // can be mid-round (nothing is rotting) and a rotting row is usually reachable.
+          // Merging them behind `elsewhere || …` short-circuited before every state check,
+          // so a sibling review in `running` was handed a note and counted in `stalled`
+          // under a top-line saying "STOPPED … not in progress", and a sibling
+          // `needs_human` got a note the same change's own texts promise never exists.
+          // Separate fields, separate triggers, and `stalled` keeps counting only the
+          // first — which is what every text says it counts.
+          ...(yours && fresh.length === 0 && r.state !== "needs_human"
             ? {
                 waiting_note:
-                  (elsewhere
-                    ? "THIS ONE IS NOT YOURS TO ANSWER. It was started by another token of yours that is " +
-                      "still live, so review_poll, review_submit, review_cancel and lore://review/" + r.id +
-                      " all answer NOT FOUND for you (D-78) — including its " + String(fresh.length) +
-                      " uncollected finding(s), if any. Nothing here is broken and the id is real: the " +
-                      "session holding that token has to finish it, or a person revokes that token, after " +
-                      "which it falls back to repository scope and you can. Nobody has touched it for at " +
-                      "least " + elapsedWords(quiet) + "."
-                    : "Everything this review found has ALREADY been handed over. `new_findings: 0` means " +
+                  ("Everything this review found has ALREADY been handed over. `new_findings: 0` means " +
                       "nothing NEW has arrived since — it does NOT mean anybody is working on it, and lore " +
                       "has no way to know whether anyone is: it cannot see sessions. Nobody has touched " +
                       "this review for at least " + elapsedWords(quiet) +
@@ -2329,6 +2322,29 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
                       "session that collected them ended — read lore://review/" + r.id +
                       ", which returns all of them and consumes nothing; polling cannot replay them. If " +
                       "nobody is going to answer, review_cancel is the honest ending."),
+              }
+            : {}),
+          // REACHABILITY, SEPARATELY, AND WHATEVER THE STATE. It fires on any row bound to
+          // another live token, because the refusal is a property of the token and not of
+          // the state: a `running` sibling row is not stalled and still cannot be polled.
+          // `needs_human` gets its own sentence, because the generic advice — wait for
+          // that session, or have the token revoked — is simply wrong there:
+          // `knowledge_resolve` is REPO-scoped (`who.repoId`), so this caller's own user
+          // can settle the contradiction now and resume the review.
+          ...(elsewhere
+            ? {
+                not_yours_note:
+                  "NOT YOURS TO ANSWER. It was started by another token of yours that is still live, so " +
+                  "review_poll, review_submit, review_cancel and lore://review/" + r.id +
+                  " all answer NOT FOUND for you (D-78) — including its " + String(fresh.length) +
+                  " uncollected finding(s), if any. Nothing is broken and the id is real. " +
+                  (r.state === "needs_human"
+                    ? "But this one is parked on a QUESTION, and settling it is not token-bound: " +
+                      "`open_questions` above is that question, and knowledge_resolve works for anyone on " +
+                      "this repository. Take it to your user, resolve it, and the review resumes — do not " +
+                      "wait for the other session."
+                    : "The session holding that token has to finish it, or a person revokes that token, " +
+                      "after which it falls back to repository scope and you can."),
               }
             : {}),
           // THE RAW FACT BEHIND THE SENTENCE ABOVE, and it is deliberately NOT

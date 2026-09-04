@@ -233,9 +233,10 @@ to review.
 > arrived since the last handover, and that is all it can mean: lore cannot see
 > sessions, so a caller mid-fix and one that ended days ago produce the same row. Such
 > an entry carries a `waiting_note` saying so and a `quiet_since`, which is the one
-> fact that separates the two — with two exceptions that are NOT reassurance:
-> `needs_human` (answered by `open_questions` instead) and a review started by another
-> live token of yours (its note says the calls will refuse) — and `quiet_since` — reaching back through the staleness dim, whose own write
+> fact that separates the two — except `needs_human`, which is NOT reassurance: it is
+> equally stopped and is answered by `open_questions` instead. A review started by another
+> live token of yours carries a separate `not_yours_note`, because being unreachable and
+> being stalled are different claims — and `quiet_since` — reaching back through the staleness dim, whose own write
 > would otherwise make a two-day-old review look like it moved minutes ago. `stalled` at the top counts them, and while it is above
 > zero the answer to "is everything done" is no.
 

@@ -1391,9 +1391,11 @@ describe("the inbox lists what is waiting, not only what is fresh", () => {
     const row = (out["reviews"] as Record<string, unknown>[]).find((r) => r["review_id"] === "revSibling");
     expect(row, "principal-scoped, so it is listed").toBeDefined();
 
-    const note = String(row?.["waiting_note"]);
+    const note = String(row?.["not_yours_note"]);
     expect(note, "and the note must not prescribe an exit that answers NOT FOUND").toContain("NOT YOURS TO ANSWER");
     expect(note).toContain("revokes that token");
+    expect(row, "reachability is not rot: this one is stopped, but that is a separate claim")
+      .toHaveProperty("waiting_note");
 
     // THE CLAIM CHECKED AGAINST THE REAL REFUSAL, not assumed. Raw, because `callTool`
     // parses the reply as JSON and a refusal is plain text — the first version of this
@@ -1458,9 +1460,65 @@ describe("the inbox lists what is waiting, not only what is fresh", () => {
     const out = await callTool("review_inbox", {});
     const row = (out["reviews"] as Record<string, unknown>[]).find((r) => r["review_id"] === "revSibFresh");
     expect(row?.["new_findings"], "there IS something to collect").toBe(1);
-    expect(String(row?.["waiting_note"]), "and it cannot be collected by this token").toContain(
+    expect(String(row?.["not_yours_note"]), "and it cannot be collected by this token").toContain(
       "NOT YOURS TO ANSWER",
     );
+    expect(row, "there is something to collect, so nothing is rotting").not.toHaveProperty("waiting_note");
+  });
+
+  /**
+   * A SIBLING ROW MID-ROUND IS UNREACHABLE, NOT STALLED — and merging the two facts into
+   * one field said otherwise. `stalled`'s own top-note reads "reviews STOPPED ... not in
+   * progress", so counting a `running` review there makes the payload contradict itself
+   * and reports work lore is executing at that moment as abandoned.
+   */
+  it("does not call an unreachable review stalled while a round is running", async () => {
+    const other = grantToken(store, repoId, "alice");
+    store.createReview({
+      id: "revSibRunning", repoId, principal: "alice", branch: "feat/rotated-running", intoRef: "main",
+      ticket: "t", type: "code-arch", state: "running", ladder: initialState(),
+      tokenHash: hashToken(other),
+    });
+
+    const out = await callTool("review_inbox", {});
+    const row = (out["reviews"] as Record<string, unknown>[]).find((r) => r["review_id"] === "revSibRunning");
+    expect(row?.["waiting_on"], "lore is working on it").toBe("lore");
+    expect(String(row?.["not_yours_note"]), "still unreachable from here").toContain("NOT YOURS TO ANSWER");
+    expect(row, "but nothing about it is stopped").not.toHaveProperty("waiting_note");
+    expect(out["stalled"], "and it must not be counted as rot").toBe(0);
+  });
+
+  /**
+   * AND A SIBLING `needs_human` MUST NOT BE TOLD TO WAIT FOR THE OTHER SESSION.
+   *
+   * `knowledge_resolve` is repo-scoped (`who.repoId`), not token-bound, so this caller's
+   * own user can settle the contradiction now and resume the review. The generic sibling
+   * advice — wait, or have the token revoked — is wrong there, and it competes with
+   * `open_questions`' own instruction over the same review.
+   */
+  it("tells a sibling token it can still settle a needs_human question itself", async () => {
+    const claim = (statement: string) =>
+      store.addKnowledge({
+        repoId, kind: "rule", source: "taught", statement, why: "because",
+        path: undefined, cwe: undefined, provenance: undefined,
+        sourceBlob: undefined, confidence: undefined,
+      }).id;
+    store.recordConflict(repoId, claim("a holds") as string, claim("a never holds") as string);
+    const other = grantToken(store, repoId, "alice");
+    store.createReview({
+      id: "revSibAsk", repoId, principal: "alice", branch: "feat/rotated-ask", intoRef: "main",
+      ticket: "t", type: "code-arch", state: "needs_human", ladder: initialState(),
+      tokenHash: hashToken(other),
+    });
+
+    const out = await callTool("review_inbox", {});
+    const row = (out["reviews"] as Record<string, unknown>[]).find((r) => r["review_id"] === "revSibAsk");
+    const note = String(row?.["not_yours_note"]);
+    expect(note, "settling is not token-bound").toContain("knowledge_resolve");
+    expect(note, "so it must not say to wait for the other session").toContain("do not\nwait".replace("\n", " "));
+    expect(row, "needs_human never carries the rot note").not.toHaveProperty("waiting_note");
+    expect(out["stalled"], "nor is it counted as rot").toBe(0);
+    expect(out["needs_human"], "it is answered by its own mechanism").toBe(1);
   });
 
   /**

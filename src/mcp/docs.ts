@@ -802,15 +802,22 @@ Every such review carries a \`waiting_note\` saying so, and a \`quiet_since\` �
 fact that actually separates the two. Read it. Quiet for minutes is somebody probably
 still there; quiet for days is nobody coming back.
 
-TWO ENTRIES DO NOT CARRY A \`waiting_note\`, and neither absence means "fine".
-\`needs_human\` never does: it is equally stopped, and its move is to get a PERSON, so
-\`needs_human\` and \`open_questions\` above carry it instead — read those. And a review
-started by ANOTHER LIVE TOKEN OF YOURS carries a different note saying exactly that:
+\`needs_human\` NEVER CARRIES A \`waiting_note\`, and the absence does not mean "fine".
+It is equally stopped, and its move is to get a PERSON, so \`needs_human\` and
+\`open_questions\` above carry it instead — read those. Never read a missing
+\`waiting_note\` as evidence that somebody has a review in hand; nothing in this reply
+can tell you that.
+
+\`not_yours_note\` IS A DIFFERENT FIELD ABOUT A DIFFERENT THING, and a row can have
+either, both or neither. It appears on a review started by ANOTHER LIVE TOKEN OF YOURS:
 review_poll, review_submit, review_cancel and the resource all answer NOT FOUND for you
-on it (D-78), whether or not it has findings waiting. The id is real and nothing is
-broken — that session has to finish it, or a person revokes the old token, after which it
-falls back to repository scope. Never read a missing \`waiting_note\` as evidence that
-somebody has a review in hand; nothing in this reply can tell you that.
+on it (D-78), whatever its state and whether or not findings are waiting. The id is real
+and nothing is broken — that session has to finish it, or a person revokes the old token,
+after which it falls back to repository scope. **A \`not_yours_note\` is not a claim that
+anything is stalled**: such a review may be running a round right now. The one exception
+is \`needs_human\`, where the note says so: settling the question is NOT token-bound, so
+take \`open_questions\` to your user and call knowledge_resolve rather than waiting on the
+other session.
 
 \`quiet_since\` IS NOT THE SAME AS "when the row last changed", deliberately. A review
 that sat unanswered for two days is DIMMED to findings_stale by a sweep, and that write

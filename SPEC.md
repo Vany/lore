@@ -4103,13 +4103,24 @@ place the client was actually reading:
   reading rows one at a time and getting each one wrong; a count cannot be misread that
   way, and the note says out loud that while it is above zero the answer is no.
 
-**Two entries carry no `waiting_note`, and the client texts now say so — they promised it
-without exception until round 2 (`330f37e3`, `1211c075`), which left a missing note
-readable as "not the rot case".** `needs_human` is one; a review bound to another live
-token is the other, and it carries a different note instead. That warning fires whether
-or not the row still has findings to collect: the first version gated it on there being
-nothing to collect, so the one case where the standing text actively says *collect them
-with review_poll* got no warning at all, and the call answers NOT FOUND.
+**`needs_human` carries no `waiting_note`, and the client texts now say so — they promised
+it without exception until round 2 (`330f37e3`, `1211c075`), which left a missing note
+readable as "not the rot case".**
+
+**Reachability is a SECOND fact and it needed a second field — round 3 (`581d72f2`,
+`be968324`).** Round 2 answered "a sibling-token row must be warned even while findings
+wait" by widening the same field: `elsewhere || (yours && …)`. That short-circuits before
+every state check, so a sibling review executing a round was handed a note and counted in
+`stalled` under a top-line reading *"reviews STOPPED … not in progress"* — the payload
+contradicting itself, and reporting work lore was running at that moment as abandoned. A
+sibling `needs_human` got a note the same change's own texts promise never exists, saying
+to wait for the other session when `knowledge_resolve` is REPO-scoped and this caller's
+own user could settle it immediately.
+
+The two claims are independent — a sibling row can be mid-round with nothing rotting, and
+a rotting row is usually perfectly reachable — so they are `waiting_note` and
+`not_yours_note`, with their own triggers. `stalled` counts only the first, which is what
+every text says it counts.
 
 **`needs_human` is deliberately outside `waiting_note` and `stalled` — and still carries
 `quiet_since`, which the first draft of this entry wrongly said it did not (`d3ab4d8b`).**
