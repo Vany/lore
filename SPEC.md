@@ -4122,6 +4122,25 @@ a rotting row is usually perfectly reachable — so they are `waiting_note` and
 `not_yours_note`, with their own triggers. `stalled` counts only the first, which is what
 every text says it counts.
 
+**And a split is not finished until each field is true ON ITS OWN — round 4 (`89d7281d`,
+`2b9f4a59`, `a1598621`, the last a re-raise of a finding this change had already
+settled).** Moving reachability out left `waiting_note` byte-identical between an
+answerable row and a sibling-bound one: the same *"answer them with review_submit …
+review_cancel is the honest ending"*, on three calls that answer NOT FOUND. The
+difference sat in a second field, and both pointers still aimed at the first — the
+top-level note said *"read each one's `waiting_note`, which says whether you can answer it
+here"*, and `TOOL_DOCS.inbox` said every counted review was *"yours to answer"*. A client
+following either lands on `review_submit` → NOT FOUND, which under D-23 reads as lore
+pointing at a review that does not exist: the confusion `not_yours_note` was created to
+prevent, re-entered through the un-updated pointer.
+
+Asking a client to cross-reference two fields to learn whether one of them is true is the
+same inference this whole decision exists to stop asking for. So `waiting_note` on an
+unreachable row now says its own prescriptions do not apply and names the field that
+explains why, both pointers name both fields, and the counted-but-not-yours case is
+stated rather than left to be noticed. **`stalled` still counts it** — it is still
+stopped and somebody still has to finish it; what changes is who.
+
 **`needs_human` is deliberately outside `waiting_note` and `stalled` — and still carries
 `quiet_since`, which the first draft of this entry wrongly said it did not (`d3ab4d8b`).**
 It is equally stopped and equally the caller's move, but its move is to get a PERSON, and

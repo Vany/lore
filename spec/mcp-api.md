@@ -565,7 +565,11 @@ that is stopped. On `needs_human` it says the opposite of "wait for that session
 `knowledge_resolve` is repo-scoped, so this caller can settle the question and resume the
 review itself. `stalled` at the top level counts them — one number, above the rows, for the
 question the client was actually asked, and while it is above zero the honest answer to
-*is everything done* is no.
+*is everything done* is no. A counted row that is bound to another live token still
+counts, because it is still stopped and somebody still has to finish it — and its
+`waiting_note` says its own prescriptions will not work for this caller rather than
+leaving the reader to cross-reference `not_yours_note` and notice. A field that reads the
+same on an actionable row and an unactionable one is the defect, not the pair of fields.
 
 Each entry carries `highest`, the worst severity among its new findings, so a client
 can triage 30 reviews without reading 30 lists. It is **computed over the whole set**,

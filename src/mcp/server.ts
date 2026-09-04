@@ -2321,7 +2321,18 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
                       ". If you hold these findings, answer them with review_submit. If you do not — a " +
                       "session that collected them ended — read lore://review/" + r.id +
                       ", which returns all of them and consumes nothing; polling cannot replay them. If " +
-                      "nobody is going to answer, review_cancel is the honest ending."),
+                      "nobody is going to answer, review_cancel is the honest ending.") +
+                  // NO PRESCRIPTIONS ON A ROW YOU CANNOT REACH. Splitting reachability into
+                  // its own field left this one byte-identical between an answerable row
+                  // and a sibling-bound one — same "answer them with review_submit", on
+                  // calls that answer NOT FOUND — with the difference parked in a second
+                  // field the top note did not mention. Cross-referencing two fields to
+                  // find out whether one of them is true is exactly the inference this
+                  // whole change exists to stop asking a client to make.
+                  (elsewhere
+                    ? " NONE OF THOSE CALLS WILL WORK FOR YOU, though: read `not_yours_note` on this row" +
+                      " before acting on anything above."
+                    : ""),
               }
             : {}),
           // REACHABILITY, SEPARATELY, AND WHATEVER THE STATE. It fires on any row bound to
@@ -2426,7 +2437,8 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
             ...(items.some((i) => i.waiting_note !== undefined)
               ? [
                   "`stalled` counts reviews STOPPED with nothing left to collect — read each one's " +
-                    "`waiting_note`, which says whether you can answer it here. They are not in progress: " +
+                    "`waiting_note` for what it needs, AND its `not_yours_note` if it has one, which says " +
+                    "you cannot do any of that from here. They are not in progress: " +
                     "lore cannot see whether anyone is working, so `new_findings: 0` says only that nothing " +
                     "new arrived. While `stalled` is above zero, the honest answer to \"is everything done\" " +
                     "is NO.",

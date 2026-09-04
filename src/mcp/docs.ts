@@ -834,8 +834,11 @@ was told the opposite by an agent that had every fact except the meaning.
 \`stalled\` AT THE TOP IS THE ANSWER TO "IS EVERYTHING DONE", and it is one number
 rather than rows you have to interpret one at a time: how many reviews are stopped,
 waiting on YOU, with nothing left to collect. **While it is above zero the answer is
-NO** — each one is yours to answer with review_submit, or yours to end with
-review_cancel.
+NO.** Most are yours to answer with review_submit or to end with review_cancel — but a
+counted row carrying \`not_yours_note\` is NOT, and its own \`waiting_note\` says so
+rather than leaving you to notice: those calls answer NOT FOUND for you. It is still
+counted, because it is still stopped and somebody still has to finish it; what changes is
+who.
   * "lore" — queued, running, or fast_clean with the deep tiers still going. Nothing to
     do. review_start naming the same branch AND the same scope (a folder review's
     \`path\`, or bare diff mode) as this open review is REFUSED, not destructive — it

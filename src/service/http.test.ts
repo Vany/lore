@@ -1394,8 +1394,19 @@ describe("the inbox lists what is waiting, not only what is fresh", () => {
     const note = String(row?.["not_yours_note"]);
     expect(note, "and the note must not prescribe an exit that answers NOT FOUND").toContain("NOT YOURS TO ANSWER");
     expect(note).toContain("revokes that token");
-    expect(row, "reachability is not rot: this one is stopped, but that is a separate claim")
-      .toHaveProperty("waiting_note");
+    // BOTH FIELDS, AND EACH TRUE ON ITS OWN. The split left waiting_note byte-identical
+    // between an answerable row and this one — same "answer them with review_submit", on
+    // a call that answers NOT FOUND — with the difference parked in a field the top note
+    // did not name. A client cross-referencing two fields to learn whether one of them is
+    // true is the inference this whole change exists to stop asking for.
+    const rot = String(row?.["waiting_note"]);
+    expect(rot, "the rot fact is real and still stated").toContain("ALREADY been handed over");
+    expect(rot, "and it must not read as actionable here").toContain("NONE OF THOSE CALLS WILL WORK FOR YOU");
+    expect(rot).toContain("not_yours_note");
+
+    // The pointer at the top has to name the field that actually answers "can I act".
+    expect(String(out["note"]), "the top note must not send a reader to waiting_note alone")
+      .toContain("not_yours_note");
 
     // THE CLAIM CHECKED AGAINST THE REAL REFUSAL, not assumed. Raw, because `callTool`
     // parses the reply as JSON and a refusal is plain text — the first version of this
