@@ -549,9 +549,13 @@ lesson — a meaning that lives only in the tool text loses to a number in the p
 
 So every entry that is waiting on the caller with nothing to collect carries a
 `waiting_note` saying what the zero does and does not mean, and every non-terminal entry
-carries `last_moved_at`, which is the only fact lore holds that separates the two
-readings: quiet for minutes is somebody probably still there, quiet for days is nobody
-coming back. `stalled` at the top level counts them — one number, above the rows, for the
+carries `quiet_since`, which is the only fact lore holds that separates the two readings:
+quiet for minutes is somebody probably still there, quiet for days is nobody coming back.
+`quiet_since` is deliberately **not** `updated_at` — the retention sweep's graying write
+touches that column, so it would report a two-day-old review as having moved minutes ago
+(`quietSince` in `src/ops/retention.ts` reaches back through the dim). A review started by
+another live token of the same principal says so in its `waiting_note` instead of
+prescribing exits that would answer NOT FOUND (D-78). `stalled` at the top level counts them — one number, above the rows, for the
 question the client was actually asked, and while it is above zero the honest answer to
 *is everything done* is no.
 

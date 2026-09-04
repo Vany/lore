@@ -7,7 +7,7 @@ import { initialState } from "../core/ladder.ts";
 import type { ReviewState } from "../core/review-state.ts";
 import { Store } from "../store/store.ts";
 import { withInstallLock } from "../t0/runner.ts";
-import { DEFAULT_RETENTION, collect, expireStale, type RetentionConfig } from "./retention.ts";
+import { DEFAULT_RETENTION, STALE_HOURS, collect, expireStale, quietSince, type RetentionConfig } from "./retention.ts";
 
 let store: Store;
 let repoId: string;
@@ -451,5 +451,36 @@ describe("the sandbox cache does not grow for ever", () => {
     const r = await collect(store, { ...DEFAULT_RETENTION, reposRoot: join(root, "repos"), cacheRoot: undefined, scratchRoot: undefined });
     expect(r.cacheDirsRemoved).toBe(0);
     expect(r.cacheBytesFreed).toBe(0);
+  });
+});
+
+/**
+ * The reconstruction D-142's HIGH finding was about: `updated_at` on a gray row is the
+ * SWEEP's write, not the client's.
+ */
+describe("quietSince", () => {
+  it("is updated_at itself for every state the dim has not touched", () => {
+    const at = "2026-09-01T10:00:00.000Z";
+    for (const state of ["findings_ready", "awaiting_diff", "needs_human", "running", "queued"]) {
+      expect(quietSince(state, at)).toBe(at);
+    }
+  });
+
+  // The whole finding in one assertion: a review dimmed twenty minutes ago was last
+  // touched by its client STALE_HOURS before that, and reporting the twenty minutes is
+  // what makes a client say "somebody is probably still working".
+  it("reaches back through the dim on findings_stale", () => {
+    const dimmedAt = "2026-09-03T12:00:00.000Z";
+    expect(quietSince("findings_stale", dimmedAt)).toBe(
+      new Date(Date.parse(dimmedAt) - STALE_HOURS * 3_600_000).toISOString(),
+    );
+  });
+
+  // Derived from the sweep's own constant rather than a second literal — the direction
+  // that drift takes here is a client told a review is fresher than it is.
+  it("subtracts exactly the interval the sweep waits before dimming", () => {
+    const dimmedAt = "2026-09-03T12:00:00.000Z";
+    const gap = Date.parse(dimmedAt) - Date.parse(quietSince("findings_stale", dimmedAt));
+    expect(gap / 3_600_000).toBe(STALE_HOURS);
   });
 });

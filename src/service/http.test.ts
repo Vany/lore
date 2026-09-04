@@ -1307,7 +1307,7 @@ describe("the inbox lists what is waiting, not only what is fresh", () => {
     expect(note, "the inference the client made, refused in the payload").toContain("does NOT mean anybody is working on it");
     expect(note, "and why lore cannot know").toContain("cannot see sessions");
     expect(note, "the honest ending, so a caller who cannot answer has somewhere to go").toContain("review_cancel");
-    expect(quiet?.["last_moved_at"], "the one fact that separates mid-fix from abandoned").toBe(
+    expect(quiet?.["quiet_since"], "the one fact that separates mid-fix from abandoned").toBe(
       store.getReview("revQuiet", "alice")?.updatedAt,
     );
   });
@@ -1336,6 +1336,77 @@ describe("the inbox lists what is waiting, not only what is fresh", () => {
     expect(running?.["waiting_on"]).toBe("lore");
     expect(running).not.toHaveProperty("waiting_note");
     expect(out["stalled"]).toBe(0);
+  });
+
+  /**
+   * THE DIM RESETS `updated_at`, AND THE FIRST VERSION OF THIS FEATURE BELIEVED IT.
+   *
+   * `grayStaleFindings` writes `updated_at = now()` when it dims a review — that write is
+   * what starts the `STALE_GRACE_DAYS` week. So a review nobody had touched for two days
+   * reported "nothing has moved here for 20 minutes", and the surrounding text teaches
+   * that quiet-for-minutes means somebody is probably still working: D-142's own remedy
+   * re-manufacturing D-142's defect, on every gray row.
+   *
+   * No test could see it, because every fixture opened a review with `updated_at = now`.
+   * This one ages the row the way the sweep does.
+   */
+  it("counts quiet time through the dim, not from the sweep's own write", async () => {
+    open("revDimmed", "findings_stale", "feat/dimmed");
+    // Exactly what grayStaleFindings leaves behind: state gray, updated_at = the moment
+    // of the dim, twenty minutes ago.
+    const dimmedAt = new Date(Date.now() - 20 * 60_000).toISOString();
+    // Straight to the column, as `retention.test.ts` does: `updateReview` stamps
+    // `updated_at` itself, so going through it could not produce an aged row at all.
+    store.db.prepare("UPDATE review SET updated_at = ? WHERE id = 'revDimmed'").run(dimmedAt);
+
+    const out = await callTool("review_inbox", {});
+    const row = (out["reviews"] as Record<string, unknown>[]).find((r) => r["review_id"] === "revDimmed");
+
+    // The client last touched it STALE_HOURS before the dim, so ~48h20m ago — days, not
+    // minutes, and it is the minutes/days boundary the note's own advice turns on.
+    expect(String(row?.["waiting_note"]), "twenty minutes would read as somebody still working").toContain("2 days");
+    expect(Date.parse(String(row?.["quiet_since"])), "reaches back through the dim").toBeLessThanOrEqual(
+      Date.parse(dimmedAt) - STALE_HOURS * 3_600_000,
+    );
+  });
+
+  /**
+   * A SIBLING TOKEN SEES IT AND CANNOT ACT ON IT.
+   *
+   * The inbox is principal-scoped, but `review_poll`, `review_submit`, `review_cancel`
+   * and the resource all go through the token binding (D-78) — so during a rotation, a
+   * new token is shown a stalled review whose every prescribed exit answers NOT FOUND.
+   * Telling a caller to review_submit something that does not exist for it is worse than
+   * saying nothing: it reads as lore pointing at a review that is not real.
+   */
+  it("tells a sibling token that this one is not its to answer", async () => {
+    const other = grantToken(store, repoId, "alice");
+    store.createReview({
+      id: "revSibling", repoId, principal: "alice", branch: "feat/rotated", intoRef: "main",
+      ticket: "t", type: "code-arch", state: "findings_ready", ladder: initialState(),
+      tokenHash: hashToken(other),
+    });
+
+    const out = await callTool("review_inbox", {});
+    const row = (out["reviews"] as Record<string, unknown>[]).find((r) => r["review_id"] === "revSibling");
+    expect(row, "principal-scoped, so it is listed").toBeDefined();
+
+    const note = String(row?.["waiting_note"]);
+    expect(note, "and the note must not prescribe an exit that answers NOT FOUND").toContain("NOT YOURS TO ANSWER");
+    expect(note).toContain("revokes that token");
+
+    // THE CLAIM CHECKED AGAINST THE REAL REFUSAL, not assumed. Raw, because `callTool`
+    // parses the reply as JSON and a refusal is plain text — the first version of this
+    // assertion failed on the parse error and would have passed just as happily if the
+    // call had succeeded and returned something unparseable.
+    const res = await mcp(
+      { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "review_poll", arguments: { review_id: "revSibling" } } },
+      token,
+    );
+    const line = (await res.text()).split("\n").find((l) => l.startsWith("data:")) ?? "";
+    const rpc = JSON.parse(line.slice("data:".length)) as { result?: { isError?: boolean; content?: { text?: string }[] } };
+    expect(rpc.result?.isError, "the note's premise is that these calls refuse").toBe(true);
+    expect(rpc.result?.content?.[0]?.text).toContain("not found");
   });
 
   /**

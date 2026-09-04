@@ -232,8 +232,9 @@ to review.
 > **`new_findings: 0` never means somebody is working on it.** It means nothing NEW
 > arrived since the last handover, and that is all it can mean: lore cannot see
 > sessions, so a caller mid-fix and one that ended days ago produce the same row. Such
-> an entry carries a `waiting_note` saying so and a `last_moved_at`, which is the one
-> fact that separates the two. `stalled` at the top counts them, and while it is above
+> an entry carries a `waiting_note` saying so and a `quiet_since`, which is the one
+> fact that separates the two — reaching back through the staleness dim, whose own write
+> would otherwise make a two-day-old review look like it moved minutes ago. `stalled` at the top counts them, and while it is above
 > zero the answer to "is everything done" is no.
 
 Written after a client answered exactly that question with *"they have new_findings: 0,

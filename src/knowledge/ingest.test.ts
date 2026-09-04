@@ -414,7 +414,15 @@ describe("a document past the 400-document read cap is not mistaken for a delete
   });
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-  it("does not retire a live rule from a document that exists but sorts past the cap", async () => {
+  // EXPLICIT TIMEOUT, because this one writes past the 400-document cap and costs ~2.9s
+  // alone — inside vitest's 5s default, but not inside it once the full suite is loading
+  // 80 other files in parallel, where it was measured at 5102ms and failed on the clock
+  // rather than on its property. Third instance of this shape in one session (both
+  // `round.test.ts` shuffle loops were the other two), and the same answer: the default
+  // was never chosen as this test's budget, so state one. ~3x the measurement, not more —
+  // headroom is itself a claim, and a test that would pass at any speed guards nothing
+  // about the cost of the thing it exercises.
+  it("does not retire a live rule from a document that exists but sorts past the cap", { timeout: 10_000 }, async () => {
     const store = new Store(":memory:");
     const repoId = store.upsertRepo("r", "git@example.com:o/r.git").id;
 

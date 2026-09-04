@@ -4056,21 +4056,47 @@ place the client was actually reading:
 * **`waiting_note`**, on every entry waiting on the caller with nothing to collect. It
   says the zero means nothing NEW arrived, that it does not mean anybody is working, that
   lore cannot see sessions and so cannot tell you which case this is, how long the review
-  has been quiet, and the two ways out — `review_submit` if you hold the findings,
+  has been quiet, and the way out — `review_submit` if you hold the findings,
   `lore://review/{id}` if you lost them, `review_cancel` if nobody will answer.
-* **`last_moved_at`**, on every non-terminal entry: the one fact that separates the two
-  readings. Derived from the same `updated_at` that feeds `expires_at`, so they cannot
-  disagree. `elapsedWords` (`src/core/elapsed.ts`) renders it into the note — pure,
-  tested without a clock, and deliberately coarse, because the buckets exist to drive a
-  decision rather than to be precise: under an hour is probably still there, days is not.
+
+  **Except when the review is not this caller's to answer, which the note now says
+  (`bf31d7c2`).** The inbox is principal-scoped while `review_poll`, `review_submit`,
+  `review_cancel` and `lore://review/{id}` are all token-bound (D-78), so during a
+  rotation — both tokens live, which is the taught procedure — a session is shown a
+  stalled review whose every prescribed exit answers NOT FOUND. Prescribing them there is
+  worse than saying nothing: under D-23 the refusal reads as *this id is not real*, so
+  lore would appear to be pointing at a review that does not exist. The predicate is
+  `boundElsewhere`, extracted from `mine` rather than copied, because the same condition
+  written twice is this repository's most repeated defect.
+* **`quiet_since`**, on every non-terminal entry: the one fact that separates the two
+  readings. `elapsedWords` (`src/core/elapsed.ts`) renders it into the note — pure, tested
+  without a clock, and deliberately coarse, because the buckets exist to drive a decision
+  rather than to be precise: under an hour is probably still there, days is not.
+
+  **It is NOT `updated_at`, and the first version of this feature thought it was — caught
+  by this change's own review at HIGH (`9d45567f`).** That column means "when the row last
+  changed", and the retention sweep's graying write is one of those changes: it sets
+  `updated_at = now()` on the dim, which is what starts `STALE_GRACE_DAYS`. So every
+  `findings_stale` row reported exactly `STALE_HOURS` less idle time than reality — a
+  review nobody had touched for two days read as "nothing has moved here for 20 minutes",
+  in a payload whose own text teaches that quiet-for-minutes means somebody is probably
+  still working. D-142's remedy re-manufacturing D-142's defect, on every gray row, and no
+  test could see it because every fixture opened its reviews with `updated_at = now`.
+  `quietSince` (`src/ops/retention.ts`, beside the constant the sweep enforces) reaches
+  back through the dim, as a lower bound — the sweep is hourly, so a row may have been
+  quiet longer, and "less idle than it really is" is the direction that fails safe.
 * **`stalled`**, one number at the top: how many reviews are stopped, waiting on this
   caller, with nothing left to collect. The client answered *"is everything ready"* by
   reading rows one at a time and getting each one wrong; a count cannot be misread that
   way, and the note says out loud that while it is above zero the answer is no.
 
-**`needs_human` is deliberately outside all three.** It is equally stopped and equally
-the caller's move, but its move is to get a PERSON, and `waiting_note`'s two exits —
-`review_submit` and `review_cancel` — are both wrong there. The inbox already answers
+**`needs_human` is deliberately outside `waiting_note` and `stalled` — and still carries
+`quiet_since`, which the first draft of this entry wrongly said it did not (`d3ab4d8b`).**
+It is equally stopped and equally the caller's move, but its move is to get a PERSON, and
+`waiting_note`'s two exits — `review_submit` and `review_cancel` — are both wrong there.
+`quiet_since` carries no instruction at all, and on the one state whose whole content is
+*a person has not answered yet*, how long that has been true is the useful fact rather
+than a misleading one. The inbox already answers
 that case louder, with `open_questions` carrying the question itself and a note saying
 not to answer it yourself; a second instruction over the same review is how a client
 comes to pick the cheaper one.

@@ -73,6 +73,33 @@ export const STALE_HOURS = 48;
  */
 export const STALE_GRACE_DAYS = 7;
 
+/**
+ * When the CLIENT last touched a review, reconstructed through the dim.
+ *
+ * `review.updated_at` is "when the row last changed", and the sweep's own graying write
+ * is one of those changes (`grayStaleFindings` sets `updated_at = now()`, which is what
+ * starts the week `STALE_GRACE_DAYS` counts). So on a `findings_stale` row the column
+ * says the review moved moments ago when nobody has touched it for two days.
+ *
+ * That is not a rounding error, it is the exact misreading D-142 exists to prevent, wired
+ * into D-142's own remedy: a client is told "quiet for minutes is somebody probably still
+ * there", so a review dimmed twenty minutes ago would have been reported as actively
+ * worked. Every gray row understated its idle time by `STALE_HOURS`.
+ *
+ * The dim only fires on a row already quiet for `STALE_HOURS`, so subtracting it back out
+ * recovers the client's last touch — as a LOWER BOUND, since the sweep runs hourly and
+ * may gray a row that had been quiet rather longer. Erring toward "less idle than it
+ * really is" is the direction that fails safe here: it can only make a caller look
+ * sooner, never later.
+ *
+ * Derived from the same constant the sweep enforces, because two literals for one
+ * interval is how the client comes to be told it has longer than it has.
+ */
+export function quietSince(state: string, updatedAt: string): string {
+  if (state !== "findings_stale") return updatedAt;
+  return new Date(Date.parse(updatedAt) - STALE_HOURS * 3_600_000).toISOString();
+}
+
 export const DEFAULT_RETENTION: RetentionConfig = {
   worktreeDays: 0,
   reviewDays: 90,

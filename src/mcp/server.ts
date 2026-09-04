@@ -24,7 +24,7 @@ import { SHORT_LENGTH } from "../core/fingerprint.ts";
 import { AmbiguousFingerprint } from "../core/errors.ts";
 import { isSuppressionNotice } from "../core/checks-skipped.ts";
 import { DEFAULT_TYPE, reviewType, reviewTypeIds } from "../core/review-type.ts";
-import { STALE_GRACE_DAYS, STALE_HOURS } from "../ops/retention.ts";
+import { STALE_GRACE_DAYS, STALE_HOURS, quietSince } from "../ops/retention.ts";
 import { applyPatch, resolveTree, restoreTree, revParse, treeDelta, treeHash } from "../git/repo.ts";
 import { filesInDiff, filesTouchedByDiff } from "../git/diff.ts";
 import { requestMirrorRefresh, type RefreshOutcome } from "../git/mirror-request.ts";
@@ -412,12 +412,25 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
     // the common case, and stranding a colleague's in-flight work is a worse failure
     // than the accident this prevents, against people who are already trusted with the
     // repository. Reversible if the threat model ever changes; say so if it should.
-    const bound = r.tokenHash;
-    if (bound !== undefined && bound !== who.tokenHash && store.tokenLive(bound)) {
-      throw new Error(`review ${reviewId} not found`);
-    }
+    if (boundElsewhere(r)) throw new Error(`review ${reviewId} not found`);
     return r;
   };
+
+  /**
+   * Started by a DIFFERENT live token of this same principal (D-78).
+   *
+   * Extracted because `review_inbox` needs the same answer for a different purpose and
+   * two copies of this condition would disagree eventually — this repository's most
+   * repeated defect. `mine` refuses such a review; the inbox LISTS it, because the inbox
+   * is principal-scoped by design, and then has to say that none of the exits it would
+   * normally prescribe will work. A note telling a caller to review_submit something that
+   * answers NOT FOUND is worse than no note: it reads as lore pointing at a review that
+   * does not exist.
+   */
+  function boundElsewhere(r: { readonly tokenHash?: string | undefined }): boolean {
+    const bound = r.tokenHash;
+    return bound !== undefined && bound !== who.tokenHash && store.tokenLive(bound);
+  }
 
   /**
    * Fetch a refactor run or refuse, same reasoning as `mine` — repository scope, and
@@ -2230,6 +2243,8 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
       const reviews = justResumed ? store.listReviews(who.principal, who.repoId) : reviews0;
       const items = reviews.map((r) => {
         const fresh = store.undelivered(r.id);
+        // Listed but not answerable by THIS token — see `boundElsewhere`.
+        const elsewhere = boundElsewhere(r);
         // WHOSE MOVE IT IS, which is the question this call is for and the one it could
         // not answer. A review in `running` needs nothing from anyone; a review in
         // `findings_ready` is stopped dead and dies in 48 hours.
@@ -2287,17 +2302,28 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
                 waiting_note:
                   "Everything this review found has ALREADY been handed over. `new_findings: 0` means nothing " +
                   "NEW has arrived since — it does NOT mean anybody is working on it, and lore has no way to " +
-                  "know whether anyone is: it cannot see sessions. Nothing has moved here for " +
-                  elapsedWords(r.updatedAt) +
-                  ". If you hold these findings, answer them with review_submit. If you do not — a session " +
-                  "that collected them ended, or it was never you — read lore://review/" + r.id +
-                  ", which returns all of them and consumes nothing; polling cannot replay them. If nobody " +
-                  "is going to answer, review_cancel is the honest ending.",
+                  "know whether anyone is: it cannot see sessions. Nobody has touched this review for at " +
+                  "least " + elapsedWords(quietSince(r.state, r.updatedAt)) +
+                  (elsewhere
+                    ? ". THIS ONE IS NOT YOURS TO ANSWER: it was started by another token of yours that is " +
+                      "still live, so review_poll, review_submit, review_cancel and lore://review/" + r.id +
+                      " all answer NOT FOUND for you (D-78). The session holding that token has to finish it " +
+                      "— or a person revokes that token, after which it falls back to repository scope and " +
+                      "you can."
+                    : ". If you hold these findings, answer them with review_submit. If you do not — a " +
+                      "session that collected them ended — read lore://review/" + r.id +
+                      ", which returns all of them and consumes nothing; polling cannot replay them. If " +
+                      "nobody is going to answer, review_cancel is the honest ending."),
               }
             : {}),
-          // The raw fact behind the sentence above, for a caller that wants to compare
-          // it itself. Same source as `expires_at`, so the two cannot disagree.
-          ...(isTerminal(r.state) ? {} : { last_moved_at: r.updatedAt }),
+          // THE RAW FACT BEHIND THE SENTENCE ABOVE, and it is deliberately NOT
+          // `updated_at`. That column is "when the row last changed", and the sweep's own
+          // graying write is one of those changes — so on a `findings_stale` row it says
+          // the review moved moments ago when nobody has touched it for two days.
+          // `quietSince` reconstructs the client's last touch through the dim; the note
+          // and this field therefore measure the same thing, which is the whole point of
+          // shipping both.
+          ...(isTerminal(r.state) ? {} : { quiet_since: quietSince(r.state, r.updatedAt) }),
           // This is the field a client triages on, so it is computed, not read off
           // the front of the list. It used to be `fresh[0].severity` with "high"
           // special-cased — and since the query sorted severity as text, a review
@@ -2368,11 +2394,11 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
             // person who asked.
             ...(items.some((i) => i.waiting_note !== undefined)
               ? [
-                  "`stalled` counts reviews STOPPED and waiting on you with nothing left to collect — read " +
-                    "each one's `waiting_note`. They are not in progress: lore cannot see whether anyone is " +
-                    "working, so `new_findings: 0` says only that nothing new arrived. While `stalled` is " +
-                    "above zero, the honest answer to \"is everything done\" is NO, and each one is either " +
-                    "yours to answer with review_submit or yours to end with review_cancel.",
+                  "`stalled` counts reviews STOPPED with nothing left to collect — read each one's " +
+                    "`waiting_note`, which says whether you can answer it here. They are not in progress: " +
+                    "lore cannot see whether anyone is working, so `new_findings: 0` says only that nothing " +
+                    "new arrived. While `stalled` is above zero, the honest answer to \"is everything done\" " +
+                    "is NO.",
                 ]
               : []),
           ].join(" "),

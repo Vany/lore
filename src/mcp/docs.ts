@@ -798,9 +798,15 @@ READ \`waiting_on\` FIRST. It is "you" or "lore", and it is the whole triage:
 arrived since the last handover, and that is all it can mean: **lore cannot see
 sessions.** A caller who is mid-fix right now and one that ended four days ago produce
 the same row, byte for byte, and lore has no way to tell you which you are looking at.
-Every such review carries a \`waiting_note\` saying so, and a \`last_moved_at\` — the
-one fact that actually separates the two. Read it. Quiet for minutes is somebody
-probably still there; quiet for days is nobody coming back.
+Every such review carries a \`waiting_note\` saying so, and a \`quiet_since\` — the one
+fact that actually separates the two. Read it. Quiet for minutes is somebody probably
+still there; quiet for days is nobody coming back.
+
+\`quiet_since\` IS NOT THE SAME AS "when the row last changed", deliberately. A review
+that sat unanswered for two days is DIMMED to findings_stale by a sweep, and that write
+touches the review — so the row looks like it moved minutes ago while nobody has touched
+it since Tuesday. \`quiet_since\` reaches back through the dim to when YOU last did
+something, and it is a lower bound: at least this long, possibly longer.
 
 This is not hypothetical and it is why the fields exist. Asked "is everything ready",
 a client read three reviews sitting in findings_ready with \`new_findings: 0\` and
