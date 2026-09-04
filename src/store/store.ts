@@ -1495,6 +1495,24 @@ export class Store {
     return rows.map(toFinding);
   }
 
+  /**
+   * When findings were last handed to the client, or undefined if never.
+   *
+   * The client's collect is recorded ONLY here — `review_poll` writes
+   * `finding.delivered_at` and deliberately leaves `review.updated_at` alone, so the
+   * staleness sweep keeps measuring "nobody answered" rather than "nobody looked". That
+   * makes this the other half of "is anybody working on this" (`lastClientTouch`), and
+   * reading the review row alone reports a client that collected yesterday as absent
+   * since the handover.
+   */
+  lastDeliveredAt(reviewId: string): string | undefined {
+    const row = this.db
+      .prepare("SELECT MAX(delivered_at) AS t FROM finding WHERE review_id = ? AND delivered_at IS NOT NULL")
+      .get(reviewId) as Record<string, string | null> | undefined;
+    const t = row?.["t"];
+    return typeof t === "string" && t !== "" ? t : undefined;
+  }
+
   markDelivered(reviewId: string, fingerprints: readonly string[]): void {
     const stmt = this.db.prepare(
       "UPDATE finding SET delivered_at = ? WHERE review_id = ? AND fingerprint = ?",

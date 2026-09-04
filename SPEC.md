@@ -4082,13 +4082,34 @@ place the client was actually reading:
   in a payload whose own text teaches that quiet-for-minutes means somebody is probably
   still working. D-142's remedy re-manufacturing D-142's defect, on every gray row, and no
   test could see it because every fixture opened its reviews with `updated_at = now`.
-  `quietSince` (`src/ops/retention.ts`, beside the constant the sweep enforces) reaches
-  back through the dim, as a lower bound — the sweep is hourly, so a row may have been
-  quiet longer, and "less idle than it really is" is the direction that fails safe.
+  `lastClientTouch` (`src/ops/retention.ts`, beside the constant the sweep enforces)
+  reaches back through the dim.
+
+  **And the row is only half the answer — round 2 of the same review (`3592ec92`,
+  `c348e685`).** `review_poll` records a collect on `finding.delivered_at` and never on
+  `review.updated_at`, which is deliberate and must stay: the sweep asks *has anybody
+  ANSWERED this*, and a poll that re-brightened the row would let a client keep a review
+  alive for ever by looking at it — the abandonment D-106 exists to end. But the inbox
+  note asks a different question, *is anybody here*, and reading the sweep's clock to
+  answer it reported a client that collected an hour ago as absent since the handover. On
+  a gray row, where collecting stays legal all week and still writes nothing to the
+  review, it could say "8 days" about a review the caller had polled minutes earlier —
+  under a sentence that prescribes `review_cancel` for exactly that, so the error pointed
+  at destroying live work. Two questions, two clocks: `lastClientTouch` takes the later of
+  the row's quiet point and the last handover, and neither is discarded, because a client
+  can answer without collecting and collect without answering.
 * **`stalled`**, one number at the top: how many reviews are stopped, waiting on this
   caller, with nothing left to collect. The client answered *"is everything ready"* by
   reading rows one at a time and getting each one wrong; a count cannot be misread that
   way, and the note says out loud that while it is above zero the answer is no.
+
+**Two entries carry no `waiting_note`, and the client texts now say so — they promised it
+without exception until round 2 (`330f37e3`, `1211c075`), which left a missing note
+readable as "not the rot case".** `needs_human` is one; a review bound to another live
+token is the other, and it carries a different note instead. That warning fires whether
+or not the row still has findings to collect: the first version gated it on there being
+nothing to collect, so the one case where the standing text actively says *collect them
+with review_poll* got no warning at all, and the call answers NOT FOUND.
 
 **`needs_human` is deliberately outside `waiting_note` and `stalled` — and still carries
 `quiet_since`, which the first draft of this entry wrongly said it did not (`d3ab4d8b`).**

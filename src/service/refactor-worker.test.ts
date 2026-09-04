@@ -196,11 +196,30 @@ describe("suggestions are written before the state that announces them", () => {
     const worker = new RefactorWorker(faultingStore, { reposRoot: join(root, "repos"), pollMs: 10 }, reviewer);
     const stop = worker.start();
     try {
-      await new Promise((r) => setTimeout(r, 300));
+      // WAIT FOR THE CONDITION, NOT FOR A DURATION.
+      //
+      // This slept a fixed 300ms and then asserted. In that window the worker has to
+      // poll, claim the run, `git worktree add` off a bare clone and reach the reviewer
+      // before `finishRefactorRun` is ever touched — comfortably inside 300ms alone, and
+      // not inside it with the suite running eighty files. It then failed as
+      // `expected undefined to equal [...]`, which reads as "the fix regressed" rather
+      // than "the worker had not got there yet", on a test whose whole subject is the
+      // ORDER of two writes.
+      //
+      // Exactly the signature `drain.test.ts` carried until 2026-08-11 — its third
+      // occurrence — and the same remedy: faster in the normal case, correct in the slow
+      // one, and it names what it was waiting for when it genuinely does not happen.
+      const deadline = Date.now() + 10_000;
+      while (sawSuggestionsBeforeFinish === undefined) {
+        if (Date.now() > deadline) {
+          throw new Error("timed out waiting for: the worker to reach finishRefactorRun");
+        }
+        await new Promise((r) => setTimeout(r, 5));
+      }
     } finally {
       stop();
     }
 
     expect(sawSuggestionsBeforeFinish, "recordRefactorSuggestions must have already committed").toStrictEqual(ONE_SUGGESTION);
-  });
+  }, 20_000);
 });

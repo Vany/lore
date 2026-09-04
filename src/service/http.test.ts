@@ -1410,6 +1410,60 @@ describe("the inbox lists what is waiting, not only what is fresh", () => {
   });
 
   /**
+   * A COLLECT IS A TOUCH, AND THE REVIEW ROW DOES NOT RECORD IT.
+   *
+   * `review_poll` writes `finding.delivered_at` and deliberately never `updated_at`, so
+   * the sweep keeps measuring "nobody answered" rather than "nobody looked". Round 1's
+   * fix read the row alone, which reported a client that collected an hour ago as absent
+   * since the handover — under a note that prescribes review_cancel for exactly that.
+   */
+  it("counts a collect as a touch, not only a write to the review row", async () => {
+    open("revCollected", "findings_ready", "feat/collected-recently");
+    store.recordFinding("revCollected", {
+      fingerprint: "c1", file: "a.ts", line: 1, symbol: "f", severity: "high",
+      claim: "collected then worked on", evidence: "e", failureScenario: "x", origin: "t1", round: 1,
+      firstSeen: new Date().toISOString(),
+    });
+    // The handover was days ago; the client came back an hour ago and took it.
+    store.db.prepare("UPDATE review SET updated_at = ? WHERE id = 'revCollected'")
+      .run(new Date(Date.now() - 3 * 86_400_000).toISOString());
+    await callTool("review_poll", { review_id: "revCollected" });
+    const collected = new Date(Date.now() - 3_600_000).toISOString();
+    store.db.prepare("UPDATE finding SET delivered_at = ? WHERE review_id = 'revCollected'").run(collected);
+
+    const out = await callTool("review_inbox", {});
+    const row = (out["reviews"] as Record<string, unknown>[]).find((r) => r["review_id"] === "revCollected");
+    expect(row?.["quiet_since"], "the collect is the later touch and wins").toBe(collected);
+    expect(String(row?.["waiting_note"]), "1 hour, not 3 days").toContain("1 hour");
+  });
+
+  /**
+   * A SIBLING ROW WITH FINDINGS STILL WAITING must be warned too — the first version
+   * gated the warning on there being nothing to collect, so the one case where the
+   * standing text actively tells the client to call review_poll got no warning at all.
+   */
+  it("warns a sibling token even while findings are uncollected", async () => {
+    const other = grantToken(store, repoId, "alice");
+    store.createReview({
+      id: "revSibFresh", repoId, principal: "alice", branch: "feat/rotated-fresh", intoRef: "main",
+      ticket: "t", type: "code-arch", state: "findings_ready", ladder: initialState(),
+      tokenHash: hashToken(other),
+    });
+    store.recordFinding("revSibFresh", {
+      fingerprint: "s9", file: "a.ts", line: 1, symbol: "f", severity: "high",
+      claim: "uncollected and unreachable", evidence: "e", failureScenario: "x", origin: "t1", round: 1,
+      firstSeen: new Date().toISOString(),
+    });
+
+    const out = await callTool("review_inbox", {});
+    const row = (out["reviews"] as Record<string, unknown>[]).find((r) => r["review_id"] === "revSibFresh");
+    expect(row?.["new_findings"], "there IS something to collect").toBe(1);
+    expect(String(row?.["waiting_note"]), "and it cannot be collected by this token").toContain(
+      "NOT YOURS TO ANSWER",
+    );
+  });
+
+  /**
    * `needs_human` IS STOPPED TOO, AND ITS MOVE IS A DIFFERENT ONE.
    *
    * The waiting_note offers review_submit and review_cancel. Both are wrong for a review

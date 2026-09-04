@@ -7,7 +7,7 @@ import { initialState } from "../core/ladder.ts";
 import type { ReviewState } from "../core/review-state.ts";
 import { Store } from "../store/store.ts";
 import { withInstallLock } from "../t0/runner.ts";
-import { DEFAULT_RETENTION, STALE_HOURS, collect, expireStale, quietSince, type RetentionConfig } from "./retention.ts";
+import { DEFAULT_RETENTION, STALE_HOURS, collect, expireStale, lastClientTouch, type RetentionConfig } from "./retention.ts";
 
 let store: Store;
 let repoId: string;
@@ -455,32 +455,54 @@ describe("the sandbox cache does not grow for ever", () => {
 });
 
 /**
- * The reconstruction D-142's HIGH finding was about: `updated_at` on a gray row is the
- * SWEEP's write, not the client's.
+ * TWO CLOCKS, and the review row is only one of them.
+ *
+ * Round 1 of D-142's own review found the sweep's graying write standing in for the
+ * client's last touch; round 2 found the other half — `review_poll` records a collect on
+ * `finding.delivered_at` and never on the review, on purpose, so the sweep keeps
+ * measuring "nobody answered" rather than "nobody looked".
  */
-describe("quietSince", () => {
-  it("is updated_at itself for every state the dim has not touched", () => {
-    const at = "2026-09-01T10:00:00.000Z";
-    for (const state of ["findings_ready", "awaiting_diff", "needs_human", "running", "queued"]) {
-      expect(quietSince(state, at)).toBe(at);
+describe("lastClientTouch", () => {
+  const AT = "2026-09-03T12:00:00.000Z";
+  const minus = (iso: string, ms: number) => new Date(Date.parse(iso) - ms).toISOString();
+
+  it("is the row's own timestamp when nothing was ever delivered", () => {
+    for (const state of ["findings_ready", "awaiting_diff", "needs_human", "running"]) {
+      expect(lastClientTouch(state, AT, undefined)).toBe(AT);
     }
   });
 
-  // The whole finding in one assertion: a review dimmed twenty minutes ago was last
-  // touched by its client STALE_HOURS before that, and reporting the twenty minutes is
-  // what makes a client say "somebody is probably still working".
+  // Round 1's finding: the dim is the SWEEP's write, not the client's.
   it("reaches back through the dim on findings_stale", () => {
-    const dimmedAt = "2026-09-03T12:00:00.000Z";
-    expect(quietSince("findings_stale", dimmedAt)).toBe(
-      new Date(Date.parse(dimmedAt) - STALE_HOURS * 3_600_000).toISOString(),
-    );
+    expect(lastClientTouch("findings_stale", AT, undefined)).toBe(minus(AT, STALE_HOURS * 3_600_000));
   });
 
-  // Derived from the sweep's own constant rather than a second literal — the direction
-  // that drift takes here is a client told a review is fresher than it is.
   it("subtracts exactly the interval the sweep waits before dimming", () => {
-    const dimmedAt = "2026-09-03T12:00:00.000Z";
-    const gap = Date.parse(dimmedAt) - Date.parse(quietSince("findings_stale", dimmedAt));
+    const gap = Date.parse(AT) - Date.parse(lastClientTouch("findings_stale", AT, undefined));
     expect(gap / 3_600_000).toBe(STALE_HOURS);
+  });
+
+  // Round 2's finding, and the one that pointed at destroying live work: a client that
+  // collected after the handover is present, and the row cannot say so.
+  it("prefers a collect that happened after the row went quiet", () => {
+    const collected = minus(AT, 60 * 60_000);
+    expect(lastClientTouch("findings_ready", minus(AT, 3 * 86_400_000), collected)).toBe(collected);
+  });
+
+  // The gray case the finding said was unbounded: collecting stays legal all week and
+  // still never writes the review row, so reading the row alone could report "8 days"
+  // about a review polled minutes ago — under a note that prescribes review_cancel for
+  // exactly that.
+  it("prefers a collect on a gray review, however old the dim is", () => {
+    const dimmedLongAgo = minus(AT, 6 * 86_400_000);
+    const collected = minus(AT, 5 * 60_000);
+    expect(lastClientTouch("findings_stale", dimmedLongAgo, collected)).toBe(collected);
+  });
+
+  // And never the other way: a stale delivery must not make a freshly-answered review
+  // look older than it is.
+  it("keeps the row's time when the last collect is older than it", () => {
+    const answered = minus(AT, 10 * 60_000);
+    expect(lastClientTouch("findings_ready", answered, minus(AT, 3 * 86_400_000))).toBe(answered);
   });
 });

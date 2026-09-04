@@ -802,6 +802,16 @@ Every such review carries a \`waiting_note\` saying so, and a \`quiet_since\` �
 fact that actually separates the two. Read it. Quiet for minutes is somebody probably
 still there; quiet for days is nobody coming back.
 
+TWO ENTRIES DO NOT CARRY A \`waiting_note\`, and neither absence means "fine".
+\`needs_human\` never does: it is equally stopped, and its move is to get a PERSON, so
+\`needs_human\` and \`open_questions\` above carry it instead — read those. And a review
+started by ANOTHER LIVE TOKEN OF YOURS carries a different note saying exactly that:
+review_poll, review_submit, review_cancel and the resource all answer NOT FOUND for you
+on it (D-78), whether or not it has findings waiting. The id is real and nothing is
+broken — that session has to finish it, or a person revokes the old token, after which it
+falls back to repository scope. Never read a missing \`waiting_note\` as evidence that
+somebody has a review in hand; nothing in this reply can tell you that.
+
 \`quiet_since\` IS NOT THE SAME AS "when the row last changed", deliberately. A review
 that sat unanswered for two days is DIMMED to findings_stale by a sweep, and that write
 touches the review — so the row looks like it moved minutes ago while nobody has touched

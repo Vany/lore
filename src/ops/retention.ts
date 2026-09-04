@@ -95,9 +95,41 @@ export const STALE_GRACE_DAYS = 7;
  * Derived from the same constant the sweep enforces, because two literals for one
  * interval is how the client comes to be told it has longer than it has.
  */
-export function quietSince(state: string, updatedAt: string): string {
+function rowWentQuiet(state: string, updatedAt: string): string {
   if (state !== "findings_stale") return updatedAt;
   return new Date(Date.parse(updatedAt) - STALE_HOURS * 3_600_000).toISOString();
+}
+
+/**
+ * When the client last did ANYTHING here — and the review row is only half the answer.
+ *
+ * `review_poll` collects findings by writing `finding.delivered_at` and never touches
+ * `review.updated_at` (`markDelivered`). That is deliberate and must stay: the sweep's
+ * clock asks *"has anybody ANSWERED this"*, and a poll that re-brightened the row would
+ * let a client keep a review alive for ever by looking at it, which is precisely the
+ * abandonment D-106 exists to end.
+ *
+ * But the note in `review_inbox` asks a different question — *"is anybody here"* — and
+ * the first version of it read the sweep's clock to answer it. So a client that collected
+ * on Wednesday and is mid-fix on a large change was reported as untouched since Monday,
+ * and on a gray row, where collecting stays legal for the whole week, it could say "8
+ * days" about a review the caller itself had polled minutes earlier. The note then
+ * prescribes `review_cancel` for exactly that case, so the error pointed at destroying
+ * live work.
+ *
+ * Two questions, two clocks, and this is the second one: the later of the row's own quiet
+ * point and the last handover of findings. Neither is discarded, because a client can
+ * answer without collecting (a submit writes the row) and collect without answering (a
+ * poll writes the findings).
+ */
+export function lastClientTouch(
+  state: string,
+  updatedAt: string,
+  lastDeliveredAt: string | undefined,
+): string {
+  const row = rowWentQuiet(state, updatedAt);
+  if (lastDeliveredAt === undefined) return row;
+  return Date.parse(lastDeliveredAt) > Date.parse(row) ? lastDeliveredAt : row;
 }
 
 export const DEFAULT_RETENTION: RetentionConfig = {

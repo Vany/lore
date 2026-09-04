@@ -24,7 +24,7 @@ import { SHORT_LENGTH } from "../core/fingerprint.ts";
 import { AmbiguousFingerprint } from "../core/errors.ts";
 import { isSuppressionNotice } from "../core/checks-skipped.ts";
 import { DEFAULT_TYPE, reviewType, reviewTypeIds } from "../core/review-type.ts";
-import { STALE_GRACE_DAYS, STALE_HOURS, quietSince } from "../ops/retention.ts";
+import { STALE_GRACE_DAYS, STALE_HOURS, lastClientTouch } from "../ops/retention.ts";
 import { applyPatch, resolveTree, restoreTree, revParse, treeDelta, treeHash } from "../git/repo.ts";
 import { filesInDiff, filesTouchedByDiff } from "../git/diff.ts";
 import { requestMirrorRefresh, type RefreshOutcome } from "../git/mirror-request.ts";
@@ -2245,6 +2245,10 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
         const fresh = store.undelivered(r.id);
         // Listed but not answerable by THIS token — see `boundElsewhere`.
         const elsewhere = boundElsewhere(r);
+        // BOTH CLOCKS, once: the row's own quiet point and the last handover of findings.
+        // Computed here rather than at each use so the sentence and the field cannot
+        // drift — they are the same claim rendered two ways.
+        const quiet = lastClientTouch(r.state, r.updatedAt, store.lastDeliveredAt(r.id));
         // WHOSE MOVE IT IS, which is the question this call is for and the one it could
         // not answer. A review in `running` needs nothing from anyone; a review in
         // `findings_ready` is stopped dead and dies in 48 hours.
@@ -2297,20 +2301,31 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           // louder, with `open_questions` carrying the question itself and a top-level
           // note saying not to answer it yourself. Two instructions competing over one
           // review is how a client picks the cheaper one.
-          ...(yours && fresh.length === 0 && r.state !== "needs_human"
+          // TWO REASONS TO SPEAK, AND THEY HAVE DIFFERENT TRIGGERS.
+          //
+          // The stalled note fires when there is nothing left to collect. The "not yours"
+          // warning has to fire whenever the row is bound elsewhere, INCLUDING when it
+          // still has findings — the first version gated both on `fresh.length === 0`,
+          // so a sibling-token row with three uncollected findings got no warning at all
+          // while the standing text told the client to collect them, and `review_poll`
+          // answered NOT FOUND. That is the D-23 confusion the warning exists to prevent,
+          // reached by the shorter path.
+          ...(elsewhere || (yours && fresh.length === 0 && r.state !== "needs_human")
             ? {
                 waiting_note:
-                  "Everything this review found has ALREADY been handed over. `new_findings: 0` means nothing " +
-                  "NEW has arrived since — it does NOT mean anybody is working on it, and lore has no way to " +
-                  "know whether anyone is: it cannot see sessions. Nobody has touched this review for at " +
-                  "least " + elapsedWords(quietSince(r.state, r.updatedAt)) +
                   (elsewhere
-                    ? ". THIS ONE IS NOT YOURS TO ANSWER: it was started by another token of yours that is " +
+                    ? "THIS ONE IS NOT YOURS TO ANSWER. It was started by another token of yours that is " +
                       "still live, so review_poll, review_submit, review_cancel and lore://review/" + r.id +
-                      " all answer NOT FOUND for you (D-78). The session holding that token has to finish it " +
-                      "— or a person revokes that token, after which it falls back to repository scope and " +
-                      "you can."
-                    : ". If you hold these findings, answer them with review_submit. If you do not — a " +
+                      " all answer NOT FOUND for you (D-78) — including its " + String(fresh.length) +
+                      " uncollected finding(s), if any. Nothing here is broken and the id is real: the " +
+                      "session holding that token has to finish it, or a person revokes that token, after " +
+                      "which it falls back to repository scope and you can. Nobody has touched it for at " +
+                      "least " + elapsedWords(quiet) + "."
+                    : "Everything this review found has ALREADY been handed over. `new_findings: 0` means " +
+                      "nothing NEW has arrived since — it does NOT mean anybody is working on it, and lore " +
+                      "has no way to know whether anyone is: it cannot see sessions. Nobody has touched " +
+                      "this review for at least " + elapsedWords(quiet) +
+                      ". If you hold these findings, answer them with review_submit. If you do not — a " +
                       "session that collected them ended — read lore://review/" + r.id +
                       ", which returns all of them and consumes nothing; polling cannot replay them. If " +
                       "nobody is going to answer, review_cancel is the honest ending."),
@@ -2320,10 +2335,10 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           // `updated_at`. That column is "when the row last changed", and the sweep's own
           // graying write is one of those changes — so on a `findings_stale` row it says
           // the review moved moments ago when nobody has touched it for two days.
-          // `quietSince` reconstructs the client's last touch through the dim; the note
+          // `lastClientTouch` reconstructs it through the dim AND through the collect; the note
           // and this field therefore measure the same thing, which is the whole point of
           // shipping both.
-          ...(isTerminal(r.state) ? {} : { quiet_since: quietSince(r.state, r.updatedAt) }),
+          ...(isTerminal(r.state) ? {} : { quiet_since: quiet }),
           // This is the field a client triages on, so it is computed, not read off
           // the front of the list. It used to be `fresh[0].severity` with "high"
           // special-cased — and since the query sorted severity as text, a review

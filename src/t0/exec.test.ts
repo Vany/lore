@@ -115,7 +115,17 @@ describe("a run this service's own output cap cut off is not mistaken for an ord
     expect(out.unavailable).toMatch(/not a fault in the branch/);
   });
 
-  it("discards the truncated partial output rather than returning it as if complete", async () => {
+  // EXPLICIT TIMEOUT: this pushes 64MB through a pipe to prove the output cap fires, so
+  // its cost is the subject rather than an accident. Measured at 5003ms under a loaded
+  // full-suite run against vitest's 5s default — failing on the clock, not on the
+  // property, on a test whose whole point is that a truncated run is not trusted.
+  //
+  // Fourth heavy test in this repository to inherit that default as a budget nobody
+  // chose. Still stated per test rather than raised globally: the default suits the unit
+  // tests that are most of this suite, a global bump would delay the report of a genuine
+  // hang, and each declaration here carries its own measurement, which a shared number
+  // cannot.
+  it("discards the truncated partial output rather than returning it as if complete", { timeout: 20_000 }, async () => {
     const script = join(dir, "flood2.sh");
     writeFileSync(script, "#!/bin/sh\nhead -c 67108865 /dev/zero | tr '\\0' 'a'\n");
     chmodSync(script, 0o755);

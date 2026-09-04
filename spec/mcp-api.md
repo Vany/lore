@@ -548,14 +548,18 @@ sessions**: a caller mid-fix and one that ended four days ago produce identical 
 lesson — a meaning that lives only in the tool text loses to a number in the payload.
 
 So every entry that is waiting on the caller with nothing to collect carries a
-`waiting_note` saying what the zero does and does not mean, and every non-terminal entry
+`waiting_note` saying what the zero does and does not mean — **except `needs_human`,
+which is answered louder by `open_questions` and whose move is a person rather than a
+submit** — and every non-terminal entry
 carries `quiet_since`, which is the only fact lore holds that separates the two readings:
 quiet for minutes is somebody probably still there, quiet for days is nobody coming back.
 `quiet_since` is deliberately **not** `updated_at` — the retention sweep's graying write
 touches that column, so it would report a two-day-old review as having moved minutes ago
-(`quietSince` in `src/ops/retention.ts` reaches back through the dim). A review started by
+(`lastClientTouch` in `src/ops/retention.ts` reaches back through the dim, and takes a collect into account as well — `review_poll` records one on the finding rather than on the review). A review started by
 another live token of the same principal says so in its `waiting_note` instead of
-prescribing exits that would answer NOT FOUND (D-78). `stalled` at the top level counts them — one number, above the rows, for the
+prescribing exits that would answer NOT FOUND (D-78) — and that warning fires whether or
+not the row still has findings to collect, because the standing instruction for an
+uncollected finding is to call `review_poll`, which is one of the calls that refuses. `stalled` at the top level counts them — one number, above the rows, for the
 question the client was actually asked, and while it is above zero the honest answer to
 *is everything done* is no.
 
