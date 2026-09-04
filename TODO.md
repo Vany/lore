@@ -39,6 +39,25 @@ that part is pulled out into its own open item rather than hidden inside a tick.
 
 ## Now — nothing here is about writing more features
 
+### 2026-09-03 — Vany's to decide: two changes are on `main` and neither is deployed
+
+- [ ] **D-141 AND D-142 BOTH NEED A CONTAINER RECREATE, AND A RECREATE DROPS ROUNDS IN
+      FLIGHT.** `make restart` is `docker compose restart`, which keeps the container's
+      creation-time environment and re-reads nothing; only `up`/`deploy` recreate it. So
+      the standing instruction (D-141) and the whole `waiting_note`/`quiet_since`/`stalled`
+      surface (D-142) are text that no client has yet seen.
+
+      **The cost of deploying is not zero and it is not money:** on 2026-09-02 there were
+      four other reviews live on this deployment at rounds 3–4, and the D-140 session
+      already proved a redeploy kills their in-flight tier runs — measured, by timestamp
+      match. So this wants a quiet moment, checked first, rather than a green build.
+
+      **The cost of NOT deploying is that the client which prompted both changes is still
+      reading the old text**, and the gap between what `main` says and what the service
+      does widens with each of these.
+
+      Mine to raise, Vany's to time.
+
 ### 2026-09-02 — waiting on evidence: does the standing instruction actually change anything?
 
 - [ ] **D-141 SHIPPED A TEXT AND CLAIMS NOTHING ABOUT ITS EFFECT.** `SERVER_INSTRUCTIONS`

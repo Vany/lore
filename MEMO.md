@@ -3,6 +3,81 @@
 Newest first. Updated at the end of each task: what changed, what I learned, what
 surprised me.
 
+## 2026-09-03 — D-142: the client read a number and invented its meaning
+
+**What changed.** `rev_f2VBHXHuviA9GCfsTYwJBzh7`, `passed_partial`, attested at tree
+`1b69be6c30c98d8b70ef49719f234025577e6a30` (12 findings, 12 fixed, 0 justified) — merged
+as five commits, the feature then four answer rounds. Vany, quoting his own client after
+asking whether everything was ready: *"Those three findings_ready entries have
+new_findings: 0, which means the agents already collected them and are working the fixes
+— not the rot state we hit earlier."* Every word after *"which means"* was invented, to a
+person, about whether work was done. All three were stopped and unanswered.
+
+**The constraint that makes the number ambiguous, and it is not fixable:**
+`review_inbox` cannot see sessions. A caller mid-fix this second and one that ended four
+days ago produce byte-identical rows. So `new_findings: 0` genuinely admits two readings
+and the payload was handing over only the number.
+
+**`TOOL_DOCS.inbox` already said the right thing and it lost anyway.** It has opened with
+"THIS IS THE STATE THAT ROTS" about exactly this case for weeks. That is D-141's finding
+one layer down — being in context is not being read as a rule — and the answer is the
+same shape: put the meaning where the misreading happens. `waiting_note` beside the
+number, `quiet_since` as the one fact that separates the two readings, `stalled` as one
+count for the question actually asked.
+
+**Four rounds, twelve findings, and not one was about the feature.** Every single one was
+a false statement one of my own fixes had just introduced — the same defect class as the
+client's original error, which is the thing worth writing down.
+
+* **Round 1 (HIGH).** `grayStaleFindings` writes `updated_at = now()` at the dim, so
+  "nothing has moved here for X" measured time since the SWEEP's write. Every gray row
+  understated idle by exactly `STALE_HOURS`: two days of silence read as "20 minutes", in
+  a payload whose own text teaches that quiet-for-minutes means somebody is probably
+  still working. D-142's remedy re-manufacturing D-142's defect, and no test could see it
+  because every fixture opens reviews with `updated_at = now`.
+* **Round 2.** The row is only half the answer: `review_poll` records a collect on
+  `finding.delivered_at` and never on the review — deliberately, because the sweep asks
+  *has anybody ANSWERED*, and a poll that re-brightened the row would let a client keep a
+  review alive for ever by looking at it. So the fix could say "8 days" about a review the
+  caller polled minutes earlier, under a sentence prescribing `review_cancel`. Two
+  questions, two clocks: `lastClientTouch` takes the later of both, and `quietSince` is
+  no longer exported at all, so nobody can reach for half the answer again.
+* **Round 3.** I answered "warn a sibling row even while findings wait" by widening the
+  same field — `elsewhere || (...)` short-circuits before every state check — which
+  handed a note to a review that was mid-round and counted it in `stalled` under a line
+  saying "not in progress". Unreachable and stalled are independent facts and needed two
+  fields.
+* **Round 4, including a RE-RAISE of a finding round 3 had settled.** The split left
+  `waiting_note` byte-identical between an answerable row and a sibling-bound one, with
+  the difference parked in a second field both pointers still failed to name. Asking a
+  client to cross-reference two fields to learn whether one of them is TRUE is the same
+  inference this whole change exists to stop asking for. A split is not finished until
+  each field is true on its own.
+
+**Three test defects found by running the suite, not by a tier.** A fixed 300ms sleep in
+`refactor-worker.test.ts` before asserting — the worker has to poll, claim, clone a
+worktree and reach the reviewer first, so under load it failed at 476ms as "expected
+undefined", reading as a regression on a test whose whole subject is the ORDER of two
+writes. Identical signature to `drain.test.ts`'s 2026-08-11 fix, third occurrence there;
+same remedy, wait for the condition. And two heavy tests (`ingest`, `exec`) inheriting
+vitest's 5s default as a budget nobody chose — fourth and fifth this session. Considered a
+global `testTimeout` and rejected it: the default suits the unit tests that are most of
+this suite, a global bump delays the report of a real hang, and a per-test declaration
+carries its own measurement where a shared number cannot.
+
+**What I got wrong about my own process.** I reported the suite green while running two
+and three `vitest` invocations concurrently, read the resulting failures as noise, and
+piped a run through `tail -5` — three times — which threw away the failure names I then
+said I could not determine. The fix was a control: baseline on a stashed tree, alone;
+then the change, alone. That should have been the first move at the first red run, not
+the fifth.
+
+**`passed_partial`, honestly: every tier that ran was z-ai**, and one tier never left a
+trusted read. Kimi and OpenAI have refused every probe since 08-18.
+
+**Not deployed, same as D-141.** Both are on `main` and neither is in the container. The
+client that prompted this is still talking to the old text.
+
 ## 2026-09-02 — D-141: the channel was missing, not the words
 
 **What changed.** `rev_RTM6EYyn2ImQJ2XuwZiah3NU`, `passed_partial`, attested at tree
