@@ -4021,6 +4021,46 @@ working agreement says to confirm rather than assume.
 (fingerprint 9c6f2a60) — never inside the repository**, so nothing needs a new
 `.gitignore` rule.
 
+**D-143 — a rejected credential is drawn RED on the board's first line, because for
+thirteen days it looked exactly like a spent quota. BUILT 2026-09-07.**
+
+Vany: *"if creds is rejected, let's draw the quota red in the first line of the web."*
+
+**Measured, and the cost was thirteen days of the deep tier not running.**
+`openai/gpt-5.6-terra` was parked with `why` reading *"rejected our credentials — opencode
+returned 500: UnknownError: Token refresh failed: 401"* and **214 consecutive failures**.
+Its OAuth access token had expired on 2026-08-25 at 11:07Z; the last successful call on
+that seat was 13:14Z the same day, and there has been none since. The refresh token is
+still present and the provider rejects it, so only a person re-logging in can heal it.
+
+**The board drew that as an ordinary cooled-off route** — the same yellow chip a rate
+limit gets, carrying a countdown. So the account was read as out of quota, its limits were
+reset on the provider's dashboard, and nothing changed, because limits were never the
+problem. Every deep review meanwhile landed `passed_partial` on one vendor
+(`TODO.md`'s 2026-08-18 entry, which said in as many words that lore *"has no way to tell
+'still rate-limited' from 'the plan actually lapsed'"*).
+
+**The fact was in the store the whole time and never reached the payload.**
+`ProviderAuthFailed` has been its own error class since 2026-08-14, `routeFault` already
+routes it to `markRouteUnavailable`, and `alerts.providerAuthFailed` already pages on it.
+What was missing was one field: the mark recorded the sentence but not the *kind*, so
+`board.ts` had nothing to expose and `board-page.ts` had nothing to colour. The comment at
+the park site even claimed *"the mark is also what turns the status line red"* — which was
+true of the CLI status line and false of the web board nobody had checked it against.
+
+**Stored, never re-derived.** The mark gains `auth: true`, written from
+`e instanceof ProviderAuthFailed` at the one site that parks a route. Parsing it back out
+of `why` would be a second definition of a fact the caller already holds, which is this
+repository's most repeated defect. Absent means quota, which is the safe default: it says
+*wait*, and waiting on a dead credential wastes time, where the reverse — sending an
+operator to re-login over a rate limit — wastes a person.
+
+**The countdown is the actively misleading part, so it goes.** A parked credential still
+carries a backoff `until`, so the chip read `~24h` and promised a recovery that was never
+coming; the clock is only the interval before lore asks again and is refused again. An
+`auth` route renders `CREDS` in red, with the remedy on hover, and the ordinary quota park
+keeps its yellow clock — because if everything is red, red means nothing.
+
 **D-142 — the inbox says what `new_findings: 0` MEANS, because a client read the number
 and invented the meaning. BUILT 2026-09-03.**
 

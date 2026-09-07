@@ -472,6 +472,61 @@ describe("the board's own script runs", () => {
  * variable-length name is in a different place on every row; a column is the thing an
  * eye can sweep.
  */
+/**
+ * THE FIRST LINE HAS TO SAY "RE-LOGIN", NOT "WAIT 24h".
+ *
+ * Vany, 2026-09-07, after thirteen days of t3 not running: *"if creds is rejected, let's
+ * draw the quota red in the first line of the web."* The route was parked on
+ * "Token refresh failed: 401" with 214 consecutive failures, and this line drew it as an
+ * ordinary cooled-off provider — a yellow chip with a countdown, identical to a rate
+ * limit. So the account was read as out of quota and its limits were reset on the
+ * provider's dashboard, which cannot help a revoked refresh token.
+ *
+ * The countdown is the actively misleading part: a parked credential still carries a
+ * backoff, so the chip promised the route was coming back on its own. It was not.
+ */
+describe("a rejected credential on the first line", () => {
+  const provs = (over: Record<string, unknown>[]) => snapshot({ providers: over });
+
+  it("draws it red and says CREDS instead of a countdown", () => {
+    const { render, byId } = loadPage();
+    render(provs([{ route: "openai/gpt-5.6-terra", until: new Date(Date.now() + 86_400_000).toISOString(), stated: false, auth: true }]));
+
+    const html = String(byId.get("providers")?.innerHTML ?? "");
+    expect(html, "the red class the stylesheet defines for this").toContain("p-auth");
+    expect(html, "and not the ordinary parked chip").not.toContain("p-out");
+    expect(html, "the countdown promises a recovery that will not happen").not.toContain("24h");
+    expect(html, "what it says instead").toContain("CREDS");
+    expect(html, "and what a person must do, on hover").toContain("must re-login");
+  });
+
+  // The ordinary case must stay yellow, or the red stops meaning anything.
+  it("leaves a quota park yellow, with its clock", () => {
+    const { render, byId } = loadPage();
+    render(provs([{ route: "kimi-for-coding/k3", until: new Date(Date.now() + 1_800_000).toISOString(), stated: true }]));
+
+    const html = String(byId.get("providers")?.innerHTML ?? "");
+    expect(html, "still the parked chip").toContain("p-out");
+    expect(html, "not the credential one").not.toContain("p-auth");
+    expect(html, "waiting IS the answer here, so the clock stays").toContain("30m");
+  });
+
+  it("leaves a healthy route alone", () => {
+    const { render, byId } = loadPage();
+    render(provs([{ route: "zai-coding-plan/glm-5.3" }]));
+    const html = String(byId.get("providers")?.innerHTML ?? "");
+    expect(html).toContain("p-ok");
+    expect(html).not.toContain("p-auth");
+  });
+
+  // The stylesheet has to actually define the class the script emits — they live in one
+  // file but are not checked against each other by the compiler.
+  it("defines the red style the script asks for", () => {
+    expect(BOARD_PAGE, "a class nothing styles renders as ordinary text").toContain(".prov.p-auth");
+    expect(BOARD_PAGE).toMatch(/\.prov\.p-auth[^}]*var\(--red\)/);
+  });
+});
+
 describe("the PR column on a review row", () => {
   it("shows #number linking to the PR", () => {
     const { prLink } = loadPage();

@@ -128,6 +128,50 @@ describe("what a review is doing right now", () => {
   });
 });
 
+/**
+ * A REJECTED CREDENTIAL AND A SPENT QUOTA MUST NOT LOOK THE SAME ON THE BOARD.
+ *
+ * Measured 2026-09-07: `openai/gpt-5.6-terra` had been parked for thirteen days on
+ * "Token refresh failed: 401" with 214 consecutive failures, and the board drew it as an
+ * ordinary cooled-off route — the same chip a rate limit gets, with a countdown implying
+ * it comes back on its own. So the account was read as out of quota and its limits were
+ * reset on the provider's dashboard, which could not possibly help: the refresh token was
+ * revoked, and only a re-login clears that. Thirteen days of t3 not running, and every
+ * deep review silently landing `passed_partial` on one vendor.
+ *
+ * The fact was in the store the whole time. It just never reached the payload.
+ */
+describe("a dead credential is not a cooled-off route", () => {
+  it("carries the auth fact to the board, not just the countdown", () => {
+    const route = "openrouter/openai/gpt-5.6-sol-pro";
+    store.markRouteUnavailable(route, new Date(Date.now() + 86_400_000).toISOString(),
+      `${route} rejected our credentials — opencode returned 500: UnknownError: Token refresh failed: 401`,
+      214, false, true);
+
+    const p = board(store).providers.find((x) => x.route === route);
+    expect(p, "the route is in the ladder and must appear").toBeDefined();
+    expect(p?.auth, "the one field that separates re-login from patience").toBe(true);
+  });
+
+  // The quota case is the common one and must stay unmarked, or the red means nothing.
+  it("does not mark an ordinary quota park as an auth failure", () => {
+    const route = "openrouter/openai/gpt-5.6-sol-pro";
+    store.markRouteUnavailable(route, new Date(Date.now() + 3_600_000).toISOString(),
+      "usage limit reached, resets at 14:00", 1, true);
+
+    const p = board(store).providers.find((x) => x.route === route);
+    expect(p?.until, "still parked").toBeDefined();
+    expect(p?.auth, "but by a clock, which waiting does fix").toBeUndefined();
+  });
+
+  // A healthy route carries neither, which is what makes the chip readable at a glance.
+  it("says nothing about a route that is fine", () => {
+    const p = board(store).providers.find((x) => x.route === "openrouter/openai/gpt-5.6-sol-pro");
+    expect(p?.until).toBeUndefined();
+    expect(p?.auth).toBeUndefined();
+  });
+});
+
 describe("the two clocks", () => {
   /**
    * `updated_at` MOVES ON STATE CHANGES ONLY, and a tier can read a repository for twenty

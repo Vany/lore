@@ -3619,7 +3619,7 @@ export class Store {
    * doubling backoff is a guess — and a review must not narrow its own coverage on
    * somebody else's guess (D-90).
    */
-  markRouteUnavailable(model: string, untilIso: string, why: string, failures: number, stated = false): void {
+  markRouteUnavailable(model: string, untilIso: string, why: string, failures: number, stated = false, auth = false): void {
     // AN UPDATE THAT DOES NOT NAME `probedAt` KEEPS THE ONE ALREADY THERE — the same rule
     // `markTierUnavailable` carries above, and for the same reason, which I reproduced here
     // within an hour of writing the route probe.
@@ -3636,6 +3636,21 @@ export class Store {
       why,
       failures,
       stated,
+      // A DEAD CREDENTIAL AND A SPENT QUOTA WANT OPPOSITE RESPONSES, so the mark records
+      // which this was rather than leaving a reader to pattern-match `why`.
+      //
+      // 2026-09-07, measured: `openai/gpt-5.6-terra` sat parked for thirteen days on
+      // "Token refresh failed: 401" with 214 consecutive failures, and the operator board
+      // drew it as an ordinary cooled-off route — the same grey chip a rate limit gets.
+      // So the account was read as out of quota, its limits were reset on the provider's
+      // dashboard, and none of that could help: the refresh token was revoked and only a
+      // re-login fixes it. Waiting is the right answer to one and does nothing for the
+      // other, and the board could not tell them apart.
+      //
+      // Stored, not derived from `why`: parsing the sentence back out would be a second
+      // definition of a fact the caller already has in hand, and this repository's most
+      // repeated defect is exactly that.
+      ...(auth ? { auth: true } : {}),
       ...(kept === undefined ? {} : { probedAt: kept }),
     });
   }
@@ -3667,7 +3682,7 @@ export class Store {
    * what the next backoff is computed from, and an operator wants to know a route failed
    * at all rather than only that it is failing now.
    */
-  routeUnavailable(model: string): { readonly until: string; readonly why: string; readonly failures: number; readonly stated: boolean; readonly probedAt?: string } | undefined {
+  routeUnavailable(model: string): { readonly until: string; readonly why: string; readonly failures: number; readonly stated: boolean; readonly auth?: boolean; readonly probedAt?: string } | undefined {
     // getJson's degrade-on-parse-failure is exactly right here: unreadable is not "out
     // of quota", and a row we cannot parse must not silently strike a paid-for route
     // out of every ladder that names it.
@@ -3678,7 +3693,7 @@ export class Store {
     // at getJson itself, not here: it now treats a parsed null the same as an absent
     // key, so `v === undefined` below is enough on its own — a null row never reaches
     // the `v.until` access two lines down.
-    const v = getJson<{ until?: string; why?: string; failures?: number; stated?: boolean; probedAt?: string }>(
+    const v = getJson<{ until?: string; why?: string; failures?: number; stated?: boolean; auth?: boolean; probedAt?: string }>(
       this.db,
       `route-unavailable:${model}`,
     );
@@ -3688,6 +3703,11 @@ export class Store {
       why: v.why ?? "",
       failures: v.failures ?? 1,
       stated: v.stated === true,
+      // ABSENT MEANS QUOTA, which is the safe default: it says "wait", and waiting on a
+      // dead credential wastes time where the reverse — telling an operator to re-login
+      // over a rate limit — wastes a person. Every mark written before this shipped has
+      // no `auth` key and reads as quota, which is what they were.
+      ...(v.auth === true ? { auth: true } : {}),
       // Absent means never probed, which `shouldProbe` reads as "due now" — so the first
       // review after this shipped re-tests every route parked on a guess, which is
       // exactly right for marks written before probing existed.

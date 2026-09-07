@@ -1943,7 +1943,11 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       if (routeFault(e) && primaryAsked && !(e instanceof ProbeInconclusive)) {
         const seen = store.routeUnavailable(primaryRoute)?.failures ?? 0;
         const { until, stated } = retryAt(Date.now(), seen + 1, resetOf(e));
-        store.markRouteUnavailable(primaryRoute, until, e.message, seen + 1, stated);
+        // WHICH KIND OF REFUSAL, carried to the mark so the board can draw them
+        // differently. A spent quota heals by waiting; a rejected credential never does,
+        // and for thirteen days the board drew them identically while an operator reset
+        // limits that were not the problem.
+        store.markRouteUnavailable(primaryRoute, until, e.message, seen + 1, stated, e instanceof ProviderAuthFailed);
       }
       const spare = pool.slice(1);
       // A NICKNAME WORKS WHEREVER A MODEL ID DOES, including here. A fallback entry naming

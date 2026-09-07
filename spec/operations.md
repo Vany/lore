@@ -170,6 +170,20 @@ Not built. Recorded here rather than covered by a check that measures something 
 which is the failure §2.5 is about — and named so that a reader of this table does not
 read its absence as coverage.
 
+**One half of it IS visible, and now says so: a REJECTED credential (D-143).** Remaining
+quota is unpublished and unknowable from in here, but a provider refusing our credentials
+is a fact lore holds in its hand — `ProviderAuthFailed`, its own error class, which parks
+the route and pages devops. What it did not do was reach the board, so a dead credential
+and a rate limit drew the same yellow chip with the same countdown. Measured 2026-09-07:
+thirteen days of `openai/gpt-5.6-terra` parked on a 401 refresh failure, 214 consecutive
+failures, read as a spent quota and answered by resetting limits that were not the
+problem. The mark now records which kind of refusal it was, and the board's first line
+draws a rejected credential **red**, labelled `CREDS` rather than a countdown, because a
+countdown promises a recovery that a revoked token will never make on its own.
+
+The distinction is the whole point: a quota heals by waiting and a credential never does,
+so they need opposite responses from whoever is looking.
+
 ### 2.4.3 The board — the same facts, for a person rather than a monitor (D-96)
 
 `/status` answers *is it healthy* in JSON, for something that will page. It is a poor

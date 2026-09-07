@@ -136,6 +136,10 @@ export const BOARD_PAGE = `<!doctype html>
   a.pr:hover { text-decoration: underline; }
   .prov.p-ok b { color: var(--green); font-weight: 600; }
   .prov.p-out b { color: var(--yellow); font-weight: 600; }
+  /* A DEAD CREDENTIAL IS NOT A COOLED-OFF ROUTE. Yellow says "wait"; this one never heals
+     by waiting, so it is red and it is loud — the whole chip, not just the figure. */
+  .prov.p-auth { color: var(--red); font-weight: 700; }
+  .prov.p-auth b { color: var(--red); font-weight: 700; }
   .s-findings_ready, .s-awaiting_diff { color: var(--yellow); }
   /* findings_ready wearing gray (D-106): same protocol, less time. */
   .s-findings_stale { color: var(--dim); }
@@ -248,13 +252,23 @@ function render(b) {
     const label = perProvider[provider] > 1 ? provider + "\u00b7" + p.route.split("/").pop() : provider;
     let state = "ok";
     let cls = "p-ok";
+    let why = "";
     if (p.until) {
       const ms = Date.parse(p.until) - Date.now();
       const disp = ms <= 0 ? "now" : ms < 3600000 ? Math.ceil(ms / 60000) + "m" : Math.round(ms / 3600000) + "h";
       state = (p.stated ? "" : "~") + disp;
       cls = "p-out";
     }
-    return '<span class="prov ' + cls + '" title="' + esc(p.route) + (p.until ? " \u2014 back " + esc(p.until) : "") + '">'
+    // AUTH OVERRIDES THE CLOCK, because the clock is meaningless here. A parked credential
+    // still carries a backoff until-time, so it rendered as "~24h" — a number that promises
+    // the route comes back on its own. It does not: only a re-login clears it, and the
+    // countdown is just the interval before lore next asks and is refused again.
+    if (p.auth) {
+      state = "CREDS";
+      cls = "p-auth";
+      why = " \u2014 credentials REJECTED: a person must re-login. Waiting will not fix this.";
+    }
+    return '<span class="prov ' + cls + '" title="' + esc(p.route) + (p.until ? " \u2014 back " + esc(p.until) : "") + esc(why) + '">'
       + esc(label) + ' <b>' + esc(state) + "</b></span>";
   }).join("");
   // WHAT EVERY QUEUED REVIEW IS WAITING FOR. Rounds hold a worker while they wait here,

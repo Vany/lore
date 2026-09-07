@@ -292,6 +292,15 @@ export interface Board {
     readonly until?: string;
     /** True when the PROVIDER named that time; false when it is lore's doubling guess. */
     readonly stated?: boolean;
+    /**
+     * The credential was REJECTED, not the quota spent — a person must re-login.
+     *
+     * Its own field because the two need opposite responses and the board drew them
+     * identically for thirteen days: `openai/gpt-5.6-terra` on a revoked refresh token,
+     * 214 failures, read as a rate limit and answered by resetting limits that were
+     * never the problem.
+     */
+    readonly auth?: boolean;
   }[];
   /**
    * How many model calls are out right now.
@@ -410,7 +419,7 @@ export function board(store: Store, now = Date.now(), modelGate?: () => GateStat
       return routes.map((route) => {
         const mark = store.routeUnavailable(route);
         return mark !== undefined && mark.until > nowIso
-          ? { route, until: mark.until, stated: mark.stated }
+          ? { route, until: mark.until, stated: mark.stated, ...(mark.auth === true ? { auth: true } : {}) }
           : { route };
       });
     })(),
