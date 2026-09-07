@@ -13,7 +13,7 @@
 
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
-import { AmbiguousFingerprint } from "../core/errors.ts";
+import { AUTH_REFUSAL, AmbiguousFingerprint } from "../core/errors.ts";
 import { normalizeClaim, type Finding, type Severity } from "../core/finding.ts";
 import { clientDeliveredWork, type LadderState } from "../core/ladder.ts";
 import { isTerminal, TERMINAL_SQL, PERSON_OR_CLOCK_DECIDED_SQL, type ReviewState, FINDINGS_SQL } from "../core/review-state.ts";
@@ -498,6 +498,7 @@ export class Store {
     // Written after the migrations and UPDATED, not left alone: the row is only
     // worth having if it describes the tables that are actually there.
     metaSet(this.db, "schema_version", String(SCHEMA_VERSION));
+    this.backfillAuthMarks();
   }
 
   close(): void {
@@ -3619,6 +3620,50 @@ export class Store {
    * doubling backoff is a guess — and a review must not narrow its own coverage on
    * somebody else's guess (D-90).
    */
+  /**
+   * Teach the OLD credential parks that they were credential parks (D-143).
+   *
+   * `ProviderAuthFailed` has parked routes since 2026-08-14 and the mark only started
+   * recording WHICH KIND of refusal it was on 2026-09-07. So every mark written in
+   * between carries the refusal sentence and no `auth` key — including the one this whole
+   * decision was built for: `openai/gpt-5.6-terra`, 215 failures, "rejected our
+   * credentials — … Token refresh failed: 401", live on the deployment as this shipped.
+   *
+   * Without this, the fix does not fix its own incident. The flag is only written when a
+   * route is re-parked, which happens inside a round — and the board would have gone on
+   * drawing that route yellow, then GREEN once its backoff lapsed, exactly as before. A
+   * migration that leaves the case it was written for unconverted is the shape this
+   * repository keeps being burned by: the comment claimed those marks "read as quota,
+   * which is what they were", and they were not.
+   *
+   * Matches on `AUTH_REFUSAL`, imported from the class that WRITES it, so the two cannot
+   * drift. This reads a sentence lore composed itself in a format lore controls — not
+   * provider prose, which is why the general rule against re-deriving `auth` from `why`
+   * does not apply to a one-time conversion of rows that predate the field.
+   *
+   * Once, guarded by its own meta key: the store is opened on every process start, and a
+   * scan that runs for ever to find nothing is a cost with no upside.
+   */
+  private backfillAuthMarks(): void {
+    if (metaGet(this.db, "auth-marks-backfilled") !== undefined) return;
+    const rows = this.db
+      .prepare("SELECT key, value FROM meta WHERE key LIKE 'route-unavailable:%'")
+      .all() as { key?: string; value?: string }[];
+    for (const r of rows) {
+      if (typeof r.key !== "string" || typeof r.value !== "string") continue;
+      let v: Record<string, unknown>;
+      // A row we cannot parse is left exactly as it is: `routeUnavailable` already
+      // degrades on unreadable JSON, and rewriting one here would turn a bad row into a
+      // confidently bad one.
+      try { v = JSON.parse(r.value) as Record<string, unknown>; } catch { continue; }
+      if (v === null || typeof v !== "object") continue;
+      if (v["auth"] === true) continue;
+      if (typeof v["why"] !== "string" || !v["why"].includes(AUTH_REFUSAL)) continue;
+      this.db.prepare("UPDATE meta SET value = ? WHERE key = ?").run(JSON.stringify({ ...v, auth: true }), r.key);
+    }
+    metaSet(this.db, "auth-marks-backfilled", "1");
+  }
+
   markRouteUnavailable(model: string, untilIso: string, why: string, failures: number, stated = false, auth = false): void {
     // AN UPDATE THAT DOES NOT NAME `probedAt` KEEPS THE ONE ALREADY THERE — the same rule
     // `markTierUnavailable` carries above, and for the same reason, which I reproduced here
@@ -3705,8 +3750,13 @@ export class Store {
       stated: v.stated === true,
       // ABSENT MEANS QUOTA, which is the safe default: it says "wait", and waiting on a
       // dead credential wastes time where the reverse — telling an operator to re-login
-      // over a rate limit — wastes a person. Every mark written before this shipped has
-      // no `auth` key and reads as quota, which is what they were.
+      // over a rate limit — wastes a person.
+      //
+      // NOT because older marks were all quota — the first version of this comment said
+      // so and it was false. `ProviderAuthFailed` has parked routes since 2026-08-14 with
+      // the refusal sentence and no kind, so a pre-D-143 credential park is indeed absent
+      // here. `backfillAuthMarks` converts those once, at open, which is why "absent" can
+      // be read as quota from that point on rather than merely hoped to be.
       ...(v.auth === true ? { auth: true } : {}),
       // Absent means never probed, which `shouldProbe` reads as "due now" — so the first
       // review after this shipped re-tests every route parked on a guess, which is

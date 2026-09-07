@@ -4042,7 +4042,9 @@ problem. Every deep review meanwhile landed `passed_partial` on one vendor
 
 **The fact was in the store the whole time and never reached the payload.**
 `ProviderAuthFailed` has been its own error class since 2026-08-14, `routeFault` already
-routes it to `markRouteUnavailable`, and `alerts.providerAuthFailed` already pages on it.
+routes it to `markRouteUnavailable`, and `alerts.providerAuthFailed` pages on it — though
+only when a whole ROUND fails (`worker.ts`'s catch), so a tier rescued by its fallback
+pages nobody, which is exactly the shape this incident had.
 What was missing was one field: the mark recorded the sentence but not the *kind*, so
 `board.ts` had nothing to expose and `board-page.ts` had nothing to colour. The comment at
 the park site even claimed *"the mark is also what turns the status line red"* — which was
@@ -4052,6 +4054,17 @@ true of the CLI status line and false of the web board nobody had checked it aga
 `e instanceof ProviderAuthFailed` at **both** sites that park a route. Parsing it back out
 of `why` would be a second definition of a fact the caller already holds, which is this
 repository's most repeated defect.
+
+**And the marks written BEFORE the field existed are converted once, at open
+(`5ae6767c`).** `ProviderAuthFailed` has parked routes since 2026-08-14, so every mark in
+between carries the refusal sentence and no kind — including the incident's own row,
+`openai/gpt-5.6-terra` at 215 failures, live on the deployment as this shipped. The flag is
+otherwise written only on a re-park, which happens inside a round, so without the backfill
+this change would not have fixed the case it was built for: that chip would have stayed
+yellow and then gone green. `backfillAuthMarks` matches on `AUTH_REFUSAL`, exported from
+the class that writes it — a sentence lore composed in a format lore controls, which is why
+the general rule against re-deriving `auth` from `why` does not govern a one-time
+conversion of rows that predate the field.
 
 *Both*, because the first draft of this entry said "the one site that parks a route" and
 there are two — caught at HIGH by this change's own review (`682213ec`), against a

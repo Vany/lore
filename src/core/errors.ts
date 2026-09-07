@@ -261,10 +261,20 @@ export class ProviderAuthFailed extends DidNotRun {
   readonly provider: string;
 
   constructor(provider: string, message: string) {
-    super(`${provider} rejected our credentials — ${message}`);
+    super(`${provider} ${AUTH_REFUSAL} — ${message}`);
     this.provider = provider;
   }
 }
+
+/**
+ * The words this class puts in every credential refusal.
+ *
+ * Exported so the one place that has to recognise an OLD refusal — the backfill for marks
+ * written before the kind was recorded (D-143) — reads the same string this constructor
+ * writes, rather than a copy of it that can drift. Not a general parser of provider text:
+ * it matches a sentence lore itself composed, in a format lore controls.
+ */
+export const AUTH_REFUSAL = "rejected our credentials";
 
 /**
  * Short-id lookup found more than one match.

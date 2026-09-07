@@ -173,7 +173,16 @@ read its absence as coverage.
 **One half of it IS visible, and now says so: a REJECTED credential (D-143).** Remaining
 quota is unpublished and unknowable from in here, but a provider refusing our credentials
 is a fact lore holds in its hand — `ProviderAuthFailed`, its own error class, which parks
-the route and pages devops. What it did not do was reach the board, so a dead credential
+the route.
+
+**It does NOT always page, and this section said it did until its own review corrected it
+(`124fa208`).** `alerts.providerAuthFailed` fires from one place: the catch in
+`worker.ts` that handles a whole ROUND failing. When a fallback rescues the tier — the
+primary's credential dead, the twin answering, verdicts quietly downgraded to
+`passed_partial` — the round succeeds and nobody is paged at all. That is precisely the
+thirteen-day shape below, so a manual promising a page there would send an operator to
+wait for one that is never coming. The board is what covers that case, which is why the
+chip had to change. What it did not do was reach the board, so a dead credential
 and a rate limit drew the same yellow chip with the same countdown. Measured 2026-09-07:
 thirteen days of `openai/gpt-5.6-terra` parked on a 401 refresh failure, 214 consecutive
 failures, read as a spent quota and answered by resetting limits that were not the

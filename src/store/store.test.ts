@@ -2038,3 +2038,65 @@ describe("a round completing into a closed store", () => {
     expect(() => s.upsertRepo("r", "git@x:r2.git")).toThrow();
   });
 });
+
+/**
+ * THE FIX MUST FIX ITS OWN INCIDENT.
+ *
+ * `ProviderAuthFailed` parked routes from 2026-08-14; the mark only began recording WHICH
+ * KIND of refusal on 2026-09-07. So the row this whole decision was built for —
+ * `openai/gpt-5.6-terra`, 215 failures, "rejected our credentials … Token refresh failed:
+ * 401" — was live on the deployment with no `auth` key, and the board would have gone on
+ * drawing it yellow, then green once the backoff lapsed. Raised at medium by lore's own
+ * review against a comment claiming those old marks "read as quota, which is what they
+ * were".
+ */
+describe("credential parks written before the kind was recorded", () => {
+  const legacy = (db: Store, route: string, why: string) =>
+    db.db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)").run(
+      `route-unavailable:${route}`,
+      JSON.stringify({ until: new Date(Date.now() + 3_600_000).toISOString(), why, failures: 215, stated: false }),
+    );
+
+  it("converts a legacy credential park on the next open", () => {
+    const path = join(mkdtempSync(join(tmpdir(), "lore-backfill-")), "x.db");
+    const first = new Store(path);
+    legacy(first, "openai/gpt-5.6-terra",
+      "openai/gpt-5.6-terra rejected our credentials — tier t3: opencode returned 500: UnknownError: Token refresh failed: 401");
+    // The backfill already ran for this store, so the conversion has to happen on a
+    // REOPEN — which is exactly how it reaches a deployment's existing database.
+    first.db.prepare("DELETE FROM meta WHERE key = 'auth-marks-backfilled'").run();
+    first.close();
+
+    const reopened = new Store(path);
+    expect(reopened.routeUnavailable("openai/gpt-5.6-terra")?.auth,
+      "the incident's own row must come back red, not yellow").toBe(true);
+    reopened.close();
+  });
+
+  it("leaves a legacy QUOTA park alone", () => {
+    const path = join(mkdtempSync(join(tmpdir(), "lore-backfill-")), "x.db");
+    const first = new Store(path);
+    legacy(first, "kimi-for-coding/k3", "kimi-for-coding/k3: weekly usage limit reached, resets Monday");
+    first.db.prepare("DELETE FROM meta WHERE key = 'auth-marks-backfilled'").run();
+    first.close();
+
+    const reopened = new Store(path);
+    expect(reopened.routeUnavailable("kimi-for-coding/k3")?.auth,
+      "waiting really is the answer here, and red would be a lie").toBeUndefined();
+    reopened.close();
+  });
+
+  // Once, or it is a scan on every process start for ever, finding nothing.
+  it("does not run again once it has run", () => {
+    const path = join(mkdtempSync(join(tmpdir(), "lore-backfill-")), "x.db");
+    const first = new Store(path);
+    legacy(first, "openai/gpt-5.6-terra", "openai/gpt-5.6-terra rejected our credentials — 401");
+    first.close();
+
+    // The flag was set on the FIRST open, before this row existed, so a second open must
+    // leave it untouched — which is what makes the guard a guard rather than a comment.
+    const reopened = new Store(path);
+    expect(reopened.routeUnavailable("openai/gpt-5.6-terra")?.auth).toBeUndefined();
+    reopened.close();
+  });
+});
