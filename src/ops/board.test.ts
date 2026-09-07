@@ -164,6 +164,36 @@ describe("a dead credential is not a cooled-off route", () => {
     expect(p?.auth, "but by a clock, which waiting does fix").toBeUndefined();
   });
 
+  /**
+   * AND IT MUST OUTLIVE ITS OWN BACKOFF.
+   *
+   * An auth park takes the doubling guess capped at 24h, because no provider states a
+   * reset time for a revoked token. Gating the payload on that clock meant one second past
+   * the cap the row dropped and the chip went GREEN for a credential lore knows is dead —
+   * and since the probe fires only inside a round, a quiet weekend would show "ok" for
+   * days. An operator who saw red yesterday reads green today as a recovery, which is the
+   * thirteen-day incident re-entering through the gap between backoffs.
+   */
+  it("keeps a dead credential red after its backoff lapses", () => {
+    const route = "openrouter/openai/gpt-5.6-sol-pro";
+    store.markRouteUnavailable(route, new Date(Date.now() - 60_000).toISOString(),
+      `${route} rejected our credentials — Token refresh failed: 401`, 214, false, true);
+
+    const p = board(store).providers.find((x) => x.route === route);
+    expect(p?.auth, "the credential did not heal when the clock ran out").toBe(true);
+  });
+
+  // The clock still governs QUOTA, where lapsed genuinely means "believed fine again".
+  it("lets an expired quota park go back to healthy", () => {
+    const route = "openrouter/openai/gpt-5.6-sol-pro";
+    store.markRouteUnavailable(route, new Date(Date.now() - 60_000).toISOString(),
+      "usage limit reached", 1, true);
+
+    const p = board(store).providers.find((x) => x.route === route);
+    expect(p?.until, "the wait is over, so it is not parked any more").toBeUndefined();
+    expect(p?.auth).toBeUndefined();
+  });
+
   // A healthy route carries neither, which is what makes the chip readable at a glance.
   it("says nothing about a route that is fine", () => {
     const p = board(store).providers.find((x) => x.route === "openrouter/openai/gpt-5.6-sol-pro");

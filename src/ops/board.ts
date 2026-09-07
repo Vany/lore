@@ -418,9 +418,20 @@ export function board(store: Store, now = Date.now(), modelGate?: () => GateStat
       const nowIso = new Date(now).toISOString();
       return routes.map((route) => {
         const mark = store.routeUnavailable(route);
-        return mark !== undefined && mark.until > nowIso
-          ? { route, until: mark.until, stated: mark.stated, ...(mark.auth === true ? { auth: true } : {}) }
-          : { route };
+        // A DEAD CREDENTIAL DOES NOT EXPIRE WITH ITS BACKOFF, and gating it on the clock
+        // put the incident back through a gap. An auth park takes the doubling guess
+        // capped at 24h — no provider states a reset time for a revoked token — so one
+        // second past that cap the row dropped out and the chip went GREEN for a route
+        // lore knows needs a re-login. Worse on a quiet weekend: the D-94 probe fires only
+        // inside a round, so with nothing running the board would say healthy for days,
+        // and an operator who saw red yesterday reads green today as a recovery.
+        //
+        // `routeUnavailable` returns expired rows deliberately, for exactly this kind of
+        // question, so the fact is here to be used. The clock still governs QUOTA, where
+        // it is the whole truth: lapsed means the route is believed fine again.
+        if (mark === undefined) return { route };
+        if (mark.auth === true) return { route, until: mark.until, stated: mark.stated, auth: true };
+        return mark.until > nowIso ? { route, until: mark.until, stated: mark.stated } : { route };
       });
     })(),
     modelCalls: modelGate === undefined ? undefined : modelGate(),

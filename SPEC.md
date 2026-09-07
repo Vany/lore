@@ -4049,9 +4049,17 @@ the park site even claimed *"the mark is also what turns the status line red"* �
 true of the CLI status line and false of the web board nobody had checked it against.
 
 **Stored, never re-derived.** The mark gains `auth: true`, written from
-`e instanceof ProviderAuthFailed` at the one site that parks a route. Parsing it back out
+`e instanceof ProviderAuthFailed` at **both** sites that park a route. Parsing it back out
 of `why` would be a second definition of a fact the caller already holds, which is this
-repository's most repeated defect. Absent means quota, which is the safe default: it says
+repository's most repeated defect.
+
+*Both*, because the first draft of this entry said "the one site that parks a route" and
+there are two — caught at HIGH by this change's own review (`682213ec`), against a
+sentence written after grepping and seeing both. The second is the fallback/twin catch,
+and it is not the rarer case: a fallback is a DIFFERENT subscription with its own key,
+which is the entire reason it exists, so a credential dies there at least as readily as on
+a primary. Unmarked, it drew yellow with a countdown — the thirteen-day misreading
+surviving on the chain. Absent means quota, which is the safe default: it says
 *wait*, and waiting on a dead credential wastes time, where the reverse — sending an
 operator to re-login over a rate limit — wastes a person.
 
@@ -4060,6 +4068,15 @@ carries a backoff `until`, so the chip read `~24h` and promised a recovery that 
 coming; the clock is only the interval before lore asks again and is refused again. An
 `auth` route renders `CREDS` in red, with the remedy on hover, and the ordinary quota park
 keeps its yellow clock — because if everything is red, red means nothing.
+
+**And the flag outlives the clock it was parked under (`d007fac2`, same review).** Gating
+the payload on `until` put the incident back through a gap: an auth park takes the doubling
+guess capped at 24h, so one second past the cap the row dropped and the chip went GREEN for
+a credential lore knows is dead. The D-94 probe fires only inside a round, so a quiet
+weekend would have shown "ok" for days, and an operator who saw red yesterday reads green
+today as a recovery. `routeUnavailable` returns expired rows deliberately, for exactly this
+kind of question. The clock still governs QUOTA, where lapsed genuinely means the route is
+believed fine again — which is the difference the whole decision rests on.
 
 **D-142 — the inbox says what `new_findings: 0` MEANS, because a client read the number
 and invented the meaning. BUILT 2026-09-03.**

@@ -896,6 +896,44 @@ describe("runRound", () => {
   // and the one thing it exists to answer is exactly this: a fallback keeps the
   // tier's id and changes its model (`continuity.ts`, observed on rev_8ZM1XT7), so
   // naming `tier.model` there would have recorded the PRIMARY that never answered.
+  /**
+   * A CREDENTIAL DIES ON A FALLBACK AT LEAST AS READILY AS ON A PRIMARY.
+   *
+   * D-143 shipped the auth flag on the primary park site and missed the twin's, so a
+   * rejected credential reached on the chain was parked unmarked — drawn yellow with a
+   * countdown, which is the thirteen-day misreading the decision exists to end, surviving
+   * on the fallback. The fallback is a DIFFERENT subscription with its own key, which is
+   * the entire reason it is there, so it is not a rarer case than the primary.
+   */
+  describe("a rejected credential is marked as one wherever it is met", () => {
+    it("flags the twin's route, not only the primary's", async () => {
+      const type = {
+        ...TYPE,
+        tiers: DEFAULT_TIERS.map((t) => (t.id === "t1" ? { ...t, fallback: ["openrouter/twin"] } : t)),
+      };
+      const primary = type.tiers.find((t) => t.id === "t1")?.model ?? "";
+
+      /** Primary is out of quota; the twin's key has been revoked. */
+      class TwinCredentialDead implements ReviewerLike {
+        async review(tier: Tier): Promise<ReviewerResult> {
+          if (tier.model === primary) throw new Exhausted("primary is out");
+          throw new ProviderAuthFailed("openrouter/twin", "Token refresh failed: 401");
+        }
+      }
+
+      await runRound({ store, reviewer: new TwinCredentialDead(), reviewId: "r1", principal: "p", worktree: dir, type, allowMetered: true })
+        .catch(() => undefined);
+
+      const primaryMark = store.routeUnavailable(primary);
+      const twinMark = store.routeUnavailable("openrouter/twin");
+      expect(twinMark, "the twin refused, so it must be parked").toBeDefined();
+      expect(twinMark?.auth, "and parked as a CREDENTIAL failure, which waiting never fixes").toBe(true);
+      // The primary went out of quota, not out of credentials — the distinction is the
+      // whole point, so it must not be smeared across both.
+      expect(primaryMark?.auth, "quota is not an auth failure").toBeUndefined();
+    });
+  });
+
   describe("a settled verdict names the route that actually answered", () => {
     const fix = () => writeFileSync(join(dir, "src/hold.ts"), "export function capture() {\n  return release();\n}\n");
 

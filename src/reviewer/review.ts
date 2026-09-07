@@ -2186,7 +2186,14 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
           if (routeFault(twin) && !(twin instanceof ProbeInconclusive)) {
             const seen = store.routeUnavailable(twinModel)?.failures ?? 0;
             const at = retryAt(Date.now(), seen + 1, resetOf(twin));
-            store.markRouteUnavailable(twinModel, at.until, why, seen + 1, at.stated);
+            // THE AUTH FLAG BELONGS ON BOTH PARK SITES, and D-143 shipped it on one.
+            // A credential dies on a FALLBACK at least as readily as on a primary — the
+            // fallback is a different subscription with its own key, which is the whole
+            // point of it — and a route parked here without the flag draws yellow with a
+            // countdown, which is the thirteen-day misreading the decision exists to end,
+            // surviving on the chain. The comment a few lines down names "a rejected
+            // credential" as a case this very path handles.
+            store.markRouteUnavailable(twinModel, at.until, why, seen + 1, at.stated, twin instanceof ProviderAuthFailed);
           }
           console.error(`[lore:log] ${reviewId}: the fallback ${twinModel} failed too — ${why}`);
           refused.push(`${twinModel}: ${why}`);
