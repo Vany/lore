@@ -4044,12 +4044,26 @@ the container saw `1000:1000` where the host saw `501:20`, and the failing comma
 succeeded again minutes later. Nothing lore can observe separates a repository it must not
 touch from one whose uid mapping hiccuped for ninety seconds.
 
-**So the check is disabled for lore's own git calls, and that is a narrower claim than it
-sounds.** `safe.directory` defends a SHARED machine — another user planting a repository
-in a path you are about to run git in. lore is single-tenant and every path it hands git is
-one it created under the data directory compose mounts for it. There is no second user to
-defend against, and with the check in place the service's availability rests on a mapping
-no part of this system owns.
+**So the check is disabled for git calls aimed INSIDE `dataDir()`, and nowhere else.**
+`safe.directory` defends a SHARED machine — another user planting a repository in a path
+you are about to run git in — and with the check in place for lore's own tree, the
+service's availability rests on a uid mapping no part of this system owns. Inside that
+tree there is no second user to defend against: lore creates it, populates it and hands it
+to itself.
+
+**The first version said `safe.directory=*`, and the justification written beside it — "every
+path it hands git is one it created itself" — was FALSE. Caught at HIGH, twice, by this
+change's own review (`ff57d49a`, `d6c8a49c`).** `lore review --target <path>` takes a
+checkout from whoever runs it, and `treeHash` opens with `git add -A` there. So the blanket
+exemption did not merely let lore READ a foreign repository: it let lore WRITE one it does
+not own, staging every uncommitted change in somebody else's working tree — D-2 forbids
+that outright and INV-9 forbids it again — and `add -A` runs that repository's own
+configured filters, which makes being induced to point lore at a hostile checkout a code
+execution path. That is precisely the attack the check exists to stop, handed back while
+fixing an availability problem, in the one place lore writes.
+
+The sentence was written without reading `cli.ts`. It is the same failure this decision is
+about: a claim about the system asserted rather than checked.
 
 **Delivered as environment, from `gitEnv` in `src/git/exec.ts`, not baked into the image.**
 `LORE_DATA_DIR` is set by compose to the HOST's path so both sides agree, so a build-time
@@ -4127,6 +4141,20 @@ repeating a number that would then have two sources.
 
 **`needs_human` keeps its carve-out** (D-142): `open_questions` answers it louder, and two
 instructions over one review is how a client picks the cheaper one.
+
+**THE SAME CLASS, A THIRD TIME, IN THE SUMMARY RATHER THAN THE ROW (`d43dfe35`,
+`626700da`).** Round 2 gave the in-flight ROW its exception and left the top-level bullet —
+the sentence a client actually acts on — saying "come back and review_poll them" with no
+caveat, beside a row saying the call refuses. `TOOL_DOCS.inbox`'s own lore-row paragraph
+had it too. Both carry it now, and the test asserts it on the SUMMARY, not only the row,
+because the summary is what gets read.
+
+Recording the count honestly: this interface has now reintroduced "a prescription the
+reader cannot follow, with the exception parked in a second field" three times in two days
+— once in D-144, once in D-145's first draft, once in its second. Each fix was correct for
+the place it was applied and none of them generalised. What has actually caught it every
+time is a reviewer reading the payload as a whole; there is no mechanical check here, and
+this entry does not pretend one is coming.
 
 **And the in-flight note withdraws its own prescription on a row the caller cannot reach**
 (`9ffcb6a0`, same review). It said *"come back and review_poll it"* on a review bound to

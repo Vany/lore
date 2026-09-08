@@ -1525,6 +1525,13 @@ describe("the inbox lists what is waiting, not only what is fresh", () => {
     // is the inference this interface exists to stop asking for.
     expect(note, "the prescription must be withdrawn here").toContain("CANNOT WATCH IT FROM HERE");
     expect(note, "and it must name the field that explains why").toContain("not_yours_note");
+    // AND THE SUMMARY THE CLIENT ACTUALLY ACTS ON must carry the same exception. The row
+    // said "cannot watch it from here" while the top-level bullet said "come back and
+    // review_poll them" — and a caller reading the summary polls, gets NOT FOUND, and
+    // reports the review vanished. Third reintroduction of this one class.
+    expect(String(out["note"]), "the in_flight bullet must not prescribe a call that refuses")
+      .toContain("EXCEPT");
+    expect(String(out["note"])).toContain("not_yours_note");
     expect(out["stalled"], "and it must not be counted as rot").toBe(0);
   });
 

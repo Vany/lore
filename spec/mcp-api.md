@@ -560,8 +560,15 @@ another live token of the same principal carries a separate `not_yours_note` rat
 prescribing exits that would answer NOT FOUND (D-78). Separate, because reachability and
 rot are independent claims: it fires whatever the state and whether or not findings are
 waiting — the standing instruction for an uncollected finding is to call `review_poll`,
-one of the calls that refuses — while `waiting_note` and `stalled` stay about a review
-that is stopped. On `needs_human` it says the opposite of "wait for that session":
+one of the calls that refuses — while `stalled` stays about a review that is stopped.
+
+**`waiting_note` no longer does (D-145), and this sentence said it did until the same
+batch's own review caught it.** It is on every non-terminal row now, saying what that row
+needs from the caller — including a lore-owned one, whose text says the round is NOT
+FINISHED. A reader still taking `waiting_note` to mean *stopped* would read a mid-round
+review as stuck, and `TOOL_DOCS.inbox` names what follows: reaching for `restart: true`
+"because nothing seems to be happening", which discards every ratified justification and
+reruns from round 1. On `needs_human` it says the opposite of "wait for that session":
 `knowledge_resolve` is repo-scoped, so this caller can settle the question and resume the
 review itself. `stalled` at the top level counts them — one number, above the rows, for the
 question the client was actually asked. **`waiting_on_you` and `in_flight` are the pair that

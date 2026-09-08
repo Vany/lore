@@ -859,7 +859,9 @@ who.
     say only the first. The round will end either in a pass or in findings that nobody
     but you can answer, and lore cannot tell you which is coming or reach you when it
     knows. So this row is the one MOST likely to become your move — come back and
-    review_poll it; the reply carries how long to wait. in_flight counts these, and an
+    review_poll it; the reply carries how long to wait. UNLESS the row carries
+    not_yours_note: that call answers NOT FOUND for you there, and the row says so rather
+    than leaving you to find out. in_flight counts these, and an
     inbox with work in flight is not an empty inbox.
     review_start naming the same branch AND the same scope (a folder review's
     \`path\`, or bare diff mode) as this open review is REFUSED, not destructive — it

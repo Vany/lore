@@ -2516,8 +2516,9 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
               ? [
                   "`in_flight` counts reviews LORE IS STILL WORKING ON. Nothing is due from you this " +
                     "second and they are not finished: each will either pass or hand you findings only you " +
-                    "can answer, and nothing will tell you which — come back and review_poll them. An " +
-                    "inbox with work in flight is not an empty inbox.",
+                    "can answer, and nothing will tell you which — come back and review_poll them, EXCEPT " +
+                    "any row carrying `not_yours_note`, where that call answers NOT FOUND for you and the " +
+                    "row says so. An inbox with work in flight is not an empty inbox.",
                 ]
               : []),
             // Gated on what the call LISTS, not on what is unfinished: a terminal review

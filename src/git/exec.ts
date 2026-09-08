@@ -9,8 +9,10 @@
  */
 
 import { execFile } from "node:child_process";
+import { resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { DidNotRun } from "../core/errors.ts";
+import { dataDir } from "../core/paths.ts";
 
 const run = promisify(execFile);
 
@@ -38,28 +40,55 @@ export interface GitResult {
  * command succeeded again minutes later, which is the difficult part: nothing lore can
  * observe separates a repository it must not touch from one whose uid mapping hiccuped.
  *
- * WHY DISABLING THE CHECK IS RIGHT HERE, rather than lax. It defends a SHARED machine —
- * another user planting a repository in a path you are about to run git in. lore runs
- * single-tenant and every path it hands git is one it created itself, under a data
- * directory compose mounts for it. There is no second user to defend against, and with
- * the check in place the service's availability rests on a uid mapping no part of this
- * system owns.
- *
  * DELIVERED AS ENV, NOT AS `git config`, and not baked into the image: the data directory
  * is `LORE_DATA_DIR`, which compose sets to the HOST's path so both sides agree — a build
  * time `safe.directory` would name a path this deployment never uses. `GIT_CONFIG_*`
  * applies to the invocation, needs no writable HOME, and travels to every call site that
  * spawns git with this env rather than only the ones that read a config file.
+ *
+ * SCOPED TO WHAT LORE OWNS, and the first version was not. It said `safe.directory=*`, on
+ * the stated ground that "every path it hands git is one it created itself" — which is
+ * FALSE, as this change's own review proved at HIGH twice.
+ *
+ * `lore review --target <path>` takes a checkout from whoever runs it, and `treeHash`
+ * opens with `git add -A` in that directory. So a blanket exemption did not merely let
+ * lore READ a foreign repository: it let lore WRITE one it does not own — staging every
+ * uncommitted change in somebody else's working tree — which D-2 forbids outright and
+ * INV-9 forbids again. Worse, `add -A` runs that repository's own configured filters, and
+ * executing code out of a repository you were induced to point at IS the attack git's
+ * ownership check exists to stop. Disabling it globally handed that back on a shared
+ * machine, in the one code path where lore writes.
+ *
+ * So the exemption covers `dataDir()` and nothing else — the tree lore creates, populates
+ * and hands to itself. A CLI target outside it keeps git's check, which is the correct
+ * answer there: if git will not touch a stranger's repository, neither should lore.
+ *
+ * The trailing `/*` is git's documented prefix form and is verified against the git in
+ * this image (2.39.5) rather than assumed.
  */
-const OWNERSHIP_CHECK_OFF: Readonly<Record<string, string>> = {
-  GIT_CONFIG_COUNT: "1",
-  GIT_CONFIG_KEY_0: "safe.directory",
-  GIT_CONFIG_VALUE_0: "*",
-};
+function ownershipExemptionFor(cwd: string): Readonly<Record<string, string>> {
+  const root = resolve(dataDir());
+  const here = resolve(cwd);
+  if (here !== root && !here.startsWith(root + sep)) return {};
+  return {
+    GIT_CONFIG_COUNT: "2",
+    GIT_CONFIG_KEY_0: "safe.directory",
+    GIT_CONFIG_VALUE_0: root,
+    GIT_CONFIG_KEY_1: "safe.directory",
+    // Everything beneath it: a worktree's repository resolves to the bare clone, so
+    // exempting only the directory git was pointed at would leave the bare refused.
+    GIT_CONFIG_VALUE_1: `${root}/*`,
+  };
+}
 
 /** The environment every git invocation in this service runs under. */
 export function gitEnv(cwd: string, extra: Readonly<Record<string, string>> = {}): Record<string, string> {
-  return { ...process.env, GIT_CEILING_DIRECTORIES: cwd, ...OWNERSHIP_CHECK_OFF, ...extra } as Record<string, string>;
+  return {
+    ...process.env,
+    GIT_CEILING_DIRECTORIES: cwd,
+    ...ownershipExemptionFor(cwd),
+    ...extra,
+  } as Record<string, string>;
 }
 
 export async function git(
