@@ -837,8 +837,9 @@ answered that the agents had "already collected them and are working the fixes".
 in the reply said that. All three were stopped, unanswered, and rotting, and a person
 was told the opposite by an agent that had every fact except the meaning.
 
-TWO COUNTS AT THE TOP ANSWER "IS EVERYTHING DONE", and between them they cover every
-unfinished review — whose move it is, for each one. \`waiting_on_you\`: yours to act on,
+TWO COUNTS AT THE TOP ANSWER "IS EVERYTHING DONE", and between them they cover every row
+this call lists — whose move it is, for each one, including a review that ENDED while
+still holding findings nobody collected. No sweep hands those over; a person has to. \`waiting_on_you\`: yours to act on,
 whether that means collecting findings you have not read, answering ones you have, or
 getting a person. \`in_flight\`: lore is still working on it, so nothing is due this
 second and it is not finished. **While either is above zero the answer is NO.**

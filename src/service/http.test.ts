@@ -14,7 +14,6 @@ import { STALE_HOURS, STALE_GRACE_DAYS } from "../ops/retention.ts";
 import { BOARD_PAGE } from "./board-page.ts";
 import { DEFAULT_HEARTBEAT } from "../ops/heartbeat.ts";
 import { grantToken, hashToken, revokeByPrefix } from "../mcp/auth.ts";
-import { REVIEW_STATES, isTerminal } from "../core/review-state.ts";
 import { Store } from "../store/store.ts";
 import { everyClientDocument, SERVER_INSTRUCTIONS, TOOL_DOCS } from "../mcp/docs.ts";
 import { startHttp } from "./http.ts";
@@ -1113,8 +1112,6 @@ describe("findings are ranked worst first", () => {
  * `expired` — which by INV-1 never means "found nothing" and here would have meant
  * nothing at all.
  */
-const TERMINAL_STATES = new Set(REVIEW_STATES.filter(isTerminal));
-
 describe("the inbox lists what is waiting, not only what is fresh", () => {
   const open = (id: string, state: ReviewState, branch: string) =>
     store.createReview({
@@ -1614,14 +1611,43 @@ describe("the inbox lists what is waiting, not only what is fresh", () => {
     open("revEnded", "passed", "feat/done");
 
     const out = await callTool("review_inbox", {});
-    const rows = (out["reviews"] as Record<string, unknown>[]).filter(
-      (r) => !TERMINAL_STATES.has(r["state"] as ReviewState),
-    );
+    const rows = out["reviews"] as Record<string, unknown>[];
+    // OVER EVERY LISTED ROW, not every unfinished one. The distinction is the whole of
+    // the re-raise: a review that ENDED holding undelivered findings is listed, is
+    // outstanding, and was counted by neither — the shape this repository already
+    // measured as a HIGH finding sitting undelivered for four days because its review
+    // happened to end `failed`.
     expect(Number(out["waiting_on_you"]) + Number(out["in_flight"]),
-      "every unfinished review is in exactly one of the two").toBe(rows.length);
+      "every row this call shows is in exactly one of the two").toBe(rows.length);
     expect(out["waiting_on_you"], "the uncollected one and the quiet one").toBe(2);
     expect(out["in_flight"], "the running one").toBe(1);
     expect(out["stalled"], "and stalled is the SUBSET that has gone quiet, not a third bucket").toBe(1);
+  });
+
+  /**
+   * A REVIEW THAT ENDED HOLDING FINDINGS IS STILL WORK.
+   *
+   * Re-raised after the first partition fix, and narrower: `waiting_on_you` was gated on
+   * `!isTerminal`, so a review that died mid-flight with findings raised and never
+   * collected landed in no count at all — while the row itself was listed. This repo has
+   * measured that exact shape: "a HIGH finding on master, undelivered for four days,
+   * because the review carrying it happened to end failed". No sweep delivers findings
+   * from a terminal row; a person has to, and the counts were telling them not to look.
+   */
+  it("counts a terminal review that still holds findings nobody collected", async () => {
+    open("revDiedHolding", "failed", "feat/died-mid-round");
+    store.recordFinding("revDiedHolding", {
+      fingerprint: "h1", file: "a.ts", line: 1, symbol: "f", severity: "high",
+      claim: "raised, then the round died", evidence: "e", failureScenario: "x", origin: "t1", round: 1,
+      firstSeen: new Date().toISOString(),
+    });
+
+    const out = await callTool("review_inbox", {});
+    const row = (out["reviews"] as Record<string, unknown>[]).find((r) => r["review_id"] === "revDiedHolding");
+    expect(row, "a terminal review is listed while it still holds findings").toBeDefined();
+    expect(out["waiting_on_you"], "and somebody has to read them").toBe(1);
+    expect(out["in_flight"], "nothing is running").toBe(0);
+    expect(String(out["note"]), "the note must not go silent either").toContain("waiting_on_you");
   });
 
   /** A finished review is not outstanding — the count must not cry wolf. */

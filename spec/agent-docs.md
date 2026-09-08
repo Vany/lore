@@ -232,9 +232,13 @@ to review.
 > **A row that is lore's move is not "nothing to do" (D-145).** It is unfinished, and it
 > is the row most likely to become yours — when the round ends it either passes or hands
 > you findings only you can answer, and nothing reaches you when it does. `in_flight`
-> counts those beside `stalled`, which counts what is rotting; while either is above zero
-> you are not done. This line used to read "Nothing to do", which was true for the instant
-> and false for the session.
+> counts those. This line used to read "Nothing to do", which was true for the instant and
+> false for the session.
+>
+> **`waiting_on_you` and `in_flight` are the pair that answers "is everything done".**
+> Between them they cover every row this call lists — whose move it is, for each one —
+> including a review that ENDED while still holding findings nobody collected. While
+> either is above zero, you are not done.
 >
 > **`new_findings: 0` never means somebody is working on it.** It means nothing NEW
 > arrived since the last handover, and that is all it can mean: lore cannot see
@@ -243,9 +247,10 @@ to review.
 > fact that separates the two — except `needs_human`, which is NOT reassurance: it is
 > equally stopped and is answered by `open_questions` instead. A review started by another
 > live token of yours carries a separate `not_yours_note`, because being unreachable and
-> being stalled are different claims — and `quiet_since` — reaching back through the staleness dim, whose own write
-> would otherwise make a two-day-old review look like it moved minutes ago. `stalled` at the top counts them, and while it is above
-> zero the answer to "is everything done" is no.
+> being stalled are different claims — and `quiet_since` reaches back through the
+> staleness dim, whose own write would otherwise make a two-day-old review look like it
+> moved minutes ago. `stalled` at the top counts these: it is the SUBSET of
+> `waiting_on_you` that has gone quiet, so read it as urgency and never as the total.
 
 Written after a client answered exactly that question with *"they have new_findings: 0,
 which means the agents already collected them and are working the fixes"* — about three

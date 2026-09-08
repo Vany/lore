@@ -2467,7 +2467,21 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           // `waiting_on` already answers "whose move", so the counts are its two values.
           // Every non-terminal review lands in exactly one, and the question the client
           // asked has an answer that cannot be zero while work is outstanding.
-          waiting_on_you: items.filter((i) => i.waiting_on === "you" && !isTerminal(i.state)).length,
+          // NOT GATED ON `!isTerminal`, and the first version was — which left the one
+          // case this repository has already been burned by counted nowhere: a review
+          // that ENDED while holding findings nobody collected. Its own ingested record
+          // says it plainly — "a HIGH finding on master, undelivered for four days,
+          // because the review carrying it happened to end failed". The row is LISTED
+          // (the filter below keeps a terminal review while it still holds findings) and
+          // every count above it read zero, so a client answering from the counts, as
+          // these texts teach, reports done and never reads them. No sweep delivers
+          // findings from a terminal row; a person has to.
+          //
+          // Safe without the gate: `waiting_on` is "you" only when there are undelivered
+          // findings or the state needs the client, and a terminal state needs nobody —
+          // so a terminal row reaches this count exactly when it is still holding
+          // something, and drops out of the list entirely once it is collected.
+          waiting_on_you: items.filter((i) => i.waiting_on === "you").length,
           in_flight: items.filter((i) => i.waiting_on === "lore" && !isTerminal(i.state)).length,
           // The SUBSET of `waiting_on_you` that is rotting (D-142): stopped, with nothing
           // left to collect, so nothing about it will change until somebody acts. Kept
@@ -2506,10 +2520,14 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
                     "inbox with work in flight is not an empty inbox.",
                 ]
               : []),
-            ...(items.some((i) => !isTerminal(i.state))
+            // Gated on what the call LISTS, not on what is unfinished: a terminal review
+            // holding undelivered findings is listed, is outstanding work, and was
+            // silent here for the same reason it was uncounted above.
+            ...(items.some((i) => i.new_findings > 0 || !isTerminal(i.state))
               ? [
-                  "`waiting_on_you` and `in_flight` COVER EVERY UNFINISHED REVIEW between them — whose " +
-                    "move it is, for each one. `stalled` is the subset of the first that has gone quiet. " +
+                  "`waiting_on_you` and `in_flight` COVER EVERY REVIEW THIS CALL LISTS between them — " +
+                    "whose move it is, for each one, including a review that ENDED while still holding " +
+                    "findings nobody collected. `stalled` is the subset of the first that has gone quiet. " +
                     "WHILE EITHER OF THE FIRST TWO IS ABOVE ZERO THE HONEST ANSWER TO \"is everything " +
                     "done\" IS NO: some of this needs you now, the rest will need you shortly.",
                 ]

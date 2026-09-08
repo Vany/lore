@@ -565,8 +565,10 @@ that is stopped. On `needs_human` it says the opposite of "wait for that session
 `knowledge_resolve` is repo-scoped, so this caller can settle the question and resume the
 review itself. `stalled` at the top level counts them — one number, above the rows, for the
 question the client was actually asked. **`waiting_on_you` and `in_flight` are the pair that
-covers every unfinished review (D-145)** — the two values of `waiting_on`, so each lands in
-exactly one and the answer cannot be zero while work is outstanding. `stalled` is the
+covers every row this call lists (D-145)** — the two values of `waiting_on`, so each lands
+in exactly one and the answer cannot be zero while work is outstanding. A review that ENDED
+while still holding undelivered findings is listed and counted, because no sweep hands
+those over: a person has to. `stalled` is the
 subset of the first that has gone quiet. The triage table above used to answer the lore
 case with "nothing", and a client that read it stopped in the middle of its own loop. A counted row that is bound to another live token still
 counts, because it is still stopped and somebody still has to finish it — and its

@@ -4092,10 +4092,19 @@ has stopped in the middle, and its findings then sit in `findings_ready` until t
 takes them — the abandonment measured at 14 open reviews on 2026-09-02, invited by the
 text rather than in spite of it.
 
-**Two counts that PARTITION every unfinished review, and the first draft's did not —
-caught by this change's own review (`b3bc89a7`).** `waiting_on_you` and `in_flight` are
-the two values of `waiting_on`, so each unfinished review lands in exactly one and the
-question cannot be answered zero while work is outstanding.
+**Two counts that PARTITION every row this call LISTS, and the first draft's did not —
+caught by this change's own review, twice (`b3bc89a7`, then `516126ea` re-raising it
+narrower).** `waiting_on_you` and `in_flight` are the two values of `waiting_on`, so each
+listed row lands in exactly one and the question cannot be answered zero while work is
+outstanding.
+
+**Listed, not merely unfinished** — that is the second finding. The first fix gated
+`waiting_on_you` on `!isTerminal`, which left a review that ENDED while still holding
+findings nobody collected counted nowhere, with its row on the list the whole time. Not
+hypothetical: this repository's own record carries *"a HIGH finding on master, undelivered
+for four days, because the review carrying it happened to end failed"*. **No sweep delivers
+findings from a terminal row — a person has to**, and the counts were telling them not to
+look.
 
 The draft offered `stalled` and `in_flight` as the whole answer. `stalled` fires only when
 there is nothing left to collect and `in_flight` only when the move is lore's — so a review
