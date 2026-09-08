@@ -4021,6 +4021,39 @@ working agreement says to confirm rather than assume.
 (fingerprint 9c6f2a60) — never inside the repository**, so nothing needs a new
 `.gitignore` rule.
 
+**D-144 — the review id on the board is a button, and clicking it copies the id. BUILT
+2026-09-08.**
+
+Vany: *"in webinterface, make review id clickable, click must copy review id to
+clipboard."*
+
+**The id is the one thing a reader takes OFF this page.** Everything else on the board is
+for looking at — states, clocks, findings — while the id gets pasted into `review_poll`,
+into a message to whoever owns the branch, into a query against the store. Selecting a
+28-character base64url id by hand out of a dim run-on line is the kind of small friction
+that ends in a transposed character and a `NOT FOUND` nobody can explain. Both id sites,
+review rows and refactor runs, are buttons: a real `<button>` so the keyboard and a screen
+reader reach it, styled back down to the dim text it replaces, because an id that suddenly
+looks like a control reads as an action to take rather than a fact to copy.
+
+**It copies two ways on purpose, and says so when neither works — which is the whole
+reason this is not a one-liner.** `navigator.clipboard` requires a secure context.
+`127.0.0.1` is one, so the obvious implementation works perfectly for whoever is sitting at
+the deployment and is a button that silently does nothing for everybody else: `LORE_BIND`
+is deliberately settable to an address the workgroup can reach, there is no TLS in front of
+this page, and the API is simply undefined over plain HTTP to a LAN address. So there is a
+`document.execCommand` fallback for those readers, and when both routes fail the page says
+*could not copy* and prints the id to select by hand.
+
+**"Copied" and "did nothing" must not look identical.** That is the ambiguous-guard rule
+this repository states in `PROG.md` and applies to reviews, quotas and replicas — and the
+case it protects here is the reader furthest from the machine, who is also least able to
+work out why nothing happened. The message goes to `#told`, outside the list, because the
+next SSE push rebuilds every row and would erase it; `pick` writes there for the same
+reason and its comment says so.
+
+**The surface detail lives in `spec/operations.md` §2.4.3**, with the rest of the board.
+
 **D-143 — a rejected credential is drawn RED on the board's first line, because for
 thirteen days it looked exactly like a spent quota. BUILT 2026-09-07.**
 
