@@ -39,6 +39,51 @@ that part is pulled out into its own open item rather than hidden inside a tick.
 
 ## Now — nothing here is about writing more features
 
+### 2026-09-08 — Vany's to decide: `passed` and its own attestation disagree about what passed
+
+- [ ] **A REVIEW REACHED `state: passed`, `clean: true`, AND ITS SIGNED LINE SAYS
+      `PARTIAL`.** Measured on `rev_ZJHfthwOzYjTw7hqlym0jwmY` (D-144's own batch, the first
+      full `passed` in weeks — everything else has been `passed_partial`, which is why this
+      surfaced now rather than earlier).
+
+      Three surfaces, three answers:
+
+      * `review_poll` → `state: "passed"`, `clean: true` — the strongest verdict lore has;
+      * `review_attest` → *"1 tier(s) never left a trusted read of this tree, so this is
+        PARTIAL, 7 findings, 6 fixed, 0 justified"*;
+      * `open_count: 1`, against a resource showing 7 findings and 6 settlements.
+
+      **Neither surface is malfunctioning; they encode different rules.** The attestation
+      is right and says so deliberately — `attest.ts` carries `lore-ok[20310406]` naming
+      exactly this case, *"a tier that read a genuinely earlier tree and was never re-run
+      (D-6)"*. t1 ran rounds 1 and 2 and correctly never re-read after the ladder escalated
+      (D-6, "a closed tier stays closed"). So the signed tree genuinely was not read by
+      every tier. The ladder's own pass test asks a different question: no tier SKIPPED
+      above the highest that ran, and no vendor collapse (`ladder.ts`) — t1 is not skipped,
+      it ran, so the ladder says `passed`.
+
+      **README sides with the attestation**: *"`passed` still requires that every tier
+      actually read the tree it is signing."* By that sentence the state is wrong. By D-6
+      the attestation is unavoidable for any review that escalates — which would make
+      `passed` unreachable for every review that ever raised a finding, and reachable only
+      for one that was clean at the top tier on round 1.
+
+      **That is the decision, and it is not mine:** either `passed` means what README says
+      and the ladder must stop issuing it when a lower tier's last read is an earlier tree
+      (making `passed_partial` the normal ending for any review with rounds), or D-6's
+      closed-tier rule is a deliberate exception and README and the attestation should say
+      so instead. Both are defensible; what cannot stand is the client being told `clean:
+      true` while the signed record says PARTIAL, because the client merges on the first
+      and the operator reads the second.
+
+      **Separately, and smaller:** `16211efb` is open with no settlement and no
+      `will_not_settle`, on a review that passed. The code it asked for IS fixed (the
+      publish guard in `tell`, plus a test that fires the interleaving) — t3 simply never
+      recorded a verdict for it, while recording one for the two findings raised beside it
+      in the same round. So a review can reach a terminal verdict with a finding it raised
+      neither settled nor refused, and `review_poll`'s own contract says that pairing is a
+      bug in lore rather than a fact about the branch.
+
 ### 2026-09-03 — Vany's to decide: two changes are on `main` and neither is deployed
 
 - [ ] **D-141 AND D-142 BOTH NEED A CONTAINER RECREATE, AND A RECREATE DROPS ROUNDS IN
