@@ -605,6 +605,23 @@ describe("the review id copies itself", () => {
     expect(byId.get("told")?.textContent).toBe("Copied rev_denied");
   });
 
+  /**
+   * A MESSAGE NOBODY CAN SEE IS NOT A MESSAGE.
+   *
+   * #told sat in normal flow below a sticky header, so a reader scrolled down to a row —
+   * which is where the button is — got their answer rendered off-screen. A failed copy
+   * then looked exactly like a successful one from where they were sitting, which is the
+   * one guarantee this whole change exists to make. The first version of the design
+   * comment reasoned carefully about the message being ERASED by the next push and never
+   * about it being above the viewport.
+   */
+  it("keeps the feedback in view when it has something to say", () => {
+    expect(BOARD_PAGE, "sticky, or the answer scrolls away from the click").toMatch(
+      /#told:not\(:empty\)[^}]*position:\s*sticky/,
+    );
+    expect(BOARD_PAGE, "and below the header rather than under it").toMatch(/#told:not\(:empty\)[^}]*top:/);
+  });
+
   // The id is untrusted the same way every other string on this page is.
   it("escapes the id in both the attribute and the text", () => {
     const { render, byId } = loadPage();

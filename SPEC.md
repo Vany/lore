@@ -4052,6 +4052,15 @@ work out why nothing happened. The message goes to `#told`, outside the list, be
 next SSE push rebuilds every row and would erase it; `pick` writes there for the same
 reason and its comment says so.
 
+**And `#told` sticks under the header, because the first version made that guarantee and
+then rendered it off-screen** (found by this change's own review). It sat in normal flow
+below a sticky header, so a reader scrolled down to a row — which is where the button is —
+had their answer painted at the top of the page. A failed copy then looked exactly like a
+successful one from where they were sitting: the guarantee restated as its own violation.
+The design note reasoned carefully about the message being ERASED by the next push and
+never about it being above the viewport. Every decision result `pick` writes there had the
+same blind spot, and gains the same fix.
+
 **The surface detail lives in `spec/operations.md` §2.4.3**, with the rest of the board.
 
 **D-143 — a rejected credential is drawn RED on the board's first line, because for

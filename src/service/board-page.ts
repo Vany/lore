@@ -128,6 +128,13 @@ export const BOARD_PAGE = `<!doctype html>
   button.pick:hover:not(:disabled) { background: var(--mag); color: #12151a; }
   button.pick:disabled { opacity: .5; cursor: default; }
   .banner.ok { background: #16301f; color: #7fd6a0; }
+  /* #told STICKS UNDER THE HEADER, because a message nobody can see is not a message.
+     It sat in normal flow below a sticky header, so a reader scrolled down to a row got
+     their answer rendered off-screen: a failed copy looked exactly like a successful one
+     from where they were sitting, which is the single guarantee D-144 exists to make.
+     Same for every decision result pick writes here — an operator resolving a
+     contradiction from a row halfway down the board had the same blind spot. */
+  #told:not(:empty) { position: sticky; top: 38px; z-index: 2; }
 
   .s-running, .s-queued { color: var(--blue); }
   /* THE ID STAYS AN ID. A real <button> for the keyboard and for screen readers, styled
@@ -743,7 +750,10 @@ function copyable(id) {
  * Hence the execCommand fallback, and hence the failure branch: a silent no-op is the
  * ambiguous guard this project keeps writing rules about — "copied" and "did nothing" must
  * not look identical. The message goes to #told rather than into the button, because the
- * next push rebuilds the list and would erase it (the same reason pick writes there).
+ * next push rebuilds the list and would erase it (the same reason pick writes there) —
+ * and #told is sticky, because the first version of this reasoned about the message being
+ * ERASED and never about it being off-screen. A reader scrolled to a row got their answer
+ * rendered at the top of the page, where the whole point is that they are not looking.
  */
 async function copyId(e) {
   const id = e.currentTarget.dataset.id;
