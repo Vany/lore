@@ -130,6 +130,12 @@ export const BOARD_PAGE = `<!doctype html>
   .banner.ok { background: #16301f; color: #7fd6a0; }
 
   .s-running, .s-queued { color: var(--blue); }
+  /* THE ID STAYS AN ID. A real <button> for the keyboard and for screen readers, styled
+     back down to the dim text it replaces — a review id that suddenly looks like a
+     control reads as an action to take rather than a fact to copy. */
+  .cid { font: inherit; color: inherit; background: none; border: 0; padding: 0;
+         cursor: pointer; border-bottom: 1px dotted currentColor; }
+  .cid:hover, .cid:focus-visible { color: var(--blue); }
   .prov { margin-right: 10px; white-space: nowrap; }
   .pr-cell { overflow: hidden; }
   a.pr { color: var(--blue); text-decoration: none; }
@@ -337,6 +343,9 @@ function render(b) {
     });
   }
   for (const btn of main.querySelectorAll("button.pick")) btn.addEventListener("click", pick);
+  // Same rebuild-then-attach as pick above: innerHTML discarded the previous nodes
+  // and their listeners with them, so nothing accumulates across pushes.
+  for (const btn of main.querySelectorAll("button.cid")) btn.addEventListener("click", copyId);
   tick();
 }
 
@@ -412,7 +421,7 @@ function detail(r) {
   if (r.state === "needs_human") out.push(question(r));
   // D-130: a folder review carries a path, not an into to merge into.
   const target = r.path ? "folder " + esc(r.path) : "into " + esc(r.into);
-  out.push('<div class="dim">' + esc(r.id) + " · " + esc(r.type) + " · " + target +
+  out.push('<div class="dim">' + copyable(r.id) + " · " + esc(r.type) + " · " + target +
     " · started " + esc(r.createdAt.slice(0, 19).replace("T", " ")) + "Z</div>");
 
   if (r.tiers.length > 0) {
@@ -511,7 +520,7 @@ function refactorDetail(r) {
   if (r.queuedNote) {
     out.push('<div class="note">' + esc(r.queuedNote) + "</div>");
   }
-  out.push('<div class="dim">' + esc(r.id) + " · refactor · " + esc(r.folder) + " @ " + esc(r.commitSha) +
+  out.push('<div class="dim">' + copyable(r.id) + " · refactor · " + esc(r.folder) + " @ " + esc(r.commitSha) +
     " · principal " + esc(r.principal) + " · started " + esc(r.createdAt.slice(0, 19).replace("T", " ")) + "Z</div>");
   if (r.combinerNote) out.push('<div class="skip">' + esc(r.combinerNote) + "</div>");
   if (r.lastError) out.push('<div class="skip">' + esc(r.lastError) + "</div>");
@@ -707,6 +716,65 @@ function finding(r, f) {
       (f.preexisting ? '<p class="dim">the branch did not touch this file</p>' : "") +
     "</div>" +
   "</details>";
+}
+
+/**
+ * A review id, clickable, because the id is the ONE thing a reader takes off this page.
+ *
+ * Everything else here is for looking at; the id gets pasted into review_poll, into a
+ * message to whoever owns the branch, into a database query. Selecting a 28-character
+ * base64url id by hand out of a dim run-on line is the kind of small friction that ends
+ * in a transposed character and a NOT FOUND nobody can explain.
+ */
+function copyable(id) {
+  return '<button class="cid" data-id="' + esc(id) + '" title="copy this id">' + esc(id) + "</button>";
+}
+
+/**
+ * Copy, and SAY SO WHEN IT DOES NOT WORK.
+ *
+ * navigator.clipboard needs a secure context. That is satisfied on 127.0.0.1, which is
+ * where LORE_BIND points by default — and NOT satisfied the moment an operator points it
+ * at a LAN address so the workgroup can see the board, because there is no TLS in front of
+ * this page and http://192.168.x.x is not secure. The API is simply undefined there, so
+ * the obvious one-liner would be a button that does nothing, for the readers furthest from
+ * the machine.
+ *
+ * Hence the execCommand fallback, and hence the failure branch: a silent no-op is the
+ * ambiguous guard this project keeps writing rules about — "copied" and "did nothing" must
+ * not look identical. The message goes to #told rather than into the button, because the
+ * next push rebuilds the list and would erase it (the same reason pick writes there).
+ */
+async function copyId(e) {
+  const id = e.currentTarget.dataset.id;
+  const note = document.getElementById("told");
+  const said = (ok, msg) => { note.className = ok ? "banner ok" : "banner down"; note.textContent = msg; };
+
+  if (navigator.clipboard && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(id);
+      said(true, "Copied " + id);
+      return;
+    } catch (err) {
+      // Fall through: a permissions policy can refuse even in a secure context.
+    }
+  }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = id;
+    ta.setAttribute("readonly", "");
+    // Off-screen but focusable: display:none cannot be selected, so the copy silently
+    // copies nothing, which is the failure this branch exists to avoid.
+    ta.style.position = "fixed";
+    ta.style.top = "-1000px";
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    said(ok, ok ? "Copied " + id : "Could not copy — select it by hand: " + id);
+  } catch (err) {
+    said(false, "Could not copy — select it by hand: " + id);
+  }
 }
 
 /**

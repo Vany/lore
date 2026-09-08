@@ -203,6 +203,21 @@ shell into the container and three SQL queries every time.
 `GET /` is that answer. One page, pushed over SSE at `/board/events`, with `/board.json`
 for anything that would rather read once than hold a stream.
 
+**The review id is a button, and clicking it copies the id.** It is the one thing a reader
+takes OFF this page — everything else here is for looking at, while the id gets pasted into
+`review_poll`, into a message to whoever owns the branch, into a query. Selecting a
+28-character base64url id out of a dim run-on line by hand ends in a transposed character
+and a NOT FOUND nobody can explain.
+
+**It copies two ways on purpose, and says so when neither works.**
+`navigator.clipboard` requires a secure context: `127.0.0.1` is one, and the LAN address an
+operator points `LORE_BIND` at so the workgroup can see the board is NOT, because there is
+no TLS in front of this page. The API is simply undefined there, so the obvious one-line
+implementation is a button that does nothing for exactly the readers furthest from the
+machine. A `document.execCommand` fallback covers them, and when both fail the page says
+*could not copy* and prints the id to select by hand — because "copied" and "did nothing"
+must not look identical, which is the ambiguous-guard rule this file is otherwise full of.
+
 **Every review is collapsed, and collapsed carries four things**: its state, which step
 it is on, how long it has been going in total, and **how long since anything moved**.
 The last is the whole point, and its definition is load-bearing: the newest of the

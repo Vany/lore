@@ -46,6 +46,19 @@ function element(tag = "div") {
       el["_html"] = v;
     },
     appendChild: (c: unknown) => (el["children"] as unknown[]).push(c),
+    removeChild: (c: unknown) => {
+      const kids = el["children"] as unknown[];
+      const i = kids.indexOf(c);
+      if (i >= 0) kids.splice(i, 1);
+    },
+    // The clipboard fallback builds a throwaway textarea and drives it: setAttribute,
+    // then select. Missing from this stub, both threw before execCommand was ever
+    // reached — so the fallback test saw the FAILURE branch and read as if the code were
+    // broken, when what was broken was the stub. A fake that is less capable than the
+    // browser fails the code for its own gaps.
+    setAttribute: (k: string, v: unknown) => { (el["_attrs"] as Record<string, unknown>)[k] = v; },
+    _attrs: {} as Record<string, unknown>,
+    select: () => undefined,
     addEventListener: () => undefined,
     // NOT AN EMPTY ARRAY, and the first version of this file returned one — which made
     // every test here pass with the shadowing bug deliberately reintroduced. `render`
@@ -63,11 +76,12 @@ function element(tag = "div") {
 }
 
 /** Run the page's script against a stub DOM and hand back what it defined. */
-function loadPage(): {
+function loadPage(over: Record<string, unknown> = {}): {
   render: (b: unknown) => void;
   prLink: (r: unknown) => string;
   refactorRow: (r: unknown) => string;
   combinedRows: (reviews: unknown[], refactorRuns: unknown[]) => { kind: string }[];
+  copyId: (e: unknown) => Promise<void>;
   byId: Map<string, ReturnType<typeof element>>;
 } {
   const script = BOARD_PAGE.slice(BOARD_PAGE.indexOf("<script>") + 8, BOARD_PAGE.lastIndexOf("</script>"));
@@ -97,13 +111,28 @@ function loadPage(): {
     confirm: () => false,
     fetch: async () => ({ ok: true, json: async () => ({}) }),
     console,
+    // The clipboard path needs a place to put its throwaway textarea, and a context to
+    // ask about. `over` lets one test claim a secure context and the next deny it —
+    // which is the whole point, since the insecure branch is the one that runs for
+    // everybody reading this board over a LAN address.
+    window: { isSecureContext: false },
+    navigator: {},
+    // `document` is MERGED, never replaced — spreading it wholesale here wiped
+    // getElementById and every test using an override died at load with a TypeError that
+    // named neither the override nor the cause.
+    ...Object.fromEntries(Object.entries(over).filter(([k]) => k !== "document")),
   };
+  const doc = sandbox["document"] as Record<string, unknown>;
+  doc["body"] = element("body");
+  doc["execCommand"] = () => false;
+  Object.assign(doc, (over["document"] as Record<string, unknown> | undefined) ?? {});
   runInNewContext(script, sandbox);
   return {
     render: sandbox["render"] as (b: unknown) => void,
     prLink: sandbox["prLink"] as (r: unknown) => string,
     refactorRow: sandbox["refactorRow"] as (r: unknown) => string,
     combinedRows: sandbox["combinedRows"] as (reviews: unknown[], refactorRuns: unknown[]) => { kind: string }[],
+    copyId: sandbox["copyId"] as (e: unknown) => Promise<void>,
     byId,
   };
 }
@@ -485,6 +514,107 @@ describe("the board's own script runs", () => {
  * The countdown is the actively misleading part: a parked credential still carries a
  * backoff, so the chip promised the route was coming back on its own. It was not.
  */
+/**
+ * THE ID IS THE ONE THING A READER TAKES OFF THIS PAGE.
+ *
+ * Vany, 2026-09-08: *"in webinterface, make review id clickable, click must copy review id
+ * to clipboard."* Everything else on the board is for looking at; the id gets pasted into
+ * review_poll, into a message to whoever owns the branch, into a query. Selecting 28
+ * characters out of a dim run-on line by hand ends in a transposed character and a NOT
+ * FOUND nobody can explain.
+ */
+describe("the review id copies itself", () => {
+  it("renders the id as a real button carrying the id", () => {
+    const { render, byId } = loadPage();
+    render(snapshot());
+    const html = String(byId.get("board")?.innerHTML ?? "");
+    expect(html, "a button, so the keyboard and a screen reader reach it").toContain('<button class="cid"');
+    expect(html, "carrying the id it will copy").toContain('data-id="rev1"');
+    expect(html, "and still reading as the id").toContain(">rev1</button>");
+  });
+
+  /**
+   * THE SECURE-CONTEXT PATH, which is what an operator on the host machine gets.
+   */
+  it("copies through the clipboard API and says which id it took", async () => {
+    const wrote: string[] = [];
+    const { copyId, byId } = loadPage({
+      window: { isSecureContext: true },
+      navigator: { clipboard: { writeText: async (t: string) => { wrote.push(t); } } },
+    });
+
+    await copyId({ currentTarget: { dataset: { id: "rev_abc" } } });
+    expect(wrote, "the id itself, not a truncation of it").toStrictEqual(["rev_abc"]);
+    expect(byId.get("told")?.textContent).toBe("Copied rev_abc");
+    expect(byId.get("told")?.className).toBe("banner ok");
+  });
+
+  /**
+   * THE PATH EVERYONE ELSE GETS, and the reason this is not a one-liner.
+   *
+   * navigator.clipboard exists only in a secure context. 127.0.0.1 is one; the LAN
+   * address an operator sets LORE_BIND to so the workgroup can see the board is not,
+   * because there is no TLS in front of this page. The API is simply undefined there, so
+   * the obvious implementation is a button that does nothing for the readers furthest
+   * from the machine.
+   */
+  it("falls back to execCommand when the context is not secure", async () => {
+    const selected: string[] = [];
+    const { copyId, byId } = loadPage({
+      window: { isSecureContext: false },
+      navigator: {},
+      document: { execCommand: (cmd: string) => { selected.push(cmd); return true; } },
+    });
+
+    await copyId({ currentTarget: { dataset: { id: "rev_lan" } } });
+    expect(selected, "the fallback actually ran").toStrictEqual(["copy"]);
+    expect(byId.get("told")?.textContent).toBe("Copied rev_lan");
+  });
+
+  /**
+   * AND WHEN NEITHER WORKS IT SAYS SO, WITH THE ID.
+   *
+   * A silent no-op is the ambiguous guard this repository keeps writing rules about:
+   * "copied" and "did nothing" must not look identical. The id goes into the message so
+   * the reader can still select it from somewhere, which is the thing they were trying
+   * to do.
+   */
+  it("says it failed, and hands the id over anyway", async () => {
+    const { copyId, byId } = loadPage({
+      window: { isSecureContext: false },
+      navigator: {},
+      document: { execCommand: () => false },
+    });
+
+    await copyId({ currentTarget: { dataset: { id: "rev_nope" } } });
+    expect(byId.get("told")?.textContent).toContain("Could not copy");
+    expect(byId.get("told")?.textContent, "still reachable by hand").toContain("rev_nope");
+    expect(byId.get("told")?.className, "and it must not read as success").toBe("banner down");
+  });
+
+  // A clipboard that rejects (a permissions policy can refuse even on localhost) must
+  // reach the fallback rather than ending in an unhandled rejection.
+  it("falls through to the fallback when the clipboard API rejects", async () => {
+    const { copyId, byId } = loadPage({
+      window: { isSecureContext: true },
+      navigator: { clipboard: { writeText: async () => { throw new Error("denied by policy"); } } },
+      document: { execCommand: () => true },
+    });
+
+    await copyId({ currentTarget: { dataset: { id: "rev_denied" } } });
+    expect(byId.get("told")?.textContent).toBe("Copied rev_denied");
+  });
+
+  // The id is untrusted the same way every other string on this page is.
+  it("escapes the id in both the attribute and the text", () => {
+    const { render, byId } = loadPage();
+    render(snapshot({ reviews: [{ ...snapshot().reviews[0], id: 'rev"><script>x</script>' }] }));
+    const html = String(byId.get("board")?.innerHTML ?? "");
+    expect(html, "raw markup must never reach the DOM").not.toContain("<script>x</script>");
+    expect(html).toContain("&lt;script&gt;");
+  });
+});
+
 describe("a rejected credential on the first line", () => {
   const provs = (over: Record<string, unknown>[]) => snapshot({ providers: over });
 
