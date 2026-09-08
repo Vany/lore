@@ -2342,6 +2342,27 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           // that session, or have the token revoked — is simply wrong there:
           // `knowledge_resolve` is REPO-scoped (`who.repoId`), so this caller's own user
           // can settle the contradiction now and resume the review.
+          // A REVIEW LORE IS WORKING ON STILL NEEDS YOU LATER, and the inbox used to say
+          // the opposite in as many words: "lore — queued, running, or fast_clean with the
+          // deep tiers still going. Nothing to do." True for that instant, false for the
+          // session, and it undercut the two decisions either side of it — the standing
+          // instruction to finish what you start (D-141) and the whole point of saying
+          // what a quiet row means (D-142). A client reads "nothing to do", does nothing,
+          // and the findings this round is about to raise sit in findings_ready until the
+          // sweep takes them.
+          //
+          // The row that is lore's move is the one MOST likely to become yours, because it
+          // is the one still producing findings.
+          ...(!yours && !isTerminal(r.state)
+            ? {
+                waiting_note:
+                  "NOTHING FOR YOU THIS SECOND, AND THIS REVIEW IS NOT FINISHED — those are different " +
+                  "things. lore is working on it (" + r.state + "), and when the round ends it will " +
+                  "either pass or hand you findings that nobody else can answer. Come back and " +
+                  "review_poll it: the reply carries how long to wait. Do not start a second review of " +
+                  "this branch, and do not treat this list as empty because nothing is due right now.",
+              }
+            : {}),
           ...(elsewhere
             ? {
                 not_yours_note:
@@ -2422,7 +2443,14 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           // it from three rows it had misread one at a time. A number it cannot get wrong
           // sits above the rows: how many reviews are stopped, waiting on this caller,
           // with nothing left to collect. That is the count of things that will rot.
-          stalled: items.filter((i) => i.waiting_note !== undefined).length,
+          // TWO COUNTS, BECAUSE "IS EVERYTHING DONE" HAS TWO WAYS TO BE NO.
+          //
+          // `stalled` was the answer to a client reading rows one at a time and getting
+          // each wrong (D-142). It does not cover the other half: a review lore is still
+          // working on is not done either, and the text used to call that "nothing to do".
+          // A caller who sees stalled: 0 and stops has stopped in the middle.
+          stalled: items.filter((i) => i.waiting_on === "you" && i.waiting_note !== undefined).length,
+          in_flight: items.filter((i) => i.waiting_on === "lore" && !isTerminal(i.state)).length,
           needs_human: needsHuman.length,
           ...(needsHuman.length > 0 ? { open_questions: questions } : {}),
           note: [
@@ -2434,14 +2462,31 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
             // Said whenever there is one, and never implied by silence. NOTHING IS READY
             // while this is above zero, and that is the sentence a client relays to the
             // person who asked.
-            ...(items.some((i) => i.waiting_note !== undefined)
+            ...(items.some((i) => i.waiting_on === "you" && i.waiting_note !== undefined)
               ? [
                   "`stalled` counts reviews STOPPED with nothing left to collect — read each one's " +
                     "`waiting_note` for what it needs, AND its `not_yours_note` if it has one, which says " +
                     "you cannot do any of that from here. They are not in progress: " +
                     "lore cannot see whether anyone is working, so `new_findings: 0` says only that nothing " +
-                    "new arrived. While `stalled` is above zero, the honest answer to \"is everything done\" " +
-                    "is NO.",
+                    "new arrived.",
+                ]
+              : []),
+            // SAID WHENEVER WORK IS OUTSTANDING, not only when it is stopped. A client
+            // that reads an inbox with a running review and concludes it is finished has
+            // made the same mistake as one that reads new_findings: 0 as progress — it is
+            // just earlier in the loop.
+            ...(items.some((i) => i.waiting_on === "lore" && !isTerminal(i.state))
+              ? [
+                  "`in_flight` counts reviews LORE IS STILL WORKING ON. Nothing is due from you this " +
+                    "second and they are not finished: each will either pass or hand you findings only you " +
+                    "can answer, and nothing will tell you which — come back and review_poll them. An " +
+                    "inbox with work in flight is not an empty inbox.",
+                ]
+              : []),
+            ...(items.some((i) => !isTerminal(i.state))
+              ? [
+                  "WHILE EITHER COUNT IS ABOVE ZERO THE HONEST ANSWER TO \"is everything done\" IS NO: " +
+                    "some of this needs you now, the rest will need you shortly.",
                 ]
               : []),
           ].join(" "),

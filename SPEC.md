@@ -4021,6 +4021,92 @@ working agreement says to confirm rather than assume.
 (fingerprint 9c6f2a60) — never inside the repository**, so nothing needs a new
 `.gitignore` rule.
 
+**D-146 — git's ownership check cannot decide whether a review runs. BUILT 2026-09-08.**
+
+A colleague reported that lore had "judged a stale tree" on `rigid-monorepo`. It had not,
+and the truth was worse in one way and better in another: **lore never judged the new tree
+at all.**
+
+The sequence, from the store: round 2's `t0` ran twelve minutes and ended `interrupted`;
+its `t1` raised findings against the worktree as it stood; the client pushed *while that
+round was still running*; and the re-pinned round that should have read the new tree died
+before it started, on `git worktree list --porcelain` — *"detected dubious ownership in
+repository"*. The review is `failed`, which by INV-1 concludes nothing, so the gate held.
+What misled the reader is that the review row then showed the newly pushed tree beside
+findings from before it, with nothing reconciling the two.
+
+**Why git refused, and why it is not lore's to argue with.** The data directory is a host
+bind by design (D-60): the T0 sandbox asks the host daemon to bind-mount a worktree by
+absolute path, so the path must mean the same thing on both sides. On the host those files
+belong to the operator; in the container the process is a different uid; the two are
+reconciled by the file-sharing layer and by nothing lore controls. Measured the same day:
+the container saw `1000:1000` where the host saw `501:20`, and the failing command
+succeeded again minutes later. Nothing lore can observe separates a repository it must not
+touch from one whose uid mapping hiccuped for ninety seconds.
+
+**So the check is disabled for lore's own git calls, and that is a narrower claim than it
+sounds.** `safe.directory` defends a SHARED machine — another user planting a repository
+in a path you are about to run git in. lore is single-tenant and every path it hands git is
+one it created under the data directory compose mounts for it. There is no second user to
+defend against, and with the check in place the service's availability rests on a mapping
+no part of this system owns.
+
+**Delivered as environment, from `gitEnv` in `src/git/exec.ts`, not baked into the image.**
+`LORE_DATA_DIR` is set by compose to the HOST's path so both sides agree, so a build-time
+`safe.directory` would name a path this deployment never uses — written that way first,
+and caught before it shipped by checking what the container actually mounts.
+
+**The ceiling and the disablement travel together, and a check enforces it.** D-61's
+`GIT_CEILING_DIRECTORIES` was already required of every call site, with `repin.ts` carrying
+the story of a local runner that "silently opted out of the one thing every other git call
+in this service gets". That is this same defect one option earlier. The guard in
+`one-definition.test.ts` now rejects a call site that spells the ceiling out inline instead
+of calling `gitEnv()`, AND asserts `gitEnv` carries both — without the second half,
+stripping an option leaves every call site still looking correct, which the first version
+of this fix did until a mutation test found it.
+
+`[OPEN]` — a review whose re-pin failed still displays a tree no tier ever read. That is
+the half the colleague actually bumped into, and it is a presentation defect independent of
+the git failure.
+
+**D-145 — an inbox with work in flight is not an empty inbox: `in_flight` beside
+`stalled`, and "Nothing to do" is gone. BUILT 2026-09-08.**
+
+Vany: *"right now we talking CALL review_inbox but in fact we need check review state,
+because here may be nothing in inbox, but review is running … programmer must want to
+monitor the review or submit fixes, not just doing nothing."*
+
+**The inbox said the wrong thing in as many words.** `TOOL_DOCS.inbox`'s triage read:
+*"'lore' — queued, running, or fast_clean with the deep tiers still going. **Nothing to
+do.**"* True for that instant and false for the session — and it sat between the two
+decisions built to stop precisely this failure. D-141 put a standing instruction in front
+of every session to finish what it starts; D-142 made a quiet row say what its silence
+means. Between them, the one sentence a client reads about a review that is actively
+running told it to do nothing.
+
+**The row that is lore's move is the one MOST likely to become the client's**, because it
+is the one still producing findings. When the round ends it either passes or hands over
+findings nobody else can answer, lore cannot say which is coming, and it cannot reach
+anyone when it knows (D-141's first fact). A client that reads "nothing to do" and stops
+has stopped in the middle, and its findings then sit in `findings_ready` until the sweep
+takes them — the abandonment measured at 14 open reviews on 2026-09-02, invited by the
+text rather than in spite of it.
+
+**Two counts, because "is everything done" has two ways to be no.** `stalled` (D-142)
+counts work ROTTING: stopped, waiting on the caller, nothing left to collect.
+`in_flight` counts work COMING: reviews lore is still running. Either above zero means
+no, and the note says so rather than leaving a reader to combine them. A caller who read
+`stalled: 0` and stopped was reading half the answer.
+
+**Every non-terminal row now carries a `waiting_note`, including lore's own**, which
+widens D-142's field from the rot case to "what this row needs from you, and when". The
+in-flight text says what the state is, that it is not finished, and to come back and
+`review_poll` — deferring the interval to the reply that computes it, rather than
+repeating a number that would then have two sources.
+
+**`needs_human` keeps its carve-out** (D-142): `open_questions` answers it louder, and two
+instructions over one review is how a client picks the cheaper one.
+
 **D-144 — the review id on the board is a button, and clicking it copies the id. BUILT
 2026-09-08.**
 

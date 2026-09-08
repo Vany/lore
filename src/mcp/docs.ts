@@ -75,6 +75,13 @@ the session that started it. An earlier session — usually an earlier you — m
 one open, holding a pinned copy of the branch and waiting for an answer only its owner
 can give. Nothing else will finish it, and nothing is going to tell you it is there.
 
+AND READ WHAT IT ANSWERS WITH. Two counts say whether anything is outstanding: stalled
+is work ROTTING — stopped, waiting on you — and in_flight is work COMING, which lore is
+running right now. A row that is lore's move needs nothing this second and is not
+finished: it will end in a pass or in findings only you can answer, and nothing will
+reach you when it does. So while either count is above zero you are not done, and an
+inbox with work in flight is not an empty inbox.
+
 A REVIEW IS A LOOP, NOT A REQUEST, AND A SUBMIT IS NOT AN ENDING. review_start and
 review_submit both return the moment your input is accepted, and accepted is not judged:
 the round runs after they return, over minutes. It reaches a verdict without you — what
@@ -831,16 +838,23 @@ answered that the agents had "already collected them and are working the fixes".
 in the reply said that. All three were stopped, unanswered, and rotting, and a person
 was told the opposite by an agent that had every fact except the meaning.
 
-\`stalled\` AT THE TOP IS THE ANSWER TO "IS EVERYTHING DONE", and it is one number
-rather than rows you have to interpret one at a time: how many reviews are stopped,
-waiting on YOU, with nothing left to collect. **While it is above zero the answer is
-NO.** Most are yours to answer with review_submit or to end with review_cancel — but a
+TWO COUNTS AT THE TOP ANSWER "IS EVERYTHING DONE", and between them they cover the two
+ways it can be no. \`stalled\`: reviews STOPPED, waiting on you, with nothing left to
+collect — work that is rotting. \`in_flight\`: reviews lore is still working on — work
+that is coming. **While either is above zero the answer is NO**, and a caller who reads
+\`stalled: 0\` and stops has stopped in the middle. Most are yours to answer with review_submit or to end with review_cancel — but a
 counted row carrying \`not_yours_note\` is NOT, and its own \`waiting_note\` says so
 rather than leaving you to notice: those calls answer NOT FOUND for you. It is still
 counted, because it is still stopped and somebody still has to finish it; what changes is
 who.
-  * "lore" — queued, running, or fast_clean with the deep tiers still going. Nothing to
-    do. review_start naming the same branch AND the same scope (a folder review's
+  * "lore" — queued, running, or fast_clean with the deep tiers still going. NOTHING FOR
+    YOU THIS SECOND, AND NOT FINISHED: those are different things, and this line used to
+    say only the first. The round will end either in a pass or in findings that nobody
+    but you can answer, and lore cannot tell you which is coming or reach you when it
+    knows. So this row is the one MOST likely to become your move — come back and
+    review_poll it; the reply carries how long to wait. in_flight counts these, and an
+    inbox with work in flight is not an empty inbox.
+    review_start naming the same branch AND the same scope (a folder review's
     \`path\`, or bare diff mode) as this open review is REFUSED, not destructive — it
     errors and names this review rather than touching it. Only \`restart: true\` on that
     same call discards every ratified justification and reruns the cheap tiers from

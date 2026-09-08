@@ -22,6 +22,46 @@ export interface GitResult {
   readonly stderr: string;
 }
 
+/**
+ * Git's ownership check cannot be allowed to decide whether a review runs.
+ *
+ * The data directory is a HOST BIND by design (D-60: the T0 sandbox asks the host daemon
+ * to bind-mount a worktree by absolute path, so the path must mean the same thing on both
+ * sides). On the host those files belong to the operator; in the container the process is
+ * a different uid, and the two are reconciled by the file-sharing layer — not by anything
+ * lore controls. When that reconciliation slips, git refuses the repository outright with
+ * "detected dubious ownership", and every git call in the review path fails at once.
+ *
+ * Measured 2026-09-08 on `rigid-monorepo`. A client pushed and re-pinned; the round that
+ * should have read the new tree died on `git worktree list --porcelain` before it began,
+ * and a `t0` in the same window ran twelve minutes and ended `interrupted`. The same
+ * command succeeded again minutes later, which is the difficult part: nothing lore can
+ * observe separates a repository it must not touch from one whose uid mapping hiccuped.
+ *
+ * WHY DISABLING THE CHECK IS RIGHT HERE, rather than lax. It defends a SHARED machine —
+ * another user planting a repository in a path you are about to run git in. lore runs
+ * single-tenant and every path it hands git is one it created itself, under a data
+ * directory compose mounts for it. There is no second user to defend against, and with
+ * the check in place the service's availability rests on a uid mapping no part of this
+ * system owns.
+ *
+ * DELIVERED AS ENV, NOT AS `git config`, and not baked into the image: the data directory
+ * is `LORE_DATA_DIR`, which compose sets to the HOST's path so both sides agree — a build
+ * time `safe.directory` would name a path this deployment never uses. `GIT_CONFIG_*`
+ * applies to the invocation, needs no writable HOME, and travels to every call site that
+ * spawns git with this env rather than only the ones that read a config file.
+ */
+const OWNERSHIP_CHECK_OFF: Readonly<Record<string, string>> = {
+  GIT_CONFIG_COUNT: "1",
+  GIT_CONFIG_KEY_0: "safe.directory",
+  GIT_CONFIG_VALUE_0: "*",
+};
+
+/** The environment every git invocation in this service runs under. */
+export function gitEnv(cwd: string, extra: Readonly<Record<string, string>> = {}): Record<string, string> {
+  return { ...process.env, GIT_CEILING_DIRECTORIES: cwd, ...OWNERSHIP_CHECK_OFF, ...extra } as Record<string, string>;
+}
+
 export async function git(
   cwd: string,
   args: readonly string[],
@@ -53,7 +93,7 @@ export async function git(
       // The ceiling is `cwd` itself, so discovery can find a repository AT `cwd` and
       // nowhere above it. Cheaper and more total than auditing every call site for
       // whether its target exists.
-      env: { ...process.env, GIT_CEILING_DIRECTORIES: cwd, ...extraEnv },
+      env: gitEnv(cwd, extraEnv),
     });
     return { stdout, stderr };
   } catch (e) {

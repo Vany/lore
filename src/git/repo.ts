@@ -14,7 +14,7 @@ import { DidNotRun } from "../core/errors.ts";
 import { dataDir } from "../core/paths.ts";
 import { unquoteGitPath } from "./diff.ts";
 import { requestMirrorRefresh, type RefreshOutcome } from "./mirror-request.ts";
-import { git, gitMaybe } from "./exec.ts";
+import { git, gitEnv, gitMaybe } from "./exec.ts";
 
 export interface RepoPaths {
   /** Bare clone, shared by every review of this repo. */
@@ -905,7 +905,10 @@ export async function applyPatch(worktree: string, patch: string): Promise<void>
         maxBuffer: 64 * 1024 * 1024,
         // The same ceiling every other invocation gets (D-61): a patch must never be
         // applied to a repository above the worktree it was meant for.
-        env: { ...process.env, GIT_CEILING_DIRECTORIES: worktree },
+        // gitEnv, not a hand-built copy: it carries the D-61 ceiling AND the ownership
+      // check's disablement, and a second copy of that list is how one call site comes to
+      // be the only one git refuses.
+      env: gitEnv(worktree),
         // THE SAME BOUND EVERY OTHER GIT CALL GETS (`exec.ts`'s `git()` default,
         // `diff.ts`'s `mergeCheck`) — found by lore's own review: this is the one raw
         // `execFile` in the module (needed for stdin piping, which the `git()` wrapper

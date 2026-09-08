@@ -355,6 +355,26 @@ describe("git runs through one runner", () => {
   // The exemption is granted for spelling the options out. If one stops doing that, it is
   // no longer the thing the exemption was granted for — which is how `repin.ts` came to
   // look like a legitimate second runner in the first place.
+  /**
+   * AND THE ONE FUNCTION THEY ALL DEFER TO MUST ACTUALLY CARRY BOTH.
+   *
+   * The check above accepts `gitEnv(` as proof a call site is complete. That makes this
+   * assertion load-bearing rather than decorative: strip an option out of `gitEnv` and
+   * every call site still looks correct, which is a guard agreeing with a file that
+   * stopped doing the thing — the exact failure mode the comment below is about, one
+   * level up.
+   */
+  it("gitEnv carries the ceiling AND the ownership-check disablement", () => {
+    const text = FILES.find((x) => x.path === "git/exec.ts")?.text ?? "";
+    expect(text, "git/exec.ts not found — the runner moved").not.toBe("");
+    expect(text, "D-61: git must not climb out of cwd").toContain("GIT_CEILING_DIRECTORIES: cwd");
+    // Without this, a slip in the host bind's uid mapping refuses every repository with
+    // "detected dubious ownership" and the whole review path fails at once — measured
+    // 2026-09-08, one review killed outright and a t0 left running twelve minutes.
+    expect(text, "the ownership check must be disabled for lore's own data directory").toContain("safe.directory");
+    expect(text, "delivered as env, because the data path is only known at runtime").toContain("GIT_CONFIG_KEY_0");
+  });
+
   it("has no exemption that stopped setting the options it was exempted for", () => {
     for (const path of MAY_SPAWN) {
       const f = FILES.find((x) => x.path === path);
@@ -372,10 +392,28 @@ describe("git runs through one runner", () => {
       // `t0/exec.ts` runs the target repo's own tooling, not git, so a git ceiling would
       // mean nothing there — it carries its own env hygiene instead. Every git-running
       // exemption must carry the ceiling.
+      //
+      // `gitEnv(...)` SATISFIES THIS, and is the better answer. The environment a git call
+      // needs stopped being one option on 2026-09-08: a slip in the host bind's uid
+      // mapping made git refuse every repository with "detected dubious ownership", which
+      // killed a review's re-pinned round outright and left a t0 running twelve minutes to
+      // an `interrupted` end. So the ceiling and the ownership-check disablement travel
+      // together from one function, and an exemption spelling out ONLY the ceiling is now
+      // the incomplete version — exactly the shape this test was written to catch, one
+      // option later.
       if (path !== "t0/exec.ts") {
         expect(
-          /GIT_CEILING_DIRECTORIES\s*:/.test(f?.text ?? ""),
-          `${path} names GIT_CEILING_DIRECTORIES but no longer SETS it — D-61 says git will climb out of cwd`,
+          /GIT_CEILING_DIRECTORIES\s*:/.test(f?.text ?? "") || /gitEnv\(/.test(f?.text ?? ""),
+          `${path} builds a git environment without the ceiling and without gitEnv() — ` +
+            "D-61 says git will climb out of cwd, and the ownership check will refuse the repo outright",
+        ).toBe(true);
+        // AND IF IT HAND-BUILDS ONE, IT IS NOW WRONG. A literal ceiling with no gitEnv
+        // means that call site opts out of the ownership disablement while looking
+        // complete — which is how `repin.ts` came to look like a legitimate second runner.
+        expect(
+          !/GIT_CEILING_DIRECTORIES\s*:/.test(f?.text ?? "") || /gitEnv\(/.test(f?.text ?? ""),
+          `${path} spells the ceiling out inline instead of calling gitEnv() — it will lose ` +
+            "every option that is added to the git environment after this one",
         ).toBe(true);
       }
     }
@@ -812,3 +850,4 @@ describe("no docblock is orphaned by the next one", () => {
     expect(stale, "these are clean now; delete their baseline entries").toStrictEqual([]);
   });
 });
+

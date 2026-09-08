@@ -1328,14 +1328,29 @@ describe("the inbox lists what is waiting, not only what is fresh", () => {
     expect(out["stalled"], "only the collected-and-left review counts").toBe(0);
   });
 
-  /** Waiting on LORE is not stalled either: a running round needs nothing from anyone. */
-  it("does not call a running review stalled", async () => {
+  /**
+   * WAITING ON LORE IS NOT STALLED — AND IT IS NOT "NOTHING TO DO" EITHER.
+   *
+   * The inbox used to say exactly that, in as many words: *"lore — queued, running, or
+   * fast_clean with the deep tiers still going. Nothing to do."* True for that instant and
+   * false for the session. A client reads it, does nothing, and the findings the round is
+   * about to raise sit in findings_ready until the sweep takes them — the abandonment
+   * D-141 and D-142 both exist to end, invited by the text between them.
+   *
+   * So a running row now says what it is and what it will need, while staying out of
+   * `stalled`, which counts what is ROTTING rather than what is outstanding.
+   */
+  it("tells a running review it is unfinished, without calling it stalled", async () => {
     open("revRunning", "running", "feat/mid-round-inbox");
     const out = await callTool("review_inbox", {});
     const running = (out["reviews"] as Record<string, unknown>[]).find((r) => r["review_id"] === "revRunning");
+
     expect(running?.["waiting_on"]).toBe("lore");
-    expect(running).not.toHaveProperty("waiting_note");
-    expect(out["stalled"]).toBe(0);
+    const note = String(running?.["waiting_note"]);
+    expect(note, "the distinction the old text collapsed").toContain("NOT FINISHED");
+    expect(note, "and what to do about it later").toContain("review_poll");
+    expect(out["stalled"], "nothing is rotting").toBe(0);
+    expect(out["in_flight"], "but something is outstanding").toBe(1);
   });
 
   /**
@@ -1495,7 +1510,8 @@ describe("the inbox lists what is waiting, not only what is fresh", () => {
     const row = (out["reviews"] as Record<string, unknown>[]).find((r) => r["review_id"] === "revSibRunning");
     expect(row?.["waiting_on"], "lore is working on it").toBe("lore");
     expect(String(row?.["not_yours_note"]), "still unreachable from here").toContain("NOT YOURS TO ANSWER");
-    expect(row, "but nothing about it is stopped").not.toHaveProperty("waiting_note");
+    expect(String(row?.["waiting_note"]), "unfinished, which is a different claim from stopped")
+      .toContain("NOT FINISHED");
     expect(out["stalled"], "and it must not be counted as rot").toBe(0);
   });
 
@@ -1530,6 +1546,46 @@ describe("the inbox lists what is waiting, not only what is fresh", () => {
     expect(row, "needs_human never carries the rot note").not.toHaveProperty("waiting_note");
     expect(out["stalled"], "nor is it counted as rot").toBe(0);
     expect(out["needs_human"], "it is answered by its own mechanism").toBe(1);
+  });
+
+  /**
+   * AN INBOX WITH WORK IN FLIGHT IS NOT AN EMPTY INBOX.
+   *
+   * Vany, 2026-09-08: *"here may be nothing in inbox, but review is running … programmer
+   * must want to monitor the review or submit fixes, not just doing nothing."* The old
+   * text answered a lore-owned row with "Nothing to do", which is true for the instant and
+   * false for the session — and it sat between the two decisions built to stop exactly
+   * this, the standing instruction to finish what you start and the whole apparatus for
+   * saying what a quiet row means.
+   */
+  it("says work is outstanding even when nothing is due right now", async () => {
+    open("revBusy", "running", "feat/still-going");
+    open("revQueued", "queued", "feat/not-started");
+
+    const out = await callTool("review_inbox", {});
+    expect(out["stalled"], "nothing is rotting").toBe(0);
+    expect(out["in_flight"], "but two reviews will need this caller").toBe(2);
+
+    const note = String(out["note"]);
+    expect(note, "the count is explained, not just emitted").toContain("in_flight");
+    expect(note, "and the conclusion is drawn for the reader").toContain(
+      'THE HONEST ANSWER TO "is everything done" IS NO',
+    );
+    expect(note, "in the words that answer the question actually asked").toContain(
+      "not an empty inbox",
+    );
+  });
+
+  /** A finished review is not outstanding — the count must not cry wolf. */
+  it("counts nothing in flight when every review has ended", async () => {
+    open("revDone", "passed", "feat/finished");
+    open("revGone", "cancelled", "feat/stopped");
+
+    const out = await callTool("review_inbox", {});
+    expect(out["in_flight"]).toBe(0);
+    expect(out["stalled"]).toBe(0);
+    expect(String(out["note"]), "and it says nothing about work that is coming")
+      .not.toContain("in_flight");
   });
 
   /**
@@ -1575,8 +1631,10 @@ describe("the inbox lists what is waiting, not only what is fresh", () => {
 
     const out = await callTool("review_inbox", {});
     expect(out["stalled"], "both stopped ones, not the running one").toBe(2);
-    expect(String(out["note"])).toContain("the honest answer to \"is everything done\" is NO");
+    expect(out["in_flight"], "and the running one is counted separately").toBe(1);
+    expect(String(out["note"])).toContain("THE HONEST ANSWER TO \"is everything done\" IS NO");
     expect(String(out["note"]), "and it points at the per-review detail").toContain("waiting_note");
+    expect(String(out["note"]), "including the half that is not stopped").toContain("in_flight");
   });
 
   // The docs ARE the interface, so a field the inbox emits and TOOL_DOCS.inbox never

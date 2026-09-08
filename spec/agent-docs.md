@@ -229,6 +229,13 @@ to review.
 > and you decide what deserves attention. A finding nobody sees is a finding nobody
 > found.
 >
+> **A row that is lore's move is not "nothing to do" (D-145).** It is unfinished, and it
+> is the row most likely to become yours — when the round ends it either passes or hands
+> you findings only you can answer, and nothing reaches you when it does. `in_flight`
+> counts those beside `stalled`, which counts what is rotting; while either is above zero
+> you are not done. This line used to read "Nothing to do", which was true for the instant
+> and false for the session.
+>
 > **`new_findings: 0` never means somebody is working on it.** It means nothing NEW
 > arrived since the last handover, and that is all it can mean: lore cannot see
 > sessions, so a caller mid-fix and one that ended days ago produce the same row. Such

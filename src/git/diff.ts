@@ -7,7 +7,7 @@
  * because `git diff` cannot see them at all (INV-4).
  */
 
-import { git, gitLines, gitMaybe } from "./exec.ts";
+import { git, gitEnv, gitLines, gitMaybe } from "./exec.ts";
 
 /**
  * Above this, the diff is cut and the reviewer is told so.
@@ -689,7 +689,10 @@ async function mergeCheck(worktree: string, base: string): Promise<boolean | und
         // not part of what needed bypassing, and without it a hung git holds the
         // round open with nothing to say.
         timeout: 120_000,
-        env: { ...process.env, GIT_CEILING_DIRECTORIES: worktree },
+        // gitEnv, not a hand-built copy: it carries the D-61 ceiling AND the ownership
+        // check's disablement, and a second copy of that list is how one call site comes
+        // to be the only one git refuses.
+        env: gitEnv(worktree),
       },
       (err) => {
         if (err === null) return resolve(true);

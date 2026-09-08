@@ -521,7 +521,7 @@ away in `expires_at`:
 | `waiting_on` | states | what the client does |
 |---|---|---|
 | `you` | `findings_ready`, `findings_stale`, `awaiting_diff`, `needs_human`, or anything with uncollected findings | collect, answer with `review_submit`, or get a person |
-| `lore` | `queued`, `running`, `fast_clean` | nothing — and specifically **not** a second `review_start` for that branch (§2.4.2) |
+| `lore` | `queued`, `running`, `fast_clean` | nothing **this second**, and it is not finished — come back and poll (D-145). Specifically **not** a second `review_start` for that branch (§2.4.2) |
 
 `expires_at` is `updated_at` + the retention sweep's `staleHours`, read from one
 constant so the deadline stated and the deadline enforced cannot differ. It is absent
@@ -564,8 +564,10 @@ one of the calls that refuses — while `waiting_note` and `stalled` stay about 
 that is stopped. On `needs_human` it says the opposite of "wait for that session":
 `knowledge_resolve` is repo-scoped, so this caller can settle the question and resume the
 review itself. `stalled` at the top level counts them — one number, above the rows, for the
-question the client was actually asked, and while it is above zero the honest answer to
-*is everything done* is no. A counted row that is bound to another live token still
+question the client was actually asked. **`in_flight` counts the other half (D-145):
+reviews lore is still running**, which are not done either. The triage table above used to
+answer that case with "nothing", and a client that read it stopped in the middle of its own
+loop; either count above zero means the honest answer to *is everything done* is no. A counted row that is bound to another live token still
 counts, because it is still stopped and somebody still has to finish it — and its
 `waiting_note` says its own prescriptions will not work for this caller rather than
 leaving the reader to cross-reference `not_yours_note` and notice. A field that reads the
