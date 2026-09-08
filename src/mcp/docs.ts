@@ -75,12 +75,11 @@ the session that started it. An earlier session — usually an earlier you — m
 one open, holding a pinned copy of the branch and waiting for an answer only its owner
 can give. Nothing else will finish it, and nothing is going to tell you it is there.
 
-AND READ WHAT IT ANSWERS WITH. Two counts say whether anything is outstanding: stalled
-is work ROTTING — stopped, waiting on you — and in_flight is work COMING, which lore is
-running right now. A row that is lore's move needs nothing this second and is not
-finished: it will end in a pass or in findings only you can answer, and nothing will
-reach you when it does. So while either count is above zero you are not done, and an
-inbox with work in flight is not an empty inbox.
+AND READ WHAT IT ANSWERS WITH. Two counts cover every unfinished review between them:
+waiting_on_you is yours to act on, in_flight is lore still working. A row that is lore's
+move needs nothing this second and is NOT finished — it will end in a pass or in findings
+only you can answer, and nothing will reach you when it does. So while either count is
+above zero you are not done, and an inbox with work in flight is not an empty inbox.
 
 A REVIEW IS A LOOP, NOT A REQUEST, AND A SUBMIT IS NOT AN ENDING. review_start and
 review_submit both return the moment your input is accepted, and accepted is not judged:
@@ -838,11 +837,18 @@ answered that the agents had "already collected them and are working the fixes".
 in the reply said that. All three were stopped, unanswered, and rotting, and a person
 was told the opposite by an agent that had every fact except the meaning.
 
-TWO COUNTS AT THE TOP ANSWER "IS EVERYTHING DONE", and between them they cover the two
-ways it can be no. \`stalled\`: reviews STOPPED, waiting on you, with nothing left to
-collect — work that is rotting. \`in_flight\`: reviews lore is still working on — work
-that is coming. **While either is above zero the answer is NO**, and a caller who reads
-\`stalled: 0\` and stops has stopped in the middle. Most are yours to answer with review_submit or to end with review_cancel — but a
+TWO COUNTS AT THE TOP ANSWER "IS EVERYTHING DONE", and between them they cover every
+unfinished review — whose move it is, for each one. \`waiting_on_you\`: yours to act on,
+whether that means collecting findings you have not read, answering ones you have, or
+getting a person. \`in_flight\`: lore is still working on it, so nothing is due this
+second and it is not finished. **While either is above zero the answer is NO.**
+
+\`stalled\` IS A SUBSET OF THE FIRST, NOT A THIRD CATEGORY: the ones that have gone
+quiet — stopped, with nothing left to collect, so nothing changes until somebody acts.
+Read it as urgency, never as the total. An earlier version of this text offered
+\`stalled\` and \`in_flight\` as the whole answer, and they were not: a review holding
+findings you had not collected yet was counted by neither, so the most ordinary
+outstanding state of all read as "everything done". Most are yours to answer with review_submit or to end with review_cancel — but a
 counted row carrying \`not_yours_note\` is NOT, and its own \`waiting_note\` says so
 rather than leaving you to notice: those calls answer NOT FOUND for you. It is still
 counted, because it is still stopped and somebody still has to finish it; what changes is

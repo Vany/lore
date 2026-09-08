@@ -2358,9 +2358,13 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
                 waiting_note:
                   "NOTHING FOR YOU THIS SECOND, AND THIS REVIEW IS NOT FINISHED — those are different " +
                   "things. lore is working on it (" + r.state + "), and when the round ends it will " +
-                  "either pass or hand you findings that nobody else can answer. Come back and " +
-                  "review_poll it: the reply carries how long to wait. Do not start a second review of " +
-                  "this branch, and do not treat this list as empty because nothing is due right now.",
+                  "either pass or hand you findings that nobody else can answer. " +
+                  (elsewhere
+                    ? "YOU CANNOT WATCH IT FROM HERE, though: read `not_yours_note` on this row before " +
+                      "acting on anything above — review_poll answers NOT FOUND for you on it."
+                    : "Come back and review_poll it: the reply carries how long to wait.") +
+                  " Do not start a second review of this branch, and do not treat this list as empty " +
+                  "because nothing is due right now.",
               }
             : {}),
           ...(elsewhere
@@ -2449,8 +2453,27 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           // each wrong (D-142). It does not cover the other half: a review lore is still
           // working on is not done either, and the text used to call that "nothing to do".
           // A caller who sees stalled: 0 and stops has stopped in the middle.
-          stalled: items.filter((i) => i.waiting_on === "you" && i.waiting_note !== undefined).length,
+          // THESE TWO PARTITION EVERY UNFINISHED REVIEW, and the first version did not.
+          //
+          // `stalled` fires only when there is nothing left to collect, and `in_flight`
+          // only when the move is lore's — so the MOST ORDINARY outstanding state, a
+          // review holding findings the client has not collected yet, was counted by
+          // NEITHER. A session reading "stalled: 0, in_flight: 0" as the texts taught it
+          // to would report everything done with three findings waiting, which is the
+          // abandonment D-145 was written to end, rebuilt by D-145. This repository's own
+          // test proved it and nobody read it that way: a row with one uncollected finding
+          // asserts `stalled` is 0.
+          //
+          // `waiting_on` already answers "whose move", so the counts are its two values.
+          // Every non-terminal review lands in exactly one, and the question the client
+          // asked has an answer that cannot be zero while work is outstanding.
+          waiting_on_you: items.filter((i) => i.waiting_on === "you" && !isTerminal(i.state)).length,
           in_flight: items.filter((i) => i.waiting_on === "lore" && !isTerminal(i.state)).length,
+          // The SUBSET of `waiting_on_you` that is rotting (D-142): stopped, with nothing
+          // left to collect, so nothing about it will change until somebody acts. Kept
+          // separate rather than folded in, because "you have findings to read" and
+          // "this has been sitting untouched for days" want different urgency.
+          stalled: items.filter((i) => i.waiting_on === "you" && i.waiting_note !== undefined).length,
           needs_human: needsHuman.length,
           ...(needsHuman.length > 0 ? { open_questions: questions } : {}),
           note: [
@@ -2485,8 +2508,10 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
               : []),
             ...(items.some((i) => !isTerminal(i.state))
               ? [
-                  "WHILE EITHER COUNT IS ABOVE ZERO THE HONEST ANSWER TO \"is everything done\" IS NO: " +
-                    "some of this needs you now, the rest will need you shortly.",
+                  "`waiting_on_you` and `in_flight` COVER EVERY UNFINISHED REVIEW between them — whose " +
+                    "move it is, for each one. `stalled` is the subset of the first that has gone quiet. " +
+                    "WHILE EITHER OF THE FIRST TWO IS ABOVE ZERO THE HONEST ANSWER TO \"is everything " +
+                    "done\" IS NO: some of this needs you now, the rest will need you shortly.",
                 ]
               : []),
           ].join(" "),

@@ -14,6 +14,7 @@ import { STALE_HOURS, STALE_GRACE_DAYS } from "../ops/retention.ts";
 import { BOARD_PAGE } from "./board-page.ts";
 import { DEFAULT_HEARTBEAT } from "../ops/heartbeat.ts";
 import { grantToken, hashToken, revokeByPrefix } from "../mcp/auth.ts";
+import { REVIEW_STATES, isTerminal } from "../core/review-state.ts";
 import { Store } from "../store/store.ts";
 import { everyClientDocument, SERVER_INSTRUCTIONS, TOOL_DOCS } from "../mcp/docs.ts";
 import { startHttp } from "./http.ts";
@@ -1112,6 +1113,8 @@ describe("findings are ranked worst first", () => {
  * `expired` — which by INV-1 never means "found nothing" and here would have meant
  * nothing at all.
  */
+const TERMINAL_STATES = new Set(REVIEW_STATES.filter(isTerminal));
+
 describe("the inbox lists what is waiting, not only what is fresh", () => {
   const open = (id: string, state: ReviewState, branch: string) =>
     store.createReview({
@@ -1326,6 +1329,12 @@ describe("the inbox lists what is waiting, not only what is fresh", () => {
     expect(fresh?.["new_findings"]).toBe(1);
     expect(fresh, "there is something to do and it is visible; nothing is rotting").not.toHaveProperty("waiting_note");
     expect(out["stalled"], "only the collected-and-left review counts").toBe(0);
+    // AND IT MUST STILL BE COUNTED SOMEWHERE. This assertion is the one that was missing:
+    // `stalled: 0` here is correct and was read as "nothing outstanding", so a review
+    // holding findings nobody had collected fell between both counts — the most ordinary
+    // outstanding state of all, invisible to the client the inbox exists for.
+    expect(out["waiting_on_you"], "somebody has to collect it").toBe(1);
+    expect(out["in_flight"], "and it is not lore's move").toBe(0);
   });
 
   /**
@@ -1510,8 +1519,15 @@ describe("the inbox lists what is waiting, not only what is fresh", () => {
     const row = (out["reviews"] as Record<string, unknown>[]).find((r) => r["review_id"] === "revSibRunning");
     expect(row?.["waiting_on"], "lore is working on it").toBe("lore");
     expect(String(row?.["not_yours_note"]), "still unreachable from here").toContain("NOT YOURS TO ANSWER");
-    expect(String(row?.["waiting_note"]), "unfinished, which is a different claim from stopped")
-      .toContain("NOT FINISHED");
+    const note = String(row?.["waiting_note"]);
+    expect(note, "unfinished, which is a different claim from stopped").toContain("NOT FINISHED");
+    // AND IT MUST NOT PRESCRIBE A CALL THAT REFUSES. The stalled note was given this
+    // suffix for exactly this reason and the in-flight note shipped without it: "come back
+    // and review_poll it" on a row where review_poll answers NOT FOUND, one line above a
+    // field saying so. Cross-referencing two fields to learn whether one of them is true
+    // is the inference this interface exists to stop asking for.
+    expect(note, "the prescription must be withdrawn here").toContain("CANNOT WATCH IT FROM HERE");
+    expect(note, "and it must name the field that explains why").toContain("not_yours_note");
     expect(out["stalled"], "and it must not be counted as rot").toBe(0);
   });
 
@@ -1574,6 +1590,38 @@ describe("the inbox lists what is waiting, not only what is fresh", () => {
     expect(note, "in the words that answer the question actually asked").toContain(
       "not an empty inbox",
     );
+  });
+
+  /**
+   * THE TWO COUNTS PARTITION EVERY UNFINISHED REVIEW, which is the property the first
+   * version claimed and did not have.
+   *
+   * `stalled` fires only with nothing left to collect and `in_flight` only when the move
+   * is lore's, so a review holding uncollected findings was counted by neither — and the
+   * texts told a client those two were the whole answer. A session reading them as taught
+   * would report "done" with findings waiting, rebuilding the abandonment this decision
+   * exists to end.
+   */
+  it("leaves no unfinished review outside both counts", async () => {
+    open("revFreshWork", "findings_ready", "feat/uncollected");
+    store.recordFinding("revFreshWork", {
+      fingerprint: "p1", file: "a.ts", line: 1, symbol: "f", severity: "high",
+      claim: "waiting to be collected", evidence: "e", failureScenario: "x", origin: "t1", round: 1,
+      firstSeen: new Date().toISOString(),
+    });
+    open("revQuietWork", "findings_stale", "feat/collected-then-left");
+    open("revLoreWork", "running", "feat/lore-is-busy");
+    open("revEnded", "passed", "feat/done");
+
+    const out = await callTool("review_inbox", {});
+    const rows = (out["reviews"] as Record<string, unknown>[]).filter(
+      (r) => !TERMINAL_STATES.has(r["state"] as ReviewState),
+    );
+    expect(Number(out["waiting_on_you"]) + Number(out["in_flight"]),
+      "every unfinished review is in exactly one of the two").toBe(rows.length);
+    expect(out["waiting_on_you"], "the uncollected one and the quiet one").toBe(2);
+    expect(out["in_flight"], "the running one").toBe(1);
+    expect(out["stalled"], "and stalled is the SUBSET that has gone quiet, not a third bucket").toBe(1);
   });
 
   /** A finished review is not outstanding — the count must not cry wolf. */

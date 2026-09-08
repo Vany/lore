@@ -4092,11 +4092,23 @@ has stopped in the middle, and its findings then sit in `findings_ready` until t
 takes them — the abandonment measured at 14 open reviews on 2026-09-02, invited by the
 text rather than in spite of it.
 
-**Two counts, because "is everything done" has two ways to be no.** `stalled` (D-142)
-counts work ROTTING: stopped, waiting on the caller, nothing left to collect.
-`in_flight` counts work COMING: reviews lore is still running. Either above zero means
-no, and the note says so rather than leaving a reader to combine them. A caller who read
-`stalled: 0` and stopped was reading half the answer.
+**Two counts that PARTITION every unfinished review, and the first draft's did not —
+caught by this change's own review (`b3bc89a7`).** `waiting_on_you` and `in_flight` are
+the two values of `waiting_on`, so each unfinished review lands in exactly one and the
+question cannot be answered zero while work is outstanding.
+
+The draft offered `stalled` and `in_flight` as the whole answer. `stalled` fires only when
+there is nothing left to collect and `in_flight` only when the move is lore's — so a review
+**holding findings the client had not collected yet**, the most ordinary outstanding state
+there is, was counted by neither, while the texts taught that those two covered it. A
+session reading `stalled: 0, in_flight: 0` would report everything done with findings
+waiting: the abandonment this decision exists to end, rebuilt inside it. This repository's
+own suite proved it and it was read as correct — a test asserting `stalled` is 0 for a row
+with one uncollected finding.
+
+**`stalled` survives as a SUBSET of `waiting_on_you`, never a third category**: the ones
+that have gone quiet, where nothing changes until somebody acts. It is urgency, not the
+total, and D-142's meaning is unchanged.
 
 **Every non-terminal row now carries a `waiting_note`, including lore's own**, which
 widens D-142's field from the rot case to "what this row needs from you, and when". The
@@ -4106,6 +4118,14 @@ repeating a number that would then have two sources.
 
 **`needs_human` keeps its carve-out** (D-142): `open_questions` answers it louder, and two
 instructions over one review is how a client picks the cheaper one.
+
+**And the in-flight note withdraws its own prescription on a row the caller cannot reach**
+(`9ffcb6a0`, same review). It said *"come back and review_poll it"* on a review bound to
+another live token, where `review_poll` answers NOT FOUND — one line above the field that
+says so. The stalled note was given that suffix in D-144 for exactly this reason; a new
+note was written without carrying the lesson across. Asking a client to cross-reference two
+fields to learn whether one of them is true is the inference this interface exists to stop
+asking for, and it has now been reintroduced twice.
 
 **D-144 — the review id on the board is a button, and clicking it copies the id. BUILT
 2026-09-08.**
