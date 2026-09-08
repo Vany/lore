@@ -83,11 +83,13 @@ function loadPage(over: Record<string, unknown> = {}): {
   combinedRows: (reviews: unknown[], refactorRuns: unknown[]) => { kind: string }[];
   copyId: (e: unknown) => Promise<void>;
   byId: Map<string, ReturnType<typeof element>>;
+  timers: (() => void)[];
 } {
   const script = BOARD_PAGE.slice(BOARD_PAGE.indexOf("<script>") + 8, BOARD_PAGE.lastIndexOf("</script>"));
   expect(script.length, "the page has no script to run").toBeGreaterThan(500);
 
   const byId = new Map<string, ReturnType<typeof element>>();
+  const timers: (() => void)[] = [];
   const get = (id: string) => {
     const found = byId.get(id) ?? element();
     byId.set(id, found);
@@ -108,6 +110,10 @@ function loadPage(over: Record<string, unknown> = {}): {
     },
     setInterval: () => 0,
     clearInterval: () => undefined,
+    // The copy confirmation clears itself on a timer. Recorded rather than run: firing it
+    // here would assert a browser's scheduling, and the property under test is what gets
+    // written, not when it is unwritten. `timers` lets one test run it deliberately.
+    setTimeout: (fn: () => void) => { (timers as (() => void)[]).push(fn); return 0; },
     confirm: () => false,
     fetch: async () => ({ ok: true, json: async () => ({}) }),
     console,
@@ -134,6 +140,7 @@ function loadPage(over: Record<string, unknown> = {}): {
     combinedRows: sandbox["combinedRows"] as (reviews: unknown[], refactorRuns: unknown[]) => { kind: string }[],
     copyId: sandbox["copyId"] as (e: unknown) => Promise<void>,
     byId,
+    timers,
   };
 }
 
@@ -606,6 +613,71 @@ describe("the review id copies itself", () => {
   });
 
   /**
+   * A SUCCESS CLEARS ITSELF; A FAILURE DOES NOT.
+   *
+   * Nothing else on this page ever empties #told, and it now rides with the header — so a
+   * "Copied" left there would sit above the board for the rest of the session, taking
+   * vertical space and staling into a claim about a click nobody remembers making. Worse
+   * with D-143 in play: a permanent banner over a wrapped header hides the red CREDS chip.
+   * A failure stays deliberately, because it carries the id to select by hand.
+   */
+  it("clears a copy confirmation, and keeps a failure", async () => {
+    const ok = loadPage({
+      window: { isSecureContext: true },
+      navigator: { clipboard: { writeText: async () => undefined } },
+    });
+    await ok.copyId({ currentTarget: { dataset: { id: "rev_ok" } } });
+    expect(ok.byId.get("told")?.textContent).toBe("Copied rev_ok");
+    for (const t of ok.timers) t();
+    expect(ok.byId.get("told")?.textContent, "gone, so it cannot stale").toBe("");
+    expect(ok.byId.get("told")?.className, "and takes its banner styling with it").toBe("");
+
+    const bad = loadPage({ window: { isSecureContext: false }, navigator: {} });
+    await bad.copyId({ currentTarget: { dataset: { id: "rev_bad" } } });
+    for (const t of bad.timers) t();
+    expect(bad.byId.get("told")?.textContent, "the id is the only copy this reader gets")
+      .toContain("rev_bad");
+  });
+
+  /**
+   * TWO CLICKS, AND THE FIRST TIMER MUST NOT ERASE THE SECOND MESSAGE — the obvious bug
+   * in the obvious fix. Only the latest writer may clear.
+   */
+  it("does not let a stale timer clear a newer message", async () => {
+    const page = loadPage({
+      window: { isSecureContext: true },
+      navigator: { clipboard: { writeText: async () => undefined } },
+    });
+    await page.copyId({ currentTarget: { dataset: { id: "rev_first" } } });
+    await page.copyId({ currentTarget: { dataset: { id: "rev_second" } } });
+
+    // The FIRST click's timer fires while the second message is on screen.
+    page.timers[0]?.();
+    expect(page.byId.get("told")?.textContent, "the newer message survives").toBe("Copied rev_second");
+  });
+
+  /**
+   * A THROW WHILE DISPLAYING THE OUTCOME MUST NOT REWRITE THE OUTCOME.
+   *
+   * Reporting used to sit inside the try around the clipboard call, so anything failing
+   * in `said` — a missing timer in a stripped-down environment was how this surfaced —
+   * sent a copy that had ALREADY landed down the fallback path and announced it as a
+   * failure. The user has the id on their clipboard and is told they do not.
+   */
+  it("reports the copy that happened, even if the reporting stumbles", async () => {
+    const page = loadPage({
+      window: { isSecureContext: true },
+      navigator: { clipboard: { writeText: async () => undefined } },
+      setTimeout: () => { throw new Error("no timers here"); },
+      document: { execCommand: () => false },
+    });
+
+    await page.copyId({ currentTarget: { dataset: { id: "rev_landed" } } }).catch(() => undefined);
+    expect(String(page.byId.get("told")?.textContent), "it really was copied")
+      .not.toContain("Could not copy");
+  });
+
+  /**
    * A MESSAGE NOBODY CAN SEE IS NOT A MESSAGE.
    *
    * #told sat in normal flow below a sticky header, so a reader scrolled down to a row —
@@ -616,10 +688,23 @@ describe("the review id copies itself", () => {
    * about it being above the viewport.
    */
   it("keeps the feedback in view when it has something to say", () => {
-    expect(BOARD_PAGE, "sticky, or the answer scrolls away from the click").toMatch(
-      /#told:not\(:empty\)[^}]*position:\s*sticky/,
+    // ONE STICKY BLOCK, not two sticky elements and a constant between them. The first
+    // version pinned #told at a hand-set 38px against a header declared `flex-wrap: wrap`
+    // that grows a chip per configured route — so at a narrow window, or with four routes,
+    // the banner painted over the header's second row and hid the provider chips,
+    // including D-143's red CREDS alarm.
+    expect(BOARD_PAGE, "the header and its feedback stick together").toMatch(
+      /\.top\s*\{[^}]*position:\s*sticky[^}]*top:\s*0/,
     );
-    expect(BOARD_PAGE, "and below the header rather than under it").toMatch(/#told:not\(:empty\)[^}]*top:/);
+    expect(BOARD_PAGE, "so no offset has to guess the header's height").not.toMatch(
+      /#told[^}]*top:\s*\d+px/,
+    );
+    const body = BOARD_PAGE.slice(BOARD_PAGE.indexOf("<body>"));
+    const top = body.indexOf('<div class="top">');
+    expect(top, "the wrapper exists in the markup, not only in the stylesheet").toBeGreaterThan(-1);
+    expect(body.indexOf('id="told"'), "and #told is inside it").toBeGreaterThan(top);
+    expect(body.indexOf("</div>", body.indexOf('id="told"')), "closed before the board")
+      .toBeLessThan(body.indexOf("<main>"));
   });
 
   // The id is untrusted the same way every other string on this page is.

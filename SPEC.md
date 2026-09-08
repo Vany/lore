@@ -4052,7 +4052,7 @@ work out why nothing happened. The message goes to `#told`, outside the list, be
 next SSE push rebuilds every row and would erase it; `pick` writes there for the same
 reason and its comment says so.
 
-**And `#told` sticks under the header, because the first version made that guarantee and
+**And `#told` rides with the header, because the first version made that guarantee and
 then rendered it off-screen** (found by this change's own review). It sat in normal flow
 below a sticky header, so a reader scrolled down to a row — which is where the button is —
 had their answer painted at the top of the page. A failed copy then looked exactly like a
@@ -4060,6 +4060,25 @@ successful one from where they were sitting: the guarantee restated as its own v
 The design note reasoned carefully about the message being ERASED by the next push and
 never about it being above the viewport. Every decision result `pick` writes there had the
 same blind spot, and gains the same fix.
+
+**The fix is ONE STICKY BLOCK, not a second sticky element at a hand-set offset** — the
+next round said so twice. `header` is `flex-wrap: wrap` and grows a chip per configured
+route, so any constant is wrong at some window width, and wrong in the worst direction:
+the banner painting over the header's second row, which is where the provider chips live.
+That row carries D-143's red `CREDS` alarm, and **nothing ever cleared `#told`** — so a
+stale copy confirmation could hide a dead credential for the rest of the session. Two
+decisions a day apart, colliding in a way neither entry predicted. `header` and `#told`
+now share one `.top { position: sticky; top: 0 }`, which needs no number.
+
+**A success clears itself; a failure does not.** Four seconds, token-guarded so a first
+click's timer cannot erase a second click's message. The failure stays because it carries
+the id to select by hand, which is the only copy that reader is getting.
+
+**And the outcome is separated from the reporting of it.** Announcing the result used to
+sit inside the `try` around the clipboard call, so a throw while DISPLAYING success sent a
+copy that had already landed down the fallback path and announced it as a failure — the
+user holding the id and being told they do not. What the clipboard did decides what is
+said about it.
 
 **The surface detail lives in `spec/operations.md` §2.4.3**, with the rest of the board.
 

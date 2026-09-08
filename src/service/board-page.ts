@@ -31,8 +31,15 @@ export const BOARD_PAGE = `<!doctype html>
     margin: 0; background: var(--bg); color: var(--fg);
     font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   }
+  /* ONE STICKY BLOCK, so nothing has to know how tall the other one is.
+     The header wraps (flex-wrap, and it grows a chip per configured route), so any
+     hand-set offset for a second sticky element is wrong at some window width — and wrong
+     in the worst direction: the feedback banner painted over the header's second row,
+     which is where the provider chips live, hiding D-143's red CREDS alarm behind a stale
+     copy confirmation. Sticking the pair together needs no such number. */
+  .top { position: sticky; top: 0; z-index: 2; background: var(--bg); }
   header {
-    position: sticky; top: 0; background: var(--bg); border-bottom: 1px solid var(--line);
+    background: var(--bg); border-bottom: 1px solid var(--line);
     padding: 10px 14px; display: flex; gap: 18px; align-items: baseline; flex-wrap: wrap;
   }
   h1 { font-size: 13px; margin: 0; font-weight: 700; letter-spacing: .5px; }
@@ -128,13 +135,11 @@ export const BOARD_PAGE = `<!doctype html>
   button.pick:hover:not(:disabled) { background: var(--mag); color: #12151a; }
   button.pick:disabled { opacity: .5; cursor: default; }
   .banner.ok { background: #16301f; color: #7fd6a0; }
-  /* #told STICKS UNDER THE HEADER, because a message nobody can see is not a message.
-     It sat in normal flow below a sticky header, so a reader scrolled down to a row got
-     their answer rendered off-screen: a failed copy looked exactly like a successful one
-     from where they were sitting, which is the single guarantee D-144 exists to make.
-     Same for every decision result pick writes here — an operator resolving a
-     contradiction from a row halfway down the board had the same blind spot. */
-  #told:not(:empty) { position: sticky; top: 38px; z-index: 2; }
+  /* #told RIDES WITH THE HEADER, inside .top — because a message nobody can see is not a
+     message. It sat in normal flow below a sticky header, so a reader scrolled down to a
+     row got their answer rendered off-screen: a failed copy looked exactly like a
+     successful one from where they were sitting, which is the single guarantee D-144
+     exists to make. Same for every decision result pick writes here. */
 
   .s-running, .s-queued { color: var(--blue); }
   /* THE ID STAYS AN ID. A real <button> for the keyboard and for screen readers, styled
@@ -177,6 +182,7 @@ export const BOARD_PAGE = `<!doctype html>
 </style>
 </head>
 <body>
+<div class="top">
 <header>
   <h1>lore</h1>
   <span id="build" class="dim">—</span>
@@ -193,6 +199,7 @@ export const BOARD_PAGE = `<!doctype html>
      erased by its own success. The case that most needs reading survives least: "decided,
      and NOTHING resumed, because another contradiction still blocks these reviews". -->
 <div id="told"></div>
+</div>
 <main>
   <div class="grid head" id="head" hidden>
     <span></span><span>state</span><span>PR</span><span>branch</span>
@@ -758,16 +765,45 @@ function copyable(id) {
 async function copyId(e) {
   const id = e.currentTarget.dataset.id;
   const note = document.getElementById("told");
-  const said = (ok, msg) => { note.className = ok ? "banner ok" : "banner down"; note.textContent = msg; };
+  // A SUCCESS CLEARS ITSELF; A FAILURE DOES NOT.
+  //
+  // Nothing else on this page ever empties #told, and it now rides with the header — so a
+  // "Copied" left there sits above the board for the rest of the session, taking vertical
+  // space from the rows and staling into a claim about a click nobody remembers making.
+  // A failure stays deliberately: it carries the id to select by hand, which is the only
+  // way that reader is getting it.
+  //
+  // The token guards the obvious bug in the obvious fix: two clicks in quick succession,
+  // and the first timer erases the SECOND message. Only the latest writer may clear.
+  const mine = String(Date.now()) + ":" + id;
+  note.dataset.copy = mine;
+  const said = (ok, msg) => {
+    note.className = ok ? "banner ok" : "banner down";
+    note.textContent = msg;
+    if (!ok) return;
+    setTimeout(() => {
+      if (note.dataset.copy !== mine) return;
+      note.className = "";
+      note.textContent = "";
+    }, 4000);
+  };
 
+  // THE COPY AND THE REPORTING OF IT ARE SEPARATE. Reporting used to sit inside the try,
+  // so a throw while DISPLAYING the outcome rewrote the outcome: a copy that had already
+  // landed in the clipboard fell through to the fallback and was announced as a failure.
+  // Only what the clipboard did decides what is said about it.
+  let copied = false;
   if (navigator.clipboard && window.isSecureContext) {
     try {
       await navigator.clipboard.writeText(id);
-      said(true, "Copied " + id);
-      return;
+      copied = true;
     } catch (err) {
       // Fall through: a permissions policy can refuse even in a secure context.
     }
+  }
+  if (copied) {
+    said(true, "Copied " + id);
+    return;
   }
   try {
     const ta = document.createElement("textarea");
