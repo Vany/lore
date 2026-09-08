@@ -4070,9 +4070,27 @@ stale copy confirmation could hide a dead credential for the rest of the session
 decisions a day apart, colliding in a way neither entry predicted. `header` and `#told`
 now share one `.top { position: sticky; top: 0 }`, which needs no number.
 
-**A success clears itself; a failure does not.** Four seconds, token-guarded so a first
-click's timer cannot erase a second click's message. The failure stays because it carries
-the id to select by hand, which is the only copy that reader is getting.
+**A success clears itself; a failure does not.** Four seconds. The failure stays because
+it carries the id to select by hand, which is the only copy that reader is getting.
+
+**`#told` has ONE writer discipline, because three races turned out to be one missing
+idea** — a shared element written from several places with no notion of whose message is on
+screen. A copy's self-clear timer erased a DECISION result written after it, the message
+this element's own markup calls the case that most needs reading. A slow clipboard promise
+for one review resolved after another had already FAILED, overwriting *could not copy … B*
+with *copied A* — making a failure look like a success and hiding the id its reader had
+just been told to select by hand. And the first guard covered clearing but not publishing,
+which is exactly why the second race survived the fix for the first. So `tell` owns the
+element: every writer claims a token first and may publish or clear only while it still
+holds the newest one. **A late writer is silent, never corrective** — reporting on a click
+the reader has moved on from, over the one they are looking at, is the failure.
+
+**`#banners` is deliberately OUTSIDE `.top`.** Wrapping the header and `#told` together
+swept it in by accident and pinned every `DRAINING` and tier-down alarm to the viewport for
+ever: a sick service shows four or five at once, which on a laptop is a third of the screen
+the operator cannot scroll past — exactly when the rows underneath are what they need.
+Nobody decided that and no entry recorded it; it was a side effect of where a wrapper
+happened to close, and it is pinned by a test now.
 
 **And the outcome is separated from the reporting of it.** Announcing the result used to
 sit inside the `try` around the clipboard call, so a throw while DISPLAYING success sent a

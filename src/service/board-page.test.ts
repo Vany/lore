@@ -82,6 +82,8 @@ function loadPage(over: Record<string, unknown> = {}): {
   refactorRow: (r: unknown) => string;
   combinedRows: (reviews: unknown[], refactorRuns: unknown[]) => { kind: string }[];
   copyId: (e: unknown) => Promise<void>;
+  tell: unknown;
+  tellClaim: () => string;
   byId: Map<string, ReturnType<typeof element>>;
   timers: (() => void)[];
 } {
@@ -139,6 +141,8 @@ function loadPage(over: Record<string, unknown> = {}): {
     refactorRow: sandbox["refactorRow"] as (r: unknown) => string,
     combinedRows: sandbox["combinedRows"] as (reviews: unknown[], refactorRuns: unknown[]) => { kind: string }[],
     copyId: sandbox["copyId"] as (e: unknown) => Promise<void>,
+    tell: sandbox["tell"],
+    tellClaim: (sandbox["tell"] as { claim: () => string }).claim,
     byId,
     timers,
   };
@@ -613,6 +617,52 @@ describe("the review id copies itself", () => {
   });
 
   /**
+   * ONE WRITER, ONE TOKEN — because three separate races were the same missing idea.
+   *
+   * #told is written from two places. A copy's self-clear timer erased a DECISION result
+   * written after it (the message the markup calls the case that most needs reading); a
+   * slow clipboard promise for review A resolved after review B had already FAILED and
+   * overwrote "Could not copy … B" with "Copied A", hiding the id B's reader was told to
+   * select by hand. The first guard covered clearing only, which is why the second race
+   * survived the fix for the first.
+   */
+  it("does not let a copy's timer erase a decision result", async () => {
+    const page = loadPage({
+      window: { isSecureContext: true },
+      navigator: { clipboard: { writeText: async () => undefined } },
+    });
+    await page.copyId({ currentTarget: { dataset: { id: "rev_copied" } } });
+
+    // A decision lands inside the copy confirmation's four-second window.
+    const told = page.byId.get("told");
+    const claimed = (page.tellClaim as () => string)();
+    (page.tell as (t: string, ok: boolean, m: string, tr: boolean) => void)(claimed, true, "Decided. 3 review(s) resumed.", false);
+
+    for (const t of page.timers) t();
+    expect(told?.textContent, "the decision survives the copy's timer").toBe("Decided. 3 review(s) resumed.");
+  });
+
+  it("does not let a slow copy overwrite a later failure", async () => {
+    let release: (() => void) | undefined;
+    const page = loadPage({
+      window: { isSecureContext: true },
+      navigator: { clipboard: { writeText: () => new Promise<void>((r) => { release = r; }) } },
+    });
+
+    // A is in flight and has not resolved.
+    const slow = page.copyId({ currentTarget: { dataset: { id: "rev_A" } } });
+    // B claims the element and fails outright.
+    const claimed = (page.tellClaim as () => string)();
+    (page.tell as (t: string, ok: boolean, m: string, tr: boolean) => void)(
+      claimed, false, "Could not copy — select it by hand: rev_B", false);
+
+    release?.();
+    await slow;
+    expect(String(page.byId.get("told")?.textContent), "B's failure is what the reader is looking at")
+      .toContain("rev_B");
+  });
+
+  /**
    * A SUCCESS CLEARS ITSELF; A FAILURE DOES NOT.
    *
    * Nothing else on this page ever empties #told, and it now rides with the header — so a
@@ -703,8 +753,15 @@ describe("the review id copies itself", () => {
     const top = body.indexOf('<div class="top">');
     expect(top, "the wrapper exists in the markup, not only in the stylesheet").toBeGreaterThan(-1);
     expect(body.indexOf('id="told"'), "and #told is inside it").toBeGreaterThan(top);
-    expect(body.indexOf("</div>", body.indexOf('id="told"')), "closed before the board")
-      .toBeLessThan(body.indexOf("<main>"));
+    const closes = body.indexOf("</div>", body.indexOf('id="told"'));
+    expect(closes, "closed before the board").toBeLessThan(body.indexOf("<main>"));
+    // BANNERS STAY OUT. Wrapping the header and #told together swept this in by accident,
+    // pinning every DRAINING and tier-down alarm to the viewport for ever — four or five
+    // of them on a sick service, a third of a laptop screen the operator cannot scroll
+    // past, exactly when the rows underneath are what they need. It is one line's
+    // difference in the markup and nothing else would have noticed.
+    expect(body.indexOf('id="banners"'), "banners scroll, so they must close after .top does")
+      .toBeGreaterThan(closes);
   });
 
   // The id is untrusted the same way every other string on this page is.

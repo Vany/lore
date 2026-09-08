@@ -193,13 +193,19 @@ export const BOARD_PAGE = `<!doctype html>
   <span><span class="k">spend today</span><span id="spend">—</span></span>
   <span class="dim" id="live">connecting…</span>
 </header>
-<div id="banners"></div>
 <!-- What a decision did, OUTSIDE the list. Deciding changes a review's state, which
      pushes a new snapshot and rebuilds every row — so a message written into the row is
      erased by its own success. The case that most needs reading survives least: "decided,
      and NOTHING resumed, because another contradiction still blocks these reviews". -->
 <div id="told"></div>
 </div>
+<!-- BANNERS SCROLL, and are deliberately OUTSIDE .top. Wrapping the header and #told
+     together swept this element in with them by accident, which pinned every DRAINING and
+     tier-down alarm to the viewport for ever: a sick service shows four or five of these
+     at once, and on a laptop that is a third of the screen the operator cannot scroll past
+     — exactly when the board is fullest of rows they need to read. Nobody decided that,
+     and no entry recorded it; it was a side effect of where a wrapper happened to close. -->
+<div id="banners"></div>
 <main>
   <div class="grid head" id="head" hidden>
     <span></span><span>state</span><span>PR</span><span>branch</span>
@@ -733,6 +739,46 @@ function finding(r, f) {
 }
 
 /**
+ * The one writer to #told, so that its writers cannot erase each other.
+ *
+ * Three separate races, all found by review, all the same missing idea: a shared element
+ * written from several places with no notion of WHOSE message is on screen.
+ *
+ *  * a copy's self-clear timer erased a DECISION result written after it — the one
+ *    message the markup comment says most needs reading, gone four seconds after an
+ *    operator resolved a contradiction;
+ *  * a slow clipboard promise for review A resolved after review B had already failed,
+ *    overwriting "Could not copy … B" with "Copied A" — making B's failure look like a
+ *    success and hiding the id B's reader was told to select by hand;
+ *  * and the first version guarded only clearing, not publishing, which is why the
+ *    second one survived the fix for the first.
+ *
+ * So: every writer claims a token first, and may only publish or clear while it still
+ * holds the newest one. Claiming is the act of taking the element over.
+ */
+function tell(token, ok, msg, transient) {
+  const note = document.getElementById("told");
+  // A LATE WRITER IS SILENT, never corrective. Publishing here would be reporting on a
+  // click the reader has already moved on from, over one they are looking at now.
+  if (note.dataset.told !== token) return;
+  note.className = ok ? "banner ok" : "banner down";
+  note.textContent = msg;
+  if (!transient) return;
+  setTimeout(() => {
+    if (note.dataset.told !== token) return;
+    note.className = "";
+    note.textContent = "";
+  }, 4000);
+}
+
+tell.claim = function () {
+  const note = document.getElementById("told");
+  const t = String(Date.now()) + ":" + String(Math.random());
+  note.dataset.told = t;
+  return t;
+};
+
+/**
  * A review id, clickable, because the id is the ONE thing a reader takes off this page.
  *
  * Everything else here is for looking at; the id gets pasted into review_poll, into a
@@ -764,7 +810,6 @@ function copyable(id) {
  */
 async function copyId(e) {
   const id = e.currentTarget.dataset.id;
-  const note = document.getElementById("told");
   // A SUCCESS CLEARS ITSELF; A FAILURE DOES NOT.
   //
   // Nothing else on this page ever empties #told, and it now rides with the header — so a
@@ -774,19 +819,10 @@ async function copyId(e) {
   // way that reader is getting it.
   //
   // The token guards the obvious bug in the obvious fix: two clicks in quick succession,
-  // and the first timer erases the SECOND message. Only the latest writer may clear.
-  const mine = String(Date.now()) + ":" + id;
-  note.dataset.copy = mine;
-  const said = (ok, msg) => {
-    note.className = ok ? "banner ok" : "banner down";
-    note.textContent = msg;
-    if (!ok) return;
-    setTimeout(() => {
-      if (note.dataset.copy !== mine) return;
-      note.className = "";
-      note.textContent = "";
-    }, 4000);
-  };
+  // and the first timer erases the SECOND message. tell() owns that rule for EVERY writer
+  // to this element, which is what the first version got wrong — see its own comment.
+  const mine = tell.claim();
+  const said = (ok, msg) => tell(mine, ok, msg, ok);
 
   // THE COPY AND THE REPORTING OF IT ARE SEPARATE. Reporting used to sit inside the try,
   // so a throw while DISPLAYING the outcome rewrote the outcome: a copy that had already
@@ -845,7 +881,12 @@ async function pick(e) {
   }
   for (const b of box.querySelectorAll("button.pick")) b.disabled = true;
   // Written outside the list, which the next push rebuilds. See #told.
-  const note = document.getElementById("told");
+  //
+  // CLAIMED, like every other writer: a copy made in the four seconds before this one
+  // leaves a self-clear timer armed, and without a claim here that timer erased the
+  // decision result — the message this element's own markup comment calls the case that
+  // most needs reading. A decision is never transient; it stays until the reader leaves.
+  const mine = tell.claim();
   try {
     const res = await fetch("/board/decide", {
       method: "POST",
@@ -858,24 +899,21 @@ async function pick(e) {
     });
     const out = await res.json();
     if (!res.ok) {
-      note.className = "banner down";
-      note.textContent = "NOT decided: " + (out.error || res.status) +
-        " — nothing was retired and every review is still parked.";
+      tell(mine, false, "NOT decided: " + (out.error || res.status) +
+        " — nothing was retired and every review is still parked.", false);
       for (const b of box.querySelectorAll("button.pick")) b.disabled = false;
       return;
     }
-    note.className = "banner ok";
     // The COUNT, because "resolved" alone does not say whether anything moved — and it
     // legitimately may not have: another contradiction in the same repository keeps every
     // review parked, and reporting progress that is not happening is the thing this whole
     // page exists to refuse.
-    note.textContent = out.resumed > 0
+    tell(mine, true, out.resumed > 0
       ? "Decided. " + out.resumed + " review(s) resumed; their clients will be told a person answered."
       : "Decided, and NOTHING RESUMED: " + out.stillBlocking +
-        " other contradiction(s) in this repository still block every review parked here.";
+        " other contradiction(s) in this repository still block every review parked here.", false);
   } catch (err) {
-    note.className = "banner down";
-    note.textContent = "NOT decided: " + err + " — nothing was retired.";
+    tell(mine, false, "NOT decided: " + err + " — nothing was retired.", false);
     for (const b of box.querySelectorAll("button.pick")) b.disabled = false;
   }
 }
