@@ -22,7 +22,7 @@ silent failures in one day are the reason this project exists in this shape.
   branches; it gates its own the same way. After committing I drive a full review over
   MCP — as a client, not through the CLI (D-76) — answering findings with
   `review_submit` so the ladder re-reads the corrected tree, until it reaches `passed`
-  or `passed_partial`. Then I amend the commit with exactly what was submitted, and
+  or `passed_thin_ladder`. Then I amend the commit with exactly what was submitted, and
   only then push. `needs_human` is a blocker, not an ending: get a person, resolve it,
   carry on.
   **Code or specs fire a review; tests, `TODO.md` and `MEMO.md` do not** — with one

@@ -227,7 +227,7 @@ describe("step", () => {
     }
 
     expect(guard, `seed ${seed} did not terminate`).toBeLessThanOrEqual(200);
-    expect(["passed", "passedPartial", "stopped", "needsHuman"]).toContain(decision.kind);
+    expect(["passed", "passedThinLadder", "stopped", "needsHuman"]).toContain(decision.kind);
   });
 
   // The bound is not merely "eventually" — it is the global cap, and a paraphrasing
@@ -262,11 +262,11 @@ describe("tiers nobody can pay for (D-48)", () => {
    * D-88 did not relax. Nothing read this code at t3's level, so "we did everything we
    * can" is the honest claim and "every tier agreed" is not.
    */
-  it("reaches passedPartial when the skipped tier was ABOVE the one that passed", () => {
+  it("reaches passedThinLadder when the skipped tier was ABOVE the one that passed", () => {
     let s = markUnavailable(initialState(), "t3");
     s = step({ state: s, raised: [] }).state; // t1 -> t2
     const r = step({ state: s, raised: [] });
-    expect(r.decision).toStrictEqual({ kind: "passedPartial", skipped: ["t3"] });
+    expect(r.decision).toStrictEqual({ kind: "passedThinLadder", skipped: ["t3"] });
   });
 
   /**
@@ -307,7 +307,7 @@ describe("tiers nobody can pay for (D-48)", () => {
     // it promotes a dead top tier.
     const s = { ...markUnavailable(initialState(), "t3"), cursor: 3 };
     const r = step({ state: s, raised: [] });
-    expect(r.decision.kind, "nothing read this code at t3's level").toBe("passedPartial");
+    expect(r.decision.kind, "nothing read this code at t3's level").toBe("passedThinLadder");
   });
 
   it("still reaches a full pass when nothing was skipped", () => {
@@ -361,9 +361,9 @@ describe("single-vendor ladders cannot pass (D-49)", () => {
     return d;
   };
 
-  it("reaches passedPartial naming the vendor, never passed", () => {
+  it("reaches passedThinLadder naming the vendor, never passed", () => {
     expect(runClean(ONE_VENDOR)).toStrictEqual({
-      kind: "passedPartial",
+      kind: "passedThinLadder",
       skipped: [],
       soleVendor: "z-ai",
       // `soleVendor` is kept and still means what it always did — every tier was one
@@ -394,7 +394,7 @@ describe("single-vendor ladders cannot pass (D-49)", () => {
       { id: "t3", kind: "model", model: "openai/gpt-5.6-terra", effort: "high", stage: "deep" },
     ];
     const d = runClean(TWO_OF_THREE);
-    expect(d.kind, "two opinions, three tiers").toBe("passedPartial");
+    expect(d.kind, "two opinions, three tiers").toBe("passedThinLadder");
     // NOT `soleVendor`: it would be a lie here, and the old field keeps its old meaning.
     expect(d).not.toHaveProperty("soleVendor");
     expect(d).toHaveProperty("vendorSpread", { distinct: 2, tiers: 3, vendors: ["z-ai", "openai"] });
@@ -469,7 +469,7 @@ describe("single-vendor ladders cannot pass (D-49)", () => {
     let s = markUnavailable(initialState(ONE_VENDOR), "t3");
     s = step({ state: s, raised: [], tiers: ONE_VENDOR }).state; // t1 -> t2
     expect(step({ state: s, raised: [], tiers: ONE_VENDOR }).decision).toStrictEqual({
-      kind: "passedPartial",
+      kind: "passedThinLadder",
       skipped: ["t3"],
       soleVendor: "z-ai",
       vendorSpread: { distinct: 1, tiers: 2, vendors: ["z-ai"] },
@@ -513,7 +513,7 @@ describe("single-vendor ladders cannot pass (D-49)", () => {
       s = r.state;
       d = r.decision;
     }
-    expect(d.kind, "the fixture is one vendor throughout").toBe("passedPartial");
+    expect(d.kind, "the fixture is one vendor throughout").toBe("passedThinLadder");
     expect(s.soleVendor).toBe("z-ai");
 
     // The client sends more work and the ladder is walked again from the top — t2 now

@@ -163,7 +163,8 @@ today and the one we are leaving.
   conversation the cheap tier has been having is **open**.
 - `tree_hash` is still verified on every submit (D-40).
 - Findings are still records, and still questions (D-79).
-- `passed` still means every tier agreed, and nothing else means clean.
+- `passed` still means every tier agreed; `passed_thin_ladder` still means the tiers that
+  ran agreed on a thinner ladder, and `cleared` covers both (D-147).
 
 ## 6. Answered before it ships
 

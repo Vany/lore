@@ -17,7 +17,7 @@ import { createPrivateKey, createPublicKey, generateKeyPairSync, sign, verify } 
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { DidNotRun } from "../core/errors.ts";
-import { isAttestable } from "../core/review-state.ts";
+import { isCleared } from "../core/review-state.ts";
 import type { Store } from "../store/store.ts";
 
 export interface Attestation {
@@ -49,14 +49,15 @@ async function loadOrCreateKey(path: string): Promise<{ privateKey: string; publ
 export async function attest(store: Store, reviewId: string, principal: string, keyPath: string): Promise<Attestation> {
   const review = store.getReview(reviewId, principal);
   if (review === undefined) throw new DidNotRun(`review ${reviewId} not found`);
-  if (!isAttestable(review.state)) {
-    // Names BOTH attestable states, because `passed` is not the only one and saying
+  if (!isCleared(review.state)) {
+    // Names BOTH cleared states, because `passed` is not the only one and saying
     // so sends a caller to wait for something it may never reach. Seventh place the
     // same omission turned up; the first six were documentation, and an
     // error message is documentation that arrives when someone is already stuck.
     throw new DidNotRun(
       `review is '${review.state}' — attesting it would be a false claim. ` +
-        `Only 'passed' and 'passed_partial' can be attested, and only 'passed' is clean.`,
+        `Only 'passed' and 'passed_thin_ladder' can be attested; both are cleared, and this ` +
+        `line names which ladder stood behind it.`,
     );
   }
   // No tree, no attestation. The signature's whole subject is a TREE rather than a
@@ -152,7 +153,7 @@ export async function attest(store: Store, reviewId: string, principal: string, 
   // TWO INDEPENDENT SOURCES OF PARTIAL, and keying only off the verdict conflated them.
   //
   //   * the LADDER's verdict — a tier above the one that answered never ran, or every
-  //     tier that ran was one vendor. That is `passed_partial`, and D-88 decides it.
+  //     tier that ran was one vendor. That is `passed_thin_ladder`, and D-88 decides it.
   //   * the SIGNED TREE — a tier's only read of THIS tree was not one worth trusting:
   //     it may have read a genuinely EARLIER tree and, since a closed tier is not
   //     re-run after a fix (D-6), never re-read this one; or it ran against this
@@ -164,7 +165,7 @@ export async function attest(store: Store, reviewId: string, principal: string, 
   // The second is why this cannot simply read the state: a `passed` whose t1 verdict was
   // given against a tree two fixes ago is genuinely partial COVER of the tree being
   // signed, whatever the verdict says. A test caught me collapsing them.
-  const partial = review.state === "passed_partial" || tiers < everyTier;
+  const partial = review.state === "passed_thin_ladder" || tiers < everyTier;
   const scope =
     caveats.length === 0
       ? `${tiers} tiers (${named})`

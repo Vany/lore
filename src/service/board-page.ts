@@ -163,7 +163,7 @@ export const BOARD_PAGE = `<!doctype html>
   .s-findings_stale { color: var(--dim); }
   .s-needs_human { color: var(--mag); }
   .s-passed { color: var(--green); }
-  .s-passed_partial { color: var(--yellow); }
+  .s-passed_thin_ladder { color: var(--yellow); }
   .s-fast_clean { color: var(--blue); }
   .s-failed, .s-expired { color: var(--red); }
   .s-cancelled { color: var(--dim); }
@@ -248,7 +248,7 @@ function stallClass(ms, terminal) {
   return "stall-ok";
 }
 
-const TERMINAL = new Set(["passed", "passed_partial", "failed", "expired", "cancelled"]);
+const TERMINAL = new Set(["passed", "passed_thin_ladder", "failed", "expired", "cancelled"]);
 
 function esc(s) {
   return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -480,12 +480,17 @@ function detail(r) {
   for (const s of r.checksSkipped) {
     out.push('<div class="skip">' + (s.ranAnyway ? "ran differently: " : "did not run: ") + esc(s.text) + "</div>");
   }
-  // AND WHY A VERDICT WAS DOWNGRADED WHEN NOTHING WAS SKIPPED AT ALL (D-49).
+  // AND WHY THE LADDER READS AS THIN WHEN NOTHING WAS SKIPPED AT ALL (D-49).
   //
-  // A passed_partial with an empty checksSkipped is the shape that has no other
-  // explanation on this page: every tier ran, and the review is still not a pass, because
-  // fewer vendors read it than there were rungs. Without this line an operator sees the
-  // downgrade and nothing that accounts for it.
+  // A passed_thin_ladder with an empty checksSkipped is the shape that has no other
+  // explanation on this page: every tier ran, the review IS cleared, and the ladder is
+  // still thin, because fewer vendors read it than there were rungs. Without this line an
+  // operator sees the thinness and nothing that accounts for it.
+  //
+  // Not a downgrade, and this comment called it one until D-147: the verdict is whole and
+  // what is reduced is the independence behind it. The operator's question here is
+  // whether the ladder is delivering what it promises, which is exactly what this line
+  // answers.
   //
   // NO BACKTICKS ANYWHERE IN HERE, comments included: this function is inside the page's
   // template literal, so one closes the string and the file stops parsing.

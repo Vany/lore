@@ -6,7 +6,7 @@
  * unrelated. Two shapes account for most of them, and both are greppable:
  *
  *   * **one thing defined twice, and the copies disagree** — the terminal review
- *     states were written out in FIVE places, and `passed_partial` was missing from
+ *     states were written out in FIVE places, and `passed_thin_ladder` was missing from
  *     three of them. That silently overwrote a partial pass with `expired` after 48h,
  *     held its worktree for ever, and showed it as permanently open in two views. I
  *     introduced `TERMINAL_SQL` to fix this, fixed the copies I happened to read, and
@@ -68,8 +68,8 @@ describe("a page held in a template literal has no stray backtick", () => {
 
 describe("review states have one definition", () => {
   // A SQL membership test naming states as literals. Every one of these that existed
-  // was missing `passed_partial`, because the list was written from memory each time.
-  const SPELLED_OUT = /(?:NOT\s+)?IN\s*\(\s*'(?:passed|failed|expired|passed_partial|findings_ready)'[^)]*\)/i;
+  // was missing `passed_thin_ladder`, because the list was written from memory each time.
+  const SPELLED_OUT = /(?:NOT\s+)?IN\s*\(\s*'(?:passed|failed|expired|passed_thin_ladder|findings_ready)'[^)]*\)/i;
 
   it("is never spelled out in a SQL membership test", () => {
     const offenders = FILES.filter((f) => SPELLED_OUT.test(f.text)).map((f) => f.path);
@@ -80,7 +80,7 @@ describe("review states have one definition", () => {
   it("derives the SQL form from the same set the type checker sees", async () => {
     const { TERMINAL_SQL } = await import("./review-state.ts");
     const named = TERMINAL_SQL.split(",").map((s) => s.trim().replaceAll("'", ""));
-    expect(named).toContain("passed_partial");
+    expect(named).toContain("passed_thin_ladder");
     for (const s of named) expect(REVIEW_STATES).toContain(s);
   });
 });

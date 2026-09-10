@@ -137,7 +137,7 @@ describe("what a review is doing right now", () => {
  * it comes back on its own. So the account was read as out of quota and its limits were
  * reset on the provider's dashboard, which could not possibly help: the refresh token was
  * revoked, and only a re-login clears that. Thirteen days of t3 not running, and every
- * deep review silently landing `passed_partial` on one vendor.
+ * deep review silently landing `passed_thin_ladder` on one vendor.
  *
  * The fact was in the store the whole time. It just never reached the payload.
  */

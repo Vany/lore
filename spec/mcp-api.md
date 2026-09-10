@@ -60,7 +60,7 @@ nothing.
 | tool | arguments (`*` required) | returns |
 |---|---|---|
 | `review_start` | `branch*`, `into*`, `ticket*`, `pull_request`, `type` | `{review_id, state: "queued", note}` — returns immediately |
-| `review_poll` | `review_id*` | `{state, clean, note, new_findings[], open_count, human_decision?}` — §2.1.1 |
+| `review_poll` | `review_id*` | `{state, cleared, evidence?, note, new_findings[], open_count, human_decision?}` — §2.1.1 |
 | `review_submit` | `review_id*`, `tree_hash*`, exactly one of `diff` / `commit`, `fixed_elsewhere` | `{review_id, state, tree_hash, fixed_elsewhere_skipped?}` — §4.2 |
 | `review_cancel` | `review_id*`, `reason` | `{state: "cancelled", stopped_in_flight, findings[], note}` — §2.5 |
 | `review_attest` | `review_id*` | the signed line, with its tree hash |
@@ -82,8 +82,13 @@ the tier rules on it (D-83). `knowledge_retire` is the other half — a rule tha
 withdrawn is a check that cannot be switched back on.
 
 `review_poll` and `review_inbox` both return a `note` that restates the one rule in
-machine-readable position: *only `passed` means clean*. A client that reads `state`
-and nothing else is the client this service exists to protect against.
+machine-readable position. Until D-147 that rule was *only `passed` means clean*, which
+was true of the field and wrong as advice: it read `false` on `passed_thin_ladder`, the
+ending of 89% of the reviews that concluded cleanly here, and clients stopped on it. The
+rule is now **`cleared` says whether the ladder read this tree and found nothing;
+`evidence` says how much of the ladder did.** A client that reads `state` and nothing else
+is still the client this service exists to protect against — which is why both facts are
+their own fields rather than something to infer from the string.
 
 `knowledge_*` is available to anyone holding a token for the repo, at any time,
 independent of any review (D-18). That is the point of the service: a session

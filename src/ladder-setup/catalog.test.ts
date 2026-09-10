@@ -65,7 +65,7 @@ describe("filterCatalog", () => {
    * seven vendors (`~z-ai/glm-5.2-latest` alongside `z-ai/glm-5.2`, and six more). A
    * normalised vendor COLUMN was not enough — every review-time consumer of vendor
    * identity (`core/ladder.ts`'s `vendorSpread`, which decides `passed`/
-   * `passed_partial` and feeds the signed attestation; `reviewer/review.ts`'s
+   * `passed_thin_ladder` and feeds the signed attestation; `reviewer/review.ts`'s
    * fallback prose; `doctor.ts`'s own check) calls bare `vendorOf` with no tilde
    * awareness, a blind spot harmless until this feature could legitimately WRITE a
    * tilde id into a real `LORE_TIERS` file. Excluding the shape here means one never

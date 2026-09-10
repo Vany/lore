@@ -73,7 +73,7 @@ Written first, because each one is why a specific sentence exists.
 9. **Summarises the ticket instead of pasting it**, or substitutes its own account
    of what it built — which destroys the only independent statement of intent the
    reviewers have.
-10. **Treats `passed`/`passed_partial` as the end of its whole task and stops
+10. **Treats `passed`/`passed_thin_ladder` as the end of its whole task and stops
     there**, not just the end of this one review — the exact opposite of what a
     clean or partial verdict should prompt.
 11. **Treats `review_submit` as the answer rather than as the start of another
@@ -135,9 +135,9 @@ Draft text. These are the deliverable, not a summary of it.
 > again — do not re-fix anything absent from the response.
 >
 > States: `queued`, `running`, `findings_ready`, `awaiting_diff`, `fast_clean`,
-> `needs_human`, `passed`, `passed_partial`, `failed`, `expired`.
+> `needs_human`, `passed`, `passed_thin_ladder`, `failed`, `expired`.
 >
-> `passed_partial` means every tier that *could* run agreed, but one or more could
+> `passed_thin_ladder` means every tier that *could* run agreed, but one or more could
 > not be paid for. Real evidence, weaker evidence — report it as what it is, and the
 > attestation names the tiers that were skipped.
 >
@@ -149,7 +149,7 @@ Draft text. These are the deliverable, not a summary of it.
 > pattern was already there — every other branch gets it too. Real, worth a ticket,
 > not yours to answer here. These sort last on purpose; do not re-sort by severity.
 >
-> **Only `passed` means the branch is clean.** Reaching it, or `passed_partial`,
+> **Only `passed` means the branch is clean.** Reaching it, or `passed_thin_ladder`,
 > closes THIS review, not your task — attest it, then carry on with whatever else
 > you were asked to do.
 >
@@ -262,7 +262,7 @@ down: put the meaning where the misreading happens.
 
 ### `review_attest`
 
-> Available once state is `passed` **or** `passed_partial` — the partial case is
+> Available once state is `passed` **or** `passed_thin_ladder` — the partial case is
 > the one that most needs a record: the line names which tiers were skipped and
 > how many distinct vendors actually read the code. Refusing to attest a partial
 > would leave no account of it at all, which is worse than an honest incomplete
@@ -383,14 +383,15 @@ folder-mode call opens differently, naming `path` instead of `into`, per
 >    mid-read is HELD, not refused, and handed to it at its next emission.
 >    Exception: a `commit` is REFUSED, not held, while an unconsumed `diff` hold
 >    is outstanding — send `diff` instead, or wait for that hold to clear.
-> 5. Return to 2. Repeat until the state is TERMINAL — `passed`, `passed_partial`,
->    `needs_human`, `failed`, `expired` or `cancelled`. Only `passed` and
->    `passed_partial` are worth attesting, and only `passed` is clean.
+> 5. Return to 2. Repeat until the state is TERMINAL — `passed`, `passed_thin_ladder`,
+>    `needs_human`, `failed`, `expired` or `cancelled`. `passed` and
+>    `passed_thin_ladder` both carry `cleared: true` and are both worth attesting;
+>    `evidence` says which ladder stood behind it.
 >
 > **Rules**
 > - Polls return only new findings. Never re-fix what is not in the response.
 > - `failed`, `expired` and `fast_clean` are not `passed`. Do not merge on them.
-> - `passed_partial` is TERMINAL: it will never become `passed`, so looping for
+> - `passed_thin_ladder` is TERMINAL: it will never become `passed`, so looping for
 >   that never ends. Attest it, and tell your user the evidence is weaker than a
 >   pass, so the decision to merge is theirs.
 > - Expect several rounds. A fix does NOT send the review back down the ladder:
@@ -403,7 +404,7 @@ folder-mode call opens differently, naming `path` instead of `into`, per
 > - If the state is `needs_human`, STOP and ask a person. Do not answer it
 >   yourself.
 >
-> When the state is `passed` — or `passed_partial` — call `review_attest` and
+> When the state is `passed` — or `passed_thin_ladder` — call `review_attest` and
 > give the user that line. On a partial one, say which tiers were skipped and
 > that the evidence is weaker than a pass; the decision to merge on it is theirs,
 > not yours. Either way, attesting and merging closes THIS review — carry on
@@ -421,6 +422,10 @@ folder-mode call opens differently, naming `path` instead of `into`, per
 
 - **Say the consequence, not just the rule.** "Only `passed` means clean" is
   ignorable; "`failed` is not 'nothing found' — never merge on it" is not.
+- **A rule that is true of a field can still be wrong as advice.** "Only `passed` means
+  clean" was both, and it survived here as the example of a GOOD rule while it was
+  teaching clients to stop on the ordinary ending (D-147). Check what a sentence makes a
+  reader DO, not only whether it is accurate.
 - **Write for the agent that will get it wrong.** Every sentence in §3 traces to a
   failure mode in §2. A sentence that prevents nothing is deleted.
 - **Never describe unimplemented behaviour.** A tool description is a promise an

@@ -43,7 +43,7 @@ that part is pulled out into its own open item rather than hidden inside a tick.
 
 - [ ] **A REVIEW REACHED `state: passed`, `clean: true`, AND ITS SIGNED LINE SAYS
       `PARTIAL`.** Measured on `rev_ZJHfthwOzYjTw7hqlym0jwmY` (D-144's own batch, the first
-      full `passed` in weeks — everything else has been `passed_partial`, which is why this
+      full `passed` in weeks — everything else has been `passed_thin_ladder`, which is why this
       surfaced now rather than earlier).
 
       Three surfaces, three answers:
@@ -70,7 +70,7 @@ that part is pulled out into its own open item rather than hidden inside a tick.
 
       **That is the decision, and it is not mine:** either `passed` means what README says
       and the ladder must stop issuing it when a lower tier's last read is an earlier tree
-      (making `passed_partial` the normal ending for any review with rounds), or D-6's
+      (making `passed_thin_ladder` the normal ending for any review with rounds), or D-6's
       closed-tier rule is a deliberate exception and README and the attestation should say
       so instead. Both are defensible; what cannot stand is the client being told `clean:
       true` while the signed record says PARTIAL, because the client merges on the first
@@ -139,7 +139,7 @@ that part is pulled out into its own open item rather than hidden inside a tick.
 
       Confirmed by direct comparison, not guessed: the draft's state list (`queued`,
       `running`, `findings_ready`, `awaiting_diff`, `fast_clean`, `needs_human`, `passed`,
-      `passed_partial`, `failed`, `expired`) is missing `findings_stale` and `cancelled`,
+      `passed_thin_ladder`, `failed`, `expired`) is missing `findings_stale` and `cancelled`,
       both live in `REVIEW_STATES` (`src/core/review-state.ts`). It still says "wait and
       poll again — start at 10s, back off to 60s" — the EXACT wording
       `docs.test.ts`'s own "THE MOST EXPENSIVE INSTRUCTION THIS SERVICE EVER SHIPPED"
@@ -271,7 +271,7 @@ that part is pulled out into its own open item rather than hidden inside a tick.
       quietly retry it forever at the 24h ceiling, burning nothing (good) but also never
       telling anyone the *right* fix is a renewed subscription rather than patience.
 
-      Every deep review meanwhile reads `passed_partial`: t2 and t3 both fall through to
+      Every deep review meanwhile reads `passed_thin_ladder`: t2 and t3 both fall through to
       `zai-coding-plan2/glm-5.2` — the only non-metered entry in either fallback list,
       per D-117 — so all three tiers land on one vendor. `spec/review-ladder.md` already
       records why the fallback is 5.2 and not 5.3 (the GLM5.2 pool spanned both Z.ai
@@ -401,7 +401,7 @@ where they live, because SPEC describes what stands.
 **Decided and NOT to be built, with the reasoning, so nobody re-opens them by accident:**
 
 - **Metered stays OFF while Kimi's cycle is out.** I predicted weaker verdicts and was
-  wrong: our own review of D-121 came back `passed`, not `passed_partial`, with
+  wrong: our own review of D-121 came back `passed`, not `passed_thin_ladder`, with
   `checks_skipped` reading *"t2 was answered by an equivalent stand-in"* — the free Z.ai
   plan covered the dead Kimi seat at $0, on seven calls that would have cost ~$34. Full
   coverage, no spend. Revisit only if a verdict actually returns partial.
@@ -478,7 +478,7 @@ where they live, because SPEC describes what stands.
       (`openrouter/`), answerable BEFORE the call, and whether to allow it is a checkbox in
       D-118's window rather than something the ladder infers. A deployment that bought
       metered capacity as a safety net wants the fallback; one on pure subscriptions wants
-      `passed_partial` with the tier in `checks_skipped` — honest, free, already built.
+      `passed_thin_ladder` with the tier in `checks_skipped` — honest, free, already built.
       **BUILT 2026-08-17**: `isMeteredRoute` in `src/core/metered.ts` filters the fallback
       chain, `LORE_ALLOW_METERED` (default `0`) is the toggle, and it moves into D-118's
       window when that lands rather than waiting for it. The tier's own model is never
@@ -834,7 +834,7 @@ zero `@ts-ignore`, zero `eslint-disable` — and every item below is something t
       fail by name.
 - [x] **`isClean` was written as "the only predicate any caller should use" and no
       caller used it.** Four hand-written `state === "passed"`, including both `clean`
-      fields the MCP surface hands a client. `passed_partial` has been left out of a
+      fields the MCP surface hands a client. `passed_thin_ladder` has been left out of a
       hand-written state list three times here; in that field it would read as clean.
 - [x] **Sixteen symbols exported and read only at home**, plus one genuinely dead
       (`quotaExhausted`, redundant with the live throw in `opencode.ts`). Both halves
@@ -1111,7 +1111,7 @@ landing with a real user, and it should not get lost among the defects below.
       and the condition arrives as a hang.
 
       What is built already keeps reviews finishing: the deadline bounds the stall, and
-      D-48-widened promotes the tier's work upward at `passed_partial`.
+      D-48-widened promotes the tier's work upward at `passed_thin_ladder`.
 
       What is NOT built is the tracking, and it has a measurable price. It was **two dead
       tier attempts** per review; `skip_if_quota` (D-85) took that to one, and D-87 took
@@ -1491,7 +1491,7 @@ grows sideways is the one nobody can review.
 ## Later
 
 - [x] **Exercise the three paths that have never happened.** Done 2026-08-05:
-      `passed_partial`, `needs_human` and quota exhaustion now run end to end through
+      `passed_thin_ladder`, `needs_human` and quota exhaustion now run end to end through
       `runRound` against a real worktree and store. Writing them corrected my model of
       the ladder twice — one unpayable tier is `fast_clean` with more to come, not a
       partial pass, and the ladder steps OVER an exhausted tier to try the next rather

@@ -288,7 +288,7 @@ export async function serve(cfg: ServiceConfig): Promise<() => void> {
   //
   // `DEFAULT_TIERS` is three literal `openrouter/` models. With no `LORE_TIERS` and no
   // metered permission, every tier is gated and no review can reach a model at all — so
-  // the service would run, accept work, and return `passed_partial` with everything in
+  // the service would run, accept work, and return `passed_thin_ladder` with everything in
   // `checks_skipped`, for ever, looking like a configured deployment. That is the shape
   // this project refuses: it says so, once, at the one moment somebody is watching.
   //
@@ -300,7 +300,7 @@ export async function serve(cfg: ServiceConfig): Promise<() => void> {
     console.error(
       "lore: NO REVIEW CAN RUN. LORE_TIERS is unset, so the built-in ladder is in use — and every one of its " +
         "tiers is an `openrouter/` route, which bills per call. LORE_ALLOW_METERED=0 refuses those, so every " +
-        "tier will be skipped and every verdict will be `passed_partial` having read nothing. Fix it by " +
+        "tier will be skipped and every verdict will be `passed_thin_ladder` having read nothing. Fix it by " +
         "setting LORE_TIERS to a ladder on your own subscriptions, or LORE_ALLOW_METERED=1 to pay per call.",
     );
   }
