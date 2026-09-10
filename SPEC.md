@@ -4163,6 +4163,25 @@ the place it was applied and none of them generalised. What has actually caught 
 time is a reviewer reading the payload as a whole; there is no mechanical check here, and
 this entry does not pretend one is coming.
 
+**AND A SECOND CLASS, WHICH THIS BATCH PRODUCED FOUR TIMES (`39ed66b3`, `935af431`,
+`436cdfc9`/`3ac76b3e`, `1b1039b5`/`fa23eb3c`).** D-145 widened `waiting_note` and the
+`waiting_on` counts from one kind of row to nearly all of them, and every sentence written
+about the old, narrower world was left standing as an unqualified universal:
+*"waiting_note means stopped"*, *"it is on every non-terminal row"*, *"`new_findings: 0`
+never means somebody is working"*, *"a counted row is still stopped"*. All four were TRUE
+when written, of the set they were written for. All four became false the moment the set
+grew, silently — nothing about widening a field makes the prose about it fail, and the
+worst form is the sentence that never named a scope at all, because it still reads as
+correct in the new world and there is nothing to grep for.
+
+The rule this leaves behind: **when a field's domain widens, every sentence about that
+field is a claim to re-check, not only the ones that mention the old boundary.**
+`waiting_on` is now named explicitly in each of them — on a row waiting on you the zero
+means nobody came back, on a lore row it means the round has not finished — because a
+sentence that states its own scope is one the next widening cannot quietly invalidate.
+Distinct from the class above: that one is a prescription the reader cannot follow, this
+one is a description that stopped being true.
+
 **And the in-flight note withdraws its own prescription on a row the caller cannot reach**
 (`9ffcb6a0`, same review). It said *"come back and review_poll it"* on a review bound to
 another live token, where `review_poll` answers NOT FOUND — one line above the field that

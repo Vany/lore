@@ -800,13 +800,21 @@ READ \`waiting_on\` FIRST. It is "you" or "lore", and it is the whole triage:
     ROTS. It listed nothing to collect and so used to be omitted here entirely — the
     common way to reach it is to poll, start fixing, and end the session.
 
-\`new_findings: 0\` NEVER MEANS SOMEBODY IS WORKING ON IT. It means nothing NEW has
-arrived since the last handover, and that is all it can mean: **lore cannot see
-sessions.** A caller who is mid-fix right now and one that ended four days ago produce
-the same row, byte for byte, and lore has no way to tell you which you are looking at.
-Every such review carries a \`waiting_note\` saying so, and a \`quiet_since\` — the one
-fact that actually separates the two. Read it. Quiet for minutes is somebody probably
-still there; quiet for days is nobody coming back.
+ON A ROW WAITING ON YOU, \`new_findings: 0\` NEVER MEANS SOMEBODY IS WORKING ON IT. It
+means nothing NEW has arrived since the last handover, and that is all it can mean:
+**lore cannot see sessions.** A caller who is mid-fix right now and one that ended four
+days ago produce the same row, byte for byte, and lore has no way to tell you which you
+are looking at. Every such review carries a \`waiting_note\` saying so, and a
+\`quiet_since\` — the one fact that actually separates the two. Read it. Quiet for
+minutes is somebody probably still there; quiet for days is nobody coming back.
+
+READ \`waiting_on\` BEFORE YOU READ THE ZERO, because on the other kind of row the same
+zero means the opposite. On \`waiting_on: "lore"\` it means the round has not handed
+anything over YET — lore is working, that is what \`waiting_on\` says, and the row's own
+\`waiting_note\` says the round is not finished. Taking the sentence above to that row
+reads an active review as abandoned, and what follows is a review_cancel or a
+\`restart: true\` that throws away a round still being judged. One field, two meanings,
+and \`waiting_on\` is which.
 
 \`needs_human\` NEVER CARRIES A \`waiting_note\`, and the absence does not mean "fine".
 It is equally stopped, and its move is to get a PERSON, so \`needs_human\` and
@@ -852,8 +860,11 @@ findings you had not collected yet was counted by neither, so the most ordinary
 outstanding state of all read as "everything done". Most are yours to answer with review_submit or to end with review_cancel — but a
 counted row carrying \`not_yours_note\` is NOT, and its own \`waiting_note\` says so
 rather than leaving you to notice: those calls answer NOT FOUND for you. It is still
-counted, because it is still stopped and somebody still has to finish it; what changes is
-who.
+counted — in \`waiting_on_you\` if it is stopped, in \`in_flight\` if lore is still
+working on it, exactly as its \`waiting_on\` says — because somebody still has to finish
+it; what changes is who. Do not read "counted" as "stopped": a sibling row in
+\`running\` is neither yours nor stalled, and revoking that token to reach it would
+interrupt a round that is doing its job.
   * "lore" — queued, running, or fast_clean with the deep tiers still going. NOTHING FOR
     YOU THIS SECOND, AND NOT FINISHED: those are different things, and this line used to
     say only the first. The round will end either in a pass or in findings that nobody

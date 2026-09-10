@@ -240,12 +240,14 @@ to review.
 > including a review that ENDED while still holding findings nobody collected. While
 > either is above zero, you are not done.
 >
-> **`new_findings: 0` never means somebody is working on it.** It means nothing NEW
-> arrived since the last handover, and that is all it can mean: lore cannot see
-> sessions, so a caller mid-fix and one that ended days ago produce the same row. Such
-> an entry carries a `waiting_note` saying so and a `quiet_since`, which is the one
-> fact that separates the two — except `needs_human`, which is NOT reassurance: it is
-> equally stopped and is answered by `open_questions` instead. A review started by another
+> **On a row waiting on YOU, `new_findings: 0` never means somebody is working on it.**
+> It means nothing NEW arrived since the last handover, and that is all it can mean: lore
+> cannot see sessions, so a caller mid-fix and one that ended days ago produce the same
+> row. Such an entry carries a `waiting_note` saying so and a `quiet_since`, which is the
+> one fact that separates the two — except `needs_human`, which is NOT reassurance: it is
+> equally stopped and is answered by `open_questions` instead. **On a `waiting_on: "lore"`
+> row the same zero means the opposite** — the round has not handed anything over yet,
+> and lore is working — so `waiting_on` is read before the zero, not after it. A review started by another
 > live token of yours carries a separate `not_yours_note`, because being unreachable and
 > being stalled are different claims — and `quiet_since` reaches back through the
 > staleness dim, whose own write would otherwise make a two-day-old review look like it

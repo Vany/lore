@@ -582,9 +582,13 @@ while still holding undelivered findings is listed and counted, because no sweep
 those over: a person has to. `stalled` is the
 subset of the first that has gone quiet. The triage table above used to answer the lore
 case with "nothing", and a client that read it stopped in the middle of its own loop. A counted row that is bound to another live token still
-counts, because it is still stopped and somebody still has to finish it — and its
+counts — in `waiting_on_you` if it is stopped, in `in_flight` if lore is still working on
+it — because somebody still has to finish it, and its
 `waiting_note` says its own prescriptions will not work for this caller rather than
-leaving the reader to cross-reference `not_yours_note` and notice. A field that reads the
+leaving the reader to cross-reference `not_yours_note` and notice. **Counted is not
+stopped**, and this sentence said it was: a sibling row in `running` lands in `in_flight`,
+and a reader who took "still stopped" literally would revoke that token to reach a round
+that needed nothing from anyone. A field that reads the
 same on an actionable row and an unactionable one is the defect, not the pair of fields.
 
 Each entry carries `highest`, the worst severity among its new findings, so a client
