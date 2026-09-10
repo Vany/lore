@@ -76,7 +76,7 @@ export class CancelledByLore extends DidNotRun {}
  * about the branch.
  *
  * The ladder steps over one of these and finishes with what remains, reaching
- * `passed_partial` at best (D-48). That is the whole distinction: a tier that could
+ * `passed_thin_ladder` at best (D-48). That is the whole distinction: a tier that could
  * not run is a limitation, honestly labelled; a tier that ran and broke is a failure.
  *
  * Two of them, and the second arrived because the first's machinery was already
@@ -129,7 +129,7 @@ export class ServiceUnreachable extends DidNotRun {}
 
 /**
  * A tier's provider is out of budget or rate limit — the canonical `TierUnavailable`
- * (D-48): the ladder steps over it and reaches `passed_partial` at best.
+ * (D-48): the ladder steps over it and reaches `passed_thin_ladder` at best.
  *
  * Found by lore's own review, pasted twice back-to-back and inverted: this used to say
  * "Never a reason to skip it", backwards from D-48's own SPEC entry ("A tier that cannot

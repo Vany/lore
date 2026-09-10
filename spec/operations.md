@@ -179,7 +179,7 @@ the route.
 (`124fa208`).** `alerts.providerAuthFailed` fires from one place: the catch in
 `worker.ts` that handles a whole ROUND failing. When a fallback rescues the tier — the
 primary's credential dead, the twin answering, verdicts quietly downgraded to
-`passed_partial` — the round succeeds and nobody is paged at all. That is precisely the
+`passed_thin_ladder` — the round succeeds and nobody is paged at all. That is precisely the
 thirteen-day shape below, so a manual promising a page there would send an operator to
 wait for one that is never coming. The board is what covers that case, which is why the
 chip had to change. What it did not do was reach the board, so a dead credential
@@ -416,7 +416,7 @@ id begins with `openrouter/` — every other provider here is a flat subscriptio
 `LORE_ALLOW_METERED` (default `0`) says whether a fallback chain may walk onto one. Asked
 per call, before the call, from the id alone. When the answer is no the chain steps over
 the metered entries; if none are left the tier is skipped, which is D-48's existing path
-and reaches the client as `passed_partial` with the tier named in `checks_skipped` —
+and reaches the client as `passed_thin_ladder` with the tier named in `checks_skipped` —
 honest, free, and a weaker claim said out loud. A tier's OWN model is never filtered:
 configuring `openrouter/x` *is* the operator switching it on.
 
@@ -434,7 +434,7 @@ outcomes is currently wrong for a different reason, recorded in SPEC §3.
 **A review that is finished gives its worktree back at once.** Its tree hash is
 already recorded, attestation reads only the store, and `review_submit` refuses a
 finished review — so the worker releases the worktree the moment a review reaches
-`passed`, `passed_partial`, `failed` or `expired`. An hourly sweep repeats this with a
+`passed`, `passed_thin_ladder`, `failed` or `expired`. An hourly sweep repeats this with a
 zero-day window, prunes git records whose directory has gone, and deletes review rows
 after 90 days. Findings and verdicts cascade with them; **knowledge never does**, and
 has no foreign key to a review precisely so that it outlives one.

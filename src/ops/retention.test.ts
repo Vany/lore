@@ -250,8 +250,8 @@ describe("a finished review gives its worktree back", () => {
 
   // It was omitted from the hand-written list in all three queries, so a partial pass
   // held its worktree for ever and its row was never collected.
-  it("treats passed_partial as finished, like every other terminal state", async () => {
-    const dir = reviewWithWorktree("revPP", "passed_partial");
+  it("treats passed_thin_ladder as finished, like every other terminal state", async () => {
+    const dir = reviewWithWorktree("revPP", "passed_thin_ladder");
     await collect(store, cfg());
     expect(existsSync(dir)).toBe(false);
   });
@@ -295,22 +295,22 @@ describe("a finished review gives its worktree back", () => {
 });
 
 // A verdict destroyed by a sweep. `expireStale` listed the terminal states by hand
-// and left out passed_partial, so a review that legitimately reached a partial pass
+// and left out passed_thin_ladder, so a review that legitimately reached a partial pass
 // would be overwritten with `expired` 48 hours later.
 describe("expiry never overwrites a verdict", () => {
-  it("does not expire a passed_partial review", () => {
+  it("does not expire a passed_thin_ladder review", () => {
     const store = new Store(":memory:");
     const repoId = store.upsertRepo("r", "git@x:r.git").id;
     store.createReview({
       id: "revPP2", repoId, principal: "p", branch: "b", intoRef: "main",
-      ticket: "t", type: "code-arch", state: "passed_partial", ladder: initialState(),
+      ticket: "t", type: "code-arch", state: "passed_thin_ladder", ladder: initialState(),
     });
     store.db.prepare("UPDATE review SET updated_at = ? WHERE id = 'revPP2'")
       .run(new Date(Date.now() - 100 * 3_600_000).toISOString());
 
     expireStale(store, DEFAULT_RETENTION);
 
-    expect(store.getReview("revPP2", "p")?.state).toBe("passed_partial");
+    expect(store.getReview("revPP2", "p")?.state).toBe("passed_thin_ladder");
     store.close();
   });
 });

@@ -8,7 +8,7 @@
  *   * every tool was documented with a DOT (`review.poll`) and registered with an
  *     UNDERSCORE (`review_poll`) — an agent following the docs literally calls
  *     nothing, in ten places including the prompt that drives the whole loop;
- *   * `passed_partial` was mishandled in FIVE separate documents — omitted from the
+ *   * `passed_thin_ladder` was mishandled in FIVE separate documents — omitted from the
  *     canonical state list, excluded from attestation, and left out of two loops
  *     that therefore never terminate on it. It has never occurred in production,
  *     which is exactly why every document about it was wrong;
@@ -22,7 +22,7 @@
 
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { REVIEW_STATES, isAttestable, isTerminal } from "../core/review-state.ts";
+import { REVIEW_STATES, isCleared, isTerminal } from "../core/review-state.ts";
 import { DRIVABLE_VERDICTS, everyClientDocument, RESOURCE_DOCS, REVIEW_PROMPT_TEXT, SERVER_INSTRUCTIONS, TOOL_DOCS } from "./docs.ts";
 
 /**
@@ -196,7 +196,7 @@ describe("the standing instructions carry what a session cannot be expected to l
   });
 
   // DERIVED FROM THE PREDICATES, NEVER TYPED OUT AGAIN — six places once wrote a state
-  // list by hand and three were missing `passed_partial`.
+  // list by hand and three were missing `passed_thin_ladder`.
   //
   // And the derivation has to be the RIGHT set, which the first version was not: a list
   // of every terminal state told the client to drive the review to `expired` or
@@ -208,7 +208,7 @@ describe("the standing instructions carry what a session cannot be expected to l
     // The set itself, asserted rather than re-derived here: `expired` and `cancelled` are
     // endings that happen TO a review, and naming them as goals is the defect this
     // replaced.
-    expect([...DRIVABLE_VERDICTS]).toStrictEqual(["passed", "passed_partial", "failed"]);
+    expect([...DRIVABLE_VERDICTS]).toStrictEqual(["passed", "passed_thin_ladder", "failed"]);
     // needs_human is not terminal, and it still stops the client's driving: a question
     // only a person can settle. Left out of the loop above, said explicitly instead.
     expect(SERVER_INSTRUCTIONS).toContain("needs_human");
@@ -326,12 +326,12 @@ describe("the docs describe every state the code can produce", () => {
   const states = RESOURCE_DOCS["lore://docs/states"]?.text ?? "";
 
   // The canonical reference. A state missing from it is a state a client cannot
-  // learn about at all — which is how `passed_partial` went undocumented while
+  // learn about at all — which is how `passed_thin_ladder` went undocumented while
   // being both terminal and attestable.
   //
   // Anchored to the start of a line, because the rows in this resource are
   // `name  description`. A bare `toContain` passes on the word appearing ANYWHERE
-  // in the blob — I wrote that first, deleted `passed_partial`'s row to check the
+  // in the blob — I wrote that first, deleted `passed_thin_ladder`'s row to check the
   // test bites, and it did not: the name still occurred in the sentence below the
   // table. A test that survives the defect it was written for is worse than none.
   const rows = new Set(
@@ -341,7 +341,7 @@ describe("the docs describe every state the code can produce", () => {
     expect(rows.has(state)).toBe(true);
   });
 
-  // A loop told to wait for `passed` never returns on `passed_partial`, because it
+  // A loop told to wait for `passed` never returns on `passed_thin_ladder`, because it
   // is terminal and cannot become `passed`. Both the workflow resource and the
   // prompt said exactly that.
   const loops: readonly [string, string][] = [
@@ -363,10 +363,13 @@ describe("the docs describe every state the code can produce", () => {
 // below that. This line is an unrelated pre-existing check the finding used as its
 // nearest anchor; it does not need to change for the fix to be real.
 describe("what the docs promise about attestation is what the code allows", () => {
-  const attestable = REVIEW_STATES.filter(isAttestable);
+  // ATTESTABLE AND CLEARED ARE ONE QUESTION (D-147). They used to be two predicates, and
+  // the pair disagreed: this set was both passing states while the wire said only
+  // `passed` was clean.
+  const attestable = REVIEW_STATES.filter(isCleared);
 
-  it("is exactly passed and passed_partial", () => {
-    expect(attestable).toStrictEqual(["passed", "passed_partial"]);
+  it("is exactly passed and passed_thin_ladder", () => {
+    expect(attestable).toStrictEqual(["passed", "passed_thin_ladder"]);
   });
 
   // Said in three places, and for a while two of them were wrong in the same way.
@@ -375,7 +378,7 @@ describe("what the docs promise about attestation is what the code allows", () =
     ["lore://docs/states", RESOURCE_DOCS["lore://docs/states"]?.text ?? ""],
     ["REVIEW_PROMPT_TEXT", REVIEW_PROMPT_TEXT({ branch: "b", into: "i" }, "t")],
   ])("%s does not restrict attestation to `passed` alone", (_n, text) => {
-    if (/attest/i.test(text)) expect(text).toContain("passed_partial");
+    if (/attest/i.test(text)) expect(text).toContain("passed_thin_ladder");
   });
 });
 

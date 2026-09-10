@@ -1170,7 +1170,7 @@ describe("a call that is no longer wanted", () => {
 // so a 104 KB prompt was well inside the computed budget and sent unchanged, and the
 // endpoint answered 400 "Prompt exceeds max length". Generic, that failed the whole
 // review — six commits unreviewed, while t2 (1M) and t3 (500k) could each have held the
-// diff comfortably. Classified, the ladder steps over t1 and finishes passed_partial.
+// diff comfortably. Classified, the ladder steps over t1 and finishes passed_thin_ladder.
 describe("a prompt the provider refuses as too long", () => {
   it("is a tier that could not look, so the ladder can step over it", async () => {
     replies = [{ info: { error: { name: "APIError", data: { message: "Prompt exceeds max length", statusCode: 400 } } } }];
@@ -1585,7 +1585,7 @@ describe("what the reviewer reached for", () => {
 /**
  * "TOO LONG FOR THIS TIER" IS A DOWNGRADE, SO IT MUST NOT BE GUESSED.
  *
- * `TooLargeForTier` makes the ladder STEP OVER the tier and finish `passed_partial`
+ * `TooLargeForTier` makes the ladder STEP OVER the tier and finish `passed_thin_ladder`
  * (D-48) — weaker evidence, honestly labelled. That is right when the tier's window
  * genuinely could not hold the diff, and wrong for everything else: a transient rate
  * limit classified this way silently downgrades a review's evidence instead of failing

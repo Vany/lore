@@ -1811,7 +1811,7 @@ ${contract}`,
       // Generic, this failed the WHOLE REVIEW: t1 died, the ladder stopped, and six
       // commits went unreviewed although t2 (1M context) and t3 (500k) could each have
       // held the diff comfortably. As `TooLargeForTier` the ladder steps over t1 and
-      // finishes `passed_partial` — weaker evidence, honestly labelled, which is the
+      // finishes `passed_thin_ladder` — weaker evidence, honestly labelled, which is the
       // whole of D-48. The same lesson as the 741 KB branch that failed five times.
       // THE SUBJECT MUST BE THE PROMPT, not merely the word "exceed" somewhere.
       //
@@ -1819,7 +1819,7 @@ ${contract}`,
       // limit, a quota, a spend cap, a token budget — and every one of those was then
       // classified as "this tier's window is too small". The consequence is the opposite
       // of the one it was built for: `TooLargeForTier` makes the ladder STEP OVER the
-      // tier and finish `passed_partial`, so a transient rate limit would silently
+      // tier and finish `passed_thin_ladder`, so a transient rate limit would silently
       // downgrade a review's evidence instead of failing it, and the attestation would
       // claim a tier had been honestly skipped when it had merely been throttled.
       //
@@ -1877,7 +1877,7 @@ ${contract}`,
  * a provider says "exceeded" about?
  *
  * Exported so it can be aimed at: it decides between failing a review and DOWNGRADING one
- * (`TooLargeForTier` makes the ladder step over the tier and finish `passed_partial`,
+ * (`TooLargeForTier` makes the ladder step over the tier and finish `passed_thin_ladder`,
  * D-48), and a predicate that important should not live unreachable inside a catch block.
  *
  * Anchored on the PAIRING of a length phrase with an input subject rather than on either

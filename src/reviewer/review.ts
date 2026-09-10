@@ -80,7 +80,7 @@ export interface RoundInput {
    * The operator's answer, held in config and set by a person, because neither answer is
    * right in general: a deployment that has deliberately bought metered capacity as its
    * safety net wants the fallback, and one running purely on subscriptions would rather
-   * have `passed_partial` with the tier named in `checks_skipped` — honest, free, and
+   * have `passed_thin_ladder` with the tier named in `checks_skipped` — honest, free, and
    * already implemented. lore stops guessing and asks once.
    *
    * Absent means NO. A deployment that has not said yes to spending money does not spend
@@ -1730,7 +1730,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     // sat out its whole doubling backoff untouched. Measured the morning it was found:
     // `openai/gpt-5.6-terra` parked at a GUESSED 19:18Z, last asked at 00:46Z, eleven
     // hours earlier, while t3 answered on Z.ai and every verdict came back
-    // `passed_partial` for a vendor collapse that no longer had to exist. The provider's
+    // `passed_thin_ladder` for a vendor collapse that no longer had to exist. The provider's
     // limit was a rolling window that had almost certainly reset several times over.
     //
     // D-90's reasoning — do not re-ask a dead provider every round — was written when
@@ -1998,7 +1998,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       // the whole of what this flag guards.
       //
       // An emptied chain is not an error: `throw e` below rethrows the primary's
-      // `Exhausted`, D-48 steps over the tier, and the client gets `passed_partial` with it
+      // `Exhausted`, D-48 steps over the tier, and the client gets `passed_thin_ladder` with it
       // named in `checks_skipped`. A weaker review, said out loud, for free.
       const chain = withoutMetered(reachable, input.allowMetered ?? false);
       // ONLY WHEN THE MONEY IS ACTUALLY WHY (lore-ok is not the answer to fd0f65d5 —
@@ -2692,7 +2692,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // member is freshly behind a tree the loop never gets to re-check, because there is
   // no pass 9. Reported instead of silently reached past — the caller (worker.ts)
   // requeues on it exactly as it already does for an unconsumed hold, rather than a
-  // verdict settling `passed`/`passed_partial` over a tree not everyone actually read.
+  // verdict settling `passed`/`passed_thin_ladder` over a tree not everyone actually read.
   const rungStillStale = staleMembers(await treeHash(worktree)).length > 0;
   const ranMembers = outcomes.filter((o): o is MemberRan => o.kind === "ok");
   const skippedMembers = outcomes.filter((o): o is MemberSkipped => o.kind === "skipped");
@@ -2708,7 +2708,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     // sibling — and the sibling has now had its say. If nothing anywhere can read the
     // code there is no review (INV-1); otherwise the ladder steps with nothing raised
     // and the verdict carries the skips. The tree is recorded on this path too: it can
-    // reach `passed_partial`, which is attestable, and an attestation must name its tree.
+    // reach `passed_thin_ladder`, which is attestable, and an attestation must name its tree.
     const first = skippedMembers[0];
     if (first === undefined) throw new Error("unreachable: a rung round with no members");
     if (!anyTierRan(tiers, ladderNow.unavailable)) throw first.error;
@@ -3789,8 +3789,8 @@ function toReviewState(d: Decision): ReviewState {
       return "fast_clean";
     case "passed":
       return "passed";
-    case "passedPartial":
-      return "passed_partial";
+    case "passedThinLadder":
+      return "passed_thin_ladder";
     case "needsHuman":
       return "needs_human";
     case "stopped":

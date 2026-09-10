@@ -615,7 +615,7 @@ export async function main(argv: readonly string[]): Promise<ExitCode> {
     switch (result.decision.kind) {
       case "passed":
         return EXIT.PASS;
-      case "passedPartial":
+      case "passedThinLadder":
         return EXIT.PARTIAL;
       case "stopped":
         return EXIT.DID_NOT_RUN;

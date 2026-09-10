@@ -210,9 +210,12 @@ the reason the project has the shape it does:
 What is **not** proven, stated plainly because a checklist that hides its gaps is
 the failure this tool exists to catch:
 
-- `passed_partial` and a real quota exhaustion have **never occurred**. Both have
-  code and tests; a path whose first live execution is during an incident is a path
-  nobody has reviewed.
+- ~~`passed_thin_ladder` and a real quota exhaustion have **never occurred**.~~
+  **Wrong, and it stayed here while it was wrong.** Measured 2026-09-10: 201 of 408
+  reviews all-time reached `passed_thin_ladder`, and 54 of the 61 that concluded cleanly
+  in the preceding nine days. It is the ORDINARY ending on this deployment, not an
+  untested path — and this sentence is why the state kept being reasoned about as an
+  exception. Real quota exhaustion is the untested half; that part still stands.
 - `needs_human` has occurred exactly once, and **it was wrong** — two ADR sentences
   restating one constraint, read as a contradiction because negation was cancelled
   across a whole statement. It stopped a review whose findings were all settled. The

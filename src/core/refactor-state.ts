@@ -16,7 +16,7 @@ const TERMINAL = new Set<RefactorState>(["done", "failed"]);
 
 /**
  * The same set, for SQL that has to name it — `review-state.ts`'s own `TERMINAL_SQL`,
- * mirrored for the same reason: a hand-copied state list is how `passed_partial` went
+ * mirrored for the same reason: a hand-copied state list is how `passed_thin_ladder` went
  * missing from three of six review-side copies (2026-08-06) and overwrote real verdicts.
  * Found again in this table's own board-visibility change (D-139, fingerprints
  * ad809772/ba0d19b8) before this file existed to prevent it — four independent copies

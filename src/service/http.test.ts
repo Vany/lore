@@ -805,7 +805,14 @@ describe("MCP surface", () => {
     // substrings that do not wrap in the source — a wrapped phrase would make this
     // test fail for formatting rather than for content.
     expect(text).toContain("Returns ONLY NEW findings");
-    expect(text).toContain("ONLY `passed` means the branch is clean");
+    // D-147 REPLACED THE SENTENCE THIS LINE USED TO PIN — "ONLY `passed` means the branch
+    // is clean" — because it was the sentence teaching clients to stop on 89% of lore's
+    // clean verdicts. The pin moves with it: what must survive is that the payload names
+    // BOTH cleared states and separates "may I proceed" from "how much read it".
+    // Quote-free substrings on purpose: the body is JSON, so a pinned `"full"` would have
+    // to match escaped quotes and would fail for encoding rather than for content.
+    expect(text).toContain("TWO STATES MEAN THE LADDER READ THIS TREE AND FOUND NOTHING");
+    expect(text).toContain("WHAT SEPARATES THEM IS `evidence`, NOT WHETHER YOU MAY PROCEED");
     expect(text).toContain("Do not summarise it");
     expect(text).toContain("needs_human");
   });
@@ -1720,6 +1727,40 @@ describe("the inbox lists what is waiting, not only what is fresh", () => {
 
   // The docs ARE the interface, so a field the inbox emits and TOOL_DOCS.inbox never
   // mentions is a client acting on a contract it cannot read (spec/agent-docs.md §1).
+  /**
+   * D-147. The field a client decides on is the one lore got wrong for longest: `clean`
+   * was a claim about the CODE, which lore never makes, and to stay honest it read false
+   * on `passed_thin_ladder` — the ending of 54 of the 61 reviews that concluded cleanly
+   * in the nine days before this was written. Clients read the false half and stopped.
+   *
+   * These pin the wire, not the predicate (`review-state.test.ts` has that): what a
+   * client actually receives, on the two calls it actually reads.
+   */
+  it("tells a client it may proceed on a thin ladder, and says the ladder was thin", async () => {
+    open("revThin", "passed_thin_ladder", "feat/thin");
+    const out = await callTool("review_poll", { review_id: "revThin" });
+    expect(out["cleared"], "the thin ladder is a pass and the wire must say so").toBe(true);
+    expect(out["evidence"]).toBe("thin");
+    expect(out, "`clean` was the wrong word and is gone, not aliased").not.toHaveProperty("clean");
+  });
+
+  it("says full evidence on the full ladder, with the same cleared flag", async () => {
+    open("revFull", "passed", "feat/full");
+    const out = await callTool("review_poll", { review_id: "revFull" });
+    expect(out["cleared"]).toBe(true);
+    expect(out["evidence"]).toBe("full");
+  });
+
+  // ABSENT, NOT "full", AND NOT "unknown". A review that never finished reading has no
+  // evidence claim to make, and a client that defaulted the missing field would invent a
+  // reading nobody took — INV-1 at field scale.
+  it("omits evidence entirely where nothing was cleared", async () => {
+    open("revFailed", "failed", "feat/failed");
+    const out = await callTool("review_poll", { review_id: "revFailed" });
+    expect(out["cleared"]).toBe(false);
+    expect(out).not.toHaveProperty("evidence");
+  });
+
   it("emits no inbox field the docs do not name", async () => {
     open("revF", "findings_ready", "feat/fields");
     const out = await callTool("review_inbox", {});
@@ -1727,7 +1768,7 @@ describe("the inbox lists what is waiting, not only what is fresh", () => {
       (out["reviews"] as Record<string, unknown>[]).flatMap((r) => Object.keys(r)),
     );
     // Named by the protocol or by every other tool, not by this text.
-    const ELSEWHERE = new Set(["review_id", "branch", "state", "clean", "findings", "highest"]);
+    const ELSEWHERE = new Set(["review_id", "branch", "state", "cleared", "findings", "highest"]);
     const undocumented = [...emitted].filter((k) => !ELSEWHERE.has(k) && !TOOL_DOCS.inbox.includes(k));
     expect(undocumented, "the inbox emits fields its own docs never mention").toStrictEqual([]);
   });
@@ -2484,7 +2525,7 @@ describe("one review per branch", () => {
 
     expect(store.getReview(firstId, "alice")?.state, "the predecessor ends as somebody-decided").toBe("cancelled");
     const open = store.db
-      .prepare("SELECT COUNT(*) c FROM review WHERE branch = 'feat/x' AND state NOT IN ('passed','passed_partial','failed','expired','cancelled')")
+      .prepare("SELECT COUNT(*) c FROM review WHERE branch = 'feat/x' AND state NOT IN ('passed','passed_thin_ladder','failed','expired','cancelled')")
       .get() as { c: number };
     expect(open.c, "exactly one live review per branch").toBe(1);
     // The account of WHY survives on the old review, as for any cancel.
@@ -2549,7 +2590,7 @@ describe("one review per branch", () => {
   // just this review, and stopping there — the exact opposite of what a passed
   // review should prompt. Pinned so the "carry on" framing cannot quietly drop
   // back out in a later wording pass.
-  it.each([["passed"], ["passed_partial"]] as const)(
+  it.each([["passed"], ["passed_thin_ladder"]] as const)(
     "tells the client %s closes the review, not its task",
     async (state) => {
       const first = await start();

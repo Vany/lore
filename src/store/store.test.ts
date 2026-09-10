@@ -608,7 +608,7 @@ describe("starting a claimed review", () => {
     );
   });
 
-  it.each(["passed", "passed_partial", "failed", "expired"] as const)(
+  it.each(["passed", "passed_thin_ladder", "failed", "expired"] as const)(
     "refuses a review that reached '%s' in the same window",
     (state) => {
       store.updateReview("rev1", { state });
@@ -1537,6 +1537,64 @@ describe("opening a database that already exists", () => {
     outcome       TEXT NOT NULL,
     at            TEXT NOT NULL
   )`;
+
+  /**
+   * D-147 renamed `passed_partial` to `passed_thin_ladder`, and the deployed database held
+   * 201 rows carrying the old word.
+   *
+   * WHY A ROW LEFT BEHIND IS NOT HARMLESS, which is the whole reason this is tested rather
+   * than done by hand once: `ReviewState` no longer has the old string, so an unmigrated
+   * row is a state with no case anywhere — `isTerminal` answers false for it, and
+   * `expireStale` then overwrites a real, signed-off verdict with `expired` 48 hours
+   * later. That is the sweep-destroys-a-verdict failure `TERMINAL_SQL`'s docstring already
+   * records, reached by a different road.
+   */
+  it("renames the state the deployed database still spells the old way", () => {
+    const path = join(dir, "rename.db");
+    const before = new Store(path);
+    const repo = before.upsertRepo("r", "u");
+    const mk = (id: string, state: string) => {
+      before.createReview({
+        id, repoId: repo.id, principal: "alice", branch: "b", intoRef: "main",
+        ticket: "t", type: "code-arch", state: "passed", ladder: initialState(),
+      });
+      // Written straight past the typed API on purpose: the string is no longer a
+      // `ReviewState`, so the only way to produce the row a real database holds is the
+      // way the OLD build produced it.
+      before.db.prepare("UPDATE review SET state = ? WHERE id = ?").run(state, id);
+    };
+    mk("old1", "passed_partial");
+    mk("old2", "passed_partial");
+    mk("keep", "failed");
+    before.db.prepare("DELETE FROM meta WHERE key = 'state-renamed-thin-ladder'").run();
+    before.close();
+
+    const migrated = new Store(path);
+    const states = migrated.db.prepare("SELECT id, state FROM review ORDER BY id").all() as {
+      id: string; state: string;
+    }[];
+    // Mapped to arrays because `node:sqlite` returns null-prototype rows, which
+    // `toStrictEqual` rejects for the prototype while reporting "no visual difference".
+    expect(states.map((r) => [r.id, r.state])).toStrictEqual([
+      ["keep", "failed"],
+      ["old1", "passed_thin_ladder"],
+      ["old2", "passed_thin_ladder"],
+    ]);
+    migrated.close();
+
+    // ONCE, AND THEN NEVER AGAIN. This runs on every open, so the guard row is what stops
+    // it from being a permanent table scan — and, more importantly, from silently
+    // rewriting a row some future build legitimately puts back under the old name.
+    const reopened = new Store(path);
+    reopened.db.prepare("UPDATE review SET state = 'passed_partial' WHERE id = 'keep'").run();
+    reopened.close();
+    const third = new Store(path);
+    expect(
+      (third.db.prepare("SELECT state FROM review WHERE id = 'keep'").get() as { state: string }).state,
+      "the guard row means the migration does not run a second time",
+    ).toBe("passed_partial");
+    third.close();
+  });
 
   it("adds a column the deployed database has never seen", () => {
     const path = join(dir, "v1.db");

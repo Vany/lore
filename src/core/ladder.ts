@@ -603,7 +603,7 @@ export function loadTiers(source = process.env["LORE_TIERS"]): readonly Tier[] {
   const sole = soleVendorOf(tiers);
   if (sole !== undefined) {
     console.error(
-      `lore: WARNING — every model tier is from one vendor (${sole}). Tiers share blind spots, so this ladder is closer to one opinion asked three times than to three independent reviews. Reviews on it can reach 'passed_partial' at best, never 'passed'.`,
+      `lore: WARNING — every model tier is from one vendor (${sole}). Tiers share blind spots, so this ladder is closer to one opinion asked three times than to three independent reviews. Reviews on it can reach 'passed_thin_ladder' at best, never 'passed'.`,
     );
   }
 
@@ -1120,7 +1120,7 @@ export type Decision =
    * (D-49), or both. `skipped` and `soleVendor` say which.
    */
   | {
-      readonly kind: "passedPartial";
+      readonly kind: "passedThinLadder";
       readonly skipped: readonly string[];
       readonly soleVendor?: string;
       /**
@@ -1361,7 +1361,7 @@ export function step(input: StepInput): { readonly state: LadderState; readonly 
             // is disclosed — a `passed` that quietly stopped mentioning t1 would be the
             // silent downgrade this whole project exists to refuse.
             {
-              kind: "passedPartial",
+              kind: "passedThinLadder",
               skipped,
               ...(sole === undefined ? {} : { soleVendor: sole }),
               ...(collapse === undefined ? {} : { vendorSpread: collapse }),

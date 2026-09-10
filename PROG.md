@@ -69,7 +69,7 @@ and found two more the next day.
 
 - **One thing defined twice always disagrees eventually.** Derive the second form from
   the first. The terminal review states were written out in six places and
-  `passed_partial` was missing from three: a verdict overwritten by a sweep, worktrees
+  `passed_thin_ladder` was missing from three: a verdict overwritten by a sweep, worktrees
   held for ever, partial passes shown as permanently open.
 - **An exported constant nothing reads is worse than one that is absent**, because a
   reader believes it. `RULE_DIRS` sat beside the ingest list looking used and 37 ADRs

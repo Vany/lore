@@ -499,6 +499,7 @@ export class Store {
     // worth having if it describes the tables that are actually there.
     metaSet(this.db, "schema_version", String(SCHEMA_VERSION));
     this.backfillAuthMarks();
+    this.renameThinLadderState();
   }
 
   close(): void {
@@ -3662,6 +3663,36 @@ export class Store {
       this.db.prepare("UPDATE meta SET value = ? WHERE key = ?").run(JSON.stringify({ ...v, auth: true }), r.key);
     }
     metaSet(this.db, "auth-marks-backfilled", "1");
+  }
+
+  /**
+   * `passed_partial` became `passed_thin_ladder` (D-147), and 201 stored rows still say
+   * the old word.
+   *
+   * A ONE-SHOT DATA MIGRATION, not a schema one. `applyMigrations` can express exactly
+   * `ADD COLUMN` and refuses anything else out loud, because it decides what has already
+   * run by asking whether a column exists — a question an `UPDATE` can never answer, so an
+   * update parked in that list would run on every open for ever. This is the mechanism
+   * that list's own error message points at, and `backfillAuthMarks` above is its
+   * precedent: guarded by a `meta` row, so it runs once and is then a no-op.
+   *
+   * A ROW LEFT BEHIND WOULD NOT BE HARMLESS. `ReviewState` no longer contains the old
+   * string, so an unmigrated row parses as a state the code has no case for: the board
+   * would paint it as unknown, `isTerminal` would answer false, and `expireStale` would
+   * then overwrite a real verdict with `expired` 48 hours later — the exact sweep-destroys-
+   * a-verdict failure `TERMINAL_SQL`'s docstring already records, arriving by a new route.
+   *
+   * The rename is invertible and the value is a closed vocabulary, so this is safe to run
+   * against a database an older build wrote. Rolling BACK past this point is not safe, and
+   * that is what `assertNotDowngrade` is for.
+   */
+  private renameThinLadderState(): void {
+    if (metaGet(this.db, "state-renamed-thin-ladder") !== undefined) return;
+    const n = this.db.prepare("UPDATE review SET state = 'passed_thin_ladder' WHERE state = 'passed_partial'").run();
+    // Said out loud rather than silently: a data migration that touched 201 rows and one
+    // that touched none look identical afterwards, and only one of them is expected.
+    if (Number(n.changes) > 0) console.error(`[lore:log] renamed ${String(n.changes)} review(s) passed_partial -> passed_thin_ladder (D-147)`);
+    metaSet(this.db, "state-renamed-thin-ladder", "1");
   }
 
   markRouteUnavailable(model: string, untilIso: string, why: string, failures: number, stated = false, auth = false): void {

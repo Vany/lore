@@ -47,7 +47,7 @@ export function isMeteredRoute(route: string): boolean {
  *
  * When they are refused the chain can empty, and an empty chain is the honest outcome
  * rather than an error: the caller rethrows the original `Exhausted`, D-48 steps over the
- * tier, and the verdict is `passed_partial` with the tier named in `checks_skipped`. Free,
+ * tier, and the verdict is `passed_thin_ladder` with the tier named in `checks_skipped`. Free,
  * already implemented, and it says out loud that the review is worth less.
  */
 export function withoutMetered(chain: readonly string[], allowMetered: boolean): readonly string[] {

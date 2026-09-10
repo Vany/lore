@@ -19,7 +19,7 @@ import { elapsedWords } from "../core/elapsed.ts";
 import { absent } from "../core/optional.ts";
 import { worstSeverity } from "../core/finding.ts";
 import { initialState, ladderFingerprint, loadTiers, type LadderState } from "../core/ladder.ts";
-import { isAttestable, isClean, isTerminal, needsClient, type ReviewState } from "../core/review-state.ts";
+import { evidenceOf, isCleared, isTerminal, needsClient, type ReviewState } from "../core/review-state.ts";
 import { SHORT_LENGTH } from "../core/fingerprint.ts";
 import { AmbiguousFingerprint } from "../core/errors.ts";
 import { isSuppressionNotice } from "../core/checks-skipped.ts";
@@ -189,7 +189,7 @@ function nextStep(state: ReviewState, freshFindings: number, reviewId: string): 
       return "STOP and ask a person. `open_questions` is the question — take both statements to your user verbatim. Do not answer it yourself and do not close it with lore-ok. When they decide, call knowledge_resolve; that resumes this review.";
     case "passed":
       return "Every tier agrees. Call review_attest for the signed line, then merge — and carry on. This closes the review, not your task.";
-    case "passed_partial":
+    case "passed_thin_ladder":
       return "Every tier that COULD run agrees — weaker evidence than `passed`, honestly labelled. Tell your user which tiers were skipped and why (the attestation names them) before deciding to merge. Same after that: this closes the review, not your task.";
     case "failed":
       return "The review DID NOT RUN — this is not 'nothing found' and you must not merge. Read `failed_because` and repeat it to your user verbatim. Retry AT MOST ONCE; if it fails the same way, stop and report it rather than diagnosing lore yourself.";
@@ -986,7 +986,16 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           state,
           // Restated on every poll, because failure mode 1 and 7 are the two most
           // likely ways this loop ends with unreviewed code shipped.
-          clean: isClean(state),
+          //
+          // `cleared`, not `clean` (D-147). `clean` was a claim about the CODE, which
+          // lore never makes — its own attestation says so — and to stay honest it had to
+          // read false on `passed_thin_ladder`, the ending of 89% of the reviews that
+          // conclude cleanly here. Clients read the false half and stopped.
+          cleared: isCleared(state),
+          // The strength of that clearing, as its own field, so nothing has to be
+          // inferred from the state string. ABSENT means there was no clearing — not
+          // "full", and not "unknown but probably fine".
+          ...(evidenceOf(state) === undefined ? {} : { evidence: evidenceOf(state) }),
           // THE NEXT CALL, NAMED. This said only "NOT clean. Only `passed` means
           // clean." — true, and it left a client holding three findings with no
           // sentence telling it what to do with them. Every failure this surface has
@@ -2173,11 +2182,15 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
     { description: TOOL_DOCS.attest, inputSchema: z.object({ review_id: z.string().min(1) }) },
     async ({ review_id }) => {
       const review = mine(review_id);
-      if (!isAttestable(review.state)) {
+      // ATTESTABLE IS CLEARED — one question, one predicate (D-147). These were two
+      // functions that disagreed: this gate accepted both passing states while the wire
+      // field told the same client only one of them was clean.
+      if (!isCleared(review.state)) {
         throw new Error(
           `review is '${review.state}' — there is nothing to attest. ` +
-          `Only 'passed' and 'passed_partial' can be attested, and only 'passed' is clean. ` +
-            `An attestation for an incomplete review would be a false claim.`,
+          `Only 'passed' and 'passed_thin_ladder' can be attested; both are cleared, and the ` +
+            `attestation names which. An attestation for a review that never finished reading ` +
+            `would be a false claim.`,
         );
       }
       return text(await deps.attest(review_id));
@@ -2257,7 +2270,8 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
           review_id: r.id,
           branch: r.branch,
           state: r.state,
-          clean: isClean(r.state),
+          cleared: isCleared(r.state),
+          ...(evidenceOf(r.state) === undefined ? {} : { evidence: evidenceOf(r.state) }),
           waiting_on: yours ? "you" : "lore",
           // WHEN IT WILL BE TAKEN AWAY. "Waiting on you" is true of a review with three
           // hours left and of one with two days, and a client that cannot tell them

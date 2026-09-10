@@ -12,10 +12,17 @@
  * the thin end of exactly the ambiguity this project refuses.
  *
  * COLOUR IS LOAD-BEARING HERE, and there is one rule it must never break:
- * **`passed_partial` is not green.** It is the state most likely to be misread as a
- * pass — every tier that could run agreed, but a tier ABOVE the one that passed was
- * skipped, or every tier that ran came from one vendor (D-48, D-49, D-88). Green would
- * undo in one glance what the whole escalation ladder exists to say.
+ * **`passed_thin_ladder` is not green.** It IS a pass — the tiers that ran read the tree
+ * and agreed, and lore signs an attestation for it (D-147) — but a tier ABOVE the highest
+ * that ran never looked, or fewer distinct vendors read the code than tiers ran (D-48,
+ * D-49, D-88). Yellow says exactly that: cleared, on a thinner ladder. Green would claim
+ * an independence this review did not have.
+ *
+ * This board is the OPERATOR's, and the operator's question is different from the
+ * client's. A client asks "may I proceed" and the answer is yes; an operator asks "is my
+ * ladder actually delivering what it promises", and a wall of yellow is the answer — as
+ * it was on 2026-09-10, when 54 of 61 clean endings were thin because a configured tier
+ * was being answered by another vendor's route.
  *
  *   node src/ops/status.ts             every open review
  *   node src/ops/status.ts <review_id> one review, in full
@@ -56,7 +63,7 @@ const magenta = c("35");
  */
 const STATE_STYLE: Readonly<Record<string, { paint: (s: string) => string; mark: string; note: string }>> = {
   passed: { paint: green, mark: "✔", note: "every tier agreed" },
-  passed_partial: { paint: yellow, mark: "◑", note: "NOT a pass — a tier ABOVE the one that passed never ran, or one vendor reviewed it all" },
+  passed_thin_ladder: { paint: yellow, mark: "◑", note: "cleared, on a thinner ladder — a tier ABOVE the one that passed never ran, or fewer vendors read it than tiers ran" },
   fast_clean: { paint: yellow, mark: "◔", note: "NOT a pass — only the cheap tiers are done" },
   findings_ready: { paint: cyan, mark: "●", note: "findings are waiting for you" },
   findings_stale: { paint: dim, mark: "●", note: "findings unanswered for 48h — at most a week left" },
@@ -415,7 +422,15 @@ export function renderStatus(db: DatabaseSync, reviewId?: string, dataDir = "/va
 
   // Repeated because a coloured tick is exactly the thing a tired reader
   // over-trusts, and these two states are the ones that cost the most when misread.
-  out.push(dim("only PASSED is clean. passed_partial and fast_clean are not passes."));
+  //
+  // They are misread in OPPOSITE directions, so one sentence cannot cover both and the
+  // old one — "only PASSED is clean" — got `passed_thin_ladder` wrong to get `fast_clean`
+  // right. `fast_clean` is a review still running: nothing has concluded. A thin ladder is
+  // a review that CONCLUDED, cleanly, with less independence behind it than the ladder
+  // describes. Telling an operator both are "not passes" is what taught clients to stop on
+  // 89% of lore's successful verdicts (D-147).
+  out.push(dim("PASSED and PASSED_THIN_LADDER are both cleared; the thin one had fewer independent readers."));
+  out.push(dim("fast_clean is NOT an ending — the deep tiers are still running."));
   return `${out.join("\n")}\n`;
 }
 
@@ -492,7 +507,7 @@ function tierDownLines(db: DatabaseSync): string[] {
     // This read the config alone, so it said "coverage is FULL — this costs metered money"
     // for any tier with any fallback configured. Under D-117 that is wrong in both
     // directions at once: with an all-`openrouter/` fallback list and LORE_ALLOW_METERED=0
-    // the chain is EMPTY, the tier is skipped every round and verdicts are `passed_partial`
+    // the chain is EMPTY, the tier is skipped every round and verdicts are `passed_thin_ladder`
     // — while the one view an operator is taught to watch says coverage is full. And with
     // the deployed config, where the fallback actually asked is a free second plan, the
     // money half is false whenever it prints.

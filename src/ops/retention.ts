@@ -245,7 +245,7 @@ export function expireStale(store: Store, cfg: RetentionConfig): number {
   const cutoff = new Date(Date.now() - cfg.staleHours * 3_600_000).toISOString();
   const staleCutoff = new Date(Date.now() - STALE_GRACE_DAYS * 86_400_000).toISOString();
   // The SQL lives in the store, not here. It used to be written inline — the terminal
-  // set spelled out (it omitted `passed_partial`, and a partial pass was overwritten
+  // set spelled out (it omitted `passed_thin_ladder`, and a partial pass was overwritten
   // with `expired` two days later, a verdict destroyed by a sweep), and the state
   // column written directly, which made this the one review-state change that woke no
   // subscriber. Both faults are the same fault: a mutation that knows the schema
@@ -263,7 +263,7 @@ export function expireStale(store: Store, cfg: RetentionConfig): number {
 export async function collect(store: Store, cfg: RetentionConfig = DEFAULT_RETENTION): Promise<RetentionResult> {
   const reviewsExpired = expireStale(store, cfg);
 
-  // Worktrees for finished reviews. `passed_partial` is in this set now; spelled
+  // Worktrees for finished reviews. `passed_thin_ladder` is in this set now; spelled
   // out, it was missing, so a partial pass held its worktree for ever.
   // `<=`, not `<`. With `worktreeDays: 0` the cutoff IS now, and a review that
   // finished in the same millisecond as the sweep would fall outside a strict

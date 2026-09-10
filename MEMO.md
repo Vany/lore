@@ -5,7 +5,7 @@ surprised me.
 
 ## 2026-09-03 — D-142: the client read a number and invented its meaning
 
-**What changed.** `rev_f2VBHXHuviA9GCfsTYwJBzh7`, `passed_partial`, attested at tree
+**What changed.** `rev_f2VBHXHuviA9GCfsTYwJBzh7`, `passed_thin_ladder`, attested at tree
 `1b69be6c30c98d8b70ef49719f234025577e6a30` (12 findings, 12 fixed, 0 justified) — merged
 as five commits, the feature then four answer rounds. Vany, quoting his own client after
 asking whether everything was ready: *"Those three findings_ready entries have
@@ -72,7 +72,7 @@ said I could not determine. The fix was a control: baseline on a stashed tree, a
 then the change, alone. That should have been the first move at the first red run, not
 the fifth.
 
-**`passed_partial`, honestly: every tier that ran was z-ai**, and one tier never left a
+**`passed_thin_ladder`, honestly: every tier that ran was z-ai**, and one tier never left a
 trusted read. Kimi and OpenAI have refused every probe since 08-18.
 
 **Not deployed, same as D-141.** Both are on `main` and neither is in the container. The
@@ -80,7 +80,7 @@ client that prompted this is still talking to the old text.
 
 ## 2026-09-02 — D-141: the channel was missing, not the words
 
-**What changed.** `rev_RTM6EYyn2ImQJ2XuwZiah3NU`, `passed_partial`, attested at tree
+**What changed.** `rev_RTM6EYyn2ImQJ2XuwZiah3NU`, `passed_thin_ladder`, attested at tree
 `f987183b7cf25c56db2866bb68a41505223a7d28` (11 findings, 10 fixed, 1 justified) — merged
 as six commits, the feature then four review-answer rounds plus an unrelated flake fix.
 Vany, looking at the board: *"why does the web show a lot of findings_ready? was it
@@ -143,7 +143,7 @@ retracted claim greps EVERYTHING, and an exclusion filter in that grep is itself
 Separately: `git checkout <file>` to undo a deliberate test mutation reverted two unrelated
 fixes in the same file; caught and reapplied, but a stash would have been the right tool.
 
-**`passed_partial`, honestly: every tier that ran was z-ai**, and one tier never left a
+**`passed_thin_ladder`, honestly: every tier that ran was z-ai**, and one tier never left a
 trusted read of the tree. Kimi and OpenAI have been refusing every probe since 08-18, so
 t2 and t3 were both answered by same-vendor stand-ins — real coverage, not the
 independence the ladder is meant to provide.
@@ -154,7 +154,7 @@ is Vany's call, and the D-140 session already paid for learning it.
 
 ## 2026-09-01 — store.ts: lore's own refactor-suggestor, acted on for the first time
 
-**What changed.** `rev_Q7OdAwl_Wdzmja_KD4v4T2Nq`, `passed_partial`, attested at
+**What changed.** `rev_Q7OdAwl_Wdzmja_KD4v4T2Nq`, `passed_thin_ladder`, attested at
 `e36673a874da61af29039621d1dade04105036d6` (3 findings, 2 fixed, 1 justified) —
 merged as six commits. `refactor_start` (D-136) had been run against `src/store`
 back on 2026-08-31, as that feature's own live-check smoke test, and never acted
@@ -205,10 +205,10 @@ added six tests closing that gap, in exactly the two areas this file's own
 history says are riskiest (D-114's held-diff reset, three windows of the same
 defect before its current shape; the daily-notice suppression bug).
 
-**`passed_partial`, honestly: every tier that ran was z-ai.** t2 and t3 were both
+**`passed_thin_ladder`, honestly: every tier that ran was z-ai.** t2 and t3 were both
 answered by same-vendor stand-ins for their configured routes this round, and one
 tier never left a trusted read of the tree at all — D-32/D-49's own rule
-(a ladder whose reachable tiers share one vendor reaches `passed_partial` at
+(a ladder whose reachable tiers share one vendor reaches `passed_thin_ladder` at
 best) doing exactly what it is for. Real coverage, not the independence the
 ladder is meant to provide.
 
@@ -224,7 +224,7 @@ missing entry.
 ## 2026-09-01 — D-140, `lore ladder-suggest`: a fresh install's static guess
 replaced by a live catalog, eight rounds
 
-**What changed.** `rev_zhDJJrtcVpLEbjEK-91XYebB`, `passed_partial`, attested at
+**What changed.** `rev_zhDJJrtcVpLEbjEK-91XYebB`, `passed_thin_ladder`, attested at
 `60fca615df5166b09efca47ab68122198a8098f6` (21 findings, 18 fixed, 3 justified) —
 merged as nine commits (the feature, then eight review-answer rounds). Vany's own
 `TODO.md` note, quoted verbatim: *"we have configured already models. But let's
@@ -262,7 +262,7 @@ accepted `z-ai` and `~z-ai` as two independent vendors — the exact miscount th
 fix was named for, surviving in the one place it had to not survive (round 3).
 Even that was insufficient: a tilde id could still be WRITTEN into a real
 `LORE_TIERS` file, and every review-TIME consumer of vendor identity —
-`vendorSpread` (the actual `passed`/`passed_partial` decision), `review.ts`'s
+`vendorSpread` (the actual `passed`/`passed_thin_ladder` decision), `review.ts`'s
 fallback prose, `doctor.ts` — has no tilde awareness at all, a blind spot this
 feature could newly trigger even though none of those three call sites are its
 own code. Closed by excluding the whole shape from the candidate pool at the
@@ -338,7 +338,7 @@ for in-flight work first, not just a green build.
 ## 2026-08-31 — deploy/tiers.kimi.json removed: a dead config file the repo's own
 docs had already declared didn't exist
 
-**What changed.** `rev_TPCd3l3R7vc4zIKOPBzUgE1s`, `passed_partial`, attested at
+**What changed.** `rev_TPCd3l3R7vc4zIKOPBzUgE1s`, `passed_thin_ladder`, attested at
 `66da11fe43da3a935fc3087d45ffa021e6a450fc` (2 findings, 2 fixed) — merged as two
 commits. Vany: *"we have several config files, let's remove unused."* Audited all
 three `deploy/tiers.*.json` files; only one was actually dead — `tiers.zai-openai.json`
@@ -372,7 +372,7 @@ mechanism walks.
 ## 2026-08-31 — D-139: a running refactor session shows up on the board, and six
 rounds finding what "shows up" actually required
 
-**What changed.** `rev_DS-KoFNzYSVeqmgf0nd4ojqL`, `passed_partial`, attested at
+**What changed.** `rev_DS-KoFNzYSVeqmgf0nd4ojqL`, `passed_thin_ladder`, attested at
 `50da47a1b572d4841247562198105362c8f5ce8d` (12 findings, 7 fixed, 5 justified) —
 merged as seven commits (the feature, then six review-answer rounds). Vany: *"let's
 show running refactor session as REFACTOR in the web."* D-136 shipped a whole second
@@ -402,7 +402,7 @@ drift-net fix needed a second git-stash-verify attempt after the first "break"
 burned by once, found again in the change meant to be genuinely new work.** Four
 independent hand-copied copies of `queued`/`running`/`done`/`failed` — two SQL
 strings, one TypeScript comparison in `board.ts`, one client-side `Set` — the exact
-shape that lost `passed_partial` from three of six review-state copies months ago.
+shape that lost `passed_thin_ladder` from three of six review-state copies months ago.
 Only three of the four could actually be fixed: `core/refactor-state.ts` (new file,
 mirrors `review-state.ts` exactly) is now the shared source for the SQL and the TS
 comparison; the client-side `Set` in `board-page.ts` cannot import it (that file is
@@ -457,7 +457,7 @@ its own grep for prose that still describes the old location.
 ## 2026-08-31 — D-137/D-138: a live "hang" report, and the four rounds it took to
 learn my own fix was breaking the thing it existed to protect
 
-**What changed.** `rev_0T1ndgZdg5K9F7ZM0KWoEEt2`, `passed_partial`, attested at
+**What changed.** `rev_0T1ndgZdg5K9F7ZM0KWoEEt2`, `passed_thin_ladder`, attested at
 `47fe4c9f7d1f97a55334836b4c155cefe72540cb` (12 findings, 9 fixed, 3 justified) —
 merged as five commits (D-137's config removal, then four review-answer rounds
 for D-138). Two requests, handled together: drop OpenRouter's GLM fallback now that
@@ -466,7 +466,7 @@ two Z.ai subscriptions cover the same ground (D-137, small, clean, one round), a
 something to avoid it in the future" (D-138, the substance of this entry).
 
 **The investigation mattered more than it looked like it would.** The review had not
-actually hung forever — it reached `passed_partial` — but round 3 took 44 minutes,
+actually hung forever — it reached `passed_thin_ladder` — but round 3 took 44 minutes,
 one short of the board's own 45-minute red line, because `kimi-for-coding/k3`'s route
 mark had never been probed before (D-94) and the probe call sat completely silent for
 ~21.5 minutes before a weekly-quota refusal finally arrived. The real defect wasn't
@@ -546,7 +546,7 @@ time, before writing the comment that says what a channel "tells us."
 ## 2026-08-31 — D-136, the refactor suggestor: seven rounds, eighteen findings, and
 the cost of shipping a whole new subsystem with no review until it was all written
 
-**What changed.** `rev_I2-wzmdlq9vLgFOr5215_S7G`, `passed_partial`, attested at
+**What changed.** `rev_I2-wzmdlq9vLgFOr5215_S7G`, `passed_thin_ladder`, attested at
 `77784995150ac5babfdaa1660cc652e998b1c93c` (18 findings, 7 fixed, 9 justified) —
 merged as nine commits. Vany's request: a new capability, explicitly separate from
 review, that asks several models what in a folder is worth restructuring and hands
@@ -558,7 +558,7 @@ dispatcher (`RefactorWorker`), two new MCP tools, and the docs/spec/SPEC.md entr
 about 1,700 lines, all written before the first review round ever ran.
 
 **That ordering is the lesson.** Every one of D-133/D-134/D-135 this week was small
-enough to git-stash-verify as it was built and reach `passed_partial` in three to five
+enough to git-stash-verify as it was built and reach `passed_thin_ladder` in three to five
 rounds. This one was reviewed only after the whole thing existed, and it took seven
 rounds and eighteen findings — most of them real, and several in exactly the class of
 defect this project's own doctrine exists to catch (a guard with no guard, a claim the
@@ -649,7 +649,7 @@ of two or three.
 ## 2026-08-31 — D-135, un-redacting the board: three rounds, all three my own
 follow-up fix missing a corner of the same sentence
 
-**What changed.** `rev_duePHIichyGQQZUEoWxSXnhv`, `passed_partial`, attested at
+**What changed.** `rev_duePHIichyGQQZUEoWxSXnhv`, `passed_thin_ladder`, attested at
 `b55b2bbb40a00ee319e180cb6fe5433b5ad6b33e` (2 findings, 2 fixed, 0 justified) —
 merged as three commits. Reverses D-96's 2026-08-28 revision: Vany asked directly
 to un-redact `claim`/`evidence`/`failureScenario`/rationale on the unauthenticated
@@ -692,7 +692,7 @@ I named claim/evidence/failureScenario and dropped the fourth field —
 happening to the original redaction (969fa523, "the first pass of this revision
 named three fields and missed a fourth"). The pattern the entry warns about, in
 miniature, in the sentence fixing it. Fixed by adding the rationale clause.
-Round 3 found nothing — `passed_partial` (t0–t3, z-ai and moonshotai across 3
+Round 3 found nothing — `passed_thin_ladder` (t0–t3, z-ai and moonshotai across 3
 tiers, so not 3 independent vendor opinions, hence partial rather than full).
 
 **What I'd do differently:** the "don't touch it, the pointer already covers it"
@@ -706,7 +706,7 @@ and this entry had three separate assertions of the same fact across ~40 lines.
 ## 2026-08-29 — D-134, tsc --incremental actually incremental: four rounds, and my
 own fix broke twice before it was real
 
-**What changed.** `rev_SRNj5drMfydaAOXUHQI4bSNs`, `passed_partial`, attested at
+**What changed.** `rev_SRNj5drMfydaAOXUHQI4bSNs`, `passed_thin_ladder`, attested at
 `66968873f506f7748c39466738a3ce13a4859e00` (4 findings, 3 fixed, 1 justified) —
 merged as four commits. Not from the audit that produced D-132/D-133: Vany asked
 whether T0 runs its engines in parallel, then what dominates a round's timing,
@@ -793,7 +793,7 @@ part a self-review would skip BECAUSE it feels settled.
 ## 2026-08-29 — D-133, fixed_elsewhere on review_submit: five rounds, nine
 findings, and my own fixes needing fixing twice
 
-**What changed.** `rev_o5yYjnhfydCQkyrj8p7WF9PK`, `passed_partial`, attested at
+**What changed.** `rev_o5yYjnhfydCQkyrj8p7WF9PK`, `passed_thin_ladder`, attested at
 `e02ff81a6e5c4ba912ab4b8f9bc91a58bc3e8fc8` (9 findings, 8 fixed, 0 justified) —
 merged as five commits. Second of three features from Vany's "does lore have
 anything unimplemented from its own specs?" audit (D-132 was the first): a
@@ -902,7 +902,7 @@ working on itself, which is the only kind of proof this project trusts.
 ## 2026-08-28 — D-132, docs-only rounds and the per-tier bound: five rounds, four
 distinct real defects, none of them where the first version looked
 
-**What changed.** `rev_b9CPqxrCLB_xsEdfF6KEwbjj`, `passed_partial`, attested at
+**What changed.** `rev_b9CPqxrCLB_xsEdfF6KEwbjj`, `passed_thin_ladder`, attested at
 `564fc4e28d0d7eaa56fc30f05dc92db9a7d96849` (4 findings, 4 fixed) — merged as five
 commits. First of three features from Vany's "does lore have anything unimplemented
 from its own specs?" audit: a documentation-only round should not trip the per-tier
@@ -1011,12 +1011,12 @@ the conversation that started this whole cycle.
 not just this review; six rounds, and five of them were the review catching its
 own prior round
 
-**What changed.** `rev_IaR87a0i5sSz15lc3pov3faf`, `passed_partial`, attested at
+**What changed.** `rev_IaR87a0i5sSz15lc3pov3faf`, `passed_thin_ladder`, attested at
 `6bc6f706dee5a98901a01436eabc103ea7395b8f` — 7 findings, 6 fixed, 1 justified —
 merged as six commits (`e06c5b4` … `84dad20`). Vany: *"clients stop working when
 review is passed, we asked them to stop. It is [a] strong behavior we do not need,
 ask them to stop or anything, let's allow them do what they need."* `nextStep()`'s
-`passed`/`passed_partial` text said "then merge." and stopped, with nothing telling
+`passed`/`passed_thin_ladder` text said "then merge." and stopped, with nothing telling
 an agent client that this closed the review and not its session — so it read as
 the end of the task and quit, mid-instruction, whatever else it had been asked to
 do. Fixed in all four places a client can learn this: `nextStep()`
@@ -1025,7 +1025,7 @@ round's own review insisted on — `TOOL_DOCS.poll` itself, the one layer that i
 every session's context whether or not a client ever reads a resource.
 
 **Round 2 fixed the bug and shipped a smaller one in the fix.** "Attest, merge, and
-carry on" collapsed `passed` and `passed_partial` into one unconditional
+carry on" collapsed `passed` and `passed_thin_ladder` into one unconditional
 instruction, silently dropping the adjacent rule that a partial pass's merge
 decision belongs to the user, not the agent. Caught by the review one round later
 (`7c044bae`) — the second time this exact session has watched a hand-written fix
@@ -1054,7 +1054,7 @@ of `spec/agent-docs.md`'s §5 draft — done to close a *different* finding
 (`2d4266b5`) — had silently dropped the commit-vs-diff-hold refusal exception both
 live texts it was copied from still carry. Round 6 (`da2a3551`): §3's
 `review_attest` draft, untouched by any of this, still said "available once state
-is `passed`" with no mention of `passed_partial` — pre-existing, but this round's
+is `passed`" with no mention of `passed_thin_ladder` — pre-existing, but this round's
 own new sentences ("attest it either way") now sit two sections above a paragraph
 that contradicts them, which is what made a long-standing gap suddenly
 load-bearing.
@@ -1078,7 +1078,7 @@ N×" sections. Filed in `TODO.md` as a named, argued deferral — real, sized (a
 full transcription of a ~150-line tool description, not a two-line fix), and out
 of scope for the round that found it.
 
-**What changed.** `rev_lfaizbAHpr47yUtXmj9RVXgq`, `passed_partial`, attested at
+**What changed.** `rev_lfaizbAHpr47yUtXmj9RVXgq`, `passed_thin_ladder`, attested at
 `6c23f41d884302930aab0f01d4855d693db6ec8e` (scoped to `src/t0`) — 17 findings, 12
 fixed, 2 justified, 3 left open by a terminal race (see below) — merged at
 `7492470` (four commits: `fe4ea22`, `cb211ed`, `177e262`, `7492470`). This closes
@@ -1184,7 +1184,7 @@ worth remembering that "I know the first 7 characters" is not "I know the SHA."
 (`0b55733a`, `14b6df61`, `bfc4e055` — all three, on inspection, the same
 underlying container-collision concern, raised by different tiers/rounds against
 code that had already been fixed) never got a fresh tier read before the ladder
-concluded `passed_partial`. Attested honestly (17 findings, 12 fixed, 2
+concluded `passed_thin_ladder`. Attested honestly (17 findings, 12 fixed, 2
 justified — 14 accounted, matching `open_count: 3`) rather than treating the
 non-zero open count as a reason to distrust an attestation that was itself
 telling the truth about what it covered.
@@ -1192,12 +1192,12 @@ telling the truth about what it covered.
 ## 2026-08-28 — src/store follow-up: a clean review, and two infrastructure bugs in
 lore's own submission path that had nothing to do with the code under review
 
-**What changed.** `rev_QQFYaL7bJKgGrOJG3xilFzSh`, `passed_partial`, attested at
+**What changed.** `rev_QQFYaL7bJKgGrOJG3xilFzSh`, `passed_thin_ladder`, attested at
 `b397fa5ee13e2e41944ad7b570ccdce4a86d8490` — 6 findings, 6 fixed, 0 justified —
 merged at `e22f7c7` (two commits: `042d830`, `e22f7c7`) on top of the prior cycle's
 `74d49dd`. Opened specifically to get an independent tier read on whether `3d90d9a0`
 and `54d77a41` — reopened by the prior review's own staleness sweep after it had
-already gone `passed_partial` and could take no more submissions — were genuinely
+already gone `passed_thin_ladder` and could take no more submissions — were genuinely
 resolved by the code already on `main`. **Confirmed: neither was re-raised.** The
 fresh review instead found four real, previously-unseen defects: a D-23 doc comment
 correctly describing `getReview`'s ownership check sitting above `openReviewFor`
@@ -1305,7 +1305,7 @@ against a live deployment's own paths needs `{ readOnly: true }` even when it lo
 like "just a SELECT" — the open mode, not the query, is what did the damage, and it
 did it before the query ever ran.**
 
-**What changed.** `rev_N9TmkGVAjk_VdPk5A4frkLwa`, `passed_partial`, attested at
+**What changed.** `rev_N9TmkGVAjk_VdPk5A4frkLwa`, `passed_thin_ladder`, attested at
 `a601ba4d0d77b8ca36706c55461cc3ee1adb9291` — 9 findings, 2 fixed, 5 justified —
 merged at `4be1231` (five commits: `ed0795a`, `78a0a04`, `4bd690e`, `0ca5d1b`,
 `4be1231`). Touched `store.ts`, `store.test.ts`, `enrich.ts` + its two test files,
@@ -1369,7 +1369,7 @@ rewrote enough of the method body that the STORE's own `expireStaleVerdicts` swe
 — correctly — decided the justifications for `3d90d9a0` and `54d77a41` no longer
 matched their originally-scoped code hunks, and reopened both as unsettled findings
 one round later. I tried to submit a docstring-only fix consolidating the history
-onto a fresh hunk; the review had ALREADY reached `passed_partial` from the
+onto a fresh hunk; the review had ALREADY reached `passed_thin_ladder` from the
 ladder's own tier-progression logic (independent of the reopening) and refused the
 submission outright: *"Its base is gone and cannot be recreated... Start a fresh
 review."* The attestation itself stayed honest about this — "9 findings, 2 fixed,
@@ -1395,7 +1395,7 @@ a design correctly holding its own weight looks like from the inside.
 ## 2026-08-28 — src/service folder review: five rounds, a design question that
 needed Vany rather than a guess, and a fix that caught its own gap one round later
 
-**What changed.** `rev_TBVG6LWtj-dleRn2C8rmyeHf`, rounds 1–5, `passed_partial`,
+**What changed.** `rev_TBVG6LWtj-dleRn2C8rmyeHf`, rounds 1–5, `passed_thin_ladder`,
 merged at `b9af5ce` (five commits, one per round: `712e5db`, `11367ee`, `b57096d`,
 `1e71f04`, `b9af5ce`). Touched `worker.ts`, `board-stream.ts`, `board-page.ts`,
 `attest.ts`, `http.ts`, `repin.ts`, `config.test.ts`, `store.ts`, `ops/board.ts`,
@@ -1503,9 +1503,9 @@ too literally instead of reading its intent.
 ## 2026-08-28 — src/security folder review: twelve rounds, and the sharpest bug of
 the whole project so far was in a field nobody had looked at twice
 
-**What changed.** `rev_sf6-rWCYapHZMa_JBhdtWnND` (rounds 1–8, `passed_partial`,
+**What changed.** `rev_sf6-rWCYapHZMa_JBhdtWnND` (rounds 1–8, `passed_thin_ladder`,
 merged at `1d7cd12`) then `rev_-R1FZziTV5mItpMxg01V8T7c` (rounds 9–12,
-`passed_partial`, merged at `0d6acdf`) — two reviews, not one, because the first
+`passed_thin_ladder`, merged at `0d6acdf`) — two reviews, not one, because the first
 went terminal while I still had real, verified follow-up fixes queued (below).
 Across both: `sbom.ts`, `osv.ts`, `vex.ts`, `engines.ts`, `store.ts`, `review.ts`,
 `server.ts`. Roughly twenty distinct findings, every one git-stash-verified
@@ -1573,7 +1573,7 @@ clean, as unproven forever, and the fix for that is a different query, not a
 different filter over the same one.
 
 **The terminal-race pattern from earlier sessions came back with a new wrinkle.**
-`review_submit` refused outright once the first review reached `passed_partial`
+`review_submit` refused outright once the first review reached `passed_thin_ladder`
 ("Start a fresh review for further work on this branch") — expected, matches
 precedent. New this time: the FRESH review's `review_start` pinned a worktree
 mirror that was still showing the tree from *before round 1 of the entire first
@@ -1589,7 +1589,7 @@ that matters already landed: prefer `commit` over `diff` for the first
 submission against a brand-new review, since it does not depend on knowing what
 the reviewer's own base actually is.
 
-**Chose to keep going past a legitimate `passed_partial` rather than bank it.**
+**Chose to keep going past a legitimate `passed_thin_ladder` rather than bank it.**
 The first review reached a mergeable terminal state with two findings the ladder
 itself had judged non-blocking (`118b5ec1`, `b03d0b1e` — a stale-tree race in the
 new `vexGap` fallback, and the npm-only-fallback-message gap described two
@@ -1607,7 +1607,7 @@ non-blocking" had been read as "done."
 **What changed.** D-129's own tracking task #2 — cargo execution, deliberately
 deferred when ecosystem detection landed — went through its own D-77 cycle
 (`rev_rFSJLQvou_gN967j3yEw49FS`), eight rounds (`2865838` through `1789291`),
-attested `passed_partial` at tree `408a01a` (round 7's — round 8 submitted after
+attested `passed_thin_ladder` at tree `408a01a` (round 7's — round 8 submitted after
 the review had already gone terminal and was dropped; more below).
 
 **The one design question that was actually mine to ask, not mine to decide.**
@@ -1708,7 +1708,7 @@ in passing does not answer finding `Y` — the ladder looks for the tag, not a
 mention. Caught and fixed once in round 6 (d341a76e/c37f7c9b), then made
 *again* in round 7 for three different findings (874b52df/c618f5cb/57dea7e8),
 caught in round 8 — which submitted a few seconds too late: the review had
-already gone terminal on round 7's tree. `passed_partial`, 16 findings, 11
+already gone terminal on round 7's tree. `passed_thin_ladder`, 16 findings, 11
 fixed + 4 justified — one short of 16, the direct cost of round 8 not landing
 in time. Resolved the same way the previous entry's identical race was:
 finalized on the tree that was actually attested (round 7), round 8 (pure
@@ -1728,7 +1728,7 @@ until a follow-up decides how the image gets a toolchain.
 **What changed.** The commit-form held-diff-chaining fix the previous entry's
 `awaiting_diff` investigation produced went through its own D-77 cycle
 (`rev_u7jJVldbXWLkTVtJKisyS8L2`), seven rounds (`cf66643` through `3f6ce00`),
-attested `passed_partial` at tree `1b3edc2`. Not a clean pass: 2 vendors read it
+attested `passed_thin_ladder` at tree `1b3edc2`. Not a clean pass: 2 vendors read it
 across 3 tiers, 1 tier read an earlier round and never re-read the final one —
 named in the attestation rather than smoothed over.
 
@@ -1785,7 +1785,7 @@ existing `lore-ok[109d9211]` comment and naming `b39f4f4a` in prose inside it. T
 ladder re-raised `b39f4f4a` as a NEW finding on the very next poll — the prose
 mention doesn't count as an answer; only a `lore-ok[b39f4f4a]:` tag does. Split into
 two separate `lore-ok` blocks in round 8. By the time round 8 was ready to submit,
-the review had already gone terminal on round 7's tree (`passed_partial`, 0 open
+the review had already gone terminal on round 7's tree (`passed_thin_ladder`, 0 open
 findings) — some tier judged round 7's wording adequate despite the missing tag
 before the tag-only fix could reach it. Round 8 was dropped rather than pushed
 unreviewed: it fixed a house-style nitpick the verdict already treated as settled,
@@ -1831,7 +1831,7 @@ from cache.
 
 **What changed.** Folder review of `src/reviewer` itself (`rev_QaLsIY5rnsWLI2Rkrl1w3XhC`,
 `path: src/reviewer` — the engine every other module's review this session ran
-through), driven to `passed_partial` over eleven commits (`d3e108f` through
+through), driven to `passed_thin_ladder` over eleven commits (`d3e108f` through
 `5ee7301`), attested at tree `737bdb2`. The restart earlier in the session (four
 findings against the same fixed tree) is a separate memory; this entry covers the
 eleven rounds from there to the verdict.
@@ -1935,7 +1935,7 @@ invariant the earlier code never stated as its own.
 
 
 **What changed.** Folder review of `src/propose` (`rev__X9yu8r4xMlGH-Pm8ibJz_yi`,
-`path: src/propose`), driven to `passed_partial` over **eleven commits**
+`path: src/propose`), driven to `passed_thin_ladder` over **eleven commits**
 (`41e15d6` through `f37e40d`). Rounds 1–2 were an ordinary audit sweep — five
 findings, four fixed (an undocumented `--json` flag that nothing read, `--out`
 defaulting CWD-relative instead of anchored, a self-contradicting module docstring,
@@ -2058,14 +2058,14 @@ narrative voice of the moment; the bracket form only gets checked when something
 forces the question. Cross-checked programmatically against all 18 fingerprints
 before moving on, rather than trusting memory of which ones already had it.
 
-**Verdict:** `passed_partial` — `rev__X9yu8r4xMlGH-Pm8ibJz_yi`, tree
+**Verdict:** `passed_thin_ladder` — `rev__X9yu8r4xMlGH-Pm8ibJz_yi`, tree
 `360829262a9146766ff8e723507ac706cc6d5260` scoped to `src/propose`, 3 tiers (t0, t2, t3), 38 findings, 23
 fixed, 9 justified, 6 left open at settlement — all six independently confirmed
 already fixed with working `lore-ok` markers before this entry was written; the
 stale-mirror tier simply never got a chance to re-read the final tree, because the
 review reached its terminal state before the next submission (round 11, the
 citation-only commit above) could land — `review_submit` refused it outright:
-*"review ... is 'passed_partial' and takes no more submissions."* **Two honest
+*"review ... is 'passed_thin_ladder' and takes no more submissions."* **Two honest
 caveats, not buried:** every tier that actually ran this round happened to be
 z-ai — t2 and t3 were both answered by same-vendor stand-ins for their configured
 models, so despite three tiers running, this was not the independent-vendor
@@ -2081,7 +2081,7 @@ said here, not silently.
 client must not know about it, it is our problem and responsibility we have to
 silently fix the situation." Not a folder review — a standalone incident report,
 driven through a single diff-mode review (`rev_tyDbeU-kWi_jGAazC-fhLm-i`, `t0`
-against `main`). Landed `passed_partial` after **nine rounds and ten commits**
+against `main`). Landed `passed_thin_ladder` after **nine rounds and ten commits**
 (`7556146` through `cd4ddc9`): 34 findings, 28 fixed, 1 justified, 5 left open at
 attestation time and independently confirmed already fixed against `origin/main`
 before attesting — the now-familiar stale-mirror pattern, unusually persistent
@@ -2179,7 +2179,7 @@ fixing again or trusting a "still open" claim.
 **What changed.** Vany: "coll, let's review src/ops" — the operator-facing
 observability/safety-net module (`alerts.ts`, `board.ts`, `status.ts`,
 `heartbeat.ts`, `retention.ts`, `pace.ts`, `spend.ts`, `config-view.ts`), folder
-mode, `rev_HHtN19r6-H0ESersLT4y-x7x`. Landed `passed_partial` (3 tiers ran — t0, t2,
+mode, `rev_HHtN19r6-H0ESersLT4y-x7x`. Landed `passed_thin_ladder` (3 tiers ran — t0, t2,
 t3, all z-ai, not independent vendors; 1 earlier tier's read of an earlier tree
 never carried forward, hence PARTIAL, named explicitly in the signed line itself
 this time): 59 findings, 47 fixed by the ledger's own count, 0 justified, across
@@ -2308,7 +2308,7 @@ asking — it is what asking first is for.
 
 **What changed.** Vany: "now src/mcp" — the actual protocol surface (`server.ts`,
 `auth.ts`, `events.ts`, `plain.ts`, `docs.ts`), folder mode,
-`rev_RPIcs7lQZVNpfrOok6YgXsBd`. Landed `passed_partial` (3 tiers ran — t0, t2, t3 —
+`rev_RPIcs7lQZVNpfrOok6YgXsBd`. Landed `passed_thin_ladder` (3 tiers ran — t0, t2, t3 —
 every tier that ran was z-ai, not independent vendors; one earlier tier's read of an
 earlier tree never carried forward): 37 findings, 19 fixed, 15 justified, across ten
 rounds and ten commits (`16c9217` through `d8a795f`). This module is the one place a
@@ -2377,7 +2377,7 @@ real id has a hyphen at position 9, that pattern matches exactly the same rows t
 plain 8-char prefix does, silently no more specific than what the caller believed
 was a longer, safer citation. Fixed to require the suffix end in hex, never a
 hyphen. `b1a9841c`, the review's LAST finding, arriving in the same poll as
-`passed_partial` itself: `knowledge_resolve`'s `keep`/`retire` were the one
+`passed_thin_ladder` itself: `knowledge_resolve`'s `keep`/`retire` were the one
 id-comparison path in the whole file still using exact equality after everything
 else had been hardened to prefix matching — and a client naturally holds one rule in
 two lengths (a full id from `open_questions`, an 8-char `cite_as` from
@@ -2426,7 +2426,7 @@ by reading my own prose carefully enough on the first pass.
 ## 2026-08-26 — src/knowledge reviews itself: the product, not the mechanism, and a fix that broke its own fix four times running
 
 **What changed.** Vany: "okay, let's revie src/knowledge" — the memory layer itself,
-folder mode, `rev_JeMKtcw6dRLX5c_-ydE4RkoB`. Landed `passed_partial` (3 tiers ran, all
+folder mode, `rev_JeMKtcw6dRLX5c_-ydE4RkoB`. Landed `passed_thin_ladder` (3 tiers ran, all
 z-ai — not independent vendors — one earlier tier's read of an earlier tree never
 carried forward, hence PARTIAL): 33 findings, 15 fixed, 17 justified, across roughly
 fourteen rounds and ten commits (`1c29725` through `ce0ad60`). CLAUDE.md's own framing
@@ -2539,7 +2539,7 @@ default" at the same time. Caught by a test that asked for every row and silentl
 ## 2026-08-25 — src/git reviews itself: a submodule chain of eight, and a tool that couldn't submit
 
 **What changed.** Vany: "review src/git pls" — lore's git boundary reviewing itself,
-folder mode, `rev_AlPC4vTQyt8mn3qOfPvDGoFz`. Twelve rounds, 38 findings, `passed_partial`
+folder mode, `rev_AlPC4vTQyt8mn3qOfPvDGoFz`. Twelve rounds, 38 findings, `passed_thin_ladder`
 (28 fixed, 9 justified — same one-short-of-38 gap the src/core entry below already
 explains: the ladder's own expiry re-opening a settled finding mid-review, not a
 counting bug). The commits carry the fixes (`7b0a49c` through `290a8c0`); this is the
@@ -2629,7 +2629,7 @@ say so before a client has to discover it the hard way.
 **What changed.** Vany: "okay, review our src/core pls" — the first FOLDER-mode
 review anyone has actually asked for a real answer from, not a smoke test. Eight
 genuine bugs, in the module with the least git-diff traffic and the most riding
-on it being right: `passed_partial` on `rev_rxKtrY4MrdbAaH-h_i2sGEZA`, 12
+on it being right: `passed_thin_ladder` on `rev_rxKtrY4MrdbAaH-h_i2sGEZA`, 12
 findings, 8 fixed, 3 justified. Full account in the commit (`e1705e0`); this is
 what the numbers don't say.
 
@@ -2694,7 +2694,7 @@ still true."
 two confirmation markers right beside the original `lore-ok[7f126450]` shifted
 enough surrounding context that the ladder's OWN expiry mechanism — the one
 this review spent half its rounds fixing — re-opened that exact finding one
-round later, purely from the insertion. The review still reached `passed_partial`
+round later, purely from the insertion. The review still reached `passed_thin_ladder`
 regardless; the attestation's "12 findings, 8 fixed, 3 justified" honestly
 doesn't sum to 12, which is the correct, visible way for that gap to show up
 rather than being smoothed over.
@@ -2939,7 +2939,7 @@ exactly what it is.
 ## 2026-08-21 — the "PARTIAL" wording was already right; it was just untested
 
 **Resolved the item this same MEMO flagged an entry above.** `attest.ts` (lines 143-155)
-already draws the distinction on purpose: `partial` is `state === "passed_partial"` OR
+already draws the distinction on purpose: `partial` is `state === "passed_thin_ladder"` OR
 `tiers < everyTier` — TWO independent sources, not one. The second fires when a CLOSED
 tier's own approval covers an earlier tree than the one being signed (D-6: a closed tier
 is not re-run after a later fix that never touched what it cared about) — which is a fact
@@ -2951,7 +2951,7 @@ me collapsing them."*
 
 **What was actually missing: a test for this exact case.** `attest.test.ts` had two tests
 under "what a signed line calls PARTIAL" — a tier skipped below a pass (correctly NOT
-partial, D-88) and the ladder's own `passed_partial` (correctly IS partial) — but nothing
+partial, D-88) and the ladder's own `passed_thin_ladder` (correctly IS partial) — but nothing
 exercising the third source, the one D-128's own review had just hit live. Added
 `"calls a full pass PARTIAL when a closed tier never re-read the signed tree"`, replaying
 the exact shape: t1 on an earlier tree, t0/t2/t3 on the current one, state `passed`,
@@ -3022,7 +3022,7 @@ it clean cost two corrections to the paragraph itself — worth doing anyway, si
 **Surprised me — the attestation's own wording, unrelated to any of the above.** The
 signed line reads *"3 tiers (t0, t2, t3) — 1 earlier tier(s) read an earlier tree and did
 not re-read this one, so this is PARTIAL"* while the review's own `state` was `passed`,
-not `passed_partial` — t1 closed early (D-6, "a closed tier stays closed") and correctly
+not `passed_thin_ladder` — t1 closed early (D-6, "a closed tier stays closed") and correctly
 never needed re-asking, but the attestation TEXT still reads as though the verdict itself
 were partial. Not chased — flagged for whoever next reads an attestation and wonders why a
 `passed` review's own signed line calls itself partial.
@@ -3082,7 +3082,7 @@ cannot be true regardless of host state — a repo config file that does not exi
 never on a claim about a package manager's install semantics, which turned out to be
 narrower than I assumed and which I never actually checked.
 
-**Surprised me — a `passed_partial` review can go terminal with a finding that
+**Surprised me — a `passed_thin_ladder` review can go terminal with a finding that
 received no verdict at all.** The attestation for this batch: "9 findings, 7 fixed,
 1 justified" — arithmetic that is silently short one. The ninth (`26faa974`, the
 mirror-refresh honesty fix above) was raised by t3 at round 5, fixed in the tree by
@@ -3769,7 +3769,7 @@ level: INV-1 inverted, inside the change that relaxes the rule. The pivot is
 **What did not move.** Every skipped tier is still disclosed on a `passed` —
 `checks_skipped`, the operator view, and an attestation that names only the tiers that
 read the signed tree. D-49's sole-vendor rule is untouched: t1 skipped with only t3 left
-is still `passed_partial`.
+is still `passed_thin_ladder`.
 
 **Also corrected.** My cancel reason said *"re-run once the screen honours
 skip_if_quota"*, which framed a cost problem as a validity problem — the same conflation
@@ -3806,7 +3806,7 @@ writing them rather than to test harder.
 **What I checked and found sound**, recorded because a sweep that only lists hits reads as
 if everything else was examined and nothing was:
 
-- the ladder cannot reach `passed_partial` with no tier having read the code — both
+- the ladder cannot reach `passed_thin_ladder` with no tier having read the code — both
   promotion paths refuse when nothing is left, and `step()` only decides it from a tier
   that came back clean;
 - INV-9 is enforced at the filesystem, not by prompt: the repos bind into opencode `:ro`;
@@ -4835,7 +4835,7 @@ docstring says it is "the only predicate any caller should use... so there is on
 place to be wrong", and every caller wrote `state === "passed"` by hand instead. Four
 of them, including both `clean` fields the MCP surface hands a client — the single
 value a client decides to merge on. The one place to be wrong was five. And
-`passed_partial` has already been omitted from a hand-written state list three times
+`passed_thin_ladder` has already been omitted from a hand-written state list three times
 in this codebase; in that field it would read as clean.
 
 **The sweep also condemned something innocent, which is worth recording.** My probe
@@ -5049,7 +5049,7 @@ records from a data directory that moved months of reviews ago were collected by
 `git worktree prune` nothing had ever called.
 
 **Two latent bugs, same shape, found by reading:** the terminal states written out by
-hand with `passed_partial` left off — so `expireStale` would overwrite a legitimate
+hand with `passed_thin_ladder` left off — so `expireStale` would overwrite a legitimate
 partial pass with `expired` after 48h, destroying a verdict, and the sweep would hold
 its worktree for ever. There is one `TERMINAL` set now and the SQL derives from it.
 **Every time a set of states is spelled out twice in this codebase, the copies have
@@ -5235,7 +5235,7 @@ verdict ROWS, while D-51 carries a justification forward once per round. Then t3
 found the sharper half: `?? "unknown"` meant a missing hash still got SIGNED — an
 artefact asserting nothing checkable while carrying a real ed25519 signature over
 it, which looks verified. `attest` refuses now. Then it found that the quota path
-returns early and skipped the recording, so `passed_partial` would have been
+returns early and skipped the recording, so `passed_thin_ladder` would have been
 refused an attestation by the guard I had just added.
 
 Four defects in the product's central artefact, none reachable except by making it
@@ -5563,7 +5563,7 @@ by fixing the first; I revealed one that shipped with the compose file.
 
 **D-49.** Kimi is waitlist-only, so a second vendor cannot be bought. Enforcing
 independence therefore cannot mean "fix the ladder" — it means a single-vendor
-ladder reaches `passed_partial`, never `passed`, and the attestation names the
+ladder reaches `passed_thin_ladder`, never `passed`, and the attestation names the
 vendor next to the tier count it would otherwise inflate. Vany chose this over
 spending on OpenRouter. The honest answer to *"we cannot afford independence"* is to
 say so in the output, not to quietly redefine `passed`.

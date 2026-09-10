@@ -77,7 +77,7 @@ them together (§5.0, D-109).
 the deployment did not have until 2026-08-06: T1 and T2 were both Z.ai, so two thirds of
 the ladder shared a blind spot. That shape used to be reported as a clean `passed`,
 because the check only fired when EVERY tier was one vendor; since 2026-08-17 any repeat
-reaches `passed_partial` (D-49, widened). It matters more than it did, because a tier
+reaches `passed_thin_ladder` (D-49, widened). It matters more than it did, because a tier
 whose subscription is out falls back to another plan from a vendor already in the ladder —
 the free one — so the ladder collapses toward two vendors exactly when a provider is
 having a bad day. Read the tiers file for what is actually being spent, and `SPEC.md` D-54
@@ -224,7 +224,7 @@ Two consequences, and neither is optional:
   turns an invisible stall into a bounded, reportable event.
 - **The tier must be steppable on a hang, not only on a refusal.** That is D-48 widened:
   after its retry is spent, the tier's work passes up and the review finishes
-  `passed_partial` rather than dying. Without it, a provider at its limit takes down the
+  `passed_thin_ladder` rather than dying. Without it, a provider at its limit takes down the
   gate every review must clear.
 
 **`skip_if_quota` is the part of this that IS built.** A tier carrying it skips on its
@@ -255,7 +255,7 @@ far below the model's nominal context, and nothing publishes that ceiling.
 **So the refusal is classified as `TooLargeForTier`, not as a failure.** The difference
 is the whole review: generic, it killed the run and six commits went unreviewed while t2
 (1M) and t3 (500k) could each have held the diff comfortably. As a tier that could not
-look, the ladder steps over it and finishes `passed_partial` — weaker evidence, honestly
+look, the ladder steps over it and finishes `passed_thin_ladder` — weaker evidence, honestly
 labelled (D-48).
 
 **It does not claim a limit it does not have.** The pre-call refusal names the window,
@@ -661,7 +661,7 @@ A skip therefore lands in one of two places:
 | where the skipped tier sat | outcome | why |
 |---|---|---|
 | **below** the dearest tier that answered | does not prevent `passed` | its work was done again, above it |
-| **at or above** it | `passed_partial` | nothing read this code at that level |
+| **at or above** it | `passed_thin_ladder` | nothing read this code at that level |
 
 **A FALLBACK TO THE SAME VENDOR COSTS THE VERDICT NOTHING, and the client's line says so.**
 `zai-coding-plan/glm-5.3` giving way to `zai-coding-plan2/glm-5.2` is one company on a
@@ -673,7 +673,7 @@ change from a VENDOR change, using the same `vendorOf` the verdict has always us
 caveat is spent only where there is something to caveat.
 
 The vendor rule (D-49) is independent of all this: if fewer vendors read the code than
-tiers ran — any repeat, not only a total collapse — it is `passed_partial` however the
+tiers ran — any repeat, not only a total collapse — it is `passed_thin_ladder` however the
 skips lie. `soleVendor` still names the extreme case where there was exactly one;
 `vendorSpread` carries the count for every other.
 
@@ -685,7 +685,7 @@ failure and call the review `passed` when nothing had read it at that level: INV
 inverted, inside the change that relaxes the rule.
 
 **Every skipped tier is still disclosed**, on a `passed` exactly as on a
-`passed_partial` — `checks_skipped` names it, the operator view lists it, and the
+`passed_thin_ladder` — `checks_skipped` names it, the operator view lists it, and the
 attestation names only the tiers that read the signed tree.
 
 **The signed line says PARTIAL for two independent reasons, and only one of them is the

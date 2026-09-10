@@ -709,7 +709,7 @@ describe("runRound", () => {
   });
 
   // The quota path returns early with its own updateReview, so it missed the tree
-  // recording above. It reaches `passed_partial`, which is attestable —
+  // recording above. It reaches `passed_thin_ladder`, which is attestable —
   // so a review could pass and then be refused an attestation for having no tree,
   // which is the guard causing the fault rather than catching it.
   it("records the tree even when the tier cannot be paid for", async () => {
@@ -1468,7 +1468,7 @@ describe("the paths that only happen when something has gone wrong", () => {
       last = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type }).catch(() => undefined);
       if (last === undefined || !["escalate", "fastClean"].includes(last.decision.kind)) break;
     }
-    // `passed`, not `passedPartial` (D-88): t1 is the CHEAPEST tier and both tiers above
+    // `passed`, not `passedThinLadder` (D-88): t1 is the CHEAPEST tier and both tiers above
     // it read this code. The ladder is a gate — dearer tiers only see what the cheaper
     // ones passed — so t1's absence made the review dearer, not less certain.
     expect(last?.decision.kind).toBe("passed");
@@ -1519,7 +1519,7 @@ describe("the paths that only happen when something has gone wrong", () => {
   // The ladder does not give up on the first unpayable tier — it steps over that one
   // and tries the next, which is the whole point of D-48. It gives up only when the
   // LAST tier that could have looked is gone, because at that point nothing has read
-  // the code and calling it `passed_partial` would claim evidence nobody gathered.
+  // the code and calling it `passed_thin_ladder` would claim evidence nobody gathered.
   it("fails outright once NOTHING can run, rather than passing partially", async () => {
     const all = CODE_ARCH.tiers.filter((t) => t.kind === "model").map((t) => t.id);
     const reviewer = new Unpayable(all);
@@ -1532,7 +1532,7 @@ describe("the paths that only happen when something has gone wrong", () => {
     }
 
     expect(thrown).toBeInstanceOf(Exhausted);
-    expect(store.getReview("r1", "p")?.state).not.toBe("passed_partial");
+    expect(store.getReview("r1", "p")?.state).not.toBe("passed_thin_ladder");
   });
 
   // D-39: the one place the system stops and asks a person. A knowledge conflict is
@@ -3034,7 +3034,7 @@ describe("a pool of routes to one model", () => {
    * `shouldProbe` was only ever asked about the TIER mark — and both outages this service
    * actually has are ROUTE marks, so nothing re-tested them. Measured the morning it was
    * found: `openai/gpt-5.6-terra` parked at a GUESSED 19:18Z, last asked at 00:46Z eleven
-   * hours earlier, while t3 answered on Z.ai and every verdict came back `passed_partial`
+   * hours earlier, while t3 answered on Z.ai and every verdict came back `passed_thin_ladder`
    * for a vendor collapse that no longer had to exist.
    *
    * The trade is twelve seconds (D-91 makes a refusal arrive fast) against a whole vendor.

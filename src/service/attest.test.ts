@@ -81,7 +81,7 @@ describe("attest", () => {
       // The message must name every state that CAN be attested, not just the clean
       // one: a caller told only about `passed` waits for a state a partial review
       // will never reach.
-      await expect(attest(store, "r1", "p", keyPath)).rejects.toThrow(/'passed' and 'passed_partial'/);
+      await expect(attest(store, "r1", "p", keyPath)).rejects.toThrow(/'passed' and 'passed_thin_ladder'/);
       store.db.prepare("DELETE FROM review WHERE id = 'r1'").run();
     }
   });
@@ -301,7 +301,7 @@ describe("what a signed line calls PARTIAL", () => {
   });
 
   it("still calls it PARTIAL when the ladder did", async () => {
-    review("passed_partial");
+    review("passed_thin_ladder");
     allOnTree("t0", "t1", "t2");
     skip("t3");
 

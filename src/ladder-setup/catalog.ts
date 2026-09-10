@@ -91,7 +91,7 @@ export function vendorOfCandidate(id: string): string {
  * fingerprint 4f56d47a, found the deeper problem: a tilde id that PASSES those checks
  * can still be WRITTEN into a real `LORE_TIERS` file, and every review-time consumer of
  * vendor identity — `core/ladder.ts`'s `vendorSpread` (the actual `passed`/
- * `passed_partial` decision and signed attestation), `reviewer/review.ts`'s fallback
+ * `passed_thin_ladder` decision and signed attestation), `reviewer/review.ts`'s fallback
  * prose, `doctor.ts`'s own check — calls bare `vendorOf` with no tilde awareness at
  * all, a blind spot that was harmless before this feature because nothing had reason to
  * hand-write a `~`-prefixed "-latest" pointer id into a ladder file. Excluding the shape

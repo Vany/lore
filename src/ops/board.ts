@@ -192,7 +192,7 @@ export interface BoardReview {
    * Fewer vendors read this review than tiers ran (D-49), when that is why it is partial.
    *
    * Absent on the ordinary case. Present, it is usually the ONLY explanation of a
-   * `passed_partial` that skipped nothing — without it the board shows a downgrade with no
+   * `passed_thin_ladder` that skipped nothing — without it the board shows a downgrade with no
    * visible cause.
    */
   readonly vendorSpread?: VendorSpread;
@@ -492,7 +492,7 @@ export function board(store: Store, now = Date.now(), modelGate?: () => GateStat
     }),
     refactorRuns: refactorRuns.map((r) => {
       // lore-ok[ad809772,ba0d19b8]: found by lore's own review — hand-copied state
-      // lists are this codebase's own repeat offender (review-side `passed_partial`
+      // lists are this codebase's own repeat offender (review-side `passed_thin_ladder`
       // went missing from three of six copies, 2026-08-06); `isRefactorTerminal`
       // (`core/refactor-state.ts`) is the one place this comparison is written now.
       const state = String(r["state"] ?? "failed") as BoardRefactorRun["state"];

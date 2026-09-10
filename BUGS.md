@@ -150,7 +150,7 @@ Thirteen consecutive reviews reached t3 and died on `Token refresh failed: 401`.
 already paid t0, t1 and t2 in full — several with clean verdicts from two independent
 vendors — and all of it was discarded. `failed` is correct per INV-1: the top tier never
 read the code. But a client is left with nothing, when what actually existed was
-*"two vendors agreed and the third could not be reached"*, which is `passed_partial`'s
+*"two vendors agreed and the third could not be reached"*, which is `passed_thin_ladder`'s
 exact meaning.
 
 The credential fault is fixed (auth is now a route fault and walks the chain). **The

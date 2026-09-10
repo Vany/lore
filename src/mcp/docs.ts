@@ -99,6 +99,13 @@ needs_human, which is a question only a person can settle. Or, when findings are
 you cannot answer them, review_cancel: it records that somebody decided to stop and
 releases everything the review is holding.
 
+A PASS IS \`cleared: true\`, AND TWO STATES CARRY IT. passed_thin_ladder is a pass —
+the tiers that ran read the tree and agreed — with less independence behind it, and here
+it is the ORDINARY ending rather than the exception. Attest it, tell your user what
+\`evidence\` says, and carry on. Reading it as a non-pass and looping is the mistake
+this sentence exists to prevent; it was called passed_partial until 2026-09-10 and that
+name is what taught it.
+
 CANCEL ON FINDINGS YOU CANNOT ANSWER, NEVER ON A ROUND YOU HAVE JUST FED. A round already
 reading your fix may be about to pass; cancelling it throws that verdict away and costs a
 re-review from round 1. What you must not do is stop with findings open and say nothing:
@@ -123,7 +130,7 @@ failure that has already happened — read the one for the tool you are about to
  *  7. Reads `fast_clean` as `passed`.
  *  8. Answers a `needs_human` question itself, because stopping feels like failing.
  *  9. Summarises the ticket instead of pasting it.
- * 10. Reads `passed`/`passed_partial` as the end of its whole task and stops
+ * 10. Reads `passed`/`passed_thin_ladder` as the end of its whole task and stops
  *     there, not just the end of this one review.
  * 11. Treats `review_submit` as the answer rather than as the start of another
  *     round: sends a fix, reports it as reviewed, and never comes back for the
@@ -297,12 +304,23 @@ LLM turn that learns nothing, and the round finishes when it finishes.
 
 States: ${REVIEW_STATES.join(", ")}.
 
-ONLY \`passed\` means the branch is clean. Reaching it, or \`passed_partial\`,
-closes THIS review, not your task — call review_attest, then carry on with
-whatever else you were asked to do.
+TWO STATES MEAN THE LADDER READ THIS TREE AND FOUND NOTHING: \`passed\` and
+\`passed_thin_ladder\`. The payload says so in one field — \`cleared: true\` — and you do
+the same thing on both: call review_attest, then carry on with whatever else you were
+asked to do. Reaching either closes THIS review, not your task.
 
-- \`passed_partial\` means every tier that COULD run agreed, but the evidence is
-  weaker than a pass, for either or both of two reasons:
+WHAT SEPARATES THEM IS \`evidence\`, NOT WHETHER YOU MAY PROCEED. \`evidence: "full"\`
+is the whole ladder, every tier a distinct vendor. \`evidence: "thin"\` is the same
+verdict with less independence behind it, and it is the ORDINARY ending here — on this
+deployment 54 of the 61 reviews that concluded cleanly in a recent nine-day window were
+thin. Report the difference to your user, because the attestation line names it; do not
+treat it as a reason to loop, restart, or refuse to proceed.
+
+\`evidence\` IS ABSENT WHEN \`cleared\` IS FALSE, and absent is not "full" and not
+"probably fine". It means no clearing happened, so there is no claim to make.
+
+- \`passed_thin_ladder\` means every tier that COULD run agreed — a real verdict on a
+  thinner ladder, for either or both of two reasons:
     * a tier could not ANSWER — it was unavailable to lore, or it never replied on
       either attempt — so its work passed to the next tier up and one fewer independent
       vendor read this code ("we did everything we can"). checks_skipped names which.
@@ -315,9 +333,11 @@ whatever else you were asked to do.
       not three. Any repeat lands here, not only a total collapse: when a subscription
       runs out, the stand-in that covers it is often another plan from a vendor already
       in the ladder, which is exactly when this is easiest to miss.
-  Both are real evidence and both are weaker evidence. Say so to your user rather
-  than reporting it as a pass; the attestation names which tiers were skipped and
-  which vendor, if only one, actually looked at the code.
+  Both are real evidence and both are weaker evidence. Report it AS a pass with the
+  weakness named — not as a non-pass, which is what the old name \`passed_partial\` and
+  the old \`clean: false\` taught clients to do, and what stopped them mid-loop on the
+  ordinary outcome. The attestation names which tiers were skipped and which vendor, if
+  only one, actually looked at the code; quote that line rather than paraphrasing it.
 
 - \`failed\` and \`expired\` mean the review did not complete. They are NOT "nothing
   found". Never merge on them. **\`failed_because\` says why** — read it and repeat it
@@ -755,7 +775,7 @@ hands you everything at once. A poll after that legitimately returns nothing new
 `.trim(),
 
   attest: `
-Available once state is \`passed\` — or \`passed_partial\`, which is the case that
+Available once state is \`passed\` — or \`passed_thin_ladder\`, which is the case that
 most needs a record: the line names which tiers were skipped, and how many distinct
 vendors actually read the code against how many tiers ran. Refusing to attest a partial review would leave the operator with no
 account of it at all, which is worse than an honest incomplete one.
@@ -821,6 +841,15 @@ It is equally stopped, and its move is to get a PERSON, so \`needs_human\` and
 \`open_questions\` above carry it instead — read those. Never read a missing
 \`waiting_note\` as evidence that somebody has a review in hand; nothing in this reply
 can tell you that.
+
+\`cleared\` AND \`evidence\` ARE THE VERDICT FIELDS, and a row here usually has neither:
+this call lists reviews that are still OPEN. They appear on a row that ENDED while still
+holding findings nobody collected — which is listed precisely because no sweep hands those
+over. \`cleared: true\` means the ladder read the tree and found nothing, on \`passed\`
+and on \`passed_thin_ladder\` alike; \`evidence\` is "full" or "thin" and says how much
+independence stood behind it. When \`cleared\` is false, \`evidence\` is ABSENT — which is
+not "full" and not "unknown but probably fine", it is "no clearing happened". Do not
+default it.
 
 \`not_yours_note\` IS A DIFFERENT FIELD ABOUT A DIFFERENT THING, and a row can have
 either, both or neither. It appears on a review started by ANOTHER LIVE TOKEN OF YOURS:
@@ -1135,7 +1164,7 @@ export const RESOURCE_DOCS: Readonly<Record<string, { title: string; priority: n
    to each of them at its own next emission; you never wait for a state and never
    resubmit. Exception: a \`commit\` is REFUSED, not held, while an unconsumed \`diff\`
    hold is outstanding — send \`diff\` instead, or wait for that hold to clear.
-5. Return to 2. Repeat until the state is TERMINAL — \`passed\`, \`passed_partial\`,
+5. Return to 2. Repeat until the state is TERMINAL — \`passed\`, \`passed_thin_ladder\`,
    \`needs_human\`, \`failed\`, \`expired\` or \`cancelled\`.
 
 Rules that decide whether this works:
@@ -1152,9 +1181,9 @@ Rules that decide whether this works:
   away every justification already ratified.
 - \`failed\` and \`expired\` are not \`passed\`. Report and stop; do not merge.
 - \`fast_clean\` is not \`passed\` either — the deep tiers have not run.
-- \`passed_partial\` is terminal and will NEVER become \`passed\`, so waiting for that
+- \`passed_thin_ladder\` is terminal and will NEVER become \`passed\`, so waiting for that
   never returns. Attest it, and say plainly that the evidence is weaker than a pass.
-- Reaching \`passed\`/\`passed_partial\` closes THIS review, not your task. Attest it
+- Reaching \`passed\`/\`passed_thin_ladder\` closes THIS review, not your task. Attest it
   either way; merge on a full pass, but a partial one is your user's call, not yours
   (the bullet above). Once that is settled, carry on with whatever else you were
   asked to do — lore has no opinion on when your session ends, only on whether this
@@ -1223,13 +1252,18 @@ running         the round is working — that is the deterministic sweep, readin
 findings_ready  new findings are waiting for you
 findings_stale  the same, gray: unanswered for 48h, at most a week left before it is abandoned
 awaiting_diff   waiting for your fixes
-fast_clean      cheap tiers clean, deep tiers still running — NOT a pass
+fast_clean      cheap tiers clean, deep tiers still running — NOT AN ENDING. Nothing
+                has concluded yet; this is not a thin pass, it is an unfinished one
 needs_human     a question you must not answer yourself — NOT a pass
-passed          every tier agrees. The only clean state.
-passed_partial  every tier that COULD run agreed, and something above them did not.
-                A tier ABOVE the one that passed never ran, or fewer vendors read the
-                code than tiers ran — any repeat, not only a total collapse.
-                Real evidence, weaker evidence. NOT a pass.
+passed          CLEARED by the full ladder — every tier ran, each a distinct vendor.
+                evidence: "full"
+passed_thin_ladder  CLEARED, on a thinner ladder. evidence: "thin", and it is the
+                ORDINARY ending here, not an exception: a tier ABOVE the one that passed
+                never ran, or fewer vendors read the code than tiers ran — any repeat,
+                not only a total collapse. Real evidence, weaker evidence, SAME verdict:
+                you may proceed, and you say what was thin.
+                It was called passed_partial until 2026-09-10, which read as a
+                half-verdict and taught clients to stop on it (D-147).
                 A tier skipped BELOW one that passed does not land here: the ladder is
                 a gate, so the tier above re-read everything it would have (D-88).
                 checks_skipped names every tier that did not run, either way
@@ -1239,8 +1273,9 @@ cancelled       YOU stopped it — terminal, and NOT "found nothing". The findin
                 had already produced are real and are yours; what the remaining tiers
                 would have found is unknown
 
-\`passed\` and \`passed_partial\` both support an attestation. The partial one is the
-case that most needs the record, because the line names what was skipped.
+\`passed\` and \`passed_thin_ladder\` both support an attestation, and \`cleared: true\`
+is the single field that says so. The thin one is the case that most needs the record,
+because the line names what was skipped.
 
 \`expired\` and \`cancelled\` are deliberately not the same state, though both are
 terminal and neither is a pass: expired is nobody came back, cancelled is somebody
@@ -1322,14 +1357,15 @@ The loop:
    to each of them at its own next emission; you never wait for a state and never
    resubmit. Exception: a \`commit\` is REFUSED, not held, while an unconsumed \`diff\`
    hold is outstanding — send \`diff\` instead, or wait for that hold to clear.
-5. Return to 2. Repeat until the state is TERMINAL — \`passed\`, \`passed_partial\`,
+5. Return to 2. Repeat until the state is TERMINAL — \`passed\`, \`passed_thin_ladder\`,
    \`needs_human\`, \`failed\`, \`expired\` or \`cancelled\`.
-   Only \`passed\` and \`passed_partial\` are worth attesting, and only \`passed\` is clean.
+   Only \`passed\` and \`passed_thin_ladder\` are worth attesting; \`cleared: true\` marks
+   both, and \`evidence\` says which ladder stood behind it.
 
 Rules:
 - Polls return only new findings. Never re-fix what is not in the response.
 - \`failed\`, \`expired\` and \`fast_clean\` are not \`passed\`. Do not merge on them.
-- \`passed_partial\` is TERMINAL: it will never become \`passed\`, so looping for that
+- \`passed_thin_ladder\` is TERMINAL: it will never become \`passed\`, so looping for that
   never ends. Attest it — the line names which tiers were skipped and which vendor
   looked — and tell your user the evidence is weaker than a pass, so the decision to
   merge is theirs.
@@ -1343,7 +1379,7 @@ Rules:
 The ticket for this change:
 ${ticket.trim()}
 
-When the state is \`passed\` — or \`passed_partial\` — call review_attest and give the
+When the state is \`passed\` — or \`passed_thin_ladder\` — call review_attest and give the
 user that line. On a partial one, say which tiers were skipped and that the evidence
 is weaker than a pass; the decision to merge on it is theirs, not yours. Either way,
 attesting and merging closes THIS review — carry on with whatever else your task needs.

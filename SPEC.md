@@ -5,7 +5,7 @@ point — **remembers the codebase between sessions**.
 
 Status: **deployed and reviewing itself**, 2026-08-06. All phases in `PLAN.md` have
 code; 552 tests. Live: 53 reviews, 3 attested, 332 live knowledge rows, 132 model
-calls. Unproven: `passed_partial` and quota exhaustion, which
+calls. Unproven: `passed_thin_ladder` and quota exhaustion, which
 have never executed; and Kimi at T2, configured and not yet used for a round.
 `needs_human` has fired once and was wrong. `TODO.md` keeps those open rather than
 folding them into a tick.
@@ -189,7 +189,7 @@ Knowledge is **per repo**, shared freely between all sessions working on it
 | **D-92** | **t0 is not re-run on a tree it has already read**, and its pattern engines see the branch's files, not the repository | built 2026-08-09 |
 | **D-93** | **An exhausted subscription asks elsewhere** — a list of routes, tried in order, verified at startup | built 2026-08-09; list 2026-08-12 |
 | **D-94** | **A cooled-off tier is asked again every 15 minutes.** lore could hear a tier die and not hear it recover | built 2026-08-10 |
-| **D-49** | **Fewer vendors than tiers** reaches `passed_partial`, never `passed` — widened from single-vendor 2026-08-17 | confirmed |
+| **D-49** | **Fewer vendors than tiers** reaches `passed_thin_ladder`, never `passed` — widened from single-vendor 2026-08-17 | confirmed |
 | **D-50** | Exploration is **counted per review before it is capped**. Distribution measured 2026-08-11: longer rounds find LESS | cap `[OPEN]` |
 | **D-51** | An accepted justification is **repo knowledge**, carried across reviews | confirmed |
 | **D-52** | The per-tier cap bounds *iteration*, so a clean tier escalates past it | confirmed |
@@ -434,7 +434,7 @@ of money.
 
 **What the client may be told, and it is a complete list:** what was examined, what was
 NOT examined and therefore what the verdict is worth, and what to do next. INV-1 is fully
-served by that — `passed_partial` naming the tiers that did not run is the honest weaker
+served by that — `passed_thin_ladder` naming the tiers that did not run is the honest weaker
 claim, and it stays. What must never appear is WHY in money terms: no ceiling, no spend
 figure, no per-call cost, no "out of quota", no "come back when the budget resets".
 
@@ -1561,7 +1561,7 @@ states do:
 Fixed by excluding `PERSON_OR_CLOCK_DECIDED_SQL` (`cancelled`, `expired`) instead of
 `TERMINAL_SQL` — the distinction `decidedByPersonOrClock` already existed to make, for a
 different but related reason (D-107's late-diff handling), applied here for the first
-time. `passed` and `passed_partial` were never excluded and still are not: a review's own
+time. `passed` and `passed_thin_ladder` were never excluded and still are not: a review's own
 terminal step does not hand its findings over either, and the normal client loop (poll
 until terminal, one more poll to see it) already collects them in the ordinary case — this
 only fires where that loop did not happen.
@@ -1577,7 +1577,7 @@ doubling backoff untouched.
 **Measured the morning it was found.** `openai/gpt-5.6-terra` parked until a GUESSED
 19:18Z, last asked at 00:46Z — eleven hours earlier. `kimi-for-coding/k3` likewise. So t2
 and t3 both answered on `zai-coding-plan2/glm-5.2`, all three tiers were z-ai, and ten
-consecutive reviews came back `passed_partial` for a total vendor collapse. Every finding
+consecutive reviews came back `passed_thin_ladder` for a total vendor collapse. Every finding
 in them was solved; what was missing was a second opinion, and the ladder had one available
 that nobody was asking. OpenAI's limit on that plan is a rolling window which had almost
 certainly reset several times over.
@@ -1675,9 +1675,9 @@ re-read if this turns out to have been wrong.
 vendor by construction, and the obvious arithmetic would have refused `passed` to every
 single-tier configuration for a property it cannot have.
 
-**What it costs, stated rather than discovered.** `passed_partial` already means "a tier
+**What it costs, stated rather than discovered.** `passed_thin_ladder` already means "a tier
 could not answer", and this loads a second meaning onto it. While a subscription is out —
-which is now — every deep review reaches `passed_partial` rather than `passed`. A state
+which is now — every deep review reaches `passed_thin_ladder` rather than `passed`. A state
 that is normal during an outage teaches people to ignore it, and that is the risk taken
 here deliberately: the alternative was a verdict that says three independent opinions read
 the code when two did, which is the kind of quiet overstatement INV-1 exists to refuse.
@@ -1857,7 +1857,7 @@ cost model, and it is answerable *before* the call rather than after it.
 **Whether to allow it is a human decision, held in config** (D-118's window, as a
 checkbox) rather than inferred by the ladder. A deployment that has deliberately bought
 metered capacity as its safety net wants the fallback; one running purely on subscriptions
-does not, and would rather have `passed_partial` with the tier named in `checks_skipped` —
+does not, and would rather have `passed_thin_ladder` with the tier named in `checks_skipped` —
 honest, free, and already implemented. Neither is right in general, so lore stops guessing
 and asks once.
 
@@ -1920,7 +1920,7 @@ subscription model falling back to a paid twin has an exempt model while being e
 event worth reporting. The question is who chose the route, lore or the operator.
 
 **Settled, 2026-08-17: the first branch, made switchable.** A metered fallback is refused
-by default — `passed_partial` with the tier in `checks_skipped`, which is honest, free and
+by default — `passed_thin_ladder` with the tier in `checks_skipped`, which is honest, free and
 was already implemented — and `LORE_ALLOW_METERED=1` restores it for a deployment that has
 deliberately bought metered capacity, which was the objection to refusing outright. The
 second branch (stay available, become loud) shipped as well and is not an alternative to
@@ -1983,14 +1983,14 @@ dearer models: the review would never terminate, and a tool that cannot finish o
 hardware you actually have is not a tool.
 
 So an exhausted tier is **recorded as unavailable and stepped over**. When every tier
-that *could* run agrees, the review reaches **`passed_partial`** — "we did everything
+that *could* run agrees, the review reaches **`passed_thin_ladder`** — "we did everything
 we can" — with its own exit code (**3**), never `passed` and never `0`.
 
 The distinction is load-bearing and must not erode:
 
 - **`passed`** — every configured tier agreed. Three independent vendors found
   nothing. That is the claim the attestation exists to make.
-- **`passed_partial`** — every *available* tier agreed; the rest never looked.
+- **`passed_thin_ladder`** — every *available* tier agreed; the rest never looked.
   Weaker evidence, honestly labelled.
 
 **The attestation names the tiers that ran and the tiers that did not, and why.**
@@ -2011,7 +2011,7 @@ that preceded it: **a check that only prints is a comment.** This codebase's own
 is that every ambiguity resolves toward saying so loudly, and here it resolved toward
 a clean-looking pass.
 
-So a ladder whose *reachable* tiers share one vendor now reaches **`passed_partial`**,
+So a ladder whose *reachable* tiers share one vendor now reaches **`passed_thin_ladder`**,
 never `passed` — the same outcome as D-48, for an independent reason, and the decision
 carries both:
 
@@ -3049,7 +3049,7 @@ it must not answer a transient fault. The trigger is the tier having already end
 once in THIS review, read from the `tier_run` rows already recorded rather than tracked
 separately.
 
-**It costs a vendor, and the result says so.** The outcome is `passed_partial`, the
+**It costs a vendor, and the result says so.** The outcome is `passed_thin_ladder`, the
 `checks_skipped` entry names the tier, the error and the consequence — *"this review is
 evidence from one fewer independent vendor"* — and the attestation cannot claim what did
 not run. Independence is the ladder's premise (D-1); spending one to keep a review alive
@@ -3125,13 +3125,13 @@ needed."*
 
 The ladder is a **gate** — dearer tiers only see code the cheaper ones already passed —
 so whatever a skipped cheap tier would have read was read again above it. Its absence
-made the review dearer, not less certain. Every skip used to force `passed_partial`,
+made the review dearer, not less certain. Every skip used to force `passed_thin_ladder`,
 which said the opposite.
 
 | where the skipped tier sat | outcome |
 |---|---|
 | below the dearest tier that answered | does not prevent `passed` |
-| at or above it | `passed_partial` — nothing read this code at that level |
+| at or above it | `passed_thin_ladder` — nothing read this code at that level |
 
 D-49's sole-vendor rule is untouched and independent.
 
@@ -3376,7 +3376,7 @@ Vany: *"we have some openrouter credits… if there is no quota on the subscript
 to openrouter."*
 
 An exhausted plan used to cost the review that tier entirely: its work promoted to a
-dearer one (D-48), the verdict labelled `passed_partial`, an independent vendor lost. But
+dearer one (D-48), the verdict labelled `passed_thin_ladder`, an independent vendor lost. But
 the model is not gone — only that route to it — and opencode has OpenRouter configured
 with a twin of every model in the deployed ladder:
 
@@ -3688,7 +3688,7 @@ call" stopped being a safe description of one (2026-08-31).**
 
 Vany: *"we have problem, seems like kimi run out in the middle of review. and we
 hanged. We need to do something to avoid it in the future."* The review had not, in fact,
-hung forever — `rev_5HzuI3SzXDgOfni-HebKyoVt` reached `passed_partial` — but round 3 took
+hung forever — `rev_5HzuI3SzXDgOfni-HebKyoVt` reached `passed_thin_ladder` — but round 3 took
 44 minutes, one short of the board's own 45-minute red line, and 21.5 of those minutes
 were `tier_run`-silent: `kimi-for-coding/k3` was probed (its route mark had never been
 probed before, per D-94's own mechanism), the call was genuinely dispatched, and nothing
@@ -3872,7 +3872,7 @@ shown one commit at a time sees four unrelated small things, at best.
 
 **The real limit on a big diff is the context window, not the review process** — and it
 is now handled: a prompt a tier cannot hold makes that tier `TooLargeForTier`, so the
-ladder steps over it and finishes `passed_partial` rather than failing the review (D-48).
+ladder steps over it and finishes `passed_thin_ladder` rather than failing the review (D-48).
 That is what turns "too big" from a wall into a degradation.
 
 D-77 still holds and nothing skips the ladder. What changes is that batching is the
@@ -4020,6 +4020,99 @@ working agreement says to confirm rather than assume.
 **Output lands under `dataDir()`, matching `propose`'s own `--out` default
 (fingerprint 9c6f2a60) — never inside the repository**, so nothing needs a new
 `.gitignore` rule.
+
+**D-147 — `passed_partial` is `passed_thin_ladder`, and `clean` is `cleared`. BUILT
+2026-09-10.**
+
+Vany: *"let's rename state everywhere especially in the responses. passed_partial is not
+apropriate, because it is passed, but not with common way"* — and, when asked what was
+actually going wrong: *"passed_partial confuses our clients."*
+
+**IT IS NOT THE EXCEPTION IT WAS NAMED FOR.** Measured on the live store the day of the
+rename: **201 of 408 reviews all-time**, and **54 of the 61 that concluded cleanly since
+2026-09-01**. Of the 201, 178 were vendor-collapse alone, 12 a skipped tier alone, 11
+both — so the dominant real meaning is not "a tier could not be paid for" but "three
+tiers ran, all agreed, and two of them were the same vendor". Full depth, correlated
+opinions.
+
+**THE NAME PUT IT IN THE WRONG COLUMN, AND CLIENTS ACT ON THE COLUMN.** "Partial"
+attaches to *passed* — it reads as a half-verdict, something unfinished — while what is
+reduced is the LADDER: a tier above the highest that ran never looked (D-48), or fewer
+distinct vendors read the code than tiers ran (D-49/D-88). The verdict itself is whole.
+`passed_thin_ladder` attaches the qualifier to the object that was actually thinned, in
+this project's own central noun, and it is deliberately not guessable: a client that does
+not know the term looks it up, where "partial" is guessable and wrong.
+
+**`lore://docs/states` made it worse than the name did.** It read *"Real evidence, weaker
+evidence. NOT a pass."* — in a column where `failed`, `expired`, `cancelled`,
+`needs_human` and `fast_clean` all also said "NOT a pass". Three different things wore one
+label: *not over yet* (`fast_clean`, `needs_human`), *over and concluded nothing*
+(`failed`, `expired`, `cancelled`), and *over, concluded clean, on thinner evidence*. A
+client reading that table put the third in the second bucket, which is exactly the report
+Vany brought. `src/ops/status.ts` said it twice more, on the operator's board.
+
+**AND `clean` WAS THE WRONG WORD INDEPENDENTLY OF WHICH STATES IT COVERED.** `clean` is a
+claim about the CODE. lore never makes one — its own attestation says so in as many
+words: *"It asserts what was checked. It does NOT assert the code is correct."* So the
+field a client decides to merge on promised something the system explicitly refuses to
+promise, and then, to stay honest, had to read `false` on 89% of the reviews that
+concluded cleanly. Clients read the false half and stopped.
+
+`cleared` is a claim about the READING, which is the only thing lore can witness, and it
+was already this codebase's verb for it — `src/reviewer/prompts.ts` tells a tier *"You
+cleared this tree"*. Nine uses in `src`, two in the specs, all the same sense. Chosen for
+that, not for novelty: `vetted` and `signed off` were unused but foreign, `settled`
+already means a FINDING is answered (26 uses), `green` is board paint.
+
+**The wire, therefore:**
+
+```
+state:    "passed" | "passed_thin_ladder"   (and the seven that are neither)
+cleared:  true                              both. read, nothing found, done.
+evidence: "full" | "thin"                   what stood behind it
+```
+
+One boolean for the decision, one word for the strength, and **neither has to be parsed
+out of a state string** — which is the point, because misparsing the state string is the
+defect. That both fields are derivable from `state` is deliberate redundancy, not an
+oversight.
+
+**`evidence` IS ABSENT WHEN `cleared` IS FALSE, and absent is not "full".** On `failed`,
+`expired` or `cancelled` there is no evidence claim to make, because the ladder did not
+finish reading — INV-1 in its smallest form. A caller defaulting the missing field would
+invent a reading nobody took, so every text says what absence means rather than leaving it
+inferable.
+
+**`isClean` and `isAttestable` were two predicates asking one question and answering it
+differently**, and they are now one, `isCleared`. `isAttestable` returned true for both
+passing states; `isClean` returned true only for `passed`, and it is `isClean` that fed
+the wire. So lore signed an attestation for a state it simultaneously told the client was
+not clean. Attestable IS cleared; there is no third question.
+
+**Migration.** 201 stored rows carry the old string. `applyMigrations` can express only
+`ADD COLUMN` and refuses anything else out loud — it decides what has already run by
+asking whether a column exists, which an `UPDATE` can never answer — so this is a one-shot
+guarded by a `meta` row, `backfillAuthMarks`'s precedent and the mechanism that list's own
+error message points at. **A row left behind would not be harmless**: the old string is no
+longer a `ReviewState`, so `isTerminal` answers false for it and `expireStale` overwrites a
+real verdict with `expired` 48 hours later — the sweep-destroys-a-verdict failure
+`TERMINAL_SQL`'s docstring already records, arriving by a new road.
+
+**[OPEN] This does not settle the attestation disagreement, and may sharpen it.** A review
+can now report `cleared: true, evidence: "full"` while its signed line says PARTIAL,
+because the two are computed by different rules: the ladder asks whether a tier was
+SKIPPED above the highest that ran, the attestation asks whether every tier left a trusted
+read of THIS tree (D-6 closes a tier that escalated past, so it never re-reads). Deriving
+`evidence` from the attestation's rule would make them agree and would also make nearly
+every multi-round review "thin". That is the decision already recorded in `TODO.md` as
+Vany's, and it is unchanged by this one; `evidence` is computed from the ladder's existing
+rule so that nothing about the verdict moved in a rename.
+
+**Separately, and not fixed here: the 89% may be a routing fault rather than a design
+fact.** Recent rows carry `vendorSpread: {distinct: 2, tiers: 3, vendors: ["z-ai",
+"openai"]}` with nothing marked unavailable — a configured tier is being ANSWERED by
+another vendor's route. If that is repairable the thin rate falls on its own, and no
+naming decision substitutes for looking.
 
 **D-146 — git's ownership check cannot decide whether a review runs. BUILT 2026-09-08.**
 
@@ -4315,7 +4408,7 @@ still present and the provider rejects it, so only a person re-logging in can he
 **The board drew that as an ordinary cooled-off route** — the same yellow chip a rate
 limit gets, carrying a countdown. So the account was read as out of quota, its limits were
 reset on the provider's dashboard, and nothing changed, because limits were never the
-problem. Every deep review meanwhile landed `passed_partial` on one vendor
+problem. Every deep review meanwhile landed `passed_thin_ladder` on one vendor
 (`TODO.md`'s 2026-08-18 entry, which said in as many words that lore *"has no way to tell
 'still rate-limited' from 'the plan actually lapsed'"*).
 
@@ -6048,7 +6141,7 @@ So the loop closes on ourselves:
 2. **Review it, over MCP, as a client** (D-76). Not one round — answer each finding by
    fixing it or justifying it, and send the answer back with `review_submit` so the
    ladder re-reads the corrected tree. Repeat until it reaches **`passed`** or
-   **`passed_partial`**, which are the only two states that mean a ladder read this
+   **`passed_thin_ladder`**, which are the only two states that mean a ladder read this
    code and was satisfied.
 3. **Amend** that commit with exactly what was submitted, and record in its message
    what the review found and what was done about it.
@@ -6062,7 +6155,7 @@ the code that is actually pushed.
 
 **`needs_human` is not a stopping point, and D-77 said it was.** Caught by the first
 review this decision ever ran on — its own. The code's terminal set is
-`{passed, passed_partial, failed, expired}` (`core/review-state.ts`); `needs_human`
+`{passed, passed_thin_ladder, failed, expired}` (`core/review-state.ts`); `needs_human`
 is a review PARKED on a question, and `spec/knowledge.md` §7.2 is explicit that while
 one is open the review cannot pass, cannot attest and cannot be closed with `lore-ok`.
 Reading D-77 literally, an operator would have stopped there and pushed code carrying
@@ -6553,7 +6646,7 @@ lifecycle scripts with network. That is what the ephemeral container contains.
 
 A terminal review's worktree serves nothing. Its tree hash is already recorded,
 attestation reads only the store, and `review_submit` refuses a finished review — so
-the moment a review reaches `passed`, `passed_partial`, `failed` or `expired`, the
+the moment a review reaches `passed`, `passed_thin_ladder`, `failed` or `expired`, the
 worker releases the worktree. The hourly sweep keeps a zero-day window as the backstop
 for anything that path missed.
 
