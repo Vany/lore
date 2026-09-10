@@ -111,7 +111,7 @@ services:
       # provider here (D-121).
       #
       # "0" is this deployment's DEFAULT answer: every tier has a subscription route, and a
-      # tier whose plan is out is honestly reported as skipped (`passed_partial`, named in
+      # tier whose plan is out is honestly reported as skipped (`passed_thin_ladder`, named in
       # checks_skipped) rather than quietly bought at ~$4.83 a call. Set it to "1" in .env
       # to buy the coverage instead — that is a deliberate purchase, not a fallback.
       #

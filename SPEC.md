@@ -4116,6 +4116,28 @@ outcome as an unknown failure. Both codes are successes now, said in the table, 
 choice between requiring `0` and accepting either spelled out rather than left to the
 reader.
 
+**FOUR FINDINGS ON ITS OWN FIRST ROUND, and the HIGH was a guard named but not built.**
+The migration's docstring said *"Rolling BACK past this point is not safe, and that is
+what `assertNotDowngrade` is for"* — while `SCHEMA_VERSION` still read 22. That function
+refuses only a database written by a HIGHER version, so the rollback it was credited with
+blocking was not blocked at all: an older build would open a database of 201 rows carrying
+a state its `ReviewState` has no case for, answer `isTerminal` false for every one, and let
+`expireStale` overwrite them with `expired`. **Naming a guard that cannot fire is worse
+than naming none**, because it ends the reader's search. `SCHEMA_VERSION` is 23, and the
+bump's comment says why a data-only migration needs one.
+
+Two more were sweep misses of the same kind: the rename ran over `*.ts` and `*.md`, so
+`deploy/.env.example` and `deploy/docker-compose.yml` kept the old name in the comments an
+OPERATOR reads while deciding what a metered key costs them — the surface furthest from
+the code and the one a code-shaped sweep never reaches.
+
+And the fourth is this decision breaking a rule it had just cited: the standing client
+instructions shipped *"54 of the 61 reviews that concluded cleanly"* with no date and no
+mechanism to update it, which is a measurement that stopped being taken the moment it was
+written. The text now names the shape and points at `checks_skipped`, which carries the
+current account; the dated numbers stay here, where a date is part of the sentence.
+`spec/agent-docs.md` §6 gained the rule.
+
 **Separately, and not fixed here: the 89% may be a routing fault rather than a design
 fact.** Recent rows carry `vendorSpread: {distinct: 2, tiers: 3, vendors: ["z-ai",
 "openai"]}` with nothing marked unavailable — a configured tier is being ANSWERED by

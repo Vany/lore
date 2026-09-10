@@ -3684,7 +3684,10 @@ export class Store {
    *
    * The rename is invertible and the value is a closed vocabulary, so this is safe to run
    * against a database an older build wrote. Rolling BACK past this point is not safe, and
-   * that is what `assertNotDowngrade` is for.
+   * `SCHEMA_VERSION` is bumped to 23 in the same change so that `assertNotDowngrade`
+   * actually refuses it. That sentence stood here for a while while the version still read
+   * 22 — naming a guard that could not fire, which is worse than naming none, and this
+   * change's own review raised it HIGH.
    */
   private renameThinLadderState(): void {
     if (metaGet(this.db, "state-renamed-thin-ladder") !== undefined) return;
