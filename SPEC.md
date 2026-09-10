@@ -4133,11 +4133,18 @@ with one uncollected finding.
 that have gone quiet, where nothing changes until somebody acts. It is urgency, not the
 total, and D-142's meaning is unchanged.
 
-**Every non-terminal row now carries a `waiting_note`, including lore's own**, which
-widens D-142's field from the rot case to "what this row needs from you, and when". The
-in-flight text says what the state is, that it is not finished, and to come back and
-`review_poll` — deferring the interval to the reply that computes it, rather than
-repeating a number that would then have two sources.
+**Every non-terminal row with nothing queued to collect now carries a `waiting_note`,
+including lore's own**, which widens D-142's field from the rot case to "what this row
+needs from you, and when". The in-flight text says what the state is, that it is not
+finished, and to come back and `review_poll` — deferring the interval to the reply that
+computes it, rather than repeating a number that would then have two sources.
+
+**A row with findings queued carries none, and that is the boundary, not an oversight.**
+The findings ARE the instruction on such a row, and a note beside them would compete with
+them over the same decision — the failure D-142 already named, where two instructions on
+one review let a client pick the cheaper. The claim first shipped here as the unqualified
+"every non-terminal row", which is false in this document's own terms, and this batch's
+own review caught it a round after catching the sentence it replaced.
 
 **`needs_human` keeps its carve-out** (D-142): `open_questions` answers it louder, and two
 instructions over one review is how a client picks the cheaper one.

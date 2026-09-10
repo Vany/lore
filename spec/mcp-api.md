@@ -562,15 +562,19 @@ rot are independent claims: it fires whatever the state and whether or not findi
 waiting — the standing instruction for an uncollected finding is to call `review_poll`,
 one of the calls that refuses — while `stalled` stays about a review that is stopped.
 
-**`waiting_note` no longer does (D-145), and this sentence said it did until the same
-batch's own review caught it.** It is on every non-terminal row now, saying what that row
-needs from the caller — including a lore-owned one, whose text says the round is NOT
-FINISHED. A reader still taking `waiting_note` to mean *stopped* would read a mid-round
-review as stuck, and `TOOL_DOCS.inbox` names what follows: reaching for `restart: true`
-"because nothing seems to be happening", which discards every ratified justification and
-reruns from round 1. On `needs_human` it says the opposite of "wait for that session":
-`knowledge_resolve` is repo-scoped, so this caller can settle the question and resume the
-review itself. `stalled` at the top level counts them — one number, above the rows, for the
+**`waiting_note` no longer does (D-145), and this sentence has now been wrong twice — it
+said the note meant *stopped*, and its replacement said the note is on every non-terminal
+row. Both were caught by this batch's own review, one round apart.** It is on every
+non-terminal row **that has nothing queued for the caller to collect**, and not on
+`needs_human`. A row with `new_findings > 0` carries none, deliberately: the findings ARE
+the instruction, and a note beside them would compete with it for the same decision. Within
+that set it says what the row needs — including a lore-owned one, whose text says the round
+is NOT FINISHED. A reader still taking `waiting_note` to mean *stopped* would read a
+mid-round review as stuck, and `TOOL_DOCS.inbox` names what follows: reaching for `restart:
+true` "because nothing seems to be happening", which discards every ratified justification
+and reruns from round 1. The sentence telling a `needs_human` caller not to wait for the
+other session lives on `not_yours_note`, not here — `needs_human` has no `waiting_note` to
+put it in. `stalled` at the top level counts them — one number, above the rows, for the
 question the client was actually asked. **`waiting_on_you` and `in_flight` are the pair that
 covers every row this call lists (D-145)** — the two values of `waiting_on`, so each lands
 in exactly one and the answer cannot be zero while work is outstanding. A review that ENDED
