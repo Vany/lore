@@ -4104,7 +4104,13 @@ the first draft withheld the exemption on exactly the calls that create lore's t
 
 Canonicalizing also made the scope check STRICTER rather than merely different: a symlink
 partway down that leaves the tree now resolves and is refused, where a string-prefix test
-would have read a stranger's checkout as lore's own. Both are pinned, along with a test
+would have read a stranger's checkout as lore's own. And the test for the two spellings
+BUILDS its symlink rather than hoping the runner's temp directory is one (`5d2e4db7`):
+the first version asserted the second spelling inside `if (realpath !== resolve)`, true on
+macOS and false on a Linux `/tmp`, so on CI the assertion simply did not run and deleting
+the second spelling would have passed. **A conditional assertion is a test that is absent
+exactly where it is cheapest to be absent** — the third time in this batch a guard was
+found agreeing with whatever it was pointed at. Both are pinned, along with a test
 that asks the only question the unit assertions could not — whether the value handed to git
 equals the path git itself resolves the repository to.
 

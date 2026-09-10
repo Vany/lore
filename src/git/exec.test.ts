@@ -75,17 +75,29 @@ describe("gitEnv", () => {
   /**
    * AND THE UNCANONICAL SPELLING IS SENT TOO, because which of the two a given git compares
    * is a property of that git, and the cost of guessing wrong is silence.
+   *
+   * THE SYMLINK IS BUILT HERE RATHER THAN HOPED FOR (`5d2e4db7`). The first version of
+   * this test asserted the second spelling inside `if (realpath !== resolve)` — true on
+   * macOS, where `mkdtemp` lands under `/var/folders`, and FALSE on a Linux runner with a
+   * plain `/tmp`. There the whole assertion was skipped, so deleting the second spelling
+   * from `exec.ts` would have passed CI and failed only on a deployment reached through a
+   * symlink. A conditional assertion is a test that is absent exactly where it is cheap to
+   * be absent.
    */
   it("sends both spellings when the data directory is reached through a symlink", () => {
-    const env = gitEnv(root);
+    const link = join(mkdtempSync(join(tmpdir(), "lore-link-")), "data");
+    symlinkSync(realpathSync(root), link);
+    process.env["LORE_DATA_DIR"] = link;
+    expect(realpathSync(link), "the fixture must actually be a symlink for this to test anything")
+      .not.toBe(resolve(link));
+
+    const env = gitEnv(link);
     const values = Object.entries(env)
       .filter(([k]) => k.startsWith("GIT_CONFIG_VALUE_"))
       .map(([, v]) => v);
-    expect(values).toContain(realpathSync(root));
-    if (realpathSync(root) !== resolve(root)) {
-      expect(values, "the as-written path must travel too").toContain(resolve(root));
-      expect(env["GIT_CONFIG_COUNT"]).toBe("4");
-    }
+    expect(values, "git compares the canonical path").toContain(realpathSync(link));
+    expect(values, "the as-written path must travel too").toContain(resolve(link));
+    expect(env["GIT_CONFIG_COUNT"]).toBe("4");
   });
 
   /**
