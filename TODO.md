@@ -39,6 +39,32 @@ that part is pulled out into its own open item rather than hidden inside a tick.
 
 ## Now — nothing here is about writing more features
 
+### 2026-09-10 — Vany's to decide: lore's live data lives inside the source tree
+
+- [ ] **`lore/data` holds the service's database, its git mirrors and every pinned review
+      worktree, gitignored, INSIDE the repository working tree.** Git protects the source
+      from lore's data; nothing protects lore's data from the source's tools.
+
+      Measured the hard way on 2026-09-10, by me: a `pathlib.rglob("*.ts")` in a rename
+      script descended into `lore/data/repos/<repo>/wt/<review>/` and rewrote 40 files in
+      the pinned worktree of a review that was running at that moment. Restored from git
+      after about three minutes; disclosed in that review's ticket, because I cannot prove
+      no tier read a mutated file in the window.
+
+      **It was not a careless glob — it is the default behaviour of every recursive tool.**
+      `find -exec`, a codemod, `eslint --fix`, `prettier --write`, a `grep -rl | xargs sed
+      -i`: all of them walk in, and none of them can be told not to by `.gitignore`. The
+      one thing that would have saved me is the data not being there.
+
+      **The fix is a deployment change and therefore yours.** `LORE_DATA_DIR` already
+      points wherever compose says, and D-60 requires only that the path means the same
+      thing on both sides of the bind — so moving it to `~/lore-data` (outside `~/l/rev`)
+      costs a compose edit and a `make mirror`. What it buys is that no tool aimed at the
+      source can reach the service's state, which is a property, not a habit.
+
+      **Why I did not just do it:** it changes where a running deployment keeps its
+      database, and a mistake means restoring from litestream. Not mine to spend.
+
 ### 2026-09-08 — Vany's to decide: `passed` and its own attestation disagree about what passed
 
 - [ ] **A REVIEW REACHED `state: passed`, `clean: true`, AND ITS SIGNED LINE SAYS
@@ -75,6 +101,14 @@ that part is pulled out into its own open item rather than hidden inside a tick.
       so instead. Both are defensible; what cannot stand is the client being told `clean:
       true` while the signed record says PARTIAL, because the client merges on the first
       and the operator reads the second.
+
+      **D-147 (2026-09-10) did not settle this and may sharpen it.** The rename gave the
+      wire an `evidence: "full" | "thin"` field computed from the LADDER's rule, so a
+      review can now report `cleared: true, evidence: "full"` beside a signed line saying
+      PARTIAL — the same disagreement, now with a field literally named "evidence" on one
+      side of it. Deriving `evidence` from the attestation's rule instead would make them
+      agree and would also make nearly every multi-round review thin. That is still the
+      choice below, unchanged; D-147 deliberately moved no verdict while renaming one.
 
       **Separately, and smaller:** `16211efb` is open with no settlement and no
       `will_not_settle`, on a review that passed. The code it asked for IS fixed (the

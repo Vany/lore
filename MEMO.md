@@ -3,6 +3,49 @@
 Newest first. Updated at the end of each task: what changed, what I learned, what
 surprised me.
 
+## 2026-09-10 — D-147: the state that is 89% of our clean verdicts was named like a failure
+
+**What changed.** `passed_partial` → `passed_thin_ladder`; the wire field `clean` →
+`cleared`, joined by `evidence: "full" | "thin"`; `isClean` and `isAttestable` merged into
+`isCleared`. 719 textual occurrences across 39 project files, plus a one-shot guarded
+migration for the 201 stored rows.
+
+**Vany's report was one sentence and the measurement was the whole argument.** *"passed_partial
+confuses our clients."* I queried the live store before proposing anything: **201 of 408
+reviews all-time**, **54 of the 61 clean endings since 2026-09-01**. It is not the
+exception it was named for — it is the ordinary ending — and 178 of the 201 are vendor
+collapse rather than an unfundable tier, so the dominant meaning was never the one D-48
+named it for.
+
+**What I got wrong in my first answer, and what fixed it.** I opened with a menu of
+suffixes — `thin`, `narrow`, `with_gaps` — as though the problem were the second word.
+Vany's reply was a question, not a choice: *"do we have the word that means clean and
+done?"* We did, twice: `isAttestable` was the SET (and had no name on the wire), and
+`prompts.ts` had been telling tiers *"You cleared this tree"* for weeks. The right move
+was not a better adjective but noticing that `clean` — a claim about the CODE, which lore's
+own attestation explicitly refuses to make — was the wrong word independent of which states
+it covered. **Asking what we already call something beats inventing a name for it**, and I
+had read `prompts.ts` in this same session without seeing it.
+
+**The three surfaces disagreed and each was individually defensible.** SPEC D-48 said
+"weaker evidence, honestly labelled" — a real ending. `status.ts` said "NOT a pass", twice.
+`isClean` said false while `isAttestable` said true, so lore signed an attestation for a
+state it told the client was not clean. Nobody wrote a contradiction; three correct local
+decisions composed into one.
+
+**What I broke.** A `pathlib.rglob` in my rename script walked into
+`lore/data/repos/.../wt/`, rewriting 40 files inside the pinned worktree of the review
+running at that moment. Restored with `git checkout` after ~3 minutes; I disclosed it in
+that review's ticket rather than hoping. **`lore/data` is live service state living inside
+the source tree, gitignored.** Git protects the source from lore; nothing protects lore's
+data from the source's tools — every recursive codemod, `find -exec` and linter `--fix`
+walks straight in. Same class as D-146, opposite direction. Not fixed, and it should be.
+
+**Also learned:** `zsh` does not word-split an unquoted `$files`, so a `for f in $files;
+do perl -pi ...` loop hands the entire newline-separated list to perl as one filename. It
+failed loudly and changed nothing, which is the good version — but I read the error as
+"BUGS.md is missing" for a moment because the rest of the list was in the error message.
+
 ## 2026-09-03 — D-142: the client read a number and invented its meaning
 
 **What changed.** `rev_f2VBHXHuviA9GCfsTYwJBzh7`, `passed_thin_ladder`, attested at tree

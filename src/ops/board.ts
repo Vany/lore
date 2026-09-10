@@ -189,11 +189,11 @@ export interface BoardReview {
     readonly repoId: string;
   }[];
   /**
-   * Fewer vendors read this review than tiers ran (D-49), when that is why it is partial.
+   * Fewer vendors read this review than tiers ran (D-49), when that is why the ladder is thin.
    *
    * Absent on the ordinary case. Present, it is usually the ONLY explanation of a
-   * `passed_thin_ladder` that skipped nothing — without it the board shows a downgrade with no
-   * visible cause.
+   * `passed_thin_ladder` that skipped nothing — without it the board shows a thin ladder
+   * with no visible cause.
    */
   readonly vendorSpread?: VendorSpread;
   /** Findings whose `(origin, round)` matches no tier run. Normally empty; never hidden. */
