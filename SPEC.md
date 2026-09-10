@@ -4108,6 +4108,14 @@ every multi-round review "thin". That is the decision already recorded in `TODO.
 Vany's, and it is unchanged by this one; `evidence` is computed from the ladder's existing
 rule so that nothing about the verdict moved in a rename.
 
+**Exit code 3 keeps its number and loses its name.** `EXIT.PARTIAL` is `EXIT.THIN_LADDER`;
+the number is a contract with scripts nobody here can see, the constant is ours. And the
+README's exit-code table — the one that calls itself "the API" — **did not list 3 at all**,
+while saying `0` was "the only success". A caller reading it would treat the ordinary
+outcome as an unknown failure. Both codes are successes now, said in the table, with the
+choice between requiring `0` and accepting either spelled out rather than left to the
+reader.
+
 **Separately, and not fixed here: the 89% may be a routing fault rather than a design
 fact.** Recent rows carry `vendorSpread: {distinct: 2, tiers: 3, vendors: ["z-ai",
 "openai"]}` with nothing marked unavailable — a configured tier is being ANSWERED by

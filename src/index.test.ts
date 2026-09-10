@@ -41,7 +41,7 @@ describe("exit codes", () => {
       // Partial is deliberately NOT 0: "the tiers we could afford agreed" is
       // weaker evidence than "every tier agreed", and a caller that wants to
       // treat them alike must say so itself (D-48).
-      PARTIAL: 3,
+      THIN_LADDER: 3,
       USAGE: 2,
       DID_NOT_RUN: 70,
       EXHAUSTED: 75,

@@ -616,7 +616,7 @@ export async function main(argv: readonly string[]): Promise<ExitCode> {
       case "passed":
         return EXIT.PASS;
       case "passedThinLadder":
-        return EXIT.PARTIAL;
+        return EXIT.THIN_LADDER;
       case "stopped":
         return EXIT.DID_NOT_RUN;
       default:
