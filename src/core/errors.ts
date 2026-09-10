@@ -13,13 +13,19 @@ export const EXIT = {
   /** Findings to fix or justify, then call again. */
   FINDINGS: 1,
   /**
-   * Every tier that COULD run agreed; some could not be paid for (D-48).
+   * Cleared, on a thinner ladder than this deployment describes — `passed_thin_ladder`
+   * (D-48, D-49, renamed D-147).
    *
-   * Deliberately not 0. `passed` means three independent vendors found nothing;
-   * this means the ones we could afford found nothing. Weaker evidence, and a
-   * caller that wants to treat them alike must say so itself.
+   * Deliberately not 0, and NOT because it is a lesser verdict: it is a real pass, and it
+   * is the ORDINARY one here (201 of 408 reviews). It is separate from 0 so that a script
+   * which needs the FULL ladder can require it, while one that only needs "the tiers that
+   * ran agreed" can accept both. A caller that wants to treat them alike must say so
+   * itself, which is the whole point of two codes.
+   *
+   * THE NAME IS `THIN_LADDER`, THE NUMBER IS STILL 3. Exit codes are a contract with
+   * scripts nobody here can see; the constant is ours to rename, the number is not.
    */
-  PARTIAL: 3,
+  THIN_LADDER: 3,
   /** Bad invocation. */
   USAGE: 2,
   /** Did not run. Never confuse with PASS. */

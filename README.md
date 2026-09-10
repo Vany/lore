@@ -107,10 +107,18 @@ Exit codes are the API, because the caller is usually a program:
 
 | code | meaning |
 |:--|:--|
-| `0` | **passed** — every tier agrees. The only success. |
+| `0` | **passed** — cleared by the full ladder: every tier ran, each a distinct vendor |
+| `3` | **passed_thin_ladder** — cleared, on a thinner ladder. A tier above the highest that ran never looked, or fewer vendors read the code than tiers ran |
 | `1` | findings — fix or justify, then run again |
 | `70` | **did not run** — never confuse with "found nothing" |
 | `75` | quota exhausted — also not a pass |
+
+`0` and `3` are **both** successes and this table omitted `3` altogether until D-147,
+while calling itself the API. They are separate so a caller that needs the full ladder can
+require `0`, and one that only needs "the tiers that ran agreed" can accept either — which
+is the common case here, since `3` is the ordinary outcome rather than the exception. A
+script treating `3` as failure blocks on nearly every clean review; one treating it as `0`
+loses the distinction the ladder exists to make. Choose deliberately.
 
 ### As a service
 
