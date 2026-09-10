@@ -1580,6 +1580,20 @@ describe("opening a database that already exists", () => {
       ["old1", "passed_thin_ladder"],
       ["old2", "passed_thin_ladder"],
     ]);
+
+    // AND THE ROLLBACK IS ACTUALLY REFUSED, not merely said to be. The migration's
+    // docstring credited `assertNotDowngrade` with blocking a downgrade past this point
+    // while `SCHEMA_VERSION` still read 22 — so an older build would have opened a
+    // database of rows carrying a state its own `ReviewState` has no case for, answered
+    // `isTerminal` false for every one, and let `expireStale` overwrite real verdicts
+    // with `expired`. Raised HIGH by this change's own review. Pinned here because the
+    // bump IS the guard: nothing else about a data-only migration forces one.
+    expect(
+      Number(
+        (migrated.db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as { value: string }).value,
+      ),
+      "a data migration with no version bump is a rollback nothing refuses",
+    ).toBeGreaterThanOrEqual(23);
     migrated.close();
 
     // ONCE, AND THEN NEVER AGAIN. This runs on every open, so the guard row is what stops

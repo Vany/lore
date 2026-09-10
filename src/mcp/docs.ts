@@ -311,10 +311,15 @@ asked to do. Reaching either closes THIS review, not your task.
 
 WHAT SEPARATES THEM IS \`evidence\`, NOT WHETHER YOU MAY PROCEED. \`evidence: "full"\`
 is the whole ladder, every tier a distinct vendor. \`evidence: "thin"\` is the same
-verdict with less independence behind it, and it is the ORDINARY ending here — on this
-deployment 54 of the 61 reviews that concluded cleanly in a recent nine-day window were
-thin. Report the difference to your user, because the attestation line names it; do not
-treat it as a reason to loop, restart, or refuse to proceed.
+verdict with less independence behind it, and on most deployments it is the ORDINARY
+ending rather than an exception — which is why treating it as a non-pass stops a client
+on the common case. Report the difference to your user, because the attestation line
+names it; do not treat it as a reason to loop, restart, or refuse to proceed.
+
+\`checks_skipped\` on this reply is the CURRENT account of what was thin, measured on
+this review. Read that rather than any remembered proportion: how often a ladder comes
+back thin is a property of the deployment on the day, and a number written into a
+standing instruction would be a measurement that stopped being taken.
 
 \`evidence\` IS ABSENT WHEN \`cleared\` IS FALSE, and absent is not "full" and not
 "probably fine". It means no clearing happened, so there is no claim to make.

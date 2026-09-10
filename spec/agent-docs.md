@@ -149,9 +149,10 @@ Draft text. These are the deliverable, not a summary of it.
 > pattern was already there — every other branch gets it too. Real, worth a ticket,
 > not yours to answer here. These sort last on purpose; do not re-sort by severity.
 >
-> **Only `passed` means the branch is clean.** Reaching it, or `passed_thin_ladder`,
-> closes THIS review, not your task — attest it, then carry on with whatever else
-> you were asked to do.
+> **`cleared: true` means the ladder read this tree and found nothing**, on `passed` and
+> `passed_thin_ladder` alike; `evidence` is "full" or "thin" and says how much of the
+> ladder did. Reaching either closes THIS review, not your task — attest it, then carry
+> on with whatever else you were asked to do.
 >
 > `failed` and `expired` mean the review did not complete; they are not "nothing
 > found". Never merge on them. `failed_because` carries the reason — repeat it
@@ -422,6 +423,13 @@ folder-mode call opens differently, naming `path` instead of `into`, per
 
 - **Say the consequence, not just the rule.** "Only `passed` means clean" is
   ignorable; "`failed` is not 'nothing found' — never merge on it" is not.
+- **No undated measurement in a standing text.** These strings are read by every session
+  for as long as they ship, so a number written into one is a measurement that stopped
+  being taken — this repository's own taught rule, and D-147 broke it in the same change
+  that quoted it, shipping "54 of the 61 reviews" to every client with no date and no way
+  to update it. Either date it in the sentence, as the abandoned-review paragraph does
+  ("Measured here on 2026-09-02"), or say the shape and point at the field that carries
+  the current number.
 - **A rule that is true of a field can still be wrong as advice.** "Only `passed` means
   clean" was both, and it survived here as the example of a GOOD rule while it was
   teaching clients to stop on the ordinary ending (D-147). Check what a sentence makes a

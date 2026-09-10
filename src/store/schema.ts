@@ -16,6 +16,14 @@
 import type { DatabaseSync } from "node:sqlite";
 import { SEVERITIES } from "../core/finding.ts";
 
+// 23: review.state 'passed_partial' rewritten to 'passed_thin_ladder' (D-147). NOT a
+//     column change, and bumped anyway: this number is the ONLY thing standing between a
+//     rolled-back build and a database full of a state its `ReviewState` has no case for.
+//     An older build would answer `isTerminal` false for every migrated row and let
+//     `expireStale` overwrite 201 real verdicts with `expired` — the migration's own
+//     docstring claimed `assertNotDowngrade` covered that while this line still said 22,
+//     which made the claim false and the guard absent. Raised HIGH by this change's own
+//     review.
 // 22: refactor_run / refactor_suggestion (D-136).
 // 21: held_diff.fixed_elsewhere (D-133).
 // 20: fixed_elsewhere_claim (D-133).
@@ -24,7 +32,7 @@ import { SEVERITIES } from "../core/finding.ts";
 // adds the columns, because this number is what `assertNotDowngrade` compares — left
 // behind, it says a database written by this build is identical to one written before
 // the columns existed.
-export const SCHEMA_VERSION = 22;
+export const SCHEMA_VERSION = 23;
 
 /**
  * How findings are ordered wherever the service hands them out: worst first.
