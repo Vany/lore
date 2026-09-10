@@ -4083,6 +4083,31 @@ of this fix did until a mutation test found it.
 the half the colleague actually bumped into, and it is a presentation defect independent of
 the git failure.
 
+**AND THE SCOPED VERSION WAS SILENTLY INERT ON ANY SYMLINKED DATA DIRECTORY
+(`1723a79c`, medium, round 6 of its own review).** `resolve()` removes `..` and makes a
+path absolute; it does not canonicalize. git matches `safe.directory` against a repository
+path it has ALREADY canonicalized, so one symlink anywhere in `LORE_DATA_DIR` and the
+entries name a path git never compares against — no error, no warning, "detected dubious
+ownership" again, from a fix that reads as present in the source.
+
+Not exotic: on macOS `/tmp` and `/var` are themselves symlinks into `/private`, which is
+where a relocated data directory or a test fixture naturally lands. **The test written
+specifically for this function agreed with the bug**, because it asserted `resolve(root)`
+on a fixture that was itself under `/var/folders` — it made the same mistake as the code
+and therefore confirmed it.
+
+Three things changed. The values are canonicalized; **both spellings are sent** when they
+differ, because which one a given git compares is a property of that git and the cost of
+guessing wrong is silence; and canonicalization walks up to the deepest EXISTING ancestor,
+because lore hands git paths that do not exist yet — `init`, `clone`, `worktree add` — and
+the first draft withheld the exemption on exactly the calls that create lore's tree.
+
+Canonicalizing also made the scope check STRICTER rather than merely different: a symlink
+partway down that leaves the tree now resolves and is refused, where a string-prefix test
+would have read a stranger's checkout as lore's own. Both are pinned, along with a test
+that asks the only question the unit assertions could not — whether the value handed to git
+equals the path git itself resolves the repository to.
+
 **D-145 — an inbox with work in flight is not an empty inbox: `in_flight` beside
 `stalled`, and "Nothing to do" is gone. BUILT 2026-09-08.**
 

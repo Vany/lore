@@ -9,6 +9,7 @@
  */
 
 import { execFile } from "node:child_process";
+import { realpathSync } from "node:fs";
 import { resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { DidNotRun } from "../core/errors.ts";
@@ -65,20 +66,74 @@ export interface GitResult {
  *
  * The trailing `/*` is git's documented prefix form and is verified against the git in
  * this image (2.39.5) rather than assumed.
+ *
+ * SYMLINKS, WHICH MADE THE FIRST SCOPED VERSION SILENTLY INERT. `resolve()` removes `..`
+ * and makes a path absolute; it does NOT canonicalize, and git matches `safe.directory`
+ * against the repository path it has already canonicalized. So one symlink anywhere in
+ * `LORE_DATA_DIR` and the entries name a path git never compares against — no error, no
+ * warning, just "detected dubious ownership" again, from a fix that reads as present.
+ * This is not exotic: on macOS `/tmp` and `/var` are themselves symlinks to `/private/*`,
+ * which is where a test fixture or a relocated data directory naturally lands.
+ *
+ * BOTH SPELLINGS ARE EMITTED rather than only the canonical one. Which of the two git
+ * compares is a property of the git in the image, and the failure mode of guessing wrong
+ * is silence — the same silence this whole comment is about. Two extra config entries cost
+ * nothing and remove the need to be right about it.
+ *
+ * A `realpath` that THROWS means the path does not exist, and then no repository under it
+ * exists either: `{}` is the correct answer, and it is the safe one — git keeps its check.
  */
 function ownershipExemptionFor(cwd: string): Readonly<Record<string, string>> {
-  const root = resolve(dataDir());
-  const here = resolve(cwd);
+  const root = real(resolve(dataDir()));
+  const here = real(resolve(cwd));
+  if (root === undefined || here === undefined) return {};
   if (here !== root && !here.startsWith(root + sep)) return {};
-  return {
-    GIT_CONFIG_COUNT: "2",
-    GIT_CONFIG_KEY_0: "safe.directory",
-    GIT_CONFIG_VALUE_0: root,
-    GIT_CONFIG_KEY_1: "safe.directory",
+  // The pre-canonical spelling too, when it differs — see BOTH SPELLINGS above.
+  const asWritten = resolve(dataDir());
+  const roots = asWritten === root ? [root] : [root, asWritten];
+  const entries: Record<string, string> = { GIT_CONFIG_COUNT: String(roots.length * 2) };
+  roots.forEach((r, i) => {
+    entries[`GIT_CONFIG_KEY_${String(i * 2)}`] = "safe.directory";
+    entries[`GIT_CONFIG_VALUE_${String(i * 2)}`] = r;
+    entries[`GIT_CONFIG_KEY_${String(i * 2 + 1)}`] = "safe.directory";
     // Everything beneath it: a worktree's repository resolves to the bare clone, so
     // exempting only the directory git was pointed at would leave the bare refused.
-    GIT_CONFIG_VALUE_1: `${root}/*`,
-  };
+    entries[`GIT_CONFIG_VALUE_${String(i * 2 + 1)}`] = `${r}/*`;
+  });
+  return entries;
+}
+
+/**
+ * The canonical form of `p`, resolved through the deepest ancestor that actually exists.
+ *
+ * Plain `realpathSync` throws on a path that is not there yet, and lore hands git paths
+ * that are not there yet all the time — `git init <dest>`, `git clone <dest>`, `git
+ * worktree add <dest>`. Answering `undefined` for those dropped the exemption on exactly
+ * the calls that CREATE lore's tree, which the first version of this fix did.
+ *
+ * Walking up is sound for the question being asked: if the deepest existing ancestor
+ * canonicalizes to somewhere inside the data directory, so does anything created beneath
+ * it. It is also STRICTER than not walking, because a symlink partway down that points
+ * out of the tree resolves here and the exemption is correctly withheld.
+ *
+ * Never falls back to the uncanonicalized path. That would put back the silently inert
+ * exemption this function exists to prevent, wearing the look of a safe default.
+ */
+function real(p: string): string | undefined {
+  let at = p;
+  for (;;) {
+    try {
+      const resolved = realpathSync(at);
+      // Re-attach whatever was not there yet, so the caller compares full paths.
+      return at === p ? resolved : resolved + p.slice(at.length);
+    } catch {
+      const up = resolve(at, "..");
+      // `resolve(x, "..")` is a fixed point at the filesystem root: if even `/` cannot be
+      // canonicalized there is nothing left to try, and looping would not end.
+      if (up === at) return undefined;
+      at = up;
+    }
+  }
 }
 
 /** The environment every git invocation in this service runs under. */

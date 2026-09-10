@@ -521,7 +521,16 @@ away in `expires_at`:
 | `waiting_on` | states | what the client does |
 |---|---|---|
 | `you` | `findings_ready`, `findings_stale`, `awaiting_diff`, `needs_human`, or anything with uncollected findings | collect, answer with `review_submit`, or get a person |
-| `lore` | `queued`, `running`, `fast_clean` | nothing **this second**, and it is not finished — come back and poll (D-145). Specifically **not** a second `review_start` for that branch (§2.4.2) |
+| `lore` | `queued`, `running`, `fast_clean` | nothing **this second**, and it is not finished — come back and poll (D-145), **unless the row carries `not_yours_note`**, where `review_poll` answers NOT FOUND for this caller (D-78) and the row's own note says what to do instead. Specifically **not** a second `review_start` for that branch (§2.4.2) |
+
+**The `lore` row's exception is written into the row itself, not left in a second field**
+(`c19d42ad`). This is the fourth place the same class turned up — a prescription the
+reader cannot follow, with the caveat parked somewhere the reader has to think to look —
+and the first three fixes were each correct where they were applied and generalised to
+nothing. `TOOL_DOCS.inbox`, the payload's own `waiting_note` and the top-level `in_flight`
+bullet all carry the carve-out; this table is the document that DEFINES what to do per
+`waiting_on` value, so a reader consulting it is precisely the reader who never sees the
+payload note.
 
 `expires_at` is `updated_at` + the retention sweep's `staleHours`, read from one
 constant so the deadline stated and the deadline enforced cannot differ. It is absent

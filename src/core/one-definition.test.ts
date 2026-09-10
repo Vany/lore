@@ -21,8 +21,10 @@
 
 import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { gitEnv } from "../git/exec.ts";
+import { dataDir } from "./paths.ts";
 import { REVIEW_STATES } from "./review-state.ts";
 
 const SRC = new URL("..", import.meta.url).pathname;
@@ -372,7 +374,19 @@ describe("git runs through one runner", () => {
     // "detected dubious ownership" and the whole review path fails at once — measured
     // 2026-09-08, one review killed outright and a t0 left running twelve minutes.
     expect(text, "the ownership check must be disabled for lore's own data directory").toContain("safe.directory");
-    expect(text, "delivered as env, because the data path is only known at runtime").toContain("GIT_CONFIG_KEY_0");
+    // ASKED OF THE OUTPUT, NOT OF THE SOURCE. This used to grep for the literal
+    // `GIT_CONFIG_KEY_0`, which stopped appearing the moment the keys were built from an
+    // index — a guard failing because the code got better is the mirror of a guard passing
+    // because the code got worse, and both mean it was reading the wrong thing. Calling
+    // the function answers the question the guard actually has.
+    const env = gitEnv(resolve(dataDir(), "repos", "any"));
+    const keys = Object.keys(env).filter((k) => k.startsWith("GIT_CONFIG_KEY_"));
+    expect(keys.length, "delivered as env, because the data path is only known at runtime").toBeGreaterThan(0);
+    for (const k of keys) expect(env[k]).toBe("safe.directory");
+    // git reads exactly COUNT entries and ignores any beyond it, so a COUNT that
+    // undercounts silently drops the tail — including the `/*` prefix entry the bare
+    // clone needs.
+    expect(env["GIT_CONFIG_COUNT"], "git reads exactly this many").toBe(String(keys.length));
   });
 
   it("has no exemption that stopped setting the options it was exempted for", () => {

@@ -2,11 +2,11 @@
  * The environment every git call runs under, and the one thing it must NOT do.
  */
 
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { gitEnv } from "./exec.ts";
+import { git, gitEnv } from "./exec.ts";
 
 let saved: string | undefined;
 let root: string;
@@ -38,10 +38,77 @@ describe("gitEnv", () => {
   it("exempts lore's own data directory from the ownership check", () => {
     const env = gitEnv(join(root, "repos", "abc", "bare.git"));
     expect(env["GIT_CONFIG_KEY_0"]).toBe("safe.directory");
-    expect(env["GIT_CONFIG_VALUE_0"]).toBe(resolve(root));
+    // THE CANONICAL PATH, not `resolve()`'s. git matches `safe.directory` against a
+    // repository path it has already canonicalized, so an entry naming the symlinked
+    // spelling is never compared and the exemption is silently inert. This assertion used
+    // to read `resolve(root)` and passed, on a fixture that is itself symlinked — macOS
+    // puts `mkdtemp` under `/var/folders`, and `/var` is a link to `/private/var`. The
+    // test agreed with the bug because it made the same mistake.
+    expect(env["GIT_CONFIG_VALUE_0"]).toBe(realpathSync(root));
     // The bare clone a worktree resolves to is a level up from the worktree, so exempting
     // only the directory git was pointed at would leave it refused.
-    expect(env["GIT_CONFIG_VALUE_1"]).toBe(`${resolve(root)}/*`);
+    expect(env["GIT_CONFIG_VALUE_1"]).toBe(`${realpathSync(root)}/*`);
+  });
+
+  /**
+   * THE CHECK THE UNIT ASSERTIONS CANNOT MAKE: does the value we hand git equal the path
+   * git actually compares it against?
+   *
+   * Everything above inspects the env we build, which is how the symlink hole survived a
+   * test written specifically for this function. Real refusal needs a foreign uid and a
+   * test cannot make one — but the mechanism behind the refusal is a string comparison,
+   * and this pins both sides of it against the real git in this image.
+   */
+  it("names the same path git itself resolves the repository to", async () => {
+    const repo = join(root, "repos", "canon");
+    await git(root, ["init", "-q", repo]);
+    const { stdout } = await git(repo, ["rev-parse", "--show-toplevel"]);
+    const asGitSeesIt = stdout.trim();
+    const env = gitEnv(repo);
+    const exempted = [env["GIT_CONFIG_VALUE_0"], env["GIT_CONFIG_VALUE_2"]].filter((v) => v !== undefined);
+    expect(
+      exempted.some((v) => asGitSeesIt === v || asGitSeesIt.startsWith(v + "/")),
+      `git resolves the repo to ${asGitSeesIt}; the exemption names ${exempted.join(" and ")}`,
+    ).toBe(true);
+  });
+
+  /**
+   * AND THE UNCANONICAL SPELLING IS SENT TOO, because which of the two a given git compares
+   * is a property of that git, and the cost of guessing wrong is silence.
+   */
+  it("sends both spellings when the data directory is reached through a symlink", () => {
+    const env = gitEnv(root);
+    const values = Object.entries(env)
+      .filter(([k]) => k.startsWith("GIT_CONFIG_VALUE_"))
+      .map(([, v]) => v);
+    expect(values).toContain(realpathSync(root));
+    if (realpathSync(root) !== resolve(root)) {
+      expect(values, "the as-written path must travel too").toContain(resolve(root));
+      expect(env["GIT_CONFIG_COUNT"]).toBe("4");
+    }
+  });
+
+  /**
+   * A PATH THAT DOES NOT EXIST YET STILL GETS THE EXEMPTION, because lore hands git
+   * paths that do not exist yet — `git init <dest>`, `clone <dest>`, `worktree add
+   * <dest>` — and those are exactly the calls that CREATE its tree. The first version of
+   * the canonicalizing fix answered `undefined` for them and silently withheld it.
+   */
+  it("exempts a directory inside the tree that has not been created yet", () => {
+    const env = gitEnv(join(root, "repos", "not-yet", "bare.git"));
+    expect(env["GIT_CONFIG_KEY_0"]).toBe("safe.directory");
+  });
+
+  /**
+   * AND A SYMLINK PARTWAY DOWN THAT LEAVES THE TREE IS REFUSED — canonicalizing makes the
+   * scope check STRICTER, not merely different. Without it, `dataDir()/repos/x` pointing
+   * at a stranger's checkout would read as inside lore's own tree by string prefix alone.
+   */
+  it("does not exempt a path inside the tree that symlinks out of it", () => {
+    const outside = mkdtempSync(join(tmpdir(), "lore-elsewhere-"));
+    mkdirSync(join(root, "repos"), { recursive: true });
+    symlinkSync(outside, join(root, "repos", "escape"));
+    expect(gitEnv(join(root, "repos", "escape", "repo"))["GIT_CONFIG_COUNT"]).toBeUndefined();
   });
 
   /**
@@ -65,6 +132,7 @@ describe("gitEnv", () => {
   });
 
   it("exempts the data directory itself", () => {
-    expect(gitEnv(root)["GIT_CONFIG_COUNT"]).toBe("2");
+    // 2 entries for one spelling, 4 when the canonical and as-written paths differ.
+    expect(["2", "4"]).toContain(gitEnv(root)["GIT_CONFIG_COUNT"]);
   });
 });
