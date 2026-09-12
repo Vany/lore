@@ -4145,10 +4145,25 @@ absent and no vendor information reaches the client wire at all. A client follow
 sentence on the ordinary thin verdict finds the field missing and reports "no recorded
 cause", or invents one.
 
-The account is in two places and which one depends on the cause, so the text now says
-both: `checks_skipped` when a tier did not run, the attestation line when every tier ran
-and the vendors repeated. That is the same split `board.ts` already makes for the
-operator, finally made for the client.
+The account is in two places and which one depends on the cause, so the text said both:
+`checks_skipped` when a tier did not run, the attestation line when every tier ran and the
+vendors repeated. That is the same split `board.ts` already makes for the operator.
+
+**And that was still wrong, in the mixed state (`b919fcc0`, round 3 — the third pass over
+one paragraph).** It branched on whether `checks_skipped` EXISTS, when `checks_skipped`
+also carries ENGINE entries — tsc, eslint, semgrep — which are a real gap in what was
+checked and never thin the ladder at all. A repository with no lint config carries one on
+every review, including reviews that pass in full. This review's own payload demonstrated
+it: `checks_skipped: ["eslint: no lint script and no eslint config"]`, present, while
+every tier ran. A client following the presence test would have reported eslint as the
+reason its verdict was thin — a false cause, with the true one sitting unread in the
+attestation.
+
+**The branch is on what the entries NAME, not on whether the field is there**: a TIER that
+did not run thins the ladder; an ENGINE does not; fewer vendors than tiers is the
+commonest cause and appears in neither, living only in the attestation line. Three rounds
+on one paragraph, each fix correct about the case in front of it and silent about the
+next — which is this batch's recurring shape, now recorded twice.
 
 **Separately, and not fixed here: the 89% may be a routing fault rather than a design
 fact.** Recent rows carry `vendorSpread: {distinct: 2, tiers: 3, vendors: ["z-ai",
