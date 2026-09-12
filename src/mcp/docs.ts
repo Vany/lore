@@ -316,10 +316,15 @@ ending rather than an exception — which is why treating it as a non-pass stops
 on the common case. Report the difference to your user, because the attestation line
 names it; do not treat it as a reason to loop, restart, or refuse to proceed.
 
-\`checks_skipped\` on this reply is the CURRENT account of what was thin, measured on
-this review. Read that rather than any remembered proportion: how often a ladder comes
-back thin is a property of the deployment on the day, and a number written into a
-standing instruction would be a measurement that stopped being taken.
+WHAT WAS THIN IS RECORDED IN TWO PLACES, AND WHICH ONE DEPENDS ON THE CAUSE. If a tier
+did not run, \`checks_skipped\` on this reply names it. If every tier RAN and fewer
+vendors read the code than there were tiers — the commoner cause, and the one with
+nothing to skip — \`checks_skipped\` is ABSENT and the account lives in the attestation
+line, which names the vendors. So an absent \`checks_skipped\` on a thin ladder is not
+"no recorded cause": call review_attest and quote that line. Read whichever applies
+rather than any remembered proportion, because how often a ladder comes back thin is a
+property of the deployment on the day, and a number written into a standing instruction
+would be a measurement that stopped being taken.
 
 \`evidence\` IS ABSENT WHEN \`cleared\` IS FALSE, and absent is not "full" and not
 "probably fine". It means no clearing happened, so there is no claim to make.

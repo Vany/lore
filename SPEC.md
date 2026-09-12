@@ -4138,6 +4138,18 @@ written. The text now names the shape and points at `checks_skipped`, which carr
 current account; the dated numbers stay here, where a date is part of the sentence.
 `spec/agent-docs.md` §6 gained the rule.
 
+**And the fix for that one pointed at the wrong field (`9ba556af`, round 2).** It told
+clients `checks_skipped` was "the CURRENT account of what was thin" — but in the commoner
+cause, vendor collapse, every tier RAN and there is nothing to skip: `checks_skipped` is
+absent and no vendor information reaches the client wire at all. A client following that
+sentence on the ordinary thin verdict finds the field missing and reports "no recorded
+cause", or invents one.
+
+The account is in two places and which one depends on the cause, so the text now says
+both: `checks_skipped` when a tier did not run, the attestation line when every tier ran
+and the vendors repeated. That is the same split `board.ts` already makes for the
+operator, finally made for the client.
+
 **Separately, and not fixed here: the 89% may be a routing fault rather than a design
 fact.** Recent rows carry `vendorSpread: {distinct: 2, tiers: 3, vendors: ["z-ai",
 "openai"]}` with nothing marked unavailable — a configured tier is being ANSWERED by
