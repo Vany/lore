@@ -120,6 +120,47 @@ is the common case here, since `3` is the ordinary outcome rather than the excep
 script treating `3` as failure blocks on nearly every clean review; one treating it as `0`
 loses the distinction the ladder exists to make. Choose deliberately.
 
+### Stop your agent sleeping: run the channel
+
+A review takes tens of minutes and a client has no way to know when it finished, so agents
+bridge the gap with a fixed `sleep`. Measured on this deployment, that costs a median of
+three minutes per finding and 339 hours in total — and no constant can be right, because a
+round runs anywhere from twenty seconds to twenty-three minutes.
+
+`channel/lore-channel.ts` is a [Claude Code channel](https://code.claude.com/docs/en/channels):
+a small local process that watches your reviews and pushes an event into your session the
+moment one needs you. The polling still happens — it just happens somewhere that costs no
+model turns.
+
+Add it to `.mcp.json` beside lore itself:
+
+```json
+{
+  "mcpServers": {
+    "lore-channel": {
+      "command": "node",
+      "args": ["--experimental-strip-types", "/path/to/rev/channel/lore-channel.ts"],
+      "env": { "LORE_URL": "http://127.0.0.1:7777/mcp", "LORE_TOKEN": "lore_..." }
+    }
+  }
+}
+```
+
+Then start Claude Code with it enabled. Custom channels are not on the research-preview
+allowlist, so during the preview this is the flag that loads it:
+
+```bash
+claude --dangerously-load-development-channels server:lore-channel
+```
+
+`LORE_TOKEN` is the same bearer your `lore` entry uses, without the `Bearer ` prefix.
+Events arrive as `<channel source="lore" review_id="..." state="..." severity="...">`, and
+one carrying `backlog="true"` was already waiting when the session began — that is what an
+earlier session left behind.
+
+**It reports only what it sees while running.** Start-of-session `review_inbox` is still
+the rule; the channel means you need not keep asking afterwards.
+
 ### As a service
 
 ```bash

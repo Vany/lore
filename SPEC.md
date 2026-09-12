@@ -4111,6 +4111,80 @@ of them and no Docker event history left to read. lore is now robust to it, whic
 part that is lore's. The cause is upstream of lore and is recorded here with its evidence
 rather than guessed at.
 
+**D-148 — a CHANNEL is how a review reaches an agent; the stream never could. BUILT
+2026-09-12.**
+
+Vany: *"clients use sleep 450 to await findings. can we somehow block them unless findings
+here, like send them message over MCP?"* — and then, of the ladder: *"client must use
+subscriptions, if it isnt available - channels, and only if nothing works - polling."*
+
+**MEASURED FIRST.** Of the findings a client collected within an hour of them being
+raised (n=2625), the median sat **192 seconds** before anyone looked; **764** sat longer
+than 450; **538** were taken inside a minute, meaning that client was polling tightly and
+burning a turn per attempt. Total dead waiting: **339 hours**. And no constant can fix it,
+because a round's wall-time runs from a p10 of ~20s to a p90 of ~1400s — `sleep 450` is
+simultaneously far too long for the short rounds and too short for the long ones.
+
+**D-103's PREMISE WAS RIGHT AND ITS REVISION RE-BROKE IT.** `subscribeTo` was changed to
+emit the `subscribe` frame whenever the connection negotiated `2026-07-28`, on the stated
+ground that *"A client that negotiated 2026-07-28 can"*. The era is a NECESSARY condition
+that was being read as a sufficient one, and two things break it:
+
+* **Claude Code has no MCP resource-subscription support at all** — checked in its own
+  documentation, not inferred.
+* **An agent is handed TOOLS, not protocol methods.** Even in a harness that has the
+  machinery, the model cannot issue `subscriptions/listen`; there is no tool for it. This
+  holds however new the wire is, so no version check can ever establish the capability.
+
+Measured by being the client: lore emitted that frame to a Claude Code session on every
+poll for a day and it was not once actionable. That is D-103's own failure — the most
+prominent instruction in the reply is one the reader must fail at — restored by the
+revision that added the gate. The frame no longer asserts; it offers, names the condition
+the reader must check, and points at what works instead.
+
+**AND WHAT WORKS IS A CHANNEL, WHICH lore CANNOT BE.** A Claude Code channel is an MCP
+server declaring `experimental['claude/channel']`, emitting `notifications/claude/channel`,
+**spawned by Claude Code as a stdio subprocess on the user's machine**. lore is a remote
+HTTP service in a container. There is no version of lore that is itself a channel, so the
+bridge is a separate local process: `channel/lore-channel.ts`.
+
+It polls `review_inbox` and pushes an event when a review needs the client. **The polling
+did not go away — it moved somewhere it costs nothing.** The waste was never HTTP
+requests; it was agent TURNS, each an LLM call that usually learned nothing. A daemon with
+no model attached can ask every fifteen seconds for free.
+
+**Three properties it must have, each for a failure that is silent:**
+
+* **It never negotiates `2026-07-28`.** Claude Code refuses to register a channel that
+  does, and drops its events with no error returned — the server runs, writes, and reaches
+  nobody. That is why the file speaks the handshake directly instead of delegating to an
+  SDK: both MCP packages in this repo are v2 and know that revision, so handing them the
+  negotiation risks exactly that silent non-registration. `SPEAKS` cannot contain it.
+* **It announces a CHANGE, never a state.** At fifteen seconds an unchanged row would be
+  announced 240 times an hour, each one a turn of the session's attention — the `sleep 450`
+  problem inverted and worse. A channel that is noisy is a channel the user turns off,
+  which costs them every later event too.
+* **It announces the BACKLOG on its first look, marked as such.** A review an earlier
+  session walked away from never changes, so a pure change-detector would report nothing
+  about the single largest measured source of waste here. `backlog="true"` says it is not
+  news.
+
+A missing token is ANNOUNCED rather than exited on, for the same reason: Claude Code
+reports nothing when a channel dies, so a user whose channel quietly failed would believe
+they were covered.
+
+**What this does not fix**, stated because the numbers above invite the opposite reading:
+the p90 of 7.6 hours and p99 of 8.8 days are abandonment, not sleeping. A channel only
+reaches a session that is open. D-141, D-142 and D-145 keep that problem.
+
+**[OPEN] The blocking poll (`wait_ms`) was designed and not built.** `review_poll` could
+hold the request open until the state changes or a cap elapses, which would ride the one
+channel every client has. It is the right answer for a client with no channel, and the MCP
+spec permits it — timeout reset on progress is a MAY and a maximum is always enforced, so
+the wait must be bounded and conservative. Deferred rather than dropped: the channel
+removes the sleeping for the client we actually have, and a second mechanism for the same
+problem should wait until there is a client that needs it.
+
 **D-147 — `passed_partial` is `passed_thin_ladder`, and `clean` is `cleared`. BUILT
 2026-09-10.**
 

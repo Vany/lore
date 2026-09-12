@@ -481,6 +481,25 @@ describe("the docs ask a client to poll, and mention nothing it cannot do", () =
     expect(flat, "implies the client holds one").not.toMatch(/your subscription|a subscription (to|carries|has)/i);
   });
 
+  /**
+   * AND THE THING THAT ACTUALLY WAKES AN AGENT IS NAMED (D-148).
+   *
+   * The hidden mechanism stays hidden — an agent is handed TOOLS, not protocol methods, so
+   * the stream is unreachable from where a client stands however new its wire is. What IS
+   * reachable is a channel: a local process that pushes into the session. It is the only
+   * answer to "how do I stop sleeping" that does not depend on the harness exposing raw
+   * MCP, so the standing instructions must carry it or a client has nothing but the
+   * interval.
+   */
+  it("names the one push a tool-only agent can actually benefit from", () => {
+    expect(SERVER_INSTRUCTIONS, "the standing text every session reads").toContain("CHANNEL");
+    expect(TOOL_DOCS.poll, "and the tool a sleeping client is about to call").toContain("CHANNEL");
+    // AND SAYS WHOSE JOB IT IS. An agent that thinks it can start one spends turns
+    // discovering it cannot; the user is the only one who can, and the text has to say so
+    // or the advice is another instruction the reader fails at.
+    expect(SERVER_INSTRUCTIONS).toMatch(/cannot start one yourself/i);
+  });
+
   // The replacement has to be PRESENT, not merely the old text absent: a doc that removed
   // the subscribe advice and said nothing instead would leave a client with no interval
   // and the sleep-poll loop this whole surface exists to prevent.

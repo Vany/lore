@@ -95,6 +95,34 @@ independent of any review (D-18). That is the point of the service: a session
 should be able to ask what is known *before* it writes code, not only learn it
 after being corrected.
 
+### 2.0.1 The channel (D-148)
+
+`subscriptions/listen` is not how a review reaches an agent, and cannot be. Claude Code has
+no MCP resource-subscription support, and more generally an agent is handed **tools**, not
+protocol methods — there is no tool for opening a stream, so no wire revision can make one
+reachable. The offer still goes out on connections that could carry one (`subscribeTo`), but
+it names the condition rather than asserting the capability.
+
+What reaches a tool-only agent is a **channel**: an MCP server declaring
+`experimental['claude/channel']` and emitting `notifications/claude/channel`, which Claude
+Code spawns as a **stdio subprocess on the user's machine**. lore is remote HTTP, so lore
+cannot be one. `channel/lore-channel.ts` is the bridge: it polls `review_inbox` and pushes
+an event when a review needs the client.
+
+The polling did not go away — it moved somewhere it costs nothing. The measured waste was
+agent TURNS, not HTTP requests.
+
+Three properties, each guarding a silent failure:
+
+| property | what it prevents |
+|---|---|
+| never negotiates `2026-07-28` | Claude Code refuses to register such a channel and drops its events with no error |
+| announces a CHANGE, never a state | 240 events an hour for one unchanged review; a noisy channel gets turned off |
+| announces the backlog on its first look, marked `backlog="true"` | a review an earlier session abandoned never changes, so a pure change-detector is silent about the largest source of waste |
+
+A missing token is announced as an event rather than exited on, because Claude Code reports
+nothing when a channel dies and the user would believe they were covered.
+
 ### 2.0 Resources and the prompt
 
 Tools are not the whole surface. `spec/agent-docs.md` §1 — the docs **are** the

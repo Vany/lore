@@ -245,13 +245,22 @@ function wireRevision(ctx: unknown): string | undefined {
  *
  * The connection already answers the question. `subscriptions/listen` exists only in the
  * 2026-07-28 method registry, so a client that negotiated an earlier era CANNOT call it —
- * not "probably will not", cannot: the method is not in its era. A client that negotiated
- * 2026-07-28 can, and lore serves it (D-80, proven end to end in `subscribe.test.ts`).
+ * not "probably will not", cannot: the method is not in its era.
  *
- * So the hint is emitted on exactly the connections where it is followable, and on every
- * other one the reply says what it has said since D-103: poll, at this interval. Nobody
- * is handed an instruction they cannot carry out, and nobody who could stream is kept in
- * the dark because somebody else could not.
+ * **THE CONVERSE WAS ALSO CLAIMED HERE, AND IT IS FALSE (D-148).** This docstring said
+ * "A client that negotiated 2026-07-28 can", and the era is a NECESSARY condition that
+ * was being read as a sufficient one. Two things break it, and the commonest client
+ * fails both: Claude Code has no MCP resource-subscription support at all, and an AGENT
+ * in any harness is handed TOOLS rather than raw protocol methods, so it cannot issue
+ * `subscriptions/listen` however new its wire is. Measured by being the client: lore
+ * emitted this frame to a Claude Code session on every poll for a day, and not once was
+ * it actionable. That is D-103's own failure — the most prominent instruction in the
+ * reply is one the reader will fail at — restored by the revision that added the gate.
+ *
+ * So the frame no longer ASSERTS a capability from the wire era. It offers the stream to
+ * a connection that could carry one, names the condition the reader must check for
+ * itself, and points at the thing that works when it does not: a lore channel, which is
+ * a local process and reaches an agent that has only tools (`channel/lore-channel.ts`).
  */
 export function subscribeTo(reviewId: string, ctx?: unknown): object {
   if (wireRevision(ctx) !== "2026-07-28") return {};
@@ -260,11 +269,16 @@ export function subscribeTo(reviewId: string, ctx?: unknown): object {
       method: "subscriptions/listen",
       params: { resourceSubscriptions: [reviewUri(reviewId)] },
       note:
-        "Your connection can hold a notification stream, so you do not have to poll on a timer: open " +
+        "THIS CONNECTION could hold a notification stream — whether YOU can open one is a different " +
+        "question, and only you can answer it. If your harness lets you issue raw MCP methods, call " +
         "subscriptions/listen with the filter above and lore wakes you on every state change of this " +
-        "review. Poll once when woken to collect what is new — the stream says THAT something happened, " +
-        "review_poll says what. Polling on the interval still works and is never wrong; this only saves " +
-        "the calls that would have found nothing.",
+        "review; poll once when woken, because the stream says THAT something happened and review_poll " +
+        "says what. IF IT DOES NOT — and most agent harnesses hand you tools rather than protocol " +
+        "methods, Claude Code among them — do not spend a turn trying. Use a lore CHANNEL instead: a " +
+        "small local process that watches lore and pushes events into your session, which is the only " +
+        "thing that reaches an agent that cannot subscribe. It is `channel/lore-channel.ts` in lore's " +
+        "own repository and your USER has to start it, not you. Tell them it exists rather than " +
+        "sleeping between polls. Polling on the interval still works and is never wrong.",
     },
   };
 }

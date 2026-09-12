@@ -93,6 +93,20 @@ BUDGET FOR IT. A round takes tens of minutes and a review usually needs several,
 driving one to a verdict can span your whole session. That is the ordinary cost of an
 independent review, not a fault — and it is why the endings below matter.
 
+DO NOT SLEEP THROUGH IT. Two ways to learn that a round finished, better first:
+
+  1. A lore CHANNEL, if one is running — a small local process that pushes an event into
+     your session the moment a review needs you. Nothing to call; events just arrive. You
+     cannot start one yourself, so if you are about to sleep between polls, tell your user
+     it exists. That is one line, and it can save every polling turn.
+  2. review_poll, on the interval its own reply gives you. Always correct, and the only
+     one that needs nothing from anybody.
+
+WHAT YOU MUST NOT DO IS GUESS AN INTERVAL. A fixed sleep is wrong in both directions at
+once: measured here, a round's wall-time runs from twenty seconds to twenty-three minutes,
+and the findings a client eventually collected had sat unread for a median of three
+minutes. Use the number the reply hands you, or be woken.
+
 TWO HONEST ENDINGS, AND ONE THAT IS NOT. Either drive it to the verdict the review
 itself reaches — ${DRIVABLE_VERDICTS.join(", ")} — and review_attest a pass, stopping at
 needs_human, which is a question only a person can settle. Or, when findings are open and
@@ -300,7 +314,16 @@ before it starts falling, so read \`check_back_note\` rather than inferring from
 — the note says which of the two you are being handed.
 
 A tight retry loop is the most expensive thing a client can do here — every attempt is an
-LLM turn that learns nothing, and the round finishes when it finishes.
+LLM turn that learns nothing, and the round finishes when it finishes. A FIXED SLEEP IS
+NOT THE ANSWER EITHER: a round runs anywhere from twenty seconds to twenty-three minutes
+on this deployment, so one constant is simultaneously too long for the short rounds and
+too short for the long ones. \`check_back_after_ms\` is measured; a constant is a guess.
+
+BETTER THAN EITHER, IF YOU CAN HAVE IT: a lore CHANNEL pushes an event into your session
+when a review needs you, so you stop asking entirely. It is a local process your USER
+starts (lore's repository ships it), not something you can call — so if you find yourself
+about to sleep between polls, tell them it exists. That sentence costs one line and can
+save every polling turn you would otherwise spend.
 
 States: ${REVIEW_STATES.join(", ")}.
 
