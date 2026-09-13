@@ -4173,6 +4173,21 @@ A missing token is ANNOUNCED rather than exited on, for the same reason: Claude 
 reports nothing when a channel dies, so a user whose channel quietly failed would believe
 they were covered.
 
+**AND IT TAKES NO CONFIGURATION.** Vany: *"can we put it into config?"* — it already is.
+Anyone running lore has its url and bearer in `.mcp.json`, because that is how Claude Code
+reaches lore at all, so the channel reads them from the entry it was spawned beside rather
+than asking for a second copy. Two copies of a credential drift, and the failure when they
+do is a channel watching the wrong deployment while looking perfectly healthy. `LORE_URL`,
+`LORE_TOKEN` and `LORE_MCP_SERVER` override, and an EMPTY one of those counts as unset —
+a blank placeholder in a wrapper script otherwise beat the discovered url and produced a
+permanent fetch of `""`, which reads as an outage rather than as a mistake.
+
+**What could NOT go in config is the loading**, and that is Claude Code's decision rather
+than ours: a channel injects text into a session, so it requires a per-session `--channels`
+opt-in and no settings key will auto-start one from a project file. `channelsEnabled` and
+`allowedChannelPlugins` are organisation policy about what is PERMITTED, not what runs. A
+shell alias is the answer for a user who wants it every time, and the README carries one.
+
 **What this does not fix**, stated because the numbers above invite the opposite reading:
 the p90 of 7.6 hours and p99 of 8.8 days are abandonment, not sleeping. A channel only
 reaches a session that is open. D-141, D-142 and D-145 keep that problem.

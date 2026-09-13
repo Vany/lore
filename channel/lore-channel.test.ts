@@ -9,6 +9,9 @@
  */
 
 import { spawnSync } from "node:child_process";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { decide, type Row } from "./lore-channel.ts";
@@ -41,9 +44,14 @@ describe("the handshake", () => {
           params: { protocolVersion: "2026-07-28", capabilities: {}, clientInfo: { name: "claude-code", version: "2" } },
         }) + "\n",
         encoding: "utf8",
-        // No token: the server announces the misconfiguration and does not start polling,
-        // so this exercises the handshake without reaching the network.
-        env: { ...process.env, LORE_TOKEN: "" },
+        // No token AND no `.mcp.json` to find one in, so the server announces the
+        // misconfiguration and never polls — this exercises the handshake without
+        // reaching the network. The empty cwd is load-bearing: the channel reads the
+        // project's `.mcp.json` when no env var is set, and this repository has one with a
+        // live token in it, so a test run from the repo root would quietly hit the real
+        // service instead of testing what it says it tests.
+        env: { ...process.env, LORE_TOKEN: "", LORE_URL: "" },
+        cwd: mkdtempSync(join(tmpdir(), "lore-channel-")),
         timeout: 20_000,
       },
     );
@@ -60,11 +68,43 @@ describe("the handshake", () => {
   // reports nothing when a channel dies, so the user would believe they were covered.
   it("announces a missing token instead of dying quietly", () => {
     const out = spawnSync(process.execPath, ["--experimental-strip-types", SERVER], {
-      input: "", encoding: "utf8", env: { ...process.env, LORE_TOKEN: "" }, timeout: 20_000,
+      input: "", encoding: "utf8",
+      env: { ...process.env, LORE_TOKEN: "", LORE_URL: "" },
+      cwd: mkdtempSync(join(tmpdir(), "lore-channel-")),
+      timeout: 20_000,
     });
     expect(out.stdout).toContain("notifications/claude/channel");
+    // NAMES BOTH PLACES IT LOOKED. "no token" sends the user hunting; "I checked these two
+    // and neither had one" is a thing they can act on in one step.
     expect(out.stdout).toContain("LORE_TOKEN");
+    expect(out.stdout).toContain(".mcp.json");
   }, 30_000);
+
+  /**
+   * ZERO CONFIGURATION IS THE POINT (D-148). A user running lore already has its url and
+   * bearer in `.mcp.json` — that is how Claude Code reaches lore at all — so requiring
+   * them again in the channel's env would be a second copy to drift, whose failure is a
+   * channel quietly watching the wrong deployment while looking healthy.
+   */
+  it("takes the url and token from the .mcp.json it is spawned beside", () => {
+    const dir = mkdtempSync(join(tmpdir(), "lore-channel-"));
+    writeFileSync(
+      join(dir, ".mcp.json"),
+      JSON.stringify({
+        mcpServers: { lore: { type: "http", url: "http://127.0.0.1:9/mcp", headers: { Authorization: "Bearer tok_abc" } } },
+      }),
+    );
+    const out = spawnSync(process.execPath, ["--experimental-strip-types", SERVER], {
+      input: "", encoding: "utf8",
+      env: { ...process.env, LORE_TOKEN: "", LORE_URL: "", LORE_CHANNEL_INTERVAL_MS: "50" },
+      cwd: dir,
+      timeout: 15_000,
+    });
+    // Port 9 is the discard port: it refuses, so the channel reports the OUTAGE rather
+    // than the missing token — which is only reachable if it found a token to try with.
+    expect(out.stdout, "it must not report a missing token").not.toContain("found no lore token");
+    expect(out.stdout).toContain("cannot reach lore at http://127.0.0.1:9/mcp");
+  }, 20_000);
 });
 
 describe("decide", () => {

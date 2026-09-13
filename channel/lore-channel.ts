@@ -34,6 +34,7 @@
  * SPEC: D-148, `spec/mcp-api.md`
  */
 
+import { readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -44,8 +45,87 @@ import { fileURLToPath } from "node:url";
  */
 const SPEAKS = ["2025-11-25", "2025-06-18", "2025-03-26"] as const;
 
-const LORE_URL = process.env["LORE_URL"] ?? "http://127.0.0.1:7777/mcp";
-const LORE_TOKEN = process.env["LORE_TOKEN"];
+/**
+ * Where lore is and how to prove you may ask it — and NO NEW CONFIGURATION FOR EITHER.
+ *
+ * Vany, of the setup: *"can we put it into config?"* It already is. A user running lore
+ * has `.mcp.json` with the url and the bearer in it, because that is how Claude Code
+ * reaches lore at all. Asking them to copy both into a second place would be one more
+ * pair of values to drift, and the failure when they drift is this channel silently
+ * watching the wrong deployment — or, worse, watching nothing while looking healthy.
+ *
+ * So: an explicit env var wins if set, and otherwise the answer is read out of the
+ * `.mcp.json` Claude Code already spawned this process beside. No new secret anywhere,
+ * and nothing to keep in step.
+ *
+ * `LORE_MCP_SERVER` names which entry to read, for a setup that calls it something else.
+ * The reader is deliberately tolerant of a missing file and silent about it here: what to
+ * SAY when nothing was found is decided once, at the bottom of this file, where it can be
+ * said in the one place the user will actually read it.
+ */
+interface Wire {
+  readonly url: string;
+  readonly token: string | undefined;
+  readonly from: string;
+}
+
+function fromMcpJson(): { url?: string; token?: string } {
+  const name = process.env["LORE_MCP_SERVER"] ?? "lore";
+  for (const file of [resolve(process.cwd(), ".mcp.json"), resolve(process.cwd(), ".claude", "mcp.json")]) {
+    let raw: string;
+    try {
+      raw = readFileSync(file, "utf8");
+    } catch {
+      continue;
+    }
+    try {
+      const entry = (JSON.parse(raw) as { mcpServers?: Record<string, { url?: string; headers?: Record<string, string> }> })
+        .mcpServers?.[name];
+      if (entry === undefined) continue;
+      const auth = entry.headers?.["Authorization"] ?? entry.headers?.["authorization"];
+      return {
+        ...(entry.url === undefined ? {} : { url: entry.url }),
+        ...(auth === undefined ? {} : { token: auth.replace(/^Bearer\s+/i, "") }),
+      };
+    } catch {
+      // A malformed .mcp.json is the user's to fix and Claude Code will have said so
+      // already; guessing at half-parsed JSON would be worse than moving on.
+      continue;
+    }
+  }
+  return {};
+}
+
+/**
+ * AN EMPTY ENV VAR IS UNSET, NOT A VALUE — for the url as well as the token.
+ *
+ * `LORE_URL=` in a wrapper script, or an `env` block with a blank placeholder, otherwise
+ * beats the url discovered from `.mcp.json` and the channel fetches `""` for ever. It
+ * fails in a way that reads as an outage rather than as a configuration mistake, which is
+ * the worst of both. Found by a test that set it blank to isolate the discovery path.
+ */
+function set(name: string): string | undefined {
+  const v = process.env[name];
+  return v === undefined || v === "" ? undefined : v;
+}
+
+function wire(): Wire {
+  const envUrl = set("LORE_URL");
+  const envToken = set("LORE_TOKEN");
+  if (envUrl !== undefined && envToken !== undefined) {
+    return { url: envUrl, token: envToken, from: "LORE_URL and LORE_TOKEN" };
+  }
+  const found = fromMcpJson();
+  return {
+    url: envUrl ?? found.url ?? "http://127.0.0.1:7777/mcp",
+    token: envToken ?? found.token,
+    from: found.token === undefined ? "no source" : `.mcp.json (server "${process.env["LORE_MCP_SERVER"] ?? "lore"}")`,
+  };
+}
+
+const WIRE = wire();
+const LORE_URL = WIRE.url;
+const LORE_TOKEN = WIRE.token;
 const INTERVAL_MS = Number(process.env["LORE_CHANNEL_INTERVAL_MS"] ?? "15000");
 
 /**
@@ -314,9 +394,11 @@ if (invokedDirectly) {
   // what is wrong puts it in the one place they are certain to read.
   if (LORE_TOKEN === undefined || LORE_TOKEN === "") {
     push(
-      "lore-channel started with no LORE_TOKEN, so it can see nothing and will send no review events." +
-        " Set LORE_TOKEN (the same bearer your .mcp.json uses) and restart the session. Until then, call" +
-        " review_inbox yourself.",
+      "lore-channel found no lore token, so it can see nothing and will send no review events. It looked" +
+        " for LORE_TOKEN in its environment and for an `mcpServers." + (process.env["LORE_MCP_SERVER"] ?? "lore") +
+        "` entry with an Authorization header in .mcp.json under " + process.cwd() + ". Fix whichever is" +
+        " wrong and restart the session. Until then this channel is doing nothing: call review_inbox" +
+        " yourself and tell your user, because they cannot see this failing from the outside.",
       { review_id: "none", state: "channel_error", severity: "high" },
     );
   } else {

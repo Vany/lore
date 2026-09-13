@@ -132,15 +132,16 @@ a small local process that watches your reviews and pushes an event into your se
 moment one needs you. The polling still happens — it just happens somewhere that costs no
 model turns.
 
-Add it to `.mcp.json` beside lore itself:
+Add it to `.mcp.json` beside lore itself. **No url and no token**: it reads them from the
+`lore` entry already in that same file, because that is how Claude Code reaches lore at
+all and a second copy is one more thing to drift.
 
 ```json
 {
   "mcpServers": {
     "lore-channel": {
       "command": "node",
-      "args": ["--experimental-strip-types", "/path/to/rev/channel/lore-channel.ts"],
-      "env": { "LORE_URL": "http://127.0.0.1:7777/mcp", "LORE_TOKEN": "lore_..." }
+      "args": ["--experimental-strip-types", "/path/to/rev/channel/lore-channel.ts"]
     }
   }
 }
@@ -153,8 +154,17 @@ allowlist, so during the preview this is the flag that loads it:
 claude --dangerously-load-development-channels server:lore-channel
 ```
 
-`LORE_TOKEN` is the same bearer your `lore` entry uses, without the `Bearer ` prefix.
-Events arrive as `<channel source="lore" review_id="..." state="..." severity="...">`, and
+**There is no settings.json key for this, by design.** A channel injects text into your
+session, so Claude Code requires a per-session opt-in and will not auto-start one from a
+project file. If you want it every time, alias it:
+
+```bash
+alias claude-lore='claude --dangerously-load-development-channels server:lore-channel'
+```
+
+`LORE_URL` and `LORE_TOKEN` override the discovered values if you need a different
+deployment; `LORE_MCP_SERVER` names a `.mcp.json` entry called something other than
+`lore`. Events arrive as `<channel source="lore" review_id="..." state="..." severity="...">`, and
 one carrying `backlog="true"` was already waiting when the session began — that is what an
 earlier session left behind.
 
