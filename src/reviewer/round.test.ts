@@ -4002,7 +4002,7 @@ describe("skip_if_quota together with a fallback", () => {
    * PRIMARY's `Exhausted`, the fallback's `ServiceUnreachable` survived only as text, and
    * the guard that requeues an unreachable opencode checks the TYPE — so it never fired.
    * Both deep tiers were booked unpayable, D-48 stepped over them, and the review ended
-   * `passed_partial` with no deep tier having read a line. The log said "the round is
+   * `passed_thin_ladder` with no deep tier having read a line. The log said "the round is
    * requeued"; the ladder did the opposite.
    */
   it("requeues rather than skipping when opencode dies under the twin", async () => {

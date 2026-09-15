@@ -2189,7 +2189,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
           // (D-48) as though nobody could pay for it. Measured on rigid-monorepo, 2026-09-15,
           // on fix/RIGID-161-record-then-release — both deep tiers fell back to glm-5.2, opencode
           // restarted at 06:56:42, both twins died one second later, and the review ended
-          // passed_partial with no deep tier having read a line. Seven more passes on that
+          // passed_thin_ladder with no deep tier having read a line. Seven more passes on that
           // repository carry the same signature: t2 and t3, on different providers, dying in
           // the same second.
           //

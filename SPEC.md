@@ -4030,7 +4030,7 @@ restarted, why did we say it is passed?"* He was right.
 **What happened.** rigid-monorepo, `fix/RIGID-161-record-then-release`. Both deep tiers'
 primaries were parked — kimi on quota, openai at its usage limit — so both fell back to
 `zai-coding-plan2/glm-5.2`. opencode restarted at 06:56:42; both twins died on the dropped
-connection at 06:56:43. The review ended `passed_partial`. **No deep tier ever read the
+connection at 06:56:43. The review ended `passed_thin_ladder` (then still called `passed_partial`). **No deep tier ever read the
 code.** t1 was the only model that looked.
 
 **Why it said passed.** The fallback loop flattens each twin's failure into `refused` text,
@@ -4055,7 +4055,7 @@ died. Parking it would mark a healthy subscription down for the length of a back
 would then thin the NEXT review for no reason.
 
 **The client-facing texts did not change, because they were already right.** They say a
-`passed_partial` tier "could not ANSWER — it was unavailable to lore, or it never replied".
+`passed_thin_ladder` tier "could not ANSWER — it was unavailable to lore, or it never replied".
 This tier was neither: it was never asked to completion. The code lied against an accurate
 contract.
 
