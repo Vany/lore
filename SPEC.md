@@ -4021,6 +4021,67 @@ working agreement says to confirm rather than assume.
 (fingerprint 9c6f2a60) — never inside the repository**, so nothing needs a new
 `.gitignore` rule.
 
+**D-149 — an opencode that dies under a FALLBACK is a requeue, not a quota skip. BUILT
+2026-09-15.**
+
+Vany, of `rev_PZvTlWJUJxA0igCCASD8vXCL`: *"I think it is not passed, t2 and t3 must be
+restarted, why did we say it is passed?"* He was right.
+
+**What happened.** rigid-monorepo, `fix/RIGID-161-record-then-release`. Both deep tiers'
+primaries were parked — kimi on quota, openai at its usage limit — so both fell back to
+`zai-coding-plan2/glm-5.2`. opencode restarted at 06:56:42; both twins died on the dropped
+connection at 06:56:43. The review ended `passed_partial`. **No deep tier ever read the
+code.** t1 was the only model that looked.
+
+**Why it said passed.** The fallback loop flattens each twin's failure into `refused` text,
+and the summary rethrows the PRIMARY's kind — a comment says so: *"THE PRIMARY'S KIND
+SURVIVES THE SUMMARY."* So the twin's `ServiceUnreachable` came out the far side as
+`Exhausted`. The guard that exists for exactly this — *"AND NEITHER IS AN UNREACHABLE
+OPENCODE … the worker owns this error; it requeues"* — checks the error's TYPE, and the type
+had been replaced. The tier was booked `unpayable`, D-48 stepped over it as unfundable, and
+with both deep tiers stepped over the ladder concluded on t1. lore's own log for that round
+reads *"Nothing about the code was learned; the round is requeued"* — the state machine did
+the opposite of what the same process had just printed.
+
+**It is the D-143 fix, on the one case it never reached.** That line already special-cases a
+dead CREDENTIAL, so auth outranks quota and pages instead of taking D-48's quiet exit. Nobody
+extended it to an opencode that is down, though that invalidates every route at once — they
+all go through the same opencode. The rule is the same in both: the primary really was out,
+but the ladder's question is *"could this tier answer?"*, and a connection that died mid-call
+means nobody found out. That is INV-1, not D-48.
+
+**The twin is thrown before its route is parked**, deliberately. It did not refuse; opencode
+died. Parking it would mark a healthy subscription down for the length of a backoff, which
+would then thin the NEXT review for no reason.
+
+**The client-facing texts did not change, because they were already right.** They say a
+`passed_partial` tier "could not ANSWER — it was unavailable to lore, or it never replied".
+This tier was neither: it was never asked to completion. The code lied against an accurate
+contract.
+
+**Blast radius, measured: 8 of 298 passes attempted the deep tiers and had no deep tier read
+the code, all rigid-monorepo.** This one is certain. Six of the seven from 2026-08-17/18 carry
+the same fingerprint — t2 and t3, on different providers, closing in the same second, twice
+across two different reviews at 22:00:03 — which a shared crash produces and independent
+provider failures do not. That is inference: the container logs from August are gone, so it
+is not proven. The seventh, `rev_BHL_TA7CXwSEV0TxUFb8CpbU`, closed its two tiers 18 minutes
+apart and looks like two genuine separate failures.
+
+**[OPEN] The eight verdicts stand for now, by decision.** Vany: *"go deploy, but not restart
+yet."* This fixes what the next round does; it rewrites no past verdict. Reopening
+`rev_PZvTlWJUJxA0igCCASD8vXCL` waits because both deep primaries are parked until 09-16 07:02
+UTC — re-running now reaches only glm-5.2, the same vendor as t1, so it would be honestly thin
+rather than genuinely independent. And each of the eight belongs to a client who may already
+have merged on it.
+
+**[OPEN] The ledger is not fixed.** A `ServiceUnreachable` still closes its tier row as
+`failed`, on the primary path and now on this one, and `failed` counts toward
+`tierFailureCount`. The requeue guard runs before the strike count is consulted, so an opencode
+drop is never itself skipped — but its strike is carried, and can make a LATER, genuine failure
+of the same tier skip one attempt early. `interrupted` would be the honest outcome, but it is
+t0's own vocabulary today and sits outside `DID_NOT_LOOK_SQL` on purpose; widening it touches
+the board and the attestation, which is too much to change inside a fix deployed the same hour.
+
 **D-146 — git's ownership check cannot decide whether a review runs. BUILT 2026-09-08.**
 
 A colleague reported that lore had "judged a stale tree" on `rigid-monorepo`. It had not,

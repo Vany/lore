@@ -3984,6 +3984,38 @@ describe("skip_if_quota together with a fallback", () => {
     tiers: CODE_ARCH.tiers.map((t) => (t.id === "t1" ? { ...t, skip_if_quota: true, fallback } : t)),
   });
 
+  /**
+   * OPENCODE DYING UNDER THE TWIN IS A REQUEUE, NOT A SKIP — and this was a false PASS.
+   *
+   * `rev_PZvTlWJUJxA0igCCASD8vXCL`, rigid-monorepo, 2026-09-15. Both deep tiers' primaries
+   * were parked on quota and fell back to glm-5.2; opencode restarted at 06:56:42 and both
+   * twins died on the dropped connection one second later. The summary rethrew the
+   * PRIMARY's `Exhausted`, the fallback's `ServiceUnreachable` survived only as text, and
+   * the guard that requeues an unreachable opencode checks the TYPE — so it never fired.
+   * Both deep tiers were booked unpayable, D-48 stepped over them, and the review ended
+   * `passed_partial` with no deep tier having read a line. The log said "the round is
+   * requeued"; the ladder did the opposite.
+   */
+  it("requeues rather than skipping when opencode dies under the twin", async () => {
+    const type = bothSet("openrouter/twin");
+    const primary = type.tiers.find((t) => t.id === "t1")?.model ?? "";
+    class PrimaryOutThenOpencodeGone implements ReviewerLike {
+      async review(tier: Tier): Promise<ReviewerResult> {
+        if (tier.model === primary) throw new Exhausted("plan is out");
+        throw new ServiceUnreachable(`tier ${tier.id} could not reach opencode — the connection dropped mid-call`);
+      }
+    }
+
+    await expect(
+      runRound({ store, reviewer: new PrimaryOutThenOpencodeGone(), reviewId: "r1", principal: "p", worktree: dir, allowMetered: true, type }),
+      "the worker must see ServiceUnreachable, which is what requeues",
+    ).rejects.toThrow(ServiceUnreachable);
+    expect(store.getReview("r1", "p")?.ladder.unavailable ?? [], "the tier was not stepped over as unfundable").toStrictEqual([]);
+    // AND THE TWIN IS NOT BLAMED. It did not refuse — opencode died — so parking its route
+    // would mark a healthy subscription down for the length of a backoff.
+    expect(store.routeUnavailable("openrouter/twin"), "the twin's route stays clear").toBeUndefined();
+  });
+
   it("asks the twin rather than skipping, when the twin can answer", async () => {
     const type = bothSet("openrouter/twin");
     const primary = type.tiers.find((t) => t.id === "t1")?.model ?? "";

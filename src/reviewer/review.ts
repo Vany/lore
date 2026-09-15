@@ -2179,6 +2179,34 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
           // over the `cancelled` the client was just told it got. The review came back to
           // life and the worker enqueued its next round.
           if (!stillWanted()) throw twin;
+          // AN UNREACHABLE OPENCODE UNDER THE TWIN IS THE WORKER'S TO REQUEUE, and it must
+          // leave this loop AS ITSELF.
+          //
+          // Everything after this line flattens the twin into `refused` text, and the
+          // summary below rethrows the PRIMARY's kind — so a `ServiceUnreachable` here came
+          // out the far side as `Exhausted`. The guard that requeues an unreachable opencode
+          // checks the TYPE, never saw it, and the tier was booked unpayable and stepped over
+          // (D-48) as though nobody could pay for it. Measured on rigid-monorepo, 2026-09-15,
+          // on fix/RIGID-161-record-then-release — both deep tiers fell back to glm-5.2, opencode
+          // restarted at 06:56:42, both twins died one second later, and the review ended
+          // passed_partial with no deep tier having read a line. Seven more passes on that
+          // repository carry the same signature: t2 and t3, on different providers, dying in
+          // the same second.
+          //
+          // It outranks the primary's quota for the reason D-143 made a dead credential
+          // outrank it: the primary really was out, but the question the ladder asks is
+          // "could this tier answer?", and an opencode that died mid-call means nobody found
+          // out. Every route goes through the same opencode, so there is no next route worth
+          // trying either. Thrown BEFORE the park below, deliberately: the twin did not
+          // refuse, and parking its route would mark a healthy subscription down for the
+          // length of a backoff. Spend was already recorded above, which is why it sits here
+          // and not earlier.
+          if (twin instanceof ServiceUnreachable) {
+            console.error(
+              `[lore:log] ${reviewId}: the fallback ${twinModel} lost opencode mid-call — not a quota refusal, so tier ${member.id} is requeued rather than skipped`,
+            );
+            throw twin;
+          }
           const why = twin instanceof Error ? twin.message : String(twin);
           // Same reasoning as the primary's own guard, one screen up: a probe that went
           // quiet learned nothing about this twin's quota, so it must not overwrite the
