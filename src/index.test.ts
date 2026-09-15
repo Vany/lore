@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { parseArgs } from "./cli.ts";
+import { existingReview, parseArgs, render } from "./cli.ts";
+import { initialState } from "./core/ladder.ts";
+import type { ReviewState } from "./core/review-state.ts";
+import { Store } from "./store/store.ts";
 import { EXIT } from "./core/errors.ts";
 
 describe("parseArgs", () => {
@@ -46,5 +49,56 @@ describe("exit codes", () => {
       DID_NOT_RUN: 70,
       EXHAUSTED: 75,
     });
+  });
+});
+
+/**
+ * `b632d279`: the CLI resumed any review whose state it had not named, and after D-147 that
+ * included the ordinary successful ending. Asked through `isTerminal` now.
+ */
+describe("which review the CLI resumes", () => {
+  const withReview = (state: ReviewState): { store: Store; id: string } => {
+    const store = new Store(":memory:");
+    const repo = store.upsertRepo("r", "u");
+    store.createReview({
+      id: "rev_x", repoId: repo.id, principal: "p", branch: "feat/x", intoRef: "main",
+      ticket: "t", type: "code-arch", state, ladder: initialState(),
+    });
+    return { store, id: "rev_x" };
+  };
+
+  it.each(["passed", "passed_thin_ladder", "failed", "expired", "cancelled"] as const)(
+    "starts fresh rather than running another round on a %s review",
+    (state) => {
+      const { store } = withReview(state);
+      expect(existingReview(store, "p", "feat/x"), "a concluded review is not resumed").toBeUndefined();
+    },
+  );
+
+  it.each(["findings_ready", "running", "fast_clean"] as const)("resumes a %s review", (state) => {
+    const { store, id } = withReview(state);
+    expect(existingReview(store, "p", "feat/x")).toBe(id);
+  });
+});
+
+/**
+ * `2df1e05f`: the thin ladder was told "This is NOT a pass. Fix or justify, then run again."
+ * while exiting 3, which the README calls a success.
+ */
+describe("what the CLI says at the end of a round", () => {
+  const say = (decision: string): string => render("rev_x", decision, [], [], [], [], [], new Map());
+
+  it("does not tell a thin ladder it failed", () => {
+    const text = say("passedThinLadder");
+    expect(text).not.toContain("NOT a pass");
+    expect(text).toContain("CLEARED, on a thinner ladder");
+  });
+
+  it("does not tell a full pass it failed either", () => {
+    expect(say("passed")).not.toContain("NOT a pass");
+  });
+
+  it("still says NOT a pass where nothing was cleared", () => {
+    for (const d of ["findings", "fastClean", "stopped"]) expect(say(d), d).toContain("NOT a pass");
   });
 });

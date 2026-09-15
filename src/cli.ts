@@ -16,6 +16,7 @@ import { EXIT, LoreError, UsageError, type ExitCode } from "./core/errors.ts";
 import { dataDir, dbPath } from "./core/paths.ts";
 import { compareFindings } from "./core/finding.ts";
 import { initialState } from "./core/ladder.ts";
+import { isTerminal } from "./core/review-state.ts";
 import { DEFAULT_TYPE, reviewType, reviewTypeIds } from "./core/review-type.ts";
 import { gitMaybe } from "./git/exec.ts";
 import { treeHash } from "./git/repo.ts";
@@ -627,18 +628,26 @@ export async function main(argv: readonly string[]): Promise<ExitCode> {
   }
 }
 
-function existingReview(store: Store, principal: string, branch: string): string | undefined {
+export function existingReview(store: Store, principal: string, branch: string): string | undefined {
   // Reviews are snapshot-pinned and explicitly started (D-40), but the CLI is a
   // loop driver: resume the open review for this branch rather than starting a new
   // one and losing every justification already accepted.
+  //
+  // OPEN MEANS NOT TERMINAL, asked through the one predicate that knows (`b632d279`). This
+  // spelled the exclusions out — `passed` and `expired` — and so resumed every terminal
+  // state it did not name. After D-147 that included `passed_thin_ladder`, the ORDINARY
+  // successful ending: a second `lore review` on a cleared branch ran another round on top of
+  // a concluded verdict instead of starting fresh. It had always done the same to `failed`
+  // and `cancelled`, which are just as finished. A hand-written state list missing a state is
+  // this codebase's most repeated defect, and the rename made one more state for it to miss.
   return store
     // Every repository, deliberately: this runs on the operator's own machine,
     // against their own database, where narrowing would hide their own work.
     .listReviews(principal, undefined)
-    .find((r) => r.branch === branch && r.state !== "passed" && r.state !== "expired")?.id;
+    .find((r) => r.branch === branch && !isTerminal(r.state))?.id;
 }
 
-function render(
+export function render(
   reviewId: string,
   decision: string,
   findings: readonly RecordedFinding[],
@@ -672,8 +681,25 @@ function render(
     );
   }
 
+  // BOTH PASSING DECISIONS ARE CLEARED (D-147, `2df1e05f`). This asked `=== "passed"` in two
+  // places, so a thin ladder read "No new findings this round" followed by "This is NOT a
+  // pass. Fix or justify, then run again." — while the process exited 3, which the README
+  // calls a success. There is nothing to fix on a thin ladder, and re-running cannot change
+  // a vendor collapse, so the old text sent a person to burn another ladder of quota or to
+  // hold a merge on the outcome 54 of 61 clean reviews had. The one CLI surface the rename's
+  // sweep of "NOT a pass" missed.
+  const cleared = decision === "passed" || decision === "passedThinLadder";
   if (findings.length === 0) {
-    out.push(decision === "passed" ? "No findings. Every tier agrees." : "No new findings this round.", "");
+    out.push(
+      decision === "passed"
+        ? "No findings. Every tier agrees."
+        : decision === "passedThinLadder"
+          ? "No findings. CLEARED, on a thinner ladder: every tier that ran agreed, with less " +
+            "independence behind it than the full ladder. Anything under \"Not checked\" above " +
+            "is what was thin; if nothing is listed there, fewer vendors read it than tiers ran."
+          : "No new findings this round.",
+      "",
+    );
   } else {
     out.push(`## ${findings.length} finding(s)`, "");
     // The store already orders these worst-first. Sorting again is redundant for
@@ -697,7 +723,7 @@ function render(
     }
   }
 
-  if (decision !== "passed") {
+  if (!cleared) {
     out.push("---", "", "This is NOT a pass. Fix or justify, then run again.", "");
   }
   return out.join("\n");
