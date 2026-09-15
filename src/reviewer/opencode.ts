@@ -1838,34 +1838,46 @@ ${contract}`,
       if (this.aborters.get(sessionId)?.signal.aborted === true || /aborted by lore/.test(message)) {
         throw new CancelledByLore(`tier ${tier.id} (${tier.model}) was stopped by lore, not by the provider: ${message}`, e);
       }
-      // A CONNECTION THAT DROPPED MID-CALL IS AMBIGUOUS, AND THE ANSWER IS A PROBE, NOT
-      // A STRING. This briefly classified `socket hang up` / `ECONNRESET` as
-      // `ServiceUnreachable` by pattern alone; lore's own t2 refused it and was right —
-      // opencode relays provider errors verbatim, so those strings are exactly how an
-      // upstream reset presents, and requeuing them would spend subscription quota
-      // proving somebody else's outage while blaming our own opencode in the audit trail.
+      // A CONNECTION THAT DROPPED MID-CALL: WHERE IT DROPPED DECIDES, NOT WHEN WE ASK.
       //
-      // But the SAME string is also what a round sees when the opencode container is
-      // recreated under it — and on 2026-08-13 that window skipped t1 as "could not
-      // answer" while both z.ai plans were fine, which Vany read and called a lie. It
-      // was. The two cases are distinguishable by one cheap question nobody was asking:
-      // is opencode itself answering RIGHT NOW? A healthy server means the hang-up came
-      // through it from the provider — a tier failure, exactly as before. A dead server
-      // means the sidecar is gone and the provider was never reached — requeue, because
-      // nothing about the code was learned (INV-1).
-      if (/socket hang up|ECONNRESET|ENOTFOUND|ECONNREFUSED|fetch failed|other side closed/i.test(message)) {
+      // This briefly classified `socket hang up` / `ECONNRESET` as `ServiceUnreachable` by
+      // pattern alone; lore's own t2 refused it and was right — opencode relays provider
+      // errors verbatim, so those strings are exactly how an upstream reset presents, and
+      // requeuing them would spend subscription quota proving somebody else's outage while
+      // blaming our own opencode in the audit trail.
+      //
+      // Then a PROBE settled it: is opencode answering right now? On 2026-08-13 an opencode
+      // recreate had skipped t1 as "could not answer" while both z.ai plans were fine, and
+      // Vany called that a lie. The probe fixed the slow case and left a race: opencode
+      // restarts in seconds, so by the time the probe asks, the restarted process answers,
+      // the drop reads as the provider's, and the tier is skipped. Measured 2026-09-15:
+      // opencode restarted seven times in two hours with exit 0, and a review of lore's own
+      // fix had t1 SKIPPED on a bare "socket hang up" in the middle of it.
+      //
+      // The two cases were always distinguishable by STRUCTURE, which does not race. Every
+      // answer opencode gives — a non-2xx, or a provider's failure nested in a 200 — is
+      // rethrown above as `HttpStatus`. So:
+      //   * `HttpStatus` carrying the string: opencode ANSWERED and relayed a provider's
+      //     reset. That is the tier failing, exactly t2's point, and it stays a DidNotRun.
+      //   * anything else: lore's own socket to opencode broke before opencode answered.
+      //     The provider was never reached through a live exchange, nothing about the code
+      //     was learned, and it is a requeue whatever opencode looks like a second later.
+      // The probe survives only to say WHICH of those two stories the operator is reading.
+      if (!(e instanceof HttpStatus) && /socket hang up|ECONNRESET|ENOTFOUND|ECONNREFUSED|fetch failed|other side closed/i.test(message)) {
         const alive = await this.client.config
           .providers()
           .then((r) => (r.response?.status ?? 200) < 500)
           .catch(() => false);
-        if (!alive) {
-          throw new ServiceUnreachable(
-            `tier ${tier.id} could not reach opencode at ${this.cfg.baseUrl} — the connection dropped mid-call ` +
-              `(${message}) and opencode itself is not answering. Nothing about the code was learned; the round ` +
-              `is requeued.`,
-            e,
-          );
-        }
+        throw new ServiceUnreachable(
+          alive
+            ? `tier ${tier.id} lost its connection to opencode at ${this.cfg.baseUrl} mid-call (${message}), and ` +
+                `opencode is already answering again — it restarted under the call rather than relaying a ` +
+                `provider's error. Nothing about the code was learned; the round is requeued.`
+            : `tier ${tier.id} could not reach opencode at ${this.cfg.baseUrl} — the connection dropped mid-call ` +
+                `(${message}) and opencode itself is not answering. Nothing about the code was learned; the round ` +
+                `is requeued.`,
+          e,
+        );
       }
       throw new DidNotRun(`tier ${tier.id} (${tier.model}) failed: ${message}`, e);
     }

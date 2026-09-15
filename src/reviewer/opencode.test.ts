@@ -1220,15 +1220,39 @@ describe("a connection that drops mid-call", () => {
     expect(String((err as Error).message)).toContain("opencode itself is not answering");
   });
 
-  it("still blames the tier when opencode is healthy, because then the reset was the provider's", async () => {
+  /**
+   * THE RACE (D-149), and the test that encoded it. This used to be the case below this one,
+   * asserting that a destroyed socket with a healthy opencode "was the provider's" and
+   * blaming the tier. But a destroyed socket to opencode is how an opencode RESTART looks,
+   * and opencode restarts in seconds — so by the time the probe asked, it answered, and a
+   * restart was booked as the tier failing. Measured: seven exit-0 restarts in two hours,
+   * and t1 of a review of lore's own fix SKIPPED on a bare "socket hang up" in the storm.
+   */
+  it("requeues when opencode drops the call and is already answering again", async () => {
     replies = [];
     destroyPrompt = true;
     const err = await reviewer().review(TIER, "review this", "/tmp/wt").then(
       () => undefined,
       (e: unknown) => e,
     );
-    expect(err).not.toBeInstanceOf(ServiceUnreachable);
-    expect(String((err as Error).message)).toMatch(/failed: .*(socket hang up|other side closed|fetch failed)/i);
+    expect(err, "a broken socket to opencode is never the tier's fault").toBeInstanceOf(ServiceUnreachable);
+    expect(String((err as Error).message)).toContain("already answering again");
+  });
+
+  /**
+   * AND t2'S POINT SURVIVES, modelled the way opencode actually delivers it. A provider's
+   * reset reaches lore INSIDE an answer — opencode relays it verbatim — which is how the
+   * earlier pattern-only version wrongly requeued it and spent quota proving somebody
+   * else's outage. Answered, it is the tier failing, and it must stay one.
+   */
+  it("still blames the tier when opencode RELAYS a provider's reset in its answer", async () => {
+    replies = [{ info: { error: { name: "APIError", data: { message: "upstream socket hang up", statusCode: 502 } } } }];
+    const err = await reviewer().review(TIER, "review this", "/tmp/wt").then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(err, "an answered provider reset is not opencode going away").not.toBeInstanceOf(ServiceUnreachable);
+    expect(String((err as Error).message)).toMatch(/failed: .*socket hang up/i);
   });
 });
 

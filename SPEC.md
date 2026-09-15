@@ -4074,13 +4074,42 @@ UTC — re-running now reaches only glm-5.2, the same vendor as t1, so it would 
 rather than genuinely independent. And each of the eight belongs to a client who may already
 have merged on it.
 
-**[OPEN] The ledger is not fixed.** A `ServiceUnreachable` still closes its tier row as
-`failed`, on the primary path and now on this one, and `failed` counts toward
-`tierFailureCount`. The requeue guard runs before the strike count is consulted, so an opencode
-drop is never itself skipped — but its strike is carried, and can make a LATER, genuine failure
-of the same tier skip one attempt early. `interrupted` would be the honest outcome, but it is
-t0's own vocabulary today and sits outside `DID_NOT_LOOK_SQL` on purpose; widening it touches
-the board and the attestation, which is too much to change inside a fix deployed the same hour.
+**The ledger is fixed too.** A `ServiceUnreachable` now closes its tier row as `stopped` —
+"a lore-caused end", which is what lore's own sidecar going away is. Booked `failed`, it
+counted toward `tierFailureCount`, so the requeue guard saved the round while leaving a
+strike that could make a later, genuine failure of the same tier skip one attempt early.
+`stopped` already sits outside `DID_NOT_LOOK_SQL` (not evidence about the tier) and inside
+`UNTRUSTED_READ_SQL` (not a read worth signing), which are the two answers this case needs;
+widening `interrupted` would have meant changing t0's vocabulary to get the same result.
+
+**AND THE PROBE RACED — found the same day, by this change's own review failing.** The
+classifier told an opencode outage from a provider's reset by asking *"is opencode answering
+right now?"* after a dropped connection. opencode exits and is restarted in seconds, so the
+restarted process answered, the drop read as the provider's, and the tier was skipped. It
+did exactly that to t1 of the review of this very fix, mid-way through a storm of seven
+opencode restarts in two hours.
+
+The fix is STRUCTURAL, because structure does not race. Every answer opencode gives — a
+non-2xx, or a provider failure nested in a 200 — is rethrown as `HttpStatus`. So a
+connection-drop string inside an `HttpStatus` is opencode relaying a provider's reset, which
+is the tier failing and stays a `DidNotRun`; the same string on anything else means lore's
+own socket to opencode broke before an answer, which is a requeue whatever the probe says a
+second later. The probe now only chooses the wording.
+
+**This reverses what a test asserted, and the test was wrong rather than the code it
+guarded.** `still blames the tier when opencode is healthy` simulated a provider reset by
+destroying lore's socket to opencode — which is how an opencode RESTART presents, not how a
+provider reset does. The concern behind it is kept, correctly modelled: lore's own t2 once
+refused a version that classified the bare STRING as an outage, because opencode relays
+provider errors verbatim and requeuing those spends quota proving somebody else's outage.
+That version matched the string regardless of source; this one excludes every answered
+error, and a test now pins that a relayed reset still blames the tier.
+
+**[OPEN] Why opencode keeps exiting is not diagnosed.** Seven restarts between 06:56 and
+08:30 on 2026-09-15, each `exit 0` — not OOM, not a crash — with nothing logged before any
+of them and no Docker event history left to read. lore is now robust to it, which is the
+part that is lore's. The cause is upstream of lore and is recorded here with its evidence
+rather than guessed at.
 
 **D-146 — git's ownership check cannot decide whether a review runs. BUILT 2026-09-08.**
 
@@ -4174,6 +4203,36 @@ exactly where it is cheapest to be absent** — the third time in this batch a g
 found agreeing with whatever it was pointed at. Both are pinned, along with a test
 that asks the only question the unit assertions could not — whether the value handed to git
 equals the path git itself resolves the repository to.
+
+**AND THE `/*` EXEMPTION NEVER WORKED ON THE GIT LORE SHIPS (2026-09-15).** It was
+described here, and in the code, as *"git's documented prefix form … verified against the
+git in this image (2.39.5) rather than assumed."* It was not. With the foreign-owner check
+forced on (`GIT_TEST_ASSUME_DIFFERENT_OWNER=1`) against a real `bare.git` in the container:
+no exemption REFUSED, `<dataDir>` REFUSED, **`<dataDir>/*` REFUSED**, the exact bare path
+passed, and `*` passed. git 2.39.5 does not understand the prefix form, so the exemption was
+inert for every repository lore owns from the day it shipped — and the incident it existed to
+end came back and failed the review of D-149.
+
+**Two things kept it invisible, and both are the class this batch keeps producing.** The
+original verification ran while ownership happened to be fine, so git never consulted
+`safe.directory` and every form "passed". And the suite runs on the host, whose git (2.55)
+DOES honour `/*` — so every test of this function passed on the machine it was written on
+while doing nothing where it runs. **A test that can only pass is not evidence, and a test
+run against a different version of the thing it guards is not a test of that thing.**
+
+The exemption now names the exact repositories first: the directory git is pointed at, and
+for a linked worktree its own gitdir and the bare clone its `commondir` names — read from
+what git wrote, not rebuilt from lore's layout. `/*` is still emitted, for newer git, and is
+no longer load-bearing. The new tests do not depend on any git version: the exact path is in
+the list or it is not. The one that runs real git strips every `/*` entry first, so it sees
+what 2.39.5 sees, and its first assertion is that the CONTROL is refused — so it fails rather
+than passing vacuously if the check is ever not actually being exercised. Mutation-verified:
+with the shipped behaviour restored, all three new tests fail.
+
+One measurement is recorded as inconclusive rather than as support: the same matrix against
+a linked WORKTREE passed even for the control, so git did not enforce the check there and
+that run proves nothing either way. The worktree paths are emitted because they are harmless
+and cover whatever git checks; only the bare-repository case is proven.
 
 **D-145 — an inbox with work in flight is not an empty inbox: `in_flight` beside
 `stalled`, and "Nothing to do" is gone. BUILT 2026-09-08.**

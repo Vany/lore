@@ -174,7 +174,8 @@ export function isSettled(v: VerdictKind): boolean {
  * answering which question it was for; `one-definition.test.ts` bans review states spelled
  * out in SQL partly because of that collision.
  */
-// `stopped` is a lore-caused end — a cancel, a superseding restart, a shutdown — and it
+// `stopped` is a lore-caused end — a cancel, a superseding restart, a shutdown, or lore's own
+// opencode going away mid-call (D-149) — and it
 // is its own outcome precisely so it stays OUT of `DID_NOT_LOOK_SQL` below. The tier did
 // not look, which is why it is not `clean`; but it is not EVIDENCE ABOUT THE TIER, which
 // is why it must not feed `tierFailureCount` and from there the skip that costs a review

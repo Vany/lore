@@ -9,8 +9,8 @@
  */
 
 import { execFile } from "node:child_process";
-import { realpathSync } from "node:fs";
-import { resolve, sep } from "node:path";
+import { readFileSync, realpathSync } from "node:fs";
+import { join, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { DidNotRun } from "../core/errors.ts";
 import { dataDir } from "../core/paths.ts";
@@ -64,8 +64,10 @@ export interface GitResult {
  * and hands to itself. A CLI target outside it keeps git's check, which is the correct
  * answer there: if git will not touch a stranger's repository, neither should lore.
  *
- * The trailing `/*` is git's documented prefix form and is verified against the git in
- * this image (2.39.5) rather than assumed.
+ * The trailing `/*` form is NOT what makes this work, and this comment once said it was
+ * "verified against the git in this image (2.39.5) rather than assumed". It was not: git
+ * 2.39.5 ignores it, which is why the function now emits the exact repositories first.
+ * The measurement is in the function body.
  *
  * SYMLINKS, WHICH MADE THE FIRST SCOPED VERSION SILENTLY INERT. `resolve()` removes `..`
  * and makes a path absolute; it does NOT canonicalize, and git matches `safe.directory`
@@ -87,20 +89,83 @@ function ownershipExemptionFor(cwd: string): Readonly<Record<string, string>> {
   const root = real(resolve(dataDir()));
   const here = real(resolve(cwd));
   if (root === undefined || here === undefined) return {};
-  if (here !== root && !here.startsWith(root + sep)) return {};
-  // The pre-canonical spelling too, when it differs — see BOTH SPELLINGS above.
+  const inside = (p: string): boolean => p === root || p.startsWith(root + sep);
+  if (!inside(here)) return {};
   const asWritten = resolve(dataDir());
-  const roots = asWritten === root ? [root] : [root, asWritten];
-  const entries: Record<string, string> = { GIT_CONFIG_COUNT: String(roots.length * 2) };
-  roots.forEach((r, i) => {
-    entries[`GIT_CONFIG_KEY_${String(i * 2)}`] = "safe.directory";
-    entries[`GIT_CONFIG_VALUE_${String(i * 2)}`] = r;
-    entries[`GIT_CONFIG_KEY_${String(i * 2 + 1)}`] = "safe.directory";
-    // Everything beneath it: a worktree's repository resolves to the bare clone, so
-    // exempting only the directory git was pointed at would leave the bare refused.
-    entries[`GIT_CONFIG_VALUE_${String(i * 2 + 1)}`] = `${r}/*`;
+  // The same path under the data directory's as-written spelling, when that differs — see
+  // BOTH SPELLINGS above. `undefined` when there is only one spelling.
+  const alsoAs = (p: string): string | undefined =>
+    asWritten === root ? undefined : asWritten + p.slice(root.length);
+
+  // EXACT REPOSITORIES FIRST, AND THEY ARE THE ONES THAT WORK ON THE GIT WE SHIP (D-146).
+  //
+  // This emitted only `<dataDir>` and `<dataDir>/*`, on the stated ground that the `/*`
+  // form was "verified against the git in this image (2.39.5) rather than assumed". It was
+  // not. Measured 2026-09-15 inside the container with the foreign-owner check forced on
+  // (`GIT_TEST_ASSUME_DIFFERENT_OWNER=1`) against a real `bare.git`: the control REFUSED,
+  // `<dataDir>` REFUSED, `<dataDir>/*` REFUSED, the exact bare path passed, and `*` passed.
+  // git 2.39.5 does not understand the prefix form. So the exemption was inert for every
+  // repository lore owns from the day it shipped, and the dubious-ownership failure it
+  // existed to end came back and failed a review of lore's own fix.
+  //
+  // The earlier verification was vacuous, and so was the test: both ran while ownership
+  // happened to be fine, so git never consulted `safe.directory` at all. And the suite
+  // runs on the host, whose git (2.55) DOES honour `/*` — so every test of this function
+  // passed on the developer's machine while it did nothing in production.
+  //
+  // `/*` is still emitted below: it works on newer git and costs nothing. It is simply no
+  // longer the thing the exemption depends on.
+  const exact = new Set<string>([here]);
+  for (const repo of linkedRepositories(here)) if (inside(repo)) exact.add(repo);
+
+  const values: string[] = [];
+  for (const p of exact) {
+    values.push(p);
+    const alt = alsoAs(p);
+    if (alt !== undefined) values.push(alt);
+  }
+  for (const r of asWritten === root ? [root] : [root, asWritten]) values.push(r, `${r}/*`);
+
+  const unique = [...new Set(values)];
+  const entries: Record<string, string> = { GIT_CONFIG_COUNT: String(unique.length) };
+  unique.forEach((v, i) => {
+    entries[`GIT_CONFIG_KEY_${String(i)}`] = "safe.directory";
+    entries[`GIT_CONFIG_VALUE_${String(i)}`] = v;
   });
   return entries;
+}
+
+/**
+ * The repositories a linked worktree actually belongs to: its own gitdir and the common
+ * (bare) repository — both canonical, and empty for anything that is not a linked worktree.
+ *
+ * A worktree's `.git` is a FILE naming its gitdir (`bare.git/worktrees/<name>`), and that
+ * gitdir holds a `commondir` file pointing back at the bare clone (`../..`). Read from what
+ * git itself wrote rather than rebuilt from lore's directory layout, so it stays true for
+ * any repository git discovers here, not only the layout `repo.ts` happens to use today.
+ *
+ * Every failure answers "none": a directory with no `.git` file is a bare repository or not
+ * a repository at all, and in both cases `here` is already the exact path to exempt.
+ */
+function linkedRepositories(here: string): string[] {
+  let gitfile: string;
+  try {
+    gitfile = readFileSync(join(here, ".git"), "utf8");
+  } catch {
+    return [];
+  }
+  const m = /^gitdir:\s*(.+)$/m.exec(gitfile);
+  if (m?.[1] === undefined) return [];
+  const gitdir = real(resolve(here, m[1].trim()));
+  if (gitdir === undefined) return [];
+  const found = [gitdir];
+  try {
+    const common = real(resolve(gitdir, readFileSync(join(gitdir, "commondir"), "utf8").trim()));
+    if (common !== undefined) found.push(common);
+  } catch {
+    // No `commondir`: the gitdir is the repository itself, and it is already listed.
+  }
+  return found;
 }
 
 /**

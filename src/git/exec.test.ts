@@ -5,6 +5,7 @@
 import { mkdirSync, mkdtempSync, realpathSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { spawnSync } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { git, gitEnv } from "./exec.ts";
 
@@ -22,6 +23,37 @@ afterEach(() => {
   else process.env["LORE_DATA_DIR"] = saved;
 });
 
+/** Every `safe.directory` value gitEnv emitted, in order. */
+function safeDirs(env: Record<string, string>): string[] {
+  return Object.entries(env)
+    .filter(([k]) => /^GIT_CONFIG_VALUE_\d+$/.test(k))
+    .sort(([a], [b]) => Number(a.slice(17)) - Number(b.slice(17)))
+    .map(([, v]) => v);
+}
+
+/**
+ * A real bare clone with a linked worktree, laid out the way `repo.ts` lays one out:
+ * `repos/<id>/bare.git` and `repos/<id>/wt/<review>`. Built with plain git, not gitEnv,
+ * because it is the fixture and not the thing under test.
+ */
+function linkedFixture(): { bare: string; worktree: string } {
+  const plain = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" } as Record<string, string>;
+  const run = (args: string[], cwd?: string): void => {
+    const r = spawnSync("git", args, { cwd, env: plain, encoding: "utf8" });
+    if (r.status !== 0) throw new Error(`fixture: git ${args.join(" ")} failed: ${r.stderr}`);
+  };
+  const src = mkdtempSync(join(tmpdir(), "lore-src-"));
+  run(["init", "-q", src]);
+  run(["-C", src, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "seed"]);
+  const repoDir = join(root, "repos", "fixture");
+  mkdirSync(repoDir, { recursive: true });
+  const bare = join(repoDir, "bare.git");
+  run(["clone", "-q", "--bare", src, bare]);
+  const worktree = join(repoDir, "wt", "rev_fixture");
+  run(["-C", bare, "worktree", "add", "-q", "--detach", worktree, "HEAD"]);
+  return { bare, worktree };
+}
+
 describe("gitEnv", () => {
   // D-61. Without it git walks UP from cwd and answers from whatever encloses the target,
   // which once pointed a `fetch --prune` at an operator's own working repository.
@@ -37,17 +69,67 @@ describe("gitEnv", () => {
    */
   it("exempts lore's own data directory from the ownership check", () => {
     const env = gitEnv(join(root, "repos", "abc", "bare.git"));
+    const values = safeDirs(env);
     expect(env["GIT_CONFIG_KEY_0"]).toBe("safe.directory");
-    // THE CANONICAL PATH, not `resolve()`'s. git matches `safe.directory` against a
-    // repository path it has already canonicalized, so an entry naming the symlinked
-    // spelling is never compared and the exemption is silently inert. This assertion used
-    // to read `resolve(root)` and passed, on a fixture that is itself symlinked — macOS
-    // puts `mkdtemp` under `/var/folders`, and `/var` is a link to `/private/var`. The
-    // test agreed with the bug because it made the same mistake.
-    expect(env["GIT_CONFIG_VALUE_0"]).toBe(realpathSync(root));
-    // The bare clone a worktree resolves to is a level up from the worktree, so exempting
-    // only the directory git was pointed at would leave it refused.
-    expect(env["GIT_CONFIG_VALUE_1"]).toBe(`${realpathSync(root)}/*`);
+    // THE CANONICAL ROOT is among the values, not at a fixed position. It used to be
+    // asserted at index 0, which pinned the ordering rather than the property — and the
+    // exact repositories now come first, because they are the entries that actually work
+    // on the git lore ships (D-146).
+    expect(values).toContain(realpathSync(root));
+    expect(values).toContain(`${realpathSync(root)}/*`);
+  });
+
+  /**
+   * THE EXACT REPOSITORY IS NAMED, AND THIS IS THE ASSERTION THAT WAS MISSING (D-146).
+   *
+   * git 2.39.5 — the version in lore's image — ignores the `<dataDir>/*` form entirely.
+   * Measured in the container with the foreign-owner check forced on: `/*` REFUSED, the
+   * exact `bare.git` passed. The suite runs on a host whose git DOES honour `/*`, so a test
+   * that only exercised real git would keep passing while production stayed broken. This
+   * one does not depend on any git version: the exact path is either in the list or not.
+   */
+  it("names the exact bare repository, not only a prefix git may ignore", () => {
+    const { bare } = linkedFixture();
+    expect(safeDirs(gitEnv(bare))).toContain(realpathSync(bare));
+  });
+
+  it("names a linked worktree's own gitdir and the bare repository it belongs to", () => {
+    const { bare, worktree } = linkedFixture();
+    const values = safeDirs(gitEnv(worktree));
+    expect(values, "the worktree itself").toContain(realpathSync(worktree));
+    expect(values, "the bare clone its commondir points at").toContain(realpathSync(bare));
+  });
+
+  /**
+   * AND THE EXACT ENTRIES ALONE ARE ENOUGH, proven against real git without the prefix form.
+   *
+   * Every `/*` value is stripped before git runs, which is precisely what git 2.39.5 sees.
+   * The first assertion is the CONTROL: with no exemption the command must be REFUSED. The
+   * previous verification of this function ran while ownership happened to be fine, so git
+   * never consulted `safe.directory` and every row passed — including the wrong ones. A
+   * test whose control does not refuse is measuring nothing, so this one fails if it does.
+   */
+  it("lets git through on exact entries alone, where the control is refused", () => {
+    const { bare } = linkedFixture();
+    const isolated = {
+      ...process.env,
+      // A host with `safe.directory=*` in its global config would make the control pass.
+      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_TEST_ASSUME_DIFFERENT_OWNER: "1",
+    } as Record<string, string>;
+    const list = (env: Record<string, string>): string =>
+      spawnSync("git", ["-C", bare, "worktree", "list", "--porcelain"], { env, encoding: "utf8" }).stdout;
+
+    expect(list(isolated), "CONTROL: without an exemption git must refuse, or this proves nothing").toBe("");
+
+    const exactOnly = safeDirs(gitEnv(bare)).filter((v) => !v.endsWith("/*"));
+    const withExact: Record<string, string> = { ...isolated, GIT_CONFIG_COUNT: String(exactOnly.length) };
+    exactOnly.forEach((v, i) => {
+      withExact[`GIT_CONFIG_KEY_${String(i)}`] = "safe.directory";
+      withExact[`GIT_CONFIG_VALUE_${String(i)}`] = v;
+    });
+    expect(list(withExact), "the exact entries must carry it without the prefix form").toContain("worktree ");
   });
 
   /**

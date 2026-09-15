@@ -3974,6 +3974,15 @@ describe("a round that lost opencode", () => {
       .prepare("SELECT unavailable_for_tier FROM tier_run WHERE review_id='r1' ORDER BY id DESC LIMIT 1")
       .get() as Record<string, string> | undefined;
     expect(String(note?.["unavailable_for_tier"] ?? ""), "no vendor was declared lost").not.toContain("SKIPPED");
+
+    // AND NO STRIKE IS LEFT BEHIND (D-149). The rethrow kept this round clean while the row
+    // was booked `failed`, which `tierFailureCount` counts — so a later, genuine failure of
+    // t1 would have been skipped one attempt early on a strike opencode earned.
+    const last = store.db
+      .prepare("SELECT outcome FROM tier_run WHERE review_id='r1' AND tier='t1' ORDER BY id DESC LIMIT 1")
+      .get() as Record<string, string> | undefined;
+    expect(last?.["outcome"], "lore's own opencode ending the call is a lore-caused stop").toBe("stopped");
+    expect(store.tierFailureCount("r1", "t1"), "only the strike the fixture planted").toBe(1);
   });
 });
 

@@ -2486,7 +2486,11 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       // the tier a strike toward the skip that costs the review a vendor, which is the
       // exact laundering the class was introduced to end. The rethrow kept the DECISION
       // clean and left the LEDGER dirty.
-      e instanceof CancelledByLore ? "stopped" : e instanceof TierUnavailable ? "unpayable" : "failed",
+      // AN OPENCODE THAT WENT AWAY IS `stopped` TOO (D-149): lore's own sidecar ended the
+      // call, which says nothing about the tier. Booked `failed`, it counted toward
+      // `tierFailureCount` — so the requeue guard below saved THIS round while the strike it
+      // left made a later, genuine failure of the same tier skip one attempt early.
+      e instanceof CancelledByLore || e instanceof ServiceUnreachable ? "stopped" : e instanceof TierUnavailable ? "unpayable" : "failed",
       // THE CLIENT IS TOLD, and this is the whole point of the change.
       //
       // lore already knew this diff was 3.4× the largest t1 had ever finished — it
