@@ -39,6 +39,60 @@ that part is pulled out into its own open item rather than hidden inside a tick.
 
 ## Now — nothing here is about writing more features
 
+### 2026-09-16 — OPEN AND IN PRODUCTION: five findings on a batch that is already deployed
+
+Not deferrals. The batch (D-147 rename, D-148 channel, D-149, and the three reviewer fixes)
+went live ahead of its review on Vany's instruction, so each of these is a defect running
+now. Review `rev_kq7psOFQqIKn1di0XjMEal7e`, open at `findings_ready` — answer with
+`review_submit`, or it dims in 48h and concludes nothing.
+
+- [ ] **`f5f92a32`** (medium, `channel/lore-channel.ts`) — the channel tells an agent never
+      to poll while it is running, and nothing tells the agent when the channel DIES. Claude
+      Code reports nothing, so the session waits for an event that can never come: the
+      abandonment D-148 was built to end, caused by D-148.
+- [ ] **`976cc0a6`** (medium, `channel/lore-channel.ts`) — `decide()` announces any row
+      `waiting_on: "you"` and ignores `not_yours_note`, so during a token rotation it tells
+      the agent to poll reviews whose poll, submit and attest all answer NOT FOUND.
+- [ ] **`a888d6df`** (medium, `spec/mcp-api.md` §2.4) — still says only `passed` supports an
+      attestation. False since D-147: `isCleared` gates `review_attest`. The rename sweep
+      edited this file elsewhere and missed the sentence.
+- [ ] **`16be0108`** (medium, `src/cli.ts`) — the thin-ladder text points at "Not checked" as
+      the reason, but that list also carries ENGINE gaps (eslint), which never thin a ladder.
+      The existence-vs-name defect D-147 rounds 2–3 fixed in the tool texts, reintroduced in
+      the CLI.
+- [ ] **`0ce0fe9a`** (low, `channel/lore-channel.ts`) — `LORE_CHANNEL_INTERVAL_MS=15s` or an
+      empty value parses to NaN/0 and `setTimeout` fires at ~1ms: a silent hot loop against
+      `review_inbox`, invisible because every tick succeeds.
+
+### 2026-09-16 — unreviewed and unpushed
+
+- [ ] **D-150 (glm-5.3 everywhere) is deployed and was never reviewed.** No scratch refs were
+      pushed for it; it needs to join the batch above or get its own review.
+- [ ] **Three commits sit on local `main`, not on origin** — `2b3eb4b` (D-150), `37d941c`
+      (env: plan 2 is its own subscription), `4eff155` (Phase 6 plan). By the working
+      agreement the push waits for the review to pass.
+- [ ] **Housekeeping:** `lore-channel` and `rename-cleared` are fully merged into `main` and
+      can be deleted. Eleven `worktree-wf_*` branches are left from workflow runs in an
+      earlier session — provenance unknown, so nobody should delete them blind. The scratch
+      refs `review/9c1ed291…` and `review-base/9c1ed291…` stay on origin while that review
+      is open.
+
+### 2026-09-16 — decided but not built
+
+- [ ] **The attempts fix (D-149's sibling).** Design is settled: a lore-caused requeue — a
+      deploy or worker restart — does not spend one of a job's three attempts, and an
+      unreachable opencode is bounded by 30 minutes of CONTINUOUS unreachability rather than
+      a count; no message says "requeued" once it will not be. It failed two rigid reviews on
+      2026-09-15 and is Phase 6 step 2c.
+- [ ] **A provider-stated park outlives a plan change** (D-150 `[OPEN]`). lore re-tests only
+      the parks it guessed, so Vany's z.ai upgrade was invisible and plan 2 stayed parked
+      until cleared by hand. Phase 6 step 4b.
+- [ ] **Why opencode exits cleanly and is restarted** — seven times in two hours on
+      2026-09-15, `exit 0`, nothing logged before any of them, no event history left. lore is
+      robust to it now; the cause is upstream and undiagnosed. Phase 6 step 5 would at least
+      make it visible.
+
+
 ### 2026-09-16 — Phase 6, token economy (PLAN.md has the why, the gates and the order)
 
 Order **0 → 1+4 → 2 → 5 → 3**. Each step moves a number from step 0's report, or it
