@@ -16,6 +16,7 @@
 
 import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
+import { floorBytes, mayStart, mib, readMemory, type MemoryState } from "../core/memory.ts";
 import { MAX_MIRROR_AGE_MS, mirrorFreshness } from "../git/repo.ts";
 import type { Store } from "../store/store.ts";
 import { Alerter, CONDITIONS } from "./alerts.ts";
@@ -41,6 +42,14 @@ export interface HeartbeatConfig {
   readonly uncollectedAgeHours: number;
   /** Grace before an empty replica folder pages. See `REPLICA_GRACE_MS`. */
   readonly replicaGraceMs: number;
+  /**
+   * What the host has left (D-151), injected exactly as `ServerDeps.memory` is.
+   *
+   * The real reader is `/proc/meminfo`, which is absent on the machine this suite runs
+   * on — so without a seam the shortage branch here, and the ticket it sends, could only
+   * ever run on the deployment. Defaults to the real reader.
+   */
+  readonly memory?: () => MemoryState;
 }
 
 /**
@@ -67,6 +76,15 @@ export const REPLICA_BEHIND_SEC = 300;
  * unsolicited page waits.
  */
 const REPLICA_GRACE_MS = 5 * 60_000;
+
+/**
+ * Consecutive beats under the memory floor before the operator is told (D-151).
+ *
+ * Three, at a 60s beat, so a shortage has to outlast the ramp of a single t0 sandbox —
+ * measured on this deployment at ~5 GiB and several minutes — before it counts as the
+ * box being short rather than the box being busy.
+ */
+export const LOW_MEMORY_BEATS = 3;
 
 export const DEFAULT_HEARTBEAT: HeartbeatConfig = {
   intervalMs: 60_000,
@@ -103,6 +121,18 @@ export interface Health {
   readonly needsHumanOverAge: number;
   /** Reviews holding a HIGH finding no client has collected (see `uncollectedAgeHours`). */
   readonly uncollectedOverAge: number;
+  /**
+   * What the memory door (D-151) can see, and whether it can see at all.
+   *
+   * Three fields rather than one number, because "plenty free", "under the floor" and
+   * "nobody could look" are three different facts and a single number makes the third
+   * indistinguishable from the first. While `memoryBelowFloor` holds, every `review_start`
+   * on this deployment is refused — the same class as a stale mirror, which is why it
+   * joins `problems` rather than sitting quietly in a field.
+   */
+  readonly memoryAvailableBytes?: number;
+  readonly memoryBelowFloor: boolean;
+  readonly memoryMeasured: boolean;
   readonly at: string;
 }
 
@@ -159,6 +189,12 @@ export async function checkHealth(store: Store, cfg: HeartbeatConfig): Promise<H
       replica: "unconfigured",
       needsHumanOverAge: 0,
       uncollectedOverAge: 0,
+      // NOT `false` because the memory is fine — nothing asked. Same rule as `replica:
+      // "unconfigured"` beside it: on this path every other field is a placeholder, and a
+      // placeholder that reads as a healthy measurement is the shape this whole file's
+      // first comment is about.
+      memoryBelowFloor: false,
+      memoryMeasured: false,
       at: new Date().toISOString(),
     };
   }
@@ -189,6 +225,18 @@ export async function checkHealth(store: Store, cfg: HeartbeatConfig): Promise<H
         "refresher runs again",
     );
   }
+  // OUT OF MEMORY REFUSES EVERY REVIEW TOO, and for the same reason the stale mirror
+  // above is here: a condition that closes the door for every client belongs in the
+  // report that says whether this service is working, not only in the error the one
+  // client who happened to call gets back. D-151's floor is read from the same place the
+  // door reads it, so a monitor cannot disagree with the rule it monitors.
+  const memory = mayStart(cfg.memory?.() ?? readMemory(), floorBytes());
+  if (!memory.allowed) {
+    problems.push(
+      `host memory ${mib(memory.availableBytes ?? 0)} available, under the ${mib(memory.floorBytes)} floor — ` +
+        "every review_start is REFUSED until it recovers",
+    );
+  }
   // Read from cache; a stale one refreshes in the background. Never awaited — see the
   if (replica.state === "absent") problems.push("replica missing");
   if (replica.state === "behind") problems.push(`replica ${Math.round((replica.behindSec ?? 0) / 60)}m behind`);
@@ -202,6 +250,9 @@ export async function checkHealth(store: Store, cfg: HeartbeatConfig): Promise<H
     ...(replica.behindSec === undefined ? {} : { replicaBehindSec: replica.behindSec }),
     needsHumanOverAge,
     uncollectedOverAge,
+    ...(memory.availableBytes === undefined ? {} : { memoryAvailableBytes: memory.availableBytes }),
+    memoryBelowFloor: !memory.allowed,
+    memoryMeasured: memory.measured,
     at: new Date().toISOString(),
   };
 }
@@ -285,6 +336,9 @@ async function newestMtime(dir: string): Promise<number | undefined> {
 export function startHeartbeat(store: Store, cfg: HeartbeatConfig, alerter: Alerter): () => void {
   /** Latched so the one permanent fault pages once, not on every beat. */
   let pagedUnreadable = false;
+  /** Consecutive beats under D-151's floor, and whether this shortage has been reported. */
+  let lowMemoryBeats = 0;
+  let toldMemoryLow = false;
   /**
    * `ae4dc75d`: found by lore's own review, the SAME shape as `pagedUnreadable` a line
    * up, unfixed on the two conditions right beside it. A replica outage can last hours
@@ -404,6 +458,30 @@ export function startHeartbeat(store: Store, cfg: HeartbeatConfig, alerter: Aler
       } else if (toldQueueDepth > 0) {
         // The backlog cleared. Re-arm, so a fresh one speaks again.
         toldQueueDepth = 0;
+      }
+
+      // THE DOOR IS SHUT AND ONLY THE CLIENTS KNOW (D-151).
+      //
+      // Counted across beats before it speaks: a single t0 sandbox ramping to five
+      // gigabytes takes the box under the floor for a minute or two as a matter of course,
+      // and that is the service working, not failing. `LOW_MEMORY_BEATS` consecutive beats
+      // is the difference between weather and a condition.
+      if (health.memoryBelowFloor) {
+        lowMemoryBeats += 1;
+        if (lowMemoryBeats >= LOW_MEMORY_BEATS && !toldMemoryLow) {
+          const minutes = Math.round((lowMemoryBeats * cfg.intervalMs) / 60_000);
+          const alert = CONDITIONS.memoryLow(
+            Math.round((health.memoryAvailableBytes ?? 0) / (1024 * 1024)),
+            Math.round(floorBytes() / (1024 * 1024)),
+            minutes,
+          );
+          if (await alerter.send(alert)) toldMemoryLow = true;
+        }
+      } else {
+        // Recovered. Both counters re-arm, so the NEXT shortage speaks rather than being
+        // suppressed by a latch set hours ago.
+        lowMemoryBeats = 0;
+        toldMemoryLow = false;
       }
 
       // The knowledge base IS the product and this device has no redundancy, so these

@@ -217,6 +217,27 @@ export const CONDITIONS = {
     detail: `${depth} reviews waiting — T0 is CPU-bound on this host and is the bottleneck`,
   }),
   /**
+   * The box is out of memory, so lore is turning reviews away at the door (D-151).
+   *
+   * A ticket rather than a page, and the line is the one this table already draws: the
+   * clients ARE told — they get a refusal naming the reason and a five-minute retry — so
+   * this is not a silent failure, it is a working service on a machine that has stopped
+   * being able to host it. What nobody is told without this is that it is STILL happening
+   * an hour later, and that is the operator's question.
+   *
+   * SUSTAINED, not instantaneous. A t0 sandbox on this deployment ramps to several
+   * gigabytes and releases them, so a single beat below the floor is ordinary weather;
+   * `LOW_MEMORY_BEATS` of them is the box actually being short. Paging on the first dip
+   * would train the operator to mute exactly the alert that says the gate is shut.
+   */
+  memoryLow: (availableMb: number, floorMb: number, minutes: number): Alert => ({
+    severity: "ticket",
+    condition: "host memory under the floor",
+    detail:
+      `${availableMb} MB available against a ${floorMb} MB floor, for ${minutes}m — every review_start is ` +
+      "being refused with a five-minute retry, so branches are going unreviewed while this lasts",
+  }),
+  /**
    * The database cannot be read, so lore is serving a refusal and nothing else.
    *
    * The one fault that ends the service outright, and the one that had no alert. It went

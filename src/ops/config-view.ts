@@ -183,6 +183,16 @@ export function configView(env: NodeJS.ProcessEnv = process.env): ConfigView {
       "Redeploy. The value is never shown here — it is a credential in most deployments.",
     ),
     entry(
+      "LORE_MIN_AVAILABLE_MB",
+      env["LORE_MIN_AVAILABLE_MB"],
+      "1024",
+      "How little host memory may be left before review_start is refused with a five-minute retry (D-151). " +
+        "The reviewing work is memory-hungry and the box is shared, so this floor is about the MACHINE, " +
+        "not about lore's own load.",
+      "Redeploy. Raise it if t0 sandboxes are being OOM-killed; it is measured against MemAvailable, " +
+        "which is what a new allocation can actually get.",
+    ),
+    entry(
       "LORE_BACKUP_DIR",
       env["LORE_BACKUP_DIR"],
       "(unset — replica unmonitored)",

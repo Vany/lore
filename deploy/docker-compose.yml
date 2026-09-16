@@ -127,6 +127,23 @@ services:
       # rather than ignoring it: believing a number caps the day when none does is worse
       # than having no answer at all.
       LORE_ALLOW_METERED: ${LORE_ALLOW_METERED:-0}
+      # HOW LITTLE MEMORY MAY BE LEFT ON THE HOST BEFORE `review_start` IS REFUSED (D-151).
+      #
+      # Megabytes; blank means 1024. Read as MemAvailable — on 2026-09-16, with ONE ordinary
+      # t0 sandbox running and nothing wrong, this host showed MemFree 0.97 GiB against
+      # MemAvailable 2.40 GiB, so a floor on MemFree would have shut the door on a healthy
+      # box for ever.
+      #
+      # This is a floor on the MACHINE, not a budget for lore's own load, and that is the
+      # reason it reads the kernel rather than counting sandboxes: the box is shared with
+      # whatever else the operator runs — on the day this was written, four of their
+      # cockroach containers had been OOM-killed beside it — and no in-process count can
+      # see one byte of that.
+      #
+      # A refused client is told to come back in five minutes and nothing is created; the
+      # operator is ticketed only if the shortage outlives three beats, because a single
+      # t0 sandbox ramping to ~5 GiB dips under any sane floor as a matter of course.
+      LORE_MIN_AVAILABLE_MB: ${LORE_MIN_AVAILABLE_MB:-}
       # LORE_RUN_TESTS is gone (D-71). lore READS a test suite — whether the change
       # is covered, whether a test asserts what its name claims — and never runs one.
       # A suite that fails belongs to whoever owns the repository, and CI already

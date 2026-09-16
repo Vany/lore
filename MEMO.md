@@ -3,6 +3,58 @@
 Newest first. Updated at the end of each task: what changed, what I learned, what
 surprised me.
 
+## 2026-09-16 — D-151: the OOM kills, measured, and the door Vany asked for
+
+**What changed.** `src/core/memory.ts` and a refusal in `review_start`: under
+`LORE_MIN_AVAILABLE_MB` of `MemAvailable` (default 1024) the call is refused with
+"reconnect in about 5 minutes", `retry_after_ms=300000`, and nothing created. Plus the
+operator half — `Health` carries three memory fields, `checkHealth` puts a shortage in
+`problems`, and the beat tickets after three consecutive beats.
+
+**The question was "what do we do about the OOM kills", and measuring first changed the
+answer twice.** Vany could add memory, to 12 GiB of Docker VM. But:
+
+* **`tier_run` since 09-07: 187 of 859 rigid t0 runs ended `interrupted` — 22%.** 74 kills
+  on 09-15 alone. All of it rigid-monorepo; lore's own 29 runs, zero.
+* **25% of the kills happened with NO other sandbox running.** So the dominant cause is
+  inside one container, and more RAM does not touch it.
+* **Live `ps` inside the running sandbox found it:** ten concurrent `eslint` processes —
+  turbo's default `--concurrency 10` — on a container with `--cpus 2`. RSS 320–580 MB
+  each, `memory.peak` 5.48 GiB of a 6 GiB cap, with 8 of 33 packages started. The fan-out
+  buys nothing (two cores either way) and costs everything.
+* **And the fleet is unbounded:** peak 19 concurrent sandboxes, each entitled to 6 GiB, on
+  a 7.75 GiB VM. At ≥11 concurrent the interrupted rate is ~75%. `docker-compose.yml` still
+  reassures the reader with arithmetic about `LORE_CONCURRENCY` — a knob the lines directly
+  below it say was removed in D-101 — so the bound it describes has not existed for weeks.
+
+**I argued for the wrong door first, and the codebase had already argued the other side.**
+My case was: 446 of 675 t0-running rounds arrive through `review_submit`, not
+`review_start`, so a door check governs a third of the demand at 100% of the client-visible
+cost; better to wait at the sandbox. Vany's answer was the door with a retry — and
+`core/admission.ts`'s own docblock makes his case better than I did: *"Refusing at the door
+beats queueing in the middle… a client that is refused KNOWS."* The thing I had NOT said,
+and which is the real reason to read the kernel at all, is that **the box is shared**: his
+cockroach and postgres containers sit in the same VM (four `Exited (137)` two days back),
+and no in-process accounting of lore's own sandboxes can see a byte of them.
+
+**The live numbers killed my first draft of the rule.** His "less than 1G" against
+`MemFree` would have refused on a healthy host: with one ordinary sandbox running, MemFree
+was 0.97 GiB while MemAvailable was 2.40 GiB. Page cache is not spent memory. Same number,
+different field, opposite behaviour — and the fixture in `memory.test.ts` is that exact
+reading so nobody re-derives it.
+
+**What I deliberately did not build**, both recorded in D-151 rather than done quietly: the
+submit path (refusing one strands fixes a client already made — it needs a mechanism that
+KEEPS the work), and a deterministic budget counting lore's own sandboxes' ceilings, which
+is the term that catches a ramp `MemAvailable` reads as fine. The fan-out cap
+(`TURBO_CONCURRENCY`, `NODE_OPTIONS`) and `--oom-score-adj 1000` on sandboxes are the
+bigger fix and are Vany's next call.
+
+**Two small things worth keeping.** `one-definition.test.ts` caught my new `ServerDeps`
+member orphaning `repin`'s docblock — a structural check earning its keep on the first
+try. And `turbo`'s own binary answered whether `TURBO_CONCURRENCY` exists (`strings` found
+`turbo_concurrency` in its env-config map) rather than my memory of the docs.
+
 ## 2026-09-10 — D-147: the state that is 89% of our clean verdicts was named like a failure
 
 **What changed.** `passed_partial` → `passed_thin_ladder`; the wire field `clean` →

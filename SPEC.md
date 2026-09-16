@@ -4021,6 +4021,78 @@ working agreement says to confirm rather than assume.
 (fingerprint 9c6f2a60) — never inside the repository**, so nothing needs a new
 `.gitignore` rule.
 
+**D-151 — a review is refused at the door when the HOST is out of memory, with a
+five-minute retry. BUILT 2026-09-16.**
+
+Vany: *"can we check docker state and do not accept review starts if here is less than
+1G?"*, then *"just respond to reconnect in 5 minutes if here is not enough memory"*.
+
+**This is D-98's rule applied to a resource that is not lore's.** `core/admission.ts`
+already argues it: refusing at the door beats queueing in the middle, because a client
+that is refused KNOWS and can come back, tell its user, or cancel something. What is new
+is why the door has to look OUTSIDE lore at all — the deployment host is shared. lore's t0
+sandboxes run beside the operator's own containers, four of which were sitting
+`Exited (137)` on the day this was written, and no count of lore's own work can see one
+byte of that. The kernel can.
+
+**MemAvailable, never MemFree, and the live reading is the argument.** Measured on the
+deployment with ONE ordinary t0 sandbox running and nothing wrong: `MemFree 0.97 GiB`,
+`MemAvailable 2.40 GiB`, `Cached 1.44 GiB`. Page cache is not spent memory, so a 1 GiB
+rule written against `MemFree` would have refused that review and every review after it,
+on a host that was working perfectly. `MemAvailable` is the kernel's own estimate of what
+a new allocation can actually get.
+
+**The refusal is a different KIND from every other one on this tool, and says so.** "lore
+is full", "`into` is required" and "this branch already has an open review" are answered by
+doing something else; this one is answered by waiting. It names what it saw, carries
+`retry_after_ms=300000`, states that NOTHING WAS STARTED, and states that nothing about the
+code was read — so it can never be filed as a clean result. `TOOL_DOCS.start` draws the
+same line, because a client that cannot tell the two kinds apart either retries what will
+never succeed or abandons a branch over passing weather.
+
+**Checked before anything can be destroyed**, above the open-review lookup: a refusal must
+leave a `pull_fresh`'s worktree un-recut and a `restart`'s predecessor un-cancelled. It
+therefore covers all three entries — fresh start, `pull_fresh`, `restart` — which is right,
+since all three end in `enqueue` and it is the ROUND that spends the memory. None of them
+loses work when refused.
+
+**The floor is `LORE_MIN_AVAILABLE_MB` (default 1024) because it is a property of the
+HOST**, and this deployment's host memory has changed twice. A value that cannot be parsed
+refuses to start rather than falling back to the default: `Number("2g")` is NaN and every
+comparison against NaN is false, which would leave the door permanently open while looking
+configured.
+
+**The operator hears about it only if it lasts.** `checkHealth` puts the shortage in
+`problems` — the same class as a stale mirror, since both refuse every review — and the
+beat tickets after `LOW_MEMORY_BEATS` (3) consecutive beats. A single t0 sandbox ramping
+to ~5 GiB dips under any sane floor as a matter of course, and a ticket a minute for that
+is how an operator learns to mute the one alert that says the gate is shut. `Health`
+carries three fields rather than a number, because *plenty*, *under the floor* and *nobody
+could look* are three facts and the third must not read as the first.
+
+**WHAT THIS DOES NOT DO, stated because the mechanism invites the opposite reading.**
+
+* **It does not cover `review_submit`.** Two thirds of the rounds that run t0 arrive
+  through a submit — 446 of 675 since 2026-09-07 — and refusing one strands fixes a client
+  has already made, which is the abandonment the whole inbox surface exists to fight. The
+  door was the instruction; a submit needs a mechanism that KEEPS the work (the `held_diff`
+  machinery already does something of that shape) rather than a refusal.
+* **It is an instant, not a forecast.** A sandbox that started thirty seconds ago holds
+  200 MB on its way to five gigabytes, and `MemAvailable` reports the 200 MB. So a burst
+  that ramps together still overruns the box; this stops the review that walks up to a
+  machine ALREADY short.
+* **It does not make the kills stop.** 187 of 859 rigid-monorepo t0 runs since 2026-09-07
+  ended `interrupted` — 22% — and 25% of those were the only sandbox running, which is a
+  fan-out problem inside one container (turbo's default `--concurrency 10`, measured live
+  at ten eslint processes of 320–580 MB each on a 2-CPU container, `memory.peak` 5.48 GiB
+  of 6). That is a separate change and the bigger one.
+
+**[OPEN] Whether the door should also count lore's own sandboxes.** A deterministic budget
+— running sandboxes × their `--memory` ceiling against the host total — is the term that
+catches the ramp, and the measured peak of 19 concurrent sandboxes on a 7.75 GiB VM says
+the case is real. Not built: it was not what was asked for, and it changes throughput,
+which is a deployment decision.
+
 **D-150 — every GLM route is glm-5.3, on both z.ai subscriptions. BUILT 2026-09-16.**
 
 Vany: *"i upgraded second plan, now we have both z.ai with glm 5.3 and everything … it is two

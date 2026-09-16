@@ -15,6 +15,7 @@ import { forClient } from "./plain.ts";
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/server";
 import * as z from "zod";
 import { mayAdmit, MAX_OPEN_REFACTOR_RUNS } from "../core/admission.ts";
+import { floorBytes, mayStart, mib, readMemory, type MemoryState } from "../core/memory.ts";
 import { elapsedWords } from "../core/elapsed.ts";
 import { absent } from "../core/optional.ts";
 import { worstSeverity } from "../core/finding.ts";
@@ -55,6 +56,16 @@ export interface ServerDeps {
    * stopped.
    */
   readonly reviewer?: { cancel?(reviewId: string): Promise<boolean> };
+  /**
+   * What the host has left, for the door in `review_start` (D-151).
+   *
+   * Injected rather than read inline so the refusal can be tested at all: the real reader
+   * is `/proc/meminfo`, which does not exist on the machine this suite usually runs on,
+   * and a guard whose refusing branch has never executed is the shape `PROG.md` names —
+   * *code that has never executed is not code that works*. Defaults to the real reader, so
+   * production wires nothing.
+   */
+  readonly memory?: () => MemoryState;
   /**
    * Advance an open review's pin to the branch as origin now has it (D-108): sync,
    * remove the worktree, recut at the same review id. Optional because the CLI and the
@@ -614,6 +625,36 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
         throw new Error(
           `path must stay inside the repository, relative to its root — "${path}" does not. Pass a path like ` +
             '"src" or "src/payments", not an absolute one or one starting with "..".',
+        );
+      }
+
+      // NOT ONTO A MACHINE THAT IS ALREADY OUT OF MEMORY (D-151).
+      //
+      // Checked HERE — before `open` is looked up, before `repin` recuts a worktree, before
+      // `restart: true` cancels anything — for the reason the `into` refusal above gives:
+      // nothing may be destroyed on the way to a refusal. A client told to come back in five
+      // minutes must find its review exactly as it left it.
+      //
+      // Covers pull_fresh and restart as well as a fresh start, because all three END in
+      // `deps.enqueue` and it is the ROUND that spends the memory, not the review row. None
+      // of the three loses work when refused: no review is created, no commit is unpushed,
+      // and calling again is the whole remedy.
+      //
+      // WHAT IT DOES NOT COVER, said here rather than discovered later: `review_submit`.
+      // Two thirds of the rounds that run t0 on this deployment arrive through a submit
+      // (446 of 675 since 2026-09-07), and refusing one of those would strand fixes the
+      // client has already made — the abandonment this service's whole inbox exists to
+      // fight. The door was the instruction; the submit path needs a mechanism that keeps
+      // the work, not a refusal.
+      const memory = mayStart(deps.memory?.() ?? readMemory(), floorBytes());
+      if (!memory.allowed) {
+        throw new Error(
+          `lore's host is out of memory: ${mib(memory.availableBytes ?? 0)} available, and this service stops ` +
+            `accepting reviews below ${mib(memory.floorBytes)}. NOTHING WAS STARTED — this branch is ` +
+            "unreviewed and no review id exists for it. RECONNECT IN ABOUT 5 MINUTES and call again " +
+            `(retry_after_ms=${String(memory.retryAfterMs)}); this is a property of the machine right now, ` +
+            "not of your branch, and it is not something you can fix from your side. Nothing about your code " +
+            "has been read, so treat this as 'not reviewed yet', never as a clean result.",
         );
       }
 

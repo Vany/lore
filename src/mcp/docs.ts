@@ -213,6 +213,16 @@ change is worse than no link.
 Returns a review_id IMMEDIATELY. The review takes minutes — this does not mean it
 finished.
 
+IT CAN ALSO REFUSE, AND ONE REFUSAL MEANS "COME BACK", NOT "GIVE UP". When the host is
+out of memory lore stops accepting starts and says so, naming what it saw and
+\`retry_after_ms\`: NOTHING is started, no review id exists, and your branch is simply
+unreviewed. WAIT ABOUT FIVE MINUTES AND CALL AGAIN — the reviewing work is memory-hungry
+and the machine is shared, so this is ordinary weather rather than a fault in your branch
+or in your call. Nothing about your code was read, so it is never a clean result. The
+other refusals are different in kind and repeating the call will not help them: a missing
+\`into\`, a branch that already has an open review (continue THAT one), or lore being full
+at 128 open reviews (cancel one of yours that you are not going to answer).
+
 POLL IT, ONE CALL AT A TIME, AT THE INTERVAL THE REPLY GIVES YOU.
 
 Every reply carries \`check_back_note\`, and USUALLY \`check_back_after_ms\` too — measured

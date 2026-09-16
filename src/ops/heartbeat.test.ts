@@ -17,8 +17,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { initialState } from "../core/ladder.ts";
 import { Store } from "../store/store.ts";
 import { Alerter, type Alert } from "./alerts.ts";
+import type { MemoryState } from "../core/memory.ts";
 import {
   DEFAULT_HEARTBEAT,
+  LOW_MEMORY_BEATS,
   REPLICA_BEHIND_SEC,
   checkHealth,
   startHeartbeat,
@@ -735,3 +737,100 @@ describe("a mirror too stale to review is not a healthy service", () => {
   });
 });
 
+
+/**
+ * The memory door, from the operator's side (D-151).
+ *
+ * The clients already learn about a shortage — they are refused, by name, with a retry.
+ * What has no other channel is that it is STILL happening: a box that stays under the
+ * floor turns every review away while `/status` would otherwise answer `ok: true`, which
+ * is the stale-mirror failure one resource over.
+ */
+describe("host memory", () => {
+  const measured = (availableGiB: number): (() => MemoryState) => {
+    const state: MemoryState = {
+      kind: "measured",
+      reading: { availableBytes: availableGiB * 1024 ** 3, totalBytes: 8 * 1024 ** 3 },
+    };
+    return () => state;
+  };
+
+  it("names the shortage AND its consequence, and is not ok while it holds", async () => {
+    const h = await checkHealth(store, cfg({ memory: measured(0.5) }));
+    expect(h.ok).toBe(false);
+    expect(h.problems.join(" ")).toMatch(/host memory/);
+    expect(h.problems.join(" "), "the consequence, not just the number").toMatch(/REFUSED/);
+    expect(h.memoryBelowFloor).toBe(true);
+    expect(h.memoryMeasured).toBe(true);
+  });
+
+  it("is quiet with room to spare", async () => {
+    const h = await checkHealth(store, cfg({ memory: measured(4) }));
+    expect(h.problems.filter((p) => p.startsWith("host memory"))).toStrictEqual([]);
+    expect(h.memoryBelowFloor).toBe(false);
+  });
+
+  /**
+   * An unmeasurable host must not read as a healthy one. `ok` stays true — refusing to
+   * call the service sick over a guard that cannot see would be its own false claim — but
+   * `memoryMeasured: false` is the field that stops a reader treating this beat as
+   * evidence the box has room.
+   */
+  it("distinguishes 'plenty' from 'nobody looked'", async () => {
+    const h = await checkHealth(store, cfg({ memory: () => ({ kind: "unmeasurable", why: "no /proc here" }) }));
+    expect(h.memoryBelowFloor).toBe(false);
+    expect(h.memoryMeasured).toBe(false);
+    expect(h.memoryAvailableBytes).toBeUndefined();
+    expect(h.problems.filter((p) => p.startsWith("host memory"))).toStrictEqual([]);
+  });
+
+  it("waits for a sustained shortage before telling anyone, then tells once", async () => {
+    const stop = startHeartbeat(store, cfg({ intervalMs: 5, memory: measured(0.5) }), alerter);
+    try {
+      await until(() => sent.some((a) => a.condition === "host memory under the floor"));
+      // Several more beats: the condition still holds, and must not repeat.
+      await new Promise((r) => setTimeout(r, 60));
+      const told = sent.filter((a) => a.condition === "host memory under the floor");
+      expect(told.length, "latched — a ticket a minute is a channel nobody reads").toBe(1);
+      expect(told[0]?.severity).toBe("ticket");
+      expect(told[0]?.detail, "what a person needs to act: the number and the effect").toMatch(/512 MB/);
+      expect(told[0]?.detail).toMatch(/review_start/);
+    } finally {
+      stop();
+    }
+  });
+
+  /**
+   * A single t0 sandbox ramping to five gigabytes takes this box under the floor for a
+   * minute or two as a matter of course. Telling anyone about THAT trains them to mute
+   * the one ticket that says the gate is shut — so the count is the guard, and a beat
+   * that recovers must reset it.
+   */
+  it("says nothing about a dip that does not last", async () => {
+    // COUNTED IN BEATS, NOT IN MILLISECONDS. Timing the dip with a sleep would make the
+    // test assert "LOW_MEMORY_BEATS beats did not fit in 8ms" on a fast machine and
+    // something else entirely on a loaded one — the fixed-sleep flake this file's own
+    // `until` helper exists to end. The reader itself ends the dip after one beat, so the
+    // shortage is exactly one beat long however the machine is behaving.
+    let beats = 0;
+    const stop = startHeartbeat(
+      store,
+      cfg({
+        intervalMs: 5,
+        memory: () => {
+          beats += 1;
+          const availableGiB = beats <= LOW_MEMORY_BEATS - 1 ? 0.5 : 4;
+          return { kind: "measured", reading: { availableBytes: availableGiB * 1024 ** 3, totalBytes: 8 * 1024 ** 3 } };
+        },
+      }),
+      alerter,
+    );
+    try {
+      // Well past the point where a sustained shortage would have spoken.
+      await until(() => beats > LOW_MEMORY_BEATS + 3);
+      expect(sent.filter((a) => a.condition === "host memory under the floor")).toStrictEqual([]);
+    } finally {
+      stop();
+    }
+  });
+});

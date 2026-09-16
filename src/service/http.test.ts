@@ -8,6 +8,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { MAX_OPEN_REVIEWS } from "../core/admission.ts";
+import type { MemoryState } from "../core/memory.ts";
 import { initialState } from "../core/ladder.ts";
 import type { ReviewState } from "../core/review-state.ts";
 import { STALE_HOURS, STALE_GRACE_DAYS } from "../ops/retention.ts";
@@ -27,6 +28,17 @@ let repoId: string;
 let port: number;
 
 /**
+ * What the memory door (D-151) is told the host has left.
+ *
+ * `unmeasurable` by default, which is what `/proc/meminfo`'s absence produces on the
+ * machine this suite usually runs on — so every test that is not about memory takes the
+ * same path it takes on a developer's laptop today. A test that IS about memory sets a
+ * reading and gets the refusing branch to execute, which is the only way that branch is
+ * ever run outside the deployment.
+ */
+let hostMemory: MemoryState;
+
+/**
  * A DIFFERENT PORT PER TEST.
  *
  * One fixed port, rebound by every `beforeEach`, leaves fetch's connection pool
@@ -40,6 +52,7 @@ let portSeq = 39_517;
 const nextPort = () => (port = ++portSeq);
 
 beforeEach(() => {
+  hostMemory = { kind: "unmeasurable", why: "this fixture simulates memory only where a test says so" };
   store = new Store(":memory:");
   const repo = store.upsertRepo("demo", "git@x:demo.git");
   const other = store.upsertRepo("other", "git@x:other.git");
@@ -54,6 +67,7 @@ beforeEach(() => {
       worktreeFor: async () => "/tmp/nowhere",
       enqueue: () => undefined,
       attest: async () => "lore: attested",
+      memory: () => hostMemory,
     },
     {
       port: nextPort(),
@@ -265,6 +279,43 @@ describe("the service refuses work rather than queueing it invisibly", () => {
 
   it("accepts while there is room", async () => {
     expect(await start("feat/room")).toContain("review_id");
+  });
+
+  /**
+   * The memory door (D-151), at the wire.
+   *
+   * The interesting half is not that it refuses — it is that the refusal is a DIFFERENT
+   * KIND from every other one on this tool. "lore is full" and "`into` is required" are
+   * answered by doing something else; this one is answered by waiting and calling again,
+   * and a client that cannot tell them apart either retries what will never succeed or
+   * abandons a branch over a passing weather condition.
+   */
+  it("refuses a start when the host is out of memory, and tells the client to come back", async () => {
+    hostMemory = { kind: "measured", reading: { availableBytes: 700 * 1024 * 1024, totalBytes: 8 * 1024 ** 3 } };
+
+    const body = await start("feat/out-of-memory");
+
+    expect(body).toContain("out of memory");
+    expect(body, "what it saw, not just that it refused").toContain("700 MB");
+    // THE RETRY IS THE WHOLE POINT: this refusal expires by itself.
+    expect(body).toContain("RECONNECT IN ABOUT 5 MINUTES");
+    expect(body).toContain("retry_after_ms=300000");
+    // And it must not read as a verdict about the branch — nothing was reviewed.
+    expect(body).toContain("never as a clean result");
+    // NOTHING WAS STARTED. Asserted on the store rather than on the words, because the
+    // words are what a refusal says and this is what it must have done.
+    const row = store.db
+      .prepare("SELECT COUNT(*) c FROM review WHERE branch = 'feat/out-of-memory'")
+      .get() as { c: number };
+    expect(Number(row.c), "a refusal must leave nothing behind").toBe(0);
+  });
+
+  it("starts normally once the host has room again — the refusal is not sticky", async () => {
+    hostMemory = { kind: "measured", reading: { availableBytes: 700 * 1024 * 1024, totalBytes: 8 * 1024 ** 3 } };
+    expect(await start("feat/recovers")).toContain("out of memory");
+
+    hostMemory = { kind: "measured", reading: { availableBytes: 4 * 1024 ** 3, totalBytes: 8 * 1024 ** 3 } };
+    expect(await start("feat/recovers")).toContain("review_id");
   });
 
   it("refuses once the service is full, and says how to make room", async () => {

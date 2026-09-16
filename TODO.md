@@ -113,6 +113,37 @@ does not ship.
 - [ ] **3a** deterministic diff context (library search first) · **3b** repository brief per
       trunk commit · **3c** prompts.ts · **3d** replay gate, then the step budget
 
+### 2026-09-16 — the t0 sandbox is OOM-killed on 22% of rigid rounds, and the door (D-151) is not the fix
+
+- [ ] **CAP THE FAN-OUT INSIDE THE SANDBOX — mine to do, waiting on a go-ahead.** Measured
+      live: ten concurrent `eslint` processes (turbo's default `--concurrency 10`) in a
+      container with `--cpus 2`, RSS 320–580 MB each, `memory.peak` 5.48 GiB of a 6 GiB cap
+      with 8 of 33 packages started. `TURBO_CONCURRENCY` (confirmed in turbo 2.10.8's own
+      binary, not from the docs) plus a `NODE_OPTIONS` heap cap, both derived from
+      `cfg.cpus`, in `baseArgs` (`src/t0/sandbox.ts`). Verdicts do not change — tsc and
+      eslint report the same thing at 2-way as at 10-way — and wall-clock should not either,
+      since two cores is two cores. **25% of the kills happen with no other sandbox running,
+      so this is the half more memory cannot buy.**
+
+- [ ] **`--oom-score-adj 1000` on every sandbox.** When the VM runs out, the kernel picks a
+      victim by badness score, and today that can be `lore` or `opencode` — which loses
+      every in-flight round rather than the one offending container. Positive adjustments
+      need no privilege. Turns luck into a property.
+
+- [ ] **Vany's: the 12 GiB, the per-sandbox ceiling, and whether the door should also count
+      lore's own sandboxes.** More memory alone moves the cliff rather than removing it —
+      two sandboxes at the 6 GiB ceiling still overrun 12 GiB. After the fan-out cap the
+      ceiling should come DOWN (~3 GiB), because sum-of-ceilings under VM-total is what
+      makes every kill a cgroup kill (attributed, already reported honestly) instead of a VM
+      kill that picks a victim. Peak measured: 19 concurrent sandboxes on a 7.75 GiB VM.
+      Throughput and deployment, so not mine.
+
+- [ ] **`review_submit` has no memory door and should not get this one.** 446 of 675
+      t0-running rounds since 09-07 arrive through a submit; refusing one strands fixes the
+      client has already made — the abandonment the inbox surface exists to fight. It needs
+      a mechanism that KEEPS the work (`held_diff` is close to the right shape), which is a
+      design question rather than a missing line.
+
 ### 2026-09-16 — Vany's to decide, deliberately outside Phase 6
 
 - [ ] **The silence bound on a single model call.** A call can sit 45 min

@@ -684,6 +684,28 @@ started the review, running in the operator's browser, on the exact page they op
 something is wrong. The page re-checks the scheme before linking, because rows written
 before the validation existed are still rows.
 
+### 2.4.1.2 The memory door (D-151)
+
+`review_start` is refused when the HOST has less than `LORE_MIN_AVAILABLE_MB` (default
+1024) of `MemAvailable` left, and the refusal tells the client to reconnect in about five
+minutes, carrying `retry_after_ms=300000`.
+
+**It is the only refusal on this tool that expires by itself**, and the text says so
+explicitly, because the client's correct response is the opposite of every other one here:
+a missing `into`, a duplicate open review and a full service are all answered by doing
+something different, and this one is answered by doing the same thing later. Nothing is
+created — no review id, no worktree, no cancelled predecessor — so the branch is simply
+unreviewed, never cleanly reviewed.
+
+Checked above the open-review lookup, so `pull_fresh` and `restart: true` are refused on
+the same terms and neither destroys anything on its way out. It does NOT cover
+`review_submit`: two thirds of the rounds that reach t0 arrive through a submit, and
+refusing one would strand fixes a client has already made.
+
+The operator sees the same fact from the other side: `checkHealth` reports it in
+`problems` — a shortage refuses every review, exactly as a stale mirror does — and the
+heartbeat tickets once it has held for three beats (`spec/operations.md` §2.1).
+
 ### 2.4.2 One review per branch
 
 `review_start` refuses a branch that already has an open review, naming the one to

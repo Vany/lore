@@ -89,7 +89,19 @@ Elevated review failure rate; a mirror `make status` shows in red (D-65 — the 
 refresher has stopped or cannot reach the remote, which lore itself cannot detect);
 queue depth sustained high enough that reviews are waiting on CPU
 (`spec/deployment.md` §3); `needs_human` findings ageing without resolution; **high
-findings nobody has collected** for over 24h.
+findings nobody has collected** for over 24h; **host memory under the floor** for three
+consecutive beats (D-151).
+
+**Host memory is a ticket rather than a page, and the line is the one this table already
+draws.** The clients ARE told — a refused `review_start` names the shortage and a
+five-minute retry — so this is not a silent failure, it is a working service on a machine
+that has stopped being able to host it. What nobody learns without the ticket is that it is
+*still* happening an hour later. Sustained, because a single t0 sandbox ramping to ~5 GiB
+takes this host under any sane floor as a matter of course, and a ticket a minute for
+ordinary weather is how an operator learns to mute the one notice that says the gate is
+shut. `checkHealth` also puts it in `problems` the moment it holds, so `/status` answers
+`ok: false` while every review is being refused — the stale-mirror rule (D-65), one
+resource over.
 
 **Spend anomaly against trend is GONE, deliberately** (D-121). It was listed here from the
 day this file was written; the alert behind it was deleted with the ceiling, and leaving
