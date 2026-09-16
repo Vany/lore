@@ -55,6 +55,24 @@ member orphaning `repin`'s docblock — a structural check earning its keep on t
 try. And `turbo`'s own binary answered whether `TURBO_CONCURRENCY` exists (`strings` found
 `turbo_concurrency` in its env-config map) rather than my memory of the docs.
 
+**Then Vany read `TODO.md` and we pruned it: 2423 lines to 932.** 179 items, 114 of them
+already struck — August history the file's own header says should have moved to MEMO and
+been removed. It had moved; only the removal never happened, so more than half of "Now" was
+scrollback. The open 65 are preserved verbatim and regrouped by whose move it is, with a
+script that asserts every open item is placed exactly once — because a hand-reorganisation
+of sixty entries is precisely where one goes missing silently.
+
+**Two entries in it were false, and both had gone stale in the direction that hurts —
+D-82's own warning, in the file that carries D-82's own warning.** One said the OOM kills
+had "no code change that fixes it" and pointed at Docker Desktop's memory slider; the
+measurement three sections down says a quarter of them happen with a single sandbox on the
+box. The other, dated 09-03, said D-141 and D-142 had never reached a container so no
+client had seen them — while this very session was handed `SERVER_INSTRUCTIONS` at the
+handshake and a `waiting_note` from the inbox. Two weeks of "not measurable until it is
+deployed" on something that was deployed. **The lesson is not "prune more often"; it is
+that a stale entry reads exactly like a live one, and only checking the deployment tells
+them apart.**
+
 ## 2026-09-10 — D-147: the state that is 89% of our clean verdicts was named like a failure
 
 **What changed.** `passed_partial` → `passed_thin_ladder`; the wire field `clean` →
