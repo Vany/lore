@@ -39,6 +39,28 @@ that part is pulled out into its own open item rather than hidden inside a tick.
 
 ## Now — nothing here is about writing more features
 
+### 2026-09-16 — needs Vany's machine: Docker has 7.7 GiB and t0 asks for 6
+
+- [ ] **`tsc`/`eslint` are OOM-killed (exit 137) on rigid-monorepo, and no code change fixes
+      it.** The t0 sandbox runs with `--memory 6g` (`src/t0/sandbox.ts`, hard-coded — not
+      env-tunable), while `docker info` reports **7.748 GiB total**, shared with lore,
+      opencode and litestream. One sandbox alone claims 77% of everything Docker has, so
+      lint over rigid's 49 packages cannot fit and the kernel takes it.
+
+      Reported twice on 2026-09-16 by the `Auth + ledger reconciliation` session, the second
+      time (`rev_YJ_Ypte2HB8OosBQd8-JQlpg`) with host load at **5.77** — so contention is
+      ruled out and the cap is the cause.
+
+      **lore reports it honestly**, which is worth keeping: the round closed `interrupted`,
+      never `clean`, and `checks_skipped` told the client *"eslint: `pnpm run lint` did not
+      complete (killed, exit 137) — almost always a memory limit … Nothing it would have
+      found is known either way."* So the defect is lost COVERAGE, not a false claim.
+
+      The fix is Docker Desktop's memory allocation — `deploy/docker-compose.yml` already
+      says "if it appears, give Docker Desktop more memory (24 GB makes …)". Until then,
+      rigid reviews carry no lint or type check, and this also feeds the "stuck at round 0
+      under host load" cancellations that Phase 6 step 2 is about.
+
 ### 2026-09-16 — OPEN AND IN PRODUCTION: five findings on a batch that is already deployed
 
 Not deferrals. The batch (D-147 rename, D-148 channel, D-149, and the three reviewer fixes)
