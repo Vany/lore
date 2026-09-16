@@ -240,6 +240,152 @@ becomes vulnerable with no commit to trigger anything.
 
 ---
 
+## Phase 6 — Token economy *(planned 2026-09-16)*
+
+**Why this phase exists.** Every subscription ran dry within a week. Measured 2026-09-16
+over everything since 09-07 (the `usage` table, 4376 rows):
+
+- **98% of tokens are one repository**, rigid-monorepo: 178 reviews in nine days, average
+  diff 152 KB.
+- **The cost is re-reading, not writing.** Output is a rounding error; cached re-reads are
+  10–20× fresh input. A reviewer re-sends its whole context on every tool step.
+- **The first read is two-thirds of it.** A tier's first call on a rigid branch re-reads
+  2.84M tokens over ~25 steps at ~114k context per step; by round 4 a call costs ~0.7M.
+  `conversation: true` makes later rounds cheaper, not dearer.
+- **The steps are exploration.** Across 78 logged sessions: 2,262 `bash` calls, 603
+  `read`, 92 `grep` — the agent shelling around a repository it has read before. Reviewers
+  are handed rules (`relevantTo`), never a map of the code.
+- **37% of spend was correlated**: t2 and t3 falling back to `zai-coding-plan2`, the same
+  vendor as t1, paying two full first reads for an opinion the ladder then calls thin.
+- **~30% bought no verdict**: 351M tokens on cancelled reviews, 235M on failed. Restart-and-
+  redo is only 61M of it; the recorded reasons are "stuck at round 0 under host load ~120",
+  "wedged after the lore-wide retry", and "branch merged before the review finished".
+- **One plan backstopped everything.** Every fallback chain ends in `zai-coding-plan2`, so
+  when Kimi's weekly and OpenAI's limits went, that plan carried three tiers (43% of spend)
+  and its 5-hour windows took the whole ladder down.
+
+**The rule this phase is judged by: tokens per concluded verdict, with no loss of findings.**
+A change that saves tokens by finding less is not an optimisation, it is a weaker gate —
+the INV-1 failure in slow motion. So every step has a number it must move and a way to
+check it did not cost findings.
+
+### Decisions taken to plan it (Vany: *"all is good"*)
+
+| | decision | default | revisitable because |
+|---|---|---|---|
+| D1 | a deep tier whose only route is a vendor that already read this tree is **skipped and named thin**, not asked | skip, per-tier `skip_correlated` | a second z.ai model does sometimes catch different things; the replay in step 3 measures it |
+| D2 | reviews are **capped per repository** | rigid-monorepo: 2 at once; others unlimited | slower but finished beats fast and abandoned; tuned from the queue-wait numbers |
+| D3 | a lore-caused requeue (deploy, worker restart) **does not spend an attempt**; an unreachable opencode is bounded by **30 min of continuous unreachability**, not a count | 30 min | a deep tier legitimately runs ~23 min at p90 |
+| D4 | exploration **step budget** | none until step 3's replay picks one | picking it blind trades tokens for findings with no measurement |
+
+Still open, and not part of this phase: the silence bound on a single model call (changes
+which model is called — its own decision), and metered OpenRouter ($190.35 left).
+
+### Step 0 — Measure what the steps are *(no behaviour change; first)*
+
+- **0a. Record every tool call's argument**, not just its count. The event stream already
+  sees each call; persist tool, command or path, session, tier, review. opencode keeps no
+  readable session history (its storage dirs are empty), so lore must write this itself.
+  Answers: which files, and how often the SAME files recur across reviews and tiers.
+- **0b. Check the three opencode plugins** — `oh-my-openagent`, `agent-usage-reminder`,
+  `directory-readme`. Any that injects text into every step multiplies its size by ~30 on
+  every call. Removing one would be the cheapest saving in this phase.
+- **0c. Find out how each plan meters** — tokens, requests, or steps. z.ai counting steps
+  would make step count the lever for its 5-hour window, not context size.
+- **0d. A standing token report** (`make tokens`, and a board panel): tokens per concluded
+  verdict, first-read share, steps per first read, correlated share, no-verdict share —
+  per day and per repository. Every later step is judged against this baseline.
+
+**Done when** the baseline exists, the plugins are cleared or removed, and 0a has a week
+of data or enough rigid first reads to see repetition.
+
+### Step 1 — Stop correlated reads *(biggest measured waste; policy, not a build)*
+
+- Before asking a fallback route, compare `vendorOf(route)` (`src/core/ladder.ts`) with the
+  vendors that already read this tree in this review (`readBy`). A match with
+  `skip_correlated` set marks the tier unavailable with the reason named, and the ladder
+  ends thin exactly as it already does for a skipped tier.
+- In the fallback walk in `src/reviewer/review.ts` — the same loop D-149 changed.
+- `checks_skipped` says it in words; the attestation's vendor count already covers it.
+- `deploy/tiers.*.json` gains `skip_correlated: true` on t2 and t3.
+- Tests: a same-vendor twin is not asked; a different-vendor twin is; the thin ladder names
+  the reason. **Metric:** correlated share of deep-tier tokens → ~0.
+
+### Step 2 — Stop throwing work away
+
+- **2a. Per-repository concurrency cap (D2).** `claimJob` (`src/store/store.ts`) skips a job
+  whose repository already has N rounds running. The queue position reaches the client —
+  "queued behind 2 reviews of this repository" — in `review_poll` and the inbox, so a
+  waiting review is not mistaken for a stalled one (the client complaint of 2026-09-16).
+- **2b. Do not start the deep stage on a branch that already merged** or no longer exists
+  on the mirror. End it with a state and a reason that say NOT reviewed, before spending.
+- **2c. The attempts fix (D3).** `claimJob` increments `attempts` on every claim, so a
+  deploy-dropped round spends one. Startup reclaim stops counting; a `ServiceUnreachable`
+  requeue is bounded by continuous-down time; no message says "requeued" once it will not
+  be. It failed two rigid reviews on 2026-09-15.
+- **Metric:** no-verdict share of review tokens, from ~30%.
+
+### Step 3 — Keep the repository analysed *(the structural lever; gated on step 0)*
+
+- **3a. Diff context, computed without a model.** For each changed symbol: its definition,
+  its call sites, the types it touches — extracted deterministically and put in the prompt,
+  budgeted (~25k tokens) and ranked by relevance. `src/reviewer/diff-context.ts`, one file.
+  **Search for an existing library first** (tree-sitter bindings, ctags, the TypeScript
+  language service) — large, well-known functionality.
+- **3b. A repository brief per trunk commit.** Module map, public interfaces, invariants,
+  conventions, how to build and test, ≤20k tokens. Built by the helper model when `into`'s
+  tip moves — once per trunk commit, not per review — and updated from the previous brief
+  plus the trunk diff. `src/knowledge/brief.ts`. A brief older than `into`'s tip is not used.
+- **3c. Tell the model it has them**, in `src/reviewer/prompts.ts` — a model learning
+  differently is exactly what that file is for — and set the step budget (D4) only after 3d.
+- **3d. The replay gate.** Replay N real rigid reviews — same tree, ticket and base — with
+  and without 3a+3b. Ship only if steps and tokens per first read fall materially **and** the
+  replay still raises the findings the original run raised.
+- **Caveat that decides the design:** these tokens are already provider-cached, and quota
+  burns anyway. A brief re-sent on every step only moves the cost. It pays only by
+  **removing steps**, so the metric is steps per first read, not brief size.
+- **Metric:** first-read tokens per review, from ~8.5M.
+
+### Step 4 — Small wastes *(ride along with step 1)*
+
+- **4a.** Deny `webfetch` and web search in reviews (`DENIED_TOOLS`, `src/reviewer/opencode.ts`)
+  — 23 calls in the sample, none a code review needs. Check the exa tool's exact name.
+- **4b.** A refusal that names a **weekly** window backs off for hours, not the 15-minute
+  `PROBE_INTERVAL_MS` (`src/core/cooloff.ts`) — Kimi was probed 80 times against a 7-day limit.
+- **4c.** `TOOL_DOCS.start`: a stacked branch is reviewed `into` its parent, not `main` —
+  #957 on #941 otherwise re-reads the parent's whole change.
+
+### Step 5 — See opencode *(from the 2026-09-16 client complaint)*
+
+- Per tier call in flight: route asked, asked since, last heard from opencode, when lore gives
+  up — persisted on the tier row so a failed round keeps its reason (three 46–88-minute
+  failures had none), and said in one sentence in `review_poll` and the inbox.
+- opencode restarts counted from event-stream reconnects plus a health probe; a board panel;
+  a page on a restart storm (seven clean exits in two hours paged nobody) and on long silence.
+
+### Order, and what each deploy costs
+
+**0 → 1+4 → 2 → 5 → 3.** Step 0 first because every later step is judged by it. 1 and 4 are
+small, independent and the biggest immediate relief, so they ship together. 2 stops the
+throwaway and unblocks the rigid sessions holding their starts. 5 before 3 because it makes
+the replay gate's failures legible. 3 last because it is the most work and needs step 0's
+data to be designed right.
+
+**Deploys drop in-flight rounds**, so steps ship in as few deploys as possible, with the
+rigid sessions warned first (they asked). **Reviewing this phase spends the same quota it is
+trying to save**, and until the plans reset those reviews run t1 only — said in each batch's
+commit rather than skipped silently.
+
+### Risks
+
+- **Fewer steps can mean missed findings** — the replay gate exists for this and is not optional.
+- **A stale brief is worse than none**: it states wrong facts confidently. Keyed to the trunk
+  commit and refused when behind.
+- **Deterministic context in rigid's languages** — which languages rigid-monorepo actually
+  is decides which extractor is viable. Unverified.
+- **Skipping correlated reads** may drop a finding a second z.ai model would have caught;
+  the replay measures that too.
+
 ## Deliberately deferred
 
 - Cross-repo knowledge (`SPEC.md` §11.5) — per-repo is decided; the workgroup-wide
@@ -286,6 +432,6 @@ is the point: the errors were not in the hard parts.
 
 ## The next concrete action
 
-Deploy it. `deploy/docker-compose.yml`, then `lore new --name … --git …`, then point
-a Claude Code session at the endpoint with no other instructions and watch where it
-goes wrong — every failure it invents becomes a sentence in the tool descriptions.
+**Phase 6, step 0** — before changing anything: record every reviewer tool call's
+argument, check the three opencode plugins for per-step injection, find out how each plan
+meters, and stand up the token report every later step is judged against.

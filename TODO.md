@@ -39,6 +39,35 @@ that part is pulled out into its own open item rather than hidden inside a tick.
 
 ## Now — nothing here is about writing more features
 
+### 2026-09-16 — Phase 6, token economy (PLAN.md has the why, the gates and the order)
+
+Order **0 → 1+4 → 2 → 5 → 3**. Each step moves a number from step 0's report, or it
+does not ship.
+
+- [ ] **0a** record each reviewer tool call's argument (command/path), not only its count
+- [ ] **0b** check the three opencode plugins for per-step injection; remove any that do
+- [ ] **0c** find how each plan meters: tokens, requests or steps
+- [ ] **0d** `make tokens` + board panel: tokens per concluded verdict, first-read share,
+      steps per first read, correlated share, no-verdict share — the baseline
+- [ ] **1** skip a deep tier whose only route is a vendor that already read (`skip_correlated`)
+- [ ] **4a** deny webfetch/web search in reviews · **4b** weekly refusal backs off for hours ·
+      **4c** stacked branch reviewed into its parent (TOOL_DOCS.start)
+- [ ] **2a** per-repository concurrency cap, queue position told to the client
+- [ ] **2b** no deep stage on a branch already merged or gone
+- [ ] **2c** attempts: reclaim does not spend one; opencode-down bounded by 30 min continuous
+- [ ] **5** per-call "waiting on" persisted and said; opencode restart detection, panel, page
+- [ ] **3a** deterministic diff context (library search first) · **3b** repository brief per
+      trunk commit · **3c** prompts.ts · **3d** replay gate, then the step budget
+
+### 2026-09-16 — Vany's to decide, deliberately outside Phase 6
+
+- [ ] **The silence bound on a single model call.** A call can sit 45 min
+      (`DEFAULT_TIMEOUT_MS`); Kimi once took 21.5 min to refuse. Bounding silence falls back
+      sooner, which changes which model is called.
+- [ ] **Metered OpenRouter.** $190.35 left (granted $6177, used $5986.65). `LORE_ALLOW_METERED`
+      unset blocks it; t2's and t3's first fallbacks are OpenRouter routes.
+
+
 ### 2026-09-10 — Vany's to decide: lore's live data lives inside the source tree
 
 - [ ] **`lore/data` holds the service's database, its git mirrors and every pinned review
