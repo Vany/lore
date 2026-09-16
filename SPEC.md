@@ -4021,6 +4021,48 @@ working agreement says to confirm rather than assume.
 (fingerprint 9c6f2a60) — never inside the repository**, so nothing needs a new
 `.gitignore` rule.
 
+**D-150 — every GLM route is glm-5.3, on both z.ai subscriptions. BUILT 2026-09-16.**
+
+Vany: *"i upgraded second plan, now we have both z.ai with glm 5.3 and everything … it is two
+different subscriptions"*, then *"ensure we using glm 5.3 every where, not 5.2 or lesser."*
+
+**Two subscriptions, not two keys on one.** `deploy/.env.example` called plan 2 "a second key
+on the same subscription". The record already said otherwise before Vany did: the two plans'
+5-hour limits reset at different times the same day (19:16 and 20:04). That matters beyond the
+wording — a second key on one subscription shares its quota, and a fallback that runs out with
+the tier it rescues rescues nothing.
+
+**What changed.** The helper and every fallback in `deploy/tiers.zai-kimi-openai.json` moved
+from `zai-coding-plan2/glm-5.2` to `glm-5.3`. `deploy/tiers.zai-openai.json` moved t1 off
+`glm-5-turbo`, t2 off `glm-5.2`, and its three fallbacks off `glm-5.2`. The built-in
+`DEFAULT_TIERS` t1 is `openrouter/z-ai/glm-5.3`, an id read from opencode's catalog rather than
+inferred from the name; the test environment's copy of it moved with it.
+
+**Plan 2's models are defined on the HOST, and that is where they had to be added.** Plan 1
+takes its model list from opencode's catalog; plan 2 is a custom provider whose list is written
+by hand, and it stopped at 5.2 — so `zai-coding-plan2/glm-5.3` answered a 500 from opencode
+itself even after the account was upgraded. The definition lives in
+`~/.config/opencode/opencode.json`, and `deploy/sync-opencode.sh` copies it into the deployment
+on every `make up`: an edit to the staged copy under `lore/` is overwritten at the next deploy
+without a word. The 5.3 entries were ADDED there with the limits opencode's own catalog gives
+those models on plan 1 (1,000,000 context, 131,072 output); the 5.2 entries were left, because
+that file also serves the operator's own opencode.
+
+**Two consequences that are known, not hidden:**
+- In `tiers.zai-openai.json`, t1 and t2 are now the SAME model on the same subscription. A deep
+  tier that repeats the fast tier's model is the correlated read Phase 6 step 1 exists to stop.
+  That file is not the deployed ladder; it needs a different t2 before anyone deploys it.
+- Reviews holding a conversation on a 5.2 route start a new session on 5.3 — one fresh first
+  read per such tier. Paid once.
+
+**[OPEN] A provider-stated park outlives a plan change.** z.ai told lore plan 2's limit reset at
+20:04; Vany's upgrade reset it at once; lore kept it parked, because it re-tests only the parks
+it GUESSED (`review.ts`, `!mark.stated`). It was cleared by hand with `clearRouteUnavailable`'s
+own statement. A stated park is not re-tested because re-asking a provider that named its own
+reset is usually wasted — which is right until an operator changes the subscription. Recorded
+beside Phase 6 step 4b rather than guessed at here: the likely shape is re-testing a stated park
+too, far less often, or an operator command to clear one.
+
 **D-149 — an opencode that dies under a FALLBACK is a requeue, not a quota skip. BUILT
 2026-09-15.**
 

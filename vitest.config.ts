@@ -81,7 +81,7 @@ export default defineConfig({
     env: {
       LORE_TIERS: JSON.stringify([
         { id: "t0", kind: "deterministic", stage: "fast" },
-        { id: "t1", kind: "model", model: "openrouter/z-ai/glm-5.2", effort: "medium", stage: "fast" },
+        { id: "t1", kind: "model", model: "openrouter/z-ai/glm-5.3", effort: "medium", stage: "fast" },
         { id: "t2", kind: "model", model: "openrouter/moonshotai/kimi-k3", effort: "high", stage: "deep" },
         { id: "t3", kind: "model", model: "openrouter/openai/gpt-5.6-sol-pro", effort: "high", stage: "deep" },
       ]),

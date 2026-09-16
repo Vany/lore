@@ -1146,7 +1146,12 @@ describe("runRound", () => {
     await runRound({ store, reviewer: cumulative, reviewId: "r1", principal: "p", worktree: dir, type: KEPT });
     expect(calls, "three rounds must each have asked t1").toBe(3);
 
-    const total = store.usageSoFar("r1", "t1", "openrouter/z-ai/glm-5.2");
+    // THE ROUTE COMES FROM THE LADDER, not from memory. This named the default t1 model as a
+    // literal, and when D-150 moved the defaults to glm-5.3 it went on summing usage for a
+    // route nothing runs on any more — reading 0 and failing for a reason that had nothing to
+    // do with per-round deltas. The neighbouring test already derives it; this one now does.
+    const t1Model = DEFAULT_TIERS.find((t) => t.id === "t1")?.model ?? "";
+    const total = store.usageSoFar("r1", "t1", t1Model);
     expect(total.inputTokens, "the true total, not 1000+2000+3000").toBe(3000);
     expect(total.costUsd, "the true total, not 0.01+0.02+0.03").toBeCloseTo(0.03, 6);
   });

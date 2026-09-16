@@ -1,5 +1,5 @@
 {
-  "helper": "zai-coding-plan2/glm-5.2",
+  "helper": "zai-coding-plan2/glm-5.3",
   "tiers": [
     {
       "id": "t0",
@@ -14,7 +14,7 @@
       "stage": "fast",
       "skip_if_quota": true,
       "fallback": [
-        "zai-coding-plan2/glm-5.2"
+        "zai-coding-plan2/glm-5.3"
       ],
       "conversation": true
     },
@@ -27,7 +27,7 @@
         "stage": "deep",
         "fallback": [
           "openrouter/moonshotai/kimi-k3",
-          "zai-coding-plan2/glm-5.2"
+          "zai-coding-plan2/glm-5.3"
         ],
         "conversation": true,
         "refactor": true
@@ -40,7 +40,7 @@
         "stage": "deep",
         "fallback": [
           "openrouter/openai/gpt-5.6-terra",
-          "zai-coding-plan2/glm-5.2"
+          "zai-coding-plan2/glm-5.3"
         ],
         "conversation": true,
         "refactor": true

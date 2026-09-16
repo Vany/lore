@@ -54,7 +54,7 @@ reachable, which is why it cannot be part of first boot — and it never edits
 | **T2** | `kimi-for-coding/k3` | high | Moonshot | subscription |
 | **T3** | `openai/gpt-5.6-terra` | high | OpenAI | subscription |
 
-T1's fallback is `zai-coding-plan2/glm-5.2` (the smaller plan), full stop — **revised
+T1's fallback is `zai-coding-plan2/glm-5.3` (the second subscription, upgraded 2026-09-16 to the same model as the first), full stop — **revised
 2026-08-31**: it used to carry a third hop to OpenRouter, gated behind
 `LORE_ALLOW_METERED=1` (D-117), which this deployment has never set. Vany's call: with
 two Z.ai subscriptions already in the chain, that third hop was never reachable in
@@ -664,7 +664,7 @@ A skip therefore lands in one of two places:
 | **at or above** it | `passed_thin_ladder` | nothing read this code at that level |
 
 **A FALLBACK TO THE SAME VENDOR COSTS THE VERDICT NOTHING, and the client's line says so.**
-`zai-coding-plan/glm-5.3` giving way to `zai-coding-plan2/glm-5.2` is one company on a
+`zai-coding-plan/glm-5.3` giving way to `zai-coding-plan2/glm-5.3` is one company on a
 second subscription — the ordinary shape here, and the one this deployment takes most
 often. The note used to call it *"a different provider"* and attach D-49's weaker-evidence
 sentence to it, which was false twice: the provider did not change and neither did
