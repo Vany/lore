@@ -25,7 +25,7 @@ import { CODE_ARCH } from "../core/review-type.ts";
 import { Store } from "../store/store.ts";
 import type { Finding } from "../core/finding.ts";
 import type { Listed, ReviewerLike, ReviewerResult, SessionResult } from "./opencode.ts";
-import { CARRIED_TIER, originalJustification, runRound } from "./review.ts";
+import { CARRIED_TIER, codeMoved, originalJustification, runRound } from "./review.ts";
 import { treeHash } from "../git/repo.ts";
 
 /** A reviewer that says exactly what a test tells it to, and records what it saw. */
@@ -4380,5 +4380,80 @@ describe("an empty change-set is refused before any tier is asked", () => {
     // And the two cases where there IS something left to do are named, with what to do.
     expect(why).toContain("already merged");
     expect(why).toMatch(/pinned to a\s+base that already contains it/);
+  });
+});
+
+/**
+ * D-153 END TO END, because the unit test could not see the defect that mattered.
+ *
+ * `anchorFromEvidence` was tested in isolation and shipped anyway broken: the post-run
+ * re-raise pass computed a SECOND scope from the model's raw line, evidence-blind, and
+ * `refreshFinding` overwrote the anchored one — so the anchor undid itself inside a single
+ * round, and never reached batch members at all. Found by lore's own review, fingerprint
+ * 34661306, HIGH. A pure function passing its own tests said nothing about either.
+ *
+ * The assertion is the CONSEQUENCE and not the storage: a fix where the claim's subject
+ * actually lives must move the finding's scope, because that is what lets it settle.
+ */
+describe("a finding's scope follows its evidence, on every path (D-153)", () => {
+  const SUBJECT = 'const answer = "the subject of this claim";';
+
+  /** Named line 2; the quoted subject is far below it. */
+  const MISPOINTED: Finding = {
+    file: "src/hold.ts",
+    line: 2,
+    symbol: "capture",
+    severity: "medium",
+    claim: "the answer is wrong",
+    evidence: `it says \`${SUBJECT}\` which is not what the caller expects`,
+    failureScenario: "a caller reads the wrong answer",
+  };
+
+  const layOutFile = (): void => {
+    const lines = [
+      "export function capture() {",
+      "  // line 2: the line the model named, and not what it quoted",
+      ...Array.from({ length: 40 }, (_, i) => `  // filler ${String(i)}`),
+      `  ${SUBJECT}`,
+      "}",
+      "",
+    ];
+    writeFileSync(join(dir, "src/hold.ts"), lines.join("\n"));
+    git("add", "-A");
+    git("commit", "-qm", "mispointed");
+  };
+
+  it("anchors on the quote, and the re-raise pass does not overwrite it", async () => {
+    layOutFile();
+    // TWO rounds: the first records the finding, the second re-raises it, which is the
+    // path that used to recompute the scope without the evidence and clobber it.
+    await runRound({ store, reviewer: new ScriptedReviewer([[MISPOINTED]]), reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
+    await runRound({ store, reviewer: new ScriptedReviewer([[MISPOINTED]]), reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
+
+    const stored = store.openFindings("r1").find((f) => f.claim === MISPOINTED.claim);
+    expect(stored?.scope, "a finding with a line must carry a scope").toBeDefined();
+    // The line is the REVIEWER'S and is never rewritten — the client sees what the tier said.
+    expect(stored?.line, "the model's own line survives").toBe(2);
+
+    // Editing where the EVIDENCE points must count as the code moving...
+    const source = readFileSync(join(dir, "src/hold.ts"), "utf8");
+    writeFileSync(join(dir, "src/hold.ts"), source.replace(SUBJECT, 'const answer = "fixed";'));
+    expect(
+      await codeMoved(dir, stored as Parameters<typeof codeMoved>[1]),
+      "a fix where the claim's subject lives is what settles the finding",
+    ).toBe(true);
+  });
+
+  it("leaves the scope on the named line when the evidence quotes nothing findable", async () => {
+    layOutFile();
+    const vague = { ...MISPOINTED, evidence: "it is simply wrong, with no quotation at all" };
+    await runRound({ store, reviewer: new ScriptedReviewer([[vague]]), reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
+
+    const stored = store.openFindings("r1").find((f) => f.claim === vague.claim);
+    // Editing the far-away subject must NOT settle it: with nothing to anchor on, the
+    // model's line stands and the scope is the window around it.
+    const source = readFileSync(join(dir, "src/hold.ts"), "utf8");
+    writeFileSync(join(dir, "src/hold.ts"), source.replace(SUBJECT, 'const answer = "fixed";'));
+    expect(await codeMoved(dir, stored as Parameters<typeof codeMoved>[1])).toBe(false);
   });
 });

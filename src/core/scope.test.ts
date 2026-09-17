@@ -209,10 +209,22 @@ describe("re-anchoring a finding onto the code its evidence quotes", () => {
     expect(anchorFromEvidence(file, 99, "it says `something never written here`")).toBeUndefined();
   });
 
+  /**
+   * BOTH QUOTES CLEAR THE LENGTH FILTER, which the first version of this test did not
+   * arrange: its shorter quote was 10 characters and `ANCHOR_MIN_CHARS` dropped it before
+   * any matching happened, so the assertion passed on the filter and would have survived
+   * any change to the ordering it is named for. Found by lore's own review, fingerprint
+   * 03179792 — "a test named for a property it does not test is worse than no test".
+   */
   it("prefers the longest quote, since the most distinctive one collides least", () => {
-    const src = "alpha beta gamma delta\nfiller\nbeta gamma\n";
-    // The short quote matches two lines; the long one matches only the first.
-    const at = anchorFromEvidence(src, 40, "it has `beta gamma` and also `alpha beta gamma delta` in it");
+    const shorter = "the shared fragment";      // 19 chars, on two lines
+    const longer = `${shorter} plus a tail`;    // 32 chars, on one
+    const src = [`one ${longer}`, "filler", `two ${shorter}`, "filler", "filler"].join("\n");
+    // Ordering is the whole subject: taken shortest-first, or in evidence order, the
+    // ambiguous quote would be tried first and the answer would be undefined.
+    const at = anchorFromEvidence(src, 40, `it has \`${shorter}\` and also \`${longer}\` in it`);
     expect(at).toBe(1);
+    // ...and the shorter one really is ambiguous, or this proves nothing.
+    expect(anchorFromEvidence(src, 40, `only \`${shorter}\` here`)).toBeUndefined();
   });
 });

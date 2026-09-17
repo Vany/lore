@@ -126,6 +126,9 @@ function wire(): Wire {
 const WIRE = wire();
 const LORE_URL = WIRE.url;
 const LORE_TOKEN = WIRE.token;
+/** Node's own timer ceiling: above this, `setTimeout` silently uses 1ms instead. */
+const MAX_INTERVAL_MS = 2_147_483_647;
+
 /**
  * How often to ask lore, in milliseconds — and a refusal to guess when the answer is not a
  * number.
@@ -145,6 +148,18 @@ export function pollInterval(raw: string | undefined): { readonly ms: number } |
   const ms = Number(raw);
   if (!Number.isFinite(ms)) return { bad: `LORE_CHANNEL_INTERVAL_MS is "${raw}", which is not a number of milliseconds` };
   if (ms < 1_000) return { bad: `LORE_CHANNEL_INTERVAL_MS is "${raw}"; the floor is 1000ms, and anything under it is a hot loop` };
+  // AND A CEILING, for the same reason and by the same mechanism — found by lore's own
+  // review, fingerprint c185c56a. `setTimeout` coerces any delay above 2^31-1 to ONE
+  // MILLISECOND, so a value typed in microseconds sails through the floor and produces the
+  // exact hot loop the floor exists to make impossible, while the startup line cheerfully
+  // announces a poll "every 5000000s". No interval of 24 days is what an operator meant.
+  if (ms > MAX_INTERVAL_MS) {
+    return {
+      bad:
+        `LORE_CHANNEL_INTERVAL_MS is "${raw}", which is over 24 days; setTimeout turns anything above ` +
+        `${String(MAX_INTERVAL_MS)}ms into a 1ms timer, so this would poll continuously rather than never`,
+    };
+  }
   return { ms };
 }
 

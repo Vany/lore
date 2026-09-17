@@ -4033,10 +4033,24 @@ the client was told to write its `lore-ok` at a line with nothing to do with the
 review ended with it open, and the first diagnosis blamed the settle pass, which was working
 perfectly on the data it was given.
 
-**`anchorFromEvidence` (`src/core/scope.ts`) moves the line to where the quoted code
-actually is**, and `anchoredScope` records the corrected line on the finding rather than
-only using it for the hash — a scope anchored somewhere other than the finding's own line
-would be the same defect one layer deeper and harder to see.
+**`anchorFromEvidence` (`src/core/scope.ts`) decides where the SCOPE is taken**, and
+nothing else. `anchoredScope` is the single function every capture site calls.
+
+**CORRECTED THE SAME DAY, BY THIS DECISION'S OWN REVIEW (fingerprint 34661306, HIGH).** As
+first built it also rewrote the finding's line, on the reasoning that a scope anchored
+somewhere other than the finding's own line would be the same defect one layer deeper. That
+reasoning was right about the danger and wrong about the remedy, and it produced exactly the
+state it feared: the post-run re-raise pass computed a SECOND scope from the model's raw
+line, evidence-blind, and `refreshFinding` overwrote the anchored one — so the anchor undid
+itself inside a single round, leaving findings stored with one line and a scope watching
+another. The same pass is the ONLY path batch (non-streamed) members take, so they never
+got the anchor at all. Both are the same root cause: two places computing one thing.
+Rewriting the line also destroyed the only record of what the tier actually said, which is
+precisely what a reader needs when the heuristic is the party in the wrong.
+
+So the line is never rewritten, one function serves every site, and `parseLoreOk` matches a
+justification by FINGERPRINT anywhere in the file — so nothing about answering a finding
+ever depended on the line being right.
 
 **Deliberately timid, and that is the whole design.** A wrong re-anchor is worse than none:
 it moves a CORRECT finding onto unrelated code, and unlike the original defect nobody is
@@ -4045,10 +4059,18 @@ quotes a fragment of at least 12 characters, that fragment occurs EXACTLY ONCE i
 and the named line is not already within 2 lines of it. Several matches, no match, a short
 fragment or no evidence all leave the model's line untouched.
 
-**What it does not do:** check that a line contains what the claim describes in general.
-That needs the claim understood, not a string found, and a fuzzy version of this would be a
-worse defect wearing a helpful face. This catches the case where the model handed us the
-answer in its own evidence, which is the case that occurred.
+**What it does not do, and this is a real hole rather than a caveat** (fingerprint
+10c63eae): it cannot tell a quote OF the claim's subject from a quote that merely
+REFERENCES it. Evidence quoting a call site while the claim is about the definition anchors
+the scope at the call site, and a fix at the definition then does not auto-settle.
+
+**Accepted deliberately, on the asymmetry.** That costs a round — the same cost as the
+defect it replaces, and the client still has `fixed_elsewhere`, a `lore-ok` anywhere in the
+file, and `will_not_settle`. What it cannot do is corrupt a verdict, because settlement was
+NOT made more permissive: the obvious alternative — settle if EITHER anchor moved — would
+let an unrelated edit at a quoted reference record `fixed` for a defect nobody fixed, and a
+false `fixed` never expires (`expireStaleVerdicts` reopens justifications only). A
+finding that will not auto-settle is visible and answerable; a wrong `fixed` is neither.
 
 **D-152 — the sandbox hands its own limits down to the tooling inside it, and is the
 kernel's victim when the box goes under. BUILT 2026-09-17.**

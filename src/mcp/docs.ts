@@ -454,12 +454,17 @@ WHAT EACH FINDING CARRIES.
 codebase already knows about this defect, which tells you whether to fix the line or
 fix the habit.
 
-\`line\` IS THE REVIEWER'S CLAIM ABOUT POSITION, and lore corrects it when the evidence
-proves it wrong: if the evidence quotes a distinctive fragment that sits exactly once in
-the file, somewhere other than the line given, the line you are handed is where that
-fragment actually is. It is left alone in every other case, including when the quote is
-ambiguous. This matters to you because settlement is anchored there — a \`lore-ok\` written
-at a line the claim is not about can never settle the finding, however right your answer is.
+\`line\` IS THE REVIEWER'S CLAIM ABOUT POSITION, and it is handed to you exactly as the
+reviewer gave it — lore never rewrites it. What lore does correct is where it WATCHES for
+your fix: when the evidence quotes a distinctive fragment that sits exactly once in the
+file, somewhere other than the line given, the finding settles on a change THERE rather
+than at the line. You do not have to do anything with that, and it is why a finding whose
+line looks wrong is still worth fixing where the claim actually points.
+
+AND A \`lore-ok\` IS MATCHED BY FINGERPRINT, ANYWHERE IN THE FILE. Putting it at the named
+line is good manners to the next reader, not a requirement — so a finding that names a line
+you believe is wrong is still answerable: write the marker where the code actually is, say
+so in the reason, and it counts.
 
 \`preexisting: true\` means the finding is in a file YOUR BRANCH DOES NOT TOUCH and the
 pattern was already there — every other branch gets it too. Real, worth a ticket, not

@@ -1193,19 +1193,15 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     // The scope read can race a sibling's boundary apply on the shared worktree: worst
     // case is a hunk hashed mid-patch, which the next re-raise refreshes. Chosen over
     // holding the lock for every emission, which would serialise the rung.
-    // THE LINE CAN MOVE HERE, and it is recorded where the client will read it. See
-    // `anchoredScope`: a model's line is a claim about position and can be wrong while the
-    // claim is right, and every consumer downstream trusts it.
-    const anchored = await anchoredScope(worktree, f);
+    const scope = await anchoredScope(worktree, f);
     const rec: RecordedFinding = {
       ...f,
-      ...(anchored.line === undefined ? {} : { line: anchored.line }),
       fingerprint: fp,
       origin: member.id,
       round: review.ladder.round + 1,
       firstSeen: new Date().toISOString(),
       preexisting: false,
-      ...(anchored.scope === undefined ? {} : { scope: anchored.scope }),
+      ...(scope === undefined ? {} : { scope }),
     };
     if (store.recordFinding(reviewId, rec)) {
       streamed.push(rec);
@@ -1216,7 +1212,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
         origin: member.id,
         line: `${fp.slice(0, 8)} ${rec.file}:${String(rec.line ?? "?")} [${rec.severity}] — ${rec.claim}`,
       });
-    } else store.refreshFinding(reviewId, fp, anchored.scope, undefined);
+    } else store.refreshFinding(reviewId, fp, scope, undefined);
   };
 
   const streamRun = async (route: Tier, asProbe = false): Promise<ReviewerResult> => {
@@ -2885,7 +2881,14 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     // The scope is taken NOW, while the code the finding is about is still the code
     // the tier saw. Without it a later round cannot tell a finding the author fixed
     // from one a tier simply stopped mentioning (D-56).
-    const scope = await scopeOf(worktree, f.file, f.line);
+    //
+    // THROUGH `anchoredScope`, LIKE EVERY OTHER SITE — found by lore's own review,
+    // fingerprint 34661306, HIGH. This pass ran a second, evidence-blind scope computation
+    // and `refreshFinding` overwrote the anchored one recorded at emission, so D-153 undid
+    // itself inside one round and left findings stored with one line and a scope watching
+    // another. It is also the ONLY path batch (non-streamed) members take, so the anchor
+    // never reached them at all. One function, every caller.
+    const scope = await anchoredScope(worktree, f);
     const rec: RecordedFinding = {
       ...f,
       fingerprint: fp,
@@ -3368,37 +3371,42 @@ function tierRank(tiers: readonly Tier[], id: string): number {
  * "cannot tell", and every caller treats that as a reason to do nothing rather than
  * as evidence of anything.
  */
-async function scopeOf(worktree: string, file: string, line: number | undefined): Promise<Scope | undefined> {
-  return (await anchoredScope(worktree, { file, line })).scope;
-}
-
 /**
- * The scope, and the line it should have been captured at.
+ * The code a finding is about, anchored on the EVIDENCE when the named line is not where
+ * the claim's subject lives (D-153).
  *
- * A finding's line is a MODEL'S claim about position, and it can be wrong while the claim
- * itself is right — `55aeca68` named `README.md:297` while quoting a mermaid node that
- * lived elsewhere. Everything downstream inherits the line: the scope is hashed around it,
- * so `codeMoved` watches code the fix will never touch and the finding can never settle,
- * and the client is told to write its `lore-ok` at a line with nothing to do with the
- * claim. `anchorFromEvidence` corrects it when — and only when — the evidence quotes
- * something long enough and unique enough to be sure about.
+ * A finding's line is a MODEL'S claim about position and can be wrong while the claim is
+ * right: `55aeca68` named `README.md:297` while quoting a mermaid node that lived
+ * elsewhere, so the scope was hashed around 25 unrelated lines, `codeMoved` watched code no
+ * fix would touch, and the finding could not settle however correctly it was answered.
  *
- * Returns the corrected line so the CALLER can record it: a scope quietly anchored
- * somewhere other than the finding's own line would be the same defect one layer deeper,
- * and harder to see.
+ * **THE LINE ITSELF IS NEVER REWRITTEN, and that is a correction to D-153 as first built.**
+ * Rewriting it created a worse defect than the one it fixed — the post-run re-raise pass
+ * re-derives the scope from the model's raw line, so a finding ended up STORED with one
+ * line and a scope watching another — and it destroyed the only record of what the tier
+ * actually said, which is the thing a reader needs when this heuristic is the party in the
+ * wrong. So the anchor governs one thing: where the scope is taken. The client is still
+ * shown the reviewer's own line, and a `lore-ok` is matched by FINGERPRINT anywhere in the
+ * file (`parseLoreOk`), so nothing about answering depends on it.
+ *
+ * **What this cannot do is tell a quote OF the subject from a quote that REFERENCES it.**
+ * Evidence quoting a call site while the claim is about the definition moves the scope to
+ * the call site, and a fix at the definition then does not auto-settle. That costs a round
+ * and is recorded in D-153 as the accepted trade: it is the same cost as the defect it
+ * replaces, and neither can corrupt a verdict, because settlement was deliberately NOT made
+ * more permissive — a false `fixed` never expires, and that asymmetry decides it.
  */
 async function anchoredScope(
   worktree: string,
   f: { readonly file: string; readonly line?: number | undefined; readonly evidence?: string },
-): Promise<{ readonly scope?: Scope; readonly line?: number }> {
-  if (f.line === undefined) return {};
+): Promise<Scope | undefined> {
+  if (f.line === undefined) return undefined;
   const source = await readFile(join(worktree, f.file), "utf8").catch(() => undefined);
-  if (source === undefined) return {};
-  const moved = anchorFromEvidence(source, f.line, f.evidence);
-  const line = moved ?? f.line;
+  if (source === undefined) return undefined;
   const blob = await blobSha(worktree, f.file);
-  if (blob === undefined) return moved === undefined ? {} : { line };
-  return { scope: makeScope(blob, hunkAround(source, line)), ...(moved === undefined ? {} : { line }) };
+  if (blob === undefined) return undefined;
+  const at = anchorFromEvidence(source, f.line, f.evidence) ?? f.line;
+  return makeScope(blob, hunkAround(source, at));
 }
 
 /**
@@ -3743,7 +3751,7 @@ async function collectJustifications(
       out.push({
         finding,
         reason,
-        scope: await scopeOf(worktree, finding.file, finding.line),
+        scope: await anchoredScope(worktree, finding),
         // Carried only when the citation RESOLVED. An appeal to a rule that does not
         // exist is judged on its words like any other reason; it must not be able to
         // buy a suppression, or an unresolvable id would switch a check off.
@@ -3808,7 +3816,7 @@ async function collectFixedElsewhere(
       // tier that is supposed to ratify it: it saw only free prose, indistinguishable
       // from a claim naming nowhere at all, and silence accepts either way.
       reason: `${claim.reason} (fixed at ${claim.file}${claim.line === undefined ? "" : `:${String(claim.line)}`})`,
-      scope: await scopeOf(worktree, finding.file, finding.line),
+      scope: await anchoredScope(worktree, finding),
     });
   }
   return out;

@@ -235,4 +235,19 @@ describe("the poll interval refuses what it cannot read", () => {
     expect("bad" in pollInterval("999")).toBe(true);
     expect("bad" in pollInterval("-5")).toBe(true);
   });
+
+  /**
+   * THE CEILING IS THE SAME DEFECT FROM ABOVE — found by lore's own review, fingerprint
+   * c185c56a. `setTimeout` turns any delay over 2^31-1 into ONE MILLISECOND, so a value
+   * typed in microseconds passes the floor and produces exactly the hot loop the floor was
+   * added to make impossible, while the startup line announces a poll every 5,000,000
+   * seconds.
+   */
+  it("refuses a value so large that setTimeout would fire immediately", () => {
+    const bad = pollInterval("5000000000");
+    expect("bad" in bad && bad.bad).toMatch(/24 days|1ms timer/);
+    // The boundary itself is legal, so the refusal is about the coercion and not about
+    // large numbers being suspicious.
+    expect(pollInterval("2147483647")).toStrictEqual({ ms: 2_147_483_647 });
+  });
 });
