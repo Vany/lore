@@ -261,13 +261,19 @@ so the docs are the interface**. What follows is what actually happens.
 ```
 1.  the engineer finishes a branch and pushes it
 2.  the agent calls    review_start(branch, into, ticket)     → review_id, in under a second
-3.  T0 runs on the host       your own tsc / eslint / semgrep / ast-grep     ~10s
+3.  T0 runs in a throwaway container: your own tsc / eslint / semgrep / ast-grep    ~10s
 4.  T1 reads the diff         one model, one vendor                         ~5-15 min
 5.  the agent calls    review_poll(review_id)                 → findings, each with a
                                                                  claim, its evidence, and
                                                                  the failure it predicts
 6.  the engineer or the agent fixes them — or writes lore-ok[<id>]: <why> at the line
-7.  the agent pushes and calls review_start(..., pull_fresh: true)
+7.  the agent hands the fixes back, either way round:
+        review_submit(review_id, diff, tree_hash)   the usual path — the work never
+                                                    leaves the client's own history,
+                                                    and lore applies it to a private
+                                                    worktree without committing
+        review_start(..., pull_fresh: true)         push first, no diff on the wire:
+                                                    same review, re-pinned to the new tip
 8.  the ladder re-reads the CORRECTED tree, and rules on every justification
         a rejected one comes back at higher severity
         an accepted one becomes a fact this repository now knows
@@ -276,6 +282,14 @@ so the docs are the interface**. What follows is what actually happens.
 11. the agent calls    review_attest(review_id)               → one signed line
 12. merge
 ```
+
+**Step 7 is the one worth reading twice.** `review_submit` is the ordinary path and two
+thirds of this deployment's rounds arrive through it: the fix stays in the client's own
+history, lore applies it to a private worktree and never commits, and the reviewer keeps
+one conversation per tier across the whole review rather than re-reading from cold.
+`pull_fresh` is for when the branch is already pushed and composing a diff into a tool call
+is the awkward part — a whitespace-significant diff does not survive every client, which is
+exactly why both exist.
 
 Median: **4.1 rounds**, a round is minutes not seconds, and nothing blocks — `review_start`
 returns immediately and the agent goes back to work. What it must not do is walk away: a
@@ -296,8 +310,12 @@ JavaScript framework.
 | **`/healthz`** | unauthenticated liveness, for a probe |
 
 A knowledge conflict — two rules about the same thing that cannot both hold — stops the
-review and asks a person. **That decision is a button on this board**, and it records who
-decided. It is the one place lore deliberately refuses to guess.
+review and asks a person. **That decision is a button on this board**, and what it records
+is deliberately modest: *"a person on the operator board (no credential, so no name
+recorded)"*, plus whatever reason they typed. The page holds no credential, so which person
+is not recoverable, and lore will not write down an attribution it cannot support. When you
+need the decision attributed, `knowledge_resolve` over MCP does the same thing under a
+token and records who. It is the one place lore deliberately refuses to guess.
 
 
 ### 5. Stop your agent sleeping: run the channel
