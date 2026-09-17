@@ -173,9 +173,20 @@ itself — and the shape of those findings is the reason the project has the sha
 
 ---
 
-## Quick start
+## What you get, concretely
 
-### As a CLI, on your laptop
+| you do | lore does | you get |
+|:--|:--|:--|
+| push a branch and ask for a review | runs your own `tsc`, ESLint, `semgrep`, `ast-grep`, then up to three models from three vendors | findings with a **failure scenario**, not style notes |
+| fix, or write a `lore-ok[…]` reason | re-reads the corrected tree; rules on your reason | the reason becomes **shared memory**, or comes back at higher severity |
+| merge | signs one line naming the tree, the tiers, the vendors and the verdict | an **attestation**: what was checked, never "the code is correct" |
+| start tomorrow's session, amnesiac | hands the reviewers what this repository already taught it | a review that does not re-raise what you settled last week |
+
+---
+
+## Use it
+
+### 1. Try it on a laptop, with no service at all
 
 ```bash
 npm ci
@@ -195,34 +206,101 @@ Exit codes are the API, because the caller is usually a program:
 | `75` | quota exhausted — also not a pass |
 
 `0` and `3` are **both** successes, and `3` is the *ordinary* one here — 287 of 341 clean
-verdicts. They are separate so a caller that needs the full ladder can require `0`, and one
-that only needs "the tiers that ran agreed" can accept either. A script treating `3` as
-failure blocks on nearly every clean review; one treating it as `0` loses the distinction
-the ladder exists to make. Choose deliberately.
+verdicts. A script treating `3` as failure blocks on nearly every clean review; one
+treating it as `0` loses the distinction the ladder exists to make. Choose deliberately.
 
-### As a service, for a workgroup
+### 2. Run it for your whole team
+
+**One deployment on one box serves every engineer.** That is the intended shape rather than
+a scaling story bolted on afterwards: knowledge is per *repository* and shared by everybody
+who works on it (D-18, D-19), so what your colleague's review established on Monday is what
+your agent is handed on Thursday.
 
 ```bash
+# on the company server, once
 cd deploy
 cp .env.example .env          # three subscriptions by default, or one metered key
-make sync-opencode            # stage local config, minus the Anthropic credential
+make sync-opencode            # stage local model config, minus the Anthropic credential
 make up
-make new NAME=you GIT=git@github.com:you/repo.git   # token + the .mcp.json to paste
-make mirror REPO=repo         # clone it once — out here, as you
-make mirror-daemon            # ...and keep it fresh, so nobody has to remember
+
+# one line per engineer, per repository
+make new NAME=alice GIT=git@github.com:acme/payments.git
+make new NAME=bob   GIT=git@github.com:acme/payments.git
+make new NAME=carol GIT=git@github.com:acme/console.git
+
+# keep the mirrors fresh, so nobody has to remember
+make mirror REPO=payments
+make mirror-daemon
 ```
 
-**lore never talks to a remote.** It holds no git credentials by design, so the fetch
-happens on the host under your own agent and lands in a directory the container already
-reads. Keeping that current is the *service's* job, not a person's (D-65): the client is an
-agent on another machine with no shell here, and a stale mirror was once the single largest
-cause of failed reviews.
+Each `make new` prints **a revocable bearer token and the exact `.mcp.json` block to
+paste** into that person's Claude Code, Cursor, or any other MCP client. Nothing else is
+installed on their machine, and nothing is installed per project.
 
-Then point any MCP client at it. lore ships its own documentation — tool descriptions,
-`lore://docs/*` resources and a `/lore:review` prompt that drives the whole loop — because
-**the client is an agent, so the docs are the interface**.
+| property | how it works |
+|:--|:--|
+| **isolation** | a token reaches exactly one repository; one engineer cannot poll, submit to or attest another's review (D-78) |
+| **sharing** | knowledge is per repository and shared by every session and teammate working on it |
+| **capacity** | a claimed round starts immediately — no worker queue — and the service refuses politely at 128 open reviews |
+| **revocation** | `make tokens` lists them by hash; `make revoke TOKEN=<prefix>` turns one off. The secret is shown once, and revoking never needs it back |
+| **perimeter** | `LORE_BIND` defaults to loopback. Put it on your tailnet, or bind it to the LAN deliberately — on a LAN, **the tokens are the perimeter** |
+| **cost** | flat subscriptions, one set for the whole team: 4,458 of this deployment's 4,551 calls billed nothing beyond them |
 
-### Stop your agent sleeping: run the channel
+**lore never talks to a remote and holds no git credentials.** The mirror is fetched on the
+host under your own agent, and the container only reads the directory it lands in. Keeping
+it current is the *service's* job, not a person's (D-65): the client is an agent on another
+machine with no shell here, and a stale mirror was once the single largest cause of failed
+reviews.
+
+### 3. The loop, exactly
+
+Your agent drives this. lore ships its own instructions — tool descriptions,
+`lore://docs/*` resources and a `/lore:review` prompt — because **the client is an agent,
+so the docs are the interface**. What follows is what actually happens.
+
+```
+1.  the engineer finishes a branch and pushes it
+2.  the agent calls    review_start(branch, into, ticket)     → review_id, in under a second
+3.  T0 runs on the host       your own tsc / eslint / semgrep / ast-grep     ~10s
+4.  T1 reads the diff         one model, one vendor                         ~5-15 min
+5.  the agent calls    review_poll(review_id)                 → findings, each with a
+                                                                 claim, its evidence, and
+                                                                 the failure it predicts
+6.  the engineer or the agent fixes them — or writes lore-ok[<id>]: <why> at the line
+7.  the agent pushes and calls review_start(..., pull_fresh: true)
+8.  the ladder re-reads the CORRECTED tree, and rules on every justification
+        a rejected one comes back at higher severity
+        an accepted one becomes a fact this repository now knows
+9.  clean at T1 → T2 and T3 run together, two more vendors, on the tree T1 cleared
+10. all agree → passed (exit 0) or passed_thin_ladder (exit 3)
+11. the agent calls    review_attest(review_id)               → one signed line
+12. merge
+```
+
+Median: **4.1 rounds**, a round is minutes not seconds, and nothing blocks — `review_start`
+returns immediately and the agent goes back to work. What it must not do is walk away: a
+review that nobody answers holds its findings and expires having concluded nothing, which
+is why step 5 is a loop and why the channel below exists.
+
+### 4. Watch it: the web board
+
+`http://<host>:7777/` is a live operator view — server-sent events, no build step, no
+JavaScript framework.
+
+| surface | what it answers |
+|:--|:--|
+| **`/`** | every review in flight with its tier, round and age; which provider routes are in cool-off and until when; host load; model calls in flight; the running build's own commit |
+| **`/status`** | the health report the heartbeat sends — `ok`, and *why not* when it is false: stale mirrors, replica lag, uncollected high findings, host memory under the floor |
+| **`/config.json`** | every setting with its value, its default, what it does and how to change it — so "is metered spending on?" has an answer that is not a guess |
+| **`/board.json`** | the same board as JSON, for your own dashboard |
+| **`/healthz`** | unauthenticated liveness, for a probe |
+
+A knowledge conflict — two rules about the same thing that cannot both hold — stops the
+review and asks a person. **That decision is a button on this board**, and it records who
+decided. It is the one place lore deliberately refuses to guess.
+
+
+### 5. Stop your agent sleeping: run the channel
 
 A review takes tens of minutes and a client has no way to know when it finished, so agents
 bridge the gap with a fixed `sleep`. Measured here: a median of three minutes of dead

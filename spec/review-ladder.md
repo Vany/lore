@@ -110,9 +110,16 @@ wrong (43cd1237).
 Tiers are configuration, not code.
 
 **Three tiers, three vendors — deliberately.** Two tiers from one model family
-share blind spots and are not two independent opinions. Kimi K3 is poor value on
-capability alone (3× the price of GPT-5.6 Terra for 2 more points), but it buys a
-third distinct vendor, and independence is the premise of the whole design (D-1).
+share blind spots and are not two independent opinions. Kimi K3 is the expensive seat —
+`3.00/15.00` against `2.00/10.00` for the OpenAI row above it, so 1.5× on both axes — and
+it is kept anyway, because it buys a third distinct vendor and independence is the premise
+of the whole design (D-1).
+
+This sentence used to read *"3× the price of GPT-5.6 Terra for 2 more points"*, citing an
+intelligence index that no longer appears in the table, and its twin in §5.2 cited the same
+index for **two FEWER** points. One number, quoted in opposite directions in one file, is
+the argument for dropping it: the decision stands on the vendor count, which is checkable,
+not on an index nobody here can re-derive.
 
 ### 1.1 T0 is not a model, and that is the point
 
@@ -716,10 +723,12 @@ a tier it did not run would be the silent downgrade this project exists to refus
 **This overruled an argument, and the argument is kept because it may age better than the
 decision.** I put two objections and Vany decided against both:
 
-1. *The ladder is not ordered by capability.* §1 says so in its own words — the
-   intercepts are 51 / 57 / 59, and K3 is kept at 3× the price of GPT-5.6 Terra for two
-   fewer points **because it buys a third vendor**. If tiers were a capability ordering,
-   t2 would not be in the ladder at all.
+1. *The ladder is not ordered by capability.* §1 says so in its own words — K3 is the
+   dearest seat in the ladder and is kept **because it buys a third vendor**, not because
+   it is the strongest reader. If tiers were a capability ordering, t2 would not be in the
+   ladder at all. (This point argued from an intelligence index, `51 / 57 / 59`, which §1
+   and this line quoted in opposite directions; the index is gone and the argument does not
+   need it.)
 2. *Our own findings do not look like a subset relation.* All time: t2 raised 111
    findings with 3 high or critical, **t1 raised 95 with 13** — the largest source of
    high-severity model findings in the system. The confound is real and unresolvable from
