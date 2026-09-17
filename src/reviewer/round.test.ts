@@ -4324,3 +4324,61 @@ describe("a rung of two members", () => {
     expect(r.t0Unavailable.join(" "), "and it is not filed as an engine gap").not.toContain("t2");
   });
 });
+
+/**
+ * NOTHING TO READ IS NOT A CLEAN REVIEW (INV-1), and until now nothing asserted it.
+ *
+ * The guard exists and is load-bearing — `drain.test.ts` had to change its fixture the day
+ * it landed, because that fixture reviewed `main` into `main` and the round stopped
+ * refusing to pretend. But an incidental fixture break is not a test: it says the code ran,
+ * not that it says the right thing, and the three-way message here is the whole value. A
+ * branch that a FINDING told the author to revert reaches this state by obeying, and the
+ * earlier wording sent that client to buy a fresh ladder to re-read code it had just
+ * correctly deleted.
+ */
+describe("an empty change-set is refused before any tier is asked", () => {
+  const emptyBranch = () => {
+    // The branch tip IS the base: `git checkout -B` from main, no commit on top.
+    git("checkout", "-q", "main");
+    git("checkout", "-qB", "feat/nothing");
+    store.createReview({
+      id: "empty1",
+      repoId,
+      principal: "p",
+      branch: "feat/nothing",
+      intoRef: "main",
+      ticket: "Revert the change: it duplicated what the base already had.",
+      type: CODE_ARCH.id,
+      state: "running",
+      ladder: initialState(),
+    });
+  };
+
+  it("fails the review rather than passing it, and asks no tier anything", async () => {
+    emptyBranch();
+    const reviewer = new ScriptedReviewer([]);
+    await expect(
+      runRound({ store, reviewer, reviewId: "empty1", principal: "p", worktree: dir, type: CODE_ARCH }),
+    ).rejects.toBeInstanceOf(DidNotRun);
+
+    expect(store.getReview("empty1", "p")?.state, "never `passed` — four models agreeing about nothing").toBe("failed");
+    // The consequence, not the setup: no tier was asked, so nothing was spent.
+    expect(store.tierRunsFor("empty1"), "no tier ran, so nothing was paid for").toStrictEqual([]);
+  });
+
+  it("tells the client which of the three cases it is in, including the one it reached by OBEYING", async () => {
+    emptyBranch();
+    await runRound({ store, reviewer: new ScriptedReviewer([]), reviewId: "empty1", principal: "p", worktree: dir, type: CODE_ARCH })
+      .catch(() => undefined);
+
+    const why = store.failureReason("empty1") ?? "";
+    expect(why, "not a pass, said in the words the whole project turns on").toContain("NOTHING WAS READ");
+    expect(why).toContain("this is not a pass");
+    // A client that reverted its branch BECAUSE a finding told it to must be told it is
+    // finished, not sent to buy another ladder.
+    expect(why).toContain("NOTHING FURTHER IS NEEDED FROM YOU");
+    // And the two cases where there IS something left to do are named, with what to do.
+    expect(why).toContain("already merged");
+    expect(why).toMatch(/pinned to a\s+base that already contains it/);
+  });
+});

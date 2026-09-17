@@ -454,6 +454,13 @@ WHAT EACH FINDING CARRIES.
 codebase already knows about this defect, which tells you whether to fix the line or
 fix the habit.
 
+\`line\` IS THE REVIEWER'S CLAIM ABOUT POSITION, and lore corrects it when the evidence
+proves it wrong: if the evidence quotes a distinctive fragment that sits exactly once in
+the file, somewhere other than the line given, the line you are handed is where that
+fragment actually is. It is left alone in every other case, including when the quote is
+ambiguous. This matters to you because settlement is anchored there — a \`lore-ok\` written
+at a line the claim is not about can never settle the finding, however right your answer is.
+
 \`preexisting: true\` means the finding is in a file YOUR BRANCH DOES NOT TOUCH and the
 pattern was already there — every other branch gets it too. Real, worth a ticket, not
 yours to answer in this merge. **The list is already ordered with these last**, so do

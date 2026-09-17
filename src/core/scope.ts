@@ -169,3 +169,65 @@ export function hunkAround(source: string, line: number, radius = HUNK_RADIUS): 
   const start = Math.min(Math.max(0, line - 1 - radius), lines.length - window);
   return lines.slice(start, start + window).join("\n");
 }
+
+/**
+ * How far a named line may be from the code its evidence quotes before the line is
+ * treated as wrong rather than approximate.
+ *
+ * A model pointing two lines off is pointing at the thing. Forty lines off is pointing at
+ * something else, and everything downstream then anchors to that something else.
+ */
+const ANCHOR_SLACK = 2;
+
+/** The shortest quoted fragment worth trusting as an anchor. Below this, coincidence. */
+const ANCHOR_MIN_CHARS = 12;
+
+/**
+ * Where a finding's evidence says the code actually is, when that is not where the
+ * finding says it is.
+ *
+ * **WHY THIS EXISTS, measured 2026-09-17.** A tier raised `55aeca68` against
+ * `README.md:297`, quoting a mermaid node in its evidence — and line 297 held an unrelated
+ * section, because the model named a line that did not contain the text it was arguing
+ * about. Nothing checked, so `scopeOf` captured 25 lines around the WRONG place and every
+ * downstream consumer inherited it: `codeMoved` watched a region no fix would ever touch,
+ * so the finding could never settle; and the client was told to write its `lore-ok` at a
+ * line with nothing to do with the claim. The review ended with it open, and the first
+ * diagnosis blamed the settle pass — which was working perfectly on the data it was given.
+ *
+ * DELIBERATELY TIMID, because a wrong re-anchor is worse than none: it would move a
+ * correct finding onto unrelated code and, unlike the original defect, nobody would have
+ * the model's own line to compare against. So it fires only when the evidence quotes a
+ * fragment long enough not to be coincidence, that fragment occurs EXACTLY ONCE in the
+ * file, and the named line is not already within `ANCHOR_SLACK` of it. Anything else —
+ * several matches, no match, a short fragment, no evidence — returns undefined and the
+ * model's own line stands.
+ *
+ * SPEC: SPEC.md D-153
+ */
+export function anchorFromEvidence(source: string, line: number, evidence: string | undefined): number | undefined {
+  if (evidence === undefined || evidence === "") return undefined;
+  const lines = source.split("\n");
+
+  // Backtick spans are how every tier quotes code in `evidence` — checked against the
+  // findings this deployment has actually recorded, not assumed from the prompt.
+  const fragments = [...evidence.matchAll(/`([^`\n]+)`/g)]
+    .map((m) => m[1] ?? "")
+    .filter((f) => f.trim().length >= ANCHOR_MIN_CHARS)
+    // Longest first: the most distinctive quote is the one least likely to collide.
+    .sort((a, b) => b.length - a.length);
+
+  for (const fragment of fragments) {
+    const hits: number[] = [];
+    for (const [i, text] of lines.entries()) {
+      if (text.includes(fragment)) hits.push(i + 1);
+      // Two is already ambiguous; stop counting.
+      if (hits.length > 1) break;
+    }
+    if (hits.length !== 1) continue;
+    const at = hits[0] ?? 0;
+    if (Math.abs(at - line) <= ANCHOR_SLACK) return undefined;
+    return at;
+  }
+  return undefined;
+}

@@ -387,26 +387,33 @@ line it belongs to:**
 
 ### Mine, ready — no decision needed, only a turn
 
-- [ ] **eslint has NEVER run on lore's own repository, and cannot yet.** Every review of
-      this repo reports `eslint: no `lint` script and no eslint config` in
+- [ ] **eslint has NEVER run on lore's own repository, and the blocker is upstream.**
+      Every review of this repo reports `eslint: no `lint` script and no eslint config` in
       `checks_skipped` — one of T0's four engines dark on the repo whose whole purpose is
-      catching what people miss, and we had both been reading past the line for weeks.
-      Surfaced 2026-08-17 while driving our own review.
+      catching what people miss. Surfaced 2026-08-17; **tried and measured 2026-09-17**.
 
-      **Blocked upstream, verified rather than assumed.** `typescript-eslint@8.67.0` (and
-      its canary) peer-requires `typescript >=4.8.4 <6.1.0`; this repo is on 7.0.2. Forced
-      into a scratch project it does not degrade — it THROWS at import: *"typescript-eslint
-      does not support TS 7.0"*, pointing at
-      https://github.com/typescript-eslint/typescript-eslint/issues/10940. The documented
-      side-by-side workaround needs the RESOLVED `typescript` to be 6.x, which would take
-      our own `tsc --noEmit` with it, and TS 7 is load-bearing here (`erasableSyntaxOnly`,
-      no build step, D-33's source-is-the-binary).
+      **`typescript-eslint` does not support this repository's TypeScript.** Latest stable
+      is 8.70.0, whose peer range is `typescript >=4.8.4 <6.1.0`; lore is on `typescript
+      7.0.2`. Installed anyway with `--legacy-peer-deps` to find out whether the range was
+      merely conservative, and it is not — the plugin refuses at load, in its own words:
 
-      So: not forced, not faked. Options when 10940 lands, or sooner if it is worth the
-      machinery — a separate lint workspace with its own TypeScript, or `oxlint`/`biome`,
-      which parse TS themselves and have no TypeScript peer at all. **The gap stays
-      REPORTED in the meantime**, which is the one part already working: the engine says it
-      could not run rather than passing, exactly as INV-1 requires.
+      ```
+      Error: typescript-eslint does not support TS 7.0.
+      ```
+
+      So this is not "we have not got round to it": there is no configuration of the
+      current release that can parse this codebase. Only the `8.70.1-alpha.*` line is newer
+      and it is the same major.
+
+      **The unblock is a one-command check, not a design decision:** when
+      `npm view typescript-eslint peerDependencies` names a range including 7.x, install it,
+      add a flat config and a `lint` script, and run it over the tree ONCE before committing
+      — a config that lights up eighty thousand lines would flood T0 with findings on the
+      next review, which is the reason to look before shipping it rather than after.
+
+      Downgrading TypeScript to 6.x to buy eslint is the other direction and is not obviously
+      wrong, but it is Vany's: it changes what the compiler checks on every file in the repo
+      to gain a linter on the same files.
 
 - [ ] **`review_start` accepts a branch identical to its base, and calls it `passed`.**
       Three tiers agreed that nothing contains no defects, which is INV-1's exact

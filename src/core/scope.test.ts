@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { hashHunk, hunkAround, hunkStillPresent, isStale, makeScope } from "./scope.ts";
+import { anchorFromEvidence, hashHunk, hunkAround, hunkStillPresent, isStale, makeScope } from "./scope.ts";
 
 describe("hashHunk", () => {
   it("ignores reformatting", () => {
@@ -153,5 +153,66 @@ describe("hunkAround and hunkStillPresent round-trip at a file's boundaries", ()
     // The original content itself still expires the verdict once it actually changes.
     const grownAndEdited = grownAfter.replace("s7", "s7 (changed)");
     expect(hunkStillPresent(grownAndEdited, hunk)).toBe(false);
+  });
+});
+
+/**
+ * A finding's line has to contain what its claim is about, and until 2026-09-17 nothing
+ * checked. `55aeca68` named `README.md:297` while quoting a mermaid node that lived
+ * elsewhere in the file: the scope was captured around the wrong 25 lines, so the finding
+ * could never settle, and the client was told to annotate a line with nothing to do with it.
+ */
+describe("re-anchoring a finding onto the code its evidence quotes", () => {
+  const file = [
+    "one",                                  // 1
+    "two",                                  // 2
+    "three",                                // 3
+    "T0[\"T0 sandbox: no secrets, no network\"]", // 4
+    "five",                                 // 5
+    "six",                                  // 6
+    "seven",                                // 7
+    "eight",                                // 8
+  ].join("\n");
+
+  it("moves the line when the quote is elsewhere and unambiguous", () => {
+    const at = anchorFromEvidence(file, 8, 'the diagram says `T0["T0 sandbox: no secrets, no network"]` which is false');
+    expect(at).toBe(4);
+  });
+
+  it("leaves a line that is already close enough alone", () => {
+    // Two off is pointing AT the thing; moving it would churn for nothing.
+    expect(anchorFromEvidence(file, 6, 'says `T0["T0 sandbox: no secrets, no network"]`')).toBeUndefined();
+    expect(anchorFromEvidence(file, 4, 'says `T0["T0 sandbox: no secrets, no network"]`')).toBeUndefined();
+  });
+
+  /**
+   * The timidity is the design. A wrong re-anchor is worse than none — it moves a correct
+   * finding onto unrelated code, and unlike the original defect nobody is left with the
+   * model's own line to compare against.
+   */
+  it("refuses when the quote appears more than once", () => {
+    const twice = "same line here\nfiller\nsame line here\n";
+    expect(anchorFromEvidence(twice, 99, "it says `same line here` twice")).toBeUndefined();
+  });
+
+  it("refuses a fragment short enough to be a coincidence", () => {
+    expect(anchorFromEvidence(file, 99, "it says `six`")).toBeUndefined();
+  });
+
+  it("refuses when there is no evidence, or no quote in it", () => {
+    expect(anchorFromEvidence(file, 99, undefined)).toBeUndefined();
+    expect(anchorFromEvidence(file, 99, "")).toBeUndefined();
+    expect(anchorFromEvidence(file, 99, "the diagram is wrong, with no quote at all")).toBeUndefined();
+  });
+
+  it("refuses when the quote is nowhere in the file", () => {
+    expect(anchorFromEvidence(file, 99, "it says `something never written here`")).toBeUndefined();
+  });
+
+  it("prefers the longest quote, since the most distinctive one collides least", () => {
+    const src = "alpha beta gamma delta\nfiller\nbeta gamma\n";
+    // The short quote matches two lines; the long one matches only the first.
+    const at = anchorFromEvidence(src, 40, "it has `beta gamma` and also `alpha beta gamma delta` in it");
+    expect(at).toBe(1);
   });
 });

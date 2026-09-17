@@ -4021,6 +4021,35 @@ working agreement says to confirm rather than assume.
 (fingerprint 9c6f2a60) — never inside the repository**, so nothing needs a new
 `.gitignore` rule.
 
+**D-153 — a finding's line is a model's CLAIM about position, and lore corrects it when the
+evidence proves it wrong. BUILT 2026-09-17.**
+
+**The incident.** `55aeca68` named `README.md:297` and quoted a mermaid node in its
+evidence. Line 297 held an unrelated section: the model was right about the code and wrong
+about where it was. Nothing checked, and everything downstream inherits the line —
+`scopeOf` hashed 25 lines around the wrong place, so `codeMoved` watched a region no fix
+could ever touch and the finding could not settle however correctly it was answered; and
+the client was told to write its `lore-ok` at a line with nothing to do with the claim. The
+review ended with it open, and the first diagnosis blamed the settle pass, which was working
+perfectly on the data it was given.
+
+**`anchorFromEvidence` (`src/core/scope.ts`) moves the line to where the quoted code
+actually is**, and `anchoredScope` records the corrected line on the finding rather than
+only using it for the hash — a scope anchored somewhere other than the finding's own line
+would be the same defect one layer deeper and harder to see.
+
+**Deliberately timid, and that is the whole design.** A wrong re-anchor is worse than none:
+it moves a CORRECT finding onto unrelated code, and unlike the original defect nobody is
+left holding the model's own line to compare against. So it fires only when the evidence
+quotes a fragment of at least 12 characters, that fragment occurs EXACTLY ONCE in the file,
+and the named line is not already within 2 lines of it. Several matches, no match, a short
+fragment or no evidence all leave the model's line untouched.
+
+**What it does not do:** check that a line contains what the claim describes in general.
+That needs the claim understood, not a string found, and a fuzzy version of this would be a
+worse defect wearing a helpful face. This catches the case where the model handed us the
+answer in its own evidence, which is the case that occurred.
+
 **D-152 — the sandbox hands its own limits down to the tooling inside it, and is the
 kernel's victim when the box goes under. BUILT 2026-09-17.**
 
