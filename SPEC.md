@@ -4111,7 +4111,14 @@ loses work when refused.
 HOST**, and this deployment's host memory has changed twice. A value that cannot be parsed
 refuses to start rather than falling back to the default: `Number("2g")` is NaN and every
 comparison against NaN is false, which would leave the door permanently open while looking
-configured.
+configured. **The refusal is in `configFromEnv`, not in the parser** — that distinction is
+the whole of it, and this entry originally claimed the behaviour while only the parser
+existed. `floorBytes` always threw, but both its callers are lazy: one inside
+`review_start`, one inside `checkHealth`. So a bad value left the service UP, answering
+`/healthz` 200, while `/status` 500'd and the beat died in a console line with no deadman
+POST — the monitor failing on the misconfiguration instead of reporting it, with only
+whichever client happened to call being told anything. Boot parses it once and logs the
+floor it found, which is also the only line that says the door is armed.
 
 **The operator hears about it only if it lasts.** `checkHealth` puts the shortage in
 `problems` — the same class as a stale mirror, since both refuse every review — and the

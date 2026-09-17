@@ -18,6 +18,7 @@ import { configFromEnv } from "./main.ts";
 const KEYS = [
   "LORE_WEBHOOK_URL", "LORE_HEARTBEAT_URL", "LORE_CONCURRENCY",
   "LORE_PORT", "LORE_DAILY_CEILING_USD", "LORE_ALLOW_METERED", "LORE_DATA_DIR", "LORE_HOST",
+  "LORE_MIN_AVAILABLE_MB",
 ];
 let saved: Record<string, string | undefined>;
 
@@ -134,6 +135,33 @@ describe("a setting that no longer exists", () => {
     } finally {
       if (before === undefined) delete process.env["LORE_DAILY_CEILING_USD"];
       else process.env["LORE_DAILY_CEILING_USD"] = before;
+    }
+  });
+
+  /**
+   * The memory door's own floor, and the gap the SPEC sentence had shipped ahead of.
+   *
+   * `floorBytes` always threw on garbage, but both its callers are lazy — one inside
+   * `review_start`, one inside `checkHealth` — so `LORE_MIN_AVAILABLE_MB=2g` (the SPEC's
+   * own example spelling) left the service UP and answering `/healthz` 200 while `/status`
+   * 500'd and the beat died in a console line with no deadman POST. The monitor failing on
+   * a misconfiguration instead of reporting it is the shape this whole file exists for.
+   */
+  it("refuses to start rather than accepting a LORE_MIN_AVAILABLE_MB it cannot read", () => {
+    const before = process.env["LORE_MIN_AVAILABLE_MB"];
+    try {
+      process.env["LORE_MIN_AVAILABLE_MB"] = "2g";
+      expect(() => configFromEnv()).toThrow(/megabytes/);
+      // A NUMBER still boots, so the refusal is about unreadable values and not about the
+      // variable existing — otherwise the knob could never be used.
+      process.env["LORE_MIN_AVAILABLE_MB"] = "2048";
+      expect(() => configFromEnv()).not.toThrow();
+      // And blank means the default, exactly as every other variable here.
+      process.env["LORE_MIN_AVAILABLE_MB"] = "";
+      expect(() => configFromEnv()).not.toThrow();
+    } finally {
+      if (before === undefined) delete process.env["LORE_MIN_AVAILABLE_MB"];
+      else process.env["LORE_MIN_AVAILABLE_MB"] = before;
     }
   });
 

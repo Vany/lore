@@ -8,6 +8,7 @@
 import { join } from "node:path";
 import { repinReview } from "./repin.ts";
 import { fallbackRoutes, ladderIsOperatorWritten, loadPools, loadTiers } from "../core/ladder.ts";
+import { floorBytes, mib } from "../core/memory.ts";
 import { dataDir, dbDir, dbFileIn } from "../core/paths.ts";
 import { mkdir } from "node:fs/promises";
 import { Alerter, CONDITIONS } from "../ops/alerts.ts";
@@ -162,6 +163,19 @@ export function configFromEnv(): ServiceConfig {
         "(D-117). Remove the variable, and set LORE_ALLOW_METERED=1 if you want paid fallbacks.",
     );
   }
+  // THE MEMORY FLOOR IS PARSED HERE SO A BAD ONE CANNOT BOOT (D-151).
+  //
+  // `floorBytes` throws on a value it cannot read — but every caller of it is lazy, one
+  // inside `review_start` and one inside `checkHealth`, so an unreadable
+  // `LORE_MIN_AVAILABLE_MB` used to leave the service UP and answering `/healthz` 200
+  // while `/status` 500'd and the beat died in a console line with no deadman POST. The
+  // monitor would have failed on the misconfiguration instead of reporting it, and the
+  // only party told anything was whichever client happened to call. SPEC D-151 claimed the
+  // boot refusal this line now actually performs; the claim shipped ahead of the code.
+  //
+  // The result is LOGGED rather than discarded, because a guard nobody can see is a guard
+  // nobody trusts: this is the one line that says the door exists and what it is set to.
+  console.error(`lore: review_start refuses below ${mib(floorBytes())} of host MemAvailable (D-151)`);
   const webhookUrl = env("LORE_WEBHOOK_URL");
   const heartbeatUrl = env("LORE_HEARTBEAT_URL");
   const backupDir = env("LORE_BACKUP_DIR");

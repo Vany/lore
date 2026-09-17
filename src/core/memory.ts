@@ -58,6 +58,12 @@ export const RETRY_AFTER_MS = 5 * 60_000;
  * trouble harder to see. In the environment rather than a constant because it is a
  * property of the HOST, and this deployment's host memory has changed twice.
  */
+// lore-ok[e8d3f8a3]: upheld, and fixed one layer out — the throw was never the gap, the
+// LAZINESS was. `configFromEnv` (src/service/main.ts) now calls this at boot and logs the
+// floor it found, so an unreadable value refuses to start instead of leaving the service up
+// while `/status` 500s and the beat dies with no deadman POST. Covered by
+// `config.test.ts`'s "refuses to start rather than accepting a LORE_MIN_AVAILABLE_MB it
+// cannot read". This throw stays because it is what the boot check fires.
 export function floorBytes(env: NodeJS.ProcessEnv = process.env): number {
   const raw = env["LORE_MIN_AVAILABLE_MB"];
   if (raw === undefined || raw.trim() === "") return 1024 * 1024 * 1024;

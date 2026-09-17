@@ -64,11 +64,18 @@ subscription routes are all out is SKIPPED and named in `checks_skipped` rather 
 bought at per-call rates; the remaining `openrouter/` entries (T2 → Kimi, T3 → OpenAI,
 neither GLM) are insurance a person switches on, not a chain lore walks by
 itself. The
-`GLM5.2` POOL IS GONE: 5.3 exists on plan 1 and not on plan 2, and a pool is one model
-reachable several ways, so it could not simply be repointed. The deep tiers' last resort
-moved off the pool to the small plan too — the pool spanned BOTH, so a deep tier reaching
-for it could land on the seat T1 runs every round on. Work that is not a review (the
-background screen, the bootstrap survey) runs on the `helper` model, also the small plan.
+`GLM5.2` POOL IS GONE, and the reason it went has since expired. It was removed because a
+pool is one model reachable several ways and 5.3 then existed on plan 1 only, so it could
+not simply be repointed; the deep tiers' last resort moved off the pool for a second
+reason, that the pool spanned BOTH plans and a deep tier reaching for it could land on the
+seat T1 runs every round on. **D-150 (2026-09-16) made plan 2 carry 5.3 too**, which
+un-did the first reason and, with every fallback now pointing at
+`zai-coding-plan2/glm-5.3`, un-did the protection the second one bought: T1's fallback and
+BOTH deep tiers' last resort are now the same model on the same subscription. That is not
+an accident to be repaired by repointing a route — it is the correlated read Phase 6 step 1
+exists to refuse, where a deep tier whose only remaining route is a vendor that has already
+read this tree is skipped and named thin rather than asked. Work that is not a review (the
+background screen, the bootstrap survey) runs on the `helper` model, also plan 2.
 
 T2 and T3 are ONE RUNG in the deployed file — a nested array — so the deep phase runs
 them together (§5.0, D-109).
