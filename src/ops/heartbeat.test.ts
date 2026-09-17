@@ -83,8 +83,25 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
+/**
+ * HERMETIC ABOUT MEMORY BY DEFAULT — every test here, not only the memory ones.
+ *
+ * `checkHealth` falls back to reading the real `/proc/meminfo` when no reader is injected,
+ * which is absent on the machine this suite is usually written on and PRESENT on every
+ * Linux box it runs on. So `ok: true, problems: []` — asserted in five tests that have
+ * nothing to do with memory — quietly became "and this host happens to have a spare
+ * gigabyte", and would go red inside a small CI or review container for a reason no
+ * author could reproduce. `http.test.ts` got its hermetic default when the door shipped;
+ * this file did not, which is the half of the change that was missed.
+ *
+ * Plenty of room by default; a test that cares says so with `memory`.
+ */
 function cfg(over: Partial<typeof DEFAULT_HEARTBEAT> = {}) {
-  return { ...DEFAULT_HEARTBEAT, dataDir: dir, ...over };
+  const roomy: MemoryState = {
+    kind: "measured",
+    reading: { availableBytes: 4 * 1024 ** 3, totalBytes: 8 * 1024 ** 3 },
+  };
+  return { ...DEFAULT_HEARTBEAT, dataDir: dir, memory: () => roomy, ...over };
 }
 
 /**

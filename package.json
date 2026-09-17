@@ -2,7 +2,23 @@
   "name": "lore",
   "version": "0.0.0",
   "private": true,
-  "description": "Local pull-request review: an escalating ladder of independent models",
+  "description": "An independent code reviewer that remembers your codebase between sessions: an escalating ladder of models that did not write the code, and a shared memory built from what they find",
+  "license": "MIT",
+  "keywords": [
+    "code-review",
+    "mcp",
+    "model-context-protocol",
+    "ai",
+    "agents",
+    "static-analysis",
+    "claude-code",
+    "opencode"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Vany/lore.git"
+  },
+  "homepage": "https://github.com/Vany/lore#readme",
   "type": "module",
   "bin": {
     "lore": "./src/index.ts"
