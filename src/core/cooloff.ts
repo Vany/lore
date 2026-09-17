@@ -44,18 +44,6 @@ export function coolOffMs(consecutiveFailures: number): number {
 }
 
 /**
- * When to ask this tier again — the provider's own answer if it gave one, ours if not.
- *
- * **A stated reset time beats a guess and it is not close.** Z.ai says *"your limit will
- * reset at 2026-08-10 18:19:09"*; waiting exactly that long is both the shortest correct
- * wait and the longest safe one. The doubling exists for refusals that name nothing, which
- * is what D-90 was written believing was every refusal.
- *
- * Clamped regardless, because a parsed timestamp is input: a floor so a stale or
- * mis-parsed time cannot turn into a retry loop, a ceiling so one bad string cannot retire
- * a tier for a year.
- */
-/**
  * How long a review will honour a cool-off before trying the primary once anyway.
  *
  * THE COST ASYMMETRY THAT JUSTIFIED "DO NOT EVEN INITIATE" HAS INVERTED. When D-90 was
@@ -88,6 +76,18 @@ export function shouldProbe(mark: { readonly probedAt?: string } | undefined, no
   return Number.isNaN(last) || now - last >= PROBE_INTERVAL_MS;
 }
 
+/**
+ * When to ask this tier again — the provider's own answer if it gave one, ours if not.
+ *
+ * **A stated reset time beats a guess and it is not close.** Z.ai says *"your limit will
+ * reset at 2026-08-10 18:19:09"*; waiting exactly that long is both the shortest correct
+ * wait and the longest safe one. The doubling exists for refusals that name nothing, which
+ * is what D-90 was written believing was every refusal.
+ *
+ * Clamped regardless, because a parsed timestamp is input: a floor so a stale or
+ * mis-parsed time cannot turn into a retry loop, a ceiling so one bad string cannot retire
+ * a tier for a year.
+ */
 export function retryAt(
   now: number,
   consecutiveFailures: number,

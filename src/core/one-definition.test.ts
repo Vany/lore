@@ -804,15 +804,9 @@ describe("the deploy-file drift guard covers the template it gained", () => {
  * docblock is the normal shape, not an orphan.
  */
 const ORPHAN_BASELINE: Readonly<Record<string, number>> = {
-  "core/cooloff.ts": 1,
-  "core/errors.ts": 1,
-  "git/diff.ts": 1,
-  "git/repo.ts": 1,
-  "mcp/server.ts": 1,
   "reviewer/opencode.ts": 3,
   "reviewer/review.ts": 5,
   "store/store.ts": 10,
-  "t0/sandbox.ts": 1,
 };
 
 function orphanedDocblocks(text: string): number {

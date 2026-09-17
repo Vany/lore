@@ -426,49 +426,49 @@ line it belongs to:**
       nothing"*; the second says more but adds a state. Small either way; deliberately
       not bundled into a diff that was already ten files and answering a live finding.
 
-- [ ] **Twenty-four orphaned docblocks, found mechanically 2026-08-12.** A docblock that
-      ends where another begins describes nothing: whichever declaration follows takes the
-      SECOND block, and the first is stranded. `one-definition.test.ts` now counts them and
-      holds a per-file baseline that may only go DOWN, so new ones fail — which is what the
-      check was written for, after I made the mistake three times in one afternoon and one
-      of the stranded blocks ended up asserting the opposite of the code beneath it.
-      **Waiting on:** the judgement each one needs. Fixing them is mechanical but not
-      automatic — you have to read what the stranded block was written about before you
-      know where it goes — and two dozen of those would have swamped the diff a reviewer
-      was already reading. Counts by file are in the baseline; `store.ts` has ten.
+- [ ] **Eighteen orphaned docblocks left, in the three files that carry more than one.**
+      A docblock that ends where another begins describes the SECOND one's subject, and
+      whatever it was written about has no comment at all — pinned mechanically in
+      `one-definition.test.ts`, whose baseline may shrink and never grow.
 
-- [ ] **The reviewing model cannot ask for a human, and the spec says it can.** Found
-      2026-08-06 by Vany asking what we actually tell a model about escalating.
+      **Six fixed 2026-09-17, one per file, and they were three different defects** — which
+      is the argument for doing the rest by hand rather than by script:
 
-      `spec/knowledge.md` §7.1–7.2 says *"the reviewing agent must actually resolve
-      it… If the agent cannot resolve it, it must say so rather than pick"*, and D-39
-      calls this *"the one place the system deliberately stops and asks for a person"*.
-      None of that is wired:
+      * `cooloff.ts`, `git/diff.ts`, `git/repo.ts`, `mcp/server.ts` — a real docblock
+        STRANDED from its member by a later insertion (`retryAt`, `renderDiff`,
+        `applyPatch`, `newReviewId`). Moved back to what it describes.
+      * `core/errors.ts` — a TOMBSTONE for a deleted function (`looksUnreachable IS GONE`).
+        Nothing can ever sit under it, so it is prose and is now written as `//` comments.
+      * `t0/sandbox.ts` — TWO docblocks for one constant, the stranded one being an older
+        wording of the same thing. The detail only it carried is folded into the live block.
 
-      - `needsHuman` is set at exactly one line — `review.ts:574`,
-        `store.openConflicts(repoId).length > 0` — entirely from `conflict.ts`'s
-        heuristic. **The model cannot originate one.**
-      - `prompts.ts` never mentions a human or escalation. The only such text is in
-        `renderConflicts`, shown only once a conflict already exists.
-      - That text says *"if you cannot decide, say so plainly and stop"* — and there is
-        **no channel to say it in**. The output contract is a findings array; prose is
-        not parsed. The model's answer changes nothing either way.
-      - It could not act even if it decided: `knowledge_resolve` is an MCP tool for
-        clients, and reviewers have no lore MCP (the staged opencode config carries
-        only `plane`).
+      What is left is `reviewer/opencode.ts` (3), `reviewer/review.ts` (5) and
+      `store/store.ts` (10). Left deliberately: they are the three largest files in the
+      repository, each orphan needs its own reading to tell which of those three shapes it
+      is, and a batch that size is a worse review than it is a fix.
 
-      So the escalation path is entirely deterministic, driven by a token-overlap and
-      polarity heuristic that has fired exactly once in production and **was wrong**
-      (session 32). The model that could actually judge a contradiction is shown the
-      question, told to answer, and ignored.
+- [ ] **Should a reviewing model be able to originate an escalation?** *(Vany's: it costs
+      a change to the contract every tier's output is parsed against.)*
 
-      Two directions, and they are different in kind. **Wire the model in** — give the
-      findings contract a way to say *"this needs a person, and here is the question"*,
-      which makes D-39 true and lets a model raise an escalation the heuristic cannot
-      see. Or **narrow the spec** to what the code does: conflicts are detected
-      deterministically and only a client resolves them. The first is the better
-      product and costs a schema change; the second is honest and costs nothing.
-      Either way the spec stops describing agency that does not exist.
+      **The DRIFT half is fixed, 2026-09-17.** This entry began as "the spec says the
+      reviewing agent resolves a knowledge conflict, and it cannot" — a false claim about
+      agency, which is this repository's most common defect. `spec/knowledge.md` §7.2 had
+      already been corrected in its own text; §7.1 still said *"the reviewing agent must
+      actually resolve it"* and now says who actually does: `knowledge_resolve` over MCP
+      under a token, which records who, or the board button, which records that a person
+      did and deliberately not which one.
+
+      **What is left is a product decision, not a defect.** The model is the party best
+      placed to judge a contradiction and the only one shown the question — it is told to
+      resolve it or say it cannot, and its answer is parsed by nothing, has no field in the
+      findings contract to arrive in, and reviewers hold no lore MCP to act through. Wiring
+      it in makes D-39 true and lets an escalation be raised that the deterministic
+      heuristic cannot see; it also changes the shape every tier's reply is validated
+      against, and a tier that starts emitting a field the parser rejects fails the review
+      rather than degrading. That is why it is yours.
+
+      The alternative is to leave escalation deterministic and say so, which is now what the
+      documents do — so nothing is false today whichever way this goes.
 
 ### Argued deferrals — deliberately not fixed, each with its argument
 

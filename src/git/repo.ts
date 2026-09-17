@@ -799,15 +799,6 @@ export async function gitlinks(worktree: string): Promise<readonly Gitlink[]> {
 }
 
 /**
- * Apply a unified diff without committing. The client keeps its own history.
- *
- * Spawned here rather than through `git()` because the patch goes in on stdin, which
- * that wrapper has no way to pass — so this is the one call site the ceiling in D-61
- * did not reach, while SPEC said it applied to "every git invocation". The env is set
- * explicitly below; nothing mechanical would have caught the gap, which is the
- * argument for the wrapper rather than against it.
- */
-/**
  * Put a worktree back to a tree it was at, discarding everything since.
  *
  * For the one caller that needs it: `review_submit` applies a patch, hashes the result,
@@ -869,6 +860,15 @@ export async function restoreTree(worktree: string, tree: string): Promise<void>
 // 120_000`, the same bound every other git call in this module gets, and the reject
 // path names a timeout kill honestly rather than inheriting `describeApplyFailure`'s
 // "worktree is unchanged" claim, which is not verified for a killed mid-write.
+/**
+ * Apply a unified diff without committing. The client keeps its own history.
+ *
+ * Spawned here rather than through `git()` because the patch goes in on stdin, which
+ * that wrapper has no way to pass — so this is the one call site the ceiling in D-61
+ * did not reach, while SPEC said it applied to "every git invocation". The env is set
+ * explicitly below; nothing mechanical would have caught the gap, which is the
+ * argument for the wrapper rather than against it.
+ */
 export async function applyPatch(worktree: string, patch: string): Promise<void> {
   const { execFile } = await import("node:child_process");
   await new Promise<void>((resolve, reject) => {

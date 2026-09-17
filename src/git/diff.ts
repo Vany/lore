@@ -665,12 +665,6 @@ export async function readAtRef(
 }
 
 /**
- * Render the diff for a prompt, with everything the reviewer must not assume away.
- *
- * The untracked list and the truncation notice are part of the prompt rather than
- * metadata, because a reviewer that never sees them cannot account for them.
- */
-/**
  * Does the branch still merge into the base as it now stands?
  *
  * `undefined` means genuinely unknown and must never be rendered as safe.
@@ -703,6 +697,12 @@ async function mergeCheck(worktree: string, base: string): Promise<boolean | und
   });
 }
 
+/**
+ * Render the diff for a prompt, with everything the reviewer must not assume away.
+ *
+ * The untracked list and the truncation notice are part of the prompt rather than
+ * metadata, because a reviewer that never sees them cannot account for them.
+ */
 export function renderDiff(d: ReviewDiff): string {
   if (d.scopePath !== undefined) return renderFolderDiff(d, d.scopePath);
   // Spelled out, because naming the base was not enough. A reviewer given

@@ -143,12 +143,6 @@ function pacing(
 }
 
 /**
- * CSPRNG, never sequential.
- *
- * The moment ids are guessable, every log line containing one becomes a credential
- * (D-23).
- */
-/**
  * What to do next, per state — the most-read string this service produces.
  *
  * It used to be binary: "Every tier agrees" or "NOT clean. Only `passed` means
@@ -294,6 +288,12 @@ export function subscribeTo(reviewId: string, ctx?: unknown): object {
   };
 }
 
+/**
+ * CSPRNG, never sequential.
+ *
+ * The moment ids are guessable, every log line containing one becomes a credential
+ * (D-23).
+ */
 function newReviewId(): string {
   return `rev_${randomBytes(18).toString("base64url")}`;
 }

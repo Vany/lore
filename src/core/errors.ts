@@ -112,27 +112,23 @@ export abstract class TierUnavailable extends LoreError {}
  */
 export class ServiceUnreachable extends DidNotRun {}
 
-/**
- * `looksUnreachable` IS GONE, and the reason is worth more than the function was.
- *
- * It matched `socket hang up`, `ECONNRESET`, `fetch failed` in the message text, under a
- * comment claiming those were "never anything a provider could say". lore's own t2 showed
- * that they are: opencode relays a provider's error with its message intact, and this
- * repository's own incident record attributes *"two socket hang up in the same second"* to
- * the UPSTREAM refusing load. `MEMO.md` goes further — socket-hang-up is not retried, and
- * that is recorded as a quota decision and Vany's.
- *
- * So the classifier would have requeued a provider outage up to three times per review,
- * spending subscription quota to prove somebody else's service is down, and then failed
- * the review naming lore's own opencode as the culprit. It reversed a decision that was
- * not mine to make, by guessing from a string.
- *
- * `ServiceUnreachable` survives, raised only where the origin is UNAMBIGUOUS: the session
- * could not be created at all, which happens before any provider is involved and can only
- * mean our own sidecar is unreachable. Mid-call faults stay ordinary tier failures, as
- * they were.
- */
-
+// A TOMBSTONE, NOT A DOCBLOCK: it describes a function that no longer exists, so nothing
+// can sit under it and `/** */` would make it document whatever came next.
+// `looksUnreachable` IS GONE, and the reason is worth more than the function was.
+// It matched `socket hang up`, `ECONNRESET`, `fetch failed` in the message text, under a
+// comment claiming those were "never anything a provider could say". lore's own t2 showed
+// that they are: opencode relays a provider's error with its message intact, and this
+// repository's own incident record attributes *"two socket hang up in the same second"* to
+// the UPSTREAM refusing load. `MEMO.md` goes further — socket-hang-up is not retried, and
+// that is recorded as a quota decision and Vany's.
+// So the classifier would have requeued a provider outage up to three times per review,
+// spending subscription quota to prove somebody else's service is down, and then failed
+// the review naming lore's own opencode as the culprit. It reversed a decision that was
+// not mine to make, by guessing from a string.
+// `ServiceUnreachable` survives, raised only where the origin is UNAMBIGUOUS: the session
+// could not be created at all, which happens before any provider is involved and can only
+// mean our own sidecar is unreachable. Mid-call faults stay ordinary tier failures, as
+// they were.
 /**
  * A tier's provider is out of budget or rate limit — the canonical `TierUnavailable`
  * (D-48): the ladder steps over it and reaches `passed_thin_ladder` at best.

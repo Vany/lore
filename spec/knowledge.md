@@ -474,10 +474,25 @@ floats"* — and those need a model or a person to spot.
 
 ### 7.1 Resolution
 
-The reviewing agent must actually resolve it: read both rules, read their
-provenance, read the code as it now stands, and decide — recording *why*. A resolved
-conflict retires the losing rule with its reason preserved, so the decision is
-reconstructable later.
+Resolving means reading both rules, reading their provenance, reading the code as it now
+stands, and deciding — recording *why*. A resolved conflict retires the losing rule with
+its reason preserved, so the decision is reconstructable later.
+
+**WHO does that is the client or a person, never the reviewing model.** This section said
+"the reviewing agent must actually resolve it" from the day it was written, and no version
+of the code has made that possible: the reviewer is shown the contradiction and told to
+resolve it or say it cannot, and its answer is not parsed, has no field in the findings
+contract to arrive in, and reviewers hold no lore MCP to act through. The two real routes
+are `knowledge_resolve` over MCP, under a token, which records who decided, and the button
+on the operator board, which records that a person decided and deliberately not which one
+(§7.2, `src/service/http.ts`). §7.2 was corrected for exactly this in its own text; this
+section was missed, which is why the claim outlived the correction.
+
+**[OPEN] Whether a model should be able to originate an escalation at all.** It is the
+party best placed to judge a contradiction and the only one shown the question, so the
+product argument is strong — and it costs a change to the findings contract every tier's
+output is parsed against, which is not a decision to take while narrowing a spec. Recorded
+in `TODO.md` rather than settled here.
 
 ### 7.2 Escalation to a human — only when the two cannot be ordered (D-39, revised)
 

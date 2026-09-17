@@ -347,14 +347,11 @@ function baseArgs(
 }
 
 /**
- * Refresh the scratch copy from the read-only sources.
- *
- * `-a` preserves modes and times so incremental typecheckers are not fooled into
- * rebuilding everything; the `node_modules` mount is left alone because it is the
- * shared cache, not part of the source.
- */
-/**
  * Copy the sources into the writable scratch, and FAIL if it does not happen.
+ *
+ * `-a` preserves modes and times, so an incremental typechecker is not fooled into
+ * rebuilding everything; the `node_modules` mount is left alone because it is the shared
+ * cache rather than part of the source.
  *
  * This was `cp -a /src/. /work/ 2>/dev/null || true`, which swallowed the reason and
  * then reported success, so every later step ran against an empty `/work`. What the
