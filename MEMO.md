@@ -45,13 +45,29 @@ corrected prices. The reviewer's failure scenario named Vany by role: the person
 whether Kimi's subscription is worth keeping, handed the document's only quantitative
 argument, uncheckable and wrong by 2×.
 
-**A defect in lore itself, now twice-observed.** The review reached a terminal verdict with
-`open_count: 2`: `55aeca68` and `5736234a` carry no verdict of any kind, though both were
-fixed two rounds earlier — verified in the tree rather than assumed. The attestation's
-arithmetic shows the hole without naming it ("9 findings, 6 fixed, 1 justified"). The
-2026-09-08 TODO entry recorded the first instance and waited for a second; it has one, with
-a sharper shape: the same tier settled findings raised BESIDE these and skipped these, so
-the suspect is a settle pass that misses findings older than the round it is judging.
+**I claimed a defect in lore and there was none. Corrected the same day.** The review ended
+with `open_count: 2` and I wrote — here and in `TODO.md` — that lore had dropped two
+verdicts, reasoning from the attestation's arithmetic: nine findings, six fixed, one
+justified, so two were never ruled on. Then I ran the actual predicate against the merged
+tree, which is what should have come first: `hunkStillPresent` says both findings' recorded
+25-line windows are **still there, intact**, so `codeMoved` is false and `settleFixed`
+declined to settle them exactly as specified.
+
+* `5736234a` named `heartbeat.test.ts:151`; my fix went into `cfg()` seventy lines above it.
+  That is `BUGS.md` §5, *"fixed one layer in"*, and the protocol's answer is a `lore-ok` at
+  the named line or `fixed_elsewhere` on the submit. I used neither and then blamed the
+  engine.
+* `55aeca68` named `README.md:297`, and the 25 lines captured around 297 are the "rules it
+  is built on" section — not the mermaid node the finding quotes. **The model named a line
+  that did not contain the text it was arguing about**, so settlement was anchored to a
+  region no fix would ever move. Nothing checks that a finding's line contains what its
+  claim describes, and that is a real gap, unlike the one I invented.
+
+**This is `BUGS.md` §9 — "I twice reported a fault that did not exist, from a stale read" —
+committed by the person who had re-read that file the previous day**, in a session whose
+own lesson was that marketing copy is where I stop checking. The generalisation is worse
+than either: I stop checking wherever the sentence sounds true and nobody is arguing.
+Arithmetic about someone else's bug sounds true.
 
 **Prices came from opencode's live catalogue, not from a vendor page or memory** — which
 found a third stale row nobody had asked about: T3 carried `5.00/30.00` against a catalogue

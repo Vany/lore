@@ -285,17 +285,30 @@ line it belongs to:**
       neither settled nor refused, and `review_poll`'s own contract says that pairing is a
       bug in lore rather than a fact about the branch.
 
-      **IT HAPPENED AGAIN, TWICE IN ONE REVIEW, 2026-09-17** — `rev_yFUVBiGGTWvu5LAD5oWb-QWU`
-      reached `passed_thin_ladder` with `open_count: 2`. Nine findings; seven carry a
-      verdict; `55aeca68` (raised r4) and `5736234a` (raised r3) carry NONE, and both were
-      genuinely fixed two rounds before the end — verified in the tree, not assumed. The
-      attestation's own arithmetic shows the hole without naming it: *"9 findings, 6 fixed,
-      1 justified"*. So this is no longer one observation on one review: the same tier (t3)
-      recorded verdicts for findings raised beside these and skipped these, which is the
-      shape to chase — a settle pass that misses findings raised in an EARLIER round than
-      the one it is judging. Worth fixing before the next `passed` is read as "everything
-      was answered", because nothing in the client-facing reply distinguishes "settled" from
-      "never ruled on".
+      **A SECOND INSTANCE WAS CLAIMED ON 2026-09-17 AND THE CLAIM WAS WRONG.**
+      `rev_yFUVBiGGTWvu5LAD5oWb-QWU` ended `passed_thin_ladder` with `open_count: 2`, and
+      that was recorded here and in `MEMO.md` as lore dropping two verdicts. It was not.
+      Checked afterwards by running `hunkStillPresent` against the merged tree, which is the
+      thing that should have been done before writing it down: both findings' recorded
+      25-line windows are **still present, intact**, so `codeMoved` is false and `settleFixed`
+      correctly declined to settle either.
+
+      * `5736234a` named `src/ops/heartbeat.test.ts:151`; the fix went into `cfg()` seventy
+        lines above. Textbook `BUGS.md` §5, *"fixed one layer in"* — the protocol's two
+        remedies are a `lore-ok` at the named line or `fixed_elsewhere` on the submit, and
+        the answer used neither.
+      * `55aeca68` named `README.md:297`, but the 25 lines captured around 297 are the
+        "rules it is built on" section, not the mermaid node the finding quotes. The model
+        named a line that was not the text it was talking about, so the scope watched a
+        region no fix would ever move. **That one is worth its own thought**: settlement is
+        anchored to a line a MODEL chose, and nothing checks that the line contains what the
+        claim describes.
+
+      So `16211efb` below is still the only observed instance, still unexplained, and the
+      entry stays open on one data point rather than two. **The false second instance is
+      kept here deliberately** — it was written from arithmetic ("9 findings, 6 fixed, 1
+      justified, so two were dropped") without running the predicate, which is `BUGS.md` §9
+      committed by the person who reads that file, one day after re-reading it.
 
 - [ ] **`review_submit` needs a tree both sides can name.** *(Vany's to weigh — it is a
       change to the MCP contract three clients depend on.)*
