@@ -82,21 +82,13 @@ now. Review `rev_kq7psOFQqIKn1di0XjMEal7e`, open at `findings_ready` — answer 
       empty value parses to NaN/0 and `setTimeout` fires at ~1ms: a silent hot loop against
       `review_inbox`, invisible because every tick succeeds.
 
-### 2026-09-16 — unreviewed and unpushed
+### 2026-09-17 — the batch is reviewed, attested and pushed
 
-- [ ] **D-150 (glm-5.3 everywhere) is deployed and was never reviewed.** No scratch refs were
-      pushed for it; it needs to join the batch above or get its own review.
-
-- [ ] **EVERYTHING AFTER `9263e28` IS UNPUSHED AND UNREVIEWED.** The base ref is the fact;
-      the count is not. It said "three" when written on 2026-09-16, was eight by the next
-      morning, and `git log 9263e28..main` answers correctly at any hour — a count in a
-      checklist has a half-life of hours, and two of the three entries this file has had to
-      correct this week were numbers somebody wrote down once.
-
-      By the working agreement the push waits for a review to pass, and the batch is
-      reviewed WHOLE: `refs/heads/review-base/<sha>` at `9263e28`, `refs/heads/review/<sha>`
-      at the tip (D-113 — `into: main` cannot name "before this batch" once any of it is on
-      `main`).
+Thirteen commits (`9263e28..8c33458`) reached `passed_thin_ladder` and are on `origin/main`,
+signed at tree `47ae1a35`: 3 tiers, 9 findings, 6 fixed, 1 justified. D-150 was reviewed as
+part of it. **Every tier that ran was z-ai** — kimi and openai both refused — so the ladder
+was full depth and correlated opinions, which is the ending Phase 6 step 1 exists to stop
+buying.
 
 - [ ] **Housekeeping:** `lore-channel` and `rename-cleared` are fully merged into `main` and
       can be deleted. Eleven `worktree-wf_*` branches are left from workflow runs in an
@@ -292,6 +284,18 @@ line it belongs to:**
       in the same round. So a review can reach a terminal verdict with a finding it raised
       neither settled nor refused, and `review_poll`'s own contract says that pairing is a
       bug in lore rather than a fact about the branch.
+
+      **IT HAPPENED AGAIN, TWICE IN ONE REVIEW, 2026-09-17** — `rev_yFUVBiGGTWvu5LAD5oWb-QWU`
+      reached `passed_thin_ladder` with `open_count: 2`. Nine findings; seven carry a
+      verdict; `55aeca68` (raised r4) and `5736234a` (raised r3) carry NONE, and both were
+      genuinely fixed two rounds before the end — verified in the tree, not assumed. The
+      attestation's own arithmetic shows the hole without naming it: *"9 findings, 6 fixed,
+      1 justified"*. So this is no longer one observation on one review: the same tier (t3)
+      recorded verdicts for findings raised beside these and skipped these, which is the
+      shape to chase — a settle pass that misses findings raised in an EARLIER round than
+      the one it is judging. Worth fixing before the next `passed` is read as "everything
+      was answered", because nothing in the client-facing reply distinguishes "settled" from
+      "never ruled on".
 
 - [ ] **`review_submit` needs a tree both sides can name.** *(Vany's to weigh — it is a
       change to the MCP contract three clients depend on.)*

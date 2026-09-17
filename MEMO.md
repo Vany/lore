@@ -3,6 +3,65 @@
 Newest first. Updated at the end of each task: what changed, what I learned, what
 surprised me.
 
+## 2026-09-17 — the batch passed, and the README it advertised us with was wrong twice
+
+**What changed.** `rev_yFUVBiGGTWvu5LAD5oWb-QWU`, `passed_thin_ladder`, attested at tree
+`47ae1a35` — 3 tiers, 9 findings, 6 fixed, 1 justified. Thirteen commits from `9263e28` to
+`8c33458`, five answer rounds, now on `origin/main`. Vany asked mid-review for the README to
+become an advertisement, then for a usage guide, the web board and the company-server shape;
+all of it went into the same batch and was reviewed with it.
+
+**Four of the nine findings were against work I had written that same morning**, and two of
+those against the marketing copy itself:
+
+* **The SPEC sentence that shipped ahead of its code.** D-151 said an unparseable
+  `LORE_MIN_AVAILABLE_MB` "refuses to start"; `floorBytes` only threw lazily, inside
+  `review_start` and inside `checkHealth`. So a bad value left the service green on
+  `/healthz` while `/status` 500'd and the beat died with no deadman POST — **the monitor
+  failing on the misconfiguration instead of reporting it**. This is the "I write the SPEC
+  claim wider than the code" pattern `TODO.md` has had an open entry about since 2026-08-17,
+  caught by a reviewer rather than by me, again.
+* **"no secrets, no network"** in my new architecture diagram. The check phases run under
+  `--network none`; the install phase does not, because a registry needs it. A containment
+  property I invented for a picture.
+* **"records who decided"** about the board's conflict button. It records the opposite, on
+  purpose: *"a person on the operator board (no credential, so no name recorded)"*. I
+  promised an accountability the product deliberately refuses to fake.
+* **A twelve-step guide that never mentioned `review_submit`**, the path two thirds of this
+  deployment's rounds actually take — and a step saying T0 "runs on the host", two screens
+  above the diagram saying it runs in a container.
+
+**The pattern is worth keeping: a page written to sell the thing got the thing wrong four
+times, every time in the direction that flatters it.** Nothing else in this repository
+produces that error rate. Marketing copy is where I stop checking, because the sentence
+sounds true and nobody is arguing with me — which is precisely the condition an independent
+reviewer exists for.
+
+**One fix created the next finding, and that is the mechanism working.** Round 3 dropped an
+intelligence-index column as unverifiable; round 4's finding was that two sentences
+elsewhere still argued from those numbers — and cited them in OPPOSITE directions ("2 more
+points" in §1, "two fewer" in §5.2), while the "3×" they claimed was 1.5× against the
+corrected prices. The reviewer's failure scenario named Vany by role: the person deciding
+whether Kimi's subscription is worth keeping, handed the document's only quantitative
+argument, uncheckable and wrong by 2×.
+
+**A defect in lore itself, now twice-observed.** The review reached a terminal verdict with
+`open_count: 2`: `55aeca68` and `5736234a` carry no verdict of any kind, though both were
+fixed two rounds earlier — verified in the tree rather than assumed. The attestation's
+arithmetic shows the hole without naming it ("9 findings, 6 fixed, 1 justified"). The
+2026-09-08 TODO entry recorded the first instance and waited for a second; it has one, with
+a sharper shape: the same tier settled findings raised BESIDE these and skipped these, so
+the suspect is a settle pass that misses findings older than the round it is judging.
+
+**Prices came from opencode's live catalogue, not from a vendor page or memory** — which
+found a third stale row nobody had asked about: T3 carried `5.00/30.00` against a catalogue
+saying `2.00/10.00`.
+
+**`passed_thin_ladder`, honestly: every tier that ran was z-ai.** Kimi and OpenAI refused
+throughout, so t2 and t3 both fell back to plan 2 — full depth, correlated opinions, the
+exact ending Phase 6 step 1 exists to stop paying for. Three of the nine findings came from
+those correlated deep tiers, which is an argument on the other side of that decision.
+
 ## 2026-09-17 — D-152: the sandbox was handing out the host's memory, ten processes at a time
 
 **What changed.** `fanOut` in `src/t0/sandbox.ts` derives `TURBO_CONCURRENCY` and
