@@ -267,7 +267,7 @@ flowchart LR
     L --> OC["opencode"] --> M["GLM-5.3 — Kimi K3 — GPT-5.6 Terra<br/>three vendors, none of them the author"]
     L --> S["scheduler<br/>admission, quota-aware fallback"]
     L --> W["repo cache<br/>a worktree per review"]
-    L --> T0["T0 sandbox<br/>no secrets, no network"]
+    L --> T0["T0 sandbox<br/>no secrets ever;<br/>network only for the install"]
     L --> DB[("SQLite + Litestream")]
     DB --> RP["local replica, then off-box"]
     YOU["you: make mirror"] -->|"git"| W
@@ -276,7 +276,11 @@ flowchart LR
 `tsc` and `eslint` run in a throwaway container, copied from a read-only mount of the
 reviewed tree — they resolve their binaries out of the target's `node_modules`, so the
 install runs, and an install runs lifecycle scripts. That container holds **no** credential,
-no database and no signing key. lore does not execute a test suite at all (D-71): it reads
+no database and no signing key, and the *check* phases run with `--network none`. The
+install phase does not: a registry needs the network, so a dependency's `postinstall` can
+reach the internet from inside a review. That is the real boundary, and it is drawn where it
+is deliberately — the containment this buys is *nothing worth stealing is in there*, not
+*nothing can get out*. lore does not execute a test suite at all (D-71): it reads
 your tests and leaves running them to your CI.
 
 ---

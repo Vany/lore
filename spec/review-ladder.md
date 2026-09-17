@@ -14,12 +14,19 @@ its members are peers reading the same tree, not gates for each other. Every lad
 before D-109 is the degenerate case: one tier per rung, and it behaves exactly as it
 always did.
 
-| Tier | Purpose | Engine | Int. | $/M in | $/M out | vendor |
-|---|---|---|---|---|---|---|
-| **T0** | deterministic | the **target repo's own** `tsc`, ESLint, `cargo check`/`clippy`, `ast-grep`, semgrep | — | free | free | — |
-| **T1** | cheap gate | `openrouter/z-ai/glm-5.2` | 51 | 0.28 | 0.89 | Z.ai |
-| **T2** | main reviewer | `openrouter/moonshotai/kimi-k3` | 57 | 3.00 | 15.00 | Moonshot |
-| **T3** | adversarial | `openrouter/openai/gpt-5.6-sol-pro` | 59 | 5.00 | 30.00 | OpenAI |
+| Tier | Purpose | Engine | $/M in | $/M out | vendor |
+|---|---|---|---|---|---|
+| **T0** | deterministic | the **target repo's own** `tsc`, ESLint, `cargo check`/`clippy`, `ast-grep`, semgrep | free | free | — |
+| **T1** | cheap gate | `openrouter/z-ai/glm-5.3` | 1.40 | 4.40 | Z.ai |
+| **T2** | main reviewer | `openrouter/moonshotai/kimi-k3` | 3.00 | 15.00 | Moonshot |
+| **T3** | adversarial | `openrouter/openai/gpt-5.6-sol-pro` | 2.00 | 10.00 | OpenAI |
+
+**Prices read from opencode's live catalogue on 2026-09-17, not from memory or from a
+vendor page.** Two of the three rows were wrong before that: T1 named `glm-5.2` after D-150
+moved `DEFAULT_TIERS` to `glm-5.3`, and T3 carried `5.00/30.00` against a catalogue saying
+`2.00/10.00`. An `Int.` column (an intelligence index recorded when the rows were first
+written) was dropped rather than carried forward onto models it was never measured against
+— a number nobody can re-derive is the kind of decoration this file elsewhere refuses.
 
 **A fresh install with only an OpenRouter key needs `LORE_TIERS` cleared before it
 gets the table above — `.env.example` ships that variable already pointed at the
