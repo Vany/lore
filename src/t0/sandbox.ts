@@ -129,6 +129,63 @@ export async function cargoLockKey(worktree: string, dir: string): Promise<strin
 export const SANDBOX_CWD = "/work";
 
 /**
+ * Bytes a docker `--memory` string names.
+ *
+ * Throws on anything it cannot read, rather than defaulting: the caller derives a LIMIT
+ * from this number, and a silent fallback would size a heap cap from a value nobody wrote.
+ */
+export function memoryBytes(memory: string): number {
+  const m = /^(\d+(?:\.\d+)?)\s*([bkmg])?$/i.exec(memory.trim());
+  const digits = m?.[1];
+  if (digits === undefined) throw new Error(`cannot read a docker memory limit from "${memory}"`);
+  const scale = { b: 1, k: 1024, m: 1024 ** 2, g: 1024 ** 3 }[(m?.[2] ?? "b").toLowerCase()] ?? 1;
+  return Number(digits) * scale;
+}
+
+/**
+ * How wide the target's own tooling may fan out inside the sandbox, and how much heap each
+ * process in it may take.
+ *
+ * **WHY THIS EXISTS, measured on the deployment 2026-09-16.** 187 of 859 rigid-monorepo t0
+ * runs since 09-07 ended `interrupted` — OOM-killed — and a quarter of those had no other
+ * sandbox on the box, so a quarter are one container exceeding its own limit alone. `ps`
+ * inside a live one found why: **ten concurrent `eslint` processes**, turbo's default
+ * fan-out, in a container holding `--cpus 2`. RSS 320–580 MB each, `memory.peak` 5.48 GiB
+ * of 6, with 8 of 33 packages started. Ten processes on two cores finish no sooner than two
+ * do — they are serialised on CPU either way — so the fan-out bought nothing and cost the
+ * whole limit.
+ *
+ * **AND EACH SIZED ITS HEAP FROM THE WRONG MACHINE.** Measured inside the sandbox: node's
+ * default `heap_size_limit` is **2240 MB**, derived from the host VM's 7.75 GiB, while the
+ * cgroup that will actually kill it allows 6 GiB. Ten defaults is 22 GB of entitlement
+ * inside a six-gigabyte box. Nothing tells node about the cgroup, so the container's own
+ * `--memory` has to be handed down explicitly or it governs nothing until the kill.
+ *
+ * This is scheduling, never verdicts: `tsc` and `eslint` report the same findings
+ * two-at-a-time as ten-at-a-time. What a target CAN meet is a heap cap it does not fit in,
+ * and that stays honest — V8 exits with "Allocation failed - JavaScript heap out of
+ * memory", which `runner.ts`'s `ranOutOfMemory` already reports as *did not complete*
+ * rather than as a finding about the branch.
+ *
+ * Derived from the CONTAINER's limit rather than fixed, so it stays correct when that limit
+ * moves — which is what makes lowering the ceiling safe: at `--memory 3g` node would still
+ * default to 2240 MB and two processes would overrun, where this gives them 1152 MB each.
+ */
+export function fanOut(cfg: SandboxConfig): { readonly concurrency: number; readonly heapMb: number } {
+  // Integer ≥ 1: turbo refuses a fractional `--concurrency`, and `--cpus 1.5` is a legal
+  // docker limit. Rounded DOWN, because the point is to stop over-subscribing.
+  const concurrency = Math.max(1, Math.floor(Number(cfg.cpus)));
+  // Three quarters, so the processes plus the toolchain around them (a pnpm wrapper per
+  // package, turbo itself, V8's own off-heap arenas — RSS ran well above heap in the
+  // measurement above) still fit under the cgroup that would otherwise kill them.
+  const heapMb = Math.floor(((memoryBytes(cfg.memory) / concurrency) * 0.75) / 1024 ** 2);
+  // A floor, because a very small `--memory` would otherwise produce a cap no toolchain can
+  // start inside — turning a tight box into "every engine fails" rather than "engines are
+  // slower".
+  return { concurrency, heapMb: Math.max(512, heapMb) };
+}
+
+/**
  * A stable, unique name for this run's container — `scratch`'s own basename,
  * already unique per invocation (it is the throwaway per-review scratch
  * directory), sanitised to what `docker run --name` accepts.
@@ -206,6 +263,7 @@ function baseArgs(
   // reason), is the only mount neither teardown reaches.
   extraMount?: { readonly hostDir: string; readonly containerPath: string },
 ): string[] {
+  const fan = fanOut(cfg);
   return [
     "run",
     "--rm",
@@ -233,6 +291,16 @@ function baseArgs(
     "-w", SANDBOX_CWD,
     "--memory", cfg.memory,
     "--cpus", cfg.cpus,
+    // WHEN THE BOX RUNS OUT, THIS CONTAINER IS THE VICTIM — never lore, never opencode.
+    //
+    // A cgroup kill is attributable and already reported honestly (`ranOutOfMemory`, exit
+    // 137 → *did not complete*). A kill by the HOST's out-of-memory killer is not: it picks
+    // by badness score across the whole machine, and lore and opencode are eligible. Losing
+    // lore costs every round in flight rather than the one container that was too big, and
+    // the entitlements have summed to more than the machine for weeks — peak 19 concurrent
+    // sandboxes, 6 GiB each, on a 7.75 GiB VM. A POSITIVE adjustment needs no privilege,
+    // which is why this can be a property rather than a hope.
+    "--oom-score-adj", "1000",
     // Fork bombs are a denial of service against every other review on the box.
     "--pids-limit", "512",
     "--cap-drop", "ALL",
@@ -252,6 +320,19 @@ function baseArgs(
     "--user", `${cfg.uid}:${cfg.gid}`,
     "-e", "CI=1",
     "-e", "NO_COLOR=1",
+    // THE FAN-OUT AND THE HEAP, HANDED DOWN FROM THIS CONTAINER'S OWN LIMITS — see `fanOut`
+    // for the measurement. Both are named for the tools that read them rather than set
+    // generically, because a variable no tool reads is decoration: `TURBO_CONCURRENCY` is
+    // turbo's own (confirmed in the 2.10.8 binary's env-config map and in its published
+    // system-environment-variables table, not from memory), and `NODE_OPTIONS` is what
+    // every node process in here inherits. When a target turns up whose fan-out is neither
+    // — nx, a bare `make -j` — it gets its own entry here, with its own evidence.
+    //
+    // A target's own script still wins: `NODE_OPTIONS` set inside a package script is
+    // applied after this one, which is correct. A repo that has chosen its own heap has
+    // chosen it.
+    "-e", `TURBO_CONCURRENCY=${String(fan.concurrency)}`,
+    "-e", `NODE_OPTIONS=--max-old-space-size=${String(fan.heapMb)}`,
     // Where a self-provisioning package manager keeps the version the project
     // ASKED for, on the one mount that survives between phases.
     //

@@ -67,22 +67,30 @@ services:
       # thing a human carries away is the REPLICA, and that stays a host bind.
       LORE_DB_DIR: /var/lib/lore/db
       LORE_PORT: "7777"
-      # How many ROUNDS run at once. Governs both halves of a round, which have very
-      # different costs: the model call is remote and merely waits (t1 averages 304s,
-      # t2 915s), while T0 runs a sandbox container locally and is CPU- and
-      # memory-bound. Raising this buys real throughput on the waiting half and
-      # oversubscribes the local one.
+      # HOW MANY SANDBOXES MAY EXIST AT ONCE: nothing bounds it, and the reassurance that
+      # used to stand here was about a knob that no longer exists.
       #
-      # 12 on a machine whose DOCKER VM has 7.7 GB, against a 6g limit per sandbox.
-      # That is deliberate and the arithmetic is not a mistake: limits are ceilings,
-      # not reservations, and a warm install uses a fraction of one — which is why 2
-      # has been fine while already requesting 12 GB of limits. Workers are also
-      # rarely in T0 together, since the model call dominates the round.
+      # It read "12 on a machine whose DOCKER VM has 7.7 GB, against a 6g limit per
+      # sandbox … limits are ceilings, not reservations … which is why 2 has been fine
+      # while already requesting 12 GB of limits" — an argument about `LORE_CONCURRENCY`,
+      # which the lines directly below say D-101 removed. With the worker pool gone, every
+      # claimed job starts its round at once, and the entitlements stopped summing to
+      # anything: measured 2026-09-16, a peak of NINETEEN concurrent sandboxes, 6 GiB
+      # each, on a 7.75 GiB VM. At eleven or more concurrent, ~75% of t0 rounds were
+      # OOM-killed.
+      #
+      # The ceiling below is therefore a ceiling per container and nothing else. Two
+      # changes shipped against that: D-152 hands each container's own limits down to the
+      # tooling inside it (turbo fanned out to ten processes on two CPUs, each sizing its
+      # heap from the HOST's memory), and every sandbox now runs with
+      # `--oom-score-adj 1000`, so when the box does go under, the kernel takes a sandbox
+      # rather than lore or opencode. What is still NOT bounded is the number of them.
       #
       # When it is wrong it is wrong LOUDLY: an OOM-killed sandbox exits 137 and is
       # reported as `did not finish`, never as a clean check. Watch for that in
-      # `checks_skipped`; if it appears, give Docker Desktop more memory (24 GB makes
-      # four concurrent cold installs comfortable) rather than guessing here.
+      # `checks_skipped`; if it appears, give Docker Desktop more memory rather than
+      # guessing here — and see `LORE_MIN_AVAILABLE_MB` below, which refuses new reviews
+      # once the host is already short.
       # LORE_CONCURRENCY IS GONE (D-101). There is no worker pool: a claimed job starts its
       # round immediately, so nothing sits in `queued` waiting for a loop to free up, and
       # the only bound is admission — a new review is refused at 128 open.

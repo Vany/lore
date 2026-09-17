@@ -3,6 +3,43 @@
 Newest first. Updated at the end of each task: what changed, what I learned, what
 surprised me.
 
+## 2026-09-17 — D-152: the sandbox was handing out the host's memory, ten processes at a time
+
+**What changed.** `fanOut` in `src/t0/sandbox.ts` derives `TURBO_CONCURRENCY` and
+`NODE_OPTIONS=--max-old-space-size` from the container's own `--cpus` and `--memory`, and
+every sandbox now runs `--oom-score-adj 1000`.
+
+**The number I did not expect, and it is the whole entry.** I went in believing the fix was
+the fan-out: ten eslint processes on two cores, obviously wasteful. Then I asked the
+sandbox what node thought its heap limit was — `v8.getHeapStatistics().heap_size_limit` —
+and got **2240 MB, computed from the host VM's 7.75 GiB while the cgroup allows 6**. Ten of
+those is 22 GB of entitlement inside a six-gigabyte box. The fan-out was the multiplier;
+the wrong-machine default was the unit. Neither alone explains a `memory.peak` of 5.48 GiB
+with a quarter of the packages started.
+
+**Which makes the heap cap the part that matters later**, not now: at today's 6 GiB ceiling
+two processes at the default nearly fit, so capping concurrency alone would have looked
+like a fix. At the 3 GiB ceiling we will want next, two defaults do NOT fit, and the
+derived cap is what makes lowering it safe. A fix that only works at the current
+configuration is a coincidence.
+
+**Verified rather than remembered, twice.** `TURBO_CONCURRENCY` exists — `strings` on the
+installed 2.10.8 binary shows it in the env-config map, and turbo's published
+system-environment-variables table confirms it. And the default fan-out of ten came from
+counting processes in a live container, not from the docs, which do not state it.
+
+**What I did not do:** bound the fleet. Peak 19 concurrent sandboxes at 6 GiB each on a
+7.75 GiB VM is the other three quarters of the kills, and it is a throughput decision.
+Recorded as `[OPEN]` in D-152 with the observation that lowering the per-sandbox ceiling
+now costs nothing, because the heap cap follows it automatically.
+
+**Also corrected: the compose comment that reassured us wrongly.** It argued that 12
+concurrent rounds against 6 GiB ceilings was fine because "limits are ceilings, not
+reservations" — an argument about `LORE_CONCURRENCY`, which the lines directly below it say
+D-101 removed. The reassurance outlived the mechanism it was about by weeks, which is the
+same failure as the two stale TODO entries yesterday, in a file nobody thinks of as
+documentation.
+
 ## 2026-09-16 — D-151: the OOM kills, measured, and the door Vany asked for
 
 **What changed.** `src/core/memory.ts` and a refusal in `review_start`: under

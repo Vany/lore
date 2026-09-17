@@ -4021,6 +4021,57 @@ working agreement says to confirm rather than assume.
 (fingerprint 9c6f2a60) — never inside the repository**, so nothing needs a new
 `.gitignore` rule.
 
+**D-152 — the sandbox hands its own limits down to the tooling inside it, and is the
+kernel's victim when the box goes under. BUILT 2026-09-17.**
+
+**The measurement that produced it.** 187 of 859 rigid-monorepo t0 runs since 2026-09-07
+ended `interrupted` — OOM-killed — 22%, and **a quarter of those had no other sandbox on
+the box**. So a quarter of the kills are one container exceeding its own 6 GiB alone, which
+no amount of host memory buys back. `ps` inside a live sandbox found the mechanism: **ten
+concurrent `eslint` processes**, turbo's default fan-out, in a container holding
+`--cpus 2`; RSS 320–580 MB each; `memory.peak` 5.48 GiB of 6 with 8 of 33 packages started.
+Ten processes on two cores finish no sooner than two — they are serialised on CPU either
+way — so the fan-out bought nothing and cost the entire limit.
+
+**And each of them sized its heap from the wrong machine.** Measured inside the sandbox:
+node's default `heap_size_limit` is **2240 MB**, derived from the host VM's 7.75 GiB, while
+the cgroup that kills it allows 6 GiB. Ten defaults is 22 GB of entitlement in a
+six-gigabyte box. Nothing tells node about the cgroup, so a container's `--memory` governs
+nothing until the kill unless it is handed down explicitly.
+
+**What ships:** `TURBO_CONCURRENCY` and `NODE_OPTIONS=--max-old-space-size` in `baseArgs`,
+both derived from the container's own `--cpus` and `--memory` (`fanOut`, `src/t0/sandbox.ts`)
+— concurrency floored to an integer ≥ 1 because turbo refuses a fractional one, heap at
+three quarters of the per-process share because RSS runs well above heap. Plus
+`--oom-score-adj 1000` on every sandbox.
+
+**The two variables are named for the tools that read them, not set generically.** A
+variable no tool reads is decoration a reader believes (`PROG.md`). `TURBO_CONCURRENCY` was
+confirmed in the installed 2.10.8 binary's own env-config map and in turbo's published
+system-environment-variables table; `NODE_OPTIONS` is inherited by every node process in
+the container. A target's own script still wins if it sets `NODE_OPTIONS` itself, which is
+correct: a repo that has chosen its heap has chosen it.
+
+**This is scheduling, never verdicts, which is why no client text changes.** `tsc` and
+`eslint` report the same findings two-at-a-time as ten-at-a-time; what a client sees is
+FEWER honest *"did not complete"* reports, not different ones. The one new failure a target
+can meet — a heap cap it does not fit in — stays honest: V8 exits with *"Allocation failed
+- JavaScript heap out of memory"*, which `ranOutOfMemory` already classifies as *did not
+complete* rather than as a finding about the branch.
+
+**`--oom-score-adj 1000` makes the victim a property rather than luck.** A cgroup kill is
+attributable and already reported honestly. A kill by the HOST's out-of-memory killer is
+not: it picks by badness score across the whole machine, and lore and opencode are
+eligible — losing lore costs every round in flight rather than the one container that was
+too big. A positive adjustment needs no privilege.
+
+**[OPEN] The fleet is still unbounded, and that is the other three quarters.** Peak 19
+concurrent sandboxes, 6 GiB each, on a 7.75 GiB VM; at 11 or more concurrent the
+interrupted rate is ~75%. Lowering the per-sandbox ceiling to ~3 GiB now costs nothing — the
+heap cap follows it automatically — and would make sum-of-ceilings fit the machine, which
+is what turns every kill into an attributable cgroup kill. Not taken here: it is throughput
+and deployment, and `TODO.md` holds it as Vany's.
+
 **D-151 — a review is refused at the door when the HOST is out of memory, with a
 five-minute retry. BUILT 2026-09-16.**
 

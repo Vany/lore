@@ -156,6 +156,15 @@ Docker VM of 14 cores and **7.7 GB**:
   peaking near 84% of the VM. Limits are ceilings, not reservations. When it is wrong it is
   wrong loudly: an OOM-killed sandbox exits 137 and is reported as *did not finish*, never
   as a clean check.
+
+  **RE-MEASURED 2026-09-16, AND "1–3 GB apiece" NO LONGER HELD.** On rigid-monorepo a
+  single sandbox reached `memory.peak` 5.48 GiB of its 6, and **187 of 859 t0 runs (22%)
+  were OOM-killed** — a quarter of them with no other sandbox on the box at all. Two
+  mechanisms, both inside one container: turbo fanning out to ten `eslint` processes
+  against `--cpus 2`, and each of those sizing its heap from the HOST's 7.75 GiB (node's
+  default `heap_size_limit`, measured in the sandbox: 2240 MB) rather than from the cgroup
+  that kills it. D-152 hands both down from the container's own limits. The peak
+  concurrency was **19 sandboxes**, which is not bounded by anything and remains open.
 - **The npm cache did not, and had to be fixed.** It is keyed by lockfile hash, so every
   branch of a repository that has not changed its lockfile shares one `node_modules`
   mounted read-write into each sandbox. Installs sharing a cache directory are serialised

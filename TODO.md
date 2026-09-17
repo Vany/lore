@@ -87,16 +87,16 @@ now. Review `rev_kq7psOFQqIKn1di0XjMEal7e`, open at `findings_ready` — answer 
 - [ ] **D-150 (glm-5.3 everywhere) is deployed and was never reviewed.** No scratch refs were
       pushed for it; it needs to join the batch above or get its own review.
 
-- [ ] **SEVEN commits sit on local `main`, not on origin.** `4eff155` (Phase 6 plan),
-      `37d941c` (env: plan 2 is its own subscription), `2b3eb4b` (D-150), `8934530` (the
-      unfinished-work sweep), `c7b26a9` (D-151, the memory door), `da1541e` (the OOM entry,
-      since merged) and this prune.
-      By the working agreement the push waits for a review to pass, and the batch is
-      reviewed WHOLE: base ref at `9263e28`, tip at the last of these.
+- [ ] **EVERYTHING AFTER `9263e28` IS UNPUSHED AND UNREVIEWED.** The base ref is the fact;
+      the count is not. It said "three" when written on 2026-09-16, was eight by the next
+      morning, and `git log 9263e28..main` answers correctly at any hour — a count in a
+      checklist has a half-life of hours, and two of the three entries this file has had to
+      correct this week were numbers somebody wrote down once.
 
-      It said "three" until 2026-09-16 and was written the same day — a count in a
-      checklist is a fact with a half-life of hours, which is an argument for naming the
-      base ref rather than the number.
+      By the working agreement the push waits for a review to pass, and the batch is
+      reviewed WHOLE: `refs/heads/review-base/<sha>` at `9263e28`, `refs/heads/review/<sha>`
+      at the tip (D-113 — `into: main` cannot name "before this batch" once any of it is on
+      `main`).
 
 - [ ] **Housekeeping:** `lore-channel` and `rename-cleared` are fully merged into `main` and
       can be deleted. Eleven `worktree-wf_*` branches are left from workflow runs in an
@@ -138,18 +138,14 @@ now. Review `rev_kq7psOFQqIKn1di0XjMEal7e`, open at `findings_ready` — answer 
       D-151's memory door does not touch either half: it refuses a review that walks up to a
       machine ALREADY short, which is a third thing.
 
-- [ ] **CAP THE FAN-OUT INSIDE THE SANDBOX — mine to do, waiting on a go-ahead.**
-      `TURBO_CONCURRENCY` (confirmed in turbo 2.10.8's own binary, not from the docs) plus a
-      `NODE_OPTIONS` heap cap, both derived from `cfg.cpus`, in `baseArgs`
-      (`src/t0/sandbox.ts`). Verdicts do not change — tsc and eslint report the same thing at
-      2-way as at 10-way — and wall-clock should not either, since two cores is two cores.
-      The measurement is the entry above; this is the quarter of the kills that more host
-      memory cannot buy back.
-
-- [ ] **`--oom-score-adj 1000` on every sandbox.** When the VM runs out, the kernel picks a
-      victim by badness score, and today that can be `lore` or `opencode` — which loses
-      every in-flight round rather than the one offending container. Positive adjustments
-      need no privilege. Turns luck into a property.
+      **THE FIRST HALF IS FIXED — D-152, 2026-09-17.** `TURBO_CONCURRENCY` and a
+      `NODE_OPTIONS` heap cap, both derived from the container's own `--cpus` and
+      `--memory`, plus `--oom-score-adj 1000` so the kernel takes a sandbox rather than lore
+      or opencode. One more measurement went in with it: node's default `heap_size_limit`
+      inside the sandbox was **2240 MB, sized from the host's 7.75 GiB**, not from the
+      cgroup's 6 — ten of those is 22 GB of entitlement in a six-gigabyte box. **Shipped,
+      not yet observed:** the next rigid round after a deploy is the first real test, and
+      the number to watch is the `interrupted` share in `tier_run`.
 
 - [ ] **Vany's: the 12 GiB, the per-sandbox ceiling, and whether the door should also count
       lore's own sandboxes.** More memory alone moves the cliff rather than removing it —

@@ -14,7 +14,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { scriptFinding } from "./runner.ts";
-import { cargoLockKey, commandsFor, detectEcosystems, install, lockfileKey, runInSandbox, type SandboxConfig } from "./sandbox.ts";
+import {
+  cargoLockKey,
+  commandsFor,
+  detectEcosystems,
+  fanOut,
+  install,
+  lockfileKey,
+  memoryBytes,
+  runInSandbox,
+  type SandboxConfig,
+} from "./sandbox.ts";
 
 let dir: string;
 
@@ -368,6 +378,35 @@ describe("a timed-out sandboxed run is killed explicitly, not left to a signal t
     expect(killCall).toBe(`kill ${nameInRun}`);
   });
 
+  /**
+   * AT THE WIRE, because `fanOut` being right is worth nothing if its numbers never reach
+   * `docker run` — and this is a list of strings assembled by position, which is the shape
+   * that silently drops an entry.
+   *
+   * On BOTH calls: `install` runs the target's lifecycle scripts, which is a node process
+   * fanning out like any other, and it was the fourth OOM site found the last time this
+   * class of bug was chased (`runner.ts`'s own `install()` check).
+   */
+  it("hands the container's limits down to the tooling inside it, on every call", async () => {
+    fakeDockerBinary();
+    await runInSandbox(baseSandbox, dir, cache, scratch, "echo hi", false);
+    await install(baseSandbox, dir, cache, scratch, {
+      name: "npm", lockfile: "package-lock.json", install: "npm ci", run: (s) => `npm run ${s}`,
+    });
+
+    const runs = readFileSync(log, "utf8").split("\n").filter((c) => c.startsWith("run "));
+    expect(runs, "one run for the phase, one for the install").toHaveLength(2);
+    for (const call of runs) {
+      // The fan-out, matching the CPUs this container is actually given.
+      expect(call).toContain("TURBO_CONCURRENCY=2");
+      // The heap, derived from this container's own --memory rather than the host's.
+      expect(call).toContain("NODE_OPTIONS=--max-old-space-size=2304");
+      // And if the box goes under anyway, this container is what the kernel takes —
+      // never lore, which would lose every round in flight rather than this one.
+      expect(call).toContain("--oom-score-adj 1000");
+    }
+  });
+
   it("install: also clears stale state and issues an explicit kill, the same as runInSandbox", async () => {
     fakeDockerBinary();
     const result = await install(baseSandbox, dir, cache, scratch, {
@@ -393,5 +432,57 @@ describe("a timed-out sandboxed run is killed explicitly, not left to a signal t
     const result = await runInSandbox(sandbox, dir, cache, scratch, "echo hi", false);
     expect(result.timedOut).toBe(false);
     expect(readFileSync(log, "utf8")).not.toMatch(/^kill /m);
+  });
+});
+
+/**
+ * The fan-out cap, and the invariant it exists to hold.
+ *
+ * Measured 2026-09-16: ten concurrent eslint processes inside a two-CPU container, each
+ * entitled by node's default to 2240 MB of heap sized from the HOST's memory rather than
+ * the cgroup's — 22 GB of entitlement in a 6 GiB box, and 22% of rigid's t0 runs killed.
+ * The property worth pinning is not either number but their PRODUCT: what the container
+ * hands out must fit in what the container is allowed.
+ */
+describe("what the sandbox lets the target's tooling take", () => {
+  const cfg = (memory: string, cpus: string): SandboxConfig => ({
+    image: "unused", cacheRoot: "/tmp", scratchRoot: "/tmp", uid: 1000, gid: 1000,
+    memory, cpus, timeoutMs: 1000, runtime: "true",
+  });
+
+  it("hands down the container's own limit, not the host's", () => {
+    expect(fanOut(cfg("6g", "2"))).toStrictEqual({ concurrency: 2, heapMb: 2304 });
+    // The case that makes lowering the ceiling safe: node would still default to 2240 MB
+    // here, and two of those do not fit in 3 GiB.
+    expect(fanOut(cfg("3g", "2"))).toStrictEqual({ concurrency: 2, heapMb: 1152 });
+  });
+
+  it("never entitles more than the cgroup allows, at any shape of limit", () => {
+    for (const memory of ["1g", "2g", "3g", "6g", "8g", "12g", "512m"]) {
+      for (const cpus of ["1", "1.5", "2", "4", "8"]) {
+        const fan = fanOut(cfg(memory, cpus));
+        const entitled = fan.concurrency * fan.heapMb * 1024 ** 2;
+        // The 512 MB floor is allowed to exceed a tiny limit — a cap no toolchain can start
+        // inside would turn a small box into "every engine fails" — so the invariant is
+        // asserted where it is meaningful, and the exception is named rather than hidden.
+        if (fan.heapMb > 512) {
+          expect(entitled, `${memory} / ${cpus} cpus entitles more than the container has`)
+            .toBeLessThanOrEqual(memoryBytes(memory));
+        }
+      }
+    }
+  });
+
+  it("gives turbo an integer it will accept", () => {
+    // `--cpus 1.5` is a legal docker limit; turbo refuses a fractional concurrency.
+    expect(fanOut(cfg("6g", "1.5")).concurrency).toBe(1);
+    expect(Number.isInteger(fanOut(cfg("6g", "2")).concurrency)).toBe(true);
+  });
+
+  it("refuses a memory string it cannot read rather than sizing a cap from a guess", () => {
+    expect(() => memoryBytes("lots")).toThrow(/cannot read a docker memory limit/);
+    expect(memoryBytes("6g")).toBe(6 * 1024 ** 3);
+    expect(memoryBytes("512m")).toBe(512 * 1024 ** 2);
+    expect(memoryBytes("1024")).toBe(1024);
   });
 });
