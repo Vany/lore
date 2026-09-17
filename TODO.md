@@ -53,34 +53,34 @@ is deployed", is now measurable and says so.
 
 ---
 
-### 2026-09-16 — OPEN AND IN PRODUCTION: five findings on a batch that is already deployed
+### 2026-09-17 — the production findings are fixed, and there were THIRTEEN of them
 
-Not deferrals. The batch (D-147 rename, D-148 channel, D-149, and the three reviewer fixes)
-went live ahead of its review on Vany's instruction, so each of these is a defect running
-now. Review `rev_kq7psOFQqIKn1di0XjMEal7e`, open at `findings_ready` — answer with
-`review_submit`, or it dims in 48h and concludes nothing.
+`rev_kq7psOFQqIKn1di0XjMEal7e` is `cancelled` — deliberately, not abandoned: it was pinned
+to a tree from 2026-09-15 and the files have moved since, so answering it in place would
+have meant composing fixes against code that no longer exists. The fixes are on main and in
+a review of their own.
 
-- [ ] **`f5f92a32`** (medium, `channel/lore-channel.ts`) — the channel tells an agent never
-      to poll while it is running, and nothing tells the agent when the channel DIES. Claude
-      Code reports nothing, so the session waits for an event that can never come: the
-      abandonment D-148 was built to end, caused by D-148.
+**The inbox showed five; cancelling returned thirteen.** The other eight had been delivered
+to the session that started it and never reached this file — which is worth remembering as a
+property of the protocol rather than a mistake: `review_poll` consumes what it returns, so a
+session that collects and then ends takes the only copy with it. `lore://review/{id}` and
+`review_cancel` are the two ways back to the full list, and neither is reached by a reader
+of this file.
 
-- [ ] **`976cc0a6`** (medium, `channel/lore-channel.ts`) — `decide()` announces any row
-      `waiting_on: "you"` and ignores `not_yours_note`, so during a token rotation it tells
-      the agent to poll reviews whose poll, submit and attest all answer NOT FOUND.
+All thirteen are fixed. Five by this session (the channel's silent death, not-yours rows,
+the interval hot loop, `spec/mcp-api.md` §2.4, the CLI's conflated skip list — commit
+`2ad2fe9`), and eight by the rounds that followed on that branch, verified against main one
+at a time rather than assumed:
 
-- [ ] **`a888d6df`** (medium, `spec/mcp-api.md` §2.4) — still says only `passed` supports an
-      attestation. False since D-147: `isCleared` gates `review_attest`. The rename sweep
-      edited this file elsewhere and missed the sentence.
-
-- [ ] **`16be0108`** (medium, `src/cli.ts`) — the thin-ladder text points at "Not checked" as
-      the reason, but that list also carries ENGINE gaps (eslint), which never thin a ladder.
-      The existence-vs-name defect D-147 rounds 2–3 fixed in the tool texts, reintroduced in
-      the CLI.
-
-- [ ] **`0ce0fe9a`** (low, `channel/lore-channel.ts`) — `LORE_CHANNEL_INTERVAL_MS=15s` or an
-      empty value parses to NaN/0 and `setTimeout` fires at ~1ms: a silent hot loop against
-      `review_inbox`, invisible because every tick succeeds.
+* `21aea4dd` (HIGH) — the migration's docstring promised `assertNotDowngrade` would refuse a
+  rollback while `SCHEMA_VERSION` still read 22, so the guard could not fire and an older
+  build's sweep would have expired 201 real verdicts. It is 23 now, and the docstring says
+  the sentence stood there while the version did not.
+* `2df1e05f`, `b632d279` — the CLI no longer tells a thin ladder it failed, and no longer
+  reuses a concluded `passed_thin_ladder` for another round.
+* `8b920173`, `abfe5238` — the `spec/agent-docs.md` §3 draft and the `deploy/` comments.
+* `9eb9f13c`, `9ba556af`, `b919fcc0` — three successive rounds on one paragraph of
+  `docs.ts`, ending with the tier/engine/vendor-count split that is in the live text now.
 
 ### 2026-09-17 — the batch is reviewed, attested and pushed
 
