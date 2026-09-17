@@ -609,7 +609,7 @@ export async function main(argv: readonly string[]): Promise<ExitCode> {
         undelivered.map((f) => [f.fingerprint, renderEnrichment(enrich(store, repo.id, reviewId, f))]),
       );
       process.stdout.write(
-        render(reviewId, result.decision.kind, undelivered, result.t0Unavailable, result.accepted, result.rejected, result.expired, history),
+        render(reviewId, result.decision.kind, undelivered, result.t0Unavailable, result.tiersSkipped, result.accepted, result.rejected, result.expired, history),
       );
     }
 
@@ -652,6 +652,8 @@ export function render(
   decision: string,
   findings: readonly RecordedFinding[],
   unavailable: readonly string[],
+  /** Tiers that did not read this tree — the only thing that can make a verdict thin. */
+  tiersSkipped: readonly string[],
   accepted: readonly string[],
   rejected: readonly string[],
   expired: readonly string[],
@@ -659,9 +661,24 @@ export function render(
 ): string {
   const out: string[] = ["", `# lore — ${decision}`, `_review ${reviewId}_`, ""];
 
+  // TWO SECTIONS, BECAUSE THEY ARE TWO DIFFERENT FACTS (`16be0108`). An engine gap is lost
+  // coverage; a skipped tier is a thinner ladder. They were printed as one list under one
+  // heading, and the thin-ladder sentence below then pointed a reader at it — so on a repo
+  // with no eslint config, a vendor-collapse verdict read as though the missing eslint had
+  // caused it.
   if (unavailable.length > 0) {
-    out.push("## Not checked", "", "Nothing verified these. Do not read them as clean.", "");
+    out.push("## Not checked", "", "Engines that did not run. Nothing verified these — do not read them as clean.", "");
     for (const u of unavailable) out.push(`- ${u}`);
+    out.push("");
+  }
+  if (tiersSkipped.length > 0) {
+    out.push(
+      "## Tiers that did not read this tree",
+      "",
+      "This is what makes a verdict THIN. Nothing above in \"Not checked\" does.",
+      "",
+    );
+    for (const t of tiersSkipped) out.push(`- ${t}`);
     out.push("");
   }
 
@@ -695,8 +712,11 @@ export function render(
         ? "No findings. Every tier agrees."
         : decision === "passedThinLadder"
           ? "No findings. CLEARED, on a thinner ladder: every tier that ran agreed, with less " +
-            "independence behind it than the full ladder. Anything under \"Not checked\" above " +
-            "is what was thin; if nothing is listed there, fewer vendors read it than tiers ran."
+            "independence behind it than the full ladder. What was thin is under \"Tiers that " +
+            "did not read this tree\" above; if nothing is listed there, the ladder ran whole " +
+            "and fewer distinct VENDORS read it than tiers ran. \"Not checked\" is a different " +
+            "thing entirely — engines that did not run, which cost coverage and never thin a " +
+            "verdict."
           : "No new findings this round.",
       "",
     );

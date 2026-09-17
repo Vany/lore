@@ -86,7 +86,8 @@ describe("which review the CLI resumes", () => {
  * while exiting 3, which the README calls a success.
  */
 describe("what the CLI says at the end of a round", () => {
-  const say = (decision: string): string => render("rev_x", decision, [], [], [], [], [], new Map());
+  const say = (decision: string, over: { unavailable?: string[]; tiersSkipped?: string[] } = {}): string =>
+    render("rev_x", decision, [], over.unavailable ?? [], over.tiersSkipped ?? [], [], [], [], new Map());
 
   it("does not tell a thin ladder it failed", () => {
     const text = say("passedThinLadder");
@@ -96,6 +97,30 @@ describe("what the CLI says at the end of a round", () => {
 
   it("does not tell a full pass it failed either", () => {
     expect(say("passed")).not.toContain("NOT a pass");
+  });
+
+  /**
+   * `16be0108`: "Not checked" carries ENGINE gaps as well as skipped tiers, and only the
+   * second kind can thin a ladder. Printed as one list under one heading, a missing eslint
+   * config read as the reason a vendor-collapse verdict was thin.
+   */
+  it("does not blame a missing engine for a thin ladder", () => {
+    const text = say("passedThinLadder", { unavailable: ["eslint: no `lint` script and no eslint config"] });
+    // The engine gap is still reported...
+    expect(text).toContain("eslint: no `lint` script");
+    // ...under a heading that says what it is, and NOT under the one the thin verdict points at.
+    expect(text).toContain("Engines that did not run");
+    expect(text).not.toContain("## Tiers that did not read this tree");
+    // And the verdict sentence must not send the reader to the engine list for its reason.
+    expect(text).toMatch(/Tiers that did not read this tree/);
+    expect(text).toContain("never thin a verdict");
+  });
+
+  it("names the skipped tier when there IS one, in its own section", () => {
+    const text = say("passedThinLadder", { tiersSkipped: ["t3 was skipped: no route left that could be paid for"] });
+    expect(text).toContain("## Tiers that did not read this tree");
+    expect(text).toContain("t3 was skipped");
+    expect(text).not.toContain("## Not checked");
   });
 
   it("still says NOT a pass where nothing was cleared", () => {

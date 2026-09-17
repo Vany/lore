@@ -531,9 +531,17 @@ immediately, so the developer keeps moving. The deep stage continues in the
 background and its findings land whenever they land.
 
 **A fast pass is not a pass.** `fast_clean` is its own state and is never reported
-as `passed`. Only the full ladder produces `passed`, and only `passed` supports an
-attestation. This is INV-1 in a new disguise: "the cheap tiers found nothing" must
-never read as "the branch is clean".
+as `passed`. Only the full ladder produces `passed`. This is INV-1 in a new disguise:
+"the cheap tiers found nothing" must never read as "the branch is clean".
+
+**Both CLEARED states are attestable, and this sentence used to deny it.** It read "only
+`passed` supports an attestation", which stopped being true at D-147: `isCleared` is what
+gates `review_attest`, so `passed_thin_ladder` attests too — and it is the ORDINARY clean
+ending here, 287 of 341. The false version taught a client to skip the signed record on
+almost every clean review, which is the opposite of what the attestation is for: a partial
+review is exactly the one whose account somebody will want later. The line names which
+tiers were skipped and how many distinct vendors read the code, so an honest incomplete
+record beats no record at all.
 
 ### 2.4.1 `review_inbox`
 

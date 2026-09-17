@@ -4317,6 +4317,10 @@ describe("a rung of two members", () => {
     const ladder = store.getReview("rung1", "p")?.ladder;
     expect(ladder?.unavailable, "the dead member is marked, alone").toStrictEqual(["t2"]);
     expect(ladder?.tierRounds, "and not billed for a round it never saw").toStrictEqual({ t3: 1 });
-    expect(r.t0Unavailable.join(" "), "the client is told which member could not look").toContain("t2");
+    // ON `tiersSkipped`, NOT `t0Unavailable` (`16be0108`). A member that could not be paid
+    // for is a thinner LADDER; an engine that could not run is lost coverage. They were one
+    // list, and the CLI then blamed a missing eslint for a vendor collapse.
+    expect(r.tiersSkipped.join(" "), "the client is told which member could not look").toContain("t2");
+    expect(r.t0Unavailable.join(" "), "and it is not filed as an engine gap").not.toContain("t2");
   });
 });

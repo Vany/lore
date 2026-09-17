@@ -107,7 +107,22 @@ export interface RoundResult {
   readonly expired: readonly string[];
   /** Findings settled as `fixed`: not re-raised by a qualified tier, code moved (D-56). */
   readonly fixed: readonly string[];
+  /**
+   * Checks that did not happen, and WHY IS TWO DIFFERENT ANSWERS — kept apart because a
+   * caller that merges them tells somebody a false reason.
+   *
+   * `t0Unavailable` is an ENGINE gap: eslint has no config here, semgrep could not parse a
+   * file. It is lost coverage and never thins a ladder. `tiersSkipped` is a tier that did
+   * not read this tree, which is exactly what a thin verdict is made of.
+   *
+   * They were one list, and `cli.ts` then printed "the ladder was thin — see Not checked
+   * above" over a list whose only entry could be a missing eslint. Same shape as the
+   * existence-vs-name defect D-147 fixed in `TOOL_DOCS`, reintroduced one surface over,
+   * which is the argument for splitting the DATA rather than teaching each reader to
+   * re-classify the strings.
+   */
   readonly t0Unavailable: readonly string[];
+  readonly tiersSkipped: readonly string[];
   /**
    * A rung member's session still trails the tree after the catch-up cap (D-109,
    * fingerprint 83d84e62) — this round's own verdict may describe a tree not every
@@ -2762,7 +2777,8 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       rejected: [],
       expired,
       fixed: [],
-      t0Unavailable: [...t0.unavailable, ...skippedMembers.map((s) => s.note)],
+      t0Unavailable: [...t0.unavailable],
+      tiersSkipped: skippedMembers.map((s) => s.note),
       // Nobody ran, so nobody can be stale relative to a tree they never read at all —
       // this path's own INV-1 refusal/skip handling is the answer to that question here.
       rungStillStale: false,
@@ -3276,7 +3292,8 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     fixed,
     // A member skipped beside members that answered still reaches the client's channel
     // — a mixed rung is the one shape the single-tier ladder could never produce.
-    t0Unavailable: [...t0.unavailable, ...skippedMembers.map((s) => s.note), ...lateSkipNotes],
+    t0Unavailable: [...t0.unavailable],
+    tiersSkipped: [...skippedMembers.map((s) => s.note), ...lateSkipNotes],
     rungStillStale,
   };
 }

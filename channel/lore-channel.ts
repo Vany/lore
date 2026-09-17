@@ -126,7 +126,30 @@ function wire(): Wire {
 const WIRE = wire();
 const LORE_URL = WIRE.url;
 const LORE_TOKEN = WIRE.token;
-const INTERVAL_MS = Number(process.env["LORE_CHANNEL_INTERVAL_MS"] ?? "15000");
+/**
+ * How often to ask lore, in milliseconds — and a refusal to guess when the answer is not a
+ * number.
+ *
+ * `Number("15s")` is NaN and `Number("")` is 0, and `setTimeout` coerces both to about one
+ * millisecond: a silent hot loop hammering `review_inbox` for the life of the session,
+ * invisible because every tick SUCCEEDS and success resets the one thing that would have
+ * complained. This channel exists to be quiet enough to leave on; a misconfiguration that
+ * makes it the noisiest thing on the box has to be impossible rather than unlikely.
+ *
+ * The floor is a second for the same reason: any value under it is a mistake whatever the
+ * operator meant, and a channel is a daemon with no model attached — it gains nothing from
+ * asking faster than the service can answer.
+ */
+export function pollInterval(raw: string | undefined): { readonly ms: number } | { readonly bad: string } {
+  if (raw === undefined || raw.trim() === "") return { ms: 15_000 };
+  const ms = Number(raw);
+  if (!Number.isFinite(ms)) return { bad: `LORE_CHANNEL_INTERVAL_MS is "${raw}", which is not a number of milliseconds` };
+  if (ms < 1_000) return { bad: `LORE_CHANNEL_INTERVAL_MS is "${raw}"; the floor is 1000ms, and anything under it is a hot loop` };
+  return { ms };
+}
+
+const INTERVAL = pollInterval(process.env["LORE_CHANNEL_INTERVAL_MS"]);
+const INTERVAL_MS = "ms" in INTERVAL ? INTERVAL.ms : 15_000;
 
 /**
  * What Claude is told about these events when the channel connects.
@@ -141,9 +164,17 @@ const INSTRUCTIONS = [
   "severity. They mean one of your reviews needs you NOW — lore has stopped and will not",
   "move again until you act.",
   "",
-  "DO NOT SLEEP OR POLL ON A TIMER WHILE THIS CHANNEL IS RUNNING. That is what it replaces:",
-  "you will be woken when there is something to do, so spend your turns on the work instead",
-  "of on asking whether there is any.",
+  "WHILE YOU ARE SEEING EVENTS FROM ME, do not sleep or poll on a timer. That is what this",
+  "replaces: you will be woken when there is something to do, so spend your turns on the work",
+  "instead of on asking whether there is any.",
+  "",
+  "BUT YOU CANNOT SEE WHETHER I AM STILL ALIVE, so that instruction has a condition and here",
+  "is how to check it. I send one line when I start, naming how many of your reviews are open.",
+  "If you never saw it, I am not running and nothing will wake you — poll as you would have",
+  "without me. If you saw it but nothing since, and a review of yours has been open for longer",
+  "than a round usually takes, make ONE review_inbox call rather than waiting: a channel that",
+  "dies mid-session is reported to nobody, by anyone, ever. One call costs a turn; believing a",
+  "dead channel costs the review.",
   "",
   "On an event, call review_poll for that review_id to collect what is new, answer the",
   "findings, and review_submit. An event saying a review is no longer open means it reached",
@@ -248,6 +279,17 @@ export interface Row {
   readonly waiting_on?: string;
   readonly new_findings?: number;
   readonly highest?: string | null;
+  /**
+   * Set by the inbox when the row belongs to this PRINCIPAL but not to this TOKEN — the
+   * documented rotation overlap, where a new token is minted and pasted while a review
+   * started on the old one is still open (D-78).
+   *
+   * It is the difference between "act on this" and "you cannot act on this from here", and
+   * the row is otherwise byte-identical: same `waiting_on: "you"`, same state, same count.
+   * Ignoring it produced the one instruction a reader must fail at — poll, submit and attest
+   * all answer NOT FOUND — which is exactly the defect the channel was built to remove.
+   */
+  readonly not_yours_note?: string;
 }
 
 export interface Event {
@@ -299,6 +341,27 @@ export function decide(
     if (r.waiting_on !== "you") continue;
     const backlog = first && had === undefined;
     const n = r.new_findings ?? 0;
+    // NOT YOURS TO DRIVE, AND SAYING SO BEATS BOTH ALTERNATIVES. Silence would leave a
+    // review of this person's rotting with nothing anywhere mentioning it; the ordinary
+    // event would send them at three calls that all answer NOT FOUND. The row is otherwise
+    // identical, so this note is the only thing that distinguishes them.
+    if (r.not_yours_note !== undefined && r.not_yours_note !== "") {
+      events.push({
+        content:
+          `Review ${r.review_id}${r.branch === undefined ? "" : ` (${r.branch})`} is waiting, and YOU CANNOT` +
+          ` DRIVE IT FROM HERE — it was started on a different token of yours, so review_poll,` +
+          ` review_submit and review_attest will all answer NOT FOUND. lore says: ${r.not_yours_note}` +
+          ` Tell your user, and drive it from the session holding the token that started it.`,
+        meta: {
+          review_id: r.review_id,
+          state: r.state,
+          severity: r.highest ?? "none",
+          not_yours: "true",
+          ...(backlog ? { backlog: "true" } : {}),
+        },
+      });
+      continue;
+    }
     const what =
       r.state === "needs_human"
         ? "is parked on a QUESTION only a person can settle — take it to your user, then knowledge_resolve it"
@@ -346,7 +409,25 @@ let complaining = false;
 
 async function tick(): Promise<void> {
   const inbox = await callLore("review_inbox");
-  const { events, next } = decide(snapshot, (inbox?.["reviews"] as Row[] | undefined) ?? [], first);
+  const rows = (inbox?.["reviews"] as Row[] | undefined) ?? [];
+  // THE ONE LINE THE INSTRUCTIONS PROMISE, sent once, on the first successful look.
+  //
+  // An agent cannot observe whether this process is alive, and Claude Code reports nothing
+  // when a channel dies — so "do not poll while the channel is running" was an instruction
+  // whose condition the reader had no way to evaluate, and a channel that died after
+  // startup left a session waiting for an event that could never come. This is the anchor:
+  // if it never arrived, the channel is not running. Once per session, so it cannot become
+  // the noise this design exists to avoid.
+  if (first) {
+    push(
+      `lore-channel is watching your reviews, every ${String(Math.round(INTERVAL_MS / 1000))}s.` +
+        ` ${rows.length === 0 ? "None are open right now" : `${String(rows.length)} open right now`}.` +
+        ` If this is the last you hear from me and a review of yours is open, call review_inbox once —` +
+        ` a channel that dies mid-session is reported to nobody.`,
+      { review_id: "none", state: "channel_started", severity: "none" },
+    );
+  }
+  const { events, next } = decide(snapshot, rows, first);
   for (const e of events) push(e.content, e.meta);
   snapshot = next;
   first = false;
@@ -399,6 +480,16 @@ if (invokedDirectly) {
         "` entry with an Authorization header in .mcp.json under " + process.cwd() + ". Fix whichever is" +
         " wrong and restart the session. Until then this channel is doing nothing: call review_inbox" +
         " yourself and tell your user, because they cannot see this failing from the outside.",
+      { review_id: "none", state: "channel_error", severity: "high" },
+    );
+  } else if ("bad" in INTERVAL) {
+    // ANNOUNCED AND NOT STARTED, for the same reason a missing token is: exiting would
+    // leave Claude Code holding a channel that registered and then vanished, which it
+    // reports to nobody. Refusing to poll is the point — the alternative this replaces was
+    // a ~1ms hot loop against review_inbox that looked perfectly healthy from here.
+    push(
+      `lore-channel will not start: ${INTERVAL.bad}. It is sending no review events. Fix the variable and` +
+        ` restart the session; until then call review_inbox yourself and tell your user.`,
       { review_id: "none", state: "channel_error", severity: "high" },
     );
   } else {

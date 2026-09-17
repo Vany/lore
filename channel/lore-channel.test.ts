@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { decide, type Row } from "./lore-channel.ts";
+import { decide, pollInterval, type Row } from "./lore-channel.ts";
 
 const SERVER = fileURLToPath(new URL("./lore-channel.ts", import.meta.url));
 
@@ -96,7 +96,10 @@ describe("the handshake", () => {
     );
     const out = spawnSync(process.execPath, ["--experimental-strip-types", SERVER], {
       input: "", encoding: "utf8",
-      env: { ...process.env, LORE_TOKEN: "", LORE_URL: "", LORE_CHANNEL_INTERVAL_MS: "50" },
+      // 1000, not 50: the floor refuses anything under a second now, and this test spawns
+      // the real binary, so it meets the real rule. It costs nothing — `loop()` ticks once
+      // BEFORE its first sleep, and the complaint under test comes from that first tick.
+      env: { ...process.env, LORE_TOKEN: "", LORE_URL: "", LORE_CHANNEL_INTERVAL_MS: "1000" },
       cwd: dir,
       timeout: 15_000,
     });
@@ -166,5 +169,70 @@ describe("decide", () => {
     const { events } = decide(new Map(), [row({ state: "needs_human", new_findings: 0 })], false);
     expect(events[0]?.content).toContain("only a person can settle");
     expect(events[0]?.content).not.toContain("review_submit");
+  });
+});
+
+/**
+ * The three ways this channel could reach nobody while looking healthy.
+ *
+ * All three shipped in D-148 and were found by lore's own review of it: an instruction
+ * whose condition the reader cannot evaluate, a row announced as actionable that no call
+ * of theirs can touch, and a poll interval that parses to zero.
+ */
+describe("a row this token cannot act on", () => {
+  const notMine = (over: Partial<Row> = {}): Row =>
+    row({ not_yours_note: "started on another token of yours; only that token can drive it.", ...over });
+
+  it("is announced, because silence would let it rot unmentioned", () => {
+    const { events } = decide(new Map(), [notMine()], false);
+    expect(events).toHaveLength(1);
+  });
+
+  it("never tells the agent to make a call that answers NOT FOUND", () => {
+    const { events } = decide(new Map(), [notMine()], false);
+    const content = events[0]?.content ?? "";
+    // The whole defect: the ordinary event's instruction is "review_poll it".
+    expect(content).toContain("CANNOT");
+    expect(content).toMatch(/NOT FOUND/);
+    expect(content).not.toMatch(/review_poll it/);
+    expect(events[0]?.meta["not_yours"]).toBe("true");
+  });
+
+  it("still carries lore's own explanation rather than paraphrasing it", () => {
+    const { events } = decide(new Map(), [notMine()], false);
+    expect(events[0]?.content).toContain("only that token can drive it.");
+  });
+
+  it("leaves an ordinary row completely unaffected", () => {
+    const { events } = decide(new Map(), [row()], false);
+    expect(events[0]?.content).toContain("review_poll it");
+    expect(events[0]?.meta["not_yours"]).toBeUndefined();
+  });
+});
+
+describe("the poll interval refuses what it cannot read", () => {
+  it("defaults when unset or blank", () => {
+    expect(pollInterval(undefined)).toStrictEqual({ ms: 15_000 });
+    expect(pollInterval("  ")).toStrictEqual({ ms: 15_000 });
+  });
+
+  it("takes a number of milliseconds", () => {
+    expect(pollInterval("30000")).toStrictEqual({ ms: 30_000 });
+  });
+
+  /**
+   * `Number("15s")` is NaN and `Number("")` is 0; `setTimeout` coerces both to ~1ms. The
+   * result was a hot loop against review_inbox that looked healthy from every angle,
+   * because each tick succeeded and success is what resets the complaint.
+   */
+  it("refuses a unit suffix rather than turning it into a hot loop", () => {
+    const bad = pollInterval("15s");
+    expect("bad" in bad && bad.bad).toMatch(/not a number/);
+  });
+
+  it("refuses anything under a second, whatever the operator meant by it", () => {
+    expect("bad" in pollInterval("0")).toBe(true);
+    expect("bad" in pollInterval("999")).toBe(true);
+    expect("bad" in pollInterval("-5")).toBe(true);
   });
 });
