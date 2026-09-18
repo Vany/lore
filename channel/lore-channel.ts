@@ -434,11 +434,21 @@ export function decide(
       if (next.has(id)) continue;
       const notYours = wasNotYours(prev.get(id));
       events.push({
+        // THE BINDING IS CONDITIONAL, so this text must not read as a dead end. `boundElsewhere`
+        // in src/mcp/server.ts requires `store.tokenLive(bound)`: revoke the old token and the
+        // review falls back to repository scope, after which these very calls work from here.
+        // lore's own waiting-path note has always said so ("a person revokes that token, after
+        // which it falls back to repository scope and you can"); this one said "there is nothing
+        // for you to call", which on the ordinary D-78 path — token rotated BECAUSE the old
+        // session is gone, so nobody is ever coming to drive it — buries a passed review's
+        // verdict for good, unread and unattested, over a revocation nobody knew would help.
         content: notYours
           ? `Review ${id} is no longer open — it ended while you were away. It was started on a different` +
-            ` token of yours, so review_poll and review_attest still answer NOT FOUND from here and there` +
-            ` is nothing for you to call: the verdict is readable only from the session that started it,` +
-            ` or from lore's operator board. Say so to your user rather than trying.`
+            ` token of yours, so review_poll and review_attest answer NOT FOUND from here for as long as` +
+            ` that token is LIVE: the verdict is readable from the session that started it, or from` +
+            ` lore's operator board. That is not permanent — have a person REVOKE the old token and the` +
+            ` review falls back to repository scope, after which you can poll and attest it from here.` +
+            ` Tell your user both, rather than retrying the calls as things stand.`
           : `Review ${id} is no longer open — it reached a verdict while you were away. review_poll it once` +
             ` to learn which, and review_attest it if it is cleared.`,
         meta: { review_id: id, state: "closed", severity: "none", ...(notYours ? { not_yours: "true" } : {}) },

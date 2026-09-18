@@ -300,6 +300,23 @@ describe("a not-yours row in the states the first fix missed", () => {
     expect(events[0]?.meta["not_yours"]).toBe("true");
   });
 
+  /**
+   * ...and it names the way OUT of not-yours, which the first version of the vanish text
+   * dropped. The binding holds only while the old token is live (`boundElsewhere` calls
+   * `store.tokenLive`), so revocation is a real remedy and the only actionable one on the
+   * path where the other session is gone for good. Saying "there is nothing for you to
+   * call" instead loses a finished review's verdict to a revocation nobody knew to ask for.
+   */
+  it("names revocation as the way out, rather than calling it unreadable", () => {
+    const { next } = decide(new Map(), [row({ not_yours_note: note })], false);
+    const { events } = decide(next, [], false);
+    const content = events[0]?.content ?? "";
+    expect(content).toContain("REVOKE");
+    expect(content).toContain("repository scope");
+    expect(content, "the overclaim that foreclosed it").not.toContain("nothing for you to call");
+    expect(content, "and not 'readable ONLY from' the other session").not.toMatch(/readable only from/i);
+  });
+
   it("still tells the agent to poll a review of its OWN that ended", () => {
     const { next } = decide(new Map(), [row()], false);
     const { events } = decide(next, [], false);
