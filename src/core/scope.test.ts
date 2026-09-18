@@ -210,21 +210,30 @@ describe("re-anchoring a finding onto the code its evidence quotes", () => {
   });
 
   /**
-   * BOTH QUOTES CLEAR THE LENGTH FILTER, which the first version of this test did not
-   * arrange: its shorter quote was 10 characters and `ANCHOR_MIN_CHARS` dropped it before
-   * any matching happened, so the assertion passed on the filter and would have survived
-   * any change to the ordering it is named for. Found by lore's own review, fingerprint
-   * 03179792 — "a test named for a property it does not test is worse than no test".
+   * BOTH QUOTES UNIQUE, AT DIFFERENT LINES — which is the only arrangement that pins the
+   * sort, and it took two goes to get there.
+   *
+   * v1 was caught (`03179792`) because its shorter quote was 10 characters and the length
+   * filter dropped it before any matching: the assertion rested on the filter. v2 made both
+   * quotes long enough but left the shorter one AMBIGUOUS — and ambiguity is `continue`, not
+   * failure, so it was skipped and the unique long quote won under every ordering. The
+   * comment I wrote there ("the ambiguous quote would be tried first and the answer would be
+   * undefined") described a mechanism the implementation does not have, which is worse than
+   * the untested property it was covering for (`1cbe0a11`).
+   *
+   * With both unique and on different lines, ordering is the entire answer: longest-first
+   * returns the long quote's line, and anything else returns the short one's.
    */
   it("prefers the longest quote, since the most distinctive one collides least", () => {
-    const shorter = "the shared fragment";      // 19 chars, on two lines
-    const longer = `${shorter} plus a tail`;    // 32 chars, on one
+    const shorter = "the shorter fragment";               // 20 chars, unique, line 3
+    const longer = "the considerably longer fragment";    // 32 chars, unique, line 1
     const src = [`one ${longer}`, "filler", `two ${shorter}`, "filler", "filler"].join("\n");
-    // Ordering is the whole subject: taken shortest-first, or in evidence order, the
-    // ambiguous quote would be tried first and the answer would be undefined.
-    const at = anchorFromEvidence(src, 40, `it has \`${shorter}\` and also \`${longer}\` in it`);
-    expect(at).toBe(1);
-    // ...and the shorter one really is ambiguous, or this proves nothing.
-    expect(anchorFromEvidence(src, 40, `only \`${shorter}\` here`)).toBeUndefined();
+
+    expect(anchorFromEvidence(src, 40, `it has \`${shorter}\` and also \`${longer}\` in it`)).toBe(1);
+    // Order in the evidence must not decide it either, or the sort is doing nothing.
+    expect(anchorFromEvidence(src, 40, `it has \`${longer}\` and also \`${shorter}\` in it`)).toBe(1);
+    // And each really is findable on its own, or the assertion above proves nothing.
+    expect(anchorFromEvidence(src, 40, `only \`${shorter}\` here`)).toBe(3);
+    expect(anchorFromEvidence(src, 40, `only \`${longer}\` here`)).toBe(1);
   });
 });

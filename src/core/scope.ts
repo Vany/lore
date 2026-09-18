@@ -205,6 +205,16 @@ const ANCHOR_MIN_CHARS = 12;
  *
  * SPEC: SPEC.md D-153
  */
+// lore-ok[10c63eae]: upheld and ACCEPTED, not fixed — the guard genuinely cannot tell a
+// quote OF the claim's subject from one that merely REFERENCES it, so evidence quoting a
+// call site while the claim is about the definition anchors the scope at the call site and
+// a fix at the definition does not auto-settle. Kept, on the asymmetry: that costs a round
+// and the client still has `fixed_elsewhere`, a `lore-ok` anywhere in the file, and
+// `will_not_settle` — while the obvious alternative, settling if EITHER anchor moved, would
+// let an unrelated edit at a quoted reference record `fixed` for a defect nobody fixed, and
+// a false `fixed` never expires. A finding that will not auto-settle is visible and
+// answerable; a wrong `fixed` is neither. The trade is written into SPEC D-153 as a hole
+// rather than a caveat, because the conditions do NOT close it.
 export function anchorFromEvidence(source: string, line: number, evidence: string | undefined): number | undefined {
   if (evidence === undefined || evidence === "") return undefined;
   const lines = source.split("\n");
