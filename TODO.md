@@ -415,17 +415,6 @@ line it belongs to:**
       wrong, but it is Vany's: it changes what the compiler checks on every file in the repo
       to gain a linter on the same files.
 
-- [ ] **`review_start` accepts a branch identical to its base, and calls it `passed`.**
-      Three tiers agreed that nothing contains no defects, which is INV-1's exact
-      inverse: a review that read an empty tree reporting the strongest verdict this
-      service can issue. It happened once, to me, by pushing `main` to the same commit
-      as the review ref. **Waiting on:** nothing but a decision about the refusal's
-      shape — refuse at `review_start` beside the stale-mirror and missing-ticket
-      refusals, or let it run and end as its own state. The first is a one-line guard
-      and the honest reading of *"a review that did not run is not a review that found
-      nothing"*; the second says more but adds a state. Small either way; deliberately
-      not bundled into a diff that was already ten files and answering a live finding.
-
 - [ ] **Eighteen orphaned docblocks left, in the three files that carry more than one.**
       A docblock that ends where another begins describes the SECOND one's subject, and
       whatever it was written about has no comment at all — pinned mechanically in

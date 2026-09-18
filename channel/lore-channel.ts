@@ -321,7 +321,19 @@ export interface Event {
  * the three facts a client acts on; anything else moving is lore's business.
  */
 function signature(r: Row): string {
-  return `${r.state}:${String(r.new_findings ?? 0)}:${r.waiting_on ?? "?"}`;
+  // NOT-YOURS IS PART OF THE SIGNATURE, and not because it changes when to speak — found by
+  // lore's own review, fingerprint b6ca40c8. It is the only memory the vanish path has: a
+  // row that leaves the inbox is announced from `prev` alone, and without this the closing
+  // event told the agent to `review_poll` and `review_attest` a review whose every call
+  // answers NOT FOUND for this token — the exact instruction the waiting path suppresses,
+  // re-entering through the one door the fix did not cover.
+  const mine = r.not_yours_note === undefined || r.not_yours_note === "" ? "mine" : "not-yours";
+  return `${r.state}:${String(r.new_findings ?? 0)}:${r.waiting_on ?? "?"}:${mine}`;
+}
+
+/** Was the row under this signature one this token could not act on? See `signature`. */
+function wasNotYours(sig: string | undefined): boolean {
+  return sig !== undefined && sig.endsWith(":not-yours");
 }
 
 /**
@@ -361,12 +373,26 @@ export function decide(
     // event would send them at three calls that all answer NOT FOUND. The row is otherwise
     // identical, so this note is the only thing that distinguishes them.
     if (r.not_yours_note !== undefined && r.not_yours_note !== "") {
+      // AND `needs_human` IS THE ONE THAT IS NOT TOKEN-BOUND — found by lore's own review,
+      // fingerprint e0d2d3fa. The generic text below says "drive it from the session holding
+      // the token that started it", while lore's own note for THIS state says the opposite:
+      // `knowledge_resolve` is repo-scoped, so the session reading this event can settle the
+      // question right now. An event whose two halves disagree sends the agent looking for a
+      // session that may not exist, and `needs_human` never expires on its own — so the
+      // review blocks for ever, which is the abandonment this channel exists to end,
+      // reproduced by the fix for its sibling finding.
+      const stuck = r.state === "needs_human";
       events.push({
-        content:
-          `Review ${r.review_id}${r.branch === undefined ? "" : ` (${r.branch})`} is waiting, and YOU CANNOT` +
-          ` DRIVE IT FROM HERE — it was started on a different token of yours, so review_poll,` +
-          ` review_submit and review_attest will all answer NOT FOUND. lore says: ${r.not_yours_note}` +
-          ` Tell your user, and drive it from the session holding the token that started it.`,
+        content: stuck
+          ? `Review ${r.review_id}${r.branch === undefined ? "" : ` (${r.branch})`} is parked on a QUESTION` +
+            ` only a person can settle. You cannot poll, submit or attest it — it was started on a` +
+            ` different token of yours — but SETTLING IT IS NOT TOKEN-BOUND: knowledge_resolve is` +
+            ` scoped to the repository, so take the question to your user and resolve it from here.` +
+            ` lore says: ${r.not_yours_note}`
+          : `Review ${r.review_id}${r.branch === undefined ? "" : ` (${r.branch})`} is waiting, and YOU CANNOT` +
+            ` DRIVE IT FROM HERE — it was started on a different token of yours, so review_poll,` +
+            ` review_submit and review_attest will all answer NOT FOUND. lore says: ${r.not_yours_note}` +
+            ` Tell your user, and drive it from the session holding the token that started it.`,
         meta: {
           review_id: r.review_id,
           state: r.state,
@@ -406,11 +432,16 @@ export function decide(
   if (!first) {
     for (const id of prev.keys()) {
       if (next.has(id)) continue;
+      const notYours = wasNotYours(prev.get(id));
       events.push({
-        content:
-          `Review ${id} is no longer open — it reached a verdict while you were away. review_poll it once` +
-          ` to learn which, and review_attest it if it is cleared.`,
-        meta: { review_id: id, state: "closed", severity: "none" },
+        content: notYours
+          ? `Review ${id} is no longer open — it ended while you were away. It was started on a different` +
+            ` token of yours, so review_poll and review_attest still answer NOT FOUND from here and there` +
+            ` is nothing for you to call: the verdict is readable only from the session that started it,` +
+            ` or from lore's operator board. Say so to your user rather than trying.`
+          : `Review ${id} is no longer open — it reached a verdict while you were away. review_poll it once` +
+            ` to learn which, and review_attest it if it is cleared.`,
+        meta: { review_id: id, state: "closed", severity: "none", ...(notYours ? { not_yours: "true" } : {}) },
       });
     }
   }

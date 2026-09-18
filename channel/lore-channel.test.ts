@@ -251,3 +251,59 @@ describe("the poll interval refuses what it cannot read", () => {
     expect(pollInterval("2147483647")).toStrictEqual({ ms: 2_147_483_647 });
   });
 });
+
+/**
+ * The not-yours fix, in the two places it did not reach. Both found by lore's own review of
+ * it: a fix for "the channel sends the agent at calls that answer NOT FOUND" that left two
+ * paths doing exactly that.
+ */
+describe("a not-yours row in the states the first fix missed", () => {
+  const note = "started on another token of yours; only that token can drive it.";
+  const humanNote = "settling it is not token-bound: knowledge_resolve works for anyone on this repository.";
+
+  /**
+   * `needs_human` is the one state where the answer is NOT "go and find the other session":
+   * `knowledge_resolve` is repo-scoped, so the session reading the event can settle it. The
+   * generic text said the opposite, and `needs_human` never expires on its own — so
+   * following it blocks the review for ever.
+   */
+  it("tells a needs_human row it CAN settle the question from here", () => {
+    const { events } = decide(new Map(), [row({ state: "needs_human", new_findings: 0, not_yours_note: humanNote })], false);
+    expect(events).toHaveLength(1);
+    const content = events[0]?.content ?? "";
+    expect(content).toContain("NOT TOKEN-BOUND");
+    expect(content).toContain("knowledge_resolve");
+    expect(content, "the contradiction: do not send them looking for another session").not.toContain(
+      "drive it from the session holding the token",
+    );
+    expect(content, "and it still carries lore's own words").toContain(humanNote);
+  });
+
+  it("still refuses to send an ordinary not-yours row at review_poll", () => {
+    const { events } = decide(new Map(), [row({ not_yours_note: note })], false);
+    expect(events[0]?.content).toContain("CANNOT");
+    expect(events[0]?.content).not.toMatch(/review_poll it/);
+  });
+
+  /**
+   * THE VANISH PATH. A row that leaves the inbox is announced from the previous snapshot
+   * alone, which is why not-yours has to be part of the signature: without it the closing
+   * event says "review_poll it once, and review_attest it if it is cleared" — the exact
+   * instruction the waiting path suppresses, for the exact calls that answer NOT FOUND.
+   */
+  it("does not send the agent at a not-yours review when it ends", () => {
+    const { next } = decide(new Map(), [row({ not_yours_note: note })], false);
+    const { events } = decide(next, [], false);
+    expect(events).toHaveLength(1);
+    expect(events[0]?.content).not.toMatch(/review_poll it once/);
+    expect(events[0]?.content).toContain("NOT FOUND");
+    expect(events[0]?.meta["not_yours"]).toBe("true");
+  });
+
+  it("still tells the agent to poll a review of its OWN that ended", () => {
+    const { next } = decide(new Map(), [row()], false);
+    const { events } = decide(next, [], false);
+    expect(events[0]?.content).toContain("review_poll it once");
+    expect(events[0]?.meta["not_yours"]).toBeUndefined();
+  });
+});

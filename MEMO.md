@@ -3,6 +3,29 @@
 Newest first. Updated at the end of each task: what changed, what I learned, what
 surprised me.
 
+## 2026-09-18 — a TODO entry that described a defect fixed a month earlier
+
+**Found by the review of the commit that disproved it.** `TODO.md` listed *"`review_start`
+accepts a branch identical to its base, and calls it `passed`"* under "mine, ready — no
+decision needed", with a paragraph weighing which shape the refusal should take. The
+refusal has existed since 2026-08-16, five days after the entry was written: an empty
+change-set ends the review `failed` before any tier is asked, with a three-way message. I
+found that while working the list, wrote two tests for it — and left the entry standing,
+claiming the defect was live, in the same commit whose tests assert it is not.
+
+`7a5383c2` caught it, with the consequence spelled out: a future session takes its next task
+from that list, implements a guard that already exists, and discovers the branch's own test
+asserting the behaviour it just built.
+
+**The pattern is now three for three this week**, and all three are the same shape rather
+than three mistakes: the entry about D-141/D-142 not being deployed, the OOM entry saying
+no code change could fix it, and this one. **A checklist entry is a claim about the code,
+and nothing re-checks it.** Specs get reviewed because a tier reads them beside the code;
+`TODO.md` is read only by whoever is about to trust it. The prune fixed the volume problem
+and not this one — I struck 114 done items and left a live entry describing month-old
+history, because "is this still true?" is a different question from "is this still open?",
+and only the second one gets asked.
+
 ## 2026-09-17 — the batch passed, and the README it advertised us with was wrong twice
 
 **What changed.** `rev_yFUVBiGGTWvu5LAD5oWb-QWU`, `passed_thin_ladder`, attested at tree
