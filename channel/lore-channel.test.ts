@@ -279,6 +279,26 @@ describe("a not-yours row in the states the first fix missed", () => {
     expect(content, "and it still carries lore's own words").toContain(humanNote);
   });
 
+  /**
+   * AND IT NAMES THE CALL THAT PRODUCES THE QUESTION, which the first fix did not.
+   *
+   * `not_yours_note` is written for the review_inbox RESPONSE, where `open_questions` is a
+   * top-level sibling of the row — so it reads "`open_questions` above is that question".
+   * Quoted into a channel event there is no "above" and no such field; `Row` does not carry
+   * one. Telling an agent to settle a question it has never been shown, while naming no call
+   * that would show it, leaves it reaching for review_poll and getting NOT FOUND — and
+   * `needs_human` never expires on its own, so the review blocks exactly as it did before
+   * the fix this event IS. review_inbox is the route: repository-scoped, so it answers for
+   * this token, and it carries the question and the id knowledge_resolve needs.
+   */
+  it("names review_inbox as where the question actually is", () => {
+    const { events } = decide(new Map(), [row({ state: "needs_human", new_findings: 0, not_yours_note: humanNote })], false);
+    const content = events[0]?.content ?? "";
+    expect(content).toContain("review_inbox");
+    expect(content).toContain("open_questions");
+    expect(content, "and it says the event is not where to look").toContain("NOT IN THIS EVENT");
+  });
+
   it("still refuses to send an ordinary not-yours row at review_poll", () => {
     const { events } = decide(new Map(), [row({ not_yours_note: note })], false);
     expect(events[0]?.content).toContain("CANNOT");

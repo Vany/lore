@@ -705,6 +705,30 @@ describe("the template README.md and deploy/Makefile both point at is real", () 
     const tracked = spawnSync("git", ["ls-files", "--error-unmatch", "deploy/.env.example"], { cwd: root });
     expect(tracked.status, "unignored but never `git add`-ed is the same failure from the other side").toBe(0);
   });
+
+  /**
+   * aeb578d2, found by lore's own review: README's document table advertises SPEC.md as
+   * holding "every decision `D-1`…`D-152`" — a range maintained BY HAND, bumped from D-77
+   * to D-152 in 53ea5c0 and then not bumped by the branch that added D-153 and D-154. So
+   * the table was wrong in the commit that landed the decisions, and a reader checking
+   * whether something is recorded reads a ceiling below it and concludes it is not.
+   *
+   * The same shape as the TODO entries this repository keeps correcting: a hand-maintained
+   * claim about the codebase that nothing re-checks. It is greppable on both sides, so it
+   * is checked rather than read — and the failure names what to bump, because the fix is
+   * one character and the cost of not knowing that is a puzzled minute.
+   */
+  it("advertises a decision range that reaches SPEC.md's highest decision", () => {
+    const readme = readFileSync(join(root, "README.md"), "utf8");
+    const spec = readFileSync(join(root, "SPEC.md"), "utf8");
+    const advertised = /`D-1`…`D-(\d+)`/u.exec(readme);
+    expect(advertised, "README's document table no longer states a D-range — update this check").not.toBeNull();
+    const highest = Math.max(...[...spec.matchAll(/^\*\*D-(\d+)/gmu)].map((m) => Number(m[1])));
+    expect(
+      Number(advertised?.[1]),
+      `README says D-1…D-${String(advertised?.[1])}; SPEC.md's highest is D-${String(highest)} — bump the README table`,
+    ).toBe(highest);
+  });
 });
 
 /**

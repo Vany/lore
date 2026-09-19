@@ -381,14 +381,29 @@ export function decide(
       // session that may not exist, and `needs_human` never expires on its own — so the
       // review blocks for ever, which is the abandonment this channel exists to end,
       // reproduced by the fix for its sibling finding.
+      // AND THE EVENT HAS TO SAY WHERE THE QUESTION IS, because it is not in the event.
+      //
+      // Found by lore's own review, fingerprint fee965ce. `not_yours_note` is written for the
+      // review_inbox RESPONSE, where `open_questions` is a top-level sibling of the row
+      // (src/mcp/server.ts), so it says "`open_questions` above is that question" — and quoted
+      // into a channel event there is no "above" and no such field: `Row` does not carry one.
+      // The result was an event telling an agent to settle a question it had never been shown,
+      // naming no call that would produce it; the one that does is review_inbox, which is
+      // repository-scoped and so answers for this token. Without it the agent reaches for
+      // review_poll, gets NOT FOUND, and `needs_human` — which never expires on its own —
+      // blocks exactly as it did before the fix that this event IS.
       const stuck = r.state === "needs_human";
       events.push({
         content: stuck
           ? `Review ${r.review_id}${r.branch === undefined ? "" : ` (${r.branch})`} is parked on a QUESTION` +
             ` only a person can settle. You cannot poll, submit or attest it — it was started on a` +
             ` different token of yours — but SETTLING IT IS NOT TOKEN-BOUND: knowledge_resolve is` +
-            ` scoped to the repository, so take the question to your user and resolve it from here.` +
-            ` lore says: ${r.not_yours_note}`
+            ` scoped to the repository, so you can resolve it from here.` +
+            ` THE QUESTION IS NOT IN THIS EVENT: call review_inbox, which is scoped to the` +
+            ` repository rather than the token and lists this review with \`open_questions\` — both` +
+            ` statements in full, and the id knowledge_resolve needs. Take those to your user` +
+            ` verbatim, then resolve. lore's own note follows, written for the inbox reply where` +
+            ` that field sits beside the row: ${r.not_yours_note}`
           : `Review ${r.review_id}${r.branch === undefined ? "" : ` (${r.branch})`} is waiting, and YOU CANNOT` +
             ` DRIVE IT FROM HERE — it was started on a different token of yours, so review_poll,` +
             ` review_submit and review_attest will all answer NOT FOUND. lore says: ${r.not_yours_note}` +
