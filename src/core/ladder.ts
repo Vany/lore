@@ -714,12 +714,25 @@ export function loadHelper(source = process.env["LORE_TIERS"]): string | undefin
  * guessing that two ids are one company because they look alike is how a rule that must
  * be exactly right becomes approximately right. An unknown id stands for itself, which
  * over-counts vendors — the safe direction is the one that says "not independent".
+ *
+ * **AN UPSTREAM RENAME CAN OPEN THE HOLE THIS TABLE CLOSES, silently** (2026-09-19,
+ * D-154). models.dev retired the provider id `kimi-for-coding` and re-listed the Kimi
+ * Coding Plan as `kimi-code-plan-global` / `kimi-code-plan-cn`, keeping `kimi-for-coding`
+ * only as a MODEL name inside it. opencode then had a credential for a provider no
+ * catalog claimed, dropped it, and answered t2 with a 500 — which cost a review round.
+ * The diversity hole is the quieter half: an id this table does not know stands for
+ * itself, so a renamed `kimi-code-plan-global` falling back to `openrouter/moonshotai/…`
+ * would have counted Moonshot twice and called the ladder two vendors wide when it was
+ * one. Retired ids stay in the table on purpose — they cost nothing, and a deployment
+ * pinned to an older opencode still resolves them.
  */
 const VENDOR_ALIASES: Readonly<Record<string, string>> = {
   "zai-coding-plan": "z-ai",
   "zai-coding-plan2": "z-ai",
   zai: "z-ai",
   "kimi-for-coding": "moonshotai",
+  "kimi-code-plan-global": "moonshotai",
+  "kimi-code-plan-cn": "moonshotai",
 };
 
 /**

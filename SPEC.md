@@ -2598,8 +2598,9 @@ largest review this deployment has run sent 204,609 tokens, which is 78% of the 
 window with no room for a reply. Chosen on that measurement; choosing on the name would
 have picked the one that runs out.
 
-**Model ids come from opencode, never from memory.** The provider is `kimi-for-coding`
-and the ids were read from `/config/providers` on the running server. `DEFAULT_TIERS`
+**Model ids come from opencode, never from memory.** The provider was `kimi-for-coding`
+when this was decided and is `kimi-code-plan-global` now (D-154); both ids were read from
+`/config/providers` on the running server rather than assumed. `DEFAULT_TIERS`
 still names `openrouter/moonshotai/kimi-k3` for a gateway route nobody here uses, which
 is a guess nothing has verified — it applies only when `LORE_TIERS` is unset, and this
 deployment always sets it.
@@ -4020,6 +4021,36 @@ working agreement says to confirm rather than assume.
 **Output lands under `dataDir()`, matching `propose`'s own `--out` default
 (fingerprint 9c6f2a60) — never inside the repository**, so nothing needs a new
 `.gitignore` rule.
+
+**D-154 — a provider id is upstream's to rename, and the ladder follows the catalog.
+REPAIRED 2026-09-19.**
+
+**The incident.** A round of `rev_KDSsbJfcSJmsCxZKfHTNPAx3` came back `failed`:
+*"tier t2 failed: lore's model runtime answered 500: UnknownError"*. models.dev had
+retired `kimi-for-coding` as a PROVIDER and re-listed the Kimi Coding Plan as
+`kimi-code-plan-global` / `kimi-code-plan-cn`, keeping `kimi-for-coding` as a MODEL name
+inside it. opencode held a credential keyed to a provider no catalog claimed, so it
+dropped the provider — `/config/providers` listed five, none of them Moonshot — and
+answered t2's request for a model it had never heard of with a 500. The fix is the id, in
+`deploy/tiers.zai-kimi-openai.json` and in the auth entry's key: same plan, same `k3`,
+same 1M window, a different string. Vany chose `-global` over `-cn`.
+
+**`make doctor` already knew, and nothing asked it.** It said
+`[FAIL] tier t2 'kimi-for-coding/k3' is not a known model` and, exactly right, *"A review
+would start, spend on the diff and T0, and then not run."* That is what happened: the
+round paid for a t0 sweep, an ingest and t1 before dying on t2. The check exists, is
+correct, and runs only when an operator types it — so a break upstream is discovered by
+spending a review on it. Whether `review_start` should preflight the configured ladder is
+**[OPEN]** and belongs to Vany, because refusing at the door trades a wasted round against
+a gate that can refuse to run over a check of its own.
+
+**The quieter half is D-49's.** `VENDOR_ALIASES` folds one company's several names onto
+one vendor, and it is a table of NAMES by deliberate choice (no heuristics). A rename
+therefore lands as an id the table does not know, which stands for itself — so
+`kimi-code-plan-global` falling back to `openrouter/moonshotai/kimi-k3` would have counted
+Moonshot as two vendors and called a one-vendor deep stage independent. The new ids are in
+the table; the retired one stays beside them, because it costs nothing and a deployment
+pinned to an older opencode still resolves it.
 
 **D-153 — a finding's line is a model's CLAIM about position, and lore corrects it when the
 evidence proves it wrong. BUILT 2026-09-17.**

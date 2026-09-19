@@ -577,6 +577,25 @@ describe("vendorOf", () => {
   });
 
   /**
+   * AND THE NAME THE VENDOR IS REACHED UNDER CAN CHANGE UPSTREAM (D-154).
+   *
+   * models.dev retired `kimi-for-coding` as a provider on 2026-09-19 and re-listed the
+   * Kimi Coding Plan as `kimi-code-plan-global` / `kimi-code-plan-cn`. The loud half of
+   * that cost a review round — opencode dropped a provider no catalog claimed and answered
+   * 500. The quiet half is here: an id this table does not know stands for itself, so the
+   * renamed plan falling back to `openrouter/moonshotai/kimi-k3` would have counted
+   * Moonshot twice and called a one-vendor deep stage two vendors wide. The retired id is
+   * asserted beside the new ones because a deployment pinned to an older opencode still
+   * resolves it, and dropping it would re-open the hole for them.
+   */
+  it("folds the Kimi plan's old and new provider ids onto one vendor", () => {
+    expect(vendorOf("kimi-code-plan-global/k3")).toBe("moonshotai");
+    expect(vendorOf("kimi-code-plan-cn/k3")).toBe("moonshotai");
+    expect(vendorOf("kimi-for-coding/k3"), "the retired id still resolves").toBe("moonshotai");
+    expect(vendorOf("openrouter/moonshotai/kimi-k3")).toBe("moonshotai");
+  });
+
+  /**
    * AN UNKNOWN ID STANDS FOR ITSELF, which over-counts vendors rather than under-counting
    * them. Guessing that two ids are one company because they look alike is how a rule
    * that has to be exactly right becomes approximately right; the safe direction for a

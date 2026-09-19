@@ -58,8 +58,15 @@ reachable, which is why it cannot be part of first boot — and it never edits
 | Tier | Model | Effort | Vendor | Paid by |
 |---|---|---|---|---|
 | **T1** | `zai-coding-plan/glm-5.3` | medium | Z.ai | subscription |
-| **T2** | `kimi-for-coding/k3` | high | Moonshot | subscription |
+| **T2** | `kimi-code-plan-global/k3` | high | Moonshot | subscription |
 | **T3** | `openai/gpt-5.6-terra` | high | OpenAI | subscription |
+
+**T2's provider id changed on 2026-09-19 and the model did not** (D-154). models.dev
+retired `kimi-for-coding` as a PROVIDER and re-listed the Kimi Coding Plan as
+`kimi-code-plan-global` (and `kimi-code-plan-cn`), keeping `kimi-for-coding` as a model
+name inside it. Same subscription, same `k3`, same 1M window; only the string moved. The
+read of it is in `make doctor`, which is the check that names this class of break:
+`'kimi-for-coding/k3' is not a known model`.
 
 T1's fallback is `zai-coding-plan2/glm-5.3` (the second subscription, upgraded 2026-09-16 to the same model as the first), full stop — **revised
 2026-08-31**: it used to carry a third hop to OpenRouter, gated behind
