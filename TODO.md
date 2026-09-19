@@ -57,8 +57,17 @@ is deployed", is now measurable and says so.
 
 `rev_kq7psOFQqIKn1di0XjMEal7e` is `cancelled` — deliberately, not abandoned: it was pinned
 to a tree from 2026-09-15 and the files have moved since, so answering it in place would
-have meant composing fixes against code that no longer exists. The fixes are on main and in
-a review of their own.
+have meant composing fixes against code that no longer exists. The fixes are COMMITTED ON
+THE LOCAL `main` AND NOT YET PUSHED, in a review of their own — `rev_C5CMA4EtqehIp7JTIRCjz1dO`
+as of 2026-09-19, which is what gates the push.
+
+**"On main" was written here meaning the local branch, and that is the wrong word in a file
+whose readers include an operator mid-incident.** Caught by `eb9827b3`, on this batch: the
+entry claimed a tree `origin/main` does not carry, so a rollback to `origin/main` after an
+incident would silently restore the five defects listed below — the `review_inbox` ~1ms hot
+loop among them — while this file said they were fixed. Unpushed is a state a checklist has
+to name, because the whole window in which it is interesting is the window in which it is
+true. Strike this entry when the batch reaches `origin/main`.
 
 **The inbox showed five; cancelling returned thirteen.** The other eight had been delivered
 to the session that started it and never reached this file — which is worth remembering as a
@@ -67,10 +76,10 @@ session that collects and then ends takes the only copy with it. `lore://review/
 `review_cancel` are the two ways back to the full list, and neither is reached by a reader
 of this file.
 
-All thirteen are fixed. Five by this session (the channel's silent death, not-yours rows,
-the interval hot loop, `spec/mcp-api.md` §2.4, the CLI's conflated skip list — commit
-`2ad2fe9`), and eight by the rounds that followed on that branch, verified against main one
-at a time rather than assumed:
+All thirteen are fixed, on the same unpushed batch. Five by this session (the channel's
+silent death, not-yours rows, the interval hot loop, `spec/mcp-api.md` §2.4, the CLI's
+conflated skip list — commit `2ad2fe9`), and eight by the rounds that followed on that
+branch, each verified against the working tree one at a time rather than assumed:
 
 * `21aea4dd` (HIGH) — the migration's docstring promised `assertNotDowngrade` would refuse a
   rollback while `SCHEMA_VERSION` still read 22, so the guard could not fire and an older
@@ -202,6 +211,26 @@ line it belongs to:**
       make it visible.
 
 ### Vany's to decide
+
+- [ ] **Should `review_start` preflight the configured ladder?** (D-154, 2026-09-19.)
+      `make doctor` resolves every configured model against opencode and says, in these
+      words, *"NOT ready … A review would start, spend on the diff and T0, and then not
+      run."* On 2026-09-19 it was right: models.dev had renamed t2's provider, doctor said
+      so, nobody typed it, and a round spent a t0 sweep, a knowledge ingest and t1 before
+      dying on t2 with a 500.
+
+      **The check exists, is cheap and is read only by a person.** Calling it at
+      `review_start` would refuse in a second instead of failing in ten minutes. What it
+      costs is the thing that makes it a decision rather than a chore: lore would then
+      have a way to refuse a review over a check of ITS OWN, and a false negative there —
+      opencode slow to answer `/config/providers`, a catalog fetch failing — turns a
+      working ladder into a closed door. A gate that refuses to run is the failure this
+      project is named after, arriving from the other side.
+
+      Shapes worth weighing, cheapest first: cache doctor's verdict and refuse only on a
+      model that resolved false RECENTLY; warn in `review_start`'s reply without refusing;
+      or fail the round early with doctor's own sentence rather than a provider 500. Mine
+      to implement, yours to pick.
 
 - [ ] **The silence bound on a single model call.** A call can sit 45 min
       (`DEFAULT_TIMEOUT_MS`); Kimi once took 21.5 min to refuse. Bounding silence falls back

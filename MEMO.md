@@ -3,6 +3,50 @@
 Newest first. Updated at the end of each task: what changed, what I learned, what
 surprised me.
 
+## 2026-09-19 — "rise lore up", and the tier that had been dead since the catalog moved
+
+**The deployment was three days and seven commits behind, and nothing said so.** Vany asked
+to raise lore up; the running image was 2026-09-16 code. `make deploy` refused first, on
+`check-deployed`: `deploy/` and the deployment copy had drifted, and this time the
+REPOSITORY was the one ahead — D-151's `LORE_MIN_AVAILABLE_MB` and D-152's corrected OOM
+comments existed only in the tracked copy. So the host-memory floor had been committed,
+specced and reviewed on 2026-09-16 and had never run anywhere. The drift guard is what
+caught it, three days later, on an unrelated errand.
+
+**Then the review of the batch came back `failed`:** *"tier t2 failed: lore's model runtime
+answered 500: UnknownError"*. models.dev had retired `kimi-for-coding` as a PROVIDER id and
+re-listed the Kimi Coding Plan as `kimi-code-plan-global` / `-cn`, keeping `kimi-for-coding`
+as a MODEL name inside it. opencode held a credential for a provider no catalog claimed,
+dropped it, and 500'd on a model it had never heard of. Same plan, same `k3`, same 1M
+window — only the string moved. D-154.
+
+**`make doctor` already knew, in the exact words that would have saved the round:**
+*"'kimi-for-coding/k3' is not a known model … A review would start, spend on the diff and
+T0, and then not run."* It did: t0 swept, the knowledge ingest ran, t1 answered, t2 died.
+The check is correct, it is cheap, and it runs only when a person types it. I left the
+question of preflighting at `review_start` `[OPEN]` for Vany rather than deciding it —
+refusing at the door trades a wasted round against a gate that can refuse to run over a
+check of its own, and that is a decision about what lore IS.
+
+**What I got wrong first, and it cost twenty minutes.** I read "provider missing from
+`/config/providers` while present in `auth.json`" as a stale in-memory provider list and
+restarted opencode. Twice. The restart was the right instinct for the symptom and the wrong
+diagnosis: the file was fine and the catalog had moved under it. What actually answered it
+was reading models.dev's own `api.json` and grepping for kimi — four provider ids came
+back, none of them the one we were asking for. CLAUDE.md already says model ids are read
+from opencode, never from memory; the corollary this adds is that a provider id is
+upstream's to rename, so "read it" is not a one-time act.
+
+**The quieter half is D-49's, and no failure would have announced it.** `VENDOR_ALIASES`
+folds a company's several names onto one vendor and is a table of NAMES by choice, no
+heuristics — so an upstream rename lands as an id the table does not know, which stands for
+itself. `kimi-code-plan-global` falling back to `openrouter/moonshotai/kimi-k3` would have
+counted Moonshot twice and called a one-vendor deep stage two vendors wide, and reported it
+as a `passed` on an independent ladder. The loud half cost a round; this half would have
+cost a wrong verdict. A table that must be exactly right carries a maintenance cost that
+only ever surfaces as a silent wrong answer, which is worth weighing the next time a
+names-not-heuristics call comes up.
+
 ## 2026-09-18 — a TODO entry that described a defect fixed a month earlier
 
 **Found by the review of the commit that disproved it.** `TODO.md` listed *"`review_start`
