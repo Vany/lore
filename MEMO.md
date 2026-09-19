@@ -37,6 +37,22 @@ back, none of them the one we were asking for. CLAUDE.md already says model ids 
 from opencode, never from memory; the corollary this adds is that a provider id is
 upstream's to rename, so "read it" is not a one-time act.
 
+**How it ended.** `passed_thin_ladder` at tree `739e11d7`, five findings, all five fixed,
+pushed as `ab20c09` and deployed. The five are worth listing because four of them are one
+shape: "on main" in `TODO.md` meaning the local branch; the channel's `needs_human` event
+telling an agent to settle a question the event does not carry; README advertising
+`D-1…D-152` in the commit that added D-154; and SPEC D-74 still naming the 2026-08-06
+roster in the present tense — the one I had looked at and left, reasoning that a decision
+record keeps its own words. The reviewers were right and I was wrong: the D-49 table
+twenty pages away carries an explicit "not the current chain", and D-74 carried nothing.
+They also caught what I had not — t1 has not been `glm-5-turbo` since 2026-08-12, so that
+sentence had been drifting for five weeks.
+
+**Two of the five are now checked mechanically rather than read**, which is the only
+answer that scales for this shape: `one-definition.test.ts` compares README's D-range
+against SPEC's highest `**D-n` and fails naming the number to bump, and the channel's
+question-route is pinned by a test. The other two were prose and stay prose.
+
 **The quieter half is D-49's, and no failure would have announced it.** `VENDOR_ALIASES`
 folds a company's several names onto one vendor and is a table of NAMES by choice, no
 heuristics — so an upstream rename lands as an id the table does not know, which stands for

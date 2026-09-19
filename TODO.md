@@ -57,17 +57,17 @@ is deployed", is now measurable and says so.
 
 `rev_kq7psOFQqIKn1di0XjMEal7e` is `cancelled` — deliberately, not abandoned: it was pinned
 to a tree from 2026-09-15 and the files have moved since, so answering it in place would
-have meant composing fixes against code that no longer exists. The fixes are COMMITTED ON
-THE LOCAL `main` AND NOT YET PUSHED, in a review of their own — `rev_C5CMA4EtqehIp7JTIRCjz1dO`
-as of 2026-09-19, which is what gates the push.
+have meant composing fixes against code that no longer exists. The fixes are on
+`origin/main` — **pushed 2026-09-19 as `ab20c09`**, after `rev_C5CMA4EtqehIp7JTIRCjz1dO`
+reached `passed_thin_ladder`.
 
-**"On main" was written here meaning the local branch, and that is the wrong word in a file
-whose readers include an operator mid-incident.** Caught by `eb9827b3`, on this batch: the
-entry claimed a tree `origin/main` does not carry, so a rollback to `origin/main` after an
-incident would silently restore the five defects listed below — the `review_inbox` ~1ms hot
-loop among them — while this file said they were fixed. Unpushed is a state a checklist has
-to name, because the whole window in which it is interesting is the window in which it is
-true. Strike this entry when the batch reaches `origin/main`.
+**Until that push this entry said "on main" meaning the LOCAL branch, and `eb9827b3`
+caught it.** For two days it claimed a tree `origin/main` did not carry, so a rollback
+to `origin/main` after an incident would have silently restored the five defects listed
+below — the `review_inbox` ~1ms hot loop among them — while this file said they were
+fixed. Kept as the record of the shape, because it is the third of its kind this month:
+unpushed is a state a checklist has to name, since the window in which the entry is
+interesting is exactly the window in which it is true.
 
 **The inbox showed five; cancelling returned thirteen.** The other eight had been delivered
 to the session that started it and never reached this file — which is worth remembering as a
@@ -90,6 +90,28 @@ branch, each verified against the working tree one at a time rather than assumed
 * `8b920173`, `abfe5238` — the `spec/agent-docs.md` §3 draft and the `deploy/` comments.
 * `9eb9f13c`, `9ba556af`, `b919fcc0` — three successive rounds on one paragraph of
   `docs.ts`, ending with the tier/engine/vendor-count split that is in the live text now.
+
+### 2026-09-19 — the batch is reviewed, attested and pushed, and t2 was dead for the first half of it
+
+Nine commits (`2ad2fe9..ab20c09`) reached `passed_thin_ladder` and are on `origin/main`,
+signed at tree `739e11d7`: 5 findings, 5 fixed, 0 justified. The deployment is at that
+commit and `/status` is `ok` with no problems.
+
+**THIN, and worth reading rather than rounding up.** t1 never left a trusted read of this
+tree, and t3 was answered by a stand-in from a vendor already in the ladder — so two
+vendors (z-ai, moonshotai) read nine commits across three tiers, not three. `eslint` did
+not run (no config here) and semgrep's `react-insecure-request` stayed suppressed at
+`src/service/refusing.test.ts` by development rule `de7fb2b3`.
+
+**The first attempt of this batch came back `failed`, which is why D-154 exists.** t2's
+provider had been renamed upstream; `make doctor` knew and nobody asked it. The open
+question that came out of that — should `review_start` preflight the ladder — is in
+"Vany's to decide" above.
+
+- [ ] **Housekeeping:** the scratch refs `review/37560c1c` and `review-base/37560c1c`
+      were pushed and deleted in the same command, as D-77 requires. Nothing sweeps
+      `refs/heads/review/*`, so the ones named in the 2026-09-17 entry below are still
+      worth a look.
 
 ### 2026-09-17 — the batch is reviewed, attested and pushed
 
