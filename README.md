@@ -110,7 +110,7 @@ tier already passed.
 | **T0** | the repo's own `tsc` · `eslint` · `cargo check`/`clippy` · `ast-grep` · `semgrep` | — | free |
 | **T1** | GLM-5.3 | Z.ai | subscription |
 | **T2** | Kimi K3 | Moonshot | subscription |
-| **T3** | GPT-5.6 Terra | OpenAI | subscription |
+| **T3** | GPT-5.6 Sol | OpenAI | subscription |
 
 Three tiers, **three vendors** — two tiers from one model family share blind spots and are
 not two independent opinions.
@@ -120,7 +120,7 @@ flowchart TD
     T0["T0 — tsc, eslint, semgrep, ast-grep<br/>free, deterministic"] --> T1["T1 — GLM-5.3"]
     T1 -->|"findings"| FIX["you fix, or justify"]
     FIX -->|"a fix is unreviewed code"| T0
-    T1 -->|"clean"| DEEP["T2 — Kimi K3 &nbsp; + &nbsp; T3 — GPT-5.6 Terra<br/>run together, different vendors"]
+    T1 -->|"clean"| DEEP["T2 — Kimi K3 &nbsp; + &nbsp; T3 — GPT-5.6 Sol<br/>run together, different vendors"]
     DEEP -->|"findings"| FIX
     DEEP -->|"all agree"| P["passed<br/>one signed line saying what was checked"]
 ```
@@ -360,7 +360,7 @@ session, so Claude Code requires a per-session opt-in.
 ```mermaid
 flowchart LR
     C["MCP client<br/>(an agent)"] -->|"review_start, poll,<br/>submit, attest"| L["lore"]
-    L --> OC["opencode"] --> M["GLM-5.3 — Kimi K3 — GPT-5.6 Terra<br/>three vendors, none of them the author"]
+    L --> OC["opencode"] --> M["GLM-5.3 — Kimi K3 — GPT-5.6 Sol<br/>three vendors, none of them the author"]
     L --> S["scheduler<br/>admission, quota-aware fallback"]
     L --> W["repo cache<br/>a worktree per review"]
     L --> T0["T0 sandbox<br/>no secrets ever;<br/>network only for the install"]

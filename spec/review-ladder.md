@@ -59,7 +59,7 @@ reachable, which is why it cannot be part of first boot — and it never edits
 |---|---|---|---|---|
 | **T1** | `zai-coding-plan/glm-5.3` | medium | Z.ai | subscription |
 | **T2** | `kimi-code-plan-global/k3` | high | Moonshot | subscription |
-| **T3** | `openai/gpt-5.6-terra` | high | OpenAI | subscription |
+| **T3** | `openai/gpt-5.6-sol` | high | OpenAI | subscription |
 
 **T2's provider id changed on 2026-09-19 and the model did not** (D-154). models.dev
 retired `kimi-for-coding` as a PROVIDER and re-listed the Kimi Coding Plan as
@@ -90,6 +90,17 @@ an accident to be repaired by repointing a route — it is the correlated read P
 exists to refuse, where a deep tier whose only remaining route is a vendor that has already
 read this tree is skipped and named thin rather than asked. Work that is not a review (the
 background screen, the bootstrap survey) runs on the `helper` model, also plan 2.
+
+**T3 moved from `gpt-5.6-terra` to `gpt-5.6-sol` on 2026-09-21, on Vany's call.** Same
+subscription, same 500k window, same $0 — thirteen OpenAI models sit behind one credential, so
+the choice between them is a judgement about the reader rather than about cost. §1.2's effort
+analysis was already written about Sol (59 at max effort, 56 at high), so this aligns the
+deployed ladder with the numbers this file reasons from; t3 stays at `high` — moving effort is a
+separate decision with its own cost. It also lands t3 on a
+route with no history: a park is keyed to the ROUTE string, and `openai/gpt-5.6-terra` was
+carrying 97 consecutive auth failures, so the switch sidesteps a stale mark rather than
+clearing it. The credential underneath is the same one, so if the OAuth refresh is still
+broken, sol will fail exactly as terra did — and park in its turn, which is the honest test.
 
 T2 and T3 are ONE RUNG in the deployed file — a nested array — so the deep phase runs
 them together (§5.0, D-109).
