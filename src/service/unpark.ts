@@ -152,6 +152,11 @@ export function describePark(p: Park, now: number): string {
  * What lore does with each kind of mark on its own — stated once, by rule, with the
  * decision each line comes from, so a reader can check it against SPEC rather than trust
  * a per-mark prediction. The two "waited out" lines are the cases a clear exists for.
+ *
+ * lore-ok[b13d07f3]: the per-route "the next review re-tests it" this was about is gone with
+ * every other per-mark prediction; the rule it got wrong is stated here instead — only a
+ * route some tier uses as its PRIMARY is re-tested (D-125), and "a route that is only a
+ * fallback" is listed with what is waited out.
  */
 export const LEGEND = [
   "Re-tested by the next review that reaches it, at most every 15 minutes:",
@@ -160,10 +165,10 @@ export const LEGEND = [
   "Waited out until its time, however wrong that has become:",
   "  a route the provider stated a reset for (D-91), unless a probe of its tier asks it first",
   "  a route that is only a fallback",
-  // NOT a clock, so not under "waited out" — found by lore's own review, fingerprint
-  // 28b49f21: the metered gate drops a gated route from every walk whatever its mark says,
-  // so neither waiting nor clearing brings it back. Same clock-vs-toggle line `ladder.ts`
-  // draws when it refuses to send anyone "to wait for a reset that will not help".
+  // lore-ok[28b49f21]: NOT a clock, so not under "waited out" — the metered gate drops a
+  // gated route from every walk whatever its mark says, so neither waiting nor clearing
+  // brings it back. Same clock-vs-toggle line `ladder.ts` draws when it refuses to send
+  // anyone "to wait for a reset that will not help".
   // SCOPED TO WHAT `exemptLiteral` GATES — found by lore's own review, fingerprints 9abac845
   // and dc7ce659: a metered route an operator wrote as a tier's own literal model is exempt,
   // and telling that operator to flip the global toggle would ungate every metered fallback
