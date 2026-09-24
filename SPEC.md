@@ -4310,13 +4310,16 @@ that file also serves the operator's own opencode.
 - Reviews holding a conversation on a 5.2 route start a new session on 5.3 — one fresh first
   read per such tier. Paid once.
 
-**[OPEN] A provider-stated park outlives a plan change.** z.ai told lore plan 2's limit reset at
+**A provider-stated park outlives a plan change — ANSWERED 2026-09-24 by D-155.** z.ai told lore plan 2's limit reset at
 20:04; Vany's upgrade reset it at once; lore kept it parked, because it re-tests only the parks
 it GUESSED (`review.ts`, `!mark.stated`). It was cleared by hand with `clearRouteUnavailable`'s
 own statement. A stated park is not re-tested because re-asking a provider that named its own
 reset is usually wasted — which is right until an operator changes the subscription. Recorded
 beside Phase 6 step 4b rather than guessed at here: the likely shape is re-testing a stated park
-too, far less often, or an operator command to clear one.
+too, far less often, or an operator command to clear one. Vany chose the command — *"this will
+appear often, so let's make a special api call and use it in makefile"* — and it is `make unpark`.
+The timed re-test was not taken: the event it would catch is one only a person causes, and that
+person is the one holding the command.
 
 **D-149 — an opencode that dies under a FALLBACK is a requeue, not a quota skip. BUILT
 2026-09-15.**

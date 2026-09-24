@@ -181,4 +181,29 @@ describe("rendering", () => {
     }
     expect(renderCleared([p], now)).toContain("1 mark(s) cleared");
   });
+
+  /**
+   * Found by lore's own review, fingerprint 05e651dd. The live case: `--route openai`
+   * also clears a long-expired mark, and the listing's "kept for its failure count" was
+   * printed about it after the DELETE that removed the count. A cleared mark gets no line
+   * about what lore would do with it.
+   */
+  it("says nothing about what lore would do with a mark it just deleted", () => {
+    const expired: Park = {
+      kind: "route",
+      id: "openai/gpt-5.6-terra",
+      until: "2026-09-22T00:00:00.000Z",
+      why: "Token refresh failed: 401",
+      failures: 97,
+      stated: false,
+      auth: true,
+      probedAt: undefined,
+    };
+    const text = renderCleared([expired], now);
+    expect(text).toContain("cleared route openai/gpt-5.6-terra");
+    expect(text).not.toContain("kept for its failure count");
+    expect(text).not.toContain("re-tests it");
+    // The listing, where the mark still exists, keeps saying it.
+    expect(renderParks([expired], now)).toContain("kept for its failure count");
+  });
 });

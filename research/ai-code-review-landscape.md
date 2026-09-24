@@ -191,6 +191,22 @@ Three tiers, three vendors, ascending capability, cheapest possible gate (§2.1b
 Alternative worth measuring: `gpt-5.6-terra` (55 int, $1/$6, 134 t/s) instead of
 Kimi K3 at T2 — 3× cheaper and 4× faster, at the cost of sharing a vendor with T3.
 
+### 3.0 Re-verified 2026-09-24 — the Sol ids the deployed t3 names
+
+Read from opencode's live provider list (`provider.list()`, the same source `make doctor`
+and the D-93 startup check read), not inferred from a name:
+
+| id | opencode lists it as | context | $/M in / out |
+|---|---|---|---|
+| `openai/gpt-5.6-sol` — t3, subscription | GPT-5.6 Sol | 500k | 0 / 0 |
+| `openrouter/openai/gpt-5.6-sol` — t3's metered fallback | GPT-5.6 Sol | 1.05M | 2 / 10 |
+| `openrouter/openai/gpt-5.6-sol-pro` | GPT-5.6 Sol Pro | 1.05M | 2 / 10 |
+
+Sol and Sol Pro are separate models. §2's benchmark rows and §2.2's effort figures (59 at
+max, 56 at high) are Sol's own; §2.1a's single "Sol / Sol Pro" row is the one place the two
+are lumped together, and its $5/$30 for Sol Pro is stale. The service confirmed the fallback
+at its last boot, too: `quota fallback ready — … openrouter/openai/gpt-5.6-sol`.
+
 ## 3.1 Estimated cost per review
 
 **Estimates, not measurements.** Token counts are assumed; T1 replaces them with

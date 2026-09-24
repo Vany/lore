@@ -145,7 +145,13 @@ function onItsOwn(p: Park, now: number): string {
     : `lore's guess: reviews ignore it; only the background screen waits until ${p.until}`;
 }
 
-export function describePark(p: Park, now: number): string {
+/**
+ * `cleared` drops the line about what lore would do on its own: that line describes a mark,
+ * and a cleared one no longer exists. Found by lore's own review, fingerprint 05e651dd — the
+ * first version reused the listing's wording after a clear, so an expired mark came back as
+ * "kept for its failure count" two lines above the text saying the count was gone.
+ */
+export function describePark(p: Park, now: number, cleared = false): string {
   // A route's mark records which refusal it was (D-143); a tier's does not — it may be a
   // stated limit reset or a screen that went unanswered — so a tier gets no label and its
   // `why` speaks for it, rather than a label that would be a guess.
@@ -154,7 +160,7 @@ export function describePark(p: Park, now: number): string {
   const facts = [...what, `${String(p.failures)} failure(s)`, force].join(", ");
   return (
     `${p.kind.padEnd(5)} ${p.id}  [${facts}]\n` +
-    `      ${onItsOwn(p, now)}\n` +
+    (cleared ? "" : `      ${onItsOwn(p, now)}\n`) +
     `      why: ${p.why}`
   );
 }
@@ -183,7 +189,7 @@ export function renderParks(list: readonly Park[], now: number): string {
 
 export function renderCleared(cleared: readonly Park[], now: number): string {
   return [
-    ...cleared.map((p) => `cleared ${describePark(p, now)}`),
+    ...cleared.map((p) => `cleared ${describePark(p, now, true)}`),
     "",
     `${String(cleared.length)} mark(s) cleared: the next review that needs one asks it.`,
     AFTER_CLEARING,

@@ -223,9 +223,10 @@ line it belongs to:**
       a count; no message says "requeued" once it will not be. It failed two rigid reviews on
       2026-09-15 and is Phase 6 step 2c.
 
-- [ ] **A provider-stated park outlives a plan change** (D-150 `[OPEN]`). lore re-tests only
-      the parks it guessed, so Vany's z.ai upgrade was invisible and plan 2 stayed parked
-      until cleared by hand. Phase 6 step 4b.
+- [x] **A provider-stated park outlives a plan change** (D-150). Answered 2026-09-24 by
+      D-155: `make unpark` lists every mark with when lore would ask on its own, and clears
+      on an operator's word. (Step 4b beside it — weekly windows — is a separate question and
+      stays open.)
 
 - [ ] **Why opencode exits cleanly and is restarted** — seven times in two hours on
       2026-09-15, `exit 0`, nothing logged before any of them, no event history left. lore is
