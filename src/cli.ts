@@ -430,7 +430,16 @@ export async function main(argv: readonly string[]): Promise<ExitCode> {
         process.stderr.write(`nothing parked matches that — nothing was cleared.\n\n${renderParks(all, now)}`);
         return EXIT.USAGE;
       }
-      process.stdout.write(renderCleared(cleared, parks(store), now));
+      // The ladder says which remaining mark stands in front of what was cleared. Read
+      // here, where the container's LORE_TIERS is; unreadable is reported, not guessed past.
+      const { loadPools, loadTiers } = await import("./core/ladder.ts");
+      let ladder: { tiers: ReturnType<typeof loadTiers>; pools: ReturnType<typeof loadPools> } | Error;
+      try {
+        ladder = { tiers: loadTiers(), pools: loadPools() };
+      } catch (e) {
+        ladder = e instanceof Error ? e : new Error(String(e));
+      }
+      process.stdout.write(renderCleared(cleared, parks(store), now, ladder));
       return EXIT.PASS;
     } finally {
       store.close();

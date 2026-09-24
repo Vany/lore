@@ -14,7 +14,8 @@
  *
  * So a review asks a tier's primary only when neither the tier nor that route is parked,
  * and a clear that lifts one while the other stands buys nothing — which is why a clear
- * reports what still stands rather than promising the next review will ask.
+ * reports what still stands in front of it, read off the ladder, rather than promising
+ * the next review will ask.
  *
  * The person who just reset a limit, upgraded a plan or re-logged a credential knows what
  * lore cannot: the refusal stopped being true. This is how they say so. It exists because
@@ -32,6 +33,7 @@
 
 import { PROBE_INTERVAL_MS } from "../core/cooloff.ts";
 import { UsageError } from "../core/errors.ts";
+import { routesFor, type ModelPools, type Tier } from "../core/ladder.ts";
 import type { Store } from "../store/store.ts";
 
 export interface Park {
@@ -214,23 +216,71 @@ export function renderParks(list: readonly Park[], now: number): string {
   ].join("\n");
 }
 
+/** The ladder a clear is judged against: which routes are each tier's primary. */
+export interface Ladder {
+  readonly tiers: readonly Tier[];
+  readonly pools: ModelPools;
+}
+
 /**
- * The clear, and what still stands. Found by lore's own review, fingerprint ac16d99e: the
- * first version closed every clear with "the next review that needs one asks it", which is
- * false while a mark of the other kind still blocks the same tier — a route cleared under
- * a stated tier mark is not asked, because the tier's cool-off is checked first. Nothing
- * here maps routes to tiers, so it does not guess which remaining mark blocks what: it lists
- * every one still in force and says the rule.
+ * The marks still in force that stand in front of what was just cleared.
+ *
+ * Found by lore's own review, fingerprint 59ae6ccc: listing EVERY remaining mark as a
+ * possible blocker sent an operator to clear unrelated ones too, deleting failure counts
+ * lore still needed. The relationship is read off the ladder instead, by `review.ts`'s own
+ * order: a tier's cool-off is checked before its PRIMARY routes and not before its
+ * fallbacks, which are walked regardless. So a cleared ROUTE is blocked by a tier mark on
+ * any tier it is a primary route of, and a cleared TIER by route marks only when every one
+ * of its primary routes is still parked — a pool twin that is free serves it.
  */
-export function renderCleared(cleared: readonly Park[], remaining: readonly Park[], now: number): string {
+export function blockers(cleared: readonly Park[], remaining: readonly Park[], ladder: Ladder, now: number): readonly Park[] {
+  const primaries = (tierId: string): readonly string[] => {
+    const t = ladder.tiers.find((x) => x.id === tierId && x.kind === "model");
+    return t === undefined ? [] : routesFor(t, ladder.pools);
+  };
   const inForce = remaining.filter((p) => Date.parse(p.until) > now);
+  const parkedRoutes = new Set(inForce.filter((p) => p.kind === "route").map((p) => p.id));
+  return inForce.filter((m) =>
+    m.kind === "tier"
+      ? cleared.some((c) => c.kind === "route" && primaries(m.id).includes(c.id))
+      : cleared.some((c) => {
+          if (c.kind !== "tier") return false;
+          const routes = primaries(c.id);
+          return routes.includes(m.id) && routes.every((r) => parkedRoutes.has(r));
+        }),
+  );
+}
+
+/**
+ * The clear, and what still stands in front of it — never a promise past it. Found by
+ * lore's own review, fingerprint ac16d99e: every clear used to end "the next review that
+ * needs one asks it", false while a stated tier mark still blocked the route just cleared.
+ *
+ * `ladder` is an `Error` when the ladder could not be read; then which remaining mark
+ * blocks what is unknown, and the output says exactly that rather than guessing either way.
+ */
+export function renderCleared(cleared: readonly Park[], remaining: readonly Park[], now: number, ladder: Ladder | Error): string {
+  const inForce = remaining.filter((p) => Date.parse(p.until) > now);
+  const after =
+    inForce.length === 0
+      ? ["Nothing else is parked: the next review that reaches these asks them."]
+      : ladder instanceof Error
+        ? [
+            `The ladder could not be read (${ladder.message}), so whether the ${String(inForce.length)} mark(s) still in`,
+            "force stand in front of these is unknown. Run `lore unpark` to see them.",
+            BOTH_KINDS,
+          ]
+        : ((): string[] => {
+            const blocking = blockers(cleared, remaining, ladder, now);
+            return blocking.length === 0
+              ? ["Nothing still parked stands in front of these: the next review that reaches them asks them."]
+              : ["Still parked, and in front of what you cleared:", ...blocking.map((p) => describePark(p, now)), BOTH_KINDS];
+          })();
   return [
     ...cleared.map((p) => `cleared ${describePark(p, now, true)}`),
     "",
     `${String(cleared.length)} mark(s) cleared.`,
-    ...(inForce.length === 0
-      ? ["Nothing else is parked: the next review that reaches these asks them."]
-      : ["Still parked, and able to keep a review from asking what you cleared:", ...inForce.map((p) => describePark(p, now)), BOTH_KINDS]),
+    ...after,
     AFTER_CLEARING,
     "",
   ].join("\n");

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { PROBE_INTERVAL_MS } from "../core/cooloff.ts";
 import { UsageError } from "../core/errors.ts";
 import { Store } from "../store/store.ts";
-import { describePark, parks, parseRequest, renderCleared, renderParks, unpark, type Park } from "./unpark.ts";
+import { blockers, describePark, parks, parseRequest, renderCleared, renderParks, unpark, type Ladder, type Park } from "./unpark.ts";
 
 describe("parseRequest", () => {
   it("lists when nothing is named", () => {
@@ -185,6 +185,70 @@ describe("describePark", () => {
   });
 });
 
+/** The deployed ladder's shape: each tier's primary, plus t1 on a two-plan pool. */
+const LADDER: Ladder = {
+  tiers: [
+    { id: "t0", kind: "deterministic", stage: "fast" },
+    { id: "t1", kind: "model", model: "GLM", stage: "fast" },
+    { id: "t2", kind: "model", model: "kimi-code-plan-global/k3", stage: "deep" },
+    { id: "t3", kind: "model", model: "openai/gpt-5.6-sol", stage: "deep", fallback: ["openrouter/openai/gpt-5.6-sol"] },
+  ],
+  pools: { GLM: ["zai-coding-plan/glm-5.3", "zai-coding-plan2/glm-5.3"] },
+};
+
+const mark = (over: Partial<Park>): Park => ({
+  kind: "route",
+  id: "openai/gpt-5.6-sol",
+  until: "2126-01-01T00:00:00.000Z",
+  why: "limit",
+  failures: 1,
+  stated: true,
+  auth: false,
+  probedAt: undefined,
+  ...over,
+});
+
+/**
+ * Found by lore's own review, fingerprint 59ae6ccc: every remaining mark used to be named
+ * a possible blocker, sending an operator to clear unrelated ones and lose their failure
+ * counts. The ladder decides instead, in `review.ts`'s own order.
+ */
+describe("blockers", () => {
+  const now = Date.parse("2026-09-24T15:10:00.000Z");
+
+  it("a tier mark stands in front of a route cleared from that tier's primary, and no other", () => {
+    const cleared = [mark({})];
+    const t3 = mark({ kind: "tier", id: "t3" });
+    const t1 = mark({ kind: "tier", id: "t1" });
+    const kimi = mark({ id: "kimi-code-plan-global/k3" });
+    expect(blockers(cleared, [t3, t1, kimi], LADDER, now)).toStrictEqual([t3]);
+  });
+
+  /** A tier's cool-off does not stop its fallback chain, so it blocks nothing cleared from it. */
+  it("a tier mark does not stand in front of that tier's fallback", () => {
+    const cleared = [mark({ id: "openrouter/openai/gpt-5.6-sol" })];
+    expect(blockers(cleared, [mark({ kind: "tier", id: "t3" })], LADDER, now)).toStrictEqual([]);
+  });
+
+  it("a cleared tier is blocked by its primary route's mark", () => {
+    const sol = mark({});
+    expect(blockers([mark({ kind: "tier", id: "t3" })], [sol], LADDER, now)).toStrictEqual([sol]);
+  });
+
+  /** A free pool twin serves the tier, so one parked plan blocks nothing; both parked do. */
+  it("a cleared pooled tier is blocked only when every plan in its pool is parked", () => {
+    const plan1 = mark({ id: "zai-coding-plan/glm-5.3" });
+    const plan2 = mark({ id: "zai-coding-plan2/glm-5.3" });
+    const t1 = [mark({ kind: "tier", id: "t1" })];
+    expect(blockers(t1, [plan1], LADDER, now)).toStrictEqual([]);
+    expect(blockers(t1, [plan1, plan2], LADDER, now)).toStrictEqual([plan1, plan2]);
+  });
+
+  it("an expired mark stands in front of nothing", () => {
+    expect(blockers([mark({})], [mark({ kind: "tier", id: "t3", until: "2020-01-01T00:00:00.000Z" })], LADDER, now)).toStrictEqual([]);
+  });
+});
+
 describe("rendering", () => {
   const now = Date.parse("2026-09-24T15:10:00.000Z");
 
@@ -204,11 +268,11 @@ describe("rendering", () => {
       auth: false,
       probedAt: undefined,
     };
-    for (const text of [renderParks([p], now), renderCleared([p], [], now)]) {
+    for (const text of [renderParks([p], now), renderCleared([p], [], now, LADDER)]) {
       expect(text).toContain("starting over from a single failure");
       expect(text).not.toContain("intact");
     }
-    expect(renderCleared([p], [], now)).toContain("1 mark(s) cleared");
+    expect(renderCleared([p], [], now, LADDER)).toContain("1 mark(s) cleared");
   });
 
   /**
@@ -228,7 +292,7 @@ describe("rendering", () => {
       auth: true,
       probedAt: undefined,
     };
-    const text = renderCleared([expired], [], now);
+    const text = renderCleared([expired], [], now, LADDER);
     expect(text).toContain("cleared route openai/gpt-5.6-terra");
     expect(text).not.toContain("kept for its failure count");
     expect(text).not.toContain("re-tests it");
@@ -237,31 +301,31 @@ describe("rendering", () => {
   });
 
   /**
-   * Found by lore's own review, fingerprint ac16d99e: a route cleared while a stated mark
-   * on its tier stands is not asked — the tier's cool-off is checked first — yet every
-   * clear used to end "the next review that needs one asks it". A clear now lists what
-   * still stands in force instead of promising past it.
+   * Found by lore's own review, fingerprints ac16d99e and 59ae6ccc: a clear must neither
+   * promise the next review asks what a stated tier mark still blocks, nor name unrelated
+   * marks as blockers. It says what stands in front of it, off the ladder — or, with no
+   * ladder, that it cannot tell.
    */
-  it("names what still blocks after a clear instead of promising the next review asks", () => {
-    const route: Park = {
-      kind: "route",
-      id: "openai/gpt-5.6-sol",
-      until: "2126-01-01T00:00:00.000Z",
-      why: "limit",
-      failures: 1,
-      stated: true,
-      auth: false,
-      probedAt: undefined,
-    };
-    const tier: Park = { ...route, kind: "tier", id: "t3", why: "the provider said its limit resets then" };
-    const expired: Park = { ...route, id: "kimi-for-coding/k3", until: "2020-01-01T00:00:00.000Z" };
+  it("says what stands in front of a clear, and only that", () => {
+    const sol = mark({});
+    const t3 = mark({ kind: "tier", id: "t3", why: "the provider said its limit resets then" });
+    const t1 = mark({ kind: "tier", id: "t1" });
 
-    const blocked = renderCleared([route], [tier, expired], now);
-    expect(blocked).toContain("Still parked, and able to keep a review from asking what you cleared:");
+    const blocked = renderCleared([sol], [t3, t1], now, LADDER);
+    expect(blocked).toContain("Still parked, and in front of what you cleared:");
     expect(blocked).toContain("tier  t3");
-    expect(blocked).not.toContain("kimi-for-coding/k3"); // expired: blocks nothing, so not named
-    expect(blocked).not.toContain("the next review that reaches these asks them");
+    expect(blocked, "t1 serves no route that was cleared").not.toContain("tier  t1");
 
-    expect(renderCleared([route], [expired], now)).toContain("Nothing else is parked: the next review that reaches these asks them.");
+    expect(renderCleared([sol], [t1], now, LADDER)).toContain(
+      "Nothing still parked stands in front of these: the next review that reaches them asks them.",
+    );
+    expect(renderCleared([sol], [], now, LADDER)).toContain("Nothing else is parked: the next review that reaches these asks them.");
+  });
+
+  it("says it cannot tell when the ladder cannot be read, rather than guessing", () => {
+    const text = renderCleared([mark({})], [mark({ kind: "tier", id: "t3" })], now, new Error("LORE_TIERS: bad json"));
+    expect(text).toContain("The ladder could not be read (LORE_TIERS: bad json)");
+    expect(text).not.toContain("Still parked, and in front");
+    expect(text).not.toContain("the next review that reaches");
   });
 });

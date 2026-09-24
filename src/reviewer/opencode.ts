@@ -386,6 +386,24 @@ class SessionGone extends Error {
   }
 }
 
+/**
+ * A request the provider refused before generating anything — a 400 that no classifier in
+ * `ask` recognised as quota, a credential, an oversized prompt or lore's own cancel.
+ *
+ * On a RESUMED session the only thing a cold request changes is the history, so
+ * `conductSession` retries cold once to tell the two apart. Found live on 2026-09-24:
+ * opencode restarted twice under a t2 round, and the kept Kimi session came back holding
+ * the interrupted turn as an EMPTY assistant message — every later call on it answered
+ * `400: the message at position 79 with role 'assistant' must not be empty` before
+ * generating a token, and the review failed. Nothing ever forgot that session, so D-80's
+ * continuity guaranteed the same refusal on every round that tier had left.
+ *
+ * A `DidNotRun` carrying the identical message, so every caller that does not know this
+ * class treats it exactly as the plain failure it replaced; only `conductSession` looks
+ * closer, and only at a session it resumed.
+ */
+class HistoryRejected extends DidNotRun {}
+
 /** `openrouter/z-ai/glm-5.2` → provider `openrouter`, model `z-ai/glm-5.2`. */
 export function splitModel(id: string): { providerID: string; modelID: string } {
   const slash = id.indexOf("/");
@@ -1145,13 +1163,22 @@ export class Reviewer implements ReviewerLike {
       // Left in place the row would fail this tier on every future round of the review,
       // permanently, which is strictly worse than the cold start it was saving.
       //
-      // NARROW ON PURPOSE: only when we RESUMED (`continuing`), only on 404, and only
-      // once (`noResume`). A 404 without a resume is a bug worth surfacing, not a thing
-      // to paper over, and a second attempt would be a loop.
-      if (e instanceof SessionGone && continuing !== undefined && !noResume) {
+      // AND A SESSION OPENCODE STILL HAS BUT THE PROVIDER WILL NO LONGER TAKE
+      // (`HistoryRejected`) gets the same answer — see the class for the empty assistant
+      // turn that made this necessary.
+      //
+      // NARROW ON PURPOSE: only when we RESUMED (`continuing`), only on one of those two,
+      // and only once (`noResume`). Either one without a resume is a bug worth surfacing,
+      // not a thing to paper over, and a second attempt would be a loop. The cold retry is
+      // cheap for a refused history by construction: a refusal costs nothing when it
+      // recurs, and one that does was the request's fault, and fails as it always did.
+      if ((e instanceof SessionGone || e instanceof HistoryRejected) && continuing !== undefined && !noResume) {
         console.error(
-          `[lore:log] ${tier.id}: opencode no longer has session ${continuing} — forgetting it and starting a ` +
-            "fresh one. This round pays for a cold read; later rounds resume normally.",
+          e instanceof SessionGone
+            ? `[lore:log] ${tier.id}: opencode no longer has session ${continuing} — forgetting it and starting a ` +
+                "fresh one. This round pays for a cold read; later rounds resume normally."
+            : `[lore:log] ${tier.id}: the provider refused kept session ${continuing}'s own history (${e.message}) — ` +
+                "forgetting it and starting a fresh one. This round pays for a cold read; later rounds resume normally.",
         );
         if (keptKey !== undefined) {
           this.kept.delete(keptKey);
@@ -1878,6 +1905,12 @@ ${contract}`,
                 `is requeued.`,
           e,
         );
+      }
+      // A 400 NOTHING ABOVE CLAIMED: refused before a token was generated. Marked, not
+      // rescued here — whether the history is to blame is `conductSession`'s question,
+      // because only it knows whether this session was resumed.
+      if (e instanceof HttpStatus && e.status === 400) {
+        throw new HistoryRejected(`tier ${tier.id} (${tier.model}) failed: ${message}`, e);
       }
       throw new DidNotRun(`tier ${tier.id} (${tier.model}) failed: ${message}`, e);
     }

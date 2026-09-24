@@ -12,7 +12,7 @@
 
 import { createServer, type Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { CancelledByLore, Exhausted, ProbeInconclusive, ProviderAuthFailed, ServiceUnreachable, TooLargeForTier } from "../core/errors.ts";
+import { CancelledByLore, DidNotRun, Exhausted, ProbeInconclusive, ProviderAuthFailed, ServiceUnreachable, TooLargeForTier } from "../core/errors.ts";
 import { CLAIM_MAX } from "../core/finding.ts";
 import type { Tier } from "../core/ladder.ts";
 import { Reviewer, countStepParts, emissionOf, extractFindings, quotaRefusal, splitModel, toolsUsed, isTooLong, usageFromMessages } from "./opencode.ts";
@@ -654,6 +654,72 @@ describe("a tier that keeps its session", () => {
     // this fixture, so a recovery without a bound would loop until something else stopped
     // it — asserting the count is what pins the bound rather than the intent.
     expect(creates(), "one cold restart, then it gives up honestly").toHaveLength(1);
+  });
+
+  /**
+   * A SESSION OPENCODE STILL HAS, WHOSE HISTORY THE PROVIDER REFUSES — the live case of
+   * 2026-09-24. opencode restarted twice under a t2 round, and the kept Kimi session came
+   * back holding the interrupted turn as an empty assistant message; every later call was
+   * refused with exactly this 400, relayed inside a 200 as opencode relays every provider
+   * failure, and the review failed. Resumed, refused, recovered cold once — and the row
+   * now names the fresh session, so later rounds resume normally again.
+   */
+  const REFUSED_HISTORY = {
+    info: {
+      error: {
+        name: "APIError",
+        data: { message: "the message at position 79 with role 'assistant' must not be empty", statusCode: 400 },
+      },
+    },
+  };
+  const keptPort = (rows: Map<string, string>) => ({
+    get: (k: string) => rows.get(k),
+    set: (k: string, v: string) => void rows.set(k, v),
+    forget: (k: string) => void rows.delete(k),
+    keys: () => [...rows.keys()],
+  });
+
+  it("forgets a kept session whose history the provider refuses, and starts cold exactly once", async () => {
+    replies = [REFUSED_HISTORY, reply()];
+    const rows = new Map<string, string>([["rev1:t1:openrouter/z-ai/glm-5.2", "ses_poisoned"]]);
+    const r = new Reviewer({ baseUrl, agent: "readonly", timeoutMs: 10_000, keptSessions: keptPort(rows) });
+
+    const result = await r.review(KEEPS, { initial: "FULL ORIENTATION", continued: "THE AUTHOR ANSWERED" }, "/tmp/wt", "rev1");
+
+    expect(result.findings, "the cold retry read the code").toHaveLength(1);
+    expect(rows.get("rev1:t1:openrouter/z-ai/glm-5.2"), "never the poisoned session again").not.toBe("ses_poisoned");
+    expect(creates(), "one cold session").toHaveLength(1);
+    const sent = prompts().map((c) => JSON.stringify((c.body as { parts?: unknown[] }).parts ?? []));
+    expect(sent[0], "the refused call was the resume").toContain("THE AUTHOR ANSWERED");
+    expect(sent[1], "and the retry is a genuine cold read").toContain("FULL ORIENTATION");
+  });
+
+  /**
+   * NARROW: a FRESH session refused the same way has no history to blame. It fails exactly
+   * as a plain 400 always did — same class, same words — with no retry and nothing forgotten.
+   */
+  it("fails a fresh session the provider refuses exactly as before, without retrying", async () => {
+    replies = [REFUSED_HISTORY, reply()];
+    const r = reviewer();
+
+    const err = await r.review(KEEPS, { initial: "A", continued: "B" }, "/tmp/wt", "rev1").then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+
+    expect(err).toBeInstanceOf(DidNotRun);
+    expect((err as Error).message).toMatch(/^tier t1 \(openrouter\/z-ai\/glm-5\.2\) failed: .*must not be empty/);
+    expect(prompts(), "no retry").toHaveLength(1);
+  });
+
+  /** BOUNDED: a cold request refused too was the request's fault, and one retry is all it gets. */
+  it("gives up after one cold retry when the cold request is refused too", async () => {
+    replies = [REFUSED_HISTORY, REFUSED_HISTORY, reply()];
+    const rows = new Map<string, string>([["rev1:t1:openrouter/z-ai/glm-5.2", "ses_poisoned"]]);
+    const r = new Reviewer({ baseUrl, agent: "readonly", timeoutMs: 10_000, keptSessions: keptPort(rows) });
+
+    await expect(r.review(KEEPS, { initial: "A", continued: "B" }, "/tmp/wt", "rev1")).rejects.toThrow(DidNotRun);
+    expect(prompts(), "the resume, one cold retry, and no third").toHaveLength(2);
   });
 
   /**

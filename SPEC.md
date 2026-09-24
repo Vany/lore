@@ -1759,6 +1759,17 @@ flattened it to `DidNotRun`, and the recovery silently stopped working. On it, l
 the row and starts cold ONCE. Left unhandled that row would have failed its tier on every
 future round of the review: permanent, and strictly worse than the cold start it avoided.
 
+**And a session opencode still has, whose history the provider will no longer take.** On
+2026-09-24 opencode restarted twice under a t2 round, and the kept Kimi session came back
+holding the interrupted turn as an empty assistant message; every later call on it was
+refused before generating a token — `400: the message at position 79 with role 'assistant'
+must not be empty` — and the review failed. A 400 that nothing more specific claims (not
+quota, a credential, an oversized prompt or lore's own cancel) on a RESUMED session now
+gets the same bound: forget the row, start cold ONCE. On a resumed session only the history
+separates the refused request from a cold one, so the retry tells the two apart, and a
+refusal costs nothing when it recurs. A fresh session refused the same way has no history
+to blame and fails exactly as before.
+
 **D-121 — a price is REPORTED, never acted on. The daily spend ceiling is gone.
 DECIDED and BUILT 2026-08-17, one day after it cost eight people their reviews.**
 
@@ -4039,11 +4050,14 @@ working agreement says to confirm rather than assume.
 **D-155 — a person's word clears a park: `lore unpark`. BUILT 2026-09-24.**
 
 lore learns that a refusal stopped being true only by asking again, and whether it asks
-again on its own depends on who named the wait: a route lore GUESSED is re-tested within
-fifteen minutes (D-125), a tier the provider stated is probed at the same interval (D-94),
-a guessed tier binds only the background screen (D-90) — and a route whose reset the
-PROVIDER stated is honoured to the second and never re-tested (D-91, D-125). That last rule
-is right until a person changes the thing underneath: a limit reset early, a plan
+again on its own depends on who named the wait. A route lore GUESSED is re-tested within
+fifteen minutes (D-125). A tier the provider stated keeps reviews off its primary but is
+probed at the same interval (D-94), and a due probe asks every primary route whatever
+their own marks say. A guessed tier keeps no review off it — a due one is called as a
+probe, under the probe's shorter deadline — and only the background screen waits it out
+(D-90). And a route whose reset the PROVIDER stated is not re-tested before its time
+(D-91, D-125), unless it is the primary of a parked tier whose probe comes due first. That
+last rule is right until a person changes the thing underneath: a limit reset early, a plan
 upgraded, a credential re-logged. The operator then knows what lore cannot, and had no way
 to say it; three such fixes (2026-09-16, -22, -24) were each cleared with a hand-typed
 `DELETE` into the container, which exits 0 whether or not its key matched anything.
@@ -4060,6 +4074,11 @@ id prefix, or all at once.
   match there locks a teammate out. Here a wrong match costs one request, and `openai`,
   what a person who reset OpenAI types, matched a second long-expired mark the day this was
   built. Every cleared mark is printed.
+- **A clear says what still stands in front of it**, read off the ladder in `review.ts`'s
+  own order: a tier mark blocks the routes that are its primaries (not its fallbacks, which
+  are walked regardless), and route marks block a tier only once every primary it has is
+  parked. A mark unrelated to the clear is not named, so nobody is sent to delete a failure
+  count lore still needs; with the ladder unreadable, it says it cannot tell.
 - **A clear that matches nothing is an error**; nothing parked at all is a success, since
   lore will then ask regardless.
 - **Clearing deletes the mark with its failure count.** A refusal that is still real costs
