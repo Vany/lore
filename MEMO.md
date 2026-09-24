@@ -3,6 +3,60 @@
 Newest first. Updated at the end of each task: what changed, what I learned, what
 surprised me.
 
+## 2026-09-24 — `make unpark`, and the batch that taught me why predictions are a second copy
+
+**Vany reset the OpenAI quota and asked how to make lore notice — "again".** The answer was
+a third hand-typed `node -e` DELETE into the container, and his next message was the task:
+*"this will appear often, so let's make a special api call and use it in makefile."* An
+uncommitted draft of exactly that (`lore unpark`) had been sitting in the tree since 01:46,
+never reviewed. Finished it in a separate worktree, because the main checkout also held an
+unrelated in-flight `runner.ts` change and a zod 4→3 downgrade with zod 3 installed in
+`node_modules` — testing there would not have tested what ships, and the deploy build
+context is that same working tree.
+
+**The draft had three defects before review saw it:** it saw only route marks while
+`review.ts` still writes provider-stated TIER marks (it would have said "nothing parked" over
+a parked t3); it promised a re-park keeps its failure count "intact" (clearing deletes it);
+and it refused an ambiguous prefix by git's rule, so `ROUTE=openai` was refused over a
+long-expired terra mark. Also found by reading the code rather than the draft's comments:
+today's `sol` park was lore's own guess, probed at 15:02Z and due again at 15:17Z, so the
+hand-clear bought eight minutes. Only a provider-STATED route, or a fallback-only route, is
+never re-tested — the cases the command actually exists for.
+
+**Then I spent three rounds making the listing predict, and review kept finding the next
+branch of `review.ts` it missed** — the tier probe bypassing route marks, a guessed tier
+still being called, fallback-only routes never probed, pool spares, due probes, the metered
+gate, `exemptLiteral`. Eleven findings of one shape. Asked, Vany chose facts over
+predictions: each mark as what it is, the rules once as a legend citing their decisions.
+The lesson is the codebase's own, met again: a prediction of another module's routing IS a
+second implementation of it, and a second copy drifts. The legend drifted too, twice, until
+it named exactly what `exemptLiteral` gates — smaller surface, same disease.
+
+**The first review of the batch FAILED, and it was lore's fault.** opencode went away twice
+mid-round (the whole stack restarted — Docker again, I think), and t2's kept Kimi session
+came back holding the interrupted turn as an empty assistant message; every resume got
+`400: the message at position 79 with role 'assistant' must not be empty` and nothing ever
+forgot the session. A 400 no classifier claims on a RESUMED session now gets `SessionGone`'s
+recovery — forget, delete the session in opencode, go cold once. Only history separates a
+resumed request from a cold one, and a refusal costs nothing when it recurs.
+
+**The retry nearly failed on the environment, too.** Round 6's t0 install hit npm
+`ECONNRESET` twice under a load average of 34 — some of it my own full-suite runs, about
+ten today, each saturating every core — and t0 reported it as a HIGH finding against a
+`package.json` the batch never touched. That misclassification is a real runner defect (the
+shape `bd0f45f3` fixed for OOM); deferred to TODO only because the in-flight `runner.ts`
+change sits on the neighbouring classifier. I also submitted one round before seeing the
+suite pass, having said I would check first; it had 4 failures under that load that did not
+reproduce on the same tree, and I lost their names to my own grep.
+
+**Result:** `passed_thin_ladder`, attested PARTIAL — z-ai and moonshotai only; OpenAI's reset
+was spent again within about two hours (`sol` re-parked on quota at 16:55Z), so t3 answered
+on the Z.ai stand-in. Carried `6fb45a6` (t3 → sol, deployed ahead of review on Vany's call)
+into the batch so it reached origin reviewed, and review found `.env.example` and D-74 still
+naming terra. One inconsistency worth Vany's eye: the review cleared while `open_count` said
+3 — three accepted answers expired when my last commit moved their lines, and the final
+clean round was taken as settling them.
+
 ## 2026-09-19 — "rise lore up", and the tier that had been dead since the catalog moved
 
 **The deployment was three days and seven commits behind, and nothing said so.** Vany asked
