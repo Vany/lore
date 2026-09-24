@@ -179,8 +179,11 @@ describe("rendering", () => {
     expect(LEGEND).toContain("a route that is only a fallback");
     // Found by lore's own review, fingerprint 28b49f21: the metered gate is a toggle, not a
     // clock, so it has its own line and says what does and does not help.
-    expect(LEGEND).toContain("Never asked while metered use is off, mark or no mark: a metered route.");
-    expect(LEGEND).toContain("LORE_ALLOW_METERED=1 does (D-117)");
+    expect(LEGEND).toContain("Never asked while metered use is off, mark or no mark (D-117): a metered route in a pool,");
+    expect(LEGEND).toContain("LORE_ALLOW_METERED=1 does.");
+    // Found by lore's own review, fingerprints 9abac845 and dc7ce659: `exemptLiteral` ungates
+    // a metered route written as a tier's own literal model, so the gate line must say so.
+    expect(LEGEND).toContain("A metered route you wrote as a tier's\n  own model is your choice, and is asked like any other primary.");
     expect(LEGEND).not.toContain("or is metered while metered use is off");
     expect(text).toContain("If you fixed what a mark names, clear it: --route <prefix>, --tier <prefix>, or --all.");
   });

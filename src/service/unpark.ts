@@ -161,11 +161,17 @@ export const LEGEND = [
   "  a route the provider stated a reset for (D-91), unless a probe of its tier asks it first",
   "  a route that is only a fallback",
   // NOT a clock, so not under "waited out" — found by lore's own review, fingerprint
-  // 28b49f21: the metered gate drops such a route from every walk whatever its mark says,
+  // 28b49f21: the metered gate drops a gated route from every walk whatever its mark says,
   // so neither waiting nor clearing brings it back. Same clock-vs-toggle line `ladder.ts`
   // draws when it refuses to send anyone "to wait for a reset that will not help".
-  "Never asked while metered use is off, mark or no mark: a metered route. Waiting will not",
-  "  change that and neither will clearing; LORE_ALLOW_METERED=1 does (D-117).",
+  // SCOPED TO WHAT `exemptLiteral` GATES — found by lore's own review, fingerprints 9abac845
+  // and dc7ce659: a metered route an operator wrote as a tier's own literal model is exempt,
+  // and telling that operator to flip the global toggle would ungate every metered fallback
+  // in their file to reach a route that was never gated.
+  "Never asked while metered use is off, mark or no mark (D-117): a metered route in a pool,",
+  "  as a fallback, or anywhere in the built-in ladder. Waiting will not change that and",
+  "  neither will clearing; LORE_ALLOW_METERED=1 does. A metered route you wrote as a tier's",
+  "  own model is your choice, and is asked like any other primary.",
   "A tier lore guessed about holds back only the background screen; reviews still call it.",
   "An expired mark holds nothing back; it is kept for the failure count the next backoff uses.",
 ].join("\n");
