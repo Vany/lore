@@ -692,6 +692,12 @@ describe("a tier that keeps its session", () => {
     const sent = prompts().map((c) => JSON.stringify((c.body as { parts?: unknown[] }).parts ?? []));
     expect(sent[0], "the refused call was the resume").toContain("THE AUTHOR ANSWERED");
     expect(sent[1], "and the retry is a genuine cold read").toContain("FULL ORIENTATION");
+    // Found by lore's own review, fingerprint cbc1e5a6: forgetting the row was the last way
+    // to find the poisoned session, so it is deleted in opencode rather than orphaned.
+    expect(
+      captured.some((c) => c.method === "DELETE" && (c.path.split("?")[0] ?? "") === "/session/ses_poisoned"),
+      "the poisoned session is deleted, not orphaned",
+    ).toBe(true);
   });
 
   /**

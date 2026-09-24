@@ -583,8 +583,8 @@ tokens:
 
 ## What lore is refusing to ask, and how to make it forget.
 ##
-##   make unpark                 list every parked route and tier, and when lore would
-##                               ask again on its own
+##   make unpark                 list every parked route and tier, as facts, and the
+##                               rules lore follows with each kind on its own
 ##   make unpark ROUTE=openai    clear route marks by id or prefix: every match goes
 ##   make unpark TIER=t3         clear tier marks by id or prefix
 ##   make unpark ALL=1           clear everything
@@ -594,8 +594,8 @@ tokens:
 ## GUESSED on a tier's primary route is re-tested within fifteen minutes on its own, but a
 ## route that is only a fallback is never probed, and a reset time the PROVIDER stated is
 ## trusted to the second (D-91) — right until the thing underneath changes. The listing
-## says which case each mark is, so run it bare first. A mark cleared while the refusal is
-## still real costs one request and parks again.
+## gives each mark's facts and the rules to read them by, so run it bare first. A mark
+## cleared while the refusal is still real costs one request and parks again.
 unpark:
 	$(wrong-directory)
 	@$(COMPOSE) exec -T lore node /app/src/index.ts unpark $(if $(ALL),--all) $(if $(ROUTE),--route "$(ROUTE)") $(if $(TIER),--tier "$(TIER)")

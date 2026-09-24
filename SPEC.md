@@ -4053,17 +4053,19 @@ working agreement says to confirm rather than assume.
 
 lore learns that a refusal stopped being true only by asking again, and whether it asks
 again on its own depends on who named the wait and where the route sits. A route lore
-GUESSED is re-tested within fifteen minutes (D-125) if it is some tier's primary; one that
-is only a fallback is never probed and waits out its whole backoff. A tier the provider stated keeps reviews off its primary but is
-probed at the same interval (D-94), and a due probe asks every primary route whatever
+GUESSED is re-tested within fifteen minutes (D-125) if it is some tier's primary and not a
+metered route while metered use is off; one that is only a fallback is never probed and
+waits out its whole backoff. A tier the provider stated keeps reviews off its primary but
+is probed at the same interval (D-94), and a due probe asks every primary route whatever
 their own marks say. A guessed tier keeps no review off it — a due one is called as a
 probe, under the probe's shorter deadline — and only the background screen waits it out
 (D-90). And a route whose reset the PROVIDER stated is not re-tested before its time
 (D-91, D-125), unless it is the primary of a parked tier whose probe comes due first. That
-last rule is right until a person changes the thing underneath: a limit reset early, a plan
-upgraded, a credential re-logged. The operator then knows what lore cannot, and had no way
-to say it; three such fixes (2026-09-16, -22, -24) were each cleared with a hand-typed
-`DELETE` into the container, which exits 0 whether or not its key matched anything.
+last rule is right until a person changes the thing underneath: a limit reset early, a
+plan upgraded, a credential re-logged. The operator then knows what lore cannot, and had
+no way to say it; three such fixes (2026-09-16, -22, -24) were each cleared with a
+hand-typed `DELETE` into the container, which exits 0 whether or not its key matched
+anything.
 
 **This reverses a recorded preference, on Vany's own call.** Offered a manual route-clear
 when D-125 was built, he declined it — *"no, everything must be automated."* — and the
@@ -4074,22 +4076,23 @@ he asked for the command.
 `lore unpark` (`make unpark`) lists every tier and route mark, and clears them by kind and
 id prefix, or all at once.
 
-- **The listing says what lore would do unaided, and when**, because the rules above mean
-  clearing often buys nothing: the park cleared on 2026-09-24 was a guess, due for re-test
-  eight minutes later.
+- **Facts per mark, rules once.** Each mark is listed as what it is — route or tier,
+  provider-stated or lore's guess, until, last probe, failures, why — and what lore does with
+  each kind on its own is stated once, as a legend citing the decisions above. Not a per-mark
+  prediction of what the next review will do: that would be a second implementation of
+  `review.ts`'s routing (cool-off, due probes, the metered gate, pools and their spares), and a
+  second copy of it drifts. Vany chose this over computing the predictions exactly through one
+  definition shared with `review.ts`, which would mean refactoring the reviewer core for an
+  operator's listing.
 - **Tier marks are listed and cleared too.** A stated tier mark parks a tier while every
   route is clear, and a command that saw only routes would report "nothing parked" over it.
 - **A prefix clears every match** — not git's rule, which `revoke` keeps because a wrong
   match there locks a teammate out. Here a wrong match costs one request, and `openai`,
   what a person who reset OpenAI types, matched a second long-expired mark the day this was
   built. Every cleared mark is printed.
-- **A clear says what still stands in front of it**, read off the ladder in `review.ts`'s
-  own order: a provider-stated tier mark blocks the routes that are its primaries (a guessed
-  one blocks nothing; fallbacks are walked regardless), and route marks block a tier only
-  once every primary it has is parked. A mark unrelated to the clear is not named, so nobody is sent to delete a failure
-  count lore still needs; with the ladder unreadable, it says it cannot tell.
 - **A clear that matches nothing is an error**; nothing parked at all is a success, since
-  lore will then ask regardless.
+  lore will then ask regardless. A clear that does match prints what it cleared and what is
+  still in force afterwards, as facts.
 - **Clearing deletes the mark with its failure count.** A refusal that is still real costs
   one request and parks again, at the provider's stated time or on lore's backoff from a
   single failure.

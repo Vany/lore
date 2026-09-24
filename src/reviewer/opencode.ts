@@ -1184,6 +1184,15 @@ export class Reviewer implements ReviewerLike {
           this.kept.delete(keptKey);
           this.cfg.keptSessions?.forget(keptKey);
         }
+        // A REFUSED history's session still exists in opencode, and forgetting the row was
+        // the last thing that could find it: `release` enumerates sessions only through those
+        // rows, so without this delete every recovery left one orphan for good — found by
+        // lore's own review, fingerprint cbc1e5a6. Best-effort, exactly as `release` deletes:
+        // failing to tidy up must not fail the round the cold retry is about to save. A
+        // vanished session (`SessionGone`) has nothing left to delete.
+        if (e instanceof HistoryRejected) {
+          await this.client.session.delete({ path: { id: continuing } }).catch(() => undefined);
+        }
         this.aborters.delete(sessionId);
         this.watchers.delete(sessionId);
         return await this.conductSession(

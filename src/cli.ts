@@ -414,33 +414,23 @@ export async function main(argv: readonly string[]): Promise<ExitCode> {
   if (args.command === "unpark") {
     const { parks, parseRequest, renderCleared, renderParks, unpark } = await import("./service/unpark.ts");
     const req = parseRequest(argv);
-    // The ladder decides both what the listing can promise (only a tier's PRIMARY route is
-    // ever re-tested on its own) and what stands in front of a clear. Read where the
-    // container's LORE_TIERS is; unreadable is reported in the output, not guessed past.
-    const { loadPools, loadTiers } = await import("./core/ladder.ts");
-    let ladder: { tiers: ReturnType<typeof loadTiers>; pools: ReturnType<typeof loadPools> } | Error;
-    try {
-      ladder = { tiers: loadTiers(), pools: loadPools() };
-    } catch (e) {
-      ladder = e instanceof Error ? e : new Error(String(e));
-    }
     const store = openExisting(args.db);
     try {
       const now = Date.now();
       const all = parks(store);
       if (req === undefined || all.length === 0) {
         // Nothing parked answers a clear too: the operator wanted lore to ask, and it will.
-        process.stdout.write(renderParks(all, now, ladder));
+        process.stdout.write(renderParks(all, now));
         return EXIT.PASS;
       }
       const cleared = unpark(store, req);
       if (cleared.length === 0) {
         // A typo must not read as success: a DELETE that matched nothing exits 0, and that
         // is how hand-typed clears used to fail without anybody noticing.
-        process.stderr.write(`nothing parked matches that — nothing was cleared.\n\n${renderParks(all, now, ladder)}`);
+        process.stderr.write(`nothing parked matches that — nothing was cleared.\n\n${renderParks(all, now)}`);
         return EXIT.USAGE;
       }
-      process.stdout.write(renderCleared(cleared, parks(store), now, ladder));
+      process.stdout.write(renderCleared(cleared, parks(store), now));
       return EXIT.PASS;
     } finally {
       store.close();

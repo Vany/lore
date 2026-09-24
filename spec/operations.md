@@ -206,15 +206,15 @@ The distinction is the whole point: a quota heals by waiting and a credential ne
 so they need opposite responses from whoever is looking.
 
 **After fixing a provider upstream, `make unpark` (D-155).** Run bare, it lists every tier
-and route mark lore holds and says, for each, whether lore would ask again on its own and
-when. A guess on a tier's primary route is re-tested within fifteen minutes and usually
-needs nothing; a route that is only a fallback is never probed, and waits out its whole
-backoff unless cleared. A reset time the provider STATED for a route is waited out however
-wrong it has become — unless the route's tier is parked too and that tier's probe comes
-due first — and a credential re-logged is only noticed at the next re-test.
-`ROUTE=<prefix>` and `TIER=<prefix>` clear every mark they match; `ALL=1` clears
-everything. A clear then names whatever still stands in front of it. Clearing early costs
-one refused request, and the mark comes back.
+and route mark lore holds, as facts — who named the wait, until when, last probe,
+failures, why — and states once what lore does with each kind on its own. A guess on a
+tier's primary route is re-tested within fifteen minutes and usually needs nothing; a
+route that is only a fallback is never probed, and waits out its whole backoff unless
+cleared. A reset time the provider STATED for a route is waited out however wrong it has
+become — unless the route's tier is parked too and that tier's probe comes due first — and
+a credential re-logged is only noticed at the next re-test. `ROUTE=<prefix>` and
+`TIER=<prefix>` clear every mark they match; `ALL=1` clears everything. A clear then lists
+what is still in force. Clearing early costs one refused request, and the mark comes back.
 
 ### 2.4.3 The board — the same facts, for a person rather than a monitor (D-96)
 

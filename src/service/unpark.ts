@@ -1,42 +1,26 @@
 /**
- * What lore is refusing to ask, and forgetting it on an operator's word.
+ * What lore is refusing to ask, and forgetting it on an operator's word (D-155).
  *
  * lore parks what refused it — one subscription's ROUTE (D-93) or a whole TIER (D-90) —
- * and learns of a recovery only by asking again. Whether it asks again ON ITS OWN depends
- * on who named the wait:
+ * and learns of a recovery only by asking again. The person who just reset a limit,
+ * upgraded a plan or re-logged a credential knows what lore cannot: the refusal stopped
+ * being true. This is how they say so. It exists because it kept happening — a plan
+ * upgrade on 2026-09-16 and limit resets on 2026-09-22 and 2026-09-24 were each cleared
+ * with a hand-typed `node -e` into the container, and a hand-typed DELETE exits 0 whether
+ * or not its key matched anything.
  *
- *   route, lore's guess      re-tested by the next review 15 min after its last probe (D-94)
- *                            — but only as a tier's PRIMARY: a route that is only a fallback
- *                            is filtered out of the fallback walk, never probed, and waits
- *                            out its whole backoff
- *   route, provider-stated   not re-tested before `until` (D-91) — except by the probe of a
- *                            parked tier it is the primary of, which asks every primary route
- *   tier,  provider-stated   reviews skip its primary, probing it once per 15 min (D-94)
- *   tier,  lore's guess      reviews still call it, a due one as a probe under the probe's
- *                            shorter deadline; the background screen waits it out (D-90)
- *
- * So a review skips a tier's primary while the tier carries a STATED mark or that route is
- * parked, and a clear that lifts one while the other stands buys nothing — which is why a clear
- * reports what still stands in front of it, read off the ladder, rather than promising
- * the next review will ask.
- *
- * The person who just reset a limit, upgraded a plan or re-logged a credential knows what
- * lore cannot: the refusal stopped being true. This is how they say so. It exists because
- * it kept happening — a plan upgrade on 2026-09-16 and limit resets on 2026-09-22 and
- * 2026-09-24 were each cleared with a hand-typed `node -e` into the container, and a
- * hand-typed DELETE exits 0 whether or not its key matched anything.
- *
- * LISTING COMES FIRST, and says when lore would ask on its own, because the table above
- * means clearing often buys nothing: on 2026-09-24 the park being cleared was a guess,
- * probed seven minutes earlier and due again in eight. The line that says so is the
- * difference between an operator who needs this command and one who only needs to wait.
+ * FACTS PER MARK, RULES ONCE. Each mark is listed as what it is — route or tier, who named
+ * the wait, until when, when last probed, how many failures, why — and what lore does with
+ * each kind on its own is stated once, as `LEGEND`. The first version predicted per mark
+ * whether lore would re-ask and what still blocked a clear; every such prediction was a
+ * second implementation of `review.ts`'s routing (cool-off, probe due, metered gate, pools
+ * and spares), and a second copy of that logic drifts from the first. Facts do not. Vany
+ * chose this over computing the predictions exactly through one shared definition.
  *
  * SPEC: spec/operations.md §2.4.2
  */
 
-import { PROBE_INTERVAL_MS } from "../core/cooloff.ts";
 import { UsageError } from "../core/errors.ts";
-import { routesFor, type ModelPools, type Tier } from "../core/ladder.ts";
 import type { Store } from "../store/store.ts";
 
 export interface Park {
@@ -148,62 +132,37 @@ export function unpark(store: Store, req: UnparkRequest): readonly Park[] {
   return cleared;
 }
 
-/** The tiers that have this route as a PRIMARY — the only role D-94's route probe reaches. */
-function primaryOf(route: string, ladder: Ladder): readonly string[] {
-  return ladder.tiers.filter((t) => t.kind === "model" && routesFor(t, ladder.pools).includes(route)).map((t) => t.id);
+/**
+ * One mark, as facts only. A route's mark records which refusal it was (D-143); a tier's
+ * does not — it may be a stated limit reset or a screen that went unanswered — so a tier gets
+ * no label and its `why` speaks for it, rather than a label that would be a guess.
+ */
+export function describePark(p: Park, now: number): string {
+  const facts = [
+    ...(p.kind === "route" ? [p.auth ? "credential rejected" : "quota"] : []),
+    p.stated ? "provider-stated" : "lore's guess",
+    `${String(p.failures)} failure(s)`,
+    Date.parse(p.until) > now ? `in force until ${p.until}` : `expired ${p.until}`,
+    p.probedAt === undefined ? "never probed" : `last probed ${p.probedAt}`,
+  ].join(", ");
+  return `${p.kind.padEnd(5)} ${p.id}  [${facts}]\n      why: ${p.why}`;
 }
 
 /**
- * Whether lore would ask again without being told, and when — the line that decides
- * whether clearing buys anything. Mirrors the table at the top of this file, which
- * mirrors `review.ts`; lore's own review found it saying more than review.ts does four
- * times before it did (fingerprints e0fa6114, 3e88004b, and b13d07f3 — a guessed route
- * is re-tested only as a tier's PRIMARY; a fallback-only route waits out its time, so on
- * the deployed ladder "the next review re-tests it" would have told the person who reset
- * plan 2 to wait hours for nothing).
+ * What lore does with each kind of mark on its own — stated once, by rule, with the
+ * decision each line comes from, so a reader can check it against SPEC rather than trust
+ * a per-mark prediction. The two "waited out" lines are the cases a clear exists for.
  */
-function onItsOwn(p: Park, now: number, ladder: Ladder | Error): string {
-  if (Date.parse(p.until) <= now) return "expired: blocks nothing now, kept for its failure count";
-  const probedAt = p.probedAt === undefined ? Number.NaN : Date.parse(p.probedAt);
-  const nextProbe = Number.isNaN(probedAt) ? now : probedAt + PROBE_INTERVAL_MS;
-  const due = nextProbe <= now ? "the next review" : `the first review after ${new Date(nextProbe).toISOString()}`;
-  const who = p.stated ? "provider-stated" : "lore's guess";
-  if (p.kind === "route") {
-    if (ladder instanceof Error) {
-      return `${who}: whether any review re-tests it is unknown — the ladder could not be read (${ladder.message})`;
-    }
-    const tiers = primaryOf(p.id, ladder);
-    if (tiers.length === 0) return `${who}: not any tier's primary, so no probe reaches it — it waits out ${p.until}`;
-    return p.stated
-      ? `provider-stated: not re-tested before ${p.until}, unless ${tiers.join(", ")} is parked too and its ` +
-          "probe comes due first"
-      : `lore's guess, primary of ${tiers.join(", ")}: ${due} that needs it re-tests it`;
-  }
-  return p.stated
-    ? `provider-stated: reviews skip this tier's primary; ${due} that needs it probes it`
-    : `lore's guess: reviews still call it — ${due} as a probe, under the shorter probe deadline — ` +
-        `and the background screen waits until ${p.until}`;
-}
-
-/**
- * `cleared` drops the line about what lore would do on its own: that line describes a mark,
- * and a cleared one no longer exists. Found by lore's own review, fingerprint 05e651dd — the
- * first version reused the listing's wording after a clear, so an expired mark came back as
- * "kept for its failure count" two lines above the text saying the count was gone.
- */
-export function describePark(p: Park, now: number, ladder: Ladder | Error, cleared = false): string {
-  // A route's mark records which refusal it was (D-143); a tier's does not — it may be a
-  // stated limit reset or a screen that went unanswered — so a tier gets no label and its
-  // `why` speaks for it, rather than a label that would be a guess.
-  const what = p.kind === "tier" ? [] : [p.auth ? "credential rejected" : "quota"];
-  const force = Date.parse(p.until) <= now ? "expired" : `in force until ${p.until}`;
-  const facts = [...what, `${String(p.failures)} failure(s)`, force].join(", ");
-  return (
-    `${p.kind.padEnd(5)} ${p.id}  [${facts}]\n` +
-    (cleared ? "" : `      ${onItsOwn(p, now, ladder)}\n`) +
-    `      why: ${p.why}`
-  );
-}
+export const LEGEND = [
+  "Re-tested by the next review that reaches it, at most every 15 minutes:",
+  "  a route lore guessed about, while some tier uses it as its primary (D-125)",
+  "  a tier the provider stated a reset for — reviews skip its primary between probes (D-94)",
+  "Waited out until its time, however wrong that has become:",
+  "  a route the provider stated a reset for (D-91), unless a probe of its tier asks it first",
+  "  a route that is only a fallback, or is metered while metered use is off",
+  "A tier lore guessed about holds back only the background screen; reviews still call it.",
+  "An expired mark holds nothing back; it is kept for the failure count the next backoff uses.",
+].join("\n");
 
 /**
  * What a re-park after clearing looks like, said once wherever a clear is offered — found
@@ -215,91 +174,36 @@ const AFTER_CLEARING =
   "and parks again — until the provider's stated time if it names one, else on lore's backoff\n" +
   "starting over from a single failure.";
 
-const BOTH_KINDS =
-  "A review skips a tier's primary while the tier carries a provider-stated mark or that\n" +
-  "route is parked, so if your fix covers both, clear both.";
-
-export function renderParks(list: readonly Park[], now: number, ladder: Ladder | Error): string {
+export function renderParks(list: readonly Park[], now: number): string {
   if (list.length === 0) return "nothing parked — lore is not refusing to ask anything.\n";
   return [
     "parked:",
-    ...list.map((p) => describePark(p, now, ladder)),
+    ...list.map((p) => describePark(p, now)),
     "",
-    "clear with --route <prefix>, --tier <prefix>, or --all.",
-    BOTH_KINDS,
+    LEGEND,
+    "",
+    "If you fixed what a mark names, clear it: --route <prefix>, --tier <prefix>, or --all.",
     AFTER_CLEARING,
     "",
   ].join("\n");
 }
 
-/** The ladder a clear is judged against: which routes are each tier's primary. */
-export interface Ladder {
-  readonly tiers: readonly Tier[];
-  readonly pools: ModelPools;
-}
-
 /**
- * The marks still in force that stand in front of what was just cleared.
+ * The clear, and what is still in force — facts, never a promise about the next review.
  *
- * Found by lore's own review, fingerprint 59ae6ccc: listing EVERY remaining mark as a
- * possible blocker sent an operator to clear unrelated ones too, deleting failure counts
- * lore still needed. The relationship is read off the ladder instead, by `review.ts`'s own
- * order: a tier's cool-off is checked before its PRIMARY routes and not before its
- * fallbacks, which are walked regardless. So a cleared ROUTE is blocked by a STATED tier
- * mark on any tier it is a primary route of, and a cleared TIER by route marks only when every one
- * of its primary routes is still parked — a pool twin that is free serves it.
+ * "Nothing else is IN FORCE", not "nothing else is parked": an expired mark is still held,
+ * for its failure count, and the next listing shows it — found by lore's own review,
+ * fingerprint 1bf96fd2, when the clear's last line contradicted the listing after it.
  */
-export function blockers(cleared: readonly Park[], remaining: readonly Park[], ladder: Ladder, now: number): readonly Park[] {
-  const primaries = (tierId: string): readonly string[] => {
-    const t = ladder.tiers.find((x) => x.id === tierId && x.kind === "model");
-    return t === undefined ? [] : routesFor(t, ladder.pools);
-  };
+export function renderCleared(cleared: readonly Park[], remaining: readonly Park[], now: number): string {
   const inForce = remaining.filter((p) => Date.parse(p.until) > now);
-  const parkedRoutes = new Set(inForce.filter((p) => p.kind === "route").map((p) => p.id));
-  return inForce.filter((m) =>
-    m.kind === "tier"
-      ? // STATED only — found by lore's own review, fingerprint 24b6c2f3: `inCoolOff` in
-        // review.ts is `down.stated && …`, so a guessed tier mark keeps no review off the
-        // tier, and naming it here sent an operator to delete the screen's failure count.
-        m.stated && cleared.some((c) => c.kind === "route" && primaries(m.id).includes(c.id))
-      : cleared.some((c) => {
-          if (c.kind !== "tier") return false;
-          const routes = primaries(c.id);
-          return routes.includes(m.id) && routes.every((r) => parkedRoutes.has(r));
-        }),
-  );
-}
-
-/**
- * The clear, and what still stands in front of it — never a promise past it. Found by
- * lore's own review, fingerprint ac16d99e: every clear used to end "the next review that
- * needs one asks it", false while a stated tier mark still blocked the route just cleared.
- *
- * `ladder` is an `Error` when the ladder could not be read; then which remaining mark
- * blocks what is unknown, and the output says exactly that rather than guessing either way.
- */
-export function renderCleared(cleared: readonly Park[], remaining: readonly Park[], now: number, ladder: Ladder | Error): string {
-  const inForce = remaining.filter((p) => Date.parse(p.until) > now);
-  const after =
-    inForce.length === 0
-      ? ["Nothing else is parked: the next review that reaches these asks them."]
-      : ladder instanceof Error
-        ? [
-            `The ladder could not be read (${ladder.message}), so whether the ${String(inForce.length)} mark(s) still in`,
-            "force stand in front of these is unknown. Run `lore unpark` to see them.",
-            BOTH_KINDS,
-          ]
-        : ((): string[] => {
-            const blocking = blockers(cleared, remaining, ladder, now);
-            return blocking.length === 0
-              ? ["Nothing still parked stands in front of these: the next review that reaches them asks them."]
-              : ["Still parked, and in front of what you cleared:", ...blocking.map((p) => describePark(p, now, ladder)), BOTH_KINDS];
-          })();
   return [
-    ...cleared.map((p) => `cleared ${describePark(p, now, ladder, true)}`),
+    ...cleared.map((p) => `cleared ${describePark(p, now)}`),
     "",
     `${String(cleared.length)} mark(s) cleared.`,
-    ...after,
+    ...(inForce.length === 0
+      ? ["Nothing else is in force."]
+      : ["Still in force:", ...inForce.map((p) => describePark(p, now)), "", LEGEND]),
     AFTER_CLEARING,
     "",
   ].join("\n");
