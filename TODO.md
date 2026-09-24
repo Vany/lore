@@ -228,6 +228,17 @@ line it belongs to:**
       on an operator's word. (Step 4b beside it — weekly windows — is a separate question and
       stays open.)
 
+- [ ] **t0 reports a network failure during install as a finding against `package.json`**
+      (argued deferral). `runner.ts` sends every install failure that is not a timeout or an
+      OOM down `!installed.ok`, which raises a high-severity "dependencies do not install".
+      On 2026-09-24 npm hit `ECONNRESET` twice in lore's own review during a host load
+      spike, and the claim landed on a `package.json` that batch never touched, which had
+      installed cleanly in the five rounds before. A network reset is the environment, not
+      the branch — the shape `bd0f45f3` already fixed for OOM. Deferred only because
+      `runner.ts` has an uncommitted change in flight on the neighbouring classifier
+      (`CHILD_KILLED`, from the 2026-09-23 client report); the network arm belongs in that
+      change, not in a second concurrent edit of the same function.
+
 - [ ] **Why opencode exits cleanly and is restarted** — seven times in two hours on
       2026-09-15, `exit 0`, nothing logged before any of them, no event history left. lore is
       robust to it now; the cause is upstream and undiagnosed. Phase 6 step 5 would at least
