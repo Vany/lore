@@ -203,9 +203,12 @@ and the D-93 startup check read), not inferred from a name:
 | `openrouter/openai/gpt-5.6-sol-pro` | GPT-5.6 Sol Pro | 1.05M | 2 / 10 |
 
 Sol and Sol Pro are separate models. §2's benchmark rows and §2.2's effort figures (59 at
-max, 56 at high) are Sol's own; §2.1a's single "Sol / Sol Pro" row is the one place the two
-are lumped together, and its $5/$30 for Sol Pro is stale. The service confirmed the fallback
-at its last boot, too: `quota fallback ready — … openrouter/openai/gpt-5.6-sol`.
+max, 56 at high) are Sol's own, and no Sol Pro score is recorded anywhere in this document.
+Two places lump the two together: §2.1a's single "Sol / Sol Pro" row, and §3's T3 row above,
+which gives `gpt-5.6-sol-pro` Sol's 59. And every Sol Pro price in this document — those
+two rows and §3.1–3.2's cost figures built on them — is the 2026-08-03 $5/$30, not today's
+$2/$10. The service confirmed the fallback at its last boot, too: `quota fallback ready — …
+openrouter/openai/gpt-5.6-sol`.
 
 ## 3.1 Estimated cost per review
 
