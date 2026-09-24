@@ -6,9 +6,15 @@
  * on who named the wait:
  *
  *   route, lore's guess      re-tested by the next review 15 min after its last probe (D-94)
- *   route, provider-stated   honoured to the second, never re-tested before `until` (D-91)
- *   tier,  provider-stated   reviews skip the tier, re-testing it once per 15 min (D-94)
- *   tier,  lore's guess      reviews ignore it; only the background screen waits (D-90)
+ *   route, provider-stated   not re-tested before `until` (D-91) — except by the probe of a
+ *                            parked tier it is the primary of, which asks every primary route
+ *   tier,  provider-stated   reviews skip its primary, probing it once per 15 min (D-94)
+ *   tier,  lore's guess      reviews still call it, a due one as a probe under the probe's
+ *                            shorter deadline; the background screen waits it out (D-90)
+ *
+ * So a review asks a tier's primary only when neither the tier nor that route is parked,
+ * and a clear that lifts one while the other stands buys nothing — which is why a clear
+ * reports what still stands rather than promising the next review will ask.
  *
  * The person who just reset a limit, upgraded a plan or re-logged a credential knows what
  * lore cannot: the refusal stopped being true. This is how they say so. It exists because
@@ -74,23 +80,37 @@ export type UnparkRequest =
 /**
  * `lore unpark`'s own arguments: `undefined` means list, anything else names what to clear.
  *
- * A flag given WITHOUT a value is refused rather than dropped — `lore unpark --route`
- * falling through to the listing would look like a clear that did nothing. So is an empty
- * one: `startsWith("")` is true of every route, so `--route ""` would be `--all` in disguise.
+ * EVERY ARGUMENT IS ACCOUNTED FOR. Found by lore's own review, fingerprint bd6ba0c0: the
+ * first version looked only for the flags it knew, so `--rout openai` matched none of them
+ * and fell through to the listing with exit 0 — a clear that did nothing, reporting
+ * success, which is the exact failure this command replaced. So is a flag given without a
+ * value, and an empty one: `startsWith("")` is true of every route, so `--route ""` would
+ * be `--all` in disguise. `--db` is the one global option that means anything here.
  */
 export function parseRequest(argv: readonly string[]): UnparkRequest | undefined {
-  const valueOf = (name: string): string | undefined => {
-    const i = argv.indexOf(`--${name}`);
-    if (i < 0) return undefined;
+  const values = new Map<string, string>();
+  let all = false;
+  for (let i = argv[0] === "unpark" ? 1 : 0; i < argv.length; i++) {
+    const a = argv[i] ?? "";
+    if (a === "--all") {
+      all = true;
+      continue;
+    }
+    const name = ["--route", "--tier", "--db"].includes(a) ? a.slice(2) : undefined;
+    if (name === undefined) {
+      throw new UsageError(`unknown argument '${a}' — lore unpark takes --route <prefix>, --tier <prefix> or --all`);
+    }
     const v = argv[i + 1];
     if (v === undefined || v === "" || v.startsWith("--")) {
       throw new UsageError(`--${name} needs a value: lore unpark --${name} <id or prefix>`);
     }
-    return v;
-  };
-  const route = valueOf("route");
-  const tier = valueOf("tier");
-  if (argv.includes("--all")) {
+    if (values.has(name)) throw new UsageError(`--${name} given twice — give it once`);
+    values.set(name, v);
+    i++;
+  }
+  const route = values.get("route");
+  const tier = values.get("tier");
+  if (all) {
     if (route !== undefined || tier !== undefined) {
       throw new UsageError("--all clears every mark; give it no --route or --tier.");
     }
@@ -125,24 +145,26 @@ export function unpark(store: Store, req: UnparkRequest): readonly Park[] {
 
 /**
  * Whether lore would ask again without being told, and when — the line that decides
- * whether clearing buys anything at all. Mirrors the table at the top of this file, and
- * `review.ts`'s own gates: a stated route is exempt from probing, a guessed tier binds
- * only the screen.
+ * whether clearing buys anything. Mirrors the table at the top of this file, which
+ * mirrors `review.ts`: found wrong twice by lore's own review before it did (fingerprints
+ * e0fa6114 and 3e88004b) — a stated route IS asked early through its tier's probe, and a
+ * guessed tier is NOT ignored by reviews, only relieved of its cool-off.
  */
 function onItsOwn(p: Park, now: number): string {
   if (Date.parse(p.until) <= now) return "expired: blocks nothing now, kept for its failure count";
   const probedAt = p.probedAt === undefined ? Number.NaN : Date.parse(p.probedAt);
   const nextProbe = Number.isNaN(probedAt) ? now : probedAt + PROBE_INTERVAL_MS;
-  const whenProbed =
-    nextProbe <= now
-      ? "the next review that needs it re-tests it"
-      : `the first review after ${new Date(nextProbe).toISOString()} re-tests it`;
+  const due = nextProbe <= now ? "the next review" : `the first review after ${new Date(nextProbe).toISOString()}`;
   if (p.kind === "route") {
-    return p.stated ? `provider-stated: never re-tested before ${p.until}` : `lore's guess: ${whenProbed}`;
+    return p.stated
+      ? `provider-stated: not re-tested before ${p.until}, unless a parked tier above has it as its ` +
+          "primary — that tier's probe asks it"
+      : `lore's guess: ${due} that needs it re-tests it`;
   }
   return p.stated
-    ? `provider-stated: reviews skip this tier; ${whenProbed}`
-    : `lore's guess: reviews ignore it; only the background screen waits until ${p.until}`;
+    ? `provider-stated: reviews skip this tier's primary; ${due} that needs it probes it`
+    : `lore's guess: reviews still call it — ${due} as a probe, under the shorter probe deadline — ` +
+        `and the background screen waits until ${p.until}`;
 }
 
 /**
@@ -175,6 +197,10 @@ const AFTER_CLEARING =
   "and parks again — until the provider's stated time if it names one, else on lore's backoff\n" +
   "starting over from a single failure.";
 
+const BOTH_KINDS =
+  "A review asks a tier's primary only when neither the tier nor that route is parked, so if\n" +
+  "your fix covers both, clear both.";
+
 export function renderParks(list: readonly Park[], now: number): string {
   if (list.length === 0) return "nothing parked — lore is not refusing to ask anything.\n";
   return [
@@ -182,16 +208,29 @@ export function renderParks(list: readonly Park[], now: number): string {
     ...list.map((p) => describePark(p, now)),
     "",
     "clear with --route <prefix>, --tier <prefix>, or --all.",
+    BOTH_KINDS,
     AFTER_CLEARING,
     "",
   ].join("\n");
 }
 
-export function renderCleared(cleared: readonly Park[], now: number): string {
+/**
+ * The clear, and what still stands. Found by lore's own review, fingerprint ac16d99e: the
+ * first version closed every clear with "the next review that needs one asks it", which is
+ * false while a mark of the other kind still blocks the same tier — a route cleared under
+ * a stated tier mark is not asked, because the tier's cool-off is checked first. Nothing
+ * here maps routes to tiers, so it does not guess which remaining mark blocks what: it lists
+ * every one still in force and says the rule.
+ */
+export function renderCleared(cleared: readonly Park[], remaining: readonly Park[], now: number): string {
+  const inForce = remaining.filter((p) => Date.parse(p.until) > now);
   return [
     ...cleared.map((p) => `cleared ${describePark(p, now, true)}`),
     "",
-    `${String(cleared.length)} mark(s) cleared: the next review that needs one asks it.`,
+    `${String(cleared.length)} mark(s) cleared.`,
+    ...(inForce.length === 0
+      ? ["Nothing else is parked: the next review that reaches these asks them."]
+      : ["Still parked, and able to keep a review from asking what you cleared:", ...inForce.map((p) => describePark(p, now)), BOTH_KINDS]),
     AFTER_CLEARING,
     "",
   ].join("\n");

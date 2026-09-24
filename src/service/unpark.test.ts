@@ -33,6 +33,22 @@ describe("parseRequest", () => {
   it("refuses an empty prefix", () => {
     expect(() => parseRequest(["unpark", "--tier", ""])).toThrow(UsageError);
   });
+
+  /**
+   * Found by lore's own review, fingerprint bd6ba0c0: `--rout openai` matched no flag the
+   * first version looked for, fell through to the listing and exited 0 — a typo reporting
+   * a clear that never happened.
+   */
+  it("refuses anything it does not know, rather than listing", () => {
+    expect(() => parseRequest(["unpark", "--rout", "openai"])).toThrow(/unknown argument '--rout'/);
+    expect(() => parseRequest(["unpark", "openai"])).toThrow(/unknown argument 'openai'/);
+    expect(() => parseRequest(["unpark", "--route", "a", "--route", "b"])).toThrow(/given twice/);
+  });
+
+  it("accepts --db, the one global option that means anything here", () => {
+    expect(parseRequest(["unpark", "--db", "/tmp/x.db"])).toBeUndefined();
+    expect(parseRequest(["unpark", "--db", "/tmp/x.db", "--all"])).toStrictEqual({ all: true });
+  });
 });
 
 describe("parks and unpark, against a real store", () => {
@@ -121,25 +137,38 @@ describe("describePark", () => {
   it("gives a guessed route's next re-test time", () => {
     const probedAt = "2026-09-24T15:02:24.925Z";
     const next = new Date(Date.parse(probedAt) + PROBE_INTERVAL_MS).toISOString();
-    expect(describePark(park({ probedAt }), now)).toContain(`lore's guess: the first review after ${next} re-tests it`);
+    expect(describePark(park({ probedAt }), now)).toContain(`lore's guess: the first review after ${next} that needs it re-tests it`);
   });
 
   it("says a guessed route never probed is re-tested by the next review", () => {
     expect(describePark(park({}), now)).toContain("the next review that needs it re-tests it");
   });
 
-  /** The case the command exists for: nothing re-asks before `until` (D-91). */
-  it("says a stated route is never re-tested before its time", () => {
-    expect(describePark(park({ stated: true }), now)).toContain("provider-stated: never re-tested before 2026-09-25T07:02:27.527Z");
+  /**
+   * The case the command exists for — with the exception lore's own review found
+   * (fingerprint e0fa6114): a parked tier's due probe asks every primary route it has,
+   * stated marks included, so "never" was wrong whenever the tier is parked too.
+   */
+  it("says a stated route waits for its time, or for its tier's probe", () => {
+    const line = describePark(park({ stated: true }), now);
+    expect(line).toContain("provider-stated: not re-tested before 2026-09-25T07:02:27.527Z");
+    expect(line).toContain("that tier's probe asks it");
   });
 
-  it("says a stated tier is skipped by reviews but still probed (D-94)", () => {
+  it("says a stated tier's primary is skipped by reviews but still probed (D-94)", () => {
     const line = describePark(park({ kind: "tier", id: "t3", stated: true, probedAt: "2026-09-24T14:00:00.000Z" }), now);
-    expect(line).toContain("provider-stated: reviews skip this tier; the next review that needs it re-tests it");
+    expect(line).toContain("provider-stated: reviews skip this tier's primary; the next review that needs it probes it");
   });
 
-  it("says a guessed tier binds only the background screen", () => {
-    expect(describePark(park({ kind: "tier", id: "t3" }), now)).toContain("reviews ignore it; only the background screen waits");
+  /**
+   * Found by lore's own review, fingerprint 3e88004b: the first version said reviews ignore
+   * a guessed tier mark. They call the tier — but a due one as a probe, under the probe's
+   * shorter deadline, which can cut short a slow call that would otherwise have finished.
+   */
+  it("says a guessed tier is still called, as a probe when one is due", () => {
+    const line = describePark(park({ kind: "tier", id: "t3" }), now);
+    expect(line).toContain("lore's guess: reviews still call it — the next review as a probe, under the shorter probe deadline");
+    expect(line).not.toContain("ignore");
   });
 
   it("says an expired mark blocks nothing", () => {
@@ -175,11 +204,11 @@ describe("rendering", () => {
       auth: false,
       probedAt: undefined,
     };
-    for (const text of [renderParks([p], now), renderCleared([p], now)]) {
+    for (const text of [renderParks([p], now), renderCleared([p], [], now)]) {
       expect(text).toContain("starting over from a single failure");
       expect(text).not.toContain("intact");
     }
-    expect(renderCleared([p], now)).toContain("1 mark(s) cleared");
+    expect(renderCleared([p], [], now)).toContain("1 mark(s) cleared");
   });
 
   /**
@@ -199,11 +228,40 @@ describe("rendering", () => {
       auth: true,
       probedAt: undefined,
     };
-    const text = renderCleared([expired], now);
+    const text = renderCleared([expired], [], now);
     expect(text).toContain("cleared route openai/gpt-5.6-terra");
     expect(text).not.toContain("kept for its failure count");
     expect(text).not.toContain("re-tests it");
     // The listing, where the mark still exists, keeps saying it.
     expect(renderParks([expired], now)).toContain("kept for its failure count");
+  });
+
+  /**
+   * Found by lore's own review, fingerprint ac16d99e: a route cleared while a stated mark
+   * on its tier stands is not asked — the tier's cool-off is checked first — yet every
+   * clear used to end "the next review that needs one asks it". A clear now lists what
+   * still stands in force instead of promising past it.
+   */
+  it("names what still blocks after a clear instead of promising the next review asks", () => {
+    const route: Park = {
+      kind: "route",
+      id: "openai/gpt-5.6-sol",
+      until: "2126-01-01T00:00:00.000Z",
+      why: "limit",
+      failures: 1,
+      stated: true,
+      auth: false,
+      probedAt: undefined,
+    };
+    const tier: Park = { ...route, kind: "tier", id: "t3", why: "the provider said its limit resets then" };
+    const expired: Park = { ...route, id: "kimi-for-coding/k3", until: "2020-01-01T00:00:00.000Z" };
+
+    const blocked = renderCleared([route], [tier, expired], now);
+    expect(blocked).toContain("Still parked, and able to keep a review from asking what you cleared:");
+    expect(blocked).toContain("tier  t3");
+    expect(blocked).not.toContain("kimi-for-coding/k3"); // expired: blocks nothing, so not named
+    expect(blocked).not.toContain("the next review that reaches these asks them");
+
+    expect(renderCleared([route], [expired], now)).toContain("Nothing else is parked: the next review that reaches these asks them.");
   });
 });

@@ -2582,9 +2582,10 @@ The ladder this decision shipped, on 2026-08-06, was T1 `zai-coding-plan/glm-5-t
 T2 `kimi-for-coding/k3`, T3 `openai/gpt-5.6-terra` — three vendors on three
 subscriptions, no metered API.
 
-*Those are the ids of the day and two of the three have moved since: t1 left
-`glm-5-turbo` on 2026-08-12 for the window (below), and t2's provider was renamed
-upstream on 2026-09-19 (D-154). **`spec/review-ladder.md` tracks what is deployed today;
+*Those are the ids of the day and all three have moved since: t1 left `glm-5-turbo`
+on 2026-08-12 for the window (below), t2's provider was renamed upstream on 2026-09-19
+(D-154), and t3 moved to `gpt-5.6-sol` on 2026-09-21, on Vany's call.
+**`spec/review-ladder.md` tracks what is deployed today;
 this paragraph does not.*** It said "the deployed ladder IS" in the present tense and
 unmarked until `ce7ba329`/`9769e74a` caught it — the sentence that decides a tie for an
 operator mid-incident, since `CLAUDE.md` names SPEC as ground truth. Reading it during

@@ -430,7 +430,7 @@ export async function main(argv: readonly string[]): Promise<ExitCode> {
         process.stderr.write(`nothing parked matches that — nothing was cleared.\n\n${renderParks(all, now)}`);
         return EXIT.USAGE;
       }
-      process.stdout.write(renderCleared(cleared, now));
+      process.stdout.write(renderCleared(cleared, parks(store), now));
       return EXIT.PASS;
     } finally {
       store.close();
