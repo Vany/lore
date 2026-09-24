@@ -177,6 +177,11 @@ describe("rendering", () => {
     expect(text).toContain(LEGEND);
     expect(LEGEND).toContain("a route the provider stated a reset for (D-91)");
     expect(LEGEND).toContain("a route that is only a fallback");
+    // Found by lore's own review, fingerprint 28b49f21: the metered gate is a toggle, not a
+    // clock, so it has its own line and says what does and does not help.
+    expect(LEGEND).toContain("Never asked while metered use is off, mark or no mark: a metered route.");
+    expect(LEGEND).toContain("LORE_ALLOW_METERED=1 does (D-117)");
+    expect(LEGEND).not.toContain("or is metered while metered use is off");
     expect(text).toContain("If you fixed what a mark names, clear it: --route <prefix>, --tier <prefix>, or --all.");
   });
 

@@ -159,7 +159,13 @@ export const LEGEND = [
   "  a tier the provider stated a reset for — reviews skip its primary between probes (D-94)",
   "Waited out until its time, however wrong that has become:",
   "  a route the provider stated a reset for (D-91), unless a probe of its tier asks it first",
-  "  a route that is only a fallback, or is metered while metered use is off",
+  "  a route that is only a fallback",
+  // NOT a clock, so not under "waited out" — found by lore's own review, fingerprint
+  // 28b49f21: the metered gate drops such a route from every walk whatever its mark says,
+  // so neither waiting nor clearing brings it back. Same clock-vs-toggle line `ladder.ts`
+  // draws when it refuses to send anyone "to wait for a reset that will not help".
+  "Never asked while metered use is off, mark or no mark: a metered route. Waiting will not",
+  "  change that and neither will clearing; LORE_ALLOW_METERED=1 does (D-117).",
   "A tier lore guessed about holds back only the background screen; reviews still call it.",
   "An expired mark holds nothing back; it is kept for the failure count the next backoff uses.",
 ].join("\n");
