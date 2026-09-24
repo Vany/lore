@@ -1582,7 +1582,9 @@ in them was solved; what was missing was a second opinion, and the ladder had on
 that nobody was asking. OpenAI's limit on that plan is a rolling window which had almost
 certainly reset several times over.
 
-**A GUESS IS RE-TESTED; A STATED RESET IS HONOURED TO THE SECOND.** That is the whole rule.
+**A GUESS IS RE-TESTED; A STATED RESET IS HONOURED TO THE SECOND.** That is the whole rule —
+for a tier's PRIMARY routes, which are the ones the probe walks; a route that is only a
+fallback is filtered out of the fallback chain while parked and never probed at all.
 When a provider names its reset (D-91) it has told us something true and probing it is
 re-asking an answered question — which is the cost Vany refused when he said *"I do not
 want a regular check for quota if nothing happens."* A doubling backoff lore invented is
@@ -4050,8 +4052,9 @@ working agreement says to confirm rather than assume.
 **D-155 — a person's word clears a park: `lore unpark`. BUILT 2026-09-24.**
 
 lore learns that a refusal stopped being true only by asking again, and whether it asks
-again on its own depends on who named the wait. A route lore GUESSED is re-tested within
-fifteen minutes (D-125). A tier the provider stated keeps reviews off its primary but is
+again on its own depends on who named the wait and where the route sits. A route lore
+GUESSED is re-tested within fifteen minutes (D-125) if it is some tier's primary; one that
+is only a fallback is never probed and waits out its whole backoff. A tier the provider stated keeps reviews off its primary but is
 probed at the same interval (D-94), and a due probe asks every primary route whatever
 their own marks say. A guessed tier keeps no review off it — a due one is called as a
 probe, under the probe's shorter deadline — and only the background screen waits it out
@@ -4061,6 +4064,12 @@ last rule is right until a person changes the thing underneath: a limit reset ea
 upgraded, a credential re-logged. The operator then knows what lore cannot, and had no way
 to say it; three such fixes (2026-09-16, -22, -24) were each cleared with a hand-typed
 `DELETE` into the container, which exits 0 whether or not its key matched anything.
+
+**This reverses a recorded preference, on Vany's own call.** Offered a manual route-clear
+when D-125 was built, he declined it — *"no, everything must be automated."* — and the
+automation was built. It cannot see what it is never told: a stated reset and a
+fallback-only route are both, by design, never re-tested. After the third hand-typed clear
+he asked for the command.
 
 `lore unpark` (`make unpark`) lists every tier and route mark, and clears them by kind and
 id prefix, or all at once.
@@ -4075,9 +4084,9 @@ id prefix, or all at once.
   what a person who reset OpenAI types, matched a second long-expired mark the day this was
   built. Every cleared mark is printed.
 - **A clear says what still stands in front of it**, read off the ladder in `review.ts`'s
-  own order: a tier mark blocks the routes that are its primaries (not its fallbacks, which
-  are walked regardless), and route marks block a tier only once every primary it has is
-  parked. A mark unrelated to the clear is not named, so nobody is sent to delete a failure
+  own order: a provider-stated tier mark blocks the routes that are its primaries (a guessed
+  one blocks nothing; fallbacks are walked regardless), and route marks block a tier only
+  once every primary it has is parked. A mark unrelated to the clear is not named, so nobody is sent to delete a failure
   count lore still needs; with the ladder unreadable, it says it cannot tell.
 - **A clear that matches nothing is an error**; nothing parked at all is a success, since
   lore will then ask regardless.
