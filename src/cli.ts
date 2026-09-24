@@ -38,6 +38,7 @@ lore — an independent reviewer that remembers the codebase
   lore tokens                                  who holds a token, and for what
   lore revoke --token <short>                  turn one off, by its short hash
   lore doctor                                  check tiers, auth and model ids
+  lore unpark [--route <p>|--tier <p>|--all]   what lore is refusing to ask, and forget it
   lore propose --repo <name> --budget <n>      ideas for improving a folder (D-75)
   lore ladder-suggest [--out <path>]           pick t1/t2/t3 from a live catalog
 
@@ -402,6 +403,34 @@ export async function main(argv: readonly string[]): Promise<ExitCode> {
       }
 
       process.stdout.write(`${renderRules(ruleReport(store, repo.id))}\n`);
+      return EXIT.PASS;
+    } finally {
+      store.close();
+    }
+  }
+
+  // What lore is refusing to ask, and forgetting it after a person fixed it upstream.
+  // Everything but the wiring lives in `service/unpark.ts`, where it is tested.
+  if (args.command === "unpark") {
+    const { parks, parseRequest, renderCleared, renderParks, unpark } = await import("./service/unpark.ts");
+    const req = parseRequest(argv);
+    const store = openExisting(args.db);
+    try {
+      const now = Date.now();
+      const all = parks(store);
+      if (req === undefined || all.length === 0) {
+        // Nothing parked answers a clear too: the operator wanted lore to ask, and it will.
+        process.stdout.write(renderParks(all, now));
+        return EXIT.PASS;
+      }
+      const cleared = unpark(store, req);
+      if (cleared.length === 0) {
+        // A typo must not read as success: a DELETE that matched nothing exits 0, and that
+        // is how hand-typed clears used to fail without anybody noticing.
+        process.stderr.write(`nothing parked matches that — nothing was cleared.\n\n${renderParks(all, now)}`);
+        return EXIT.USAGE;
+      }
+      process.stdout.write(renderCleared(cleared, now));
       return EXIT.PASS;
     } finally {
       store.close();

@@ -2172,3 +2172,87 @@ describe("credential parks written before the kind was recorded", () => {
     reopened.close();
   });
 });
+
+/**
+ * What lore is refusing to ask, listable — the half that was missing when an operator
+ * fixed something upstream and had to be told "there is no way to tell lore".
+ */
+describe("parkedRoutes", () => {
+  it("is empty when nothing is parked, rather than throwing", () => {
+    const s = new Store(":memory:");
+    expect(s.parkedRoutes()).toStrictEqual([]);
+    s.close();
+  });
+
+  it("lists every mark with what it says, and loses nothing on the way", () => {
+    const s = new Store(":memory:");
+    s.markRouteUnavailable("openai/gpt-5.6-sol", "2026-09-22T10:14:37.685Z", "refused on quota: The usage limit has been reached", 2);
+    s.markRouteUnavailable("kimi/k3", "2026-09-23T00:00:00.000Z", "rejected our credentials", 1, true, true);
+
+    const parked = s.parkedRoutes();
+    expect(parked.map((p) => p.route).sort()).toStrictEqual(["kimi/k3", "openai/gpt-5.6-sol"]);
+    const sol = parked.find((p) => p.route === "openai/gpt-5.6-sol");
+    expect(sol?.mark.why, "the reason travels — it is what tells an operator whether their fix applies").toContain(
+      "usage limit",
+    );
+    // `stated` is the field that decides whether clearing by hand buys anything at all.
+    expect(parked.find((p) => p.route === "kimi/k3")?.mark.stated).toBe(true);
+    expect(sol?.mark.stated).toBe(false);
+    s.close();
+  });
+
+  /**
+   * An EXPIRED mark is still listed, for the same reason `routeUnavailable` still returns
+   * one: the failure count is what the next backoff is computed from, and an operator
+   * asking "what is lore holding against this route" wants the answer even after the
+   * clock has run out.
+   */
+  it("keeps an expired mark in the list", () => {
+    const s = new Store(":memory:");
+    s.markRouteUnavailable("old/route", "2020-01-01T00:00:00.000Z", "refused", 1);
+    expect(s.parkedRoutes()).toHaveLength(1);
+    s.close();
+  });
+
+  it("forgets one when it is cleared, and leaves the others alone", () => {
+    const s = new Store(":memory:");
+    s.markRouteUnavailable("a/one", "2026-09-23T00:00:00.000Z", "refused", 1);
+    s.markRouteUnavailable("b/two", "2026-09-23T00:00:00.000Z", "refused", 1);
+    s.clearRouteUnavailable("a/one");
+    expect(s.parkedRoutes().map((p) => p.route)).toStrictEqual(["b/two"]);
+    s.close();
+  });
+});
+
+/**
+ * The tier half of the same question. A provider-stated tier mark parks a whole tier while
+ * every route mark is clear, so a listing that could only see routes would report "nothing
+ * parked" over a tier nobody can ask.
+ */
+describe("parkedTiers", () => {
+  it("lists stated, guessed and expired tier marks alike", () => {
+    const s = new Store(":memory:");
+    s.markTierUnavailable("t3", "2126-01-01T00:00:00.000Z", "the provider said its limit resets then", 1, true);
+    s.markTierUnavailable("t1", "2126-01-01T00:00:00.000Z", "2 screen call(s) went unanswered", 2, false);
+    s.markTierUnavailable("t2", "2020-01-01T00:00:00.000Z", "over", 1, false);
+    const parked = s.parkedTiers();
+    expect(parked.map((p) => p.tier)).toStrictEqual(["t1", "t2", "t3"]);
+    expect(parked.find((p) => p.tier === "t3")?.mark.stated).toBe(true);
+    s.close();
+  });
+
+  /**
+   * Both lists read marks back through `routeUnavailable`/`tierUnavailable`, never by
+   * parsing the row themselves — so a row those readers call unreadable is absent here
+   * too, exactly as it parks nothing, rather than a second answer to the same question.
+   */
+  it("leaves out a mark its own reader cannot read, for tiers and routes alike", () => {
+    const s = new Store(":memory:");
+    s.db.prepare("INSERT INTO meta(key, value) VALUES('tier-unavailable:t9', 'not json')").run();
+    s.db.prepare("INSERT INTO meta(key, value) VALUES('route-unavailable:x/y', 'null')").run();
+    s.markTierUnavailable("t1", "2126-01-01T00:00:00.000Z", "down", 1, false);
+    expect(s.parkedTiers().map((p) => p.tier)).toStrictEqual(["t1"]);
+    expect(s.parkedRoutes()).toStrictEqual([]);
+    s.close();
+  });
+});

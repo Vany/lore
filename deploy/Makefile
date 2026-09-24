@@ -6,6 +6,7 @@
 #   make new NAME=vany GIT=git@github.com:o/r  provision a repo and token
 #   make status                                what is happening, coloured
 #   make status ID=rev_xxx                     one review, in full
+#   make unpark [ROUTE=openai | ALL=1]         what lore won't ask; forget it after a fix
 #   make logs                                  follow
 #   make restore                               pull the database back from backup
 #
@@ -95,10 +96,14 @@ define wrong-directory
 endef
 
 .DEFAULT_GOAL := help
-.PHONY: help preflight sync-opencode push build drain drain-off deploy up down down-hard restart logs status status-json status-local doctor ladder-suggest new relocate tokens revoke replica-state db-check mirror mirror-daemon mirror-daemon-off mirror-daemon-log backup-on backup-check backup-drill restore sweep shell
+.PHONY: help preflight sync-opencode push build drain drain-off deploy up down down-hard restart logs status status-json status-local doctor ladder-suggest new relocate tokens revoke unpark replica-state db-check mirror mirror-daemon mirror-daemon-off mirror-daemon-log backup-on backup-check backup-drill restore sweep shell
 
+## The comment block at the top of this file, however long it grows. It was a fixed
+## `sed -n '2,14p'`, a line count kept in step with the header by nobody: the header
+## reached exactly fourteen lines with `make unpark`, and the next one would have fallen
+## off the end of `make help` without a sound.
 help:
-	@sed -n '2,14p' $(MAKEFILE_LIST) | sed 's/^# \{0,1\}//'
+	@awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' $(firstword $(MAKEFILE_LIST))
 
 ## Fail early and legibly, rather than midway through a build.
 preflight:
@@ -575,6 +580,24 @@ smoke:
 tokens:
 	$(wrong-directory)
 	@$(COMPOSE) exec -T lore node /app/src/index.ts tokens
+
+## What lore is refusing to ask, and how to make it forget.
+##
+##   make unpark                 list every parked route and tier, and when lore would
+##                               ask again on its own
+##   make unpark ROUTE=openai    clear route marks by id or prefix: every match goes
+##   make unpark TIER=t3         clear tier marks by id or prefix
+##   make unpark ALL=1           clear everything
+##
+## For the moment AFTER a person fixes something upstream — a usage limit reset, a plan
+## upgraded, a credential re-logged. lore learns of a recovery only by asking: a wait it
+## GUESSED is re-tested within fifteen minutes on its own, but a reset time the PROVIDER
+## stated is trusted to the second (D-91), which is right until the thing underneath
+## changes. The listing says which case each mark is, so run it bare first. A mark
+## cleared while the refusal is still real costs one request and parks again.
+unpark:
+	$(wrong-directory)
+	@$(COMPOSE) exec -T lore node /app/src/index.ts unpark $(if $(ALL),--all) $(if $(ROUTE),--route "$(ROUTE)") $(if $(TIER),--tier "$(TIER)")
 
 ## Turn a token off. `make revoke TOKEN=<short>`, from the list above.
 ##

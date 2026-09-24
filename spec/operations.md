@@ -205,6 +205,14 @@ countdown promises a recovery that a revoked token will never make on its own.
 The distinction is the whole point: a quota heals by waiting and a credential never does,
 so they need opposite responses from whoever is looking.
 
+**After fixing a provider upstream, `make unpark` (D-155).** Run bare, it lists every tier
+and route mark lore holds and says, for each, whether lore would ask again on its own and
+when. A guess is re-tested within fifteen minutes and usually needs nothing. A reset time
+the provider STATED is waited out to the second however wrong it has become, and a
+credential re-logged is only noticed at the next re-test. `ROUTE=<prefix>` and
+`TIER=<prefix>` clear every mark they match; `ALL=1` clears everything. Clearing early
+costs one refused request, and the mark comes back.
+
 ### 2.4.3 The board — the same facts, for a person rather than a monitor (D-96)
 
 `/status` answers *is it healthy* in JSON, for something that will page. It is a poor

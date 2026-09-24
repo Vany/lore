@@ -3750,6 +3750,64 @@ export class Store {
     setJson(this.db, `route-unavailable:${model}`, { ...mark, probedAt: new Date().toISOString() });
   }
 
+  /**
+   * Every route currently carrying a mark, in route order.
+   *
+   * Exists because an operator who has just fixed something upstream — reset a usage
+   * limit, upgraded a plan, re-logged a credential — has no way to see what lore is still
+   * refusing to ask. The board renders marks for routes the CONFIGURED ladder names, which
+   * is the right scope for watching a review; this is the other question, "what is lore
+   * holding against anything", and it is what `lore unpark` lists and clears.
+   *
+   * Includes marks whose `until` has passed, for the same reason `routeUnavailable` returns
+   * them: the failure count is what the next backoff is computed from, so an expired mark
+   * is still a fact about the route.
+   */
+  parkedRoutes(): readonly { readonly route: string; readonly mark: NonNullable<ReturnType<Store["routeUnavailable"]>> }[] {
+    return this.marksUnder("route-unavailable:", (id) => this.routeUnavailable(id)).map(({ id, mark }) => ({
+      route: id,
+      mark,
+    }));
+  }
+
+  /**
+   * Every tier currently carrying a mark, in tier order — `parkedRoutes`' twin, expired
+   * marks included for the same failure-count reason.
+   *
+   * Not `unavailableTiers`, which answers "which tiers are in a cool-off NOW" for the board
+   * and the monitor. This answers "what is lore holding against any tier", and it has to
+   * exist beside the route list: a provider-stated tier mark parks a whole tier while every
+   * route mark is clear, and `lore unpark` reporting "nothing parked" over one would be a
+   * command that could not look, reporting as a command that found nothing.
+   */
+  parkedTiers(): readonly { readonly tier: string; readonly mark: NonNullable<ReturnType<Store["tierUnavailable"]>> }[] {
+    return this.marksUnder("tier-unavailable:", (id) => this.tierUnavailable(id)).map(({ id, mark }) => ({
+      tier: id,
+      mark,
+    }));
+  }
+
+  /**
+   * Every `meta` key under `prefix`, read back through `read` — never by parsing the row
+   * here: `routeUnavailable`/`tierUnavailable` already decide what an unreadable or partial
+   * mark means, and a second reader would be a second answer to the same question. An
+   * unreadable mark therefore does not appear, exactly as it does not park anything.
+   *
+   * `prefix` is one of this class's own key families, never input, so its `LIKE` has no
+   * wildcard to escape.
+   */
+  private marksUnder<M>(prefix: string, read: (id: string) => M | undefined): { id: string; mark: M }[] {
+    const rows = this.db.prepare("SELECT key FROM meta WHERE key LIKE ? ORDER BY key").all(`${prefix}%`) as { key?: string }[];
+    const out: { id: string; mark: M }[] = [];
+    for (const r of rows) {
+      if (typeof r.key !== "string") continue;
+      const id = r.key.slice(prefix.length);
+      const mark = read(id);
+      if (mark !== undefined) out.push({ id, mark });
+    }
+    return out;
+  }
+
   /** Forgotten the moment the route answers, exactly as for a tier. */
   clearRouteUnavailable(model: string): void {
     this.db.prepare("DELETE FROM meta WHERE key = ?").run(`route-unavailable:${model}`);

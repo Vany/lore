@@ -1587,7 +1587,9 @@ When a provider names its reset (D-91) it has told us something true and probing
 re-asking an answered question — which is the cost Vany refused when he said *"I do not
 want a regular check for quota if nothing happens."* A doubling backoff lore invented is
 not information, and re-testing it costs about twelve seconds since D-91 made a refusal
-arrive fast. Twelve seconds against a whole vendor is not a close trade.
+arrive fast. Twelve seconds against a whole vendor is not a close trade. It is the whole
+rule for what lore does on its own; a person who has fixed the provider may clear either
+kind of mark on their word (D-155).
 
 Bounded by `PROBE_INTERVAL_MS` exactly as the per-tier probe is, and stamped BEFORE the
 call so a hanging route is not probed again by every review that starts meanwhile. A mark
@@ -4032,6 +4034,36 @@ working agreement says to confirm rather than assume.
 **Output lands under `dataDir()`, matching `propose`'s own `--out` default
 (fingerprint 9c6f2a60) — never inside the repository**, so nothing needs a new
 `.gitignore` rule.
+
+**D-155 — a person's word clears a park: `lore unpark`. BUILT 2026-09-24.**
+
+lore learns that a refusal stopped being true only by asking again, and whether it asks
+again on its own depends on who named the wait: a route lore GUESSED is re-tested within
+fifteen minutes (D-125), a tier the provider stated is probed at the same interval (D-94),
+a guessed tier binds only the background screen (D-90) — and a route whose reset the
+PROVIDER stated is honoured to the second and never re-tested (D-91, D-125). That last rule
+is right until a person changes the thing underneath: a limit reset early, a plan
+upgraded, a credential re-logged. The operator then knows what lore cannot, and had no way
+to say it; three such fixes (2026-09-16, -22, -24) were each cleared with a hand-typed
+`DELETE` into the container, which exits 0 whether or not its key matched anything.
+
+`lore unpark` (`make unpark`) lists every tier and route mark, and clears them by kind and
+id prefix, or all at once.
+
+- **The listing says what lore would do unaided, and when**, because the rules above mean
+  clearing often buys nothing: the park cleared on 2026-09-24 was a guess, due for re-test
+  eight minutes later.
+- **Tier marks are listed and cleared too.** A stated tier mark parks a tier while every
+  route is clear, and a command that saw only routes would report "nothing parked" over it.
+- **A prefix clears every match** — not git's rule, which `revoke` keeps because a wrong
+  match there locks a teammate out. Here a wrong match costs one request, and `openai`,
+  what a person who reset OpenAI types, matched a second long-expired mark the day this was
+  built. Every cleared mark is printed.
+- **A clear that matches nothing is an error**; nothing parked at all is a success, since
+  lore will then ask regardless.
+- **Clearing deletes the mark with its failure count.** A refusal that is still real costs
+  one request and parks again, at the provider's stated time or on lore's backoff from a
+  single failure.
 
 **D-154 — a provider id is upstream's to rename, and the ladder follows the catalog.
 REPAIRED 2026-09-19.**
