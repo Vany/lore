@@ -220,8 +220,12 @@ your agent is handed on Thursday.
 # on the company server, once
 cd deploy
 cp .env.example .env          # three subscriptions by default, or one metered key
-make sync-opencode            # stage local model config, minus the Anthropic credential
-make up
+brew install opencode         # opencode 2.x; the container runs this same version
+opencode auth login           # once per provider; the logins are pushed in by `make up`
+make up                       # stages config, builds, starts, syncs credentials
+
+# after re-logging a provider on the host
+make sync-creds
 
 # one line per engineer, per repository
 make new NAME=alice GIT=git@github.com:acme/payments.git
@@ -422,7 +426,7 @@ catch.
 
 | file | what it holds |
 |:--|:--|
-| [`SPEC.md`](SPEC.md) | purpose, workflow, and every decision `D-1`…`D-155` |
+| [`SPEC.md`](SPEC.md) | purpose, workflow, and every decision `D-1`…`D-156` |
 | [`PLAN.md`](PLAN.md) | build order, and what each phase de-risked |
 | [`spec/knowledge.md`](spec/knowledge.md) | the knowledge layer — the product |
 | [`spec/review-ladder.md`](spec/review-ladder.md) | tiers, findings, verdicts, invariants |

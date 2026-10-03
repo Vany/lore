@@ -25,7 +25,7 @@
  */
 
 import type * as z from "zod";
-import { createOpencodeClient } from "@opencode-ai/sdk";
+import { ClientError, OpenCode, type OpenCodeClient } from "@opencode/client";
 import { CancelledByLore, DidNotRun, Exhausted, ProbeInconclusive, ProviderAuthFailed, ServiceUnreachable, TierUnavailable, TooLargeForTier } from "../core/errors.ts";
 import { FindingSchema, type Finding } from "../core/finding.ts";
 import type { Tier } from "../core/ladder.ts";
@@ -36,20 +36,19 @@ import { DEFAULT_TIMEOUT_MS, longFetch } from "./long-fetch.ts";
 import { OUTPUT_CONTRACT } from "./prompts.ts";
 
 /**
- * What opencode publishes about a session while it is working (D-91).
+ * What opencode publishes about a session while it is working (D-91), reduced to the one
+ * distinction the watchers act on: a retry, or progress.
  *
- * Measured against a live 1.18.11 rather than taken from the schema, because the schema
- * types `status` loosely and the field that matters is inside it:
+ * v2 announces a retry as its own event, measured on 2.0.20 rather than read off the
+ * schema — `data` carries the provider's failure STRUCTURED, which v1 never did:
  *
- *   {"type":"session.status","properties":{"sessionID":"ses_…","status":{
- *      "type":"retry","attempt":1,
- *      "message":"Weekly/Monthly Limit Exhausted. Your limit will reset at 2026-08-10 18:19:09",
- *      "next":1786237732180}}}
+ *   {"type":"session.retry.scheduled","data":{"sessionID":"ses_…","attempt":2,
+ *      "at":1791031632947,"error":{"type":"provider.rate-limit","message":"…","status":429}}}
  *
- * OpenAI's variant, measured live on 1.18.16: the same event with
- * message "The usage limit has been reached" — no reset time, and `next` is the next
- * RETRY attempt (seconds away), never the quota reset; parsing it as one would park the
- * tier for five seconds and call that a cool-off.
+ * `at` is when the next ATTEMPT runs, never a quota reset — parsing it as one would park
+ * the tier for seconds and call that a cool-off, the mistake v1's `next` invited too.
+ * The provider's words still travel in `message`: Z.ai's "Weekly/Monthly Limit Exhausted.
+ * Your limit will reset at …" arrives as a rate limit, and only the words carry the time.
  *
  * Only the fields lore reads are named. Everything else on that stream is somebody
  * else's business, and a wider type would invite depending on it.
@@ -58,6 +57,30 @@ export interface OpencodeStatus {
   readonly type?: string;
   readonly attempt?: number;
   readonly message?: string;
+  /** opencode's own classification of the failure (`provider.quota`, `provider.auth`, …). */
+  readonly errorType?: string;
+}
+
+/**
+ * One v2 event as a watcher sees it, or `undefined` when it says nothing a watcher acts on.
+ *
+ * PROGRESS IS WHAT ENDS A STORM, so it is reported as a non-retry status: a step that
+ * ENDED, or text the model is producing. Not `session.step.started` — after a retry that
+ * is the retry itself, and counting it as recovery would reset the storm clock on every
+ * attempt of a storm, which is the one thing that clock exists to outlast.
+ */
+export function statusOf(type: string | undefined, data: Record<string, unknown>): OpencodeStatus | undefined {
+  if (type === "session.retry.scheduled") {
+    const error = (data["error"] ?? {}) as { type?: unknown; message?: unknown };
+    return {
+      type: "retry",
+      ...(typeof data["attempt"] === "number" ? { attempt: data["attempt"] } : {}),
+      ...(typeof error.message === "string" ? { message: error.message } : {}),
+      ...(typeof error.type === "string" ? { errorType: error.type } : {}),
+    };
+  }
+  if (type === "session.step.ended" || type === "session.text.delta") return { type: "busy" };
+  return undefined;
 }
 
 /**
@@ -73,13 +96,19 @@ export interface OpencodeStatus {
  */
 export function quotaRefusal(status: OpencodeStatus): { readonly message: string; readonly resetAt?: string } | undefined {
   const message = status.message ?? "";
-  if (status.type !== "retry" || message === "") return undefined;
+  if (status.type !== "retry") return undefined;
+  // opencode's OWN WORD FIRST, when it has one. v2 classifies before it retries, and a
+  // quota it recognised is a quota whatever the provider's phrasing — the classifier below
+  // only ever knew the phrasings that had already cost a review each.
+  const known = status.errorType === "provider.quota";
+  if (!known && message === "") return undefined;
   // "usage limit" is OpenAI's phrasing — "The usage limit has been reached" — measured
   // live 2026-08-13 after it cost three reviews and a whole propose run 45 minutes each:
   // opencode retries it forever (attempt 1, 2, 3… every few seconds), so the session
   // never finishes and the deadline is the only thing that ends it. The narration carried
   // the refusal the entire time; this line just did not know the words.
-  if (!/limit exhausted|rate.?limit|quota|insufficient|out of credit|usage limit/i.test(message)) return undefined;
+  if (!known && !/limit exhausted|rate.?limit|quota|insufficient|out of credit|usage limit/i.test(message)) return undefined;
+  if (message === "") return { message: "quota exceeded (opencode classified it; the provider gave no words)" };
   const at = /reset(?:s)?(?: at)?\s+(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2})/i.exec(message);
   // TREATED AS UTC, and the provider does not say. Z.ai is a Beijing company and this may
   // well be UTC+8, in which case lore waits eight hours longer than it must — the safe
@@ -333,18 +362,20 @@ export interface ReviewerResult {
 }
 
 /**
- * Tools a reviewer must never have.
+ * What a reviewer's session may never do, as opencode permission rules (see
+ * `createSession` for why they live on the session rather than in the agent file).
  *
  * Read and search are left on deliberately: an agentic reviewer that can explore
  * the repo measured 70.5% higher comment acceptance than one handed a diff, and
  * exploring needs reading.
+ *
+ * Exported so a test can hold the list against the actions opencode checks — a rule
+ * naming an action nothing asks for denies nothing, and reads as if it did.
  */
-const DENIED_TOOLS: Readonly<Record<string, boolean>> = {
-  write: false,
-  edit: false,
-  patch: false,
-  todowrite: false,
-};
+export const DENY_RULES: readonly { readonly action: string; readonly resource: string; readonly effect: "deny" }[] = [
+  { action: "edit", resource: "*", effect: "deny" },
+  { action: "question", resource: "*", effect: "deny" },
+];
 
 const READ_ONLY_SYSTEM = [
   "You review code. You never modify it.",
@@ -359,11 +390,14 @@ const READ_ONLY_SYSTEM = [
  */
 class HttpStatus extends Error {
   readonly status: number;
+  /** opencode's own classification (`provider.auth`, …) when the failure was a session record's. */
+  readonly kind: string | undefined;
 
-  constructor(status: number, detail: string) {
+  constructor(status: number, detail: string, kind?: string) {
     super(`opencode returned ${status}: ${detail}`);
     this.name = "HttpStatus";
     this.status = status;
+    this.kind = kind;
   }
 }
 
@@ -424,7 +458,18 @@ export function splitModel(id: string): { providerID: string; modelID: string } 
 export const CHARS_PER_TOKEN = 4;
 
 export class Reviewer implements ReviewerLike {
-  private readonly client: ReturnType<typeof createOpencodeClient>;
+  /** Every finite request, through `longFetch` — `session.wait` lasts as long as the model does. */
+  private readonly client: OpenCodeClient;
+  /**
+   * The event stream only, through ordinary `fetch`.
+   *
+   * A SECOND CLIENT BECAUSE `longFetch` BUFFERS: it resolves a response at `end`, and the
+   * stream never ends, so subscribing through it would wait for ever and deliver nothing —
+   * every refusal D-91 exists to catch in seconds would again cost the full deadline. The
+   * stream does not need the long timeout anyway: opencode sends keepalives, and `listen`
+   * reconnects whatever ends it.
+   */
+  private readonly stream: OpenCodeClient;
   private readonly cfg: ReviewerConfig;
   private readonly gate: Gate;
   /** Lazily fetched, cached for the process: model id -> advertised context window. */
@@ -514,14 +559,16 @@ export class Reviewer implements ReviewerLike {
       cfg.password === undefined
         ? undefined
         : `Basic ${Buffer.from(`${cfg.username ?? ""}:${cfg.password}`).toString("base64")}`;
-    this.client = createOpencodeClient({
+    const headers = basic === undefined ? undefined : { Authorization: basic };
+    this.client = OpenCode.make({
       baseUrl: cfg.baseUrl,
       // Node's fetch gives up after 300s with a bare "fetch failed". A deep tier
       // routinely takes longer than that, and losing a review to an invisible
       // transport default is the worst kind of failure: it looks like the model.
-      fetch: longFetch(cfg.timeoutMs),
-      ...(basic === undefined ? {} : { headers: { Authorization: basic } }),
+      fetch: longFetch(cfg.timeoutMs) as typeof globalThis.fetch,
+      ...(headers === undefined ? {} : { headers }),
     });
+    this.stream = OpenCode.make({ baseUrl: cfg.baseUrl, ...(headers === undefined ? {} : { headers }) });
   }
 
   /**
@@ -563,54 +610,45 @@ export class Reviewer implements ReviewerLike {
       while (!this.closed) {
         try {
           this.listener = new AbortController();
-          const res = await this.client.event.subscribe({ signal: this.listener.signal });
-          for await (const ev of res.stream) {
+          for await (const ev of this.stream.event.subscribe({ signal: this.listener.signal })) {
             if (this.closed) break;
-            const e = ev as {
-              type?: string;
-              properties?: {
-                sessionID?: string;
-                status?: OpencodeStatus;
-                part?: { sessionID?: string };
-                info?: { sessionID?: string };
-              };
-            };
-            // ACTIVITY, FROM WHICHEVER EVENT SHAPE CARRIES A SESSION ID — checked before the
-            // `session.status`-only filter below, not folded into it (fingerprint a2ea8a61).
-            // THREE SHAPES, NOT ONE, and the mismatch is exactly what fingerprint 8cf1109a
-            // caught: `message.updated` was already in the type list below but its id lives
-            // at `properties.info.sessionID` (opencode SDK `EventMessageUpdated`), which
-            // neither of the other two paths would ever have read — so it was listed as
-            // recognised and silently never fired. `message.part.updated` streams a `delta`
-            // per token and nests its id in `properties.part.sessionID`; every other type
-            // this loop recognises uses the flat field. All three are genuine narration a
-            // truly stuck call cannot produce.
-            const activityId = e.properties?.sessionID ?? e.properties?.part?.sessionID ?? e.properties?.info?.sessionID;
-            if (
-              activityId !== undefined &&
-              (e.type === "session.status" || e.type === "session.idle" || e.type === "message.part.updated" ||
-                e.type === "message.updated")
-            ) {
-              // Same isolation as the watcher call below: one session's callback must not
-              // be able to blind the stream for every other session's events.
+            const e = ev as { type?: string; data?: Record<string, unknown> };
+            const id = typeof e.data?.["sessionID"] === "string" ? e.data["sessionID"] : undefined;
+            if (id === undefined) continue;
+            // ACTIVITY: every `session.*` event carries a flat `data.sessionID`, so one read
+            // covers them all. v1 nested the id three different ways and a type list missed
+            // one of them for weeks (`message.updated`); here the type is only a prefix, so
+            // a narration type added upstream counts without anyone remembering to list it.
+            // Same isolation as the watcher below: one session's callback must not be able
+            // to blind the stream for every other session's events.
+            if (e.type?.startsWith("session.") === true) {
               try {
-                this.activity.get(activityId)?.();
-              } catch (e) {
-                console.error(`[lore:log] an activity callback threw: ${e instanceof Error ? e.message : String(e)}`);
+                this.activity.get(id)?.();
+              } catch (err) {
+                console.error(`[lore:log] an activity callback threw: ${err instanceof Error ? err.message : String(err)}`);
               }
             }
-            if (e.type !== "session.status") continue;
-            const id = e.properties?.sessionID;
-            const status = e.properties?.status;
-            if (id === undefined || status === undefined) continue;
+            // A PERMISSION NOBODY WILL ANSWER. opencode asks when no rule decides, and on a
+            // headless server the ask waits for ever: measured on 2.0.20, a reviewer reading
+            // `/etc/hosts` parked its session on `permission.asked` and `session.wait` never
+            // returned — a review dying at the 45-minute deadline over a question no person
+            // could see. Refused at once instead, with the reason the model is told, so the
+            // agent carries on without it; logged, because a refusal is a fact about what
+            // the tier could not read.
+            if (e.type === "permission.asked" && this.watchers.has(id)) {
+              void this.refusePermission(id, e.data ?? {});
+              continue;
+            }
+            const status = statusOf(e.type, e.data ?? {});
+            if (status === undefined) continue;
             // GUARDED, because a watcher that throws lands in the silent catch below,
             // ends the `for await`, and reconnects — losing every other session's events
             // for two seconds and telling nobody. A watcher's job is to fail ONE call
             // fast; it must not be able to blind the stream for all of them.
             try {
               this.watchers.get(id)?.(status);
-            } catch (e) {
-              console.error(`[lore:log] a session watcher threw: ${e instanceof Error ? e.message : String(e)}`);
+            } catch (err) {
+              console.error(`[lore:log] a session watcher threw: ${err instanceof Error ? err.message : String(err)}`);
             }
           }
         } catch {
@@ -632,6 +670,38 @@ export class Reviewer implements ReviewerLike {
     // The flag alone leaves an idle stream blocked in `for await` with its socket open.
     // Aborting is what actually ends it; the flag is what stops the loop reconnecting.
     this.listener?.abort(new Error("reviewer closed"));
+  }
+
+  /**
+   * Refuse a permission opencode asked about, for a session lore is waiting on.
+   *
+   * REFUSED, never granted: a reviewer that wants something no rule allows wants something
+   * a reviewer should not have, and `reject` hands the model the reason so it carries on
+   * without it — measured on 2.0.20, it answered "I can't read that file" and finished.
+   * A refusal that itself fails leaves the session parked until the deadline, so that is
+   * logged loudly: the review will then fail as a hang, and this line says why.
+   */
+  private async refusePermission(sessionId: string, request: Record<string, unknown>): Promise<void> {
+    const requestId = typeof request["id"] === "string" ? request["id"] : undefined;
+    const what = `${String(request["action"] ?? "?")} on ${JSON.stringify(request["resources"] ?? []).slice(0, 200)}`;
+    if (requestId === undefined) {
+      console.error(`[lore:log] session ${sessionId} asked for a permission (${what}) with no request id — cannot refuse it; the session will wait until the deadline`);
+      return;
+    }
+    const failure = await this.client.permission
+      .reply({
+        sessionID: sessionId,
+        requestID: requestId,
+        decision: "reject",
+        message: "lore reviewers run unattended and read only the worktree under review — nobody can grant this. Carry on without it.",
+      })
+      .then(() => undefined)
+      .catch((e: unknown) => detail(e));
+    console.error(
+      failure === undefined
+        ? `[lore:log] refused a permission session ${sessionId} asked for: ${what}`
+        : `[lore:log] could NOT refuse the permission session ${sessionId} asked for (${what}): ${failure} — the session will wait until the deadline`,
+    );
   }
 
   async cancel(reviewId: string): Promise<boolean> {
@@ -854,25 +924,39 @@ export class Reviewer implements ReviewerLike {
    */
   private async contextLimit(model: string): Promise<number | undefined> {
     if (this.limits === undefined) {
-      this.limits = this.client.config
-        .providers()
-        .then((res) => {
+      this.limits = this.models()
+        .then((models) => {
+          // AN EMPTY CATALOGUE IS A FAILED READ, not a fact: opencode documents `/api/model`
+          // as a snapshot that "may precede initial plugin settlement", and a lore that
+          // cached that emptiness would treat every window as unmeasurable for the life of
+          // the process — no fit-check, no compaction, and nothing saying why. Thrown, so
+          // the catch below resets the cache and the next call asks again.
+          if (models.length === 0) throw new Error("opencode listed no models (its catalogue may still be loading)");
           const out = new Map<string, number>();
-          for (const p of res?.data?.providers ?? []) {
-            for (const [id, m] of Object.entries(p.models ?? {})) {
-              const ctx = (m as { limit?: { context?: number } }).limit?.context;
-              if (typeof ctx === "number" && ctx > 0) out.set(`${p.id}/${id}`, ctx);
-            }
+          for (const m of models) {
+            if (typeof m.context === "number" && m.context > 0) out.set(m.id, m.context);
           }
           return out;
         })
         .catch((e: unknown) => {
           this.limits = undefined;
-          console.error(`[lore:log] could not read /config/providers for context limits (${detail(e)}) — will retry next call`);
+          console.error(`[lore:log] could not read /api/model for context limits (${detail(e)}) — will retry next call`);
           return new Map<string, number>();
         });
     }
     return (await this.limits).get(model);
+  }
+
+  /**
+   * Every model opencode can reach right now, as `provider/model` with its advertised window.
+   *
+   * `/api/model` lists only what a CONNECTED provider offers — measured on 2.0.20: 17 models
+   * with one Z.ai key, 407 once OpenRouter was connected too — which is the question both
+   * callers are actually asking. v1's `/config/providers` answered it the same way.
+   */
+  private async models(): Promise<readonly { readonly id: string; readonly context: number | undefined }[]> {
+    const res = await this.client.model.list();
+    return res.data.map((m) => ({ id: `${m.providerID}/${m.id}`, context: m.limit?.context }));
   }
 
   /**
@@ -893,16 +977,14 @@ export class Reviewer implements ReviewerLike {
    * a tiers file that is perfectly correct.
    */
   async missingModels(ids: readonly string[]): Promise<readonly string[] | undefined> {
-    const res = await this.client.config.providers().catch(() => undefined);
-    const providers = res?.data?.providers ?? [];
+    const models = await this.models().catch(() => undefined);
     // `undefined` IS NOT AN EMPTY LIST. Returning `[]` here collapsed "opencode was
     // unreachable" and "the response was not the shape we expect" into the same value as
     // "every fallback is present" — and the caller then announced the fallback ready,
     // which is INV-1 in the one line an operator reads to believe it. A check that did
     // not run must never report as a check that found nothing.
-    if (providers.length === 0) return undefined;
-    const known = new Set<string>();
-    for (const p of providers) for (const id of Object.keys(p.models ?? {})) known.add(`${p.id}/${id}`);
+    if (models === undefined || models.length === 0) return undefined;
+    const known = new Set(models.map((m) => m.id));
     return ids.filter((id) => !known.has(id));
   }
 
@@ -948,7 +1030,7 @@ export class Reviewer implements ReviewerLike {
       ? undefined
       : (this.kept.get(keptKey) ?? this.cfg.keptSessions?.get(keptKey));
     const resumedFromStore = continuing !== undefined && !this.kept.has(keptKey ?? "");
-    const sessionId = continuing ?? (await this.createSession(tier));
+    const sessionId = continuing ?? (await this.createSession(tier, worktree));
     // lore-ok[40b5d6e5]: THE GAP `guard` NO LONGER COVERS. `createSession` is a real
     // HTTP round trip to opencode, awaited above — and until this line returns, nothing
     // is registered in `sessions`/`kept`, so a `cancel()` landing during that await finds
@@ -968,7 +1050,7 @@ export class Reviewer implements ReviewerLike {
     // "A STOP LORE CAUSED IS NOT EVIDENCE ABOUT THE TIER" fix (D-109 era) exists to
     // prevent, reopened here by naming the wrong class.
     if (continuing === undefined && stillWanted?.() === false) {
-      await this.client.session.delete({ path: { id: sessionId } }).catch(() => undefined);
+      await this.client.session.remove({ sessionID: sessionId }).catch(() => undefined);
       throw new CancelledByLore(
         `review ${reviewId ?? "?"} was ended while tier ${tier.id} was opening a session — nothing was spent on it.`,
       );
@@ -1128,11 +1210,22 @@ export class Reviewer implements ReviewerLike {
       // WHICH PROMPT: the full one for a session being initialised, the round's message
       // for one being continued. A caller that passes a bare string gets it either way,
       // which is every caller that is not the review loop.
-      const text = typeof prompt === "string"
+      const asked = typeof prompt === "string"
         ? prompt
         : continuing === undefined
           ? prompt.initial
           : prompt.continued;
+      // THE READ-ONLY CHARTER OPENS EVERY NEW SESSION. v1 sent it as a per-request
+      // `system`; v2 has no such field — a prompt is text, and the session remembers it, so
+      // saying it once at the start is saying it for every later turn. It is the belt: the
+      // braces are the session's own `edit: deny` rule (`createSession`), which opencode
+      // enforces whatever the model decides.
+      const text = continuing === undefined ? `${READ_ONLY_SYSTEM}\n\n${asked}` : asked;
+      // A KEPT SESSION FOLLOWS THE WORKTREE. v1 named the directory on every prompt; v2
+      // fixes it when the session is created, so a review whose worktree moved (a
+      // relocation, a restore into a different data dir) would have its later rounds read
+      // the old path — or nothing. One GET per resumed round to rule that out.
+      if (continuing !== undefined) await this.followWorktree(continuing, worktree);
       // COMPACT BEFORE SPENDING, at two thirds of the window (D-80). Measured on the LAST
       // turn's context rather than the session's cumulative reads: the two differ by a
       // factor of thirty on a long round, and the sum would compact almost at once and
@@ -1153,7 +1246,7 @@ export class Reviewer implements ReviewerLike {
           `review ${reviewId ?? "?"} was ended while tier ${tier.id}'s session was being compacted — nothing new was spent on it.`,
         );
       }
-      return await this.conduct(sessionId, tier, text, worktree, started, extract, contract);
+      return await this.conduct(sessionId, tier, text, started, extract, contract);
     } catch (e) {
       // A SESSION OPENCODE NO LONGER HAS: forget it and start cold, exactly once.
       //
@@ -1191,7 +1284,7 @@ export class Reviewer implements ReviewerLike {
         // failing to tidy up must not fail the round the cold retry is about to save. A
         // vanished session (`SessionGone`) has nothing left to delete.
         if (e instanceof HistoryRejected) {
-          await this.client.session.delete({ path: { id: continuing } }).catch(() => undefined);
+          await this.client.session.remove({ sessionID: continuing }).catch(() => undefined);
         }
         this.aborters.delete(sessionId);
         this.watchers.delete(sessionId);
@@ -1263,6 +1356,32 @@ export class Reviewer implements ReviewerLike {
   }
 
   /**
+   * Point a resumed session at the worktree this round reads, if it points elsewhere.
+   *
+   * A session opencode no longer has is left for `ask` to discover: its 404 is what drives
+   * the cold-start recovery in `conductSession`, and swallowing it here would only move
+   * where that is noticed. Any other failure is logged and the round goes ahead — a session
+   * that cannot be moved is still reading the tree it was opened on, which for every review
+   * whose worktree never moved is the right one.
+   */
+  private async followWorktree(sessionId: string, worktree: string): Promise<void> {
+    const at = await this.client.session
+      .get({ sessionID: sessionId })
+      .then((s) => s.location?.directory)
+      .catch(() => undefined);
+    if (at === undefined || at === worktree) return;
+    const failure = await this.client.session
+      .move({ sessionID: sessionId, directory: worktree })
+      .then(() => undefined)
+      .catch((e: unknown) => detail(e));
+    console.error(
+      failure === undefined
+        ? `[lore:log] kept session ${sessionId} moved from ${at} to ${worktree}`
+        : `[lore:log] kept session ${sessionId} reads ${at} and could NOT be moved to ${worktree}: ${failure}`,
+    );
+  }
+
+  /**
    * Compact this session if its last turn carried two thirds of the window (D-80).
    *
    * Best-effort by construction. A summarise that fails leaves the conversation exactly as
@@ -1275,9 +1394,13 @@ export class Reviewer implements ReviewerLike {
     const used = await this.lastTurnTokens(sessionId).catch(() => undefined);
     if (!shouldCompact(used, window)) return;
 
+    // ADMITTED, THEN AWAITED. v2's compact only queues the work and returns; the summary
+    // is written by the session's own loop, so the prompt that follows must wait for it or
+    // it lands on the uncompacted history it was meant to spare.
     const failure = await this.client.session
-      .summarize({ path: { id: sessionId }, body: splitModel(tier.model ?? "") })
-      .then((r) => ((r.response?.status ?? 200) >= 400 ? `opencode answered ${r.response?.status}` : undefined))
+      .compact({ sessionID: sessionId })
+      .then(() => this.client.session.wait({ sessionID: sessionId }))
+      .then(() => undefined)
       .catch((e: unknown) => detail(e));
     console.error(
       failure === undefined
@@ -1295,19 +1418,14 @@ export class Reviewer implements ReviewerLike {
    * times the context, so compacting against it would fire immediately and for ever.
    */
   private async lastTurnTokens(sessionId: string): Promise<number | undefined> {
-    const res = await this.client.session.messages({ path: { id: sessionId } });
-    const rows = ((res as { data?: unknown[] } | undefined)?.data ?? []) as {
-      info?: { role?: string; tokens?: Record<string, unknown> };
-    }[];
-    for (let i = rows.length - 1; i >= 0; i--) {
-      const info = rows[i]?.info;
-      if (info?.role !== "assistant") continue;
-      const t = info.tokens ?? {};
-      const cache = (t["cache"] ?? {}) as Record<string, unknown>;
-      const used = Number(t["input"] ?? 0) + Number(cache["read"] ?? 0) + Number(cache["write"] ?? 0);
-      return used > 0 ? used : undefined;
-    }
-    return undefined;
+    // The newest assistant message only — the server filters and orders, so this is one
+    // short page however long the session has grown.
+    const res = await this.client.message.list({ sessionID: sessionId, type: "assistant", order: "desc", limit: 1 });
+    const t = (res.data[0] as { tokens?: Record<string, unknown> } | undefined)?.tokens;
+    if (t === undefined) return undefined;
+    const cache = (t["cache"] ?? {}) as Record<string, unknown>;
+    const used = Number(t["input"] ?? 0) + Number(cache["read"] ?? 0) + Number(cache["write"] ?? 0);
+    return used > 0 ? used : undefined;
   }
 
   /**
@@ -1354,7 +1472,7 @@ export class Reviewer implements ReviewerLike {
       // deleted — a 404 the recovery path would absorb, but only after paying for a
       // round trip to learn something we knew here.
       this.cfg.keptSessions?.forget(key);
-      await this.client.session.delete({ path: { id: sessionId } }).catch(() => undefined);
+      await this.client.session.remove({ sessionID: sessionId }).catch(() => undefined);
     }
   }
 
@@ -1369,7 +1487,29 @@ export class Reviewer implements ReviewerLike {
    * daily ceiling adds up.
    */
   private async usageOf(sessionId: string): Promise<Usage | undefined> {
-    return usageFromMessages(await this.client.session.messages({ path: { id: sessionId } }));
+    return usageFromMessages({ data: await this.messagesOf(sessionId) });
+  }
+
+  /**
+   * A session's whole message list, oldest first, every page of it.
+   *
+   * PAGED in v2, and the default page is not the whole session: a reader that took the
+   * first page would under-count spend and steps on exactly the long runs where they
+   * matter. The cursor is followed until opencode stops offering one — and it keeps
+   * offering one after the last message (measured on 2.0.20: one more, empty, page), so
+   * an empty page ends it too. `order` goes on the first request only: opencode refuses a
+   * cursor sent with it (400, "Do not combine with order").
+   */
+  private async messagesOf(sessionId: string): Promise<unknown[]> {
+    const out: unknown[] = [];
+    let page = await this.client.message.list({ sessionID: sessionId, order: "asc" });
+    for (let i = 0; i < 1_000; i++) {
+      out.push(...page.data);
+      const next = page.cursor?.next ?? undefined;
+      if (page.data.length === 0 || next === undefined || next === null) return out;
+      page = await this.client.message.list({ sessionID: sessionId, cursor: next });
+    }
+    throw new DidNotRun(`session ${sessionId} kept offering message pages past 1000 — refusing to read for ever`);
   }
 
   /**
@@ -1395,9 +1535,11 @@ export class Reviewer implements ReviewerLike {
     this.aborters.get(sessionId)?.abort(new Error(`session ${sessionId} was aborted by lore`));
     this.aborters.delete(sessionId);
 
+    // `interrupted: false` is opencode saying the session was already idle — nothing was
+    // running to stop, which is not a failure to stop it.
     const failure = await this.client.session
-      .abort({ path: { id: sessionId } })
-      .then((r) => ((r.response?.status ?? 200) >= 400 ? `opencode answered ${r.response?.status}` : undefined))
+      .interrupt({ sessionID: sessionId })
+      .then(() => undefined)
       .catch((e: unknown) => detail(e));
     if (failure !== undefined) {
       console.error(
@@ -1421,12 +1563,11 @@ export class Reviewer implements ReviewerLike {
     sessionId: string,
     tier: Tier,
     prompt: string,
-    worktree: string,
     started: number,
     extract: (text: string) => Listed<T>,
     contract: string,
   ): Promise<SessionResult<T>> {
-    const first = await this.ask(sessionId, tier, `${prompt}\n\n${contract}`, worktree);
+    const first = await this.ask(sessionId, tier, `${prompt}\n\n${contract}`);
 
     let extracted = extract(first.text);
     let retried = false;
@@ -1462,7 +1603,6 @@ export class Reviewer implements ReviewerLike {
           `reported, reply with an empty array.
 
 ${contract}`,
-        worktree,
       );
       const recovered = extract(again.text);
       // ONLY WHEN SOMETHING WAS ACTUALLY RECOVERED — raised by lore's own t2 at high, and
@@ -1506,7 +1646,6 @@ ${contract}`,
         tier,
         `Your previous reply could not be used: ${extracted.why}.\n` +
           `Fix exactly that and reply again with ONLY the json block.\n\n${contract}`,
-        worktree,
       );
       const retry = extract(second.text);
       if (!retry.ok) {
@@ -1589,10 +1728,12 @@ ${contract}`,
     // ONE FETCH, TWO ANSWERS. The step count and the session's usage are both derived
     // from the same message list, and asking twice is a round trip nobody needs — the
     // first version did, which a test caught by counting the GETs.
-    const messages = await this.client.session
-      .messages({ path: { id: sessionId } })
-      .then((r) => ({ status: r.response?.status ?? 200, data: r.data, error: r.error }))
-      .catch((e: unknown) => ({ status: undefined, data: undefined, error: e }));
+    // v2 THROWS where v1 returned a status, so the three outcomes `stepsFrom` names are
+    // rebuilt here: an answer (200), a refusal opencode declared or a status it did not
+    // (the error's own status, else 500), and no answer at all (`undefined`).
+    const messages = await this.messagesOf(sessionId)
+      .then((data) => ({ status: 200 as number | undefined, data: data as unknown, error: undefined as unknown }))
+      .catch((e: unknown) => ({ status: transportFault(e) ? undefined : httpStatusOf(e) ?? 500, data: undefined, error: e }));
     const whole = await usageFromMessages({ data: messages.data }).catch(() => undefined);
     const usage = whole ?? first.usage;
     return {
@@ -1687,55 +1828,70 @@ ${contract}`,
     return steps;
   }
 
-  private async createSession(tier: Tier): Promise<string> {
-    // The ONE case where "is a server running?" is the right question, and until now
-    // the one case that never asked it: an unreachable server makes this call REJECT
-    // while every answered request comes back as a return value. Verified against a
-    // dead port — `connect ECONNREFUSED` through `longFetch`, `TypeError: fetch
-    // failed` through plain fetch. Unwrapped, either one reaches the worker naming
-    // neither the tier nor the address it could not reach.
-    const res = await this.client.session
-      .create({ body: { title: `lore-${tier.id}-${Date.now()}` } })
-      .catch((e: unknown): never => {
+  private async createSession(tier: Tier, worktree: string): Promise<string> {
+    // EVERYTHING THAT SHAPES THE SESSION IS FIXED HERE, because v2 fixes it here. v1 sent
+    // model, agent, tools and directory with every prompt; v2 takes them once, at creation,
+    // and a prompt is only text. So a session opened with the wrong model or no deny rule
+    // stays wrong for every turn — which is why the rules are not left to the agent file.
+    //
+    // THE DENY RULES ARE THE BRACES (INV-8). The predecessor learned that a missing agent
+    // falls back to the write-capable default with no error; a session's own rules are
+    // appended AFTER the agent's and the last match wins (opencode `Permission.evaluate`),
+    // so these hold whatever agent opencode actually resolves. `edit` is the action every
+    // write path checks — edit, write and patch all ask for it. `question` because nobody
+    // is there to answer one: a question on a headless server waits for ever.
+    //
+    // NOT A SANDBOX. The shell stays allowed — reviewers read with it — and measured on
+    // 2.0.20 a model told to fix a file did so through `python3 -c "open(...,'w')"` with
+    // `edit` denied. v1 had the same hole; what contains it is that the worktree is lore's
+    // own disposable copy, never the operator's checkout.
+    const body = {
+      title: `lore-${tier.id}-${Date.now()}`,
+      agent: this.cfg.agent,
+      model: (({ providerID, modelID }) => ({ providerID, id: modelID }))(splitModel(tier.model ?? "")),
+      location: { directory: worktree },
+      permissions: [...DENY_RULES],
+    };
+    const created = await this.client.session.create(body).catch((e: unknown): never => {
+      // The ONE case where "is a server running?" is the right question: an unreachable
+      // server makes this call reject before anything answers. Unwrapped, it reaches the
+      // worker naming neither the tier nor the address it could not reach.
+      if (transportFault(e)) {
         throw new ServiceUnreachable(
           `tier ${tier.id} could not reach opencode at ${this.cfg.baseUrl} (${detail(e)})` +
             " — is a server running there? Nothing about the code was learned; the round is requeued.",
           e,
         );
-      });
-
-    // And the case that made this necessary. A server that is up and refusing
-    // answers with a status and no session id, so blaming the missing id sent
-    // debugging at connectivity twice in one day while opencode was up. Verified
-    // against a password-protected opencode: a bare 401, `data` undefined and
-    // `error` an EMPTY OBJECT — the status is the only thing that names the fault,
-    // which is why it is in the message before the body is.
-    //
-    // DidNotRun rather than Exhausted even on a 429: creating a session touches no
-    // provider, so a refusal here is opencode or something in front of it, and
-    // calling it quota would step the tier over as unpayable (D-48) for a reason
-    // that has nothing to do with money.
-    const status = res.response?.status ?? 200;
-    if (status >= 400) {
-      const hint = status === 401 || status === 403 ? " — check OPENCODE_SERVER_USERNAME/PASSWORD" : "";
+      }
+      // And a server that is up and REFUSING, which is not the same thing and must not
+      // read as it: blaming connectivity sent debugging the wrong way twice in one day
+      // while opencode was up. The status names the fault, so it leads the message.
+      //
+      // DidNotRun rather than Exhausted even on a 429: creating a session touches no
+      // provider, so a refusal here is opencode or something in front of it, and calling
+      // it quota would step the tier over as unpayable (D-48) for a reason that has
+      // nothing to do with money.
+      const status = httpStatusOf(e);
+      const hint = status === 401 || status === 403
+        ? " — check OPENCODE_SERVER_PASSWORD; opencode v2 accepts only the user name `opencode`"
+        : "";
       throw new DidNotRun(
-        `tier ${tier.id} could not open a session: opencode at ${this.cfg.baseUrl} returned ${status}` +
-          ` ${JSON.stringify(res.error ?? {}).slice(0, 300)}${hint}`,
+        `tier ${tier.id} could not open a session: opencode at ${this.cfg.baseUrl} answered ` +
+          `${status === undefined ? "with an error" : String(status)}: ${detail(e)}${hint}`,
       );
+    });
+    // A SESSION WITH NO ID cannot be prompted, cancelled or deleted — failing now names
+    // the fault; failing on the first prompt would name a session id `undefined`.
+    if (typeof created?.id !== "string" || created.id === "") {
+      throw new DidNotRun(`opencode created a session but returned no id (${this.cfg.baseUrl})`);
     }
-
-    const id = (res.data as { id?: string } | undefined)?.id;
-    if (id === undefined) {
-      throw new DidNotRun(`opencode answered ${status} with no session id (${this.cfg.baseUrl})`);
-    }
-    return id;
+    return created.id;
   }
 
   private async ask(
     sessionId: string,
     tier: Tier,
     text: string,
-    worktree: string,
   ): Promise<{ text: string; usage: Usage }> {
     // LOUD, not `?? null`. A missing controller means this request cannot be cancelled,
     // which is precisely the defect the controller was added to fix — and defaulting to
@@ -1747,49 +1903,31 @@ ${contract}`,
       throw new DidNotRun(`session ${sessionId} has no abort controller — it would be impossible to cancel`);
     }
     try {
-      const res = await this.client.session.prompt({
-        path: { id: sessionId },
-        query: { directory: worktree },
-        // THE ONE THING THAT MAKES A CANCEL REACH THIS REQUEST. The generated client
-        // spreads its options into the `RequestInit` it builds (`client.gen.js`:
-        // `{redirect, ...opts, body}` → `new Request(url, requestInit)`), and
-        // `longFetch` destroys the socket when that signal fires. Without it, `abort`
-        // freed opencode and left us holding an open request until the 2700s deadline.
-        signal,
-        body: {
-          model: splitModel(tier.model ?? ""),
-          agent: this.cfg.agent,
-          system: READ_ONLY_SYSTEM,
-          tools: { ...DENIED_TOOLS },
-          parts: [{ type: "text", text }],
-        },
-      });
-
-      // The SDK does NOT throw on a non-2xx — it returns the status and an error
-      // body. Without this check a 429 fell through to the parser, came back
-      // unparseable, and was reported as "did not return findings" (exit 70)
-      // instead of "out of quota" (exit 75) — losing the quota alert and the
-      // spend-ceiling behaviour with it.
-      const status = res.response?.status ?? 200;
-      // 404 IS ABOUT THE SESSION, not about the model or the plan. Separated before the
-      // generic throw so the classifier below cannot flatten it into `DidNotRun` — which
-      // it did, silently disabling the recovery in `conductSession`.
-      if (status === 404) throw new SessionGone(sessionId);
-      if (status >= 400) {
-        throw new HttpStatus(status, JSON.stringify(res.error ?? {}).slice(0, 300));
+      // ADMITTED, NOT ANSWERED. v2's prompt queues the text and returns at once with the
+      // user message it recorded; the agent loop runs afterwards. So this request is short
+      // and the long one is `awaitTurn`'s `wait` — which is where the signal matters: it is
+      // what makes a cancel reach a call that would otherwise hold its socket until the
+      // 2700s deadline (`longFetch` destroys the socket when the signal fires).
+      const admitted = await this.client.session
+        .prompt({ sessionID: sessionId, text }, { signal })
+        .catch((e: unknown): never => {
+          throw this.wireError(e, sessionId);
+        });
+      const turn = await this.awaitTurn(sessionId, admitted.id, signal);
+      // opencode records the PROVIDER's failure on the assistant message, classified —
+      // the HTTP exchange with opencode succeeded either way, so without this an unpaid
+      // bill arrives as an empty reply and is reported as "the model did not return
+      // findings", sending someone to debug a prompt.
+      if (turn.error !== undefined) {
+        throw new HttpStatus(turn.error.status ?? 500, `${turn.error.type}: ${turn.error.message}`, turn.error.type);
       }
-
-      // opencode answers 200 and nests the PROVIDER's failure in the message body,
-      // so the transport status says nothing about whether the model ran. Without
-      // this, "insufficient credits" (402) arrives as an empty assistant message,
-      // fails to parse, and is reported as "the model did not return findings" —
-      // sending someone to debug a prompt when the real answer is an unpaid bill.
-      const embedded = providerError(res.data);
-      if (embedded !== undefined) {
-        throw new HttpStatus(embedded.statusCode, embedded.message);
+      if (turn.outcome === "interrupted") {
+        throw new HttpStatus(499, `session ${sessionId} was interrupted before it finished`, "session.interrupted");
       }
-
-      return { text: collectText(res.data), usage: collectUsage(res.data) };
+      if (turn.outcome !== "succeeded") {
+        throw new HttpStatus(500, `session ${sessionId} ended '${turn.outcome}' without recording why`, "unknown");
+      }
+      return { text: turn.text, usage: turn.usage };
     } catch (e) {
       // ALREADY CLASSIFIED, and re-deriving it would lose what it carries. When the event
       // stream fails a call (D-91), the abort reason IS an `Exhausted` holding the
@@ -1797,15 +1935,33 @@ ${contract}`,
       // recognise it: *"Weekly/Monthly Limit Exhausted"* matches none of
       // `rate.?limit|quota|insufficient`, so it would arrive as a plain `DidNotRun` and
       // the ladder would fail the review instead of stepping over the tier.
+      //
+      // AND IT ARRIVES WRAPPED. The v2 client turns every failed `fetch` into a
+      // `ClientError("Transport")` carrying the original as `cause` — and an abort IS a
+      // failed fetch, so the `Exhausted` a watcher aborted with, the `ProbeInconclusive` of
+      // a silent probe and lore's own cancel all come back inside one. Unwrapped first, or
+      // every one of them would fall through to the transport branch below and requeue a
+      // round as "lost its connection".
+      e = abortReason(e);
       if (e instanceof TierUnavailable) throw e;
       // Same reasoning, one line later: this one is answered by opening a new session,
       // which is a decision only `conductSession` can take.
       if (e instanceof SessionGone) throw e;
       const status = e instanceof HttpStatus ? e.status : undefined;
+      // opencode's own classification, when the failure came from a session record. It is
+      // asked FIRST below because it is the provider's answer as opencode understood it;
+      // the patterns are the fallback for what arrives unclassified.
+      const kind = e instanceof HttpStatus ? e.kind : undefined;
       const message = e instanceof Error ? e.message : String(e);
       // Quota is never a reason to fall through to another tier or provider: a
       // tier that did not run found nothing, which is not finding nothing.
-      if (status === 429 || status === 402 || /rate.?limit|quota|insufficient/i.test(message)) {
+      //
+      // A RATE LIMIT THAT REACHES HERE IS SPENT, not transient: v2 already retried it ten
+      // times (about 84s, longer when the provider names a wait) before failing the turn.
+      if (
+        kind === "provider.quota" || kind === "provider.rate-limit" ||
+        status === 429 || status === 402 || /rate.?limit|quota|insufficient/i.test(message)
+      ) {
         throw new Exhausted(`tier ${tier.id} (${tier.model}) refused on quota: ${message}`);
       }
       // A REJECTED CREDENTIAL IS NOT A DIFFICULT BRANCH. It stops every review at this
@@ -1830,7 +1986,10 @@ ${contract}`,
       // line, and the configured same-model fallback never walked, so a review that
       // had cleared t1 and t2 died 0.4 seconds into t3 with a healthy OpenRouter twin
       // sitting unasked in its config.
-      if (status === 401 || status === 403 || /unauthori[sz]ed|invalid api key|authentication|token refresh failed/i.test(message)) {
+      if (
+        kind === "provider.auth" ||
+        status === 401 || status === 403 || /unauthori[sz]ed|invalid api key|authentication|token refresh failed/i.test(message)
+      ) {
         throw new ProviderAuthFailed(tier.model ?? tier.id, `tier ${tier.id}: ${message}`);
       }
       // TOO LONG IS A TIER THAT CANNOT LOOK, NOT A REVIEW THAT FAILED (D-48).
@@ -1899,10 +2058,13 @@ ${contract}`,
       //     The provider was never reached through a live exchange, nothing about the code
       //     was learned, and it is a requeue whatever opencode looks like a second later.
       // The probe survives only to say WHICH of those two stories the operator is reading.
-      if (!(e instanceof HttpStatus) && /socket hang up|ECONNRESET|ENOTFOUND|ECONNREFUSED|fetch failed|other side closed/i.test(message)) {
-        const alive = await this.client.config
-          .providers()
-          .then((r) => (r.response?.status ?? 200) < 500)
+      if (
+        !(e instanceof HttpStatus) &&
+        (transportFault(e) || /socket hang up|ECONNRESET|ENOTFOUND|ECONNREFUSED|fetch failed|other side closed/i.test(message))
+      ) {
+        const alive = await this.client.server
+          .info()
+          .then(() => true)
           .catch(() => false);
         throw new ServiceUnreachable(
           alive
@@ -1918,11 +2080,73 @@ ${contract}`,
       // A 400 NOTHING ABOVE CLAIMED: refused before a token was generated. Marked, not
       // rescued here — whether the history is to blame is `conductSession`'s question,
       // because only it knows whether this session was resumed.
-      if (e instanceof HttpStatus && e.status === 400) {
+      if (e instanceof HttpStatus && (e.status === 400 || e.kind === "provider.invalid-request")) {
         throw new HistoryRejected(`tier ${tier.id} (${tier.model}) failed: ${message}`, e);
       }
       throw new DidNotRun(`tier ${tier.id} (${tier.model}) failed: ${message}`, e);
     }
+  }
+
+  /**
+   * Wait for the turn a prompt started, and read how it ended from the session's record.
+   *
+   * `wait` returns when the session is idle, which is NOT the same as "this turn ran": a
+   * session that had not yet picked the prompt up is idle too. So the turn is found by the
+   * user message `prompt` admitted, and it counts as finished only when an `idle` message
+   * follows it — opencode writes one per execution, with its outcome (measured on 2.0.20:
+   * `succeeded`, `failed` with the provider's error on the assistant message before it, or
+   * `interrupted`). Anything else is waited on again, a bounded number of times, and then
+   * refused: a turn whose end was never recorded is a turn nobody can claim ran.
+   */
+  private async awaitTurn(
+    sessionId: string,
+    userMessageId: string,
+    signal: AbortSignal,
+  ): Promise<{
+    outcome: string;
+    error: { type: string; message: string; status?: number } | undefined;
+    text: string;
+    usage: Usage;
+  }> {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      if (attempt > 0) await new Promise((r) => setTimeout(r, 1_000));
+      await this.client.session.wait({ sessionID: sessionId }, { signal }).catch((e: unknown): never => {
+        throw this.wireError(e, sessionId);
+      });
+      const messages = (await this.messagesOf(sessionId)) as V2Message[];
+      const at = messages.findIndex((m) => m.id === userMessageId);
+      if (at < 0) continue;
+      const after = messages.slice(at + 1);
+      const end = after.findIndex((m) => m.type === "idle");
+      if (end < 0) continue;
+      const assistants = after.slice(0, end).filter((m) => m.type === "assistant");
+      const last = assistants.at(-1);
+      return {
+        outcome: after[end]?.outcome ?? "unknown",
+        error: last?.error,
+        text: collectText(last),
+        usage: collectUsage(last),
+      };
+    }
+    throw new DidNotRun(
+      `opencode reported session ${sessionId} idle five times without recording the end of the turn lore started ` +
+        `(message ${userMessageId}) — the turn's outcome is unknown, so nothing it said can be used.`,
+    );
+  }
+
+  /**
+   * A failed request to opencode, as the error the classifier in `ask` reads.
+   *
+   * 404 IS ABOUT THE SESSION, not about the model or the plan: separated here so the
+   * classifier cannot flatten it into `DidNotRun` — which it did once, silently disabling
+   * the cold-start recovery in `conductSession`. A transport fault is passed through
+   * untouched: whether it was our abort or a dropped socket is the classifier's question.
+   */
+  private wireError(e: unknown, sessionId: string): unknown {
+    if (transportFault(e)) return e;
+    const status = httpStatusOf(e);
+    if (status === 404) return new SessionGone(sessionId);
+    return new HttpStatus(status ?? 500, detail(e));
   }
 }
 
@@ -1957,9 +2181,11 @@ export function isTooLong(message: string): boolean {
  * genuinely reports nothing still sums to zero, so the subscription case is unchanged.
  */
 export async function usageFromMessages(res: unknown): Promise<Usage | undefined> {
-  const rows = ((res as { data?: unknown[] } | undefined)?.data ?? []) as {
-    info?: { role?: string; tokens?: Record<string, unknown> };
-  }[];
+  // v2 MESSAGES ARE FLAT — `{type: "assistant", tokens, cost}` — where v1 nested them
+  // under `info` with a `role`. A reader left on the v1 shape finds no assistant at all
+  // and returns `undefined`: spend silently unrecorded, which is exactly the under-count
+  // this function exists to prevent.
+  const rows = ((res as { data?: unknown[] } | undefined)?.data ?? []) as V2Message[];
   let input = 0;
   let cached = 0;
   let output = 0;
@@ -1973,13 +2199,13 @@ export async function usageFromMessages(res: unknown): Promise<Usage | undefined
   // nothing still sums to zero, so the subscription case is unchanged.
   let cost = 0;
   for (const r of rows) {
-    if (r.info?.role !== "assistant") continue;
-    const t = r.info.tokens ?? {};
+    if (r.type !== "assistant") continue;
+    const t = r.tokens ?? {};
     const cache = (t["cache"] ?? {}) as Record<string, unknown>;
     input += Number(t["input"] ?? 0);
     output += Number(t["output"] ?? 0);
     cached += Number(cache["read"] ?? 0) + Number(cache["write"] ?? 0);
-    cost += Number((r.info as { cost?: unknown }).cost ?? 0);
+    cost += Number(r.cost ?? 0);
   }
   if (input + cached + output === 0) return undefined;
   return { input, cached, output, cost: Number.isFinite(cost) ? cost : 0 };
@@ -1993,36 +2219,37 @@ interface Usage {
 }
 
 /**
- * Pull a provider failure out of an otherwise-successful reply.
+ * One v2 session message, as far as lore reads it. Flat, and discriminated by `type`.
  *
- * `data.info.error` is where opencode records that the model call itself failed —
- * bad key, no credits, rate limit — while the HTTP exchange with opencode
- * succeeded. Two different layers, two different verdicts, and only one of them is
- * visible in the status code.
+ * Only the fields lore reads are named — the full union is opencode's (`SessionMessageInfo`)
+ * and a wider type would invite depending on it. Read defensively for the same reason v1's
+ * readers were: this is someone else's format, and a reader that throws on a shape it does
+ * not know would destroy a finished review over bookkeeping.
  */
-function providerError(data: unknown): { statusCode: number; message: string } | undefined {
-  const err = (data as { info?: { error?: { name?: string; data?: { message?: string; statusCode?: number } } } })
-    ?.info?.error;
-  if (err === undefined) return undefined;
-  return {
-    statusCode: err.data?.statusCode ?? 500,
-    message: `${err.name ?? "provider error"}: ${err.data?.message ?? "no detail"}`,
-  };
+interface V2Message {
+  readonly id?: string;
+  readonly type?: string;
+  /** `idle` messages only: how the execution ended. */
+  readonly outcome?: string;
+  readonly tokens?: Record<string, unknown>;
+  readonly cost?: number;
+  readonly error?: { readonly type: string; readonly message: string; readonly status?: number };
+  readonly content?: readonly { readonly type?: string; readonly text?: string; readonly name?: string }[];
 }
 
-/** Defensive: the response shape varies across opencode versions. */
-function collectText(data: unknown): string {
-  if (typeof data === "string") return data;
-  const parts = (data as { parts?: { type?: string; text?: string }[] } | undefined)?.parts;
-  if (Array.isArray(parts)) {
-    return parts
-      .filter((p) => p.type === "text" && typeof p.text === "string")
-      .map((p) => p.text ?? "")
-      .join("\n");
-  }
-  const info = (data as { info?: { parts?: { text?: string }[] } } | undefined)?.info?.parts;
-  if (Array.isArray(info)) return info.map((p) => p.text ?? "").join("\n");
-  return typeof data === "object" && data !== null ? JSON.stringify(data) : String(data ?? "");
+/**
+ * The text of the assistant message that ended a turn.
+ *
+ * THE LAST MESSAGE ONLY, as v1 read it: the earlier assistant messages of an agentic turn
+ * are the model narrating its exploration ("reading m.py…"), and the findings contract is
+ * answered in the final one. Joining them all would hand the extractor prose it was never
+ * meant to parse — and v1's `session.prompt` returned exactly this one message.
+ */
+function collectText(message: V2Message | undefined): string {
+  return (message?.content ?? [])
+    .filter((c) => c.type === "text" && typeof c.text === "string")
+    .map((c) => c.text ?? "")
+    .join("\n");
 }
 
 /**
@@ -2046,9 +2273,8 @@ function num(v: unknown): number {
  * the full input rate. `write` is what it cost to populate the cache, and counting
  * it as cached would overstate the discount that D-29's whole cost model rests on.
  */
-function collectUsage(data: unknown): Usage {
-  const info = (data as { info?: { tokens?: Record<string, unknown>; cost?: number } } | undefined)?.info;
-  const tokens = info?.tokens ?? {};
+function collectUsage(message: V2Message | undefined): Usage {
+  const tokens = message?.tokens ?? {};
   const cache = tokens["cache"];
   const cachedRead =
     typeof cache === "object" && cache !== null
@@ -2061,26 +2287,10 @@ function collectUsage(data: unknown): Usage {
     // Reasoning tokens are billed as output by every provider in the ladder, so
     // omitting them would understate what a review actually cost.
     output: num(tokens["output"]) + num(tokens["reasoning"]),
-    cost: num(info?.cost),
+    cost: num(message?.cost),
   };
 }
 
-/**
- * Count the agentic turns in a session's message list.
- *
- * `step-start` rather than assistant messages: a step is one model turn, which is
- * the unit that re-sends the accumulated context and therefore the unit that spends
- * quota. Counted against a real GLM review session (`review_glm_r181`, the
- * predecessor's, same read-only agent) — 82 `step-start` parts across 86 assistant
- * messages, the other four carrying only `patch` parts, so the two counts are close
- * but not the same and only one of them means "the model was asked again".
- *
- * `undefined`, never `0`, when the shape is not the one we know. A reply this cannot
- * read is a measurement that did not happen, and recording it as *zero exploration*
- * would bias the distribution downwards precisely when opencode's envelope has moved
- * under us — the failure mode that would make the eventual cap too tight to survive.
- * A finished review always took at least one turn, so zero is that same signal.
- */
 /** Bounded, and it says when it cut — a silent truncation in a diagnostic is its own lie. */
 function excerpt(text: string, max: number): string {
   const t = text ?? "";
@@ -2119,16 +2329,24 @@ function describeReply(which: string, text: string): string {
   return `${which} reply was ${t.length} chars ${looksJson ? "containing a JSON object" : "of prose with no JSON block"}`;
 }
 
+/**
+ * Count the agentic turns in a session's message list.
+ *
+ * ONE ASSISTANT MESSAGE IS ONE STEP in v2 — opencode opens a new one per model call
+ * (`session.step.started` names it), which is the unit that re-sends the accumulated
+ * context and therefore the unit that spends quota. v1 needed `step-start` parts to find
+ * that unit, because an assistant message there could carry only a `patch`; measured on
+ * 2.0.20, a four-call turn is four assistant messages, one per step event.
+ *
+ * `undefined`, never `0`, when the shape is not the one we know. A reply this cannot
+ * read is a measurement that did not happen, and recording it as *zero exploration*
+ * would bias the distribution downwards precisely when opencode's envelope has moved
+ * under us — the failure mode that would make the eventual cap too tight to survive.
+ * A finished review always took at least one turn, so zero is that same signal.
+ */
 export function countStepParts(data: unknown): number | undefined {
   if (!Array.isArray(data)) return undefined;
-  let steps = 0;
-  for (const message of data as { parts?: unknown }[]) {
-    const parts = message?.parts;
-    if (!Array.isArray(parts)) continue;
-    for (const part of parts as { type?: unknown }[]) {
-      if (part?.type === "step-start") steps++;
-    }
-  }
+  const steps = (data as V2Message[]).filter((m) => m?.type === "assistant").length;
   return steps === 0 ? undefined : steps;
 }
 
@@ -2148,13 +2366,11 @@ export function countStepParts(data: unknown): number | undefined {
 export function toolsUsed(data: unknown): Record<string, number> {
   const out: Record<string, number> = {};
   if (!Array.isArray(data)) return out;
-  for (const message of data as { parts?: unknown }[]) {
-    const parts = message?.parts;
-    if (!Array.isArray(parts)) continue;
-    for (const part of parts as Record<string, unknown>[]) {
-      if (part?.["type"] !== "tool") continue;
-      const name = part["tool"] ?? part["name"] ?? (part["state"] as Record<string, unknown> | undefined)?.["title"];
-      const key = typeof name === "string" && name.length > 0 ? name : "unknown";
+  for (const message of data as V2Message[]) {
+    if (message?.type !== "assistant" || !Array.isArray(message.content)) continue;
+    for (const part of message.content) {
+      if (part?.type !== "tool") continue;
+      const key = typeof part.name === "string" && part.name.length > 0 ? part.name : "unknown";
       out[key] = (out[key] ?? 0) + 1;
     }
   }
@@ -2166,6 +2382,56 @@ function detail(e: unknown): string {
   if (e instanceof Error) return e.message;
   if (typeof e === "object" && e !== null) return JSON.stringify(e).slice(0, 300);
   return String(e);
+}
+
+/**
+ * Did this request fail before opencode answered it at all?
+ *
+ * The v2 client says so by type: `ClientError("Transport")` for a fetch that rejected —
+ * a refused connection, a dropped socket, or our own abort. Everything opencode ANSWERED
+ * arrives either as its declared error (`SessionNotFoundError`, …) or as
+ * `ClientError("UnexpectedStatus")`.
+ */
+function transportFault(e: unknown): boolean {
+  return e instanceof ClientError && e.reason === "Transport";
+}
+
+/**
+ * What a request's failure was really about, when it was ours to abort.
+ *
+ * An abort reaches the caller as a transport fault whose `cause` is the signal's reason
+ * — `longFetch` destroys the socket with it. That reason is the classified error a watcher
+ * or a cancel chose (`Exhausted`, `ProbeInconclusive`, "aborted by lore"), and it is what
+ * the classifier must see; the wrapper only says "the fetch failed", which is true of all
+ * of them and decides none.
+ */
+function abortReason(e: unknown): unknown {
+  return transportFault(e) && (e as Error).cause instanceof Error ? (e as Error).cause : e;
+}
+
+/**
+ * The HTTP status opencode answered with, from either kind of failure the client throws.
+ *
+ * Declared errors carry their status only as a tag, so the tags opencode's API declares
+ * are mapped back here (from `packages/protocol/openapi.json`, 2.0.22); an undeclared
+ * status comes back on `ClientError.cause`. `undefined` means no status was answered.
+ */
+function httpStatusOf(e: unknown): number | undefined {
+  if (e instanceof ClientError) {
+    const status = (e.cause as { status?: unknown } | undefined)?.status;
+    return typeof status === "number" ? status : undefined;
+  }
+  const tag = (e as { _tag?: unknown } | undefined)?._tag;
+  const byTag: Record<string, number> = {
+    InvalidRequestError: 400,
+    InvalidCursorError: 400,
+    UnauthorizedError: 401,
+    SessionNotFoundError: 404,
+    ConflictError: 409,
+    UnknownError: 500,
+    ServiceUnavailableError: 503,
+  };
+  return typeof tag === "string" ? byTag[tag] : undefined;
 }
 
 /**

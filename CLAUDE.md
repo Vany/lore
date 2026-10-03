@@ -72,7 +72,7 @@ silent failures in one day are the reason this project exists in this shape.
   when it becomes load-bearing, rather than letting it harden by default.
 - Notes in `research/` carry the date they were checked; anything older than a few
   weeks gets re-checked, not trusted. **Model ids are read from opencode's
-  `/config/providers`, never from memory or from what the name implies** — `k3`
+  `/api/model`, never from memory or from what the name implies** — `k3`
   carries 1M tokens of context and `k3-256k` carries 262k.
 - Money is involved (three subscriptions). Anything that changes *which* model is
   called, or how much quota it burns, is discussed before it ships.

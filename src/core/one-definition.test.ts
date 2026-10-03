@@ -775,8 +775,10 @@ describe("every variable docker-compose.yml reads has a row in the template", ()
     // come from `deploy/Makefile`'s own STAMP at `make build`, and `LORE_DOCKER_GID`
     // is a Linux-only override with its exact derivation already inline in
     // docker-compose.yml, beside the "permission denied" message that is how an
-    // operator who needs it finds it.
-    const computed = new Set(["LORE_COMMIT", "LORE_BUILT_AT", "LORE_DOCKER_GID"]);
+    // operator who needs it finds it. `OPENCODE_VERSION` is read from the host's own
+    // opencode by `deploy/Makefile` (D-156) — a `.env` row would invite pinning it by hand
+    // and letting it drift from the host it must match.
+    const computed = new Set(["LORE_COMMIT", "LORE_BUILT_AT", "LORE_DOCKER_GID", "OPENCODE_VERSION"]);
 
     const referenced = [...compose.matchAll(/\$\{([A-Z_][A-Z0-9_]*)[^}]*\}/g)]
       .map((m) => m[1] ?? "")

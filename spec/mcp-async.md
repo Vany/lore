@@ -178,8 +178,8 @@ ago — 972K cached reads, 95K fresh, $0.69 — and **29% of all model rounds ar
 re-reading a review it already knows**. The objection that kept this open, that a
 conversation re-sends its whole context every turn and so loses as it lengthens, was an
 argument against an unbounded one. **Compaction at 2/3 of the tier's window** bounds it;
-opencode provides `session.summarize`, and `CompactionPart.auto` shows it already compacts
-by itself, so this chooses the threshold rather than inventing the mechanism.
+opencode provides compaction (`session.compact` in 2.x) and already compacts by itself
+when a session fills, so this chooses the threshold rather than inventing the mechanism.
 
 **How does a deep tier enter a conversation the cheap tier has been having?** It does not.
 It opens a new session, empty of the previous tier's reasoning, on the tree as it now

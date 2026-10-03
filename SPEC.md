@@ -2627,7 +2627,7 @@ have picked the one that runs out.
 
 **Model ids come from opencode, never from memory.** The provider was `kimi-for-coding`
 when this was decided and is `kimi-code-plan-global` now (D-154); both ids were read from
-`/config/providers` on the running server rather than assumed. `DEFAULT_TIERS`
+opencode's model list on the running server (`/api/model` since D-156) rather than assumed. `DEFAULT_TIERS`
 still names `openrouter/moonshotai/kimi-k3` for a gateway route nobody here uses, which
 is a guess nothing has verified — it applies only when `LORE_TIERS` is unset, and this
 deployment always sets it.
@@ -2759,8 +2759,9 @@ review it already knows**; t2's 36 repeats alone are ~$25 of the $97 it has ever
 The objection that kept this open — that a conversation re-sends its whole context every
 turn, so it wins early and loses late — was an argument against an UNBOUNDED conversation.
 Vany's rule removes it: **compact at 2/3 of that tier's context window**, never restart.
-opencode supports it directly (`session.summarize`; `CompactionPart.auto` shows it already
-compacts on its own, so this chooses a threshold rather than inventing a mechanism). What
+opencode supports it directly (`session.compact` in 2.x, followed by a wait for the summary
+to land; it also compacts on its own, so this chooses a threshold rather than inventing a
+mechanism). What
 remains is the saving that matters, and it is in TURNS — which the same measurement shows
 to be both the cost driver and INVERSELY related to findings: rounds under 25 steps average
 2.12 findings at $0.19, rounds over 40 average 0.97 at $1.31.
@@ -2982,8 +2983,8 @@ afterwards.
 
 **What "track it" has to mean, and what it cannot.** The number exists and is one cheap
 call away — but that call needs the provider key, and lore deliberately holds none:
-`auth.json` is mounted into opencode alone (D-24), so that a container holding the
-knowledge base and the signing key cannot leak a provider credential.
+provider credentials live in opencode alone — in its own database since D-156 (D-24) — so
+that a container holding the knowledge base and the signing key cannot leak one.
 
 `[OPEN]` — **whether lore may read the provider keys, read-only, for quota checks.** It
 buys a 4-token call that returns exhausted/not plus an exact reset time, replacing a dead
@@ -3318,6 +3319,10 @@ seconds. lore was waiting **2700 seconds** for a fact that took seven.
 refusal aborts that call immediately — **with an `Exhausted` as the abort reason**, so the
 error the round catches already carries the provider's words and its reset time, and every
 consumer downstream (D-48's step-over, `skip_if_quota`, D-90's cool-off) needed no change.
+
+Under opencode 2.x (D-156) the same refusal arrives as `session.retry.scheduled`, with
+opencode's own classification beside the provider's words; a turn is admitted and then
+waited on rather than held open as one request, and the abort reaches that wait.
 
 Three things this corrects:
 
@@ -3774,6 +3779,11 @@ session id under `properties.part.sessionID` rather than the flat field every ot
 recognised type uses. Both `session.status` and `message.part.updated` now ping `activity`;
 only `session.status` still drives the storm clock and `quotaRefusal`, unchanged.
 
+Under opencode 2.x (D-156) every `session.*` event carries a flat `data.sessionID`, so the
+re-arm hears all of them by PREFIX — the nesting fought above is gone, and an event type
+opencode adds later counts without anyone listing it. Progress (`session.step.ended`,
+`session.text.delta`) is what clears the storm clock; `session.retry.scheduled` drives it.
+
 **`ProbeInconclusive extends Exhausted`, deliberately.** A bound firing must still send the
 round down the fallback chain — the review needs an answer from whatever comes next, exactly
 as for a real refusal — so it inherits every place `routeFault`/`resetOf` already recognise
@@ -4048,6 +4058,77 @@ working agreement says to confirm rather than assume.
 **Output lands under `dataDir()`, matching `propose`'s own `--out` default
 (fingerprint 9c6f2a60) — never inside the repository**, so nothing needs a new
 `.gitignore` rule.
+
+**D-156 — lore speaks opencode 2.x, and the container runs the host's version. BUILT
+2026-10-03.**
+
+Vany: *"move lore to v2 now, and research what is new in v2."* The host's opencode is the
+brew install (2.0.20 on 2026-10-03); the container ran npm's `opencode-ai` 1.18.16. They had
+silently become two products: 2.x is `@opencode/cli` on npm, with a new HTTP API under
+`/api/…` (113 routes, none of 1.x's), and it keeps credentials in its database. The
+re-login that started this landed in the host's `credential` table while `auth.json` — the
+file the deployment synced — kept the token that had died two days before.
+
+**How a turn runs now (`reviewer/opencode.ts`).** Model, agent, directory and permissions
+are fixed when the session is created; a prompt is only text, and it is ADMITTED, not
+answered — the call returns at once with the user message it recorded. lore then waits
+(`session.wait`) and reads how the turn ended from the session's record: opencode writes
+an `idle` message per execution with its outcome (`succeeded`, `failed`, `interrupted`),
+and a failed turn's last assistant message carries the provider's error CLASSIFIED —
+`provider.auth`, `provider.quota`, `provider.rate-limit`, `provider.invalid-request`, with
+the status. That classification is asked first; v1's patterns stay as the fallback.
+A turn whose `idle` record never appears after five waits is `DidNotRun` (INV-1): `wait`
+answers for a session that has not picked the prompt up yet, too.
+
+**What enforces read-only (INV-8).** The session's own rules: `edit: deny` (every write
+tool asks for `edit`) and `question: deny` (nobody can answer one). opencode appends them
+after the agent's and the last match wins, so they hold whatever agent it resolves. NOT a
+sandbox: measured on 2.0.20, a model told to fix a file did it through the shell with
+`edit` denied. v1 had the same hole; the worktree being lore's disposable copy is what
+contains it.
+
+**A permission nobody answers is refused.** Anything no rule decides is an `ask`, and on a
+headless server an ask waits for ever — measured: a reviewer reading `/etc/hosts` parked
+its session and `wait` never returned. lore answers every `permission.asked` for a session
+it is waiting on with `reject` and a reason, and logs it; the model carries on without it.
+
+**What did not change in kind.** D-91's early abort reads `session.retry.scheduled`
+(opencode's classification beside the provider's words); D-138's probe re-arm hears any
+`session.*` event, by prefix rather than a list; cancel is `interrupt` plus our own socket;
+compaction (D-80) is `compact` followed by `wait`. v2 bounds its own retries — ten, about
+84s, or up to 15 minutes a gap when the provider names a wait — and does not retry quota
+or auth at all, so the 5-minute storm bound stays as the backstop it always was.
+
+**Credentials go through opencode's API: `make sync-creds` (`lore creds-sync`).** The
+host's opencode lists what it holds; lore pushes the active credentials that differ,
+removes the copies they replace, and unparks those providers' routes. It refuses an
+Anthropic login (D-1, by absence), a sync where nothing changed, and a container OAuth
+token that expires LATER than the host's — opencode renews in place, and overwriting the
+newer token with the older copy kills a working login. `make up` runs it on every start,
+because a fresh database holds nothing.
+
+**The container runs the HOST's version.** `make up` reads `opencode --version` and the
+image installs exactly that `@opencode/cli`; the build refuses an empty or 1.x value. One
+version on both sides because credentials move between them as opencode's own records.
+
+**What it cost, once.** A new volume (`opencode2-data`): 2.x would migrate 1.x's 3.7 GB
+database in place on first boot, on the SBC. The old volume is untouched, so a rollback is
+a compose edit — and every kept session (D-80) starts cold once, which `SessionGone`
+already recovers. opencode 2.x accepts only the user name `opencode`, so compose fixes it
+for lore rather than reading `OPENCODE_SERVER_USERNAME`.
+
+**Found on the way: the host's secrets were being staged.** `sync-opencode.sh` copied the
+whole config directory, and 2.x writes `service.json` — the host background service's
+password — there. It reached a live container's config, readable by every reviewer's
+shell. The staging now skips and deletes credential files, and refuses if one survives.
+
+`[OPEN]` — **the 1.x plugins do not load in 2.x** (`oh-my-openagent` and the stripped
+`claude-auth`: "Plugin must export a default definition"). Reviews do not depend on them;
+whether reviewers lose anything D-12 meant them to inherit is unexamined.
+
+`[OPEN]` — **the plane MCP server reports `needs_auth` under 2.x on the host**: its API-key
+header is not applied the way 1.x applied it. Reviewers lose Plane context (D-12) until
+the 2.x configuration for a header-authenticated remote MCP is worked out.
 
 **D-155 — a person's word clears a park: `lore unpark`. BUILT 2026-09-24.**
 

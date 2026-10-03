@@ -12,21 +12,23 @@
 # than the author is not a peer. Copying the working configuration is the honest
 # way to get that; re-deriving it by hand would drift.
 #
-# But NOT wholesale. Three things are removed on the way, and the first is the one
-# that matters:
+# But NOT wholesale. Two things are removed on the way:
 #
-#   * THE ANTHROPIC CREDENTIAL. Claude writes the code under review, so every
-#     reviewer tier is non-Anthropic (D-1). Today that is enforced by tier config —
-#     one wrong model id and the author's own model family grades its own work,
-#     silently. With no Anthropic credential in the container it is enforced by
-#     ABSENCE, which no typo can undo.
-#   * the claude-auth plugin, which exists to supply exactly that credential.
+#   * the claude-auth plugin, which exists to supply an Anthropic credential. Claude
+#     writes the code under review, so no reviewer may reach an Anthropic model (D-1).
+#     The credential itself is kept out by `lore creds-sync` (`make sync-creds`), whose
+#     FORBIDDEN_INTEGRATIONS lists the same provider — change both or neither.
 #   * the `server` block, because the container passes its own flags and mDNS on a
 #     loopback interface only produces warnings.
 #
-# Whether the surviving credentials actually cover the configured ladder is not
-# this script's business — `lore doctor` answers that against a live catalogue,
-# which is the only place the question can be answered honestly.
+# CREDENTIALS ARE NOT STAGED HERE ANY MORE. opencode 2.x keeps them in its database and
+# reads auth.json only once, when that database is created, so a staged file looked
+# like the credential path while carrying nothing after first boot. They travel through
+# opencode's API instead: `make sync-creds`.
+#
+# Whether the credentials actually cover the configured ladder is not this script's
+# business — `lore doctor` answers that against a live catalogue, which is the only
+# place the question can be answered honestly.
 #
 # Usage, on the deployment host:
 #   ./sync-opencode.sh ./opencode      # or just: make up
@@ -35,13 +37,11 @@ set -euo pipefail
 
 STAGE="${1:?usage: sync-opencode.sh <staging-dir>}"
 SRC_CONFIG="${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}"
-SRC_AUTH="${OPENCODE_DATA_DIR:-$HOME/.local/share/opencode}/auth.json"
 
 command -v python3 >/dev/null || { echo "python3 is required"; exit 1; }
 [ -d "$SRC_CONFIG" ] || { echo "no opencode config at $SRC_CONFIG"; exit 1; }
-[ -f "$SRC_AUTH" ] || { echo "no opencode auth at $SRC_AUTH — run 'opencode auth login' first"; exit 1; }
 
-mkdir -p "$STAGE/config" "$STAGE/data"
+mkdir -p "$STAGE/config"
 # 0755, not 0700.
 #
 # These directories are bind-mounted into a container running under a DIFFERENT
@@ -50,39 +50,29 @@ mkdir -p "$STAGE/config" "$STAGE/data"
 # looks nothing like a permission problem from the caller's side.
 #
 # Host protection comes from where this directory lives, not from these bits.
-chmod 755 "$STAGE" "$STAGE/config" "$STAGE/data"
+chmod 755 "$STAGE" "$STAGE/config"
 
-python3 - "$SRC_CONFIG" "$SRC_AUTH" "$STAGE" <<'PY'
+python3 - "$SRC_CONFIG" "$STAGE" <<'PY'
 import json, os, shutil, sys
 
-src_config, src_auth, stage = sys.argv[1], sys.argv[2], sys.argv[3]
+src_config, stage = sys.argv[1], sys.argv[2]
 
-# Any provider whose models would violate D-1. Removed rather than merely unused:
-# a credential that is not present cannot be reached by a misconfiguration.
-FORBIDDEN_PROVIDERS = {"anthropic"}
 FORBIDDEN_PLUGINS = ("opencode-claude-auth",)
 
-# ---- auth ----------------------------------------------------------------
-auth = json.load(open(src_auth))
-kept = {k: v for k, v in auth.items() if k not in FORBIDDEN_PROVIDERS}
-dropped = sorted(set(auth) - set(kept))
-
-if not kept:
-    sys.exit("refusing: every credential was forbidden — the container would have no provider at all")
-
-out_auth = os.path.join(stage, "data", "auth.json")
-with open(out_auth, "w") as f:
-    json.dump(kept, f, indent=2)
-# Back to 0600, and READ-WRITE for the owner on purpose.
-#
-# This was 0644 because the container ran as a different uid and could not otherwise
-# read it. The container now runs as the uid that owns this file, so the widening is
-# no longer needed — and an OAuth credential must be WRITABLE anyway: opencode
-# renews the token roughly hourly by rewriting this file.
-#
-# The blanket chmod sweep further down would flatten this back to 0644, so the final
-# mode is set after it, not here.
-os.chmod(out_auth, 0o600)
+# A credential staged by the 1.x version of this script. 2.x never reads it again, and
+# leaving a copy of every provider key in the deploy directory buys nothing but a leak.
+stale_auth = os.path.join(stage, "data", "auth.json")
+if os.path.exists(stale_auth):
+    os.remove(stale_auth)
+    print("  removed the 1.x staged auth.json — credentials now go through `make sync-creds`")
+# And any host secret an earlier run copied into the config: the copy loop below adds
+# files, it never deletes, so a skip-list alone would leave an old copy in place for ever.
+# It did — the host service's password sat in a live container's config for a day.
+for secret in ("service.json", "auth.json", "mcp-auth.json"):
+    stale = os.path.join(stage, "config", secret)
+    if os.path.exists(stale):
+        os.remove(stale)
+        print(f"  removed a staged host secret: config/{secret}")
 
 # ---- config --------------------------------------------------------------
 cfg_path = os.path.join(src_config, "opencode.json")
@@ -109,14 +99,18 @@ for name in os.listdir(src_config):
     # someone later "fixing" the container by editing the wrong one.
     if name in {"opencode.json", "node_modules", ".gitignore", "package.json", "package-lock.json"}:
         continue
+    # THE HOST'S OWN SECRETS STAY ON THE HOST. 2.x writes `service.json` here — the
+    # password of the operator's background opencode service — and a blanket copy put it
+    # in the container's config, readable by every reviewer's shell. Nothing in the
+    # container needs it: the container's server takes OPENCODE_SERVER_PASSWORD.
+    if name in {"service.json", "auth.json", "mcp-auth.json"}:
+        continue
     if ".bak" in name:
         continue
     s, d = os.path.join(src_config, name), os.path.join(stage, "config", name)
     (shutil.copytree if os.path.isdir(s) else shutil.copy2)(s, d, **({"dirs_exist_ok": True} if os.path.isdir(s) else {}))
 
 # ---- report --------------------------------------------------------------
-print(f"  providers kept   : {', '.join(sorted(kept))}")
-print(f"  providers dropped: {', '.join(dropped) if dropped else '(none)'}")
 print(f"  plugins removed  : {', '.join(removed_plugins) if removed_plugins else '(none)'}")
 print(f"  mcp servers      : {', '.join((cfg.get('mcp') or {}).keys()) or '(none)'}")
 PY
@@ -126,13 +120,6 @@ PY
 find "$STAGE" -type d -exec chmod 755 {} +
 find "$STAGE" -type f -exec chmod 644 {} +
 
-# ...except the credential, which this sweep would otherwise widen to 0644.
-#
-# It is last so nothing can flatten it afterwards, and it is 0600 rather than 0400
-# because an OAuth token is renewed IN PLACE: opencode rewrites this file when the
-# access token expires, roughly hourly. Read-only here would work for one hour and
-# then fail looking like a cancelled subscription.
-chmod 600 "$STAGE/data/auth.json"
 
 # INV-8, ENFORCED. This used to be two warnings and a shrug, which is how a
 # reviewer nearly ran write-capable.
@@ -218,9 +205,12 @@ if [ -n "$OFFENDING" ]; then
   exit 1
 fi
 
-# Last line of defence: prove the staged credentials really are clean.
-if grep -qi '"anthropic"' "$STAGE/data/auth.json"; then
-  echo "REFUSING: an Anthropic credential survived into the staged auth.json" >&2
+# Last line of defence: no credential file reaches the container's config at all. The
+# copy loop skips them by name; this proves it, because a reviewer's shell can read
+# everything staged here.
+LEAKED=$(find "$STAGE" -name service.json -o -name auth.json -o -name mcp-auth.json)
+if [ -n "$LEAKED" ]; then
+  echo "REFUSING: a credential file was staged for the container: $LEAKED" >&2
   exit 1
 fi
 

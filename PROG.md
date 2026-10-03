@@ -5,8 +5,8 @@
 - **TypeScript**, strict. `strict`, `noUncheckedIndexedAccess`,
   `exactOptionalPropertyTypes`. No implicit `any`; no `as` to silence the compiler
   — if a cast is genuinely needed it carries a `// why:` comment.
-- Model transport is **`@opencode-ai/sdk`**, generated from opencode's OpenAPI
-  spec. Hand-rolled HTTP against opencode is a last resort and must say why.
+- Model transport is **`@opencode/client`** (opencode 2.x), generated from opencode's
+  HTTP API. Hand-rolled HTTP against opencode is a last resort and must say why.
 
 ## Failure
 

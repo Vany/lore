@@ -1,9 +1,14 @@
 # The model transport.
 #
-# Built from npm rather than pulled: there is no official opencode image. The
-# distribution is `opencode-ai` on the public registry, and pinning the version
-# here means a review's behaviour does not change because upstream published on a
-# Tuesday.
+# Built from npm rather than pulled. opencode 2.x is `@opencode/cli` on the public
+# registry — NOT `opencode-ai`, which is the 1.x line and still publishes as `latest`
+# there; installing that name gets a server whose HTTP API lore no longer speaks.
+#
+# THE VERSION IS THE HOST'S, passed in by `make up` from `opencode --version` (the brew
+# install the operator logs in with). One version on both sides because credentials move
+# between them as opencode's own records (`make sync-creds`), and a record written by one
+# version is only promised to the same one. No default on purpose: a build that does not
+# know which opencode to install must stop, not quietly pick one.
 
 FROM node:24-bookworm-slim
 
@@ -13,8 +18,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       git ca-certificates ripgrep \
  && rm -rf /var/lib/apt/lists/*
 
-ARG OPENCODE_VERSION=1.18.16
-RUN npm i -g "opencode-ai@${OPENCODE_VERSION}"
+ARG OPENCODE_VERSION
+RUN case "${OPENCODE_VERSION}" in \
+      2.*) ;; \
+      *) echo "OPENCODE_VERSION='${OPENCODE_VERSION}' — lore speaks opencode 2.x; build through 'make up', which reads the host's" >&2; exit 1 ;; \
+    esac \
+ && npm i -g "@opencode/cli@${OPENCODE_VERSION}" \
+ && opencode --version
 
 # Runs as a non-root user with THE SAME UID AS THE HOST OWNER of the staged files,
 # which is also the uid the `lore` service runs as.
@@ -25,9 +35,10 @@ RUN npm i -g "opencode-ai@${OPENCODE_VERSION}"
 # nothing complained, right up until a credential needed WRITING.
 #
 # The OpenAI credential is OAuth: it carries `expires` and `refresh`, and opencode
-# renews it roughly hourly by rewriting auth.json. A file owned by the host user at
-# 0644 is not writable by uid 10001, so reviews would have worked for about an hour
-# and then failed looking like an expired subscription.
+# renews it itself. It once lived in a host-owned file opencode had to rewrite, which
+# uid 10001 could not — reviews worked for about an hour and then failed looking like an
+# expired subscription. v2 keeps credentials in its database instead, but every staged
+# file this container reads is still the host user's, so the uids still have to match.
 #
 # `node:24-bookworm-slim` ships a `node` user already holding 1000, which is why the
 # original chose 10001 to dodge the collision. Removing it is safe: nothing in this
@@ -48,6 +59,7 @@ USER lore
 
 EXPOSE 4096
 
-# Credentials come from the environment. Verified: `opencode auth list` reports
-# OPENROUTER_API_KEY as a recognised credential source with no auth.json present.
+# Credentials live in opencode's own database on the `opencode2-data` volume and arrive
+# through its API (`make sync-creds`); a provider key in the environment works too —
+# v2 lists `env` as a connection method for each provider that has one.
 ENTRYPOINT ["opencode", "serve", "--hostname", "0.0.0.0", "--port", "4096"]

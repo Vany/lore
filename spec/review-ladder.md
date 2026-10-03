@@ -217,12 +217,12 @@ of the cost. The ladder walks `(model, effort)` pairs, not models.
 **Read this section knowing its conclusion was wrong.** The hang is real and everything
 measured below happened. What was false is *"the refusal is unreachable"*: opencode
 swallows it in the message BODY and publishes it, verbatim and within about seven seconds,
-on `/event`, keyed by session —
+on its event stream, keyed by session — in opencode 2.x (D-156) as
 
 ```
-{"type":"session.status","properties":{"sessionID":"ses_…","status":{
-   "type":"retry","attempt":1,
-   "message":"Weekly/Monthly Limit Exhausted. Your limit will reset at 2026-08-10 18:19:09"}}}
+{"type":"session.retry.scheduled","data":{"sessionID":"ses_…","attempt":1,"at":…,
+   "error":{"type":"provider.rate-limit",
+            "message":"Weekly/Monthly Limit Exhausted. Your limit will reset at 2026-08-10 18:19:09"}}}
 ```
 
 so lore subscribes and fails the call in seconds instead of waiting out 2700s (D-91). The
@@ -283,7 +283,7 @@ the cost and the decision.
 ### A window a provider advertises is not always the window it enforces
 
 `compactToFit` shrinks the diff to the tier that will read it, using the context limit
-opencode reports from `/config/providers`. That is the right number to compact against
+opencode reports from `/api/model`. That is the right number to compact against
 and it is not always the number that applies.
 
 Measured 2026-08-07: `zai-coding-plan/glm-5-turbo` advertises **200,000 tokens**, so a

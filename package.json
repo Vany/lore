@@ -35,7 +35,7 @@
   "dependencies": {
     "@modelcontextprotocol/node": "^2.0.0",
     "@modelcontextprotocol/server": "^2.0.0",
-    "@opencode-ai/sdk": "^1.18.18",
+    "@opencode/client": "^2.0.22",
     "zod": "^4.4.3"
   },
   "devDependencies": {

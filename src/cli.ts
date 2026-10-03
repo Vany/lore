@@ -39,6 +39,8 @@ lore — an independent reviewer that remembers the codebase
   lore revoke --token <short>                  turn one off, by its short hash
   lore doctor                                  check tiers, auth and model ids
   lore unpark [--route <p>|--tier <p>|--all]   what lore is refusing to ask, and forget it
+  lore creds-sync [--force] [--allow-unchanged]  push credentials (opencode's list, on stdin)
+                                               into opencode and unpark what they fix
   lore propose --repo <name> --budget <n>      ideas for improving a folder (D-75)
   lore ladder-suggest [--out <path>]           pick t1/t2/t3 from a live catalog
 
@@ -435,6 +437,56 @@ export async function main(argv: readonly string[]): Promise<ExitCode> {
     } finally {
       store.close();
     }
+  }
+
+  // A re-logged credential, handed to the running opencode and its routes unparked —
+  // `make sync-creds`. The host's list arrives on stdin because only the host can read it.
+  // Planning and refusals live in `service/creds-sync.ts`, where they are tested.
+  if (args.command === "creds-sync") {
+    const { apply, parseHostCredentials, plan } = await import("./service/creds-sync.ts");
+    const { client } = await import("./service/doctor.ts");
+    const { DEFAULT_REVIEWER } = await import("./reviewer/opencode.ts");
+    const { parks, renderCleared, unpark } = await import("./service/unpark.ts");
+    const known = new Set(["creds-sync", "--force", "--allow-unchanged", "--db"]);
+    const stray = argv.find((a, i) => !known.has(a) && argv[i - 1] !== "--db");
+    if (stray !== undefined) throw new UsageError(`unknown argument '${stray}' — lore creds-sync takes --force and --allow-unchanged`);
+    const chunks: Buffer[] = [];
+    for await (const c of process.stdin) chunks.push(c as Buffer);
+    const host = parseHostCredentials(Buffer.concat(chunks).toString("utf8"));
+    const api = client(DEFAULT_REVIEWER);
+    const container = await api.credential.list();
+    const p = plan(host, container, argv.includes("--force"));
+    for (const f of p.forbidden) process.stdout.write(`${f}: not synced — no reviewer may reach it (D-1)\n`);
+    for (const b of p.behind) {
+      process.stderr.write(
+        `${b.integrationID}: the deployment renewed this login itself (expires ${new Date(b.container).toISOString()}); ` +
+          `the host's copy is older (${new Date(b.host).toISOString()}) and may already be revoked.\n`,
+      );
+    }
+    if (p.behind.length > 0) {
+      process.stderr.write("REFUSING: syncing would replace a working login with an older one. Log in again on the host, or pass --force.\n");
+      return EXIT.USAGE;
+    }
+    const changed = await apply(api, p, container);
+    for (const u of p.unchanged) process.stdout.write(`${u}: unchanged\n`);
+    if (changed.length === 0) {
+      if (argv.includes("--allow-unchanged")) return EXIT.PASS;
+      // The operator meant to renew something; a login that never reached the host's
+      // opencode (another machine, another user) must not read as done.
+      process.stderr.write("NOTHING CHANGED: the deployment already holds every credential the host has. Did the login run on THIS host, as this user?\n");
+      return EXIT.USAGE;
+    }
+    process.stdout.write(`synced: ${changed.join(", ")}\n`);
+    // A route id is `<integration>/<model>`, so `<integration>/` names exactly that
+    // credential's routes and never `openrouter/openai/...`, which is a different login.
+    const store = openExisting(args.db);
+    try {
+      const cleared = changed.flatMap((i) => unpark(store, { all: false, route: `${i}/`, tier: undefined }));
+      process.stdout.write(cleared.length === 0 ? "nothing was parked on them.\n" : renderCleared(cleared, parks(store), Date.now()));
+    } finally {
+      store.close();
+    }
+    return EXIT.PASS;
   }
 
   if (args.command === "tokens") {

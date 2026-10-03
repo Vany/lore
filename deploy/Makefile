@@ -7,7 +7,7 @@
 #   make status                                what is happening, coloured
 #   make status ID=rev_xxx                     one review, in full
 #   make unpark [ROUTE=openai | ALL=1]         what lore won't ask; forget it after a fix
-#   make sync-creds                            after `opencode auth login`: hand it over, unpark
+#   make sync-creds [FORCE=1]                  after `opencode auth login`: hand it over, unpark
 #   make logs                                  follow
 #   make restore                               pull the database back from backup
 #
@@ -49,7 +49,7 @@ DBVOL   = $(PROJECT)_lore-db
 # exactly the silent-divergence class this list exists to catch, for the one file a
 # NEW deployment reads before anything else.
 DEPLOY_FILES = Makefile docker-compose.yml litestream.yml Dockerfile opencode.Dockerfile \
-               sandbox.Dockerfile smoke.mjs mirror-refresh.sh sync-opencode.sh sync-creds.sh .env.example \
+               sandbox.Dockerfile smoke.mjs mirror-refresh.sh sync-opencode.sh .env.example \
                tiers.kimi.json tiers.zai-kimi-openai.json tiers.zai-openai.json
 # lore-ok[ac0f7ec3]: found by lore's own review — tiers.kimi.json's name stays here even
 # though the repository no longer has the file (deleted the same commit this line was
@@ -64,6 +64,14 @@ DBIMG   = $(PROJECT)-lore:latest
 DBRUN   = docker run --rm -v $(DBVOL):$(DB) -e LORE_DB_DIR=$(DB) --entrypoint node $(DBIMG)
 BACKUP  ?= $(shell grep -E '^LORE_HOST_BACKUP=' .env 2>/dev/null | cut -d= -f2)
 BACKUP  := $(if $(BACKUP),$(BACKUP),./backup)
+
+# THE CONTAINER RUNS THE HOST'S OPENCODE. Read from the operator's own install (brew) —
+# the one they log in with — and exported so compose hands it to the image build. One
+# version on both sides because credentials move between them as opencode's own records
+# (`make sync-creds`), and lore's client speaks exactly one opencode HTTP API (2.x).
+# Overridable for the rare host with no opencode at all: `make up OPENCODE_VERSION=2.0.22`.
+OPENCODE_VERSION ?= $(shell opencode --version 2>/dev/null | sed 's/^v//')
+export OPENCODE_VERSION
 
 # WHICH DEPLOYMENT THIS IS, checked before anything reports on it.
 #
@@ -109,10 +117,12 @@ help:
 ## Fail early and legibly, rather than midway through a build.
 preflight:
 	@test -f .env || { echo "no .env — copy .env.example and fill it in"; exit 1; }
-	@# Credentials normally arrive via the staged auth.json derived from this host's
-	@# own opencode install. An env key is the alternative, not the requirement.
-	@test -s ./opencode/data/auth.json || grep -qE '^(OPENROUTER_API_KEY|ZHIPU_API_KEY)=.+' .env \
-		|| { echo "no credentials: run 'make sync-opencode', or set a provider key in .env"; exit 1; }
+	@# The opencode the container will run is the host's, so the host must have one, and
+	@# it must be 2.x: lore's client speaks only that API, and a 1.x container answers
+	@# every request with a 404 that reads like a missing session.
+	@case "$(OPENCODE_VERSION)" in 2.*) ;; \
+		"") echo "no opencode on this host — install it (brew install opencode) and log in, or pass OPENCODE_VERSION=2.x"; exit 1 ;; \
+		*) echo "this host runs opencode $(OPENCODE_VERSION); lore needs 2.x — brew upgrade opencode"; exit 1 ;; esac
 	@grep -qE '^OPENCODE_SERVER_PASSWORD=.+' .env || { echo "OPENCODE_SERVER_PASSWORD is empty in .env — the server would answer a bare 401 with no hint"; exit 1; }
 	@mkdir -p "$(BACKUP)"
 	@# The T0 sandbox asks the HOST daemon to bind-mount a review worktree into a
@@ -144,9 +154,20 @@ sync-opencode:
 ## A credential re-logged on this host, handed to the RUNNING deployment without a
 ## restart, and the routes it had parked cleared. Refuses to replace a token the
 ## container has already renewed past the host's — see the script for why.
+## A credential re-logged on this host, handed to the RUNNING opencode and the routes it
+## had parked cleared — no restart, so no round in flight dies.
+##
+## THROUGH opencode's API, because 2.x keeps credentials in its database and reads
+## auth.json only once, when the database is created. The host's own opencode lists what
+## it holds (`opencode api`, the brew install's background service); lore pushes what
+## changed (`lore creds-sync`). Refuses, loudly: an Anthropic login (D-1), nothing changed
+## at all (the login did not land on this host), and a container login that is NEWER than
+## the host's — opencode renews OAuth itself, and overwriting a renewed token with the
+## older copy kills a working login. FORCE=1 overrides the last one.
 sync-creds:
 	$(wrong-directory)
-	@COMPOSE="$(COMPOSE)" ./sync-creds.sh
+	@opencode api GET /api/credential | $(COMPOSE) exec -T lore node /app/src/index.ts creds-sync \
+		$(if $(FORCE),--force) $(if $(ALLOW_UNCHANGED),--allow-unchanged)
 
 ## Ship the deployment to the host. Credentials travel over the tailnet only.
 push:
@@ -392,6 +413,14 @@ up: preflight sync-opencode
 	$(check-db-migrated)
 	@$(STAMP) $(COMPOSE) --profile build-only build sandbox
 	@$(STAMP) $(COMPOSE) up -d --build
+	@# A FRESH opencode database has no credentials until something writes them, so the
+	@# host's go in on every `up` — unchanged ones are a no-op. Retried while opencode
+	@# finishes starting; a sync that still fails after that stops `up` loudly, because
+	@# a deployment with no credentials answers every review with "did not run".
+	@for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do \
+		$(MAKE) --no-print-directory sync-creds ALLOW_UNCHANGED=1 && exit 0; \
+		echo "  opencode not ready yet — retrying credential sync ($$i/15)"; sleep 4; \
+	done; echo "credential sync FAILED after a minute — run 'make sync-creds' and read why"; exit 1
 	@echo
 	@echo "up. next:  make new NAME=<who> GIT=<ssh-url>"
 

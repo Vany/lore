@@ -88,3 +88,44 @@ describe("a call somebody cancelled", () => {
     expect(Date.now() - started, "the signal ended it, not the 120s deadline").toBeLessThan(3000);
   });
 });
+
+/** A server that answers every request with `status` and echoes what it was sent. */
+const answering = (status: number): Promise<number> =>
+  new Promise((resolve) => {
+    server = createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on("data", (c: Buffer) => chunks.push(c));
+      req.on("end", () => {
+        res.writeHead(status, { "content-type": "application/json", "x-method": req.method ?? "" });
+        res.end(status === 204 ? undefined : Buffer.concat(chunks));
+      });
+    });
+    server.listen(0, "127.0.0.1", () => {
+      resolve((server?.address() as { port: number }).port);
+    });
+  });
+
+describe("what opencode v2 answers with", () => {
+  // THE FIRST v2 `session.wait` TOOK LORE DOWN. 204 is a null-body status, `new Response`
+  // refuses a body for it, and the throw happened inside the socket's `end` handler — not
+  // in the promise — so it was an uncaught exception that ended the whole process.
+  it("resolves a 204 with no body instead of throwing", async () => {
+    const port = await answering(204);
+    const res = await longFetch(1_000)(new Request(`http://127.0.0.1:${String(port)}/`, { method: "POST" }));
+    expect(res.status).toBe(204);
+    expect(await res.text()).toBe("");
+  });
+
+  // The v2 client calls `fetch(url, init)`, the v1 SDK called `fetch(request)`. Reading
+  // only the first argument sends every v2 request as a bodiless GET.
+  it("honours the (url, init) call shape: method and body both arrive", async () => {
+    const port = await answering(200);
+    const res = await longFetch(1_000)(`http://127.0.0.1:${String(port)}/x`, {
+      method: "POST",
+      body: JSON.stringify({ text: "hello" }),
+      headers: { "content-type": "application/json" },
+    });
+    expect(res.headers.get("x-method")).toBe("POST");
+    expect(await res.json()).toStrictEqual({ text: "hello" });
+  });
+});

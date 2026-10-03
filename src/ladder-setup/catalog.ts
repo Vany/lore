@@ -4,7 +4,7 @@
  * `DEFAULT_TIERS` (`core/ladder.ts`) is a hardcoded three-model guess, written once and
  * never re-checked against what OpenRouter offers — prices move, models get deprecated,
  * new ones ship. This asks opencode itself, the same way `doctor.ts` already validates an
- * operator-written ladder after the fact: `api.provider.list()`, not OpenRouter's own
+ * operator-written ladder after the fact: opencode's `/api/model`, not OpenRouter's own
  * `/api/v1/models` directly, so every candidate is guaranteed reachable by THIS
  * deployment's opencode rather than merely listed somewhere.
  *
@@ -132,12 +132,31 @@ export function filterCatalog(models: Readonly<Record<string, RawModel>>): reado
  */
 export async function fetchCatalog(cfg: ReviewerConfig = DEFAULT_REVIEWER): Promise<readonly CatalogModel[]> {
   const api = client(cfg);
-  const res = await api.provider.list();
-  const openrouter = res.data?.all.find((p) => p.id === "openrouter");
-  if (openrouter === undefined || !(res.data?.connected ?? []).includes("openrouter")) return [];
-  // Cast, not trusted structurally — `openrouter.models`'s OWN generated type (flat
-  // `tool_call`) disagrees with the live wire shape (`capabilities.toolcall`) this file's
-  // own `RawModel` doc comment explains; `doctor.ts`'s own `client()` caller two lines up
-  // already casts `res.data` rather than trusting the generated type, for the same reason.
-  return filterCatalog(openrouter.models as unknown as Readonly<Record<string, RawModel>>);
+  // Connected first: v2 lists only a CONNECTED provider's models, so an unconnected
+  // OpenRouter would read as an empty catalogue either way — asked explicitly so the
+  // emptiness has one meaning here.
+  const providers = await api.provider.list();
+  if (!providers.data.some((p) => p.id === "openrouter")) return [];
+  const models = await api.model.list();
+  // TRANSLATED INTO THE v1 SHAPE `filterCatalog` reads, rather than teaching the pure half
+  // a second wire format. Two differences, both measured on 2.0.20 against a live
+  // OpenRouter catalogue: tool support is `capabilities.tools`, and `cost` is a LIST of
+  // price tiers quoted per MILLION tokens — `z-ai/glm-5.2` reads `[{input: 0.41, output:
+  // 3.99}]` — where `CatalogModel` carries per-token figures (`prompt.ts` multiplies by a
+  // million to print them). Left undivided, every price in the table would read a million
+  // times too high and the cheapest-first ordering in `run.ts` would still look right.
+  const raw: Record<string, RawModel> = {};
+  for (const m of models.data) {
+    if (m.providerID !== "openrouter") continue;
+    const price = (m.cost as readonly { input?: number; output?: number }[] | undefined)?.[0];
+    raw[m.id] = {
+      capabilities: { toolcall: m.capabilities?.tools === true },
+      ...(m.status === undefined ? {} : { status: m.status as RawModel["status"] & string }),
+      ...(price?.input === undefined || price.output === undefined
+        ? {}
+        : { cost: { input: price.input / 1_000_000, output: price.output / 1_000_000 } }),
+      ...(m.limit?.context === undefined ? {} : { limit: { context: m.limit.context } }),
+    };
+  }
+  return filterCatalog(raw);
 }

@@ -71,8 +71,21 @@ import { request as httpsRequest } from "node:https";
 // the only thing that is not one.
 export const DEFAULT_TIMEOUT_MS = 45 * 60_000;
 
-export function longFetch(timeoutMs = DEFAULT_TIMEOUT_MS): (request: Request) => Promise<Response> {
-  return async (request: Request): Promise<Response> => {
+/**
+ * BOTH CALL SHAPES, because the two opencode clients disagree. The v1 SDK called
+ * `fetch(request)`; the v2 client (`@opencode/client`) calls `fetch(url, init)`, and a
+ * function that read only the first argument would send every v2 request as a bodiless
+ * GET with no signal — a cancel that reaches nothing, the exact defect `abort` exists for.
+ *
+ * BUFFERED, so never hand it a stream: the response resolves only at `end`. The event
+ * stream therefore goes through ordinary `fetch` (`Reviewer.events`), and this is for the
+ * requests that are long but finite — `session.wait` above all.
+ */
+export function longFetch(
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+): (input: Request | string | URL, init?: RequestInit) => Promise<Response> {
+  return async (input: Request | string | URL, init?: RequestInit): Promise<Response> => {
+    const request = input instanceof Request && init === undefined ? input : new Request(input, init);
     const url = new URL(request.url);
     const body = request.method === "GET" || request.method === "HEAD" ? undefined : await request.text();
 
@@ -99,18 +112,30 @@ export function longFetch(timeoutMs = DEFAULT_TIMEOUT_MS): (request: Request) =>
           const chunks: Buffer[] = [];
           res.on("data", (c: Buffer) => chunks.push(c));
           res.on("end", () => {
-            const responseHeaders = new Headers();
-            for (const [k, v] of Object.entries(res.headers)) {
-              if (typeof v === "string") responseHeaders.set(k, v);
-              else if (Array.isArray(v)) responseHeaders.set(k, v.join(", "));
+            // INSIDE A TRY, because this runs in an event handler, not in the promise: a
+            // throw here is an uncaught exception that ends the whole process. It did —
+            // the first v2 `session.wait` answered 204 and took lore down with it.
+            try {
+              const responseHeaders = new Headers();
+              for (const [k, v] of Object.entries(res.headers)) {
+                if (typeof v === "string") responseHeaders.set(k, v);
+                else if (Array.isArray(v)) responseHeaders.set(k, v.join(", "));
+              }
+              const status = res.statusCode ?? 500;
+              // A NULL-BODY STATUS MUST HAVE A NULL BODY: `new Response` refuses an empty
+              // Buffer for 204, 205 and 304. v1 never answered with one; v2 answers 204 for
+              // every empty success — wait, remove, permission reply.
+              const nullBody = status === 204 || status === 205 || status === 304;
+              resolve(
+                new Response(nullBody ? null : Buffer.concat(chunks), {
+                  status,
+                  statusText: res.statusMessage ?? "",
+                  headers: responseHeaders,
+                }),
+              );
+            } catch (e) {
+              reject(e instanceof Error ? e : new Error(String(e)));
             }
-            resolve(
-              new Response(Buffer.concat(chunks), {
-                status: res.statusCode ?? 500,
-                statusText: res.statusMessage ?? "",
-                headers: responseHeaders,
-              }),
-            );
           });
           res.on("error", reject);
         },

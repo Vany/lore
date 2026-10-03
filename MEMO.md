@@ -3,6 +3,46 @@
 Newest first. Updated at the end of each task: what changed, what I learned, what
 surprised me.
 
+## 2026-10-03 — lore on opencode 2.x, because a re-login could not reach the container
+
+**It started as "how do I renew the OpenAI subscription creds".** I wrote `make
+sync-creds` for 1.x (copy the host's `auth.json`), Vany ran it, and it said nothing had
+changed — truthfully. The host's opencode had become brew's **2.0.20** the night before,
+and 2.x keeps credentials in its database: the fresh 12:31Z login was in the host's
+`credential` table, and `auth.json` still held the token that died on 10-01. Vany: move
+lore to v2 now, and research what is new.
+
+**2.x is a different product, not an upgrade.** npm `@opencode/cli`, not `opencode-ai`
+(whose `latest` is still 1.18.x — installing the old name silently gets 1.x). A new HTTP
+API under `/api/…` with none of 1.x's routes; a typed promise client `@opencode/client`.
+Everything below was measured against a throwaway 2.0.20 server (`/tmp/v2lab`, its own
+XDG dirs, one Z.ai key) before any code changed: prompt is admitted and answered later;
+`wait` + an `idle` record per execution; errors classified on the assistant message;
+`session.retry.scheduled`; paged messages that refuse `cursor` with `order`;
+`permission.asked` hanging a headless session for ever; the shell writing a file with
+`edit` denied.
+
+**Surprises worth keeping.**
+- `longFetch` crashed the WHOLE PROCESS on the first 204 — `new Response(body, {status:
+  204})` throws, and it threw inside a socket `end` handler, outside the promise.
+- The v2 client wraps every abort in `ClientError("Transport")`, so the `Exhausted` a
+  watcher aborts with arrived as "lost its connection" until unwrapped (`abortReason`).
+  The mutation check found six tests guarding that one line.
+- `sync-opencode.sh` copied 2.x's `service.json` — the host service's password — into the
+  live container's config. Found by dry-running the staging into /tmp and listing it.
+- All 146 rewritten reviewer tests passed first time, which is the moment to distrust
+  them: four mutations (no permission refusal, no unwrap, no paging, no idle check) each
+  failed tests, so they test something.
+- Kimi works on 2.x (it had refused every probe since 08-18 on 1.x).
+
+**Verified live, through the built v2 image** (not the deployment): `creds-sync` pushed
+five providers and refused Anthropic; reviews on `openai/gpt-5.6-sol` (the fresh login),
+`zai-coding-plan2/glm-5.3` (custom provider from the staged config) and
+`kimi-code-plan-global/k3` each found the planted bug and left the file untouched.
+
+**Not verified:** the deployment itself (`make up` on the real compose, the volume swap,
+lore's startup checks against 2.x), and the plane MCP under 2.x (`needs_auth` on the host).
+
 ## 2026-09-24 — `make unpark`, and the batch that taught me why predictions are a second copy
 
 **Vany reset the OpenAI quota and asked how to make lore notice — "again".** The answer was

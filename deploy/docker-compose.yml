@@ -172,10 +172,14 @@ services:
       # run, which is not the same as passing.
       LORE_BACKUP_DIR: /backup
       OPENCODE_SERVER: http://opencode:4096
-      # The same credentials the opencode service is started with. opencode answers
-      # a bare 401 with no hint when these are missing, which cost real time to
-      # diagnose the first time.
-      OPENCODE_SERVER_USERNAME: ${OPENCODE_SERVER_USERNAME:-lore}
+      # The same password the opencode service is started with. opencode answers a
+      # bare 401 with no hint when it is missing, which cost real time to diagnose the
+      # first time.
+      #
+      # THE USER NAME IS FIXED, not read from .env: opencode 2.x accepts only `opencode`
+      # and ignores OPENCODE_SERVER_USERNAME entirely (its server auth hard-codes the
+      # name). An .env that still says `lore` would otherwise send every request a 401.
+      OPENCODE_SERVER_USERNAME: opencode
       OPENCODE_SERVER_PASSWORD: ${OPENCODE_SERVER_PASSWORD:?set OPENCODE_SERVER_PASSWORD in .env}
     volumes:
       # A HOST BIND, NOT A NAMED VOLUME, and the path is identical on both sides.
@@ -227,14 +231,18 @@ services:
       context: ..
       dockerfile: deploy/opencode.Dockerfile
       args:
-        # Must match LORE_UID: opencode rewrites auth.json when it renews the OAuth
-        # token, and the staged file is owned by the host user who ran make sync.
+        # Must match LORE_UID: the staged config is owned by the host user who ran
+        # `make up`, and opencode must be able to read and write what it was handed.
         LORE_UID: "${LORE_UID:-1000}"
+        # The HOST's opencode version, which `make up` reads and exports. No fallback:
+        # the Dockerfile refuses an empty or 1.x value rather than guess.
+        OPENCODE_VERSION: "${OPENCODE_VERSION:-}"
     platform: linux/arm64
     restart: unless-stopped
     environment:
-      # Verified: opencode reads this from the environment, with no auth.json. The
-      # staged auth.json below also carries it; either alone is enough.
+      # Provider keys by environment are still honoured — v2 lists `env` as a
+      # connection method — but the usual path is `make sync-creds`, which writes the
+      # host's logins into opencode's own database.
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       # Z.AI Coding Plan. opencode reads this straight from the environment, so a
       # headless host needs no interactive login.
@@ -250,9 +258,9 @@ services:
       # key, so the config file is safe to copy and the secret stays in .env.
       PLANE_API_KEY: ${PLANE_API_KEY:-}
       PLANE_WORKSPACE_SLUG: ${PLANE_WORKSPACE_SLUG:-}
-      # Basic auth on the server. lore reads the same two variables, which is how a
-      # protected server needs no extra configuration on either side.
-      OPENCODE_SERVER_USERNAME: ${OPENCODE_SERVER_USERNAME:-lore}
+      # Basic auth on the server, user `opencode` (fixed by opencode 2.x). lore reads
+      # the same password, which is how a protected server needs no extra configuration
+      # on either side.
       OPENCODE_SERVER_PASSWORD: ${OPENCODE_SERVER_PASSWORD:?set OPENCODE_SERVER_PASSWORD in .env}
     volumes:
       # THE REPOSITORIES ONLY, READ-ONLY, AT THE SAME PATH AS IN `lore`.
@@ -299,27 +307,23 @@ services:
       # unreadable opencode silently ran with defaults and no plugins. Fixing one
       # bug exposed the next, which is the honest shape of this kind of work.
       #
-      # It is not the credential — auth.json is mounted separately and read-only.
+      # It is not the credential — those live in opencode's database (below).
       - ./opencode/config:/home/lore/.config/opencode
-      # opencode needs a WRITABLE data directory — it stores session state there.
-      # The volume provides that scratch space; auth.json is bound over it so the
-      # staged credentials land at the path opencode reads. Docker applies the
-      # deeper path last, so the file mount wins.
+      # opencode's WRITABLE data directory: its database — sessions AND credentials —
+      # lives here.
       #
-      # WRITABLE, and it was `:ro` until the OpenAI credential arrived.
+      # A NEW VOLUME FOR 2.x, not the 1.x `opencode-data`. 2.x would open 1.x's database
+      # and migrate it in place — 3.7 GB of old sessions, on the SBC, at first boot — and
+      # a failed or half-done migration would leave neither version able to start. The
+      # old volume is left exactly as it was, so going back is a compose edit; the price
+      # is that every kept session (D-80) starts cold once, which `conductSession`
+      # already recovers from (`SessionGone`).
       #
-      # An API key is a constant, so read-only cost nothing and bought a little. An
-      # OAUTH credential is not: it carries `expires` and `refresh`, and opencode
-      # must write the renewed token back roughly hourly. Read-only would have let
-      # reviews work for about an hour and then fail in a way that looks like an
-      # expired subscription rather than a mount flag.
-      #
-      # That is the third read-only-mount failure in this deployment — 0700 staged
-      # directories, then plugins that could not install, now this. The pattern is
-      # worth naming: `:ro` is a claim that nothing on the other side ever needs to
-      # write, and that claim keeps turning out to be false.
-      - opencode-data:/home/lore/.local/share/opencode
-      - ./opencode/data/auth.json:/home/lore/.local/share/opencode/auth.json
+      # NO auth.json BIND ANY MORE. 2.x reads that file once, in the migration that
+      # creates its database, and never again — so the bind looked like the credential
+      # path while carrying nothing after first boot. A re-login reaches opencode only
+      # through its API: `make sync-creds`.
+      - opencode2-data:/home/lore/.local/share/opencode
 
   # Continuous replication of the SQLite database.
   #
@@ -362,7 +366,9 @@ services:
       - lore
 
 volumes:
+  # opencode 1.x's data, kept untouched so a rollback has somewhere to go back to.
   opencode-data:
+  opencode2-data:
   # ext4 inside the Linux VM, which is the entire point — see LORE_DB_DIR. NOT backed up
   # by being a volume; litestream replicates it to the host bind above, as it always did.
   lore-db:

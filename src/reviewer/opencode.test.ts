@@ -1,21 +1,24 @@
 /**
  * The opencode boundary, against a real HTTP server.
  *
- * This is the wiring I could least justify shipping unexercised: the response shape
- * varies between opencode versions, so `collectText` and `collectUsage` are written
- * defensively — and defensive code that has never been run is just a guess with
- * more lines.
+ * This is the wiring I could least justify shipping unexercised: the reply format is
+ * someone else's and has already changed under us once (v1's synchronous prompt and
+ * `info`/`parts` messages, v2's admitted prompt and flat typed messages) — and
+ * defensive code that has never been run is just a guess with more lines.
  *
- * The server here is a stand-in for opencode, not for a model. It proves the
- * request we send is well-formed and the reply we get is understood.
+ * The server here is a stand-in for opencode 2.x, not for a model. It keeps sessions
+ * the way opencode does — a prompt admits a user message, the turn appends assistant
+ * messages and then an `idle` record of how it ended, `wait` returns once the session is
+ * idle — so the reviewer is exercised against the protocol, not against canned replies.
+ * Every shape here was measured against a live 2.0.20 first (`MEMO.md`, 2026-10-03).
  */
 
-import { createServer, type Server } from "node:http";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CancelledByLore, DidNotRun, Exhausted, ProbeInconclusive, ProviderAuthFailed, ServiceUnreachable, TooLargeForTier } from "../core/errors.ts";
 import { CLAIM_MAX } from "../core/finding.ts";
 import type { Tier } from "../core/ladder.ts";
-import { Reviewer, countStepParts, emissionOf, extractFindings, quotaRefusal, splitModel, toolsUsed, isTooLong, usageFromMessages } from "./opencode.ts";
+import { DENY_RULES, Reviewer, countStepParts, emissionOf, extractFindings, quotaRefusal, splitModel, statusOf, toolsUsed, isTooLong, usageFromMessages } from "./opencode.ts";
 
 const TIER: Tier = { id: "t1", kind: "model", model: "openrouter/z-ai/glm-5.2", stage: "fast" };
 
@@ -39,74 +42,264 @@ interface Captured {
   method?: string | undefined;
 }
 
+/**
+ * One scripted turn: what the model's LAST assistant message says, and how the turn ends.
+ *
+ * `steps` is how many assistant messages the turn writes — one per model call, as v2
+ * records them — the earlier ones carrying a tool call and a line of narration, the last
+ * one carrying `text`. `error` is opencode's classified failure on that last message,
+ * which makes the turn end `failed`.
+ */
+interface Turn {
+  readonly text?: string;
+  readonly steps?: number;
+  readonly tokens?: Record<string, unknown>;
+  readonly cost?: number;
+  readonly error?: { readonly type: string; readonly message: string; readonly status?: number };
+}
+
+const say = (text: string, extra: Partial<Turn> = {}): Turn => ({ text, ...extra });
+const refuse = (type: string, message: string, status?: number): Turn => ({
+  error: { type, message, ...(status === undefined ? {} : { status }) },
+});
+
 let server: Server;
 let baseUrl: string;
 let captured: Captured[];
-/** Replies handed out in order, so a test can script a retry. */
-let replies: unknown[];
-let status = 200;
-/** `POST /session`: an opencode that is up and refusing is not an absent one. */
+/** Turns handed out in order, one per prompt, so a test can script a retry. */
+let replies: Turn[];
+/** Every session's message list, as opencode would project it. */
+let sessions: Map<string, Record<string, unknown>[]>;
+/** Sessions with a turn admitted and not yet ended — what `wait` blocks on. */
+let running: Map<string, () => void>;
+let seq = 0;
+
+/** `POST /api/session/:id/prompt` answers 404 — the session is gone from opencode. */
+let promptGone = false;
+/** `POST /api/session`: an opencode that is up and refusing is not an absent one. */
 let sessionStatus = 200;
 let sessionBody: unknown = { id: "ses_test" };
-/** `GET /session/:id/message`: the turn-by-turn record the step count is taken from. */
-let messagesStatus = 200;
-let messages: unknown = undefined;
-/** `POST /session/:id/abort`: the call that is supposed to stop the spending. */
+/** `GET …/message` fails from this request on (0-based), to fail one read and not another. */
+let messagesFailFrom = Number.POSITIVE_INFINITY;
+let messagesRead = 0;
+/** `GET …/message` pages at this size, to prove the cursor is followed. */
+let pageSize = Number.POSITIVE_INFINITY;
+/** `POST …/interrupt`: the call that is supposed to stop the spending. */
 let abortStatus = 200;
-/** `POST /session/:id/summarize`: compaction, which must never be able to end a review. */
-let summarizeStatus = 200;
+/** `POST …/compact`: compaction, which must never be able to end a review. */
+let compactStatus = 200;
 /** Destroy the prompt's socket mid-call — the shape of a container dying under a round. */
 let destroyPrompt = false;
-/** And whether `/config/providers` still answers — the probe that tells the two apart. */
+/** And whether `/api/info` and `/api/model` still answer — the probe that tells the two apart. */
 let providersDown = false;
-/** Accept the prompt and never answer it, so a cancel has something real to interrupt. */
+/** Admit the prompt and never end the turn, so a cancel has something real to interrupt. */
 let hangPrompt = false;
-/** `DELETE /session/:id`: how long `release`'s cleanup call takes to answer. */
+/** Admit the prompt, report idle, and never record the turn at all. */
+let neverRecord = false;
+/** Record the turn this long after admitting it — `wait` answers before it exists. */
+let turnDelayMs = 0;
+/** `DELETE /api/session/:id`: how long `release`'s cleanup call takes to answer. */
 let deleteDelayMs = 0;
-/** `POST /session`: how long session creation takes — so a test can land a cancel mid-create. */
+/** `POST /api/session`: how long session creation takes — so a test can land a cancel mid-create. */
 let createSessionDelayMs = 0;
-/** `GET /session/:id/message`: how long `compactIfFull`'s own read takes — same reason. */
+/** `GET …/message`: how long a read takes — same reason. */
 let messagesDelayMs = 0;
-/** Events the fake opencode will publish on `/event`, in order. */
+/** Events the fake opencode will publish on `/api/event`, in order. */
 let pending: unknown[] = [];
 
-/**
- * What `GET /session/:id/message` really answers, taken from a live opencode 1.18.9.
- *
- * One user message, then **one assistant message per agentic turn**, each carrying
- * exactly one `step-start`. That last detail is the whole reason the count is taken
- * from here: 82 `step-start` parts across 86 assistant messages in one real session,
- * and never two in the same message.
- */
-function sessionMessages(turns: number): unknown[] {
-  const out: unknown[] = [
-    {
-      info: { id: "msg_user", sessionID: "ses_test", role: "user", time: { created: 1 } },
-      parts: [{ id: "prt_user", sessionID: "ses_test", messageID: "msg_user", type: "text", text: "review this" }],
-    },
-  ];
-  for (let i = 0; i < turns; i++) {
-    const id = `msg_a${i}`;
-    out.push({
-      info: { id, sessionID: "ses_test", role: "assistant", time: { created: 2 + i }, modelID: "z-ai/glm-5.2" },
-      parts: [
-        { id: `prt_${i}s`, sessionID: "ses_test", messageID: id, type: "step-start" },
-        { id: `prt_${i}t`, sessionID: "ses_test", messageID: id, type: "tool", tool: "read" },
-        { id: `prt_${i}f`, sessionID: "ses_test", messageID: id, type: "step-finish", reason: "tool-calls", cost: 0 },
+const json = (res: ServerResponse, status: number, body: unknown): void => {
+  res.writeHead(status, { "content-type": "application/json" });
+  res.end(body === undefined ? "" : JSON.stringify(body));
+};
+
+/** Append one turn to a session, exactly as v2 records it: N assistant messages, then `idle`. */
+function recordTurn(sessionId: string, turn: Turn): void {
+  const list = sessions.get(sessionId) ?? [];
+  const steps = Math.max(1, turn.steps ?? 1);
+  for (let i = 0; i < steps - 1; i++) {
+    list.push({
+      id: `msg_a${++seq}`,
+      type: "assistant",
+      finish: "tool-calls",
+      content: [
+        { type: "text", text: "reading the files first" },
+        { type: "tool", id: `call_${seq}`, name: "read", state: { status: "completed" } },
+      ],
+      tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      cost: 0,
+    });
+  }
+  list.push({
+    id: `msg_a${++seq}`,
+    type: "assistant",
+    finish: turn.error === undefined ? "stop" : "error",
+    content: turn.text === undefined ? [] : [{ type: "text", text: turn.text }],
+    tokens: turn.tokens ?? { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } },
+    cost: turn.cost ?? 0,
+    ...(turn.error === undefined ? {} : { error: turn.error }),
+  });
+  list.push({ id: `msg_i${++seq}`, type: "idle", outcome: turn.error === undefined ? "succeeded" : "failed" });
+  sessions.set(sessionId, list);
+}
+
+function route(req: IncomingMessage, res: ServerResponse, raw: string): void {
+  const url = new URL(req.url ?? "", "http://x");
+  const path = url.pathname;
+  const m = /^\/api\/(?:experimental\/)?session\/([^/]+)(?:\/(.*))?$/.exec(path);
+  const sid = m?.[1] ?? "";
+  const rest = m?.[2];
+
+  // THE CHANNEL D-91 READS. A real opencode narrates every session here while the turn
+  // runs; the fixture holds the connection and writes whatever a test pushes, so a quota
+  // refusal can arrive DURING a hanging call — the only arrangement that proves anything.
+  if (path === "/api/event") {
+    res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
+    // A CURSOR PER CONNECTION, never a shift. A shared queue that consumes is a fixture
+    // where one test's stream eats the next test's event — which happened, and failed the
+    // feature rather than the harness. A real event stream broadcasts; so does this.
+    let sent = 0;
+    const t = setInterval(() => {
+      while (sent < pending.length) {
+        res.write(`data: ${JSON.stringify(pending[sent])}\n\n`);
+        sent++;
+      }
+    }, 10);
+    res.on("close", () => clearInterval(t));
+    return;
+  }
+  if (path === "/api/info" || path === "/api/model") {
+    if (providersDown) {
+      req.socket.destroy();
+      return;
+    }
+    if (path === "/api/info") return json(res, 200, { version: "2.0.22", pid: 1, urls: [] });
+    // THE ADVERTISED CONTEXT WINDOW, which the 2/3 compaction rule is a fraction OF
+    // (D-80). Two pool twins with DIFFERENT windows, so the budget test can prove the
+    // prompt is fitted to the smaller one — an accidental max would pass a test whose
+    // twins agree.
+    return json(res, 200, {
+      location: { directory: "/" },
+      data: [
+        { providerID: "openrouter", id: "z-ai/glm-5.2", limit: { context: 1000 } },
+        { providerID: "zp1", id: "glm-5.2", limit: { context: 2000 } },
+        { providerID: "zp2", id: "glm-5.2", limit: { context: 500 } },
       ],
     });
   }
-  return out;
-}
+  if (path === "/api/session" && req.method === "POST") {
+    // A refusing opencode answers with its declared error — verified against a
+    // password-protected 2.0.20, which sends `UnauthorizedError` and nothing else useful.
+    setTimeout(() => {
+      if (sessionStatus === 401) return json(res, 401, { _tag: "UnauthorizedError", message: "Unauthorized" });
+      if (sessionStatus >= 400) return json(res, sessionStatus, undefined);
+      const id = (sessionBody as { id?: string }).id;
+      if (id !== undefined && !sessions.has(id)) sessions.set(id, []);
+      json(res, 200, { data: sessionBody });
+    }, createSessionDelayMs);
+    return;
+  }
+  if (m === null) return json(res, 404, undefined);
 
-/**
- * One `step-start` — what a prompt reply really carries, however far the agent went.
- *
- * The reply is a single assistant message, so its own step count is 1 for a runaway
- * and 1 for a one-shot answer. Kept in every default reply here so no test can pass
- * by counting the wrong thing.
- */
-const REPLY_STEP = { id: "prt_reply", sessionID: "ses_test", messageID: "msg_last", type: "step-start" };
+  if (rest === undefined && req.method === "GET") {
+    if (!sessions.has(sid)) return json(res, 404, { _tag: "SessionNotFoundError", sessionID: sid, message: "gone" });
+    return json(res, 200, { data: { id: sid, location: { directory: "/tmp/wt" } } });
+  }
+  // `release`'s own delete — delayable, so a test can prove what else happens WHILE it is
+  // still in flight rather than only after it settles.
+  if (rest === undefined && req.method === "DELETE") {
+    setTimeout(() => {
+      res.writeHead(204);
+      res.end();
+    }, deleteDelayMs);
+    return;
+  }
+  if (rest === "prompt") {
+    if (destroyPrompt) {
+      req.socket.destroy();
+      return;
+    }
+    if (promptGone) return json(res, 404, { _tag: "SessionNotFoundError", sessionID: sid, message: "Session not found" });
+    const list = sessions.get(sid) ?? [];
+    const userId = `msg_u${++seq}`;
+    list.push({ id: userId, type: "user", text: (JSON.parse(raw) as { text?: string }).text ?? "" });
+    sessions.set(sid, list);
+    if (hangPrompt) {
+      // Held open until `interrupt` ends it, the way a real execution is.
+      running.set(sid, () => {
+        recordTurn(sid, refuse("session.interrupted", "interrupted"));
+        const l = sessions.get(sid) ?? [];
+        const idle = l.at(-1);
+        if (idle !== undefined) idle["outcome"] = "interrupted";
+      });
+    } else if (!neverRecord) {
+      const turn = replies.shift() ?? {};
+      if (turnDelayMs > 0) setTimeout(() => recordTurn(sid, turn), turnDelayMs);
+      else recordTurn(sid, turn);
+    }
+    return json(res, 200, { data: { id: userId, sessionID: sid, type: "user", time: { created: Date.now() } } });
+  }
+  if (rest === "wait") {
+    const done = (): void => {
+      res.writeHead(204);
+      res.end();
+    };
+    if (!running.has(sid)) return done();
+    const t = setInterval(() => {
+      if (!running.has(sid)) {
+        clearInterval(t);
+        done();
+      }
+    }, 10);
+    res.on("close", () => clearInterval(t));
+    return;
+  }
+  if (rest === "interrupt") {
+    if (abortStatus >= 400) return json(res, abortStatus, undefined);
+    const stop = running.get(sid);
+    running.delete(sid);
+    stop?.();
+    return json(res, 200, { interrupted: stop !== undefined });
+  }
+  if (rest === "compact") {
+    if (compactStatus >= 400) return json(res, compactStatus, undefined);
+    return json(res, 200, { data: { id: `msg_c${++seq}`, sessionID: sid, type: "compaction", payload: {}, delivery: "steer" } });
+  }
+  if (rest === "message" && req.method === "GET") {
+    const n = messagesRead++;
+    setTimeout(() => {
+      if (n >= messagesFailFrom) return json(res, 404, { _tag: "SessionNotFoundError", sessionID: sid, message: "gone" });
+      if (!sessions.has(sid)) return json(res, 404, { _tag: "SessionNotFoundError", sessionID: sid, message: "gone" });
+      let all = [...(sessions.get(sid) ?? [])];
+      const type = url.searchParams.get("type");
+      if (type !== null) all = all.filter((x) => x["type"] === type);
+      const cursor = url.searchParams.get("cursor");
+      // opencode REFUSES a cursor sent with an order — measured, "Do not combine with order".
+      if (cursor !== null && url.searchParams.get("order") !== null) {
+        return json(res, 400, { _tag: "InvalidRequestError", message: "Do not combine with order" });
+      }
+      if (url.searchParams.get("order") === "desc") all.reverse();
+      const from = cursor === null ? 0 : Number(cursor);
+      const limit = Number(url.searchParams.get("limit") ?? Number.POSITIVE_INFINITY);
+      const size = Math.min(limit, pageSize);
+      const page = all.slice(from, from + size);
+      // A cursor is offered even after the last message, as 2.0.20 does — the reader must
+      // stop on an empty page, not on a missing cursor alone.
+      json(res, 200, { data: page, cursor: { next: from + size <= all.length ? String(from + size) : null } });
+    }, messagesDelayMs);
+    return;
+  }
+  if (rest?.startsWith("permission/") === true) {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+  if (rest === "move") {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+  json(res, 404, undefined);
+}
 
 function start(): Promise<void> {
   return new Promise((resolve) => {
@@ -116,108 +309,7 @@ function start(): Promise<void> {
       req.on("end", () => {
         const raw = Buffer.concat(chunks).toString("utf8");
         captured.push({ path: req.url ?? "", body: raw.length > 0 ? JSON.parse(raw) : undefined, method: req.method });
-
-        // Route on the path alone. The prompt call carries `?directory=…`, so
-        // matching against the raw url silently sends every prompt the
-        // session-create reply — which is how this harness lied the first time.
-        const path = (req.url ?? "").split("?")[0] ?? "";
-        // …and on the METHOD as well, because opencode puts the prompt and the
-        // message list on the same path and tells them apart by verb. Routing on the
-        // path alone would feed the prompt reply to the step counter.
-        if (path.endsWith("/message") && req.method === "GET") {
-          setTimeout(() => {
-            res.writeHead(messagesStatus, { "content-type": "application/json" });
-            res.end(JSON.stringify(messages ?? sessionMessages(3)));
-          }, messagesDelayMs);
-          return;
-        }
-        if (path.endsWith("/message") && destroyPrompt) {
-          req.socket.destroy();
-          return;
-        }
-        if (path.endsWith("/message")) {
-          // A PROMPT THAT NEVER COMES BACK — an exhausted Z.ai plan through opencode,
-          // which accepts the session and answers nothing at all (D-84). Every other
-          // fixture here answers instantly, so nothing could exercise a cancel against
-          // a call that is genuinely still open, which is the only state a cancel is for.
-          if (hangPrompt) return;
-          res.writeHead(status, { "content-type": "application/json" });
-          res.end(JSON.stringify(replies.shift() ?? {}));
-          return;
-        }
-        if (path === "/session") {
-          // A refusing opencode answers with a status and no body at all — verified
-          // against a password-protected server, which sends a bare 401 with
-          // Content-Length: 0.
-          setTimeout(() => {
-            res.writeHead(sessionStatus, { "content-type": "application/json" });
-            res.end(sessionStatus >= 400 ? "" : JSON.stringify(sessionBody));
-          }, createSessionDelayMs);
-          return;
-        }
-        // THE CHANNEL D-91 READS. A real opencode narrates every session here while the
-        // prompt request is still open; the fixture holds the connection and writes
-        // whatever a test pushes, so a quota refusal can arrive DURING a hanging call —
-        // which is the only arrangement that proves anything about this feature.
-        if (path === "/event") {
-          res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
-          // A CURSOR PER CONNECTION, never a shift. A shared queue that consumes is a
-          // fixture where one test's stream eats the next test's event — which is exactly
-          // what happened, and it failed the feature rather than the harness. A real
-          // event stream broadcasts; so does this.
-          let sent = 0;
-          const t = setInterval(() => {
-            while (sent < pending.length) {
-              res.write(`data: ${JSON.stringify(pending[sent])}\n\n`);
-              sent++;
-            }
-          }, 10);
-          res.on("close", () => {
-            clearInterval(t);
-          });
-          return;
-        }
-        // THE ADVERTISED CONTEXT WINDOW, which the 2/3 compaction rule is a fraction OF
-        // (D-80). Without a route here the catch-all answers `{id:"ses_test"}`, the window
-        // reads as unknown, and `shouldCompact` correctly refuses — so a compaction test
-        // would pass by never compacting.
-        if (path === "/config/providers" && providersDown) {
-          req.socket.destroy();
-          return;
-        }
-        if (path === "/config/providers") {
-          res.writeHead(200, { "content-type": "application/json" });
-          // Two pool twins with DIFFERENT windows, so the budget test can prove the
-          // prompt is fitted to the smaller one — an accidental max would pass a test
-          // whose twins agree.
-          res.end(JSON.stringify({ providers: [
-            { id: "openrouter", models: { "z-ai/glm-5.2": { limit: { context: 1000 } } } },
-            { id: "zp1", models: { "glm-5.2": { limit: { context: 2000 } } } },
-            { id: "zp2", models: { "glm-5.2": { limit: { context: 500 } } } },
-          ] }));
-          return;
-        }
-        if (path.endsWith("/summarize")) {
-          res.writeHead(summarizeStatus, { "content-type": "application/json" });
-          res.end(summarizeStatus === 200 ? "true" : JSON.stringify({ error: "context overflow" }));
-          return;
-        }
-        if (path.endsWith("/abort")) {
-          res.writeHead(abortStatus, { "content-type": "application/json" });
-          res.end(abortStatus >= 400 ? "" : "true");
-          return;
-        }
-        // `release`'s own `DELETE /session/:id` — delayable, so a test can prove what
-        // else happens WHILE it is still in flight rather than only after it settles.
-        if (req.method === "DELETE") {
-          setTimeout(() => {
-            res.writeHead(200, { "content-type": "application/json" });
-            res.end("true");
-          }, deleteDelayMs);
-          return;
-        }
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify({ id: "ses_test" }));
+        route(req, res, raw);
       });
     });
     server.listen(0, "127.0.0.1", () => {
@@ -248,16 +340,21 @@ function closedPort(): Promise<number> {
 beforeEach(async () => {
   captured = [];
   replies = [];
-  status = 200;
+  sessions = new Map();
+  running = new Map();
+  promptGone = false;
   sessionStatus = 200;
   sessionBody = { id: "ses_test" };
-  messagesStatus = 200;
-  messages = undefined;
+  messagesFailFrom = Number.POSITIVE_INFINITY;
+  messagesRead = 0;
+  pageSize = Number.POSITIVE_INFINITY;
   abortStatus = 200;
-  summarizeStatus = 200;
+  compactStatus = 200;
   destroyPrompt = false;
   providersDown = false;
   hangPrompt = false;
+  neverRecord = false;
+  turnDelayMs = 0;
   deleteDelayMs = 0;
   createSessionDelayMs = 0;
   messagesDelayMs = 0;
@@ -266,10 +363,11 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  server.closeAllConnections();
   server.close();
 });
 
-const reviewer = () => new Reviewer({ baseUrl, agent: "readonly", timeoutMs: 10_000});
+const reviewer = () => new Reviewer({ baseUrl, agent: "readonly", timeoutMs: 10_000 });
 
 /**
  * Found BY PATH, never by position.
@@ -279,8 +377,20 @@ const reviewer = () => new Reviewer({ baseUrl, agent: "readonly", timeoutMs: 10_
  * to do with what they assert. A positional index into "every request lore made" is a
  * dependency on the whole client's behaviour, declared nowhere.
  */
-const asked = (match: string): Captured | undefined => captured.find((c) => c.path.includes(match));
-const prompted = (): Captured | undefined => captured.find((c) => c.path.includes("/message") && c.method === "POST");
+const pathOf = (c: Captured): string => c.path.split("?")[0] ?? "";
+const created = (): Captured | undefined => captured.find((c) => pathOf(c) === "/api/session" && c.method === "POST");
+const prompted = (): Captured | undefined => captured.find((c) => pathOf(c).endsWith("/prompt"));
+const sentText = (c: Captured | undefined): string => (c?.body as { text?: string } | undefined)?.text ?? "";
+const creates = () => captured.filter((c) => pathOf(c) === "/api/session" && c.method === "POST");
+const prompts = () => captured.filter((c) => pathOf(c).endsWith("/prompt"));
+const interrupts = () => captured.filter((c) => pathOf(c).endsWith("/interrupt"));
+const deletes = () => captured.filter((c) => c.method === "DELETE");
+const keptPort = (rows: Map<string, string>) => ({
+  get: (k: string) => rows.get(k),
+  set: (k: string, v: string) => void rows.set(k, v),
+  forget: (k: string) => void rows.delete(k),
+  keys: () => [...rows.keys()],
+});
 
 describe("splitModel", () => {
   it("splits provider from model, keeping slashes in the model id", () => {
@@ -297,52 +407,68 @@ describe("splitModel", () => {
 
 describe("Reviewer.review", () => {
   it("creates a session and sends the prompt to it", async () => {
-    replies = [{ parts: [{ type: "text", text: FINDING_JSON }] }];
+    replies = [say(FINDING_JSON)];
     const result = await reviewer().review(TIER, "review this", "/tmp/wt");
 
     expect(result.findings).toHaveLength(1);
     expect(result.findings[0]?.claim).toBe("decline path leaves the hold active");
-    expect(asked("/session")?.path).toContain("/session");
-    expect(prompted()?.path).toContain("/session/ses_test/message");
+    expect(created()).toBeDefined();
+    expect(prompted()?.path).toContain("/api/session/ses_test/prompt");
+    expect(sentText(prompted())).toContain("review this");
   });
 
-  // INV-8, made structural. `--agent` silently falls back to the write-capable
-  // default when the agent is missing; an explicit per-request denial cannot.
-  it("denies write tools in the request body, not only via the agent name", async () => {
-    replies = [{ parts: [{ type: "text", text: FINDING_JSON }] }];
+  // INV-8, made structural. A missing agent silently falls back to the write-capable
+  // default; the session's own deny rules come AFTER the agent's and the last match wins,
+  // so they hold whatever agent opencode resolves.
+  it("opens the session with edit denied in its own rules, not only via the agent name", async () => {
+    replies = [say(FINDING_JSON)];
     await reviewer().review(TIER, "review this", "/tmp/wt");
 
-    const body = prompted()?.body as { agent?: string; tools?: Record<string, boolean>; model?: unknown };
+    const body = created()?.body as { agent?: string; permissions?: unknown[]; model?: unknown };
     expect(body.agent).toBe("readonly");
-    expect(body.tools).toMatchObject({ write: false, edit: false, patch: false });
-    expect(body.model).toStrictEqual({ providerID: "openrouter", modelID: "z-ai/glm-5.2" });
+    expect(body.permissions).toContainEqual({ action: "edit", resource: "*", effect: "deny" });
+    expect(body.model).toStrictEqual({ providerID: "openrouter", id: "z-ai/glm-5.2" });
+  });
+
+  // A question on a headless server waits for ever: nobody is there to answer it.
+  it("denies the question tool, which nobody could answer", () => {
+    expect(DENY_RULES).toContainEqual({ action: "question", resource: "*", effect: "deny" });
   });
 
   it("points the session at the worktree under review", async () => {
-    replies = [{ parts: [{ type: "text", text: FINDING_JSON }] }];
+    replies = [say(FINDING_JSON)];
     await reviewer().review(TIER, "review this", "/tmp/wt");
-    expect(prompted()?.path).toContain("directory=");
+    expect((created()?.body as { location?: unknown }).location).toStrictEqual({ directory: "/tmp/wt" });
   });
 
-  // The shape varies by opencode version, which is exactly why this is defensive.
-  it("reads a reply nested under info.parts as well as a flat one", async () => {
-    replies = [{ info: { parts: [{ text: FINDING_JSON }] } }];
+  // v2 has no per-request system prompt, so the charter rides the opening message.
+  it("opens a fresh session with the read-only charter", async () => {
+    replies = [say(FINDING_JSON)];
+    await reviewer().review(TIER, "review this", "/tmp/wt");
+    expect(sentText(prompted())).toMatch(/^You review code\. You never modify it\./);
+  });
+
+  // THE LAST ASSISTANT MESSAGE IS THE ANSWER. The earlier ones are the model narrating
+  // its exploration, and handing those to the extractor would feed it prose it was never
+  // meant to parse — v1's prompt returned exactly the one final message.
+  it("reads the turn's final message, not the exploration narration before it", async () => {
+    replies = [say(FINDING_JSON, { steps: 4 })];
     const result = await reviewer().review(TIER, "review this", "/tmp/wt");
     expect(result.findings).toHaveLength(1);
+    expect(result.raw).not.toContain("reading the files first");
   });
 
   // The shape opencode really sends, observed live: `cache` is an OBJECT, and
   // `Number({read,write})` is NaN. NaN into a NOT NULL column killed the first
   // real review after the diff, T0 and the model call had all been paid for.
+  //
+  // Read through the FALLBACK path — the whole-session read fails (`messagesFailFrom`) —
+  // because that is the one that reads a single message; the whole-session sum counts
+  // differently (`usageFromMessages`, below).
   it("reads the nested cache object rather than producing NaN", async () => {
+    messagesFailFrom = 1;
     replies = [
-      {
-        parts: [{ type: "text", text: FINDING_JSON }],
-        info: {
-          tokens: { input: 4000, output: 200, reasoning: 50, cache: { read: 3000, write: 900 } },
-          cost: 0.0123,
-        },
-      },
+      say(FINDING_JSON, { tokens: { input: 4000, output: 200, reasoning: 50, cache: { read: 3000, write: 900 } }, cost: 0.0123 }),
     ];
     const r = await reviewer().review(TIER, "review this", "/tmp/wt");
     expect(r.inputTokens).toBe(4000);
@@ -355,14 +481,14 @@ describe("Reviewer.review", () => {
   });
 
   it("still reads a flat cache count, for providers that send one", async () => {
-    replies = [
-      { parts: [{ type: "text", text: FINDING_JSON }], info: { tokens: { input: 10, cache: 5, output: 2 }, cost: 0.1 } },
-    ];
+    messagesFailFrom = 1;
+    replies = [say(FINDING_JSON, { tokens: { input: 10, cache: 5, output: 2 }, cost: 0.1 })];
     expect((await reviewer().review(TIER, "review this", "/tmp/wt")).cachedTokens).toBe(5);
   });
 
   it("never yields NaN when usage is missing or malformed", async () => {
-    replies = [{ parts: [{ type: "text", text: FINDING_JSON }], info: { tokens: { input: "?" } } }];
+    messagesFailFrom = 1;
+    replies = [say(FINDING_JSON, { tokens: { input: "?" } })];
     const r = await reviewer().review(TIER, "review this", "/tmp/wt");
     for (const v of [r.inputTokens, r.cachedTokens, r.outputTokens, r.costUsd]) {
       expect(Number.isFinite(v)).toBe(true);
@@ -370,10 +496,7 @@ describe("Reviewer.review", () => {
   });
 
   it("retries once when the reply cannot be parsed, and says it retried", async () => {
-    replies = [
-      { parts: [{ type: "text", text: "Sure! Here are my thoughts in prose." }] },
-      { parts: [{ type: "text", text: `\`\`\`json\n${FINDING_JSON}\n\`\`\`` }] },
-    ];
+    replies = [say("Sure! Here are my thoughts in prose."), say(`\`\`\`json\n${FINDING_JSON}\n\`\`\``)];
     const result = await reviewer().review(TIER, "review this", "/tmp/wt");
     expect(result.retried).toBe(true);
     expect(result.findings).toHaveLength(1);
@@ -382,10 +505,7 @@ describe("Reviewer.review", () => {
   // An unparseable review is a FAILED review, not a clean one. This is the single
   // most likely way a green run could silently mean nothing.
   it("fails loudly when the reply is still unparseable after the retry", async () => {
-    replies = [
-      { parts: [{ type: "text", text: "no json here" }] },
-      { parts: [{ type: "text", text: "still no json" }] },
-    ];
+    replies = [say("no json here"), say("still no json")];
     await expect(reviewer().review(TIER, "review this", "/tmp/wt")).rejects.toThrow(/DID NOT RUN/);
   });
 
@@ -403,8 +523,8 @@ describe("Reviewer.review", () => {
     replies = [
       // One block parses; the second is truncated mid-object, as a dropped connection
       // leaves it.
-      { parts: [{ type: "text", text: "```json\n" + good + "\n```\n```json\n{\"findings\": [{\"file\": \"src/a.ts\"\n```" }] },
-      { parts: [{ type: "text", text: "```json\n" + good + "\n```" }] },
+      say("```json\n" + good + "\n```\n```json\n{\"findings\": [{\"file\": \"src/a.ts\"\n```"),
+      say("```json\n" + good + "\n```"),
     ];
 
     const result = await reviewer().review(TIER, "review this", "/tmp/wt");
@@ -439,8 +559,8 @@ describe("Reviewer.review", () => {
     const good = { ...JSON.parse(FINDING_JSON).findings[0], line: 99, claim: "a second, distinct claim" };
     const stillRefused = { ...JSON.parse(FINDING_JSON).findings[0], confidence: 0.8 };
     replies = [
-      { parts: [{ type: "text", text: "```json\n" + JSON.stringify({ findings: [good, stillRefused] }) + "\n```" }] },
-      { parts: [{ type: "text", text: "```json\n" + FINDING_JSON + "\n```" }] },
+      say("```json\n" + JSON.stringify({ findings: [good, stillRefused] }) + "\n```"),
+      say("```json\n" + FINDING_JSON + "\n```"),
     ];
 
     const result = await reviewer().review(TIER, "review this", "/tmp/wt");
@@ -450,10 +570,7 @@ describe("Reviewer.review", () => {
     expect(result.discarded, "the refusal is reported").toHaveLength(1);
     expect(result.discarded.join(" ")).toMatch(/confidence/);
     expect(result.retried, "a schema refusal is not a parse failure — no re-ask").toBe(false);
-    expect(
-      captured.filter((c) => c.path.includes("/message") && c.method === "POST"),
-      "exactly one prompt POST — the second scripted reply must go unused",
-    ).toHaveLength(1);
+    expect(prompts(), "exactly one prompt — the second scripted reply must go unused").toHaveLength(1);
   });
 
   /**
@@ -464,8 +581,8 @@ describe("Reviewer.review", () => {
   it("still reports the loss when the re-ask does not recover it", async () => {
     const good = JSON.stringify({ findings: [JSON.parse(FINDING_JSON).findings[0]] });
     replies = [
-      { parts: [{ type: "text", text: "```json\n" + good + "\n```\n```json\n{\"findings\": [{\"file\"\n```" }] },
-      { parts: [{ type: "text", text: "sorry, I cannot reconstruct it" }] },
+      say("```json\n" + good + "\n```\n```json\n{\"findings\": [{\"file\"\n```"),
+      say("sorry, I cannot reconstruct it"),
     ];
 
     const result = await reviewer().review(TIER, "review this", "/tmp/wt");
@@ -486,10 +603,10 @@ describe("Reviewer.review", () => {
   it("keeps the loss note when the re-ask replies with an empty array", async () => {
     const good = JSON.stringify({ findings: [JSON.parse(FINDING_JSON).findings[0]] });
     replies = [
-      { parts: [{ type: "text", text: "```json\n" + good + "\n```\n```json\n{\"findings\": [{\"file\"\n```" }] },
+      say("```json\n" + good + "\n```\n```json\n{\"findings\": [{\"file\"\n```"),
       // Exactly what the re-ask prompt asks for when the model believes there is nothing
       // new — a valid, well-formed, EMPTY reply.
-      { parts: [{ type: "text", text: '```json\n{"findings": []}\n```' }] },
+      say('```json\n{"findings": []}\n```'),
     ];
 
     const result = await reviewer().review(TIER, "review this", "/tmp/wt");
@@ -499,7 +616,7 @@ describe("Reviewer.review", () => {
   });
 
   it("reports an empty findings array as clean rather than as a failure", async () => {
-    replies = [{ parts: [{ type: "text", text: '```json\n{"findings": []}\n```' }] }];
+    replies = [say('```json\n{"findings": []}\n```')];
     const result = await reviewer().review(TIER, "review this", "/tmp/wt");
     expect(result.findings).toStrictEqual([]);
     expect(result.retried).toBe(false);
@@ -508,48 +625,56 @@ describe("Reviewer.review", () => {
   // Quota is never a reason to fall through to another tier: a tier that did not
   // run found nothing, which is not the same as finding nothing.
   it("raises Exhausted on a rate limit rather than continuing", async () => {
-    status = 429;
-    replies = [{ error: "rate limit exceeded" }];
+    replies = [refuse("provider.rate-limit", "rate limit exceeded", 429)];
     await expect(reviewer().review(TIER, "review this", "/tmp/wt")).rejects.toThrow(Exhausted);
   });
 
-  // The shape that actually occurs. opencode answers 200 and nests the PROVIDER's
-  // failure in the body, so the transport status says nothing about whether the
-  // model ran. Observed live against OpenRouter with an unfunded account.
-  it("raises Exhausted when the provider refuses inside a 200 response", async () => {
-    replies = [
-      {
-        info: {
-          error: {
-            name: "APIError",
-            data: { message: "Insufficient credits. Add more using https://openrouter.ai/settings/credits", statusCode: 402 },
-          },
-        },
-      },
-    ];
+  // opencode records the PROVIDER's failure on the assistant message while the exchange
+  // with opencode itself succeeds — so whether the model ran is in the record, not in any
+  // HTTP status. Observed live against OpenRouter with an unfunded account.
+  it("raises Exhausted when the provider refuses inside a successful exchange", async () => {
+    replies = [refuse("provider.quota", "Insufficient credits. Add more using https://openrouter.ai/settings/credits", 402)];
     await expect(reviewer().review(TIER, "review this", "/tmp/wt")).rejects.toThrow(Exhausted);
+  });
+
+  // opencode's own word decides when it gives one: measured on 2.0.20 against a bogus
+  // OpenRouter key, `provider.auth` with "User not found." — words no pattern matches.
+  it("classifies opencode's provider.auth as rejected credentials, whatever the words", async () => {
+    replies = [refuse("provider.auth", "User not found.")];
+    await expect(reviewer().review(TIER, "review this", "/tmp/wt")).rejects.toThrow(ProviderAuthFailed);
   });
 
   // The shape that killed rev_gOhsCu's t3 on 2026-08-14: an OAuth-backed subscription
   // whose refresh token died answers through opencode as a 500 with the 401 INSIDE the
-  // message — "UnknownError: Token refresh failed: 401" — matching neither the status
-  // checks nor the old auth patterns. Unclassified, it was a plain failure: no page, no
-  // route mark for the status line, and the same-model fallback never walked.
+  // message — "Token refresh failed: 401" — matching neither the status checks nor the
+  // old auth patterns. Unclassified, it was a plain failure: no page, no route mark for
+  // the status line, and the same-model fallback never walked.
   it("classifies a failed token refresh as rejected credentials, not as a generic failure", async () => {
-    status = 500;
-    replies = [{ error: "UnknownError: Token refresh failed: 401" }];
+    replies = [refuse("unknown", "Token refresh failed: 401", 500)];
     await expect(reviewer().review(TIER, "review this", "/tmp/wt")).rejects.toThrow(ProviderAuthFailed);
   });
 
   it("does not retry a provider failure as though it were bad formatting", async () => {
     // Retrying an unpaid bill wastes a call and reports the wrong cause: someone
     // would go and debug the prompt.
-    replies = [
-      { info: { error: { name: "APIError", data: { message: "invalid api key", statusCode: 401 } } } },
-      { parts: [{ type: "text", text: FINDING_JSON }] },
-    ];
+    replies = [refuse("provider.auth", "invalid api key", 401), say(FINDING_JSON)];
     await expect(reviewer().review(TIER, "review this", "/tmp/wt")).rejects.toThrow(/invalid api key/);
   });
+
+  // `wait` answers when the session is idle, and a session that has not picked the prompt
+  // up yet is idle too. The turn counts as ended only when its `idle` record exists.
+  it("waits again when opencode reports idle before the turn is recorded", async () => {
+    turnDelayMs = 300;
+    replies = [say(FINDING_JSON)];
+    const result = await reviewer().review(TIER, "review this", "/tmp/wt");
+    expect(result.findings).toHaveLength(1);
+  });
+
+  // A turn whose end was never recorded is a turn nobody can claim ran (INV-1).
+  it("fails a turn whose end opencode never records, rather than reading it as clean", async () => {
+    neverRecord = true;
+    await expect(reviewer().review(TIER, "review this", "/tmp/wt")).rejects.toThrow(/idle five times without recording/);
+  }, 15_000);
 });
 
 /**
@@ -564,10 +689,7 @@ describe("Reviewer.review", () => {
  */
 describe("a tier that keeps its session", () => {
   const KEEPS = { ...TIER, conversation: true };
-  const reply = () => ({ parts: [{ type: "text", text: FINDING_JSON }] });
-  const creates = () => captured.filter((c) => (c.path.split("?")[0] ?? "") === "/session" && c.method === "POST");
-  const prompts = () =>
-    captured.filter((c) => (c.path.split("?")[0] ?? "").endsWith("/message") && c.method === "POST");
+  const reply = () => say(FINDING_JSON);
 
   it("creates the session once and continues it on the next round", async () => {
     replies = [reply(), reply()];
@@ -580,10 +702,11 @@ describe("a tier that keeps its session", () => {
     expect(creates(), "initialised once, not once per round").toHaveLength(1);
     // And the second round says only what changed — repeating the orientation would be
     // the cold start this replaces, wearing a different name.
-    const sent = prompts().map((c) => JSON.stringify((c.body as { parts?: unknown[] }).parts ?? []));
+    const sent = prompts().map(sentText);
     expect(sent[0]).toContain("FULL ORIENTATION");
     expect(sent[1]).toContain("THE AUTHOR ANSWERED");
     expect(sent[1], "the orientation is not repeated").not.toContain("FULL ORIENTATION");
+    expect(sent[1], "nor is the charter — the session already holds it").not.toContain("You review code.");
   });
 
   /**
@@ -603,23 +726,17 @@ describe("a tier that keeps its session", () => {
   it("continues a session the previous process opened", async () => {
     replies = [reply(), reply()];
     const rows = new Map<string, string>();
-    const port = {
-      get: (k: string) => rows.get(k),
-      set: (k: string, v: string) => void rows.set(k, v),
-      forget: (k: string) => void rows.delete(k),
-      keys: () => [...rows.keys()],
-    };
     const prompt = { initial: "FULL ORIENTATION", continued: "THE AUTHOR ANSWERED" };
 
-    const before = new Reviewer({ baseUrl, agent: "readonly", timeoutMs: 10_000, keptSessions: port });
+    const before = new Reviewer({ baseUrl, agent: "readonly", timeoutMs: 10_000, keptSessions: keptPort(rows) });
     await before.review(KEEPS, prompt, "/tmp/wt", "rev1");
 
     // The deploy. Nothing of `before` survives except what it wrote down.
-    const after = new Reviewer({ baseUrl, agent: "readonly", timeoutMs: 10_000, keptSessions: port });
+    const after = new Reviewer({ baseUrl, agent: "readonly", timeoutMs: 10_000, keptSessions: keptPort(rows) });
     await after.review(KEEPS, prompt, "/tmp/wt", "rev1");
 
     expect(creates(), "one session across the restart, not one per process").toHaveLength(1);
-    const sent = prompts().map((c) => JSON.stringify((c.body as { parts?: unknown[] }).parts ?? []));
+    const sent = prompts().map(sentText);
     expect(sent[1], "the second process says only what changed").toContain("THE AUTHOR ANSWERED");
     expect(sent[1], "and does NOT re-read the whole diff").not.toContain("FULL ORIENTATION");
   });
@@ -634,15 +751,9 @@ describe("a tier that keeps its session", () => {
   it("forgets a session opencode no longer has, and starts cold exactly once", async () => {
     replies = [reply(), reply()];
     const rows = new Map<string, string>([["rev1:t1:openrouter/z-ai/glm-5.2", "ses_vanished"]]);
-    const port = {
-      get: (k: string) => rows.get(k),
-      set: (k: string, v: string) => void rows.set(k, v),
-      forget: (k: string) => void rows.delete(k),
-      keys: () => [...rows.keys()],
-    };
-    status = 404;
+    promptGone = true;
 
-    const r = new Reviewer({ baseUrl, agent: "readonly", timeoutMs: 10_000, keptSessions: port });
+    const r = new Reviewer({ baseUrl, agent: "readonly", timeoutMs: 10_000, keptSessions: keptPort(rows) });
     await expect(r.review(KEEPS, { initial: "A", continued: "B" }, "/tmp/wt", "rev1")).rejects.toThrow();
 
     // THE DEAD ID IS GONE — not the row. The cold restart opens a fresh session and
@@ -660,28 +771,19 @@ describe("a tier that keeps its session", () => {
    * A SESSION OPENCODE STILL HAS, WHOSE HISTORY THE PROVIDER REFUSES — the live case of
    * 2026-09-24. opencode restarted twice under a t2 round, and the kept Kimi session came
    * back holding the interrupted turn as an empty assistant message; every later call was
-   * refused with exactly this 400, relayed inside a 200 as opencode relays every provider
-   * failure, and the review failed. Resumed, refused, recovered cold once — and the row
-   * now names the fresh session, so later rounds resume normally again.
+   * refused with exactly this 400, and the review failed. Resumed, refused, recovered cold
+   * once — and the row now names the fresh session, so later rounds resume normally again.
    */
-  const REFUSED_HISTORY = {
-    info: {
-      error: {
-        name: "APIError",
-        data: { message: "the message at position 79 with role 'assistant' must not be empty", statusCode: 400 },
-      },
-    },
-  };
-  const keptPort = (rows: Map<string, string>) => ({
-    get: (k: string) => rows.get(k),
-    set: (k: string, v: string) => void rows.set(k, v),
-    forget: (k: string) => void rows.delete(k),
-    keys: () => [...rows.keys()],
-  });
+  const REFUSED_HISTORY = refuse(
+    "provider.invalid-request",
+    "the message at position 79 with role 'assistant' must not be empty",
+    400,
+  );
 
   it("forgets a kept session whose history the provider refuses, and starts cold exactly once", async () => {
     replies = [REFUSED_HISTORY, reply()];
     const rows = new Map<string, string>([["rev1:t1:openrouter/z-ai/glm-5.2", "ses_poisoned"]]);
+    sessions.set("ses_poisoned", []);
     const r = new Reviewer({ baseUrl, agent: "readonly", timeoutMs: 10_000, keptSessions: keptPort(rows) });
 
     const result = await r.review(KEEPS, { initial: "FULL ORIENTATION", continued: "THE AUTHOR ANSWERED" }, "/tmp/wt", "rev1");
@@ -689,13 +791,13 @@ describe("a tier that keeps its session", () => {
     expect(result.findings, "the cold retry read the code").toHaveLength(1);
     expect(rows.get("rev1:t1:openrouter/z-ai/glm-5.2"), "never the poisoned session again").not.toBe("ses_poisoned");
     expect(creates(), "one cold session").toHaveLength(1);
-    const sent = prompts().map((c) => JSON.stringify((c.body as { parts?: unknown[] }).parts ?? []));
+    const sent = prompts().map(sentText);
     expect(sent[0], "the refused call was the resume").toContain("THE AUTHOR ANSWERED");
     expect(sent[1], "and the retry is a genuine cold read").toContain("FULL ORIENTATION");
     // Found by lore's own review, fingerprint cbc1e5a6: forgetting the row was the last way
     // to find the poisoned session, so it is deleted in opencode rather than orphaned.
     expect(
-      captured.some((c) => c.method === "DELETE" && (c.path.split("?")[0] ?? "") === "/session/ses_poisoned"),
+      deletes().some((c) => pathOf(c) === "/api/session/ses_poisoned"),
       "the poisoned session is deleted, not orphaned",
     ).toBe(true);
   });
@@ -722,6 +824,7 @@ describe("a tier that keeps its session", () => {
   it("gives up after one cold retry when the cold request is refused too", async () => {
     replies = [REFUSED_HISTORY, REFUSED_HISTORY, reply()];
     const rows = new Map<string, string>([["rev1:t1:openrouter/z-ai/glm-5.2", "ses_poisoned"]]);
+    sessions.set("ses_poisoned", []);
     const r = new Reviewer({ baseUrl, agent: "readonly", timeoutMs: 10_000, keptSessions: keptPort(rows) });
 
     await expect(r.review(KEEPS, { initial: "A", continued: "B" }, "/tmp/wt", "rev1")).rejects.toThrow(DidNotRun);
@@ -742,7 +845,7 @@ describe("a tier that keeps its session", () => {
     await r.review({ ...KEEPS, id: "t2" }, prompt, "/tmp/wt", "rev1");
 
     expect(creates(), "t2 starts empty of t1's reasoning").toHaveLength(2);
-    expect(JSON.stringify((prompts()[1]?.body as { parts?: unknown[] }).parts ?? [])).toContain("FULL");
+    expect(sentText(prompts()[1])).toContain("FULL");
   });
 
   it("gives a different review its own session, on the same tier", async () => {
@@ -762,8 +865,21 @@ describe("a tier that keeps its session", () => {
     await r.review(TIER, { initial: "A", continued: "B" }, "/tmp/wt", "rev1");
 
     expect(creates(), "no flag, no continuity").toHaveLength(2);
-    const sent = prompts().map((c) => JSON.stringify((c.body as { parts?: unknown[] }).parts ?? []));
-    expect(sent[1], "and a cold round is always told everything").toContain("A");
+    expect(sentText(prompts()[1]), "and a cold round is always told everything").toContain("A");
+  });
+
+  /**
+   * A KEPT SESSION FOLLOWS ITS WORKTREE. v1 named the directory on every prompt; v2 fixes
+   * it at creation, so a review whose worktree moved would read the old path on every
+   * later round unless the session is moved with it.
+   */
+  it("moves a resumed session to the worktree this round reads", async () => {
+    replies = [reply(), reply()];
+    const r = reviewer();
+    await r.review(KEEPS, { initial: "A", continued: "B" }, "/tmp/wt", "rev1");
+    await r.review(KEEPS, { initial: "A", continued: "B" }, "/tmp/moved", "rev1");
+    const move = captured.find((c) => pathOf(c).endsWith("/move"));
+    expect(move?.body).toStrictEqual({ directory: "/tmp/moved" });
   });
 
   /**
@@ -777,7 +893,7 @@ describe("a tier that keeps its session", () => {
     await r.review(KEEPS, { initial: "A", continued: "B" }, "/tmp/wt", "rev1");
 
     await r.release("rev1");
-    expect(captured.some((c) => c.method === "DELETE"), "the session is deleted, not leaked").toBe(true);
+    expect(deletes(), "the session is deleted, not leaked").not.toHaveLength(0);
 
     await r.review(KEEPS, { initial: "A", continued: "B" }, "/tmp/wt", "rev1");
     expect(creates(), "a released review starts over").toHaveLength(2);
@@ -795,7 +911,7 @@ describe("a tier that keeps its session", () => {
 
     // Nothing is running now — the round finished — so this is the leaking shape.
     expect(await r.cancel("rev1"), "nothing was in flight to abort").toBe(false);
-    expect(captured.some((c) => c.method === "DELETE"), "and the session still went").toBe(true);
+    expect(deletes(), "and the session still went").not.toHaveLength(0);
 
     await r.review(KEEPS, { initial: "A", continued: "B" }, "/tmp/wt", "rev1");
     expect(creates(), "a cancelled review starts over").toHaveLength(2);
@@ -840,7 +956,7 @@ describe("a tier that keeps its session", () => {
     await r.review(TWIN, prompt, "/tmp/wt", "rev1");
 
     expect(creates(), "the stand-in starts its own session").toHaveLength(2);
-    const sent = prompts().map((c) => JSON.stringify((c.body as { parts?: unknown[] }).parts ?? []));
+    const sent = prompts().map(sentText);
     expect(sent[1], "and is oriented, not continued").toContain("FULL ORIENTATION");
     expect(sent[1]).not.toContain("THE AUTHOR ANSWERED");
   });
@@ -866,7 +982,7 @@ describe("a tier that keeps its session", () => {
     expect(r.keptReviews(), "one review, however many models it ran on").toStrictEqual(["rev1"]);
 
     await r.release("rev1");
-    expect(captured.filter((c) => c.method === "DELETE"), "both sessions go").toHaveLength(2);
+    expect(deletes(), "both sessions go").toHaveLength(2);
     expect(r.keptReviews()).toStrictEqual([]);
   });
 
@@ -894,45 +1010,35 @@ describe("a tier that keeps its session", () => {
  */
 describe("compacting a kept session", () => {
   const KEEPS = { ...TIER, conversation: true };
-  const reply = () => ({ parts: [{ type: "text", text: FINDING_JSON }] });
-  const summarised = () => captured.filter((c) => c.path.split("?")[0]?.endsWith("/summarize"));
-
-  /** A session whose last turn carried `used` tokens against the fixture's 1000 window. */
-  const lastTurnAt = (used: number) => {
-    messages = [
-      { info: { id: "u", role: "user" }, parts: [] },
-      { info: { id: "a", role: "assistant", tokens: { input: used, output: 10, cache: { read: 0, write: 0 } } }, parts: [] },
-    ];
-  };
+  /** A turn whose last call carried `used` tokens against the fixture's 1000 window. */
+  const at = (used: number) => say(FINDING_JSON, { tokens: { input: used, output: 10, reasoning: 0, cache: { read: 0, write: 0 } } });
+  const compacted = () => captured.filter((c) => pathOf(c).endsWith("/compact"));
 
   it("compacts before the next turn once the last one crossed 2/3", async () => {
-    replies = [reply(), reply()];
-    lastTurnAt(700);
+    replies = [at(700), at(700)];
     const r = reviewer();
     await r.review(KEEPS, { initial: "A", continued: "B" }, "/tmp/wt", "rev1");
-    expect(summarised(), "nothing to compact on the first round").toHaveLength(0);
+    expect(compacted(), "nothing to compact on the first round").toHaveLength(0);
 
     await r.review(KEEPS, { initial: "A", continued: "B" }, "/tmp/wt", "rev1");
-    expect(summarised(), "the second round finds the session two thirds full").toHaveLength(1);
+    expect(compacted(), "the second round finds the session two thirds full").toHaveLength(1);
   });
 
   it("leaves a session alone below the threshold", async () => {
-    replies = [reply(), reply()];
-    lastTurnAt(400);
+    replies = [at(400), at(400)];
     const r = reviewer();
     await r.review(KEEPS, { initial: "A", continued: "B" }, "/tmp/wt", "rev1");
     await r.review(KEEPS, { initial: "A", continued: "B" }, "/tmp/wt", "rev1");
-    expect(summarised()).toHaveLength(0);
+    expect(compacted()).toHaveLength(0);
   });
 
   /**
-   * A summarise that fails leaves the conversation as it was — longer than we would like
+   * A compaction that fails leaves the conversation as it was — longer than we would like
    * and still correct. Throwing would end a review over a housekeeping call.
    */
   it("carries on when the compaction itself fails", async () => {
-    replies = [reply(), reply()];
-    lastTurnAt(900);
-    summarizeStatus = 500;
+    replies = [at(900), at(900)];
+    compactStatus = 500;
     const r = reviewer();
     await r.review(KEEPS, { initial: "A", continued: "B" }, "/tmp/wt", "rev1");
     const out = await r.review(KEEPS, { initial: "A", continued: "B" }, "/tmp/wt", "rev1");
@@ -979,9 +1085,9 @@ describe("the prompt budget of a pooled tier", () => {
 
 /**
  * A FAILED LOOKUP MUST NOT BE CACHED FOREVER (found by lore's own review, fingerprint
- * 277d5b24). `contextLimit` used to cache whatever `/config/providers` produced,
- * success or not — so one dropped call, cold container or a request racing opencode's
- * own startup, permanently emptied the window map for the rest of the process. Both
+ * 277d5b24). `contextLimit` used to cache whatever the provider list produced, success or
+ * not — so one dropped call, cold container or a request racing opencode's own startup,
+ * permanently emptied the window map for the rest of the process. Both
  * `promptBudgetChars` and D-80's 2/3-window compaction read that as "unmeasurable",
  * which is the safe-but-silent direction: nothing said the lookup had failed at all.
  */
@@ -998,10 +1104,22 @@ describe("a failed context-window lookup", () => {
   });
 });
 
+describe("which configured models opencode can reach", () => {
+  it("names the ones it cannot", async () => {
+    expect(await reviewer().missingModels(["zp1/glm-5.2", "nobody/knows"])).toStrictEqual(["nobody/knows"]);
+  });
+
+  // A check that did not run must never report as a check that found nothing.
+  it("answers undefined, not 'nothing missing', when the list cannot be read", async () => {
+    providersDown = true;
+    expect(await reviewer().missingModels(["zp1/glm-5.2"])).toBeUndefined();
+  });
+});
+
 describe("opening a session", () => {
   // Two debugging sessions in one day went looking at connectivity while opencode
   // was up and answering, because a status it never checked came out as "is a server
-  // running?". This SDK reports a refusal by RETURN VALUE: 500, no id, no throw.
+  // running?".
   it("names the status opencode returned rather than blaming connectivity", async () => {
     sessionStatus = 500;
     const err = await reviewer()
@@ -1012,10 +1130,8 @@ describe("opening a session", () => {
     expect(err?.message).not.toMatch(/is a server running/);
   });
 
-  // Observed against a real password-protected opencode: a bare 401 with an EMPTY
-  // body, so `error` is `{}` and the status is the only thing that names the fault.
-  // A fake that answered with a helpful message here would be kinder than
-  // production and would let a message that only prints the body pass.
+  // v2 accepts ONE user name, `opencode`, whatever OPENCODE_SERVER_USERNAME says — so the
+  // hint names the password and the fixed user, which is where the fault actually is.
   it("names a 401 as a refusal, with the credentials to check", async () => {
     sessionStatus = 401;
     const err = await reviewer()
@@ -1023,16 +1139,14 @@ describe("opening a session", () => {
       .then(() => undefined, (e: unknown) => e as Error);
 
     expect(err?.message).toMatch(/401/);
-    expect(err?.message).toMatch(/OPENCODE_SERVER_USERNAME/);
+    expect(err?.message).toMatch(/OPENCODE_SERVER_PASSWORD/);
   });
 
-  // The other half of the same SDK asymmetry, and the one case where asking about
-  // the server is right: an unreachable address REJECTS rather than returning, and
-  // unwrapped it arrives as a bare `connect ECONNREFUSED` (or `fetch failed` without
-  // `longFetch`) naming neither the tier nor the address it failed to reach.
+  // The one case where asking about the server is right: an unreachable address REJECTS
+  // before anything answers, and unwrapped it names neither the tier nor the address.
   it("names the address it could not reach, instead of a bare fetch failure", async () => {
     const dead = await closedPort();
-    const offline = new Reviewer({ baseUrl: `http://127.0.0.1:${dead}`, agent: "readonly", timeoutMs: 2_000});
+    const offline = new Reviewer({ baseUrl: `http://127.0.0.1:${dead}`, agent: "readonly", timeoutMs: 2_000 });
     const err = await offline
       .review(TIER, "review this", "/tmp/wt")
       .then(() => undefined, (e: unknown) => e as Error);
@@ -1043,13 +1157,13 @@ describe("opening a session", () => {
     expect(err?.name).toBe("ServiceUnreachable");
     expect(err?.message).toContain(`127.0.0.1:${dead}`);
     expect(err?.message).toContain("t1");
+    offline.close();
   });
 
-  // The original message still belongs to the case it was written for, and only to
-  // that case: a 200 that genuinely carries no id.
+  // A 200 that genuinely carries no id cannot be prompted, cancelled or deleted.
   it("still says so when a 200 carries no session id", async () => {
     sessionBody = {};
-    await expect(reviewer().review(TIER, "review this", "/tmp/wt")).rejects.toThrow(/no session id/);
+    await expect(reviewer().review(TIER, "review this", "/tmp/wt")).rejects.toThrow(/returned no id/);
   });
 });
 
@@ -1059,65 +1173,48 @@ describe("counting how far the reviewer explored", () => {
   // SQUARE of the exploration — and against a subscription quota the count is what
   // runs out. There is no cap yet, deliberately (D-50): this is the measurement the
   // cap would have to be derived from.
-  it("counts one step per agentic turn in the session", async () => {
-    replies = [{ parts: [REPLY_STEP, { type: "text", text: FINDING_JSON }] }];
-    messages = sessionMessages(9);
-
+  it("counts one step per model call in the session", async () => {
+    replies = [say(FINDING_JSON, { steps: 9 })];
     const r = await reviewer().review(TIER, "review this", "/tmp/wt");
     expect(r.steps).toBe(9);
     expect(r.findings).toHaveLength(1);
   });
 
-  // THE LESSON THAT KILLED THE PREVIOUS ATTEMPT AT THIS. A prompt reply is one
-  // assistant message and an assistant message holds one `step-start`, so a count
-  // taken from the reply reads 1 for a nine-turn exploration. The number has to come
-  // from the session, and this test fails if it ever goes back to the reply.
-  it("takes the count from the session, not from the one step in the reply", async () => {
-    replies = [{ parts: [REPLY_STEP, { type: "text", text: FINDING_JSON }] }];
-    messages = sessionMessages(9);
-
-    const r = await reviewer().review(TIER, "review this", "/tmp/wt");
-    expect(r.steps).not.toBe(1);
-    const asked = captured.filter((c) => c.method === "GET" && c.path.includes("/session/ses_test/message"));
-    expect(asked).toHaveLength(1);
+  // ONE READ AFTER THE TURN, TWO ANSWERS: the step count and the session's usage come
+  // from the same list. The other read is the turn's own end, which `awaitTurn` needs.
+  it("reads the session once for both the count and the usage", async () => {
+    replies = [say(FINDING_JSON, { steps: 9 })];
+    await reviewer().review(TIER, "review this", "/tmp/wt");
+    const reads = captured.filter((c) => c.method === "GET" && pathOf(c) === "/api/session/ses_test/message");
+    expect(reads, "awaitTurn's read, then one for count and usage together").toHaveLength(2);
   });
 
   // The retry is a second agentic run inside the same session, and it explores too.
   // Counting the session rather than a reply gets that for free.
   it("includes the turns the retry spent", async () => {
-    replies = [
-      { parts: [REPLY_STEP, { type: "text", text: "prose, not json" }] },
-      { parts: [REPLY_STEP, { type: "text", text: FINDING_JSON }] },
-    ];
-    messages = sessionMessages(12);
-
+    replies = [say("prose, not json", { steps: 5 }), say(FINDING_JSON, { steps: 7 })];
     const r = await reviewer().review(TIER, "review this", "/tmp/wt");
     expect(r.retried).toBe(true);
     expect(r.steps).toBe(12);
   });
 
-  // THE MEASUREMENT'S OWN FAILURE PATH. opencode answers `GET .../message` with a
-  // 404 for a session it does not know (verified live), and this call happens after
-  // the model has already been paid for. It must cost the review nothing — and it
-  // must not invent a number.
-  it("keeps the review when the count cannot be taken, and reports no number", async () => {
-    replies = [{ parts: [REPLY_STEP, { type: "text", text: FINDING_JSON }] }];
-    messagesStatus = 404;
-    messages = { name: "NotFoundError", data: { message: "Session not found: ses_test" } };
+  // PAGED in v2: a reader that took the first page would under-count exactly the long
+  // runs where the count matters.
+  it("follows the cursor through every page of a long session", async () => {
+    pageSize = 2;
+    replies = [say(FINDING_JSON, { steps: 9 })];
+    const r = await reviewer().review(TIER, "review this", "/tmp/wt");
+    expect(r.steps).toBe(9);
+  });
 
+  // THE MEASUREMENT'S OWN FAILURE PATH. This read happens after the model has already
+  // been paid for. It must cost the review nothing — and it must not invent a number.
+  it("keeps the review when the count cannot be taken, and reports no number", async () => {
+    replies = [say(FINDING_JSON)];
+    messagesFailFrom = 1;
     const r = await reviewer().review(TIER, "review this", "/tmp/wt");
     expect(r.findings).toHaveLength(1);
     expect(r.steps).toBeUndefined();
-  });
-
-  // A reply shape we do not understand must read as "not measured", never as "this
-  // review explored nothing" — a zero would be a plausible-looking data point, and
-  // the distribution it poisons is the one a future cap gets set from.
-  it("reports no number rather than zero when the shape is not the one we know", async () => {
-    replies = [{ parts: [REPLY_STEP, { type: "text", text: FINDING_JSON }] }];
-    messages = [{ info: { role: "assistant" }, parts: [{ type: "model-turn" }] }];
-
-    expect((await reviewer().review(TIER, "review this", "/tmp/wt")).steps).toBeUndefined();
   });
 });
 
@@ -1127,7 +1224,7 @@ describe("counting how far the reviewer explored", () => {
 // ended. The check belongs where the slot is won: after the wait, before anything exists.
 describe("a call that is no longer wanted", () => {
   it("does not create a session or spend, and says nothing was spent", async () => {
-    replies = [{ parts: [{ type: "text", text: '```json\n{"findings":[]}\n```' }] }];
+    replies = [say('```json\n{"findings":[]}\n```')];
     const before = captured.length;
 
     const err = await reviewer()
@@ -1141,11 +1238,11 @@ describe("a call that is no longer wanted", () => {
     // path's own catch rethrows untouched.
     expect(err, "a cancel must be classified as ours, not as the tier failing").toBeInstanceOf(CancelledByLore);
 
-    expect(captured.slice(before)).toStrictEqual([]);
+    expect(captured.slice(before).filter((c) => pathOf(c) !== "/api/event")).toStrictEqual([]);
   });
 
   it("proceeds normally when it is still wanted", async () => {
-    replies = [{ parts: [{ type: "text", text: '```json\n{"findings":[]}\n```' }] }];
+    replies = [say('```json\n{"findings":[]}\n```')];
     const r = await reviewer().review(TIER, "review this", "/tmp/wt", "rev1", () => true);
     expect(r.findings).toStrictEqual([]);
   });
@@ -1160,8 +1257,8 @@ describe("a call that is no longer wanted", () => {
    * session went on to spend a full prompt nobody would ever read.
    */
   it("still spends nothing when the review ends WHILE the session is being created", async () => {
-    replies = [{ parts: [{ type: "text", text: '```json\n{"findings":[]}\n```' }] }];
-    // Long enough that the flip below lands WHILE `POST /session` is still in flight.
+    replies = [say('```json\n{"findings":[]}\n```')];
+    // Long enough that the flip below lands WHILE `POST /api/session` is still in flight.
     createSessionDelayMs = 150;
     let wanted = true;
     setTimeout(() => {
@@ -1181,13 +1278,10 @@ describe("a call that is no longer wanted", () => {
 
     // THE SESSION OPENCODE ALREADY CREATED IS CLEANED UP, not leaked — it exists on
     // opencode's side by the time the cancel is noticed, even though lore never used it.
-    expect(captured.some((c) => c.method === "DELETE"), "the orphaned session is deleted").toBe(true);
+    expect(deletes(), "the orphaned session is deleted").not.toHaveLength(0);
     // AND NO PROMPT WAS EVER SENT, which is the entire point of catching it here rather
     // than only reporting the loss after a full round's worth of quota was already spent.
-    expect(
-      captured.some((c) => c.path.includes("/message") && c.method === "POST"),
-      "quota was never spent on a review that had already ended",
-    ).toBe(false);
+    expect(prompts(), "quota was never spent on a review that had already ended").toHaveLength(0);
   });
 
   /**
@@ -1206,12 +1300,12 @@ describe("a call that is no longer wanted", () => {
     const r = reviewer();
     // First round: establishes the kept session normally — `continuing` is undefined,
     // so this round never touches `compactIfFull` at all.
-    replies = [{ parts: [{ type: "text", text: '```json\n{"findings":[]}\n```' }] }];
+    replies = [say('```json\n{"findings":[]}\n```')];
     await r.review(KEPT, { initial: "A", continued: "B" }, "/tmp/wt", "rev1", () => true);
 
     // Second round: continuing the same session reaches `compactIfFull`'s own read.
     // Long enough that the flip below lands WHILE it is still in flight.
-    replies = [{ parts: [{ type: "text", text: '```json\n{"findings":[]}\n```' }] }];
+    replies = [say('```json\n{"findings":[]}\n```')];
     messagesDelayMs = 150;
     let wanted = true;
     setTimeout(() => {
@@ -1228,7 +1322,7 @@ describe("a call that is no longer wanted", () => {
     expect(err, "a cancel must be classified as ours, not as the tier failing").toBeInstanceOf(CancelledByLore);
 
     expect(
-      captured.slice(before).some((c) => c.path.includes("/message") && c.method === "POST"),
+      captured.slice(before).some((c) => pathOf(c).endsWith("/prompt")),
       "no new prompt was sent for the round that had already ended",
     ).toBe(false);
   });
@@ -1245,7 +1339,7 @@ describe("a call that is no longer wanted", () => {
 // diff comfortably. Classified, the ladder steps over t1 and finishes passed_thin_ladder.
 describe("a prompt the provider refuses as too long", () => {
   it("is a tier that could not look, so the ladder can step over it", async () => {
-    replies = [{ info: { error: { name: "APIError", data: { message: "Prompt exceeds max length", statusCode: 400 } } } }];
+    replies = [refuse("provider.invalid-request", "Prompt exceeds max length", 400)];
     await expect(reviewer().review(TIER, "review this", "/tmp/wt")).rejects.toThrow(TooLargeForTier);
   });
 
@@ -1253,7 +1347,7 @@ describe("a prompt the provider refuses as too long", () => {
   // believed it would fit, and were refused — so the number we hold is not the number
   // that applies, and printing it would be inventing the explanation.
   it("says the provider refused it, rather than naming a window it fitted", async () => {
-    replies = [{ info: { error: { name: "APIError", data: { message: "Prompt exceeds max length", statusCode: 400 } } } }];
+    replies = [refuse("provider.invalid-request", "Prompt exceeds max length", 400)];
     const err = await reviewer().review(TIER, "review this", "/tmp/wt").catch((e: unknown) => e);
     const msg = err instanceof Error ? err.message : "";
     expect(msg).toContain("REFUSED this review as too long");
@@ -1266,7 +1360,7 @@ describe("a prompt the provider refuses as too long", () => {
   // with wording that mentions limits, and stepping over a tier for the wrong reason
   // spends the ladder's escalation on a problem waiting is the fix for.
   it("still reads an exhausted plan as quota, not as size", async () => {
-    replies = [{ info: { error: { name: "APIError", data: { message: "quota exceeded for this plan", statusCode: 429 } } } }];
+    replies = [refuse("provider.quota", "quota exceeded for this plan", 429)];
     await expect(reviewer().review(TIER, "review this", "/tmp/wt")).rejects.toThrow(Exhausted);
   });
 });
@@ -1281,7 +1375,6 @@ describe("a prompt the provider refuses as too long", () => {
  */
 describe("a connection that drops mid-call", () => {
   it("requeues when opencode itself has stopped answering", async () => {
-    replies = [];
     destroyPrompt = true;
     providersDown = true;
     const err = await reviewer().review(TIER, "review this", "/tmp/wt").then(
@@ -1301,7 +1394,6 @@ describe("a connection that drops mid-call", () => {
    * and t1 of a review of lore's own fix SKIPPED on a bare "socket hang up" in the storm.
    */
   it("requeues when opencode drops the call and is already answering again", async () => {
-    replies = [];
     destroyPrompt = true;
     const err = await reviewer().review(TIER, "review this", "/tmp/wt").then(
       () => undefined,
@@ -1313,17 +1405,17 @@ describe("a connection that drops mid-call", () => {
 
   /**
    * AND t2'S POINT SURVIVES, modelled the way opencode actually delivers it. A provider's
-   * reset reaches lore INSIDE an answer — opencode relays it verbatim — which is how the
+   * reset reaches lore INSIDE the session's record — opencode relays it — which is how the
    * earlier pattern-only version wrongly requeued it and spent quota proving somebody
-   * else's outage. Answered, it is the tier failing, and it must stay one.
+   * else's outage. Recorded, it is the tier failing, and it must stay one.
    */
-  it("still blames the tier when opencode RELAYS a provider's reset in its answer", async () => {
-    replies = [{ info: { error: { name: "APIError", data: { message: "upstream socket hang up", statusCode: 502 } } } }];
+  it("still blames the tier when opencode RELAYS a provider's reset in its record", async () => {
+    replies = [refuse("provider.transport", "upstream socket hang up", 502)];
     const err = await reviewer().review(TIER, "review this", "/tmp/wt").then(
       () => undefined,
       (e: unknown) => e,
     );
-    expect(err, "an answered provider reset is not opencode going away").not.toBeInstanceOf(ServiceUnreachable);
+    expect(err, "a recorded provider reset is not opencode going away").not.toBeInstanceOf(ServiceUnreachable);
     expect(String((err as Error).message)).toMatch(/failed: .*socket hang up/i);
   });
 });
@@ -1333,36 +1425,31 @@ describe("abandoning a call", () => {
   // ~3.7M cached-read tokens between them, because the agent kept exploring after
   // we had stopped listening. A timeout that only frees the caller is not a
   // budget — it just makes the spend invisible.
-  it("aborts the session when the reply cannot be parsed", async () => {
-    replies = [
-      { parts: [{ type: "text", text: "prose" }] },
-      { parts: [{ type: "text", text: "still prose" }] },
-    ];
+  it("interrupts the session when the reply cannot be parsed", async () => {
+    replies = [say("prose"), say("still prose")];
     await expect(reviewer().review(TIER, "review this", "/tmp/wt")).rejects.toThrow();
-    expect(captured.some((c) => c.path.includes("/abort"))).toBe(true);
+    expect(interrupts()).not.toHaveLength(0);
   });
 
-  it("aborts the session when the provider refuses", async () => {
-    replies = [
-      { info: { error: { name: "APIError", data: { message: "Insufficient credits", statusCode: 402 } } } },
-    ];
+  it("interrupts the session when the provider refuses", async () => {
+    replies = [refuse("provider.quota", "Insufficient credits", 402)];
     await expect(reviewer().review(TIER, "review this", "/tmp/wt")).rejects.toThrow(Exhausted);
-    expect(captured.some((c) => c.path.includes("/abort"))).toBe(true);
+    expect(interrupts()).not.toHaveLength(0);
   });
 
-  it("does not abort a call that succeeded", async () => {
-    replies = [{ parts: [{ type: "text", text: FINDING_JSON }] }];
+  it("does not interrupt a call that succeeded", async () => {
+    replies = [say(FINDING_JSON)];
     await reviewer().review(TIER, "review this", "/tmp/wt");
-    expect(captured.some((c) => c.path.includes("/abort"))).toBe(false);
+    expect(interrupts()).toHaveLength(0);
   });
 
-  // The abort is best-effort by design — throwing here would replace the real error
-  // with the cleanup's. Best-effort is not the same as unobserved, though: an abort
+  // The interrupt is best-effort by design — throwing here would replace the real error
+  // with the cleanup's. Best-effort is not the same as unobserved, though: an interrupt
   // that failed means the model is still exploring and still spending, which is the
   // exact condition this call exists to end.
-  it("says so when the abort itself fails, without replacing the original error", async () => {
+  it("says so when the interrupt itself fails, without replacing the original error", async () => {
     abortStatus = 500;
-    replies = [{ info: { error: { name: "APIError", data: { message: "Insufficient credits", statusCode: 402 } } } }];
+    replies = [refuse("provider.quota", "Insufficient credits", 402)];
     const logged: string[] = [];
     const realError = console.error;
     console.error = (...args: unknown[]) => logged.push(args.join(" "));
@@ -1379,14 +1466,14 @@ describe("abandoning a call", () => {
 /**
  * A CANCEL HAS TO STOP BOTH ENDS.
  *
- * `abort` told opencode to stop the model and left our own request open, so a cancelled
+ * Telling opencode to stop the model and leaving our own request open meant a cancelled
  * review went on holding a provider slot until its 2700s deadline. Measured on the
  * deployment 2026-08-08: three sessions aborted with HTTP 200, and ninety seconds later
  * `/status` still read `inFlight: 2` with no active review at all.
  *
  * Both halves are pinned here, because either alone is a false claim of having stopped:
- * without the remote abort the model keeps exploring and keeps billing, and without the
- * local one lore keeps waiting for an answer that can never arrive.
+ * without the remote interrupt the model keeps exploring and keeps billing, and without
+ * the local abort lore keeps waiting for an answer that can never arrive.
  */
 describe("cancelling a call that is still open", () => {
   it("frees the caller instead of waiting out the deadline", async () => {
@@ -1397,7 +1484,7 @@ describe("cancelling a call that is still open", () => {
     // this request it fails at ten seconds with "did not respond within" — which is what
     // the defect looked like, only forty-five minutes long.
     const inFlight = r.review(TIER, "review this", "/tmp/wt", "rev_hung");
-    // Long enough for `createSession` to answer and the prompt to be sent; the session
+    // Long enough for `createSession` to answer and the prompt to be admitted; the session
     // is not registered until then, and a cancel arriving earlier would find nothing.
     await new Promise((res) => setTimeout(res, 200));
 
@@ -1408,16 +1495,15 @@ describe("cancelling a call that is still open", () => {
     // else's quota answering for a review a person deliberately ended.
     await expect(inFlight).rejects.toThrow(/stopped by lore/);
     expect(Date.now() - started, "the cancel ended it, not the 10s fixture deadline").toBeLessThan(5_000);
+    r.close();
   });
 
   /**
    * THE FAST LOCAL ABORT MUST NOT WAIT BEHIND A SLOW NETWORK CALL (found by lore's own
-   * review, fingerprint 4926151e). `cancel` used to await `release`'s `DELETE
-   * /session/:id` calls before aborting the in-flight request — so on a conversation
-   * tier (every tier in the deployed configuration) a slow or wedged opencode held a
-   * cancelling client behind that DELETE while the in-flight model call's own socket,
-   * and its spend, stayed open. The test above never exercised this: it uses a
-   * non-conversation tier, so `release` finds nothing and the ordering is free.
+   * review, fingerprint 4926151e). `cancel` used to await `release`'s deletes before
+   * aborting the in-flight request — so on a conversation tier (every tier in the deployed
+   * configuration) a slow or wedged opencode held a cancelling client behind that DELETE
+   * while the in-flight model call's own socket, and its spend, stayed open.
    */
   it("aborts the in-flight session without waiting on a slow release", async () => {
     const KEPT: Tier = { ...TIER, conversation: true };
@@ -1428,8 +1514,6 @@ describe("cancelling a call that is still open", () => {
     deleteDelayMs = 3_000;
     const r = reviewer();
     const inFlight = r.review(KEPT, { initial: "A", continued: "B" }, "/tmp/wt", "rev_hung");
-    // Long enough for the session to be created and kept (D-80 registers it right after
-    // creation, before the prompt is ever sent) and for the prompt to be in flight.
     await new Promise((res) => setTimeout(res, 200));
 
     const started = Date.now();
@@ -1440,7 +1524,8 @@ describe("cancelling a call that is still open", () => {
     // release() is still awaited inside cancel — must not be SKIPPED, only reordered —
     // so let it finish and confirm it genuinely ran.
     await expect(cancelling, "cancel itself still resolves once release catches up").resolves.toBe(true);
-    expect(captured.some((c) => c.method === "DELETE"), "release still ran, just not first").toBe(true);
+    expect(deletes(), "release still ran, just not first").not.toHaveLength(0);
+    r.close();
   });
 
   it("still tells opencode to stop the model, which abandoning the socket does not", async () => {
@@ -1451,7 +1536,8 @@ describe("cancelling a call that is still open", () => {
     await r.cancel("rev_hung");
     await expect(inFlight).rejects.toThrow();
 
-    expect(captured.some((c) => c.path.includes("/abort")), "the model is still exploring until this lands").toBe(true);
+    expect(interrupts(), "the model is still exploring until this lands").not.toHaveLength(0);
+    r.close();
   });
 
   // A review with nothing in flight must not report that it stopped something. The
@@ -1459,6 +1545,48 @@ describe("cancelling a call that is still open", () => {
   // client repeats that to its user.
   it("reports false when that review has no session", async () => {
     await expect(reviewer().cancel("rev_never_started")).resolves.toBe(false);
+  });
+});
+
+/**
+ * A PERMISSION NOBODY WILL ANSWER. On a headless server an `ask` waits for ever —
+ * measured on 2.0.20: a reviewer reading `/etc/hosts` parked its session on
+ * `permission.asked` and `wait` never returned. lore refuses at once, so the model gets
+ * the reason and carries on.
+ */
+describe("a permission opencode asks for mid-turn", () => {
+  it("is refused on the session's behalf, with the reason the model is told", async () => {
+    hangPrompt = true;
+    const r = reviewer();
+    const inFlight = r.review(TIER, "review this", "/tmp/wt", "rev_perm");
+    await new Promise((res) => setTimeout(res, 250));
+    pending.push({
+      id: "evt_p",
+      type: "permission.asked",
+      data: { id: "per_1", sessionID: "ses_test", action: "external_directory", resources: ["/etc/hosts"] },
+    });
+    await new Promise((res) => setTimeout(res, 200));
+
+    const reply = captured.find((c) => pathOf(c) === "/api/session/ses_test/permission/per_1/reply");
+    expect(reply, "the ask was answered").toBeDefined();
+    expect((reply?.body as { decision?: string }).decision).toBe("reject");
+    await r.cancel("rev_perm");
+    await inFlight.catch(() => undefined);
+    r.close();
+  });
+
+  it("leaves another process's sessions alone", async () => {
+    hangPrompt = true;
+    const r = reviewer();
+    const inFlight = r.review(TIER, "review this", "/tmp/wt", "rev_perm2");
+    await new Promise((res) => setTimeout(res, 250));
+    pending.push({ id: "evt_q", type: "permission.asked", data: { id: "per_2", sessionID: "ses_somebody_else", action: "read" } });
+    await new Promise((res) => setTimeout(res, 200));
+
+    expect(captured.some((c) => pathOf(c).includes("/permission/"))).toBe(false);
+    await r.cancel("rev_perm2");
+    await inFlight.catch(() => undefined);
+    r.close();
   });
 });
 
@@ -1473,7 +1601,7 @@ describe("an unparseable reply says what shape it was", () => {
   // telling a person lore's tier was broken. Where lore knows the cause it belongs in
   // failed_because; where it does not, silence beats a plausible story.
   it("names an empty reply as empty, and does not guess why", async () => {
-    replies = [{ parts: [{ type: "text", text: "" }] }, { parts: [{ type: "text", text: "" }] }];
+    replies = [say(""), say("")];
     const err = await reviewer()
       .review(TIER, "review this", "/tmp/wt")
       .then(() => undefined, (e: unknown) => e as Error);
@@ -1487,7 +1615,7 @@ describe("an unparseable reply says what shape it was", () => {
   // a different hour of debugging from an empty reply.
   it("names prose as prose, with its length", async () => {
     const prose = "I reviewed the code and it looks fine to me overall.";
-    replies = [{ parts: [{ type: "text", text: prose }] }, { parts: [{ type: "text", text: prose }] }];
+    replies = [say(prose), say(prose)];
     const err = await reviewer()
       .review(TIER, "review this", "/tmp/wt")
       .then(() => undefined, (e: unknown) => e as Error);
@@ -1500,7 +1628,7 @@ describe("an unparseable reply says what shape it was", () => {
   // into a review's failure text and an operator alert, and a 40KB model reply in
   // either is its own problem.
   it("puts both replies on the log so the round is diagnosable at all", async () => {
-    replies = [{ parts: [{ type: "text", text: "first attempt prose" }] }, { parts: [{ type: "text", text: "second attempt prose" }] }];
+    replies = [say("first attempt prose"), say("second attempt prose")];
     const logged: string[] = [];
     const real = console.error;
     console.error = (...a: unknown[]) => logged.push(a.join(" "));
@@ -1516,22 +1644,15 @@ describe("an unparseable reply says what shape it was", () => {
 });
 
 describe("countStepParts", () => {
-  const turn = (id: string) => ({
-    info: { id, sessionID: "ses_test", role: "assistant" },
-    parts: [
-      { id: `${id}s`, messageID: id, type: "step-start" },
-      { id: `${id}t`, messageID: id, type: "tool" },
-    ],
+  const call = (id: string) => ({ id, type: "assistant", content: [{ type: "tool", name: "read" }] });
+
+  it("counts one step per assistant message — one per model call", () => {
+    expect(countStepParts([call("a"), call("b"), call("c")])).toBe(3);
   });
 
-  it("counts the step of every turn, ignoring everything else in it", () => {
-    expect(countStepParts([turn("a"), turn("b"), turn("c")])).toBe(3);
-  });
-
-  // Real sessions contain messages that hold nothing but `patch` parts — 4 of the 86
-  // in the session this shape was copied from. They are bookkeeping, not turns.
-  it("does not count a message that never went to the model", () => {
-    expect(countStepParts([turn("a"), { info: { role: "assistant" }, parts: [{ type: "patch" }] }])).toBe(1);
+  // The user's message, the idle record and a compaction are bookkeeping, not calls.
+  it("does not count what never went to the model", () => {
+    expect(countStepParts([{ type: "user" }, call("a"), { type: "idle", outcome: "succeeded" }, { type: "compaction" }])).toBe(1);
   });
 
   // "I could not tell" and "it explored nothing" are different facts, and only one
@@ -1539,8 +1660,9 @@ describe("countStepParts", () => {
   it("says nothing rather than zero when there is nothing it recognises", () => {
     expect(countStepParts([])).toBeUndefined();
     expect(countStepParts(undefined)).toBeUndefined();
-    expect(countStepParts({ messages: [turn("a")] })).toBeUndefined();
-    expect(countStepParts([{ info: { role: "assistant" }, parts: "not an array" }])).toBeUndefined();
+    expect(countStepParts({ messages: [call("a")] })).toBeUndefined();
+    // v1's shape — `info.role` — must read as unrecognised, never as a session of zero.
+    expect(countStepParts([{ info: { role: "assistant" }, parts: [{ type: "step-start" }] }])).toBeUndefined();
   });
 });
 
@@ -1646,25 +1768,26 @@ describe("extractFindings", () => {
 });
 
 // Every question the reviewer answers with a tool call is one it could have been
-// handed for free. We counted `step-start` and discarded the rest, so how a tier
-// spent its turns was invisible — and that is exactly the measurement that says what
-// to precompute next. The three facts added today (the branch's commits, whether it
+// handed for free. We counted steps and discarded the rest, so how a tier spent its
+// turns was invisible — and that is exactly the measurement that says what to
+// precompute next. The three facts added today (the branch's commits, whether it
 // still merges, what the base did to the overlapping files) were found by reasoning
 // about a wrong finding. Looking is cheaper than reasoning.
 describe("what the reviewer reached for", () => {
-  const msg = (...parts: unknown[]) => ({ parts });
+  const assistant = (...content: unknown[]) => ({ type: "assistant", content });
 
   it("counts tool calls by name", () => {
     const data = [
-      msg({ type: "step-start" }, { type: "tool", tool: "read" }, { type: "tool", tool: "bash" }),
-      msg({ type: "tool", tool: "read" }, { type: "text", text: "thinking" }),
+      assistant({ type: "tool", name: "read" }, { type: "tool", name: "shell" }),
+      assistant({ type: "tool", name: "read" }, { type: "text", text: "thinking" }),
+      { type: "user", text: "review this" },
     ];
-    expect(toolsUsed(data)).toStrictEqual({ read: 2, bash: 1 });
+    expect(toolsUsed(data)).toStrictEqual({ read: 2, shell: 1 });
   });
 
   // A histogram that returns nothing is a lost measurement, never a failed review:
   // this reads someone else's reply format and must not throw on a shape change.
-  it.each([[undefined], [null], [{}], ["nonsense"], [[{ parts: "not an array" }]]])(
+  it.each([[undefined], [null], [{}], ["nonsense"], [[{ type: "assistant", content: "not an array" }]]])(
     "returns an empty histogram for %s rather than throwing",
     (data) => {
       expect(() => toolsUsed(data)).not.toThrow();
@@ -1672,9 +1795,8 @@ describe("what the reviewer reached for", () => {
     },
   );
 
-  it("falls back through the shapes a tool part might use", () => {
-    const data = [msg({ type: "tool", name: "grep" }, { type: "tool", state: { title: "webfetch" } }, { type: "tool" })];
-    expect(toolsUsed(data)).toStrictEqual({ grep: 1, webfetch: 1, unknown: 1 });
+  it("names a tool call that carries no name as unknown, rather than dropping it", () => {
+    expect(toolsUsed([assistant({ type: "tool", name: "grep" }, { type: "tool" })])).toStrictEqual({ grep: 1, unknown: 1 });
   });
 });
 
@@ -1733,27 +1855,33 @@ describe("spend recovered from a call that failed", () => {
   it("sums the assistant messages, including cache reads and writes", async () => {
     const sum = await usageFromMessages(
       messages([
-        { info: { role: "user", tokens: { input: 999 } } },
-        { info: { role: "assistant", tokens: { input: 10, output: 3, cache: { read: 100, write: 5 } } } },
-        { info: { role: "assistant", tokens: { input: 20, output: 7, cache: { read: 200, write: 0 } } } },
+        { type: "user", tokens: { input: 999 } },
+        { type: "assistant", tokens: { input: 10, output: 3, cache: { read: 100, write: 5 } } },
+        { type: "assistant", tokens: { input: 20, output: 7, cache: { read: 200, write: 0 } }, cost: 0.5 },
       ]),
     );
     // The user turn is not the model's spend; cache read AND write both count.
-    expect(sum).toStrictEqual({ input: 30, cached: 305, output: 10, cost: 0 });
+    expect(sum).toStrictEqual({ input: 30, cached: 305, output: 10, cost: 0.5 });
   });
 
   // Nothing spent is `undefined`, never a row of zeroes: a zero row is
   // indistinguishable from a call that ran and used nothing, and this must not invent
   // spend it cannot see.
   it("reports nothing rather than zero when the session shows no tokens", async () => {
-    expect(await usageFromMessages(messages([{ info: { role: "assistant", tokens: {} } }]))).toBeUndefined();
+    expect(await usageFromMessages(messages([{ type: "assistant", tokens: {} }]))).toBeUndefined();
     expect(await usageFromMessages(messages([]))).toBeUndefined();
+  });
+
+  // v1's nesting must read as "no spend recorded", which the caller handles — never as a
+  // crash, and never as somebody else's tokens.
+  it("finds no spend in v1's info/role shape rather than misreading it", async () => {
+    expect(await usageFromMessages(messages([{ info: { role: "assistant", tokens: { input: 5 } } }]))).toBeUndefined();
   });
 
   // Subscriptions report cost 0 on every message, so a dollar total is structurally
   // meaningless here — the units that mean anything are tokens and credits.
   it("does not pretend to a dollar cost", async () => {
-    const sum = await usageFromMessages(messages([{ info: { role: "assistant", tokens: { input: 1, output: 1 } } }]));
+    const sum = await usageFromMessages(messages([{ type: "assistant", tokens: { input: 1, output: 1 } }]));
     expect(sum?.cost).toBe(0);
   });
 });
@@ -1761,17 +1889,11 @@ describe("spend recovered from a call that failed", () => {
 /**
  * WAITING IS THE BUG (D-91).
  *
- * `session.prompt` is one long HTTP request that says nothing until it returns, so an
- * exhausted plan cost the full 2700s deadline. Meanwhile opencode was narrating the same
- * call on `/event`: measured 2026-08-09, the provider's exact refusal — *with its reset
- * time* — arrived SEVEN SECONDS after the prompt, then four more times in ninety seconds.
- *
- *   {"type":"session.status","properties":{"sessionID":"ses_…","status":{
- *      "type":"retry","attempt":1,
- *      "message":"Weekly/Monthly Limit Exhausted. Your limit will reset at 2026-08-10 18:19:09"}}}
- *
- * D-84 said opencode swallows the limit and the reset time. It swallows them in the
- * message body, which is where lore was looking, and publishes them here.
+ * The turn is one long wait that says nothing until it ends, so an exhausted plan cost
+ * the full 2700s deadline. Meanwhile opencode narrates the same turn on its event stream:
+ * measured 2026-08-09 on v1, the provider's exact refusal — *with its reset time* —
+ * arrived SEVEN SECONDS after the prompt, then four more times in ninety seconds. v2
+ * announces it as `session.retry.scheduled`, with opencode's classification beside it.
  */
 describe("reading what opencode says about a call in flight", () => {
   it("recognises a quota refusal and takes the reset time out of it", () => {
@@ -1789,14 +1911,19 @@ describe("reading what opencode says about a call in flight", () => {
    * propose run 45 minutes each. The narration carried "The usage limit has been
    * reached" on every attempt — the watcher saw it and did not know the words, so
    * opencode retried for ever and the deadline was the only thing that ended the call.
-   * No reset time: openai names none, and the event's `next` is the next RETRY attempt
-   * seconds away — parsing it as a reset would park the tier for five seconds and call
-   * that a cool-off.
+   * No reset time: openai names none.
    */
   it("recognises openai's usage-limit phrasing, with no reset time", () => {
     const r = quotaRefusal({ type: "retry", attempt: 2, message: "The usage limit has been reached" });
     expect(r?.message).toBe("The usage limit has been reached");
     expect(r?.resetAt).toBeUndefined();
+  });
+
+  // opencode's own classification decides when it gave one — the patterns only ever knew
+  // phrasings that had already cost a review each.
+  it("trusts opencode's provider.quota whatever the provider's words", () => {
+    const r = quotaRefusal({ type: "retry", message: "something nobody has seen before", errorType: "provider.quota" });
+    expect(r?.message).toBe("something nobody has seen before");
   });
 
   // A retry is opencode saying it will ask again, which is CORRECT behaviour for a 500.
@@ -1818,13 +1945,40 @@ describe("reading what opencode says about a call in flight", () => {
   });
 });
 
+describe("statusOf — v2 events as the watchers read them", () => {
+  it("reads a scheduled retry, carrying opencode's classification", () => {
+    expect(
+      statusOf("session.retry.scheduled", {
+        sessionID: "ses_x",
+        attempt: 2,
+        at: 1,
+        error: { type: "provider.rate-limit", message: "slow down", status: 429 },
+      }),
+    ).toStrictEqual({ type: "retry", attempt: 2, message: "slow down", errorType: "provider.rate-limit" });
+  });
+
+  // Progress ends a storm. `step.started` does not: after a retry it IS the retry.
+  it("reads progress as recovery, and a step starting as nothing", () => {
+    expect(statusOf("session.step.ended", {})).toStrictEqual({ type: "busy" });
+    expect(statusOf("session.text.delta", {})).toStrictEqual({ type: "busy" });
+    expect(statusOf("session.step.started", {})).toBeUndefined();
+  });
+});
+
+const retryEvent = (message: string) => ({
+  id: `evt_${Math.random()}`,
+  type: "session.retry.scheduled",
+  data: { sessionID: "ses_test", attempt: 1, at: Date.now() + 1_000, error: { type: "provider.rate-limit", message } },
+});
+const progressEvent = (type = "session.step.ended") => ({ id: `evt_${Math.random()}`, type, data: { sessionID: "ses_test" } });
+
 /**
  * The refactor's actual claim: a call dies when the answer arrives, not when a clock says so.
  *
- * With an exhausted plan the prompt request never returns, so before D-91 this cost the
- * full 2700s deadline — 45 minutes of holding a provider slot for a fact that had already
- * been published. The fixture reproduces exactly that: a prompt that never answers, and a
- * refusal on the event stream while it hangs.
+ * With an exhausted plan the turn never ends, so before D-91 this cost the full 2700s
+ * deadline — 45 minutes of holding a provider slot for a fact that had already been
+ * published. The fixture reproduces exactly that: a turn that never ends, and a refusal on
+ * the event stream while it hangs.
  */
 describe("a quota refusal on the event stream", () => {
   it("fails the call in flight instead of waiting out the deadline", async () => {
@@ -1835,22 +1989,12 @@ describe("a quota refusal on the event stream", () => {
     // Long enough for the session to exist and its watcher to be registered; a refusal
     // arriving before that has nowhere to go, which is the race the deadline still covers.
     await new Promise((res) => setTimeout(res, 250));
-    pending.push({
-      type: "session.status",
-      properties: {
-        sessionID: "ses_test",
-        status: {
-          type: "retry",
-          attempt: 1,
-          message: "Weekly/Monthly Limit Exhausted. Your limit will reset at 2026-08-10 18:19:09",
-        },
-      },
-    });
+    pending.push(retryEvent("Weekly/Monthly Limit Exhausted. Your limit will reset at 2026-08-10 18:19:09"));
 
     // EXHAUSTED, not DidNotRun. The distinction decides whether the ladder steps over the
-    // tier and finishes (D-48) or fails the whole review — and "Weekly/Monthly Limit
-    // Exhausted" matches none of the classifier's patterns, so it only arrives correctly
-    // because the abort reason is already the right type.
+    // tier and finishes (D-48) or fails the whole review — and it only arrives correctly
+    // because the abort reason is already the right type, unwrapped from the client's
+    // transport error.
     await expect(inFlight).rejects.toThrow(Exhausted);
     expect(Date.now() - started, "seconds, against a 10s fixture deadline and 2700s in production").toBeLessThan(5_000);
     r.close();
@@ -1861,13 +2005,7 @@ describe("a quota refusal on the event stream", () => {
     const r = reviewer();
     const inFlight = r.review(TIER, "review this", "/tmp/wt", "rev_quota2");
     await new Promise((res) => setTimeout(res, 250));
-    pending.push({
-      type: "session.status",
-      properties: {
-        sessionID: "ses_test",
-        status: { type: "retry", message: "Weekly/Monthly Limit Exhausted. Your limit will reset at 2026-08-10 18:19:09" },
-      },
-    });
+    pending.push(retryEvent("Weekly/Monthly Limit Exhausted. Your limit will reset at 2026-08-10 18:19:09"));
 
     const err = await inFlight.then(() => undefined, (e: unknown) => e);
     expect((err as Exhausted).resetAt, "D-90 waits exactly this long instead of doubling a guess").toBe(
@@ -1883,10 +2021,7 @@ describe("a quota refusal on the event stream", () => {
     const r = reviewer();
     const inFlight = r.review(TIER, "review this", "/tmp/wt", "rev_blip");
     await new Promise((res) => setTimeout(res, 250));
-    pending.push({
-      type: "session.status",
-      properties: { sessionID: "ses_test", status: { type: "retry", attempt: 1, message: "connection reset by peer" } },
-    });
+    pending.push(retryEvent("connection reset by peer"));
     await new Promise((res) => setTimeout(res, 400));
 
     // Still open: the fixture's own 10s deadline is what will end it, exactly as before.
@@ -1904,18 +2039,12 @@ describe("a quota refusal on the event stream", () => {
  * A RETRY STORM IS A DOWN PROVIDER WEARING A RETRY LOOP (the 5-minute bound).
  *
  * Vany: *"if it starts retrying a lot, do not allow it to wait more than 5 minutes —
- * treat openai as down and go to the fallback."* The classifier kills refusals it
- * recognises in seconds; openai's phrasing was unknown for three days and cost every t3
- * round 45 minutes at the deadline. This bound is the backstop for the NEXT unknown
- * phrasing: retries still arriving past the limit end the call as Exhausted — the type
- * the fallback chain advances on.
+ * treat openai as down and go to the fallback."* v2 bounds its own retries (ten, about
+ * 84s), but a provider-named wait stretches each gap to 15 minutes — so the bound stays
+ * the backstop for the NEXT unknown phrasing: retries still arriving past the limit end
+ * the call as Exhausted, the type the fallback chain advances on.
  */
 describe("a retry storm on the event stream", () => {
-  const retryEvent = (msg: string) => ({
-    type: "session.status",
-    properties: { sessionID: "ses_test", status: { type: "retry", attempt: 1, message: msg } },
-  });
-
   it("treats a storm older than the bound as a down route, and moves on", async () => {
     hangPrompt = true;
     const r = new Reviewer({ baseUrl, agent: "readonly", timeoutMs: 10_000, retryStormMs: 200 });
@@ -1935,7 +2064,7 @@ describe("a retry storm on the event stream", () => {
     r.close();
   });
 
-  it("clears the clock when the session recovers between retries", async () => {
+  it("clears the clock when the session makes progress between retries", async () => {
     hangPrompt = true;
     const r = new Reviewer({ baseUrl, agent: "readonly", timeoutMs: 10_000, retryStormMs: 300 });
     const inFlight = r.review(TIER, "review this", "/tmp/wt", "rev_recover");
@@ -1944,8 +2073,8 @@ describe("a retry storm on the event stream", () => {
     // WELL past the bound in TOTAL, well inside it per storm — the margins are wide on
     // both sides of the 300ms bound so this cannot pass or fail on delivery jitter.
     await new Promise((res) => setTimeout(res, 200));
-    // Recovery: any non-retry status. The storm that follows starts a NEW clock.
-    pending.push({ type: "session.status", properties: { sessionID: "ses_test", status: { type: "busy" } } });
+    // Recovery: a step that ended. The storm that follows starts a NEW clock.
+    pending.push(progressEvent());
     await new Promise((res) => setTimeout(res, 200));
     pending.push(retryEvent("blip again"));
     await new Promise((res) => setTimeout(res, 150));
@@ -1967,9 +2096,9 @@ describe("a retry storm on the event stream", () => {
  *
  * Neither mechanism above helps here: no retry ever hits the event stream, so there is
  * no storm for `retryStormMs` to bound and no message for `quotaRefusal` to recognise —
- * `hangPrompt` is exactly that shape, a request accepted and never answered. A probe
- * exists only to re-test a route lore already believes is down, so it must not itself
- * become a multi-minute wait repeated every `PROBE_INTERVAL_MS`.
+ * `hangPrompt` is exactly that shape, a turn admitted and never ended. A probe exists only
+ * to re-test a route lore already believes is down, so it must not itself become a
+ * multi-minute wait repeated every `PROBE_INTERVAL_MS`.
  */
 describe("a bounded probe on a silent call", () => {
   it("treats silence past the bound as inconclusive, not as a refusal", async () => {
@@ -2013,9 +2142,8 @@ describe("a bounded probe on a silent call", () => {
    * A flat kill at `probeMs` regardless of activity would abort a probe that turned out to
    * be a genuine, healthy, MINUTES-long round — and since only a completed call clears a
    * mark (D-90's "one success clears this"), a route that can never finish a call within
-   * the bound could never come back via D-94 at all. Narration (ANY status event, not only
-   * the ones the storm clock and `quotaRefusal` act on) proves the session is alive and
-   * re-arms the clock; only silence is bounded.
+   * the bound could never come back via D-94 at all. Narration proves the session is
+   * alive and re-arms the clock; only silence is bounded.
    */
   it("re-arms the probe bound on narration, and still catches silence that resumes", async () => {
     hangPrompt = true;
@@ -2026,7 +2154,7 @@ describe("a bounded probe on a silent call", () => {
     // Narration arrives WELL inside the bound — a live session telling us it is working,
     // not a quota refusal and not a retry.
     await new Promise((res) => setTimeout(res, 120));
-    pending.push({ type: "session.status", properties: { sessionID: "ses_test", status: { type: "busy" } } });
+    pending.push(progressEvent("session.step.started"));
 
     // Past the ORIGINAL 200ms bound (measured from the start), still open: the narration
     // re-armed the clock rather than merely delaying an unconditional kill.
@@ -2046,34 +2174,24 @@ describe("a bounded probe on a silent call", () => {
 
   /**
    * A STATE MACHINE IS NOT A PROGRESS METER (found by lore's own review, fingerprint
-   * a2ea8a61, against the version above that listened only to `session.status`).
-   *
-   * `session.status` is idle/busy/retry — three states, not a per-token stream — so a
-   * healthy session can sit on ONE `busy` for the whole of a long turn and never narrate
-   * again on that channel. `message.part.updated` is opencode's actual streaming-content
-   * event (a `delta` per token, per the SDK's own `EventMessagePartUpdated` type), nested
-   * under `properties.part.sessionID` rather than the flat `properties.sessionID` every
-   * other recognised type uses. A call that is truly stuck cannot produce either kind.
+   * a2ea8a61): a healthy session can sit in one state for a whole long turn, so the
+   * re-arm must hear the streamed content too — `session.text.delta`, one per chunk. A
+   * call that is truly stuck cannot produce it.
    */
-  it("re-arms the probe bound on message.part.updated, not only session.status", async () => {
+  it("re-arms the probe bound on streamed text, not only on step boundaries", async () => {
     hangPrompt = true;
     const r = new Reviewer({ baseUrl, agent: "readonly", timeoutMs: 10_000, probeTimeoutMs: 200 });
     const started = Date.now();
     const inFlight = r.review(TIER, "review this", "/tmp/wt", "rev_parts", undefined, true);
 
     await new Promise((res) => setTimeout(res, 120));
-    pending.push({
-      type: "message.part.updated",
-      properties: { part: { sessionID: "ses_test", id: "prt_1", messageID: "msg_1" }, delta: "some streamed text" },
-    });
+    pending.push(progressEvent("session.text.delta"));
 
     const stillOpenPastOriginalBound = await Promise.race([
       inFlight.then(() => "settled", () => "settled"),
       new Promise((res) => setTimeout(() => res("open"), 250 - (Date.now() - started))),
     ]);
-    expect(stillOpenPastOriginalBound, "a streamed delta re-arms the clock exactly as session.status does").toBe(
-      "open",
-    );
+    expect(stillOpenPastOriginalBound, "a streamed delta re-arms the clock").toBe("open");
 
     const err = await inFlight.then(() => undefined, (e: unknown) => e);
     expect(err).toBeInstanceOf(ProbeInconclusive);
@@ -2081,28 +2199,24 @@ describe("a bounded probe on a silent call", () => {
   });
 
   /**
-   * `message.updated`'S SESSION ID LIVES SOMEWHERE ELSE (found by lore's own review,
-   * fingerprint 8cf1109a): `properties.info.sessionID`, not the flat field or `part`. Listed
-   * as a recognised type without reading the right path, it was dead weight that looked
-   * like coverage.
+   * A PREFIX, NOT A LIST. v1 named the narration types one by one and missed one for weeks
+   * (`message.updated`, whose id lived somewhere else). Every v2 `session.*` event carries a
+   * flat `data.sessionID`, so any of them counts — including one opencode adds tomorrow.
    */
-  it("re-arms the probe bound on message.updated, read from properties.info.sessionID", async () => {
+  it("re-arms the probe bound on a session event type lore has never heard of", async () => {
     hangPrompt = true;
     const r = new Reviewer({ baseUrl, agent: "readonly", timeoutMs: 10_000, probeTimeoutMs: 200 });
     const started = Date.now();
     const inFlight = r.review(TIER, "review this", "/tmp/wt", "rev_msg", undefined, true);
 
     await new Promise((res) => setTimeout(res, 120));
-    pending.push({
-      type: "message.updated",
-      properties: { info: { id: "msg_1", sessionID: "ses_test", role: "assistant", time: { created: Date.now() } } },
-    });
+    pending.push(progressEvent("session.something.new"));
 
     const stillOpenPastOriginalBound = await Promise.race([
       inFlight.then(() => "settled", () => "settled"),
       new Promise((res) => setTimeout(() => res("open"), 250 - (Date.now() - started))),
     ]);
-    expect(stillOpenPastOriginalBound, "message.updated re-arms the clock too").toBe("open");
+    expect(stillOpenPastOriginalBound, "an unlisted session.* event re-arms the clock too").toBe("open");
 
     const err = await inFlight.then(() => undefined, (e: unknown) => e);
     expect(err).toBeInstanceOf(ProbeInconclusive);
@@ -2321,5 +2435,23 @@ describe("emissionOf", () => {
       expect(r.items).toHaveLength(1);
       expect(r.done).toBe(true);
     }
+  });
+});
+
+describe("a catalogue that is still loading", () => {
+  // opencode's `/api/model` "may precede initial plugin settlement" — an empty list then
+  // is not "no models", and caching it would disable the fit-check for the whole process.
+  it("is not cached as 'no windows', and the next call asks again", async () => {
+    const r = reviewer();
+    const realList = server.listeners("request")[0] as (req: IncomingMessage, res: ServerResponse) => void;
+    let empty = true;
+    server.removeAllListeners("request");
+    server.on("request", (req: IncomingMessage, res: ServerResponse) => {
+      if (empty && (req.url ?? "").startsWith("/api/model")) return json(res, 200, { location: { directory: "/" }, data: [] });
+      realList(req, res);
+    });
+    expect(await r.promptBudgetChars(TIER), "an empty catalogue measures nothing").toBeUndefined();
+    empty = false;
+    expect(await r.promptBudgetChars(TIER), "and is asked again, not believed").toBeDefined();
   });
 });

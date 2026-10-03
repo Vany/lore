@@ -246,6 +246,29 @@ line it belongs to:**
 
 ### Vany's to decide
 
+- [ ] **opencode 2.x: what to adopt (D-156), each a proposal, none built.**
+      - **A login the deployment owns.** v2 can log ChatGPT in through its own API
+        (`chatgpt-headless`: a URL and a code, no browser on the box). A container login
+        has its OWN refresh chain; today `make sync-creds` copies the host's, and with
+        rotation whichever side renews first may revoke the other — the suspected cause
+        of the 13-day dead credential (D-143). Proposal: `make login-openai`.
+      - **Budget against `limit.input`, not `limit.context`.** v2 publishes both;
+        `openai/gpt-5.6-sol` reads 272k input of a 400k window. `promptBudgetChars` uses
+        the window, which is the exact gap D-48's "too long" classifier exists to catch
+        after the money is spent. Changes how much of a diff t3 is sent.
+      - **Close the shell write hole.** `edit: deny` does not stop `python3 -c
+        "open(...,'w')"` (measured). v2 permission rules can be per command pattern;
+        a deny-list for writing commands would turn INV-8's "the worktree is disposable"
+        into an actual refusal. Needs a list that does not also kill reading.
+      - **Newer models are in the catalogue** (`openai/gpt-6.1-sol`, `gpt-6-*`). Which
+        model a tier calls is Vany's (money), and nothing was changed.
+- [ ] **opencode 2.x `[OPEN]`s from D-156**: the plane MCP reports `needs_auth` (Plane
+      context lost to reviewers, D-12), and the 1.x plugins (`oh-my-openagent`) do not
+      load. Neither blocks a review; both are things D-12 meant reviewers to inherit.
+- [ ] **Rotate the host opencode service password** (optional). `service.json` was staged
+      into the live 1.x container's config on 2026-10-03 and readable by reviewer shells
+      for a few hours before it was found and removed. Loopback-only service, low risk.
+
 - [ ] **Should `review_start` preflight the configured ladder?** (D-154, 2026-09-19.)
       `make doctor` resolves every configured model against opencode and says, in these
       words, *"NOT ready … A review would start, spend on the diff and T0, and then not
