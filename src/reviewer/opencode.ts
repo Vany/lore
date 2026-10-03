@@ -670,7 +670,11 @@ export class Reviewer implements ReviewerLike {
             // agent carries on without it; logged, because a refusal is a fact about what
             // the tier could not read.
             if (e.type === "permission.asked" && this.watchers.has(id)) {
-              void this.refusePermission(id, e.data ?? {});
+              // A refusal that fails is retried through the sweep, which lists the session's
+              // pending asks again — this one among them, since it is still pending.
+              void this.refusePermission(id, e.data ?? {}).then((ok) => {
+                if (!ok) this.retrySweep([id]);
+              });
               continue;
             }
             const status = statusOf(e.type, e.data ?? {});
@@ -686,6 +690,8 @@ export class Reviewer implements ReviewerLike {
             }
           }
         } catch {
+          // lore-ok[8781d7cd]: what the reconnect gap missed is swept on the next
+          // `server.connected` (above), and a failed sweep or refusal retries on its own timer.
           // Deliberately silent and deliberately not fatal. This is an optimisation: with
           // the stream up a dead provider costs seconds, and without it the 2700s deadline
           // does what it always did. Logging every reconnect would train a reader to skip
@@ -719,11 +725,12 @@ export class Reviewer implements ReviewerLike {
    * Refuse every permission already waiting on a session lore is waiting on — the asks the
    * stream could not deliver while it was down.
    *
-   * A LIST THAT FAILS IS ASKED AGAIN, on its own timer. "The next reconnect asks again" was
-   * the first version's answer, and it is no answer: once the stream is back it may stay
-   * up for the whole turn, so a missed ask behind one failed list sat parked until the
-   * 45-minute deadline. Retried every few seconds while that session is still being waited
-   * on, and only for the sessions that failed.
+   * A LIST OR A REFUSAL THAT FAILS IS ASKED AGAIN, on its own timer. "The next reconnect
+   * asks again" was the first version's answer, and it is no answer: once the stream is
+   * back it may stay up for the whole turn, so an ask behind one failed request — the list,
+   * or the reply to an ask the list did find — sat parked until the 45-minute deadline.
+   * Retried every few seconds while that session is still being waited on, and only for
+   * the sessions that failed.
    */
   private async sweepPermissions(sessions: readonly string[] = [...this.watchers.keys()]): Promise<void> {
     const failed: string[] = [];
@@ -734,21 +741,31 @@ export class Reviewer implements ReviewerLike {
         failed.push(sessionId);
         return [];
       });
-      for (const p of pending) await this.refusePermission(sessionId, p as unknown as Record<string, unknown>);
+      for (const p of pending) {
+        if (!(await this.refusePermission(sessionId, p as unknown as Record<string, unknown>)) && !failed.includes(sessionId)) {
+          failed.push(sessionId);
+        }
+      }
     }
-    if (failed.length > 0 && !this.closed) {
-      const t = setTimeout(() => void this.sweepPermissions(failed), PERMISSION_SWEEP_RETRY_MS);
-      // `unref`'d: a retry pending must not hold the process open past its work.
-      t.unref?.();
-    }
+    this.retrySweep(failed);
   }
 
-  private async refusePermission(sessionId: string, request: Record<string, unknown>): Promise<void> {
+  /** Sweep these sessions again shortly, if any — see `sweepPermissions`. */
+  private retrySweep(sessions: readonly string[]): void {
+    if (sessions.length === 0 || this.closed) return;
+    const t = setTimeout(() => void this.sweepPermissions(sessions), PERMISSION_SWEEP_RETRY_MS);
+    // `unref`'d: a retry pending must not hold the process open past its work.
+    t.unref?.();
+  }
+
+  /** Whether the refusal reached opencode — `false` sends the session back through the sweep. */
+  private async refusePermission(sessionId: string, request: Record<string, unknown>): Promise<boolean> {
     const requestId = typeof request["id"] === "string" ? request["id"] : undefined;
     const what = `${String(request["action"] ?? "?")} on ${JSON.stringify(request["resources"] ?? []).slice(0, 200)}`;
     if (requestId === undefined) {
       console.error(`[lore:log] session ${sessionId} asked for a permission (${what}) with no request id — cannot refuse it; the session will wait until the deadline`);
-      return;
+      // Not retried: no id is a shape problem a second try cannot fix.
+      return true;
     }
     const failure = await this.client.permission
       .reply({
@@ -762,8 +779,9 @@ export class Reviewer implements ReviewerLike {
     console.error(
       failure === undefined
         ? `[lore:log] refused a permission session ${sessionId} asked for: ${what}`
-        : `[lore:log] could NOT refuse the permission session ${sessionId} asked for (${what}): ${failure} — the session will wait until the deadline`,
+        : `[lore:log] could NOT refuse the permission session ${sessionId} asked for (${what}): ${failure} — asking again shortly`,
     );
+    return failure === undefined;
   }
 
   async cancel(reviewId: string): Promise<boolean> {

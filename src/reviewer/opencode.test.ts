@@ -85,6 +85,8 @@ let moveStatus = 204;
 let pendingPermissions: Record<string, unknown[]> = {};
 /** `GET …/permission` fails this many times before answering. */
 let permissionListFailures = 0;
+/** `POST …/permission/:id/reply` fails this many times before answering. */
+let permissionReplyFailures = 0;
 /** `POST /api/session`: an opencode that is up and refusing is not an absent one. */
 let sessionStatus = 200;
 let sessionBody: unknown = { id: "ses_test" };
@@ -307,6 +309,10 @@ function route(req: IncomingMessage, res: ServerResponse, raw: string): void {
     }
     return json(res, 200, { data: pendingPermissions[sid] ?? [] });
   }
+  if (rest?.startsWith("permission/") === true && permissionReplyFailures > 0) {
+    permissionReplyFailures--;
+    return json(res, 500, undefined);
+  }
   if (rest?.startsWith("permission/") === true) {
     res.writeHead(204);
     res.end();
@@ -373,6 +379,7 @@ beforeEach(async () => {
   moveStatus = 204;
   pendingPermissions = {};
   permissionListFailures = 0;
+  permissionReplyFailures = 0;
   sessionStatus = 200;
   sessionBody = { id: "ses_test" };
   messagesFailFrom = Number.POSITIVE_INFINITY;
@@ -1675,6 +1682,24 @@ describe("a permission opencode asks for mid-turn", () => {
 
     expect(captured.some((c) => pathOf(c) === "/api/session/ses_test/permission/per_late/reply")).toBe(true);
     await r.cancel("rev_sweep2");
+    await inFlight.catch(() => undefined);
+    r.close();
+  }, 10_000);
+
+  // A reply that fails leaves the ask pending; the session goes back through the sweep.
+  it("asks again when the refusal itself fails", async () => {
+    hangPrompt = true;
+    const r = reviewer();
+    const inFlight = r.review(TIER, "review this", "/tmp/wt", "rev_reply");
+    await new Promise((res) => setTimeout(res, 250));
+    pendingPermissions["ses_test"] = [{ id: "per_r", sessionID: "ses_test", action: "read", resources: ["/etc/hosts"] }];
+    permissionReplyFailures = 1;
+    pending.push({ id: "evt_c3", type: "server.connected", data: {} });
+    await new Promise((res) => setTimeout(res, 3_600));
+
+    const replies_ = captured.filter((c) => pathOf(c) === "/api/session/ses_test/permission/per_r/reply");
+    expect(replies_.length, "the failed reply was tried again").toBeGreaterThanOrEqual(2);
+    await r.cancel("rev_reply");
     await inFlight.catch(() => undefined);
     r.close();
   }, 10_000);

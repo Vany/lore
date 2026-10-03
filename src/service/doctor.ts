@@ -24,6 +24,7 @@ export interface Check {
 
 /** Shared with `ladder-setup/catalog.ts` — the same authenticated client both need. */
 export function client(cfg: ReviewerConfig) {
+  // lore-ok[0738503c]: a password-only v2 config sends the user `opencode` (V2_USER), not "".
   const basic =
     cfg.password === undefined
       ? undefined
