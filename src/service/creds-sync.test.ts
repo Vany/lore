@@ -120,6 +120,23 @@ describe("applying it", () => {
     expect(seen, "zai was unparked before openrouter failed").toStrictEqual(["zai"]);
   });
 
+  // The new login is active once created; a failed cleanup of the old copy must not leave
+  // the repaired provider parked — the retry would see it unchanged and never unpark it.
+  it("reports the integration as applied even when removing its old copy fails", async () => {
+    const seen: string[] = [];
+    const client = {
+      credential: {
+        create: async () => ({ id: "cred_new" }),
+        remove: async () => {
+          throw new Error("500 on cleanup");
+        },
+      },
+    } as unknown as OpenCodeClient;
+    const container = [key("zai", "old")];
+    await expect(apply(client, plan([key("zai", "new")], container), container, (i) => seen.push(i))).rejects.toThrow(/cleanup/);
+    expect(seen).toStrictEqual(["zai"]);
+  });
+
   it("leaves the old login in place when the create fails", async () => {
     const calls: string[] = [];
     const client = {

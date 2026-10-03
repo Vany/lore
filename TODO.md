@@ -473,6 +473,14 @@ line it belongs to:**
 
 ### Mine, ready — no decision needed, only a turn
 
+- [ ] **The board shows a round's findings once per ATTEMPT of that round** (Vany saw t3 r3's
+      findings three times, 2026-10-03). `withFindings` (`src/ops/board.ts`) keys runs on
+      `(tier, round)` and calls that unique; a requeued round (a deploy, an opencode
+      restart, `reclaimOrphanedJobs`) has several `tier_run` rows with that pair, and each
+      gets the whole list. The store is right — 11 unique fingerprints. Fix: hang a finding
+      on the latest attempt of its `(tier, round)` that started before its `first_seen`
+      (streamed findings can come from an attempt later killed, so "last row" is wrong).
+
 - [ ] **eslint has NEVER run on lore's own repository, and the blocker is upstream.**
       Every review of this repo reports `eslint: no `lint` script and no eslint config` in
       `checks_skipped` — one of T0's four engines dark on the repo whose whole purpose is

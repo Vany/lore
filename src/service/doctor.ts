@@ -12,7 +12,7 @@
 import { ClientError, OpenCode } from "@opencode/client";
 import { loadTiers, vendorOf, type Tier } from "../core/ladder.ts";
 import { longFetch } from "../reviewer/long-fetch.ts";
-import { DEFAULT_REVIEWER, type ReviewerConfig } from "../reviewer/opencode.ts";
+import { DEFAULT_REVIEWER, V2_USER, type ReviewerConfig } from "../reviewer/opencode.ts";
 
 export interface Check {
   readonly name: string;
@@ -27,7 +27,7 @@ export function client(cfg: ReviewerConfig) {
   const basic =
     cfg.password === undefined
       ? undefined
-      : `Basic ${Buffer.from(`${cfg.username ?? ""}:${cfg.password}`).toString("base64")}`;
+      : `Basic ${Buffer.from(`${cfg.username ?? V2_USER}:${cfg.password}`).toString("base64")}`;
   return OpenCode.make({
     baseUrl: cfg.baseUrl,
     fetch: longFetch(cfg.timeoutMs) as typeof globalThis.fetch,
@@ -81,8 +81,11 @@ export async function doctor(cfg: ReviewerConfig = DEFAULT_REVIEWER): Promise<re
   try {
     const [ints, provs, models] = await Promise.all([api.integration.list(), api.provider.list(), api.model.list()]);
     integrations = new Set(ints.data.map((i) => i.id));
-    connected = new Set(provs.data.map((p) => p.id));
-    for (const m of models.data) known.add(`${m.providerID}/${m.id}`);
+    // LISTED IS NOT USABLE: a provider with `activation: "disabled"` or a model with
+    // `enabled: false` is returned and cannot be called. Counted as ready, it would pass
+    // here and fail only after a review had paid for its diff and its sweep.
+    connected = new Set(provs.data.filter((p) => p.activation !== "disabled").map((p) => p.id));
+    for (const m of models.data) if (m.enabled !== false) known.add(`${m.providerID}/${m.id}`);
     checks.push({
       name: "opencode reachable",
       ok: true,

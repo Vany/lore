@@ -96,10 +96,11 @@ export function plan(host: readonly Credential[], container: readonly Credential
  * REMOVAL COMES ONLY AFTER A SUCCESSFUL CREATE, so a failure part-way leaves the old login
  * in place and active rather than none at all.
  *
- * `applied` RUNS PER INTEGRATION, the moment it is in place — not once at the end. The
- * caller unparks there, and a batch that unparked only after its last create left every
- * earlier success parked when a later one failed; the retry then saw those as unchanged
- * and never unparked them at all, so a repaired provider stayed skipped.
+ * `applied` RUNS PER INTEGRATION, the moment the new login is ACTIVE — after its create,
+ * before the old copies are removed. The caller unparks there. Unparking only after the
+ * whole batch, or only after the removals, left a provider whose login was already
+ * repaired parked whenever anything later failed — and the retry saw it as unchanged and
+ * never unparked it at all.
  */
 export async function apply(
   client: OpenCodeClient,
@@ -119,11 +120,11 @@ export async function apply(
       // a sync that left the old login answering would report a change nobody gets.
       activate: true,
     });
+    changed.push(c.integrationID);
+    applied(c.integrationID);
     for (const old of container.filter((o) => o.integrationID === c.integrationID && o.id !== created.id)) {
       await client.credential.remove({ credentialID: old.id });
     }
-    changed.push(c.integrationID);
-    applied(c.integrationID);
   }
   return changed;
 }

@@ -12,6 +12,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
+import { ClientError } from "@opencode/client";
 import { EXIT, LoreError, ServiceUnreachable, UsageError, type ExitCode } from "./core/errors.ts";
 import { dataDir, dbPath } from "./core/paths.ts";
 import { compareFindings } from "./core/finding.ts";
@@ -452,16 +453,39 @@ export async function main(argv: readonly string[]): Promise<ExitCode> {
     if (stray !== undefined) throw new UsageError(`unknown argument '${stray}' — lore creds-sync takes --force and --allow-unchanged`);
     const chunks: Buffer[] = [];
     for await (const c of process.stdin) chunks.push(c as Buffer);
-    const host = parseHostCredentials(Buffer.concat(chunks).toString("utf8"));
+    // EXIT 70 MEANS ONE THING HERE: the deployment's opencode is not answering yet — the
+    // only failure `make up` retries. Everything else leaves as a usage error in its own
+    // words, because anything uncaught exits 70 too and was retried for a minute as "not
+    // reachable" about a container that was fine: an empty stdin when the HOST's opencode
+    // failed, a list whose shape a brew upgrade changed, a create opencode refused.
+    const classify = (e: unknown, doing: string): LoreError => {
+      if (e instanceof LoreError) return e;
+      const why = e instanceof Error ? e.message : String(e);
+      const status = e instanceof ClientError ? (e.cause as { status?: unknown } | undefined)?.status : undefined;
+      const tag = (e as { _tag?: unknown } | undefined)?._tag;
+      if ((e instanceof ClientError && e.reason === "Transport") || status === 503 || tag === "ServiceUnavailableError") {
+        return new ServiceUnreachable(`could not ${doing} — opencode at ${DEFAULT_REVIEWER.baseUrl} is not answering: ${why}`, e);
+      }
+      return new UsageError(
+        `could not ${doing}: ${why}` +
+          (tag === "UnauthorizedError" || status === 401 ? " — OPENCODE_SERVER_PASSWORD differs between lore and opencode" : ""),
+      );
+    };
+    let host: ReturnType<typeof parseHostCredentials>;
+    try {
+      host = parseHostCredentials(Buffer.concat(chunks).toString("utf8"));
+    } catch (e) {
+      throw new UsageError(
+        `the HOST's opencode did not hand over its credentials (\`opencode api GET /api/credential\` — is its background ` +
+          `service running, and are you logged in?): ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
     const api = client(DEFAULT_REVIEWER);
     // UNREACHABLE IS ITS OWN EXIT (70, `ServiceUnreachable`), because `make up` retries
     // exactly that while opencode starts — and must NOT retry a refusal, which used to be
     // printed fifteen times as "opencode not ready yet" about a deployment that was up.
     const container = await api.credential.list().catch((e: unknown): never => {
-      throw new ServiceUnreachable(
-        `could not list opencode's credentials at ${DEFAULT_REVIEWER.baseUrl}: ${e instanceof Error ? e.message : String(e)}`,
-        e,
-      );
+      throw classify(e, "list the deployment's credentials");
     });
     const p = plan(host, container, argv.includes("--force"));
     for (const f of p.forbidden) process.stdout.write(`${f}: not synced — no reviewer may reach it (D-1)\n`);
@@ -489,10 +513,27 @@ export async function main(argv: readonly string[]): Promise<ExitCode> {
         process.stdout.write(`synced: ${i}\n`);
         if (cleared.length > 0) process.stdout.write(renderCleared(cleared, parks(store), Date.now()));
       });
+    } catch (e) {
+      throw classify(e, "write a credential into the deployment's opencode");
     } finally {
       store.close();
     }
     for (const u of p.unchanged) process.stdout.write(`${u}: unchanged\n`);
+    // NOTHING TO CHANGE IS ONLY FINE IF SOMETHING IS THERE. `make up` passes
+    // --allow-unchanged on every start, and a fresh database with an empty host list (or
+    // only the forbidden Anthropic login) also "changes nothing" — reported as success, the
+    // deployment came up unable to call any model. `opencode` is opencode's own public Zen
+    // provider, always present and never one of the ladder's.
+    const usable = (await api.provider.list().catch((e: unknown): never => {
+      throw classify(e, "list the deployment's connected providers");
+    })).data.filter((pr) => pr.id !== "opencode" && pr.activation !== "disabled");
+    if (usable.length === 0) {
+      process.stderr.write(
+        "NO PROVIDER IS CONNECTED: opencode holds no usable credential, so every review would fail without a model " +
+          "running. Log in on the host (`opencode auth login`) and run `make sync-creds`.\n",
+      );
+      return EXIT.USAGE;
+    }
     if (changed.length === 0) {
       if (argv.includes("--allow-unchanged")) return EXIT.PASS;
       // The operator meant to renew something; a login that never reached the host's

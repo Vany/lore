@@ -184,6 +184,14 @@ export interface ReviewerConfig {
   readonly keptSessions?: KeptSessions;
 }
 
+/**
+ * The only user name opencode 2.x accepts — its server auth hard-codes it and ignores
+ * OPENCODE_SERVER_USERNAME. The DEFAULT when none is configured: an empty name, which is
+ * what an unset username used to send, is refused with a bare 401 even with the right
+ * password, and the password is the only thing a v2 deployment configures.
+ */
+export const V2_USER = "opencode";
+
 export const DEFAULT_REVIEWER: ReviewerConfig = {
   baseUrl: process.env["OPENCODE_SERVER"] ?? "http://127.0.0.1:4096",
   agent: "readonly",
@@ -558,7 +566,7 @@ export class Reviewer implements ReviewerLike {
     const basic =
       cfg.password === undefined
         ? undefined
-        : `Basic ${Buffer.from(`${cfg.username ?? ""}:${cfg.password}`).toString("base64")}`;
+        : `Basic ${Buffer.from(`${cfg.username ?? V2_USER}:${cfg.password}`).toString("base64")}`;
     const headers = basic === undefined ? undefined : { Authorization: basic };
     this.client = OpenCode.make({
       baseUrl: cfg.baseUrl,
@@ -613,6 +621,15 @@ export class Reviewer implements ReviewerLike {
           for await (const ev of this.stream.event.subscribe({ signal: this.listener.signal })) {
             if (this.closed) break;
             const e = ev as { type?: string; data?: Record<string, unknown> };
+            // EVERY (RE)CONNECT SWEEPS WHAT WAS MISSED. The stream has no replay, so a
+            // `permission.asked` published while it was down — the two seconds between
+            // reconnects, or an opencode restart — would never arrive, and that session
+            // would sit parked until the 45-minute deadline. `server.connected` is the
+            // first event of every connection, so asking then closes the gap.
+            if (e.type === "server.connected") {
+              void this.sweepPermissions();
+              continue;
+            }
             const id = typeof e.data?.["sessionID"] === "string" ? e.data["sessionID"] : undefined;
             if (id === undefined) continue;
             // ACTIVITY: every `session.*` event carries a flat `data.sessionID`, so one read
@@ -681,6 +698,21 @@ export class Reviewer implements ReviewerLike {
    * A refusal that itself fails leaves the session parked until the deadline, so that is
    * logged loudly: the review will then fail as a hang, and this line says why.
    */
+  /**
+   * Refuse every permission already waiting on a session lore is waiting on — the asks the
+   * stream could not deliver while it was down. Best-effort per session: a list that fails
+   * is logged, and the next reconnect asks again.
+   */
+  private async sweepPermissions(): Promise<void> {
+    for (const sessionId of [...this.watchers.keys()]) {
+      const pending = await this.client.permission.list({ sessionID: sessionId }).catch((e: unknown) => {
+        console.error(`[lore:log] could not list pending permissions of session ${sessionId}: ${detail(e)}`);
+        return [];
+      });
+      for (const p of pending) await this.refusePermission(sessionId, p as unknown as Record<string, unknown>);
+    }
+  }
+
   private async refusePermission(sessionId: string, request: Record<string, unknown>): Promise<void> {
     const requestId = typeof request["id"] === "string" ? request["id"] : undefined;
     const what = `${String(request["action"] ?? "?")} on ${JSON.stringify(request["resources"] ?? []).slice(0, 200)}`;
@@ -956,7 +988,11 @@ export class Reviewer implements ReviewerLike {
    */
   private async models(): Promise<readonly { readonly id: string; readonly context: number | undefined }[]> {
     const res = await this.client.model.list();
-    return res.data.map((m) => ({ id: `${m.providerID}/${m.id}`, context: m.limit?.context }));
+    // `enabled: false` is listed and cannot be called — counting it would report a fallback
+    // ready that fails only when the subscription it backs has already run out.
+    return res.data
+      .filter((m) => m.enabled !== false)
+      .map((m) => ({ id: `${m.providerID}/${m.id}`, context: m.limit?.context }));
   }
 
   /**
@@ -1387,6 +1423,18 @@ export class Reviewer implements ReviewerLike {
     // No location at all is a session whose tree cannot be confirmed — moved like any other,
     // rather than trusted.
     await this.client.session.move({ sessionID: sessionId, directory: worktree }).catch((e: unknown): never => {
+      // Classified like the lookup above: a session that vanished between the two calls
+      // is the cold-start recovery's, a dropped connection is a requeue — only a refusal
+      // opencode actually answered is this tier's failure.
+      const w = this.wireError(e, sessionId);
+      if (w instanceof SessionGone) throw w;
+      if (transportFault(e)) {
+        throw new ServiceUnreachable(
+          `lost opencode at ${this.cfg.baseUrl} while moving kept session ${sessionId} to ${worktree} (${detail(e)}) — ` +
+            "nothing was sent to it; the round is requeued.",
+          e,
+        );
+      }
       throw new DidNotRun(
         `kept session ${sessionId} reads ${at ?? "an unknown directory"} and could NOT be moved to ${worktree}: ${detail(e)} — ` +
           "nothing was sent to it, rather than reviewing the wrong tree.",
@@ -2217,7 +2265,10 @@ export async function usageFromMessages(res: unknown): Promise<Usage | undefined
     const t = r.tokens ?? {};
     const cache = (t["cache"] ?? {}) as Record<string, unknown>;
     input += Number(t["input"] ?? 0);
-    output += Number(t["output"] ?? 0);
+    // Reasoning is billed as output by every provider in the ladder — the single-message
+    // reader (`collectUsage`) always counted it, and this sum did not, so a completed
+    // review on a reasoning model under-reported exactly the tokens it spent most of.
+    output += Number(t["output"] ?? 0) + Number(t["reasoning"] ?? 0);
     cached += Number(cache["read"] ?? 0) + Number(cache["write"] ?? 0);
     cost += Number(r.cost ?? 0);
   }

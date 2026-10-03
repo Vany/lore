@@ -40,6 +40,7 @@ interface Captured {
   path: string;
   body: unknown;
   method?: string | undefined;
+  authorization?: string | undefined;
 }
 
 /**
@@ -78,6 +79,10 @@ let seq = 0;
 let promptGone = false;
 /** `GET /api/session/:id` answers 500 — opencode cannot say where a kept session reads. */
 let sessionGetFails = false;
+/** `POST …/move` answers this status. */
+let moveStatus = 204;
+/** What `GET …/permission` lists as pending, per session. */
+let pendingPermissions: Record<string, unknown[]> = {};
 /** `POST /api/session`: an opencode that is up and refusing is not an absent one. */
 let sessionStatus = 200;
 let sessionBody: unknown = { id: "ses_test" };
@@ -185,6 +190,8 @@ function route(req: IncomingMessage, res: ServerResponse, raw: string): void {
         { providerID: "openrouter", id: "z-ai/glm-5.2", limit: { context: 1000 } },
         { providerID: "zp1", id: "glm-5.2", limit: { context: 2000 } },
         { providerID: "zp2", id: "glm-5.2", limit: { context: 500 } },
+        // Listed and switched off — must never count as reachable.
+        { providerID: "zp3", id: "glm-5.2", enabled: false, limit: { context: 500 } },
       ],
     });
   }
@@ -291,12 +298,15 @@ function route(req: IncomingMessage, res: ServerResponse, raw: string): void {
     }, messagesDelayMs);
     return;
   }
+  if (rest === "permission" && req.method === "GET") return json(res, 200, { data: pendingPermissions[sid] ?? [] });
   if (rest?.startsWith("permission/") === true) {
     res.writeHead(204);
     res.end();
     return;
   }
   if (rest === "move") {
+    if (moveStatus === 404) return json(res, 404, { _tag: "SessionNotFoundError", sessionID: sid, message: "gone" });
+    if (moveStatus >= 400) return json(res, moveStatus, undefined);
     res.writeHead(204);
     res.end();
     return;
@@ -311,7 +321,12 @@ function start(): Promise<void> {
       req.on("data", (c: Buffer) => chunks.push(c));
       req.on("end", () => {
         const raw = Buffer.concat(chunks).toString("utf8");
-        captured.push({ path: req.url ?? "", body: raw.length > 0 ? JSON.parse(raw) : undefined, method: req.method });
+        captured.push({
+          path: req.url ?? "",
+          body: raw.length > 0 ? JSON.parse(raw) : undefined,
+          method: req.method,
+          authorization: req.headers.authorization,
+        });
         route(req, res, raw);
       });
     });
@@ -347,6 +362,8 @@ beforeEach(async () => {
   running = new Map();
   promptGone = false;
   sessionGetFails = false;
+  moveStatus = 204;
+  pendingPermissions = {};
   sessionStatus = 200;
   sessionBody = { id: "ses_test" };
   messagesFailFrom = Number.POSITIVE_INFINITY;
@@ -888,6 +905,18 @@ describe("a tier that keeps its session", () => {
 
   // Whether the session reads the right tree is not best-effort: carrying on after a failed
   // lookup prompted a restored review's session at its OLD checkout.
+  // A session that vanished between lookup and move is the cold-start recovery's, not a
+  // failure of the tier.
+  it("starts cold when the session vanishes between the lookup and the move", async () => {
+    replies = [reply(), reply()];
+    const r = reviewer();
+    await r.review(KEEPS, { initial: "FULL", continued: "NEXT" }, "/tmp/wt", "rev1");
+    moveStatus = 404;
+    const out = await r.review(KEEPS, { initial: "FULL", continued: "NEXT" }, "/tmp/moved", "rev1");
+    expect(out.findings).toHaveLength(1);
+    expect(sentText(prompts()[1]), "the recovery is a genuine cold read").toContain("FULL");
+  });
+
   it("stops the round, sending nothing, when opencode cannot say which tree the session reads", async () => {
     replies = [reply(), reply()];
     const r = reviewer();
@@ -1124,10 +1153,26 @@ describe("which configured models opencode can reach", () => {
     expect(await reviewer().missingModels(["zp1/glm-5.2", "nobody/knows"])).toStrictEqual(["nobody/knows"]);
   });
 
+  // Listed is not usable: a disabled model would report a fallback ready that fails the
+  // moment the subscription it backs runs out.
+  it("counts a model opencode lists as disabled as missing", async () => {
+    expect(await reviewer().missingModels(["zp3/glm-5.2"])).toStrictEqual(["zp3/glm-5.2"]);
+  });
+
   // A check that did not run must never report as a check that found nothing.
   it("answers undefined, not 'nothing missing', when the list cannot be read", async () => {
     providersDown = true;
     expect(await reviewer().missingModels(["zp1/glm-5.2"])).toBeUndefined();
+  });
+});
+
+describe("authenticating to opencode 2.x", () => {
+  // v2 accepts only `opencode` and a deployment configures only the password; an empty
+  // user name with the right password is refused with a bare 401.
+  it("sends the user `opencode` when only a password is configured", async () => {
+    replies = [say(FINDING_JSON)];
+    await new Reviewer({ baseUrl, agent: "readonly", timeoutMs: 10_000, password: "pw" }).review(TIER, "review this", "/tmp/wt");
+    expect(created()?.authorization).toBe(`Basic ${Buffer.from("opencode:pw").toString("base64")}`);
   });
 });
 
@@ -1590,6 +1635,23 @@ describe("a permission opencode asks for mid-turn", () => {
     r.close();
   });
 
+  // The stream has no replay: an ask published while it was down never arrives. Every
+  // (re)connect starts with `server.connected`, and lore sweeps the pending list then.
+  it("refuses what was asked while the stream was down, when it reconnects", async () => {
+    hangPrompt = true;
+    const r = reviewer();
+    const inFlight = r.review(TIER, "review this", "/tmp/wt", "rev_sweep");
+    await new Promise((res) => setTimeout(res, 250));
+    pendingPermissions["ses_test"] = [{ id: "per_missed", sessionID: "ses_test", action: "read", resources: ["/etc/hosts"] }];
+    pending.push({ id: "evt_c", type: "server.connected", data: {} });
+    await new Promise((res) => setTimeout(res, 250));
+
+    expect(captured.some((c) => pathOf(c) === "/api/session/ses_test/permission/per_missed/reply")).toBe(true);
+    await r.cancel("rev_sweep");
+    await inFlight.catch(() => undefined);
+    r.close();
+  });
+
   it("leaves another process's sessions alone", async () => {
     hangPrompt = true;
     const r = reviewer();
@@ -1877,6 +1939,12 @@ describe("spend recovered from a call that failed", () => {
     );
     // The user turn is not the model's spend; cache read AND write both count.
     expect(sum).toStrictEqual({ input: 30, cached: 305, output: 10, cost: 0.5 });
+  });
+
+  // Reasoning is billed as output; the single-message reader always counted it.
+  it("counts reasoning tokens as output, as they are billed", async () => {
+    const sum = await usageFromMessages(messages([{ type: "assistant", tokens: { input: 1, output: 20, reasoning: 80 } }]));
+    expect(sum?.output).toBe(100);
   });
 
   // Nothing spent is `undefined`, never a row of zeroes: a zero row is

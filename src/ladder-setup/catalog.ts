@@ -136,7 +136,7 @@ export async function fetchCatalog(cfg: ReviewerConfig = DEFAULT_REVIEWER): Prom
   // OpenRouter would read as an empty catalogue either way — asked explicitly so the
   // emptiness has one meaning here.
   const providers = await api.provider.list();
-  if (!providers.data.some((p) => p.id === "openrouter")) return [];
+  if (!providers.data.some((p) => p.id === "openrouter" && p.activation !== "disabled")) return [];
   const models = await api.model.list();
   // TRANSLATED INTO THE v1 SHAPE `filterCatalog` reads, rather than teaching the pure half
   // a second wire format. Two differences, both measured on 2.0.20 against a live
@@ -147,7 +147,8 @@ export async function fetchCatalog(cfg: ReviewerConfig = DEFAULT_REVIEWER): Prom
   // times too high and the cheapest-first ordering in `run.ts` would still look right.
   const raw: Record<string, RawModel> = {};
   for (const m of models.data) {
-    if (m.providerID !== "openrouter") continue;
+    // A disabled model is listed and cannot be called — never a candidate.
+    if (m.providerID !== "openrouter" || m.enabled === false) continue;
     const price = (m.cost as readonly { input?: number; output?: number }[] | undefined)?.[0];
     raw[m.id] = {
       capabilities: { toolcall: m.capabilities?.tools === true },

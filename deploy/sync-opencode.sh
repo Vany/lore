@@ -88,6 +88,23 @@ else:
 # The container supplies its own hostname/port, and mDNS on loopback only warns.
 cfg.pop("server", None)
 
+# RECONCILED, NOT OVERLAID. The copy below only ever added, so an agent, command or plugin
+# file the operator deleted on the host lived on in the container and kept shaping
+# reviews — and a stale `agents/readonly.md` could even satisfy the INV-8 guard further
+# down after the host's copy was gone. So everything staged before is cleared first.
+#
+# THE DIRECTORY ITSELF STAYS, emptied in place: it is bind-mounted into a running
+# container, and a directory removed and recreated is a new inode the container never
+# sees. Kept: what opencode itself installs here (`node_modules` and the package files
+# its plugin install writes) — clearing them would only force a reinstall on every `up`.
+OPENCODE_OWNED = {"node_modules", "package.json", "package-lock.json"}
+staged_config = os.path.join(stage, "config")
+for name in os.listdir(staged_config):
+    if name in OPENCODE_OWNED:
+        continue
+    path = os.path.join(staged_config, name)
+    shutil.rmtree(path) if os.path.isdir(path) and not os.path.islink(path) else os.remove(path)
+
 with open(os.path.join(stage, "config", "opencode.json"), "w") as f:
     json.dump(cfg, f, indent=2)
 
