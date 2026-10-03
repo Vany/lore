@@ -299,6 +299,21 @@ async function sandboxed(
           interrupted: true,
         }));
       }
+      // A NETWORK FAILURE IS THE ENVIRONMENT, NOT THE BRANCH — the same shape as the OOM
+      // arm above, one cause over. On 2026-09-24 npm hit ECONNRESET twice in lore's own
+      // review during a host load spike (load average 34), and `!installed.ok` below
+      // raised a high-severity "dependencies do not install" against a package.json that
+      // batch never touched and that had installed cleanly five rounds running.
+      if (installFailedOnNetwork(installed)) {
+        return wanted.map((engine) => ({
+          engine,
+          findings: [],
+          unavailable:
+            `install (${cmds.name}) did not complete — the package registry could not be reached ` +
+            `(a network failure, not a fault in the branch). Nothing that needs the dependencies is known either way.`,
+          interrupted: true,
+        }));
+      }
       if (!installed.ok) {
         // One finding, not one per engine — it is a single fact about the branch. The
         // others report unavailable, because that is what they are.
@@ -731,6 +746,34 @@ const CHILD_KILLED = [
   /Command failed with exit code 137\b/, // pnpm
   /Command failed with signal "?SIGKILL"?/, // pnpm, signal form
 ];
+
+/**
+ * Did an install fail because the registry could not be reached, by the installer's own words?
+ *
+ * MATCHED ON EACH INSTALLER'S OWN ERROR LINE, never on a bare `ECONNRESET` anywhere in the
+ * output — the same rule `CHILD_KILLED` follows, and for the same reason: this runs before
+ * the failure is turned into a finding, so a fragment that could appear in a package's own
+ * install log (a postinstall that prints an error it recovered from) would let the target's
+ * text decide lore's gate did not run. npm prints `npm error code E…` (v10+) or
+ * `npm ERR! code E…` (older); pnpm names fetch failures `ERR_PNPM_META_FETCH_FAIL` /
+ * `ERR_PNPM_FETCH_*`; yarn classic says it in a sentence.
+ *
+ * THE TRADE, as `CHILD_KILLED` states it: a branch whose dependencies genuinely point at an
+ * unreachable registry reads as "did not complete" rather than as a finding — lost
+ * coverage, reported as lost. A wrong high-severity claim about someone's package.json is
+ * the error INV-1 refuses.
+ */
+const INSTALL_NETWORK = [
+  /^npm (?:error|ERR!) code (?:ECONNRESET|ETIMEDOUT|ESOCKETTIMEDOUT|EAI_AGAIN|ENOTFOUND|ECONNREFUSED|ENETUNREACH)\b/m,
+  /\bERR_PNPM_(?:META_FETCH_FAIL|FETCH_\d{3}|FETCH_FAIL)\b/,
+  /There appears to be trouble with your network connection/,
+];
+
+function installFailedOnNetwork(r: { ok: boolean; stdout: string; stderr: string }): boolean {
+  if (r.ok) return false;
+  const out = `${r.stdout}\n${r.stderr}`;
+  return INSTALL_NETWORK.some((re) => re.test(out));
+}
 
 function ranOutOfMemory(r: { ok: boolean; code: number; stdout: string; stderr: string }): boolean {
   if (r.ok) return false;

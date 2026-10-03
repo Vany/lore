@@ -231,6 +231,45 @@ describe("a run the sandbox itself killed is never mistaken for a clean or parti
     expect(tsc?.unavailable).toMatch(/not a fault in the branch/);
   });
 
+  // ECONNRESET twice in lore's own review on 2026-09-24, under host load: the network,
+  // not the branch — and a package.json the batch never touched took the blame.
+  it("sandboxed install: a registry the network dropped is 'did not complete', not 'dependencies do not install'", async () => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { typecheck: "tsc -b" } }));
+    const script = join(dir, "fake-docker-install-netfail.sh");
+    writeFileSync(
+      script,
+      "#!/bin/sh\n" +
+        'if [ "$1" = "rm" ]; then exit 0; fi\n' +
+        'echo "npm error code ECONNRESET" >&2\n' +
+        'echo "npm error network aborted" >&2\n' +
+        "exit 1\n",
+    );
+    chmodSync(script, 0o755);
+    const out = await runT0(dir, { engines: ["tsc"], sandbox: baseSandbox(script) });
+    const tsc = out.outcomes.find((o) => o.engine === "tsc");
+    expect(tsc?.findings, "a network failure is not a claim about package.json").toStrictEqual([]);
+    expect(tsc?.unavailable).toMatch(/network failure, not a fault in the branch/);
+  });
+
+  // The wording is npm's own error line, not the bare code anywhere in the output: a
+  // genuinely broken install that merely MENTIONS a reset it recovered from still fails.
+  it("sandboxed install: a real install failure that only mentions ECONNRESET is still a finding", async () => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { typecheck: "tsc -b" } }));
+    const script = join(dir, "fake-docker-install-broken.sh");
+    writeFileSync(
+      script,
+      "#!/bin/sh\n" +
+        'if [ "$1" = "rm" ]; then exit 0; fi\n' +
+        'echo "postinstall: retried after ECONNRESET, ok" >&2\n' +
+        'echo "npm error code ERESOLVE" >&2\n' +
+        "exit 1\n",
+    );
+    chmodSync(script, 0o755);
+    const out = await runT0(dir, { engines: ["tsc"], sandbox: baseSandbox(script) });
+    const tsc = out.outcomes.find((o) => o.engine === "tsc");
+    expect(tsc?.findings.map((f) => f.claim).join(" ")).toMatch(/dependencies do not install/);
+  });
+
   it("checkTypes: a killed `typecheck` script is reported killed, not its partial output", async () => {
     writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { typecheck: "tsc -b" } }));
     const sandbox = fakeDocker("src/foo.ts(3,5): error TS2322: fake partial output before the kill");

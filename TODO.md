@@ -228,8 +228,9 @@ line it belongs to:**
       on an operator's word. (Step 4b beside it — weekly windows — is a separate question and
       stays open.)
 
-- [ ] **t0 reports a network failure during install as a finding against `package.json`**
-      (argued deferral). `runner.ts` sends every install failure that is not a timeout or an
+- [x] **t0 reports a network failure during install as a finding against `package.json`**
+      — FIXED in the CHILD_KILLED change it was deferred into (`installFailedOnNetwork`,
+      npm/pnpm/yarn's own network-error lines → "did not complete"). Was an argued deferral: `runner.ts` sends every install failure that is not a timeout or an
       OOM down `!installed.ok`, which raises a high-severity "dependencies do not install".
       On 2026-09-24 npm hit `ECONNRESET` twice in lore's own review during a host load
       spike, and the claim landed on a `package.json` that batch never touched, which had
