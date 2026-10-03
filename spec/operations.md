@@ -216,6 +216,16 @@ a credential re-logged is only noticed at the next re-test. `ROUTE=<prefix>` and
 `TIER=<prefix>` clear every mark they match; `ALL=1` clears everything. A clear then lists
 what is still in force. Clearing early costs one refused request, and the mark comes back.
 
+**A re-logged credential is `make sync-creds`**, run on the host after `opencode auth
+login`. It stages the host's credentials through `sync-opencode.sh`, checks that the
+running opencode reads the new file, and unparks the routes of exactly the providers whose
+credential changed — without restarting opencode, so no round in flight dies. It refuses
+when nothing changed (the login did not land in this host's `auth.json`), and when the
+container holds an OAuth token that expires later than the host's: opencode renews it in
+place about hourly, so by then the host copy is the stale one, and copying it over would
+kill a working credential while reading as a renewal. That opencode re-reads `auth.json`
+per request, rather than from startup, is assumed and not yet observed.
+
 ### 2.4.3 The board — the same facts, for a person rather than a monitor (D-96)
 
 `/status` answers *is it healthy* in JSON, for something that will page. It is a poor

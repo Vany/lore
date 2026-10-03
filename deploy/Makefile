@@ -7,6 +7,7 @@
 #   make status                                what is happening, coloured
 #   make status ID=rev_xxx                     one review, in full
 #   make unpark [ROUTE=openai | ALL=1]         what lore won't ask; forget it after a fix
+#   make sync-creds                            after `opencode auth login`: hand it over, unpark
 #   make logs                                  follow
 #   make restore                               pull the database back from backup
 #
@@ -48,7 +49,7 @@ DBVOL   = $(PROJECT)_lore-db
 # exactly the silent-divergence class this list exists to catch, for the one file a
 # NEW deployment reads before anything else.
 DEPLOY_FILES = Makefile docker-compose.yml litestream.yml Dockerfile opencode.Dockerfile \
-               sandbox.Dockerfile smoke.mjs mirror-refresh.sh sync-opencode.sh .env.example \
+               sandbox.Dockerfile smoke.mjs mirror-refresh.sh sync-opencode.sh sync-creds.sh .env.example \
                tiers.kimi.json tiers.zai-kimi-openai.json tiers.zai-openai.json
 # lore-ok[ac0f7ec3]: found by lore's own review — tiers.kimi.json's name stays here even
 # though the repository no longer has the file (deleted the same commit this line was
@@ -96,7 +97,7 @@ define wrong-directory
 endef
 
 .DEFAULT_GOAL := help
-.PHONY: help preflight sync-opencode push build drain drain-off deploy up down down-hard restart logs status status-json status-local doctor ladder-suggest new relocate tokens revoke unpark replica-state db-check mirror mirror-daemon mirror-daemon-off mirror-daemon-log backup-on backup-check backup-drill restore sweep shell
+.PHONY: help preflight sync-opencode sync-creds push build drain drain-off deploy up down down-hard restart logs status status-json status-local doctor ladder-suggest new relocate tokens revoke unpark replica-state db-check mirror mirror-daemon mirror-daemon-off mirror-daemon-log backup-on backup-check backup-drill restore sweep shell
 
 ## The comment block at the top of this file, however long it grows. It was a fixed
 ## `sed -n '2,14p'`, a line count kept in step with the header by nobody: the header
@@ -139,6 +140,13 @@ preflight:
 ## there is one configuration to maintain, not two that drift.
 sync-opencode:
 	@./sync-opencode.sh ./opencode
+
+## A credential re-logged on this host, handed to the RUNNING deployment without a
+## restart, and the routes it had parked cleared. Refuses to replace a token the
+## container has already renewed past the host's — see the script for why.
+sync-creds:
+	$(wrong-directory)
+	@COMPOSE="$(COMPOSE)" ./sync-creds.sh
 
 ## Ship the deployment to the host. Credentials travel over the tailnet only.
 push:
