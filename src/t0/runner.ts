@@ -694,9 +694,52 @@ export const KILLED = 137;
  * OOM, say, then finishes and exits clean. Without this gate, that success would
  * still read as "did not complete." The `KILLED` arm never needed the gate (137
  * cannot be `ok`), but it costs nothing to state once for both.
+ *
+ * AND THE THIRD WAY: THE KERNEL KILLS A CHILD AND THE WRAPPER EXITS 1.
+ *
+ * Both arms above describe the process lore itself waited on. In a monorepo, that
+ * process is a task runner — `pnpm run lint` is pnpm, running turbo, running an
+ * eslint per package. When the cgroup's OOM killer takes one of those eslints, the
+ * runner survives, reports its task as failed, and exits ONE. There is no 137 to
+ * see and no V8 message, because V8 never got to complain: the process was killed
+ * from outside. lore then reads a non-zero exit with output in it and raises
+ * *"`pnpm run lint` fails on this branch"* at high severity — a confident false
+ * statement about someone else's code, which is the exact shape `KILLED` was added
+ * to stop, one process deeper.
+ *
+ * Raised by a client on 2026-09-23 in almost these words: *"gets OOM-killed, which
+ * surfaces as a lint failure rather than as exit 137."* It was NOT what had
+ * happened to them — their lint genuinely failed, on a named file, line and rule,
+ * and rigid's t0 has had a zero interrupted rate since D-152 capped the fan-out —
+ * but the mechanism they described is real and lore could not have told the
+ * difference.
+ *
+ * MATCHED ON EACH RUNNER'S OWN WORDING, never on a bare "SIGKILL" or "137", for
+ * the reason the V8 arm above already had to learn: this is checked before the
+ * parse, so a fragment short enough to appear in ordinary output would let a
+ * target's own text decide that lore's gate did not run. `exited (137)` is
+ * turbo's; the two `Command failed` forms are pnpm's.
+ *
+ * THE TRADE, STATED: a repository whose lint output genuinely contains one of
+ * these strings gets *"did not complete"* instead of a finding — lost coverage,
+ * reported as lost. That is the direction INV-1 chooses: a review that did not run
+ * is not a review that found nothing, and the reverse error is a high-severity
+ * accusation against a branch that is fine.
  */
+const CHILD_KILLED = [
+  /\bexited \(137\)/, // turbo: "command (…) exited (137)"
+  /Command failed with exit code 137\b/, // pnpm
+  /Command failed with signal "?SIGKILL"?/, // pnpm, signal form
+];
+
 function ranOutOfMemory(r: { ok: boolean; code: number; stdout: string; stderr: string }): boolean {
-  return !r.ok && (r.code === KILLED || `${r.stdout}\n${r.stderr}`.includes("Allocation failed - JavaScript heap out of memory"));
+  if (r.ok) return false;
+  const out = `${r.stdout}\n${r.stderr}`;
+  return (
+    r.code === KILLED ||
+    out.includes("Allocation failed - JavaScript heap out of memory") ||
+    CHILD_KILLED.some((re) => re.test(out))
+  );
 }
 
 /**

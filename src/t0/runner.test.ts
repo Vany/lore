@@ -293,6 +293,56 @@ describe("a run the sandbox itself killed is never mistaken for a clean or parti
     expect(tsc?.unavailable).toBeUndefined();
   });
 
+  /**
+   * THE THIRD WAY A MEMORY LIMIT ENDS A RUN, and the one a client described on
+   * 2026-09-23: the kernel kills a CHILD, the task runner survives it, and the
+   * wrapper exits ONE. No 137 for lore to see and no V8 message, because V8 never
+   * got to complain. Before this, lore read a non-zero exit with output in it and
+   * raised "`pnpm run lint` fails on this branch" at HIGH severity — an accusation
+   * against a branch whose lint is fine.
+   */
+  it("checkLint: a child killed under the runner is an OOM, not a failing gate", async () => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { lint: "turbo run lint" } }));
+    const turboKilledAChild =
+      "@rigidfi/console:lint: cache miss, executing 906586fbc8e2\n" +
+      "@rigidfi/console:lint: ERROR: command finished with error: command (/work/apps/console) " +
+      "/bin/sh -c eslint . exited (137)\n" +
+      "ERROR  run failed: command exited (137)\n";
+    const sandbox = fakeDocker(turboKilledAChild, 1);
+    const out = await runT0(dir, { engines: ["eslint"], sandbox });
+    const eslint = out.outcomes.find((o) => o.engine === "eslint");
+    expect(eslint?.findings, "a killed child must not become a finding about the branch").toStrictEqual([]);
+    expect(eslint?.unavailable).toMatch(/not a fault in the branch/);
+    expect(eslint?.interrupted, "and the round must withhold trust from this engine's silence").toBe(true);
+  });
+
+  it("checkLint: pnpm's own signal wording counts too", async () => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { lint: "eslint ." } }));
+    const sandbox = fakeDocker(' ELIFECYCLE  Command failed with signal "SIGKILL".\n', 1);
+    const out = await runT0(dir, { engines: ["eslint"], sandbox });
+    expect(out.outcomes.find((o) => o.engine === "eslint")?.unavailable).toMatch(/not a fault in the branch/);
+  });
+
+  /**
+   * The other half, and the reason the patterns are each runner's own wording
+   * rather than a bare "137": this check runs BEFORE the parse, so a fragment short
+   * enough to appear in ordinary output would let a target's own text decide that
+   * lore's gate did not run. A real lint error that merely mentions the number is
+   * still a real lint error.
+   */
+  it("checkLint: a genuine lint failure that mentions 137 is still a finding", async () => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { lint: "eslint ." } }));
+    const realFailure =
+      "/work/tools/x/tests/exit-codes.test.ts\n" +
+      "  12:7  error  'EXIT_137' is assigned a value but never used  @typescript-eslint/no-unused-vars\n" +
+      "\n✖ 1 problem (1 error, 0 warnings)\n";
+    const sandbox = fakeDocker(realFailure, 1);
+    const out = await runT0(dir, { engines: ["eslint"], sandbox });
+    const eslint = out.outcomes.find((o) => o.engine === "eslint");
+    expect(eslint?.unavailable, "a real failure must not be discarded as an OOM").toBeUndefined();
+    expect(eslint?.findings.length, "it is a finding about the branch, which is what it is").toBeGreaterThan(0);
+  });
+
   it("checkTypes: a killed bare `tsc --noEmit` is reported killed, not its partial output", async () => {
     writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: {} }));
     writeFileSync(join(dir, "tsconfig.json"), "{}");
