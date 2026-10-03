@@ -477,7 +477,21 @@ export async function main(argv: readonly string[]): Promise<ExitCode> {
           "Re-log it on the host, or pass FORCE=1, to replace it.\n",
       );
     }
-    const changed = await apply(api, p, container);
+    // Opened BEFORE anything changes, so each provider is unparked the moment its login is in
+    // place (`apply`'s callback) — a later provider failing cannot strand an earlier one.
+    const store = openExisting(args.db);
+    let changed: readonly string[];
+    try {
+      changed = await apply(api, p, container, (i) => {
+        // A route id is `<integration>/<model>`, so `<integration>/` names exactly that
+        // credential's routes and never `openrouter/openai/...`, which is a different login.
+        const cleared = unpark(store, { all: false, route: `${i}/`, tier: undefined });
+        process.stdout.write(`synced: ${i}\n`);
+        if (cleared.length > 0) process.stdout.write(renderCleared(cleared, parks(store), Date.now()));
+      });
+    } finally {
+      store.close();
+    }
     for (const u of p.unchanged) process.stdout.write(`${u}: unchanged\n`);
     if (changed.length === 0) {
       if (argv.includes("--allow-unchanged")) return EXIT.PASS;
@@ -489,16 +503,6 @@ export async function main(argv: readonly string[]): Promise<ExitCode> {
           : "NOTHING CHANGED: the deployment already holds every credential the host has. Did the login run on THIS host, as this user?\n",
       );
       return EXIT.USAGE;
-    }
-    process.stdout.write(`synced: ${changed.join(", ")}\n`);
-    // A route id is `<integration>/<model>`, so `<integration>/` names exactly that
-    // credential's routes and never `openrouter/openai/...`, which is a different login.
-    const store = openExisting(args.db);
-    try {
-      const cleared = changed.flatMap((i) => unpark(store, { all: false, route: `${i}/`, tier: undefined }));
-      process.stdout.write(cleared.length === 0 ? "nothing was parked on them.\n" : renderCleared(cleared, parks(store), Date.now()));
-    } finally {
-      store.close();
     }
     return EXIT.PASS;
   }

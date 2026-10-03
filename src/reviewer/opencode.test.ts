@@ -76,6 +76,8 @@ let seq = 0;
 
 /** `POST /api/session/:id/prompt` answers 404 — the session is gone from opencode. */
 let promptGone = false;
+/** `GET /api/session/:id` answers 500 — opencode cannot say where a kept session reads. */
+let sessionGetFails = false;
 /** `POST /api/session`: an opencode that is up and refusing is not an absent one. */
 let sessionStatus = 200;
 let sessionBody: unknown = { id: "ses_test" };
@@ -201,6 +203,7 @@ function route(req: IncomingMessage, res: ServerResponse, raw: string): void {
   if (m === null) return json(res, 404, undefined);
 
   if (rest === undefined && req.method === "GET") {
+    if (sessionGetFails) return json(res, 500, undefined);
     if (!sessions.has(sid)) return json(res, 404, { _tag: "SessionNotFoundError", sessionID: sid, message: "gone" });
     return json(res, 200, { data: { id: sid, location: { directory: "/tmp/wt" } } });
   }
@@ -343,6 +346,7 @@ beforeEach(async () => {
   sessions = new Map();
   running = new Map();
   promptGone = false;
+  sessionGetFails = false;
   sessionStatus = 200;
   sessionBody = { id: "ses_test" };
   messagesFailFrom = Number.POSITIVE_INFINITY;
@@ -880,6 +884,17 @@ describe("a tier that keeps its session", () => {
     await r.review(KEEPS, { initial: "A", continued: "B" }, "/tmp/moved", "rev1");
     const move = captured.find((c) => pathOf(c).endsWith("/move"));
     expect(move?.body).toStrictEqual({ directory: "/tmp/moved" });
+  });
+
+  // Whether the session reads the right tree is not best-effort: carrying on after a failed
+  // lookup prompted a restored review's session at its OLD checkout.
+  it("stops the round, sending nothing, when opencode cannot say which tree the session reads", async () => {
+    replies = [reply(), reply()];
+    const r = reviewer();
+    await r.review(KEEPS, { initial: "A", continued: "B" }, "/tmp/wt", "rev1");
+    sessionGetFails = true;
+    await expect(r.review(KEEPS, { initial: "A", continued: "B" }, "/tmp/moved", "rev1")).rejects.toThrow(DidNotRun);
+    expect(prompts(), "nothing was sent to a session whose tree is unknown").toHaveLength(1);
   });
 
   /**

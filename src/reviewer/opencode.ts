@@ -1359,26 +1359,40 @@ export class Reviewer implements ReviewerLike {
    * Point a resumed session at the worktree this round reads, if it points elsewhere.
    *
    * A session opencode no longer has is left for `ask` to discover: its 404 is what drives
-   * the cold-start recovery in `conductSession`, and swallowing it here would only move
-   * where that is noticed. Any other failure is logged and the round goes ahead — a session
-   * that cannot be moved is still reading the tree it was opened on, which for every review
-   * whose worktree never moved is the right one.
+   * the cold-start recovery in `conductSession`, and handling it here would only move where
+   * that is noticed.
+   *
+   * ANY OTHER FAILURE STOPS THE ROUND. The first version logged and carried on, on the
+   * reasoning that a session that cannot be moved still reads the tree it was opened on —
+   * true, and exactly the danger: a review restored under a new data directory would
+   * prompt the session at the OLD checkout and could pass on code nobody had read. Whether
+   * the session reads the right tree is not something to be best-effort about.
    */
   private async followWorktree(sessionId: string, worktree: string): Promise<void> {
-    const at = await this.client.session
-      .get({ sessionID: sessionId })
-      .then((s) => s.location?.directory)
-      .catch(() => undefined);
-    if (at === undefined || at === worktree) return;
-    const failure = await this.client.session
-      .move({ sessionID: sessionId, directory: worktree })
-      .then(() => undefined)
-      .catch((e: unknown) => detail(e));
-    console.error(
-      failure === undefined
-        ? `[lore:log] kept session ${sessionId} moved from ${at} to ${worktree}`
-        : `[lore:log] kept session ${sessionId} reads ${at} and could NOT be moved to ${worktree}: ${failure}`,
-    );
+    let at: string | undefined;
+    try {
+      at = (await this.client.session.get({ sessionID: sessionId })).location?.directory;
+    } catch (e) {
+      const w = this.wireError(e, sessionId);
+      if (w instanceof SessionGone) return;
+      throw transportFault(e)
+        ? new ServiceUnreachable(
+            `could not ask opencode at ${this.cfg.baseUrl} which worktree kept session ${sessionId} reads (${detail(e)}) — ` +
+              "nothing was sent to it; the round is requeued.",
+            e,
+          )
+        : new DidNotRun(`could not ask opencode which worktree kept session ${sessionId} reads: ${detail(e)} — nothing was sent to it.`);
+    }
+    if (at === worktree) return;
+    // No location at all is a session whose tree cannot be confirmed — moved like any other,
+    // rather than trusted.
+    await this.client.session.move({ sessionID: sessionId, directory: worktree }).catch((e: unknown): never => {
+      throw new DidNotRun(
+        `kept session ${sessionId} reads ${at ?? "an unknown directory"} and could NOT be moved to ${worktree}: ${detail(e)} — ` +
+          "nothing was sent to it, rather than reviewing the wrong tree.",
+      );
+    });
+    console.error(`[lore:log] kept session ${sessionId} moved from ${at ?? "an unknown directory"} to ${worktree}`);
   }
 
   /**

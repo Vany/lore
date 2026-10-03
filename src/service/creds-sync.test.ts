@@ -99,6 +99,27 @@ describe("applying it", () => {
     expect(calls).toStrictEqual(["create zai activate=true", "remove cred_zai_old"]);
   });
 
+  // The caller unparks in `applied`; a batch that reported only at the end stranded every
+  // earlier success behind its old park when a later create failed.
+  it("reports each integration the moment it is in place, before a later one fails", async () => {
+    const seen: string[] = [];
+    let n = 0;
+    const client = {
+      credential: {
+        create: async (input: { integrationID: string }) => {
+          if (input.integrationID === "openrouter") throw new Error("opencode said no");
+          return { id: `cred_new_${String(++n)}` };
+        },
+        remove: async () => undefined,
+      },
+    } as unknown as OpenCodeClient;
+    const container = [key("zai", "old"), key("openrouter", "old")];
+    await expect(
+      apply(client, plan([key("zai", "new"), key("openrouter", "new")], container), container, (i) => seen.push(i)),
+    ).rejects.toThrow(/said no/);
+    expect(seen, "zai was unparked before openrouter failed").toStrictEqual(["zai"]);
+  });
+
   it("leaves the old login in place when the create fails", async () => {
     const calls: string[] = [];
     const client = {
