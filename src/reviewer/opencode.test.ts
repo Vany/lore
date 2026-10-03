@@ -83,6 +83,8 @@ let sessionGetFails = false;
 let moveStatus = 204;
 /** What `GET …/permission` lists as pending, per session. */
 let pendingPermissions: Record<string, unknown[]> = {};
+/** `GET …/permission` fails this many times before answering. */
+let permissionListFailures = 0;
 /** `POST /api/session`: an opencode that is up and refusing is not an absent one. */
 let sessionStatus = 200;
 let sessionBody: unknown = { id: "ses_test" };
@@ -298,7 +300,13 @@ function route(req: IncomingMessage, res: ServerResponse, raw: string): void {
     }, messagesDelayMs);
     return;
   }
-  if (rest === "permission" && req.method === "GET") return json(res, 200, { data: pendingPermissions[sid] ?? [] });
+  if (rest === "permission" && req.method === "GET") {
+    if (permissionListFailures > 0) {
+      permissionListFailures--;
+      return json(res, 500, undefined);
+    }
+    return json(res, 200, { data: pendingPermissions[sid] ?? [] });
+  }
   if (rest?.startsWith("permission/") === true) {
     res.writeHead(204);
     res.end();
@@ -364,6 +372,7 @@ beforeEach(async () => {
   sessionGetFails = false;
   moveStatus = 204;
   pendingPermissions = {};
+  permissionListFailures = 0;
   sessionStatus = 200;
   sessionBody = { id: "ses_test" };
   messagesFailFrom = Number.POSITIVE_INFINITY;
@@ -1652,6 +1661,24 @@ describe("a permission opencode asks for mid-turn", () => {
     r.close();
   });
 
+  // Once the stream is back it may stay up all turn; a sweep that failed once must try
+  // again on its own, not wait for a reconnect that never comes.
+  it("asks again when the sweep's list fails, without another reconnect", async () => {
+    hangPrompt = true;
+    const r = reviewer();
+    const inFlight = r.review(TIER, "review this", "/tmp/wt", "rev_sweep2");
+    await new Promise((res) => setTimeout(res, 250));
+    pendingPermissions["ses_test"] = [{ id: "per_late", sessionID: "ses_test", action: "read", resources: ["/etc/hosts"] }];
+    permissionListFailures = 1;
+    pending.push({ id: "evt_c2", type: "server.connected", data: {} });
+    await new Promise((res) => setTimeout(res, 3_600));
+
+    expect(captured.some((c) => pathOf(c) === "/api/session/ses_test/permission/per_late/reply")).toBe(true);
+    await r.cancel("rev_sweep2");
+    await inFlight.catch(() => undefined);
+    r.close();
+  }, 10_000);
+
   it("leaves another process's sessions alone", async () => {
     hangPrompt = true;
     const r = reviewer();
@@ -2049,9 +2076,15 @@ describe("statusOf — v2 events as the watchers read them", () => {
 
   // Progress ends a storm. `step.started` does not: after a retry it IS the retry.
   it("reads progress as recovery, and a step starting as nothing", () => {
-    expect(statusOf("session.step.ended", {})).toStrictEqual({ type: "busy" });
+    expect(statusOf("session.step.ended", { finish: "tool-calls" })).toStrictEqual({ type: "busy" });
     expect(statusOf("session.text.delta", {})).toStrictEqual({ type: "busy" });
     expect(statusOf("session.step.started", {})).toBeUndefined();
+  });
+
+  // Each FAILED attempt of a storm closes with step.ended finish:"error" — counted as
+  // recovery, it reset the storm clock every attempt and the bound never fired.
+  it("does not read a step that ended in error as recovery", () => {
+    expect(statusOf("session.step.ended", { finish: "error" })).toBeUndefined();
   });
 });
 
@@ -2141,9 +2174,11 @@ describe("a retry storm on the event stream", () => {
     const started = Date.now();
     const inFlight = r.review(TIER, "review this", "/tmp/wt", "rev_storm");
     await new Promise((res) => setTimeout(res, 250));
-    // A message the classifier does NOT know — the whole point of the bound.
+    // A message the classifier does NOT know — the whole point of the bound. Each attempt
+    // closes its step with finish:"error" before the retry, as the wire does.
     pending.push(retryEvent("some entirely new provider unhappiness"));
     await new Promise((res) => setTimeout(res, 300));
+    pending.push({ id: "evt_se", type: "session.step.ended", data: { sessionID: "ses_test", finish: "error" } });
     pending.push(retryEvent("some entirely new provider unhappiness"));
 
     const err = await inFlight.then(() => undefined, (e: unknown) => e);

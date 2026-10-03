@@ -65,9 +65,13 @@ export interface OpencodeStatus {
  * One v2 event as a watcher sees it, or `undefined` when it says nothing a watcher acts on.
  *
  * PROGRESS IS WHAT ENDS A STORM, so it is reported as a non-retry status: a step that
- * ENDED, or text the model is producing. Not `session.step.started` — after a retry that
- * is the retry itself, and counting it as recovery would reset the storm clock on every
- * attempt of a storm, which is the one thing that clock exists to outlast.
+ * ended WELL, or text the model is producing. Not `session.step.started` — after a retry
+ * that is the retry itself, and counting it as recovery would reset the storm clock on
+ * every attempt of a storm, which is the one thing that clock exists to outlast. And not a
+ * step that ended with `finish: "error"` either, for the same reason from the other side:
+ * that is how each FAILED attempt of a storm closes (step.started → error → step.ended
+ * error → retry.scheduled), and reading it as recovery reset the clock on every attempt, so
+ * the 5-minute bound could never fire on a real v2 storm.
  */
 export function statusOf(type: string | undefined, data: Record<string, unknown>): OpencodeStatus | undefined {
   if (type === "session.retry.scheduled") {
@@ -79,7 +83,8 @@ export function statusOf(type: string | undefined, data: Record<string, unknown>
       ...(typeof error.type === "string" ? { errorType: error.type } : {}),
     };
   }
-  if (type === "session.step.ended" || type === "session.text.delta") return { type: "busy" };
+  if (type === "session.step.ended" && data["finish"] !== "error") return { type: "busy" };
+  if (type === "session.text.delta") return { type: "busy" };
   return undefined;
 }
 
@@ -453,6 +458,9 @@ class SessionGone extends Error {
  */
 class HistoryRejected extends DidNotRun {}
 
+/** How soon a failed pending-permission list is asked again (see `sweepPermissions`). */
+const PERMISSION_SWEEP_RETRY_MS = 3_000;
+
 /** `openrouter/z-ai/glm-5.2` → provider `openrouter`, model `z-ai/glm-5.2`. */
 export function splitModel(id: string): { providerID: string; modelID: string } {
   const slash = id.indexOf("/");
@@ -707,16 +715,29 @@ export class Reviewer implements ReviewerLike {
    */
   /**
    * Refuse every permission already waiting on a session lore is waiting on — the asks the
-   * stream could not deliver while it was down. Best-effort per session: a list that fails
-   * is logged, and the next reconnect asks again.
+   * stream could not deliver while it was down.
+   *
+   * A LIST THAT FAILS IS ASKED AGAIN, on its own timer. "The next reconnect asks again" was
+   * the first version's answer, and it is no answer: once the stream is back it may stay
+   * up for the whole turn, so a missed ask behind one failed list sat parked until the
+   * 45-minute deadline. Retried every few seconds while that session is still being waited
+   * on, and only for the sessions that failed.
    */
-  private async sweepPermissions(): Promise<void> {
-    for (const sessionId of [...this.watchers.keys()]) {
+  private async sweepPermissions(sessions: readonly string[] = [...this.watchers.keys()]): Promise<void> {
+    const failed: string[] = [];
+    for (const sessionId of sessions) {
+      if (!this.watchers.has(sessionId)) continue;
       const pending = await this.client.permission.list({ sessionID: sessionId }).catch((e: unknown) => {
-        console.error(`[lore:log] could not list pending permissions of session ${sessionId}: ${detail(e)}`);
+        console.error(`[lore:log] could not list pending permissions of session ${sessionId}: ${detail(e)} — asking again shortly`);
+        failed.push(sessionId);
         return [];
       });
       for (const p of pending) await this.refusePermission(sessionId, p as unknown as Record<string, unknown>);
+    }
+    if (failed.length > 0 && !this.closed) {
+      const t = setTimeout(() => void this.sweepPermissions(failed), PERMISSION_SWEEP_RETRY_MS);
+      // `unref`'d: a retry pending must not hold the process open past its work.
+      t.unref?.();
     }
   }
 
