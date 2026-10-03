@@ -120,6 +120,7 @@ export async function apply(
       // a sync that left the old login answering would report a change nobody gets.
       activate: true,
     });
+    // lore-ok[e65a61df]: reported once ACTIVE, before the old copies are removed below.
     changed.push(c.integrationID);
     applied(c.integrationID);
     for (const old of container.filter((o) => o.integrationID === c.integrationID && o.id !== created.id)) {

@@ -97,6 +97,7 @@ cfg.pop("server", None)
 # container, and a directory removed and recreated is a new inode the container never
 # sees. Kept: what opencode itself installs here (`node_modules` and the package files
 # its plugin install writes) — clearing them would only force a reinstall on every `up`.
+# lore-ok[b9425e16]: reconciled here — the staged config is emptied in place before copying.
 OPENCODE_OWNED = {"node_modules", "package.json", "package-lock.json"}
 staged_config = os.path.join(stage, "config")
 for name in os.listdir(staged_config):

@@ -202,6 +202,7 @@ export interface ReviewerConfig {
  * what an unset username used to send, is refused with a bare 401 even with the right
  * password, and the password is the only thing a v2 deployment configures.
  */
+// lore-ok[0738503c]: the default every Basic-auth encoder here and in doctor.ts falls back to.
 export const V2_USER = "opencode";
 
 export const DEFAULT_REVIEWER: ReviewerConfig = {
@@ -641,6 +642,7 @@ export class Reviewer implements ReviewerLike {
             // reconnects, or an opencode restart — would never arrive, and that session
             // would sit parked until the 45-minute deadline. `server.connected` is the
             // first event of every connection, so asking then closes the gap.
+            // lore-ok[8781d7cd]: the reconnect gap is closed here — see the sweep below.
             if (e.type === "server.connected") {
               void this.sweepPermissions();
               continue;
@@ -1455,6 +1457,7 @@ export class Reviewer implements ReviewerLike {
       // is the cold-start recovery's, a dropped connection is a requeue — only a refusal
       // opencode actually answered is this tier's failure.
       const w = this.wireError(e, sessionId);
+      // lore-ok[4047454f]: move failures keep the lookup's classes — gone, transport, refusal.
       if (w instanceof SessionGone) throw w;
       if (transportFault(e)) {
         throw new ServiceUnreachable(
