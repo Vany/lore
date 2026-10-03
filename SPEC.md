@@ -4097,7 +4097,11 @@ it is waiting on with `reject` and a reason, and logs it; the model carries on w
 `session.*` event, by prefix rather than a list; cancel is `interrupt` plus our own socket;
 compaction (D-80) is `compact` followed by `wait`. v2 bounds its own retries — ten, about
 84s, or up to 15 minutes a gap when the provider names a wait — and does not retry quota
-or auth at all, so the 5-minute storm bound stays as the backstop it always was.
+or auth at all, so the 5-minute storm bound stays as the backstop it always was. Which is
+also why D-91's early abort NARROWED: it fires on opencode's own `provider.quota` and on the
+words of exhaustion ("limit exhausted", "usage limit", "quota", "insufficient"), no longer on
+a plain "rate limit" — v2 heals a per-minute throttle within its own retries, and aborting on
+the first one turned it into a stepped-over tier and a thin-ladder pass.
 
 **Credentials go through opencode's API: `make sync-creds` (`lore creds-sync`).** The
 host's opencode lists what it holds; lore pushes the active credentials that differ,

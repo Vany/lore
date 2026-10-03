@@ -2022,9 +2022,16 @@ describe("reading what opencode says about a call in flight", () => {
   // own backoff. Returning nothing here would make lore hang out the full deadline for
   // any provider that phrases its limit differently.
   it("classifies a refusal that names no reset time", () => {
-    const r = quotaRefusal({ type: "retry", message: "rate limit exceeded, try later" });
-    expect(r?.message).toContain("rate limit");
+    const r = quotaRefusal({ type: "retry", message: "quota exceeded for this plan" });
+    expect(r?.message).toContain("quota");
     expect(r?.resetAt).toBeUndefined();
+  });
+
+  // v2 retries a throttle itself and a per-minute 429 heals within one gap; aborting on its
+  // first retry manufactured thin ladders out of self-healing throttles.
+  it("leaves a plain rate limit to opencode's own bounded retries", () => {
+    expect(quotaRefusal({ type: "retry", attempt: 1, message: "Rate limit reached, retry after 30s" })).toBeUndefined();
+    expect(quotaRefusal({ type: "retry", attempt: 1, message: "rate limit", errorType: "provider.rate-limit" })).toBeUndefined();
   });
 });
 

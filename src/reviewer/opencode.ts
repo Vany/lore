@@ -107,7 +107,14 @@ export function quotaRefusal(status: OpencodeStatus): { readonly message: string
   // opencode retries it forever (attempt 1, 2, 3… every few seconds), so the session
   // never finishes and the deadline is the only thing that ends it. The narration carried
   // the refusal the entire time; this line just did not know the words.
-  if (!known && !/limit exhausted|rate.?limit|quota|insufficient|out of credit|usage limit/i.test(message)) return undefined;
+  // A PLAIN RATE LIMIT IS NOT IN THIS LIST, and in v1 it was. v1 retried for ever, so any
+  // throttle meant waiting out the deadline and aborting at once was right; v2 retries a
+  // rate limit itself — ten times, honouring a provider-named wait up to 15 minutes a gap —
+  // which is exactly what heals a per-minute 429. Aborting on its first retry turned such
+  // a throttle into a stepped-over tier and a thin-ladder pass. What stays are the words of
+  // EXHAUSTION, which no retry heals; a throttle that never heals still ends, either in the
+  // turn's own recorded failure (`ask` reads it as spent) or at the storm bound.
+  if (!known && !/limit exhausted|quota|insufficient|out of credit|usage limit/i.test(message)) return undefined;
   if (message === "") return { message: "quota exceeded (opencode classified it; the provider gave no words)" };
   const at = /reset(?:s)?(?: at)?\s+(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2})/i.exec(message);
   // TREATED AS UTC, and the provider does not say. Z.ai is a Beijing company and this may
