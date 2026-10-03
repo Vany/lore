@@ -40,6 +40,15 @@ five providers and refused Anthropic; reviews on `openai/gpt-5.6-sol` (the fresh
 `zai-coding-plan2/glm-5.3` (custom provider from the staged config) and
 `kimi-code-plan-global/k3` each found the planted bug and left the file untouched.
 
+**Reviewed, deployed, pushed (2026-10-03).** `rev_EPvS8cwLwgdeBh3wmuYlozuo` passed after
+five rounds — 20 findings, 14 fixed, 6 justified — attested PARTIAL because t1 never re-read
+the final tree. Once OpenAI was back, t3 found the real defects: a storm clock that every
+failed attempt reset (`finish: "error"` read as progress), an early quota abort that turned
+v2's self-healing throttles into thin ladders, and every way `creds-sync` could report
+success over a deployment with no usable credential. The board showed t3 r3's findings
+three times; that is a board bug (TODO), not duplicate findings — my deploy made three
+attempts at that round.
+
 **Not verified:** the deployment itself (`make up` on the real compose, the volume swap,
 lore's startup checks against 2.x), and the plane MCP under 2.x (`needs_auth` on the host).
 
