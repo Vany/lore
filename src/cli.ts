@@ -12,7 +12,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
-import { EXIT, LoreError, UsageError, type ExitCode } from "./core/errors.ts";
+import { EXIT, LoreError, ServiceUnreachable, UsageError, type ExitCode } from "./core/errors.ts";
 import { dataDir, dbPath } from "./core/paths.ts";
 import { compareFindings } from "./core/finding.ts";
 import { initialState } from "./core/ladder.ts";
@@ -454,18 +454,28 @@ export async function main(argv: readonly string[]): Promise<ExitCode> {
     for await (const c of process.stdin) chunks.push(c as Buffer);
     const host = parseHostCredentials(Buffer.concat(chunks).toString("utf8"));
     const api = client(DEFAULT_REVIEWER);
-    const container = await api.credential.list();
+    // UNREACHABLE IS ITS OWN EXIT (70, `ServiceUnreachable`), because `make up` retries
+    // exactly that while opencode starts — and must NOT retry a refusal, which used to be
+    // printed fifteen times as "opencode not ready yet" about a deployment that was up.
+    const container = await api.credential.list().catch((e: unknown): never => {
+      throw new ServiceUnreachable(
+        `could not list opencode's credentials at ${DEFAULT_REVIEWER.baseUrl}: ${e instanceof Error ? e.message : String(e)}`,
+        e,
+      );
+    });
     const p = plan(host, container, argv.includes("--force"));
     for (const f of p.forbidden) process.stdout.write(`${f}: not synced — no reviewer may reach it (D-1)\n`);
+    // A LOGIN THE DEPLOYMENT RENEWED ITSELF IS SKIPPED, NOT A REASON TO STOP. Both sides
+    // renew OAuth independently, so whichever renewed last is "newer" on most runs; the
+    // first version refused the WHOLE sync here, so a fresh Z.ai key stayed unpushed
+    // because of an OpenAI token that was fine, and `make up` failed on a healthy
+    // deployment. The skipped login keeps working; the others go through.
     for (const b of p.behind) {
       process.stderr.write(
-        `${b.integrationID}: the deployment renewed this login itself (expires ${new Date(b.container).toISOString()}); ` +
-          `the host's copy is older (${new Date(b.host).toISOString()}) and may already be revoked.\n`,
+        `${b.integrationID}: kept the deployment's login — it renewed itself (expires ${new Date(b.container).toISOString()}) ` +
+          `past the host's copy (${new Date(b.host).toISOString()}), which may already be revoked. ` +
+          "Re-log it on the host, or pass FORCE=1, to replace it.\n",
       );
-    }
-    if (p.behind.length > 0) {
-      process.stderr.write("REFUSING: syncing would replace a working login with an older one. Log in again on the host, or pass --force.\n");
-      return EXIT.USAGE;
     }
     const changed = await apply(api, p, container);
     for (const u of p.unchanged) process.stdout.write(`${u}: unchanged\n`);
@@ -473,7 +483,11 @@ export async function main(argv: readonly string[]): Promise<ExitCode> {
       if (argv.includes("--allow-unchanged")) return EXIT.PASS;
       // The operator meant to renew something; a login that never reached the host's
       // opencode (another machine, another user) must not read as done.
-      process.stderr.write("NOTHING CHANGED: the deployment already holds every credential the host has. Did the login run on THIS host, as this user?\n");
+      process.stderr.write(
+        p.behind.length > 0
+          ? "NOTHING CHANGED: every login the host has is either identical or older than the deployment's (above).\n"
+          : "NOTHING CHANGED: the deployment already holds every credential the host has. Did the login run on THIS host, as this user?\n",
+      );
       return EXIT.USAGE;
     }
     process.stdout.write(`synced: ${changed.join(", ")}\n`);

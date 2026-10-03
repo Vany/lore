@@ -160,10 +160,11 @@ sync-opencode:
 ## THROUGH opencode's API, because 2.x keeps credentials in its database and reads
 ## auth.json only once, when the database is created. The host's own opencode lists what
 ## it holds (`opencode api`, the brew install's background service); lore pushes what
-## changed (`lore creds-sync`). Refuses, loudly: an Anthropic login (D-1), nothing changed
-## at all (the login did not land on this host), and a container login that is NEWER than
-## the host's — opencode renews OAuth itself, and overwriting a renewed token with the
-## older copy kills a working login. FORCE=1 overrides the last one.
+## changed (`lore creds-sync`). Refuses, loudly: an Anthropic login (D-1), and nothing
+## changed at all (the login did not land on this host). A container login NEWER than the
+## host's is kept and said so while the rest still sync — opencode renews OAuth itself,
+## and overwriting a renewed token with the older copy kills a working login. FORCE=1
+## replaces it anyway.
 sync-creds:
 	$(wrong-directory)
 	@opencode api GET /api/credential | $(COMPOSE) exec -T lore node /app/src/index.ts creds-sync \
@@ -409,18 +410,23 @@ migrate-db:
 ## Always re-derives the opencode config first: a container running yesterday's
 ## credentials while the operator has since fixed them is a confusing failure.
 up: preflight sync-opencode
+	$(wrong-directory)
 	$(check-deployed)
 	$(check-db-migrated)
 	@$(STAMP) $(COMPOSE) --profile build-only build sandbox
 	@$(STAMP) $(COMPOSE) up -d --build
 	@# A FRESH opencode database has no credentials until something writes them, so the
-	@# host's go in on every `up` — unchanged ones are a no-op. Retried while opencode
-	@# finishes starting; a sync that still fails after that stops `up` loudly, because
-	@# a deployment with no credentials answers every review with "did not run".
+	@# host's go in on every `up` — unchanged ones are a no-op. Retried ONLY while opencode
+	@# is unreachable (exit 70) as it finishes starting; any other failure is a refusal
+	@# with its own words above, and retrying it would print "not ready" fifteen times
+	@# about a deployment that is up. Either way `up` fails loudly, because a deployment
+	@# with no credentials answers every review with "did not run".
 	@for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do \
-		$(MAKE) --no-print-directory sync-creds ALLOW_UNCHANGED=1 && exit 0; \
-		echo "  opencode not ready yet — retrying credential sync ($$i/15)"; sleep 4; \
-	done; echo "credential sync FAILED after a minute — run 'make sync-creds' and read why"; exit 1
+		opencode api GET /api/credential | $(COMPOSE) exec -T lore node /app/src/index.ts creds-sync --allow-unchanged; \
+		rc=$$?; [ $$rc -eq 0 ] && exit 0; \
+		[ $$rc -ne 70 ] && { echo "credential sync REFUSED (exit $$rc, reason above) — the deployment is up without it"; exit 1; }; \
+		echo "  opencode not reachable yet — retrying credential sync ($$i/15)"; sleep 4; \
+	done; echo "credential sync FAILED: opencode unreachable for a minute — 'make logs' and read why"; exit 1
 	@echo
 	@echo "up. next:  make new NAME=<who> GIT=<ssh-url>"
 

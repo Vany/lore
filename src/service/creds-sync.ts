@@ -14,7 +14,9 @@
  *   - GOING BACKWARDS: opencode renews an OAuth token itself and, with refresh-token
  *     rotation, the copy it replaced may already be dead. A container token that expires
  *     LATER than the host's is the newer one, and overwriting it would kill a working
- *     login while reading as a renewal. Refused unless forced.
+ *     login while reading as a renewal. That ONE integration is held back unless forced; the
+ *     rest of the plan is unaffected, because both sides renew independently and this is
+ *     the ordinary state, not an error.
  *
  * The caller decides what "nothing changed" means; this only reports it.
  *

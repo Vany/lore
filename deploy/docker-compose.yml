@@ -296,9 +296,10 @@ services:
       # the plane MCP server, the plugins and the read-only agent, so reviewers
       # inherit what a Claude Code session has (D-12).
       #
-      # The staging step STRIPS THE ANTHROPIC CREDENTIAL. Claude writes the code
-      # under review, so with no Anthropic credential present, D-1 is enforced by
-      # absence rather than by a tier config a typo could undo.
+      # NO CREDENTIAL IS STAGED HERE (D-156) — staging strips the claude-auth plugin
+      # and any host secret file. Credentials reach opencode only through
+      # `make sync-creds`, whose FORBIDDEN_INTEGRATIONS keeps the Anthropic login out
+      # (D-1): enforced by absence, as long as nothing logs in INSIDE the container.
       # WRITABLE, deliberately. opencode installs declared plugins into this
       # directory at startup, so a read-only mount makes every request 500 with
       # "Unexpected server error" and nothing in the log.

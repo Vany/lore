@@ -4102,10 +4102,13 @@ or auth at all, so the 5-minute storm bound stays as the backstop it always was.
 **Credentials go through opencode's API: `make sync-creds` (`lore creds-sync`).** The
 host's opencode lists what it holds; lore pushes the active credentials that differ,
 removes the copies they replace, and unparks those providers' routes. It refuses an
-Anthropic login (D-1, by absence), a sync where nothing changed, and a container OAuth
-token that expires LATER than the host's — opencode renews in place, and overwriting the
-newer token with the older copy kills a working login. `make up` runs it on every start,
-because a fresh database holds nothing.
+Anthropic login (D-1, by absence) and a sync where nothing changed. A container OAuth
+token that expires LATER than the host's is KEPT, with a note, while every other provider
+still goes through — opencode renews in place, so the host's is the older copy, and both
+sides renew independently, so this is the ordinary state rather than an error; refusing
+the whole sync over it once left a fresh Z.ai key unpushed and failed `make up` on a
+healthy deployment. `FORCE=1` replaces it anyway. `make up` runs the sync on every start,
+because a fresh database holds nothing, retrying only while opencode is unreachable.
 
 **The container runs the HOST's version.** `make up` reads `opencode --version` and the
 image installs exactly that `@opencode/cli`; the build refuses an empty or 1.x value. One

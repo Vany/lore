@@ -176,7 +176,7 @@ export const CONDITIONS = {
     detail:
       `opencode cannot reach ${missing.join(", ")}. The ladder still works — an exhausted tier is skipped and ` +
       "its work promoted — but the fallback that was configured to prevent that will not happen. Check the " +
-      "model id against `/config/providers`, and that the provider has credentials.",
+      "model id with `make doctor` (opencode's `/api/model`), and that the provider has credentials — `make sync-creds`.",
   }),
   /** No replica at all is worse than a late one: there is nothing to restore from. */
   backupAbsent: (): Alert => ({

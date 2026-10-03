@@ -52,6 +52,14 @@ describe("planning a credential sync", () => {
     expect(p.behind).toStrictEqual([{ integrationID: "openai", host: 1_000, container: 2_000 }]);
   });
 
+  // Both sides renew independently, so a held-back login is the ORDINARY state. Refusing
+  // the whole sync over it left a fresh Z.ai key unpushed and failed `make up`.
+  it("still pushes every other provider while holding one renewed login back", () => {
+    const p = plan([oauth("openai", 1_000), key("zai", "fresh")], [oauth("openai", 2_000, "rotated"), key("zai", "old")]);
+    expect(p.behind.map((b) => b.integrationID)).toStrictEqual(["openai"]);
+    expect(p.push.map((c) => c.integrationID)).toStrictEqual(["zai"]);
+  });
+
   it("pushes it anyway when forced", () => {
     const p = plan([oauth("openai", 1_000)], [oauth("openai", 2_000, "rotated")], true);
     expect(p.push.map((c) => c.integrationID)).toStrictEqual(["openai"]);
