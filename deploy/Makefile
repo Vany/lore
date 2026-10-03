@@ -70,7 +70,8 @@ BACKUP  := $(if $(BACKUP),$(BACKUP),./backup)
 # version on both sides because credentials move between them as opencode's own records
 # (`make sync-creds`), and lore's client speaks exactly one opencode HTTP API (2.x).
 # Overridable for the rare host with no opencode at all: `make up OPENCODE_VERSION=2.0.22`.
-OPENCODE_VERSION ?= $(shell opencode --version 2>/dev/null | sed 's/^v//')
+# `opencode --version` prints `opencode v2.0.20`: the version is the LAST word, `v` dropped.
+OPENCODE_VERSION ?= $(shell opencode --version 2>/dev/null | awk '{print $$NF}' | sed 's/^v//')
 export OPENCODE_VERSION
 
 # WHICH DEPLOYMENT THIS IS, checked before anything reports on it.
