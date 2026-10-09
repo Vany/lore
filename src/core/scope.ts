@@ -32,11 +32,15 @@ export interface Scope {
  * line. What must not shift the hash is the ACT of marking, and the marker line is
  * that act. A reason that grows a paragraph is an edit like any other.
  *
- * Loose across the three comment syntaxes, erring toward stripping too much rather
- * than too little: a stray line ignored costs nothing, a marker line counted is the
- * livelock below.
+ * Loose across the comment syntaxes `parseLoreOk` reads, erring toward stripping too much
+ * rather than too little: a stray line ignored costs nothing, a marker line counted is the
+ * livelock below. `#+`, not `#`: the parser reads a Makefile's `##` marker, and a form it
+ * reads but this does not strip is one whose justification invalidates itself. The test
+ * beside this one feeds every form the parser accepts through here, so the two cannot
+ * drift apart again.
  */
-const ANNOTATION = /^\s*(?:\/\/|\*|<!--|#)?\s*lore-ok\[/;
+// lore-ok[faaf3363]: `#+` here, and scope.test.ts ties this to every form parseLoreOk reads.
+const ANNOTATION = /^\s*(?:\/\/|\*|<!--|#+)?\s*lore-ok\[/;
 
 /**
  * Hash a hunk's text — the CODE, never the annotation about it.

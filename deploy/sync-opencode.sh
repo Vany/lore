@@ -88,6 +88,23 @@ else:
 # The container supplies its own hostname/port, and mDNS on loopback only warns.
 cfg.pop("server", None)
 
+# THE SECOND CHATGPT SUBSCRIPTION'S PROVIDER (D-157), defined HERE rather than left to the
+# operator's opencode.json: `make login-openai2` and `openai2-creds.py` only ever deliver
+# its credential, and a credential for a provider the config never defines is a fallback
+# that silently does not exist — the ladder skips past it to the next route. Staged only
+# when an account #2 login exists, so a deployment without one is not shown a provider it
+# cannot use; and it replaces any host definition, so there is exactly one.
+# The token alone selects and bills the account: no `chatgpt-account-id` header is needed.
+# Limits are the OpenAI plugin's own for its ChatGPT models (400k window, 272k input).
+openai2_state = os.environ.get("OPENAI2_STATE") or os.path.expanduser("~/.config/lore/openai2.json")
+if os.path.exists(openai2_state):
+    cfg.setdefault("provider", {})["openai2"] = {
+        "npm": "@ai-sdk/openai",
+        "name": "OpenAI ChatGPT (second subscription)",
+        "options": {"baseURL": "https://chatgpt.com/backend-api/codex", "headers": {"originator": "opencode"}},
+        "models": {"gpt-5.6-sol": {"name": "GPT-5.6 Sol", "limit": {"context": 400000, "input": 272000, "output": 128000}}},
+    }
+
 # RECONCILED, NOT OVERLAID. The copy below only ever added, so an agent, command or plugin
 # file the operator deleted on the host lived on in the container and kept shaping
 # reviews — and a stale `agents/readonly.md` could even satisfy the INV-8 guard further
@@ -131,6 +148,7 @@ for name in os.listdir(src_config):
 # ---- report --------------------------------------------------------------
 print(f"  plugins removed  : {', '.join(removed_plugins) if removed_plugins else '(none)'}")
 print(f"  mcp servers      : {', '.join((cfg.get('mcp') or {}).keys()) or '(none)'}")
+print(f"  openai2 provider : {'staged (D-157)' if 'openai2' in (cfg.get('provider') or {}) else '(no account #2 login)'}")
 PY
 
 # Everything staged must be readable inside the container. Checking here beats

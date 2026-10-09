@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { parseLoreOk } from "./lore-ok.ts";
 import { anchorFromEvidence, hashHunk, hunkAround, hunkStillPresent, isStale, makeScope } from "./scope.ts";
 
 describe("hashHunk", () => {
@@ -236,4 +237,26 @@ describe("re-anchoring a finding onto the code its evidence quotes", () => {
     expect(anchorFromEvidence(src, 40, `only \`${shorter}\` here`)).toBe(3);
     expect(anchorFromEvidence(src, 40, `only \`${longer}\` here`)).toBe(1);
   });
+});
+
+describe("hashHunk strips every marker form the parser reads", () => {
+  // Two definitions of one syntax: `parseLoreOk` decides what a marker IS, `hashHunk` what
+  // it strips. A form read but not stripped is a justification that invalidates itself —
+  // the livelock hashHunk's own docstring records — and the `#` form shipped that way for
+  // `##`. Every form is checked through the parser first, so a new form added there and
+  // not here fails this test rather than a review.
+  const code = "doThing();";
+  for (const marker of [
+    "// lore-ok[a1b2c3d4]: reason",
+    " * lore-ok[a1b2c3d4]: reason",
+    "# lore-ok[a1b2c3d4]: reason",
+    "## lore-ok[a1b2c3d4]: reason",
+    "    ### lore-ok[a1b2c3d4]: reason",
+    "<!-- lore-ok[a1b2c3d4]: reason -->",
+  ]) {
+    it(`strips ${JSON.stringify(marker.trim())}`, () => {
+      expect(parseLoreOk(marker), "the parser reads it").toHaveLength(1);
+      expect(hashHunk(`${marker}\n${code}`)).toBe(hashHunk(code));
+    });
+  }
 });

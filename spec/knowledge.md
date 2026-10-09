@@ -313,9 +313,9 @@ it is currently silencing — separately those two mislead in opposite direction
 list reading as harmless prose and a suppression list as unexplained holes.
 
 **How a client cites one:** `lore-ok[<fingerprint>]: rule <id> — <why it covers this
-code>`, in any of the three comment forms the parser already reads, including the
+code>`, in any of the four comment forms the parser reads (`//`, ` * `, `#`, `<!-- -->`), including the
 markdown ledger. No new tool: the docs are the interface, and a fourth call an agent must
-learn costs more than a fourth shape in a parser that has three.
+learn costs more than another shape in a parser that has four.
 
 **Still open:** whether a model can originate the opposite claim — *this rule is wrong*.
 Today a tier can say nothing but findings, which is the same gap that leaves the

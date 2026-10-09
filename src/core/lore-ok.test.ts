@@ -175,3 +175,25 @@ describe("citing a development rule", () => {
     }
   });
 });
+
+describe("the hash-comment form", () => {
+  // Shell, Python, YAML and Makefiles have only `#`. Before this form existed a marker
+  // there sat at the right line and was never read, so its finding could never settle.
+  it("reads a Python or shell marker, and a Makefile's `##`", () => {
+    const src = ["x = 1", "    # lore-ok[a1b2c3d4]: the URL is a constant", "## lore-ok[b1b2c3d4]: make doc"].join("\n");
+    expect(parseLoreOk(src)).toStrictEqual([
+      { short: "a1b2c3d4", reason: "the URL is a constant", line: 2 },
+      { short: "b1b2c3d4", reason: "make doc", line: 3 },
+    ]);
+  });
+
+  it("continues across `#` lines and stops at code", () => {
+    const src = ["# lore-ok[a1b2c3d4]: checked in main(),", "# before any renewal.", "save()", "# unrelated"].join("\n");
+    expect(parseLoreOk(src)).toStrictEqual([{ short: "a1b2c3d4", reason: "checked in main(), before any renewal.", line: 2 }]);
+  });
+
+  it("does not merge two `#` markers", () => {
+    const found = parseLoreOk(["# lore-ok[aaaaaaaa]: first", "# lore-ok[bbbbbbbb]: second"].join("\n"));
+    expect(found.map((f) => f.reason)).toStrictEqual(["first", "second"]);
+  });
+});

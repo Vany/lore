@@ -107,15 +107,26 @@ const STAR_START = new RegExp(`^\\s*\\*\\s*lore-ok\\[(${SHORT})\\]\\s*:\\s*(.*)$
  * down rather than left as a difference someone rediscovers.
  */
 const STAR_CONT = /^\s*\*(?!\/)\s?(.*\S)\s*$/;
+/**
+ * `# lore-ok[abcd1234]: reason` — shell, Python, YAML, Makefiles (`##` too).
+ *
+ * MISSING UNTIL 2026-10-09, AND SILENTLY: this repository's own `deploy/*.sh` already
+ * carried `#` markers that nothing read, and `scope.ts` already stripped `#` marker lines
+ * from its hunk hashes — so the system half-knew the form. Found when a justified finding
+ * on a Python file stayed open round after round with its marker sitting at the line.
+ * Continues like `//`: following `#` lines are the rest of the reason.
+ */
+const HASH_START = new RegExp(`^\\s*#+\\s*lore-ok\\[(${SHORT})\\]\\s*:\\s*(.*)$`);
+const HASH_CONT = /^\s*#+(?!!)\s?(.*)$/;
 
 /**
  * Find every justification in a file.
  *
- * Only the three comment forms the spec names: `//`, ` * ` inside a block, and
- * `<!-- -->`. Adding `#` for YAML and Python is an obvious future need but not a
- * guess to make now — a marker syntax that silently differs between languages is
- * worse than one that is absent. JSON has no comment at all, so a finding there
- * cannot be justified in place; that is open, and in TODO.
+ * The four comment forms the spec names: `//`, ` * ` inside a block, `#`, and
+ * `<!-- -->`. A marker syntax that silently differs between languages is worse than one
+ * that is absent, which is why `#` had to arrive once files that only have `#` were being
+ * reviewed. JSON has no comment at all, so a finding there cannot be justified in place;
+ * `.lore-ok.md` is its home.
  */
 export function parseLoreOk(source: string): LoreOk[] {
   const found: LoreOk[] = [];
@@ -124,13 +135,16 @@ export function parseLoreOk(source: string): LoreOk[] {
   for (let i = 0; i < lines.length; i++) {
     // Whichever line form this is, it continues in the SAME form: a `//` reason is
     // not continued by a ` * ` line, so two adjacent comment blocks cannot merge.
-    const slash = SLASH_START.exec(lines[i] ?? "");
-    const star = slash === null ? STAR_START.exec(lines[i] ?? "") : null;
-    const start = slash ?? star;
+    const line = lines[i] ?? "";
+    const form = [
+      { START: SLASH_START, CONT: SLASH_CONT },
+      { START: STAR_START, CONT: STAR_CONT },
+      { START: HASH_START, CONT: HASH_CONT },
+    ].find((f) => f.START.test(line));
+    if (form === undefined) continue;
+    const { START, CONT } = form;
+    const start = START.exec(line);
     if (start === null) continue;
-    const isStar = slash === null;
-    const CONT = isStar ? STAR_CONT : SLASH_CONT;
-    const START = isStar ? STAR_START : SLASH_START;
 
     const short = start[1] ?? "";
     const parts = [start[2] ?? ""];

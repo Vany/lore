@@ -216,6 +216,7 @@ a scaling story bolted on afterwards: knowledge is per *repository* and shared b
 who works on it (D-18, D-19), so what your colleague's review established on Monday is what
 your agent is handed on Thursday.
 
+<!-- lore-ok[44763525]: the openai2 provider is staged by deploy/sync-opencode.sh whenever an account #2 login exists -->
 ```bash
 # on the company server, once
 cd deploy
@@ -226,6 +227,11 @@ make up                       # stages config, builds, starts, syncs credentials
 
 # after re-logging a provider on the host
 make sync-creds
+
+# optional: a second ChatGPT subscription as `openai2` (D-157), renewed daily.
+# The login is all it takes: it stages the provider and syncs the credential.
+make login-openai2
+make renew-daemon
 
 # one line per engineer, per repository
 make new NAME=alice GIT=git@github.com:acme/payments.git
@@ -426,7 +432,7 @@ catch.
 
 | file | what it holds |
 |:--|:--|
-| [`SPEC.md`](SPEC.md) | purpose, workflow, and every decision `D-1`…`D-156` |
+| [`SPEC.md`](SPEC.md) | purpose, workflow, and every decision `D-1`…`D-157` |
 | [`PLAN.md`](PLAN.md) | build order, and what each phase de-risked |
 | [`spec/knowledge.md`](spec/knowledge.md) | the knowledge layer — the product |
 | [`spec/review-ladder.md`](spec/review-ladder.md) | tiers, findings, verdicts, invariants |

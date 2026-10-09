@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { OpenCodeClient } from "@opencode/client";
-import { apply, parseHostCredentials, plan, type Credential } from "./creds-sync.ts";
+import { apply, parseHostCredentials, plan, settledProviders, type Credential } from "./creds-sync.ts";
 
 const key = (integrationID: string, k: string, extra: Partial<Credential> = {}): Credential => ({
   id: `cred_${integrationID}_${k}`,
@@ -167,5 +167,24 @@ describe("reading the host's list", () => {
     expect(() => parseHostCredentials(JSON.stringify({ error: "nope" }))).toThrow(/credential list/);
     expect(() => parseHostCredentials(JSON.stringify([{ label: "x" }]))).toThrow(/no integrationID/);
     expect(() => parseHostCredentials("")).toThrow();
+  });
+});
+
+describe("checking that something is connected", () => {
+  const noPause = async (): Promise<void> => undefined;
+
+  it("re-asks an empty provider list instead of reporting nothing connected", async () => {
+    const reads = [[], [], ["zai-coding-plan", "openai2"]];
+    let n = 0;
+    const got = await settledProviders(async () => reads[n++] ?? [], 10, noPause);
+    expect(got).toStrictEqual(["zai-coding-plan", "openai2"]);
+    expect(n).toBe(3);
+  });
+
+  it("still answers empty when the list stays empty", async () => {
+    let n = 0;
+    const got = await settledProviders(async () => (n++, []), 4, noPause);
+    expect(got).toStrictEqual([]);
+    expect(n, "a bounded number of reads, then the loud answer").toBe(4);
   });
 });

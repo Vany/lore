@@ -61,6 +61,11 @@ reachable, which is why it cannot be part of first boot — and it never edits
 | **T2** | `kimi-code-plan-global/k3` | high | Moonshot | subscription |
 | **T3** | `openai/gpt-5.6-sol` | high | OpenAI | subscription |
 
+**T3's first fallback is `openai2/gpt-5.6-sol`** — the same model on a second ChatGPT
+Plus subscription (D-157), so an exhausted plan 1 hands t3 to plan 2 at $0 before anything
+metered is considered. It buys quota, not an opinion: `openai2` counts as OpenAI in the
+vendor arithmetic exactly as `zai-coding-plan2` counts as Z.ai.
+
 **T2's provider id changed on 2026-09-19 and the model did not** (D-154). models.dev
 retired `kimi-for-coding` as a PROVIDER and re-listed the Kimi Coding Plan as
 `kimi-code-plan-global` (and `kimi-code-plan-cn`), keeping `kimi-for-coding` as a model

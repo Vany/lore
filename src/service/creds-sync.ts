@@ -130,6 +130,29 @@ export async function apply(
   return changed;
 }
 
+/**
+ * The deployment's usable providers, read until they appear or `attempts` reads say none.
+ *
+ * ONE EMPTY READ IS NOT "NOTHING IS CONNECTED". Observed 2026-10-09 on `make up`: the first
+ * sync to bring a new custom provider (`openai2`, D-157) read the provider list empty right
+ * after writing its credential, failed `up` with "NO PROVIDER IS CONNECTED" — and the same
+ * read a minute later listed all seven. Whatever opencode was doing in between (it logs
+ * nothing at this level; a provider reload is the likely shape) is transient, while the
+ * state the guard exists for — a deployment with no credential at all — is permanent. So
+ * an empty read is re-asked, and only a list that STAYS empty is the answer.
+ */
+export async function settledProviders<T>(
+  read: () => Promise<readonly T[]>,
+  attempts = 10,
+  pause: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms)),
+): Promise<readonly T[]> {
+  for (let i = 1; ; i++) {
+    const usable = await read();
+    if (usable.length > 0 || i >= attempts) return usable;
+    await pause(2_000);
+  }
+}
+
 /** `GET /api/credential`'s body, or its `data`, as the host printed it. Throws on anything else. */
 export function parseHostCredentials(raw: string): readonly Credential[] {
   const parsed = JSON.parse(raw) as unknown;

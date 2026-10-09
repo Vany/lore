@@ -226,7 +226,19 @@ changed (the login did not land on this host). A container OAuth token that expi
 than the host's is kept — opencode renews it in place, so the host copy is the stale one
 and copying it over would kill a working credential while reading as a renewal — but the
 other providers still sync; `FORCE=1` replaces it anyway. `make up` runs the same sync on every start, because a fresh opencode database
-holds nothing.
+holds nothing — and fails if, after it, opencode lists no usable provider. An empty list is
+re-read for about twenty seconds first: one empty read straight after a new provider's
+credential landed has been seen to recover on its own.
+
+**The second ChatGPT account is not on that list, and renews itself through it** (D-157).
+`make login-openai2` logs it in once, in a throwaway opencode, and keeps only its refresh
+token in `~/.config/lore/openai2.json`; from then on `sync-opencode.sh` stages the `openai2`
+provider definition, which lives in the repository rather than the host's config. Every sync passes the host's list through
+`deploy/openai2-creds.py`, which appends `openai2` with the current access token and renews
+it when it is within three days of expiry; `make renew-daemon` runs the sync daily so that
+does not wait for a person. A failed renewal is printed loudly and the other providers
+still sync. If the token runs out anyway, the alarm is the ordinary one: `openai2/…` parks
+as "rejected our credentials", and the cure is `make login-openai2`.
 
 ### 2.4.3 The board — the same facts, for a person rather than a monitor (D-96)
 

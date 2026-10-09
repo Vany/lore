@@ -506,6 +506,19 @@ async function sandboxedCargo(
           interrupted: true,
         }));
       }
+      // lore-ok[f8fc48c9]: the network arm, one ecosystem over from npm's — same list, same words.
+      // The npm path's 2026-09-24 incident, on the cargo side: crates.io unreachable is the
+      // environment, and the `!fetched.ok` arm below would name the branch's Cargo.toml.
+      if (installFailedOnNetwork(fetched)) {
+        return wanted.map((engine) => ({
+          engine,
+          findings: [],
+          unavailable:
+            "cargo fetch did not complete — the crate registry could not be reached " +
+            "(a network failure, not a fault in the branch). Nothing that needs the dependencies is known either way.",
+          interrupted: true,
+        }));
+      }
       if (!fetched.ok) {
         // MISSING BINARY, NOT A BROKEN BRANCH — with no toolchain in the sandbox
         // image yet (D-131's own explicit scope boundary), this is what every real
@@ -756,7 +769,14 @@ const CHILD_KILLED = [
  * install log (a postinstall that prints an error it recovered from) would let the target's
  * text decide lore's gate did not run. npm prints `npm error code E…` (v10+) or
  * `npm ERR! code E…` (older); pnpm names fetch failures `ERR_PNPM_META_FETCH_FAIL` /
- * `ERR_PNPM_FETCH_*`; yarn classic says it in a sentence.
+ * `ERR_PNPM_FETCH_<status>`; yarn classic says it in a sentence.
+ *
+ * pnpm's `FETCH_<status>` is the REGISTRY ANSWERING, so only the statuses that mean "try
+ * again" count: 5xx, 408, 429. `ERR_PNPM_FETCH_404` is a package that does not exist — a
+ * typo'd or unpublished dependency, exactly the defect "dependencies do not install"
+ * exists to report — and a blanket `FETCH_\d{3}` turned it into "the network", on every
+ * round, for ever. npm's arm excludes E404 for the same reason. 401/403 stay findings too:
+ * they are permanent, and the output names the status for whoever reads it.
  *
  * THE TRADE, as `CHILD_KILLED` states it: a branch whose dependencies genuinely point at an
  * unreachable registry reads as "did not complete" rather than as a finding — lost
@@ -765,8 +785,15 @@ const CHILD_KILLED = [
  */
 const INSTALL_NETWORK = [
   /^npm (?:error|ERR!) code (?:ECONNRESET|ETIMEDOUT|ESOCKETTIMEDOUT|EAI_AGAIN|ENOTFOUND|ECONNREFUSED|ENETUNREACH)\b/m,
-  /\bERR_PNPM_(?:META_FETCH_FAIL|FETCH_\d{3}|FETCH_FAIL)\b/,
+  // lore-ok[e516b7f4]: only the try-again statuses — a 404/401/403 is the registry answering.
+  /\bERR_PNPM_(?:META_FETCH_FAIL|FETCH_(?:5\d\d|408|429)|FETCH_FAIL)\b/,
   /There appears to be trouble with your network connection/,
+  // cargo: its error chain ends in libcurl's own `[code] message` line under `Caused by:`
+  // — 5/6 cannot resolve, 7 cannot connect, 28 timeout, 35 TLS, 52/56 nothing or a broken
+  // receive. Anchored to the line start, because cargo's retry warnings carry the same
+  // text mid-line ("spurious network error (2 tries remaining): [6] …") and a retry that
+  // then SUCCEEDED, before an unrelated real failure, must not read as the network.
+  /^\s*\[(?:5|6|7|28|35|52|56)\] /m,
 ];
 
 function installFailedOnNetwork(r: { ok: boolean; stdout: string; stderr: string }): boolean {

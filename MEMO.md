@@ -3,6 +3,57 @@
 Newest first. Updated at the end of each task: what changed, what I learned, what
 surprised me.
 
+## 2026-10-09 — a second ChatGPT account, the zai-coding-plan2 way (D-157)
+
+**Vany bought a second ChatGPT Plus account; plan 1 was at its usage limit.** opencode 2.x
+holds one active login per integration and its OpenAI plugin reads only `openai`'s (2.0.20
+and 2.0.26 checked in the binary), so a second login replaces the first. Vany first
+suggested two opencode instances, then asked for "the same hack we did for second zai".
+It works: custom provider `openai2`, `@ai-sdk/openai` at chatgpt.com/backend-api/codex, the
+access token as its API key. No `chatgpt-account-id` header needed — the token selects the
+account. Both accounts are `plus` (the JWT's `chatgpt_plan_type`).
+
+**The cost is renewal, and the shape that fell out is a filter.** `opencode api GET
+/api/credential | openai2-creds.py | lore creds-sync` — the script appends `openai2` and
+renews it three days before expiry, so `sync-creds`, `up` and a daily launchd job
+(`make renew-daemon`, installed here) all renew through one path, and creds-sync did not
+change at all. The refresh token rotates on every use (verified: a forced renewal returned
+a new one), so the login runs in a throwaway opencode and the file is the only holder.
+
+**Surprises worth keeping.**
+- `opencode api --data` takes no `@file`; a token on argv was the only way through it, so
+  the design moved to the stdin pipe instead.
+- `opencode run` printed the answer and then never exited (2.0.20) — read as a hang twice
+  before I noticed the answer was already there.
+- An unknown provider id stands for itself in `VENDOR_ALIASES`, so without
+  `openai2: "openai"` the second account would have counted as an independent vendor.
+- The first `make deploy` failed with "NO PROVIDER IS CONNECTED" on a deployment with
+  seven connected — one empty read right after `openai2`'s first credential. Not
+  reproducible afterwards and opencode logs nothing about it; the guard now re-reads for
+  ~20s before believing an empty list.
+- `origin/main` was two commits behind what I took for the base; the review batch is
+  three commits, not one.
+
+**Account #2 ran dry on its first real work.** One t3 round on another review — 75 turns,
+10M input tokens (4.09M cached) — exhausted plan 2's window; this batch's own t3 then got
+"usage limit reached" from `openai2` too and fell to `zai-coding-plan2/glm-5.3`, a vendor
+already in the ladder. Two Plus plans buy roughly one more long deep round per window, not a
+second pool for a day's reviews.
+
+**Two incidents of my own during the review loop.**
+- I tested `openai2-creds.py` by importing it, which wrote `deploy/__pycache__/*.pyc`, and
+  `git add -A` committed it. lore applies submissions as patches and a binary one cannot
+  apply, so three held submissions silently never landed and the review sat in
+  `awaiting_diff`. `__pycache__/` is ignored now.
+- A redirect written `2>&1 >/dev/null` under zsh put the script's stdout — the host's whole
+  credential list, every provider key and token — into the session transcript. Vany was told
+  at once; rotation is his call. Inspect secrets-carrying output by shape (`jq keys`), never
+  by printing it, even when "it goes to /dev/null".
+
+**Caching, settled the same day:** plan 2 caches without the plugin's per-session
+`session-id` header (4.09M of 10M above). Only the RATE against plan 1 is still to compare
+(TODO).
+
 ## 2026-10-03 — lore on opencode 2.x, because a re-login could not reach the container
 
 **It started as "how do I renew the OpenAI subscription creds".** I wrote `make

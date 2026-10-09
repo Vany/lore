@@ -8,6 +8,8 @@
 #   make status ID=rev_xxx                     one review, in full
 #   make unpark [ROUTE=openai | ALL=1]         what lore won't ask; forget it after a fix
 #   make sync-creds [FORCE=1]                  after `opencode auth login`: hand it over, unpark
+#   make login-openai2                         log in the SECOND ChatGPT account (D-157)
+#   make renew-daemon                          keep that login alive: sync-creds, daily
 #   make logs                                  follow
 #   make restore                               pull the database back from backup
 #
@@ -49,7 +51,7 @@ DBVOL   = $(PROJECT)_lore-db
 # exactly the silent-divergence class this list exists to catch, for the one file a
 # NEW deployment reads before anything else.
 DEPLOY_FILES = Makefile docker-compose.yml litestream.yml Dockerfile opencode.Dockerfile \
-               sandbox.Dockerfile smoke.mjs mirror-refresh.sh sync-opencode.sh .env.example \
+               sandbox.Dockerfile smoke.mjs mirror-refresh.sh sync-opencode.sh openai2-creds.py .env.example \
                tiers.kimi.json tiers.zai-kimi-openai.json tiers.zai-openai.json
 # lore-ok[ac0f7ec3]: found by lore's own review — tiers.kimi.json's name stays here even
 # though the repository no longer has the file (deleted the same commit this line was
@@ -106,7 +108,7 @@ define wrong-directory
 endef
 
 .DEFAULT_GOAL := help
-.PHONY: help preflight sync-opencode sync-creds push build drain drain-off deploy up down down-hard restart logs status status-json status-local doctor ladder-suggest new relocate tokens revoke unpark replica-state db-check mirror mirror-daemon mirror-daemon-off mirror-daemon-log backup-on backup-check backup-drill restore sweep shell
+.PHONY: help preflight sync-opencode sync-creds push build drain drain-off deploy up down down-hard restart logs status status-json status-local doctor ladder-suggest new relocate tokens revoke unpark login-openai2 renew-daemon renew-daemon-off replica-state db-check mirror mirror-daemon mirror-daemon-off mirror-daemon-log backup-on backup-check backup-drill restore sweep shell
 
 ## The comment block at the top of this file, however long it grows. It was a fixed
 ## `sed -n '2,14p'`, a line count kept in step with the header by nobody: the header
@@ -152,9 +154,6 @@ preflight:
 sync-opencode:
 	@./sync-opencode.sh ./opencode
 
-## A credential re-logged on this host, handed to the RUNNING deployment without a
-## restart, and the routes it had parked cleared. Refuses to replace a token the
-## container has already renewed past the host's — see the script for why.
 ## A credential re-logged on this host, handed to the RUNNING opencode and the routes it
 ## had parked cleared — no restart, so no round in flight dies.
 ##
@@ -166,10 +165,92 @@ sync-opencode:
 ## host's is kept and said so while the rest still sync — opencode renews OAuth itself,
 ## and overwriting a renewed token with the older copy kills a working login. FORCE=1
 ## replaces it anyway.
+##
+## The host's list passes through `openai2-creds.py` on the way, which adds the second
+## ChatGPT account and renews it when it is due (D-157). pipefail, so a refusal there
+## stops the sync instead of handing lore an empty list to complain about.
+HOST_CREDS = set -o pipefail; opencode api GET /api/credential | python3 ./openai2-creds.py
 sync-creds:
 	$(wrong-directory)
-	@opencode api GET /api/credential | $(COMPOSE) exec -T lore node /app/src/index.ts creds-sync \
+	@$(HOST_CREDS) | $(COMPOSE) exec -T lore node /app/src/index.ts creds-sync \
 		$(if $(FORCE),--force) $(if $(ALLOW_UNCHANGED),--allow-unchanged)
+
+## The SECOND ChatGPT subscription (D-157). opencode serves one ChatGPT login per
+## integration, so account #2 reaches the ladder as the custom provider `openai2`, keyed
+## by its access token — and since nothing in opencode renews a custom provider's key,
+## `openai2-creds.py` keeps the refresh token and renews it on every sync that is due.
+##
+## The login runs in a THROWAWAY opencode (its own XDG dirs, deleted on exit), so the
+## host's own `openai` login is never touched and no second copy of the refresh token
+## survives: OpenAI rotates it on every use, and two holders kill the login for both.
+## Sign the browser in as account #2 — a private window if it remembers account #1.
+login-openai2:
+	$(wrong-directory)
+	@tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
+	export XDG_CONFIG_HOME=$$tmp/config XDG_DATA_HOME=$$tmp/data XDG_STATE_HOME=$$tmp/state XDG_CACHE_HOME=$$tmp/cache; \
+	opencode auth login openai --method chatgpt-browser --standalone \
+	  && opencode auth export --standalone | python3 ./openai2-creds.py --import -
+	@# The provider definition is staged by sync-opencode once the login exists, and the
+	@# running opencode picks a re-staged config up without a restart.
+	@$(MAKE) --no-print-directory sync-opencode sync-creds
+
+## Renewal that does not wait for a person: `make sync-creds` once a day, from launchd
+## (macOS) or a systemd --user timer. A ChatGPT access token lives about ten days and
+## the script renews three days early, so two missed days are survivable; a dead login
+## shows up where every dead login does — lore parks `openai2/…` and says why.
+## The PATH is the installer's, frozen into the agent: launchd's default has neither
+## brew's opencode nor docker, and the job would fail every day without a word.
+## Guarded like every target that drives the deployment: the agent runs `make` wherever
+## it was installed, and installed from a checkout it would fail daily into a log.
+## The log is ~/Library/Logs (journald on Linux), NOT this directory — `make push`
+## mirrors it with --delete, which would erase the one record of a failed renewal.
+## lore-ok[dfb2ecd3]: guarded with $(wrong-directory) below.
+## lore-ok[99a795c1]: logs to ~/Library/Logs/lore-renew.log or journald, outside the deploy dir.
+renew-daemon:
+	$(wrong-directory)
+	@here="$$(cd $$(dirname $(firstword $(MAKEFILE_LIST))) && pwd)"; \
+	if [ "$$(uname)" = "Darwin" ]; then \
+		plist="$$HOME/Library/LaunchAgents/org.lore.renew.plist"; \
+		mkdir -p "$$HOME/Library/LaunchAgents"; \
+		printf '%s\n' \
+		  '<?xml version="1.0" encoding="UTF-8"?>' \
+		  '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
+		  '<plist version="1.0"><dict>' \
+		  '  <key>Label</key><string>org.lore.renew</string>' \
+		  '  <key>ProgramArguments</key><array>' \
+		  "    <string>/bin/sh</string><string>-c</string><string>make sync-creds ALLOW_UNCHANGED=1</string>" \
+		  '  </array>' \
+		  "  <key>EnvironmentVariables</key><dict><key>PATH</key><string>$$PATH</string></dict>" \
+		  "  <key>WorkingDirectory</key><string>$$here</string>" \
+		  '  <key>RunAtLoad</key><true/>' \
+		  '  <key>StartInterval</key><integer>86400</integer>' \
+		  "  <key>StandardOutPath</key><string>$$HOME/Library/Logs/lore-renew.log</string>" \
+		  "  <key>StandardErrorPath</key><string>$$HOME/Library/Logs/lore-renew.log</string>" \
+		  '</dict></plist>' > "$$plist"; \
+		launchctl bootout gui/$$(id -u)/org.lore.renew 2>/dev/null || true; \
+		launchctl bootstrap gui/$$(id -u) "$$plist" && echo "installed: $$plist — log: ~/Library/Logs/lore-renew.log"; \
+	else \
+		mkdir -p "$$HOME/.config/systemd/user"; \
+		printf '%s\n' '[Unit]' 'Description=lore credential sync and openai2 renewal' \
+		  '[Service]' 'Type=oneshot' "WorkingDirectory=$$here" \
+		  "Environment=PATH=$$PATH" "ExecStart=/bin/sh -c 'make sync-creds ALLOW_UNCHANGED=1'" \
+		  > "$$HOME/.config/systemd/user/lore-renew.service"; \
+		printf '%s\n' '[Unit]' 'Description=daily lore credential sync' \
+		  '[Timer]' 'OnCalendar=daily' 'Persistent=true' '[Install]' 'WantedBy=timers.target' \
+		  > "$$HOME/.config/systemd/user/lore-renew.timer"; \
+		systemctl --user daemon-reload && systemctl --user enable --now lore-renew.timer \
+		  && echo "installed — log: journalctl --user -u lore-renew. For it to run while logged out:  loginctl enable-linger $$USER"; \
+	fi
+
+renew-daemon-off:
+	@if [ "$$(uname)" = "Darwin" ]; then \
+		launchctl bootout gui/$$(id -u)/org.lore.renew 2>/dev/null; \
+		rm -f "$$HOME/Library/LaunchAgents/org.lore.renew.plist"; \
+	else \
+		systemctl --user disable --now lore-renew.timer 2>/dev/null; \
+		rm -f "$$HOME/.config/systemd/user/lore-renew."*; systemctl --user daemon-reload; \
+	fi
+	@echo "removed. The openai2 login now dies about ten days after its last sync."
 
 ## Ship the deployment to the host. Credentials travel over the tailnet only.
 push:
@@ -423,7 +504,7 @@ up: preflight sync-opencode
 	@# about a deployment that is up. Either way `up` fails loudly, because a deployment
 	@# with no credentials answers every review with "did not run".
 	@for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do \
-		opencode api GET /api/credential | $(COMPOSE) exec -T lore node /app/src/index.ts creds-sync --allow-unchanged; \
+		$(HOST_CREDS) | $(COMPOSE) exec -T lore node /app/src/index.ts creds-sync --allow-unchanged; \
 		rc=$$?; [ $$rc -eq 0 ] && exit 0; \
 		[ $$rc -ne 70 ] && { echo "credential sync REFUSED (exit $$rc, reason above) — the deployment is up without it"; exit 1; }; \
 		echo "  opencode not reachable yet — retrying credential sync ($$i/15)"; sleep 4; \

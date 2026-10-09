@@ -270,6 +270,29 @@ describe("a run the sandbox itself killed is never mistaken for a clean or parti
     expect(tsc?.findings.map((f) => f.claim).join(" ")).toMatch(/dependencies do not install/);
   });
 
+  // pnpm's FETCH_<status> is the registry ANSWERING. 404 is a dependency that does not
+  // exist, which is the branch's fault; only the try-again statuses are the network's.
+  it("sandboxed install: pnpm's 404 for a missing package is a finding, its 503 is not", async () => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { typecheck: "tsc -b" } }));
+    const run = async (status: string): Promise<ReturnType<typeof runT0>> => {
+      const script = join(dir, `fake-docker-install-pnpm-${status}.sh`);
+      writeFileSync(
+        script,
+        "#!/bin/sh\n" +
+          'if [ "$1" = "rm" ]; then exit 0; fi\n' +
+          `echo " ERR_PNPM_FETCH_${status}  GET https://registry.npmjs.org/lodahs: failed - ${status}" >&2\n` +
+          "exit 1\n",
+      );
+      chmodSync(script, 0o755);
+      return runT0(dir, { engines: ["tsc"], sandbox: baseSandbox(script) });
+    };
+    const missing = (await run("404")).outcomes.find((o) => o.engine === "tsc");
+    expect(missing?.findings.map((f) => f.claim).join(" ")).toMatch(/dependencies do not install/);
+    const down = (await run("503")).outcomes.find((o) => o.engine === "tsc");
+    expect(down?.findings, "a registry that is down is not a claim about package.json").toStrictEqual([]);
+    expect(down?.unavailable).toMatch(/network failure, not a fault in the branch/);
+  });
+
   it("checkTypes: a killed `typecheck` script is reported killed, not its partial output", async () => {
     writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { typecheck: "tsc -b" } }));
     const sandbox = fakeDocker("src/foo.ts(3,5): error TS2322: fake partial output before the kill");
@@ -658,6 +681,36 @@ describe("sandboxedCargo, through a fake docker", () => {
   // the branch's own dependencies as a false "cargo is not available". cargo itself
   // is present here (exit 101, a plausible cargo failure code — not 127), so only
   // the exit code decides now.
+  // crates.io unreachable is the environment, as npm's ECONNRESET was on 2026-09-24 — and a
+  // retry warning that mentions the same curl code mid-line must not excuse a real failure.
+  it("a registry the network dropped is 'did not complete', not a finding against Cargo.toml", async () => {
+    const run = async (name: string, body: string): Promise<ReturnType<typeof runT0>> => {
+      const script = join(dir, name);
+      writeFileSync(script, `#!/bin/sh\n${body}exit 101\n`);
+      chmodSync(script, 0o755);
+      return runT0(dir, { engines: ["cargo-check"], sandbox: baseSandbox(script) });
+    };
+    const down = (
+      await run(
+        "fake-docker-cargo-net.sh",
+        "echo 'warning: spurious network error (2 tries remaining): [6] Could not resolve hostname' >&2\n" +
+          "echo 'error: failed to download from `https://index.crates.io/config.json`' >&2\n" +
+          "echo 'Caused by:' >&2\necho '  [6] Could not resolve hostname (Could not resolve host: index.crates.io)' >&2\n",
+      )
+    ).outcomes.find((x) => x.engine === "cargo-check");
+    expect(down?.findings, "a network failure is not a claim about Cargo.toml").toStrictEqual([]);
+    expect(down?.unavailable).toMatch(/network failure, not a fault in the branch/);
+
+    const real = (
+      await run(
+        "fake-docker-cargo-retry-then-real.sh",
+        "echo 'warning: spurious network error (2 tries remaining): [6] Could not resolve hostname' >&2\n" +
+          "echo 'error: no matching package named `lodahs` found' >&2\n",
+      )
+    ).outcomes.find((x) => x.engine === "cargo-check");
+    expect(real?.findings.map((f) => f.claim).join(" ")).toMatch(/dependencies do not fetch with cargo/);
+  });
+
   it("a genuine dependency-fetch failure is reported as one, even if its text says 'not found'", async () => {
     const script = join(dir, "fake-docker-broken-dep.sh");
     writeFileSync(

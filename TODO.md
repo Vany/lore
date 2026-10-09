@@ -53,6 +53,16 @@ is deployed", is now measurable and says so.
 
 ---
 
+### 2026-10-09 — `openai2` (D-157): waiting on evidence
+
+- **Prompt caching rate on plan 2.** It caches (first t3 round on `openai2`: 4.09M of 10M
+  input cached), without the plugin's per-session `session-id` header. Still to compare: the
+  cached share against t3 rounds on `openai/…` once plan 1 is back.
+- **The first real renewal by the daemon** — due around 2026-10-16 (expiry 10-19 minus three
+  days). Check `~/Library/Logs/lore-renew.log` says `renewed` that day, not a failure.
+
+---
+
 ### 2026-09-17 — the production findings are fixed, and there were THIRTEEN of them
 
 `rev_kq7psOFQqIKn1di0XjMEal7e` is `cancelled` — deliberately, not abandoned: it was pinned

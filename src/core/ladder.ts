@@ -733,6 +733,9 @@ const VENDOR_ALIASES: Readonly<Record<string, string>> = {
   "kimi-for-coding": "moonshotai",
   "kimi-code-plan-global": "moonshotai",
   "kimi-code-plan-cn": "moonshotai",
+  // The second ChatGPT subscription (D-157): a custom provider, because opencode serves one
+  // ChatGPT login per integration. Same trainer, same blind spots — quota, not an opinion.
+  openai2: "openai",
 };
 
 /**

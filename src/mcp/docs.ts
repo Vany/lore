@@ -746,9 +746,10 @@ For a finding you believe is WRONG, do not skip it silently. Write at the site:
 
     // lore-ok[<fingerprint>]: <why this code is correct>
      * lore-ok[<fingerprint>]: <reason>          (inside a /** */ block)
+    # lore-ok[<fingerprint>]: <reason>           (shell, Python, YAML, Makefile)
     <!-- lore-ok[<fingerprint>]: <reason> -->    (for markdown)
 
-Those three forms are the whole list; anything else is never read. \`.lore-ok.md\` at the
+Those four forms are the whole list; anything else is never read. \`.lore-ok.md\` at the
 repo root is read on every round as well, in the markdown form, and it is the right home
 for two cases: a file that has no comment syntax at all — JSON, a lockfile, generated
 output — and a finding whose named line your fix DELETED, where there is no site left to

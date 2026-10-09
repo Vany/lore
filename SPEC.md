@@ -2887,9 +2887,9 @@ makes that safe is that a rule cannot silence anything by itself — it can only
 still open and is not blocking.
 
 - **How a client cites a rule:** `lore-ok[<fp>]: rule <id> — <why it covers this code>`,
-  in any of the three comment forms the parser already reads. No new tool — the docs are
-  the interface, and a fourth call an agent must learn costs more than a fourth shape in a
-  parser that has three. `knowledge_teach` at kind `policy` returns the id to cite.
+  in any of the comment forms the parser reads (`//`, ` * `, `#`, `<!-- -->`). No new tool — the docs are
+  the interface, and a fourth call an agent must learn costs more than another shape in a
+  parser that has four. `knowledge_teach` at kind `policy` returns the id to cite.
 - **What a suppression does to a later round:** the engines run, and their findings are
   filtered before anything is recorded — which is where the saving is, since a suppressed
   finding never resets settling, never costs a round and is never re-argued. Every one
@@ -4058,6 +4058,53 @@ working agreement says to confirm rather than assume.
 **Output lands under `dataDir()`, matching `propose`'s own `--out` default
 (fingerprint 9c6f2a60) — never inside the repository**, so nothing needs a new
 `.gitignore` rule.
+
+**D-157 — a second ChatGPT subscription is the custom provider `openai2`, renewed by
+lore's host tooling. BUILT 2026-10-09.**
+
+Vany bought a second ChatGPT Plus account; plan 1 was answering "usage limit reached".
+opencode 2.x cannot hold two: the OpenAI plugin serves the ONE active credential of the
+`openai` integration (2.0.20 and 2.0.26 alike), and a second login replaces the first. Vany
+asked for the same trick as the second Z.ai plan, and it works: a custom provider `openai2`
+— `@ai-sdk/openai` at `https://chatgpt.com/backend-api/codex`, whose API key is the account's
+ChatGPT access token. Unlike `zai-coding-plan2` it is defined in the repository, not the
+host's `opencode.json`: `sync-opencode.sh` stages it whenever an account #2 login exists,
+because a credential for a provider the config never defines is a fallback that silently
+does not exist. The token alone selects and bills the account; no account header is
+needed (measured: a tool-using turn answered on plan 2, and plan 1's token through the same
+provider got plan 1's usage-limit refusal).
+
+**What the trick costs is renewal.** opencode renews `openai` itself and treats a custom
+provider's key as an opaque string; the access token dies in about ten days. So
+`deploy/openai2-creds.py` owns the login: the refresh token lives in one host file (0600,
+outside the deploy directory that `make push` mirrors with `--delete`), every credential
+sync passes through it and gets `openai2` appended, and it renews with opencode's own OAuth
+client when three days remain. It must be the ONLY holder: OpenAI rotates the refresh token
+on each use, so a second copy that renews kills both — which is why the login runs in a
+throwaway opencode that is deleted afterwards, and why a host `openai2` credential is
+refused rather than merged. lore itself still holds no credential.
+
+**Where it sits.** T3's first fallback, ahead of the metered OpenRouter route — Vany's call,
+$0, same model. `openai2` aliases to `openai` in `VENDOR_ALIASES`: without that, an id the
+table does not know stands for itself, and t3 on plan 2 beside a tier read on plan 1 would
+have counted as two vendors and passed clean.
+
+**Failure is the ordinary kind.** A renewal that fails is printed loudly and the rest of the
+sync proceeds (D-156's rule: one dead login does not block a fresh key). A token that then
+expires parks `openai2/…` with "rejected our credentials", visible where every dead login
+is; `make login-openai2` is the cure.
+
+**A renewal that rotated but could not be saved is a LOST login, said as such.** Once OpenAI
+answers, the stored refresh token is dead; a failure to write the new pair is not "the next
+sync retries" but "re-login before the new access token expires", and the new token is still
+sent so the deadline is the full ten days. And OpenAI refusing the refresh token (400/401) is a
+DEAD login, not a retry: nothing is sent for it, because the stale token on disk would replace a
+fresher one the deployment already holds — a `key` credential has no expiry to compare.
+
+**Prompt caching works without the plugin's header.** The OpenAI plugin adds a per-session
+`session-id` header the custom provider does not send; the first real t3 round on `openai2`
+(2026-10-09, 75 turns) still read 4.09M of its 10M input tokens from cache. Whether the RATE
+matches plan 1's is not yet compared.
 
 **D-156 — lore speaks opencode 2.x, and the container runs the host's version. BUILT
 2026-10-03.**

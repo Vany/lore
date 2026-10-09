@@ -48,3 +48,4 @@ deploy/.env
 # does not belong in a public repository even though the token itself is an env
 # reference rather than a literal.
 .mcp.json
+__pycache__/

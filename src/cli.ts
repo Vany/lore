@@ -444,7 +444,7 @@ export async function main(argv: readonly string[]): Promise<ExitCode> {
   // `make sync-creds`. The host's list arrives on stdin because only the host can read it.
   // Planning and refusals live in `service/creds-sync.ts`, where they are tested.
   if (args.command === "creds-sync") {
-    const { apply, parseHostCredentials, plan } = await import("./service/creds-sync.ts");
+    const { apply, parseHostCredentials, plan, settledProviders } = await import("./service/creds-sync.ts");
     const { client } = await import("./service/doctor.ts");
     const { DEFAULT_REVIEWER } = await import("./reviewer/opencode.ts");
     const { parks, renderCleared, unpark } = await import("./service/unpark.ts");
@@ -524,9 +524,11 @@ export async function main(argv: readonly string[]): Promise<ExitCode> {
     // only the forbidden Anthropic login) also "changes nothing" — reported as success, the
     // deployment came up unable to call any model. `opencode` is opencode's own public Zen
     // provider, always present and never one of the ladder's.
-    const usable = (await api.provider.list().catch((e: unknown): never => {
-      throw classify(e, "list the deployment's connected providers");
-    })).data.filter((pr) => pr.id !== "opencode" && pr.activation !== "disabled");
+    const usable = await settledProviders(async () =>
+      (await api.provider.list().catch((e: unknown): never => {
+        throw classify(e, "list the deployment's connected providers");
+      })).data.filter((pr) => pr.id !== "opencode" && pr.activation !== "disabled"),
+    );
     if (usable.length === 0) {
       process.stderr.write(
         "NO PROVIDER IS CONNECTED: opencode holds no usable credential, so every review would fail without a model " +

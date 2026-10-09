@@ -401,6 +401,24 @@ describe("single-vendor ladders cannot pass (D-49)", () => {
   });
 
   /**
+   * THE SECOND CHATGPT ACCOUNT IS OPENAI AGAIN (D-157). `openai2` is a custom provider id
+   * nobody else uses, and an id the alias table does not know stands for itself — so
+   * without the alias, t3 falling back to account #2 while another tier read on account #1
+   * would count OpenAI twice and pass clean on two opinions.
+   */
+  it("counts both ChatGPT subscriptions as one vendor", () => {
+    const TWO_ACCOUNTS: readonly Tier[] = [
+      { id: "t0", kind: "deterministic", stage: "fast" },
+      { id: "t1", kind: "model", model: "zai-coding-plan/glm-5.3", effort: "medium", stage: "fast" },
+      { id: "t2", kind: "model", model: "openai2/gpt-5.6-sol", effort: "high", stage: "deep" },
+      { id: "t3", kind: "model", model: "openai/gpt-5.6-sol", effort: "high", stage: "deep" },
+    ];
+    const d = runClean(TWO_ACCOUNTS);
+    expect(d.kind, "two opinions, three tiers").toBe("passedThinLadder");
+    expect(d).toHaveProperty("vendorSpread", { distinct: 2, tiers: 3, vendors: ["z-ai", "openai"] });
+  });
+
+  /**
    * A TIER THAT RAN ON TWO VENDORS GOT TWO OPINIONS, and the old accounting forgot one.
    *
    * `answeredBy` is last-write-wins — it exists so a warm session is not abandoned, and it
@@ -574,6 +592,8 @@ describe("vendorOf", () => {
     expect(vendorOf("openrouter/moonshotai/kimi-k3")).toBe("moonshotai");
     // A SECOND SUBSCRIPTION to the same company is not a second vendor.
     expect(vendorOf("zai-coding-plan2/glm-5.2")).toBe("z-ai");
+    // The second ChatGPT subscription, a custom provider for the same reason (D-157).
+    expect(vendorOf("openai2/gpt-5.6-sol")).toBe("openai");
   });
 
   /**
