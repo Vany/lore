@@ -1533,6 +1533,7 @@ export class Store {
     // `queued_at` so the "uncollected for N hours" checks age it from NOW, not from its first
     // raise — see the column's comment in schema.ts.
     // lore-ok[40c0942c]: fixed — the age readers use COALESCE(queued_at, first_seen).
+    // lore-ok[5e9f5576]: and so does `make status` — ops/status.ts `uncollectedLines`.
     this.db
       .prepare("UPDATE finding SET delivered_at = NULL, queued_at = ? WHERE review_id = ? AND fingerprint = ?")
       .run(now(), reviewId, fingerprint);

@@ -696,7 +696,10 @@ function uncollectedLines(db: DatabaseSync): string[] {
       `SELECT r.branch AS branch, COUNT(*) AS n,
               SUM(CASE WHEN f.severity = 'high' AND f.preexisting = 0 THEN 1 ELSE 0 END) AS high,
               SUM(CASE WHEN f.severity = 'high' AND f.preexisting = 1 THEN 1 ELSE 0 END) AS high_pre,
-              MIN(f.first_seen) AS since
+              -- From the hand-back when there was one (D-159, queued_at), not the first
+              -- raise: a refusal of a days-old finding is not a client that stopped coming.
+              -- lore-ok[5e9f5576]: fixed — aged as store.uncollectedByReview ages it.
+              MIN(COALESCE(f.queued_at, f.first_seen)) AS since
        FROM finding f JOIN review r ON r.id = f.review_id
        WHERE f.delivered_at IS NULL AND r.state NOT IN (${PERSON_OR_CLOCK_DECIDED_SQL})
        GROUP BY r.id, r.branch ORDER BY since`,

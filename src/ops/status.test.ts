@@ -169,6 +169,19 @@ describe("findings nobody has collected", () => {
     expect(out).toContain("a review that did not run, later");
   });
 
+  // D-159: a refused justification hands a delivered finding back. Aged from `first_seen`,
+  // a refusal of a four-day-old finding read "unread since 96h ago" on the beat it came back.
+  it("ages a handed-back finding from the hand-back", () => {
+    withFinding("high", "d".repeat(64));
+    store.markDelivered("revU", ["d".repeat(64)]);
+    // The first raise, four days ago — what the line used to age from.
+    store["db"].prepare("UPDATE finding SET first_seen = ? WHERE fingerprint = ?").run(new Date(Date.now() - 96 * 3600_000).toISOString(), "d".repeat(64));
+    store.markUndelivered("revU", "d".repeat(64));
+    const out = render();
+    expect(out).toContain("waiting to be collected");
+    expect(out).toMatch(/unread since \d+s ago/);
+  });
+
   it("says nothing when everything has been collected", () => {
     withFinding("low", "e".repeat(64));
     store.markDelivered("revU", ["e".repeat(64)]);

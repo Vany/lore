@@ -1209,6 +1209,9 @@ list; call \`refactor_poll\` with the \`run_id\` this returns for that.
 } as const;
 
 export const RESOURCE_DOCS: Readonly<Record<string, { title: string; priority: number; text: string }>> = {
+  // lore-ok[1b143e0b]: fixed — the delivery rule below and its copy in REVIEW_PROMPT_TEXT
+  // now name the one finding that comes back (a refused justification), as TOOL_DOCS.poll
+  // and spec/agent-docs.md do.
   "lore://docs/workflow": {
     title: "The review loop, end to end",
     priority: 1.0,
@@ -1227,7 +1230,8 @@ export const RESOURCE_DOCS: Readonly<Record<string, { title: string; priority: n
    RE-READ IT ON EVERY REPLY and never reuse the last number; read \`check_back_note\`
    with it. Below the cap the number shrinks as the round ages and caching it doubles your
    wait; AT the cap it stays put for several calls and the note says so.
-   Each poll returns only what is NEW. A tight retry loop is the most expensive thing
+   Each poll returns only what is NEW — a finding whose justification was refused comes
+   back once, as news (rules below). A tight retry loop is the most expensive thing
    you can do here: every attempt is a turn that learns nothing.
 3. For each finding: fix it, or justify it — \`fixed_elsewhere\` on your next submit if
    the fix landed elsewhere, or \`// lore-ok[fp]: <reason>\` at the named line otherwise.
@@ -1422,7 +1426,8 @@ The loop:
    RE-READ IT ON EVERY REPLY — never reuse the last number — and read \`check_back_note\`
    with it. Below the cap the number shrinks as the round ages and caching it doubles your
    wait; AT the cap it stays put for several calls and the note says so.
-   Each poll returns only what is NEW. A tight retry loop is the most expensive thing
+   Each poll returns only what is NEW — a finding whose justification was refused comes
+   back once, as news (rules below). A tight retry loop is the most expensive thing
    you can do here: every attempt is a turn that learns nothing.
 3. For each finding: fix it, or justify it — \`fixed_elsewhere\` on your next submit if
    the fix landed elsewhere, or \`// lore-ok[fp]: <reason>\` at the named line otherwise.
