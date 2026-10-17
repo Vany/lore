@@ -4265,6 +4265,29 @@ describe("a rung of two members", () => {
     expect(store.getReview("rung1", "p")?.state).toBe("findings_ready");
   });
 
+  // D-159: a member that refuses a justification and is then SKIPPED (its chain exhausted)
+  // used to return an outcome carrying nothing, so its refusal was in no set and the
+  // surviving member's silence ACCEPTED what it had just refused.
+  it("counts a refusal from a member that was skipped after making it", async () => {
+    const tiers = RUNG_TIERS.map((t) => (t.id === "t3" ? { ...t, skip_if_quota: true } : t));
+    const type = { ...RUNG_TYPE, tiers };
+    const first = new RungStreaming({ t2: [DONE], t3: [emission([B]), DONE] });
+    await runRound({ store, reviewer: first, reviewId: "rung1", principal: "p", worktree: dir, type });
+    const fp = fingerprint(B);
+    expect(store.allFindings("rung1").map((f) => f.fingerprint)).toContain(fp);
+
+    store.recordFixedElsewhere("rung1", fp, "src.txt", 1, "handled by the caller now");
+    const reraise: Finding = { ...B, evidence: "the caller never sees this path", failureScenario: "the base line is read before the caller runs" };
+    const second = new RungStreaming({ t2: [DONE], t3: [emission([reraise])] });
+    // t3 answers once (the refusal), then its plan is out.
+    second.onAsk = (tierId, i) => { if (tierId === "t3" && i === 0) second.fail["t3"] = new Exhausted("plan is out"); };
+    await runRound({ store, reviewer: second, reviewId: "rung1", principal: "p", worktree: dir, type }).catch(() => undefined);
+
+    const v = store.latestVerdict("rung1", fp);
+    expect(v?.verdict, "t2's silence must not accept what t3 refused before it was skipped").toBe("justified-rejected");
+    expect(v?.rationale).toContain(reraise.evidence);
+  });
+
   it("applies a held diff once and tells each member at its own boundary", async () => {
     const reviewer = new RungStreaming({ t2: [emission([A]), DONE], t3: [emission([B]), DONE] });
     let release!: () => void;
@@ -4335,6 +4358,52 @@ describe("a rung of two members", () => {
     const finalTree = await treeHash(dir);
     expect(store.sessionTreeOf("rung1", "t3", "vendor-b/m"), "and it has now seen the final tree").toBe(finalTree);
     expect(store.sessionTreeOf("rung1", "t2", "vendor-a/m")).toBe(finalTree);
+  });
+
+  // D-159, the catch-up seam: a member re-raises a justified finding DURING its catch-up
+  // pass and is then skipped. The merge kept only its first-pass outcome — "done", silent
+  // — and dropped the catch-up's emissions, so the refusal was in no set and the round
+  // accepted the justification.
+  it("counts a refusal made in a catch-up pass that ended skipped", async () => {
+    const tiers = RUNG_TIERS.map((t) => (t.id === "t3" ? { ...t, skip_if_quota: true } : t));
+    const type = { ...RUNG_TYPE, tiers };
+    const first = new RungStreaming({ t2: [DONE], t3: [emission([B]), DONE] });
+    await runRound({ store, reviewer: first, reviewId: "rung1", principal: "p", worktree: dir, type });
+    const fp = fingerprint(B);
+    store.recordFixedElsewhere("rung1", fp, "src.txt", 1, "handled by the caller now");
+
+    const file = join(dir, "src/hold.ts");
+    const original = readFileSync(file, "utf8");
+    writeFileSync(file, original.replace("return 1;", "return release();"));
+    const claimed = await treeHash(dir);
+    const diffText = execFileSync("git", ["diff", "HEAD"], { cwd: dir }).toString();
+    writeFileSync(file, original);
+    await treeHash(dir);
+    store.holdDiff("rung1", diffText, claimed);
+
+    const reraise: Finding = { ...B, evidence: "the caller never sees this path", failureScenario: "the base line is read before the caller runs" };
+    const second = new RungStreaming({ t2: [emission([A]), DONE], t3: [DONE, emission([reraise])] });
+    // Round 1 already recorded t3's session tree, so its first appearance (the signal the
+    // test above uses) is gone; the end of t3's run is observed as the write itself.
+    let t3Ended = false;
+    const record = store.setSessionTree.bind(store);
+    store.setSessionTree = (r, tier, route, tree) => { if (tier === "t3") t3Ended = true; record(r, tier, route, tree); };
+    second.onAsk = async (tierId, i) => {
+      // t3's first pass ends before t2's boundary lands the fix, so t3 needs a catch-up.
+      if (tierId === "t2" && i === 0) {
+        for (let w = 0; w < 400 && !t3Ended; w++) {
+          await new Promise((r) => setTimeout(r, 5));
+        }
+      }
+      // In the catch-up t3 refuses once, then its plan is out.
+      if (tierId === "t3" && i === 1) second.fail["t3"] = new Exhausted("plan is out");
+    };
+    await runRound({ store, reviewer: second, reviewId: "rung1", principal: "p", worktree: dir, type }).catch(() => undefined);
+
+    expect(second.asked.get("t3"), "t3 was brought back for the fix").toHaveLength(2);
+    const v = store.latestVerdict("rung1", fp);
+    expect(v?.verdict, "the catch-up refusal must not be dropped").toBe("justified-rejected");
+    expect(v?.rationale).toContain(reraise.evidence);
   });
 
   it("continues with the survivor when one member cannot be paid for", async () => {
@@ -4486,5 +4555,108 @@ describe("a finding's scope follows its evidence, on every path (D-153)", () => 
     const source = readFileSync(join(dir, "src/hold.ts"), "utf8");
     writeFileSync(join(dir, "src/hold.ts"), source.replace(SUBJECT, 'const answer = "fixed";'));
     expect(await codeMoved(dir, stored as Parameters<typeof codeMoved>[1])).toBe(false);
+  });
+});
+
+/**
+ * A CONTEST A DYING PRIMARY MADE STILL COUNTS (D-159).
+ *
+ * A streamed member re-raises a finding whose justification is pending — that is a
+ * refusal, with its reason in the evidence — and then its route dies mid-stream, so a
+ * fallback twin completes the run without re-raising it. The re-raise was in neither
+ * `streamed` (new records only) nor the twin's `result`, so the round saw nobody object:
+ * the justification was ACCEPTED by the twin's silence and carried into later reviews,
+ * over an objection the top tier had raised and been billed for.
+ */
+describe("a refusal from a member that died mid-stream", () => {
+  const emission = (findings: readonly Finding[]) => "```json\n" + JSON.stringify({ findings }) + "\n```";
+  const DONE = '```json\n{"done": true, "examined": "everything"}\n```';
+  const TWIN = "openrouter/twin";
+  const type = {
+    ...CODE_ARCH,
+    t0: [] as const,
+    tiers: CODE_ARCH.tiers.map((t) => (t.kind === "model" ? { ...t, conversation: true, ...(t.id === "t1" ? { fallback: [TWIN] } : {}) } : t)),
+  };
+  const primary = type.tiers.find((t) => t.id === "t1")?.model ?? "";
+
+  /** Per-route scripts; an entry that is an Error is thrown instead of answered. */
+  class Routes implements ReviewerLike {
+    readonly scripts = new Map<string, (string | Error)[]>();
+    async review(): Promise<ReviewerResult> {
+      throw new Error("a conversation tier must stream, not run a batch round");
+    }
+    async askFor<T>(tier: Tier, _p: unknown, _w: string, extract: (text: string) => Listed<T>): Promise<SessionResult<T>> {
+      const next = this.scripts.get(tier.model ?? "")?.shift();
+      if (next === undefined) throw new Error(`the script for ${tier.model ?? "?"} ran out`);
+      if (next instanceof Error) throw next;
+      const r = extract(next);
+      if (!r.ok) throw new Error(`the fixture's own emission was refused: ${r.why}`);
+      return { items: r.items, raw: next, inputTokens: 1, cachedTokens: 0, outputTokens: 1, costUsd: 0, latencyMs: 1, retried: false, steps: 1, rejected: r.rejected };
+    }
+  }
+
+  it("rejects the justification, quoting the dead primary's reason", async () => {
+    const reviewer = new Routes();
+    reviewer.scripts.set(primary, [emission([HOLD_BUG]), DONE]);
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, allowMetered: true, type });
+    const fp = fingerprint(HOLD_BUG);
+    expect(store.allFindings("r1").map((f) => f.fingerprint)).toContain(fp);
+
+    store.recordFixedElsewhere("r1", fp, "src/hold.ts", 3, "released in a shared helper now");
+    const reraise: Finding = { ...HOLD_BUG, evidence: "the shared helper is never awaited on the decline path", failureScenario: "decline returns before release; the hold stays" };
+    reviewer.scripts.set(primary, [emission([reraise]), new Exhausted("plan is out")]);
+    reviewer.scripts.set(TWIN, [DONE]);
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, allowMetered: true, type });
+
+    const v = store.latestVerdict("r1", fp);
+    expect(v?.verdict, "the twin's silence must not ratify what the primary refused").toBe("justified-rejected");
+    expect(v?.rationale).toContain(reraise.evidence);
+  });
+
+  // The other branch of the same contest: the author FIXED the code instead of arguing,
+  // the primary read the fix and raised the finding again (the fix is wrong), then died.
+  // Its re-raise must keep the finding open — not let the twin's silence record `fixed`,
+  // a verdict that never expires.
+  it("does not record `fixed` over a dead primary's objection to the fix", async () => {
+    const reviewer = new Routes();
+    reviewer.scripts.set(primary, [emission([HOLD_BUG]), DONE]);
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, allowMetered: true, type });
+    const fp = fingerprint(HOLD_BUG);
+
+    writeFileSync(join(dir, "src/hold.ts"), "export function capture() {\n  // released on decline now\n  release();\n  return 1;\n}\n");
+    const reraise: Finding = { ...HOLD_BUG, evidence: "release() is called but not awaited", failureScenario: "decline returns before release resolves; the hold stays" };
+    reviewer.scripts.set(primary, [emission([reraise]), new Exhausted("plan is out")]);
+    reviewer.scripts.set(TWIN, [DONE]);
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, allowMetered: true, type });
+
+    expect(store.latestVerdict("r1", fp)?.verdict, "the twin's silence must not settle what the primary still objects to").not.toBe("fixed");
+    expect(store.openFindings("r1").map((f) => f.fingerprint)).toContain(fp);
+  });
+
+  // And the release still works for it. The primary's re-raise came BEFORE the fix landed
+  // at that same boundary; then it died, and the twin read the fixed tree and said nothing.
+  // That is qualified post-fix silence, and the fix must settle. The release used to be
+  // collected at the end of a run that completed, which a run that died never reaches.
+  it("still settles a fix whose only pre-fix re-raise came from the member that died", async () => {
+    const reviewer = new Routes();
+    reviewer.scripts.set(primary, [emission([HOLD_BUG]), DONE]);
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, allowMetered: true, type });
+    const fp = fingerprint(HOLD_BUG);
+
+    const file = join(dir, "src/hold.ts");
+    const original = readFileSync(file, "utf8");
+    writeFileSync(file, original.replace("return 1;", "return release();"));
+    const claimed = await treeHash(dir);
+    const diffText = execFileSync("git", ["diff", "HEAD"], { cwd: dir }).toString();
+    writeFileSync(file, original);
+    await treeHash(dir);
+    store.holdDiff("r1", diffText, claimed);
+
+    reviewer.scripts.set(primary, [emission([HOLD_BUG]), new Exhausted("plan is out")]);
+    reviewer.scripts.set(TWIN, [DONE]);
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, allowMetered: true, type });
+
+    expect(readFileSync(file, "utf8"), "the fix landed at the primary's boundary").toContain("return release();");
+    expect(store.latestVerdict("r1", fp)?.verdict).toBe("fixed");
   });
 });

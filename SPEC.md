@@ -4068,8 +4068,19 @@ finding open it repeats the claim word for word — that is what makes the finge
 raise's text (D-56: claim, evidence and first-seen describe the finding as found), so the
 reason has to live on the verdict. The `justified-rejected` rationale is therefore
 *"<tier> raised this again after reading your answer: <evidence> — <failure scenario>. The
-answer it refused: <the author's reason>"*. If no raise can be quoted (a member that
-faulted after emitting), the rationale says so instead of making one up.
+answer it refused: <the author's reason>"*.
+
+**A contest counts even if the member that made it then died.** Every set that reads
+"who raised what this round" — the one that rejects a justification, the raise it quotes,
+and the one that keeps a fixed finding from settling — is built from every finding each
+member emitted (`emitted`), re-raises and runs that faulted part-way included. Before
+this, a primary that re-raised an open finding and then lost its route had that contest
+in no set. Its fallback twin's silence then overruled it either way: a refused
+justification was *accepted* (and D-51 carried it into later reviews), or an objection
+to the author's fix let the finding settle as `fixed`, which never expires. Re-raises
+made before a fix landed are still released for settling (`preFixEmitted`). A model
+rejection with no raise to quote is a lore bug: it throws rather than record a refusal
+without a reason.
 
 **And the finding goes back on the delivery queue** (`markUndelivered`). Delivery is a
 delta of news (`spec/mcp-api.md` §2.1). A refusal is news, and a finding delivered in an

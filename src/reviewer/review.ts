@@ -1031,6 +1031,13 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     readonly fellBackTo: string | undefined;
     readonly chosenRoute: string | undefined;
     readonly streamed: readonly RecordedFinding[];
+    /**
+     * EVERY finding this member emitted this round — re-raises included, and runs that
+     * died part-way included. `streamed` holds new records only and `result` only the run
+     * that finished, so a refusal made by a primary that then lost its route was in
+     * neither, and its justification was ratified by the fallback's silence (D-159).
+     */
+    readonly emitted: readonly Finding[];
     readonly fixCandidates: readonly RecordedFinding[];
     readonly preFixEmitted: readonly string[];
     readonly heldMismatch: string | undefined;
@@ -1041,6 +1048,15 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     readonly error: Error;
     /** For the client's channel, phrased as the single-tier path always phrased it. */
     readonly note: string;
+    /**
+     * What the member emitted before it was skipped, with its pre-fix bookkeeping. A tier
+     * that re-raised a pending finding and then died with its whole chain exhausted is
+     * skipped — and a skipped outcome used to carry nothing, so its refusal was in no set
+     * and the survivors' silence accepted the justification it had just refused (D-159).
+     */
+    readonly emitted: readonly Finding[];
+    readonly fixCandidates: readonly RecordedFinding[];
+    readonly preFixEmitted: readonly string[];
   }
   type MemberOutcome = MemberRan | MemberSkipped;
 
@@ -1167,6 +1183,22 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // exactly that boundary, and tells the model to rule on the fix and continue. The run
   // ends when the model DECLARES the tree examined — never by silence (INV-1).
   const streamed: RecordedFinding[] = [];
+  const emitted: Finding[] = [];
+  /**
+   * WHEN each fingerprint was last emitted and when the last fix landed, on ONE clock for
+   * the whole member — every route it ran on, a run that died included.
+   *
+   * These were per-run and read at the end of `streamRun`, which a run that loses its
+   * route never reaches. A primary that re-raised a finding before a fix landed and then
+   * died left that re-raise in `emitted` but never released it, so its twin's qualified
+   * silence after the fix could not settle what the fix fixed. Per-run maps would be wrong
+   * the other way: the dead run's "pre-fix" would release a finding its twin raised again
+   * after the fix. One clock answers the only question asked — was this member's LAST word
+   * on the finding before the last fix it saw?
+   */
+  const lastEmittedAt = new Map<string, number>();
+  let lastApplyAt = -1;
+  let clock = 0;
   let heldMismatch: string | undefined;
   /**
    * Findings whose LAST emission came before the last applied fix, for the settle pass.
@@ -1181,14 +1213,39 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
    */
   const fixCandidates: RecordedFinding[] = [];
   /** Every fingerprint emitted at or before the member's last-seen fix — see the
-   * collection site at the end of `streamRun` for why re-raises belong here too. */
+   * collection site where the member returns for why re-raises belong here too. */
   const preFixEmitted: string[] = [];
-  // lore-ok[86f5f5d2]: real, and fixed at the collection site at the end of
-  // `streamRun` rather than here: every fingerprint emitted at or before the member's
+  /**
+   * ONCE per member, before it returns either way, on the member's one clock — so a run
+   * that died is counted, and a later route's re-raise is later.
+   * lore-ok[e4d4dc34]: fixed here; see `lastEmittedAt`.
+   * lore-ok[70f507d3]: fixed — the skipped returns call this too and carry `emitted`.
+   */
+  const collectPreFix = (): void => {
+    if (lastApplyAt < 0) return;
+    for (const rec of streamed) {
+      const at = lastEmittedAt.get(rec.fingerprint);
+      // Emitted at or before the boundary where the last fix landed, and never again
+      // after it: the model saw the fix and stayed silent, which is the qualified
+      // silence D-56 settles on — once the settle pass is allowed to see it.
+      if (at !== undefined && at <= lastApplyAt) fixCandidates.push(rec);
+    }
+    // EVERY pre-fix emission, not only the newly recorded ones. A RE-RAISE of an
+    // already-open finding in the turn whose boundary applied the fix is in `open`
+    // already — what it needs is release from `settleRaised`, or the model's
+    // qualified post-fix silence can never settle the very thing the fix fixed and
+    // the client is nagged about a finding it answered.
+    for (const [fp, at] of lastEmittedAt) {
+      if (at <= lastApplyAt) preFixEmitted.push(fp);
+    }
+  };
+  // lore-ok[86f5f5d2]: real, and fixed at the collection site where the member
+  // returns rather than here: every fingerprint emitted at or before the member's
   // last-seen fix — re-raises of already-open findings included, which is what this
   // function alone could not see — enters `preFixEmitted`, and the merge releases them
   // from `settleRaised` so the model's post-fix silence can settle what the fix fixed.
   const recordStreamed = async (f: Finding): Promise<void> => {
+    emitted.push(f);
     const fp = fingerprint(f);
     // The scope read can race a sibling's boundary apply on the shared worktree: worst
     // case is a hunk hashed mid-patch, which the next re-raise refreshes. Chosen over
@@ -1327,8 +1384,6 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       });
     }
     let done = false;
-    const lastEmittedAt = new Map<string, number>();
-    let lastApplyAt = -1;
     /** How far into the shared fix chain and peer list THIS member has been told (D-109). */
     let seenFixes = chainSeen;
     let seenPeers = 0;
@@ -1341,6 +1396,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     /** Set when the wall clock, not the model, ended the run — see `MAX_RUN_MS`. */
     let outOfTime = false;
     for (let i = 0; i < MAX_EMISSIONS; i++) {
+      const tick = clock++;
       // THE RUN'S OWN CLOCK, checked at the boundary rather than inside a call, so a
       // turn is never abandoned half-spent — the same discipline the round-boundary
       // spend ceiling uses. Breaking here rather than throwing keeps everything the
@@ -1417,7 +1473,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       for (const f of res.items) {
         agg.findings.push(f);
         await recordStreamed(f);
-        lastEmittedAt.set(fingerprint(f), i);
+        lastEmittedAt.set(fingerprint(f), tick);
       }
       if (flag.done) { done = true; break; }
 
@@ -1486,7 +1542,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
         .map((x) => x.line);
       seenPeers = roundFindings.length;
       if (unseenFixes.length > 0) {
-        lastApplyAt = i;
+        lastApplyAt = tick;
         continued = streamFix({
           diff: unseenFixes.join("\n"),
           t0: t0Seen(hold.lastT0),
@@ -1526,23 +1582,6 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     await withHoldLock(async () => {
       store.setSessionTree(reviewId, member.id, routeKey, await treeHash(worktree));
     });
-    if (lastApplyAt >= 0) {
-      for (const rec of streamed) {
-        const at = lastEmittedAt.get(rec.fingerprint);
-        // Emitted at or before the boundary where the last fix landed, and never again
-        // after it: the model saw the fix and stayed silent, which is the qualified
-        // silence D-56 settles on — once the settle pass is allowed to see it.
-        if (at !== undefined && at <= lastApplyAt) fixCandidates.push(rec);
-      }
-      // EVERY pre-fix emission, not only the newly recorded ones. A RE-RAISE of an
-      // already-open finding in the turn whose boundary applied the fix is in `open`
-      // already — what it needs is release from `settleRaised`, or the model's
-      // qualified post-fix silence can never settle the very thing the fix fixed and
-      // the client is nagged about a finding it answered (raised by lore's own t2).
-      for (const [fp, at] of lastEmittedAt) {
-        if (at <= lastApplyAt) preFixEmitted.push(fp);
-      }
-    }
     return {
       findings: agg.findings, discarded: agg.discarded, raw: agg.raw,
       inputTokens: agg.inputTokens, cachedTokens: agg.cachedTokens, outputTokens: agg.outputTokens,
@@ -2579,11 +2618,13 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       // The MERGE below marks the tier unavailable and moves the ladder — with a rung, a
       // sibling may have answered, and stepping the ladder from inside one member's catch
       // would write a decision over a round the other member is still in (D-109).
+      collectPreFix();
       return {
         kind: "skipped",
         member,
         error: e instanceof Error ? e : new Error(String(e)),
         note: `${member.id}: ${e instanceof Error ? e.message : String(e)}`,
+        emitted, fixCandidates, preFixEmitted,
       };
     }
     // A tier nobody can pay for, or whose window cannot hold the diff, is a limitation
@@ -2593,7 +2634,8 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     // "something else" may be a sibling whose call is still in flight.
     if (!(e instanceof TierUnavailable)) throw e;
 
-    return { kind: "skipped", member, error: e, note: `${member.id}: ${e.message}` };
+    collectPreFix();
+    return { kind: "skipped", member, error: e, note: `${member.id}: ${e.message}`, emitted, fixCandidates, preFixEmitted };
   }
 
   // PER-ROUND, not the kept session's running total — see `perRoundUsage`, fingerprints
@@ -2631,7 +2673,8 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     outcome: result.retried ? "ok-after-retry" : "ok",
   });
 
-  return { kind: "ok", member, tierRunId, result, fellBackTo, chosenRoute, streamed, fixCandidates, preFixEmitted, heldMismatch };
+  collectPreFix();
+  return { kind: "ok", member, tierRunId, result, fellBackTo, chosenRoute, streamed, emitted, fixCandidates, preFixEmitted, heldMismatch };
   };
 
   // ─── THE RUNG RUNS — every member at once (D-109) ──────────────────────────────────
@@ -2711,6 +2754,15 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
         return { member: o.member, ...(pin === undefined ? {} : { pin }) };
       }),
     );
+    // WHAT A LATER PASS SAID, kept whichever way it ended (D-159). A catch-up that
+    // re-raised a pending finding and then died was dropped here whole, and the first
+    // pass's silence accepted the justification it had refused.
+    // lore-ok[7d6174bf]: fixed here — the skipped branch keeps the catch-up's emissions.
+    const laterPass = (o: MemberRan, fresh: MemberOutcome) => ({
+      emitted: [...o.emitted, ...fresh.emitted],
+      fixCandidates: [...o.fixCandidates, ...fresh.fixCandidates],
+      preFixEmitted: [...o.preFixEmitted, ...fresh.preFixEmitted],
+    });
     outcomes = outcomes.map((o) => {
       if (o.kind !== "ok") return o;
       const fresh = again.find((n) => n.member.id === o.member.id);
@@ -2718,14 +2770,13 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       if (fresh.kind !== "ok") {
         gaveUp.add(o.member.id);
         lateSkipNotes.push(`${fresh.note} (while being told of fixes its rung-mates had already seen)`);
-        return o;
+        return { ...o, ...laterPass(o, fresh) };
       }
       return {
         ...fresh,
         result: { ...fresh.result, findings: [...o.result.findings, ...fresh.result.findings] },
         streamed: [...o.streamed, ...fresh.streamed],
-        fixCandidates: [...o.fixCandidates, ...fresh.fixCandidates],
-        preFixEmitted: [...o.preFixEmitted, ...fresh.preFixEmitted],
+        ...laterPass(o, fresh),
       };
     });
   }
@@ -2820,11 +2871,24 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // says WHY in the evidence, which `recordFinding` then drops as a duplicate.
   const raisedRank = new Map<string, { readonly member: Tier; readonly model: string | undefined; readonly raise: Finding }>();
   for (const o of ranMembers) {
-    for (const f of o.result.findings) {
+    // `emitted` too: a streamed member's re-raises from a run that died part-way are in
+    // no `result`, and a refusal is exactly a re-raise.
+    for (const f of [...o.result.findings, ...o.emitted]) {
       const fp = fingerprint(f);
       const cur = raisedRank.get(fp);
       if (cur === undefined || tierRank(tiers, o.member.id) > tierRank(tiers, cur.member.id)) {
         raisedRank.set(fp, { member: o.member, model: o.fellBackTo ?? o.chosenRoute ?? o.member.model, raise: f });
+      }
+    }
+  }
+  // A SKIPPED member's emissions too — it contested before its whole chain died, and the
+  // rejection must quote it. Its route is not known here, so the configured model is named.
+  for (const o of skippedMembers) {
+    for (const f of o.emitted) {
+      const fp = fingerprint(f);
+      const cur = raisedRank.get(fp);
+      if (cur === undefined || tierRank(tiers, o.member.id) > tierRank(tiers, cur.member.id)) {
+        raisedRank.set(fp, { member: o.member, model: o.member.model, raise: f });
       }
     }
   }
@@ -2937,6 +3001,20 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     // may — see `modelRaised`, which T0 is excluded from for the opposite reason.
     modelRaised.add(r.fingerprint);
   }
+  // AND EVERY RE-RAISE, which `streamed` (new records only) never carries. A primary that
+  // re-raised a pending finding and then lost its route left that contest in no set at all,
+  // and the fallback twin's silence overruled it both ways: a refused justification was
+  // ACCEPTED (D-51 then carried it into later reviews), and an objection to the author's
+  // fix let `settleFixed` record `fixed` — a verdict that never expires. Both sets, so
+  // every reader of "who contested what" sees the same emissions. Pre-fix re-raises are
+  // still released for settling through `preFixEmitted`, below.
+  // lore-ok[5c43a8d1]: fixed here — `emitted` now feeds `raisedFingerprints` as well.
+  // lore-ok[96aa53cb]: the same finding, raised twice. Same answer.
+  for (const f of [...ranMembers, ...skippedMembers].flatMap((o) => o.emitted)) {
+    const fp = fingerprint(f);
+    raisedFingerprints.add(fp);
+    modelRaised.add(fp);
+  }
 
   // 5b. Carry forward justifications this repo already ratified.
   //
@@ -3030,14 +3108,20 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       // words — so `justification_rejected` echoed them back as the refusal. On 2026-10-17
       // t3 refused a guild fix three rounds running over a UTF-8 split the fix introduced;
       // that objection lived only in its re-raise's evidence, was dropped, and the author
-      // kept re-answering the obsolete one. Without a raise to quote (a member that faulted
-      // after emitting), it says so rather than inventing one.
-      const by = (rejectedBy?.member ?? strongest.member).id;
-      const raise = rejectedBy?.raise;
-      const why =
-        raise === undefined
-          ? `${by} raised this again after reading your answer; its reason did not reach lore`
-          : `${by} raised this again after reading your answer: ${raise.evidence} — ${raise.failureScenario}`;
+      // kept re-answering the obsolete one.
+      //
+      // `raisedRank` and `modelRaised` are built from the same emissions, so a model
+      // rejection always has a raise to quote. If it ever does not, the sets have drifted
+      // apart, and recording a refusal with no reason is the defect this exists to end.
+      // lore-ok[5d830805]: fixed — the unreachable fallback is gone (this throws instead),
+      // and the faulted-primary case now reaches this branch: `emitted` feeds both
+      // `modelRaised` and `raisedRank` (see MemberRan.emitted), tested in round.test.ts
+      // "a refusal from a member that died mid-stream".
+      if (rejectedBy === undefined) {
+        throw new Error(`lore bug: ${p.finding.fingerprint.slice(0, 8)} was re-raised by a model but no raise was kept to quote`);
+      }
+      const by = rejectedBy.member.id;
+      const why = `${by} raised this again after reading your answer: ${rejectedBy.raise.evidence} — ${rejectedBy.raise.failureScenario}`;
       store.recordVerdict(reviewId, {
         fingerprint: p.finding.fingerprint,
         verdict: "justified-rejected",
@@ -3046,7 +3130,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
         tier: by,
         // lore-ok[6aa59cb5]: found by lore's own review. See raisedRank's own comment
         // a few dozen lines up for why this is not `.member.model`.
-        model: rejectedBy?.model ?? (strongest.fellBackTo ?? strongest.chosenRoute ?? strongest.member.model),
+        model: rejectedBy.model,
         round,
       });
       // HANDED BACK. The finding was delivered when first raised, so a refusal added
@@ -3166,7 +3250,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // The stream's fix-candidates enter as open-and-unraised (see `fixCandidates`): the
   // pre-fix emission must not count as this round's re-raise, or the model's silence
   // after seeing the fix can never settle what the fix fixed.
-  const rungFixCandidates = ranMembers.flatMap((o) => o.fixCandidates);
+  const rungFixCandidates = [...ranMembers, ...skippedMembers].flatMap((o) => o.fixCandidates);
   const settleRaised = new Set(raisedFingerprints);
   for (const c of rungFixCandidates) settleRaised.delete(c.fingerprint);
   // AND every pre-fix emission — a re-raise of an already-open finding in the turn
@@ -3174,7 +3258,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // from the raised set; without it the model's post-fix silence could never settle
   // the very thing the fix fixed. `codeMoved` still guards: a fix that did not touch
   // the finding's code settles nothing.
-  for (const o of ranMembers) for (const fp of o.preFixEmitted) settleRaised.delete(fp);
+  for (const o of [...ranMembers, ...skippedMembers]) for (const fp of o.preFixEmitted) settleRaised.delete(fp);
   // `hold.lastT0.interrupted`, NOT the round-start `t0.interrupted` — found by
   // lore's own review, fingerprint 5e8a675e: `codeMoved` (inside settleFixed)
   // already reads the LIVE worktree, which D-107's boundary machinery can have
