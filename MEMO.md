@@ -3,6 +3,34 @@
 Newest first. Updated at the end of each task: what changed, what I learned, what
 surprised me.
 
+## 2026-10-18 — lore reviewed D-158/D-159: eight rounds, 19 findings, passed
+
+**rev_lW5UCp7JZX3LvrHxTFBHC_zq, base `review-base/4c89452` into `review/159b203`.** It
+passed with full evidence; the attestation says PARTIAL because t1 never read the final
+tree. Every finding was real. Two kinds:
+
+- **Holes in my own change.** A dead fallback with a comment claiming it handled a case
+  it could not reach. A refused HIGH would have paged the operator, because the age checks
+  read `first_seen` (`queued_at` now). A member's first reason was quoted instead of its
+  latest. The CLI and five docs copies still said "never shown twice". On the sandbox side:
+  EACCES and a missing runtime were not treated as interrupted, and podman's wording was
+  missing (verified: 5.8.4, exit 125, `Error: `).
+- **One older class, one door per round.** "Who contested what" is computed in five or
+  six places. Each round found a member state whose emissions were dropped: a primary
+  that died mid-stream, a skipped member, a catch-up that ended skipped, per-run clocks.
+  I fixed four doors. After the fifth round I stopped and asked. Kira deferred the last
+  three to a redesign (SPEC D-159 [OPEN]); the redesign is pending Vany.
+
+**What I'd do differently.** I wrote the "no raise to quote" fallback for a case I had not
+traced, and the comment claimed it was handled. A test that passed without its fix nearly
+went in (the first skipped-member test), and a "supersedes" filter shipped for one
+round with no test exercising it. Each was caught, but by the reviewer or by luck, not by
+me first.
+
+**Tooling.** `scripts/watch-review.sh <id>` (untracked) waits on the DB read-only until a
+review needs its client, so a round costs one approval. Large submits go as a pushed
+scratch `review/<sha>` branch plus `commit`, not as a hand-pasted diff (the Makefile has tabs).
+
 ## 2026-10-17 — a refusal now says why, and comes back (D-159)
 
 **Vany: "many runs in a row that did nothing"** on guild rev_Hxv4 (src/web, lain). They
