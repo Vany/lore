@@ -1530,7 +1530,12 @@ export class Store {
    * refusal is news; left delivered, the round that refused it reads as an empty round.
    */
   markUndelivered(reviewId: string, fingerprint: string): void {
-    this.db.prepare("UPDATE finding SET delivered_at = NULL WHERE review_id = ? AND fingerprint = ?").run(reviewId, fingerprint);
+    // `queued_at` so the "uncollected for N hours" checks age it from NOW, not from its first
+    // raise — see the column's comment in schema.ts.
+    // lore-ok[40c0942c]: fixed — the age readers use COALESCE(queued_at, first_seen).
+    this.db
+      .prepare("UPDATE finding SET delivered_at = NULL, queued_at = ? WHERE review_id = ? AND fingerprint = ?")
+      .run(now(), reviewId, fingerprint);
   }
 
   /**
@@ -1882,7 +1887,7 @@ export class Store {
                 COUNT(*) AS undelivered,
                 SUM(CASE WHEN f.severity = 'high' AND f.preexisting = 0 THEN 1 ELSE 0 END) AS high,
                 SUM(CASE WHEN f.severity = 'high' AND f.preexisting = 1 THEN 1 ELSE 0 END) AS high_pre,
-                MIN(f.first_seen) AS waiting_since
+                MIN(COALESCE(f.queued_at, f.first_seen)) AS waiting_since
          FROM finding f JOIN review r ON r.id = f.review_id
          WHERE f.delivered_at IS NULL AND r.state NOT IN (${PERSON_OR_CLOCK_DECIDED_SQL})
          GROUP BY r.id, r.branch
@@ -4636,7 +4641,7 @@ export class Store {
            SELECT f.review_id FROM finding f JOIN review r ON r.id = f.review_id
            WHERE f.delivered_at IS NULL AND f.severity = 'high' AND f.preexisting = 0
              AND r.state NOT IN (${PERSON_OR_CLOCK_DECIDED_SQL})
-           GROUP BY f.review_id HAVING MIN(f.first_seen) < ?
+           GROUP BY f.review_id HAVING MIN(COALESCE(f.queued_at, f.first_seen)) < ?
          )`,
       )
       .get(cutoff) as Record<string, number | bigint> | undefined;

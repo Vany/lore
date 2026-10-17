@@ -1438,6 +1438,20 @@ describe("uncollectedHighOlderThan", () => {
     expect(store.uncollectedHighOlderThan(1)).toBe(0);
   });
 
+  // D-159 hands a refused finding back by clearing `delivered_at`. Aged by `first_seen`, a
+  // HIGH found four days ago and refused NOW read as "no client has collected it for 24h+"
+  // and paged the operator about a client that was polling that minute.
+  it("ages a handed-back finding from when it was handed back, not when first seen", () => {
+    newReview("revLive");
+    store.recordFinding("revLive", finding("f1", { firstSeen: old }));
+    store.markDelivered("revLive", ["f1"]);
+    store.markUndelivered("revLive", "f1");
+
+    expect(store.uncollectedHighOlderThan(1), "a refusal one beat old is not abandoned").toBe(0);
+    const row = store.uncollectedByReview().find((r) => r["id"] === "revLive");
+    expect(String(row?.["waiting_since"]), "waiting since the hand-back").not.toBe(old);
+  });
+
   it("ignores a finding younger than the threshold", () => {
     newReview("revFailed");
     store.recordFinding("revFailed", finding("f1", { firstSeen: new Date().toISOString() }));

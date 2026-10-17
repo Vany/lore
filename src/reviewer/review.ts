@@ -2761,6 +2761,10 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     const laterPass = (o: MemberRan, fresh: MemberOutcome) => ({
       emitted: [...o.emitted, ...fresh.emitted],
       fixCandidates: [...o.fixCandidates, ...fresh.fixCandidates],
+      // lore-ok[d1839d30]: real and NOT fixed here — SPEC D-159 [OPEN]. Each pass keeps
+      // its own clock, so a first pass's "said before the fix" still releases a finding a
+      // catch-up raised again after a later fix. Concatenation is the old behaviour,
+      // unchanged; the fix is one emission record per member across passes.
       preFixEmitted: [...o.preFixEmitted, ...fresh.preFixEmitted],
     });
     outcomes = outcomes.map((o) => {
@@ -2800,6 +2804,9 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   let ladderNow = review.ladder;
   for (const s of skippedMembers) ladderNow = markUnavailable(ladderNow, s.member.id);
 
+  // lore-ok[cbb3bc94]: real and NOT fixed here — SPEC D-159 [OPEN]. When every member is
+  // skipped, this returns before the contest sets are built, so what they emitted before
+  // dying is not ruled on. Old behaviour, unchanged by D-159.
   if (ranMembers.length === 0) {
     // The whole rung was stepped over. The same decision the single-tier path always
     // made, moved here because with a rung "something else can still look" may be a
@@ -2876,7 +2883,11 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     for (const f of [...o.result.findings, ...o.emitted]) {
       const fp = fingerprint(f);
       const cur = raisedRank.get(fp);
-      if (cur === undefined || tierRank(tiers, o.member.id) > tierRank(tiers, cur.member.id)) {
+      // `>=`, so a LATER raise at the same rank replaces the earlier one: emissions are
+      // walked in the order they happened, and a member that raised a refused finding
+      // again after seeing a fix is quoted by what it says now, not by the objection it
+      // has moved past. lore-ok[9eac53fc]: fixed here, and in the skipped loop below.
+      if (cur === undefined || tierRank(tiers, o.member.id) >= tierRank(tiers, cur.member.id)) {
         raisedRank.set(fp, { member: o.member, model: o.fellBackTo ?? o.chosenRoute ?? o.member.model, raise: f });
       }
     }
@@ -2887,7 +2898,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     for (const f of o.emitted) {
       const fp = fingerprint(f);
       const cur = raisedRank.get(fp);
-      if (cur === undefined || tierRank(tiers, o.member.id) > tierRank(tiers, cur.member.id)) {
+      if (cur === undefined || tierRank(tiers, o.member.id) >= tierRank(tiers, cur.member.id)) {
         raisedRank.set(fp, { member: o.member, model: o.member.model, raise: f });
       }
     }
@@ -3138,6 +3149,10 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       // nothing — five of them in a row on that guild review.
       store.markUndelivered(reviewId, p.finding.fingerprint);
     } else {
+      // lore-ok[c9b070ff]: real and NOT fixed here — SPEC D-159 [OPEN]. `strongest` is the
+      // strongest member that COMPLETED, so with the stronger rung member skipped silently a
+      // weaker one's silence still ratifies the stronger tier's finding (against D-10).
+      // Old behaviour, unchanged by D-159.
       accepted.push(p.finding.fingerprint);
       store.recordVerdict(reviewId, {
         fingerprint: p.finding.fingerprint,

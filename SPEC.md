@@ -4082,15 +4082,34 @@ made before a fix landed are still released for settling (`preFixEmitted`). A mo
 rejection with no raise to quote is a lore bug: it throws rather than record a refusal
 without a reason.
 
-**And the finding goes back on the delivery queue** (`markUndelivered`). Delivery is a
-delta of news (`spec/mcp-api.md` §2.1). A refusal is news, and a finding delivered in an
-earlier round otherwise adds nothing to the next poll. The round that refused it then
-looks to the client like a round that did nothing.
+**The reason quoted is the latest.** A member that raises a refused finding more than once
+in a round — before and after a fix it was shown — is quoted by its last raise.
+
+**[OPEN] — three gaps in the same machinery, older than D-159, found by its review and
+deferred to a redesign by Kira; the redesign is pending Vany.** "Who contested what this
+round" is computed in several places, each with its own blind spot. The fix is one record
+per member of every emission and every fix landing, on one clock across all its passes,
+with one function answering contested or settled. Until then:
+- a rung whose members are ALL skipped returns before the contest sets are built, so what
+  they emitted before dying is not ruled on;
+- `strongest` is the strongest member that completed, so with the stronger member skipped
+  silently, a weaker member's silence still accepts a justification for the stronger
+  tier's finding (against D-10);
+- a first pass's "said before the fix" still releases a finding that a catch-up raised
+  again after a later fix, because each pass keeps its own clock.
+
+**And the finding goes back on the delivery queue** (`markUndelivered`). It is stamped
+`queued_at`, and the "uncollected for N hours" checks age from that when set, not from
+`first_seen`: a refusal of a days-old HIGH would otherwise page the operator about a
+client that is polling that minute. Delivery is a delta of news (`spec/mcp-api.md` §2.1).
+A refusal is news, and a finding delivered in an earlier round otherwise adds nothing to
+the next poll. The round that refused it then looks to the client like a round that did
+nothing.
 
 **Why it was built:** a guild review where t3 refused answers in five rounds running —
-one finding three times, over a UTF-8 character split across the fix's 256 KB read blocks. Each time the client saw an
-empty poll, then "rejected" with its own words and the first raise's obsolete evidence,
-and it answered the old objection again.
+one finding three times, over a UTF-8 character split across the fix's 256 KB read
+blocks. Each time the client saw an empty poll, then "rejected" with its own words and the
+first raise's obsolete evidence, and it answered the old objection again.
 
 **D-158 — a sandbox that never started is "sandbox unavailable", never a finding. BUILT
 2026-10-17.**

@@ -197,6 +197,12 @@ CREATE TABLE IF NOT EXISTS finding (
   -- Poll returns deltas, so a client is never shown the same finding twice: in an
   -- LLM-driven loop duplicate work is indistinguishable from real work.
   delivered_at     TEXT,
+  -- When it was last put on the delivery queue AFTER first being delivered — a refused
+  -- justification hands the finding back (D-159). The "uncollected for N hours" checks age
+  -- from this when set: aged from first_seen, a refusal of a days-old finding read as a
+  -- client that had stopped coming back, on the very beat it was handed back. NULL is the
+  -- ordinary case: never handed back, so first_seen is when it became deliverable.
+  queued_at        TEXT,
   -- The code this finding is ABOUT, as it stood when the finding was raised (D-56).
   -- Blob sha of the file plus a hash of the lines around it, the same shape a
   -- verdict records. It is what lets a later round tell a finding the author FIXED
@@ -517,6 +523,7 @@ export const WRITE_TIMESTAMPS: readonly { readonly table: string; readonly colum
   { table: "tier_run", column: "finished_at" },
   { table: "finding", column: "first_seen" },
   { table: "finding", column: "delivered_at" },
+  { table: "finding", column: "queued_at" },
   { table: "verdict", column: "created_at" },
   { table: "knowledge", column: "verified_at" },
   { table: "knowledge", column: "retired_at" },
@@ -624,6 +631,9 @@ export const MIGRATIONS: readonly { readonly table: string; readonly column: str
   // wrong. NULL for a diff with no claims and for every row written before this
   // column existed; both read back as "no claims", which is correct either way.
   { table: "held_diff", column: "fixed_elsewhere", sql: "ALTER TABLE held_diff ADD COLUMN fixed_elsewhere TEXT" },
+  // WHEN A FINDING WAS HANDED BACK (D-159) — see the column's comment in DDL. NULL on every
+  // existing row, which ages from `first_seen` exactly as before.
+  { table: "finding", column: "queued_at", sql: "ALTER TABLE finding ADD COLUMN queued_at TEXT" },
 ];
 
 /**

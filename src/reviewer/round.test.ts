@@ -4633,6 +4633,27 @@ describe("a refusal from a member that died mid-stream", () => {
     expect(store.openFindings("r1").map((f) => f.fingerprint)).toContain(fp);
   });
 
+  // A member that raises the refused finding twice — say before and after a fix it was
+  // shown — is quoted by its LATEST reason. Keeping the first recreated the stale-objection
+  // loop: the author answers what the reviewer has already moved past.
+  it("quotes the latest reason when one member raises a refused finding twice", async () => {
+    const reviewer = new Routes();
+    reviewer.scripts.set(primary, [emission([HOLD_BUG]), DONE]);
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, allowMetered: true, type });
+    const fp = fingerprint(HOLD_BUG);
+
+    store.recordFixedElsewhere("r1", fp, "src/hold.ts", 3, "released in a shared helper now");
+    const before: Finding = { ...HOLD_BUG, evidence: "reason A: the helper is not called", failureScenario: "A" };
+    const after: Finding = { ...HOLD_BUG, evidence: "reason B: the helper is called but not awaited", failureScenario: "B" };
+    reviewer.scripts.set(primary, [emission([before]), emission([after]), DONE]);
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, allowMetered: true, type });
+
+    const v = store.latestVerdict("r1", fp);
+    expect(v?.verdict).toBe("justified-rejected");
+    expect(v?.rationale).toContain(after.evidence);
+    expect(v?.rationale).not.toContain(before.evidence);
+  });
+
   // And the release still works for it. The primary's re-raise came BEFORE the fix landed
   // at that same boundary; then it died, and the twin read the fixed tree and said nothing.
   // That is qualified post-fix silence, and the fix must settle. The release used to be
