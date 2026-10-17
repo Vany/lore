@@ -293,6 +293,69 @@ describe("a run the sandbox itself killed is never mistaken for a clean or parti
     expect(down?.unavailable).toMatch(/network failure, not a fault in the branch/);
   });
 
+  // 2026-10-16: the sandbox image had not been built on the host, so `docker run` itself
+  // failed before any container existed — and every guild review carried a high
+  // "dependencies do not install" against a package.json nobody had touched. Docker's
+  // exact words and exit code, captured from the real CLI.
+  const dockerFails = (name: string, stderr: string): SandboxConfig => {
+    const script = join(dir, name);
+    const err = join(dir, `${name}.stderr`);
+    writeFileSync(err, `${stderr}\n`);
+    writeFileSync(script, "#!/bin/sh\n" + 'if [ "$1" = "rm" ]; then exit 0; fi\n' + `cat "${err}" >&2\n` + "exit 125\n");
+    chmodSync(script, 0o755);
+    return baseSandbox(script);
+  };
+
+  it("sandboxed install: a sandbox image that does not exist is 'sandbox unavailable', not a finding", async () => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { typecheck: "tsc -b", lint: "eslint ." } }));
+    const sandbox = dockerFails(
+      "fake-docker-no-image.sh",
+      "Unable to find image 'lore-sandbox:node24' locally\n" +
+        "docker: Error response from daemon: pull access denied for lore-sandbox, repository does not exist or may require 'docker login'\n\n" +
+        "Run 'docker run --help' for more information",
+    );
+    const out = await runT0(dir, { engines: ["tsc", "eslint"], sandbox });
+    for (const engine of ["tsc", "eslint"]) {
+      const o = out.outcomes.find((x) => x.engine === engine);
+      expect(o?.findings, `${engine}: a sandbox that never started says nothing about the branch`).toStrictEqual([]);
+      expect(o?.unavailable).toMatch(/sandbox unavailable/);
+      expect(o?.unavailable).toMatch(/pull access denied for lore-sandbox/);
+      expect(o?.interrupted).toBe(true);
+    }
+  });
+
+  // The check phase goes through the same `docker run`, so the same failure there must
+  // not be parsed as the typecheck's own output.
+  it("checkTypes: docker failing to start the check container is 'sandbox unavailable'", async () => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { typecheck: "tsc -b" } }));
+    const script = join(dir, "fake-docker-check-125.sh");
+    const called = join(dir, ".called");
+    writeFileSync(
+      script,
+      "#!/bin/sh\n" +
+        'if [ "$1" = "rm" ]; then exit 0; fi\n' +
+        `if [ ! -f "${called}" ]; then touch "${called}"; exit 0; fi\n` +
+        "echo 'docker: Error response from daemon: Cannot connect to the Docker daemon at unix:///var/run/docker.sock.' >&2\n" +
+        "exit 125\n",
+    );
+    chmodSync(script, 0o755);
+    const out = await runT0(dir, { engines: ["tsc"], sandbox: baseSandbox(script) });
+    const tsc = out.outcomes.find((o) => o.engine === "tsc");
+    expect(tsc?.findings).toStrictEqual([]);
+    expect(tsc?.unavailable).toMatch(/sandbox unavailable/);
+    expect(tsc?.interrupted).toBe(true);
+  });
+
+  // 125 alone is not docker's: a target's own install can exit 125 (verified — `sh -c 'exit
+  // 125'` in a container gives 125 too). Without docker's own line it stays the branch's.
+  it("sandboxed install: a target script that exits 125 on its own is still a finding", async () => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { typecheck: "tsc -b" } }));
+    const sandbox = dockerFails("fake-docker-target-125.sh", "npm error code ERESOLVE\nnpm error docker: is not a dependency");
+    const out = await runT0(dir, { engines: ["tsc"], sandbox });
+    const tsc = out.outcomes.find((o) => o.engine === "tsc");
+    expect(tsc?.findings.map((f) => f.claim).join(" ")).toMatch(/dependencies do not install/);
+  });
+
   it("checkTypes: a killed `typecheck` script is reported killed, not its partial output", async () => {
     writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { typecheck: "tsc -b" } }));
     const sandbox = fakeDocker("src/foo.ts(3,5): error TS2322: fake partial output before the kill");

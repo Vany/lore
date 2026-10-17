@@ -3,6 +3,26 @@
 Newest first. Updated at the end of each task: what changed, what I learned, what
 surprised me.
 
+## 2026-10-17 — a sandbox that never started stopped accusing the branch (D-158)
+
+**Kira's brief (Vany live): "the sandbox never runs".** It did run. The image was missing
+on 2026-10-16, and the last `make up` rebuilt it at 13:53Z on 10-17. The defect was what
+lore said about a missing image: `docker run` exited 125, the install arm took that as a
+failed install, and guild got a high 704edc91 on `package.json` in 11 reviews.
+
+**125 is not reserved.** Checked against the real CLI: `sh -c 'exit 125'` inside a
+container also gives 125. So the check needs docker's own `docker: ` line as well. It sits
+in `sandbox.ts`, where every sandbox call returns, because all seven callers check
+`unavailable` before they parse — install, tsc, eslint and cargo are covered at once.
+
+**Live proof on the deployed build, guild master:** clean tree → tsc no findings; planted
+`TS2322` → reported at the line; an image name that does not exist → "sandbox
+unavailable", interrupted, no finding. eslint is honestly unavailable on guild (no lint
+config).
+
+**Surprise:** the first `make deploy` refused — a round started between my DB check and
+the guard. The guard is the check worth trusting; mine was a snapshot.
+
 ## 2026-10-09 — a second ChatGPT account, the zai-coding-plan2 way (D-157)
 
 **Vany bought a second ChatGPT Plus account; plan 1 was at its usage limit.** opencode 2.x

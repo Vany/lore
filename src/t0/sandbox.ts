@@ -606,6 +606,47 @@ async function clearStaleContainer(cfg: SandboxConfig, worktree: string, scratch
 }
 
 /**
+ * Did `docker run` ITSELF fail — the sandbox never started — rather than the command in it?
+ *
+ * THE INCIDENT: on 2026-10-16 the sandbox image had not been built on the host. Every
+ * `docker run` exited 125 with *"Unable to find image 'lore-sandbox:node24' locally …
+ * pull access denied"*, the install arm read that as an ordinary failed install, and every
+ * guild review carried a high-severity *"dependencies do not install"* against a
+ * package.json nobody had touched — the same fingerprint, review after review. tsc, eslint
+ * and cargo go through the same `docker run`, and would have parsed docker's error as
+ * their own output.
+ *
+ * TWO CONDITIONS, BOTH REQUIRED. 125 is docker's code for "the CLI or daemon failed", but
+ * it is not reserved: `sh -c 'exit 125'` inside a container exits 125 too (checked against
+ * the real CLI), so a target's own script could produce it. What a target does not produce
+ * is docker's own error line, which the CLI prefixes `docker: ` at the start of a line —
+ * missing image, daemon unreachable, a name conflict, a bad mount all read that way.
+ *
+ * THE TRADE, as `CHILD_KILLED` in runner.ts states it: a target that exits 125 AND prints a
+ * line starting `docker: ` gets "sandbox unavailable" instead of a finding — lost coverage,
+ * reported as lost. The reverse is a false accusation against a branch that is fine.
+ *
+ * `timedOut: true` for the reason exec.ts gives on its maxBuffer arm: every caller reads it
+ * as "this round's silence proves nothing" (`EngineOutcome.interrupted`), which is exactly
+ * true of a sandbox that never ran — earlier t0 findings stay unconfirmed, not resolved.
+ */
+const DOCKER_CLI_FAILED = 125;
+const DOCKER_OWN_LINE = /^docker: .+$/m;
+
+function sandboxUnavailable(cfg: SandboxConfig, result: ToolResult): ToolResult {
+  if (result.unavailable !== undefined || result.code !== DOCKER_CLI_FAILED) return result;
+  const line = DOCKER_OWN_LINE.exec(result.stderr)?.[0];
+  if (line === undefined) return result;
+  return {
+    ...result,
+    timedOut: true,
+    unavailable:
+      `sandbox unavailable (image ${cfg.image}): ${line} — lore's own environment, not a fault in the branch; ` +
+      `nothing the sandbox would have checked is known either way`,
+  };
+}
+
+/**
  * Run one command in the sandbox.
  *
  * `network` is on ONLY for the install: a registry needs it, and a test — or a
@@ -648,7 +689,7 @@ export async function runInSandbox(
     // doc comment for why that earns the one exception to its default minimal env.
     true,
   );
-  return killIfTimedOut(cfg, worktree, scratch, result);
+  return sandboxUnavailable(cfg, await killIfTimedOut(cfg, worktree, scratch, result));
 }
 
 /**
@@ -683,6 +724,6 @@ export async function install(
     // doc comment for why that earns the one exception to its default minimal env.
     true,
   );
-  return killIfTimedOut(cfg, worktree, scratch, result);
+  return sandboxUnavailable(cfg, await killIfTimedOut(cfg, worktree, scratch, result));
 }
 

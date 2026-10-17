@@ -529,7 +529,10 @@ see. MOST of it narrows what the review is evidence of; one entry does not, and 
 difference is stated on each line rather than left for you to guess:
 
   * a deterministic engine did NOT run — no installed dependencies, no test script, a
-    suite disabled for the deployment;
+    suite disabled for the deployment. **"sandbox unavailable" is lore's own environment
+    failing** (its container image missing, its docker daemon unreachable): nothing in
+    your branch caused it and no edit fixes it. Tell your user, so the deployment's
+    operator hears of it;
   * a tier produced a finding the schema refused, so this review does not contain it.
     The line says which tier and what was wrong with it. The tier looked at the code
     and saw something; you are not being shown it;

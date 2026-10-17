@@ -4059,6 +4059,26 @@ working agreement says to confirm rather than assume.
 (fingerprint 9c6f2a60) — never inside the repository**, so nothing needs a new
 `.gitignore` rule.
 
+**D-158 — a sandbox that never started is "sandbox unavailable", never a finding. BUILT
+2026-10-17.**
+
+Every t0 command — install, tsc, eslint, cargo — is a `docker run` of the sandbox image.
+When docker ITSELF fails (the image is not built on the host, the daemon is unreachable,
+a name conflict, a bad mount), no container ran and nothing about the branch is known.
+`sandbox.ts` recognises that at the one place every sandbox call returns through, and
+reports `unavailable: "sandbox unavailable (image …): <docker's line> …"` with the round
+`interrupted` — so it lands in `checks_skipped`, earlier t0 findings stay unconfirmed
+rather than resolved, and no finding is raised against the reviewed code.
+
+**Recognised by exit 125 AND a line starting `docker: `, never by 125 alone.** 125 is
+docker's "the CLI or daemon failed", but a command inside the container can exit 125 too
+(checked against the real CLI); docker's own error line is what a target does not print.
+The trade is INV-1's: a target that does both gets "sandbox unavailable" — coverage lost
+and said so — rather than lore accusing a branch that is fine.
+
+The image is built by `make up` (the `sandbox` service, `build-only` profile). The message
+names the image so the operator knows what to rebuild.
+
 **D-157 — a second ChatGPT subscription is the custom provider `openai2`, renewed by
 lore's host tooling. BUILT 2026-10-09.**
 
