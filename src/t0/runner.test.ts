@@ -309,7 +309,7 @@ describe("a run the sandbox itself killed is never mistaken for a clean or parti
   it("sandboxed install: a sandbox image that does not exist is 'sandbox unavailable', not a finding", async () => {
     writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { typecheck: "tsc -b", lint: "eslint ." } }));
     const sandbox = dockerFails(
-      "fake-docker-no-image.sh",
+      "docker",
       "Unable to find image 'lore-sandbox:node24' locally\n" +
         "docker: Error response from daemon: pull access denied for lore-sandbox, repository does not exist or may require 'docker login'\n\n" +
         "Run 'docker run --help' for more information",
@@ -328,7 +328,7 @@ describe("a run the sandbox itself killed is never mistaken for a clean or parti
   // not be parsed as the typecheck's own output.
   it("checkTypes: docker failing to start the check container is 'sandbox unavailable'", async () => {
     writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { typecheck: "tsc -b" } }));
-    const script = join(dir, "fake-docker-check-125.sh");
+    const script = join(dir, "docker");
     const called = join(dir, ".called");
     writeFileSync(
       script,
@@ -346,11 +346,49 @@ describe("a run the sandbox itself killed is never mistaken for a clean or parti
     expect(tsc?.interrupted).toBe(true);
   });
 
+  // A runtime binary that is not installed never started a sandbox either: its silence must
+  // not let earlier T0 findings settle as fixed, so the round is interrupted.
+  it("sandboxed install: a missing container runtime is unavailable AND interrupted", async () => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { typecheck: "tsc -b" } }));
+    const out = await runT0(dir, { engines: ["tsc"], sandbox: baseSandbox(join(dir, "no-such-runtime")) });
+    const tsc = out.outcomes.find((o) => o.engine === "tsc");
+    expect(tsc?.findings).toStrictEqual([]);
+    expect(tsc?.unavailable).toMatch(/not found/);
+    expect(tsc?.interrupted, "a sandbox that never ran proves nothing").toBe(true);
+  });
+
+  // podman's own words, captured from podman 5.8.4 with its machine stopped: exit 125, and
+  // a line that starts `Error: ` rather than docker's `docker: `.
+  it("sandboxed install: podman failing to start is 'sandbox unavailable' too", async () => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { typecheck: "tsc -b" } }));
+    const fake = dockerFails(
+      "podman",
+      "Cannot connect to Podman. Please verify your connection to the Linux system using `podman system connection list`\n" +
+        'Error: unable to connect to Podman socket: Get "http://d/v5.8.4/libpod/_ping": dial unix /tmp/podman.sock: connect: no such file or directory',
+    );
+    const out = await runT0(dir, { engines: ["tsc"], sandbox: fake });
+    const tsc = out.outcomes.find((o) => o.engine === "tsc");
+    expect(tsc?.findings).toStrictEqual([]);
+    expect(tsc?.unavailable).toMatch(/sandbox unavailable/);
+    expect(tsc?.unavailable).toMatch(/unable to connect to Podman socket/);
+  });
+
+  // A runtime lore has no wording for cannot be told apart from the target, so its 125 is
+  // the sandbox's — reported as such, never as a finding against the branch.
+  it("sandboxed install: an unrecognised runtime's exit 125 is never a finding", async () => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { typecheck: "tsc -b" } }));
+    const out = await runT0(dir, { engines: ["tsc"], sandbox: dockerFails("other-runtime", "something went wrong") });
+    const tsc = out.outcomes.find((o) => o.engine === "tsc");
+    expect(tsc?.findings).toStrictEqual([]);
+    expect(tsc?.unavailable).toMatch(/knows no wording/);
+    expect(tsc?.interrupted).toBe(true);
+  });
+
   // 125 alone is not docker's: a target's own install can exit 125 (verified — `sh -c 'exit
   // 125'` in a container gives 125 too). Without docker's own line it stays the branch's.
   it("sandboxed install: a target script that exits 125 on its own is still a finding", async () => {
     writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { typecheck: "tsc -b" } }));
-    const sandbox = dockerFails("fake-docker-target-125.sh", "npm error code ERESOLVE\nnpm error docker: is not a dependency");
+    const sandbox = dockerFails("docker", "npm error code ERESOLVE\nnpm error docker: is not a dependency");
     const out = await runT0(dir, { engines: ["tsc"], sandbox });
     const tsc = out.outcomes.find((o) => o.engine === "tsc");
     expect(tsc?.findings.map((f) => f.claim).join(" ")).toMatch(/dependencies do not install/);

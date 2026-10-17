@@ -626,16 +626,34 @@ async function clearStaleContainer(cfg: SandboxConfig, worktree: string, scratch
  * line starting `docker: ` gets "sandbox unavailable" instead of a finding — lost coverage,
  * reported as lost. The reverse is a false accusation against a branch that is fine.
  *
+ * EACH RUNTIME IN ITS OWN WORDS. podman (5.8.4, checked with its machine stopped) also
+ * exits 125, and its line starts `Error: `. A runtime with no entry below is a runtime lore
+ * cannot tell apart from the target, so its 125 is taken as the sandbox's — said so, and
+ * never turned into a finding.
+ *
  * `timedOut: true` for the reason exec.ts gives on its maxBuffer arm: every caller reads it
  * as "this round's silence proves nothing" (`EngineOutcome.interrupted`), which is exactly
  * true of a sandbox that never ran — earlier t0 findings stay unconfirmed, not resolved.
+ * THE SAME FOR EVERY `unavailable`: a runtime binary that is not installed (`runTool`'s
+ * ENOENT) came back `timedOut: false`, so T0's silence over a sandbox that never started
+ * could still settle an earlier T0 finding as `fixed` — a verdict that never expires.
+ * lore-ok[f931ec97]: fixed — any `unavailable` from a sandbox call is interrupted below.
  */
-const DOCKER_CLI_FAILED = 125;
-const DOCKER_OWN_LINE = /^docker: .+$/m;
+const RUNTIME_FAILED = 125;
+// lore-ok[052011e4]: fixed — podman's own line, verified against podman 5.8.4.
+const RUNTIME_OWN_LINE: Readonly<Record<string, RegExp>> = {
+  docker: /^docker: .+$/m,
+  podman: /^Error: .+$/m,
+};
 
 function sandboxUnavailable(cfg: SandboxConfig, result: ToolResult): ToolResult {
-  if (result.unavailable !== undefined || result.code !== DOCKER_CLI_FAILED) return result;
-  const line = DOCKER_OWN_LINE.exec(result.stderr)?.[0];
+  if (result.unavailable !== undefined) return result.timedOut ? result : { ...result, timedOut: true };
+  if (result.code !== RUNTIME_FAILED) return result;
+  const own = RUNTIME_OWN_LINE[basename(cfg.runtime)];
+  const line =
+    own === undefined
+      ? `${cfg.runtime} exited ${String(RUNTIME_FAILED)}, and lore knows no wording to tell this runtime's own errors from the target's`
+      : own.exec(result.stderr)?.[0];
   if (line === undefined) return result;
   return {
     ...result,

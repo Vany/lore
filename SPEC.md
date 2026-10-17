@@ -4109,6 +4109,13 @@ docker's "the CLI or daemon failed", but a command inside the container can exit
 The trade is INV-1's: a target that does both gets "sandbox unavailable" — coverage lost
 and said so — rather than lore accusing a branch that is fine.
 
+**Each runtime in its own words.** podman also exits 125, with a line starting `Error: `
+(checked against podman 5.8.4). A runtime lore has no wording for cannot be told apart
+from the target, so its 125 is treated as the sandbox failing and reported that way. And
+**every** `unavailable` from a sandbox call marks the round interrupted — a runtime binary
+that is not installed included, which used to leave T0's silence free to settle an earlier
+T0 finding as `fixed`.
+
 The image is built by `make up` (the `sandbox` service, `build-only` profile). The message
 names the image so the operator knows what to rebuild.
 
