@@ -360,6 +360,10 @@ Each poll returns findings **new since the caller's last poll**, plus running
 counts. A client that polls twice must not be shown the same finding twice — the
 loop is driven by an LLM, and duplicate work is indistinguishable from real work.
 
+The one finding shown twice is one whose justification a reviewer **refused** (D-159): the
+refusal is news, and without it the round that refused reads as a round that did nothing.
+It comes back once, `justification_rejected` carrying the reviewer's reason first.
+
 #### 2.1.1 What a finding carries, and the three shapes
 
 Always: `fingerprint` (the short id used in a `lore-ok`), `file`, `line`, `symbol`,
@@ -372,7 +376,7 @@ Then **exactly one** of three shapes, and the shape *is* the instruction:
 | shape | fields | what it means |
 |---|---|---|
 | open | `justify_with` | nobody has argued about it. Fix it, or answer with that line |
-| open, refused | `justify_with` + `justification_rejected` | a reviewer read a reason and refused it. Worse than untouched: the code is wrong *and* an argument for it was believed long enough to be checked |
+| open, refused | `justify_with` + `justification_rejected` | a reviewer read a reason and refused it. Worse than untouched: the code is wrong *and* an argument for it was believed long enough to be checked. The field is the reviewer's reason (its re-raise's evidence and failure scenario), then the refused answer |
 | closed | `settled` + `settled_because`, **no** `justify_with` | nothing to do; it is here only because it is new to this caller |
 
 A closed finding usually arrives by D-51 — a justification this repository ratified in

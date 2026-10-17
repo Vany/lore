@@ -3,6 +3,27 @@
 Newest first. Updated at the end of each task: what changed, what I learned, what
 surprised me.
 
+## 2026-10-17 — a refusal now says why, and comes back (D-159)
+
+**Vany: "many runs in a row that did nothing"** on guild rev_Hxv4 (src/web, lain). They
+all did something. Rounds 5–9 were each lain's submit, and t3 refused answers in each.
+t3's opencode session shows why it never accepted 15018aa2: the fix itself had a new
+defect (UTF-8 split across countToday's 256 KB blocks). t3 kept the finding open the only
+way it can, by repeating the claim verbatim with the new reason in `evidence`. lore lost
+it twice. The re-raise was deduplicated by fingerprint, so the text was dropped. The
+rejection stored lain's own reason as its rationale. And nothing re-delivered the finding,
+so each poll was empty.
+
+**How I found it:** the DB alone looked like "t3 says findings, nothing new". The answer
+was in t3's kept session (`message.list` on the opencode client, read-only). The session
+is the only place a tier's full words survive. Worth remembering for the next
+"reviewer gave no reason" report.
+
+**Live proof:** the deployed code, a throwaway repo and an in-memory store, with a scripted
+re-raise after a fixed_elsewhere. The rationale quotes the new objection and then the
+refused answer, and the finding is undelivered again. No real refusal was triggered (it
+would cost quota); lain's next submit is the first real one.
+
 ## 2026-10-17 — a sandbox that never started stopped accusing the branch (D-158)
 
 **Kira's brief (Vany live): "the sandbox never runs".** It did run. The image was missing

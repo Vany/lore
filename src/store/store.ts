@@ -1525,6 +1525,15 @@ export class Store {
   }
 
   /**
+   * Back on the delivery queue: something the client must act on happened to a finding it
+   * already holds — its justification was refused. Delivery is a delta of NEWS, and a
+   * refusal is news; left delivered, the round that refused it reads as an empty round.
+   */
+  markUndelivered(reviewId: string, fingerprint: string): void {
+    this.db.prepare("UPDATE finding SET delivered_at = NULL WHERE review_id = ? AND fingerprint = ?").run(reviewId, fingerprint);
+  }
+
+  /**
    * Findings nothing has settled yet. Worst first, for the same reason as
    * `undelivered` — and because an unordered query lets SQLite pick a different plan
    * and hand back a different order for the same data, which makes any downstream

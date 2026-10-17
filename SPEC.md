@@ -4059,6 +4059,28 @@ working agreement says to confirm rather than assume.
 (fingerprint 9c6f2a60) — never inside the repository**, so nothing needs a new
 `.gitignore` rule.
 
+**D-159 — a refused justification carries the reviewer's reason, and is handed back.
+BUILT 2026-10-17.**
+
+A tier refuses a justification by raising the finding again after reading it. To keep a
+finding open it repeats the claim word for word — that is what makes the fingerprint match
+— and puts its reason in `evidence` and `failureScenario`. The finding row keeps its FIRST
+raise's text (D-56: claim, evidence and first-seen describe the finding as found), so the
+reason has to live on the verdict. The `justified-rejected` rationale is therefore
+*"<tier> raised this again after reading your answer: <evidence> — <failure scenario>. The
+answer it refused: <the author's reason>"*. If no raise can be quoted (a member that
+faulted after emitting), the rationale says so instead of making one up.
+
+**And the finding goes back on the delivery queue** (`markUndelivered`). Delivery is a
+delta of news (`spec/mcp-api.md` §2.1). A refusal is news, and a finding delivered in an
+earlier round otherwise adds nothing to the next poll. The round that refused it then
+looks to the client like a round that did nothing.
+
+**Why it was built:** a guild review where t3 refused answers in five rounds running —
+one finding three times, over a UTF-8 character split across the fix's 256 KB read blocks. Each time the client saw an
+empty poll, then "rejected" with its own words and the first raise's obsolete evidence,
+and it answered the old objection again.
+
 **D-158 — a sandbox that never started is "sandbox unavailable", never a finding. BUILT
 2026-10-17.**
 

@@ -300,7 +300,9 @@ Expect several rounds of findings. That is the process working, not failing.
 Fetch findings discovered since your last poll.
 
 Returns ONLY NEW findings. Anything you have already been shown will not appear again
-— do not re-fix something absent from the response.
+— do not re-fix something absent from the response. ONE EXCEPTION, and it is news: a
+finding whose justification a reviewer REFUSED comes back once, carrying
+\`justification_rejected\` — the reviewer's reason for refusing.
 
 IF YOU HAVE LOST FINDINGS YOU WERE ALREADY GIVEN, DO NOT POLL AGAIN — read the resource
 \`lore://review/{review_id}\`. It returns every finding on the review in full, and it
@@ -513,9 +515,12 @@ Then ONE of three shapes, and they are the whole instruction:
   * \`justify_with\` AND \`justification_rejected\` — open, and you already tried. A
     reviewer read your reason and refused it, so this is worse than a finding nobody
     argued about: the code is still wrong AND an argument for it was believed long
-    enough to be checked. \`justification_rejected\` is why it was refused. Fix the
-    code, or give a reason that holds. Repeating the rejected one is the one move
-    guaranteed not to work.
+    enough to be checked. \`justification_rejected\` is why it was refused, in the
+    REVIEWER's words, then the answer it refused. Read the reviewer's half before
+    anything else: it is often a NEW objection — a defect in your fix — while \`claim\`
+    and \`evidence\` above still describe the finding as first raised. Fix what the
+    reviewer now says, or give a reason that holds against it. Repeating the rejected
+    answer is the one move guaranteed not to work.
 
   * \`settled\` and \`settled_because\`, with NO \`justify_with\` — closed. Nothing to do.
     It appears only because it is new to YOU: often a justification this repository

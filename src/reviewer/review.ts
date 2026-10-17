@@ -2814,13 +2814,17 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // move the same misattribution into the new column. `o.fellBackTo ?? o.chosenRoute
   // ?? o.member.model` is the pattern this file already uses everywhere else a
   // verdict needs to name who actually spoke (`ranOnRoute`, `failedOn`, `paidRoute`).
-  const raisedRank = new Map<string, { readonly member: Tier; readonly model: string | undefined }>();
+  //
+  // AND THE RAISE ITSELF, because that is the reviewer's reason. A tier keeping a finding
+  // open repeats the claim word for word — that is what makes the fingerprint match — and
+  // says WHY in the evidence, which `recordFinding` then drops as a duplicate.
+  const raisedRank = new Map<string, { readonly member: Tier; readonly model: string | undefined; readonly raise: Finding }>();
   for (const o of ranMembers) {
     for (const f of o.result.findings) {
       const fp = fingerprint(f);
       const cur = raisedRank.get(fp);
       if (cur === undefined || tierRank(tiers, o.member.id) > tierRank(tiers, cur.member.id)) {
-        raisedRank.set(fp, { member: o.member, model: o.fellBackTo ?? o.chosenRoute ?? o.member.model });
+        raisedRank.set(fp, { member: o.member, model: o.fellBackTo ?? o.chosenRoute ?? o.member.model, raise: f });
       }
     }
   }
@@ -3022,17 +3026,33 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       // The member that actually re-raised it, at the highest rank that did — a
       // rejection is a contest, and the record must name the contestant (D-10).
       const rejectedBy = raisedRank.get(p.finding.fingerprint);
+      // THE REVIEWER'S REASON, not the author's. This stored `p.reason` — the author's own
+      // words — so `justification_rejected` echoed them back as the refusal. On 2026-10-17
+      // t3 refused a guild fix three rounds running over a UTF-8 split the fix introduced;
+      // that objection lived only in its re-raise's evidence, was dropped, and the author
+      // kept re-answering the obsolete one. Without a raise to quote (a member that faulted
+      // after emitting), it says so rather than inventing one.
+      const by = (rejectedBy?.member ?? strongest.member).id;
+      const raise = rejectedBy?.raise;
+      const why =
+        raise === undefined
+          ? `${by} raised this again after reading your answer; its reason did not reach lore`
+          : `${by} raised this again after reading your answer: ${raise.evidence} — ${raise.failureScenario}`;
       store.recordVerdict(reviewId, {
         fingerprint: p.finding.fingerprint,
         verdict: "justified-rejected",
-        rationale: p.reason,
+        rationale: `${why}. The answer it refused: ${p.reason}`,
         scope: undefined,
-        tier: (rejectedBy?.member ?? strongest.member).id,
+        tier: by,
         // lore-ok[6aa59cb5]: found by lore's own review. See raisedRank's own comment
         // a few dozen lines up for why this is not `.member.model`.
         model: rejectedBy?.model ?? (strongest.fellBackTo ?? strongest.chosenRoute ?? strongest.member.model),
         round,
       });
+      // HANDED BACK. The finding was delivered when first raised, so a refusal added
+      // nothing to the next poll and the round that made it read as a round that did
+      // nothing — five of them in a row on that guild review.
+      store.markUndelivered(reviewId, p.finding.fingerprint);
     } else {
       accepted.push(p.finding.fingerprint);
       store.recordVerdict(reviewId, {

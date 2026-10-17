@@ -413,6 +413,37 @@ describe("runRound", () => {
     expect(store.settledFingerprints("r1")).not.toContain(fingerprint(HOLD_BUG));
   });
 
+  // 2026-10-17, guild: t3 refused a fix three rounds running for a NEW reason (a UTF-8
+  // character split across read blocks), stated only in its re-raise's evidence. lore
+  // dropped that text, stored the author's own reason as the rejection's rationale, and
+  // never handed the finding back — so the author saw an empty round, then "rejected"
+  // carrying their own words and the first raise's obsolete evidence, and answered the
+  // old objection again.
+  it("a rejection carries the reviewer's reason and hands the finding back", async () => {
+    const reraise: Finding = {
+      ...HOLD_BUG,
+      evidence: "the finally block added in the fix runs before the async release resolves",
+      failureScenario: "release rejects after finally; the hold stays",
+    };
+    const reviewer = new ScriptedReviewer([[HOLD_BUG], [reraise]]);
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
+    const fp = fingerprint(HOLD_BUG);
+    store.markDelivered("r1", [fp]);
+
+    store.recordFixedElsewhere("r1", fp, "src/hold.ts", 3, "released in a finally block now");
+    await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });
+
+    const v = store.latestVerdict("r1", fp);
+    expect(v?.verdict).toBe("justified-rejected");
+    expect(v?.rationale, "the reviewer's reason, not the author's echoed back").toContain(reraise.evidence);
+    expect(v?.rationale).toContain(reraise.failureScenario);
+    expect(v?.rationale, "and which answer it refused").toContain("released in a finally block now");
+    expect(
+      store.undelivered("r1").map((f) => f.fingerprint),
+      "a refused answer is news: the next poll must carry it",
+    ).toContain(fp);
+  });
+
   // D-133, the same silence-based ruling loop a text lore-ok already goes through —
   // reached by a stored claim instead of a file comment.
   it("accepts a fixed_elsewhere claim the reviewer declines to re-raise", async () => {
