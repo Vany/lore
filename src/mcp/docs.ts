@@ -1240,7 +1240,9 @@ export const RESOURCE_DOCS: Readonly<Record<string, { title: string; priority: n
    \`needs_human\`, \`failed\`, \`expired\` or \`cancelled\`.
 
 Rules that decide whether this works:
-- Polls return only new findings. Never re-fix what is not in the response.
+- Polls return only new findings. Never re-fix what is not in the response. The one
+  finding that comes back is one whose justification a reviewer REFUSED: answer what
+  \`justification_rejected\` says, not the original claim.
 - LOST YOUR NOTES? READ \`lore://review/{review_id}\`. A poll consumes what it returns,
   so a session that compacted, crashed or simply forgot cannot get its open findings
   back by polling again — the ids it needs are exactly the ones it will never be shown
@@ -1435,7 +1437,9 @@ The loop:
    both, and \`evidence\` says which ladder stood behind it.
 
 Rules:
-- Polls return only new findings. Never re-fix what is not in the response.
+- Polls return only new findings. Never re-fix what is not in the response. The one
+  finding that comes back is one whose justification a reviewer REFUSED: answer what
+  \`justification_rejected\` says, not the original claim.
 - \`failed\`, \`expired\` and \`fast_clean\` are not \`passed\`. Do not merge on them.
 - \`passed_thin_ladder\` is TERMINAL: it will never become \`passed\`, so looping for that
   never ends. Attest it — the line names which tiers were skipped and which vendor

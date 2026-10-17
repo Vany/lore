@@ -741,9 +741,23 @@ export async function main(argv: readonly string[]): Promise<ExitCode> {
 
     const undelivered = store.undelivered(reviewId);
     store.markDelivered(reviewId, undelivered.map((f) => f.fingerprint));
+    // A REFUSED JUSTIFICATION IS HANDED BACK (D-159), and the finding's own claim and
+    // evidence are its FIRST raise's. The reviewer's reason lives on the verdict; without
+    // it here a refusal reads as a fresh finding with obsolete evidence, and the operator
+    // answers an objection the reviewer has already moved past.
+    // lore-ok[109d8a92]: fixed — both the text and the --json output carry it.
+    const refusals = new Map<string, string>();
+    for (const f of undelivered) {
+      const v = store.latestVerdict(reviewId, f.fingerprint);
+      if (v?.verdict === "justified-rejected") refusals.set(f.fingerprint, v.rationale ?? "no reason recorded");
+    }
 
     if (args.json) {
-      process.stdout.write(`${JSON.stringify({ reviewId, decision: result.decision, findings: undelivered }, null, 2)}\n`);
+      const findings = undelivered.map((f) => {
+        const why = refusals.get(f.fingerprint);
+        return why === undefined ? f : { ...f, justification_rejected: why };
+      });
+      process.stdout.write(`${JSON.stringify({ reviewId, decision: result.decision, findings }, null, 2)}\n`);
     } else {
       // History is what turns a defect into a pattern: "seen 4x, and the rule from
       // 2026-07-11 says X" is a different object from the same finding raised cold.
@@ -751,7 +765,7 @@ export async function main(argv: readonly string[]): Promise<ExitCode> {
         undelivered.map((f) => [f.fingerprint, renderEnrichment(enrich(store, repo.id, reviewId, f))]),
       );
       process.stdout.write(
-        render(reviewId, result.decision.kind, undelivered, result.t0Unavailable, result.tiersSkipped, result.accepted, result.rejected, result.expired, history),
+        render(reviewId, result.decision.kind, undelivered, result.t0Unavailable, result.tiersSkipped, result.accepted, result.rejected, result.expired, history, refusals),
       );
     }
 
@@ -800,6 +814,8 @@ export function render(
   rejected: readonly string[],
   expired: readonly string[],
   history: ReadonlyMap<string, string | undefined>,
+  /** The reviewer's reason, per finding whose justification was refused (D-159). */
+  refusals: ReadonlyMap<string, string> = new Map(),
 ): string {
   const out: string[] = ["", `# lore — ${decision}`, `_review ${reviewId}_`, ""];
 
@@ -878,6 +894,9 @@ export function render(
         "",
         `- evidence: ${f.evidence}`,
         `- failure: ${f.failureScenario}`,
+        ...(refusals.get(f.fingerprint) === undefined
+          ? []
+          : [`- YOUR ANSWER WAS REFUSED — answer this, not the claim above: ${refusals.get(f.fingerprint) ?? ""}`]),
         `- fix it, or justify it:  \`// lore-ok[${f.fingerprint.slice(0, 8)}]: <why this code is correct>\``,
         ...(history.get(f.fingerprint) === undefined ? [] : [`- history: ${history.get(f.fingerprint) ?? ""}`]),
         "",

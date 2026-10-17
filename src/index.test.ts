@@ -127,3 +127,22 @@ describe("what the CLI says at the end of a round", () => {
     for (const d of ["findings", "fastClean", "stopped"]) expect(say(d), d).toContain("NOT a pass");
   });
 });
+
+/**
+ * D-159 on the CLI: a refused justification hands the finding back, and its claim and
+ * evidence are the FIRST raise's. Printed bare, a refusal read as a fresh finding with
+ * obsolete evidence; the reviewer's reason has to be on the page.
+ */
+describe("a handed-back refusal on the CLI", () => {
+  const f = {
+    fingerprint: "abcdef0123456789", file: "src/a.ts", line: 3, severity: "medium" as const,
+    claim: "the cap resets on restart", evidence: "counts only an 8 MiB tail", failureScenario: "a big day",
+    origin: "t3", round: 1, firstSeen: "2026-10-17T00:00:00.000Z", preexisting: false,
+  };
+  it("prints the reviewer's reason under the finding", () => {
+    const why = "t3 raised this again after reading your answer: a UTF-8 split at a block boundary";
+    const text = render("rev_x", "findingsReady", [f], [], [], [], [f.fingerprint], [], new Map(), new Map([[f.fingerprint, why]]));
+    expect(text).toContain(why);
+    expect(text).toMatch(/refused/i);
+  });
+});

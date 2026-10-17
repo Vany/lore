@@ -1022,6 +1022,16 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     return next;
   };
 
+  /**
+   * One finding as a member emitted it, with the ROUTE that emitted it. A member's round can
+   * span routes (a primary that died, a twin that finished), and a verdict names the route
+   * that actually spoke — a refusal made by the primary must not be stamped with the twin.
+   * lore-ok[b9886e2d]: fixed — raisedRank reads `route` per emission.
+   */
+  interface Emission {
+    readonly finding: Finding;
+    readonly route: string | undefined;
+  }
   /** What one rung member's round came to — the merge below is the only reader. */
   interface MemberRan {
     readonly kind: "ok";
@@ -1037,7 +1047,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
      * that finished, so a refusal made by a primary that then lost its route was in
      * neither, and its justification was ratified by the fallback's silence (D-159).
      */
-    readonly emitted: readonly Finding[];
+    readonly emitted: readonly Emission[];
     readonly fixCandidates: readonly RecordedFinding[];
     readonly preFixEmitted: readonly string[];
     readonly heldMismatch: string | undefined;
@@ -1054,7 +1064,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
      * skipped — and a skipped outcome used to carry nothing, so its refusal was in no set
      * and the survivors' silence accepted the justification it had just refused (D-159).
      */
-    readonly emitted: readonly Finding[];
+    readonly emitted: readonly Emission[];
     readonly fixCandidates: readonly RecordedFinding[];
     readonly preFixEmitted: readonly string[];
   }
@@ -1183,7 +1193,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // exactly that boundary, and tells the model to rule on the fix and continue. The run
   // ends when the model DECLARES the tree examined — never by silence (INV-1).
   const streamed: RecordedFinding[] = [];
-  const emitted: Finding[] = [];
+  const emitted: Emission[] = [];
   /**
    * WHEN each fingerprint was last emitted and when the last fix landed, on ONE clock for
    * the whole member — every route it ran on, a run that died included.
@@ -1244,8 +1254,8 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // last-seen fix — re-raises of already-open findings included, which is what this
   // function alone could not see — enters `preFixEmitted`, and the merge releases them
   // from `settleRaised` so the model's post-fix silence can settle what the fix fixed.
-  const recordStreamed = async (f: Finding): Promise<void> => {
-    emitted.push(f);
+  const recordStreamed = async (f: Finding, route: string | undefined): Promise<void> => {
+    emitted.push({ finding: f, route });
     const fp = fingerprint(f);
     // The scope read can race a sibling's boundary apply on the shared worktree: worst
     // case is a hunk hashed mid-patch, which the next re-raise refreshes. Chosen over
@@ -1472,7 +1482,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       agg.discarded.push(...res.rejected);
       for (const f of res.items) {
         agg.findings.push(f);
-        await recordStreamed(f);
+        await recordStreamed(f, route.model);
         lastEmittedAt.set(fingerprint(f), tick);
       }
       if (flag.done) { done = true; break; }
@@ -2880,7 +2890,12 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   for (const o of ranMembers) {
     // `emitted` too: a streamed member's re-raises from a run that died part-way are in
     // no `result`, and a refusal is exactly a re-raise.
-    for (const f of [...o.result.findings, ...o.emitted]) {
+    const memberRoute = o.fellBackTo ?? o.chosenRoute ?? o.member.model;
+    const raises = [
+      ...o.result.findings.map((f) => ({ finding: f, route: memberRoute })),
+      ...o.emitted.map((e) => ({ finding: e.finding, route: e.route ?? memberRoute })),
+    ];
+    for (const { finding: f, route } of raises) {
       const fp = fingerprint(f);
       const cur = raisedRank.get(fp);
       // `>=`, so a LATER raise at the same rank replaces the earlier one: emissions are
@@ -2888,18 +2903,18 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       // again after seeing a fix is quoted by what it says now, not by the objection it
       // has moved past. lore-ok[9eac53fc]: fixed here, and in the skipped loop below.
       if (cur === undefined || tierRank(tiers, o.member.id) >= tierRank(tiers, cur.member.id)) {
-        raisedRank.set(fp, { member: o.member, model: o.fellBackTo ?? o.chosenRoute ?? o.member.model, raise: f });
+        raisedRank.set(fp, { member: o.member, model: route, raise: f });
       }
     }
   }
   // A SKIPPED member's emissions too — it contested before its whole chain died, and the
-  // rejection must quote it. Its route is not known here, so the configured model is named.
+  // rejection must quote it, naming the route each emission came from.
   for (const o of skippedMembers) {
-    for (const f of o.emitted) {
-      const fp = fingerprint(f);
+    for (const e of o.emitted) {
+      const fp = fingerprint(e.finding);
       const cur = raisedRank.get(fp);
       if (cur === undefined || tierRank(tiers, o.member.id) >= tierRank(tiers, cur.member.id)) {
-        raisedRank.set(fp, { member: o.member, model: o.member.model, raise: f });
+        raisedRank.set(fp, { member: o.member, model: e.route ?? o.member.model, raise: e.finding });
       }
     }
   }
@@ -3021,8 +3036,8 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // still released for settling through `preFixEmitted`, below.
   // lore-ok[5c43a8d1]: fixed here — `emitted` now feeds `raisedFingerprints` as well.
   // lore-ok[96aa53cb]: the same finding, raised twice. Same answer.
-  for (const f of [...ranMembers, ...skippedMembers].flatMap((o) => o.emitted)) {
-    const fp = fingerprint(f);
+  for (const e of [...ranMembers, ...skippedMembers].flatMap((o) => o.emitted)) {
+    const fp = fingerprint(e.finding);
     raisedFingerprints.add(fp);
     modelRaised.add(fp);
   }

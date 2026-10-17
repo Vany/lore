@@ -4611,6 +4611,7 @@ describe("a refusal from a member that died mid-stream", () => {
     const v = store.latestVerdict("r1", fp);
     expect(v?.verdict, "the twin's silence must not ratify what the primary refused").toBe("justified-rejected");
     expect(v?.rationale).toContain(reraise.evidence);
+    expect(v?.model, "the route that refused, not the twin that finished silently").toBe(primary);
   });
 
   // The other branch of the same contest: the author FIXED the code instead of arguing,

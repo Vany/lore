@@ -357,6 +357,20 @@ describe("a run the sandbox itself killed is never mistaken for a clean or parti
     expect(tsc?.interrupted, "a sandbox that never ran proves nothing").toBe(true);
   });
 
+  // A runtime that exists but cannot be EXECUTED fails to spawn with EACCES, before any
+  // container exists — which runTool turned into an ordinary exit 1, and so a finding.
+  it("sandboxed install: a runtime that cannot be executed is unavailable, not a finding", async () => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { typecheck: "tsc -b" } }));
+    const runtime = join(dir, "docker");
+    writeFileSync(runtime, "#!/bin/sh\nexit 0\n");
+    chmodSync(runtime, 0o644);
+    const out = await runT0(dir, { engines: ["tsc"], sandbox: baseSandbox(runtime) });
+    const tsc = out.outcomes.find((o) => o.engine === "tsc");
+    expect(tsc?.findings).toStrictEqual([]);
+    expect(tsc?.unavailable).toMatch(/could not be started/);
+    expect(tsc?.interrupted).toBe(true);
+  });
+
   // podman's own words, captured from podman 5.8.4 with its machine stopped: exit 125, and
   // a line that starts `Error: ` rather than docker's `docker: `.
   it("sandboxed install: podman failing to start is 'sandbox unavailable' too", async () => {

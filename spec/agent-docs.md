@@ -132,7 +132,9 @@ Draft text. These are the deliverable, not a summary of it.
 > Fetch findings discovered since your last poll.
 >
 > Returns **only new** findings. A finding you have already seen will not appear
-> again — do not re-fix anything absent from the response.
+> again — do not re-fix anything absent from the response. One exception, and it is
+> news: a finding whose justification a reviewer **refused** comes back once, carrying
+> `justification_rejected` — the reviewer's reason for refusing.
 >
 > States: `queued`, `running`, `findings_ready`, `awaiting_diff`, `fast_clean`,
 > `needs_human`, `passed`, `passed_thin_ladder`, `failed`, `expired`.
@@ -176,8 +178,10 @@ Draft text. These are the deliverable, not a summary of it.
 >
 > * `justify_with` alone — open, unargued. Fix it or answer with that line.
 > * `justify_with` **and** `justification_rejected` — open, and a reason was already
->   refused. Fix the code or give one that holds; repeating the refused one is the
->   single move guaranteed to fail.
+>   refused. `justification_rejected` is the reviewer's reason, then the answer it
+>   refused. It is often a NEW objection — a defect in your fix — while `claim` and
+>   `evidence` still describe the finding as first raised: answer the reviewer's
+>   reason. Repeating the refused answer is the single move guaranteed to fail.
 > * `settled` and `settled_because`, with **no** `justify_with` — closed. Nothing to
 >   do. It is shown because it is new to you, usually a justification this repository
 >   ratified earlier and carried forward. Writing a `lore-ok` duplicates the marker
@@ -390,7 +394,9 @@ folder-mode call opens differently, naming `path` instead of `into`, per
 >    `evidence` says which ladder stood behind it.
 >
 > **Rules**
-> - Polls return only new findings. Never re-fix what is not in the response.
+> - Polls return only new findings. Never re-fix what is not in the response. The one
+>   finding that comes back is one whose justification a reviewer REFUSED: answer what
+>   `justification_rejected` says, not the original claim.
 > - `failed`, `expired` and `fast_clean` are not `passed`. Do not merge on them.
 > - `passed_thin_ladder` is TERMINAL: it will never become `passed`, so looping for
 >   that never ends. Attest it, and tell your user the evidence is weaker than a

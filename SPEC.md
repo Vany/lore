@@ -4104,7 +4104,8 @@ with one function answering contested or settled. Until then:
 client that is polling that minute. Delivery is a delta of news (`spec/mcp-api.md` §2.1).
 A refusal is news, and a finding delivered in an earlier round otherwise adds nothing to
 the next poll. The round that refused it then looks to the client like a round that did
-nothing.
+nothing. The CLI shows the same reason under the handed-back finding, and its `--json`
+carries it as `justification_rejected`, as MCP does.
 
 **Why it was built:** a guild review where t3 refused answers in five rounds running —
 one finding three times, over a UTF-8 character split across the fix's 256 KB read

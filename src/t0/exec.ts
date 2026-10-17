@@ -96,6 +96,15 @@ export async function runTool(
     if (err.code === "ENOENT") {
       return { ok: false, code: -1, stdout: "", stderr: "", timedOut: false, unavailable: `${cmd} not found` };
     }
+    // AND EVERY OTHER WAY THE PROCESS NEVER STARTED. A tool that exists but cannot be
+    // executed (EACCES: the execute bit lost, a parent directory locked) fails at spawn
+    // with a STRING code, which fell through to `code: 1` below — an ordinary failing run.
+    // For the sandbox runtime that meant a high-severity "dependencies do not install"
+    // against a branch no container ever saw. Node marks spawn failures `syscall: "spawn …"`.
+    // lore-ok[8bef78c2]: fixed here; sandboxUnavailable then marks the round interrupted.
+    if (typeof err.code === "string" && typeof err.syscall === "string" && err.syscall.startsWith("spawn")) {
+      return { ok: false, code: -1, stdout: "", stderr: "", timedOut: false, unavailable: `${cmd} could not be started (${err.code})` };
+    }
     // A run OUR OWN maxBuffer cap cut off is the third way a process does not
     // finish, alongside a kill and a timeout — found by lore's own review,
     // fingerprint 2d852614, confirmed empirically against this repo's own Node
