@@ -3,6 +3,45 @@
 Newest first. Updated at the end of each task: what changed, what I learned, what
 surprised me.
 
+## 2026-10-19 — card #0050: rigid's review stuck below t2 (two of three bugs were misdiagnosed)
+
+**The report (Kira's brief).** Three bugs: a stale "image not found" finding that nothing
+re-ran, a sandbox stolen by another review, and a preexisting semgrep hit that cannot be
+answered. **The record said otherwise for the first two.** The t0 rerun DID happen (round 3,
+08:17–08:26Z). The install succeeded, and the round still closed `interrupted`, because its
+only `unavailable` lines were ten "semgrep could not parse …test.tsx". A parse failure set
+the ROUND-level flag. That cost had been deferred before as lore-ok[f30f0b2f], priced as
+"rare", and on rigid it hit every round, for ever. No container conflict appears in the logs;
+names are `lore-t0-<reviewId>`. The 9–19 minute t0 waits are the per-lockfile install lock:
+queueing, not stealing.
+
+- **Bug 1:** `EngineOutcome.unread` / `T0Result.unread` name the skipped file, and
+  `t0SilenceProves` is the one predicate for settling, "resolved" and "unconfirmed". The
+  reuse path reads the files back out of the stored lines (`unreadFilesOf`). No migration
+  sweep: zero open findings in the live DB carried docker-error evidence. Note that even
+  with this fix, d9af8d2c could never have settled as `fixed`: its package.json never
+  moved (`codeMoved`). An environment finding has no honest settling path. D-158 stopping
+  new ones is the actual cure.
+- **Bug 3:** inherited (`preexisting`) raises are left out of what `step()` sees, and
+  only that. The attestation appends "N inherited from the repository and left open".
+  Owner dismissal and per-path suppression are not built.
+- **Bug 2:** a guard test only.
+
+**Review and deploy.** lore reviewed the batch (rev_8cToQ-ja_kEkCaJq2nY-xLs-, two rounds,
+`passed_thin_ladder`; t2/t3 answered by other-vendor stand-ins). Its high finding was half
+right: an interrupted t0 was REUSED rather than retried, so now only a finished run is
+reused (D-102), and my `unread` comment had overclaimed. lore never went idle: the first
+50-minute drain timed out on a live t3, and the second (Kira: "drain again, 90 min") deployed
+at 11:44Z. Live proof: the deployed semgrep engine, run on rigid's real worktree, returns
+audit-page.test.tsx as `unread` with no `interrupted`, and still raises json-ld.ts:41.
+#1580's restart passed on the OLD code before the deploy, because t1 accepted a justification
+of b05805a7 there. So #1580 is not proof of bug 3. The test is; the first rigid round to
+re-raise an inherited match on the new code would be.
+
+**Loose end.** docs.ts still says "lore cannot yet suppress a rule for a path", yet D-83's
+`suppression` table is exactly (rule_class, path) bought by an appeal. That is half
+true at best; not touched here.
+
 ## 2026-10-18 — lore reviewed D-158/D-159: eight rounds, 19 findings, passed
 
 **rev_lW5UCp7JZX3LvrHxTFBHC_zq, base `review-base/4c89452` into `review/159b203`.** It
