@@ -1840,6 +1840,25 @@ describe("t0 on a tree that has not moved", () => {
     expect(calls.n, "a different engine set is a different question").toBe(2);
   });
 
+  // The reuse rests on determinism, and a run cut short — killed, out of memory, timed
+  // out — is not a deterministic answer. Reused, it was carried forward instead of retried,
+  // and every t0 finding stayed unconfirmed for as long as the tree did not move.
+  it("runs again when the run it would reuse was interrupted", async () => {
+    let n = 0;
+    const t0 = async () => {
+      n++;
+      return { findings: [], outcomes: [], unavailable: ["tsc: killed"], skipped: [], interrupted: n === 1, unread: [] };
+    };
+    const reviewer = new ScriptedReviewer([[], [], []]);
+    const type = { ...CODE_ARCH, t0: [] as const };
+    for (let i = 0; i < 3; i++) {
+      const r = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type, t0 });
+      if (!["escalate", "fastClean"].includes(r.decision.kind)) break;
+    }
+
+    expect(n, "retried once, then reused the run that finished").toBe(2);
+  });
+
   /**
    * `unavailable` MUST survive the reuse. It is a real coverage statement — an engine
    * that could not run is a check nobody made — and it reaches the model prompt and the

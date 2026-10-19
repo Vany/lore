@@ -6272,7 +6272,12 @@ Vany, reading the board: *"why is there a round 2 on t0?"*
 
 D-92 skips t0 when the tree hash AND the engine set are unchanged — a deterministic engine
 set given the same bytes cannot answer differently, and it saves 18% of t0 time on
-rigid-monorepo. The skip is right. What it recorded was not: the reuse produces zero
+rigid-monorepo. **Only a run that finished is reused**: a killed, out-of-memory or
+timed-out run answered nothing deterministic, and carrying it forward left every t0
+finding unconfirmed for as long as the tree sat still, with nothing ever re-running it.
+A file semgrep could not parse does not count as unfinished (D-56's `unread`), so a
+permanently unparseable file does not force a re-run every round.
+The skip is right. What it recorded was not: the reuse produces zero
 findings, so the row closed as `clean`, and the operator board rendered
 `t0 · round 2 · 0s · clean · raised nothing`.
 

@@ -69,9 +69,8 @@ export interface EngineOutcome {
    * Kept apart from `interrupted` because the two differ in scope, and the scope is what
    * mattered: a parse failure used to set `interrupted`, which withholds trust from ALL of
    * t0's silence for the round. A repository with one permanently unparseable test file
-   * then had every t0 round interrupted for the life of the review, so no t0 finding could
-   * ever settle — among them a high "dependencies do not install" raised while the sandbox
-   * image was missing, which held a review below t2 for days after the image was rebuilt.
+   * then had every t0 round interrupted for the life of the review, so no t0 finding there
+   * could ever settle as fixed, nor be called "resolved" to the session that held it.
    * Read through `t0SilenceProves` (runner.ts), never directly.
    */
   readonly unread?: readonly string[];

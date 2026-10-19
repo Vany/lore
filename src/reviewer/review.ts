@@ -680,12 +680,23 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // lines above. A deploy that adds or drops a t0 engine mid-review would otherwise carry
   // the old set's answer forward as though it were the new set's.
   const engineKey = [...type.t0].sort().join(",");
+  // AND A RUN THAT FINISHED. The determinism above is a property of a completed run; one
+  // killed, out of memory or timed out answered nothing deterministic. Reused, it was
+  // carried forward instead of retried, so every t0 finding stayed unconfirmed for as long
+  // as the tree sat still — a stuck t0 that nothing would ever re-run.
+  // lore-ok[43acfeaf]: the retry is this condition. No sweep retires pre-D-158 sandbox
+  // findings because none is open (checked on the live store 2026-10-19: the two that exist
+  // sit in a cancelled and a passed review) and D-158 raises no new ones. Nor did one hold
+  // the ladder: `step` reads this round's raises, and once the install ran it was not
+  // re-raised; the review was held by an inherited semgrep match, which no longer holds it.
+  const reusedUnread = previousT0 === undefined ? [] : unreadFilesOf(previousT0.unavailable);
   const reuseT0 =
     previousT0 !== undefined &&
     previousT0.treeHash === roundTree &&
     previousT0.unavailableForTier !== undefined &&
-    previousT0.engines === engineKey;
-  const reusedUnread = previousT0 === undefined ? [] : unreadFilesOf(previousT0.unavailable);
+    previousT0.engines === engineKey &&
+    !previousT0.interrupted &&
+    reusedUnread !== undefined;
   let t0;
   try {
     t0 = reuseT0
@@ -695,22 +706,19 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
         // no t0 findings at all — they were raised when the tree was first read and are
         // still open — so there is nothing here to classify.
         //
-        // CARRIED FROM THE REUSED RUN, not hardcoded — found by lore's own review,
-        // fingerprint 4c38b78d/928bccd1: an earlier version of this branch reasoned
-        // that `roundTree` equalling t0's last-read tree makes `settleFixed`'s
-        // `codeMoved` check false for everything this round, so `interrupted` could
-        // not matter. False — D-107's held-diff boundary can apply a fix to the SAME
-        // worktree LATER in this same round, after this line runs, moving it past
-        // `roundTree` before `settleFixed` reads it. If the tree t0 actually read
-        // was itself an interrupted run, that risk is real here too.
+        // THE UNREAD FILES ARE CARRIED FROM THE REUSED RUN, read back from its own lines
+        // (`unreadFilesOf`). `roundTree` equalling t0's last-read tree does NOT make
+        // `settleFixed`'s `codeMoved` false for everything this round: D-107's held-diff
+        // boundary can apply a fix to the SAME worktree later in this round, after this
+        // line runs, and a finding in a file the reused run never parsed must not settle
+        // on that. `interrupted` is false because only a finished run is reused (above),
+        // and `reusedUnread` is defined for the same reason — the `?? []` is unreachable.
         {
           findings: [],
           outcomes: [],
           skipped: [],
           unavailable: previousT0.unavailable,
-          // The files the reused run never parsed, read back from its own lines; a line
-          // naming no file leaves only the round-wide flag (`unreadFilesOf`).
-          interrupted: previousT0.interrupted || reusedUnread === undefined,
+          interrupted: false,
           unread: reusedUnread ?? [],
         }
       : await (input.t0 ?? runT0)(worktree, {
@@ -3675,9 +3683,9 @@ async function settleFixed(
   /**
    * THIS round's t0 run, as far as its silence goes (`t0SilenceProves`): `interrupted`
    * when an engine was cut short rather than genuinely absent, `unread` for the files
-   * an engine skipped. `interrupted` is never true for a reused-because-
-   * unchanged round, since that reuse only fires when nothing moved and `codeMoved`
-   * below is then false for every finding regardless.
+   * an engine skipped. A reused round's `interrupted` is false because only a finished
+   * run is reused, NOT because nothing can move: D-107's held-diff boundary can move the
+   * worktree later in the same round, which is why its `unread` is carried.
    *
    * Found by lore's own review of the OOM-kill fix, fingerprint dd98f788: this
    * function's own premise comment — "T0 re-scans the whole worktree every round,
