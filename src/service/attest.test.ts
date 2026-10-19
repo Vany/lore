@@ -175,6 +175,19 @@ describe("attest", () => {
     expect(a.line).toContain("3 findings");
     expect(a.line).toContain("2 fixed");
     expect(a.line).toContain("1 justified");
+    expect(a.line, "nothing was left open").not.toContain("left open");
+  });
+
+  // An inherited match does not hold the ladder (D-68), so a pass can carry one open.
+  it("says how many inherited findings a pass left open", async () => {
+    review("passed");
+    store.recordFinding("r1", {
+      fingerprint: "dddd4444", file: "old.ts", severity: "medium", claim: "rule.x: match",
+      evidence: "e", failureScenario: "s", origin: "t0", round: 1, preexisting: true,
+      firstSeen: "2026-08-03T00:00:00.000Z",
+    });
+    const a = await attest(store, "r1", "p", keyPath);
+    expect(a.line).toMatch(/1 findings, 0 fixed, 0 justified, 1 inherited from the repository and left open\.$/);
   });
 
   // It says what was checked. It does not say the code is correct — "our models

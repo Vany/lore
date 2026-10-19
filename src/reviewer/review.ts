@@ -2977,10 +2977,23 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
    * false positive on lore's own test suite.
    */
   const modelRaised = new Set<string>();
+  /**
+   * Raises that belong to the repository, not this branch (D-68) — kept out of what the
+   * LADDER steps on, and only that. They stay in `raisedFingerprints`, so silence never
+   * settles one as fixed; they are recorded, delivered and counted as left open.
+   *
+   * They used to hold the ladder like a branch's own finding, and the only answer lore
+   * accepts is a lore-ok at the site — in a file the branch does not touch. A project that
+   * forbids markers had no answer at all: a review stayed below t2 for days on a semgrep hit
+   * the same repository had raised 26 times, which is a gate measuring the repository's
+   * history instead of the change.
+   */
+  const inheritedRaised = new Set<string>();
 
   for (const { f, origin } of raised) {
     const fp = fingerprint(f);
     raisedFingerprints.add(fp);
+    if (origin === "t0" && inherited(f)) inheritedRaised.add(fp);
     if (origin !== "t0") modelRaised.add(fp);
     // The scope is taken NOW, while the code the finding is about is still the code
     // the tier saw. Without it a later round cannot tell a finding the author fixed
@@ -3373,7 +3386,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   const docsOnly = stillOpen.length > 0 && stillOpen.every((f) => isDoc(f.file));
   const stepped = step({
     state: answered,
-    raised: [...raisedFingerprints],
+    raised: [...raisedFingerprints].filter((fp) => !inheritedRaised.has(fp)),
     tiers,
     needsHuman: store.openConflicts(review.repoId).length > 0,
     // Every member that RAN is billed a round; a skipped sibling is not (D-109).

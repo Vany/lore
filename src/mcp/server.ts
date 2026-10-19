@@ -1144,7 +1144,9 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
                     preexisting_note:
                       "This file is NOT touched by your branch, and the pattern that matched was already " +
                       "there — every other branch gets this finding too. It is real and worth a ticket; it " +
-                      "is not yours to answer here. Fixing it widens this merge; a lore-ok settles it.",
+                      "is not yours to answer here, and it does NOT hold the ladder: the review can pass " +
+                      "with it open, and the attestation says so. Leaving it is a complete answer; a " +
+                      "lore-ok settles it if your project allows one; fixing it widens this merge.",
                   }
                 : {}),
             };

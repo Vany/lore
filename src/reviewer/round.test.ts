@@ -151,6 +151,33 @@ afterEach(() => {
 const TYPE = { ...CODE_ARCH, t0: [] as const };
 
 describe("runRound", () => {
+  // D-68: a pattern match in a file the branch does not touch is the repository's, not this
+  // merge's. It used to hold the ladder like any other finding — and a client whose project
+  // forbids lore-ok markers had no way to answer it, so a review sat below t2 for ever on a
+  // semgrep hit raised 26 times in that repository.
+  describe("an inherited pattern match", () => {
+    const PRE: Finding = { file: "src.txt", line: 1, severity: "medium", claim: "rule.x: dangerous pattern", evidence: "semgrep rule.x at src.txt:1", failureScenario: "s" };
+    const t0For = (f: Finding) => async () => ({
+      findings: [f], outcomes: [{ engine: "semgrep" as const, findings: [f] }], unavailable: [], skipped: [], interrupted: false, unread: [],
+    });
+
+    it("is recorded and reported, and does not hold the ladder", async () => {
+      const reviewer = new ScriptedReviewer([[]]);
+      const result = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: { ...CODE_ARCH, t0: ["semgrep"] as const }, t0: t0For(PRE) });
+
+      expect(store.openFindings("r1").map((f) => [f.file, f.preexisting])).toStrictEqual([["src.txt", true]]);
+      expect(result.decision.kind, "the branch's own reviewer was clean").not.toBe("findings");
+    });
+
+    it("still holds the ladder when the branch touched the file", async () => {
+      const reviewer = new ScriptedReviewer([[]]);
+      const OWN = { ...PRE, file: "src/hold.ts", evidence: "semgrep rule.x at src/hold.ts:1" };
+      const result = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: { ...CODE_ARCH, t0: ["semgrep"] as const }, t0: t0For(OWN) });
+
+      expect(result.decision.kind).toBe("findings");
+    });
+  });
+
   it("records a finding and reports it, resetting the ladder", async () => {
     const reviewer = new ScriptedReviewer([[HOLD_BUG]]);
     const result = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });

@@ -1018,6 +1018,9 @@ lore: reviewed <tree-hash> against this repo's rules and lore's own rules —
 3 tiers, 47 findings, 44 fixed, 3 justified.  [ed25519:<sig>]
 ```
 
+A pass that leaves inherited pattern matches open (D-68: they do not hold the ladder)
+ends `…, 3 justified, 1 inherited from the repository and left open.`
+
 It asserts **what was done**, never that the code is flawless. "Our models stopped
 finding things" does not imply "no defects remain", and the first bug that ships
 behind an overclaiming badge is the one that discredits the whole service.

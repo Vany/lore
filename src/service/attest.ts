@@ -181,7 +181,10 @@ export async function attest(store: Store, reviewId: string, principal: string, 
   const scopedTo = review.reviewPath === undefined ? "" : ` (scoped to ${review.reviewPath})`;
   const line =
     `lore: reviewed tree ${review.treeHash}${scopedTo} against this repo's rules and lore's own — ` +
-    `${scope}, ${counts.raised} findings, ${counts.fixed} fixed, ${counts.justified} justified.`;
+    `${scope}, ${counts.raised} findings, ${counts.fixed} fixed, ${counts.justified} justified` +
+    // A pass can leave inherited pattern matches open (D-68: they do not hold the ladder),
+    // and the signed line is the one place a reader cannot be told so anywhere else.
+    `${counts.inherited > 0 ? `, ${counts.inherited} inherited from the repository and left open` : ""}.`;
 
   const { privateKey, publicKey } = await loadOrCreateKey(keyPath);
   const signature = sign(null, Buffer.from(line, "utf8"), createPrivateKey(privateKey)).toString("base64");
@@ -197,7 +200,7 @@ export function render(a: Attestation): string {
   return `${a.line}  [ed25519:${a.signature}]`;
 }
 
-function tally(store: Store, reviewId: string): { raised: number; fixed: number; justified: number } {
+function tally(store: Store, reviewId: string): { raised: number; fixed: number; justified: number; inherited: number } {
   const total = store.findingCount(reviewId);
   // Counted per FINDING, by its LATEST verdict — the same rule `settledFingerprints`
   // uses. Counting verdict rows was wrong twice over, and the first attestation ever
@@ -214,7 +217,7 @@ function tally(store: Store, reviewId: string): { raised: number; fixed: number;
     if (v.verdict === "fixed") fixed += v.c;
     if (v.verdict === "justified-accepted") justified += v.c;
   }
-  return { raised: total, fixed, justified };
+  return { raised: total, fixed, justified, inherited: store.openFindings(reviewId).filter((f) => f.preexisting === true).length };
 }
 
 function countTiers(store: Store, reviewId: string): number {

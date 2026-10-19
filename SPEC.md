@@ -7506,6 +7506,15 @@ wrong is ordering — a client triaging by severity answered two inherited `high
 pattern matches in test fixtures it had never opened before three `medium` spec
 contradictions in files it had written.
 
+**And it does not hold the ladder.** A `preexisting` raise is recorded, delivered and kept
+out of silence-settling like any other, but it is not among the raises the ladder steps on,
+so a review can pass with one open. The signed attestation then says *"N inherited from the
+repository and left open"*. The only answer lore accepts is a lore-ok at the site, which is
+in a file the branch does not touch. A project that forbids markers therefore had no answer
+at all, and its review stayed below t2 for days on a semgrep hit raised 26 times in that
+repository. A gate that measures the repository's history instead of the change is not
+gating the change.
+
 **Only pattern engines.** semgrep and ast-grep match text that was already there, so
 "outside the diff" really does mean "not this branch". `tsc`, `eslint` and the test
 suite are project-wide: a change here genuinely can break an untouched file, and

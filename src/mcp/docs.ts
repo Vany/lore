@@ -470,7 +470,9 @@ so in the reason, and it counts.
 
 \`preexisting: true\` means the finding is in a file YOUR BRANCH DOES NOT TOUCH and the
 pattern was already there — every other branch gets it too. Real, worth a ticket, not
-yours to answer in this merge. **The list is already ordered with these last**, so do
+yours to answer in this merge — **and it does not hold the ladder**: the review can reach
+\`passed\` with it open, and the signed attestation counts it as "inherited from the repository
+and left open". Tell your user it exists; you do not have to answer it to finish. **The list is already ordered with these last**, so do
 not re-sort by severity alone: an inherited \`high\` is not more urgent than a \`medium\`
 in code you actually wrote. \`history\` never changes \`severity\`: a defect seen six times is not
 less serious for being familiar, and a rule engine that fires every round is still
@@ -486,7 +488,8 @@ have, and they have different answers:
     going to say it.
   * **This check keeps being wrong here.** Look at how the earlier ones were answered.
     If they were justified and accepted every time, you are about to write the same
-    justification again — write it, because that is still the contract, and TELL YOUR
+    justification again — write it, because that is still the contract (a \`preexisting\`
+    one excepted: you may leave that open), and TELL YOUR
     USER the check is misfiring on this repository. lore cannot yet suppress a rule for
     a path, so a person deciding to is the only way this stops.
 
