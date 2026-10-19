@@ -378,6 +378,21 @@ describe("a timed-out sandboxed run is killed explicitly, not left to a signal t
     expect(killCall).toBe(`kill ${nameInRun}`);
   });
 
+  // Every run starts with `rm -f <name>`, so two reviews sharing a name would not queue —
+  // the second would kill the first's container mid-run, and the first would read that as
+  // its own interruption. The name is the review's scratch directory, one per review.
+  it("never gives two reviews' sandboxes the same name", async () => {
+    fakeDockerBinary();
+    const other = join(dir, "rev_other");
+    mkdirSync(other, { recursive: true });
+    await runInSandbox(baseSandbox, dir, cache, scratch, "echo hi", false);
+    await runInSandbox(baseSandbox, dir, cache, other, "echo hi", false);
+    const names = readFileSync(log, "utf8").trim().split("\n")
+      .filter((c) => c.startsWith("run ")).map((c) => c.match(/--name (\S+)/)?.[1]);
+    expect(names).toHaveLength(2);
+    expect(names[0]).not.toBe(names[1]);
+  });
+
   /**
    * AT THE WIRE, because `fanOut` being right is worth nothing if its numbers never reach
    * `docker run` — and this is a list of strings assembled by position, which is the shape
