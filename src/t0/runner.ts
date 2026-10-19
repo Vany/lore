@@ -48,9 +48,21 @@ export interface T0Result {
    * withholds trust from all of T0's silence for it, not just the interrupted
    * engine's. Costs an auto-settle on an unrelated engine only on the rare round
    * something was actually cut short; a permanently unconfigured engine (which
-   * never sets `interrupted`) never pays it.
+   * never sets `interrupted`) never pays it — and neither does a permanently
+   * unparseable file, which is `unread` below rather than this.
    */
   readonly interrupted: boolean;
+  /** Files some engine skipped while finishing its sweep — see `EngineOutcome.unread`. */
+  readonly unread: readonly string[];
+}
+
+/**
+ * Does this t0 run's silence about `file` prove anything? The one answer every reader of
+ * t0's silence uses — settling a fix, telling a session "resolved", carrying a finding as
+ * unconfirmed — so the three cannot disagree about the same finding.
+ */
+export function t0SilenceProves(t0: { readonly interrupted: boolean; readonly unread: readonly string[] }, file: string): boolean {
+  return !t0.interrupted && !t0.unread.includes(file);
 }
 
 export interface T0Options {
@@ -157,6 +169,7 @@ export async function runT0(worktree: string, opts: T0Options): Promise<T0Result
       .map((o) => `${o.engine}: ${o.unavailable ?? ""}`),
     skipped,
     interrupted: outcomes.some((o) => o.interrupted === true),
+    unread: outcomes.flatMap((o) => o.unread ?? []),
   };
 }
 
@@ -1120,8 +1133,8 @@ export function renderT0Delta(prev: readonly SeenT0[], cur: T0Result, fp: (f: Fi
   // drops a still-real finding from its memory only recovers it if t0 happens to
   // re-raise it as though it were new.
   const missing = [...prevBy.values()].filter((p) => !curBy.has(p.fingerprint));
-  const resolved = cur.interrupted ? [] : missing;
-  const unconfirmed = cur.interrupted ? missing : [];
+  const resolved = missing.filter((p) => t0SilenceProves(cur, p.file));
+  const unconfirmed = missing.filter((p) => !t0SilenceProves(cur, p.file));
   const unchanged = cur.findings.length - fresh.length;
 
   if (fresh.length === 0 && resolved.length === 0 && unconfirmed.length === 0) {
@@ -1134,7 +1147,7 @@ export function renderT0Delta(prev: readonly SeenT0[], cur: T0Result, fp: (f: Fi
     parts.push(
       `Deterministic tooling on the new tree: ${String(resolved.length)} resolved, ${String(fresh.length)} new, ` +
         `${String(unchanged)} unchanged` +
-        `${unconfirmed.length === 0 ? "" : `, ${String(unconfirmed.length)} unconfirmed (t0 was interrupted)`}.`,
+        `${unconfirmed.length === 0 ? "" : `, ${String(unconfirmed.length)} unconfirmed (t0 could not re-read them)`}.`,
     );
     for (const p of resolved) {
       parts.push(`  resolved: ${p.file}${p.line !== undefined ? `:${String(p.line)}` : ""} — ${p.claim}`);

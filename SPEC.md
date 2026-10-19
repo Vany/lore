@@ -2349,6 +2349,14 @@ not re-raising.** Two guards make silence mean something, and neither is optiona
   nothing about a finding it might have raised again, and there is no per-finding
   record of which of T0's several engines raised which — so one interrupted engine
   withholds T0's silence from settling anything that round, not only its own.
+  **A file an engine skipped is narrower than that** — semgrep's parse failures:
+  `T0Result.unread` names the file, and T0's silence is withheld from findings in
+  that file alone (`t0SilenceProves`, the one answer `settleFixed`, the kept session's
+  "resolved" and its "unconfirmed" all read). It was round-wide once, and a repository
+  with one permanently unparseable test file then had every T0 round interrupted, so
+  no T0 finding there could ever settle. A parse failure that names no file is still
+  round-wide. The line stays in `checks_skipped` either way, and a round whose only
+  gap is an unread file closes `findings` or `clean`, not `interrupted`.
 - **The code must have MOVED.** A tier that stops mentioning untouched code has
   changed its mind, which is not a fix. The finding's scope is recorded when it is
   raised; absent scope means "cannot tell" and never settles.

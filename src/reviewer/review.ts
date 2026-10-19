@@ -49,8 +49,8 @@ import { detectAndRecord, renderConflicts } from "../knowledge/conflict.ts";
 import { promoteRecurring } from "../knowledge/derive.ts";
 import { relevantTo } from "../knowledge/enrich.ts";
 import { ingestDocs, type IngestResult } from "../knowledge/ingest.ts";
-import { runT0, renderT0, renderT0Delta } from "../t0/runner.ts";
-import { engineRuleClass } from "../t0/engines.ts";
+import { runT0, renderT0, renderT0Delta, t0SilenceProves } from "../t0/runner.ts";
+import { engineRuleClass, unreadFilesOf } from "../t0/engines.ts";
 import type { RecordedFinding, Store } from "../store/store.ts";
 import { emissionOf, type Listed, type ReviewerLike, type ReviewerResult } from "./opencode.ts";
 import { continuedPrompt, reviewPrompt, streamContinue, streamFix, streamPeer, STREAM_CONTRACT } from "./prompts.ts";
@@ -685,6 +685,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     previousT0.treeHash === roundTree &&
     previousT0.unavailableForTier !== undefined &&
     previousT0.engines === engineKey;
+  const reusedUnread = previousT0 === undefined ? [] : unreadFilesOf(previousT0.unavailable);
   let t0;
   try {
     t0 = reuseT0
@@ -702,7 +703,16 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
         // worktree LATER in this same round, after this line runs, moving it past
         // `roundTree` before `settleFixed` reads it. If the tree t0 actually read
         // was itself an interrupted run, that risk is real here too.
-        { findings: [], outcomes: [], skipped: [], unavailable: previousT0.unavailable, interrupted: previousT0.interrupted }
+        {
+          findings: [],
+          outcomes: [],
+          skipped: [],
+          unavailable: previousT0.unavailable,
+          // The files the reused run never parsed, read back from its own lines; a line
+          // naming no file leaves only the round-wide flag (`unreadFilesOf`).
+          interrupted: previousT0.interrupted || reusedUnread === undefined,
+          unread: reusedUnread ?? [],
+        }
       : await (input.t0 ?? runT0)(worktree, {
           engines: type.t0,
           // SCOPED TO WHAT THE BRANCH TOUCHED (D-92). A pattern engine matches one file at
@@ -1012,7 +1022,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   const hold = {
     chain: [] as string[],
     mismatch: undefined as string | undefined,
-    lastT0: t0ForTier as { findings: readonly Finding[]; unavailable: readonly string[]; interrupted: boolean },
+    lastT0: t0ForTier as { findings: readonly Finding[]; unavailable: readonly string[]; interrupted: boolean; unread: readonly string[] },
   };
   const roundFindings: { readonly origin: string; readonly line: string }[] = [];
   let holdLock: Promise<unknown> = Promise.resolve();
@@ -1335,7 +1345,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     // after. The session's memory holds the unchanged findings; re-sending them on every
     // boundary was the cold-start tax paid again in miniature. What was shown is
     // recorded, so the next message diffs against it.
-    const t0Seen = (cur: { findings: readonly Finding[]; unavailable: readonly string[]; interrupted: boolean }): string => {
+    const t0Seen = (cur: { findings: readonly Finding[]; unavailable: readonly string[]; interrupted: boolean; unread: readonly string[] }): string => {
       const prev = store.sessionT0Of(reviewId, member.id, routeKey);
       const shown = cur.findings.map((f) => ({
         fingerprint: fingerprint(f),
@@ -1355,7 +1365,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       // Carried forward exactly the fingerprints `renderT0Delta` is about to call
       // unconfirmed, so the record and the text it produced stay the same claim.
       const curFp = new Set(shown.map((s) => s.fingerprint));
-      const carried = cur.interrupted ? (prev ?? []).filter((p) => !curFp.has(p.fingerprint)) : [];
+      const carried = (prev ?? []).filter((p) => !curFp.has(p.fingerprint) && !t0SilenceProves(cur, p.file));
       store.setSessionT0(reviewId, member.id, routeKey, [...shown, ...carried]);
       return prev === undefined
         ? renderT0(cur as Parameters<typeof renderT0>[0])
@@ -3300,7 +3310,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // boundary keeps current for exactly this purpose (see `t0Seen`, above).
   const fixed = await settleFixed(
     store, reviewId, worktree, tiers, strongest.member, [...open, ...rungFixCandidates], settleRaised, answeredOtherwise, round,
-    hold.lastT0.interrupted,
+    hold.lastT0,
     // lore-ok[6aa59cb5]: found by lore's own review — same reasoning as the
     // rejection/acceptance verdicts a few dozen lines up: `strongest.member.model`
     // is the CONFIGURED model, not necessarily the one that answered.
@@ -3650,8 +3660,9 @@ async function settleFixed(
   answered: ReadonlySet<string>,
   round: number,
   /**
-   * True when THIS round's t0 run had an engine that was interrupted rather than
-   * genuinely absent (`T0Result.interrupted`) — never true for a reused-because-
+   * THIS round's t0 run, as far as its silence goes (`t0SilenceProves`): `interrupted`
+   * when an engine was cut short rather than genuinely absent, `unread` for the files
+   * an engine skipped. `interrupted` is never true for a reused-because-
    * unchanged round, since that reuse only fires when nothing moved and `codeMoved`
    * below is then false for every finding regardless.
    *
@@ -3661,7 +3672,7 @@ async function settleFixed(
    * cut short, and the false `fixed` verdict it would record never expires
    * (`expireStaleVerdicts` only reopens justifications, never a settled fix).
    */
-  t0Interrupted: boolean,
+  t0: { readonly interrupted: boolean; readonly unread: readonly string[] },
   /**
    * The route that actually answered this round, when it differs from `tier.model`
    * — a fallback or a twin keeps the tier's id (`continuity.ts`). `undefined` for
@@ -3681,9 +3692,10 @@ async function settleFixed(
     // t0 was itself interrupted, in which case its silence proves nothing about any
     // t0 finding this round (see the parameter doc above; there is no per-engine
     // record of which finding came from which of t0's several engines, so one
-    // interrupted engine withholds trust from all of t0's silence this round).
+    // interrupted engine withholds trust from all of t0's silence this round) — or
+    // the finding's own file went unread, which withholds it from that file alone.
     const t0Silent = tier.id === "t0" || here >= 0;
-    const qualified = f.origin === "t0" ? t0Silent && !t0Interrupted : here >= 0 && here >= rank(f.origin);
+    const qualified = f.origin === "t0" ? t0Silent && t0SilenceProves(t0, f.file) : here >= 0 && here >= rank(f.origin);
     if (!qualified) continue;
 
     if (!(await codeMoved(worktree, f))) continue;

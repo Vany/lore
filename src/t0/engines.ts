@@ -61,6 +61,20 @@ export interface EngineOutcome {
    * know whether THIS round's silence means anything read this, not `unavailable`.
    */
   readonly interrupted?: boolean;
+  /**
+   * Repo-relative files this engine skipped while finishing the rest of its sweep —
+   * semgrep's parse failures. Its silence about THESE files proves nothing; about every
+   * other file it is as good as a clean run.
+   *
+   * Kept apart from `interrupted` because the two differ in scope, and the scope is what
+   * mattered: a parse failure used to set `interrupted`, which withholds trust from ALL of
+   * t0's silence for the round. A repository with one permanently unparseable test file
+   * then had every t0 round interrupted for the life of the review, so no t0 finding could
+   * ever settle — among them a high "dependencies do not install" raised while the sandbox
+   * image was missing, which held a review below t2 for days after the image was rebuilt.
+   * Read through `t0SilenceProves` (runner.ts), never directly.
+   */
+  readonly unread?: readonly string[];
 }
 
 const cap = (s: string, n: number): string => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
@@ -863,21 +877,45 @@ interface SemgrepError {
  * semgrep answered `results: [], errors: [PartialParsing]`, and lore would have called
  * that clean — which is the same shape as the report, arrived at by accident.
  */
-function semgrepUnread(errors: readonly SemgrepError[]): readonly string[] {
+function semgrepUnread(errors: readonly SemgrepError[], worktree: string): readonly string[] {
   const byFile = new Map<string, string>();
   for (const e of errors) {
     const kind = Array.isArray(e.type) ? String(e.type[0] ?? "") : String(e.type ?? "");
     // Parse failures only. A rule that could not be fetched is a different problem and
     // semgrep already fails loudly for it; this is about code that was silently skipped.
     if (!/Parsing|Lexical|Syntax/i.test(kind)) continue;
-    const file = e.path ?? "(unknown file)";
+    const file = e.path === undefined ? UNKNOWN_FILE : relativise(worktree, e.path);
     if (!byFile.has(file)) byFile.set(file, kind);
   }
-  return [...byFile].map(
-    ([file, kind]) =>
-      `semgrep could not parse ${file} (${kind}) — it was SKIPPED, not found clean. Anything in it is ` +
-      "unexamined by every semgrep rule.",
-  );
+  return [...byFile].map(([file, kind]) => `${UNREAD_HEAD}${file} (${kind})${UNREAD_TAIL}`);
+}
+
+const UNREAD_HEAD = "semgrep could not parse ";
+const UNREAD_TAIL = " — it was SKIPPED, not found clean. Anything in it is unexamined by every semgrep rule.";
+const UNKNOWN_FILE = "(unknown file)";
+
+/**
+ * The files named by `semgrepUnread`'s lines, read back out of them — or `undefined` when
+ * one of them names no file, which leaves nothing narrower to withhold trust from than
+ * the whole round.
+ *
+ * Read back rather than stored beside the text because the text is what the store keeps:
+ * a round that REUSES the previous t0 run (same tree, same engines) has only that run's
+ * `unavailable` lines, and a fix applied later in that round must still not settle a
+ * finding in a file the reused run never parsed. Prefixed lines (`semgrep: …`, as
+ * `runT0` writes them) and lines from other engines are both fine to pass in.
+ */
+export function unreadFilesOf(lines: readonly string[]): readonly string[] | undefined {
+  const files: string[] = [];
+  for (const line of lines) {
+    const at = line.indexOf(UNREAD_HEAD);
+    if (at < 0 || !line.endsWith(UNREAD_TAIL)) continue;
+    // The kind is the LAST parenthesis before the tail — a file name may hold one too.
+    const named = line.slice(at + UNREAD_HEAD.length, line.length - UNREAD_TAIL.length).replace(/ \([^()]*\)$/, "");
+    if (named === UNKNOWN_FILE) return undefined;
+    files.push(named);
+  }
+  return files;
 }
 
 async function semgrep(worktree: string, scope?: Scope): Promise<EngineOutcome> {
@@ -913,35 +951,20 @@ async function semgrep(worktree: string, scope?: Scope): Promise<EngineOutcome> 
     return { engine: "semgrep", findings: [], unavailable: "semgrep produced unparseable output" };
   }
   const { findings, unread } = parsed;
-  // `interrupted: unread.length > 0` — a file semgrep could not parse is a site it
-  // did not finish reading, the same fact `interrupted`'s own doc comment names
-  // for a kill or a timeout, and `parseSemgrep`'s own comment already says so
-  // ("the same fact"). Without it, `settleFixed`/`renderT0Delta` (both gate on
-  // `interrupted`, never on `unavailable`) treated this round's silence about the
-  // skipped file as proof any finding there was fixed — the exact false-resolved
-  // claim the OOM-kill fix (fingerprints dd98f788/4a39ae0d) exists to prevent, for
-  // a second way a file can go unread. Found by lore's own review, fingerprint
-  // 3acaef31.
-  //
-  // lore-ok[f30f0b2f]: real cost, correctly reused mechanism, not fixed here. A
-  // permanently-unparseable file (checked-in minified vendor code) makes this
-  // TRUE on every round for the life of that review, not the "rare round" T0Result
-  // .interrupted's own doc prices — round-level is `interrupted`'s EXISTING
-  // architecture (`runT0`'s `outcomes.some(...)`, already true for a rare OOM/
-  // timeout before this fix ever touched semgrep), and this fix correctly reuses
-  // it rather than inventing a second mechanism; what changed is FREQUENCY, not
-  // correctness — a stable fact now trips a flag priced for a transient one. A
-  // real fix needs one of two bigger changes than this finding's own severity
-  // (low) warrants rushing: per-finding rather than round-level interrupted
-  // tracking, or persisting which files were ALREADY known-unparseable last round
-  // so an unchanged set stops re-tripping it. Both are real future work; neither
-  // is a same-round patch I am confident enough in to ship blind. The cost is
-  // real but SAFE — more manual settling, never a false auto-settle — which is
-  // the same trade every other `interrupted` cause in this file already makes.
+  // A file semgrep could not parse is a site it did not read, so its silence about that
+  // file must not settle a finding there or tell a session the finding "resolved" — the
+  // false-fixed claim the OOM-kill guard exists to prevent, for a second way a file goes
+  // unread. Said as `unread` (the file), not `interrupted` (the round): see
+  // `EngineOutcome.unread` for what the round-wide version cost.
+  if (unread.length === 0) return { engine: "semgrep", findings };
+  const files = unreadFilesOf(unread);
   return {
     engine: "semgrep",
     findings,
-    ...(unread.length === 0 ? {} : { unavailable: unread.join("\n"), interrupted: true }),
+    unavailable: unread.join("\n"),
+    // A parse failure that names no file could be any file: the round-level flag is all
+    // that is left. Every other one narrows the doubt to the file it names.
+    ...(files === undefined ? { interrupted: true } : { unread: files }),
   };
 }
 
@@ -961,7 +984,7 @@ export function parseSemgrep(
   if (parsed === undefined) return undefined;
   // WHAT IT COULD NOT READ, in the same channel as an engine that could not run — because
   // it is the same fact. See `semgrepUnread`.
-  const unread = semgrepUnread(parsed.errors ?? []);
+  const unread = semgrepUnread(parsed.errors ?? [], worktree);
 
   const findings: Finding[] = [];
   for (const { match: res, file, lines } of bySite(parsed.results ?? [], (r) => ({

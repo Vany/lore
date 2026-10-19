@@ -621,7 +621,7 @@ describe("runRound", () => {
     const SLOW_T0_MS = 25;
     const slow: NonNullable<Parameters<typeof runRound>[0]["t0"]> = async () => {
       await new Promise((r) => setTimeout(r, SLOW_T0_MS));
-      return { findings: [], outcomes: [], unavailable: [], skipped: [], interrupted: false };
+      return { findings: [], outcomes: [], unavailable: [], skipped: [], interrupted: false, unread: [] };
     };
 
     const entered = Date.now();
@@ -906,8 +906,8 @@ describe("runRound", () => {
       const t0 = async () => {
         call++;
         return call === 1
-          ? { findings: [T0_BUG], outcomes: [], unavailable: [], skipped: [], interrupted: false }
-          : { findings: [], outcomes: [], unavailable: ["tsc: killed"], skipped: [], interrupted: true };
+          ? { findings: [T0_BUG], outcomes: [], unavailable: [], skipped: [], interrupted: false, unread: [] }
+          : { findings: [], outcomes: [], unavailable: ["tsc: killed"], skipped: [], interrupted: true, unread: [] };
       };
       const type = { ...CODE_ARCH, t0: ["tsc"] as const };
       const reviewer = new ScriptedReviewer([[], []]);
@@ -918,6 +918,48 @@ describe("runRound", () => {
       const after = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type, t0 });
 
       expect(after.fixed, "an interrupted round's silence must not settle a t0 finding").not.toContain(fingerprint(T0_BUG));
+      expect(store.openFindings("r1").map((f) => f.fingerprint)).toContain(fingerprint(T0_BUG));
+    });
+
+    // A file semgrep could not parse is unknown; every other file it read is not. On a
+    // repository with a permanently unparseable test file, a round-level gate kept every
+    // t0 finding open for the life of the review — a stale one on package.json included.
+    it("settles a t0 finding in a file that was read, while another file went unread", async () => {
+      const T0_BUG: Finding = { ...HOLD_BUG, claim: "t0 found a real defect here" };
+      let call = 0;
+      const t0 = async () => {
+        call++;
+        return call === 1
+          ? { findings: [T0_BUG], outcomes: [], unavailable: [], skipped: [], interrupted: false, unread: [] }
+          : { findings: [], outcomes: [], unavailable: ["semgrep: could not parse src/other.tsx"], skipped: [], interrupted: false, unread: ["src/other.tsx"] };
+      };
+      const type = { ...CODE_ARCH, t0: ["semgrep"] as const };
+      const reviewer = new ScriptedReviewer([[], []]);
+
+      await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type, t0 });
+      fix();
+      const after = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type, t0 });
+
+      expect(after.fixed).toContain(fingerprint(T0_BUG));
+    });
+
+    it("does not settle a t0 finding in the file that went unread", async () => {
+      const T0_BUG: Finding = { ...HOLD_BUG, claim: "t0 found a real defect here" };
+      let call = 0;
+      const t0 = async () => {
+        call++;
+        return call === 1
+          ? { findings: [T0_BUG], outcomes: [], unavailable: [], skipped: [], interrupted: false, unread: [] }
+          : { findings: [], outcomes: [], unavailable: ["semgrep: could not parse src/hold.ts"], skipped: [], interrupted: false, unread: ["src/hold.ts"] };
+      };
+      const type = { ...CODE_ARCH, t0: ["semgrep"] as const };
+      const reviewer = new ScriptedReviewer([[], []]);
+
+      await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type, t0 });
+      fix();
+      const after = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type, t0 });
+
+      expect(after.fixed, "silence about a file nobody read proves nothing").not.toContain(fingerprint(T0_BUG));
       expect(store.openFindings("r1").map((f) => f.fingerprint)).toContain(fingerprint(T0_BUG));
     });
   });
@@ -1735,7 +1777,7 @@ describe("t0 on a tree that has not moved", () => {
   /** Counts how many times the engines were actually asked to run. */
   const countingT0 = (calls: { n: number }) => async () => {
     calls.n++;
-    return { findings: [], outcomes: [], unavailable: ["eslint: no config"], skipped: [], interrupted: false };
+    return { findings: [], outcomes: [], unavailable: ["eslint: no config"], skipped: [], interrupted: false, unread: [] };
   };
 
   it("runs once and is reused while the tree is unchanged", async () => {
@@ -3680,7 +3722,7 @@ describe("a streamed tier-run", () => {
     // AND the boundary — so the test isolates whether the BOUNDARY filters it, rather
     // than passing for the unrelated reason that it was only ever read once.
     const SUPPRESSED: Finding = { ...HOLD_BUG, claim: "some.engine.rule: a rule this project has appealed away" };
-    const t0 = async () => ({ findings: [SUPPRESSED], outcomes: [], skipped: [], unavailable: [], interrupted: false });
+    const t0 = async () => ({ findings: [SUPPRESSED], outcomes: [], skipped: [], unavailable: [], interrupted: false, unread: [] });
     const reviewer = new Streaming([emission([HOLD_BUG]), DONE]);
 
     const file = join(dir, "src/hold.ts");
@@ -3731,7 +3773,7 @@ describe("a streamed tier-run", () => {
     let boundaryFiles: readonly string[] | undefined;
     const t0: NonNullable<Parameters<typeof runRound>[0]["t0"]> = async (_worktree, opts) => {
       boundaryFiles = opts.files;
-      return { findings: [], outcomes: [], skipped: [], unavailable: [], interrupted: false };
+      return { findings: [], outcomes: [], skipped: [], unavailable: [], interrupted: false, unread: [] };
     };
     const reviewer = new Streaming([emission([HOLD_BUG]), DONE]);
 
@@ -3770,8 +3812,8 @@ describe("a streamed tier-run", () => {
       // THIS review. The boundary's re-run, after the held fix lands, is the first time
       // it does — the scenario this fix exists for.
       return call === 1
-        ? { findings: [], outcomes: [], skipped: [], unavailable: [], interrupted: false }
-        : { findings: [SUPPRESSED], outcomes: [], skipped: [], unavailable: [], interrupted: false };
+        ? { findings: [], outcomes: [], skipped: [], unavailable: [], interrupted: false, unread: [] }
+        : { findings: [SUPPRESSED], outcomes: [], skipped: [], unavailable: [], interrupted: false, unread: [] };
     };
     const reviewer = new Streaming([emission([HOLD_BUG]), DONE]);
 

@@ -7,7 +7,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { scopePaths, detect, engineRuleClass, parseCargoJson, parseEslint, parseSemgrep, parseTsc, ruleClaim, runEngine } from "./engines.ts";
+import { scopePaths, detect, engineRuleClass, parseCargoJson, parseEslint, parseSemgrep, parseTsc, ruleClaim, runEngine, unreadFilesOf } from "./engines.ts";
 import { fingerprint } from "../core/fingerprint.ts";
 import type { Finding } from "../core/finding.ts";
 
@@ -561,6 +561,51 @@ describe("a file semgrep could not read", () => {
       errors: [{ level: "warn", type: ["Timeout", []], path: "big.ts", message: "timed out" }],
     });
     expect(semgrepUnread(out)).toStrictEqual([]);
+  });
+
+  // A reused t0 run has only its stored lines, so the files must come back out of them.
+  it("reads the files back out of its own lines, and gives up on one that names none", () => {
+    const out = (paths: readonly (string | undefined)[]) =>
+      JSON.stringify({
+        results: [],
+        errors: paths.map((path) => ({ level: "warn", type: ["PartialParsing", []], ...(path === undefined ? {} : { path }), message: "x" })),
+      });
+    const lines = semgrepUnread(out(["/w/app/a (1).tsx", "b.ts"])).map((l) => `semgrep: ${l}`);
+    expect(unreadFilesOf([...lines, "tsc: not configured"])).toStrictEqual(["app/a (1).tsx", "b.ts"]);
+    expect(unreadFilesOf(semgrepUnread(out([undefined])))).toBeUndefined();
+  });
+
+  // A file semgrep cannot parse is a fact about THAT FILE. It used to mark the whole t0
+  // round interrupted, and a repository with a permanently unparseable test file had every
+  // t0 round interrupted for ever: no t0 finding there could settle, a stale one included,
+  // and a review sat behind it with nothing able to move it.
+  describe("through the real engine call", () => {
+    let dir: string;
+    let bin: string;
+    const PATH = process.env["PATH"];
+    beforeEach(() => {
+      dir = mkdtempSync(join(tmpdir(), "lore-semgrep-"));
+      bin = mkdtempSync(join(tmpdir(), "lore-semgrep-bin-"));
+      const out = JSON.stringify({
+        results: [],
+        errors: [{ code: 3, level: "warn", type: ["PartialParsing", []], path: "app/layout.tsx", message: "Syntax error" }],
+      });
+      writeFileSync(join(bin, "semgrep"), `#!/bin/sh\ncat <<'EOF'\n${out}\nEOF\n`);
+      chmodSync(join(bin, "semgrep"), 0o755);
+      process.env["PATH"] = `${bin}:${PATH ?? ""}`;
+    });
+    afterEach(() => {
+      process.env["PATH"] = PATH;
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(bin, { recursive: true, force: true });
+    });
+
+    it("names the unread file instead of interrupting the round", async () => {
+      const out = await runEngine(dir, "semgrep");
+      expect(out.unread, "the file is what is unknown").toStrictEqual(["app/layout.tsx"]);
+      expect(out.unavailable, "and it is still said").toMatch(/app\/layout\.tsx.*SKIPPED/);
+      expect(out.interrupted, "the rest of the sweep finished").toBeUndefined();
+    });
   });
 });
 
