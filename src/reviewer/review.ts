@@ -32,6 +32,7 @@ import {
 } from "../core/ladder.ts";
 import type { Finding } from "../core/finding.ts";
 import { fingerprint } from "../core/fingerprint.ts";
+import { ContestLedger, rule } from "../core/contest-ledger.ts";
 import { parseLoreOk } from "../core/lore-ok.ts";
 import { decidedByPersonOrClock, isTerminal, type ReviewState } from "../core/review-state.ts";
 import type { ReviewType } from "../core/review-type.ts";
@@ -224,6 +225,14 @@ export const MAX_EMISSIONS = 32;
  * clean result (INV-1), exactly as the emission cap already does.
  */
 export const MAX_RUN_MS = 90 * 60_000;
+
+/**
+ * Re-runs of a dead member, per REVIEW, spent to get a ruling only it may give (D-159).
+ * Two: the figure in the brief Vany delegated (2026-10-20). One more ask heals a transient
+ * fault; a plan that is out is out for hours, and asking it every round would only spend.
+ * Past it the answer stays unruled, and the client is told it needs a person.
+ */
+export const MAX_REASKS = 2;
 
 /**
  * A fault about the ROUTE, not about the model or the code — the only kind that
@@ -1066,8 +1075,6 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
      * neither, and its justification was ratified by the fallback's silence (D-159).
      */
     readonly emitted: readonly Emission[];
-    readonly fixCandidates: readonly RecordedFinding[];
-    readonly preFixEmitted: readonly string[];
     readonly heldMismatch: string | undefined;
   }
   interface MemberSkipped {
@@ -1083,10 +1090,33 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
      * and the survivors' silence accepted the justification it had just refused (D-159).
      */
     readonly emitted: readonly Emission[];
-    readonly fixCandidates: readonly RecordedFinding[];
-    readonly preFixEmitted: readonly string[];
+    /** What it recorded as new before it died — a candidate for settling like any other. */
+    readonly streamed: readonly RecordedFinding[];
   }
   type MemberOutcome = MemberRan | MemberSkipped;
+
+  // THE ROUND'S ONE CONTEST LEDGER (D-159): every member, every route, every pass, one
+  // clock. Persisted as it happens; `rule()` over it is the only answer to "contested or
+  // settled". `raiseOf` keeps each emission's own text, because a refusal quotes the raise
+  // that made it and the stored finding keeps its FIRST raise's words (D-56).
+  const ledger = new ContestLedger((e) => store.recordContestEvent(reviewId, review.ladder.round + 1, e));
+  const raiseOf = new Map<number, Finding>();
+  const rankOf = (id: string) => tierRank(tiers, id);
+  const memberIds = members.map((m) => m.id);
+  /**
+   * One run's ending, on the ledger. A batch member's findings are its emissions: it has no
+   * boundaries, so they are recorded here, once, and stand (no fix was shown after them). A
+   * streamed member's are already on the ledger, emission by emission.
+   */
+  const endRun = (o: MemberOutcome, how: "done" | "skipped" | "gave-up"): void => {
+    if (o.kind === "ok" && o.emitted.length === 0) {
+      const route = o.fellBackTo ?? o.chosenRoute ?? o.member.model;
+      for (const f of o.result.findings) {
+        raiseOf.set(ledger.record({ kind: "emit", member: o.member.id, fingerprint: fingerprint(f), route }).seq, f);
+      }
+    }
+    ledger.record({ kind: "ended", member: o.member.id, how });
+  };
 
   // `pinRoute` is the catch-up pass pinning a member to the route it just ran on: the
   // session being caught up lives under that route's key, and letting a pool re-roll
@@ -1212,69 +1242,11 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // ends when the model DECLARES the tree examined — never by silence (INV-1).
   const streamed: RecordedFinding[] = [];
   const emitted: Emission[] = [];
-  /**
-   * WHEN each fingerprint was last emitted and when the last fix landed, on ONE clock for
-   * the whole member — every route it ran on, a run that died included.
-   *
-   * These were per-run and read at the end of `streamRun`, which a run that loses its
-   * route never reaches. A primary that re-raised a finding before a fix landed and then
-   * died left that re-raise in `emitted` but never released it, so its twin's qualified
-   * silence after the fix could not settle what the fix fixed. Per-run maps would be wrong
-   * the other way: the dead run's "pre-fix" would release a finding its twin raised again
-   * after the fix. One clock answers the only question asked — was this member's LAST word
-   * on the finding before the last fix it saw?
-   */
-  const lastEmittedAt = new Map<string, number>();
-  let lastApplyAt = -1;
-  let clock = 0;
   let heldMismatch: string | undefined;
-  /**
-   * Findings whose LAST emission came before the last applied fix, for the settle pass.
-   *
-   * Raised by lore's own review of this change: a finding emitted at iteration N and
-   * fixed by the held diff at that same boundary is in NEITHER set the settle pass
-   * reads — not in `open` (it did not exist when the round began) and present in
-   * `raised` (from the pre-fix emission) — so the model's qualified silence after the
-   * fix could never settle it this round, and the client re-fixed what it had fixed.
-   * These are handed to the settle pass as open-and-unraised; every other guard there
-   * (qualification, code moved) still applies.
-   */
-  const fixCandidates: RecordedFinding[] = [];
-  /** Every fingerprint emitted at or before the member's last-seen fix — see the
-   * collection site where the member returns for why re-raises belong here too. */
-  const preFixEmitted: string[] = [];
-  /**
-   * ONCE per member, before it returns either way, on the member's one clock — so a run
-   * that died is counted, and a later route's re-raise is later.
-   * lore-ok[e4d4dc34]: fixed here; see `lastEmittedAt`.
-   * lore-ok[70f507d3]: fixed — the skipped returns call this too and carry `emitted`.
-   */
-  const collectPreFix = (): void => {
-    if (lastApplyAt < 0) return;
-    for (const rec of streamed) {
-      const at = lastEmittedAt.get(rec.fingerprint);
-      // Emitted at or before the boundary where the last fix landed, and never again
-      // after it: the model saw the fix and stayed silent, which is the qualified
-      // silence D-56 settles on — once the settle pass is allowed to see it.
-      if (at !== undefined && at <= lastApplyAt) fixCandidates.push(rec);
-    }
-    // EVERY pre-fix emission, not only the newly recorded ones. A RE-RAISE of an
-    // already-open finding in the turn whose boundary applied the fix is in `open`
-    // already — what it needs is release from `settleRaised`, or the model's
-    // qualified post-fix silence can never settle the very thing the fix fixed and
-    // the client is nagged about a finding it answered.
-    for (const [fp, at] of lastEmittedAt) {
-      if (at <= lastApplyAt) preFixEmitted.push(fp);
-    }
-  };
-  // lore-ok[86f5f5d2]: real, and fixed at the collection site where the member
-  // returns rather than here: every fingerprint emitted at or before the member's
-  // last-seen fix — re-raises of already-open findings included, which is what this
-  // function alone could not see — enters `preFixEmitted`, and the merge releases them
-  // from `settleRaised` so the model's post-fix silence can settle what the fix fixed.
   const recordStreamed = async (f: Finding, route: string | undefined): Promise<void> => {
     emitted.push({ finding: f, route });
     const fp = fingerprint(f);
+    raiseOf.set(ledger.record({ kind: "emit", member: member.id, fingerprint: fp, route }).seq, f);
     // The scope read can race a sibling's boundary apply on the shared worktree: worst
     // case is a hunk hashed mid-patch, which the next re-raise refreshes. Chosen over
     // holding the lock for every emission, which would serialise the rung.
@@ -1392,6 +1364,10 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     const sessionSaw = store.sessionTreeOf(reviewId, member.id, routeKey);
     let continued = streamContinue();
     if (sessionSaw !== undefined && sessionSaw !== nowTree) {
+      // The opener shows a fix too — a catch-up run's whole reason to exist. Recorded on the
+      // same clock as every boundary: a pass that opened on fix 2 and raised a finding again
+      // stands, whatever an earlier pass said before fix 1 (D-159).
+      ledger.record({ kind: "saw-fix", member: member.id });
       continued = streamFix({
         diff: await treeDelta(worktree, sessionSaw, nowTree),
         // THE TREE'S t0 AS IT STANDS, never the round-start snapshot. `t0ForTier` was
@@ -1424,7 +1400,6 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     /** Set when the wall clock, not the model, ended the run — see `MAX_RUN_MS`. */
     let outOfTime = false;
     for (let i = 0; i < MAX_EMISSIONS; i++) {
-      const tick = clock++;
       // THE RUN'S OWN CLOCK, checked at the boundary rather than inside a call, so a
       // turn is never abandoned half-spent — the same discipline the round-boundary
       // spend ceiling uses. Breaking here rather than throwing keeps everything the
@@ -1501,7 +1476,6 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       for (const f of res.items) {
         agg.findings.push(f);
         await recordStreamed(f, route.model);
-        lastEmittedAt.set(fingerprint(f), tick);
       }
       if (flag.done) { done = true; break; }
 
@@ -1570,7 +1544,9 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
         .map((x) => x.line);
       seenPeers = roundFindings.length;
       if (unseenFixes.length > 0) {
-        lastApplyAt = tick;
+        // Shown a fix, on the round's one clock: what this member raised BEFORE this point
+        // and never again after it is its qualified silence about the fix (D-56, D-159).
+        ledger.record({ kind: "saw-fix", member: member.id });
         continued = streamFix({
           diff: unseenFixes.join("\n"),
           t0: t0Seen(hold.lastT0),
@@ -2646,13 +2622,12 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       // The MERGE below marks the tier unavailable and moves the ladder — with a rung, a
       // sibling may have answered, and stepping the ladder from inside one member's catch
       // would write a decision over a round the other member is still in (D-109).
-      collectPreFix();
       return {
         kind: "skipped",
         member,
         error: e instanceof Error ? e : new Error(String(e)),
         note: `${member.id}: ${e instanceof Error ? e.message : String(e)}`,
-        emitted, fixCandidates, preFixEmitted,
+        emitted, streamed,
       };
     }
     // A tier nobody can pay for, or whose window cannot hold the diff, is a limitation
@@ -2662,8 +2637,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     // "something else" may be a sibling whose call is still in flight.
     if (!(e instanceof TierUnavailable)) throw e;
 
-    collectPreFix();
-    return { kind: "skipped", member, error: e, note: `${member.id}: ${e.message}`, emitted, fixCandidates, preFixEmitted };
+    return { kind: "skipped", member, error: e, note: `${member.id}: ${e.message}`, emitted, streamed };
   }
 
   // PER-ROUND, not the kept session's running total — see `perRoundUsage`, fingerprints
@@ -2701,8 +2675,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     outcome: result.retried ? "ok-after-retry" : "ok",
   });
 
-  collectPreFix();
-  return { kind: "ok", member, tierRunId, result, fellBackTo, chosenRoute, streamed, emitted, fixCandidates, preFixEmitted, heldMismatch };
+  return { kind: "ok", member, tierRunId, result, fellBackTo, chosenRoute, streamed, emitted, heldMismatch };
   };
 
   // ─── THE RUNG RUNS — every member at once (D-109) ──────────────────────────────────
@@ -2730,6 +2703,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     return results.map((s) => (s as PromiseFulfilledResult<MemberOutcome>).value);
   };
   let outcomes = await settleRung(members.map((m) => ({ member: m })));
+  for (const o of outcomes) endRun(o, o.kind === "ok" ? "done" : "skipped");
 
   // NO MEMBER LEAVES THE ROUND BEHIND THE TREE (D-109, raised by lore's own t2 as its
   // highest finding on this change). A member that declares done early never reaches
@@ -2782,18 +2756,12 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
         return { member: o.member, ...(pin === undefined ? {} : { pin }) };
       }),
     );
-    // WHAT A LATER PASS SAID, kept whichever way it ended (D-159). A catch-up that
-    // re-raised a pending finding and then died was dropped here whole, and the first
-    // pass's silence accepted the justification it had refused.
-    // lore-ok[7d6174bf]: fixed here — the skipped branch keeps the catch-up's emissions.
+    // WHAT A LATER PASS SAID, kept whichever way it ended (D-159): its emissions are on the
+    // ledger already, on the same clock as the first pass's, and its ending goes there too.
+    for (const fresh of again) endRun(fresh, fresh.kind === "ok" ? "done" : "gave-up");
     const laterPass = (o: MemberRan, fresh: MemberOutcome) => ({
       emitted: [...o.emitted, ...fresh.emitted],
-      fixCandidates: [...o.fixCandidates, ...fresh.fixCandidates],
-      // lore-ok[d1839d30]: real and NOT fixed here — SPEC D-159 [OPEN]. Each pass keeps
-      // its own clock, so a first pass's "said before the fix" still releases a finding a
-      // catch-up raised again after a later fix. Concatenation is the old behaviour,
-      // unchanged; the fix is one emission record per member across passes.
-      preFixEmitted: [...o.preFixEmitted, ...fresh.preFixEmitted],
+      streamed: [...o.streamed, ...fresh.streamed],
     });
     outcomes = outcomes.map((o) => {
       if (o.kind !== "ok") return o;
@@ -2807,7 +2775,6 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       return {
         ...fresh,
         result: { ...fresh.result, findings: [...o.result.findings, ...fresh.result.findings] },
-        streamed: [...o.streamed, ...fresh.streamed],
         ...laterPass(o, fresh),
       };
     });
@@ -2823,19 +2790,125 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // no pass 9. Reported instead of silently reached past — the caller (worker.ts)
   // requeues on it exactly as it already does for an unconsumed hold, rather than a
   // verdict settling `passed`/`passed_thin_ladder` over a tree not everyone actually read.
+  // RE-ASK A MEMBER WHOSE SILENCE WAS NEEDED AND WHO DIED (D-159). The ledger answers
+  // UNKNOWN when no member at or above a finding's tier finished — and unknown is never
+  // accepted: a weaker member's silence does not answer a stronger tier's question. A rung
+  // whose members ALL died is the same case for everything it had pending. So the dead
+  // members are run once more, here in the round: a skipped member is marked unavailable for
+  // the rest of the review, and a later round would never ask it at all.
+  //
+  // Capped per REVIEW, not per round (`MAX_REASKS`): each is paid model time, and a provider
+  // that is out stays out — the cap is what stops a plan that is down from being asked
+  // every round. Past it the answer stays unruled and the client is told to get a person.
+  let reasks = review.ladder.reasks ?? 0;
+  {
+    const now = rule(ledger.events, memberIds, rankOf);
+    const need = new Set<string>();
+    // An all-skipped rung is re-run only when it has something to RULE on — a pending answer,
+    // or an emission a dead member made. A re-ask exists to obtain a ruling; re-running a rung
+    // with nothing pending would be a plain retry, which `skip_if_quota` exists to forbid.
+    const somethingToRule = pending.length > 0 || ledger.events.some((e) => e.kind === "emit");
+    if (somethingToRule && outcomes.every((o) => o.kind === "skipped")) for (const o of outcomes) need.add(o.member.id);
+    for (const p of pending) {
+      if (now.contested.has(p.finding.fingerprint)) continue;
+      const a = now.acceptance(rankOf(p.finding.origin));
+      if (a.kind === "unknown") for (const id of a.reask) need.add(id);
+    }
+    const again = members.filter((m) => need.has(m.id) && outcomes.some((o) => o.member.id === m.id && o.kind === "skipped"));
+    if (again.length > 0 && reasks < MAX_REASKS) {
+      reasks++;
+      const fresh = await settleRung(again.map((m) => ({ member: m })));
+      for (const f of fresh) endRun(f, f.kind === "ok" ? "done" : "skipped");
+      outcomes = outcomes.map((o) => {
+        const f = fresh.find((n) => n.member.id === o.member.id);
+        if (f === undefined) return o;
+        // What the dead run emitted still counts: it is on the ledger, and its records join
+        // the fresh run's so they can be settled like any other this round.
+        return { ...f, emitted: [...o.emitted, ...f.emitted], streamed: [...o.streamed, ...f.streamed] };
+      });
+    }
+  }
   const rungStillStale = staleMembers(await treeHash(worktree)).length > 0;
   const ranMembers = outcomes.filter((o): o is MemberRan => o.kind === "ok");
   const skippedMembers = outcomes.filter((o): o is MemberSkipped => o.kind === "skipped");
+  const round = review.ladder.round + 1;
+
+  // THE RULING (D-159) — the one answer to "contested or settled", over every member, route
+  // and pass on one clock. Every reader below asks it; none keeps a set of its own.
+  const ruling = rule(ledger.events, memberIds, rankOf);
+  const rejected: string[] = [];
+  /** Answers no member entitled to rule on them could read — held, never accepted. */
+  const unruled: string[] = [];
+  /**
+   * A refusal: a model raised it again after reading the answer, a member that then died
+   * included. It quotes the raise — the stored finding keeps its first raise's words — and
+   * names who made it (D-10: the tier that asked).
+   */
+  const refuse = (p: (typeof pending)[number]): void => {
+    const by = ruling.lastRaise(p.finding.fingerprint);
+    const raise = by === undefined ? undefined : raiseOf.get(by.seq);
+    // The ledger and `raiseOf` are written in the same call, so a contest always has a raise
+    // to quote. If it ever does not, recording a refusal with no reason is the defect D-159
+    // exists to end — so this throws instead.
+    if (by === undefined || raise === undefined) {
+      throw new Error(`lore bug: ${p.finding.fingerprint.slice(0, 8)} was contested but no raise was kept to quote`);
+    }
+    const why = `${by.member} raised this again after reading your answer: ${raise.evidence} — ${raise.failureScenario}`;
+    store.recordVerdict(reviewId, {
+      fingerprint: p.finding.fingerprint,
+      verdict: "justified-rejected",
+      rationale: `${why}. The answer it refused: ${p.reason}`,
+      scope: undefined,
+      tier: by.member,
+      // The route that spoke, which on a fallback is not the tier's configured model.
+      model: by.route ?? tiers.find((t) => t.id === by.member)?.model,
+      round,
+    });
+    rejected.push(p.finding.fingerprint);
+    // HANDED BACK. The finding was delivered when first raised, so a refusal added nothing to
+    // the next poll and the round that made it read as a round that did nothing.
+    store.markUndelivered(reviewId, p.finding.fingerprint);
+  };
+  /**
+   * UNKNOWN is never accepted (D-159): no member at or above the tier that raised it
+   * finished, so nobody entitled to rule read the answer. Recorded so the client is told who
+   * did not finish — and handed back, because that is news it must act on.
+   */
+  const holdUnruled = (p: (typeof pending)[number], why: string): void => {
+    const spent = reasks >= MAX_REASKS;
+    store.recordVerdict(reviewId, {
+      fingerprint: p.finding.fingerprint,
+      verdict: "justified-unruled",
+      rationale:
+        `not ruled: ${why}. lore re-asked ${String(reasks)} of ${String(MAX_REASKS)} times this review` +
+        (spent
+          ? " and will not again — this needs a PERSON: tell your user that the tier entitled to rule could not, and let them decide (wait and restart the review, or change the code)."
+          : "; the next round asks again."),
+      scope: undefined,
+      tier: undefined,
+      round,
+    });
+    unruled.push(p.finding.fingerprint);
+    store.markUndelivered(reviewId, p.finding.fingerprint);
+  };
 
   // A member that could not look goes to `unavailable` alone — D-48's accounting was
   // per tier before rungs and stays per tier; the rung continues with the survivors.
-  let ladderNow = review.ladder;
+  // `reasks` is per review and carried in the state, so a re-ask spent this round stays spent.
+  let ladderNow: LadderState = { ...review.ladder, reasks };
   for (const s of skippedMembers) ladderNow = markUnavailable(ladderNow, s.member.id);
 
-  // lore-ok[cbb3bc94]: real and NOT fixed here — SPEC D-159 [OPEN]. When every member is
-  // skipped, this returns before the contest sets are built, so what they emitted before
-  // dying is not ruled on. Old behaviour, unchanged by D-159.
   if (ranMembers.length === 0) {
+    // RULED ON EVEN HERE (D-159): what the dead members emitted is on the ledger, so a
+    // refusal they made stands, and nothing is accepted — nobody finished to accept it. This
+    // returned before any set was built, and their contests were simply dropped.
+    for (const p of pending) {
+      if (ruling.contested.has(p.finding.fingerprint)) refuse(p);
+      else {
+        const a = ruling.acceptance(rankOf(p.finding.origin));
+        holdUnruled(p, a.kind === "unknown" ? a.why : "no member finished this round");
+      }
+    }
     // The whole rung was stepped over. The same decision the single-tier path always
     // made, moved here because with a rung "something else can still look" may be a
     // sibling — and the sibling has now had its say. If nothing anywhere can read the
@@ -2845,9 +2918,17 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     const first = skippedMembers[0];
     if (first === undefined) throw new Error("unreachable: a rung round with no members");
     if (!anyTierRan(tiers, ladderNow.unavailable)) throw first.error;
-    // No `docsOnly` here, deliberately: `raised: []` already means `fresh.length` is 0,
-    // so the per-tier trip this would suppress never runs on this path anyway (D-132).
-    const skipped = step({ state: ladderNow, raised: [], tiers, needsHuman: false, ran: [] });
+    // No `docsOnly` here: it softens the per-tier bound for a member arguing prose round
+    // after round (D-132), and a rung in which nobody finished argued nothing.
+    // What they raised, and what is held unruled, holds the ladder: a rung that never
+    // finished must not step clean over a finding the client already holds.
+    const skipped = step({
+      state: ladderNow,
+      raised: [...new Set([...ruling.contested, ...unruled])],
+      tiers,
+      needsHuman: false,
+      ran: [],
+    });
     const skippedWhy = stoppedBecause(skipped.decision, skipped.state);
     if (skippedWhy !== undefined) store.setFailureReason(reviewId, skippedWhy);
     store.updateReview(reviewId, {
@@ -2858,9 +2939,9 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     return {
       decision: skipped.decision,
       tier,
-      newFindings: [],
+      newFindings: skippedMembers.flatMap((s) => s.streamed),
       accepted: [],
-      rejected: [],
+      rejected,
       expired,
       fixed: [],
       t0Unavailable: [...t0.unavailable],
@@ -2871,75 +2952,16 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     };
   }
 
-  // THE STRONGEST MEMBER THAT RAN speaks for the rung where one tier must: its rank is
-  // what D-56's settle rule measures silence against, its run row is where round-level
-  // notes land, and its id is what an accepting verdict is stamped with. Never a weaker
-  // member — a cheap model ratifying answers to an expensive model's findings is the
-  // exact shape D-10 forbids, and the reason the strongest is chosen rather than the
-  // anchor.
+  // THE STRONGEST MEMBER THAT RAN, for what is still per-tier: D-56's settle rule measures
+  // silence against its rank (and still checks each finding's own tier), and its run row is
+  // where round-level notes land. It no longer carries ACCEPTANCE — that is the ledger's
+  // `acceptance`, which refuses to let a weaker finisher answer for a stronger tier that died.
   const strongest = ranMembers.reduce((a, b) =>
     tierRank(tiers, b.member.id) > tierRank(tiers, a.member.id) ? b : a,
   );
-  // lore-ok[07e83abc]: real, and fixed a few dozen lines below rather than here. A
-  // faulted member's streamed findings ARE now added to `raisedFingerprints` and
-  // `modelRaised`, in the loop that walks `ranMembers.flatMap(o => o.streamed)` — so the
-  // rung can no longer step clean over a finding the client already holds, and a
-  // justification the dying primary contested is no longer ratified by its silence.
-  // `raisedRank` here is a different question — WHICH member contested it, for the
-  // verdict's stamp — and reading `result.findings` is right for that: a run that faulted
-  // part-way did not finish contesting anything, so the member that DID is the honest
-  // name to put on the row.
-  // lore-ok[e5ca0c9a]: the same finding, reported twice. Same answer.
-  // Which member raised a fingerprint, at the highest rank — a REJECTED justification
-  // is stamped by the member that actually contested it (D-10: the tier that asked).
-  //
-  // lore-ok[6aa59cb5]: CARRIES THE ANSWERED MODEL TOO, not only the member — found
-  // by lore's own review. `o.member.model` is the tier's CONFIGURED model; a
-  // fallback or a twin keeps the member's id and answers on a different route
-  // (`continuity.ts`'s own history), so stamping `o.member.model` here would just
-  // move the same misattribution into the new column. `o.fellBackTo ?? o.chosenRoute
-  // ?? o.member.model` is the pattern this file already uses everywhere else a
-  // verdict needs to name who actually spoke (`ranOnRoute`, `failedOn`, `paidRoute`).
-  //
-  // AND THE RAISE ITSELF, because that is the reviewer's reason. A tier keeping a finding
-  // open repeats the claim word for word — that is what makes the fingerprint match — and
-  // says WHY in the evidence, which `recordFinding` then drops as a duplicate.
-  const raisedRank = new Map<string, { readonly member: Tier; readonly model: string | undefined; readonly raise: Finding }>();
-  for (const o of ranMembers) {
-    // `emitted` too: a streamed member's re-raises from a run that died part-way are in
-    // no `result`, and a refusal is exactly a re-raise.
-    const memberRoute = o.fellBackTo ?? o.chosenRoute ?? o.member.model;
-    const raises = [
-      ...o.result.findings.map((f) => ({ finding: f, route: memberRoute })),
-      ...o.emitted.map((e) => ({ finding: e.finding, route: e.route ?? memberRoute })),
-    ];
-    for (const { finding: f, route } of raises) {
-      const fp = fingerprint(f);
-      const cur = raisedRank.get(fp);
-      // `>=`, so a LATER raise at the same rank replaces the earlier one: emissions are
-      // walked in the order they happened, and a member that raised a refused finding
-      // again after seeing a fix is quoted by what it says now, not by the objection it
-      // has moved past. lore-ok[9eac53fc]: fixed here, and in the skipped loop below.
-      if (cur === undefined || tierRank(tiers, o.member.id) >= tierRank(tiers, cur.member.id)) {
-        raisedRank.set(fp, { member: o.member, model: route, raise: f });
-      }
-    }
-  }
-  // A SKIPPED member's emissions too — it contested before its whole chain died, and the
-  // rejection must quote it, naming the route each emission came from.
-  for (const o of skippedMembers) {
-    for (const e of o.emitted) {
-      const fp = fingerprint(e.finding);
-      const cur = raisedRank.get(fp);
-      if (cur === undefined || tierRank(tiers, o.member.id) >= tierRank(tiers, cur.member.id)) {
-        raisedRank.set(fp, { member: o.member, model: e.route ?? o.member.model, raise: e.finding });
-      }
-    }
-  }
   const rungMismatch = ranMembers.map((o) => o.heldMismatch).find((m) => m !== undefined);
 
   // 5. Record everything raised this round: T0's findings and the model's.
-  const round = review.ladder.round + 1;
   // WHOSE DEFECT IS THIS? (D-68)
   //
   // T0 scans the whole worktree, so a pattern engine reports every match in the
@@ -2972,20 +2994,6 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   const newFindings: RecordedFinding[] = [];
   const raisedFingerprints = new Set<string>();
   /**
-   * The MODEL tier's fingerprints alone, which is what may reject a justification.
-   *
-   * T0 must be excluded and this is not a nicety. A justification is a claim that a
-   * finding is wrong, and ruling on it means READING THE REASON. `tsc` and `semgrep`
-   * cannot: they pattern-match, deterministically, and re-match every single round.
-   *
-   * With T0 counted, "the reviewer looked and raised it anyway" was true forever for
-   * any deterministic finding — so a T0 false positive could never be justified, never
-   * settled, and reset the ladder every round until a bound stopped the review. The
-   * loop could not reach `passed` at all. Found by trying to justify one real semgrep
-   * false positive on lore's own test suite.
-   */
-  const modelRaised = new Set<string>();
-  /**
    * Raises that belong to the repository, not this branch (D-68) — kept out of what the
    * LADDER steps on, and only that. They stay in `raisedFingerprints`, so silence never
    * settles one as fixed; they are recorded, delivered and counted as left open.
@@ -3002,7 +3010,6 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     const fp = fingerprint(f);
     raisedFingerprints.add(fp);
     if (origin === "t0" && inherited(f)) inheritedRaised.add(fp);
-    if (origin !== "t0") modelRaised.add(fp);
     // The scope is taken NOW, while the code the finding is about is still the code
     // the tier saw. Without it a later round cannot tell a finding the author fixed
     // from one a tier simply stopped mentioning (D-56).
@@ -3054,9 +3061,6 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   for (const r of ranMembers.flatMap((o) => o.streamed)) {
     if (!newFindings.some((n) => n.fingerprint === r.fingerprint)) newFindings.push(r);
     raisedFingerprints.add(r.fingerprint);
-    // A model emitted it, so it may rule on a justification exactly as a batch reply
-    // may — see `modelRaised`, which T0 is excluded from for the opposite reason.
-    modelRaised.add(r.fingerprint);
   }
   // AND EVERY RE-RAISE, which `streamed` (new records only) never carries. A primary that
   // re-raised a pending finding and then lost its route left that contest in no set at all,
@@ -3070,7 +3074,6 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   for (const e of [...ranMembers, ...skippedMembers].flatMap((o) => o.emitted)) {
     const fp = fingerprint(e.finding);
     raisedFingerprints.add(fp);
-    modelRaised.add(fp);
   }
 
   // 5b. Carry forward justifications this repo already ratified.
@@ -3094,7 +3097,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   const carried: string[] = [];
   // See `originalJustification`: the prefix used to nest, once per review.
   for (const fp of raisedFingerprints) {
-    if (modelRaised.has(fp)) continue;
+    if (ruling.contested.has(fp)) continue;
     const prior = store.priorAcceptedVerdict(review.repoId, fp, reviewId);
     if (prior?.scope === undefined) continue;
 
@@ -3145,74 +3148,39 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     carried.push(fp);
   }
 
-  // 6. Rule on the pending justifications. Silence is assent.
+  // 6. Rule on the pending justifications — through the ledger (D-159). A model that raised it
+  // again refuses it; silence accepts it ONLY when a member at or above the tier that raised
+  // it finished; anything else is unruled, and unruled holds the ladder.
   const accepted: string[] = [...carried];
   /** Appeals accepted that bought no class suppression — the client is told (D-83). */
   const appealBoughtNothing: string[] = [];
-  const rejected: string[] = [];
   for (const p of pending) {
-    if (modelRaised.has(p.finding.fingerprint)) {
-      // The reviewer looked and raised it anyway: the reason does not hold. A
-      // mistaken justification is worse than a bug, because it was trusted.
-      //
-      // `modelRaised`, never `raisedFingerprints` — only something that can read the
-      // reason is entitled to reject it. See the note where the two sets are built.
-      rejected.push(p.finding.fingerprint);
-      // The member that actually re-raised it, at the highest rank that did — a
-      // rejection is a contest, and the record must name the contestant (D-10).
-      const rejectedBy = raisedRank.get(p.finding.fingerprint);
-      // THE REVIEWER'S REASON, not the author's. This stored `p.reason` — the author's own
-      // words — so `justification_rejected` echoed them back as the refusal. On 2026-10-17
-      // t3 refused a guild fix three rounds running over a UTF-8 split the fix introduced;
-      // that objection lived only in its re-raise's evidence, was dropped, and the author
-      // kept re-answering the obsolete one.
-      //
-      // `raisedRank` and `modelRaised` are built from the same emissions, so a model
-      // rejection always has a raise to quote. If it ever does not, the sets have drifted
-      // apart, and recording a refusal with no reason is the defect this exists to end.
-      // lore-ok[5d830805]: fixed — the unreachable fallback is gone (this throws instead),
-      // and the faulted-primary case now reaches this branch: `emitted` feeds both
-      // `modelRaised` and `raisedRank` (see MemberRan.emitted), tested in round.test.ts
-      // "a refusal from a member that died mid-stream".
-      if (rejectedBy === undefined) {
-        throw new Error(`lore bug: ${p.finding.fingerprint.slice(0, 8)} was re-raised by a model but no raise was kept to quote`);
-      }
-      const by = rejectedBy.member.id;
-      const why = `${by} raised this again after reading your answer: ${rejectedBy.raise.evidence} — ${rejectedBy.raise.failureScenario}`;
-      store.recordVerdict(reviewId, {
-        fingerprint: p.finding.fingerprint,
-        verdict: "justified-rejected",
-        rationale: `${why}. The answer it refused: ${p.reason}`,
-        scope: undefined,
-        tier: by,
-        // lore-ok[6aa59cb5]: found by lore's own review. See raisedRank's own comment
-        // a few dozen lines up for why this is not `.member.model`.
-        model: rejectedBy.model,
-        round,
-      });
-      // HANDED BACK. The finding was delivered when first raised, so a refusal added
-      // nothing to the next poll and the round that made it read as a round that did
-      // nothing — five of them in a row on that guild review.
-      store.markUndelivered(reviewId, p.finding.fingerprint);
-    } else {
-      // lore-ok[c9b070ff]: real and NOT fixed here — SPEC D-159 [OPEN]. `strongest` is the
-      // strongest member that COMPLETED, so with the stronger rung member skipped silently a
-      // weaker one's silence still ratifies the stronger tier's finding (against D-10).
-      // Old behaviour, unchanged by D-159.
+    if (ruling.contested.has(p.finding.fingerprint)) {
+      // A mistaken justification is worse than a bug, because it was trusted. Only a MODEL
+      // may refuse one — `contested` holds model emissions alone, T0 never reaches the
+      // ledger. Ruling on an answer means reading the reason, and a pattern engine
+      // re-matches every round: counted, a T0 false positive could never be justified, and
+      // the loop could not reach `passed` at all.
+      refuse(p);
+      continue;
+    }
+    const verdictOf = ruling.acceptance(rankOf(p.finding.origin));
+    if (verdictOf.kind === "unknown") {
+      holdUnruled(p, verdictOf.why);
+      continue;
+    }
+    {
+      // Carried by the finisher the ledger names, on the route it actually ran on — a
+      // fallback keeps the member's id and answers on a different model.
+      const by = ranMembers.find((o) => o.member.id === verdictOf.by) ?? strongest;
       accepted.push(p.finding.fingerprint);
       store.recordVerdict(reviewId, {
         fingerprint: p.finding.fingerprint,
         verdict: "justified-accepted",
         rationale: p.reason,
         ...(p.scope !== undefined ? { scope: p.scope } : { scope: undefined }),
-        // Acceptance is silence, and only the STRONGEST present silence carries it —
-        // a weaker member ratifying a stronger one's questions is what D-10 forbids.
-        tier: strongest.member.id,
-        // lore-ok[6aa59cb5]: found by lore's own review — same reasoning as the
-        // rejection branch above: `strongest.member.model` is the CONFIGURED model,
-        // and a fallback answers on a different route without changing the member's
-        // own id.
-        model: strongest.fellBackTo ?? strongest.chosenRoute ?? strongest.member.model,
+        tier: by.member.id,
+        model: by.fellBackTo ?? by.chosenRoute ?? by.member.model,
         round,
         // WHAT THIS ACCEPTANCE RESTS ON. NULL for an ordinary justification, which is
         // the load-bearing distinction: an ordinary reason was argued on its own words
@@ -3272,7 +3240,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
           path: p.finding.file,
           policyShort: p.citedRule,
           reviewId,
-          tier: strongest.member.id,
+          tier: verdictOf.by,
         });
       }
       // AN ACCEPTED JUSTIFICATION IS A VERDICT, NOT A RULE, and it used to be written
@@ -3308,18 +3276,18 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // member's — every member ran the same round, so what none of them re-raised, the
   // strongest one's rank vouches for.
   const answeredOtherwise = new Set<string>([...pending.map((p) => p.finding.fingerprint), ...expired]);
-  // The stream's fix-candidates enter as open-and-unraised (see `fixCandidates`): the
-  // pre-fix emission must not count as this round's re-raise, or the model's silence
-  // after seeing the fix can never settle what the fix fixed.
-  const rungFixCandidates = [...ranMembers, ...skippedMembers].flatMap((o) => o.fixCandidates);
-  const settleRaised = new Set(raisedFingerprints);
-  for (const c of rungFixCandidates) settleRaised.delete(c.fingerprint);
-  // AND every pre-fix emission — a re-raise of an already-open finding in the turn
-  // whose boundary applied the fix is in `open` already, so what it needs is release
-  // from the raised set; without it the model's post-fix silence could never settle
-  // the very thing the fix fixed. `codeMoved` still guards: a fix that did not touch
-  // the finding's code settles nothing.
-  for (const o of [...ranMembers, ...skippedMembers]) for (const fp of o.preFixEmitted) settleRaised.delete(fp);
+  // RELEASED BY THE LEDGER: a model's raise stops counting against a fix once the SAME member
+  // was shown a fix after it, on the round's one clock (`ruling.standing`). That is the
+  // member's qualified silence about the fix; `codeMoved` still guards, so a fix that did not
+  // touch the finding's code settles nothing. Findings first recorded this round enter as
+  // candidates too — they were not open when the round began.
+  const released = (fp: string) => ruling.contested.has(fp) && !ruling.standing.has(fp);
+  const rungFixCandidates = [...ranMembers, ...skippedMembers]
+    .flatMap((o) => o.streamed)
+    .filter((r) => released(r.fingerprint));
+  // T0's own raise is never released by a model's silence: it re-scanned this round.
+  const t0Raised = new Set(t0.findings.map((f) => fingerprint(f)));
+  const settleRaised = new Set([...raisedFingerprints].filter((fp) => t0Raised.has(fp) || !released(fp)));
   // `hold.lastT0.interrupted`, NOT the round-start `t0.interrupted` — found by
   // lore's own review, fingerprint 5e8a675e: `codeMoved` (inside settleFixed)
   // already reads the LIVE worktree, which D-107's boundary machinery can have
@@ -3394,7 +3362,9 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   const docsOnly = stillOpen.length > 0 && stillOpen.every((f) => isDoc(f.file));
   const stepped = step({
     state: answered,
-    raised: [...raisedFingerprints].filter((fp) => !inheritedRaised.has(fp)),
+    // Unruled answers hold it too: unknown is never accepted, and a ladder that stepped over
+    // one would pass on a question nobody entitled to answer it had read (D-159).
+    raised: [...new Set([...raisedFingerprints, ...unruled])].filter((fp) => !inheritedRaised.has(fp)),
     tiers,
     needsHuman: store.openConflicts(review.repoId).length > 0,
     // Every member that RAN is billed a round; a skipped sibling is not (D-109).

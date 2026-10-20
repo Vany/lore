@@ -4093,18 +4093,42 @@ without a reason.
 **The reason quoted is the latest.** A member that raises a refused finding more than once
 in a round — before and after a fix it was shown — is quoted by its last raise.
 
-**[OPEN] — three gaps in the same machinery, older than D-159, found by its review and
-deferred to a redesign by Kira; the redesign is pending Vany.** "Who contested what this
-round" is computed in several places, each with its own blind spot. The fix is one record
-per member of every emission and every fix landing, on one clock across all its passes,
-with one function answering contested or settled. Until then:
-- a rung whose members are ALL skipped returns before the contest sets are built, so what
-  they emitted before dying is not ruled on;
-- `strongest` is the strongest member that completed, so with the stronger member skipped
-  silently, a weaker member's silence still accepts a justification for the stronger
-  tier's finding (against D-10);
-- a first pass's "said before the fix" still releases a finding that a catch-up raised
-  again after a later fix, because each pass keeps its own clock.
+**One ledger answers "contested or settled" (BUILT 2026-10-20).** It used to be computed in
+five or six places, each from its own partial record, and each had a member state it did not
+see: a rung whose members were ALL skipped returned before any set was built; acceptance was
+carried by the strongest member that COMPLETED, so with the stronger member skipped a weaker
+one's silence accepted the stronger tier's finding (against D-10); and each catch-up pass kept
+its own clock, so a first pass's "said before the fix" released a finding a catch-up raised
+again after a later fix, which then settled `fixed`. Every one failed toward a wrong ACCEPT.
+Vany delegated the answers (Kira's brief, 2026-10-20), and they are what is built:
+
+- **A wrong accept is worse than a wrong block.** Where the record cannot say, the answer is
+  UNKNOWN — never accepted, never fixed. Every block names who and why.
+- **The ledger** (`core/contest-ledger.ts`): one record per rung member of every emission,
+  every fix its session was shown (a boundary, or a catch-up opener), and how each run ended,
+  on ONE clock per round across members, routes and passes. Persisted as it happens
+  (`contest_event`). `rule()` is the only reader: *contested* (any model emission — a dead
+  member's included — refuses a justification), *standing* (an emission not followed by the
+  same member being shown a fix — what blocks a `fixed` settle), and *acceptance*.
+- **Acceptance needs a finisher at or above the tier that raised the finding.** A weaker
+  member's silence when the stronger died or was absent is UNKNOWN. Unknown is recorded as a
+  `justified-unruled` verdict (not settling, not a refusal), handed back to the client with
+  who did not finish, and it HOLDS THE LADDER.
+- **A dead member whose ruling is needed is re-asked in the round** — a skipped member is
+  unavailable for the rest of the review, so a later round would never ask it. So is an
+  all-skipped rung that has something to rule on (a pending answer or an emission); one with
+  nothing to rule on is not retried, which is `skip_if_quota`'s promise. Re-asks are capped at
+  **two per review** (`MAX_REASKS`, `ladder.reasks`); past that the unruled answer says it
+  needs a person. The D-109 stale catch-up is separate and unchanged.
+- **An all-skipped rung is ruled on**: its contests refuse, nothing is accepted, and what it
+  raised or holds unruled is what the ladder steps on — it no longer steps clean over them.
+- **A single vendor's finding is labelled `second_opinion`** in the poll, and still blocks.
+  Two-vendor agreement is a label here, not a gate (decision 5, Kira 2026-10-20): making a
+  lone vendor's finding non-blocking would trade a wrong block for a wrong accept.
+- **Old reviews are not re-judged.** `lore d159-replay` runs the acceptance rule once over
+  stored verdicts, report-only. Only that rule is replayable: rounds before `contest_event`
+  kept no record of who emitted what when, so the all-skipped and per-pass-clock cases
+  cannot be reconstructed for them, and the report says so.
 
 **And the finding goes back on the delivery queue** (`markUndelivered`). It is stamped
 `queued_at`, and the "uncollected for N hours" checks age from that when set, not from

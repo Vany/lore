@@ -1044,7 +1044,7 @@ describe("findings are ranked worst first", () => {
       expect(byFp["l1"], `poll does not emit ${field}`).toHaveProperty(field);
     }
     // Conditional: named in the docs, emitted only when they apply.
-    for (const field of ["cwe", "history", "justify_with", "settled", "settled_because", "justification_rejected", "open_count", "checks_skipped"]) {
+    for (const field of ["cwe", "history", "justify_with", "settled", "settled_because", "justification_rejected", "justification_unruled", "second_opinion", "open_count", "checks_skipped"]) {
       expect(documented, `TOOL_DOCS.poll does not mention ${field}`).toContain(field);
     }
 
@@ -1153,6 +1153,26 @@ describe("findings are ranked worst first", () => {
 
     // The aggregate and the per-finding label now agree — which is the whole point.
     expect(out["open_count"]).toBe(2);
+  });
+
+  // D-159: an answer nobody entitled to rule could read is neither refused nor settled, and
+  // a model finding one vendor alone raised is labelled — never softened.
+  it("says an unruled answer is open and unjudged, and labels a single vendor's finding", async () => {
+    store.recordVerdict("rev1", {
+      fingerprint: "m1", verdict: "justified-unruled",
+      rationale: "not ruled: t3 did not finish this round", scope: undefined, tier: undefined, round: 1,
+    });
+    store.recordContestEvent("rev1", 1, { kind: "emit", seq: 0, member: "t3", fingerprint: "m1", route: "vendor-b/m" });
+
+    const out = await callTool("review_poll", { review_id: "rev1" });
+    const m1 = (out["new_findings"] as Record<string, unknown>[]).find((f) => f["fingerprint"] === "m1");
+
+    expect(m1?.["settled"]).toBeUndefined();
+    expect(m1?.["justification_rejected"]).toBeUndefined();
+    expect(m1?.["justification_unruled"]).toContain("t3 did not finish");
+    expect(String(m1?.["note"])).toMatch(/NOT RULED/);
+    expect(String(m1?.["second_opinion"])).toMatch(/one vendor only \(vendor-b\)/);
+    expect(out["open_count"], "still counted as open").toBe(2);
   });
 });
 

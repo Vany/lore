@@ -141,8 +141,17 @@ describe("a handed-back refusal on the CLI", () => {
   };
   it("prints the reviewer's reason under the finding", () => {
     const why = "t3 raised this again after reading your answer: a UTF-8 split at a block boundary";
-    const text = render("rev_x", "findingsReady", [f], [], [], [], [f.fingerprint], [], new Map(), new Map([[f.fingerprint, why]]));
+    const text = render("rev_x", "findingsReady", [f], [], [], [], [f.fingerprint], [], new Map(), new Map([[f.fingerprint, { kind: "justified-rejected" as const, why }]]));
     expect(text).toContain(why);
     expect(text).toMatch(/refused/i);
+  });
+
+  // D-159: an answer nobody entitled to rule could read is neither refused nor accepted.
+  it("says an unruled answer was not ruled on, and never that it was refused", () => {
+    const why = "not ruled: t3 did not finish this round";
+    const text = render("rev_x", "findingsReady", [f], [], [], [], [], [], new Map(), new Map([[f.fingerprint, { kind: "justified-unruled" as const, why }]]));
+    expect(text).toContain(why);
+    expect(text).toMatch(/NOT RULED/);
+    expect(text).not.toMatch(/REFUSED/);
   });
 });

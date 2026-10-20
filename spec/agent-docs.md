@@ -134,7 +134,9 @@ Draft text. These are the deliverable, not a summary of it.
 > Returns **only new** findings. A finding you have already seen will not appear
 > again — do not re-fix anything absent from the response. One exception, and it is
 > news: a finding whose justification a reviewer **refused** comes back once, carrying
-> `justification_rejected` — the reviewer's reason for refusing.
+> `justification_rejected` — the reviewer's reason for refusing. Its twin comes back the
+> same way: an answer **not ruled**, carrying `justification_unruled` — the tier entitled to
+> rule did not finish, so it was neither refused nor accepted.
 >
 > States: `queued`, `running`, `findings_ready`, `awaiting_diff`, `fast_clean`,
 > `needs_human`, `passed`, `passed_thin_ladder`, `failed`, `expired`.
@@ -182,6 +184,11 @@ Draft text. These are the deliverable, not a summary of it.
 >   refused. It is often a NEW objection — a defect in your fix — while `claim` and
 >   `evidence` still describe the finding as first raised: answer the reviewer's
 >   reason. Repeating the refused answer is the single move guaranteed to fail.
+> * `justify_with` **and** `justification_unruled` — open, and nobody judged the answer:
+>   the tier that raised it, or a stronger one, did not finish, and a weaker tier's silence
+>   is never acceptance. The answer stands and is ruled again next round; when the re-asks
+>   are spent, a person decides.
+> * `second_opinion` — one vendor alone raised it. It holds the review like any other.
 > * `settled` and `settled_because`, with **no** `justify_with` — closed. Nothing to
 >   do. It is shown because it is new to you, usually a justification this repository
 >   ratified earlier and carried forward. Writing a `lore-ok` duplicates the marker
@@ -396,7 +403,8 @@ folder-mode call opens differently, naming `path` instead of `into`, per
 > **Rules**
 > - Polls return only new findings. Never re-fix what is not in the response. The one
 >   finding that comes back is one whose justification a reviewer REFUSED: answer what
->   `justification_rejected` says, not the original claim.
+>   `justification_rejected` says, not the original claim — or one NOT RULED
+>   (`justification_unruled`), whose answer stands until someone entitled reads it.
 > - `failed`, `expired` and `fast_clean` are not `passed`. Do not merge on them.
 > - `passed_thin_ladder` is TERMINAL: it will never become `passed`, so looping for
 >   that never ends. Attest it, and tell your user the evidence is weaker than a

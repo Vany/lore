@@ -36,6 +36,8 @@ lore — an independent reviewer that remembers the codebase
   lore knowledge [--repo <name>] [--refusals]  what the memory holds, and what it refused
   lore rule --repo <name> [--add ... | --retire ...]  development rules a finding may
                                                be appealed to (D-83)
+  lore d159-replay                             where the D-159 ledger would have ruled
+                                               differently on stored verdicts (report only)
   lore tokens                                  who holds a token, and for what
   lore revoke --token <short>                  turn one off, by its short hash
   lore doctor                                  check tiers, auth and model ids
@@ -317,6 +319,18 @@ export async function main(argv: readonly string[]): Promise<ExitCode> {
   // THE PRODUCT HAD NO OPERATOR VIEW. `lore` could list tokens, repositories and tiers;
   // the memory this service exists to build could only be read with hand-written SQL
   // through the container, which meant only whoever wrote the SQL could read it.
+  if (args.command === "d159-replay") {
+    const { replayAcceptances, renderReplay } = await import("./ops/d159-replay.ts");
+    const store = openExisting(args.db);
+    try {
+      const r = replayAcceptances(store);
+      process.stdout.write(args.json ? `${JSON.stringify(r, null, 2)}\n` : renderReplay(r));
+      return EXIT.PASS;
+    } finally {
+      store.close();
+    }
+  }
+
   if (args.command === "knowledge") {
     const { knowledgeReport, renderKnowledge } = await import("./knowledge/report.ts");
     const store = openExisting(args.db);
@@ -746,16 +760,21 @@ export async function main(argv: readonly string[]): Promise<ExitCode> {
     // it here a refusal reads as a fresh finding with obsolete evidence, and the operator
     // answers an objection the reviewer has already moved past.
     // lore-ok[109d8a92]: fixed — both the text and the --json output carry it.
-    const refusals = new Map<string, string>();
+    // And an answer NOT RULED (D-159) — the tier entitled to rule did not finish — which is
+    // neither a refusal nor an acceptance, and says so in its own words.
+    const refusals = new Map<string, Ruled>();
     for (const f of undelivered) {
       const v = store.latestVerdict(reviewId, f.fingerprint);
-      if (v?.verdict === "justified-rejected") refusals.set(f.fingerprint, v.rationale ?? "no reason recorded");
+      if (v?.verdict === "justified-rejected" || v?.verdict === "justified-unruled") {
+        refusals.set(f.fingerprint, { kind: v.verdict, why: v.rationale ?? "no reason recorded" });
+      }
     }
 
     if (args.json) {
       const findings = undelivered.map((f) => {
-        const why = refusals.get(f.fingerprint);
-        return why === undefined ? f : { ...f, justification_rejected: why };
+        const r = refusals.get(f.fingerprint);
+        if (r === undefined) return f;
+        return r.kind === "justified-rejected" ? { ...f, justification_rejected: r.why } : { ...f, justification_unruled: r.why };
       });
       process.stdout.write(`${JSON.stringify({ reviewId, decision: result.decision, findings }, null, 2)}\n`);
     } else {
@@ -803,6 +822,9 @@ export function existingReview(store: Store, principal: string, branch: string):
     .find((r) => r.branch === branch && !isTerminal(r.state))?.id;
 }
 
+/** A refused or unruled answer, with the reason the reviewer (or the ledger) gave. */
+type Ruled = { readonly kind: "justified-rejected" | "justified-unruled"; readonly why: string };
+
 export function render(
   reviewId: string,
   decision: string,
@@ -814,8 +836,8 @@ export function render(
   rejected: readonly string[],
   expired: readonly string[],
   history: ReadonlyMap<string, string | undefined>,
-  /** The reviewer's reason, per finding whose justification was refused (D-159). */
-  refusals: ReadonlyMap<string, string> = new Map(),
+  /** The reviewer's reason, per finding whose justification was refused or not ruled (D-159). */
+  refusals: ReadonlyMap<string, Ruled> = new Map(),
 ): string {
   const out: string[] = ["", `# lore — ${decision}`, `_review ${reviewId}_`, ""];
 
@@ -894,9 +916,12 @@ export function render(
         "",
         `- evidence: ${f.evidence}`,
         `- failure: ${f.failureScenario}`,
-        ...(refusals.get(f.fingerprint) === undefined
-          ? []
-          : [`- YOUR ANSWER WAS REFUSED — answer this, not the claim above: ${refusals.get(f.fingerprint) ?? ""}`]),
+        ...((r) =>
+          r === undefined
+            ? []
+            : r.kind === "justified-rejected"
+              ? [`- YOUR ANSWER WAS REFUSED — answer this, not the claim above: ${r.why}`]
+              : [`- YOUR ANSWER WAS NOT RULED ON (not refused, not accepted) — ${r.why}`])(refusals.get(f.fingerprint)),
         `- fix it, or justify it:  \`// lore-ok[${f.fingerprint.slice(0, 8)}]: <why this code is correct>\``,
         ...(history.get(f.fingerprint) === undefined ? [] : [`- history: ${history.get(f.fingerprint) ?? ""}`]),
         "",

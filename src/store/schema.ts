@@ -399,6 +399,29 @@ CREATE TABLE IF NOT EXISTS held_diff (
   created_at TEXT NOT NULL
 );
 
+-- THE CONTEST LEDGER, as it happened (D-159): every emission of every rung member, every
+-- fix a member's session was shown, and how each run ended, numbered on ONE clock per round.
+-- The verdicts are ruled from these in memory; the rows are kept so a ruling can be replayed
+-- and audited later — before they existed, which member said what and when lived only in
+-- the round's memory, and three different wrong ACCEPTS could not be reconstructed at all.
+CREATE TABLE IF NOT EXISTS contest_event (
+  -- Not keyed by (review, round, seq): a round that dies and is requeued runs again under
+  -- the same round number and its own clock, and both attempts are the record.
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  review_id   TEXT NOT NULL REFERENCES review(id) ON DELETE CASCADE,
+  round       INTEGER NOT NULL,
+  seq         INTEGER NOT NULL,
+  -- emit | saw-fix | ended
+  kind        TEXT NOT NULL,
+  member      TEXT NOT NULL,
+  fingerprint TEXT,
+  route       TEXT,
+  -- for ended: done | skipped | gave-up
+  how         TEXT,
+  at          TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS contest_event_by_review ON contest_event(review_id, round, id);
+
 CREATE TABLE IF NOT EXISTS job (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   review_id  TEXT NOT NULL REFERENCES review(id) ON DELETE CASCADE,
@@ -533,6 +556,7 @@ export const WRITE_TIMESTAMPS: readonly { readonly table: string; readonly colum
   { table: "fixed_elsewhere_claim", column: "created_at" },
   { table: "usage", column: "at" },
   { table: "held_diff", column: "created_at" },
+  { table: "contest_event", column: "at" },
   { table: "job", column: "updated_at" },
   { table: "refactor_run", column: "updated_at" },
   { table: "refactor_suggestion", column: "created_at" },

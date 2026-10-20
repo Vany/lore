@@ -362,7 +362,13 @@ loop is driven by an LLM, and duplicate work is indistinguishable from real work
 
 The one finding shown twice is one whose justification a reviewer **refused** (D-159): the
 refusal is news, and without it the round that refused reads as a round that did nothing.
-It comes back once, `justification_rejected` carrying the reviewer's reason first.
+It comes back once, `justification_rejected` carrying the reviewer's reason first. So does
+an answer NOT RULED (`justification_unruled`, D-159): no member at or above the tier that
+raised the finding finished, the contest ledger called it unknown, and unknown is never
+accepted — the client is told who did not finish, and whether lore will ask again.
+
+A model finding one vendor alone has raised carries `second_opinion` (D-159, decision 5): a
+label, never a softening. It holds the ladder like any other finding.
 
 #### 2.1.1 What a finding carries, and the three shapes
 

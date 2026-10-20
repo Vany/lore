@@ -302,7 +302,9 @@ Fetch findings discovered since your last poll.
 Returns ONLY NEW findings. Anything you have already been shown will not appear again
 — do not re-fix something absent from the response. ONE EXCEPTION, and it is news: a
 finding whose justification a reviewer REFUSED comes back once, carrying
-\`justification_rejected\` — the reviewer's reason for refusing.
+\`justification_rejected\` — the reviewer's reason for refusing. Its twin comes back the
+same way: an answer NOT RULED, carrying \`justification_unruled\` — the tier entitled to rule
+on it did not finish, so it was neither refused nor accepted.
 
 IF YOU HAVE LOST FINDINGS YOU WERE ALREADY GIVEN, DO NOT POLL AGAIN — read the resource
 \`lore://review/{review_id}\`. It returns every finding on the review in full, and it
@@ -524,6 +526,18 @@ Then ONE of three shapes, and they are the whole instruction:
     and \`evidence\` above still describe the finding as first raised. Fix what the
     reviewer now says, or give a reason that holds against it. Repeating the rejected
     answer is the one move guaranteed not to work.
+
+  * \`justify_with\` AND \`justification_unruled\` — open, and NOBODY JUDGED your answer.
+    The tier that raised the finding (or a stronger one) did not finish this round, and a
+    weaker tier's silence is never taken as acceptance: lore would rather hold the review
+    than accept on an empty seat. Your answer is still in place and is ruled again next
+    round; nothing about it was found wrong. Read \`justification_unruled\`: it says who did
+    not finish, and whether lore will ask again or the re-asks are spent. When they are
+    spent, tell your user — a person decides whether to wait and restart, or change the code.
+
+  * \`second_opinion\` — one vendor alone has raised this. It has not had a second reading
+    and it holds the review exactly like any other finding. Weigh it as one model's view and
+    answer it the same way; it is not softer for being single.
 
   * \`settled\` and \`settled_because\`, with NO \`justify_with\` — closed. Nothing to do.
     It appears only because it is new to YOU: often a justification this repository
@@ -1249,7 +1263,9 @@ export const RESOURCE_DOCS: Readonly<Record<string, { title: string; priority: n
 Rules that decide whether this works:
 - Polls return only new findings. Never re-fix what is not in the response. The one
   finding that comes back is one whose justification a reviewer REFUSED: answer what
-  \`justification_rejected\` says, not the original claim.
+  \`justification_rejected\` says, not the original claim — or one NOT RULED
+  (\`justification_unruled\`): nobody entitled to judge it finished, so your answer stands
+  and nothing needs changing unless the re-asks are spent.
 - LOST YOUR NOTES? READ \`lore://review/{review_id}\`. A poll consumes what it returns,
   so a session that compacted, crashed or simply forgot cannot get its open findings
   back by polling again — the ids it needs are exactly the ones it will never be shown
@@ -1447,7 +1463,9 @@ The loop:
 Rules:
 - Polls return only new findings. Never re-fix what is not in the response. The one
   finding that comes back is one whose justification a reviewer REFUSED: answer what
-  \`justification_rejected\` says, not the original claim.
+  \`justification_rejected\` says, not the original claim — or one NOT RULED
+  (\`justification_unruled\`): nobody entitled to judge it finished, so your answer stands
+  and nothing needs changing unless the re-asks are spent.
 - \`failed\`, \`expired\` and \`fast_clean\` are not \`passed\`. Do not merge on them.
 - \`passed_thin_ladder\` is TERMINAL: it will never become \`passed\`, so looping for that
   never ends. Attest it — the line names which tiers were skipped and which vendor

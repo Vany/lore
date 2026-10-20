@@ -11,6 +11,7 @@
  * database.
  */
 
+import type { ContestEvent } from "../core/contest-ledger.ts";
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { AUTH_REFUSAL, AmbiguousFingerprint } from "../core/errors.ts";
@@ -133,7 +134,13 @@ export interface RecordedFinding extends Finding {
   readonly firstSeen: string;
 }
 
-export type VerdictKind = "fixed" | "justified-accepted" | "justified-rejected";
+/**
+ * `justified-unruled` (D-159): the answer was read by no member entitled to rule on it — the
+ * tier that raised the finding, or a stronger one, did not finish. Not a settling verdict
+ * and not a refusal: the finding stays open and the answer is ruled again next round. Its
+ * rationale says who did not finish, which is what the client takes to a person.
+ */
+export type VerdictKind = "fixed" | "justified-accepted" | "justified-rejected" | "justified-unruled";
 
 /**
  * The verdicts that CLOSE a finding. `justified-rejected` is deliberately not one:
@@ -3330,6 +3337,52 @@ export class Store {
    * leaving a claim with nothing behind it. `consumeHeldDiffs` promotes it to a real
    * claim only once THIS diff is confirmed to have actually landed.
    */
+  /**
+   * Every finding whose LATEST verdict is an acceptance a model tier carried — the same
+   * latest-verdict rule every other reader uses — with the finding's origin and the review's
+   * pinned ladder. Carried and expiry rows are excluded: no model ruled on them. For the
+   * D-159 replay (`ops/d159-replay.ts`).
+   */
+  latestModelAcceptances(): readonly { review_id: string; state: string; fingerprint: string; tier: string; round: number | null; origin: string; tiers: string | null }[] {
+    return this.db
+      .prepare(
+        `SELECT v.review_id, r.state, v.fingerprint, v.tier, v.round, f.origin, r.tiers
+           FROM verdict v
+           JOIN finding f ON f.review_id = v.review_id AND f.fingerprint = v.fingerprint
+           JOIN review r ON r.id = v.review_id
+          WHERE v.verdict = 'justified-accepted'
+            AND v.tier IS NOT NULL AND v.tier NOT IN ('carried', 'expiry')
+            AND v.id = (SELECT MAX(id) FROM verdict w WHERE w.review_id = v.review_id AND w.fingerprint = v.fingerprint)
+          ORDER BY v.review_id, v.id`,
+      )
+      .all() as { review_id: string; state: string; fingerprint: string; tier: string; round: number | null; origin: string; tiers: string | null }[];
+  }
+
+  /** One contest-ledger event, as it happens (D-159). See `contest_event` in schema.ts. */
+  recordContestEvent(reviewId: string, round: number, e: ContestEvent): void {
+    this.db
+      .prepare(
+        "INSERT INTO contest_event(review_id, round, seq, kind, member, fingerprint, route, how, at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run(
+        reviewId, round, e.seq, e.kind, e.member,
+        e.kind === "emit" ? e.fingerprint : null,
+        e.kind === "emit" ? (e.route ?? null) : null,
+        e.kind === "ended" ? e.how : null,
+        now(),
+      );
+  }
+
+  /** The routes that emitted each fingerprint across this review — what a vendor count reads. */
+  emittingRoutes(reviewId: string): ReadonlyMap<string, readonly string[]> {
+    const rows = this.db
+      .prepare("SELECT DISTINCT fingerprint, route FROM contest_event WHERE review_id = ? AND kind = 'emit' AND route IS NOT NULL")
+      .all(reviewId) as { fingerprint: string; route: string }[];
+    const out = new Map<string, string[]>();
+    for (const r of rows) out.set(r.fingerprint, [...(out.get(r.fingerprint) ?? []), r.route]);
+    return out;
+  }
+
   holdDiff(reviewId: string, diff: string, treeHash: string, fixedElsewhere: readonly FixedElsewhereClaim[] = []): number {
     const res = this.db
       .prepare(

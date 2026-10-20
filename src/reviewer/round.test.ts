@@ -4494,6 +4494,115 @@ describe("a rung of two members", () => {
     expect(v?.rationale).toContain(reraise.evidence);
   });
 
+  // ── D-159, THE SINGLE LEDGER: the three gaps the per-set bookkeeping left ──────────────
+
+  /** A held diff turning `from` into `to` in src/hold.ts, built on whatever tree is current. */
+  const heldEdit = async (from: string, to: string): Promise<{ diff: string; claimed: string }> => {
+    const file = join(dir, "src/hold.ts");
+    const before = readFileSync(file, "utf8");
+    // Staged as it stands, so `git diff` (worktree against index) is exactly from → to.
+    git("add", "src/hold.ts");
+    writeFileSync(file, before.replace(from, to));
+    const diff = execFileSync("git", ["diff"], { cwd: dir }).toString();
+    const claimed = await treeHash(dir);
+    git("reset", "-q");
+    writeFileSync(file, before);
+    await treeHash(dir);
+    return { diff, claimed };
+  };
+
+  // Gap 2: acceptance was carried by the strongest member that COMPLETED.
+  it("does not let a weaker member's silence accept a stronger tier's finding when the stronger one died", async () => {
+    const first = new RungStreaming({ t2: [DONE], t3: [emission([B]), DONE] });
+    await runRound({ store, reviewer: first, reviewId: "rung1", principal: "p", worktree: dir, type: RUNG_TYPE });
+    const fp = fingerprint(B);
+    store.recordFixedElsewhere("rung1", fp, "src.txt", 1, "handled by the caller now");
+
+    const second = new RungStreaming({ t2: [DONE] });
+    second.fail["t3"] = new Exhausted("plan is out");
+    const r = await runRound({ store, reviewer: second, reviewId: "rung1", principal: "p", worktree: dir, type: RUNG_TYPE });
+
+    const v = store.latestVerdict("rung1", fp);
+    expect(v?.verdict, "unknown is never accepted").toBe("justified-unruled");
+    expect(v?.rationale).toMatch(/t3 did not finish/);
+    expect(r.decision.kind, "and an unruled answer holds the ladder").toBe("findings");
+    expect(store.getReview("rung1", "p")?.ladder.reasks, "the dead member was asked again once").toBe(1);
+  });
+
+  it("accepts once the re-asked stronger member finishes silent", async () => {
+    const first = new RungStreaming({ t2: [DONE], t3: [emission([B]), DONE] });
+    await runRound({ store, reviewer: first, reviewId: "rung1", principal: "p", worktree: dir, type: RUNG_TYPE });
+    const fp = fingerprint(B);
+    store.recordFixedElsewhere("rung1", fp, "src.txt", 1, "handled by the caller now");
+
+    const second = new RungStreaming({ t2: [DONE], t3: [DONE] });
+    second.fail["t3"] = new Exhausted("a plan that refills in time for the re-ask");
+    let calls = 0;
+    const ask = second.askFor.bind(second);
+    second.askFor = (async (...args: Parameters<typeof ask>) => {
+      if (args[0].id === "t3" && calls++ === 1) delete second.fail["t3"];
+      return ask(...args);
+    }) as typeof ask;
+    await runRound({ store, reviewer: second, reviewId: "rung1", principal: "p", worktree: dir, type: RUNG_TYPE });
+
+    const v = store.latestVerdict("rung1", fp);
+    expect(v?.verdict).toBe("justified-accepted");
+    expect(v?.tier, "carried by the tier that asked").toBe("t3");
+  });
+
+  // Gap 1: a rung whose members all died returned before any set was built.
+  it("rules on what an all-skipped rung emitted before dying", async () => {
+    const tiers = RUNG_TIERS.map((t) => ({ ...t, skip_if_quota: true }));
+    const type = { ...RUNG_TYPE, tiers };
+    const first = new RungStreaming({ t2: [DONE], t3: [emission([B]), DONE] });
+    await runRound({ store, reviewer: first, reviewId: "rung1", principal: "p", worktree: dir, type });
+    const fp = fingerprint(B);
+    store.recordFixedElsewhere("rung1", fp, "src.txt", 1, "handled by the caller now");
+
+    const reraise: Finding = { ...B, evidence: "the caller never sees this path", failureScenario: "the base line is read first" };
+    const second = new RungStreaming({ t3: [emission([reraise])] });
+    second.fail["t2"] = new Exhausted("plan is out");
+    second.onAsk = (tierId, i) => { if (tierId === "t3" && i === 0) second.fail["t3"] = new Exhausted("plan is out"); };
+    await runRound({ store, reviewer: second, reviewId: "rung1", principal: "p", worktree: dir, type }).catch(() => undefined);
+
+    const v = store.latestVerdict("rung1", fp);
+    expect(v?.verdict, "a dead member's refusal is still a refusal").toBe("justified-rejected");
+    expect(v?.rationale).toContain(reraise.evidence);
+    // Nothing could run, so the round ends in INV-1's refusal and its state is not written;
+    // the re-run is seen in the trail instead: each member opened a second run in round 2.
+    const runs = store.tierRunsFor("rung1").filter((r) => r.round === 2);
+    expect(runs.filter((r) => r.tier === "t2"), "the rung was re-run once first").toHaveLength(2);
+  });
+
+  // Gap 3: each catch-up pass kept its own clock.
+  it("keeps a finding open that a catch-up raised again after a later fix", async () => {
+    const first = new RungStreaming({ t2: [DONE], t3: [emission([HOLD_BUG]), DONE] });
+    await runRound({ store, reviewer: first, reviewId: "rung1", principal: "p", worktree: dir, type: RUNG_TYPE });
+    const fp = fingerprint(HOLD_BUG);
+
+    const fix1 = await heldEdit("return 1;", "return 2;");
+    store.holdDiff("rung1", fix1.diff, fix1.claimed);
+    // t3: raises it, sees fix 1 at that boundary, done; caught up on fix 2, raises it AGAIN.
+    const second = new RungStreaming({ t2: [emission([A]), DONE], t3: [emission([HOLD_BUG]), DONE, emission([HOLD_BUG]), DONE] });
+    let t3Ended = false;
+    const record = store.setSessionTree.bind(store);
+    store.setSessionTree = (r, tier, route, tree) => { if (tier === "t3") t3Ended = true; record(r, tier, route, tree); };
+    second.onAsk = async (tierId, i) => {
+      if (tierId === "t2" && i === 0) {
+        for (let w = 0; w < 400 && !t3Ended; w++) await new Promise((res) => setTimeout(res, 5));
+        // Fix 2 lands at t2's boundary, after t3 has declared done.
+        const fix2 = await heldEdit("return 2;", "return 3;");
+        store.holdDiff("rung1", fix2.diff, fix2.claimed);
+      }
+    };
+    await runRound({ store, reviewer: second, reviewId: "rung1", principal: "p", worktree: dir, type: RUNG_TYPE });
+
+    expect(readFileSync(join(dir, "src/hold.ts"), "utf8"), "both fixes landed").toContain("return 3;");
+    expect(second.asked.get("t3"), "t3 was caught up").toHaveLength(4);
+    expect(store.latestVerdict("rung1", fp)?.verdict, "raised after the last fix it saw: not fixed").not.toBe("fixed");
+    expect(store.openFindings("rung1").map((f) => f.fingerprint)).toContain(fp);
+  });
+
   it("continues with the survivor when one member cannot be paid for", async () => {
     const reviewer = new RungStreaming({ t3: [emission([B]), DONE] });
     reviewer.fail["t2"] = new Exhausted("plan is out");

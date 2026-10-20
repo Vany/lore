@@ -920,6 +920,14 @@ export interface LadderState {
    */
   readonly unavailable: readonly string[];
   /**
+   * Re-runs of a member that died, spent so a stronger tier could rule on an answer to its
+   * own question (D-159): the contest ledger said UNKNOWN, and a weaker member's silence is
+   * never accepted in its place. Capped per REVIEW (`MAX_REASKS`) because each one is paid
+   * model time; past the cap the answer stays unruled and the client is told to get a
+   * person. Absent on states written before it existed, which is zero.
+   */
+  readonly reasks?: number;
+  /**
    * The single vendor behind every tier that could run, if there is only one (D-49).
    *
    * Derived, but stored: the attestation is written long after the ladder config is

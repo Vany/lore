@@ -19,7 +19,7 @@ import { floorBytes, mayStart, mib, readMemory, type MemoryState } from "../core
 import { elapsedWords } from "../core/elapsed.ts";
 import { absent } from "../core/optional.ts";
 import { worstSeverity } from "../core/finding.ts";
-import { initialState, ladderFingerprint, loadTiers, type LadderState } from "../core/ladder.ts";
+import { initialState, ladderFingerprint, loadTiers, vendorOf, type LadderState } from "../core/ladder.ts";
 import { evidenceOf, isCleared, isTerminal, needsClient, type ReviewState } from "../core/review-state.ts";
 import { SHORT_LENGTH } from "../core/fingerprint.ts";
 import { AmbiguousFingerprint } from "../core/errors.ts";
@@ -1010,6 +1010,7 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
     async ({ review_id }, ctx) => {
       const review = mine(review_id);
       const fresh = store.undelivered(review_id);
+      const routes = store.emittingRoutes(review_id);
       store.markDelivered(review_id, fresh.map((f) => f.fingerprint));
 
       // lore-ok[de741489]: found real by lore's own review — a needs_human review
@@ -1085,6 +1086,12 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
             const verdict = store.latestVerdict(review_id, f.fingerprint);
             const closed = verdict !== undefined && isSettled(verdict.verdict);
             const rejected = verdict?.verdict === "justified-rejected";
+            const unruled = verdict?.verdict === "justified-unruled";
+            // WHICH VENDORS RAISED IT, from the contest ledger (D-159). A model finding one vendor
+            // alone has raised is labelled, never softened: it still holds the ladder, because a
+            // wrong accept is worse than a wrong block. Absent where the ledger has no record —
+            // a deterministic finding, or one raised before the ledger existed.
+            const vendors = [...new Set((routes.get(f.fingerprint) ?? []).map((r) => vendorOf(r)))];
             return {
               fingerprint: short,
               file: f.file,
@@ -1133,7 +1140,27 @@ export function buildServer(who: Principal, deps: ServerDeps): McpServer {
                           note: "Your justification was REJECTED. Fix the code, or give a reason that holds.",
                         }
                       : {}),
+                    // NOT RULED, which is neither of the above (D-159): the tier that raised
+                    // this, or a stronger one, did not finish, and a weaker tier's silence is
+                    // never taken as acceptance. Nothing about your answer was judged.
+                    ...(unruled
+                      ? {
+                          justification_unruled: verdict.rationale ?? "no reason recorded",
+                          note:
+                            "Your answer was NOT RULED ON — the tier entitled to rule did not finish. It is not " +
+                            "rejected and not accepted, and it holds the review. Read justification_unruled: it " +
+                            "says whether lore will ask again or this now needs a person.",
+                        }
+                      : {}),
                   }),
+              ...(f.origin !== "t0" && vendors.length === 1
+                ? {
+                    second_opinion:
+                      `Raised by one vendor only (${vendors[0] ?? "?"}). It needs a second opinion and has not ` +
+                      "had one — it still holds the review exactly as any other finding does. Weigh it as one " +
+                      "model's reading, and answer it the same way: fix it, or say why it is not a problem.",
+                  }
+                : {}),
               // A finding with history is far more actionable than the same finding
               // raised cold: it says whether to fix the line or fix the habit.
               history: renderEnrichment(enrich(store, who.repoId, review_id, f)),
