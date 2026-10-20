@@ -391,7 +391,8 @@ describe("a timed-out sandboxed run is killed explicitly, not left to a signal t
       .filter((c) => c.startsWith("run ")).map((c) => c.match(/--name (\S+)/)?.[1]);
     expect(names).toHaveLength(2);
     expect(names[0]).not.toBe(names[1]);
-  });
+    // Two runs of the fake's 2 s timeout: past vitest's 5 s default under the host's load.
+  }, 20_000);
 
   /**
    * AT THE WIRE, because `fanOut` being right is worth nothing if its numbers never reach
