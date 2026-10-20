@@ -460,6 +460,13 @@ const FindingObject = z
     // is how a refactor could have deleted the preprocess with the suite still green
     // A comment is a claim nobody runs.
     cwe: absent(z.string().regex(/^CWE-\d+$/, "cwe must look like CWE-89")),
+    // A PROOF, for a finding on a Solidity contract: the full source of a forge test that FAILS
+    // on this tree because of the defect and would pass once it is fixed. t0 runs it in the
+    // EVM sandbox, in a scratch copy and never in the worktree (`t0/evm.ts`). If it PASSES,
+    // the reviewer's own evidence says the behaviour holds and the finding is withdrawn. No
+    // length cap that could refuse the finding: a PoC too long to run is skipped, and the
+    // finding stands on its words like any other.
+    poc: absent(z.string()),
   })
   // Strict: an unexpected key means our prompt and this schema have drifted apart.
   // Silently dropping it would hide that drift for as long as it took someone to

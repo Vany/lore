@@ -81,6 +81,8 @@ export function stateFor(verdict: VerdictKind | undefined, tier?: string): VexSt
     case "fixed":
       return "resolved";
     case "justified-accepted":
+    // The reviewer's own proof passes on the tree: the weakness it named is not present.
+    case "withdrawn":
       return "not_affected";
     case "justified-rejected":
       return tier === "expiry" ? "in_triage" : "exploitable";

@@ -178,6 +178,28 @@ describe("runRound", () => {
     });
   });
 
+  // A reviewer's proof is run, and its verdict on its own finding stands (brief, 2026-10-20).
+  describe("a finding that carries a PoC", () => {
+    const SOL: Finding = { file: "src/Vault.sol", line: 3, severity: "high", claim: "withdraw re-enters before the balance is cleared", evidence: "e", failureScenario: "s", poc: "contract P {}" };
+    it("is withdrawn when its own proof passes on this tree", async () => {
+      const reviewer = new ScriptedReviewer([[SOL]]);
+      const pocs = async () => new Map([[fingerprint(SOL), { kind: "refuted" as const, detail: "all 1 PoC test(s) pass" }]]);
+      const r = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE, pocs });
+      expect(store.latestVerdict("r1", fingerprint(SOL))?.verdict).toBe("withdrawn");
+      expect(store.openFindings("r1")).toStrictEqual([]);
+      expect(r.decision.kind, "a refuted finding does not hold the ladder").not.toBe("findings");
+    });
+    it("stands when its proof fails, and when it could not run", async () => {
+      for (const kind of ["confirmed", "inconclusive"] as const) {
+        const reviewer = new ScriptedReviewer([[SOL]]);
+        const pocs = async () => new Map([[fingerprint(SOL), { kind, detail: "x" }]]);
+        const r = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE, pocs });
+        expect(r.decision.kind, kind).toBe("findings");
+        expect(store.openFindings("r1").map((f) => f.fingerprint), kind).toContain(fingerprint(SOL));
+      }
+    });
+  });
+
   it("records a finding and reports it, resetting the ladder", async () => {
     const reviewer = new ScriptedReviewer([[HOLD_BUG]]);
     const result = await runRound({ store, reviewer, reviewId: "r1", principal: "p", worktree: dir, type: TYPE });

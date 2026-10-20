@@ -78,7 +78,7 @@ export interface EngineOutcome {
 
 const cap = (s: string, n: number): string => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
-function finding(f: {
+export function finding(f: {
   file: string;
   line?: number;
   severity: Severity;
@@ -177,7 +177,7 @@ export function engineRuleClass(claim: string): string | undefined {
  * Shared by semgrep and ast-grep because they have the same shape, and a second copy of
  * this decision would be the defect it fixes, written twice.
  */
-function bySite<T>(
+export function bySite<T>(
   matches: readonly T[],
   of: (m: T) => { readonly claim: string; readonly file: string; readonly line: number },
 ): { readonly match: T; readonly file: string; readonly lines: readonly number[] }[] {
@@ -226,7 +226,7 @@ function bySite<T>(
  * last" — the individual `file:line` entries are the sacrificial content here,
  * not the warning.
  */
-function sitesEvidence(tool: string, rule: string, file: string, lines: readonly number[]): string {
+export function sitesEvidence(tool: string, rule: string, file: string, lines: readonly number[]): string {
   const at = lines.map((l) => `${file}:${String(l)}`).join(", ");
   if (lines.length < 2) return `${tool} ${rule} at ${at}`;
   return (
@@ -440,7 +440,10 @@ export async function runEngine(worktree: string, engine: T0Engine, scope?: Scop
   // never run any of them — `runner.ts` drives them inside the sandbox. Falling
   // through to "has no runner" would read as a missing feature instead of a
   // boundary (D-24).
-  if (engine === "tsc" || engine === "eslint" || engine === "cargo-check" || engine === "cargo-clippy") {
+  if (
+    engine === "tsc" || engine === "eslint" || engine === "cargo-check" || engine === "cargo-clippy" ||
+    engine === "forge-build" || engine === "forge-test" || engine === "slither" || engine === "aderyn" || engine === "solhint"
+  ) {
     return {
       engine,
       findings: [],
@@ -921,7 +924,16 @@ async function semgrep(worktree: string, scope?: Scope): Promise<EngineOutcome> 
   const r = await runTool(
     worktree,
     "semgrep",
-    ["--config", "p/security-audit", "--json", "--quiet", "--metrics", "off", ...scopePaths(scope)],
+    [
+      "--config", "p/security-audit",
+      // The Solidity pack, when the scope holds contracts: p/security-audit has no Solidity
+      // rules of note, and p/smart-contracts is semgrep's own set for them (checked
+      // 2026-10-20: reentrancy, access control, oracle and callback rules among them).
+      ...((scope?.some((f) => f.endsWith(".sol")) ?? false) || existsSync(join(worktree, "foundry.toml"))
+        ? ["--config", "p/smart-contracts"]
+        : []),
+      "--json", "--quiet", "--metrics", "off", ...scopePaths(scope),
+    ],
     600_000,
   );
   // `interrupted: r.timedOut` — found by lore's own review, fingerprint dd36a31b:

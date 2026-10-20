@@ -15,7 +15,7 @@ import { describe, expect, it } from "vitest";
 import { CODE_ARCH, SECURITY } from "../core/review-type.ts";
 import type { Tier } from "../core/ladder.ts";
 import type { KnowledgeItem } from "../store/store.ts";
-import { OUTPUT_CONTRACT, continuedPrompt, proseShare, reviewPrompt, streamFix } from "./prompts.ts";
+import { OUTPUT_CONTRACT, continuedPrompt, proseShare, reviewPrompt, solidityBlock, streamFix } from "./prompts.ts";
 
 const TIER: Tier = { id: "t1", kind: "model", model: "v/m", stage: "fast" };
 
@@ -508,5 +508,19 @@ describe("the task framing, in folder mode (scopePath set)", () => {
   it("still asks the ordinary change-shaped question when scopePath is absent", () => {
     const p = promptAt(0);
     expect(p).toMatch(/does it do MORE than was asked/);
+  });
+});
+
+// The Solidity pack reaches a tier only when the change touches contracts: every line of it
+// is a prompt token on every round, and on a JS change it is noise the tier must read past.
+describe("the Solidity pack", () => {
+  it("is included when the diff touches a contract, and names the classes that drain funds", () => {
+    const block = solidityBlock("diff --git a/src/Vault.sol b/src/Vault.sol\n--- a/src/Vault.sol\n+++ b/src/Vault.sol\n");
+    expect(block).toMatch(/READ-ONLY/);
+    expect(block).toMatch(/CRITICAL — funds at risk/);
+    expect(block).toMatch(/EIP-712/);
+  });
+  it("is absent for a change with no contracts", () => {
+    expect(solidityBlock("diff --git a/src/a.ts b/src/a.ts\n+++ b/src/a.ts\n")).toBe("");
   });
 });

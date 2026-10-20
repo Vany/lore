@@ -397,7 +397,7 @@ describe("verdicts", () => {
   // Asserted over every verdict kind rather than the two that settle, so adding a
   // kind cannot pass by being ignored on both sides.
   it("agrees with openFindings on every verdict kind", () => {
-    const kinds: VerdictKind[] = ["fixed", "justified-accepted", "justified-rejected"];
+    const kinds: VerdictKind[] = ["fixed", "justified-accepted", "justified-rejected", "justified-unruled", "withdrawn"];
     kinds.forEach((verdict, i) => {
       const fp = `f${i}`;
       store.recordFinding("rev1", finding(fp));
@@ -407,10 +407,11 @@ describe("verdicts", () => {
     const settled = new Set(store.settledFingerprints("rev1"));
     const open = new Set(store.openFindings("rev1").map((f) => f.fingerprint));
 
-    for (const fp of ["f0", "f1", "f2"]) {
+    kinds.forEach((_, i) => {
+      const fp = `f${String(i)}`;
       expect(settled.has(fp), `${fp}: settled and open disagree`).toBe(!open.has(fp));
-    }
-    expect([...settled].sort()).toStrictEqual(SETTLING_VERDICTS.map((_, i) => `f${i}`));
+    });
+    expect([...settled].sort()).toStrictEqual(kinds.flatMap((k, i) => (SETTLING_VERDICTS.includes(k) ? [`f${String(i)}`] : [])));
   });
 
   // lore-ok[6aa59cb5]: found by lore's own review. `model` existed on the schema

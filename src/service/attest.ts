@@ -182,6 +182,8 @@ export async function attest(store: Store, reviewId: string, principal: string, 
   const line =
     `lore: reviewed tree ${review.treeHash}${scopedTo} against this repo's rules and lore's own — ` +
     `${scope}, ${counts.raised} findings, ${counts.fixed} fixed, ${counts.justified} justified` +
+    // Said only when it happened: a finding its own reviewer's PoC refuted on this tree.
+    `${counts.withdrawn > 0 ? `, ${counts.withdrawn} withdrawn by their own proof` : ""}` +
     // A pass can leave inherited pattern matches open (D-68: they do not hold the ladder),
     // and the signed line is the one place a reader cannot be told so anywhere else.
     `${counts.inherited > 0 ? `, ${counts.inherited} inherited from the repository and left open` : ""}.`;
@@ -200,7 +202,7 @@ export function render(a: Attestation): string {
   return `${a.line}  [ed25519:${a.signature}]`;
 }
 
-function tally(store: Store, reviewId: string): { raised: number; fixed: number; justified: number; inherited: number } {
+function tally(store: Store, reviewId: string): { raised: number; fixed: number; justified: number; withdrawn: number; inherited: number } {
   const total = store.findingCount(reviewId);
   // Counted per FINDING, by its LATEST verdict — the same rule `settledFingerprints`
   // uses. Counting verdict rows was wrong twice over, and the first attestation ever
@@ -213,11 +215,13 @@ function tally(store: Store, reviewId: string): { raised: number; fixed: number;
 
   let fixed = 0;
   let justified = 0;
+  let withdrawn = 0;
   for (const v of verdicts) {
     if (v.verdict === "fixed") fixed += v.c;
     if (v.verdict === "justified-accepted") justified += v.c;
+    if (v.verdict === "withdrawn") withdrawn += v.c;
   }
-  return { raised: total, fixed, justified, inherited: store.openFindings(reviewId).filter((f) => f.preexisting === true).length };
+  return { raised: total, fixed, justified, withdrawn, inherited: store.openFindings(reviewId).filter((f) => f.preexisting === true).length };
 }
 
 function countTiers(store: Store, reviewId: string): number {

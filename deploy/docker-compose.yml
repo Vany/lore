@@ -19,6 +19,17 @@ services:
     profiles: ["build-only"]
     command: ["true"]
 
+  # The T0 sandbox for Ethereum projects (foundry, slither, aderyn, solhint). Built, never
+  # started, like the one above: `t0/evm.ts` launches it only for a tree with a foundry.toml.
+  sandbox-evm:
+    build:
+      context: ..
+      dockerfile: deploy/sandbox-evm.Dockerfile
+    image: lore-sandbox:evm
+    platform: linux/arm64
+    profiles: ["build-only"]
+    command: ["true"]
+
   lore:
     build:
       context: ..

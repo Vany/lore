@@ -26,7 +26,10 @@ import { loadTiers, type Tier } from "./ladder.ts";
  * running it here means executing an arbitrary dependency tree on the review host for
  * a result its owner already has.
  */
-export type T0Engine = "tsc" | "eslint" | "cargo-check" | "cargo-clippy" | "ast-grep" | "semgrep" | "sbom" | "osv";
+export type T0Engine =
+  | "tsc" | "eslint" | "cargo-check" | "cargo-clippy" | "ast-grep" | "semgrep" | "sbom" | "osv"
+  // Ethereum (Solidity / EVM), in the EVM sandbox (`t0/evm.ts`).
+  | "forge-build" | "forge-test" | "slither" | "aderyn" | "solhint";
 
 export interface ReviewType {
   readonly id: string;
@@ -66,7 +69,9 @@ export const CODE_ARCH: ReviewType = {
   // actually classified now, and it reports `skipped` — ast-grep's own treatment,
   // logged to the operator rather than repeated to the client — when no Cargo.toml
   // exists at all, keeping this list unconditional the same way tsc/eslint's is.
-  t0: ["tsc", "eslint", "cargo-check", "cargo-clippy", "ast-grep", "semgrep"],
+  // The EVM engines are listed unconditionally too, and report `skipped` where there is no
+  // foundry.toml — the same treatment as cargo's.
+  t0: ["tsc", "eslint", "cargo-check", "cargo-clippy", "ast-grep", "semgrep", "forge-build", "forge-test", "slither", "aderyn", "solhint"],
   get tiers() {
     return loadTiers();
   },
@@ -85,7 +90,7 @@ export const CODE_ARCH: ReviewType = {
 export const SECURITY: ReviewType = {
   id: "security",
   description: "Known-vulnerable dependencies and weaknesses, and whether they are reachable.",
-  t0: ["sbom", "osv", "semgrep"],
+  t0: ["sbom", "osv", "semgrep", "slither", "aderyn"],
   get tiers() {
     return loadTiers();
   },

@@ -495,7 +495,7 @@ up: preflight sync-opencode
 	$(wrong-directory)
 	$(check-deployed)
 	$(check-db-migrated)
-	@$(STAMP) $(COMPOSE) --profile build-only build sandbox
+	@$(STAMP) $(COMPOSE) --profile build-only build sandbox sandbox-evm
 	@$(STAMP) $(COMPOSE) up -d --build
 	@# A FRESH opencode database has no credentials until something writes them, so the
 	@# host's go in on every `up` — unchanged ones are a no-op. Retried ONLY while opencode

@@ -615,6 +615,7 @@ export function reviewPrompt(i: PromptInput): string {
     policyBlock(i.policyCount ?? 0),
     i.conflicts ?? "",
     settledBlock(i.settled),
+    solidityBlock(i.diff),
     compositionBlock(i.diff, i.scopePath),
     "",
     "DETERMINISTIC RESULTS",
@@ -626,6 +627,58 @@ export function reviewPrompt(i: PromptInput): string {
     "still have missed. Drop what does not clear it — that is the job, not a failure to do the job.",
     "Say plainly if it is clean. `\"findings\": []` is a real answer and often the right one; a review that",
     "invents work costs the author a whole fix cycle and teaches them to skim the next one.",
+  ].join("\n");
+}
+
+/**
+ * THE SOLIDITY PACK, when the change touches contracts (brief, 2026-10-20). A contract is
+ * code that holds money in public, where an attacker writes the calling code: the classes
+ * below are the ones that have actually drained funds, and a reviewer used to application
+ * code does not look for most of them unprompted.
+ *
+ * The severity mapping is the brief's five-step scale onto lore's three. Funds at risk is
+ * `high` and says so in the claim, because lore has no fourth level and "critical" must not
+ * be lost in a word nobody reads. Info is not raised: it holds the review, and advice
+ * about style is not what holds a contract back.
+ */
+export function solidityBlock(diff: string): string {
+  if (!/^diff --git a\/\S+\.sol /m.test(diff) && !/^\+\+\+ b\/\S+\.sol$/m.test(diff)) return "";
+  return [
+    "",
+    "THIS CHANGE TOUCHES SOLIDITY CONTRACTS. Read them as an attacker who can call any external or public function,",
+    "in any order, from a contract of their own, in the same transaction, with flash-loaned capital. Check, and say",
+    "only what you can show:",
+    "  * reentrancy — classic, cross-function, cross-contract, and READ-ONLY (a view read mid-call by another protocol);",
+    "    state written after an external call, or a callback (ERC-777/721/1155 hooks, `receive`) that re-enters",
+    "  * access control — a missing or wrong modifier, an unprotected initializer, `tx.origin`, a role nobody can revoke",
+    "  * external calls — unchecked return values (low-level `call`, ERC-20 `transfer` that returns false), gas griefing",
+    "  * oracles and prices — spot prices from a pool, TWAP windows too short, stale or unchecked feed answers,",
+    "    anything a flash loan can move inside one transaction",
+    "  * integer precision — rounding direction (who does it favour?), division before multiplication, decimals",
+    "    mismatches between tokens, unsafe casts down",
+    "  * token conformance — ERC-20/721/4626 behaviour, fee-on-transfer and rebasing tokens, missing return values,",
+    "    ERC-4626 share inflation on the first deposit",
+    "  * signatures — replay across nonces, chains (chainId) and contracts (EIP-712 domain), malleability, `ecrecover`",
+    "    returning zero",
+    "  * ordering — front-running and MEV on approvals, swaps without slippage limits, commit-reveal gaps",
+    "  * upgradeability — storage layout collisions, an initializer callable twice or on the implementation, UUPS",
+    "    `_authorizeUpgrade` without access control",
+    "  * denial of service — unbounded loops over user-growable arrays, a push payment one reverting receiver blocks",
+    "  * `delegatecall` into untrusted code, `selfdestruct`",
+    "  * events — a state change an off-chain system relies on that emits nothing",
+    "  * centralisation — admin keys that can move user funds or pause withdrawals: REPORT these at `low`, they are a",
+    "    disclosure for the owners, not a defect the branch must fix",
+    "SEVERITY for contracts: funds can be stolen or frozen → `high`, and the claim begins \"CRITICAL — funds at risk:\"",
+    "when an attacker needs no privilege; a loss bounded or needing unusual conditions → `high` or `medium`; misbehaviour",
+    "without loss → `medium`; hygiene with a stated consequence → `low`. Do not raise informational notes at all.",
+    "Code under lib/ and node_modules/ is vendored — not this branch's — unless the change modifies it.",
+    "",
+    "PROVE IT WHERE YOU CAN. For a `high` or `medium` finding on a contract, add `\"poc\"`: the full source of ONE forge",
+    "test file that FAILS on this tree because of the defect and would pass once it is fixed — assert the safe behaviour",
+    "(e.g. the attacker's balance is unchanged), so the failure IS the exploit. Import `forge-std/Test.sol` and the contract",
+    "by its path from `test/` (`../src/Vault.sol`); no fork, no RPC, no network — there is none. lore runs it on this tree:",
+    "if it FAILS your finding is confirmed; if it PASSES, your own proof says the code holds and the finding is",
+    "WITHDRAWN. Omit `poc` rather than send one you have not reasoned through.",
   ].join("\n");
 }
 

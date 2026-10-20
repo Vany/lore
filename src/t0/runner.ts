@@ -14,6 +14,7 @@ import { basename, join } from "node:path";
 import { compareFindings, type Finding } from "../core/finding.ts";
 import type { T0Engine } from "../core/review-type.ts";
 import { detect, parseCargoJson, parseEslint, parseTsc, runEngine, type EngineOutcome } from "./engines.ts";
+import { EVM_ENGINES, sandboxedEvm } from "./evm.ts";
 import {
   cargoLockKey,
   commandsFor,
@@ -147,14 +148,15 @@ export async function runT0(worktree: string, opts: T0Options): Promise<T0Result
   // reason beyond the order they happened to be written in. Engines within each group
   // are independent of each other too — same reasoning, `Promise.all` rather than a
   // loop.
-  const sandboxedNames = new Set<T0Engine>(["tsc", "eslint", "cargo-check", "cargo-clippy"]);
+  const sandboxedNames = new Set<T0Engine>(["tsc", "eslint", "cargo-check", "cargo-clippy", ...EVM_ENGINES]);
   const hostEngines = opts.engines.filter((e) => !sandboxedNames.has(e));
-  const [hostOutcomes, sandboxOutcomes, cargoOutcomes] = await Promise.all([
+  const [hostOutcomes, sandboxOutcomes, cargoOutcomes, evmOutcomes] = await Promise.all([
     Promise.all(hostEngines.map((engine) => runEngine(worktree, engine, files))),
     sandboxed(worktree, opts.sandbox ?? DEFAULT_SANDBOX, opts.engines),
     sandboxedCargo(worktree, opts.sandbox ?? DEFAULT_SANDBOX, opts.engines),
+    sandboxedEvm(worktree, opts.sandbox ?? DEFAULT_SANDBOX, opts.engines),
   ]);
-  const outcomes = [...hostOutcomes, ...sandboxOutcomes, ...cargoOutcomes];
+  const outcomes = [...hostOutcomes, ...sandboxOutcomes, ...cargoOutcomes, ...evmOutcomes];
 
   const skipped = outcomes.filter((o) => o.skipped !== undefined).map((o) => o.skipped ?? "");
   // Said once, to the operator's log, so an optional engine's absence is visible to

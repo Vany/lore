@@ -140,7 +140,7 @@ export interface RecordedFinding extends Finding {
  * and not a refusal: the finding stays open and the answer is ruled again next round. Its
  * rationale says who did not finish, which is what the client takes to a person.
  */
-export type VerdictKind = "fixed" | "justified-accepted" | "justified-rejected" | "justified-unruled";
+export type VerdictKind = "fixed" | "justified-accepted" | "justified-rejected" | "justified-unruled" | "withdrawn";
 
 /**
  * The verdicts that CLOSE a finding. `justified-rejected` is deliberately not one:
@@ -154,7 +154,8 @@ export type VerdictKind = "fixed" | "justified-accepted" | "justified-rejected" 
  * trusting the per-finding note over the aggregate would merge a defect its reviewer
  * had explicitly refused to accept.
  */
-export const SETTLING_VERDICTS: readonly VerdictKind[] = ["fixed", "justified-accepted"];
+// `withdrawn`: the reviewer's own PoC passes on the tree, so its evidence refutes it.
+export const SETTLING_VERDICTS: readonly VerdictKind[] = ["fixed", "justified-accepted", "withdrawn"];
 
 export function isSettled(v: VerdictKind): boolean {
   return SETTLING_VERDICTS.includes(v);

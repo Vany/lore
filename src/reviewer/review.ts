@@ -51,6 +51,8 @@ import { promoteRecurring } from "../knowledge/derive.ts";
 import { relevantTo } from "../knowledge/enrich.ts";
 import { ingestDocs, type IngestResult } from "../knowledge/ingest.ts";
 import { runT0, renderT0, renderT0Delta, t0SilenceProves } from "../t0/runner.ts";
+import { checkPocs } from "../t0/evm.ts";
+import { DEFAULT_SANDBOX } from "../t0/sandbox.ts";
 import { engineRuleClass, unreadFilesOf } from "../t0/engines.ts";
 import type { RecordedFinding, Store } from "../store/store.ts";
 import { emissionOf, type Listed, type ReviewerLike, type ReviewerResult } from "./opencode.ts";
@@ -75,6 +77,8 @@ export interface RoundInput {
    * are treated differently, so both have to be fakeable.
    */
   readonly t0?: typeof runT0;
+  /** Runs reviewer-supplied PoCs (`t0/evm.ts`); fakeable for the same reason as `t0`. */
+  readonly pocs?: typeof checkPocs;
   /**
    * Whether a fallback chain may walk onto a route that bills per call (D-117).
    *
@@ -2978,7 +2982,9 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   //
   // Reported, never dropped. The finding is true and someone should fix it; what was
   // wrong was attributing it to this merge.
-  const PATTERN_ENGINES = new Set(["semgrep", "ast-grep"]);
+  // slither, aderyn and solhint match the contracts as they stand, file by file, exactly as
+  // semgrep does — a hit in a contract the branch never touched is the repository's.
+  const PATTERN_ENGINES = new Set(["semgrep", "ast-grep", "slither", "aderyn", "solhint"]);
   const changed = new Set(diff.changedFiles);
   const fromPatterns = new Set(
     t0.outcomes.filter((o) => PATTERN_ENGINES.has(o.engine)).flatMap((o) => o.findings.map((f) => `${f.file}:${f.claim}`)),
@@ -3148,6 +3154,34 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     carried.push(fp);
   }
 
+  // 5c. A PROOF THE REVIEWER SUPPLIED IS RUN (brief, 2026-10-20). A finding on a contract may
+  // carry `poc`, a forge test that fails because of the defect. It runs in the EVM sandbox
+  // on this tree: failing confirms it; PASSING refutes it on the reviewer's own evidence,
+  // and the finding is withdrawn; anything else proves nothing and changes nothing.
+  // Latest raise per fingerprint, the same raise a refusal would quote.
+  const pocOf = new Map<string, string>();
+  for (const e of ledger.events) {
+    const f = e.kind === "emit" ? raiseOf.get(e.seq) : undefined;
+    if (e.kind === "emit" && f?.poc !== undefined && f.file.endsWith(".sol")) pocOf.set(e.fingerprint, f.poc);
+  }
+  const withdrawn: string[] = [];
+  if (pocOf.size > 0) {
+    const proofs = await (input.pocs ?? checkPocs)(worktree, DEFAULT_SANDBOX, [...pocOf].map(([fp, source]) => ({ fingerprint: fp, source })));
+    for (const [fp, o] of proofs) {
+      console.error(`[lore:log] ${reviewId}: PoC for ${fp.slice(0, 8)} ${o.kind} — ${o.detail}`);
+      if (o.kind !== "refuted") continue;
+      store.recordVerdict(reviewId, {
+        fingerprint: fp,
+        verdict: "withdrawn",
+        rationale: `withdrawn: the proof the reviewer supplied passes on this tree (${o.detail}), so the behaviour it said was broken holds`,
+        scope: undefined,
+        tier: "t0",
+        round,
+      });
+      withdrawn.push(fp);
+    }
+  }
+
   // 6. Rule on the pending justifications — through the ledger (D-159). A model that raised it
   // again refuses it; silence accepts it ONLY when a member at or above the tier that raised
   // it finished; anything else is unruled, and unruled holds the ladder.
@@ -3275,7 +3309,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // actually have moved (D-56). With a rung, the silence measured is the STRONGEST
   // member's — every member ran the same round, so what none of them re-raised, the
   // strongest one's rank vouches for.
-  const answeredOtherwise = new Set<string>([...pending.map((p) => p.finding.fingerprint), ...expired]);
+  const answeredOtherwise = new Set<string>([...pending.map((p) => p.finding.fingerprint), ...expired, ...withdrawn]);
   // RELEASED BY THE LEDGER: a model's raise stops counting against a fix once the SAME member
   // was shown a fix after it, on the round's one clock (`ruling.standing`). That is the
   // member's qualified silence about the fix; `codeMoved` still guards, so a fix that did not
@@ -3318,7 +3352,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // is told `findings_ready` and handed nothing, for ever, until a bound stops it.
   // `ladderNow`, never `review.ladder`: a skipped member's `unavailable` mark is part of
   // this round's truth, and stepping from the stale state would resurrect the member.
-  const withSettled = settle(ladderNow, [...accepted, ...fixed]);
+  const withSettled = settle(ladderNow, [...accepted, ...fixed, ...withdrawn]);
   // WHO ACTUALLY ANSWERED THIS TIER, carried into the verdict (D-49, D-93).
   //
   // Independence is checked against the model that READ the code, not the one the config
@@ -3364,7 +3398,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     state: answered,
     // Unruled answers hold it too: unknown is never accepted, and a ladder that stepped over
     // one would pass on a question nobody entitled to answer it had read (D-159).
-    raised: [...new Set([...raisedFingerprints, ...unruled])].filter((fp) => !inheritedRaised.has(fp)),
+    raised: [...new Set([...raisedFingerprints, ...unruled])].filter((fp) => !inheritedRaised.has(fp) && !withdrawn.includes(fp)),
     tiers,
     needsHuman: store.openConflicts(review.repoId).length > 0,
     // Every member that RAN is billed a round; a skipped sibling is not (D-109).
