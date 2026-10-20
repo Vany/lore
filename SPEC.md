@@ -4068,7 +4068,7 @@ working agreement says to confirm rather than assume.
 `.gitignore` rule.
 
 **D-160 — lore reviews Ethereum projects: an EVM sandbox, its tools, a Solidity pack, and
-proofs the reviewer can attach. BUILT 2026-10-20 (sandbox demo pending — see the last line).**
+proofs the reviewer can attach. BUILT 2026-10-20, demonstrated in the sandbox.**
 
 Vany: *"add the ability to validate crypto projects"* (Kira's brief, 2026-10-20). No special
 mode: a foundry repository goes through the ordinary ladder, and these are what it adds.
@@ -4084,9 +4084,11 @@ mode: a foundry repository goes through the ordinary ladder, and these are what 
   that did NOT run, never as a defect.
 - **t0 engines** (`t0/evm.ts`), for a tree with a `foundry.toml` at its root: `forge-build`
   (compile errors, high), `forge-test` (failing tests, high), `slither` (High → high, Medium
-  → medium, Low/Informational → logged notes, not raised), `aderyn` (its high → medium, its
-  detectors being noisier), and `solhint` (errors → low, only where the project configured
-  solhint). A tree that does not compile runs nothing after the build: "slither found
+  → medium, Low/Informational → logged notes, not raised; it compiles through forge itself,
+  because crytic-compile 0.4.2 cannot read forge 1.8's build-info), `aderyn` (NOTES ONLY,
+  logged, never raised: its high bucket flagged a correct checks-effects-interactions
+  withdraw to `msg.sender`, so as a gate it would block every correct withdraw), and
+  `solhint` (errors → low, only where the project configured solhint). A tree that does not compile runs nothing after the build: "slither found
   nothing" about code that never built would be INV-1. A tool that cannot start is
   unavailable, never a finding (D-158). Without a foundry.toml the engines report `skipped`;
   a hardhat project reports them UNAVAILABLE, because nothing ran: hardhat is not built.
@@ -4104,10 +4106,12 @@ mode: a foundry repository goes through the ordinary ladder, and these are what 
   code holds, and the finding is `withdrawn` (a settling verdict, counted on the attestation).
   A PoC that does not compile or needs a network proves nothing and changes nothing.
 
-**Not yet verified end to end:** on 2026-10-20 the image could not be built — the host's link
-ran at ~18 KB/s and foundry's tarball is 130 MB. The forge output shapes were read off forge
-itself; slither's, aderyn's and solhint's follow their documented JSON and are unconfirmed
-until the demo runs.
+**Demonstrated 2026-10-20** on two foundry projects with `forge-std` as a real submodule,
+cloned at its pinned commit by the install phase: the classic EtherStore reentrancy and its
+checks-effects-interactions twin. Reentrant: slither `reentrancy-eth` high at the withdraw.
+Clean: no finding. A reviewer-style PoC (an attacker contract, asserting other depositors'
+funds survive) was CONFIRMED on the first ("drained: 0 != 2 ether") and REFUTED on the second,
+which withdraws the finding; neither worktree was touched. Hardhat is not built.
 
 **D-159 — a refused justification carries the reviewer's reason, and is handed back.
 BUILT 2026-10-17.**

@@ -29,6 +29,10 @@ ARG SOLHINT_VERSION=6.2.5
 ARG ADERYN_VERSION=aderyn-v0.6.8
 ARG TARGETARCH
 
+# Downloads RESUME and retry: the first build of this image died at curl exit 18 (the link
+# dropped mid-file) on a 130 MB tarball. The sha256 check below still decides what is kept.
+ARG CURL="curl -fsSL --retry 20 --retry-all-errors --retry-delay 5 -C -"
+
 RUN apt-get update \
  && apt-get install -y --no-install-recommends git ca-certificates curl xz-utils python3 python3-pip python3-venv \
  && rm -rf /var/lib/apt/lists/*
@@ -38,8 +42,8 @@ RUN set -eu; \
     arch="$([ "$TARGETARCH" = "arm64" ] && echo arm64 || echo amd64)"; \
     base="https://github.com/foundry-rs/foundry/releases/download/${FOUNDRY_VERSION}"; \
     file="foundry_${FOUNDRY_VERSION}_linux_${arch}.tar.gz"; \
-    curl -fsSL -o "/tmp/${file}" "${base}/${file}"; \
-    curl -fsSL -o /tmp/foundry.sha256 "${base}/foundry_${FOUNDRY_VERSION}_linux_${arch}.sha256"; \
+    ${CURL} -o "/tmp/${file}" "${base}/${file}"; \
+    ${CURL} -o /tmp/foundry.sha256 "${base}/foundry_${FOUNDRY_VERSION}_linux_${arch}.sha256"; \
     (cd /tmp && grep -q "$(sha256sum "${file}" | cut -d' ' -f1)" foundry.sha256) \
       || { echo "foundry tarball does not match its published sha256" >&2; exit 1; }; \
     tar -xzf "/tmp/${file}" -C /usr/local/bin forge cast anvil chisel; \
@@ -50,8 +54,8 @@ RUN set -eu; \
 RUN set -eu; \
     triple="$([ "$TARGETARCH" = "arm64" ] && echo aarch64 || echo x86_64)-unknown-linux-gnu"; \
     base="https://github.com/Cyfrin/aderyn/releases/download/${ADERYN_VERSION}"; \
-    curl -fsSL -o /tmp/aderyn.tar.xz "${base}/aderyn-${triple}.tar.xz"; \
-    curl -fsSL -o /tmp/aderyn.sha256 "${base}/aderyn-${triple}.tar.xz.sha256"; \
+    ${CURL} -o /tmp/aderyn.tar.xz "${base}/aderyn-${triple}.tar.xz"; \
+    ${CURL} -o /tmp/aderyn.sha256 "${base}/aderyn-${triple}.tar.xz.sha256"; \
     [ "$(sha256sum /tmp/aderyn.tar.xz | cut -d' ' -f1)" = "$(cut -d' ' -f1 /tmp/aderyn.sha256)" ] \
       || { echo "aderyn tarball does not match its published sha256" >&2; exit 1; }; \
     mkdir -p /tmp/aderyn && tar -xJf /tmp/aderyn.tar.xz -C /tmp/aderyn; \
@@ -62,7 +66,7 @@ RUN set -eu; \
 # slither in its own venv, so the system python is untouched; solc comes from forge's cache at
 # run time (slither compiles through `forge build`), so no solc-select is needed.
 RUN python3 -m venv /opt/slither \
- && /opt/slither/bin/pip install --no-cache-dir "slither-analyzer==${SLITHER_VERSION}" \
+ && /opt/slither/bin/pip install --no-cache-dir --retries 20 --timeout 120 "slither-analyzer==${SLITHER_VERSION}" \
  && ln -s /opt/slither/bin/slither /usr/local/bin/slither \
  && slither --version
 

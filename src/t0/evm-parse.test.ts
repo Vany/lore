@@ -79,6 +79,8 @@ describe("aderyn and solhint", () => {
     const f = parseSolhint(JSON.stringify([
       { filePath: "src/A.sol", line: 3, severity: "Error", message: "Avoid tx.origin", ruleId: "avoid-tx-origin" },
       { filePath: "src/A.sol", line: 4, severity: "Warning", message: "style", ruleId: "quotes" },
+      // solhint 6.2.5 ends its array with a summary object (seen in the sandbox).
+      { conclusion: "2 problem/s (1 error/s, 1 warning/s)" },
     ]));
     expect(f?.map((x) => [x.claim, x.severity])).toStrictEqual([["avoid-tx-origin: Avoid tx.origin", "low"]]);
   });

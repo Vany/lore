@@ -1,10 +1,9 @@
 /**
  * What the EVM tools say, as findings. Pure, so each shape has a test (`evm-parse.test.ts`).
  *
- * The forge shapes were read off forge itself (1.7.1 and the pinned 1.8.5), not from docs.
- * The slither, aderyn and solhint shapes follow each tool's documented JSON output and are
- * checked by the sandbox demo; every parser refuses what it does not recognise rather than
- * reading it as "found nothing" (INV-1).
+ * Every shape was read off the pinned tools themselves in the EVM sandbox (forge 1.8.5,
+ * slither 0.11.6, aderyn 0.6.8, solhint 6.2.5 — 2026-10-20), not from docs; every parser
+ * refuses what it does not recognise rather than reading it as "found nothing" (INV-1).
  *
  * VENDORED CODE IS NOT THE BRANCH'S. `lib/` (foundry's git dependencies) and `node_modules/`
  * hold other people's contracts; a detector firing inside OpenZeppelin is not a finding about

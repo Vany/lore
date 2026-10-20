@@ -104,7 +104,11 @@ export async function sandboxedEvm(worktree: string, base: SandboxConfig, engine
     }
     const rest = wanted.filter((e) => e !== "forge-build");
     if (!compiles) {
-      for (const engine of rest) out.push({ engine, findings: [], unavailable: `${engine}: the contracts do not compile, so it could not run` });
+      // Said as what is KNOWN: a build that did not run is not a build that failed, and
+      // "the contracts do not compile" about a sandbox that never started would be a false
+      // claim about the branch.
+      const why = buildFindings === undefined ? "forge build did not run, so nothing after it could" : "the contracts do not compile, so it could not run";
+      for (const engine of rest) out.push({ engine, findings: [], unavailable: `${engine}: ${why}`, ...(buildFindings === undefined ? { interrupted: true } : {}) });
       return out;
     }
 
@@ -124,7 +128,10 @@ export async function sandboxedEvm(worktree: string, base: SandboxConfig, engine
       }
     }
     if (rest.includes("slither")) {
-      const r = await offline("slither . --json - --filter-paths 'lib/|node_modules/' --exclude-dependencies --foundry-ignore-compile 2>/dev/null");
+      // Slither compiles through forge itself (offline: solc is cached). Not `--foundry-ignore-
+      // compile`: crytic-compile 0.4.2 cannot read forge 1.8's build-info layout and dies on a
+      // missing `.output.json` — found by the first sandbox run.
+      const r = await offline("slither . --json - --filter-paths 'lib/|node_modules/' --exclude-dependencies 2>/dev/null");
       const parsed = parseSlither(r.stdout);
       if (parsed === undefined) out.push(didNotRun("slither", "slither", r));
       else {
@@ -137,8 +144,14 @@ export async function sandboxedEvm(worktree: string, base: SandboxConfig, engine
       const parsed = parseAderyn(r.stdout);
       if (parsed === undefined) out.push(didNotRun("aderyn", "aderyn", r));
       else {
-        if (parsed.notes > 0) console.error(`[lore:log] aderyn: ${String(parsed.notes)} low note(s), not raised`);
-        out.push({ engine: "aderyn", findings: parsed.findings });
+        // NOTES, NOT FINDINGS. On the first sandbox run aderyn's HIGH bucket fired
+        // `eth-send-unchecked-address` on a correct checks-effects-interactions withdraw to
+        // msg.sender — the canonical pattern, so as a gate it would block every correct
+        // withdraw function. slither carries the gate; aderyn's hits are logged for the
+        // operator, never raised, until one of its detectors earns a place by evidence.
+        const hits = parsed.findings.map((f) => `${f.file}:${String(f.line ?? "?")} ${f.claim}`);
+        console.error(`[lore:log] aderyn (notes only, not raised): ${String(parsed.findings.length)} high, ${String(parsed.notes)} low${hits.length > 0 ? ` — ${hits.join("; ")}` : ""}`);
+        out.push({ engine: "aderyn", findings: [] });
       }
     }
     if (rest.includes("solhint")) {
