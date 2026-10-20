@@ -3,6 +3,32 @@
 Newest first. Updated at the end of each task: what changed, what I learned, what
 surprised me.
 
+## 2026-10-20 — D-159 finished (one contest ledger) and D-160 (Ethereum projects)
+
+**Part A, the ledger.** The three [OPEN] gaps were all one shape: five places computing
+"who contested what", each from a partial record. One ledger per round now holds every
+emission, every fix a session was shown (boundary AND catch-up opener — the opener was the
+missing event in the per-pass-clock bug), and every ending. `rule()` is the only reader.
+Decisions came from Kira's brief (Vany delegated); two I asked about: decision 5 is a
+`second_opinion` label that still blocks, and decision 6's cap governs only the new re-asks.
+- **Surprise:** a skipped member is unavailable for the REST of the review, so "re-ask" had
+  to be in-round — a requeued round would never ask it at all.
+- **Surprise:** re-running an all-skipped rung broke four tests whose point is
+  `skip_if_quota`'s "one attempt, not two". Resolved: re-run only when there is something to
+  rule on. A re-ask is for a ruling, not a retry.
+- **Replay on live data:** 7 of 1472 stored acceptances were a t3 finding accepted on t2's
+  silence, 5 of them in `passed_thin_ladder` reviews. Report only; not re-judged.
+
+**Part B, EVM.** Built: separate pinned image, forge build/test, slither, aderyn, solhint,
+the Solidity pack, PoC proofs that can withdraw a finding. NOT verified end to end: the
+host's link ran at ~18 KB/s and the image could not finish downloading foundry. Hardhat is
+not built (reported unavailable, loudly).
+
+**Environment notes.** lore restarted itself at 13:54Z (not me): same image, two jobs
+requeued, and it dropped this session's MCP connection, which did not come back. The load
+average was 15–21 all afternoon, and one sandbox test failed on its 5 s timeout in a full run
+and passed alone.
+
 ## 2026-10-19 — card #0050: rigid's review stuck below t2 (two of three bugs were misdiagnosed)
 
 **The report (Kira's brief).** Three bugs: a stale "image not found" finding that nothing

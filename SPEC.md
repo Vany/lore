@@ -4067,6 +4067,48 @@ working agreement says to confirm rather than assume.
 (fingerprint 9c6f2a60) — never inside the repository**, so nothing needs a new
 `.gitignore` rule.
 
+**D-160 — lore reviews Ethereum projects: an EVM sandbox, its tools, a Solidity pack, and
+proofs the reviewer can attach. BUILT 2026-10-20 (sandbox demo pending — see the last line).**
+
+Vany: *"add the ability to validate crypto projects"* (Kira's brief, 2026-10-20). No special
+mode: a foundry repository goes through the ordinary ladder, and these are what it adds.
+
+- **A separate sandbox image**, `lore-sandbox:evm` (`deploy/sandbox-evm.Dockerfile`): foundry,
+  slither, aderyn, solhint, node; every version pinned and every downloaded binary checked
+  against its published sha256. Separate so JS reviews never pull it. Debian, because foundry's
+  and aderyn's linux builds are glibc, and both ship arm64.
+- **Two phases, only the first with network.** Install clones the `lib/` git dependencies at
+  the commits the tree pins (`.gitmodules` plus gitlinks) and fetches the solc the pragmas
+  name. Build, test and analysis run with `--network none`, so no test reaches a chain but a
+  local anvil, and the sandbox holds no RPC URL and no key. A fork test is reported as a test
+  that did NOT run, never as a defect.
+- **t0 engines** (`t0/evm.ts`), for a tree with a `foundry.toml` at its root: `forge-build`
+  (compile errors, high), `forge-test` (failing tests, high), `slither` (High → high, Medium
+  → medium, Low/Informational → logged notes, not raised), `aderyn` (its high → medium, its
+  detectors being noisier), and `solhint` (errors → low, only where the project configured
+  solhint). A tree that does not compile runs nothing after the build: "slither found
+  nothing" about code that never built would be INV-1. A tool that cannot start is
+  unavailable, never a finding (D-158). Without a foundry.toml the engines report `skipped`;
+  a hardhat project reports them UNAVAILABLE, because nothing ran: hardhat is not built.
+- **Vendored code is never a finding**: hits under `lib/`, `node_modules/` or `dependencies/`
+  are dropped. Analyser hits in files the branch does not touch are inherited (D-68), as
+  semgrep's are. semgrep adds `p/smart-contracts` where the scope holds contracts.
+- **The Solidity pack** (`solidityBlock` in prompts.ts) reaches the model tiers when the diff
+  touches a `.sol` file: the attack classes that have drained funds, and the severity scale —
+  funds at risk is `high` and its claim begins "CRITICAL — funds at risk", centralisation is
+  `low` (a disclosure, not a defect), informational notes are not raised. lore keeps three
+  levels; a fourth would reach every client and every board for one ecosystem.
+- **A proof can withdraw a finding.** A contract finding may carry `poc`: one forge test that
+  fails because of the defect. lore runs it in the scratch copy — never the worktree — on the
+  round's tree. Failing confirms it (logged); PASSING means the reviewer's own proof says the
+  code holds, and the finding is `withdrawn` (a settling verdict, counted on the attestation).
+  A PoC that does not compile or needs a network proves nothing and changes nothing.
+
+**Not yet verified end to end:** on 2026-10-20 the image could not be built — the host's link
+ran at ~18 KB/s and foundry's tarball is 130 MB. The forge output shapes were read off forge
+itself; slither's, aderyn's and solhint's follow their documented JSON and are unconfirmed
+until the demo runs.
+
 **D-159 — a refused justification carries the reviewer's reason, and is handed back.
 BUILT 2026-10-17.**
 
