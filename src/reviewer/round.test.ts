@@ -4677,6 +4677,28 @@ describe("a rung of two members", () => {
     expect(r.decision, "a refusal nobody left can read is not passed over").toStrictEqual({ kind: "stopped", bound: "noReader" });
   });
 
+  // The third thing a dead member leaves: a bare RE-RAISE of an open finding — its last word
+  // that the fix did not work — with nothing pending and nothing new recorded.
+  it("does not pass thin over a re-raise a dead top rung just made", async () => {
+    const TOP: readonly Tier[] = [
+      { id: "t0", kind: "deterministic", stage: "fast" },
+      { id: "t1", kind: "model", model: "vendor-c/m", effort: "medium", stage: "fast", conversation: true },
+      { id: "t2", kind: "model", model: "vendor-a/m", effort: "high", stage: "deep", conversation: true, rung: 2, skip_if_quota: true },
+      { id: "t3", kind: "model", model: "vendor-b/m", effort: "high", stage: "deep", conversation: true, rung: 2, skip_if_quota: true },
+    ];
+    const type = { ...CODE_ARCH, t0: [] as const, tiers: TOP };
+    store.createReview({
+      id: "top2", repoId, principal: "p", branch: "feat/holds", intoRef: "main",
+      ticket: "t", type: CODE_ARCH.id, state: "running", ladder: { ...initialState(TOP), cursor: 2 },
+    });
+    await runRound({ store, reviewer: new RungStreaming({ t2: [DONE], t3: [emission([B]), DONE] }), reviewId: "top2", principal: "p", worktree: dir, type });
+    const second = new RungStreaming({ t3: [emission([B])] });
+    second.fail["t2"] = new Exhausted("plan is out");
+    second.onAsk = (tierId, i) => { if (tierId === "t3" && i === 0) second.fail["t3"] = new Exhausted("plan is out"); };
+    const r = await runRound({ store, reviewer: second, reviewId: "top2", principal: "p", worktree: dir, type });
+    expect(r.decision).toStrictEqual({ kind: "stopped", bound: "noReader" });
+  });
+
   it("accepts once the re-asked stronger member finishes silent", async () => {
     const first = new RungStreaming({ t2: [DONE], t3: [emission([B]), DONE] });
     await runRound({ store, reviewer: first, reviewId: "rung1", principal: "p", worktree: dir, type: RUNG_TYPE });

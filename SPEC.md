@@ -4173,8 +4173,9 @@ Vany delegated the answers (Kira's brief, 2026-10-20), and they are what is buil
 - **An all-skipped rung is ruled on**: its contests refuse (handed back), nothing is accepted.
   It never holds the cursor — every member is now unavailable, and a rung no later round can
   run would fail the review on its next submit — so the ladder moves on to the tiers that can
-  still read. When there are none above, what the dead rung left (a refusal, a finding it
-  streamed) is not passed over thin: the review stops for a person (`noReader`).
+  still read. When there are none above, anything the dead rung emitted this round — a refusal,
+  a fresh finding, a bare re-raise of an open one — is not passed over thin: the review stops
+  for a person (`noReader`).
 - **A single vendor's finding is labelled `second_opinion`** in the poll, and still blocks.
   Two-vendor agreement is a label here, not a gate (decision 5, Kira 2026-10-20): making a
   lone vendor's finding non-blocking would trade a wrong block for a wrong accept.

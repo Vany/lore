@@ -2968,7 +2968,10 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     const readerAbove = tiers.some(
       (t, i) => t.kind === "model" && i > review.ladder.cursor && rungKey(tiers, i) !== rungKey(tiers, review.ladder.cursor) && !ladderNow.unavailable.includes(t.id),
     );
-    if (!readerAbove && (rejected.length > 0 || skippedMembers.some((m) => m.streamed.length > 0))) noReaderLeft = true;
+    // ANY model emission this round, as the ledger counts it — a refusal, a fresh finding, or a
+    // bare re-raise of an open one (the reviewer's word that the fix did not work). Listing the
+    // cases by hand missed the third, and passed thin over a defect just re-confirmed.
+    if (!readerAbove && ruling.contested.size > 0) noReaderLeft = true;
     const skipped = unlessNoRuler(step({
       state: ladderNow,
       raised: [],
