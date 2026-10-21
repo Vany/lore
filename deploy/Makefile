@@ -495,7 +495,16 @@ up: preflight sync-opencode
 	$(wrong-directory)
 	$(check-deployed)
 	$(check-db-migrated)
-	@$(STAMP) $(COMPOSE) --profile build-only build sandbox sandbox-evm
+	@$(STAMP) $(COMPOSE) --profile build-only build sandbox
+	@# THE EVM SANDBOX IS BUILT WHEN MISSING, and only WARNED about when stale. Its first build
+	@# downloads ~130 MB of foundry, and on 2026-10-20 the host's link ran at ~18 KB/s: built
+	@# unconditionally here, a deploy of anything at all would have waited hours on it. A stale
+	@# image is said loudly, with the command that fixes it; a missing one is built, because
+	@# without it every Ethereum review is "sandbox unavailable" (D-158).
+	@have=$$(docker image inspect lore-sandbox:evm --format '{{ index .Config.Labels "lore.dockerfile" }}' 2>/dev/null || echo MISSING); \
+	want=$$(cat ../deploy/sandbox-evm.Dockerfile ../deploy/sandbox-evm-requirements.txt | shasum -a 256 | cut -c1-16); \
+	if [ "$$have" = "MISSING" ]; then echo "lore-sandbox:evm is missing — building it"; $(MAKE) --no-print-directory sandbox-evm || exit 1; \
+	elif [ "$$have" != "$$want" ]; then echo "WARNING: lore-sandbox:evm is STALE (built from $$have, the repository is at $$want): Ethereum reviews run the OLD tools until 'make sandbox-evm'"; fi
 	@$(STAMP) $(COMPOSE) up -d --build
 	@# A FRESH opencode database has no credentials until something writes them, so the
 	@# host's go in on every `up` — unchanged ones are a no-op. Retried ONLY while opencode
@@ -511,6 +520,14 @@ up: preflight sync-opencode
 	done; echo "credential sync FAILED: opencode unreachable for a minute — 'make logs' and read why"; exit 1
 	@echo
 	@echo "up. next:  make new NAME=<who> GIT=<ssh-url>"
+
+## The EVM sandbox image, labelled with the hash of what it was built from so `up` can tell
+## a current image from a stale one. Separate from `up` because it can take hours on a slow link.
+sandbox-evm:
+	$(wrong-directory)
+	@$(STAMP) docker build -f ../deploy/sandbox-evm.Dockerfile \
+	  --label lore.dockerfile=$$(cat ../deploy/sandbox-evm.Dockerfile ../deploy/sandbox-evm-requirements.txt | shasum -a 256 | cut -c1-16) \
+	  -t lore-sandbox:evm ..
 
 ## Stops the containers. Data survives — it is a host bind, not a volume.
 down:

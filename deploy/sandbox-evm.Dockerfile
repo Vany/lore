@@ -21,7 +21,8 @@
 #
 # This image holds NOTHING worth stealing (D-24).
 
-FROM node:24-bookworm-slim
+# By DIGEST, not tag: the tag floats, and a base that moves is a sandbox that moves.
+FROM node:24-bookworm-slim@sha256:a5f4366e834695d5f363b920c104953a535d3a9864d1bdf74566a0ebe01daee5
 
 ARG FOUNDRY_VERSION=v1.8.5
 ARG SLITHER_VERSION=0.11.6
@@ -65,12 +66,17 @@ RUN set -eu; \
 
 # slither in its own venv, so the system python is untouched; solc comes from forge's cache at
 # run time (slither compiles through `forge build`), so no solc-select is needed.
+# EVERY python package pinned (`sandbox-evm-requirements.txt`, the freeze of the image that
+# was demonstrated), `--no-deps` so nothing outside it can be resolved: crytic-compile in
+# particular decides whether slither can read forge's build-info at all.
+COPY deploy/sandbox-evm-requirements.txt /tmp/slither-requirements.txt
 RUN python3 -m venv /opt/slither \
- && /opt/slither/bin/pip install --no-cache-dir --retries 20 --timeout 120 "slither-analyzer==${SLITHER_VERSION}" \
+ && grep -qx "slither-analyzer==${SLITHER_VERSION}" /tmp/slither-requirements.txt \
+ && /opt/slither/bin/pip install --no-cache-dir --no-deps --retries 20 --timeout 120 -r /tmp/slither-requirements.txt \
  && ln -s /opt/slither/bin/slither /usr/local/bin/slither \
  && slither --version
 
-RUN npm i -g --no-audit --no-fund "solhint@${SOLHINT_VERSION}" pnpm@10 && solhint --version
+RUN npm i -g --no-audit --no-fund "solhint@${SOLHINT_VERSION}" pnpm@10.34.7 && solhint --version
 
 RUN git config --system user.email "sandbox@lore.invalid" \
  && git config --system user.name  "lore sandbox" \

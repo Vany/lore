@@ -1,9 +1,11 @@
 /**
  * What the EVM tools say, as findings. Pure, so each shape has a test (`evm-parse.test.ts`).
  *
- * Every shape was read off the pinned tools themselves in the EVM sandbox (forge 1.8.5,
- * slither 0.11.6, aderyn 0.6.8, solhint 6.2.5 — 2026-10-20), not from docs; every parser
- * refuses what it does not recognise rather than reading it as "found nothing" (INV-1).
+ * Every shape was read off the tools themselves, not from docs: the forge fixtures in the
+ * tests are forge 1.7.1's (the host's), and the pinned forge 1.8.5 then produced the same
+ * shapes in the EVM sandbox — `Success` and `Failure` both, the failure from a PoC — as did
+ * slither 0.11.6, aderyn 0.6.8 and solhint 6.2.5 (2026-10-20). Every parser refuses what it
+ * does not recognise rather than reading it as "found nothing" (INV-1).
  *
  * VENDORED CODE IS NOT THE BRANCH'S. `lib/` (foundry's git dependencies) and `node_modules/`
  * hold other people's contracts; a detector firing inside OpenZeppelin is not a finding about
@@ -82,6 +84,10 @@ export function parseForgeTest(stdout: string): { readonly failures: readonly Fo
       if (!isObj(r)) continue;
       ran++;
       if (r["status"] === "Success" || r["status"] === "Skipped") continue;
+      // A status this reader does not know is NOT a failure: counted as one, a renamed status
+      // in a forge release would report every test in a project as a failing high finding.
+      // The whole result is refused instead, and the engine says it could not read forge.
+      if (r["status"] !== "Failure") return undefined;
       const reason = typeof r["reason"] === "string" ? r["reason"] : "failed with no reason given";
       failures.push({
         file, contract, test, reason,

@@ -1,7 +1,7 @@
 /**
- * The EVM tools' output as findings. The forge fixtures are real output (forge 1.7.1, the
- * demo project in this change); the others follow each tool's documented JSON and are
- * re-checked against the real tools by the sandbox demo.
+ * The EVM tools' output as findings. The forge fixtures are real forge 1.7.1 output (the
+ * host's); the pinned 1.8.5 produced the same shapes in the sandbox demo, as did the other
+ * tools — see the header of evm-parse.ts.
  */
 
 import { describe, expect, it } from "vitest";
@@ -40,6 +40,10 @@ describe("forge test", () => {
     const f = forgeTestFindings(r?.failures ?? []);
     expect(f.map((x) => [x.file, x.claim])).toStrictEqual([["test/EtherStore.t.sol", "forge-test: EtherStoreTest.test_depositThenWithdraw() fails"]]);
     expect(r?.failures.filter((x) => x.needsNetwork).map((x) => x.test)).toStrictEqual(["testFork_mainnet()"]);
+  });
+  it("refuses a status it does not know, rather than calling every test failed", () => {
+    const odd = JSON.stringify({ "test/A.t.sol:A": { test_results: { "test_x()": { status: "Passed", reason: null } } } });
+    expect(parseForgeTest(odd)).toBeUndefined();
   });
 });
 

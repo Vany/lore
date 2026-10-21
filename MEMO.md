@@ -20,9 +20,16 @@ Decisions came from Kira's brief (Vany delegated); two I asked about: decision 5
   silence, 5 of them in `passed_thin_ladder` reviews. Report only; not re-judged.
 
 **Part B, EVM.** Built: separate pinned image, forge build/test, slither, aderyn, solhint,
-the Solidity pack, PoC proofs that can withdraw a finding. NOT verified end to end: the
-host's link ran at ~18 KB/s and the image could not finish downloading foundry. Hardhat is
-not built (reported unavailable, loudly).
+the Solidity pack, PoC proofs that can withdraw a finding. The image first failed to build
+(the host's link ran at ~18 KB/s and dropped foundry's 130 MB mid-file); it built later the
+same day with resumable downloads, and the demo then ran in it — see SPEC D-160. Hardhat
+was not built in this batch (reported unavailable, loudly).
+
+**NOT done from the same brief: Parts D and E** (added to it after I read it). D rotates
+lore's GPT tier between two ChatGPT logins and needs a codex upgrade on the Mac; E is lore
+checking its own tools' freshness and probing every configured account. Both change which
+accounts and versions lore calls, so they wait for the changelog-and-discuss step — they
+are not in this branch.
 
 **Environment notes.** lore restarted itself at 13:54Z (not me): same image, two jobs
 requeued, and it dropped this session's MCP connection, which did not come back. The load

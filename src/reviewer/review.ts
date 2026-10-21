@@ -1247,6 +1247,8 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   const streamed: RecordedFinding[] = [];
   const emitted: Emission[] = [];
   let heldMismatch: string | undefined;
+  /** A fix was put in front of this member and it has not answered since. */
+  let fixShown = false;
   const recordStreamed = async (f: Finding, route: string | undefined): Promise<void> => {
     emitted.push({ finding: f, route });
     const fp = fingerprint(f);
@@ -1368,10 +1370,9 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     const sessionSaw = store.sessionTreeOf(reviewId, member.id, routeKey);
     let continued = streamContinue();
     if (sessionSaw !== undefined && sessionSaw !== nowTree) {
-      // The opener shows a fix too — a catch-up run's whole reason to exist. Recorded on the
-      // same clock as every boundary: a pass that opened on fix 2 and raised a finding again
-      // stands, whatever an earlier pass said before fix 1 (D-159).
-      ledger.record({ kind: "saw-fix", member: member.id });
+      // The opener shows a fix too — a catch-up run's whole reason to exist (D-159). SHOWN, not
+      // yet SEEN: see `fixShown`.
+      fixShown = true;
       continued = streamFix({
         diff: await treeDelta(worktree, sessionSaw, nowTree),
         // THE TREE'S t0 AS IT STANDS, never the round-start snapshot. `t0ForTier` was
@@ -1477,6 +1478,14 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       agg.latencyMs += res.latencyMs;
       if (res.steps !== undefined) agg.steps = res.steps;
       agg.discarded.push(...res.rejected);
+      // THE MEMBER ANSWERED, so a fix it was shown is now a fix it has SEEN — recorded here, on
+      // the round's one clock, before what it says in this turn. Recorded at delivery instead,
+      // a run that died before its first turn after the fix released its earlier raises, and
+      // they settled `fixed` on a member that never read the fixed tree (D-56, D-159).
+      if (fixShown) {
+        ledger.record({ kind: "saw-fix", member: member.id });
+        fixShown = false;
+      }
       for (const f of res.items) {
         agg.findings.push(f);
         await recordStreamed(f, route.model);
@@ -1548,9 +1557,8 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
         .map((x) => x.line);
       seenPeers = roundFindings.length;
       if (unseenFixes.length > 0) {
-        // Shown a fix, on the round's one clock: what this member raised BEFORE this point
-        // and never again after it is its qualified silence about the fix (D-56, D-159).
-        ledger.record({ kind: "saw-fix", member: member.id });
+        // Shown a fix; SEEN once the next turn answers (`fixShown`).
+        fixShown = true;
         continued = streamFix({
           diff: unseenFixes.join("\n"),
           t0: t0Seen(hold.lastT0),
@@ -2878,15 +2886,19 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
    * finished, so nobody entitled to rule read the answer. Recorded so the client is told who
    * did not finish — and handed back, because that is news it must act on.
    */
-  const holdUnruled = (p: (typeof pending)[number], why: string): void => {
-    const spent = reasks >= MAX_REASKS;
+  const holdUnruled = (p: (typeof pending)[number], a: { readonly why: string; readonly reask: readonly string[] }): void => {
+    // A PERSON IS NEEDED when no later round can ask: the re-asks are spent, OR nobody who
+    // could rule ran at all — a tier marked unavailable is gone for the rest of the review,
+    // so "the next round asks again" would be false on every poll until a bound stopped it.
+    const spent = reasks >= MAX_REASKS || a.reask.length === 0;
+    const why = a.why;
     store.recordVerdict(reviewId, {
       fingerprint: p.finding.fingerprint,
       verdict: "justified-unruled",
       rationale:
         `not ruled: ${why}. lore re-asked ${String(reasks)} of ${String(MAX_REASKS)} times this review` +
         (spent
-          ? " and will not again — this needs a PERSON: tell your user that the tier entitled to rule could not, and let them decide (wait and restart the review, or change the code)."
+          ? `${a.reask.length === 0 ? " and no later round can ask: the tier entitled to rule is not in this review any more" : " and will not again"} — this needs a PERSON: tell your user that the tier entitled to rule could not, and let them decide (wait and restart the review, or change the code).`
           : "; the next round asks again."),
       scope: undefined,
       tier: undefined,
@@ -2910,7 +2922,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       if (ruling.contested.has(p.finding.fingerprint)) refuse(p);
       else {
         const a = ruling.acceptance(rankOf(p.finding.origin));
-        holdUnruled(p, a.kind === "unknown" ? a.why : "no member finished this round");
+        holdUnruled(p, a.kind === "unknown" ? a : { why: "no member finished this round", reask: [] });
       }
     }
     // The whole rung was stepped over. The same decision the single-tier path always
@@ -3189,6 +3201,11 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   /** Appeals accepted that bought no class suppression — the client is told (D-83). */
   const appealBoughtNothing: string[] = [];
   for (const p of pending) {
+    // WITHDRAWN BY ITS OWN PROOF, so there is nothing left to rule on: a re-raise carrying a
+    // PoC that passes is the reviewer's evidence that the code holds, not a refusal of the
+    // author's answer. Ruling on it anyway wrote `justified-rejected` AFTER `withdrawn`, the
+    // later row won, and the finding read as refused while the ladder had settled it.
+    if (withdrawn.includes(p.finding.fingerprint)) continue;
     if (ruling.contested.has(p.finding.fingerprint)) {
       // A mistaken justification is worse than a bug, because it was trusted. Only a MODEL
       // may refuse one — `contested` holds model emissions alone, T0 never reaches the
@@ -3200,7 +3217,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     }
     const verdictOf = ruling.acceptance(rankOf(p.finding.origin));
     if (verdictOf.kind === "unknown") {
-      holdUnruled(p, verdictOf.why);
+      holdUnruled(p, verdictOf);
       continue;
     }
     {
