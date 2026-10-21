@@ -1160,12 +1160,13 @@ export type Decision =
   | { readonly kind: "needsHuman" }
   /** A bound was hit. Not a pass — see §5. */
   /**
-   * `unruled` (D-159): an answer that only a tier at or above the one that raised its finding
-   * may rule on, and no such tier is left runnable in this review. Not a bound reached by
-   * arguing — a person has to decide, and the review stops saying so rather than parking on a
-   * rung nobody can run.
+   * `noReader` (D-159): this round left something only a model can answer — an unruled answer,
+   * a refusal, a fresh finding from a member that then died — and no tier a later round can
+   * reach is left to read it. The ladder only escalates, so a tier below the cursor does not
+   * count. Not a bound reached by arguing: a person has to decide, and the review stops saying
+   * so rather than parking on a rung nobody can run or passing over what nobody read.
    */
-  | { readonly kind: "stopped"; readonly bound: "perTier" | "global" | "unruled" };
+  | { readonly kind: "stopped"; readonly bound: "perTier" | "global" | "noReader" };
 
 export interface StepInput {
   readonly state: LadderState;

@@ -4562,7 +4562,7 @@ describe("a rung of two members", () => {
     // t3 died twice and is now unavailable for the rest of the review, so nobody may rule on
     // its finding: the review STOPS for a person, rather than parking on a rung that cannot
     // answer (and never passes over the unruled answer).
-    expect(r.decision).toStrictEqual({ kind: "stopped", bound: "unruled" });
+    expect(r.decision).toStrictEqual({ kind: "stopped", bound: "noReader" });
     expect(store.getReview("rung1", "p")?.ladder.reasks, "the dead member was asked again once").toBe(1);
   });
 
@@ -4617,6 +4617,64 @@ describe("a rung of two members", () => {
     await runRound({ store, reviewer: ruler, reviewId: "split1", principal: "p", worktree: dir, type });
     const v = store.latestVerdict("split1", fp);
     expect([v?.verdict, v?.tier], "and the tier that can rule, rules").toStrictEqual(["justified-accepted", "t3"]);
+  });
+
+  // A ruler BELOW the cursor can never be asked again — the ladder only escalates — and a dead
+  // top rung has nobody above it. Either way the answer must not pass with the review.
+  it("stops for a person when the only ruler is in an earlier rung", async () => {
+    const SPLIT: readonly Tier[] = [
+      { id: "t0", kind: "deterministic", stage: "fast" },
+      { id: "t2", kind: "model", model: "vendor-a/m", effort: "high", stage: "deep", conversation: true, rung: 1 },
+      { id: "t3", kind: "model", model: "vendor-b/m", effort: "high", stage: "deep", conversation: true, rung: 2 },
+    ];
+    const type = { ...CODE_ARCH, t0: [] as const, tiers: SPLIT };
+    store.createReview({
+      id: "low1", repoId, principal: "p", branch: "feat/holds", intoRef: "main",
+      ticket: "t", type: CODE_ARCH.id, state: "running", ladder: initialState(SPLIT),
+    });
+    // t2 raises B; then clean, so the ladder climbs to t3; then the author answers B.
+    await runRound({ store, reviewer: new RungStreaming({ t2: [emission([B]), DONE] }), reviewId: "low1", principal: "p", worktree: dir, type });
+    const fp = fingerprint(B);
+    store.recordVerdict("low1", { fingerprint: fp, verdict: "fixed", rationale: "test setup: climb", scope: undefined, tier: "t2", round: 1 });
+    await runRound({ store, reviewer: new RungStreaming({ t2: [DONE] }), reviewId: "low1", principal: "p", worktree: dir, type });
+    store.recordFixedElsewhere("low1", fp, "src.txt", 1, "handled by the caller now");
+    store.recordVerdict("low1", { fingerprint: fp, verdict: "justified-rejected", rationale: "test setup: reopen", scope: undefined, tier: "t2", round: 2 });
+
+    const dead = new RungStreaming({});
+    dead.fail["t3"] = new Exhausted("plan is out");
+    const r = await runRound({ store, reviewer: dead, reviewId: "low1", principal: "p", worktree: dir, type }).catch((e: unknown) => e);
+
+    expect(store.latestVerdict("low1", fp)?.rationale ?? "", "t2 is below the cursor and is never asked again").not.toMatch(/a later round asks t2/);
+    expect(store.getReview("low1", "p")?.state, "never a pass over an unread answer").not.toMatch(/^passed/);
+    expect(r).toMatchObject({ decision: { kind: "stopped", bound: "noReader" } });
+  });
+
+  it("does not pass thin over a refusal a dead top rung just made", async () => {
+    // t1 is alive below, so "no tier can run" does not end the round first; the cursor is
+    // on the top rung, where both members die after t3 refuses the author's answer.
+    const TOP: readonly Tier[] = [
+      { id: "t0", kind: "deterministic", stage: "fast" },
+      { id: "t1", kind: "model", model: "vendor-c/m", effort: "medium", stage: "fast", conversation: true },
+      { id: "t2", kind: "model", model: "vendor-a/m", effort: "high", stage: "deep", conversation: true, rung: 2, skip_if_quota: true },
+      { id: "t3", kind: "model", model: "vendor-b/m", effort: "high", stage: "deep", conversation: true, rung: 2, skip_if_quota: true },
+    ];
+    const type = { ...CODE_ARCH, t0: [] as const, tiers: TOP };
+    store.createReview({
+      id: "top1", repoId, principal: "p", branch: "feat/holds", intoRef: "main",
+      ticket: "t", type: CODE_ARCH.id, state: "running", ladder: { ...initialState(TOP), cursor: 2 },
+    });
+    await runRound({ store, reviewer: new RungStreaming({ t2: [DONE], t3: [emission([B]), DONE] }), reviewId: "top1", principal: "p", worktree: dir, type });
+    const fp = fingerprint(B);
+    store.recordFixedElsewhere("top1", fp, "src.txt", 1, "handled by the caller now");
+
+    const reraise: Finding = { ...B, evidence: "the caller never sees this path", failureScenario: "the base line is read first" };
+    const second = new RungStreaming({ t3: [emission([reraise])] });
+    second.fail["t2"] = new Exhausted("plan is out");
+    second.onAsk = (tierId, i) => { if (tierId === "t3" && i === 0) second.fail["t3"] = new Exhausted("plan is out"); };
+    const r = await runRound({ store, reviewer: second, reviewId: "top1", principal: "p", worktree: dir, type });
+
+    expect(store.latestVerdict("top1", fp)?.verdict).toBe("justified-rejected");
+    expect(r.decision, "a refusal nobody left can read is not passed over").toStrictEqual({ kind: "stopped", bound: "noReader" });
   });
 
   it("accepts once the re-asked stronger member finishes silent", async () => {

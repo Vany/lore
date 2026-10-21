@@ -4160,9 +4160,10 @@ Vany delegated the answers (Kira's brief, 2026-10-20), and they are what is buil
   member's silence when the stronger died or was absent is UNKNOWN. Unknown is recorded as a
   `justified-unruled` verdict (not settling, not a refusal), handed back to the client with
   who did not finish. It HOLDS THE LADDER while a survivor of the current rung can still rule
-  on it; if only a later rung can, the ladder moves on so that rung is asked; if no runnable
-  tier at or above the raising one is left in the review, the round STOPS (`stopped`,
-  bound `unruled`) with a reason telling the client a person has to decide.
+  on it; if only a later rung can, the ladder moves on so that rung is asked; if no REACHABLE
+  tier at or above the raising one is left — runnable, and at or after the cursor, since the
+  ladder only escalates — the round STOPS (`stopped`, bound `noReader`) with a reason telling
+  the client a person has to decide.
 - **A dead member whose ruling is needed is re-asked in the round** — a skipped member is
   unavailable for the rest of the review, so a later round would never ask it. So is an
   all-skipped rung that has something to rule on (a pending answer or an emission); one with
@@ -4172,7 +4173,8 @@ Vany delegated the answers (Kira's brief, 2026-10-20), and they are what is buil
 - **An all-skipped rung is ruled on**: its contests refuse (handed back), nothing is accepted.
   It never holds the cursor — every member is now unavailable, and a rung no later round can
   run would fail the review on its next submit — so the ladder moves on to the tiers that can
-  still read, or stops for a person when none can rule.
+  still read. When there are none above, what the dead rung left (a refusal, a finding it
+  streamed) is not passed over thin: the review stops for a person (`noReader`).
 - **A single vendor's finding is labelled `second_opinion`** in the poll, and still blocks.
   Two-vendor agreement is a label here, not a gate (decision 5, Kira 2026-10-20): making a
   lone vendor's finding non-blocking would trade a wrong block for a wrong accept.
