@@ -1159,7 +1159,13 @@ export type Decision =
   /** A human must answer before this can proceed. Not a pass. */
   | { readonly kind: "needsHuman" }
   /** A bound was hit. Not a pass — see §5. */
-  | { readonly kind: "stopped"; readonly bound: "perTier" | "global" };
+  /**
+   * `unruled` (D-159): an answer that only a tier at or above the one that raised its finding
+   * may rule on, and no such tier is left runnable in this review. Not a bound reached by
+   * arguing — a person has to decide, and the review stops saying so rather than parking on a
+   * rung nobody can run.
+   */
+  | { readonly kind: "stopped"; readonly bound: "perTier" | "global" | "unruled" };
 
 export interface StepInput {
   readonly state: LadderState;

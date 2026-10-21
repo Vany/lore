@@ -726,7 +726,9 @@ Rules:
 - "symbol" is the enclosing function or class. Include it whenever you can: it is what keeps a finding's
   identity stable when line numbers shift, and without it your finding may be mistaken for a different one.
 - "cwe" only when the finding genuinely is that weakness class. Omit it otherwise.
-- Every field except "line", "symbol" and "cwe" is required. For those three, omit the
+- "poc" only for a finding on a Solidity contract, and only when the review asks for proofs: the full
+  source of one test that FAILS because of the defect (see the Solidity instructions above). Omit it otherwise.
+- Every field except "line", "symbol", "cwe" and "poc" is required. For those, omit the
   key or send null — both mean "does not apply" and neither is an error.
 - No other keys. Extra keys are rejected and the review is re-run.
 `.trim();

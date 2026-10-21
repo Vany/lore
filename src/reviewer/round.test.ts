@@ -4559,7 +4559,10 @@ describe("a rung of two members", () => {
     const v = store.latestVerdict("rung1", fp);
     expect(v?.verdict, "unknown is never accepted").toBe("justified-unruled");
     expect(v?.rationale).toMatch(/t3 did not finish/);
-    expect(r.decision.kind, "and an unruled answer holds the ladder").toBe("findings");
+    // t3 died twice and is now unavailable for the rest of the review, so nobody may rule on
+    // its finding: the review STOPS for a person, rather than parking on a rung that cannot
+    // answer (and never passes over the unruled answer).
+    expect(r.decision).toStrictEqual({ kind: "stopped", bound: "unruled" });
     expect(store.getReview("rung1", "p")?.ladder.reasks, "the dead member was asked again once").toBe(1);
   });
 
@@ -4579,7 +4582,9 @@ describe("a rung of two members", () => {
     const v = store.latestVerdict("rung1", fp);
     expect(v?.verdict).toBe("justified-unruled");
     expect(v?.rationale).toMatch(/needs a PERSON/);
-    expect(v?.rationale).not.toMatch(/next round asks again/);
+    expect(v?.rationale).not.toMatch(/later round asks/);
+    expect(store.getReview("rung1", "p")?.state, "ended for a person (a stop is `failed`), not parked").toBe("failed");
+    expect(store.failureReason("rung1", false), "and says why, naming the person").toMatch(/could not be ruled on/);
   });
 
   it("accepts once the re-asked stronger member finishes silent", async () => {

@@ -2851,6 +2851,11 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   const rejected: string[] = [];
   /** Answers no member entitled to rule on them could read — held, never accepted. */
   const unruled: string[] = [];
+  /** Set when an unruled answer has nobody left in the review who may rule on it. */
+  let noRulerLeft = false;
+  /** The decision a round with `noRulerLeft` ends in, whatever the ladder would have said. */
+  const unlessNoRuler = <T extends { readonly decision: Decision }>(r: T): T =>
+    noRulerLeft ? { ...r, decision: { kind: "stopped", bound: "unruled" } } : r;
   /**
    * A refusal: a model raised it again after reading the answer, a member that then died
    * included. It quotes the raise — the stored finding keeps its first raise's words — and
@@ -2886,11 +2891,17 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
    * finished, so nobody entitled to rule read the answer. Recorded so the client is told who
    * did not finish — and handed back, because that is news it must act on.
    */
-  const holdUnruled = (p: (typeof pending)[number], a: { readonly why: string; readonly reask: readonly string[] }): void => {
-    // A PERSON IS NEEDED when no later round can ask: the re-asks are spent, OR nobody who
-    // could rule ran at all — a tier marked unavailable is gone for the rest of the review,
-    // so "the next round asks again" would be false on every poll until a bound stopped it.
-    const spent = reasks >= MAX_REASKS || a.reask.length === 0;
+  const holdUnruled = (p: (typeof pending)[number], a: { readonly why: string }): void => {
+    // WHO COULD STILL RULE, after this round's dead members are marked: a skipped member is
+    // unavailable for the rest of the review, so "the next round asks again" is true only if
+    // some OTHER runnable tier at or above the raising one is left. When none is, a person has
+    // to decide, and the round stops instead of parking on a rung nobody can run (the next
+    // submit would otherwise fail the review on "names no runnable tier").
+    const askable = tiers.filter(
+      (t) => t.kind === "model" && rankOf(t.id) >= rankOf(p.finding.origin) && !ladderNow.unavailable.includes(t.id),
+    );
+    const spent = reasks >= MAX_REASKS || askable.length === 0;
+    if (askable.length === 0) noRulerLeft = true;
     const why = a.why;
     store.recordVerdict(reviewId, {
       fingerprint: p.finding.fingerprint,
@@ -2898,8 +2909,8 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       rationale:
         `not ruled: ${why}. lore re-asked ${String(reasks)} of ${String(MAX_REASKS)} times this review` +
         (spent
-          ? `${a.reask.length === 0 ? " and no later round can ask: the tier entitled to rule is not in this review any more" : " and will not again"} — this needs a PERSON: tell your user that the tier entitled to rule could not, and let them decide (wait and restart the review, or change the code).`
-          : "; the next round asks again."),
+          ? `${askable.length === 0 ? " and no later round can ask: no tier entitled to rule is left in this review" : " and will not again"} — this needs a PERSON: tell your user that the tier entitled to rule could not, and let them decide (wait and restart the review, which asks it again, or change the code).`
+          : `; a later round asks ${askable.map((t) => t.id).join(", ")}.`),
       scope: undefined,
       tier: undefined,
       round,
@@ -2922,7 +2933,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       if (ruling.contested.has(p.finding.fingerprint)) refuse(p);
       else {
         const a = ruling.acceptance(rankOf(p.finding.origin));
-        holdUnruled(p, a.kind === "unknown" ? a : { why: "no member finished this round", reask: [] });
+        holdUnruled(p, a.kind === "unknown" ? a : { why: "no member finished this round" });
       }
     }
     // The whole rung was stepped over. The same decision the single-tier path always
@@ -2938,13 +2949,13 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     // after round (D-132), and a rung in which nobody finished argued nothing.
     // What they raised, and what is held unruled, holds the ladder: a rung that never
     // finished must not step clean over a finding the client already holds.
-    const skipped = step({
+    const skipped = unlessNoRuler(step({
       state: ladderNow,
       raised: [...new Set([...ruling.contested, ...unruled])],
       tiers,
       needsHuman: false,
       ran: [],
-    });
+    }));
     const skippedWhy = stoppedBecause(skipped.decision, skipped.state);
     if (skippedWhy !== undefined) store.setFailureReason(reviewId, skippedWhy);
     store.updateReview(reviewId, {
@@ -3411,7 +3422,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // actual, current outcome, not a stale pre-round snapshot.
   const stillOpen = store.openFindings(reviewId);
   const docsOnly = stillOpen.length > 0 && stillOpen.every((f) => isDoc(f.file));
-  const stepped = step({
+  const stepped = unlessNoRuler(step({
     state: answered,
     // Unruled answers hold it too: unknown is never accepted, and a ladder that stepped over
     // one would pass on a question nobody entitled to answer it had read (D-159).
@@ -3421,7 +3432,7 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     // Every member that RAN is billed a round; a skipped sibling is not (D-109).
     ran: ranMembers.map((o) => o.member.id),
     docsOnly,
-  });
+  }));
 
   // The model tier's row is ALREADY closed — on the success path above, or in the
   // catch. It is deliberately not closed again here.
@@ -4028,6 +4039,14 @@ function stoppedBecause(d: Decision, state: LadderState): string | undefined {
   const rounds = Object.entries(state.tierRounds)
     .map(([tier, n]) => `${tier}×${String(n)}`)
     .join(", ");
+  if (d.bound === "unruled") {
+    return (
+      "An answer to a finding could not be ruled on: the tier that raised it — or any stronger one — did not finish, " +
+      "and none is left that can run in this review. A weaker tier's silence is never taken as acceptance, so the " +
+      "review stopped here. This is NOT a pass. A person decides: restart the review when that tier is back (it is " +
+      "asked again), or change the code so the finding no longer stands. The finding's justification_unruled says which tier."
+    );
+  }
   return d.bound === "global"
     ? `The ladder ran its whole budget (${String(state.round)} rounds: ${rounds}) without settling every ` +
         "finding, so it stopped. This is NOT a pass and NOT 'nothing found' — the code past that point was " +
