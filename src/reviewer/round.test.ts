@@ -4587,6 +4587,38 @@ describe("a rung of two members", () => {
     expect(store.failureReason("rung1", false), "and says why, naming the person").toMatch(/could not be ruled on/);
   });
 
+  // The ruler may live in a LATER rung. A rung whose every member died must not hold the
+  // cursor — the next round would throw "names no runnable tier" and fail the review before
+  // the later rung, which can rule, is ever reached.
+  it("moves on to a later rung that can rule, rather than parking on a dead one", async () => {
+    const SPLIT: readonly Tier[] = [
+      { id: "t0", kind: "deterministic", stage: "fast" },
+      { id: "t2", kind: "model", model: "vendor-a/m", effort: "high", stage: "deep", conversation: true, rung: 1 },
+      { id: "t3", kind: "model", model: "vendor-b/m", effort: "high", stage: "deep", conversation: true, rung: 2 },
+    ];
+    const type = { ...CODE_ARCH, t0: [] as const, tiers: SPLIT };
+    store.createReview({
+      id: "split1", repoId, principal: "p", branch: "feat/holds", intoRef: "main",
+      ticket: "t", type: CODE_ARCH.id, state: "running", ladder: initialState(SPLIT),
+    });
+    await runRound({ store, reviewer: new RungStreaming({ t2: [emission([B]), DONE] }), reviewId: "split1", principal: "p", worktree: dir, type });
+    const fp = fingerprint(B);
+    store.recordFixedElsewhere("split1", fp, "src.txt", 1, "handled by the caller now");
+
+    const dead = new RungStreaming({});
+    dead.fail["t2"] = new Exhausted("plan is out");
+    const r = await runRound({ store, reviewer: dead, reviewId: "split1", principal: "p", worktree: dir, type });
+
+    expect(store.latestVerdict("split1", fp)?.verdict).toBe("justified-unruled");
+    expect(store.latestVerdict("split1", fp)?.rationale).toMatch(/a later round asks t3/);
+    expect(r.decision.kind, "the ladder moves to the rung that can rule").toBe("escalate");
+
+    const ruler = new RungStreaming({ t3: [DONE] });
+    await runRound({ store, reviewer: ruler, reviewId: "split1", principal: "p", worktree: dir, type });
+    const v = store.latestVerdict("split1", fp);
+    expect([v?.verdict, v?.tier], "and the tier that can rule, rules").toStrictEqual(["justified-accepted", "t3"]);
+  });
+
   it("accepts once the re-asked stronger member finishes silent", async () => {
     const first = new RungStreaming({ t2: [DONE], t3: [emission([B]), DONE] });
     await runRound({ store, reviewer: first, reviewId: "rung1", principal: "p", worktree: dir, type: RUNG_TYPE });

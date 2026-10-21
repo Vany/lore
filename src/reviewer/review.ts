@@ -2849,7 +2849,10 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // and pass on one clock. Every reader below asks it; none keeps a set of its own.
   const ruling = rule(ledger.events, memberIds, rankOf);
   const rejected: string[] = [];
-  /** Answers no member entitled to rule on them could read — held, never accepted. */
+  /**
+   * Answers no member entitled to rule on them could read, that a survivor of THIS rung can
+   * still rule on next round — these hold the ladder. Never accepted, either way.
+   */
   const unruled: string[] = [];
   /** Set when an unruled answer has nobody left in the review who may rule on it. */
   let noRulerLeft = false;
@@ -2902,6 +2905,12 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     );
     const spent = reasks >= MAX_REASKS || askable.length === 0;
     if (askable.length === 0) noRulerLeft = true;
+    // It HOLDS the ladder only while someone in THIS rung can still rule on it. If the only
+    // tiers that can are in a later rung, holding here would keep the cursor on a rung that
+    // cannot answer — the ladder has to move on for them to be asked (they rule on the
+    // answer when their round collects it, as every round collects pending answers).
+    const survivors = new Set(rungMembers(tiers, review.ladder.cursor, ladderNow.unavailable).map((t) => t.id));
+    if (askable.some((t) => survivors.has(t.id))) unruled.push(p.finding.fingerprint);
     const why = a.why;
     store.recordVerdict(reviewId, {
       fingerprint: p.finding.fingerprint,
@@ -2915,7 +2924,6 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
       tier: undefined,
       round,
     });
-    unruled.push(p.finding.fingerprint);
     store.markUndelivered(reviewId, p.finding.fingerprint);
   };
 
@@ -2947,11 +2955,14 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
     if (!anyTierRan(tiers, ladderNow.unavailable)) throw first.error;
     // No `docsOnly` here: it softens the per-tier bound for a member arguing prose round
     // after round (D-132), and a rung in which nobody finished argued nothing.
-    // What they raised, and what is held unruled, holds the ladder: a rung that never
-    // finished must not step clean over a finding the client already holds.
+    // NOTHING HOLDS THE CURSOR HERE: every member of this rung is now unavailable, so a
+    // "findings" decision would park the review on a rung no later round can run, and the next
+    // submit would fail it on "names no runnable tier". Their refusals are recorded and handed
+    // back above; the ladder moves on to the tiers that can still read, and an answer nobody
+    // left can rule on stops the review for a person (`unlessNoRuler`).
     const skipped = unlessNoRuler(step({
       state: ladderNow,
-      raised: [...new Set([...ruling.contested, ...unruled])],
+      raised: [],
       tiers,
       needsHuman: false,
       ran: [],
