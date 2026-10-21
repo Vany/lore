@@ -3030,7 +3030,10 @@ export async function runRound(input: RoundInput): Promise<RoundResult> {
   // wrong was attributing it to this merge.
   // slither, aderyn and solhint match the contracts as they stand, file by file, exactly as
   // semgrep does — a hit in a contract the branch never touched is the repository's.
-  const PATTERN_ENGINES = new Set(["semgrep", "ast-grep", "slither", "aderyn", "solhint"]);
+  // solc-bugs and evm-advisories are about the compiler config and the lockfile: a known bug
+  // in a compiler the branch did not choose, or an advisory on a dependency it did not bump,
+  // is the repository's. Change the config or the lockfile and it is the branch's again.
+  const PATTERN_ENGINES = new Set(["semgrep", "ast-grep", "slither", "aderyn", "solhint", "solc-bugs", "evm-advisories"]);
   const changed = new Set(diff.changedFiles);
   const fromPatterns = new Set(
     t0.outcomes.filter((o) => PATTERN_ENGINES.has(o.engine)).flatMap((o) => o.findings.map((f) => `${f.file}:${f.claim}`)),

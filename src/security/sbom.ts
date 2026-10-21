@@ -15,6 +15,7 @@
 
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { parseYarnLock } from "./yarn-lock.ts";
 import { runTool } from "../t0/exec.ts";
 
 /** OSV ecosystem names. Only what this workgroup ships, plus the obvious neighbours. */
@@ -45,7 +46,7 @@ export interface Component {
 
 export interface Sbom {
   readonly components: readonly Component[];
-  readonly source: "cdxgen" | "package-lock" | "none";
+  readonly source: "cdxgen" | "package-lock" | "yarn-lock" | "none";
   /**
    * Informational — a caveat about the METHOD, true on every run that used it
    * (e.g. "cdxgen not available; read package-lock.json directly"). Never a
@@ -90,6 +91,9 @@ export async function generateSbom(worktree: string, cdxgenTimeoutMs = 300_000):
           note: `cdxgen did not produce a usable SBOM (${viaCdxgen.crashed}); fell back to reading package-lock.json directly. Dev/prod scope is not distinguished there.`,
         };
   }
+
+  const viaYarn = await fromYarnLock(worktree);
+  if (viaYarn !== undefined) return viaYarn;
 
   return {
     components: [],
@@ -284,6 +288,35 @@ async function fromPackageLock(worktree: string): Promise<Sbom | undefined> {
     components,
     source: "package-lock",
     note: "cdxgen not available; read package-lock.json directly. Dev/prod scope is not distinguished.",
+  };
+}
+
+/**
+ * `yarn.lock`, when there is no package-lock (`yarn-lock.ts`). Directness comes from the
+ * root `package.json`: yarn.lock records no depth, and a name the project lists itself is
+ * direct whatever else depends on it.
+ */
+async function fromYarnLock(worktree: string): Promise<Sbom | undefined> {
+  const raw = await readFile(join(worktree, "yarn.lock"), "utf8").catch(() => undefined);
+  if (raw === undefined) return undefined;
+  const pinned = parseYarnLock(raw);
+  if (pinned === undefined) {
+    return { components: [], source: "yarn-lock", note: "cdxgen not available; read yarn.lock directly.", incomplete: "yarn.lock exists but is neither a v1 nor a berry lockfile — this reader could not enumerate it" };
+  }
+  // A package.json that does not parse leaves directness unknown, never the SBOM unread.
+  const manifest = await readFile(join(worktree, "package.json"), "utf8")
+    .then((t) => JSON.parse(t) as Record<string, unknown>)
+    .catch(() => ({}) as Record<string, unknown>);
+  const direct = new Set(
+    ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"].flatMap((k) => {
+      const v = manifest[k];
+      return typeof v === "object" && v !== null ? Object.keys(v) : [];
+    }),
+  );
+  return {
+    components: pinned.map((p) => ({ name: p.name, version: p.version, ecosystem: "npm" as const, transitive: !direct.has(p.name) })),
+    source: "yarn-lock",
+    note: "cdxgen not available; read yarn.lock directly. Dev/prod scope is not distinguished.",
   };
 }
 

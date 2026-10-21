@@ -239,3 +239,143 @@ export function classifyPoc(stdout: string): PocOutcome {
   if (failed !== undefined) return { kind: "confirmed", detail: `${failed.contract}.${failed.test} fails: ${failed.reason}` };
   return { kind: "refuted", detail: `all ${String(parsed.ran)} PoC test(s) pass on this tree` };
 }
+
+/**
+ * `hardhat compile`'s text, when it failed: solc's own blocks — `XError: message` then
+ * `--> file:line:col:`. `undefined` when it failed and no compiler error is in it (a config
+ * error, a plugin that would not load): that is not a fact about the contracts, and saying
+ * "does not compile" about it would be a false claim.
+ */
+export function parseHardhatCompile(log: string, exitCode: number): readonly Finding[] | undefined {
+  if (exitCode === 0) return [];
+  const out: Finding[] = [];
+  const lines = log.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const head = /^(\w*Error): (.+)$/.exec((lines[i] ?? "").trim());
+    if (head?.[1] === undefined || head[2] === undefined || head[1] === "Error" || head[1] === "HardhatError") continue;
+    const loc = /-->\s*([^:\s]+\.sol):(\d+):\d+/.exec(lines.slice(i + 1, i + 4).join("\n"));
+    if (loc?.[1] === undefined || vendored(loc[1])) continue;
+    out.push(
+      finding({
+        file: loc[1],
+        line: Number(loc[2]),
+        severity: "high",
+        claim: ruleClaim("solc", `${head[1]}: ${head[2]}`, "solc"),
+        evidence: lines.slice(i, i + 8).join("\n").slice(0, 1500),
+        failureScenario: "the contracts do not compile, so nothing built from them — tests, deployments, analysis — exists",
+      }),
+    );
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+/** One mocha test that did not pass, from the JSON reporter. */
+export interface MochaFailure {
+  readonly file: string;
+  readonly title: string;
+  readonly message: string;
+  readonly needsNetwork: boolean;
+}
+
+/** The mocha JSON reporter: `{stats: {tests, passes, failures}, failures: [{fullTitle, file, err}]}`. */
+export function parseMocha(json: string, root = "/work/"): { readonly ran: number; readonly passed: number; readonly failures: readonly MochaFailure[] } | undefined {
+  const d = parse(json);
+  if (!isObj(d) || !isObj(d["stats"])) return undefined;
+  const failures: MochaFailure[] = [];
+  for (const f of Array.isArray(d["failures"]) ? d["failures"] : []) {
+    if (!isObj(f)) continue;
+    const err = isObj(f["err"]) ? f["err"] : {};
+    const message = String(err["message"] ?? "failed with no message");
+    const file = String(f["file"] ?? "test").replace(root, "");
+    failures.push({ file, title: String(f["fullTitle"] ?? f["title"] ?? "?"), message, needsNetwork: /fork|rpc|ENOTFOUND|EAI_AGAIN|ECONNREFUSED|getaddrinfo/i.test(message) });
+  }
+  return { ran: Number(d["stats"]["tests"] ?? 0), passed: Number(d["stats"]["passes"] ?? 0), failures };
+}
+
+export function mochaFindings(failures: readonly MochaFailure[]): readonly Finding[] {
+  return failures
+    .filter((f) => !f.needsNetwork)
+    .map((f) =>
+      finding({
+        file: f.file,
+        severity: "high",
+        claim: ruleClaim("hardhat-test", `${f.title} fails`, "hardhat-test"),
+        evidence: `hardhat test: ${f.title} — ${f.message}`.slice(0, 1500),
+        failureScenario: "the project's own test asserts behaviour the contracts on this branch do not have",
+      }),
+    );
+}
+
+/** A hardhat PoC's verdict on its own finding, by the same rule as a forge one (`classifyPoc`). */
+export function classifyMochaPoc(json: string): PocOutcome {
+  const r = parseMocha(json);
+  if (r === undefined) return { kind: "inconclusive", detail: "the PoC did not load or mocha produced no result" };
+  if (r.ran === 0) return { kind: "inconclusive", detail: "the PoC contains no test mocha ran" };
+  if (r.failures.some((f) => f.needsNetwork)) return { kind: "inconclusive", detail: "the PoC needs a network the sandbox does not have" };
+  const failed = r.failures[0];
+  if (failed !== undefined) return { kind: "confirmed", detail: `${failed.title} fails: ${failed.message}` };
+  return { kind: "refuted", detail: `all ${String(r.ran)} PoC test(s) pass on this tree` };
+}
+
+/** One compilation a project ran, from its build-info: the exact version and the settings bugs depend on. */
+export interface SolcBuild {
+  readonly version: string;
+  readonly optimizer: boolean;
+  readonly viaIR: boolean;
+}
+
+interface SolcBug {
+  readonly uid?: string;
+  readonly name: string;
+  readonly summary?: string;
+  readonly severity?: string;
+  readonly link?: string;
+  readonly conditions?: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * The Solidity team's bug list, against the compilers this project actually used.
+ *
+ * A known bug needs a pattern in the code as well as the compiler; lore cannot tell whether
+ * the code uses it, so these are QUESTIONS for the model tiers, not proof: a high-severity
+ * compiler bug is raised at medium, a medium at low, and low/very-low bugs are not raised at
+ * all. A condition lore can read from the build settings (optimizer, viaIR, yulOptimizer)
+ * rules a bug out when unmet; one it cannot (evmVersion) is treated as met — conservative,
+ * because a missed compiler bug is the worse error.
+ */
+export function matchSolcBugs(
+  builds: readonly SolcBuild[],
+  bugs: readonly SolcBug[],
+  byVersion: Readonly<Record<string, { readonly bugs?: readonly string[] }>>,
+  configFile: string,
+): readonly Finding[] {
+  const byName = new Map(bugs.map((b) => [b.name, b]));
+  const out = new Map<string, Finding>();
+  for (const b of builds) {
+    for (const name of byVersion[b.version]?.bugs ?? []) {
+      const bug = byName.get(name);
+      if (bug === undefined) continue;
+      const c = bug.conditions ?? {};
+      if (c["optimizer"] === true && !b.optimizer) continue;
+      if (c["yulOptimizer"] === true && !b.optimizer) continue;
+      if (c["viaIR"] === true && !b.viaIR) continue;
+      if (c["viaIR"] === false && b.viaIR) continue;
+      const sev = String(bug.severity ?? "");
+      const severity = /high/.test(sev) ? "medium" : /^medium|low\/medium/.test(sev) ? "low" : undefined;
+      if (severity === undefined) continue;
+      const key = `${name}@${b.version}`;
+      if (out.has(key)) continue;
+      out.set(
+        key,
+        finding({
+          file: configFile,
+          severity,
+          claim: ruleClaim(`solc-bug-${name}`, `solc ${b.version} has a known ${sev}-severity bug: ${(bug.summary ?? name).replace(/``/g, "`")}`, "solc-bugs"),
+          evidence: `${bug.uid ?? name} (${sev}) affects solc ${b.version}, which this project compiles with${b.optimizer ? " (optimizer on)" : ""}${b.viaIR ? " (via IR)" : ""}. ${bug.link ?? ""}`.trim().slice(0, 1500),
+          failureScenario: "code using the pattern this bug concerns compiles to behaviour other than what the source says — check whether any contract here uses it, or move to a compiler without the bug",
+        }),
+      );
+    }
+  }
+  return [...out.values()];
+}

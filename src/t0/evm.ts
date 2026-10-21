@@ -1,43 +1,53 @@
 /**
- * T0 for Ethereum projects: forge build, forge test, slither, aderyn, solhint — every one in
- * the EVM sandbox image (`deploy/sandbox-evm.Dockerfile`), never in the service (D-24: a
- * build compiles and a test RUNS the target's code).
+ * T0 for Ethereum projects, foundry AND hardhat: build, test, slither, aderyn, solhint and the
+ * known-compiler-bug check — every one in the EVM sandbox image
+ * (`deploy/sandbox-evm.Dockerfile`), never in the service (D-24: a build compiles and a test
+ * RUNS the target's code).
  *
  * THE PHASES, and why only the first has network:
- *   1. install — clone `lib/` git dependencies at the commits the tree pins, and run one
- *      `forge build` so forge fetches the solc its pragmas name. Needs the network.
- *   2. build, test, analysis — `--network none`. A test that forks mainnet fails here, and is
- *      reported as a test that did not run, never as a defect: there is no RPC and no key in
- *      the sandbox, by design (brief, 2026-10-20).
+ *   1. install and compile — foundry: clone `lib/` at the commits the tree pins, `forge build`.
+ *      hardhat: install from the LOCKFILE (frozen: a review must read what the branch pins,
+ *      never what resolves today), then `hardhat compile`. Both fetch their solc here, and
+ *      aderyn runs here, because it fetches its own solc too.
+ *   2. tests and analysis — `--network none`. A fork test fails here and is reported as a
+ *      test that did NOT run, never a defect; there is no RPC and no key in the sandbox.
+ * ALL COMPILING IS PHASE 1 for hardhat: offline, `hardhat compile` re-fetches its compiler
+ * list and fails on DNS (found by the first sandbox run), so phase 2 reads the result phase 1
+ * recorded, tests run on the cached build, and slither reads the artifacts
+ * (`--hardhat-ignore-compile`) instead of recompiling with `--force`.
+ *
  * `/work` is one scratch copy for the whole run (`cp -a`, never deleted mid-run), so what
- * phase 1 fetched — dependencies, solc under `$HOME/.svm`, forge's cache — is there for the
- * rest. HOME points into it because the sandbox runs as the service's uid, which has no home.
+ * phase 1 fetched is there for the rest. HOME points into it because the sandbox runs as the
+ * service's uid, which has no home.
  *
- * A TOOL THAT CANNOT START IS UNAVAILABLE, NEVER A FINDING (#0050, D-158): docker's own
- * failures are already `unavailable` from `runInSandbox`; a missing binary (exit 127) and
- * output no parser recognises are said the same way here.
- *
- * Foundry only. A hardhat project is reported unavailable, loudly, until it is built.
+ * A TOOL THAT CANNOT START IS UNAVAILABLE, NEVER A FINDING (#0050, D-158).
  */
 
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, rm } from "node:fs/promises";
 import { basename, join } from "node:path";
-import { mkdir, rm } from "node:fs/promises";
 import type { T0Engine } from "../core/review-type.ts";
+import type { Finding } from "../core/finding.ts";
 import { gitMaybe } from "../git/exec.ts";
-import type { EngineOutcome } from "./engines.ts";
-import { classifyPoc, forgeTestFindings, parseAderyn, parseForgeBuild, parseForgeTest, parseSlither, parseSolhint, type PocOutcome } from "./evm-parse.ts";
+import { finding, type EngineOutcome } from "./engines.ts";
+import { detectEvm, type EvmFramework } from "./evm-detect.ts";
+import {
+  classifyMochaPoc, classifyPoc, forgeTestFindings, matchSolcBugs, mochaFindings, parseAderyn, parseForgeBuild,
+  parseForgeTest, parseHardhatCompile, parseMocha, parseSlither, parseSolhint, type PocOutcome, type SolcBuild,
+} from "./evm-parse.ts";
 import { runInSandbox, type SandboxConfig } from "./sandbox.ts";
 import type { ToolResult } from "./exec.ts";
 
-export const EVM_ENGINES: readonly T0Engine[] = ["forge-build", "forge-test", "slither", "aderyn", "solhint"];
+export const EVM_ENGINES: readonly T0Engine[] = ["evm-build", "evm-test", "slither", "aderyn", "solhint", "solc-bugs"];
 
 /** The EVM image, beside the JS one. Built by `make up` like it (the `sandbox-evm` service). */
 export const EVM_IMAGE = process.env["LORE_SANDBOX_EVM_IMAGE"] ?? "lore-sandbox:evm";
 
-const ENV = "export HOME=/work/.lore-home FOUNDRY_DISABLE_NIGHTLY_WARNING=1; mkdir -p \"$HOME\";";
+const ENV = "export HOME=/work/.lore-home FOUNDRY_DISABLE_NIGHTLY_WARNING=1 HARDHAT_DISABLE_TELEMETRY_PROMPT=true CI=true; mkdir -p \"$HOME\";";
 
 const exists = async (worktree: string, f: string) => (await readFile(join(worktree, f)).catch(() => undefined)) !== undefined;
+const q = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
+/** Model- or lore-written text into the scratch copy, through base64: it cannot end a quote. */
+const writeFile = (path: string, text: string) => `echo ${Buffer.from(text, "utf8").toString("base64")} | base64 -d > ${q(path)}`;
 
 /** The git dependencies a foundry tree pins: `.gitmodules` paths and urls, gitlink commits. */
 async function pinnedDeps(worktree: string): Promise<readonly { path: string; url: string; sha: string }[]> {
@@ -62,7 +72,30 @@ async function pinnedDeps(worktree: string): Promise<readonly { path: string; ur
   return out;
 }
 
-const q = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
+/**
+ * The install a hardhat tree's LOCKFILE asks for, frozen. Not the JS sandbox's `commandsFor`:
+ * that one falls back to an unfrozen install, which resolves today's versions — a review of
+ * contracts must compile exactly what the branch pins, or its CVE and compiler checks describe
+ * a tree nobody ships. No lockfile is refused for the same reason.
+ */
+async function installFor(worktree: string, fw: Extract<EvmFramework, { kind: "hardhat" }>): Promise<string | undefined> {
+  switch (fw.lockfile) {
+    case "yarn.lock": {
+      const text = await readFile(join(worktree, "yarn.lock"), "utf8").catch(() => "");
+      return /^__metadata:/m.test(text)
+        ? "COREPACK_ENABLE_DOWNLOAD_PROMPT=0 corepack yarn install --immutable"
+        : "yarn install --frozen-lockfile --non-interactive --network-timeout 600000";
+    }
+    case "package-lock.json":
+      return "npm ci --no-audit --no-fund";
+    case "pnpm-lock.yaml":
+      return "pnpm install --frozen-lockfile";
+    default:
+      return undefined;
+  }
+}
+
+const NETWORK = /EAI_AGAIN|ECONNRESET|ETIMEDOUT|ENOTFOUND|ECONNREFUSED|ENETUNREACH|network connection|socket hang up/i;
 
 /** What became of a sandbox call that did not produce parseable output. */
 function didNotRun(engine: T0Engine, what: string, r: ToolResult): EngineOutcome {
@@ -73,65 +106,80 @@ function didNotRun(engine: T0Engine, what: string, r: ToolResult): EngineOutcome
   return { engine, findings: [], unavailable: `${what} produced no output lore can read (exit ${String(r.code)}): ${tail}`, interrupted: true };
 }
 
+/** A prepared workspace, or why it could not be prepared — and, for that, whether it is the branch's fault. */
+type Workspace =
+  | { readonly framework: EvmFramework; readonly offline: (script: string) => Promise<ToolResult> }
+  | { readonly framework: EvmFramework; readonly failed: ToolResult; readonly why: string; readonly finding?: Finding };
+
+/** The hardhat config, wrapped so mocha writes JSON to a file — in the SCRATCH copy only. */
+function mochaWrapper(fw: Extract<EvmFramework, { kind: "hardhat" }>): { readonly file: string; readonly text: string } | undefined {
+  const mocha = `mocha: { ...(c.mocha ?? {}), reporter: "json", reporterOptions: { output: "/work/.lore-mocha.json" } }`;
+  if (fw.config.endsWith(".ts")) {
+    return { file: "hardhat.lore.config.ts", text: `import config from "./hardhat.config";\nconst c: any = (config as any).default ?? config;\nexport default { ...c, ${mocha} };\n` };
+  }
+  if (fw.config.endsWith(".js") || fw.config.endsWith(".cjs")) {
+    return { file: "hardhat.lore.config.cjs", text: `const m = require("./${fw.config}");\nconst c = m.default ?? m;\nmodule.exports = { ...c, ${mocha} };\n` };
+  }
+  return undefined;
+}
+
 export async function sandboxedEvm(worktree: string, base: SandboxConfig, engines: readonly T0Engine[]): Promise<EngineOutcome[]> {
   const wanted = engines.filter((e) => EVM_ENGINES.includes(e));
   if (wanted.length === 0) return [];
-  const foundry = await exists(worktree, "foundry.toml");
-  if (!foundry) {
-    const hardhat = (await Promise.all(["hardhat.config.ts", "hardhat.config.js", "hardhat.config.cjs", "hardhat.config.mjs"].map((f) => exists(worktree, f)))).some(Boolean);
-    if (hardhat) {
-      return wanted.map((engine) => ({
-        engine,
-        findings: [],
-        unavailable: `${engine}: this is a hardhat project, and lore runs foundry only — nothing compiled, tested or analysed these contracts`,
-      }));
-    }
-    return wanted.map((engine) => ({ engine, findings: [], skipped: `${engine}: no foundry.toml at the worktree root (not a foundry project, optional)` }));
+  const fw = await detectEvm(worktree);
+  if (fw === undefined) {
+    return wanted.map((engine) => ({ engine, findings: [], skipped: `${engine}: no foundry.toml or hardhat.config.* at the worktree root (not an Ethereum project, optional)` }));
   }
 
-  return withWorkspace(worktree, base, async (ws) => {
-    if ("failed" in ws) return wanted.map((engine) => ({ ...didNotRun(engine, ws.why, ws.failed), interrupted: true }));
+  return withWorkspace(worktree, base, fw, {}, async (ws) => {
+    if ("failed" in ws) {
+      // The branch's own fault (its lockfile does not install) is ONE finding, on the build;
+      // every other engine says why it could not run. Anything else is the environment.
+      const branchFault = ws.finding;
+      return wanted.map((engine): EngineOutcome =>
+        branchFault === undefined
+          ? { ...didNotRun(engine, ws.why, ws.failed), interrupted: true }
+          : engine === "evm-build"
+            ? { engine, findings: [branchFault], unavailable: `${engine}: ${ws.why}, so nothing that needs them could run` }
+            : { engine, findings: [], unavailable: `${engine}: ${ws.why}, so it could not run` },
+      );
+    }
     const { offline } = ws;
     const out: EngineOutcome[] = [];
 
-    // Built once, read by everything after it: a branch that does not compile has no tests
-    // and nothing to analyse, and saying "slither found nothing" about it would be INV-1.
-    const built = await offline("forge build --json");
-    const buildFindings = parseForgeBuild(built.stdout);
-    const compiles = buildFindings !== undefined && buildFindings.length === 0;
-    if (wanted.includes("forge-build")) {
-      out.push(buildFindings === undefined ? didNotRun("forge-build", "forge build", built) : { engine: "forge-build", findings: buildFindings });
+    // BUILT ONCE, read by everything after it: a branch that does not compile has no tests and
+    // nothing to analyse, and saying "slither found nothing" about it would be INV-1.
+    let buildFindings: readonly Finding[] | undefined;
+    let built: ToolResult;
+    if (fw.kind === "foundry") {
+      built = await offline("forge build --json");
+      buildFindings = parseForgeBuild(built.stdout);
+    } else {
+      // Phase 1 compiled; this reads what it recorded. "rc" first, then the log.
+      built = await offline("cat /work/.lore-compile.rc; echo; cat /work/.lore-compile.log");
+      const [rc = "", ...log] = built.stdout.split("\n");
+      buildFindings = /^\d+$/.test(rc.trim()) ? parseHardhatCompile(log.join("\n"), Number(rc.trim())) : undefined;
     }
-    const rest = wanted.filter((e) => e !== "forge-build");
+    const compiles = buildFindings !== undefined && buildFindings.length === 0;
+    if (wanted.includes("evm-build")) {
+      out.push(buildFindings === undefined ? didNotRun("evm-build", `${fw.kind} build`, built) : { engine: "evm-build", findings: buildFindings });
+    }
+    const rest = wanted.filter((e) => e !== "evm-build");
     if (!compiles) {
-      // Said as what is KNOWN: a build that did not run is not a build that failed, and
-      // "the contracts do not compile" about a sandbox that never started would be a false
-      // claim about the branch.
-      const why = buildFindings === undefined ? "forge build did not run, so nothing after it could" : "the contracts do not compile, so it could not run";
+      // Said as what is KNOWN: a build that did not run is not a build that failed.
+      const why = buildFindings === undefined ? `${fw.kind} build did not run, so nothing after it could` : "the contracts do not compile, so it could not run";
       for (const engine of rest) out.push({ engine, findings: [], unavailable: `${engine}: ${why}`, ...(buildFindings === undefined ? { interrupted: true } : {}) });
       return out;
     }
 
-    if (rest.includes("forge-test")) {
-      const r = await offline("forge test --json");
-      const parsed = parseForgeTest(r.stdout);
-      if (parsed === undefined) out.push(didNotRun("forge-test", "forge test", r));
-      else {
-        const offlineOnly = parsed.failures.filter((f) => f.needsNetwork);
-        out.push({
-          engine: "forge-test",
-          findings: forgeTestFindings(parsed.failures),
-          ...(offlineOnly.length === 0
-            ? {}
-            : { unavailable: `forge test: ${String(offlineOnly.length)} test(s) need a network the sandbox does not have (fork/RPC) and did NOT run: ${offlineOnly.map((f) => `${f.contract}.${f.test}`).join(", ")}` }),
-        });
-      }
-    }
+    if (rest.includes("evm-test")) out.push(await runTests(fw, offline));
     if (rest.includes("slither")) {
-      // Slither compiles through forge itself (offline: solc is cached). Not `--foundry-ignore-
-      // compile`: crytic-compile 0.4.2 cannot read forge 1.8's build-info layout and dies on a
-      // missing `.output.json` — found by the first sandbox run.
-      const r = await offline("slither . --json - --filter-paths 'lib/|node_modules/' --exclude-dependencies 2>/dev/null");
+      // foundry: slither compiles through forge (offline: solc is cached) — not
+      // `--foundry-ignore-compile`, because crytic-compile 0.4.2 cannot read forge 1.8's
+      // build-info. hardhat: the opposite — recompiling needs the network, so it reads the
+      // artifacts phase 1 left.
+      const flags = fw.kind === "hardhat" ? "--hardhat-ignore-compile" : "";
+      const r = await offline(`rm -f /work/.lore-slither.json; slither . ${flags} --json /work/.lore-slither.json --filter-paths 'lib/|node_modules/' --exclude-dependencies >/dev/null 2>&1; cat /work/.lore-slither.json`);
       const parsed = parseSlither(r.stdout);
       if (parsed === undefined) out.push(didNotRun("slither", "slither", r));
       else {
@@ -140,7 +188,7 @@ export async function sandboxedEvm(worktree: string, base: SandboxConfig, engine
       }
     }
     if (rest.includes("aderyn")) {
-      const r = await offline("aderyn . -o /work/.lore-aderyn.json >/dev/null 2>&1; cat /work/.lore-aderyn.json");
+      const r = await offline("cat /work/.lore-aderyn.json");
       const parsed = parseAderyn(r.stdout);
       if (parsed === undefined) out.push(didNotRun("aderyn", "aderyn", r));
       else {
@@ -155,70 +203,173 @@ export async function sandboxedEvm(worktree: string, base: SandboxConfig, engine
       }
     }
     if (rest.includes("solhint")) {
-      // The PROJECT's lint: without a config of its own there is no rule set it chose, and
-      // solhint's defaults are style opinions this review was not asked to enforce.
+      // The PROJECT's lint: without a config of its own there is no rule set it chose.
       const configured = (await Promise.all([".solhint.json", ".solhintrc", ".solhintrc.json"].map((f) => exists(worktree, f)))).some(Boolean);
       if (!configured) out.push({ engine: "solhint", findings: [], skipped: "solhint: no .solhint.json in this project (optional)" });
       else {
-        const r = await offline("solhint -f json 'src/**/*.sol'");
+        const dir = fw.kind === "foundry" ? "src" : "contracts";
+        const r = await offline(`solhint -f json '${dir}/**/*.sol'`);
         const parsed = parseSolhint(r.stdout);
         out.push(parsed === undefined ? didNotRun("solhint", "solhint", r) : { engine: "solhint", findings: parsed });
       }
     }
+    if (rest.includes("solc-bugs")) out.push(await solcBugs(fw, offline));
     return out;
   });
 }
 
+async function runTests(fw: EvmFramework, offline: (s: string) => Promise<ToolResult>): Promise<EngineOutcome> {
+  if (fw.kind === "foundry") {
+    const r = await offline("forge test --json");
+    const parsed = parseForgeTest(r.stdout);
+    if (parsed === undefined) return didNotRun("evm-test", "forge test", r);
+    const net = parsed.failures.filter((f) => f.needsNetwork);
+    return {
+      engine: "evm-test",
+      findings: forgeTestFindings(parsed.failures),
+      ...(net.length === 0 ? {} : { unavailable: `forge test: ${String(net.length)} test(s) need a network the sandbox does not have (fork/RPC) and did NOT run: ${net.map((f) => `${f.contract}.${f.test}`).join(", ")}` }),
+    };
+  }
+  const wrap = mochaWrapper(fw);
+  if (wrap === undefined) return { engine: "evm-test", findings: [], unavailable: `hardhat test: lore cannot wrap a ${fw.config} config (only .ts, .js, .cjs), so the tests did NOT run` };
+  const r = await offline(`${writeFile(wrap.file, wrap.text)}; rm -f /work/.lore-mocha.json; npx --no-install hardhat --config ${wrap.file} test >/work/.lore-test.log 2>&1; cat /work/.lore-mocha.json`);
+  const parsed = parseMocha(r.stdout);
+  if (parsed === undefined) {
+    const log = await offline("tail -20 /work/.lore-test.log");
+    return didNotRun("evm-test", "hardhat test", { ...r, stdout: log.stdout });
+  }
+  const net = parsed.failures.filter((f) => f.needsNetwork);
+  return {
+    engine: "evm-test",
+    findings: mochaFindings(parsed.failures),
+    ...(net.length === 0 ? {} : { unavailable: `hardhat test: ${String(net.length)} test(s) need a network the sandbox does not have (fork/RPC) and did NOT run: ${net.map((f) => f.title).join(", ")}` }),
+  };
+}
+
+/** Read inside the sandbox: every build-info's compiler and settings, plus the baked bug list. */
+const SOLC_BUGS_SCRIPT = `
+const fs = require("fs"), path = require("path");
+const dirs = ["artifacts/build-info", "out/build-info"].filter((d) => fs.existsSync(d));
+const builds = [];
+for (const d of dirs) for (const f of fs.readdirSync(d)) {
+  if (!f.endsWith(".json") || f.endsWith(".output.json")) continue;
+  const j = JSON.parse(fs.readFileSync(path.join(d, f), "utf8"));
+  const v = j.solcVersion ?? (j.solcLongVersion ?? "").split("+")[0];
+  const s = (j.input ?? {}).settings ?? {};
+  if (v) builds.push({ version: v, optimizer: !!(s.optimizer ?? {}).enabled, viaIR: !!s.viaIR });
+}
+process.stdout.write(JSON.stringify({ builds,
+  bugs: JSON.parse(fs.readFileSync("/opt/solc-bugs/bugs.json", "utf8")),
+  byVersion: JSON.parse(fs.readFileSync("/opt/solc-bugs/bugs_by_version.json", "utf8")) }));
+`;
+
+async function solcBugs(fw: EvmFramework, offline: (s: string) => Promise<ToolResult>): Promise<EngineOutcome> {
+  const r = await offline(`node -e ${q(SOLC_BUGS_SCRIPT)}`);
+  let parsed: { builds?: SolcBuild[]; bugs?: unknown[]; byVersion?: Record<string, { bugs?: string[] }> } | undefined;
+  try {
+    parsed = JSON.parse(r.stdout) as typeof parsed;
+  } catch {
+    parsed = undefined;
+  }
+  if (parsed?.builds === undefined || parsed.bugs === undefined || parsed.byVersion === undefined) return didNotRun("solc-bugs", "the compiler-bug check", r);
+  if (parsed.builds.length === 0) return { engine: "solc-bugs", findings: [], unavailable: "solc-bugs: the build left no build-info, so which compiler ran is unknown and nothing was checked" };
+  const distinct = [...new Map(parsed.builds.map((b) => [`${b.version}/${String(b.optimizer)}/${String(b.viaIR)}`, b])).values()];
+  return { engine: "solc-bugs", findings: matchSolcBugs(distinct, parsed.bugs as Parameters<typeof matchSolcBugs>[1], parsed.byVersion, fw.config) };
+}
+
 /**
- * A foundry project made runnable: the scratch copy, its pinned `lib/` dependencies and the
- * solc its pragmas name, fetched once with network (phase 1). `offline` runs a phase-2
- * script in it with `--network none`. Shared by the t0 engines and the PoC runner, so a
- * round pays for one install however many proofs it checks.
+ * An Ethereum project made runnable (phase 1), then `offline` for phase 2. Shared by the t0
+ * engines and the PoC runner, so a round pays for one install however many proofs it checks.
+ * `forgePrefetch`: a hardhat project about to run a FORGE PoC needs forge's own solc too.
  */
 export async function withWorkspace<T>(
   worktree: string,
   base: SandboxConfig,
-  fn: (ws: { readonly offline: (script: string) => Promise<ToolResult> } | { readonly failed: ToolResult; readonly why: string }) => Promise<T>,
+  fw: EvmFramework,
+  opts: { readonly forgePrefetch?: boolean },
+  fn: (ws: Workspace) => Promise<T>,
 ): Promise<T> {
   const cfg: SandboxConfig = { ...base, image: EVM_IMAGE };
   const scratch = join(cfg.scratchRoot, `${basename(worktree)}-evm`);
   await mkdir(scratch, { recursive: true });
-  // No shared cache: `lib/` is per tree. The mount is still required by the sandbox's
-  // shape, so it gets a throwaway directory beside the scratch copy.
+  // No shared cache: dependencies are per tree. The mount is still required by the
+  // sandbox's shape, so it gets a throwaway directory beside the scratch copy.
   const cacheDir = join(cfg.scratchRoot, `${basename(worktree)}-evm-cache`);
   await mkdir(cacheDir, { recursive: true });
+  const phase2 = (script: string) => runInSandbox(cfg, worktree, cacheDir, scratch, `${ENV} export FOUNDRY_OFFLINE=true; ${script}`, false, "/lore-unused-cache");
   try {
-    const deps = await pinnedDeps(worktree);
-    const clone = deps
-      .map(
-        (d) =>
-          `if [ -z "$(ls -A ${q(d.path)} 2>/dev/null)" ]; then git clone --quiet ${q(d.url)} ${q(d.path)} && ` +
-          `git -C ${q(d.path)} checkout --quiet ${d.sha} && git -C ${q(d.path)} submodule update --init --recursive --quiet || exit 3; fi`,
-      )
-      .join("; ");
-    const fetched = await runInSandbox(cfg, worktree, cacheDir, scratch, `${ENV} ${clone === "" ? "true" : clone}; forge build >/dev/null 2>&1; exit 0`, true, "/lore-unused-cache");
-    if (!fetched.ok) {
-      const why = fetched.code === 3 ? "a git dependency in lib/ could not be cloned at its pinned commit" : "the install phase did not complete";
-      return await fn({ failed: fetched, why });
+    let script: string;
+    if (fw.kind === "foundry") {
+      const clone = (await pinnedDeps(worktree))
+        .map(
+          (d) =>
+            `if [ -z "$(ls -A ${q(d.path)} 2>/dev/null)" ]; then git clone --quiet ${q(d.url)} ${q(d.path)} && ` +
+            `git -C ${q(d.path)} checkout --quiet ${d.sha} && git -C ${q(d.path)} submodule update --init --recursive --quiet || exit 3; fi`,
+        )
+        .join("; ");
+      script = `${clone === "" ? "true" : clone}; forge build >/dev/null 2>&1; aderyn . -o /work/.lore-aderyn.json >/dev/null 2>&1; exit 0`;
+    } else {
+      const install = await installFor(worktree, fw);
+      if (install === undefined) {
+        const why = "this hardhat project has no lockfile, and lore installs only what a lockfile pins";
+        return await fn({ framework: fw, failed: { ok: false, code: 2, stdout: "", stderr: why, timedOut: false }, why });
+      }
+      script =
+        `${install} > /work/.lore-install.log 2>&1 || { tail -40 /work/.lore-install.log; exit 4; }; ` +
+        `npx --no-install hardhat compile > /work/.lore-compile.log 2>&1; echo $? > /work/.lore-compile.rc; ` +
+        `aderyn . -o /work/.lore-aderyn.json >/dev/null 2>&1; ` +
+        (opts.forgePrefetch === true ? `${HARDHAT_FORGE_ENV} forge build ${HARDHAT_FORGE_FLAGS} >/dev/null 2>&1; ` : "") +
+        "exit 0";
     }
-    return await fn({
-      offline: (script) => runInSandbox(cfg, worktree, cacheDir, scratch, `${ENV} export FOUNDRY_OFFLINE=true; ${script}`, false, "/lore-unused-cache"),
-    });
+    const fetched = await runInSandbox(cfg, worktree, cacheDir, scratch, `${ENV} ${script}`, true, "/lore-unused-cache");
+    if (!fetched.ok) {
+      if (fetched.code === 3) return await fn({ framework: fw, failed: fetched, why: "a git dependency in lib/ could not be cloned at its pinned commit" });
+      if (fetched.code === 4 && fetched.unavailable === undefined) {
+        const out = `${fetched.stdout}\n${fetched.stderr}`;
+        if (NETWORK.test(out)) return await fn({ framework: fw, failed: fetched, why: "the dependency install could not reach its registry (a network failure, not the branch)" });
+        const lockfile = fw.kind === "hardhat" ? (fw.lockfile ?? "package.json") : "package.json";
+        return await fn({
+          framework: fw,
+          failed: fetched,
+          why: `dependencies did not install from ${lockfile}`,
+          finding: finding({
+            file: lockfile,
+            severity: "high",
+            claim: `dependencies do not install from ${lockfile}, so nothing that needs them could run`,
+            evidence: out.trim().split("\n").slice(-30).join("\n").slice(0, 2000),
+            failureScenario: "the contracts, their tests and every analysis resolve through the installed dependencies — none of them ran, so none of their claims exist",
+          }),
+        });
+      }
+      return await fn({ framework: fw, failed: fetched, why: "the install phase did not complete" });
+    }
+    return await fn({ framework: fw, offline: phase2 });
   } finally {
     await rm(scratch, { recursive: true, force: true }).catch(() => undefined);
     await rm(cacheDir, { recursive: true, force: true }).catch(() => undefined);
   }
 }
 
+/**
+ * forge, pointed at a HARDHAT layout: sources in contracts/, dependencies in node_modules
+ * (forge remaps them by itself), forge-std from the image, and its own out/cache so nothing
+ * it writes can be mistaken for hardhat's artifacts.
+ */
+const HARDHAT_FORGE_ENV = "FOUNDRY_SRC=contracts FOUNDRY_TEST=.lore-poc FOUNDRY_OUT=.lore-forge-out FOUNDRY_CACHE_PATH=.lore-forge-cache";
+/** The list-valued settings, as flags: forge refuses `FOUNDRY_LIBS=node_modules` ("expected a sequence"). */
+const HARDHAT_FORGE_FLAGS = "--lib-paths node_modules --remappings forge-std/=/opt/forge-std/src/";
+
 /** Above this a PoC is not run: the finding stands on its words. Proofs are tests, not suites. */
 const POC_MAX = 20_000;
 
+/** A Solidity PoC is a forge test; anything else is a hardhat (mocha) test in TS or JS. */
+const isForgePoc = (source: string) => /^\s*pragma\s+solidity\b/m.test(source);
+
 /**
  * Run each reviewer-supplied PoC once, in one shared workspace. Each is written into the
- * SCRATCH copy's test directory — never the worktree under review — run alone, and deleted,
- * so one PoC that does not compile cannot break the next (forge compiles every test file).
- * Base64 through the shell, because a PoC is model-written text and must not be able to end
- * a heredoc or quote its way out of the command.
+ * SCRATCH copy — never the worktree under review — run alone, and deleted, so one that does
+ * not compile cannot break the next. A foundry project runs forge PoCs; a hardhat project
+ * runs hardhat PoCs, and forge PoCs too, with forge pointed at its layout.
  */
 export async function checkPocs(
   worktree: string,
@@ -228,20 +379,46 @@ export async function checkPocs(
   const out = new Map<string, PocOutcome>();
   const runnable = pocs.filter((p) => p.source.length <= POC_MAX);
   for (const p of pocs) if (p.source.length > POC_MAX) out.set(p.fingerprint, { kind: "inconclusive", detail: `the PoC is over ${String(POC_MAX)} characters and was not run` });
-  if (runnable.length === 0 || !(await exists(worktree, "foundry.toml"))) {
-    for (const p of runnable) out.set(p.fingerprint, { kind: "inconclusive", detail: "no foundry.toml at the worktree root, so there is nothing to run a PoC in" });
+  const fw = await detectEvm(worktree);
+  if (runnable.length === 0 || fw === undefined) {
+    for (const p of runnable) out.set(p.fingerprint, { kind: "inconclusive", detail: "no foundry.toml or hardhat.config.* at the worktree root, so there is nothing to run a PoC in" });
     return out;
   }
-  return withWorkspace(worktree, base, async (ws) => {
+  const forgePrefetch = fw.kind === "hardhat" && runnable.some((p) => isForgePoc(p.source));
+  return withWorkspace(worktree, base, fw, { forgePrefetch }, async (ws) => {
     for (const p of runnable) {
       if ("failed" in ws) {
         out.set(p.fingerprint, { kind: "inconclusive", detail: `the sandbox could not be prepared: ${ws.why}` });
         continue;
       }
-      const name = `test/LorePoc_${p.fingerprint.slice(0, 12)}.t.sol`;
-      const b64 = Buffer.from(p.source, "utf8").toString("base64");
-      const r = await ws.offline(`mkdir -p test && echo ${b64} | base64 -d > ${name} && forge test --match-path ${name} --json; rc=$?; rm -f ${name}; exit $rc`);
-      out.set(p.fingerprint, r.unavailable !== undefined ? { kind: "inconclusive", detail: `the PoC could not run: ${r.unavailable}` } : classifyPoc(r.stdout));
+      const id = p.fingerprint.slice(0, 12);
+      const forge = isForgePoc(p.source);
+      let r: ToolResult;
+      if (fw.kind === "foundry") {
+        if (!forge) {
+          out.set(p.fingerprint, { kind: "inconclusive", detail: "a foundry project runs forge PoCs; this one is not Solidity" });
+          continue;
+        }
+        const name = `test/LorePoc_${id}.t.sol`;
+        r = await ws.offline(`mkdir -p test && ${writeFile(name, p.source)} && forge test --match-path ${name} --json; rc=$?; rm -f ${name}; exit $rc`);
+        out.set(p.fingerprint, r.unavailable !== undefined ? { kind: "inconclusive", detail: `the PoC could not run: ${r.unavailable}` } : classifyPoc(r.stdout));
+      } else if (forge) {
+        const name = `.lore-poc/LorePoc_${id}.t.sol`;
+        r = await ws.offline(`mkdir -p .lore-poc && ${writeFile(name, p.source)} && ${HARDHAT_FORGE_ENV} forge test ${HARDHAT_FORGE_FLAGS} --match-path ${name} --json; rc=$?; rm -f ${name}; exit $rc`);
+        out.set(p.fingerprint, r.unavailable !== undefined ? { kind: "inconclusive", detail: `the PoC could not run: ${r.unavailable}` } : classifyPoc(r.stdout));
+      } else {
+        const wrap = mochaWrapper(fw);
+        if (wrap === undefined) {
+          out.set(p.fingerprint, { kind: "inconclusive", detail: `lore cannot wrap a ${fw.config} config to run a PoC` });
+          continue;
+        }
+        const name = `test/LorePoc_${id}.${fw.config.endsWith(".ts") ? "ts" : "js"}`;
+        r = await ws.offline(
+          `${writeFile(wrap.file, wrap.text)}; mkdir -p test && ${writeFile(name, p.source)} && rm -f /work/.lore-mocha.json; ` +
+            `npx --no-install hardhat --config ${wrap.file} test ${name} >/dev/null 2>&1; rm -f ${name}; cat /work/.lore-mocha.json`,
+        );
+        out.set(p.fingerprint, r.unavailable !== undefined ? { kind: "inconclusive", detail: `the PoC could not run: ${r.unavailable}` } : classifyMochaPoc(r.stdout));
+      }
     }
     return out;
   });

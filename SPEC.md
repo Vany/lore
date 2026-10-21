@@ -4067,6 +4067,60 @@ working agreement says to confirm rather than assume.
 (fingerprint 9c6f2a60) — never inside the repository**, so nothing needs a new
 `.gitignore` rule.
 
+**D-161 — hardhat projects, and the CVE step: dependency advisories and known compiler bugs.
+BUILT 2026-10-21, demonstrated in the sandbox.**
+
+Kira: *"lore must handle HARDHAT Solidity projects, not only foundry"* — the first real target
+is hardhat 2.22, OpenZeppelin 4.9.6, two compilers, yarn, TypeScript tests. Same rules as
+D-160; what differs is how a hardhat tree is made runnable, and two checks both frameworks get.
+
+- **Detection** (`t0/evm-detect.ts`): `foundry.toml` → foundry; else `hardhat.config.{ts,js,
+  cjs,mjs}` → hardhat. Both present → foundry, which then builds and tests; running both
+  would pay twice. The engines are framework-neutral: `evm-build`, `evm-test`.
+- **Install from the LOCKFILE, frozen** — `yarn install --frozen-lockfile` (v1), `corepack
+  yarn install --immutable` (berry), `npm ci`, `pnpm install --frozen-lockfile`. Not the JS
+  sandbox's choice, which falls back to an unfrozen install: a contracts review must compile
+  what the branch pins, or its CVE and compiler checks describe a tree nobody ships. No
+  lockfile is refused, loudly. A lockfile that does not install is ONE finding (the branch's
+  fault); a registry that cannot be reached is the environment, and says so.
+- **All compiling in phase 1.** Offline, `hardhat compile` re-fetches its compiler list and
+  fails on DNS (seen in the first run), so phase 1 compiles and records the result; phase 2
+  reads it, runs `hardhat test` on the cached build, and slither reads the artifacts
+  (`--hardhat-ignore-compile` — recompiling with `--force` needs the network). aderyn runs in
+  phase 1 for both frameworks, because it fetches its own solc. On linux-arm64 hardhat compiles
+  with its wasm solc.
+- **Tests through mocha's JSON reporter**, by a wrapper config written into the SCRATCH copy
+  (`hardhat.lore.config.ts` / `.cjs`) — never the worktree. An `.mjs` config is reported as
+  tests that did not run.
+- **`solc-bugs`** (both frameworks): the Solidity team's own bug list (`bugs.json`,
+  `bugs_by_version.json`, pinned at the v0.8.37 release, baked into the image) against the
+  exact compilers in build-info, with the optimizer/viaIR conditions applied. A bug needs a
+  pattern in the code as well as the compiler, so these are questions, not proof: a high bug
+  is raised at medium, a medium at low, low and very-low bugs not at all. Anchored on the
+  compiler config, so they are INHERITED (D-68) unless the branch changes it.
+- **`evm-advisories`** (both frameworks, on the service): OSV for the project's DIRECT
+  dependencies and its submodules. Direct only, measured: on the demo all 34 advisories were in
+  hardhat's own transitive tooling (undici, ws, adm-zip), none in code that reaches the chain.
+  `yarn.lock` (v1 and berry) is read now, since the deployment has no cdxgen and a yarn
+  project was otherwise "could not be enumerated". Anchored on the lockfile; inherited unless
+  the branch changes it. A SECURITY review (`osv`) still reports the whole tree.
+- **PoCs in a hardhat project** may be a hardhat test (its own language, mocha + chai) or a
+  forge test. A hardhat test can deploy only contracts the project compiles, so an exploit
+  needing an attacker contract must be a forge test; lore runs that with forge pointed at the
+  hardhat layout (`contracts/`, `node_modules`, forge-std baked into the image, its own out
+  and cache dirs).
+
+**Demonstrated 2026-10-21** on hardhat's public sample project (Lock and its TypeScript
+tests), shaped like the target but not it: hardhat 2.22.19, OpenZeppelin 4.9.6, solc 0.8.19
+and 0.8.28, yarn v1, plus a Vault importing OZ `Ownable` — reentrant `withdraw` and an
+unguarded `sweep` in one tree, both fixed in the other. Reentrant tree: slither
+`reentrancy-eth` and `arbitrary-send-eth`, both high; fixed tree: neither. Both: build and
+tests pass, one known solc bug per compiler at low, no advisory on OZ 4.9.6 — and the same
+lockfile pinned at OZ 4.9.0 raised its four CVEs (CVE-2023-34234, CVE-2024-27094,
+CVE-2023-40014, CVE-2023-34459). PoCs: a TypeScript test (a stranger sweeps) and a forge test
+with an inline attacker (reentrancy) were each CONFIRMED on the first tree and REFUTED on the
+second. Neither worktree was touched.
+
 **D-160 — lore reviews Ethereum projects: an EVM sandbox, its tools, a Solidity pack, and
 proofs the reviewer can attach. BUILT 2026-10-20, demonstrated in the sandbox.**
 
@@ -4082,16 +4136,15 @@ mode: a foundry repository goes through the ordinary ladder, and these are what 
   name. Build, test and analysis run with `--network none`, so no test reaches a chain but a
   local anvil, and the sandbox holds no RPC URL and no key. A fork test is reported as a test
   that did NOT run, never as a defect.
-- **t0 engines** (`t0/evm.ts`), for a tree with a `foundry.toml` at its root: `forge-build`
-  (compile errors, high), `forge-test` (failing tests, high), `slither` (High → high, Medium
+- **t0 engines** (`t0/evm.ts`), for a foundry tree (hardhat: D-161): `evm-build`
+  (forge build; compile errors, high), `evm-test` (forge test; failing tests, high), `slither` (High → high, Medium
   → medium, Low/Informational → logged notes, not raised; it compiles through forge itself,
   because crytic-compile 0.4.2 cannot read forge 1.8's build-info), `aderyn` (NOTES ONLY,
   logged, never raised: its high bucket flagged a correct checks-effects-interactions
   withdraw to `msg.sender`, so as a gate it would block every correct withdraw), and
   `solhint` (errors → low, only where the project configured solhint). A tree that does not compile runs nothing after the build: "slither found
   nothing" about code that never built would be INV-1. A tool that cannot start is
-  unavailable, never a finding (D-158). Without a foundry.toml the engines report `skipped`;
-  a hardhat project reports them UNAVAILABLE, because nothing ran: hardhat is not built.
+  unavailable, never a finding (D-158). Without an Ethereum project the engines report `skipped`.
 - **Vendored code is never a finding**: hits under `lib/`, `node_modules/` or `dependencies/`
   are dropped. Analyser hits in files the branch does not touch are inherited (D-68), as
   semgrep's are. semgrep adds `p/smart-contracts` where the scope holds contracts.
@@ -4111,7 +4164,7 @@ cloned at its pinned commit by the install phase: the classic EtherStore reentra
 checks-effects-interactions twin. Reentrant: slither `reentrancy-eth` high at the withdraw.
 Clean: no finding. A reviewer-style PoC (an attacker contract, asserting other depositors'
 funds survive) was CONFIRMED on the first ("drained: 0 != 2 ether") and REFUTED on the second,
-which withdraws the finding; neither worktree was touched. Hardhat is not built.
+which withdraws the finding; neither worktree was touched. Hardhat came the next day (D-161).
 
 **D-159 — a refused justification carries the reviewer's reason, and is handed back.
 BUILT 2026-10-17.**

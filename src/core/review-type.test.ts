@@ -29,7 +29,7 @@ describe("review types are named pipelines", () => {
   // dependency tree it never opened, which is the one output this type exists to make.
   it("selects the security engines, not the code-arch ones", () => {
     // slither and aderyn read contracts for weakness classes, which is a security question too.
-    expect([...SECURITY.t0]).toStrictEqual(["sbom", "osv", "semgrep", "slither", "aderyn"]);
+    expect([...SECURITY.t0]).toStrictEqual(["sbom", "osv", "semgrep", "slither", "aderyn", "solc-bugs"]);
     expect(SECURITY.t0).not.toContain("tsc");
     expect(CODE_ARCH.t0).not.toContain("osv");
   });

@@ -19,6 +19,7 @@ import type { Finding, Severity } from "../core/finding.ts";
 import type { T0Engine } from "../core/review-type.ts";
 import { gitlinks } from "../git/repo.ts";
 import { commitToFindings, queryCommit, queryComponents, toFindings } from "../security/osv.ts";
+import { detectEvm } from "./evm-detect.ts";
 import { generateSbom } from "../security/sbom.ts";
 import { runTool } from "./exec.ts";
 import { SKIP_DIRS } from "./sandbox.ts";
@@ -442,13 +443,46 @@ export async function runEngine(worktree: string, engine: T0Engine, scope?: Scop
   // boundary (D-24).
   if (
     engine === "tsc" || engine === "eslint" || engine === "cargo-check" || engine === "cargo-clippy" ||
-    engine === "forge-build" || engine === "forge-test" || engine === "slither" || engine === "aderyn" || engine === "solhint"
+    engine === "evm-build" || engine === "evm-test" || engine === "slither" || engine === "aderyn" || engine === "solhint" ||
+    engine === "solc-bugs"
   ) {
     return {
       engine,
       findings: [],
       unavailable: `${engine} runs in the sandbox, not here — call it through runT0`,
     };
+  }
+  // DEPENDENCY ADVISORIES FOR AN ETHEREUM PROJECT — OpenZeppelin, hardhat-upgrades and the
+  // rest of its tree — in a code review, not only a security one: on a contracts repository a
+  // known-vulnerable OpenZeppelin is the defect, and `osv` is otherwise only in SECURITY. Gated
+  // on the project being Ethereum so every JS review does not grow a CVE gate it never asked
+  // for. Its file is the lockfile actually present: OSV names package-lock.json for every npm
+  // finding, which on a yarn project is a file that does not exist.
+  if (engine === "evm-advisories") {
+    const fw = await detectEvm(worktree);
+    if (fw === undefined) return { engine, findings: [], skipped: "evm-advisories: not an Ethereum project (optional)" };
+    // DIRECT DEPENDENCIES ONLY, and the reason is measured. On the hardhat demo every one of 34
+    // advisories was in hardhat's own transitive dev tooling (undici, ws, adm-zip) — none in
+    // code that reaches the chain, none in anything the project chose. A contracts review is
+    // about what the project depends on by name: OpenZeppelin, an upgrades plugin, an oracle
+    // library. Transitive advisories are counted for the operator, and a security review
+    // (`osv`) still reports them all. Submodules are direct by construction (foundry's lib/).
+    const lockfile = fw.kind === "hardhat" ? fw.lockfile : undefined;
+    try {
+      const bom = await generateSbom(worktree);
+      const direct = bom.components.filter((c) => c.transitive !== true);
+      const findings: Finding[] = direct.length === 0 ? [] : [...toFindings(await queryComponents(direct))];
+      for (const link of await gitlinks(worktree)) findings.push(...commitToFindings(link.path, link.commit, await queryCommit(link.commit)));
+      const skippedTransitive = bom.components.length - direct.length;
+      if (skippedTransitive > 0) console.error(`[lore:log] evm-advisories: ${String(skippedTransitive)} transitive package(s) not queried as findings (direct dependencies only)`);
+      return {
+        engine,
+        findings: findings.map((f) => (lockfile !== undefined && f.file === "package-lock.json" ? { ...f, file: lockfile } : f)),
+        ...(bom.source === "none" ? { unavailable: bom.note ?? "the dependency tree could not be enumerated" } : bom.incomplete !== undefined ? { unavailable: bom.incomplete } : {}),
+      };
+    } catch (e) {
+      return { engine, findings: [], unavailable: `evm-advisories: OSV could not be queried (${e instanceof Error ? e.message : String(e)}) — no advisory was checked` };
+    }
   }
   if (!detect(worktree, engine)) {
     // OPT-IN BY NATURE vs A GAP, and they must not be reported the same way.

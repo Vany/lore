@@ -545,8 +545,8 @@ Then ONE of three shapes, and they are the whole instruction:
     re-arguing it. \`settled_because\` names the original reason and when it was first
     decided. Do not write a lore-ok for one of these; the file already has one, and a
     duplicate is fresh surface for the next tier to review.
-    \`settled: "withdrawn"\` is the other closed kind: the reviewer attached a proof (a forge
-    test) to a finding on a contract, lore ran it on your tree, and it PASSED — the reviewer's
+    \`settled: "withdrawn"\` is the other closed kind: the reviewer attached a proof (a forge or
+    hardhat test) to a finding on a contract, lore ran it on your tree, and it PASSED — the reviewer's
     own evidence says the code holds. Nothing to do.
 
 \`checks_skipped\` is where the review tells you what it did that you would not otherwise

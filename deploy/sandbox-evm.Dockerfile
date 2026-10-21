@@ -78,6 +78,23 @@ RUN python3 -m venv /opt/slither \
 
 RUN npm i -g --no-audit --no-fund "solhint@${SOLHINT_VERSION}" pnpm@10.34.7 && solhint --version
 
+# Declared HERE, not at the top: an ARG declared above a cached step invalidates it, and the
+# first time that happened the rebuild re-downloaded foundry's 130 MB over a crawling link.
+ARG FORGE_STD_VERSION=v1.17.0
+# The Solidity team's own list of known compiler bugs, at a pinned release: it covers every
+# compiler up to that release, which is what `solc-bugs` matches a project's versions against.
+ARG SOLC_BUGS_TAG=v0.8.37
+
+# forge-std, offline: a forge PoC in a HARDHAT project has no lib/ of its own to import it from.
+RUN git clone --quiet --depth 1 --branch "${FORGE_STD_VERSION}" https://github.com/foundry-rs/forge-std /opt/forge-std \
+ && rm -rf /opt/forge-std/.git
+
+RUN mkdir -p /opt/solc-bugs \
+ && for f in bugs.json bugs_by_version.json; do \
+      ${CURL} -o "/opt/solc-bugs/${f}" "https://raw.githubusercontent.com/argotorg/solidity/${SOLC_BUGS_TAG}/docs/${f}"; \
+    done \
+ && python3 -c 'import json; [json.load(open(f"/opt/solc-bugs/{f}")) for f in ("bugs.json","bugs_by_version.json")]'
+
 RUN git config --system user.email "sandbox@lore.invalid" \
  && git config --system user.name  "lore sandbox" \
  && git config --system --add safe.directory '*'

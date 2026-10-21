@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { classifyPoc, forgeTestFindings, parseAderyn, parseForgeBuild, parseForgeTest, parseSlither, parseSolhint, vendored } from "./evm-parse.ts";
+import { classifyMochaPoc, classifyPoc, forgeTestFindings, matchSolcBugs, mochaFindings, parseAderyn, parseForgeBuild, parseForgeTest, parseHardhatCompile, parseMocha, parseSlither, parseSolhint, vendored } from "./evm-parse.ts";
 
 describe("forge build", () => {
   const out = JSON.stringify({
@@ -104,5 +104,71 @@ describe("a reviewer's PoC", () => {
     expect(classifyPoc("Error: Compiler run failed").kind).toBe("inconclusive");
     expect(classifyPoc(JSON.stringify({})).kind).toBe("inconclusive");
     expect(classifyPoc(run({ "testFork()": { status: "Failure", reason: "could not instantiate forked environment" } })).kind).toBe("inconclusive");
+  });
+});
+
+// Real output: hardhat 2.22.19 in the EVM sandbox, 2026-10-21.
+describe("hardhat compile", () => {
+  const log = [
+    "ParserError: Expected type name",
+    " --> contracts/Broken.sol:1:31:",
+    "  |",
+    "1 | contract Broken { function f( }",
+    "  |                               ^",
+    "",
+    "",
+    "Error HH600: Compilation failed",
+    "",
+    "HardhatError: HH600: Compilation failed",
+    "    at SimpleTaskDefinition.action (/work/node_modules/hardhat/src/builtin-tasks/compile.ts:499:15)",
+  ].join("\n");
+  it("raises solc's error at its line, never hardhat's own wrapper", () => {
+    const f = parseHardhatCompile(log, 1) ?? [];
+    expect(f.map((x) => [x.file, x.line, x.claim])).toStrictEqual([["contracts/Broken.sol", 1, "solc: ParserError: Expected type name"]]);
+  });
+  it("is clean on exit 0, and unknown when it failed with no compiler error in it", () => {
+    expect(parseHardhatCompile("Compiled 3 Solidity files successfully", 0)).toStrictEqual([]);
+    expect(parseHardhatCompile("Error HH8: There's one or more errors in your config file", 1)).toBeUndefined();
+  });
+});
+
+describe("hardhat test (mocha JSON)", () => {
+  const json = JSON.stringify({
+    stats: { suites: 2, tests: 4, passes: 3, pending: 0, failures: 1 },
+    failures: [{ title: "returns a deposit", fullTitle: "Vault returns a deposit", file: "/work/test/Vault.ts", err: { message: "expected 0 to equal 1." } }],
+  });
+  it("raises the failing test against its file, relative to the project", () => {
+    const r = parseMocha(json);
+    expect([r?.ran, r?.passed]).toStrictEqual([4, 3]);
+    expect(mochaFindings(r?.failures ?? []).map((f) => [f.file, f.claim])).toStrictEqual([["test/Vault.ts", "hardhat-test: Vault returns a deposit fails"]]);
+  });
+  it("judges a hardhat PoC by the same rule as a forge one", () => {
+    expect(classifyMochaPoc(json).kind).toBe("confirmed");
+    expect(classifyMochaPoc(JSON.stringify({ stats: { tests: 1, passes: 1 }, failures: [] })).kind).toBe("refuted");
+    expect(classifyMochaPoc("").kind).toBe("inconclusive");
+    expect(classifyMochaPoc(JSON.stringify({ stats: { tests: 1 }, failures: [{ fullTitle: "x", err: { message: "getaddrinfo EAI_AGAIN mainnet.infura.io" } }] })).kind).toBe("inconclusive");
+  });
+});
+
+describe("known compiler bugs", () => {
+  const bugs = [
+    { uid: "SOL-1", name: "HighWithOptimizer", summary: "a high one", severity: "high", conditions: { optimizer: true } },
+    { uid: "SOL-2", name: "MediumAlways", summary: "a ``medium`` one", severity: "medium" },
+    { uid: "SOL-3", name: "LowAlways", summary: "a low one", severity: "low" },
+    { uid: "SOL-4", name: "ViaIROnly", summary: "via-IR", severity: "medium/high", conditions: { viaIR: true } },
+  ];
+  const byVersion = { "0.8.19": { bugs: ["HighWithOptimizer", "MediumAlways", "LowAlways", "ViaIROnly"] }, "0.8.28": { bugs: ["MediumAlways"] } };
+  it("raises what the settings allow, one step below the bug's own severity, and never the low ones", () => {
+    const f = matchSolcBugs([{ version: "0.8.19", optimizer: true, viaIR: false }, { version: "0.8.28", optimizer: false, viaIR: false }], bugs, byVersion, "hardhat.config.ts");
+    expect(f.map((x) => [x.claim.split(":")[0], x.severity, x.file])).toStrictEqual([
+      ["solc-bug-HighWithOptimizer", "medium", "hardhat.config.ts"],
+      ["solc-bug-MediumAlways", "low", "hardhat.config.ts"],
+      ["solc-bug-MediumAlways", "low", "hardhat.config.ts"],
+    ]);
+    expect(f[1]?.claim).toContain("a `medium` one");
+  });
+  it("rules out a bug whose condition the build does not meet", () => {
+    const f = matchSolcBugs([{ version: "0.8.19", optimizer: false, viaIR: false }], bugs, byVersion, "foundry.toml");
+    expect(f.map((x) => x.claim.split(":")[0])).toStrictEqual(["solc-bug-MediumAlways"]);
   });
 });
