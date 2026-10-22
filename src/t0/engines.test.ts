@@ -905,3 +905,23 @@ describe("which paths an engine is given", () => {
     expect(scopePaths(many)).toStrictEqual(["--", "."]);
   });
 });
+
+// p/smart-contracts mixes security rules with gas and style advice. On the first contracts
+// committed to lore's own repository it raised twelve findings, every one `solidity.performance`
+// or `solidity.best-practice` — each holding the ladder over a gas tip. Advice is not raised.
+describe("semgrep's Solidity advice", () => {
+  it("keeps the security rules and drops performance and best-practice advice", () => {
+    const hit = (check_id: string, line: number) => ({ check_id, path: "src/Vault.sol", start: { line }, extra: { message: "m", severity: "WARNING" } });
+    const out = JSON.stringify({
+      results: [
+        hit("solidity.performance.use-custom-error-not-require.use-custom-error-not-require", 1),
+        hit("solidity.best-practice.use-ownable2step.use-ownable2step", 2),
+        hit("solidity.security.compound-borrowfresh-reentrancy.compound-borrowfresh-reentrancy", 3),
+      ],
+      errors: [],
+    });
+    expect(semgrepFindings(out, "/w").map((f) => f.claim.split(":")[0])).toStrictEqual([
+      "solidity.security.compound-borrowfresh-reentrancy.compound-borrowfresh-reentrancy",
+    ]);
+  });
+});

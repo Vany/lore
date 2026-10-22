@@ -1013,6 +1013,9 @@ async function semgrep(worktree: string, scope?: Scope): Promise<EngineOutcome> 
   };
 }
 
+/** semgrep's Solidity gas and style rules: advice, not defects. */
+const SOLIDITY_ADVICE = /^solidity\.(?:performance|best-practice)\./;
+
 /**
  * semgrep's JSON, as findings plus what it could not read. Pure, so it has a test.
  *
@@ -1032,7 +1035,14 @@ export function parseSemgrep(
   const unread = semgrepUnread(parsed.errors ?? [], worktree);
 
   const findings: Finding[] = [];
-  for (const { match: res, file, lines } of bySite(parsed.results ?? [], (r) => ({
+  // ADVICE IS NOT RAISED. p/smart-contracts (D-160) mixes security rules with gas and style
+  // advice; on the first contracts in lore's own repository every one of twelve hits was
+  // `solidity.performance.*` or `solidity.best-practice.*`, each holding the ladder over a gas
+  // tip. Counted for the operator, never a finding — the brief's scale does not raise info.
+  const results = (parsed.results ?? []).filter((r) => !SOLIDITY_ADVICE.test(r.check_id ?? ""));
+  const advice = (parsed.results ?? []).length - results.length;
+  if (advice > 0) console.error(`[lore:log] semgrep: ${String(advice)} Solidity performance/best-practice hit(s), not raised`);
+  for (const { match: res, file, lines } of bySite(results, (r) => ({
     claim: ruleClaim(r.check_id, r.extra?.message ?? "rule matched", "semgrep"),
     file: relativise(worktree, r.path),
     line: r.start?.line ?? 0,
