@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { classifyMochaPoc, classifyPoc, forgeTestFindings, matchSolcBugs, mochaFindings, parseAderyn, parseForgeBuild, parseForgeTest, parseHardhatCompile, parseMocha, parseSlither, parseSolhint, vendored } from "./evm-parse.ts";
+import { classifyMochaPoc, classifyPoc, installFailure, forgeTestFindings, matchSolcBugs, mochaFindings, parseAderyn, parseForgeBuild, parseForgeTest, parseHardhatCompile, parseMocha, parseSlither, parseSolhint, vendored } from "./evm-parse.ts";
 
 describe("forge build", () => {
   const out = JSON.stringify({
@@ -170,5 +170,26 @@ describe("known compiler bugs", () => {
   it("rules out a bug whose condition the build does not meet", () => {
     const f = matchSolcBugs([{ version: "0.8.19", optimizer: false, viaIR: false }], bugs, byVersion, "foundry.toml");
     expect(f.map((x) => x.claim.split(":")[0])).toStrictEqual(["solc-bug-MediumAlways"]);
+  });
+});
+
+// The sandbox holds no secrets by design (D-24), so an install that needed one did not fail
+// because of the branch. Real error lines from yarn v1, npm and git.
+describe("why an install failed", () => {
+  it("names a missing credential as the environment, not the branch", () => {
+    for (const line of [
+      "error An unexpected error occurred: \"https://npm.pkg.github.com/@acme%2fvault: Request failed \\\"401 Unauthorized\\\"\".",
+      "npm error code E401",
+      "npm ERR! code E403",
+      "npm error code ENEEDAUTH",
+      "fatal: could not read Username for 'https://github.com': No such device or address",
+      "git@github.com: Permission denied (publickey).",
+    ]) expect(installFailure(line), line).toBe("credentials");
+  });
+  it("names an unreachable registry as the network", () => {
+    expect(installFailure("error An unexpected error occurred: getaddrinfo EAI_AGAIN registry.yarnpkg.com")).toBe("network");
+  });
+  it("blames the branch for a lockfile that does not match", () => {
+    expect(installFailure("error Your lockfile needs to be updated, but yarn was run with `--frozen-lockfile`.")).toBe("branch");
   });
 });

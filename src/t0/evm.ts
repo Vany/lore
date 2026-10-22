@@ -31,7 +31,7 @@ import { gitMaybe } from "../git/exec.ts";
 import { finding, type EngineOutcome } from "./engines.ts";
 import { detectEvm, type EvmFramework } from "./evm-detect.ts";
 import {
-  classifyMochaPoc, classifyPoc, forgeTestFindings, matchSolcBugs, mochaFindings, parseAderyn, parseForgeBuild,
+  classifyMochaPoc, classifyPoc, forgeTestFindings, installFailure, matchSolcBugs, mochaFindings, parseAderyn, parseForgeBuild,
   parseForgeTest, parseHardhatCompile, parseMocha, parseSlither, parseSolhint, type PocOutcome, type SolcBuild,
 } from "./evm-parse.ts";
 import { runInSandbox, type SandboxConfig } from "./sandbox.ts";
@@ -95,8 +95,6 @@ async function installFor(worktree: string, fw: Extract<EvmFramework, { kind: "h
   }
 }
 
-const NETWORK = /EAI_AGAIN|ECONNRESET|ETIMEDOUT|ENOTFOUND|ECONNREFUSED|ENETUNREACH|network connection|socket hang up/i;
-
 /** What became of a sandbox call that did not produce parseable output. */
 function didNotRun(engine: T0Engine, what: string, r: ToolResult): EngineOutcome {
   if (r.unavailable !== undefined) return { engine, findings: [], unavailable: `${what} could not run: ${r.unavailable}`, interrupted: r.timedOut };
@@ -152,7 +150,7 @@ export async function sandboxedEvm(worktree: string, base: SandboxConfig, engine
     let buildFindings: readonly Finding[] | undefined;
     let built: ToolResult;
     if (fw.kind === "foundry") {
-      built = await offline("forge build --json");
+      built = await offline("forge build --build-info --json");
       buildFindings = parseForgeBuild(built.stdout);
     } else {
       // Phase 1 compiled; this reads what it recorded. "rc" first, then the log.
@@ -307,7 +305,10 @@ export async function withWorkspace<T>(
             `git -C ${q(d.path)} checkout --quiet ${d.sha} && git -C ${q(d.path)} submodule update --init --recursive --quiet || exit 3; fi`,
         )
         .join("; ");
-      script = `${clone === "" ? "true" : clone}; forge build >/dev/null 2>&1; aderyn . -o /work/.lore-aderyn.json >/dev/null 2>&1; exit 0`;
+      // `--build-info`: foundry does not write it by default, and `solc-bugs` reads which
+      // compilers ran from it. Without the flag it existed only as a side effect of slither's
+      // own compile — so solc-bugs worked only while slither ran first.
+      script = `${clone === "" ? "true" : clone}; forge build --build-info >/dev/null 2>&1; aderyn . -o /work/.lore-aderyn.json >/dev/null 2>&1; exit 0`;
     } else {
       const install = await installFor(worktree, fw);
       if (install === undefined) {
@@ -326,7 +327,11 @@ export async function withWorkspace<T>(
       if (fetched.code === 3) return await fn({ framework: fw, failed: fetched, why: "a git dependency in lib/ could not be cloned at its pinned commit" });
       if (fetched.code === 4 && fetched.unavailable === undefined) {
         const out = `${fetched.stdout}\n${fetched.stderr}`;
-        if (NETWORK.test(out)) return await fn({ framework: fw, failed: fetched, why: "the dependency install could not reach its registry (a network failure, not the branch)" });
+        const cause = installFailure(out);
+        if (cause === "network") return await fn({ framework: fw, failed: fetched, why: "the dependency install could not reach its registry (a network failure, not the branch)" });
+        if (cause === "credentials") {
+          return await fn({ framework: fw, failed: fetched, why: "a dependency needs a credential the sandbox does not hold (a private registry or git dependency — lore's environment, not the branch)" });
+        }
         const lockfile = fw.kind === "hardhat" ? (fw.lockfile ?? "package.json") : "package.json";
         return await fn({
           framework: fw,

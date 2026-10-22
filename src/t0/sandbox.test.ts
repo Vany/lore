@@ -421,7 +421,8 @@ describe("a timed-out sandboxed run is killed explicitly, not left to a signal t
       // never lore, which would lose every round in flight rather than this one.
       expect(call).toContain("--oom-score-adj 1000");
     }
-  });
+    // Two runs of the fake's 2 s timeout: past vitest's 5 s default under the host's load.
+  }, 20_000);
 
   it("install: also clears stale state and issues an explicit kill, the same as runInSandbox", async () => {
     fakeDockerBinary();

@@ -4082,7 +4082,9 @@ D-160; what differs is how a hardhat tree is made runnable, and two checks both 
   sandbox's choice, which falls back to an unfrozen install: a contracts review must compile
   what the branch pins, or its CVE and compiler checks describe a tree nobody ships. No
   lockfile is refused, loudly. A lockfile that does not install is ONE finding (the branch's
-  fault); a registry that cannot be reached is the environment, and says so.
+  fault); a registry that cannot be reached, or a dependency that needs a credential (a
+  private registry or git dependency — the sandbox holds none, D-24), is the environment, and
+  says so.
 - **All compiling in phase 1.** Offline, `hardhat compile` re-fetches its compiler list and
   fails on DNS (seen in the first run), so phase 1 compiles and records the result; phase 2
   reads it, runs `hardhat test` on the cached build, and slither reads the artifacts
@@ -4119,7 +4121,8 @@ tests pass, one known solc bug per compiler at low, no advisory on OZ 4.9.6 — 
 lockfile pinned at OZ 4.9.0 raised its four CVEs (CVE-2023-34234, CVE-2024-27094,
 CVE-2023-40014, CVE-2023-34459). PoCs: a TypeScript test (a stranger sweeps) and a forge test
 with an inline attacker (reentrancy) were each CONFIRMED on the first tree and REFUTED on the
-second. Neither worktree was touched.
+second. Neither worktree was touched. The trees are in `research/2026-10-21-evm-demos/`, with
+their git tree hashes (hardhat 1ebd76f reentrant, 08e2169 fixed) and how to replay them.
 
 **D-160 — lore reviews Ethereum projects: an EVM sandbox, its tools, a Solidity pack, and
 proofs the reviewer can attach. BUILT 2026-10-20, demonstrated in the sandbox.**
@@ -4164,7 +4167,8 @@ cloned at its pinned commit by the install phase: the classic EtherStore reentra
 checks-effects-interactions twin. Reentrant: slither `reentrancy-eth` high at the withdraw.
 Clean: no finding. A reviewer-style PoC (an attacker contract, asserting other depositors'
 funds survive) was CONFIRMED on the first ("drained: 0 != 2 ether") and REFUTED on the second,
-which withdraws the finding; neither worktree was touched. Hardhat came the next day (D-161).
+which withdraws the finding; neither worktree was touched. The trees are in
+`research/2026-10-21-evm-demos/` (foundry b3081a4 reentrant, c5d53e3 fixed). Hardhat came the next day (D-161).
 
 **D-159 — a refused justification carries the reviewer's reason, and is handed back.
 BUILT 2026-10-17.**

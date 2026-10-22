@@ -379,3 +379,19 @@ export function matchSolcBugs(
   }
   return [...out.values()];
 }
+
+const NETWORK = /EAI_AGAIN|ECONNRESET|ETIMEDOUT|ENOTFOUND|ECONNREFUSED|ENETUNREACH|network connection|socket hang up/i;
+/**
+ * A dependency that needs a credential: a private registry (401/403, npm's E401/E403/
+ * ENEEDAUTH) or a private git dependency (no username, no key). The sandbox holds no secrets
+ * by design (D-24), so this is lore's environment — raised as the branch's fault it would
+ * stand as a HIGH "does not install" on every round of every review of such a repository.
+ */
+const CREDENTIALS = /\b(?:401|403)\b.*(?:Unauthorized|Forbidden)|\bE40[13]\b|\bENEEDAUTH\b|could not read Username|Permission denied \(publickey\)|Authentication failed/i;
+
+/** Why a frozen install failed: the branch's lockfile, or something the sandbox does not have. */
+export function installFailure(output: string): "network" | "credentials" | "branch" {
+  if (CREDENTIALS.test(output)) return "credentials";
+  if (NETWORK.test(output)) return "network";
+  return "branch";
+}
